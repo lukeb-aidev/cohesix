@@ -56,6 +56,7 @@ net-irq = []
 sel4-debug = []
 debug-input = []
 tcp-echo-31337 = ["net-console"]
+net-backend-virtio = []
 bootstrap-trace = [
     "dep:spin",
 ]

@@ -553,9 +553,6 @@ PY
 
     KERNEL_LOAD_ADDR=0x70000000
     ROOTSERVER_LOAD_ADDR=0x80000000
-    VIRTIO_MMIO_BASE=0x0a000000
-    VIRTIO_MMIO_STRIDE=0x200
-
     GIC_VER="$(detect_gic_version)"
     log "Auto-detected GIC version: gic-version=$GIC_VER"
 
@@ -563,10 +560,10 @@ PY
     QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
-        log "Wiring virtio-net (MMIO) for TCP console: base=$VIRTIO_MMIO_BASE stride=$VIRTIO_MMIO_STRIDE (using QEMU default virtio-mmio slots)"
+        log "Wiring rtl8139 NIC for TCP console"
         NETWORK_ARGS=(
             -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT}"
-            -device "virtio-net-device,netdev=net0,mac=52:55:00:d1:55:01,bus=virtio-mmio-bus.0"
+            -device "rtl8139,netdev=net0,mac=52:55:00:d1:55:01"
         )
         log "TCP console: host 127.0.0.1:${TCP_PORT} -> guest 10.0.2.15:${TCP_PORT}"
         QEMU_ARGS+=("${NETWORK_ARGS[@]}")

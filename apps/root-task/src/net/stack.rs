@@ -38,7 +38,10 @@ use super::{
     ConsoleNetConfig, NetConsoleEvent, NetPoller, NetTelemetry, DEV_VIRT_GATEWAY, DEV_VIRT_IP,
     DEV_VIRT_PREFIX,
 };
-use crate::drivers::virtio::net::{DriverError, VirtioNet};
+#[cfg(not(feature = "net-backend-virtio"))]
+use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
+#[cfg(feature = "net-backend-virtio")]
+use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNet};
 use crate::hal::{HalError, Hardware};
 use crate::serial::DEFAULT_LINE_CAPACITY;
 use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR};
@@ -52,9 +55,23 @@ const ECHO_MODE: bool = cfg!(feature = "tcp-echo-31337");
 const ERR_AUTH_REASON_TIMEOUT: &str = "ERR AUTH reason=timeout";
 const ERR_CONSOLE_REASON_TIMEOUT: &str = "ERR CONSOLE reason=timeout";
 
+#[cfg(feature = "net-backend-virtio")]
+type NetDevice = VirtioNet;
+#[cfg(feature = "net-backend-virtio")]
+type NetDriverError = VirtioDriverError;
+#[cfg(feature = "net-backend-virtio")]
+const NET_BACKEND_LABEL: &str = "virtio-net";
+
+#[cfg(not(feature = "net-backend-virtio"))]
+type NetDevice = Rtl8139Device;
+#[cfg(not(feature = "net-backend-virtio"))]
+type NetDriverError = Rtl8139DriverError;
+#[cfg(not(feature = "net-backend-virtio"))]
+const NET_BACKEND_LABEL: &str = "rtl8139";
+
 #[derive(Debug)]
 pub enum NetStackError {
-    Driver(DriverError),
+    Driver(NetDriverError),
     SocketStorageInUse,
     TcpRxStorageInUse,
     TcpTxStorageInUse,
@@ -71,8 +88,8 @@ impl fmt::Display for NetStackError {
     }
 }
 
-impl From<DriverError> for NetStackError {
-    fn from(value: DriverError) -> Self {
+impl From<NetDriverError> for NetStackError {
+    fn from(value: NetDriverError) -> Self {
         Self::Driver(value)
     }
 }
@@ -80,7 +97,7 @@ impl From<DriverError> for NetStackError {
 /// High-level errors surfaced while initialising the TCP console stack.
 #[derive(Debug)]
 pub enum NetConsoleError {
-    /// No virtio-net device was found on any probed virtio-mmio slot.
+    /// No network device was found on the selected backend.
     NoDevice,
     /// An error occurred during stack bring-up.
     Init(NetStackError),
@@ -89,7 +106,7 @@ pub enum NetConsoleError {
 impl fmt::Display for NetConsoleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoDevice => f.write_str("no virtio-net device present"),
+            Self::NoDevice => f.write_str("network device not present"),
             Self::Init(err) => write!(f, "{err}"),
         }
     }
@@ -98,7 +115,7 @@ impl fmt::Display for NetConsoleError {
 impl From<NetStackError> for NetConsoleError {
     fn from(err: NetStackError) -> Self {
         match err {
-            NetStackError::Driver(DriverError::NoDevice) => Self::NoDevice,
+            NetStackError::Driver(NetDriverError::NoDevice) => Self::NoDevice,
             other => Self::Init(other),
         }
     }
@@ -198,10 +215,10 @@ impl NetworkClock {
     }
 }
 
-/// Smoltcp-backed network stack that bridges the virtio-net device into the root task.
+/// Smoltcp-backed network stack that bridges the selected network device into the root task.
 pub struct NetStack {
     clock: NetworkClock,
-    device: VirtioNet,
+    device: NetDevice,
     interface: Interface,
     sockets: SocketSet<'static>,
     tcp_handle: SocketHandle,
@@ -499,16 +516,16 @@ impl NetStack {
         let netmask = prefix_to_netmask(prefix);
         let gateway_label = gateway.unwrap_or(Ipv4Address::UNSPECIFIED);
         info!(
-            "[net-console] init: bringing up virtio-net with ip={}/{} netmask={} gateway={}",
+            "[net-console] init: bringing up {NET_BACKEND_LABEL} with ip={}/{} netmask={} gateway={}",
             ip, prefix, netmask, gateway_label
         );
         info!(
-            "[net-console] init: creating VirtioNet device (listen_port={})",
+            "[net-console] init: creating {NET_BACKEND_LABEL} device (listen_port={})",
             console_config.listen_port
         );
-        let mut device = VirtioNet::new(hal)?;
+        let mut device = NetDevice::new(hal)?;
         let mac = device.mac();
-        info!("[net-console] virtio-net device online: mac={mac}");
+        info!("[net-console] {NET_BACKEND_LABEL} device online: mac={mac}");
 
         let socket_guard =
             StorageGuard::acquire(&SOCKET_STORAGE_IN_USE, NetStackError::SocketStorageInUse)?;
@@ -1348,7 +1365,7 @@ impl NetStack {
         });
     }
 
-    /// Returns the negotiated Ethernet address for the attached virtio-net device.
+    /// Returns the negotiated Ethernet address for the attached network device.
     #[must_use]
     pub fn hardware_address(&self) -> EthernetAddress {
         self.device.mac()

@@ -1,5 +1,10 @@
 // Author: Lukas Bower
 //! Virtio MMIO network device driver used by the root task.
+//!
+//! NOTE: virtio-net is temporarily disabled for the `dev-virt` target in
+//! favour of `rtl8139` due to RX descriptor completion issues observed on the
+//! QEMU ARM `virt` platform. The driver remains available behind the alternate
+//! backend selection for future debugging.
 #![cfg(all(feature = "kernel", feature = "net-console"))]
 #![allow(unsafe_code)]
 
