@@ -868,9 +868,12 @@ impl VirtioRegs {
             }
             if header_valid && device_id == VIRTIO_DEVICE_ID_NET && vendor_id != 0 {
                 info!(
-                    "[net-console] virtio-net found at slot={} mmio=0x{base:08x}",
+                    target: "net-console",
+                    "[virtio-net] found device: slot={} mmio=0x{base:08x} device_id=0x{device_id:04x} vendor=0x{vendor_id:04x}",
                     slot,
-                    base = base
+                    base = base,
+                    device_id = device_id,
+                    vendor_id = vendor_id,
                 );
                 return Ok(regs);
             }
