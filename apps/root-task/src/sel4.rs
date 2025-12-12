@@ -1513,6 +1513,7 @@ pub fn is_boot_reserved_slot(slot: seL4_CPtr) -> bool {
 pub struct ReservedUntyped {
     cap: seL4_Untyped,
     paddr: usize,
+    offset_bytes: u128,
     size_bits: u8,
     index: usize,
     reserved_bytes: u128,
@@ -1529,6 +1530,12 @@ impl ReservedUntyped {
     #[must_use]
     pub fn paddr(&self) -> usize {
         self.paddr
+    }
+
+    /// Returns the offset in bytes from the start of the untyped region.
+    #[must_use]
+    pub fn offset_bytes(&self) -> u128 {
+        self.offset_bytes
     }
 
     /// Returns the size of the reserved region in bits.
@@ -1622,8 +1629,11 @@ impl DevicePtPool {
 
     fn reserve_page_table(&mut self) -> Result<ReservedUntyped, seL4_Error> {
         let page_table_bytes = self.page_table_bytes();
+        let aligned_start =
+            (self.used_bytes + (page_table_bytes - 1)) & !(page_table_bytes.saturating_sub(1));
+        let end = aligned_start.saturating_add(page_table_bytes);
         let free_bytes = self.remaining_bytes();
-        if page_table_bytes > free_bytes {
+        if end > self.total_bytes || page_table_bytes > free_bytes {
             log::error!(
                 "[device-pt] pool insufficient: wanted {wanted}B but only {free}B free in ut=0x{ut:03x}",
                 wanted = page_table_bytes,
@@ -1632,17 +1642,18 @@ impl DevicePtPool {
             );
             return Err(seL4_NotEnoughMemory);
         }
-        self.used_bytes = self.used_bytes.saturating_add(page_table_bytes);
+        self.used_bytes = end;
         log::trace!(
             "[device-pt] reserve ut=0x{ut:03x} paddr=0x{paddr:08x} used={used}B remaining_tables={remaining}",
             ut = self.ut_slot,
-            paddr = self.paddr,
+            paddr = self.paddr.saturating_add(aligned_start),
             used = self.used_bytes,
             remaining = self.remaining_tables(),
         );
         Ok(ReservedUntyped {
             cap: self.ut_slot,
-            paddr: self.paddr,
+            paddr: self.paddr.saturating_add(aligned_start),
+            offset_bytes: aligned_start as u128,
             size_bits: self.size_bits,
             index: self.index,
             reserved_bytes: page_table_bytes as u128,
@@ -1709,13 +1720,16 @@ impl<'a> UntypedCatalog<'a> {
         let entry = self.entries.get_mut(index)?;
         let obj_bytes = 1u128 << core::cmp::min(obj_bits, 127);
         let capacity_bytes = entry.capacity_bytes();
-        if entry.used_bytes.saturating_add(obj_bytes) > capacity_bytes {
+        let aligned_start = (entry.used_bytes + (obj_bytes - 1)) & !(obj_bytes - 1);
+        let end = aligned_start.saturating_add(obj_bytes);
+        if end > capacity_bytes {
             return None;
         }
-        entry.used_bytes = entry.used_bytes.saturating_add(obj_bytes);
+        entry.used_bytes = end;
         Some(ReservedUntyped {
             cap: self.bootinfo.untyped.start + index as seL4_CPtr,
-            paddr: entry.desc.paddr as usize,
+            paddr: entry.desc.paddr as usize + aligned_start as usize,
+            offset_bytes: aligned_start,
             size_bits: entry.desc.size_bits,
             index,
             reserved_bytes: obj_bytes,
@@ -3583,6 +3597,7 @@ mod tests {
         let reserved = ReservedUntyped {
             cap: 0x200,
             paddr: 0,
+            offset_bytes: 0,
             size_bits: PAGE_BITS as u8,
             index: 0,
             reserved_bytes: 1 << PAGE_BITS,
@@ -3617,6 +3632,7 @@ mod tests {
         let dummy = ReservedUntyped {
             cap: 0x555,
             paddr: 0,
+            offset_bytes: 0,
             size_bits: PAGE_TABLE_BITS as u8,
             index: 0,
             reserved_bytes: 1 << PAGE_TABLE_BITS,

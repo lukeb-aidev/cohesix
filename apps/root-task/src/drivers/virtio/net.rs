@@ -315,6 +315,17 @@ impl VirtioNet {
         };
         driver.initialise_queues();
 
+        let queue0_pfn = driver.rx_queue.pfn;
+        let queue1_pfn = driver.tx_queue.pfn;
+        let status_reg_value = driver.regs.status();
+        log::info!(
+            target: "net-console",
+            "[virtio-net] post-setup: queue0_pfn=0x{:x}, queue1_pfn=0x{:x}, status=0x{:02x}",
+            queue0_pfn,
+            queue1_pfn,
+            status_reg_value,
+        );
+
         status |= STATUS_DRIVER_OK;
         driver.regs.set_status(status);
         info!(
@@ -682,6 +693,16 @@ impl Device for VirtioNet {
         }
 
         self.poll_interrupts();
+
+        let (used_idx, avail_idx) = self.rx_queue.indices();
+        log::debug!(
+            target: "net-console",
+            "[virtio-net] rx poll: avail.idx={} used.idx={} last_used={}",
+            avail_idx,
+            used_idx,
+            self.rx_queue.last_used,
+        );
+        self.rx_queue.debug_descriptors("rx", 2);
 
         if let Some((id, len)) = self.pop_rx() {
             self.rx_used_count = self.rx_used_count.wrapping_add(1);
@@ -1053,6 +1074,7 @@ struct VirtQueue {
     avail: NonNull<VirtqAvail>,
     used: NonNull<VirtqUsed>,
     last_used: u16,
+    pfn: u32,
 }
 
 impl VirtQueue {
@@ -1110,14 +1132,15 @@ impl VirtQueue {
         regs.select_queue(index);
         regs.set_queue_size(queue_size);
         regs.set_queue_align(queue_align as u32);
-        regs.set_queue_pfn((frame.paddr() >> 12) as u32);
+        let queue_pfn = (frame.paddr() >> 12) as u32;
+        regs.set_queue_pfn(queue_pfn);
         regs.queue_ready(1);
         info!(
             target: "net-console",
             "[virtio-net] queue {} configured: size={} pfn=0x{:x}",
             index,
             queue_size,
-            frame.paddr() >> 12
+            queue_pfn
         );
 
         Ok(Self {
@@ -1127,6 +1150,7 @@ impl VirtQueue {
             avail: avail_ptr,
             used: used_ptr,
             last_used: 0,
+            pfn: queue_pfn,
         })
     }
 
@@ -1151,6 +1175,21 @@ impl VirtQueue {
 
     fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) {
         regs.notify(queue);
+    }
+
+    fn debug_descriptors(&self, label: &str, count: usize) {
+        let max = core::cmp::min(count, self.size as usize);
+        for idx in 0..max {
+            let desc = unsafe { read_volatile(self.desc.as_ptr().add(idx)) };
+            log::debug!(
+                target: "net-console",
+                "[virtio-net] {label} desc[{idx}]: addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}",
+                addr = desc.addr,
+                len = desc.len,
+                flags = desc.flags,
+                next = desc.next,
+            );
+        }
     }
 
     fn indices(&self) -> (u16, u16) {
