@@ -4,6 +4,7 @@
 #![allow(unsafe_code)]
 
 use crate::bootstrap::cspace::CSpaceCtx;
+use crate::bootstrap::log::force_uart_line;
 use crate::sel4 as sys;
 #[cfg(target_os = "none")]
 use crate::sel4::{BootInfoError, BootInfoView};
@@ -43,19 +44,38 @@ pub fn raw_untyped_retype(
     node_offset: sys::seL4_Word,
     num_objects: sys::seL4_Word,
 ) -> sys::seL4_Error {
+    if ut_cap == sys::seL4_CapNull || dest_root == sys::seL4_CapNull {
+        panic!(
+            "seL4_Untyped_Retype requested with null cap (ut=0x{ut:04x} root=0x{root:04x})",
+            ut = ut_cap,
+            root = dest_root,
+        );
+    }
+    if node_index == 0 || node_offset == 0 {
+        panic!(
+            "seL4_Untyped_Retype attempted to use slot 0 (index=0x{idx:04x} offset=0x{off:04x})",
+            idx = node_index,
+            off = node_offset,
+        );
+    }
     let word_bits = seL4_WordBits as usize;
     let hex_width = (word_bits + 3) / 4;
-    ::log::info!(
-        "[retype] ut=0x{ut:0width$x} root=0x{root:04x} depth={depth} index=0x{index:0width$x} offset=0x{offset:0width$x} n={num}",
-        ut = ut_cap,
-        root = dest_root,
-        depth = node_depth,
-        index = node_index,
-        offset = node_offset,
-        num = num_objects,
-        width = hex_width,
+    let mut line = heapless::String::<128>::new();
+    let _ = core::fmt::write(
+        &mut line,
+        format_args!(
+            "[retype] ut=0x{ut:0width$x} root=0x{root:04x} depth={depth} index=0x{index:0width$x} offset=0x{offset:0width$x} n={num}",
+            ut = ut_cap,
+            root = dest_root,
+            depth = node_depth,
+            index = node_index,
+            offset = node_offset,
+            num = num_objects,
+            width = hex_width,
+        ),
     );
-    unsafe {
+    force_uart_line(line.as_str());
+    let err = unsafe {
         sys::seL4_Untyped_Retype(
             ut_cap,
             obj_type,
@@ -66,7 +86,12 @@ pub fn raw_untyped_retype(
             node_offset,
             num_objects,
         )
+    };
+    if err != sys::seL4_NoError {
+        force_uart_line("[retype] seL4_Untyped_Retype failed");
+        panic!("seL4_Untyped_Retype returned {err}");
     }
+    err
 }
 
 #[cfg(target_os = "none")]
