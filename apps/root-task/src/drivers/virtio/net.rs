@@ -9,11 +9,11 @@
 
 use core::fmt::{self, Write as FmtWrite};
 use core::ptr::{read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use core::sync::atomic::{fence, AtomicBool, Ordering as AtomicOrdering};
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, warn};
-use sel4_sys::{seL4_Error, seL4_NotEnoughMemory, seL4_PageBits};
+use sel4_sys::{seL4_Error, seL4_NotEnoughMemory};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
@@ -28,7 +28,7 @@ const VIRTIO_MMIO_STRIDE: usize = 0x200;
 const VIRTIO_MMIO_SLOTS: usize = 8;
 
 const VIRTIO_MMIO_MAGIC: u32 = 0x7472_6976;
-const VIRTIO_MMIO_VERSION_LEGACY: u32 = 1;
+const VIRTIO_MMIO_VERSION_MODERN: u32 = 2;
 const VIRTIO_DEVICE_ID_NET: u32 = 1;
 
 const DEVICE_FRAME_BITS: usize = 12;
@@ -41,8 +41,10 @@ const STATUS_FAILED: u32 = 1 << 7;
 
 const VIRTQ_DESC_F_WRITE: u16 = 1 << 1;
 
-const VIRTIO_NET_F_MAC: u32 = 1 << 5;
-const SUPPORTED_FEATURES: u32 = VIRTIO_NET_F_MAC;
+const VIRTIO_F_VERSION_1: u64 = 1 << 32;
+
+const VIRTIO_NET_F_MAC: u64 = 1 << 5;
+const SUPPORTED_FEATURES: u64 = VIRTIO_NET_F_MAC | VIRTIO_F_VERSION_1;
 
 const RX_QUEUE_INDEX: u32 = 0;
 const TX_QUEUE_INDEX: u32 = 1;
@@ -158,19 +160,6 @@ impl VirtioNet {
             regs.read32(Registers::Status)
         );
 
-        // Legacy virtio-mmio devices require the guest page size to be provided
-        // before queue PFNs are written. Without this, the device disregards the
-        // queue configuration and leaves RX/TX rings idle. Advertise the seL4
-        // 4KiB page size up-front so the PFN calculations below are interpreted
-        // correctly by the device.
-        let guest_page_size = 1u32 << seL4_PageBits;
-        regs.set_guest_page_size(guest_page_size);
-        info!(
-            target: "net-console",
-            "[net-console] guest page size set: {} bytes",
-            guest_page_size
-        );
-
         info!("[net-console] querying queue sizes");
         regs.select_queue(RX_QUEUE_INDEX);
         let rx_max = regs.queue_num_max();
@@ -215,8 +204,17 @@ impl VirtioNet {
         info!("[net-console] reading host feature bits");
         let host_features = regs.host_features();
         let negotiated_features = host_features & SUPPORTED_FEATURES;
+        if negotiated_features & VIRTIO_F_VERSION_1 == 0 {
+            regs.set_status(STATUS_FAILED);
+            error!(
+                target: "net-console",
+                "[virtio-net] VIRTIO_F_VERSION_1 not offered by device; host_features=0x{host:016x}",
+                host = host_features
+            );
+            return Err(DriverError::NoQueue);
+        }
         info!(
-            "[net-console] features: host=0x{host:08x} negotiated=0x{guest:08x}",
+            "[net-console] features: host=0x{host:016x} negotiated=0x{guest:016x}",
             host = host_features,
             guest = negotiated_features
         );
@@ -359,23 +357,14 @@ impl VirtioNet {
         };
         driver.initialise_queues();
 
-        let queue0_pfn = driver.rx_queue.pfn;
-        let queue1_pfn = driver.tx_queue.pfn;
         let status_reg_value = driver.regs.status();
         log::info!(
             target: "net-console",
-            "[virtio-net] post-setup: queue0_pfn=0x{:x}, queue1_pfn=0x{:x}, status=0x{:02x}",
-            queue0_pfn,
-            queue1_pfn,
+            "[virtio-net] post-setup: rx_desc=0x{:x}, tx_desc=0x{:x}, status=0x{:02x}",
+            driver.rx_queue.desc_paddr,
+            driver.tx_queue.desc_paddr,
             status_reg_value,
         );
-        if queue0_pfn == queue1_pfn {
-            warn!(
-                target: "net-console",
-                "[virtio-net] warning: RX/TX queues share PFN 0x{:x}; DMA frames should be distinct",
-                queue0_pfn
-            );
-        }
 
         status |= STATUS_DRIVER_OK;
         driver.regs.set_status(status);
@@ -763,11 +752,14 @@ impl Device for VirtioNet {
 
         if let Some((id, len)) = self.pop_rx() {
             self.rx_used_count = self.rx_used_count.wrapping_add(1);
+            let (used_idx, avail_idx) = self.rx_queue.indices();
             log::info!(
                 target: "net-console",
-                "[virtio-net] RX: used descriptor received: id={} len={} (rx_used_count={})",
+                "[virtio-net] RX: used descriptor received: id={} len={} used.idx={} avail.idx={} (rx_used_count={})",
                 id,
                 len,
+                used_idx,
+                avail_idx,
                 self.rx_used_count,
             );
             let driver_ptr = self as *mut _;
@@ -986,7 +978,14 @@ impl VirtioRegs {
                 vendor_id = vendor_id,
                 version = version
             );
-            let header_valid = magic == VIRTIO_MMIO_MAGIC && version == VIRTIO_MMIO_VERSION_LEGACY;
+            let header_valid = magic == VIRTIO_MMIO_MAGIC && version == VIRTIO_MMIO_VERSION_MODERN;
+            if magic == VIRTIO_MMIO_MAGIC && version != VIRTIO_MMIO_VERSION_MODERN {
+                warn!(
+                    target: "net-console",
+                    "[virtio-net] virtio-mmio device present but not modern (version={version}); skipping"
+                );
+                continue;
+            }
             if header_valid && device_id == 0 {
                 warn!(
                     "[net-console] slot={} has virtio header but device_id=0 (no usable device)",
@@ -1053,16 +1052,27 @@ impl VirtioRegs {
         self.write16(Registers::QueueNum, size);
     }
 
-    fn set_queue_align(&mut self, align: u32) {
-        self.write32(Registers::QueueAlign, align);
+    fn set_queue_desc(&mut self, paddr: u64) {
+        self.write32(Registers::QueueDescLow, paddr as u32);
+        self.write32(Registers::QueueDescHigh, (paddr >> 32) as u32);
     }
 
-    fn set_queue_pfn(&mut self, pfn: u32) {
-        self.write32(Registers::QueuePfn, pfn);
+    fn set_queue_avail(&mut self, paddr: u64) {
+        self.write32(Registers::QueueAvailLow, paddr as u32);
+        self.write32(Registers::QueueAvailHigh, (paddr >> 32) as u32);
+    }
+
+    fn set_queue_used(&mut self, paddr: u64) {
+        self.write32(Registers::QueueUsedLow, paddr as u32);
+        self.write32(Registers::QueueUsedHigh, (paddr >> 32) as u32);
     }
 
     fn queue_ready(&mut self, ready: u32) {
         self.write32(Registers::QueueReady, ready);
+    }
+
+    fn queue_ready_state(&self) -> u32 {
+        self.read32(Registers::QueueReady)
     }
 
     fn status(&self) -> u32 {
@@ -1073,18 +1083,19 @@ impl VirtioRegs {
         self.write32(Registers::QueueNotify, queue);
     }
 
-    fn set_guest_features(&mut self, features: u32) {
+    fn set_guest_features(&mut self, features: u64) {
         self.write32(Registers::GuestFeaturesSel, 0);
-        self.write32(Registers::GuestFeatures, features);
+        self.write32(Registers::GuestFeatures, features as u32);
+        self.write32(Registers::GuestFeaturesSel, 1);
+        self.write32(Registers::GuestFeatures, (features >> 32) as u32);
     }
 
-    fn set_guest_page_size(&mut self, page_size: u32) {
-        self.write32(Registers::GuestPageSize, page_size);
-    }
-
-    fn host_features(&mut self) -> u32 {
+    fn host_features(&mut self) -> u64 {
         self.write32(Registers::HostFeaturesSel, 0);
-        self.read32(Registers::HostFeatures)
+        let lower = self.read32(Registers::HostFeatures) as u64;
+        self.write32(Registers::HostFeaturesSel, 1);
+        let upper = self.read32(Registers::HostFeatures) as u64;
+        (upper << 32) | lower
     }
 
     fn acknowledge_interrupts(&mut self) -> (u32, u32) {
@@ -1126,13 +1137,16 @@ enum Registers {
     HostFeaturesSel = 0x014,
     GuestFeatures = 0x020,
     GuestFeaturesSel = 0x024,
-    GuestPageSize = 0x028,
     QueueSel = 0x030,
     QueueNumMax = 0x034,
     QueueNum = 0x038,
-    QueueAlign = 0x03c,
-    QueuePfn = 0x040,
     QueueReady = 0x044,
+    QueueDescLow = 0x080,
+    QueueDescHigh = 0x084,
+    QueueAvailLow = 0x090,
+    QueueAvailHigh = 0x094,
+    QueueUsedLow = 0x0a0,
+    QueueUsedHigh = 0x0a4,
     QueueNotify = 0x050,
     InterruptStatus = 0x060,
     InterruptAck = 0x064,
@@ -1148,8 +1162,10 @@ struct VirtQueue {
     avail: NonNull<VirtqAvail>,
     used: NonNull<VirtqUsed>,
     last_used: u16,
-    pfn: u32,
     base_paddr: usize,
+    desc_paddr: usize,
+    avail_paddr: usize,
+    used_paddr: usize,
 }
 
 impl VirtQueue {
@@ -1163,9 +1179,15 @@ impl VirtQueue {
         let base_ptr = frame.ptr();
         frame.as_mut_slice().fill(0);
 
-        let queue_align = core::mem::size_of::<VirtqUsedElem>();
         let frame_capacity = frame.as_mut_slice().len();
-        let layout = VirtqLayout::compute(size, queue_align, frame_capacity)?;
+        let layout = VirtqLayout::compute(queue_size, frame_capacity)?;
+
+        let base_paddr = frame.paddr();
+        let desc_paddr = base_paddr;
+        let avail_paddr = base_paddr + layout.avail_offset;
+        let used_paddr = base_paddr + layout.used_offset;
+
+        layout.validate(base_paddr, frame_capacity)?;
 
         let desc_ptr = base_ptr.cast::<VirtqDesc>();
         let avail_ptr = unsafe {
@@ -1176,27 +1198,41 @@ impl VirtQueue {
         };
 
         regs.select_queue(index);
+        let max = regs.queue_num_max();
+        if queue_size == 0 || queue_size as u32 > max {
+            error!(
+                target: "net-console",
+                "[virtio-net] queue {} unsupported size: requested={} max={}",
+                index,
+                queue_size,
+                max
+            );
+            return Err(DriverError::NoQueue);
+        }
         regs.set_queue_size(queue_size);
-        regs.set_queue_align(queue_align as u32);
-        let base_paddr = frame.paddr();
-        let queue_pfn = (base_paddr >> seL4_PageBits) as u32;
-        regs.set_queue_pfn(queue_pfn);
+        regs.set_queue_desc(desc_paddr as u64);
+        regs.set_queue_avail(avail_paddr as u64);
+        regs.set_queue_used(used_paddr as u64);
         regs.queue_ready(1);
+        let ready = regs.queue_ready_state();
         info!(
             target: "net-console",
-            "[virtio-net] queue {} configured: size={} pfn=0x{:x}",
+            "[virtio-net] queue {} configured: size={} desc=0x{:x} avail=0x{:x} used=0x{:x} ready={}",
             index,
             queue_size,
-            queue_pfn
+            desc_paddr,
+            avail_paddr,
+            used_paddr,
+            ready
         );
         info!(
             target: "net-console",
             "[virtio-net] queue {} layout: base_paddr=0x{:x} desc=0x{:x} avail=0x{:x} used=0x{:x} desc_len={} avail_len={} used_len={} total_len={}",
             index,
             base_paddr,
-            base_paddr,
-            base_paddr + layout.avail_offset,
-            base_paddr + layout.used_offset,
+            desc_paddr,
+            avail_paddr,
+            used_paddr,
             layout.desc_len,
             layout.avail_len,
             layout.used_len,
@@ -1211,8 +1247,10 @@ impl VirtQueue {
             avail: avail_ptr,
             used: used_ptr,
             last_used: 0,
-            pfn: queue_pfn,
             base_paddr,
+            desc_paddr,
+            avail_paddr,
+            used_paddr,
         })
     }
 
@@ -1231,11 +1269,13 @@ impl VirtQueue {
         unsafe {
             let ring_ptr = (*avail).ring.as_ptr().add(ring_slot as usize) as *mut u16;
             write_volatile(ring_ptr, index);
+            fence(AtomicOrdering::Release);
             write_volatile(&mut (*avail).idx, idx.wrapping_add(1));
         }
     }
 
     fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) {
+        fence(AtomicOrdering::Release);
         regs.notify(queue);
     }
 
@@ -1288,6 +1328,7 @@ impl VirtQueue {
         if self.last_used == idx {
             return None;
         }
+        fence(AtomicOrdering::Acquire);
         let ring_slot = self.last_used % self.size;
         let elem_ptr =
             unsafe { (*used).ring.as_ptr().add(ring_slot as usize) as *const VirtqUsedElem };
@@ -1346,23 +1387,23 @@ struct VirtqLayout {
 }
 
 impl VirtqLayout {
-    fn compute(
-        queue_size: usize,
-        queue_align: usize,
-        frame_capacity: usize,
-    ) -> Result<Self, DriverError> {
-        debug_assert!(queue_align.is_power_of_two());
-
+    fn compute(queue_size: u16, frame_capacity: usize) -> Result<Self, DriverError> {
+        let size = queue_size as usize;
         let desc_len = core::mem::size_of::<VirtqDesc>()
-            .checked_mul(queue_size)
+            .checked_mul(size)
             .ok_or(DriverError::NoQueue)?;
-        let avail_len = core::mem::size_of::<VirtqAvail>()
-            .checked_add(core::mem::size_of::<u16>() * queue_size)
+        let avail_offset = align_up(desc_len, 2);
+        let avail_len = 6usize
+            .checked_add(core::mem::size_of::<u16>() * size)
             .ok_or(DriverError::NoQueue)?;
-        let avail_offset = desc_len;
-        let used_offset = align_up(desc_len + avail_len, queue_align);
-        let used_len = core::mem::size_of::<VirtqUsed>()
-            .checked_add(core::mem::size_of::<VirtqUsedElem>() * queue_size)
+        let used_offset = align_up(
+            avail_offset
+                .checked_add(avail_len)
+                .ok_or(DriverError::NoQueue)?,
+            4,
+        );
+        let used_len = 6usize
+            .checked_add(core::mem::size_of::<VirtqUsedElem>() * size)
             .ok_or(DriverError::NoQueue)?;
         let total_len = used_offset
             .checked_add(used_len)
@@ -1386,6 +1427,69 @@ impl VirtqLayout {
             used_len,
             total_len,
         })
+    }
+
+    fn validate(&self, base_paddr: usize, frame_capacity: usize) -> Result<(), DriverError> {
+        let desc_paddr = base_paddr;
+        let avail_paddr = base_paddr
+            .checked_add(self.avail_offset)
+            .ok_or(DriverError::NoQueue)?;
+        let used_paddr = base_paddr
+            .checked_add(self.used_offset)
+            .ok_or(DriverError::NoQueue)?;
+        let frame_end = base_paddr
+            .checked_add(frame_capacity)
+            .ok_or(DriverError::NoQueue)?;
+
+        let desc_end = desc_paddr
+            .checked_add(self.desc_len)
+            .ok_or(DriverError::NoQueue)?;
+        let avail_end = avail_paddr
+            .checked_add(self.avail_len)
+            .ok_or(DriverError::NoQueue)?;
+        let used_end = used_paddr
+            .checked_add(self.used_len)
+            .ok_or(DriverError::NoQueue)?;
+
+        let regions = [
+            ("desc", desc_paddr, desc_end, 16usize),
+            ("avail", avail_paddr, avail_end, 2usize),
+            ("used", used_paddr, used_end, 4usize),
+        ];
+
+        for (label, start, end, align) in regions {
+            if start == 0 || start % align != 0 || end > frame_end {
+                error!(
+                    target: "net-console",
+                    "[virtio-net] virtqueue {label} region invalid: start=0x{start:x} end=0x{end:x} align={} frame_end=0x{frame_end:x}",
+                    align
+                );
+                return Err(DriverError::NoQueue);
+            }
+        }
+
+        if desc_end > avail_paddr || avail_end > used_paddr {
+            error!(
+                target: "net-console",
+                "[virtio-net] virtqueue regions overlap: desc_end=0x{desc_end:x} avail_start=0x{avail_paddr:x} used_start=0x{used_paddr:x}",
+            );
+            return Err(DriverError::NoQueue);
+        }
+
+        info!(
+            target: "net-console",
+            "[virtio-net] virtqueue layout validated: desc=0x{:x}-0x{:x} avail=0x{:x}-0x{:x} used=0x{:x}-0x{:x} total_len={} frame_len={}",
+            desc_paddr,
+            desc_end,
+            avail_paddr,
+            avail_end,
+            used_paddr,
+            used_end,
+            self.total_len,
+            frame_capacity,
+        );
+
+        Ok(())
     }
 }
 
