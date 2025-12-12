@@ -6,7 +6,7 @@ use crate::bootstrap::log::force_uart_line;
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
-use crate::sel4::{self, is_boot_reserved_slot, BootInfoExt, BootInfoView, WORD_BITS};
+use crate::sel4::{self, is_boot_reserved_slot, BootInfoExt, BootInfoView, CapTag, WORD_BITS};
 use core::fmt::Write;
 use heapless::String;
 
@@ -872,6 +872,28 @@ impl CSpaceCtx {
         ctx
     }
 
+    fn assert_bootstrap_invariants(&self) {
+        assert_ne!(
+            self.root_cnode_cap,
+            sel4::seL4_CapNull,
+            "init CNode cap must never be null",
+        );
+        let ident = sel4::debug_cap_identify(self.root_cnode_cap);
+        assert!(
+            ident == 0 || matches!(CapTag::from_raw(ident), Some(CapTag::CNode)),
+            "init CNode cap 0x{cap:04x} identify=0x{ident:08x} is not a CNode",
+            cap = self.root_cnode_cap,
+        );
+        let next = self.cspace.next_free_slot();
+        assert!(
+            next >= self.first_free && next < self.last_free,
+            "next slot 0x{next:04x} outside boot window [0x{lo:04x}..0x{hi:04x})",
+            lo = self.first_free,
+            hi = self.last_free,
+        );
+        assert!(next != 0, "slot 0 must never be reused as a destination");
+    }
+
     #[inline(always)]
     /// Returns the depth (in bits) of the init thread's root CNode.
     pub fn cnode_bits(&self) -> u8 {
@@ -909,6 +931,7 @@ impl CSpaceCtx {
     #[inline(always)]
     /// Attempts to reserve the next available slot while enforcing boot window and reservation checks.
     pub fn alloc_slot_checked(&mut self) -> Result<sel4::seL4_CPtr, sel4::seL4_Error> {
+        self.assert_bootstrap_invariants();
         loop {
             let candidate = self.cspace.next_free_slot();
             cspace_sys::check_slot_in_range(self.init_cnode_bits, candidate);
@@ -1089,6 +1112,7 @@ impl CSpaceCtx {
         rights: sel4_sys::seL4_CapRights,
         badge: sel4::seL4_Word,
     ) -> sel4::seL4_Error {
+        self.assert_bootstrap_invariants();
         let err = cspace_sys::cnode_mint_raw_single(
             self.bi.header(),
             self.canonical_root_cap as sel4_sys::seL4_CNode,
@@ -1107,6 +1131,7 @@ impl CSpaceCtx {
         dst_slot: sel4::seL4_CPtr,
         src_slot: sel4::seL4_CPtr,
     ) -> sel4::seL4_Error {
+        self.assert_bootstrap_invariants();
         #[cfg(all(feature = "kernel", sel4_config_debug_build))]
         {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
@@ -1157,6 +1182,7 @@ impl CSpaceCtx {
         size_bits: sel4::seL4_Word,
         dst_slot: sel4::seL4_CPtr,
     ) -> sel4::seL4_Error {
+        self.assert_bootstrap_invariants();
         let first_free = self.first_free;
         assert!(
             dst_slot >= first_free,
