@@ -58,6 +58,8 @@ pub enum Command {
     },
     Log,
     Quit,
+    NetTest,
+    NetStats,
     Spawn(String<MAX_JSON_LEN>),
     Kill(String<MAX_ID_LEN>),
 }
@@ -437,6 +439,8 @@ impl CommandParser {
             v if v.eq_ignore_ascii_case("caps") => Ok(Command::Caps),
             v if v.eq_ignore_ascii_case("mem") => Ok(Command::Mem),
             v if v.eq_ignore_ascii_case("ping") => Ok(Command::Ping),
+            v if v.eq_ignore_ascii_case("nettest") => Ok(Command::NetTest),
+            v if v.eq_ignore_ascii_case("netstats") => Ok(Command::NetStats),
             v if v.eq_ignore_ascii_case("log") => Ok(Command::Log),
             v if v.eq_ignore_ascii_case("quit") => Ok(Command::Quit),
             v if v.eq_ignore_ascii_case("tail") => {
@@ -552,5 +556,15 @@ mod tests {
         assert!(parser.record_login_attempt(false, 1_000).is_ok());
         assert!(parser.record_login_attempt(false, 10_000).is_ok());
         assert!(parser.record_login_attempt(false, 20_000).is_err());
+    }
+
+    #[test]
+    fn nettest_command_parses() {
+        assert_eq!(parse("nettest\n").unwrap(), Command::NetTest);
+    }
+
+    #[test]
+    fn netstats_command_parses() {
+        assert_eq!(parse("netstats\n").unwrap(), Command::NetStats);
     }
 }

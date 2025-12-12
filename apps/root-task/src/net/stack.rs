@@ -28,6 +28,10 @@ use smoltcp::socket::tcp::{
     RecvError as TcpRecvError, Socket as TcpSocket, SocketBuffer as TcpSocketBuffer,
     State as TcpState,
 };
+use smoltcp::socket::udp::{
+    BindError as UdpBindError, PacketBuffer as UdpPacketBuffer,
+    PacketMetadata as UdpPacketMetadata, RecvError as UdpRecvError, Socket as UdpSocket,
+};
 use smoltcp::time::Instant;
 use smoltcp::wire::{
     EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, Ipv4Address,
@@ -35,8 +39,9 @@ use smoltcp::wire::{
 
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
-    ConsoleNetConfig, NetBackend, NetConsoleEvent, NetDevice, NetDriverError, NetPoller,
-    NetTelemetry, DEFAULT_NET_BACKEND, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
+    ConsoleNetConfig, NetBackend, NetConsoleEvent, NetCounters, NetDevice, NetDriverError,
+    NetPoller, NetSelfTestReport, NetSelfTestResult, NetTelemetry, DEFAULT_NET_BACKEND,
+    DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
 };
 #[cfg(not(feature = "net-backend-virtio"))]
 use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
@@ -48,12 +53,23 @@ use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR};
 
 const TCP_RX_BUFFER: usize = 2048;
 const TCP_TX_BUFFER: usize = 2048;
-const SOCKET_CAPACITY: usize = 4;
+const TCP_SMOKE_RX_BUFFER: usize = 256;
+const TCP_SMOKE_TX_BUFFER: usize = 256;
+const SOCKET_CAPACITY: usize = 6;
 const MAX_TX_BUDGET: usize = 8;
 const RANDOM_SEED: u64 = 0x5a5a_5a5a_1234_5678;
 const ECHO_MODE: bool = cfg!(feature = "tcp-echo-31337");
 const ERR_AUTH_REASON_TIMEOUT: &str = "ERR AUTH reason=timeout";
 const ERR_CONSOLE_REASON_TIMEOUT: &str = "ERR CONSOLE reason=timeout";
+const UDP_METADATA_CAPACITY: usize = 8;
+const UDP_PAYLOAD_CAPACITY: usize = 512;
+const UDP_ECHO_PORT: u16 = 31_338;
+const UDP_BEACON_PORT: u16 = 40_000;
+const TCP_SMOKE_PORT: u16 = 31_339;
+const SELF_TEST_ENABLED: bool = cfg!(feature = "dev-virt") || cfg!(feature = "net-selftest");
+const SELF_TEST_BEACON_INTERVAL_MS: u64 = 250;
+const SELF_TEST_BEACON_WINDOW_MS: u64 = 5_000;
+const SELF_TEST_WINDOW_MS: u64 = 15_000;
 
 #[cfg(feature = "net-backend-virtio")]
 type DefaultNetDevice = VirtioNet;
@@ -75,6 +91,10 @@ pub enum NetStackError<DE> {
     SocketStorageInUse,
     TcpRxStorageInUse,
     TcpTxStorageInUse,
+    TcpSmokeRxStorageInUse,
+    TcpSmokeTxStorageInUse,
+    UdpBeaconStorageInUse,
+    UdpEchoStorageInUse,
 }
 
 impl<DE: fmt::Display> fmt::Display for NetStackError<DE> {
@@ -84,6 +104,10 @@ impl<DE: fmt::Display> fmt::Display for NetStackError<DE> {
             Self::SocketStorageInUse => f.write_str("socket storage already in use"),
             Self::TcpRxStorageInUse => f.write_str("TCP RX storage already in use"),
             Self::TcpTxStorageInUse => f.write_str("TCP TX storage already in use"),
+            Self::TcpSmokeRxStorageInUse => f.write_str("TCP smoke test RX storage already in use"),
+            Self::TcpSmokeTxStorageInUse => f.write_str("TCP smoke test TX storage already in use"),
+            Self::UdpBeaconStorageInUse => f.write_str("UDP beacon storage already in use"),
+            Self::UdpEchoStorageInUse => f.write_str("UDP echo storage already in use"),
         }
     }
 }
@@ -182,6 +206,24 @@ static TCP_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static mut TCP_RX_STORAGE: [u8; TCP_RX_BUFFER] = [0u8; TCP_RX_BUFFER];
 static TCP_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static mut TCP_TX_STORAGE: [u8; TCP_TX_BUFFER] = [0u8; TCP_TX_BUFFER];
+static TCP_SMOKE_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static mut TCP_SMOKE_RX_STORAGE: [u8; TCP_SMOKE_RX_BUFFER] = [0u8; TCP_SMOKE_RX_BUFFER];
+static TCP_SMOKE_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static mut TCP_SMOKE_TX_STORAGE: [u8; TCP_SMOKE_TX_BUFFER] = [0u8; TCP_SMOKE_TX_BUFFER];
+static UDP_BEACON_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static UDP_ECHO_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static UDP_BEACON_RX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
+    [UdpPacketMetadata::EMPTY; UDP_METADATA_CAPACITY];
+static UDP_BEACON_TX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
+    [UdpPacketMetadata::EMPTY; UDP_METADATA_CAPACITY];
+static UDP_ECHO_RX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
+    [UdpPacketMetadata::EMPTY; UDP_METADATA_CAPACITY];
+static UDP_ECHO_TX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
+    [UdpPacketMetadata::EMPTY; UDP_METADATA_CAPACITY];
+static mut UDP_BEACON_RX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_CAPACITY];
+static mut UDP_BEACON_TX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_CAPACITY];
+static mut UDP_ECHO_RX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_CAPACITY];
+static mut UDP_ECHO_TX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_CAPACITY];
 
 /// Shared monotonic clock for the interface.
 #[derive(Debug, Default)]
@@ -243,6 +285,11 @@ pub struct NetStack<D: NetDevice> {
     service_logged: bool,
     last_poll_snapshot: Option<PollSnapshot>,
     peer_endpoint: Option<(IpAddress, u16)>,
+    udp_beacon_handle: Option<SocketHandle>,
+    udp_echo_handle: Option<SocketHandle>,
+    tcp_smoke_handle: Option<SocketHandle>,
+    counters: NetCounters,
+    self_test: SelfTestState,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -254,6 +301,89 @@ struct PollSnapshot {
     can_recv: bool,
     can_send: bool,
     staged_events: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct SelfTestState {
+    enabled: bool,
+    running: bool,
+    started_ms: u64,
+    last_beacon_ms: u64,
+    beacon_seq: u32,
+    beacons_sent: u32,
+    tx_ok: bool,
+    udp_echo_ok: bool,
+    tcp_ok: bool,
+    tcp_accept_seen: bool,
+    last_result: Option<NetSelfTestResult>,
+}
+
+impl SelfTestState {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            ..Self::default()
+        }
+    }
+
+    fn reset(&mut self, now_ms: u64) {
+        self.running = true;
+        self.started_ms = now_ms;
+        self.last_beacon_ms = now_ms.saturating_sub(SELF_TEST_BEACON_INTERVAL_MS);
+        self.beacon_seq = 0;
+        self.beacons_sent = 0;
+        self.tx_ok = false;
+        self.udp_echo_ok = false;
+        self.tcp_ok = false;
+        self.tcp_accept_seen = false;
+        self.last_result = None;
+    }
+
+    fn start(&mut self, now_ms: u64) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        self.reset(now_ms);
+        true
+    }
+
+    fn record_tx(&mut self) {
+        self.tx_ok = true;
+    }
+
+    fn record_udp_echo(&mut self) {
+        self.udp_echo_ok = true;
+    }
+
+    fn record_tcp_ok(&mut self) {
+        self.tcp_ok = true;
+    }
+
+    fn conclude_if_needed(&mut self, now_ms: u64) -> Option<NetSelfTestResult> {
+        if !self.running {
+            return None;
+        }
+        let deadline_reached = now_ms.saturating_sub(self.started_ms) >= SELF_TEST_WINDOW_MS;
+        if self.tx_ok && self.udp_echo_ok && self.tcp_ok || deadline_reached {
+            let result = NetSelfTestResult {
+                tx_ok: self.tx_ok,
+                udp_echo_ok: self.udp_echo_ok,
+                tcp_ok: self.tcp_ok,
+            };
+            self.last_result = Some(result);
+            self.running = false;
+            return Some(result);
+        }
+        None
+    }
+
+    fn report(&self) -> NetSelfTestReport {
+        NetSelfTestReport {
+            enabled: self.enabled,
+            running: self.running,
+            last_result: self.last_result,
+        }
+    }
 }
 
 fn prefix_to_netmask(prefix_len: u8) -> Ipv4Address {
@@ -567,6 +697,38 @@ impl<D: NetDevice> NetStack<D> {
             StorageGuard::acquire(&TCP_RX_STORAGE_IN_USE, NetStackError::TcpRxStorageInUse)?;
         let tx_guard =
             StorageGuard::acquire(&TCP_TX_STORAGE_IN_USE, NetStackError::TcpTxStorageInUse)?;
+        let tcp_smoke_rx_guard = if SELF_TEST_ENABLED {
+            Some(StorageGuard::acquire(
+                &TCP_SMOKE_RX_STORAGE_IN_USE,
+                NetStackError::TcpSmokeRxStorageInUse,
+            )?)
+        } else {
+            None
+        };
+        let tcp_smoke_tx_guard = if SELF_TEST_ENABLED {
+            Some(StorageGuard::acquire(
+                &TCP_SMOKE_TX_STORAGE_IN_USE,
+                NetStackError::TcpSmokeTxStorageInUse,
+            )?)
+        } else {
+            None
+        };
+        let udp_beacon_guard = if SELF_TEST_ENABLED {
+            Some(StorageGuard::acquire(
+                &UDP_BEACON_STORAGE_IN_USE,
+                NetStackError::UdpBeaconStorageInUse,
+            )?)
+        } else {
+            None
+        };
+        let udp_echo_guard = if SELF_TEST_ENABLED {
+            Some(StorageGuard::acquire(
+                &UDP_ECHO_STORAGE_IN_USE,
+                NetStackError::UdpEchoStorageInUse,
+            )?)
+        } else {
+            None
+        };
 
         let clock = NetworkClock::new();
         let mut iface_config = IfaceConfig::new(HardwareAddress::Ethernet(mac));
@@ -624,11 +786,29 @@ impl<D: NetDevice> NetStack<D> {
             service_logged: false,
             last_poll_snapshot: None,
             peer_endpoint: None,
+            udp_beacon_handle: None,
+            udp_echo_handle: None,
+            tcp_smoke_handle: None,
+            counters: NetCounters::default(),
+            self_test: SelfTestState::new(SELF_TEST_ENABLED),
         };
         stack.initialise_socket();
+        stack.initialise_self_test_sockets();
         socket_guard.disarm();
         rx_guard.disarm();
         tx_guard.disarm();
+        if let Some(guard) = tcp_smoke_rx_guard {
+            guard.disarm();
+        }
+        if let Some(guard) = tcp_smoke_tx_guard {
+            guard.disarm();
+        }
+        if let Some(guard) = udp_beacon_guard {
+            guard.disarm();
+        }
+        if let Some(guard) = udp_echo_guard {
+            guard.disarm();
+        }
         info!(
             target: "net-console",
             "[net-console] init: TCP listener socket prepared (port={})",
@@ -652,6 +832,83 @@ impl<D: NetDevice> NetStack<D> {
         self.tcp_handle = self.sockets.add(tcp_socket);
     }
 
+    fn initialise_self_test_sockets(&mut self) {
+        if !SELF_TEST_ENABLED {
+            return;
+        }
+
+        unsafe {
+            let rx_buffer =
+                UdpPacketBuffer::new(&UDP_BEACON_RX_METADATA[..], &mut UDP_BEACON_RX_STORAGE[..]);
+            let tx_buffer =
+                UdpPacketBuffer::new(&UDP_BEACON_TX_METADATA[..], &mut UDP_BEACON_TX_STORAGE[..]);
+            let mut beacon_socket = UdpSocket::new(rx_buffer, tx_buffer);
+            let beacon_endpoint = IpListenEndpoint {
+                addr: Some(IpAddress::Ipv4(self.ip)),
+                port: UDP_BEACON_PORT,
+            };
+            if let Err(err) = beacon_socket.bind(beacon_endpoint) {
+                warn!(
+                    "[net-selftest] failed to bind UDP beacon socket port={}: {:?}",
+                    UDP_BEACON_PORT, err
+                );
+            } else {
+                self.udp_beacon_handle = Some(self.sockets.add(beacon_socket));
+            }
+        }
+
+        unsafe {
+            let rx_buffer =
+                UdpPacketBuffer::new(&UDP_ECHO_RX_METADATA[..], &mut UDP_ECHO_RX_STORAGE[..]);
+            let tx_buffer =
+                UdpPacketBuffer::new(&UDP_ECHO_TX_METADATA[..], &mut UDP_ECHO_TX_STORAGE[..]);
+            let mut echo_socket = UdpSocket::new(rx_buffer, tx_buffer);
+            let echo_endpoint = IpListenEndpoint {
+                addr: Some(IpAddress::UNSPECIFIED),
+                port: UDP_ECHO_PORT,
+            };
+            match echo_socket.bind(echo_endpoint) {
+                Ok(()) => {
+                    info!(
+                        "[net-selftest] udp-echo ready on 0.0.0.0:{} (beacon dst=10.0.2.2:{})",
+                        UDP_ECHO_PORT, UDP_ECHO_PORT
+                    );
+                    self.udp_echo_handle = Some(self.sockets.add(echo_socket));
+                }
+                Err(UdpBindError::Unaddressable) => {
+                    warn!(
+                        "[net-selftest] failed to bind UDP echo port {}: unaddressable",
+                        UDP_ECHO_PORT
+                    );
+                }
+                Err(UdpBindError::InvalidState) => {
+                    warn!(
+                        "[net-selftest] failed to bind UDP echo port {}: invalid state",
+                        UDP_ECHO_PORT
+                    );
+                }
+            }
+        }
+
+        unsafe {
+            let rx_buffer = TcpSocketBuffer::new(&mut TCP_SMOKE_RX_STORAGE[..]);
+            let tx_buffer = TcpSocketBuffer::new(&mut TCP_SMOKE_TX_STORAGE[..]);
+            let mut tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
+            if let Err(err) = tcp_socket.listen(TCP_SMOKE_PORT) {
+                warn!(
+                    "[net-selftest] failed to start TCP smoke listener on port {}: {:?}",
+                    TCP_SMOKE_PORT, err
+                );
+            } else {
+                info!(
+                    "[net-selftest] tcp-smoke listener ready on 0.0.0.0:{}",
+                    TCP_SMOKE_PORT
+                );
+                self.tcp_smoke_handle = Some(self.sockets.add(tcp_socket));
+            }
+        }
+    }
+
     /// Polls the network stack using a host-supplied monotonic timestamp in milliseconds.
     pub fn poll_with_time(&mut self, now_ms: u64) -> bool {
         if !self.service_logged {
@@ -672,6 +929,7 @@ impl<D: NetDevice> NetStack<D> {
             self.device.debug_snapshot();
         }
 
+        self.bump_poll_counter();
         let mut poll_result = self
             .interface
             .poll(timestamp, &mut self.device, &mut self.sockets);
@@ -688,6 +946,7 @@ impl<D: NetDevice> NetStack<D> {
         // responses (including AUTH acknowledgements) are flushed to the wire
         // without waiting for the next timer tick.
         if tcp_activity {
+            self.bump_poll_counter();
             poll_result = self
                 .interface
                 .poll(timestamp, &mut self.device, &mut self.sockets);
@@ -697,11 +956,252 @@ impl<D: NetDevice> NetStack<D> {
             }
         }
 
+        if self.service_self_test(now_ms, timestamp) {
+            activity = true;
+        }
+
         self.telemetry.last_poll_ms = now_ms;
         if activity {
             self.telemetry.link_up = true;
         }
         self.telemetry.tx_drops = self.device.tx_drop_count();
+        self.sync_device_counters();
+        activity
+    }
+
+    fn bump_poll_counter(&mut self) {
+        self.counters.smoltcp_polls = self.counters.smoltcp_polls.saturating_add(1);
+    }
+
+    fn sync_device_counters(&mut self) {
+        let device_counters = self.device.counters();
+        self.counters.rx_packets = device_counters.rx_packets;
+        self.counters.tx_packets = device_counters.tx_packets;
+        self.counters.rx_used_advances = device_counters.rx_used_advances;
+        self.counters.tx_used_advances = device_counters.tx_used_advances;
+    }
+
+    fn log_self_test_result(&self, result: NetSelfTestResult) {
+        info!(
+            "[net-selftest] result tx_ok={} udp_echo_ok={} tcp_ok={}",
+            result.tx_ok, result.udp_echo_ok, result.tcp_ok
+        );
+        if !result.tx_ok {
+            info!("[net-selftest] hint: TX not visible → queue notify / cache / descriptors");
+        } else if !result.udp_echo_ok {
+            info!(
+                "[net-selftest] hint: RX never arrives → buffers not posted / used ring not read / IRQ missing"
+            );
+        } else if !result.tcp_ok {
+            info!("[net-selftest] hint: TCP accepts but no bytes → poll loop scheduling / RX path");
+        }
+    }
+
+    fn service_self_test(&mut self, now_ms: u64, timestamp: Instant) -> bool {
+        if !SELF_TEST_ENABLED {
+            return false;
+        }
+
+        if let Some(result) = self.self_test.conclude_if_needed(now_ms) {
+            self.log_self_test_result(result);
+        }
+
+        let mut activity = false;
+        if self.self_test.running
+            && now_ms.saturating_sub(self.self_test.last_beacon_ms) >= SELF_TEST_BEACON_INTERVAL_MS
+            && now_ms.saturating_sub(self.self_test.started_ms) <= SELF_TEST_BEACON_WINDOW_MS
+        {
+            activity |= self.send_udp_beacon();
+            self.self_test.last_beacon_ms = now_ms;
+        }
+
+        activity |= self.poll_udp_echo();
+        activity |= self.poll_tcp_smoke(now_ms);
+
+        if activity {
+            self.bump_poll_counter();
+            let poll_result = self
+                .interface
+                .poll(timestamp, &mut self.device, &mut self.sockets);
+            if poll_result != PollResult::None {
+                info!("[net-selftest] post-selftest poll flushed pending work");
+            }
+        }
+
+        if let Some(result) = self.self_test.conclude_if_needed(now_ms) {
+            self.log_self_test_result(result);
+        }
+
+        activity
+    }
+
+    fn send_udp_beacon(&mut self) -> bool {
+        let Some(handle) = self.udp_beacon_handle else {
+            return false;
+        };
+        let socket = self.sockets.get_mut::<UdpSocket>(handle);
+        if !socket.can_send() {
+            return false;
+        }
+
+        let mut payload = HeaplessString::<64>::new();
+        let _ = write!(&mut payload, "COHESIX_NET_OK {}", self.self_test.beacon_seq);
+        let endpoint = IpEndpoint::new(IpAddress::Ipv4(DEV_VIRT_GATEWAY), UDP_ECHO_PORT);
+        match socket.send_slice(payload.as_bytes(), endpoint) {
+            Ok(()) => {
+                self.counters.udp_tx = self.counters.udp_tx.saturating_add(1);
+                self.self_test.beacon_seq = self.self_test.beacon_seq.wrapping_add(1);
+                self.self_test.beacons_sent = self.self_test.beacons_sent.saturating_add(1);
+                self.self_test.record_tx();
+                info!(
+                    "[net-selftest] udp-beacon queued seq={} -> {}:{} payload='{}'",
+                    self.self_test.beacon_seq.saturating_sub(1),
+                    DEV_VIRT_GATEWAY,
+                    UDP_ECHO_PORT,
+                    payload
+                );
+                true
+            }
+            Err(err) => {
+                warn!(
+                    "[net-selftest] udp-beacon send failed seq={} err={:?}",
+                    self.self_test.beacon_seq, err
+                );
+                false
+            }
+        }
+    }
+
+    fn poll_udp_echo(&mut self) -> bool {
+        let Some(handle) = self.udp_echo_handle else {
+            return false;
+        };
+        let socket = self.sockets.get_mut::<UdpSocket>(handle);
+        let mut activity = false;
+        loop {
+            match socket.recv() {
+                Ok((payload, meta)) => {
+                    let endpoint = meta.endpoint;
+                    let mut reply_len = 0usize;
+                    let mut reply = [0u8; UDP_PAYLOAD_CAPACITY];
+                    let prefix = b"ECHO:";
+                    reply[..prefix.len()].copy_from_slice(prefix);
+                    let copy_len =
+                        core::cmp::min(payload.len(), reply.len().saturating_sub(prefix.len()));
+                    reply[prefix.len()..prefix.len() + copy_len]
+                        .copy_from_slice(&payload[..copy_len]);
+                    reply_len = prefix.len() + copy_len;
+                    self.counters.udp_rx = self.counters.udp_rx.saturating_add(1);
+                    if self.self_test.running {
+                        self.self_test.record_udp_echo();
+                    }
+                    info!(
+                        "[net-selftest] udp-echo rx len={} from {}:{}",
+                        payload.len(),
+                        endpoint.addr,
+                        endpoint.port
+                    );
+                    match socket.send_slice(&reply[..reply_len], endpoint) {
+                        Ok(()) => {
+                            self.counters.udp_tx = self.counters.udp_tx.saturating_add(1);
+                            if self.self_test.running {
+                                self.self_test.record_udp_echo();
+                            }
+                            info!(
+                                "[net-selftest] udp-echo tx len={} to {}:{}",
+                                reply_len, endpoint.addr, endpoint.port
+                            );
+                        }
+                        Err(err) => {
+                            warn!(
+                                "[net-selftest] udp-echo send failed len={} err={:?}",
+                                reply_len, err
+                            );
+                        }
+                    }
+                    activity = true;
+                }
+                Err(UdpRecvError::Exhausted) => break,
+                Err(UdpRecvError::Truncated) => {
+                    warn!("[net-selftest] udp-echo truncated packet dropped");
+                    break;
+                }
+            }
+        }
+
+        activity
+    }
+
+    fn poll_tcp_smoke(&mut self, now_ms: u64) -> bool {
+        let Some(handle) = self.tcp_smoke_handle else {
+            return false;
+        };
+        let socket = self.sockets.get_mut::<TcpSocket>(handle);
+        if !socket.is_open() {
+            let _ = socket.listen(TCP_SMOKE_PORT);
+            return false;
+        }
+
+        let mut activity = false;
+        if socket.state() == TcpState::Established {
+            if !self.self_test.tcp_accept_seen {
+                self.self_test.tcp_accept_seen = true;
+                self.counters.tcp_accepts = self.counters.tcp_accepts.saturating_add(1);
+                info!(
+                    "[net-selftest] tcp-smoke accept peer={:?}",
+                    socket.remote_endpoint()
+                );
+            }
+
+            let mut copied = 0usize;
+            let mut temp = [0u8; 64];
+            while socket.can_recv() {
+                let recv_result = socket.recv(|data| {
+                    let copy_len = core::cmp::min(data.len(), temp.len());
+                    temp[..copy_len].copy_from_slice(&data[..copy_len]);
+                    copied = copy_len;
+                    (copy_len, ())
+                });
+                if recv_result.is_err() || copied == 0 {
+                    break;
+                }
+                self.counters.tcp_rx_bytes =
+                    self.counters.tcp_rx_bytes.saturating_add(copied as u64);
+                info!(
+                    "[net-selftest] tcp-smoke recv bytes={} state={:?}",
+                    copied,
+                    socket.state()
+                );
+                activity = true;
+                break;
+            }
+
+            if socket.can_send() && (copied > 0 || !socket.can_recv()) {
+                match socket.send_slice(b"OK\n") {
+                    Ok(sent) => {
+                        self.counters.tcp_tx_bytes =
+                            self.counters.tcp_tx_bytes.saturating_add(sent as u64);
+                        self.self_test.record_tcp_ok();
+                        info!(
+                            "[net-selftest] tcp-smoke reply sent bytes={} close_reason=active",
+                            sent
+                        );
+                        socket.close();
+                    }
+                    Err(err) => {
+                        warn!("[net-selftest] tcp-smoke send failed err={:?}", err);
+                    }
+                }
+            } else if socket.state() == TcpState::CloseWait {
+                info!("[net-selftest] tcp-smoke peer closed (now_ms={})", now_ms);
+                socket.close();
+            }
+        }
+
+        if matches!(socket.state(), TcpState::Closed) {
+            let _ = socket.listen(TCP_SMOKE_PORT);
+        }
+
         activity
     }
 
@@ -844,6 +1344,7 @@ impl<D: NetDevice> NetStack<D> {
                         &mut self.server,
                         &mut self.telemetry,
                         &mut self.conn_bytes_written,
+                        &mut self.counters,
                         socket,
                         now_ms,
                         self.active_client_id,
@@ -867,6 +1368,7 @@ impl<D: NetDevice> NetStack<D> {
                     );
                 }
                 self.session_active = true;
+                self.counters.tcp_accepts = self.counters.tcp_accepts.saturating_add(1);
             }
 
             if socket.can_recv() {
@@ -907,6 +1409,8 @@ impl<D: NetDevice> NetStack<D> {
                             let conn_id = self.active_client_id.unwrap_or(0);
                             self.conn_bytes_read =
                                 self.conn_bytes_read.saturating_add(copied as u64);
+                            self.counters.tcp_rx_bytes =
+                                self.counters.tcp_rx_bytes.saturating_add(copied as u64);
                             let dump_len = core::cmp::min(copied, 32);
                             let (peer_label, peer_port) =
                                 Self::peer_parts(self.peer_endpoint, socket);
@@ -936,6 +1440,8 @@ impl<D: NetDevice> NetStack<D> {
                                     Ok(sent) => {
                                         self.conn_bytes_written =
                                             self.conn_bytes_written.saturating_add(sent as u64);
+                                        self.counters.tcp_tx_bytes =
+                                            self.counters.tcp_tx_bytes.saturating_add(sent as u64);
                                         Self::trace_conn_send(conn_id, &temp[..sent.min(copied)]);
                                     }
                                     Err(err) => {
@@ -1007,6 +1513,7 @@ impl<D: NetDevice> NetStack<D> {
                                         &mut self.server,
                                         &mut self.telemetry,
                                         &mut self.conn_bytes_written,
+                                        &mut self.counters,
                                         socket,
                                         now_ms,
                                         self.active_client_id,
@@ -1031,6 +1538,7 @@ impl<D: NetDevice> NetStack<D> {
                                         &mut self.server,
                                         &mut self.telemetry,
                                         &mut self.conn_bytes_written,
+                                        &mut self.counters,
                                         socket,
                                         now_ms,
                                         self.active_client_id,
@@ -1131,6 +1639,7 @@ impl<D: NetDevice> NetStack<D> {
                     &mut self.server,
                     &mut self.telemetry,
                     &mut self.conn_bytes_written,
+                    &mut self.counters,
                     socket,
                     now_ms,
                     self.active_client_id,
@@ -1174,6 +1683,7 @@ impl<D: NetDevice> NetStack<D> {
                     &mut self.server,
                     &mut self.telemetry,
                     &mut self.conn_bytes_written,
+                    &mut self.counters,
                     socket,
                     now_ms,
                     self.active_client_id,
@@ -1201,6 +1711,7 @@ impl<D: NetDevice> NetStack<D> {
                 &mut self.server,
                 &mut self.telemetry,
                 &mut self.conn_bytes_written,
+                &mut self.counters,
                 socket,
                 now_ms,
                 self.active_client_id,
@@ -1269,6 +1780,7 @@ impl<D: NetDevice> NetStack<D> {
         server: &mut TcpConsoleServer,
         telemetry: &mut NetTelemetry,
         conn_bytes_written: &mut u64,
+        counters: &mut NetCounters,
         socket: &mut TcpSocket,
         now_ms: u64,
         conn_id: Option<u64>,
@@ -1323,6 +1835,7 @@ impl<D: NetDevice> NetStack<D> {
                         &payload[..preview_len],
                     );
                     *conn_bytes_written = conn_bytes_written.saturating_add(sent as u64);
+                    counters.tcp_tx_bytes = counters.tcp_tx_bytes.saturating_add(sent as u64);
                     if !session_state.logged_first_send {
                         info!(
                             target: "root_task::net",
@@ -1457,6 +1970,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.telemetry()
     }
 
+    fn stats(&self) -> NetCounters {
+        self.counters
+    }
+
     fn drain_console_lines(
         &mut self,
         visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
@@ -1487,6 +2004,37 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.session_active = false;
         self.telemetry = NetTelemetry::default();
     }
+
+    fn start_self_test(&mut self, now_ms: u64) -> bool {
+        if !SELF_TEST_ENABLED {
+            return false;
+        }
+        if self.self_test.start(now_ms) {
+            info!(
+                "[net-selftest] starting run (udp dst=10.0.2.2:{} tcp dst=127.0.0.1:{})",
+                UDP_ECHO_PORT, TCP_SMOKE_PORT
+            );
+            info!(
+                "[net-selftest] host capture: tcpdump -i lo0 -n udp port {}",
+                UDP_ECHO_PORT
+            );
+            info!(
+                "[net-selftest] host udp echo: echo -n \"ping\" | nc -u -w1 127.0.0.1 {}",
+                UDP_ECHO_PORT
+            );
+            info!(
+                "[net-selftest] host tcp smoke: printf \"hi\" | nc -v 127.0.0.1 {}",
+                TCP_SMOKE_PORT
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    fn self_test_report(&self) -> NetSelfTestReport {
+        self.self_test.report()
+    }
 }
 
 impl<D: NetDevice> Drop for NetStack<D> {
@@ -1494,6 +2042,10 @@ impl<D: NetDevice> Drop for NetStack<D> {
         SOCKET_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
         TCP_RX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
         TCP_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
+        TCP_SMOKE_RX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
+        TCP_SMOKE_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
+        UDP_BEACON_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
+        UDP_ECHO_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
     }
 }
 

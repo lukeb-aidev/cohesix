@@ -18,7 +18,7 @@ use smoltcp::wire::EthernetAddress;
 
 use crate::hal::pci::{PciBarKind, PciDeviceInfo};
 use crate::hal::{HalError, Hardware, MapPerms, MappedRegion, PciCommandFlags};
-use crate::net::{NetDevice, NetDriverError};
+use crate::net::{NetDevice, NetDeviceCounters, NetDriverError};
 use crate::sel4::RamFrame;
 
 const RTL8139_VENDOR_ID: u16 = 0x10ec;
@@ -77,6 +77,8 @@ pub struct Rtl8139Device {
     rx_offset: usize,
     mac: EthernetAddress,
     tx_drops: u32,
+    rx_packets: u64,
+    tx_packets: u64,
 }
 
 pub struct RxToken {
@@ -136,6 +138,8 @@ impl Rtl8139Device {
             rx_offset: 0,
             mac,
             tx_drops: 0,
+            rx_packets: 0,
+            tx_packets: 0,
         };
 
         device.reset();
@@ -343,6 +347,7 @@ impl<'a> phy::TxToken for TxToken<'a> {
         if let Err(err) = self.device.transmit(filled) {
             warn!("[rtl8139] tx error: {err:?}");
         }
+        self.device.tx_packets = self.device.tx_packets.saturating_add(1);
         result
     }
 }
@@ -362,6 +367,7 @@ impl Device for Rtl8139Device {
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let packet = self.poll_rx()?;
+        self.rx_packets = self.rx_packets.saturating_add(1);
         Some((RxToken { packet }, TxToken { device: self }))
     }
 
@@ -408,6 +414,15 @@ impl NetDevice for Rtl8139Device {
 
     fn tx_drop_count(&self) -> u32 {
         self.tx_drops
+    }
+
+    fn counters(&self) -> NetDeviceCounters {
+        NetDeviceCounters {
+            rx_packets: self.rx_packets,
+            tx_packets: self.tx_packets,
+            rx_used_advances: self.rx_packets,
+            tx_used_advances: self.tx_packets,
+        }
     }
 
     fn name() -> &'static str
