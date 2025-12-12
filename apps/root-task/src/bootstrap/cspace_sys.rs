@@ -307,23 +307,6 @@ pub fn cnode_copy_raw_single(
         let dst_index = dst_slot as sys::seL4_Word;
         let src_index = src_slot as sys::seL4_Word;
         let depth_word = se_l4_wordbits_word();
-
-        panic_on_null_caps(
-            "seL4_CNode_Mint",
-            &[("destRoot", dst_root), ("srcRoot", src_root)],
-        );
-        trace_syscall_request(
-            "seL4_CNode_Mint",
-            &[("destRoot", dst_root), ("srcRoot", src_root)],
-            &[
-                ("dest_slot", dst_index),
-                ("destDepth", depth_word),
-                ("src_slot", src_index),
-                ("srcDepth", depth_word),
-                ("rights", rights.raw()),
-                ("badge", badge),
-            ],
-        );
         let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
 
         panic_on_null_caps(
@@ -659,7 +642,6 @@ fn cnode_copy_with_style(
             ("src_slot", src_index),
             ("srcDepth", depth_word),
             ("rights", rights.raw()),
-            ("badge", badge),
         ],
     );
     ::log::debug!(
@@ -2062,7 +2044,10 @@ pub use bits_as_u8 as super_bits_as_u8_for_test;
 pub mod canonical {
     #[cfg(not(target_os = "none"))]
     use super::host_trace;
-    use super::{debug_log, sel4, slot_index, sys, RootPath};
+    use super::{
+        debug_log, panic_on_null_caps, sel4, slot_index, sys, trace_syscall_request,
+        trace_syscall_result, RootPath,
+    };
 
     #[inline(always)]
     fn build_root_path(slot: u32, bi: &sys::seL4_BootInfo) -> RootPath {

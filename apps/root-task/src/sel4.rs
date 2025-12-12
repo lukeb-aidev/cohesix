@@ -1876,7 +1876,7 @@ impl<'a> UntypedCatalog<'a> {
 }
 
 /// Virtual mapping of a physical device frame.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DeviceFrame {
     cap: seL4_CPtr,
     paddr: usize,
@@ -1904,7 +1904,7 @@ impl DeviceFrame {
 }
 
 /// Virtual mapping of DMA-capable RAM used for driver buffers.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RamFrame {
     cap: seL4_CPtr,
     paddr: usize,

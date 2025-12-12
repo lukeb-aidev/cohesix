@@ -82,24 +82,32 @@ where
 
 #[inline(always)]
 pub unsafe fn write32(base: &mut MmioRegion, offset: usize, value: u32) {
-    let ptr = base.vaddr.add(offset) as *mut u32;
-    ptr::write_volatile(ptr, value);
+    unsafe {
+        let ptr = base.vaddr.add(offset) as *mut u32;
+        ptr::write_volatile(ptr, value);
+    }
 }
 
 #[inline(always)]
 pub unsafe fn write64(base: &mut MmioRegion, offset: usize, value: u64) {
-    let ptr = base.vaddr.add(offset) as *mut u64;
-    ptr::write_volatile(ptr, value);
+    unsafe {
+        let ptr = base.vaddr.add(offset) as *mut u64;
+        ptr::write_volatile(ptr, value);
+    }
 }
 
 #[inline(always)]
 pub unsafe fn read32(base: &MmioRegion, offset: usize) -> u32 {
-    let ptr = base.vaddr.add(offset) as *const u32;
-    ptr::read_volatile(ptr)
+    unsafe {
+        let ptr = base.vaddr.add(offset) as *const u32;
+        ptr::read_volatile(ptr)
+    }
 }
 
 #[inline(always)]
 pub unsafe fn read64(base: &MmioRegion, offset: usize) -> u64 {
-    let ptr = base.vaddr.add(offset) as *const u64;
-    ptr::read_volatile(ptr)
+    unsafe {
+        let ptr = base.vaddr.add(offset) as *const u64;
+        ptr::read_volatile(ptr)
+    }
 }
