@@ -557,7 +557,19 @@ PY
     log "Auto-detected GIC version: gic-version=$GIC_VER"
 
     # Serial output from the PL011 console and root-task logger is expected on stdio via -serial mon:stdio; keep this wiring intact when adjusting runtime flags.
-    QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
+    QEMU_ARGS=(
+        -machine "virt,gic-version=${GIC_VER}"
+        -cpu cortex-a57
+        -m 1024
+        -smp 1
+        -serial mon:stdio
+        -display none
+        -kernel "$ELFLOADER_STAGE_PATH"
+        -initrd "$CPIO_PATH"
+        -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on
+        -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on
+        -global virtio-mmio.force-legacy=false
+    )
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
         log "Wiring virtio-net MMIO NIC for TCP console"
