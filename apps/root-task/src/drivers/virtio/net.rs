@@ -13,7 +13,7 @@ use core::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, warn};
-use sel4_sys::{seL4_Error, seL4_NotEnoughMemory};
+use sel4_sys::{seL4_Error, seL4_NotEnoughMemory, seL4_PageBits};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
@@ -153,6 +153,19 @@ impl VirtioNet {
             target: "net-console",
             "[net-console] status set to DRIVER: 0x{:02x}",
             regs.read32(Registers::Status)
+        );
+
+        // Legacy virtio-mmio devices require the guest page size to be provided
+        // before queue PFNs are written. Without this, the device disregards the
+        // queue configuration and leaves RX/TX rings idle. Advertise the seL4
+        // 4KiB page size up-front so the PFN calculations below are interpreted
+        // correctly by the device.
+        let guest_page_size = 1u32 << seL4_PageBits;
+        regs.set_guest_page_size(guest_page_size);
+        info!(
+            target: "net-console",
+            "[net-console] guest page size set: {} bytes",
+            guest_page_size
         );
 
         info!("[net-console] querying queue sizes");
@@ -325,6 +338,13 @@ impl VirtioNet {
             queue1_pfn,
             status_reg_value,
         );
+        if queue0_pfn == queue1_pfn {
+            warn!(
+                target: "net-console",
+                "[virtio-net] warning: RX/TX queues share PFN 0x{:x}; DMA frames should be distinct",
+                queue0_pfn
+            );
+        }
 
         status |= STATUS_DRIVER_OK;
         driver.regs.set_status(status);
@@ -485,7 +505,12 @@ impl VirtioNet {
             for byte in &mut slice[length..] {
                 *byte = 0;
             }
-            debug!("[virtio-net] TX: sending frame len={}", length);
+            info!(
+                target: "net-console",
+                "[virtio-net] TX descriptor posted: id={} len={}",
+                id,
+                length
+            );
         }
     }
 }
@@ -1010,6 +1035,10 @@ impl VirtioRegs {
         self.write32(Registers::GuestFeatures, features);
     }
 
+    fn set_guest_page_size(&mut self, page_size: u32) {
+        self.write32(Registers::GuestPageSize, page_size);
+    }
+
     fn host_features(&mut self) -> u32 {
         self.write32(Registers::HostFeaturesSel, 0);
         self.read32(Registers::HostFeatures)
@@ -1054,6 +1083,7 @@ enum Registers {
     HostFeaturesSel = 0x014,
     GuestFeatures = 0x020,
     GuestFeaturesSel = 0x024,
+    GuestPageSize = 0x028,
     QueueSel = 0x030,
     QueueNumMax = 0x034,
     QueueNum = 0x038,
