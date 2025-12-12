@@ -23,6 +23,8 @@ use crate::ipc;
 use crate::kernel::BootContext;
 #[cfg(feature = "net-console")]
 use crate::net::DefaultNetStack as NetStack;
+#[cfg(feature = "net-console")]
+use crate::net::NetPoller;
 use crate::platform::Platform;
 use crate::sel4;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]

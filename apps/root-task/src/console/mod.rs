@@ -299,6 +299,9 @@ impl CohesixConsole {
             Command::Ping => self.emit_line("pong"),
             Command::Quit => self.emit_line("quit not supported on root console"),
             Command::Log => self.emit_line("log streaming unavailable"),
+            Command::NetTest | Command::NetStats => {
+                self.emit_line("network commands not available on root console")
+            }
             Command::Attach { .. }
             | Command::Tail { .. }
             | Command::Spawn(_)

@@ -212,13 +212,13 @@ static TCP_SMOKE_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static mut TCP_SMOKE_TX_STORAGE: [u8; TCP_SMOKE_TX_BUFFER] = [0u8; TCP_SMOKE_TX_BUFFER];
 static UDP_BEACON_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static UDP_ECHO_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
-static UDP_BEACON_RX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
+static mut UDP_BEACON_RX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
     [UdpPacketMetadata::EMPTY; UDP_METADATA_CAPACITY];
-static UDP_BEACON_TX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
+static mut UDP_BEACON_TX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
     [UdpPacketMetadata::EMPTY; UDP_METADATA_CAPACITY];
-static UDP_ECHO_RX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
+static mut UDP_ECHO_RX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
     [UdpPacketMetadata::EMPTY; UDP_METADATA_CAPACITY];
-static UDP_ECHO_TX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
+static mut UDP_ECHO_TX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
     [UdpPacketMetadata::EMPTY; UDP_METADATA_CAPACITY];
 static mut UDP_BEACON_RX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_CAPACITY];
 static mut UDP_BEACON_TX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_CAPACITY];
@@ -838,10 +838,14 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         unsafe {
-            let rx_buffer =
-                UdpPacketBuffer::new(&UDP_BEACON_RX_METADATA[..], &mut UDP_BEACON_RX_STORAGE[..]);
-            let tx_buffer =
-                UdpPacketBuffer::new(&UDP_BEACON_TX_METADATA[..], &mut UDP_BEACON_TX_STORAGE[..]);
+            let rx_buffer = UdpPacketBuffer::new(
+                &mut UDP_BEACON_RX_METADATA[..],
+                &mut UDP_BEACON_RX_STORAGE[..],
+            );
+            let tx_buffer = UdpPacketBuffer::new(
+                &mut UDP_BEACON_TX_METADATA[..],
+                &mut UDP_BEACON_TX_STORAGE[..],
+            );
             let mut beacon_socket = UdpSocket::new(rx_buffer, tx_buffer);
             let beacon_endpoint = IpListenEndpoint {
                 addr: Some(IpAddress::Ipv4(self.ip)),
@@ -859,12 +863,12 @@ impl<D: NetDevice> NetStack<D> {
 
         unsafe {
             let rx_buffer =
-                UdpPacketBuffer::new(&UDP_ECHO_RX_METADATA[..], &mut UDP_ECHO_RX_STORAGE[..]);
+                UdpPacketBuffer::new(&mut UDP_ECHO_RX_METADATA[..], &mut UDP_ECHO_RX_STORAGE[..]);
             let tx_buffer =
-                UdpPacketBuffer::new(&UDP_ECHO_TX_METADATA[..], &mut UDP_ECHO_TX_STORAGE[..]);
+                UdpPacketBuffer::new(&mut UDP_ECHO_TX_METADATA[..], &mut UDP_ECHO_TX_STORAGE[..]);
             let mut echo_socket = UdpSocket::new(rx_buffer, tx_buffer);
             let echo_endpoint = IpListenEndpoint {
-                addr: Some(IpAddress::UNSPECIFIED),
+                addr: Some(Ipv4Address::UNSPECIFIED.into()),
                 port: UDP_ECHO_PORT,
             };
             match echo_socket.bind(echo_endpoint) {
@@ -1046,7 +1050,8 @@ impl<D: NetDevice> NetStack<D> {
 
         let mut payload = HeaplessString::<64>::new();
         let _ = write!(&mut payload, "COHESIX_NET_OK {}", self.self_test.beacon_seq);
-        let endpoint = IpEndpoint::new(IpAddress::Ipv4(DEV_VIRT_GATEWAY), UDP_ECHO_PORT);
+        let gateway_addr = Ipv4Address::from(DEV_VIRT_GATEWAY);
+        let endpoint = IpEndpoint::new(gateway_addr.into(), UDP_ECHO_PORT);
         match socket.send_slice(payload.as_bytes(), endpoint) {
             Ok(()) => {
                 self.counters.udp_tx = self.counters.udp_tx.saturating_add(1);
@@ -1056,7 +1061,7 @@ impl<D: NetDevice> NetStack<D> {
                 info!(
                     "[net-selftest] udp-beacon queued seq={} -> {}:{} payload='{}'",
                     self.self_test.beacon_seq.saturating_sub(1),
-                    DEV_VIRT_GATEWAY,
+                    gateway_addr,
                     UDP_ECHO_PORT,
                     payload
                 );

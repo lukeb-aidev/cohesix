@@ -1178,7 +1178,8 @@ impl VirtQueue {
         regs.select_queue(index);
         regs.set_queue_size(queue_size);
         regs.set_queue_align(queue_align as u32);
-        let queue_pfn = (frame.paddr() >> seL4_PageBits) as u32;
+        let base_paddr = frame.paddr();
+        let queue_pfn = (base_paddr >> seL4_PageBits) as u32;
         regs.set_queue_pfn(queue_pfn);
         regs.queue_ready(1);
         info!(
@@ -1192,10 +1193,10 @@ impl VirtQueue {
             target: "net-console",
             "[virtio-net] queue {} layout: base_paddr=0x{:x} desc=0x{:x} avail=0x{:x} used=0x{:x} desc_len={} avail_len={} used_len={} total_len={}",
             index,
-            frame.paddr(),
-            frame.paddr(),
-            frame.paddr() + layout.avail_offset,
-            frame.paddr() + layout.used_offset,
+            base_paddr,
+            base_paddr,
+            base_paddr + layout.avail_offset,
+            base_paddr + layout.used_offset,
             layout.desc_len,
             layout.avail_len,
             layout.used_len,
@@ -1211,7 +1212,7 @@ impl VirtQueue {
             used: used_ptr,
             last_used: 0,
             pfn: queue_pfn,
-            base_paddr: frame.paddr(),
+            base_paddr,
         })
     }
 
