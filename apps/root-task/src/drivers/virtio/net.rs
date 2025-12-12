@@ -230,18 +230,21 @@ impl VirtioNet {
             "[net-console] guest features set: status=0x{:02x}",
             regs.read32(Registers::Status)
         );
-        info!(
-            target: "net-console",
-            "[net-console] status after feature negotiation: 0x{:02x}",
-            regs.read32(Registers::Status)
-        );
         let mut status = STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK;
         regs.set_status(status);
+        let status_after_features = regs.read32(Registers::Status);
         info!(
             target: "net-console",
-            "[net-console] status set to FEATURES_OK: 0x{:02x}",
-            regs.read32(Registers::Status)
+            "[net-console] status set to FEATURES_OK: 0x{status_after_features:02x}",
         );
+        if status_after_features & STATUS_FEATURES_OK == 0 {
+            regs.set_status(STATUS_FAILED);
+            error!(
+                target: "net-console",
+                "[virtio-net] device rejected FEATURES_OK: status=0x{status_after_features:02x}"
+            );
+            return Err(DriverError::NoQueue);
+        }
 
         info!("[net-console] allocating virtqueue backing memory");
 
@@ -249,10 +252,32 @@ impl VirtioNet {
             regs.set_status(STATUS_FAILED);
             DriverError::from(err)
         })?;
-        let queue_mem_tx = hal.alloc_dma_frame().map_err(|err| {
-            regs.set_status(STATUS_FAILED);
-            DriverError::from(err)
-        })?;
+
+        let queue_mem_tx = {
+            let mut attempt = 0;
+            loop {
+                let frame = hal.alloc_dma_frame().map_err(|err| {
+                    regs.set_status(STATUS_FAILED);
+                    DriverError::from(err)
+                })?;
+                if frame.paddr() != queue_mem_rx.paddr() {
+                    break frame;
+                }
+                attempt += 1;
+                warn!(
+                    target: "net-console",
+                    "[virtio-net] RX/TX queue PFN collision on attempt {attempt}; allocating a new TX frame"
+                );
+                if attempt >= 3 {
+                    regs.set_status(STATUS_FAILED);
+                    error!(
+                        target: "net-console",
+                        "[virtio-net] failed to allocate distinct TX queue backing after {attempt} attempts"
+                    );
+                    return Err(DriverError::NoQueue);
+                }
+            }
+        };
 
         info!(
             "[net-console] provisioning RX descriptors ({} entries)",
@@ -1099,12 +1124,14 @@ enum Registers {
 
 struct VirtQueue {
     _frame: RamFrame,
+    layout: VirtqLayout,
     size: u16,
     desc: NonNull<VirtqDesc>,
     avail: NonNull<VirtqAvail>,
     used: NonNull<VirtqUsed>,
     last_used: u16,
     pfn: u32,
+    base_paddr: usize,
 }
 
 impl VirtQueue {
@@ -1118,51 +1145,22 @@ impl VirtQueue {
         let base_ptr = frame.ptr();
         frame.as_mut_slice().fill(0);
 
-        let queue_align = 4usize;
+        let queue_align = core::mem::size_of::<VirtqUsedElem>();
+        let frame_capacity = frame.as_mut_slice().len();
+        let layout = VirtqLayout::compute(size, queue_align, frame_capacity)?;
 
         let desc_ptr = base_ptr.cast::<VirtqDesc>();
-        let desc_bytes = core::mem::size_of::<VirtqDesc>() * size;
-        let avail_offset = desc_bytes;
         let avail_ptr = unsafe {
-            NonNull::new_unchecked(base_ptr.as_ptr().add(avail_offset) as *mut VirtqAvail)
+            NonNull::new_unchecked(base_ptr.as_ptr().add(layout.avail_offset) as *mut VirtqAvail)
         };
-
-        // The available ring occupies flags (u16), idx (u16), and `size` ring
-        // entries (u16 each). We do not negotiate `VIRTIO_F_EVENT_IDX`, so the
-        // optional `used_event` field is omitted from the layout to keep the
-        // used ring aligned to the offsets expected by the device.
-        let avail_bytes = 4 + 2 * size;
-        let used_offset = align_up(desc_bytes + avail_bytes, queue_align);
-        let used_ptr =
-            unsafe { NonNull::new_unchecked(base_ptr.as_ptr().add(used_offset) as *mut VirtqUsed) };
-
-        let used_bytes = 4 + core::mem::size_of::<VirtqUsedElem>() * size;
-        let frame_capacity = frame.as_mut_slice().len();
-        let frame_len = used_offset + used_bytes;
-        if frame_len > frame_capacity {
-            error!(
-                target: "net-console",
-                "[net-console] virtqueue layout overflows frame: frame_len={} frame_capacity={}",
-                frame_len,
-                frame_capacity,
-            );
-            return Err(DriverError::NoQueue);
-        }
-        debug!(
-            target: "net-console",
-            "[net-console] virtqueue layout: desc_bytes={} avail_offset={} avail_bytes={} used_offset={} used_bytes={} frame_len={}",
-            desc_bytes,
-            avail_offset,
-            avail_bytes,
-            used_offset,
-            used_bytes,
-            frame_len,
-        );
+        let used_ptr = unsafe {
+            NonNull::new_unchecked(base_ptr.as_ptr().add(layout.used_offset) as *mut VirtqUsed)
+        };
 
         regs.select_queue(index);
         regs.set_queue_size(queue_size);
         regs.set_queue_align(queue_align as u32);
-        let queue_pfn = (frame.paddr() >> 12) as u32;
+        let queue_pfn = (frame.paddr() >> seL4_PageBits) as u32;
         regs.set_queue_pfn(queue_pfn);
         regs.queue_ready(1);
         info!(
@@ -1172,15 +1170,30 @@ impl VirtQueue {
             queue_size,
             queue_pfn
         );
+        info!(
+            target: "net-console",
+            "[virtio-net] queue {} layout: base_paddr=0x{:x} desc=0x{:x} avail=0x{:x} used=0x{:x} desc_len={} avail_len={} used_len={} total_len={}",
+            index,
+            frame.paddr(),
+            frame.paddr(),
+            frame.paddr() + layout.avail_offset,
+            frame.paddr() + layout.used_offset,
+            layout.desc_len,
+            layout.avail_len,
+            layout.used_len,
+            layout.total_len,
+        );
 
         Ok(Self {
             _frame: frame,
+            layout,
             size: queue_size,
             desc: desc_ptr,
             avail: avail_ptr,
             used: used_ptr,
             last_used: 0,
             pfn: queue_pfn,
+            base_paddr: frame.paddr(),
         })
     }
 
@@ -1301,6 +1314,60 @@ struct VirtqUsed {
 struct VirtqUsedElem {
     id: u32,
     len: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct VirtqLayout {
+    desc_len: usize,
+    avail_offset: usize,
+    avail_len: usize,
+    used_offset: usize,
+    used_len: usize,
+    total_len: usize,
+}
+
+impl VirtqLayout {
+    fn compute(
+        queue_size: usize,
+        queue_align: usize,
+        frame_capacity: usize,
+    ) -> Result<Self, DriverError> {
+        debug_assert!(queue_align.is_power_of_two());
+
+        let desc_len = core::mem::size_of::<VirtqDesc>()
+            .checked_mul(queue_size)
+            .ok_or(DriverError::NoQueue)?;
+        let avail_len = core::mem::size_of::<VirtqAvail>()
+            .checked_add(core::mem::size_of::<u16>() * queue_size)
+            .ok_or(DriverError::NoQueue)?;
+        let avail_offset = desc_len;
+        let used_offset = align_up(desc_len + avail_len, queue_align);
+        let used_len = core::mem::size_of::<VirtqUsed>()
+            .checked_add(core::mem::size_of::<VirtqUsedElem>() * queue_size)
+            .ok_or(DriverError::NoQueue)?;
+        let total_len = used_offset
+            .checked_add(used_len)
+            .ok_or(DriverError::NoQueue)?;
+
+        if total_len > frame_capacity {
+            error!(
+                target: "net-console",
+                "[net-console] virtqueue layout overflows frame: frame_len={} frame_capacity={}",
+                total_len,
+                frame_capacity,
+            );
+            return Err(DriverError::NoQueue);
+        }
+
+        Ok(Self {
+            desc_len,
+            avail_offset,
+            avail_len,
+            used_offset,
+            used_len,
+            total_len,
+        })
+    }
 }
 
 fn align_up(value: usize, align: usize) -> usize {
