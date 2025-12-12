@@ -43,7 +43,7 @@ impl MapPerms {
 }
 
 /// HAL-managed mapping of device memory returned to drivers.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MappedRegion {
     frame: DeviceFrame,
     size: usize,

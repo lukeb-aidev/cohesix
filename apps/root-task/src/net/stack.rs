@@ -1087,7 +1087,6 @@ impl<D: NetDevice> NetStack<D> {
             match socket.recv() {
                 Ok((payload, meta)) => {
                     let endpoint = meta.endpoint;
-                    let mut reply_len = 0usize;
                     let mut reply = [0u8; UDP_PAYLOAD_CAPACITY];
                     let prefix = b"ECHO:";
                     reply[..prefix.len()].copy_from_slice(prefix);
@@ -1095,7 +1094,7 @@ impl<D: NetDevice> NetStack<D> {
                         core::cmp::min(payload.len(), reply.len().saturating_sub(prefix.len()));
                     reply[prefix.len()..prefix.len() + copy_len]
                         .copy_from_slice(&payload[..copy_len]);
-                    reply_len = prefix.len() + copy_len;
+                    let reply_len = prefix.len() + copy_len;
                     self.counters.udp_rx = self.counters.udp_rx.saturating_add(1);
                     if self.self_test.running {
                         self.self_test.record_udp_echo();
