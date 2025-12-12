@@ -1028,10 +1028,6 @@ impl VirtioRegs {
         unsafe { write_volatile(self.base().as_ptr().add(offset as usize) as *mut u32, value) };
     }
 
-    fn write16(&mut self, offset: Registers, value: u16) {
-        unsafe { write_volatile(self.base().as_ptr().add(offset as usize) as *mut u16, value) };
-    }
-
     fn reset_status(&mut self) {
         self.write32(Registers::Status, 0);
     }
@@ -1049,7 +1045,11 @@ impl VirtioRegs {
     }
 
     fn set_queue_size(&mut self, size: u16) {
-        self.write16(Registers::QueueNum, size);
+        self.write32(Registers::QueueNum, size as u32);
+    }
+
+    fn queue_num(&self) -> u32 {
+        self.read32(Registers::QueueNum)
     }
 
     fn set_queue_desc(&mut self, paddr: u64) {
@@ -1210,11 +1210,43 @@ impl VirtQueue {
             return Err(DriverError::NoQueue);
         }
         regs.set_queue_size(queue_size);
+        let queue_num = regs.queue_num();
+        let queue_num_max = regs.queue_num_max();
+        info!(
+            target: "net-console",
+            "[virtio-net] queue {} size programmed: requested={} readback={} max={}",
+            index,
+            queue_size,
+            queue_num,
+            queue_num_max,
+        );
+        if queue_num != queue_size as u32 {
+            error!(
+                target: "net-console",
+                "[virtio-net] queue {} size write failed: expected={} readback={} max={} — aborting queue setup",
+                index,
+                queue_size,
+                queue_num,
+                queue_num_max,
+            );
+            return Err(DriverError::NoQueue);
+        }
         regs.set_queue_desc(desc_paddr as u64);
         regs.set_queue_avail(avail_paddr as u64);
         regs.set_queue_used(used_paddr as u64);
+        fence(AtomicOrdering::SeqCst);
         regs.queue_ready(1);
+        fence(AtomicOrdering::SeqCst);
         let ready = regs.queue_ready_state();
+        if ready != 1 {
+            error!(
+                target: "net-console",
+                "[virtio-net] queue {} failed to enter ready state: ready_readback={}",
+                index,
+                ready,
+            );
+            return Err(DriverError::NoQueue);
+        }
         info!(
             target: "net-console",
             "[virtio-net] queue {} configured: size={} desc=0x{:x} avail=0x{:x} used=0x{:x} ready={}",
@@ -1496,4 +1528,52 @@ impl VirtqLayout {
 fn align_up(value: usize, align: usize) -> usize {
     debug_assert!(align.is_power_of_two());
     (value + align - 1) & !(align - 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::mem::size_of;
+
+    #[test]
+    fn virtq_layout_respects_alignment_for_common_sizes() {
+        let base_paddr = 0x2000usize;
+
+        let layout_small =
+            VirtqLayout::compute(16, 4096).expect("layout for 16 entries should fit");
+        assert_eq!(layout_small.desc_len, 16 * size_of::<VirtqDesc>());
+        assert_eq!(layout_small.avail_offset, 256);
+        assert_eq!(layout_small.avail_len, 38);
+        assert_eq!(layout_small.used_offset, 296);
+        assert_eq!(layout_small.used_len, 134);
+        assert_eq!(layout_small.total_len, 430);
+        layout_small
+            .validate(base_paddr, 4096)
+            .expect("validated small layout");
+
+        let layout_large = VirtqLayout::compute(256, 8192)
+            .expect("layout for 256 entries should fit in 8 KiB frame");
+        assert_eq!(layout_large.desc_len, 256 * size_of::<VirtqDesc>());
+        assert_eq!(layout_large.avail_offset, 4096);
+        assert_eq!(layout_large.avail_len, 518);
+        assert_eq!(layout_large.used_offset, 4616);
+        assert_eq!(layout_large.used_len, 2054);
+        assert_eq!(layout_large.total_len, 6670);
+        layout_large
+            .validate(base_paddr, 8192)
+            .expect("validated large layout");
+    }
+
+    #[test]
+    fn set_queue_size_writes_32bit_mmio_word() {
+        let mut backing = [0u32; 64];
+        let ptr = NonNull::new(backing.as_mut_ptr() as *mut u8).expect("non-null backing slice");
+        let frame = unsafe { crate::sel4::DeviceFrame::from_raw_parts_for_test(ptr) };
+        let mut regs = VirtioRegs { mmio: frame };
+
+        regs.set_queue_size(0x1234);
+        let queue_num_slot = Registers::QueueNum as usize / size_of::<u32>();
+        assert_eq!(backing[queue_num_slot], 0x1234);
+        assert_eq!(regs.queue_num(), 0x1234);
+    }
 }
