@@ -1901,6 +1901,16 @@ impl DeviceFrame {
     pub fn paddr(&self) -> usize {
         self.paddr
     }
+
+    /// Construct a device frame for tests using a pre-allocated MMIO region.
+    #[cfg(test)]
+    pub(crate) unsafe fn from_raw_parts_for_test(ptr: NonNull<u8>) -> Self {
+        Self {
+            cap: 0,
+            paddr: 0,
+            ptr,
+        }
+    }
 }
 
 /// Virtual mapping of DMA-capable RAM used for driver buffers.
