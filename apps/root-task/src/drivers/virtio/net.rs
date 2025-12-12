@@ -938,6 +938,7 @@ impl TxToken for VirtioTxToken {
 
 struct VirtioRegs {
     mmio: DeviceFrame,
+    config_base: NonNull<u8>,
 }
 
 impl VirtioRegs {
@@ -965,7 +966,13 @@ impl VirtioRegs {
                 }
                 Err(err) => return Err(DriverError::from(err)),
             };
-            let regs = VirtioRegs { mmio: frame };
+            let config_base = unsafe {
+                NonNull::new_unchecked(frame.ptr().as_ptr().add(Registers::Config as usize))
+            };
+            let regs = VirtioRegs {
+                mmio: frame,
+                config_base,
+            };
             let magic = regs.read32(Registers::MagicValue);
             let version = regs.read32(Registers::Version);
             let device_id = regs.read32(Registers::DeviceId);
@@ -1003,9 +1010,11 @@ impl VirtioRegs {
             if header_valid && device_id == VIRTIO_DEVICE_ID_NET && vendor_id != 0 {
                 info!(
                     target: "net-console",
-                    "[virtio-net] found device: slot={} mmio=0x{base:08x} device_id=0x{device_id:04x} vendor=0x{vendor_id:04x}",
+                    "[virtio-net] found device: slot={} paddr=0x{base:08x} vaddr=0x{vaddr:08x} config_vaddr=0x{config:08x} device_id=0x{device_id:04x} vendor=0x{vendor_id:04x}",
                     slot,
                     base = base,
+                    vaddr = regs.base().as_ptr() as usize,
+                    config = regs.config_base().as_ptr() as usize,
                     device_id = device_id,
                     vendor_id = vendor_id,
                 );
@@ -1020,12 +1029,30 @@ impl VirtioRegs {
         self.mmio.ptr()
     }
 
+    fn config_base(&self) -> NonNull<u8> {
+        self.config_base
+    }
+
+    fn paddr(&self) -> usize {
+        self.mmio.paddr()
+    }
+
     fn read32(&self, offset: Registers) -> u32 {
         unsafe { read_volatile(self.base().as_ptr().add(offset as usize) as *const u32) }
     }
 
     fn write32(&mut self, offset: Registers, value: u32) {
         unsafe { write_volatile(self.base().as_ptr().add(offset as usize) as *mut u32, value) };
+    }
+
+    fn queue_register_snapshot(&mut self) -> QueueRegisterSnapshot {
+        QueueRegisterSnapshot {
+            queue_sel: self.read32(Registers::QueueSel),
+            queue_num_max: self.read32(Registers::QueueNumMax),
+            queue_num: self.read32(Registers::QueueNum),
+            queue_ready: self.read32(Registers::QueueReady),
+            status: self.read32(Registers::Status),
+        }
     }
 
     fn reset_status(&mut self) {
@@ -1114,9 +1141,10 @@ impl VirtioRegs {
 
     fn read_mac(&self) -> Option<EthernetAddress> {
         let mut bytes = [0u8; 6];
-        let base = Registers::Config as usize;
         for (idx, byte) in bytes.iter_mut().enumerate() {
-            *byte = unsafe { read_volatile(self.base().as_ptr().add(base + idx) as *const u8) };
+            *byte = unsafe {
+                read_volatile(self.config_base().as_ptr().add(VIRTIO_NET_CONFIG_MAC + idx) as *const u8)
+            };
         }
         if bytes.iter().all(|&b| b == 0) {
             None
@@ -1153,6 +1181,16 @@ enum Registers {
     Status = 0x070,
     Config = 0x100,
 }
+
+struct QueueRegisterSnapshot {
+    queue_sel: u32,
+    queue_num_max: u32,
+    queue_num: u32,
+    queue_ready: u32,
+    status: u32,
+}
+
+const VIRTIO_NET_CONFIG_MAC: usize = 0x00;
 
 struct VirtQueue {
     _frame: RamFrame,
@@ -1228,6 +1266,17 @@ impl VirtQueue {
                 queue_size,
                 queue_num,
                 queue_num_max,
+            );
+            let snapshot = regs.queue_register_snapshot();
+            error!(
+                target: "net-console",
+                "[virtio-net] queue {} register snapshot: sel={} num_max={} num={} ready={} status=0x{:02x}",
+                index,
+                snapshot.queue_sel,
+                snapshot.queue_num_max,
+                snapshot.queue_num,
+                snapshot.queue_ready,
+                snapshot.status,
             );
             return Err(DriverError::NoQueue);
         }
