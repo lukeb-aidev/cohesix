@@ -19,7 +19,7 @@ use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
 use crate::hal::{HalError, Hardware};
-use crate::net::{NetDevice, NetDriverError, CONSOLE_TCP_PORT};
+use crate::net::{NetDevice, NetDeviceCounters, NetDriverError, CONSOLE_TCP_PORT};
 use crate::net_consts::MAX_FRAME_LEN;
 use crate::sel4::{DeviceFrame, RamFrame};
 
@@ -115,6 +115,9 @@ pub struct VirtioNet {
     tx_buffers: HeaplessVec<RamFrame, TX_QUEUE_SIZE>,
     tx_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
     tx_drops: u32,
+    tx_packets: u64,
+    tx_used_count: u64,
+    rx_packets: u64,
     mac: EthernetAddress,
     rx_poll_count: u64,
     rx_used_count: u64,
@@ -346,6 +349,9 @@ impl VirtioNet {
             tx_buffers,
             tx_free,
             tx_drops: 0,
+            tx_packets: 0,
+            tx_used_count: 0,
+            rx_packets: 0,
             mac,
             rx_poll_count: 0,
             rx_used_count: 0,
@@ -465,6 +471,7 @@ impl VirtioNet {
 
     fn reclaim_tx(&mut self) {
         while let Some((id, _len)) = self.tx_queue.pop_used() {
+            self.tx_used_count = self.tx_used_count.wrapping_add(1);
             if self.tx_free.push(id).is_err() {
                 self.tx_drops = self.tx_drops.saturating_add(1);
             }
@@ -813,6 +820,15 @@ impl NetDevice for VirtioNet {
         self.tx_drops
     }
 
+    fn counters(&self) -> NetDeviceCounters {
+        NetDeviceCounters {
+            rx_packets: self.rx_packets,
+            tx_packets: self.tx_packets,
+            rx_used_advances: self.rx_used_count,
+            tx_used_advances: self.tx_used_count,
+        }
+    }
+
     fn name() -> &'static str
     where
         Self: Sized,
@@ -864,6 +880,7 @@ impl RxToken for VirtioRxToken {
             &payload[..preview_len],
         );
         log_tcp_trace("RX", payload);
+        driver.rx_packets = driver.rx_packets.saturating_add(1);
         let result = f(payload);
         driver.requeue_rx(self.id);
         result
@@ -913,6 +930,7 @@ impl TxToken for VirtioTxToken {
                 result
             };
             driver.submit_tx(id, total_len);
+            driver.tx_packets = driver.tx_packets.saturating_add(1);
             result
         } else {
             let length = len.min(MAX_FRAME_LEN);

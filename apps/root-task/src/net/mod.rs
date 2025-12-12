@@ -89,6 +89,66 @@ pub struct NetTelemetry {
     pub last_poll_ms: u64,
 }
 
+/// Counters gathered from the NIC driver for diagnostics.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct NetDeviceCounters {
+    /// RX packets consumed by smoltcp.
+    pub rx_packets: u64,
+    /// TX packets submitted to the NIC.
+    pub tx_packets: u64,
+    /// RX used ring advances observed by the driver.
+    pub rx_used_advances: u64,
+    /// TX used ring advances observed by the driver.
+    pub tx_used_advances: u64,
+}
+
+/// Monotonic counters collected from the NIC driver and smoltcp sockets.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct NetCounters {
+    /// RX packets handed to smoltcp.
+    pub rx_packets: u64,
+    /// TX packets submitted by smoltcp.
+    pub tx_packets: u64,
+    /// RX used ring advances observed by the driver.
+    pub rx_used_advances: u64,
+    /// TX used ring advances observed by the driver.
+    pub tx_used_advances: u64,
+    /// Total smoltcp poll iterations.
+    pub smoltcp_polls: u64,
+    /// UDP packets received.
+    pub udp_rx: u64,
+    /// UDP packets transmitted.
+    pub udp_tx: u64,
+    /// TCP accepts observed.
+    pub tcp_accepts: u64,
+    /// TCP RX bytes consumed.
+    pub tcp_rx_bytes: u64,
+    /// TCP TX bytes submitted.
+    pub tcp_tx_bytes: u64,
+}
+
+/// Outcome of the latest network self-test pass.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct NetSelfTestResult {
+    /// Whether UDP beacons were sent successfully.
+    pub tx_ok: bool,
+    /// Whether an inbound UDP echo was observed.
+    pub udp_echo_ok: bool,
+    /// Whether the TCP smoke test completed.
+    pub tcp_ok: bool,
+}
+
+/// Summary of the self-test subsystem for consoles.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct NetSelfTestReport {
+    /// Indicates whether self-test support is compiled in for the current build.
+    pub enabled: bool,
+    /// True while a self-test run is active.
+    pub running: bool,
+    /// Last recorded result, if any.
+    pub last_result: Option<NetSelfTestResult>,
+}
+
 /// Driver-facing abstraction that all NIC backends must implement in order to
 /// plug into the TCP console stack.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -115,6 +175,11 @@ pub trait NetDevice: Device {
 
     /// Optional debug snapshot hook surfaced to stack callers.
     fn debug_snapshot(&mut self);
+
+    /// Counter snapshot for diagnostics.
+    fn counters(&self) -> NetDeviceCounters {
+        NetDeviceCounters::default()
+    }
 }
 
 /// Helper trait used to normalise driver error handling across NIC backends.
@@ -171,6 +236,11 @@ pub trait NetPoller {
     /// Obtain telemetry for diagnostics.
     fn telemetry(&self) -> NetTelemetry;
 
+    /// Retrieve cumulative counters for diagnostics.
+    fn stats(&self) -> NetCounters {
+        NetCounters::default()
+    }
+
     /// Drain any pending console lines produced by TCP listeners.
     fn drain_console_lines(
         &mut self,
@@ -188,6 +258,16 @@ pub trait NetPoller {
 
     /// Reset the underlying transport (testing hook).
     fn reset(&mut self) {}
+
+    /// Start a network self-test run if supported.
+    fn start_self_test(&mut self, _now_ms: u64) -> bool {
+        false
+    }
+
+    /// Return the current self-test state for diagnostics.
+    fn self_test_report(&self) -> NetSelfTestReport {
+        NetSelfTestReport::default()
+    }
 }
 
 /// Connection lifecycle notifications surfaced by TCP console transports.

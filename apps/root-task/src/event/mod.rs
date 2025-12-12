@@ -684,6 +684,8 @@ where
         self.emit_console_line("  caps  - Show capability slots");
         self.emit_console_line("  mem   - Show untyped summary");
         self.emit_console_line("  ping  - Respond with pong");
+        self.emit_console_line("  nettest  - Run network self-test (dev-virt)");
+        self.emit_console_line("  netstats - Show network counters");
         self.emit_console_line("  quit  - Exit the console session");
     }
 
@@ -946,6 +948,71 @@ where
                 self.emit_console_line("PONG");
                 self.emit_ack_ok("PING", Some("reply=pong"));
             }
+            Command::NetTest => {
+                #[cfg(feature = "net-console")]
+                {
+                    if let Some(net) = self.net.as_mut() {
+                        if net.start_self_test(self.now_ms) {
+                            self.metrics.accepted_commands += 1;
+                            self.emit_console_line("[net-selftest] triggered");
+                            self.emit_ack_ok("NETTEST", None);
+                        } else {
+                            self.metrics.denied_commands += 1;
+                            self.emit_ack_err("NETTEST", Some("reason=unsupported"));
+                        }
+                    } else {
+                        self.metrics.denied_commands += 1;
+                        self.emit_ack_err("NETTEST", Some("reason=net-disabled"));
+                    }
+                }
+                #[cfg(not(feature = "net-console"))]
+                {
+                    self.metrics.denied_commands += 1;
+                    self.emit_ack_err("NETTEST", Some("reason=net-disabled"));
+                }
+            }
+            Command::NetStats => {
+                #[cfg(feature = "net-console")]
+                {
+                    if let Some(net) = self.net.as_mut() {
+                        let stats = net.stats();
+                        let report = net.self_test_report();
+                        let line_one = format_message(format_args!(
+                            "netstats: rx_pkts={} tx_pkts={} rx_used={} tx_used={} polls={}",
+                            stats.rx_packets,
+                            stats.tx_packets,
+                            stats.rx_used_advances,
+                            stats.tx_used_advances,
+                            stats.smoltcp_polls
+                        ));
+                        let line_two = format_message(format_args!(
+                            "netstats: udp_rx={} udp_tx={} tcp_accepts={} tcp_rx_bytes={} tcp_tx_bytes={}",
+                            stats.udp_rx,
+                            stats.udp_tx,
+                            stats.tcp_accepts,
+                            stats.tcp_rx_bytes,
+                            stats.tcp_tx_bytes
+                        ));
+                        let status_line = format_message(format_args!(
+                            "nettest: enabled={} running={} last={:?}",
+                            report.enabled, report.running, report.last_result
+                        ));
+                        self.emit_console_line(line_one.as_str());
+                        self.emit_console_line(line_two.as_str());
+                        self.emit_console_line(status_line.as_str());
+                        self.metrics.accepted_commands += 1;
+                        self.emit_ack_ok("NETSTATS", None);
+                    } else {
+                        self.metrics.denied_commands += 1;
+                        self.emit_ack_err("NETSTATS", Some("reason=net-disabled"));
+                    }
+                }
+                #[cfg(not(feature = "net-console"))]
+                {
+                    self.metrics.denied_commands += 1;
+                    self.emit_ack_err("NETSTATS", Some("reason=net-disabled"));
+                }
+            }
             Command::Quit => {
                 self.audit.info("console: quit");
                 self.metrics.accepted_commands += 1;
@@ -1088,7 +1155,9 @@ where
             | Command::BootInfo
             | Command::Caps
             | Command::Mem
-            | Command::Ping => {
+            | Command::Ping
+            | Command::NetTest
+            | Command::NetStats => {
                 return Err(CommandDispatchError::UnsupportedForNineDoor { verb });
             }
         }
@@ -1276,6 +1345,8 @@ pub(crate) enum CommandVerb {
     Caps,
     Mem,
     Ping,
+    NetTest,
+    NetStats,
 }
 
 #[cfg(feature = "kernel")]
@@ -1293,6 +1364,8 @@ impl CommandVerb {
             Self::Caps => "CAPS",
             Self::Mem => "MEM",
             Self::Ping => "PING",
+            Self::NetTest => "NETTEST",
+            Self::NetStats => "NETSTATS",
         }
     }
 }
@@ -1312,6 +1385,8 @@ impl From<&Command> for CommandVerb {
             Command::Caps => Self::Caps,
             Command::Mem => Self::Mem,
             Command::Ping => Self::Ping,
+            Command::NetTest => Self::NetTest,
+            Command::NetStats => Self::NetStats,
         }
     }
 }

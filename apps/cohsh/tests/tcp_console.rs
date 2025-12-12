@@ -69,7 +69,8 @@ fn tcp_transport_times_out_when_server_is_silent() {
         drop(stream);
     });
 
-    let mut transport = TcpTransport::new("127.0.0.1", port).with_timeout(Duration::from_millis(200));
+    let mut transport =
+        TcpTransport::new("127.0.0.1", port).with_timeout(Duration::from_millis(200));
     let result = transport.attach(Role::Queen, None);
     assert!(result.is_err());
     let err = format!("{result:?}");
