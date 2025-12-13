@@ -8,7 +8,8 @@
 use core::{
     arch::asm,
     convert::TryInto,
-    fmt, mem,
+    fmt::{self, Write},
+    mem,
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
