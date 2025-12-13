@@ -18,3 +18,11 @@ pub fn debug_uart_str(s: &str) {
         let _ = s;
     }
 }
+
+/// Emit a short raw UART marker without relying on the logging subsystem.
+///
+/// This is intended for ultra-early diagnostics when the logger might be
+/// wedged or the runtime is mid-transition.
+pub fn debug_uart_raw_marker() {
+    debug_uart_str("RAW-ALIVE\n");
+}
