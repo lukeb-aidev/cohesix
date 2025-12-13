@@ -18,10 +18,10 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
-use crate::hal::{alloc_dma, DmaBuf, HalError, Hardware};
+use crate::hal::{self, alloc_dma, DmaBuf, HalError, Hardware, MmioRegion};
 use crate::net::{NetDevice, NetDeviceCounters, NetDriverError, CONSOLE_TCP_PORT};
 use crate::net_consts::MAX_FRAME_LEN;
-use crate::sel4::{DeviceFrame, PAGE_SIZE};
+use crate::sel4::PAGE_SIZE;
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -935,7 +935,7 @@ impl TxToken for VirtioTxToken {
 }
 
 struct VirtioRegs {
-    mmio: DeviceFrame,
+    mmio: MmioRegion,
     config_base: NonNull<u8>,
     version: u32,
 }
@@ -955,8 +955,8 @@ impl VirtioRegs {
             if hal.device_coverage(base, DEVICE_FRAME_BITS).is_none() {
                 continue;
             }
-            let frame = match hal.map_device(base) {
-                Ok(frame) => frame,
+            let region = match hal::map_mmio(hal, base, VIRTIO_MMIO_STRIDE) {
+                Ok(region) => region,
                 Err(HalError::Sel4(err)) if err == seL4_NotEnoughMemory => {
                     log::trace!(
                         "virtio-mmio: slot {slot} @ 0x{base:08x} unavailable (no device coverage)",
@@ -965,11 +965,10 @@ impl VirtioRegs {
                 }
                 Err(err) => return Err(DriverError::from(err)),
             };
-            let config_base = unsafe {
-                NonNull::new_unchecked(frame.ptr().as_ptr().add(Registers::Config as usize))
-            };
+            let config_base =
+                unsafe { NonNull::new_unchecked(region.as_ptr().add(Registers::Config as usize)) };
             let mut regs = VirtioRegs {
-                mmio: frame,
+                mmio: region,
                 config_base,
                 version: 0,
             };
@@ -1027,7 +1026,7 @@ impl VirtioRegs {
     }
 
     fn base(&self) -> NonNull<u8> {
-        self.mmio.ptr()
+        unsafe { NonNull::new_unchecked(self.mmio.as_ptr()) }
     }
 
     fn config_base(&self) -> NonNull<u8> {
@@ -1040,15 +1039,14 @@ impl VirtioRegs {
 
     fn read_reg32(&self, offset: Registers) -> u32 {
         compiler_fence(AtomicOrdering::SeqCst);
-        let value =
-            unsafe { read_volatile(self.base().as_ptr().add(offset as usize) as *const u32) };
+        let value = unsafe { hal::mmio::read32(&self.mmio, offset as usize) };
         compiler_fence(AtomicOrdering::SeqCst);
         value
     }
 
     fn write_reg32(&mut self, offset: Registers, value: u32) {
         compiler_fence(AtomicOrdering::SeqCst);
-        unsafe { write_volatile(self.base().as_ptr().add(offset as usize) as *mut u32, value) };
+        unsafe { hal::mmio::write32(&mut self.mmio, offset as usize, value) };
         compiler_fence(AtomicOrdering::SeqCst);
     }
 
@@ -1166,6 +1164,7 @@ impl VirtioRegs {
                 size,
                 max
             );
+            self.set_status(self.status() | STATUS_FAILED);
             return Err(DriverError::NoQueue);
         }
 
@@ -1185,6 +1184,7 @@ impl VirtioRegs {
                 snapshot.queue_ready,
                 snapshot.status,
             );
+            self.set_status(self.status() | STATUS_FAILED);
             return Err(DriverError::NoQueue);
         }
 
@@ -1194,9 +1194,9 @@ impl VirtioRegs {
         info!("[virtio-net] queue{index}: AVAIL <- 0x{avail_paddr:016x}");
         self.write_queue_used(index, used_paddr);
         info!("[virtio-net] queue{index}: USED <- 0x{used_paddr:016x}");
-        fence(AtomicOrdering::SeqCst);
+        hal::dma_wmb();
         self.write_queue_ready(index, 1);
-        fence(AtomicOrdering::SeqCst);
+        hal::dma_wmb();
         info!("[virtio-net] queue{index}: QueueReady <- 1");
         let ready = self.read_queue_ready(index);
         info!("[virtio-net] queue{index}: QueueReady readback -> {ready}");
@@ -1206,6 +1206,7 @@ impl VirtioRegs {
                 "[virtio-net] queue {index} failed to enter ready state: ready_readback={}",
                 ready,
             );
+            self.set_status(self.status() | STATUS_FAILED);
             return Err(DriverError::NoQueue);
         }
 
@@ -1655,12 +1656,19 @@ mod tests {
     fn set_queue_size_writes_32bit_mmio_word() {
         let mut backing = [0u32; 64];
         let ptr = NonNull::new(backing.as_mut_ptr() as *mut u8).expect("non-null backing slice");
-        let frame = unsafe { crate::sel4::DeviceFrame::from_raw_parts_for_test(ptr) };
-        let mut regs = VirtioRegs { mmio: frame };
+        let mmio_len = backing.len() * size_of::<u32>();
+        let mmio = unsafe { MmioRegion::from_raw_parts_for_test(ptr.as_ptr(), mmio_len) };
+        let config_base =
+            unsafe { NonNull::new_unchecked(ptr.as_ptr().add(Registers::Config as usize)) };
+        let mut regs = VirtioRegs {
+            mmio,
+            config_base,
+            version: VIRTIO_MMIO_VERSION_MODERN,
+        };
 
-        regs.set_queue_size(0x1234);
+        regs.write_queue_num(0, 0x1234);
         let queue_num_slot = Registers::QueueNum as usize / size_of::<u32>();
         assert_eq!(backing[queue_num_slot], 0x1234);
-        assert_eq!(regs.queue_num(), 0x1234);
+        assert_eq!(regs.read_queue_num(0), 0x1234);
     }
 }

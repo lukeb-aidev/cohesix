@@ -30,16 +30,16 @@ pub fn dispatch_message(words: &[seL4_Word], handlers: &HandlerTable) -> Dispatc
     };
 
     let Some(opcode) = BootstrapOp::decode(opcode_word) else {
-        debug_uart_str("[dbg] EP 0x0130: recv/dispatch error\n");
+        debug_uart_str("[dbg] bootstrap EP: recv/dispatch error\n");
         log::error!(
-            "[ipc] EP 0x0130: dispatch error bad opcode=0x{opcode:02x}",
+            "[ipc] bootstrap dispatch error bad opcode=0x{opcode:02x}",
             opcode = opcode_word
         );
         return DispatchOutcome::BadCommand(opcode_word);
     };
 
     log::info!(
-        "[ipc] EP 0x0130: dispatch msg kind={opcode:?} words={count}",
+        "[ipc] bootstrap dispatch msg kind={opcode:?} words={count}",
         count = words.len()
     );
     let result = match opcode {

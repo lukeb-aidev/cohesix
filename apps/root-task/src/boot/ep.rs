@@ -87,6 +87,7 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
     }
 
     let ep_slot = cs.alloc_slot()?;
+    cs.reserve_slot(ep_slot);
     log_window_state("alloc", cs.root(), cs.depth(), ep_slot, None);
     debug_assert_ne!(
         ep_slot,
@@ -205,6 +206,7 @@ pub fn bootstrap_fault_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_C
     let _ = desc;
 
     let ep_slot = cs.alloc_slot()?;
+    cs.reserve_slot(ep_slot);
     log_window_state("alloc", cs.root(), cs.depth(), ep_slot, None);
     debug_assert_ne!(
         ep_slot,

@@ -21,6 +21,7 @@ use crate::bootstrap::DevicePtPoolConfig;
 use crate::debug_uart::debug_uart_str;
 use crate::sel4_view;
 use crate::serial;
+use heapless::String as HeaplessString;
 use heapless::Vec;
 pub use sel4_sys::{
     seL4_AllRights, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CNode_Mint,
@@ -525,6 +526,19 @@ pub fn pick_smallest_non_device_untyped(bi: &seL4_BootInfo) -> seL4_CPtr {
 static ROOT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
 static SEND_LOGGED: AtomicBool = AtomicBool::new(false);
 
+#[inline(always)]
+fn assert_valid_ipc_cap(dest: seL4_CPtr, context: &str) {
+    if dest == seL4_CapNull {
+        let mut line = HeaplessString::<96>::new();
+        let _ = write!(
+            line,
+            "[panic] IPC {context} called with null cap (slot=0x0000)"
+        );
+        debug_uart_str(line.as_str());
+        panic!("IPC {context} called with null cap (slot=0x0000)");
+    }
+}
+
 /// Error returned when guarded IPC cannot proceed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IpcError {
@@ -614,6 +628,7 @@ pub fn yield_now() {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn send_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
+    assert_valid_ipc_cap(dest, "send");
     unsafe {
         sel4_sys::seL4_Send(dest, info);
     }
@@ -623,6 +638,7 @@ pub fn send_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageInfo {
+    assert_valid_ipc_cap(dest, "call");
     let length = info.length();
 
     let mut mr0_val = 0;
@@ -675,6 +691,7 @@ pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageIn
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn signal_unchecked(dest: seL4_CPtr) {
+    assert_valid_ipc_cap(dest, "signal");
     let empty = seL4_MessageInfo::new(0, 0, 0, 0);
     unsafe {
         sel4_sys::seL4_Send(dest, empty);
@@ -700,12 +717,22 @@ pub fn send_guarded(info: seL4_MessageInfo) -> Result<(), IpcError> {
         endpoint, seL4_CapNull,
         "send_guarded must not transmit on the null endpoint",
     );
-    debug_uart_str("[dbg] logger.switch complete; about to send bootstrap to EP 0x0130\n");
+    let mut line = HeaplessString::<72>::new();
+    let _ = write!(
+        line,
+        "[dbg] logger.switch complete; about to send bootstrap to EP 0x{endpoint:04x}\n"
+    );
+    debug_uart_str(line.as_str());
     if !SEND_LOGGED.swap(true, Ordering::AcqRel) {
         log::info!("bootstrap: send on ep slot=0x{slot:04x}", slot = endpoint,);
     }
     send_unchecked(endpoint, info);
-    debug_uart_str("[dbg] bootstrap send to EP 0x0130 returned\n");
+    let mut done_line = HeaplessString::<64>::new();
+    let _ = write!(
+        done_line,
+        "[dbg] bootstrap send to EP 0x{endpoint:04x} returned\n"
+    );
+    debug_uart_str(done_line.as_str());
     Ok(())
 }
 
