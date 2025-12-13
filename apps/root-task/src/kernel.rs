@@ -1296,45 +1296,6 @@ fn bootstrap<P: Platform>(
         copy_slot
     };
 
-    if let Some(ipc_vaddr) = ipc_vaddr {
-        let ipc_view = match ipcbuf::install_ipc_buffer(
-            &mut kernel_env,
-            sel4_sys::seL4_CapInitThreadTCB,
-            ipc_frame,
-            ipc_vaddr,
-        ) {
-            Ok(view) => Some(view),
-            Err(code) => {
-                let err = code as sel4_sys::seL4_Error;
-                if err == sel4_sys::seL4_IllegalOperation {
-                    log::warn!(
-                        "[boot] ipc buffer re-bind not accepted by kernel; using boot-provided mapping only: err={} ({})",
-                        err,
-                        error_name(err)
-                    );
-                    let fallback_view = kernel_env
-                        .ipc_buffer_view()
-                        .or_else(|| Some(kernel_env.record_boot_ipc_buffer(ipc_frame, ipc_vaddr)));
-                    fallback_view
-                } else {
-                    panic!("ipc buffer install failed: {} ({})", code, error_name(err));
-                }
-            }
-        };
-
-        if let Some(view) = ipc_view {
-            let mut msg = heapless::String::<112>::new();
-            let _ = write!(
-                msg,
-                "[boot] ipc buffer mapped @ 0x{vaddr:08x}",
-                vaddr = view.vaddr(),
-            );
-            console.writeln_prefixed(msg.as_str());
-        }
-    } else {
-        console.writeln_prefixed("bootinfo.ipcBuffer missing");
-    }
-
     let mut fault_ep_slot = ep_slot;
     if ep_slot != sel4_sys::seL4_CapNull {
         match crate::boot::ep::bootstrap_fault_ep(&bootinfo_view, &mut boot_cspace) {
@@ -1357,49 +1318,17 @@ fn bootstrap<P: Platform>(
         }
     }
 
-    if fault_ep_slot != sel4_sys::seL4_CapNull {
-        let guard_bits =
-            sel4::word_bits().saturating_sub(bootinfo_ref.init_cnode_bits() as sel4_sys::seL4_Word);
-        let guard_data = sel4::cap_data_guard(0, guard_bits);
-        match install_fault_handler_for_tcb(
-            &mut boot_cspace,
-            sel4_sys::seL4_CapInitThreadTCB,
-            fault_ep_slot,
-            guard_data,
-            "init-tcb",
-        ) {
-            Ok(badge) => {
-                log::info!(
-                    target: "root_task::bootstrap",
-                    "[boot] fault handler installed tcb_slot=0x{slot:04x} ep=0x{ep:04x} badge=0x{badge:04x}",
-                    slot = tcb_copy_slot,
-                    ep = fault_ep_slot,
-                    badge = badge,
-                );
-            }
-            Err(fault_handler_err) => {
-                let mut line = heapless::String::<200>::new();
-                let _ = write!(
-                    line,
-                    "[boot] failed to install fault handler: {} ({})",
-                    fault_handler_err as sel4_sys::seL4_Word,
-                    error_name(fault_handler_err)
-                );
-                console.writeln_prefixed(line.as_str());
-                panic!(
-                    "fault handler installation failed: {} ({})",
-                    fault_handler_err as sel4_sys::seL4_Word,
-                    error_name(fault_handler_err)
-                );
-            }
-        }
-    } else {
-        log::warn!(
-            target: "root_task::bootstrap",
-            "[boot] skipping fault handler install: ep_slot is null (0x{ep:04x})",
-            ep = ep_slot
-        );
-    }
+    let guard_bits =
+        sel4::word_bits().saturating_sub(bootinfo_ref.init_cnode_bits() as sel4_sys::seL4_Word);
+    let guard_data = sel4::cap_data_guard(0, guard_bits);
+    let init_tcb_finaliser = InitTcbFinaliser {
+        tcb_cap: sel4_sys::seL4_CapInitThreadTCB,
+        ipc_frame,
+        ipc_vaddr,
+        fault_ep_slot,
+        guard_data,
+    };
+    let _ = init_tcb_finaliser.apply(&mut console, &mut kernel_env, &mut boot_cspace);
 
     let mut cs = CSpaceCtx::new(bootinfo_view, boot_cspace);
     cs.tcb_copy_slot = tcb_copy_slot;
@@ -2891,6 +2820,144 @@ fn lookup_fault_source(badge: sel4_sys::seL4_Word) -> Option<FaultSource> {
 
 fn record_fault_occurrence(badge: sel4_sys::seL4_Word) -> u32 {
     FAULT_REGISTRY.record_occurrence(badge)
+}
+
+#[cfg(feature = "bootstrap-trace")]
+fn trigger_fault_tripwire(fault_ep_slot: sel4_sys::seL4_CPtr) {
+    if fault_ep_slot == sel4_sys::seL4_CapNull {
+        return;
+    }
+
+    log::info!(
+        target: "root_task::kernel::fault",
+        "[boot] fault-tripwire: provoking user fault to validate handler ep=0x{fault_ep_slot:04x}",
+    );
+
+    unsafe {
+        core::ptr::read_volatile(0xdead_beefu64 as *const u64);
+    }
+
+    log::info!(
+        target: "root_task::kernel::fault",
+        "[boot] fault-tripwire returned without fault delivery; handler should confirm",
+    );
+}
+
+struct InitTcbFinaliser {
+    tcb_cap: sel4_sys::seL4_CPtr,
+    ipc_frame: sel4_sys::seL4_CPtr,
+    ipc_vaddr: Option<usize>,
+    fault_ep_slot: sel4_sys::seL4_CPtr,
+    guard_data: sel4_sys::seL4_Word,
+}
+
+impl InitTcbFinaliser {
+    /// Init TCB configuration call sites (ordering enforced here):
+    /// - apps/root-task/src/boot/tcb.rs::bootstrap_copy_init_tcb (init TCB discovery)
+    /// - apps/root-task/src/bootstrap/ipcbuf.rs::install_ipc_buffer (seL4_TCB_SetIPCBuffer)
+    /// - apps/root-task/src/kernel.rs::install_fault_handler_for_tcb (seL4_TCB_SetFaultHandler)
+    ///
+    /// Boot sanity: fault endpoint is set last; do not call TCB ops for init TCB afterwards.
+    fn apply<P: Platform>(
+        &self,
+        console: &mut DebugConsole<'_, P>,
+        kernel_env: &mut KernelEnv<'_>,
+        boot_cspace: &mut CSpace,
+    ) -> Option<sel4_sys::seL4_Word> {
+        if let Some(ipc_vaddr) = self.ipc_vaddr {
+            let ipc_view = match ipcbuf::install_ipc_buffer(
+                kernel_env,
+                self.tcb_cap,
+                self.ipc_frame,
+                ipc_vaddr,
+            ) {
+                Ok(view) => Some(view),
+                Err(code) => {
+                    let err = code as sel4_sys::seL4_Error;
+                    if err == sel4_sys::seL4_IllegalOperation {
+                        log::warn!(
+                            "[boot] ipc buffer re-bind not accepted by kernel; using boot-provided mapping only: err={} ({})",
+                            err,
+                            error_name(err)
+                        );
+                        let fallback_view = kernel_env.ipc_buffer_view().or_else(|| {
+                            Some(kernel_env.record_boot_ipc_buffer(self.ipc_frame, ipc_vaddr))
+                        });
+                        fallback_view
+                    } else {
+                        panic!("ipc buffer install failed: {} ({})", code, error_name(err));
+                    }
+                }
+            };
+
+            if let Some(view) = ipc_view {
+                let mut msg = heapless::String::<112>::new();
+                let _ = write!(
+                    msg,
+                    "[boot] ipc buffer mapped @ 0x{vaddr:08x}",
+                    vaddr = view.vaddr(),
+                );
+                console.writeln_prefixed(msg.as_str());
+            }
+        } else {
+            console.writeln_prefixed("bootinfo.ipcBuffer missing");
+        }
+
+        if self.fault_ep_slot == sel4_sys::seL4_CapNull {
+            log::warn!(
+                target: "root_task::bootstrap",
+                "[boot] skipping fault handler install: ep_slot is null (0x{ep:04x})",
+                ep = self.fault_ep_slot
+            );
+            return None;
+        }
+
+        log::info!(
+            target: "root_task::bootstrap",
+            "[boot] init TCB finalise: locking fault_ep_slot=0x{slot:04x} next_free=0x{next:04x}",
+            slot = self.fault_ep_slot,
+            next = boot_cspace.next_free_slot(),
+        );
+        boot_cspace.track_protected_slot(self.fault_ep_slot);
+
+        match install_fault_handler_for_tcb(
+            boot_cspace,
+            self.tcb_cap,
+            self.fault_ep_slot,
+            self.guard_data,
+            "init-tcb",
+        ) {
+            Ok(badge) => {
+                log::info!(
+                    target: "root_task::bootstrap",
+                    "[boot] fault handler installed tcb_slot=0x{slot:04x} ep=0x{ep:04x} badge=0x{badge:04x}",
+                    slot = self.tcb_cap,
+                    ep = self.fault_ep_slot,
+                    badge = badge,
+                );
+
+                #[cfg(feature = "bootstrap-trace")]
+                trigger_fault_tripwire(self.fault_ep_slot);
+
+                Some(badge)
+            }
+            Err(fault_handler_err) => {
+                let mut line = heapless::String::<200>::new();
+                let _ = write!(
+                    line,
+                    "[boot] failed to install fault handler: {} ({})",
+                    fault_handler_err as sel4_sys::seL4_Word,
+                    error_name(fault_handler_err)
+                );
+                console.writeln_prefixed(line.as_str());
+                panic!(
+                    "fault handler installation failed: {} ({})",
+                    fault_handler_err as sel4_sys::seL4_Word,
+                    error_name(fault_handler_err)
+                );
+            }
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
