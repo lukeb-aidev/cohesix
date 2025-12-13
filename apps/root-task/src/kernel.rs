@@ -707,11 +707,40 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
     boot_log::force_uart_line("[kernel:entry] root-task entry reached");
     log::info!("[kernel:entry] root-task entry reached");
     log::info!(target: "kernel", "[kernel] boot entrypoint: starting bootstrap");
+
+    let early_fault_ep = match install_early_fault_handler(bootinfo) {
+        Ok(cap) => {
+            boot_log::force_uart_line("[fault-early] installed init fault EP");
+            let mut line = heapless::String::<80>::new();
+            let _ = write!(
+                line,
+                "[fault-early] installed init fault EP cap=0x{cap:04x}",
+                cap = cap
+            );
+            boot_log::force_uart_line(line.as_str());
+            Some(cap)
+        }
+        Err(err) => {
+            let mut line = heapless::String::<96>::new();
+            let err_name = sel4::error_name(err);
+            let _ = write!(
+                line,
+                "[fault-early] failed to install init fault EP: {} ({})",
+                err, err_name
+            );
+            boot_log::force_uart_line(line.as_str());
+            None
+        }
+    };
+
     let ctx = match bootstrap(platform, bootinfo) {
         Ok(ctx) => ctx,
         Err(err) => {
             log::error!("[kernel:entry] bootstrap failed: {err}");
             boot_log::force_uart_line("[kernel:entry] bootstrap failed; parking thread");
+            if let Some(ep) = early_fault_ep {
+                pump_early_faults(ep);
+            }
             log::error!(
                 "[kernel:entry] unable to construct BootContext; refusing to bypass userland handoff"
             );
@@ -1911,6 +1940,172 @@ fn bootstrap<P: Platform>(
             ninedoor: RefCell::new(None),
         };
         return Ok(ctx);
+    }
+}
+
+fn install_early_fault_handler(
+    bootinfo: &'static BootInfo,
+) -> Result<sel4_sys::seL4_CPtr, sel4_sys::seL4_Error> {
+    let mut cspace = CSpace::from_bootinfo(bootinfo);
+    let mut bootinfo_mut = unsafe { (bootinfo as *const _ as *mut BootInfo).as_mut() }
+        .expect("bootinfo pointer must be valid");
+
+    let ep_slot = cspace.alloc_slot()?;
+    cspace.reserve_slot(ep_slot);
+
+    if bootinfo_mut.empty.start == ep_slot {
+        bootinfo_mut.empty.start = bootinfo_mut.empty.start.saturating_add(1);
+    }
+
+    let ut = sel4::pick_smallest_non_device_untyped(&bootinfo_mut);
+    let err = unsafe {
+        sel4_sys::seL4_Untyped_Retype(
+            ut,
+            sel4_sys::seL4_EndpointObject as usize,
+            sel4_sys::seL4_EndpointBits as usize,
+            cspace.root(),
+            0,
+            0,
+            ep_slot,
+            1,
+        )
+    };
+
+    if err != sel4_sys::seL4_NoError {
+        cspace.release_slot(ep_slot);
+        return Err(err);
+    }
+
+    let cap_type = sel4::debug_cap_identify(ep_slot);
+    debug_assert_ne!(cap_type, 0, "identify() must not be zero for endpoint");
+
+    let guard_bits =
+        sel4::word_bits().saturating_sub(bootinfo.init_cnode_bits() as sel4_sys::seL4_Word);
+    let guard_data = sel4::cap_data_guard(0, guard_bits);
+    let handler_err = unsafe {
+        sel4_sys::seL4_TCB_SetFaultHandler(
+            sel4_sys::seL4_CapInitThreadTCB,
+            ep_slot,
+            cspace.root(),
+            guard_data,
+            sel4_sys::seL4_CapInitThreadVSpace,
+            0,
+        )
+    };
+
+    if handler_err != sel4_sys::seL4_NoError {
+        cspace.release_slot(ep_slot);
+        return Err(handler_err);
+    }
+
+    boot_log::force_uart_line("[fault-early] init fault handler installed");
+    Ok(ep_slot)
+}
+
+fn decode_fault_message(tag: sel4_sys::seL4_Word, regs: &[sel4_sys::seL4_Word]) {
+    let tag_name = fault_tag_name(tag as u64);
+    match tag {
+        FAULT_TAG_VMFAULT => {
+            let ip = *regs.get(sel4_sys::seL4_VMFault_IP as usize).unwrap_or(&0);
+            let addr = *regs.get(sel4_sys::seL4_VMFault_Addr as usize).unwrap_or(&0);
+            let prefetch = *regs
+                .get(sel4_sys::seL4_VMFault_PrefetchFault as usize)
+                .unwrap_or(&0);
+            let fsr = *regs.get(sel4_sys::seL4_VMFault_FSR as usize).unwrap_or(&0);
+            let mut line = heapless::String::<160>::new();
+            let _ = write!(
+                line,
+                "[fault-early] {tag_name} ip=0x{ip:016x} addr=0x{addr:016x} prefetch={prefetch} fsr=0x{fsr:08x}",
+                tag_name = tag_name,
+                ip = ip,
+                addr = addr,
+                prefetch = prefetch,
+                fsr = fsr
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
+        FAULT_TAG_UNKNOWN_SYSCALL => {
+            let ip = *regs
+                .get(sel4_sys::seL4_UnknownSyscall_FaultIP as usize)
+                .unwrap_or(&0);
+            let sp = *regs
+                .get(sel4_sys::seL4_UnknownSyscall_SP as usize)
+                .unwrap_or(&0);
+            let lr = *regs
+                .get(sel4_sys::seL4_UnknownSyscall_LR as usize)
+                .unwrap_or(&0);
+            let syscall = *regs
+                .get(sel4_sys::seL4_UnknownSyscall_Syscall as usize)
+                .unwrap_or(&0);
+            let mut line = heapless::String::<200>::new();
+            let _ = write!(
+                line,
+                "[fault-early] {tag_name} ip=0x{ip:016x} sp=0x{sp:016x} lr=0x{lr:016x} syscall=0x{syscall:x}",
+                tag_name = tag_name,
+                ip = ip,
+                sp = sp,
+                lr = lr,
+                syscall = syscall
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
+        FAULT_TAG_USER_EXCEPTION => {
+            let ip = *regs
+                .get(sel4_sys::seL4_UserException_FaultIP as usize)
+                .unwrap_or(&0);
+            let sp = *regs
+                .get(sel4_sys::seL4_UserException_SP as usize)
+                .unwrap_or(&0);
+            let code = *regs
+                .get(sel4_sys::seL4_UserException_Code as usize)
+                .unwrap_or(&0);
+            let mut line = heapless::String::<160>::new();
+            let _ = write!(
+                line,
+                "[fault-early] {tag_name} ip=0x{ip:016x} sp=0x{sp:016x} code=0x{code:x}",
+                tag_name = tag_name,
+                ip = ip,
+                sp = sp,
+                code = code
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
+        _ => {
+            let mut line = heapless::String::<128>::new();
+            let _ = write!(
+                line,
+                "[fault-early] {tag_name} regs={regs:?}",
+                tag_name = tag_name,
+                regs = regs
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
+    }
+}
+
+fn pump_early_faults(ep_slot: sel4_sys::seL4_CPtr) -> ! {
+    loop {
+        let mut badge: sel4_sys::seL4_Word = 0;
+        let info = unsafe { sel4_sys::seL4_Recv(ep_slot, &mut badge) };
+        let label = info.label();
+        let len = info.length() as usize;
+        let mut regs = heapless::Vec::<sel4_sys::seL4_Word, { MAX_FAULT_REGS }>::new();
+        for idx in 0..len {
+            let word = unsafe { sel4_sys::seL4_GetMR(idx) };
+            let _ = regs.push(word);
+        }
+        let mut header = heapless::String::<96>::new();
+        let _ = write!(
+            header,
+            "[fault-early] badge=0x{badge:04x} label=0x{label:08x} len={len}",
+            badge = badge,
+            label = label,
+            len = len
+        );
+        boot_log::force_uart_line(header.as_str());
+        decode_fault_message(label as sel4_sys::seL4_Word, regs.as_slice());
+        boot_log::force_uart_line("[fault-early] halting after fault dump");
+        crate::panic::park();
     }
 }
 
