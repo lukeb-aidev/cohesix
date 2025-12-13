@@ -13,7 +13,7 @@ use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::untyped_pick::device_pt_pool;
 use crate::cspace::CSpace;
 use crate::kernel::BootError;
-use crate::sel4::{self, BootInfoView};
+use crate::sel4::{self, BootInfoExt, BootInfoView};
 use crate::serial;
 
 pub static mut ROOT_EP: seL4_CPtr = seL4_CapNull;
@@ -134,12 +134,13 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, B
     }
 
     let bi = view.header();
-    if bi.init_cnode_cap == seL4_CapNull {
+    let (empty_start, _empty_end) = view.init_cnode_empty_range();
+    if bi.init_cnode_cap() == seL4_CapNull {
         let err = EndpointInitError {
-            root: bi.init_cnode_cap,
-            root_bits: bi.init_cnode_bits as u8,
-            first_free: bi.empty.start,
-            dest_slot: bi.empty.start,
+            root: bi.init_cnode_cap(),
+            root_bits: view.init_cnode_bits(),
+            first_free: empty_start,
+            dest_slot: empty_start,
             ut_cap: sel4_sys::seL4_CapNull,
             syscall: "validate_root",
             code: None,
@@ -150,10 +151,10 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, B
 
     let (ut, desc) = select_endpoint_untyped(view).map_err(|code| {
         BootError::EndpointInit(EndpointInitError {
-            root: bi.init_cnode_cap,
-            root_bits: bi.init_cnode_bits as u8,
-            first_free: bi.empty.start,
-            dest_slot: bi.empty.start,
+            root: bi.init_cnode_cap(),
+            root_bits: view.init_cnode_bits(),
+            first_free: empty_start,
+            dest_slot: empty_start,
             ut_cap: bi.untyped.start,
             syscall: "select_untyped",
             code: Some(code),
@@ -175,6 +176,8 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, B
     {
         let _ = desc;
     }
+
+    let mut window = CSpaceWindow::from_bootinfo(view);
 
     let ep_slot = cs.alloc_slot().map_err(|_| {
         BootError::EndpointInit(EndpointInitError {

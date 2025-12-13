@@ -8,7 +8,7 @@ use crate::bootstrap::log::force_uart_line;
 use crate::sel4 as sys;
 #[cfg(target_os = "none")]
 use crate::sel4::{BootInfoError, BootInfoView};
-use sel4_sys::seL4_WordBits;
+use sel4_sys::{seL4_InvalidArgument, seL4_InvalidCapability, seL4_WordBits};
 
 /// Helper that logs and forwards a `seL4_CNode_Mint` request through [`CSpaceCtx`].
 pub fn cnode_mint_to_slot(
@@ -51,7 +51,7 @@ pub fn raw_untyped_retype(
             root = dest_root,
         );
         force_uart_line("boot: invalid cap arg (null) in retype; returning error");
-        return sys::seL4_InvalidCapability;
+        return seL4_InvalidCapability;
     }
     if node_index == 0 || node_offset == 0 {
         ::log::error!(
@@ -60,7 +60,7 @@ pub fn raw_untyped_retype(
             off = node_offset,
         );
         force_uart_line("boot: invalid slot (0) in retype; returning error");
-        return sys::seL4_InvalidArgument;
+        return seL4_InvalidArgument;
     }
     let word_bits = seL4_WordBits as usize;
     let hex_width = (word_bits + 3) / 4;
