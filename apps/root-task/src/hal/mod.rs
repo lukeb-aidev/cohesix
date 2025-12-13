@@ -15,7 +15,7 @@ pub mod mmio;
 pub mod pci;
 
 pub use barrier::{dma_rmb, dma_wmb};
-pub use dma::{alloc_dma, DmaRegion};
+pub use dma::{alloc_dma, DmaBuf};
 pub use mmio::{map_mmio, MmioRegion};
 
 use crate::sel4::{DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, RamFrame};
