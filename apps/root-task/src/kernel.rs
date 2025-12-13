@@ -12,7 +12,7 @@ use core::fmt::{self, Write};
 use core::ops::RangeInclusive;
 use core::panic::PanicInfo;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 #[cfg(feature = "timers-arch-counter")]
 use core::arch::asm;
@@ -36,7 +36,7 @@ use crate::bootstrap::{
 use crate::console::Console;
 use crate::cspace::tuples::assert_ipc_buffer_matches_bootinfo;
 use crate::cspace::CSpace;
-use crate::debug_uart::debug_uart_str;
+use crate::debug_uart::{debug_uart_raw_marker, debug_uart_str};
 use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, IpcDispatcher, TickEvent, TicketTable,
     TimerSource,
@@ -70,6 +70,25 @@ use spin::Mutex;
 const EARLY_DUMP_LIMIT: usize = 512;
 const DEVICE_FRAME_BITS: usize = 12;
 
+const BOOTSTEP_BOOTINFO_PARSE_BEGIN: u32 = 10;
+const BOOTSTEP_BOOTINFO_PARSE_DONE: u32 = 11;
+const BOOTSTEP_CSPACE_INIT_BEGIN: u32 = 12;
+const BOOTSTEP_CSPACE_INIT_DONE: u32 = 13;
+const BOOTSTEP_ENDPOINTS_BEGIN: u32 = 14;
+const BOOTSTEP_ENDPOINTS_DONE: u32 = 15;
+const BOOTSTEP_IPCBUF_BEGIN: u32 = 16;
+const BOOTSTEP_IPCBUF_DONE: u32 = 17;
+const BOOTSTEP_DEVICE_PT_BEGIN: u32 = 18;
+const BOOTSTEP_DEVICE_PT_DONE: u32 = 19;
+const BOOTSTEP_UART_BEGIN: u32 = 20;
+const BOOTSTEP_UART_DONE: u32 = 21;
+const BOOTSTEP_NET_BEGIN: u32 = 22;
+const BOOTSTEP_NET_DONE: u32 = 23;
+const BOOTSTEP_TIMERS_BEGIN: u32 = 24;
+const BOOTSTEP_TIMERS_DONE: u32 = 25;
+const BOOTSTEP_EVENT_BEGIN: u32 = 26;
+const BOOTSTEP_EVENT_DONE: u32 = 27;
+
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::{self, DebugSink};
 
@@ -91,24 +110,52 @@ pub(crate) struct LoopHeartbeat {
     interval: u64,
     counter: u64,
     label: &'static str,
+    limit: Option<u64>,
 }
 
 impl LoopHeartbeat {
-    pub(crate) const fn new(interval: u64, label: &'static str) -> Self {
+    pub(crate) const DEFAULT_INTERVAL: u64 = 16_384;
+
+    pub(crate) const fn new(label: &'static str) -> Self {
         Self {
-            interval,
+            interval: Self::DEFAULT_INTERVAL,
             counter: 0,
             label,
+            limit: None,
         }
     }
 
-    pub(crate) fn tick(&mut self, pc: usize) {
+    pub(crate) const fn with_limit(label: &'static str, limit: u64) -> Self {
+        Self {
+            interval: Self::DEFAULT_INTERVAL,
+            counter: 0,
+            label,
+            limit: Some(limit),
+        }
+    }
+
+    pub(crate) fn tick(&mut self, pc: usize, state: &str) {
         self.counter = self.counter.saturating_add(1);
+        if let Some(limit) = self.limit {
+            if self.counter >= limit {
+                let mut line = HeaplessString::<160>::new();
+                let _ = write!(
+                    line,
+                    "[panic] loop limit exceeded: {label} i={i} pc=0x{pc:016x} state={state}",
+                    label = self.label,
+                    i = self.counter,
+                    pc = pc,
+                );
+                boot_log::force_uart_line(line.as_str());
+                panic!("loop exceeded safe bound: {label}", label = self.label);
+            }
+        }
+
         if self.counter % self.interval == 0 {
-            let mut line = HeaplessString::<128>::new();
+            let mut line = HeaplessString::<160>::new();
             let _ = write!(
                 line,
-                "[boot:heartbeat] {label} i={i} pc=0x{pc:016x}",
+                "[boot:heartbeat] {label} i={i} pc=0x{pc:016x} state={state}",
                 label = self.label,
                 i = self.counter,
                 pc = pc,
@@ -580,6 +627,39 @@ enum BootState {
     Booted = 2,
 }
 
+static BOOT_PROGRESS: AtomicU32 = AtomicU32::new(0);
+
+const BOOT_WATCHDOG_BUDGET: u64 = 2_097_152;
+
+fn record_boot_progress(id: u32, label: &str) {
+    BOOT_PROGRESS.store(id, Ordering::Release);
+    let mut line = HeaplessString::<80>::new();
+    let _ = write!(line, "BOOTSTEP {id:03} {label}");
+    boot_log::force_uart_line(line.as_str());
+}
+
+fn boot_progress_value() -> u32 {
+    BOOT_PROGRESS.load(Ordering::Acquire)
+}
+
+fn watchdog_spin(label: &str, last_step: u32) {
+    let mut spins: u64 = 0;
+    while BOOT_PROGRESS.load(Ordering::Acquire) == last_step {
+        core::hint::spin_loop();
+        spins = spins.saturating_add(1);
+        if spins > BOOT_WATCHDOG_BUDGET {
+            let mut line = HeaplessString::<160>::new();
+            let _ = write!(
+                line,
+                "[panic] boot watchdog tripped at step={:03} label={label}",
+                last_step
+            );
+            boot_log::force_uart_line(line.as_str());
+            panic!("boot watchdog stalled at step {last_step:03}");
+        }
+    }
+}
+
 /// Errors surfaced during timer bring-up.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TimerError {
@@ -785,7 +865,7 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
         Err(err) => {
             log::error!("[kernel:entry] bootstrap failed: {err}");
             boot_log::force_uart_line("[kernel:entry] bootstrap failed; parking thread");
-            let mut fault_heartbeat = LoopHeartbeat::new(10_000, "fault-poll");
+            let mut fault_heartbeat = LoopHeartbeat::with_limit("fault-poll", 1 << 22);
             log::error!(
                 "[kernel:entry] unable to construct BootContext; refusing to bypass userland handoff"
             );
@@ -824,6 +904,9 @@ fn bootstrap<P: Platform>(
     boot_log::init_logger_bootstrap_only();
 
     crate::sel4::log_sel4_type_sanity();
+    debug_uart_raw_marker();
+
+    record_boot_progress(BOOTSTEP_BOOTINFO_PARSE_BEGIN, "before bootinfo.parse");
 
     let mut build_line = heapless::String::<192>::new();
     let mut feature_report = heapless::String::<96>::new();
@@ -886,6 +969,9 @@ fn bootstrap<P: Platform>(
     let cspace_window = CSpaceWindow::from_bootinfo(&bootinfo_view);
     let mut console = DebugConsole::new(platform);
 
+    record_boot_progress(BOOTSTEP_BOOTINFO_PARSE_DONE, "after bootinfo.parse");
+    record_boot_progress(BOOTSTEP_CSPACE_INIT_BEGIN, "before cspace.init");
+
     #[inline(always)]
     fn report_first_retype_failure<P: Platform>(
         console: &mut DebugConsole<'_, P>,
@@ -934,6 +1020,7 @@ fn bootstrap<P: Platform>(
     }
     boot_tracer().advance(BootPhase::CSpaceInit);
     boot_log::force_uart_line("[boot:marker] cspace.init.end");
+    record_boot_progress(BOOTSTEP_CSPACE_INIT_DONE, "after cspace.init");
 
     log::info!("[kernel:entry] about to log stage0 entry");
     console.writeln_prefixed("entered from seL4 (stage0)");
@@ -957,6 +1044,7 @@ fn bootstrap<P: Platform>(
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
     bootinfo_debug_dump(&bootinfo_view);
+    record_boot_progress(BOOTSTEP_IPCBUF_BEGIN, "before ipcbuf.bind");
     boot_log::force_uart_line("[boot:marker] ipcbuf.begin");
     let ipc_buffer_ptr = bootinfo_ref.ipc_buffer_ptr();
     if let Some(ptr) = ipc_buffer_ptr {
@@ -972,6 +1060,7 @@ fn bootstrap<P: Platform>(
         assert_ipc_buffer_matches_bootinfo(bootinfo_ref);
     }
     boot_log::force_uart_line("[boot:marker] ipcbuf.after");
+    record_boot_progress(BOOTSTEP_IPCBUF_DONE, "after ipcbuf.bind");
 
     log::info!(
         "[caps] Null={} TCB={} CNode={} VSpace={} IPCBuf={} BootInfo={}",
@@ -1004,10 +1093,12 @@ fn bootstrap<P: Platform>(
         crate::bootstrap::untyped::enumerate_and_plan(bootinfo_ref);
     }
 
+    record_boot_progress(BOOTSTEP_DEVICE_PT_BEGIN, "before device-pt.reserve");
     boot_log::force_uart_line("[boot:marker] untyped.enumerate.begin");
     ensure_device_pt_pool(bootinfo_ref);
     boot_log::force_uart_line("[boot:marker] device-pt.reserve.after");
     boot_log::force_uart_line("[boot:marker] untyped.enumerate.end");
+    record_boot_progress(BOOTSTEP_DEVICE_PT_DONE, "after device-pt.reserve");
 
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
     let mut kernel_env = KernelEnv::new(
@@ -1075,6 +1166,7 @@ fn bootstrap<P: Platform>(
         crate::userland::start_console_or_cohsh(platform);
     }
 
+    record_boot_progress(BOOTSTEP_ENDPOINTS_BEGIN, "before endpoints.init");
     boot_log::force_uart_line("[boot:marker] endpoints.begin");
     let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_view, &mut boot_cspace) {
         Ok(slot) => (slot, true),
@@ -1104,6 +1196,7 @@ fn bootstrap<P: Platform>(
         }
     };
     boot_log::force_uart_line("[boot:marker] endpoints.after");
+    record_boot_progress(BOOTSTEP_ENDPOINTS_DONE, "after endpoints.init");
 
     if !boot_ep_ok {
         log::warn!(
@@ -1389,6 +1482,7 @@ fn bootstrap<P: Platform>(
         Box::leak(bridge)
     };
 
+    record_boot_progress(BOOTSTEP_UART_BEGIN, "before uart.init");
     let pl011_paddr = usize::try_from(PL011_PADDR)
         .expect("PL011 physical address must fit within usize on this platform");
     let (uart_region, pl011_map_error) = match hal.map_device(pl011_paddr) {
@@ -1734,6 +1828,7 @@ fn bootstrap<P: Platform>(
         driver.write_str("[console] PL011 console online\n");
     }
     boot_log::force_uart_line("[boot:marker] uart.init.after");
+    record_boot_progress(BOOTSTEP_UART_DONE, "after uart.init");
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     {
         unsafe {
@@ -1808,6 +1903,7 @@ fn bootstrap<P: Platform>(
         let mut virtio_present = false;
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let net_stack = {
+            record_boot_progress(BOOTSTEP_NET_BEGIN, "before net.init");
             boot_log::force_uart_line("[boot:marker] net.init.begin");
             log::info!("[boot] net-console: probing {net_backend_label}");
             log::info!("[net-console] init: enter");
@@ -1844,8 +1940,10 @@ fn bootstrap<P: Platform>(
         let net_stack = None::<()>;
         #[cfg(not(feature = "net-console"))]
         boot_log::force_uart_line("[boot:marker] net.init.after");
+        record_boot_progress(BOOTSTEP_NET_DONE, "after net.init");
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
+        record_boot_progress(BOOTSTEP_TIMERS_BEGIN, "before timers.init");
         let (timer, ipc) = run_timers_and_ipc_phase(endpoints).map_err(|err| {
             log::error!(
                 target: "root_task::kernel",
@@ -1854,6 +1952,7 @@ fn bootstrap<P: Platform>(
             );
             err
         })?;
+        record_boot_progress(BOOTSTEP_TIMERS_DONE, "after timers.init");
 
         let mut tickets: TicketTable<4> = TicketTable::new();
         let _ = tickets.register(Role::Queen, "bootstrap");
@@ -1952,6 +2051,7 @@ fn bootstrap<P: Platform>(
             "[boot:ok] retyped={retyped_objects} caps_used=[0x{caps_start:04x}..0x{caps_end:04x}) left={caps_remaining}",
         );
         boot_log::force_uart_line(summary.as_str());
+        record_boot_progress(BOOTSTEP_EVENT_BEGIN, "before event-pump.start");
         crate::bp!("bootstrap.done");
         boot_tracer().advance(BootPhase::HandOff);
         boot_guard.commit();
@@ -2004,6 +2104,7 @@ fn bootstrap<P: Platform>(
             #[cfg(feature = "kernel")]
             ninedoor: RefCell::new(None),
         };
+        record_boot_progress(BOOTSTEP_EVENT_DONE, "after event-pump.start");
         return Ok(ctx);
     }
 }
@@ -2164,7 +2265,7 @@ fn decode_fault_message(tag: sel4_sys::seL4_Word, regs: &[sel4_sys::seL4_Word]) 
 fn poll_early_faults(ep_slot: sel4_sys::seL4_CPtr, heartbeat: &mut LoopHeartbeat) {
     let mut badge: sel4_sys::seL4_Word = 0;
     let info = unsafe { sel4_sys::seL4_Poll(ep_slot, &mut badge) };
-    heartbeat.tick(read_program_counter());
+    heartbeat.tick(read_program_counter(), "poll");
     if info.label() == 0 {
         return;
     }
