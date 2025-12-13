@@ -2,11 +2,15 @@
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 
+use core::fmt::Write;
+use heapless::String;
 use sel4_sys::{seL4_CPtr, seL4_CapNull, seL4_Error, seL4_IllegalOperation};
 
 use crate::boot::bi_extra::UntypedDesc;
 use crate::bootstrap::cspace::CSpaceWindow;
 use crate::bootstrap::cspace_sys::{retype_endpoint_auto, verify_root_cnode_slot};
+use crate::bootstrap::log::force_uart_line;
+use crate::bootstrap::untyped_pick::device_pt_pool;
 use crate::cspace::CSpace;
 use crate::sel4::{self, BootInfoView};
 use crate::serial;
@@ -18,6 +22,7 @@ fn select_endpoint_untyped(view: &BootInfoView) -> Result<(seL4_CPtr, UntypedDes
     const MIN_ENDPOINT_BITS: u8 = 12;
     let count = (bi.untyped.end - bi.untyped.start) as usize;
     let descriptors = &bi.untypedList[..count];
+    let reserved_device_pt_ut = device_pt_pool().map(|pool| pool.ut_slot);
     descriptors
         .iter()
         .enumerate()
@@ -26,9 +31,42 @@ fn select_endpoint_untyped(view: &BootInfoView) -> Result<(seL4_CPtr, UntypedDes
                 return None;
             }
             let cap = bi.untyped.start + index as seL4_CPtr;
+            if Some(cap) == reserved_device_pt_ut {
+                let mut line = String::<144>::new();
+                let _ = write!(
+                    line,
+                    "[ep:init] skip reserved device-pt ut=0x{cap:03x} bits={bits} index={index}",
+                    cap = cap,
+                    bits = desc.sizeBits,
+                    index = index,
+                );
+                force_uart_line(line.as_str());
+                return None;
+            }
             Some((cap, (*desc).into()))
         })
         .ok_or(seL4_IllegalOperation)
+}
+
+fn trace_ep_retype(
+    ut: seL4_CPtr,
+    desc: &UntypedDesc,
+    dest_slot: seL4_CPtr,
+    depth: u8,
+    first_free: seL4_CPtr,
+) {
+    let mut line = String::<192>::new();
+    let _ = write!(
+        line,
+        "[ep:init] ut=0x{ut:03x} bits={bits} paddr=0x{paddr:08x} -> dest=0x{dest:04x} depth={depth} first_free=0x{first_free:04x}",
+        ut = ut,
+        bits = desc.size_bits,
+        paddr = desc.paddr,
+        dest = dest_slot,
+        depth = depth,
+        first_free = first_free,
+    );
+    force_uart_line(line.as_str());
 }
 
 fn log_window_state(
@@ -132,6 +170,7 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
         ut = ut,
         slot = ep_slot,
     );
+    trace_ep_retype(ut, &desc, ep_slot, window.bits, window.first_free);
 
     if let Err(err) = verify_root_cnode_slot(bi, ep_slot as sel4_sys::seL4_Word) {
         log::error!(

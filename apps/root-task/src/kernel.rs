@@ -1137,19 +1137,6 @@ fn bootstrap<P: Platform>(
         crate::bootstrap::untyped::enumerate_and_plan(bootinfo_ref);
     }
 
-    record_boot_progress(BOOTSTEP_DEVICE_PT_BEGIN, "before device-pt.reserve");
-    boot_log::force_uart_line("[boot:marker] untyped.enumerate.begin");
-    boot_mark(BOOTMARK_UNTYPED_BEGIN);
-    ensure_device_pt_pool(bootinfo_ref);
-    boot_log::force_uart_line("[boot:marker] device-pt.reserve.after");
-    boot_log::force_uart_line("[boot:marker] untyped.enumerate.end");
-    record_boot_progress(BOOTSTEP_DEVICE_PT_DONE, "after device-pt.reserve");
-
-    #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
-    let mut kernel_env = KernelEnv::new(
-        bootinfo_ref,
-        device_pt_pool().map(DevicePtPool::from_config),
-    );
     let extra_bytes = bootinfo_view.extra();
     if !extra_bytes.is_empty() {
         console.writeln_prefixed("[boot] deferring DTB parse");
@@ -1262,6 +1249,20 @@ fn bootstrap<P: Platform>(
     );
     console.writeln_prefixed(ep_line.as_str());
     assert_bootstrap_invariants(&bootinfo_view, ep_slot);
+
+    record_boot_progress(BOOTSTEP_DEVICE_PT_BEGIN, "before device-pt.reserve");
+    boot_log::force_uart_line("[boot:marker] untyped.enumerate.begin");
+    boot_mark(BOOTMARK_UNTYPED_BEGIN);
+    ensure_device_pt_pool(bootinfo_ref);
+    boot_log::force_uart_line("[boot:marker] device-pt.reserve.after");
+    boot_log::force_uart_line("[boot:marker] untyped.enumerate.end");
+    record_boot_progress(BOOTSTEP_DEVICE_PT_DONE, "after device-pt.reserve");
+
+    #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
+    let mut kernel_env = KernelEnv::new(
+        bootinfo_ref,
+        device_pt_pool().map(DevicePtPool::from_config),
+    );
 
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
