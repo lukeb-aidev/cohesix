@@ -45,18 +45,22 @@ pub fn raw_untyped_retype(
     num_objects: sys::seL4_Word,
 ) -> sys::seL4_Error {
     if ut_cap == sys::seL4_CapNull || dest_root == sys::seL4_CapNull {
-        panic!(
-            "seL4_Untyped_Retype requested with null cap (ut=0x{ut:04x} root=0x{root:04x})",
+        ::log::error!(
+            "[retype] seL4_Untyped_Retype null cap ut=0x{ut:04x} root=0x{root:04x}; returning error",
             ut = ut_cap,
             root = dest_root,
         );
+        force_uart_line("boot: invalid cap arg (null) in retype; returning error");
+        return sys::seL4_InvalidCapability;
     }
     if node_index == 0 || node_offset == 0 {
-        panic!(
-            "seL4_Untyped_Retype attempted to use slot 0 (index=0x{idx:04x} offset=0x{off:04x})",
+        ::log::error!(
+            "[retype] seL4_Untyped_Retype attempted to use slot 0 index=0x{idx:04x} offset=0x{off:04x}; returning error",
             idx = node_index,
             off = node_offset,
         );
+        force_uart_line("boot: invalid slot (0) in retype; returning error");
+        return sys::seL4_InvalidArgument;
     }
     let word_bits = seL4_WordBits as usize;
     let hex_width = (word_bits + 3) / 4;
@@ -88,8 +92,8 @@ pub fn raw_untyped_retype(
         )
     };
     if err != sys::seL4_NoError {
-        force_uart_line("[retype] seL4_Untyped_Retype failed");
-        panic!("seL4_Untyped_Retype returned {err}");
+        force_uart_line("[retype] seL4_Untyped_Retype failed; returning error");
+        ::log::error!("[retype] seL4_Untyped_Retype err={err}");
     }
     err
 }
