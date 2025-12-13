@@ -18,10 +18,10 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
-use crate::hal::{HalError, Hardware};
+use crate::hal::{alloc_dma, DmaBuf, HalError, Hardware};
 use crate::net::{NetDevice, NetDeviceCounters, NetDriverError, CONSOLE_TCP_PORT};
 use crate::net_consts::MAX_FRAME_LEN;
-use crate::sel4::{DeviceFrame, RamFrame};
+use crate::sel4::{DeviceFrame, PAGE_SIZE};
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -113,8 +113,8 @@ pub struct VirtioNet {
     regs: VirtioRegs,
     rx_queue: VirtQueue,
     tx_queue: VirtQueue,
-    rx_buffers: HeaplessVec<RamFrame, RX_QUEUE_SIZE>,
-    tx_buffers: HeaplessVec<RamFrame, TX_QUEUE_SIZE>,
+    rx_buffers: HeaplessVec<DmaBuf, RX_QUEUE_SIZE>,
+    tx_buffers: HeaplessVec<DmaBuf, TX_QUEUE_SIZE>,
     tx_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
     tx_drops: u32,
     tx_packets: u64,
@@ -249,7 +249,7 @@ impl VirtioNet {
 
         info!("[net-console] allocating virtqueue backing memory");
 
-        let queue_mem_rx = hal.alloc_dma_frame().map_err(|err| {
+        let queue_mem_rx = alloc_dma(hal, PAGE_SIZE, PAGE_SIZE).map_err(|err| {
             regs.set_status(STATUS_FAILED);
             DriverError::from(err)
         })?;
@@ -257,7 +257,7 @@ impl VirtioNet {
         let queue_mem_tx = {
             let mut attempt = 0;
             loop {
-                let frame = hal.alloc_dma_frame().map_err(|err| {
+                let frame = alloc_dma(hal, PAGE_SIZE, PAGE_SIZE).map_err(|err| {
                     regs.set_status(STATUS_FAILED);
                     DriverError::from(err)
                 })?;
@@ -291,9 +291,9 @@ impl VirtioNet {
         );
         let tx_queue = VirtQueue::new(&mut regs, queue_mem_tx, TX_QUEUE_INDEX, tx_size)?;
 
-        let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
+        let mut rx_buffers = HeaplessVec::<DmaBuf, RX_QUEUE_SIZE>::new();
         for _ in 0..rx_size {
-            let frame = hal.alloc_dma_frame().map_err(|err| {
+            let frame = alloc_dma(hal, PAGE_SIZE, PAGE_SIZE).map_err(|err| {
                 regs.set_status(STATUS_FAILED);
                 DriverError::from(err)
             })?;
@@ -303,9 +303,9 @@ impl VirtioNet {
             })?;
         }
 
-        let mut tx_buffers = HeaplessVec::<RamFrame, TX_QUEUE_SIZE>::new();
+        let mut tx_buffers = HeaplessVec::<DmaBuf, TX_QUEUE_SIZE>::new();
         for _ in 0..tx_size {
-            let frame = hal.alloc_dma_frame().map_err(|err| {
+            let frame = alloc_dma(hal, PAGE_SIZE, PAGE_SIZE).map_err(|err| {
                 regs.set_status(STATUS_FAILED);
                 DriverError::from(err)
             })?;
@@ -410,7 +410,7 @@ impl VirtioNet {
             let idx = index as u16;
             self.rx_queue.setup_descriptor(
                 idx,
-                buffer.paddr() as u64,
+                buffer.paddr(),
                 FRAME_BUFFER_LEN as u32,
                 VIRTQ_DESC_F_WRITE,
             );
@@ -488,7 +488,7 @@ impl VirtioNet {
         if let Some(buffer) = self.rx_buffers.get_mut(id as usize) {
             self.rx_queue.setup_descriptor(
                 id,
-                buffer.paddr() as u64,
+                buffer.paddr(),
                 FRAME_BUFFER_LEN as u32,
                 VIRTQ_DESC_F_WRITE,
             );
@@ -519,7 +519,7 @@ impl VirtioNet {
         if let Some(buffer) = self.tx_buffers.get_mut(id as usize) {
             let length = len.min(buffer.as_mut_slice().len());
             self.tx_queue
-                .setup_descriptor(id, buffer.paddr() as u64, length as u32, 0);
+                .setup_descriptor(id, buffer.paddr(), length as u32, 0);
             self.tx_queue.push_avail(id);
             self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
             let slice = buffer.as_mut_slice();
@@ -1143,7 +1143,9 @@ impl VirtioRegs {
         let mut bytes = [0u8; 6];
         for (idx, byte) in bytes.iter_mut().enumerate() {
             *byte = unsafe {
-                read_volatile(self.config_base().as_ptr().add(VIRTIO_NET_CONFIG_MAC + idx) as *const u8)
+                read_volatile(
+                    self.config_base().as_ptr().add(VIRTIO_NET_CONFIG_MAC + idx) as *const u8
+                )
             };
         }
         if bytes.iter().all(|&b| b == 0) {
@@ -1193,28 +1195,28 @@ struct QueueRegisterSnapshot {
 const VIRTIO_NET_CONFIG_MAC: usize = 0x00;
 
 struct VirtQueue {
-    _frame: RamFrame,
+    _frame: DmaBuf,
     layout: VirtqLayout,
     size: u16,
     desc: NonNull<VirtqDesc>,
     avail: NonNull<VirtqAvail>,
     used: NonNull<VirtqUsed>,
     last_used: u16,
-    base_paddr: usize,
-    desc_paddr: usize,
-    avail_paddr: usize,
-    used_paddr: usize,
+    base_paddr: u64,
+    desc_paddr: u64,
+    avail_paddr: u64,
+    used_paddr: u64,
 }
 
 impl VirtQueue {
     fn new(
         regs: &mut VirtioRegs,
-        mut frame: RamFrame,
+        mut frame: DmaBuf,
         index: u32,
         size: usize,
     ) -> Result<Self, DriverError> {
         let queue_size = size as u16;
-        let base_ptr = frame.ptr();
+        let base_ptr = frame.vaddr();
         frame.as_mut_slice().fill(0);
 
         let frame_capacity = frame.as_mut_slice().len();
@@ -1222,10 +1224,10 @@ impl VirtQueue {
 
         let base_paddr = frame.paddr();
         let desc_paddr = base_paddr;
-        let avail_paddr = base_paddr + layout.avail_offset;
-        let used_paddr = base_paddr + layout.used_offset;
+        let avail_paddr = base_paddr + layout.avail_offset as u64;
+        let used_paddr = base_paddr + layout.used_offset as u64;
 
-        layout.validate(base_paddr, frame_capacity)?;
+        layout.validate(base_paddr as usize, frame_capacity)?;
 
         let desc_ptr = base_ptr.cast::<VirtqDesc>();
         let avail_ptr = unsafe {
@@ -1280,9 +1282,9 @@ impl VirtQueue {
             );
             return Err(DriverError::NoQueue);
         }
-        regs.set_queue_desc(desc_paddr as u64);
-        regs.set_queue_avail(avail_paddr as u64);
-        regs.set_queue_used(used_paddr as u64);
+        regs.set_queue_desc(desc_paddr);
+        regs.set_queue_avail(avail_paddr);
+        regs.set_queue_used(used_paddr);
         fence(AtomicOrdering::SeqCst);
         regs.queue_ready(1);
         fence(AtomicOrdering::SeqCst);
