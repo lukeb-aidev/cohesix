@@ -1154,8 +1154,17 @@ impl VirtioRegs {
         avail_paddr: u64,
         used_paddr: u64,
     ) -> Result<u16, DriverError> {
-        info!("[virtio-net] queue{index}: QueueSel <- {index}");
+        info!("[virtio-net] queue{index}: select");
         self.write_reg32(Registers::QueueSel, index);
+        let sel_readback = self.read_reg32(Registers::QueueSel);
+        if sel_readback != index {
+            error!(
+                target: "net-console",
+                "[virtio-net] queue {index} select mismatch: wrote {} read {}",
+                index,
+                sel_readback
+            );
+        }
         self.trace_queue_regs(index, "after select");
 
         let max = self.read_reg32(Registers::QueueNumMax);
@@ -1173,8 +1182,10 @@ impl VirtioRegs {
 
         self.write_reg32(Registers::QueueNum, size as u32);
         self.trace_queue_regs(index, "after queue num write");
+        compiler_fence(AtomicOrdering::SeqCst);
         info!("[virtio-net] queue{index}: QueueNum <- {size}");
         let queue_num = self.read_reg32(Registers::QueueNum);
+        compiler_fence(AtomicOrdering::SeqCst);
         self.trace_queue_regs(index, "after queue num read");
         info!("[virtio-net] queue{index}: QueueNum readback -> {queue_num}");
         if queue_num == 0 {
@@ -1220,12 +1231,14 @@ impl VirtioRegs {
         self.write_reg32(Registers::QueueUsedLow, used_paddr as u32);
         self.write_reg32(Registers::QueueUsedHigh, (used_paddr >> 32) as u32);
         self.trace_queue_regs(index, "after queue addr program");
+        compiler_fence(AtomicOrdering::SeqCst);
         info!("[virtio-net] queue{index}: DESC <- 0x{desc_paddr:016x}");
         info!("[virtio-net] queue{index}: AVAIL <- 0x{avail_paddr:016x}");
         info!("[virtio-net] queue{index}: USED <- 0x{used_paddr:016x}");
         hal::dma_wmb();
         self.write_reg32(Registers::QueueReady, 1);
         hal::dma_wmb();
+        compiler_fence(AtomicOrdering::SeqCst);
         self.trace_queue_regs(index, "after ready set");
         info!("[virtio-net] queue{index}: QueueReady <- 1");
         let ready = self.read_reg32(Registers::QueueReady);

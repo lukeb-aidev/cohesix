@@ -754,6 +754,8 @@ pub enum BootError {
     AlreadyBooted,
     /// Timer initialisation failed.
     TimerInit(TimerError),
+    /// Endpoint initialisation failed.
+    EndpointInit(crate::boot::ep::EndpointInitError),
 }
 
 impl fmt::Display for BootError {
@@ -761,6 +763,7 @@ impl fmt::Display for BootError {
         match self {
             Self::AlreadyBooted => f.write_str("bootstrap already invoked"),
             Self::TimerInit(err) => write!(f, "timer init failed: {err}"),
+            Self::EndpointInit(err) => write!(f, "endpoint init failed: {err}"),
         }
     }
 }
@@ -1203,30 +1206,22 @@ fn bootstrap<P: Platform>(
     boot_mark(BOOTMARK_ENDPOINT_BEGIN);
     let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_view, &mut boot_cspace) {
         Ok(slot) => (slot, true),
-        Err(err) => {
-            crate::trace::trace_fail(b"bootstrap_ep", err);
-            let mut line = heapless::String::<160>::new();
-            let _ = write!(
-                line,
-                "bootstrap_ep failed: {} ({})",
-                err as i32,
-                error_name(err)
-            );
+        Err(BootError::EndpointInit(err)) => {
+            log::error!("[fail:bootstrap_ep] {err}");
+            crate::trace::trace_fail(b"bootstrap_ep", sel4_sys::seL4_IllegalOperation);
+            let mut line = heapless::String::<192>::new();
+            let _ = write!(line, "bootstrap_ep failed: {err}");
             console.writeln_prefixed(line.as_str());
             #[cfg(feature = "strict-bootstrap")]
             {
-                panic!("bootstrap_ep failed: {}", error_name(err));
+                panic!("bootstrap_ep failed: {err}");
             }
             #[cfg(not(feature = "strict-bootstrap"))]
             {
-                log::error!(
-                    "[fail:bootstrap_ep] err={} ({})",
-                    err as i32,
-                    error_name(err)
-                );
                 (root_endpoint(), false)
             }
         }
+        Err(other) => return Err(other),
     };
     boot_log::force_uart_line("[boot:marker] endpoints.after");
     boot_mark(BOOTMARK_ENDPOINT_DONE);
