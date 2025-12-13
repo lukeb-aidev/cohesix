@@ -22,6 +22,8 @@ pub struct CSpace {
     empty_end: seL4_CPtr,
     reserved_floor: seL4_CPtr,
     highest_next_free: seL4_CPtr,
+    tracked_slot: Option<seL4_CPtr>,
+    tracked_violation_reported: bool,
 }
 
 impl CSpace {
@@ -36,7 +38,49 @@ impl CSpace {
             empty_end: bi.empty.end,
             reserved_floor: bi.empty.start,
             highest_next_free: bi.empty.start,
+            tracked_slot: None,
+            tracked_violation_reported: false,
         }
+    }
+
+    fn check_tracked_slot(&mut self, context: &str) {
+        if let Some(slot) = self.tracked_slot {
+            #[allow(clippy::comparison_chain)]
+            if self.next_free == slot {
+                if !self.tracked_violation_reported {
+                    self.tracked_violation_reported = true;
+                    log::error!(
+                        target: "root_task::cspace",
+                        "[BOOT][FATAL] slot allocator reused fault_ep_slot=0x{slot:04x} during {context}; parking thread",
+                    );
+                }
+                loop {
+                    core::hint::spin_loop();
+                }
+            } else if self.next_free < slot {
+                if !self.tracked_violation_reported {
+                    self.tracked_violation_reported = true;
+                    log::error!(
+                        target: "root_task::cspace",
+                        "[BOOT][FATAL] slot cursor regressed below fault_ep_slot=0x{slot:04x} during {context}; parking thread",
+                    );
+                }
+                loop {
+                    core::hint::spin_loop();
+                }
+            }
+        }
+    }
+
+    /// Marks a slot as protected so the allocator will log and halt if the cursor
+    /// regresses back into it. Intended to guard fault endpoint slots during
+    /// bootstrap.
+    pub fn track_protected_slot(&mut self, slot: seL4_CPtr) {
+        if slot == sel4_sys::seL4_CapNull {
+            return;
+        }
+        self.tracked_slot = Some(slot);
+        self.check_tracked_slot("track_protected_slot");
     }
 
     /// Returns the radix width (in bits) of the init CNode.
@@ -94,6 +138,7 @@ impl CSpace {
         self.next_free = self.next_free.saturating_add(1);
         self.highest_next_free = core::cmp::max(self.highest_next_free, self.next_free);
         self.assert_invariants();
+        self.check_tracked_slot("alloc_slot");
         Ok(slot)
     }
 
@@ -103,6 +148,7 @@ impl CSpace {
             self.next_free = slot;
         }
         self.assert_invariants();
+        self.check_tracked_slot("release_slot");
     }
 
     /// Reserve a capability slot so the allocator will never hand it out again.
@@ -120,6 +166,7 @@ impl CSpace {
         }
         self.highest_next_free = core::cmp::max(self.highest_next_free, self.next_free);
         self.assert_invariants();
+        self.check_tracked_slot("reserve_slot");
     }
 
     /// Issues a `seL4_CNode_Copy` within the init CSpace.
