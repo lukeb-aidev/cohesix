@@ -20,10 +20,6 @@ pub struct CSpace {
     next_free: seL4_CPtr,
     empty_start: seL4_CPtr,
     empty_end: seL4_CPtr,
-    reserved_floor: seL4_CPtr,
-    highest_next_free: seL4_CPtr,
-    tracked_slot: Option<seL4_CPtr>,
-    tracked_violation_reported: bool,
 }
 
 impl CSpace {
@@ -36,51 +32,7 @@ impl CSpace {
             next_free: bi.empty.start,
             empty_start: bi.empty.start,
             empty_end: bi.empty.end,
-            reserved_floor: bi.empty.start,
-            highest_next_free: bi.empty.start,
-            tracked_slot: None,
-            tracked_violation_reported: false,
         }
-    }
-
-    fn check_tracked_slot(&mut self, context: &str) {
-        if let Some(slot) = self.tracked_slot {
-            #[allow(clippy::comparison_chain)]
-            if self.next_free == slot {
-                if !self.tracked_violation_reported {
-                    self.tracked_violation_reported = true;
-                    log::error!(
-                        target: "root_task::cspace",
-                        "[BOOT][FATAL] slot allocator reused fault_ep_slot=0x{slot:04x} during {context}; parking thread",
-                    );
-                }
-                loop {
-                    core::hint::spin_loop();
-                }
-            } else if self.next_free < slot {
-                if !self.tracked_violation_reported {
-                    self.tracked_violation_reported = true;
-                    log::error!(
-                        target: "root_task::cspace",
-                        "[BOOT][FATAL] slot cursor regressed below fault_ep_slot=0x{slot:04x} during {context}; parking thread",
-                    );
-                }
-                loop {
-                    core::hint::spin_loop();
-                }
-            }
-        }
-    }
-
-    /// Marks a slot as protected so the allocator will log and halt if the cursor
-    /// regresses back into it. Intended to guard fault endpoint slots during
-    /// bootstrap.
-    pub fn track_protected_slot(&mut self, slot: seL4_CPtr) {
-        if slot == sel4_sys::seL4_CapNull {
-            return;
-        }
-        self.tracked_slot = Some(slot);
-        self.check_tracked_slot("track_protected_slot");
     }
 
     /// Returns the radix width (in bits) of the init CNode.
@@ -101,72 +53,22 @@ impl CSpace {
         self.next_free
     }
 
-    #[inline(always)]
-    fn cnode_invocation_depth(&self) -> u8 {
-        self.bits
-    }
-
-    fn assert_invariants(&self) {
-        assert!(
-            self.next_free >= self.empty_start,
-            "first_free moved below empty window start: next_free=0x{next:04x} start=0x{start:04x}",
-            next = self.next_free,
-            start = self.empty_start,
-        );
-        assert!(
-            self.next_free <= self.empty_end,
-            "first_free exceeded empty window end: next_free=0x{next:04x} end=0x{end:04x}",
-            next = self.next_free,
-            end = self.empty_end,
-        );
-        assert!(
-            self.next_free >= self.reserved_floor,
-            "first_free overlapped reserved range: next_free=0x{next:04x} reserved_floor=0x{floor:04x}",
-            next = self.next_free,
-            floor = self.reserved_floor,
-        );
-    }
-
     /// Allocates the next available slot from the init CSpace.
     pub fn alloc_slot(&mut self) -> Result<seL4_CPtr, seL4_Error> {
         let limit = 1u64 << self.bits;
         if (self.next_free as u64) >= limit || self.next_free >= self.empty_end {
             return Err(sel4_sys::seL4_NotEnoughMemory);
         }
-        self.assert_invariants();
         let slot = self.next_free;
         self.next_free = self.next_free.saturating_add(1);
-        self.highest_next_free = core::cmp::max(self.highest_next_free, self.next_free);
-        self.assert_invariants();
-        self.check_tracked_slot("alloc_slot");
         Ok(slot)
     }
 
     /// Releases a slot previously returned by [`alloc_slot`], allowing it to be reused.
     pub fn release_slot(&mut self, slot: seL4_CPtr) {
-        if slot + 1 == self.next_free && slot + 1 > self.reserved_floor {
+        if slot + 1 == self.next_free {
             self.next_free = slot;
         }
-        self.assert_invariants();
-        self.check_tracked_slot("release_slot");
-    }
-
-    /// Reserve a capability slot so the allocator will never hand it out again.
-    pub fn reserve_slot(&mut self, slot: seL4_CPtr) {
-        assert!(
-            slot >= self.empty_start && slot < self.empty_end,
-            "reserved slot 0x{slot:04x} outside empty window [0x{start:04x}..0x{end:04x})",
-            slot = slot,
-            start = self.empty_start,
-            end = self.empty_end,
-        );
-        self.reserved_floor = core::cmp::max(self.reserved_floor, slot.saturating_add(1));
-        if self.next_free < self.reserved_floor {
-            self.next_free = self.reserved_floor;
-        }
-        self.highest_next_free = core::cmp::max(self.highest_next_free, self.next_free);
-        self.assert_invariants();
-        self.check_tracked_slot("reserve_slot");
     }
 
     /// Issues a `seL4_CNode_Copy` within the init CSpace.
@@ -177,7 +79,7 @@ impl CSpace {
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
-        let depth = self.cnode_invocation_depth();
+        let depth = sel4::word_bits() as u8;
         log::info!(
             "[cnode] Copy dst=0x{dst:04x} depth={depth}",
             dst = dst_slot,
@@ -202,7 +104,7 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
-        let depth = self.cnode_invocation_depth();
+        let depth = sel4::word_bits() as u8;
         let limit = 1u64 << self.bits;
         assert!(
             (dst_slot as u64) < limit,
@@ -265,28 +167,5 @@ pub fn cap_rights_read_write_grant() -> sel4_sys::seL4_CapRights {
     #[cfg(not(target_os = "none"))]
     {
         sel4_sys::seL4_CapRights_All
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cnode_invocation_depth_tracks_init_bits() {
-        let mut cspace = CSpace {
-            root: 2,
-            bits: 13,
-            next_free: 0,
-            empty_start: 0,
-            empty_end: 1,
-            reserved_floor: 0,
-            highest_next_free: 0,
-        };
-
-        assert_eq!(cspace.cnode_invocation_depth(), 13);
-
-        cspace.bits = 16;
-        assert_eq!(cspace.cnode_invocation_depth(), 16);
     }
 }

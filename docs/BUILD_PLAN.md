@@ -481,14 +481,6 @@ Introduce the `coh-rtc` compiler that ingests `configs/root_task.toml` and emits
   - `apps/root-task/src/generated/bootstrap.rs` — init graph, ticket table, namespace descriptors with compile-time hashes.
   - `out/manifests/root_task_resolved.json` — serialised IR with SHA-256 fingerprint stored alongside.
   - `tests/cli/boot_v0.cohsh` — baseline CLI script derived from the manifest to exercise attach/log/quit flows.
-- Manifest IR gains optional `ecosystem.*` section (schema-validated, defaults to noop):
-  - `ecosystem.host.enable` (bool)
-  - `ecosystem.host.providers[]` (enum: `systemd`, `k8s`, `nvidia`, `jetson`, `net`)
-  - `ecosystem.host.mount_at` (default `/host`)
-  - `ecosystem.audit.enable` (bool)
-  - `ecosystem.policy.enable` (bool)
-  - `ecosystem.models.enable` (bool; future CAS hook)
-  - Generated doc snippets call out that these nodes appear only when enabled.
 - Documentation updates:
   - `docs/ARCHITECTURE.md §11` expanded with the manifest schema and regeneration workflow.
   - `docs/BUILD_PLAN.md` (this file) references the manifest in earlier milestones.
@@ -507,8 +499,6 @@ Introduce the `coh-rtc` compiler that ingests `configs/root_task.toml` and emits
 - Compiler validation rejects manifests that violate red lines (e.g., invalid walk depth, enabling `gpu` while `profile.kernel` omits the feature gate) and exits with non-zero status.
 - Run the Regression Pack and reject any drift in `tests/cli/boot_v0.cohsh` output or manifest fingerprints unless the docs and schema version are updated in the same change.
 - Generated modules MUST NOT introduce new global state or reorder initialisation in a way that changes serial boot ordering or `/proc/boot` output.
-- Compiler rejects manifests that set `ecosystem.host.enable = true` when memory budgets or Secure9P red lines (msize, walk depth, role isolation) would be exceeded; enabling the ecosystem section MUST NOT relax prior limits.
-- Docs-as-built guard extends to the new schema nodes so generated snippets and rendered docs agree on the resolved manifest.
 
 **Compiler touchpoints**
 - Introduces `root_task.schema = "1.0"`; schema mismatches abort generation and instruct operators to upgrade docs.
@@ -543,7 +533,7 @@ Wrap the AArch64-specific VSpace cache operations in the HAL, wire them into man
 ---
 ## Milestone 9 — Secure9P Pipelining & Batching
 
-(Clarification) Milestones 9–15 intentionally build on the full 7d acknowledgement grammar. Do NOT attempt to pull 9P batching/pipelining earlier than 7d; doing so breaks test surfaces.
+(Clarification) Milestones 9–12 intentionally build on the full 7d acknowledgement grammar. Do NOT attempt to pull 9P batching/pipelining earlier than 7d; doing so breaks test surfaces.
 
 **Why now (compiler):** Host NineDoor already handles baseline 9P flows, but upcoming use cases demand concurrent telemetry and command streams. Enabling multiple in-flight tags and batched writes requires new core structures and manifest knobs so deployments tune throughput without compromising determinism.
 
@@ -615,118 +605,7 @@ Implement ring-backed telemetry providers with manifest-governed sizes and CBOR 
 
 ---
 
-## Milestone 11 — Host Sidecar Bridge & /host Namespace (Ecosystem Coexistence)
-
-**Why now (compiler):** Cohesix needs to govern existing fleets (systemd units, Kubernetes nodes, GPUs) without moving those systems into the VM. Mirroring host controls into `/host` via Secure9P keeps determinism and the tiny TCB while exposing file-driven levers.
-
-**Flagship narrative:** Cohesix acts as a governance layer over existing ecosystems: external orchestrators, device managers, and schedulers are surfaced as files and policies so queens and workers can coordinate without new protocols or in-VM servers.
-
-**Goal**
-Provide a host-only sidecar bridge that projects external ecosystem controls into a manifest-scoped `/host` namespace with strict policy/audit boundaries and no new in-VM transports.
-
-**Deliverables**
-- New host tool crate `apps/host-sidecar-bridge/` (name can adjust) that connects to NineDoor from the host using existing transports, publishes a provider-driven synthetic tree under `/host`, and supports `--mock` mode for CI.
-- Namespace layout (v1, minimal, file-only and append-only for controls):
-  - `/host/systemd/<unit>/{status,restart}` (mocked)
-  - `/host/k8s/node/<name>/{cordon,drain}` (mocked)
-  - `/host/nvidia/gpu/<id>/{status,power_cap,thermal}` (mocked; honours GPU-outside-VM stance)
-- Access policy:
-  - Queen role can write control nodes; workers are read-only or denied based on manifest policy.
-  - Control writes are append-only command files (no random writes); audit lines are appended for every write using existing logging/telemetry mechanisms (no new logging protocol).
-- Host-only transport enforcement: no new in-VM TCP listeners; the sidecar uses the existing authenticated console/NineDoor boundaries from the host side only.
-- CLI harness and commands (documented):
-  - `cargo test -p host-sidecar-bridge`
-  - `cargo run -p host-sidecar-bridge -- --mock --mount /host`
-  - `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/host_sidecar_mock.cohsh`
-- Manifest/IR alignment: `/host` tree appears only when `ecosystem.host.enable = true` with providers declared under `ecosystem.host.providers[]` and mount point defaulting to `/host`.
-- Docs include policy and TCB notes emphasising that the bridge mirrors host controls without expanding the in-VM attack surface.
-
-**Checks (DoD)**
-- `/host/*` tree mounts only when enabled by the manifest; omitted otherwise.
-- Writes to control nodes are rejected for non-queen roles and result in append-only audit lines; mock mode exercises this path in CI.
-- No new in-VM TCP services are introduced; all transports remain host-side per Secure9P.
-
-**Compiler touchpoints**
-- `coh-rtc` validation ensures enabling `ecosystem.host` respects existing Secure9P red lines (msize, walk depth, role isolation) and memory budgets.
-- Codegen emits doc/CLI snippets advertising `/host` only when enabled; docs-as-built guard pulls from the resolved manifest.
-
----
-
-## Milestone 12 — PolicyFS & Approval Gates
-
-**Why now (compiler):** Host mirroring introduces higher-risk controls. Converting approvals into manifest-driven files keeps operations human-auditable without new protocols.
-
-**Flagship narrative:** Governance is file-native: risky actions become append-only requests, policy gates decide via files, and the hive stays deterministic across transports.
-
-**Goal**
-Add a PolicyFS surface that captures human-legible approvals for sensitive operations before they reach `/queen/ctl` or `/host` controls.
-
-**Deliverables**
-- Namespace nodes (provider may live in NineDoor or host; keep consistent with existing architecture):
-  - `/policy/ctl` (append-only JSONL commands for policy changes)
-  - `/policy/rules` (read-only snapshot emitted from manifest)
-  - `/actions/queue` (append-only requests)
-  - `/actions/<id>/status` (read-only)
-- Enforcement: selected control writes (e.g., `/queen/ctl`, `/host/*/restart`) require a policy gate when enabled; denials/approvals append to the audit log using existing telemetry logging.
-- CLI regression demonstrating a denied action followed by an approved action under policy gating.
-- Manifest flag (e.g., `ecosystem.policy.enable`) toggles the gate and publishes rules; defaults keep policy off to preserve prior behaviour.
-
-**Commands**
-- `cargo test -p nine-door`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/policy_gate.cohsh`
-
-**Checks (DoD)**
-- Policy gate enablement is manifest-driven; disabling it reverts to prior control semantics without hidden defaults.
-- Deterministic results: identical scripts produce identical ACK/ERR sequences and audit lines for denied vs. approved actions.
-- Sensitive control writes are refused when gates are active and no approval exists; acceptance path appends deterministic audit lines.
-
-**Compiler touchpoints**
-- `coh-rtc` emits policy/rule snapshots into generated docs and CLI fixtures; validation enforces append-only semantics and bounded queue sizes consistent with Secure9P limits.
-- Docs-as-built guard ensures policy nodes and examples match the resolved manifest.
-
----
-
-## Milestone 13 — AuditFS & ReplayFS
-
-**Why now (compiler):** With host mirroring and policy gates, operators need deterministic replay for investigations without expanding the TCB. Bounded audit/replay surfaces make Cohesix operations repeatable and inspectable.
-
-**Flagship narrative:** Cohesix treats control as data: every action and decision is recorded as append-only files that can be replayed deterministically to prove governance over external ecosystems.
-
-**Goal**
-Provide append-only audit logs and a bounded replay surface that re-applies Cohesix-issued control actions deterministically.
-
-**Deliverables**
-- `/audit/` subtree:
-  - `/audit/journal` (append-only CBOR or JSONL aligned with existing telemetry choices)
-  - `/audit/decisions` (policy approvals/denials)
-  - `/audit/export` (read-only snapshot trigger)
-- `/replay/` subtree:
-  - `/replay/ctl` (append-only commands like “start replay from cursor X”)
-  - `/replay/status` (read-only)
-- Replay semantics:
-  - Only replays Cohesix-issued control-plane actions (no arbitrary host scans) and respects bounded log windows.
-  - Deterministic execution: same inputs → same ACK/ERR + audit lines regardless of transport (serial/TCP).
-- CLI regression exercising record then replay of a scripted sequence with byte-identical acknowledgements.
-- Audit logging integrates with telemetry rings without adding new protocols; storage remains bounded per manifest budget.
-
-**Commands**
-- `cargo test -p nine-door`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/replay_journal.cohsh`
-
-**Checks (DoD)**
-- Scripted actions can be replayed to yield byte-identical ACK/ERR sequences for Cohesix control operations.
-- Audit entries are emitted for all transports; replay refuses to exceed bounded windows or to replay non-Cohesix host state.
-- Append-only semantics enforced for journal/control files; attempts at random-write are rejected and audited.
-
-**Compiler touchpoints**
-- Manifest fields (e.g., `ecosystem.audit.enable`) gate audit/replay surfaces; validation enforces bounded storage and adherence to Secure9P limits.
-- Generated docs reference audit/replay schemas derived from the resolved manifest; CI guard ensures snippets stay in sync.
-
----
-
-## Milestone 14 — Sharded Namespaces & Provider Split
+## Milestone 11 — Sharded Namespaces & Provider Split
 
 **Why now (compiler):** Scaling beyond hundreds of workers will otherwise bottleneck on single-directory namespaces. Deterministic sharding keeps walk depth bounded and aligns provider routing with manifest entries.
 
@@ -758,7 +637,7 @@ Introduce manifest-driven namespace sharding with optional legacy aliases.
 
 ---
 
-## Milestone 15 — Client Concurrency & Session Pooling
+## Milestone 12 — Client Concurrency & Session Pooling
 
 **Why now (compiler):** Server-side pipelining is useless unless the CLI and automation harness can take advantage of it safely. Manifest-driven client policy keeps retries and pooling deterministic across deployments.
 
@@ -790,7 +669,7 @@ Add pooled sessions and retry policies to `cohsh`, governed by compiler-exported
 
 ---
 
-## Milestone 16 — Observability via Files (No New Protocols)
+## Milestone 13 — Observability via Files (No New Protocols)
 
 **Why now (compiler):** Operators need structured observability without adding new protocols inside the VM. Manifest-defined `/proc` endpoints ensure metrics stay aligned with runtime behaviour.
 
@@ -823,7 +702,7 @@ Expose audit-friendly observability nodes under `/proc` generated from the manif
 
 ---
 
-## Milestone 17 — Content-Addressed Updates (CAS) — 9P-first
+## Milestone 14 — Content-Addressed Updates (CAS) — 9P-first
 
 **Why now (compiler):** Upcoming edge deployments need resumable, verifiable updates without bloating the VM with new protocols. Manifest-governed CAS ensures integrity rules and storage budgets remain enforceable.
 
@@ -834,8 +713,6 @@ Provide CAS-backed update distribution via NineDoor with compiler-enforced integ
 - `apps/nine-door/src/host/cas.rs` implementing a CAS provider exposing `/updates/<epoch>/{manifest.cbor,chunks/<hash>}` with optional delta packs. Provider enforces SHA-256 chunk integrity and optional Ed25519 signatures when manifest enables `cas.signing`.
 - Host tooling `apps/cas-tool/` (new crate) packaging update bundles, generating manifests, and uploading via Secure9P.
 - CLI regression `tests/cli/cas_roundtrip.cohsh` verifying download resume, signature enforcement, and delta replay.
-- Models as CAS (registry semantics via files, no new service): expose `/models/<sha256>/{weights,schema,signature}` backed by the same CAS provider; include doc example binding a model into a worker namespace via mount/bind.
-- CLI regression `tests/cli/model_cas_bind.cohsh` uploads a dummy model bundle, verifies hash, and binds it into a worker namespace.
 - Manifest IR v1.4 fields: `cas.enable`, `cas.store.chunk_bytes`, `cas.delta.enable`, `cas.signing.key_path`. Validation ensures chunk size ≤ negotiated `msize` and signing keys present when required.
 - Docs: `docs/INTERFACES.md` describes CAS grammar, delta rules, and operational runbooks sourced from compiler output; `docs/SECURITY.md` records threat model.
 
@@ -844,7 +721,6 @@ Provide CAS-backed update distribution via NineDoor with compiler-enforced integ
 - `cargo test -p cas-tool`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 - `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/cas_roundtrip.cohsh`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/model_cas_bind.cohsh`
 
 **Checks (DoD)**
 - Resume logic validated via regression script; delta application is idempotent and verified by hashing installed payloads before/after.
@@ -852,16 +728,14 @@ Provide CAS-backed update distribution via NineDoor with compiler-enforced integ
 - Compiler rejects manifests where CAS storage exceeds event-pump memory budgets or chunk sizes exceed `msize`.
 - Re-run the Regression Pack and verify that enabling CAS does not change baseline NineDoor error codes or 9P limits (e.g., `msize`, walk depth) enforced by earlier milestones.
 - CAS fetch paths MUST NOT alter 9P latency or error codes for non-CAS workloads; regression pack MUST prove no change in baseline attach/log/tail flows.
-- Model binding test proves `/models/<sha256>` mounts remain read-only and integrate with worker namespaces without introducing new services; manifest gating (e.g., `ecosystem.models.enable`) controls exposure.
 
 **Compiler touchpoints**
 - Codegen emits CAS provider tables and host-tool manifest templates; docs ingest the same JSON to prevent drift.
 - Regeneration guard checks CAS manifest fingerprints against committed artefacts.
-- Manifest validation ties CAS model exposure to `ecosystem.models.enable` and ensures model artefact sizes respect existing Secure9P `msize` and walk-depth limits.
 
 ---
 
-## Milestone 18 — UEFI Bare-Metal Boot & Device Identity
+## Milestone 15 — UEFI Bare-Metal Boot & Device Identity
 
 **Why now (context):** To meet hardware deployment goals (Edge §3 retail hubs, Edge §8 defense ISR, Security §12 segmentation) we must boot on physical aarch64 hardware with attested manifests while preserving the lean `no_std` footprint.
 
@@ -897,7 +771,7 @@ Deliver a UEFI boot path that loads the generated manifest, performs TPM-backed 
 
 ---
 
-## Milestone 19 — Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern)
+## Milestone 16 — Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern)
 
 **Why now (context):** Remaining edge use cases (Edge §§1–4,8,9; Science §§13–14) depend on deterministic adapters for industrial buses and constrained links. Implementing them as sidecars preserves the lean `no_std` core while meeting operational demands.
 
@@ -933,7 +807,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 - Validation prevents enabling sidecars without corresponding host dependencies or event-pump capacity.
 
 ---
-## Milestone 20a — `cohsh-core` Extraction (Shared Grammar & Transport)
+## Milestone 17a — `cohsh-core` Extraction (Shared Grammar & Transport)
 **Purpose:** One command/ACK grammar for CLI, automation, and UI.  
 **Deliverables**
 - New crate `crates/cohsh-core/` with verb grammar (`attach`, `tail`, `spawn`, `kill`, `quit`), ACK/ERR/END model, login throttling, ticket checks.
@@ -946,7 +820,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 
 ---
 
-## Milestone 20b — `cohsh` as 9P Client Library
+## Milestone 17b — `cohsh` as 9P Client Library
 **Purpose:** File-centric client API for automation and UI.  
 **Deliverables**
 - `CohClient` with `open/read/write/clunk`, `tail()` streaming helper.
@@ -959,7 +833,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 
 ---
 
-## Milestone 20c — NineDoor UI Providers
+## Milestone 17c — NineDoor UI Providers
 **Purpose:** System summaries as read-only 9P files (no new protocols).  
 **Deliverables**
 - Providers:  
@@ -974,7 +848,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 
 ---
 
-## Milestone 20d — SwarmUI Desktop (Tauri, Pure 9P/TCP)
+## Milestone 17d — SwarmUI Desktop (Tauri, Pure 9P/TCP)
 **Purpose:** First operator UI speaking only 9P over smoltcp TCP.  
 **Deliverables**
 - `apps/swarmui/` (Tauri): Rust backend links `cohsh-core`.
@@ -988,7 +862,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 
 ---
 
-## Milestone 20e — Edge Local Status (UEFI Host Tool)
+## Milestone 17e — Edge Local Status (UEFI Host Tool)
 **Purpose:** Installer/field tech dashboard on bare-metal edges.  
 **Deliverables**
 - `coh-status` (CLI or tiny Tauri): read-only views of `/proc/boot`, `/proc/attest/*`, `/worker/*/telemetry` via localhost 9P/TCP.
@@ -1000,7 +874,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 
 ---
 
-## Milestone 20f — CLI/UI Convergence Tests
+## Milestone 17f — CLI/UI Convergence Tests
 **Purpose:** Prove UI, CLI, and console equivalence at the boundary.  
 **Deliverables**
 - Golden transcript harness comparing console, `cohsh`, and `cohsh-core`.
@@ -1012,7 +886,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 
 ---
 
-## Milestone 20g — UI Security Hardening (Tickets & Quotas)
+## Milestone 17g — UI Security Hardening (Tickets & Quotas)
 **Purpose:** Enforce least privilege for interactive tails and controls.  
 **Deliverables**
 - Ticket scopes `{path, verb, rate}`; per-ticket bandwidth and cursor quotas.
@@ -1024,7 +898,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 
 ---
 
-## Milestone 20h — Deterministic Snapshot & Replay (UI Testing)
+## Milestone 17h — Deterministic Snapshot & Replay (UI Testing)
 **Purpose:** Repeatable UI regressions without live targets.  
 **Deliverables**
 - `cohsh-core` trace recorder/replayer for 9P frames + ACKs (`.trace` files).

@@ -12,7 +12,7 @@ use core::fmt::{self, Write};
 use core::ops::RangeInclusive;
 use core::panic::PanicInfo;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 #[cfg(feature = "timers-arch-counter")]
 use core::arch::asm;
@@ -36,7 +36,7 @@ use crate::bootstrap::{
 use crate::console::Console;
 use crate::cspace::tuples::assert_ipc_buffer_matches_bootinfo;
 use crate::cspace::CSpace;
-use crate::debug_uart::{debug_uart_raw_marker, debug_uart_str};
+use crate::debug_uart::debug_uart_str;
 use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, IpcDispatcher, TickEvent, TicketTable,
     TimerSource,
@@ -70,231 +70,14 @@ use spin::Mutex;
 const EARLY_DUMP_LIMIT: usize = 512;
 const DEVICE_FRAME_BITS: usize = 12;
 
-const BOOTSTEP_BOOTINFO_PARSE_BEGIN: u32 = 10;
-const BOOTSTEP_BOOTINFO_PARSE_DONE: u32 = 11;
-const BOOTSTEP_CSPACE_INIT_BEGIN: u32 = 12;
-const BOOTSTEP_CSPACE_INIT_DONE: u32 = 13;
-const BOOTSTEP_ENDPOINTS_BEGIN: u32 = 14;
-const BOOTSTEP_ENDPOINTS_DONE: u32 = 15;
-const BOOTSTEP_IPCBUF_BEGIN: u32 = 16;
-const BOOTSTEP_IPCBUF_DONE: u32 = 17;
-const BOOTSTEP_DEVICE_PT_BEGIN: u32 = 18;
-const BOOTSTEP_DEVICE_PT_DONE: u32 = 19;
-const BOOTSTEP_UART_BEGIN: u32 = 20;
-const BOOTSTEP_UART_DONE: u32 = 21;
-const BOOTSTEP_NET_BEGIN: u32 = 22;
-const BOOTSTEP_NET_DONE: u32 = 23;
-const BOOTSTEP_TIMERS_BEGIN: u32 = 24;
-const BOOTSTEP_TIMERS_DONE: u32 = 25;
-const BOOTSTEP_EVENT_BEGIN: u32 = 26;
-const BOOTSTEP_EVENT_DONE: u32 = 27;
-
-const BOOTMARK_ENTRY: u32 = 1;
-const BOOTMARK_LOGGER_BEGIN: u32 = 2;
-const BOOTMARK_LOGGER_DONE: u32 = 3;
-const BOOTMARK_BOOTINFO_BEGIN: u32 = 4;
-const BOOTMARK_BOOTINFO_DONE: u32 = 5;
-const BOOTMARK_CSPACE_BEGIN: u32 = 6;
-const BOOTMARK_CSPACE_DONE: u32 = 7;
-const BOOTMARK_ENDPOINT_BEGIN: u32 = 8;
-const BOOTMARK_ENDPOINT_DONE: u32 = 9;
-const BOOTMARK_IPC_BEGIN: u32 = 10;
-const BOOTMARK_IPC_DONE: u32 = 11;
-const BOOTMARK_UNTYPED_BEGIN: u32 = 12;
-const BOOTMARK_UNTYPED_DONE: u32 = 13;
-const BOOTMARK_UART_BEGIN: u32 = 14;
-const BOOTMARK_UART_DONE: u32 = 15;
-const BOOTMARK_VIRTIO_BEGIN: u32 = 16;
-const BOOTMARK_VIRTIO_DONE: u32 = 17;
-const BOOTMARK_WATCHDOG: u32 = 18;
-
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::{self, DebugSink};
-
-#[inline(always)]
-pub(crate) fn read_program_counter() -> usize {
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        let pc: usize;
-        core::arch::asm!("adr {pc}, .", pc = out(reg) pc);
-        pc
-    }
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        0
-    }
-}
-
-fn boot_mark(tag: u32) {
-    #[cfg(all(feature = "serial-console", feature = "kernel"))]
-    {
-        let mut digits = [0u8; 10];
-        let mut n = tag;
-        let mut idx = digits.len();
-        if n == 0 {
-            idx = idx.saturating_sub(1);
-            digits[idx] = b'0';
-        }
-        while n > 0 {
-            let digit = (n % 10) as u8;
-            idx = idx.saturating_sub(1);
-            digits[idx] = b'0' + digit;
-            n /= 10;
-        }
-
-        early_uart::write_byte(b'[');
-        early_uart::write_byte(b'b');
-        early_uart::write_byte(b'm');
-        for &byte in digits.iter().skip(idx) {
-            early_uart::write_byte(byte);
-        }
-        early_uart::write_byte(b']');
-        early_uart::write_byte(b'\n');
-    }
-
-    #[cfg(not(all(feature = "serial-console", feature = "kernel")))]
-    {
-        let _ = tag;
-    }
-}
-
-#[cfg(feature = "bootstrap-trace")]
-fn bootstrap_trace_yield_marker(tag: u32) {
-    static YIELD_COUNTER: AtomicU32 = AtomicU32::new(0);
-    let tick = YIELD_COUNTER.fetch_add(1, Ordering::Relaxed);
-    if tick % 1000 == 0 {
-        boot_mark(tag);
-    }
-    unsafe { sel4_sys::seL4_Yield() };
-}
-
-#[cfg(not(feature = "bootstrap-trace"))]
-fn bootstrap_trace_yield_marker(_tag: u32) {}
-
-pub(crate) struct LoopHeartbeat {
-    interval: u64,
-    counter: u64,
-    label: &'static str,
-    limit: Option<u64>,
-}
-
-impl LoopHeartbeat {
-    pub(crate) const DEFAULT_INTERVAL: u64 = 16_384;
-
-    pub(crate) const fn new(label: &'static str) -> Self {
-        Self {
-            interval: Self::DEFAULT_INTERVAL,
-            counter: 0,
-            label,
-            limit: None,
-        }
-    }
-
-    pub(crate) const fn with_limit(label: &'static str, limit: u64) -> Self {
-        Self {
-            interval: Self::DEFAULT_INTERVAL,
-            counter: 0,
-            label,
-            limit: Some(limit),
-        }
-    }
-
-    pub(crate) fn tick(&mut self, pc: usize, state: &str) {
-        self.counter = self.counter.saturating_add(1);
-        if let Some(limit) = self.limit {
-            if self.counter >= limit {
-                let mut line = HeaplessString::<160>::new();
-                let _ = write!(
-                    line,
-                    "[panic] loop limit exceeded: {label} i={i} pc=0x{pc:016x} state={state}",
-                    label = self.label,
-                    i = self.counter,
-                    pc = pc,
-                );
-                boot_log::force_uart_line(line.as_str());
-                panic!("loop exceeded safe bound: {label}", label = self.label);
-            }
-        }
-
-        if self.counter % self.interval == 0 {
-            let mut line = HeaplessString::<160>::new();
-            let _ = write!(
-                line,
-                "[boot:heartbeat] {label} i={i} pc=0x{pc:016x} state={state}",
-                label = self.label,
-                i = self.counter,
-                pc = pc,
-            );
-            boot_log::force_uart_line(line.as_str());
-        }
-    }
-}
 
 fn debug_identify_boot_caps() {
     for slot in 0u64..16u64 {
         let ty = unsafe { sel4_sys::seL4_CapIdentify(slot) };
         log::info!("[identify] slot=0x{slot:04x} ty=0x{ty:08x}");
     }
-}
-
-fn assert_bootstrap_invariants(view: &BootInfoView, ep_slot: sel4_sys::seL4_CPtr) {
-    let layout = [
-        ("TCB", sel4_sys::seL4_CapInitThreadTCB, 0x0001usize),
-        ("CNode", sel4_sys::seL4_CapInitThreadCNode, 0x0002usize),
-        ("VSpace", sel4_sys::seL4_CapInitThreadVSpace, 0x0003usize),
-        ("BootInfo", sel4_sys::seL4_CapBootInfoFrame, 0x0009usize),
-        ("IPCBuf", sel4_sys::seL4_CapInitThreadIPCBuffer, 0x000ausize),
-    ];
-
-    for (label, actual, expected) in layout {
-        if actual != expected as sel4_sys::seL4_CPtr {
-            let mut line = HeaplessString::<128>::new();
-            let _ = write!(
-                line,
-                "[panic] init cap {label} mismatch: expected=0x{expected:04x} actual=0x{actual:04x}",
-            );
-            boot_log::force_uart_line(line.as_str());
-            panic!("init cap {label} mismatch: expected=0x{expected:04x} actual=0x{actual:04x}",);
-        }
-    }
-
-    if ep_slot == sel4_sys::seL4_CapNull {
-        let mut line = HeaplessString::<96>::new();
-        let _ = write!(line, "[panic] root endpoint not published (slot=0x0000)");
-        boot_log::force_uart_line(line.as_str());
-        panic!("root endpoint not published (slot=0x0000)");
-    }
-
-    let ident = sel4::debug_cap_identify(ep_slot);
-    if ident != 0 && ident != sel4_sys::seL4_EndpointObject as sel4_sys::seL4_Word {
-        let mut line = HeaplessString::<128>::new();
-        let _ = write!(
-            line,
-            "[panic] root endpoint slot=0x{slot:04x} ident=0x{ident:08x} (expected Endpoint)",
-            slot = ep_slot,
-            ident = ident,
-        );
-        boot_log::force_uart_line(line.as_str());
-        panic!(
-            "root endpoint ident mismatch: slot=0x{slot:04x} ident=0x{ident:08x}",
-            slot = ep_slot,
-            ident = ident,
-        );
-    }
-
-    log::info!(
-        target: "root_task::kernel",
-        "[boot] invariant: caps(TCB=0x{tcb:04x}, CNode=0x{cnode:04x}, VSpace=0x{vspace:04x}, IPCBuf=0x{ipc:04x}, BootInfo=0x{bootinfo:04x}) root_ep=0x{ep:04x} ident=0x{ident:08x}",
-        tcb = sel4_sys::seL4_CapInitThreadTCB,
-        cnode = sel4_sys::seL4_CapInitThreadCNode,
-        vspace = sel4_sys::seL4_CapInitThreadVSpace,
-        ipc = sel4_sys::seL4_CapInitThreadIPCBuffer,
-        bootinfo = sel4_sys::seL4_CapBootInfoFrame,
-        ep = ep_slot,
-        ident = ident,
-    );
-
-    let _ = view;
 }
 
 /// Retypes a single notification object from the selected RAM-backed untyped and
@@ -452,7 +235,6 @@ impl BootWatchdog {
     }
 
     fn poll(&mut self) {
-        bootstrap_trace_yield_marker(BOOTMARK_WATCHDOG);
         let snapshot = boot_tracer().snapshot();
         if snapshot.sequence == self.last_sequence {
             self.stagnant_ticks = self.stagnant_ticks.saturating_add(1);
@@ -693,39 +475,6 @@ enum BootState {
     Booted = 2,
 }
 
-static BOOT_PROGRESS: AtomicU32 = AtomicU32::new(0);
-
-const BOOT_WATCHDOG_BUDGET: u64 = 2_097_152;
-
-fn record_boot_progress(id: u32, label: &str) {
-    BOOT_PROGRESS.store(id, Ordering::Release);
-    let mut line = HeaplessString::<80>::new();
-    let _ = write!(line, "BOOTSTEP {id:03} {label}");
-    boot_log::force_uart_line(line.as_str());
-}
-
-fn boot_progress_value() -> u32 {
-    BOOT_PROGRESS.load(Ordering::Acquire)
-}
-
-fn watchdog_spin(label: &str, last_step: u32) {
-    let mut spins: u64 = 0;
-    while BOOT_PROGRESS.load(Ordering::Acquire) == last_step {
-        core::hint::spin_loop();
-        spins = spins.saturating_add(1);
-        if spins > BOOT_WATCHDOG_BUDGET {
-            let mut line = HeaplessString::<160>::new();
-            let _ = write!(
-                line,
-                "[panic] boot watchdog tripped at step={:03} label={label}",
-                last_step
-            );
-            boot_log::force_uart_line(line.as_str());
-            panic!("boot watchdog stalled at step {last_step:03}");
-        }
-    }
-}
-
 /// Errors surfaced during timer bring-up.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TimerError {
@@ -754,8 +503,6 @@ pub enum BootError {
     AlreadyBooted,
     /// Timer initialisation failed.
     TimerInit(TimerError),
-    /// Endpoint initialisation failed.
-    EndpointInit(crate::boot::ep::EndpointInitError),
 }
 
 impl fmt::Display for BootError {
@@ -763,7 +510,6 @@ impl fmt::Display for BootError {
         match self {
             Self::AlreadyBooted => f.write_str("bootstrap already invoked"),
             Self::TimerInit(err) => write!(f, "timer init failed: {err}"),
-            Self::EndpointInit(err) => write!(f, "endpoint init failed: {err}"),
         }
     }
 }
@@ -898,11 +644,9 @@ impl Drop for BootStateGuard {
 /// here ensures we always enter the event-pump userland path or loudly fall
 /// back to the PL011 console when bootstrap fails.
 pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
-    boot_mark(BOOTMARK_ENTRY);
     boot_log::force_uart_line("[kernel:entry] root-task entry reached");
     log::info!("[kernel:entry] root-task entry reached");
     log::info!(target: "kernel", "[kernel] boot entrypoint: starting bootstrap");
-
     let ctx = match bootstrap(platform, bootinfo) {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -940,16 +684,10 @@ fn bootstrap<P: Platform>(
 
     crate::alloc::init_heap();
 
-    boot_mark(BOOTMARK_LOGGER_BEGIN);
     boot_log::init_logger_bootstrap_only();
-    boot_mark(BOOTMARK_LOGGER_DONE);
 
     crate::sel4::log_sel4_type_sanity();
-    debug_uart_raw_marker();
 
-    record_boot_progress(BOOTSTEP_BOOTINFO_PARSE_BEGIN, "before bootinfo.parse");
-
-    boot_mark(BOOTMARK_BOOTINFO_BEGIN);
     let mut build_line = heapless::String::<192>::new();
     let mut feature_report = heapless::String::<96>::new();
     for (idx, (label, enabled)) in [
@@ -985,9 +723,6 @@ fn bootstrap<P: Platform>(
     );
     crate::bp!("bootstrap.begin");
     boot_tracer().advance(BootPhase::Begin);
-    boot_log::force_uart_line("[boot:begin] after phase log");
-
-    boot_log::force_uart_line("[boot:marker] cspace.init.begin");
 
     let bootinfo_view = match BootInfoView::new(bootinfo) {
         Ok(view) => view,
@@ -1001,7 +736,6 @@ fn bootstrap<P: Platform>(
         }
     };
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
-    boot_mark(BOOTMARK_BOOTINFO_DONE);
     if let Err(err) = crate::bootstrap::cspace::ensure_canonical_root_alias(bootinfo_ref) {
         panic!(
             "failed to mint canonical init CNode alias: {} ({})",
@@ -1011,9 +745,6 @@ fn bootstrap<P: Platform>(
     }
     let cspace_window = CSpaceWindow::from_bootinfo(&bootinfo_view);
     let mut console = DebugConsole::new(platform);
-
-    record_boot_progress(BOOTSTEP_BOOTINFO_PARSE_DONE, "after bootinfo.parse");
-    record_boot_progress(BOOTSTEP_CSPACE_INIT_BEGIN, "before cspace.init");
 
     #[inline(always)]
     fn report_first_retype_failure<P: Platform>(
@@ -1043,7 +774,6 @@ fn bootstrap<P: Platform>(
     guards::init_text_bounds(text_start, text_end);
 
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
-    boot_mark(BOOTMARK_CSPACE_BEGIN);
     let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
     let boot_first_free = boot_cspace.next_free_slot();
     debug_assert_eq!(boot_first_free, cspace_window.first_free);
@@ -1063,9 +793,6 @@ fn bootstrap<P: Platform>(
         ),
     }
     boot_tracer().advance(BootPhase::CSpaceInit);
-    boot_log::force_uart_line("[boot:marker] cspace.init.end");
-    boot_mark(BOOTMARK_CSPACE_DONE);
-    record_boot_progress(BOOTSTEP_CSPACE_INIT_DONE, "after cspace.init");
 
     log::info!("[kernel:entry] about to log stage0 entry");
     console.writeln_prefixed("entered from seL4 (stage0)");
@@ -1089,9 +816,6 @@ fn bootstrap<P: Platform>(
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
     bootinfo_debug_dump(&bootinfo_view);
-    record_boot_progress(BOOTSTEP_IPCBUF_BEGIN, "before ipcbuf.bind");
-    boot_log::force_uart_line("[boot:marker] ipcbuf.begin");
-    boot_mark(BOOTMARK_IPC_BEGIN);
     let ipc_buffer_ptr = bootinfo_ref.ipc_buffer_ptr();
     if let Some(ptr) = ipc_buffer_ptr {
         let addr = ptr.as_ptr() as usize;
@@ -1105,9 +829,6 @@ fn bootstrap<P: Platform>(
         }
         assert_ipc_buffer_matches_bootinfo(bootinfo_ref);
     }
-    boot_log::force_uart_line("[boot:marker] ipcbuf.after");
-    boot_mark(BOOTMARK_IPC_DONE);
-    record_boot_progress(BOOTSTEP_IPCBUF_DONE, "after ipcbuf.bind");
 
     log::info!(
         "[caps] Null={} TCB={} CNode={} VSpace={} IPCBuf={} BootInfo={}",
@@ -1140,6 +861,13 @@ fn bootstrap<P: Platform>(
         crate::bootstrap::untyped::enumerate_and_plan(bootinfo_ref);
     }
 
+    ensure_device_pt_pool(bootinfo_ref);
+
+    #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
+    let mut kernel_env = KernelEnv::new(
+        bootinfo_ref,
+        device_pt_pool().map(DevicePtPool::from_config),
+    );
     let extra_bytes = bootinfo_view.extra();
     if !extra_bytes.is_empty() {
         console.writeln_prefixed("[boot] deferring DTB parse");
@@ -1201,31 +929,33 @@ fn bootstrap<P: Platform>(
         crate::userland::start_console_or_cohsh(platform);
     }
 
-    record_boot_progress(BOOTSTEP_ENDPOINTS_BEGIN, "before endpoints.init");
-    boot_log::force_uart_line("[boot:marker] endpoints.begin");
-    boot_mark(BOOTMARK_ENDPOINT_BEGIN);
     let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_view, &mut boot_cspace) {
         Ok(slot) => (slot, true),
-        Err(BootError::EndpointInit(err)) => {
-            log::error!("[fail:bootstrap_ep] {err}");
-            crate::trace::trace_fail(b"bootstrap_ep", sel4_sys::seL4_IllegalOperation);
-            let mut line = heapless::String::<192>::new();
-            let _ = write!(line, "bootstrap_ep failed: {err}");
+        Err(err) => {
+            crate::trace::trace_fail(b"bootstrap_ep", err);
+            let mut line = heapless::String::<160>::new();
+            let _ = write!(
+                line,
+                "bootstrap_ep failed: {} ({})",
+                err as i32,
+                error_name(err)
+            );
             console.writeln_prefixed(line.as_str());
             #[cfg(feature = "strict-bootstrap")]
             {
-                panic!("bootstrap_ep failed: {err}");
+                panic!("bootstrap_ep failed: {}", error_name(err));
             }
             #[cfg(not(feature = "strict-bootstrap"))]
             {
+                log::error!(
+                    "[fail:bootstrap_ep] err={} ({})",
+                    err as i32,
+                    error_name(err)
+                );
                 (root_endpoint(), false)
             }
         }
-        Err(other) => return Err(other),
     };
-    boot_log::force_uart_line("[boot:marker] endpoints.after");
-    boot_mark(BOOTMARK_ENDPOINT_DONE);
-    record_boot_progress(BOOTSTEP_ENDPOINTS_DONE, "after endpoints.init");
 
     if !boot_ep_ok {
         log::warn!(
@@ -1243,21 +973,6 @@ fn bootstrap<P: Platform>(
         ep = ep_slot
     );
     console.writeln_prefixed(ep_line.as_str());
-    assert_bootstrap_invariants(&bootinfo_view, ep_slot);
-
-    record_boot_progress(BOOTSTEP_DEVICE_PT_BEGIN, "before device-pt.reserve");
-    boot_log::force_uart_line("[boot:marker] untyped.enumerate.begin");
-    boot_mark(BOOTMARK_UNTYPED_BEGIN);
-    ensure_device_pt_pool(bootinfo_ref);
-    boot_log::force_uart_line("[boot:marker] device-pt.reserve.after");
-    boot_log::force_uart_line("[boot:marker] untyped.enumerate.end");
-    record_boot_progress(BOOTSTEP_DEVICE_PT_DONE, "after device-pt.reserve");
-
-    #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
-    let mut kernel_env = KernelEnv::new(
-        bootinfo_ref,
-        device_pt_pool().map(DevicePtPool::from_config),
-    );
 
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
@@ -1296,6 +1011,45 @@ fn bootstrap<P: Platform>(
         copy_slot
     };
 
+    if let Some(ipc_vaddr) = ipc_vaddr {
+        let ipc_view = match ipcbuf::install_ipc_buffer(
+            &mut kernel_env,
+            sel4_sys::seL4_CapInitThreadTCB,
+            ipc_frame,
+            ipc_vaddr,
+        ) {
+            Ok(view) => Some(view),
+            Err(code) => {
+                let err = code as sel4_sys::seL4_Error;
+                if err == sel4_sys::seL4_IllegalOperation {
+                    log::warn!(
+                        "[boot] ipc buffer re-bind not accepted by kernel; using boot-provided mapping only: err={} ({})",
+                        err,
+                        error_name(err)
+                    );
+                    let fallback_view = kernel_env
+                        .ipc_buffer_view()
+                        .or_else(|| Some(kernel_env.record_boot_ipc_buffer(ipc_frame, ipc_vaddr)));
+                    fallback_view
+                } else {
+                    panic!("ipc buffer install failed: {} ({})", code, error_name(err));
+                }
+            }
+        };
+
+        if let Some(view) = ipc_view {
+            let mut msg = heapless::String::<112>::new();
+            let _ = write!(
+                msg,
+                "[boot] ipc buffer mapped @ 0x{vaddr:08x}",
+                vaddr = view.vaddr(),
+            );
+            console.writeln_prefixed(msg.as_str());
+        }
+    } else {
+        console.writeln_prefixed("bootinfo.ipcBuffer missing");
+    }
+
     let mut fault_ep_slot = ep_slot;
     if ep_slot != sel4_sys::seL4_CapNull {
         match crate::boot::ep::bootstrap_fault_ep(&bootinfo_view, &mut boot_cspace) {
@@ -1318,17 +1072,49 @@ fn bootstrap<P: Platform>(
         }
     }
 
-    let guard_bits =
-        sel4::word_bits().saturating_sub(bootinfo_ref.init_cnode_bits() as sel4_sys::seL4_Word);
-    let guard_data = sel4::cap_data_guard(0, guard_bits);
-    let init_tcb_finaliser = InitTcbFinaliser {
-        tcb_cap: sel4_sys::seL4_CapInitThreadTCB,
-        ipc_frame,
-        ipc_vaddr,
-        fault_ep_slot,
-        guard_data,
-    };
-    let _ = init_tcb_finaliser.apply(&mut console, &mut kernel_env, &mut boot_cspace);
+    if fault_ep_slot != sel4_sys::seL4_CapNull {
+        let guard_bits =
+            sel4::word_bits().saturating_sub(bootinfo_ref.init_cnode_bits() as sel4_sys::seL4_Word);
+        let guard_data = sel4::cap_data_guard(0, guard_bits);
+        match install_fault_handler_for_tcb(
+            &mut boot_cspace,
+            sel4_sys::seL4_CapInitThreadTCB,
+            fault_ep_slot,
+            guard_data,
+            "init-tcb",
+        ) {
+            Ok(badge) => {
+                log::info!(
+                    target: "root_task::bootstrap",
+                    "[boot] fault handler installed tcb_slot=0x{slot:04x} ep=0x{ep:04x} badge=0x{badge:04x}",
+                    slot = tcb_copy_slot,
+                    ep = fault_ep_slot,
+                    badge = badge,
+                );
+            }
+            Err(fault_handler_err) => {
+                let mut line = heapless::String::<200>::new();
+                let _ = write!(
+                    line,
+                    "[boot] failed to install fault handler: {} ({})",
+                    fault_handler_err as sel4_sys::seL4_Word,
+                    error_name(fault_handler_err)
+                );
+                console.writeln_prefixed(line.as_str());
+                panic!(
+                    "fault handler installation failed: {} ({})",
+                    fault_handler_err as sel4_sys::seL4_Word,
+                    error_name(fault_handler_err)
+                );
+            }
+        }
+    } else {
+        log::warn!(
+            target: "root_task::bootstrap",
+            "[boot] skipping fault handler install: ep_slot is null (0x{ep:04x})",
+            ep = ep_slot
+        );
+    }
 
     let mut cs = CSpaceCtx::new(bootinfo_view, boot_cspace);
     cs.tcb_copy_slot = tcb_copy_slot;
@@ -1447,7 +1233,6 @@ fn bootstrap<P: Platform>(
     if consumed_slots > 0 {
         hal.consume_bootstrap_slots(consumed_slots);
     }
-    boot_mark(BOOTMARK_UNTYPED_DONE);
 
     #[cfg(feature = "kernel")]
     let ninedoor: &'static mut NineDoorBridge = {
@@ -1455,8 +1240,6 @@ fn bootstrap<P: Platform>(
         Box::leak(bridge)
     };
 
-    record_boot_progress(BOOTSTEP_UART_BEGIN, "before uart.init");
-    boot_mark(BOOTMARK_UART_BEGIN);
     let pl011_paddr = usize::try_from(PL011_PADDR)
         .expect("PL011 physical address must fit within usize on this platform");
     let (uart_region, pl011_map_error) = match hal.map_device(pl011_paddr) {
@@ -1761,7 +1544,6 @@ fn bootstrap<P: Platform>(
         }
     };
 
-    boot_log::force_uart_line("[boot:marker] uart.init.begin");
     let uart_ptr = uart_region
         .as_ref()
         .map(|region| region.ptr())
@@ -1801,9 +1583,6 @@ fn bootstrap<P: Platform>(
     if uart_region.is_some() {
         driver.write_str("[console] PL011 console online\n");
     }
-    boot_log::force_uart_line("[boot:marker] uart.init.after");
-    record_boot_progress(BOOTSTEP_UART_DONE, "after uart.init");
-    boot_mark(BOOTMARK_UART_DONE);
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     {
         unsafe {
@@ -1877,10 +1656,7 @@ fn bootstrap<P: Platform>(
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let mut virtio_present = false;
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let net_stack = {
-            boot_mark(BOOTMARK_VIRTIO_BEGIN);
-            record_boot_progress(BOOTSTEP_NET_BEGIN, "before net.init");
-            boot_log::force_uart_line("[boot:marker] net.init.begin");
+        let mut net_stack = {
             log::info!("[boot] net-console: probing {net_backend_label}");
             log::info!("[net-console] init: enter");
             let net_console_config = ConsoleNetConfig::default();
@@ -1895,18 +1671,12 @@ fn bootstrap<P: Platform>(
                     Some(stack)
                 }
                 Err(NetConsoleError::NoDevice) => {
-                    boot_log::force_uart_line(
-                        "[net] tcp console unavailable: virtio device missing; using UART",
-                    );
                     log::error!(
                         "[boot] net-console: init failed: no {net_backend_label} device; continuing WITHOUT TCP console"
                     );
                     None
                 }
                 Err(err) => {
-                    boot_log::force_uart_line(
-                        "[net] tcp console init failed; continuing WITHOUT TCP console",
-                    );
                     log::error!(
                         "[boot] net-console: init failed: {:?}; continuing WITHOUT TCP console",
                         err
@@ -1915,18 +1685,12 @@ fn bootstrap<P: Platform>(
                 }
             }
         };
-        boot_log::force_uart_line("[boot:marker] net.init.after");
-        boot_mark(BOOTMARK_VIRTIO_DONE);
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
         let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         #[cfg(not(feature = "net-console"))]
         let net_stack = None::<()>;
-        #[cfg(not(feature = "net-console"))]
-        boot_log::force_uart_line("[boot:marker] net.init.after");
-        record_boot_progress(BOOTSTEP_NET_DONE, "after net.init");
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
-        record_boot_progress(BOOTSTEP_TIMERS_BEGIN, "before timers.init");
         let (timer, ipc) = run_timers_and_ipc_phase(endpoints).map_err(|err| {
             log::error!(
                 target: "root_task::kernel",
@@ -1935,7 +1699,6 @@ fn bootstrap<P: Platform>(
             );
             err
         })?;
-        record_boot_progress(BOOTSTEP_TIMERS_DONE, "after timers.init");
 
         let mut tickets: TicketTable<4> = TicketTable::new();
         let _ = tickets.register(Role::Queen, "bootstrap");
@@ -1991,13 +1754,7 @@ fn bootstrap<P: Platform>(
             panic!("logger switch failed: {err:?}");
         }
         crate::bp!("logger.switch.end");
-        let mut dbg_line = HeaplessString::<80>::new();
-        let _ = write!(
-            dbg_line,
-            "[dbg] logger.switch complete; about to send bootstrap to EP 0x{slot:04x}\n",
-            slot = endpoints.control.raw(),
-        );
-        debug_uart_str(dbg_line.as_str());
+        debug_uart_str("[dbg] logger.switch complete; about to send bootstrap to EP 0x0130\n");
         if !boot_log::bridge_disabled() {
             boot_tracer().advance(BootPhase::EPAttachWait);
         }
@@ -2034,7 +1791,6 @@ fn bootstrap<P: Platform>(
             "[boot:ok] retyped={retyped_objects} caps_used=[0x{caps_start:04x}..0x{caps_end:04x}) left={caps_remaining}",
         );
         boot_log::force_uart_line(summary.as_str());
-        record_boot_progress(BOOTSTEP_EVENT_BEGIN, "before event-pump.start");
         crate::bp!("bootstrap.done");
         boot_tracer().advance(BootPhase::HandOff);
         boot_guard.commit();
@@ -2087,7 +1843,6 @@ fn bootstrap<P: Platform>(
             #[cfg(feature = "kernel")]
             ninedoor: RefCell::new(None),
         };
-        record_boot_progress(BOOTSTEP_EVENT_DONE, "after event-pump.start");
         return Ok(ctx);
     }
 }
@@ -2822,144 +2577,6 @@ fn record_fault_occurrence(badge: sel4_sys::seL4_Word) -> u32 {
     FAULT_REGISTRY.record_occurrence(badge)
 }
 
-#[cfg(feature = "bootstrap-trace")]
-fn trigger_fault_tripwire(fault_ep_slot: sel4_sys::seL4_CPtr) {
-    if fault_ep_slot == sel4_sys::seL4_CapNull {
-        return;
-    }
-
-    log::info!(
-        target: "root_task::kernel::fault",
-        "[boot] fault-tripwire: provoking user fault to validate handler ep=0x{fault_ep_slot:04x}",
-    );
-
-    unsafe {
-        core::ptr::read_volatile(0xdead_beefu64 as *const u64);
-    }
-
-    log::info!(
-        target: "root_task::kernel::fault",
-        "[boot] fault-tripwire returned without fault delivery; handler should confirm",
-    );
-}
-
-struct InitTcbFinaliser {
-    tcb_cap: sel4_sys::seL4_CPtr,
-    ipc_frame: sel4_sys::seL4_CPtr,
-    ipc_vaddr: Option<usize>,
-    fault_ep_slot: sel4_sys::seL4_CPtr,
-    guard_data: sel4_sys::seL4_Word,
-}
-
-impl InitTcbFinaliser {
-    /// Init TCB configuration call sites (ordering enforced here):
-    /// - apps/root-task/src/boot/tcb.rs::bootstrap_copy_init_tcb (init TCB discovery)
-    /// - apps/root-task/src/bootstrap/ipcbuf.rs::install_ipc_buffer (seL4_TCB_SetIPCBuffer)
-    /// - apps/root-task/src/kernel.rs::install_fault_handler_for_tcb (seL4_TCB_SetFaultHandler)
-    ///
-    /// Boot sanity: fault endpoint is set last; do not call TCB ops for init TCB afterwards.
-    fn apply<P: Platform>(
-        &self,
-        console: &mut DebugConsole<'_, P>,
-        kernel_env: &mut KernelEnv<'_>,
-        boot_cspace: &mut CSpace,
-    ) -> Option<sel4_sys::seL4_Word> {
-        if let Some(ipc_vaddr) = self.ipc_vaddr {
-            let ipc_view = match ipcbuf::install_ipc_buffer(
-                kernel_env,
-                self.tcb_cap,
-                self.ipc_frame,
-                ipc_vaddr,
-            ) {
-                Ok(view) => Some(view),
-                Err(code) => {
-                    let err = code as sel4_sys::seL4_Error;
-                    if err == sel4_sys::seL4_IllegalOperation {
-                        log::warn!(
-                            "[boot] ipc buffer re-bind not accepted by kernel; using boot-provided mapping only: err={} ({})",
-                            err,
-                            error_name(err)
-                        );
-                        let fallback_view = kernel_env.ipc_buffer_view().or_else(|| {
-                            Some(kernel_env.record_boot_ipc_buffer(self.ipc_frame, ipc_vaddr))
-                        });
-                        fallback_view
-                    } else {
-                        panic!("ipc buffer install failed: {} ({})", code, error_name(err));
-                    }
-                }
-            };
-
-            if let Some(view) = ipc_view {
-                let mut msg = heapless::String::<112>::new();
-                let _ = write!(
-                    msg,
-                    "[boot] ipc buffer mapped @ 0x{vaddr:08x}",
-                    vaddr = view.vaddr(),
-                );
-                console.writeln_prefixed(msg.as_str());
-            }
-        } else {
-            console.writeln_prefixed("bootinfo.ipcBuffer missing");
-        }
-
-        if self.fault_ep_slot == sel4_sys::seL4_CapNull {
-            log::warn!(
-                target: "root_task::bootstrap",
-                "[boot] skipping fault handler install: ep_slot is null (0x{ep:04x})",
-                ep = self.fault_ep_slot
-            );
-            return None;
-        }
-
-        log::info!(
-            target: "root_task::bootstrap",
-            "[boot] init TCB finalise: locking fault_ep_slot=0x{slot:04x} next_free=0x{next:04x}",
-            slot = self.fault_ep_slot,
-            next = boot_cspace.next_free_slot(),
-        );
-        boot_cspace.track_protected_slot(self.fault_ep_slot);
-
-        match install_fault_handler_for_tcb(
-            boot_cspace,
-            self.tcb_cap,
-            self.fault_ep_slot,
-            self.guard_data,
-            "init-tcb",
-        ) {
-            Ok(badge) => {
-                log::info!(
-                    target: "root_task::bootstrap",
-                    "[boot] fault handler installed tcb_slot=0x{slot:04x} ep=0x{ep:04x} badge=0x{badge:04x}",
-                    slot = self.tcb_cap,
-                    ep = self.fault_ep_slot,
-                    badge = badge,
-                );
-
-                #[cfg(feature = "bootstrap-trace")]
-                trigger_fault_tripwire(self.fault_ep_slot);
-
-                Some(badge)
-            }
-            Err(fault_handler_err) => {
-                let mut line = heapless::String::<200>::new();
-                let _ = write!(
-                    line,
-                    "[boot] failed to install fault handler: {} ({})",
-                    fault_handler_err as sel4_sys::seL4_Word,
-                    error_name(fault_handler_err)
-                );
-                console.writeln_prefixed(line.as_str());
-                panic!(
-                    "fault handler installation failed: {} ({})",
-                    fault_handler_err as sel4_sys::seL4_Word,
-                    error_name(fault_handler_err)
-                );
-            }
-        }
-    }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum EpMessageKind {
     Fault { length_valid: bool },
@@ -3449,10 +3066,6 @@ fn current_node_id() -> sel4_sys::seL4_NodeId {
 
 impl KernelIpc {
     pub(crate) fn new(control_ep: ControlEndpoint, fault_endpoint: FaultEndpoint) -> Self {
-        if control_ep.raw() == sel4_sys::seL4_CapNull {
-            debug_uart_str("[panic] KernelIpc constructed with null control endpoint\n");
-            panic!("KernelIpc requires a valid control endpoint");
-        }
         log::info!(
             "[ipc] root EP installed at slot=0x{ep:04x} (role=LOG+CONTROL / QUEEN bootstrap)",
             ep = control_ep.raw()
@@ -3632,11 +3245,7 @@ impl KernelIpc {
 
         loop {
             let mut badge: sel4_sys::seL4_Word = 0;
-            let info = crate::sel4::checked_nbrecv(
-                self.fault_endpoint.raw(),
-                &mut badge,
-                "KernelIpc::poll_fault_endpoint",
-            );
+            let info = unsafe { sel4_sys::seL4_NBRecv(self.fault_endpoint.raw(), &mut badge) };
             if !Self::message_present(&info, badge) {
                 return;
             }
@@ -3690,21 +3299,11 @@ impl KernelIpc {
         }
 
         if !self.debug_uart_announced {
-            let mut line = HeaplessString::<72>::new();
-            let _ = write!(
-                line,
-                "[dbg] EP 0x{ep:04x}: dispatcher loop about to recv\n",
-                ep = self.control_ep.raw(),
-            );
-            debug_uart_str(line.as_str());
+            debug_uart_str("[dbg] EP 0x0130: dispatcher loop about to recv\n");
             self.debug_uart_announced = true;
         }
         let mut badge: sel4_sys::seL4_Word = 0;
-        let info = crate::sel4::checked_poll(
-            self.control_ep.raw(),
-            &mut badge,
-            "KernelIpc::poll_endpoint",
-        );
+        let info = unsafe { sel4_sys::seL4_Poll(self.control_ep.raw(), &mut badge) };
         if !Self::message_present(&info, badge) {
             if bootstrap {
                 log::trace!(

@@ -195,8 +195,7 @@ QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" \
     -kernel "$ELFLOADER" \
     -initrd "$ROOTFS_CPIO" \
     -device loader,file="$KERNEL",addr=0x70000000,force-raw=on \
-    -device loader,file="$ROOT_TASK",addr=0x80000000,force-raw=on \
-    -global virtio-mmio.force-legacy=false)
+    -device loader,file="$ROOT_TASK",addr=0x80000000,force-raw=on)
 
 if [[ -z "$TCP_PORT" ]]; then
     TCP_PORT="$DEFAULT_TCP_PORT"
