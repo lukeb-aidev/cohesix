@@ -129,16 +129,18 @@ fn debug_log(args: fmt::Arguments<'_>) {
 }
 
 #[cfg(target_os = "none")]
-fn panic_on_null_caps(op: &str, caps: &[(&str, sys::seL4_CPtr)]) {
+fn panic_on_null_caps(op: &str, caps: &[(&str, sys::seL4_CPtr)]) -> Result<(), sys::seL4_Error> {
     for (label, cap) in caps.iter().copied() {
         if cap == sys::seL4_CapNull {
             ::log::error!(
                 target: "root_task::syscall",
-                "[syscall] op={op} null cap argument {label}",
+                "[syscall] op={op} null cap argument {label}; returning error",
             );
-            panic!("{op} attempted with null cap argument {label}");
+            force_uart_line("boot: invalid cap arg (null) in syscall; returning error");
+            return Err(sys::seL4_InvalidCapability);
         }
     }
+    Ok(())
 }
 
 #[cfg(target_os = "none")]
@@ -146,7 +148,7 @@ fn trace_syscall_request(
     op: &str,
     caps: &[(&str, sys::seL4_CPtr)],
     slots: &[(&str, sys::seL4_Word)],
-) {
+) -> Result<(), sys::seL4_Error> {
     let mut line = heapless::String::<SYSCALL_TRACE_CAPACITY>::new();
     let _ = write!(&mut line, "[syscall] op={op}");
     for (label, cap) in caps.iter().copied() {
@@ -156,13 +158,15 @@ fn trace_syscall_request(
         if label.contains("slot") && slot == 0 {
             ::log::error!(
                 target: "root_task::syscall",
-                "[syscall] op={op} attempted to use slot 0 ({label})",
+                "[syscall] op={op} attempted to use slot 0 ({label}); returning error",
             );
-            panic!("{op} attempted to use slot 0 ({label})");
+            force_uart_line("boot: invalid slot (0) in syscall; returning error");
+            return Err(sys::seL4_InvalidArgument);
         }
         let _ = write!(&mut line, " {label}=0x{slot:016x}");
     }
     force_uart_line(line.as_str());
+    Ok(())
 }
 
 #[cfg(target_os = "none")]
@@ -171,7 +175,10 @@ fn trace_syscall_result(op: &str, err: sys::seL4_Error) -> sys::seL4_Error {
     let _ = write!(&mut line, "[sysret] op={op} err={err}");
     force_uart_line(line.as_str());
     if err != sys::seL4_NoError {
-        panic!("{op} failed with {err}");
+        ::log::error!(
+            target: "root_task::syscall",
+            "[sysret] op={op} returned error {err}; propagating",
+        );
     }
     err
 }
@@ -182,14 +189,17 @@ fn debug_log(args: fmt::Arguments<'_>) {
 }
 
 #[cfg(not(target_os = "none"))]
-fn panic_on_null_caps(_op: &str, _caps: &[(&str, sys::seL4_CPtr)]) {}
+fn panic_on_null_caps(_op: &str, _caps: &[(&str, sys::seL4_CPtr)]) -> Result<(), sys::seL4_Error> {
+    Ok(())
+}
 
 #[cfg(not(target_os = "none"))]
 fn trace_syscall_request(
     _op: &str,
     _caps: &[(&str, sys::seL4_CPtr)],
     _slots: &[(&str, sys::seL4_Word)],
-) {
+) -> Result<(), sys::seL4_Error> {
+    Ok(())
 }
 
 #[cfg(not(target_os = "none"))]
@@ -309,11 +319,13 @@ pub fn cnode_copy_raw_single(
         let depth_word = se_l4_wordbits_word();
         let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
 
-        panic_on_null_caps(
+        if let Err(err) = panic_on_null_caps(
             "seL4_CNode_Copy",
             &[("destRoot", dst_root), ("srcRoot", src_root)],
-        );
-        trace_syscall_request(
+        ) {
+            return err;
+        }
+        if let Err(err) = trace_syscall_request(
             "seL4_CNode_Copy",
             &[("destRoot", dst_root), ("srcRoot", src_root)],
             &[
@@ -323,7 +335,9 @@ pub fn cnode_copy_raw_single(
                 ("srcDepth", depth_word),
                 ("rights", rights.raw()),
             ],
-        );
+        ) {
+            return err;
+        }
 
         ::log::debug!(
         "[cnode.copy/raw] style={style} dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth_word} src=0x{src_root:04x}/0x{src_slot:04x}",
@@ -629,11 +643,13 @@ fn cnode_copy_with_style(
     let src_index = enc_index(src_slot_raw, bi, style);
     let depth_word = path_depth_word(bi);
 
-    panic_on_null_caps(
+    if let Err(err) = panic_on_null_caps(
         "seL4_CNode_Mint",
         &[("destRoot", dst_root), ("srcRoot", src_root)],
-    );
-    trace_syscall_request(
+    ) {
+        return err;
+    }
+    if let Err(err) = trace_syscall_request(
         "seL4_CNode_Mint",
         &[("destRoot", dst_root), ("srcRoot", src_root)],
         &[
@@ -643,7 +659,9 @@ fn cnode_copy_with_style(
             ("srcDepth", depth_word),
             ("rights", rights.raw()),
         ],
-    );
+    ) {
+        return err;
+    }
     ::log::debug!(
         "[cnode.tuple] style={} dst_index=0x{dst_index:04x} src_index=0x{src_index:04x} depth={depth} dst_offset=0x{dst_raw:04x} src_offset=0x{src_raw:04x}",
         tuple_style_label(style),
@@ -716,12 +734,16 @@ pub fn cnode_delete_with_style(
     let index = enc_index(slot, bi, tuple_style());
     let depth_word = path_depth_word(bi);
 
-    panic_on_null_caps("seL4_CNode_Delete", &[("root", root)]);
-    trace_syscall_request(
+    if let Err(err) = panic_on_null_caps("seL4_CNode_Delete", &[("root", root)]) {
+        return err;
+    }
+    if let Err(err) = trace_syscall_request(
         "seL4_CNode_Delete",
         &[("root", root)],
         &[("index", index), ("depth", depth_word)],
-    );
+    ) {
+        return err;
+    }
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -1883,11 +1905,13 @@ pub fn canonical_cnode_copy(
     let depth_bits = path_depth(bi);
     let depth = encode_cnode_depth(depth_bits);
     let rights_word = rights.raw();
-    panic_on_null_caps(
+    if let Err(err) = panic_on_null_caps(
         "seL4_CNode_Copy",
         &[("destRoot", dest_root), ("srcRoot", src_root)],
-    );
-    trace_syscall_request(
+    ) {
+        return err;
+    }
+    if let Err(err) = trace_syscall_request(
         "seL4_CNode_Copy",
         &[("destRoot", dest_root), ("srcRoot", src_root)],
         &[
@@ -1897,7 +1921,9 @@ pub fn canonical_cnode_copy(
             ("srcDepth", depth),
             ("rights", rights_word),
         ],
-    );
+    ) {
+        return err;
+    }
     ::log::info!(
         "[cnode] op=canonical-copy form={} depth=0x{depth:x} root=0x{root:04x} dst=0x{dst_slot:04x} src=0x{src_slot:04x} idx.dst=0x{dst_index:016x} idx.src=0x{src_index:016x}",
         tuple_style_label(style),
@@ -2138,12 +2164,16 @@ pub mod canonical {
         let idx = path.index;
         let depth_word = super::init_cspace_depth_words(bi);
 
-        panic_on_null_caps("seL4_CNode_Delete", &[("root", root)]);
-        trace_syscall_request(
+        if let Err(err) = panic_on_null_caps("seL4_CNode_Delete", &[("root", root)]) {
+            return Err(err);
+        }
+        if let Err(err) = trace_syscall_request(
             "seL4_CNode_Delete",
             &[("root", root)],
             &[("index", slot_index(raw_offset)), ("depth", depth_word)],
-        );
+        ) {
+            return Err(err);
+        }
 
         #[cfg(target_os = "none")]
         let err = unsafe {
@@ -2304,11 +2334,13 @@ pub fn retype_into_root(
         style = tuple_style_label(style),
     ));
 
-    panic_on_null_caps(
+    if let Err(err) = panic_on_null_caps(
         "seL4_Untyped_Retype",
         &[("root", root), ("untyped", untyped)],
-    );
-    trace_syscall_request(
+    ) {
+        return Err(err);
+    }
+    if let Err(err) = trace_syscall_request(
         "seL4_Untyped_Retype",
         &[("root", root), ("untyped", untyped)],
         &[
@@ -2318,7 +2350,9 @@ pub fn retype_into_root(
             ("obj_type", obj_type),
             ("size_bits", size_bits),
         ],
-    );
+    ) {
+        return Err(err);
+    }
 
     #[cfg(target_os = "none")]
     {
