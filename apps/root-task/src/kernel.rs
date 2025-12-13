@@ -70,7 +70,6 @@ use spin::Mutex;
 const EARLY_DUMP_LIMIT: usize = 512;
 const DEVICE_FRAME_BITS: usize = 12;
 
-const BOOTSTEP_ENTRY: u32 = 1;
 const BOOTSTEP_BOOTINFO_PARSE_BEGIN: u32 = 10;
 const BOOTSTEP_BOOTINFO_PARSE_DONE: u32 = 11;
 const BOOTSTEP_CSPACE_INIT_BEGIN: u32 = 12;
@@ -89,14 +88,6 @@ const BOOTSTEP_TIMERS_BEGIN: u32 = 24;
 const BOOTSTEP_TIMERS_DONE: u32 = 25;
 const BOOTSTEP_EVENT_BEGIN: u32 = 26;
 const BOOTSTEP_EVENT_DONE: u32 = 27;
-const BOOTSTEP_UNTYPED_BEGIN: u32 = 28;
-const BOOTSTEP_UNTYPED_DONE: u32 = 29;
-const BOOTSTEP_FAULT_HANDLER_BEGIN: u32 = 30;
-const BOOTSTEP_FAULT_HANDLER_DONE: u32 = 31;
-const BOOTSTEP_VIRTIO_BEGIN: u32 = 32;
-const BOOTSTEP_VIRTIO_DONE: u32 = 33;
-const BOOTSTEP_NET_LISTENER_BEGIN: u32 = 34;
-const BOOTSTEP_NET_LISTENER_DONE: u32 = 35;
 
 const BOOTMARK_ENTRY: u32 = 1;
 const BOOTMARK_LOGGER_BEGIN: u32 = 2;
@@ -904,7 +895,6 @@ impl Drop for BootStateGuard {
 /// here ensures we always enter the event-pump userland path or loudly fall
 /// back to the PL011 console when bootstrap fails.
 pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
-    record_boot_progress(BOOTSTEP_ENTRY, "entry reached");
     boot_mark(BOOTMARK_ENTRY);
     boot_log::force_uart_line("[kernel:entry] root-task entry reached");
     log::info!("[kernel:entry] root-task entry reached");
@@ -1142,12 +1132,10 @@ fn bootstrap<P: Platform>(
         );
     }
 
-    record_boot_progress(BOOTSTEP_UNTYPED_BEGIN, "before untyped.enumerate");
     #[cfg(feature = "untyped-debug")]
     {
         crate::bootstrap::untyped::enumerate_and_plan(bootinfo_ref);
     }
-    record_boot_progress(BOOTSTEP_UNTYPED_DONE, "after untyped.enumerate");
 
     record_boot_progress(BOOTSTEP_DEVICE_PT_BEGIN, "before device-pt.reserve");
     boot_log::force_uart_line("[boot:marker] untyped.enumerate.begin");
@@ -1352,7 +1340,6 @@ fn bootstrap<P: Platform>(
     }
 
     let mut fault_ep_slot = ep_slot;
-    record_boot_progress(BOOTSTEP_FAULT_HANDLER_BEGIN, "before fault-handler.install");
     if ep_slot != sel4_sys::seL4_CapNull {
         match crate::boot::ep::bootstrap_fault_ep(&bootinfo_view, &mut boot_cspace) {
             Ok(slot) => {
@@ -1373,8 +1360,6 @@ fn bootstrap<P: Platform>(
             }
         }
     }
-
-    record_boot_progress(BOOTSTEP_FAULT_HANDLER_DONE, "after fault-handler.install");
 
     if fault_ep_slot != sel4_sys::seL4_CapNull {
         let guard_bits =
@@ -1545,82 +1530,6 @@ fn bootstrap<P: Platform>(
         Box::leak(bridge)
     };
 
-    let endpoints = KernelEndpoints::new(ep_slot, fault_ep_slot);
-
-    #[cfg(all(feature = "net-console", feature = "kernel"))]
-    let net_backend_label = DEFAULT_NET_BACKEND.label();
-    #[cfg(all(feature = "net-console", feature = "kernel"))]
-    let mut virtio_present = false;
-
-    record_boot_progress(BOOTSTEP_NET_BEGIN, "before net.init");
-    #[cfg(all(feature = "net-console", feature = "kernel"))]
-    let net_stack = {
-        record_boot_progress(BOOTSTEP_VIRTIO_BEGIN, "before virtio-net.init");
-        boot_mark(BOOTMARK_VIRTIO_BEGIN);
-        boot_log::force_uart_line("[boot:marker] net.init.begin");
-        log::info!("[boot] net-console: probing {net_backend_label}");
-        log::info!("[net-console] init: enter");
-        let net_console_config = ConsoleNetConfig::default();
-        match init_net_console(&mut hal, net_console_config) {
-            Ok(stack) => {
-                virtio_present = true;
-                log::info!("[boot] net-console: init ok; handle registered");
-                log::info!(
-                    "[net-console] init: success; tcp console will be available on port {}",
-                    net_console_config.listen_port
-                );
-                record_boot_progress(BOOTSTEP_VIRTIO_DONE, "after virtio-net.init");
-                Some(stack)
-            }
-            Err(NetConsoleError::NoDevice) => {
-                record_boot_progress(BOOTSTEP_VIRTIO_DONE, "virtio-net absent");
-                boot_log::force_uart_line(
-                    "[net] tcp console unavailable: virtio device missing; using UART",
-                );
-                log::error!(
-                    "[boot] net-console: init failed: no {net_backend_label} device; continuing WITHOUT TCP console"
-                );
-                None
-            }
-            Err(err) => {
-                record_boot_progress(BOOTSTEP_VIRTIO_DONE, "virtio-net init failed");
-                boot_log::force_uart_line(
-                    "[net] tcp console init failed; continuing WITHOUT TCP console",
-                );
-                log::error!(
-                    "[boot] net-console: init failed: {:?}; continuing WITHOUT TCP console",
-                    err
-                );
-                None
-            }
-        }
-    };
-    #[cfg(all(feature = "net-console", not(feature = "kernel")))]
-    let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
-    #[cfg(not(feature = "net-console"))]
-    let net_stack = None::<()>;
-    #[cfg(not(all(feature = "net-console", feature = "kernel")))]
-    let virtio_present = false;
-    boot_log::force_uart_line("[boot:marker] net.init.after");
-    record_boot_progress(BOOTSTEP_NET_DONE, "after net.init");
-
-    log::info!("[boot] net-console init complete; continuing with timers and IPC");
-    log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
-    record_boot_progress(BOOTSTEP_TIMERS_BEGIN, "before timers.init");
-    let (timer, ipc) = run_timers_and_ipc_phase(endpoints).map_err(|err| {
-        log::error!(
-            target: "root_task::kernel",
-            "[boot] TimersAndIPC: failed during bootstrap: {:?}",
-            err
-        );
-        err
-    })?;
-    record_boot_progress(BOOTSTEP_TIMERS_DONE, "after timers.init");
-
-    debug_assert!(
-        boot_progress_value() >= BOOTSTEP_NET_DONE,
-        "serial init must follow net bring-up"
-    );
     record_boot_progress(BOOTSTEP_UART_BEGIN, "before uart.init");
     boot_mark(BOOTMARK_UART_BEGIN);
     let pl011_paddr = usize::try_from(PL011_PADDR)
@@ -2038,6 +1947,71 @@ fn bootstrap<P: Platform>(
                 driver,
             );
 
+        #[cfg(all(feature = "net-console", feature = "kernel"))]
+        let net_backend_label = DEFAULT_NET_BACKEND.label();
+        #[cfg(all(feature = "net-console", feature = "kernel"))]
+        let mut virtio_present = false;
+        #[cfg(all(feature = "net-console", feature = "kernel"))]
+        let net_stack = {
+            boot_mark(BOOTMARK_VIRTIO_BEGIN);
+            record_boot_progress(BOOTSTEP_NET_BEGIN, "before net.init");
+            boot_log::force_uart_line("[boot:marker] net.init.begin");
+            log::info!("[boot] net-console: probing {net_backend_label}");
+            log::info!("[net-console] init: enter");
+            let net_console_config = ConsoleNetConfig::default();
+            match init_net_console(&mut hal, net_console_config) {
+                Ok(stack) => {
+                    virtio_present = true;
+                    log::info!("[boot] net-console: init ok; handle registered");
+                    log::info!(
+                        "[net-console] init: success; tcp console will be available on port {}",
+                        net_console_config.listen_port
+                    );
+                    Some(stack)
+                }
+                Err(NetConsoleError::NoDevice) => {
+                    boot_log::force_uart_line(
+                        "[net] tcp console unavailable: virtio device missing; using UART",
+                    );
+                    log::error!(
+                        "[boot] net-console: init failed: no {net_backend_label} device; continuing WITHOUT TCP console"
+                    );
+                    None
+                }
+                Err(err) => {
+                    boot_log::force_uart_line(
+                        "[net] tcp console init failed; continuing WITHOUT TCP console",
+                    );
+                    log::error!(
+                        "[boot] net-console: init failed: {:?}; continuing WITHOUT TCP console",
+                        err
+                    );
+                    None
+                }
+            }
+        };
+        boot_log::force_uart_line("[boot:marker] net.init.after");
+        boot_mark(BOOTMARK_VIRTIO_DONE);
+        #[cfg(all(feature = "net-console", not(feature = "kernel")))]
+        let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
+        #[cfg(not(feature = "net-console"))]
+        let net_stack = None::<()>;
+        #[cfg(not(feature = "net-console"))]
+        boot_log::force_uart_line("[boot:marker] net.init.after");
+        record_boot_progress(BOOTSTEP_NET_DONE, "after net.init");
+        log::info!("[boot] net-console init complete; continuing with timers and IPC");
+        log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
+        record_boot_progress(BOOTSTEP_TIMERS_BEGIN, "before timers.init");
+        let (timer, ipc) = run_timers_and_ipc_phase(endpoints).map_err(|err| {
+            log::error!(
+                target: "root_task::kernel",
+                "[boot] TimersAndIPC: failed during bootstrap: {:?}",
+                err
+            );
+            err
+        })?;
+        record_boot_progress(BOOTSTEP_TIMERS_DONE, "after timers.init");
+
         let mut tickets: TicketTable<4> = TicketTable::new();
         let _ = tickets.register(Role::Queen, "bootstrap");
         let _ = tickets.register(Role::WorkerHeartbeat, "worker");
@@ -2104,7 +2078,6 @@ fn bootstrap<P: Platform>(
         }
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         if let Some(net_stack) = net_stack.as_ref() {
-            record_boot_progress(BOOTSTEP_NET_LISTENER_BEGIN, "net listener announce");
             let mac = net_stack.hardware_address();
             let ip = net_stack.ipv4_address();
             let prefix = net_stack.prefix_len();
@@ -2124,13 +2097,9 @@ fn bootstrap<P: Platform>(
             let mut listen = heapless::String::<64>::new();
             let _ = write!(listen, "[console] tcp listen :{CONSOLE_TCP_PORT}");
             console.writeln_prefixed(listen.as_str());
-            record_boot_progress(BOOTSTEP_NET_LISTENER_DONE, "net listener ready");
         } else {
             log::warn!("[boot] net-console unavailable: {net_backend_label} did not initialise");
-            record_boot_progress(BOOTSTEP_NET_LISTENER_DONE, "net listener unavailable");
         }
-        #[cfg(not(all(feature = "net-console", feature = "kernel")))]
-        record_boot_progress(BOOTSTEP_NET_LISTENER_DONE, "net listener disabled");
         let caps_start = empty_start as u32;
         let caps_end = cs.next_candidate_slot();
         let caps_remaining = cs.remaining_capacity();
