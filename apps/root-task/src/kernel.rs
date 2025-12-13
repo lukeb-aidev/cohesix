@@ -73,6 +73,51 @@ const DEVICE_FRAME_BITS: usize = 12;
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::{self, DebugSink};
 
+#[inline(always)]
+pub(crate) fn read_program_counter() -> usize {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        let pc: usize;
+        core::arch::asm!("adr {pc}, .", pc = out(reg) pc);
+        pc
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        0
+    }
+}
+
+pub(crate) struct LoopHeartbeat {
+    interval: u64,
+    counter: u64,
+    label: &'static str,
+}
+
+impl LoopHeartbeat {
+    pub(crate) const fn new(interval: u64, label: &'static str) -> Self {
+        Self {
+            interval,
+            counter: 0,
+            label,
+        }
+    }
+
+    pub(crate) fn tick(&mut self, pc: usize) {
+        self.counter = self.counter.saturating_add(1);
+        if self.counter % self.interval == 0 {
+            let mut line = HeaplessString::<128>::new();
+            let _ = write!(
+                line,
+                "[boot:heartbeat] {label} i={i} pc=0x{pc:016x}",
+                label = self.label,
+                i = self.counter,
+                pc = pc,
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
+    }
+}
+
 fn debug_identify_boot_caps() {
     for slot in 0u64..16u64 {
         let ty = unsafe { sel4_sys::seL4_CapIdentify(slot) };
@@ -708,6 +753,8 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
     log::info!("[kernel:entry] root-task entry reached");
     log::info!(target: "kernel", "[kernel] boot entrypoint: starting bootstrap");
 
+    boot_log::force_uart_line("[fault-early] receiver not started on bootstrap thread");
+
     let early_fault_ep = match install_early_fault_handler(bootinfo) {
         Ok(cap) => {
             boot_log::force_uart_line("[fault-early] installed init fault EP");
@@ -738,13 +785,14 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
         Err(err) => {
             log::error!("[kernel:entry] bootstrap failed: {err}");
             boot_log::force_uart_line("[kernel:entry] bootstrap failed; parking thread");
-            if let Some(ep) = early_fault_ep {
-                pump_early_faults(ep);
-            }
+            let mut fault_heartbeat = LoopHeartbeat::new(10_000, "fault-poll");
             log::error!(
                 "[kernel:entry] unable to construct BootContext; refusing to bypass userland handoff"
             );
             loop {
+                if let Some(ep) = early_fault_ep {
+                    poll_early_faults(ep, &mut fault_heartbeat);
+                }
                 unsafe { sel4_sys::seL4_Yield() };
             }
         }
@@ -812,6 +860,9 @@ fn bootstrap<P: Platform>(
     );
     crate::bp!("bootstrap.begin");
     boot_tracer().advance(BootPhase::Begin);
+    boot_log::force_uart_line("[boot:begin] after phase log");
+
+    boot_log::force_uart_line("[boot:marker] cspace.init.begin");
 
     let bootinfo_view = match BootInfoView::new(bootinfo) {
         Ok(view) => view,
@@ -882,6 +933,7 @@ fn bootstrap<P: Platform>(
         ),
     }
     boot_tracer().advance(BootPhase::CSpaceInit);
+    boot_log::force_uart_line("[boot:marker] cspace.init.end");
 
     log::info!("[kernel:entry] about to log stage0 entry");
     console.writeln_prefixed("entered from seL4 (stage0)");
@@ -905,6 +957,7 @@ fn bootstrap<P: Platform>(
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
     bootinfo_debug_dump(&bootinfo_view);
+    boot_log::force_uart_line("[boot:marker] ipcbuf.begin");
     let ipc_buffer_ptr = bootinfo_ref.ipc_buffer_ptr();
     if let Some(ptr) = ipc_buffer_ptr {
         let addr = ptr.as_ptr() as usize;
@@ -918,6 +971,7 @@ fn bootstrap<P: Platform>(
         }
         assert_ipc_buffer_matches_bootinfo(bootinfo_ref);
     }
+    boot_log::force_uart_line("[boot:marker] ipcbuf.after");
 
     log::info!(
         "[caps] Null={} TCB={} CNode={} VSpace={} IPCBuf={} BootInfo={}",
@@ -950,7 +1004,10 @@ fn bootstrap<P: Platform>(
         crate::bootstrap::untyped::enumerate_and_plan(bootinfo_ref);
     }
 
+    boot_log::force_uart_line("[boot:marker] untyped.enumerate.begin");
     ensure_device_pt_pool(bootinfo_ref);
+    boot_log::force_uart_line("[boot:marker] device-pt.reserve.after");
+    boot_log::force_uart_line("[boot:marker] untyped.enumerate.end");
 
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
     let mut kernel_env = KernelEnv::new(
@@ -1018,6 +1075,7 @@ fn bootstrap<P: Platform>(
         crate::userland::start_console_or_cohsh(platform);
     }
 
+    boot_log::force_uart_line("[boot:marker] endpoints.begin");
     let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_view, &mut boot_cspace) {
         Ok(slot) => (slot, true),
         Err(err) => {
@@ -1045,6 +1103,7 @@ fn bootstrap<P: Platform>(
             }
         }
     };
+    boot_log::force_uart_line("[boot:marker] endpoints.after");
 
     if !boot_ep_ok {
         log::warn!(
@@ -1634,6 +1693,7 @@ fn bootstrap<P: Platform>(
         }
     };
 
+    boot_log::force_uart_line("[boot:marker] uart.init.begin");
     let uart_ptr = uart_region
         .as_ref()
         .map(|region| region.ptr())
@@ -1673,6 +1733,7 @@ fn bootstrap<P: Platform>(
     if uart_region.is_some() {
         driver.write_str("[console] PL011 console online\n");
     }
+    boot_log::force_uart_line("[boot:marker] uart.init.after");
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     {
         unsafe {
@@ -1747,6 +1808,7 @@ fn bootstrap<P: Platform>(
         let mut virtio_present = false;
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let net_stack = {
+            boot_log::force_uart_line("[boot:marker] net.init.begin");
             log::info!("[boot] net-console: probing {net_backend_label}");
             log::info!("[net-console] init: enter");
             let net_console_config = ConsoleNetConfig::default();
@@ -1775,10 +1837,13 @@ fn bootstrap<P: Platform>(
                 }
             }
         };
+        boot_log::force_uart_line("[boot:marker] net.init.after");
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
         let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         #[cfg(not(feature = "net-console"))]
         let net_stack = None::<()>;
+        #[cfg(not(feature = "net-console"))]
+        boot_log::force_uart_line("[boot:marker] net.init.after");
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
         let (timer, ipc) = run_timers_and_ipc_phase(endpoints).map_err(|err| {
@@ -2096,6 +2161,35 @@ fn decode_fault_message(tag: sel4_sys::seL4_Word, regs: &[sel4_sys::seL4_Word]) 
     }
 }
 
+fn poll_early_faults(ep_slot: sel4_sys::seL4_CPtr, heartbeat: &mut LoopHeartbeat) {
+    let mut badge: sel4_sys::seL4_Word = 0;
+    let info = unsafe { sel4_sys::seL4_Poll(ep_slot, &mut badge) };
+    heartbeat.tick(read_program_counter());
+    if info.label() == 0 {
+        return;
+    }
+
+    let len = info.length() as usize;
+    let mut regs = heapless::Vec::<sel4_sys::seL4_Word, { MAX_FAULT_REGS }>::new();
+    for idx in 0..len {
+        let word = unsafe {
+            sel4_sys::seL4_GetMR(i32::try_from(idx).expect("fault register index must fit in i32"))
+        };
+        let _ = regs.push(word);
+    }
+
+    let mut header = heapless::String::<96>::new();
+    let _ = write!(
+        header,
+        "[fault-early] poll badge=0x{badge:04x} label=0x{label:08x} len={len}",
+        badge = badge,
+        label = info.label(),
+        len = len,
+    );
+    boot_log::force_uart_line(header.as_str());
+    decode_fault_message(info.label() as sel4_sys::seL4_Word, regs.as_slice());
+}
+
 fn pump_early_faults(ep_slot: sel4_sys::seL4_CPtr) -> ! {
     loop {
         let mut badge: sel4_sys::seL4_Word = 0;
@@ -2105,7 +2199,9 @@ fn pump_early_faults(ep_slot: sel4_sys::seL4_CPtr) -> ! {
         let mut regs = heapless::Vec::<sel4_sys::seL4_Word, { MAX_FAULT_REGS }>::new();
         for idx in 0..len {
             let word = unsafe {
-                sel4_sys::seL4_GetMR(i32::try_from(idx).expect("fault register index must fit in i32"))
+                sel4_sys::seL4_GetMR(
+                    i32::try_from(idx).expect("fault register index must fit in i32"),
+                )
             };
             let _ = regs.push(word);
         }
