@@ -527,6 +527,48 @@ pub fn pick_smallest_non_device_untyped(bi: &seL4_BootInfo) -> seL4_CPtr {
 static ROOT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
 static SEND_LOGGED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(feature = "kernel")]
+#[inline(always)]
+fn panic_null_ipc_cap(kind: &str, callsite: &str) -> ! {
+    let mut line = HeaplessString::<112>::new();
+    let _ = write!(
+        line,
+        "[PANIC] IPC {kind} called with NULL cap at {callsite}\n",
+    );
+    debug_uart_str(line.as_str());
+    panic!("IPC {kind} called with NULL cap at {callsite}");
+}
+
+#[cfg(feature = "kernel")]
+#[inline(always)]
+fn log_ipc(kind: &str, cap: seL4_CPtr, label: Option<u64>, callsite: &str) {
+    let ident = debug_cap_identify(cap);
+    let mut line = HeaplessString::<160>::new();
+    if let Some(label) = label {
+        let _ = write!(
+            line,
+            "[ipc:{kind}] cap=0x{cap:04x} label=0x{label:08x} ident=0x{ident:08x} @ {callsite}\n",
+        );
+    } else {
+        let _ = write!(
+            line,
+            "[ipc:{kind}] cap=0x{cap:04x} ident=0x{ident:08x} @ {callsite}\n",
+        );
+    }
+    debug_uart_str(line.as_str());
+    if let Some(label) = label {
+        log::debug!(
+            target: "ipc.checked",
+            "[ipc:{kind}] cap=0x{cap:04x} label=0x{label:08x} ident=0x{ident:08x} @ {callsite}",
+        );
+    } else {
+        log::debug!(
+            target: "ipc.checked",
+            "[ipc:{kind}] cap=0x{cap:04x} ident=0x{ident:08x} @ {callsite}",
+        );
+    }
+}
+
 #[inline(always)]
 fn assert_valid_ipc_cap(dest: seL4_CPtr, context: &str) {
     if dest == seL4_CapNull {
@@ -629,10 +671,7 @@ pub fn yield_now() {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn send_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
-    assert_valid_ipc_cap(dest, "send");
-    unsafe {
-        sel4_sys::seL4_Send(dest, info);
-    }
+    checked_send(dest, info, "sel4::send_unchecked");
 }
 
 /// Issues a raw seL4 call without validating the destination capability.
@@ -640,6 +679,7 @@ pub fn send_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
 #[inline(always)]
 pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageInfo {
     assert_valid_ipc_cap(dest, "call");
+    log_ipc("call", dest, Some(info.label()), "sel4::call_unchecked");
     let length = info.length();
 
     let mut mr0_val = 0;
@@ -669,8 +709,15 @@ pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageIn
         mr3_ptr = &mut mr3_val;
     }
 
-    let reply =
-        unsafe { sel4_sys::seL4_CallWithMRs(dest, info, mr0_ptr, mr1_ptr, mr2_ptr, mr3_ptr) };
+    let reply = checked_call(
+        dest,
+        info,
+        mr0_ptr,
+        mr1_ptr,
+        mr2_ptr,
+        mr3_ptr,
+        "sel4::call_unchecked",
+    );
 
     if length > 0 {
         unsafe { sel4_sys::seL4_SetMR(0, mr0_val) };
@@ -693,10 +740,7 @@ pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageIn
 #[inline(always)]
 pub fn signal_unchecked(dest: seL4_CPtr) {
     assert_valid_ipc_cap(dest, "signal");
-    let empty = seL4_MessageInfo::new(0, 0, 0, 0);
-    unsafe {
-        sel4_sys::seL4_Send(dest, empty);
-    }
+    checked_signal(dest, "sel4::signal_unchecked");
 }
 
 #[inline(never)]
@@ -751,7 +795,7 @@ pub fn call_guarded(
     let m1 = mr1.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
     let m2 = mr2.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
     let m3 = mr3.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
-    let info = unsafe { sel4_sys::seL4_CallWithMRs(endpoint, info, m0, m1, m2, m3) };
+    let info = checked_call(endpoint, info, m0, m1, m2, m3, "sel4::call_guarded");
     Ok(info)
 }
 
@@ -763,6 +807,64 @@ pub fn replyrecv_guarded(
 ) -> Result<seL4_MessageInfo, IpcError> {
     let endpoint = ensure_endpoint()?;
     let badge_ptr = badge.map_or(ptr::null_mut(), |b| b as *mut seL4_Word);
+    let message = checked_replyrecv(endpoint, info, badge_ptr, "sel4::replyrecv_guarded");
+    Ok(message)
+}
+
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn checked_send(dest: seL4_CPtr, info: seL4_MessageInfo, callsite: &str) {
+    if dest == seL4_CapNull {
+        panic_null_ipc_cap("send", callsite);
+    }
+    log_ipc("send", dest, Some(info.label()), callsite);
+    unsafe {
+        sel4_sys::seL4_Send(dest, info);
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn checked_nbsend(dest: seL4_CPtr, info: seL4_MessageInfo, callsite: &str) {
+    if dest == seL4_CapNull {
+        panic_null_ipc_cap("nbsend", callsite);
+    }
+    log_ipc("nbsend", dest, Some(info.label()), callsite);
+    unsafe {
+        sel4_sys::seL4_NBSend(dest, info);
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn checked_call(
+    dest: seL4_CPtr,
+    info: seL4_MessageInfo,
+    mr0: *mut seL4_Word,
+    mr1: *mut seL4_Word,
+    mr2: *mut seL4_Word,
+    mr3: *mut seL4_Word,
+    callsite: &str,
+) -> seL4_MessageInfo {
+    if dest == seL4_CapNull {
+        panic_null_ipc_cap("call", callsite);
+    }
+    log_ipc("call", dest, Some(info.label()), callsite);
+    unsafe { sel4_sys::seL4_CallWithMRs(dest, info, mr0, mr1, mr2, mr3) }
+}
+
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn checked_replyrecv(
+    dest: seL4_CPtr,
+    info: seL4_MessageInfo,
+    badge: *mut seL4_Word,
+    callsite: &str,
+) -> seL4_MessageInfo {
+    if dest == seL4_CapNull {
+        panic_null_ipc_cap("replyrecv", callsite);
+    }
+    log_ipc("replyrecv", dest, Some(info.label()), callsite);
 
     #[allow(non_snake_case)]
     unsafe extern "C" {
@@ -773,8 +875,60 @@ pub fn replyrecv_guarded(
         ) -> seL4_MessageInfo;
     }
 
-    let message = unsafe { seL4_ReplyRecv(endpoint, info, badge_ptr) };
-    Ok(message)
+    unsafe { seL4_ReplyRecv(dest, info, badge) }
+}
+
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn checked_signal(dest: seL4_CPtr, callsite: &str) {
+    if dest == seL4_CapNull {
+        panic_null_ipc_cap("signal", callsite);
+    }
+    let empty = seL4_MessageInfo::new(0, 0, 0, 0);
+    log_ipc("signal", dest, Some(empty.label()), callsite);
+    unsafe {
+        sel4_sys::seL4_Send(dest, empty);
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn checked_wait(dest: seL4_CPtr, badge: *mut seL4_Word, callsite: &str) -> seL4_MessageInfo {
+    if dest == seL4_CapNull {
+        panic_null_ipc_cap("wait", callsite);
+    }
+    log_ipc("wait", dest, None, callsite);
+    unsafe { sel4_sys::seL4_Wait(dest, badge) }
+}
+
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn checked_nbwait(dest: seL4_CPtr, badge: *mut seL4_Word, callsite: &str) -> seL4_MessageInfo {
+    if dest == seL4_CapNull {
+        panic_null_ipc_cap("nbwait", callsite);
+    }
+    log_ipc("nbwait", dest, None, callsite);
+    unsafe { sel4_sys::seL4_NBWait(dest, badge) }
+}
+
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn checked_poll(dest: seL4_CPtr, badge: *mut seL4_Word, callsite: &str) -> seL4_MessageInfo {
+    if dest == seL4_CapNull {
+        panic_null_ipc_cap("poll", callsite);
+    }
+    log_ipc("poll", dest, None, callsite);
+    unsafe { sel4_sys::seL4_Poll(dest, badge) }
+}
+
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn checked_nbrecv(dest: seL4_CPtr, badge: *mut seL4_Word, callsite: &str) -> seL4_MessageInfo {
+    if dest == seL4_CapNull {
+        panic_null_ipc_cap("nbrecv", callsite);
+    }
+    log_ipc("nbrecv", dest, None, callsite);
+    unsafe { sel4_sys::seL4_NBRecv(dest, badge) }
 }
 
 /// Returns the traversal depth (in bits) for init CNode syscall invocations.
