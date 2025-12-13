@@ -9,7 +9,7 @@
 
 use core::fmt::{self, Write as FmtWrite};
 use core::ptr::{read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{fence, AtomicBool, Ordering as AtomicOrdering};
+use core::sync::atomic::{compiler_fence, fence, AtomicBool, Ordering as AtomicOrdering};
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, warn};
@@ -151,20 +151,18 @@ impl VirtioNet {
         info!(
             target: "net-console",
             "[net-console] status set to ACKNOWLEDGE: 0x{:02x}",
-            regs.read32(Registers::Status)
+            regs.status()
         );
         regs.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER);
         info!(
             target: "net-console",
             "[net-console] status set to DRIVER: 0x{:02x}",
-            regs.read32(Registers::Status)
+            regs.status()
         );
 
         info!("[net-console] querying queue sizes");
-        regs.select_queue(RX_QUEUE_INDEX);
-        let rx_max = regs.queue_num_max();
-        regs.select_queue(TX_QUEUE_INDEX);
-        let tx_max = regs.queue_num_max();
+        let rx_max = regs.queue_num_max(RX_QUEUE_INDEX);
+        let tx_max = regs.queue_num_max(TX_QUEUE_INDEX);
         let rx_size = core::cmp::min(rx_max as usize, RX_QUEUE_SIZE);
         let tx_size = core::cmp::min(tx_max as usize, TX_QUEUE_SIZE);
         if rx_size == 0 || tx_size == 0 {
@@ -202,7 +200,7 @@ impl VirtioNet {
         }
 
         info!("[net-console] reading host feature bits");
-        let host_features = regs.host_features();
+        let host_features = regs.device_features_64();
         let negotiated_features = host_features & SUPPORTED_FEATURES;
         if negotiated_features & VIRTIO_F_VERSION_1 == 0 {
             regs.set_status(STATUS_FAILED);
@@ -225,15 +223,15 @@ impl VirtioNet {
             rx_size,
             tx_size,
         );
-        regs.set_guest_features(negotiated_features);
+        regs.set_driver_features_64(negotiated_features);
         info!(
             target: "net-console",
             "[net-console] guest features set: status=0x{:02x}",
-            regs.read32(Registers::Status)
+            regs.status()
         );
         let mut status = STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK;
         regs.set_status(status);
-        let status_after_features = regs.read32(Registers::Status);
+        let status_after_features = regs.status();
         info!(
             target: "net-console",
             "[net-console] status set to FEATURES_OK: 0x{status_after_features:02x}",
@@ -370,7 +368,7 @@ impl VirtioNet {
         driver.regs.set_status(status);
         info!(
             "[net-console] driver status set to DRIVER_OK (status=0x{:02x})",
-            driver.regs.read32(Registers::Status)
+            driver.regs.status()
         );
         Ok(driver)
     }
@@ -939,6 +937,7 @@ impl TxToken for VirtioTxToken {
 struct VirtioRegs {
     mmio: DeviceFrame,
     config_base: NonNull<u8>,
+    version: u32,
 }
 
 impl VirtioRegs {
@@ -969,14 +968,16 @@ impl VirtioRegs {
             let config_base = unsafe {
                 NonNull::new_unchecked(frame.ptr().as_ptr().add(Registers::Config as usize))
             };
-            let regs = VirtioRegs {
+            let mut regs = VirtioRegs {
                 mmio: frame,
                 config_base,
+                version: 0,
             };
-            let magic = regs.read32(Registers::MagicValue);
-            let version = regs.read32(Registers::Version);
-            let device_id = regs.read32(Registers::DeviceId);
-            let vendor_id = regs.read32(Registers::VendorId);
+            let magic = regs.magic_value();
+            let version = regs.read_version();
+            let device_id = regs.device_id();
+            let vendor_id = regs.vendor_id();
+            regs.version = version;
             info!(
                 "[net-console] slot={slot} mmio=0x{base:08x} id=0x{device_id:04x} vendor=0x{vendor_id:04x} magic=0x{magic:08x} version={version}",
                 slot = slot,
@@ -1037,110 +1038,214 @@ impl VirtioRegs {
         self.mmio.paddr()
     }
 
-    fn read32(&self, offset: Registers) -> u32 {
-        unsafe { read_volatile(self.base().as_ptr().add(offset as usize) as *const u32) }
+    fn read_reg32(&self, offset: Registers) -> u32 {
+        compiler_fence(AtomicOrdering::SeqCst);
+        let value =
+            unsafe { read_volatile(self.base().as_ptr().add(offset as usize) as *const u32) };
+        compiler_fence(AtomicOrdering::SeqCst);
+        value
     }
 
-    fn write32(&mut self, offset: Registers, value: u32) {
+    fn write_reg32(&mut self, offset: Registers, value: u32) {
+        compiler_fence(AtomicOrdering::SeqCst);
         unsafe { write_volatile(self.base().as_ptr().add(offset as usize) as *mut u32, value) };
+        compiler_fence(AtomicOrdering::SeqCst);
     }
 
-    fn queue_register_snapshot(&mut self) -> QueueRegisterSnapshot {
-        QueueRegisterSnapshot {
-            queue_sel: self.read32(Registers::QueueSel),
-            queue_num_max: self.read32(Registers::QueueNumMax),
-            queue_num: self.read32(Registers::QueueNum),
-            queue_ready: self.read32(Registers::QueueReady),
-            status: self.read32(Registers::Status),
-        }
+    fn magic_value(&self) -> u32 {
+        self.read_reg32(Registers::MagicValue)
     }
 
-    fn reset_status(&mut self) {
-        self.write32(Registers::Status, 0);
+    fn read_version(&self) -> u32 {
+        self.read_reg32(Registers::Version)
     }
 
-    fn set_status(&mut self, status: u32) {
-        self.write32(Registers::Status, status);
+    fn device_id(&self) -> u32 {
+        self.read_reg32(Registers::DeviceId)
     }
 
-    fn select_queue(&mut self, index: u32) {
-        self.write32(Registers::QueueSel, index);
+    fn vendor_id(&self) -> u32 {
+        self.read_reg32(Registers::VendorId)
     }
 
-    fn queue_num_max(&self) -> u32 {
-        self.read32(Registers::QueueNumMax)
+    fn device_features(&mut self, select: u32) -> u32 {
+        self.write_reg32(Registers::DeviceFeaturesSel, select);
+        self.read_reg32(Registers::DeviceFeatures)
     }
 
-    fn set_queue_size(&mut self, size: u16) {
-        self.write32(Registers::QueueNum, size as u32);
+    fn driver_features(&mut self, select: u32, value: u32) {
+        self.write_reg32(Registers::DriverFeaturesSel, select);
+        self.write_reg32(Registers::DriverFeatures, value);
     }
 
-    fn queue_num(&self) -> u32 {
-        self.read32(Registers::QueueNum)
+    fn set_driver_features_64(&mut self, features: u64) {
+        self.driver_features(0, features as u32);
+        self.driver_features(1, (features >> 32) as u32);
     }
 
-    fn set_queue_desc(&mut self, paddr: u64) {
-        self.write32(Registers::QueueDescLow, paddr as u32);
-        self.write32(Registers::QueueDescHigh, (paddr >> 32) as u32);
-    }
-
-    fn set_queue_avail(&mut self, paddr: u64) {
-        self.write32(Registers::QueueAvailLow, paddr as u32);
-        self.write32(Registers::QueueAvailHigh, (paddr >> 32) as u32);
-    }
-
-    fn set_queue_used(&mut self, paddr: u64) {
-        self.write32(Registers::QueueUsedLow, paddr as u32);
-        self.write32(Registers::QueueUsedHigh, (paddr >> 32) as u32);
-    }
-
-    fn queue_ready(&mut self, ready: u32) {
-        self.write32(Registers::QueueReady, ready);
-    }
-
-    fn queue_ready_state(&self) -> u32 {
-        self.read32(Registers::QueueReady)
-    }
-
-    fn status(&self) -> u32 {
-        self.read32(Registers::Status)
-    }
-
-    fn notify(&mut self, queue: u32) {
-        self.write32(Registers::QueueNotify, queue);
-    }
-
-    fn set_guest_features(&mut self, features: u64) {
-        self.write32(Registers::GuestFeaturesSel, 0);
-        self.write32(Registers::GuestFeatures, features as u32);
-        self.write32(Registers::GuestFeaturesSel, 1);
-        self.write32(Registers::GuestFeatures, (features >> 32) as u32);
-    }
-
-    fn host_features(&mut self) -> u64 {
-        self.write32(Registers::HostFeaturesSel, 0);
-        let lower = self.read32(Registers::HostFeatures) as u64;
-        self.write32(Registers::HostFeaturesSel, 1);
-        let upper = self.read32(Registers::HostFeatures) as u64;
+    fn device_features_64(&mut self) -> u64 {
+        let lower = self.device_features(0) as u64;
+        let upper = self.device_features(1) as u64;
         (upper << 32) | lower
     }
 
+    fn reset_status(&mut self) {
+        self.write_reg32(Registers::Status, 0);
+    }
+
+    fn set_status(&mut self, status: u32) {
+        self.write_reg32(Registers::Status, status);
+    }
+
+    fn status(&self) -> u32 {
+        self.read_reg32(Registers::Status)
+    }
+
+    fn write_queue_sel(&mut self, index: u32) {
+        self.write_reg32(Registers::QueueSel, index);
+    }
+
+    fn queue_num_max(&mut self, index: u32) -> u32 {
+        self.write_queue_sel(index);
+        self.read_reg32(Registers::QueueNumMax)
+    }
+
+    fn write_queue_num(&mut self, index: u32, size: u16) {
+        self.write_queue_sel(index);
+        self.write_reg32(Registers::QueueNum, size as u32);
+    }
+
+    fn read_queue_num(&mut self, index: u32) -> u32 {
+        self.write_queue_sel(index);
+        self.read_reg32(Registers::QueueNum)
+    }
+
+    fn write_queue_desc(&mut self, index: u32, paddr: u64) {
+        self.write_queue_sel(index);
+        self.write_reg32(Registers::QueueDescLow, paddr as u32);
+        self.write_reg32(Registers::QueueDescHigh, (paddr >> 32) as u32);
+    }
+
+    fn write_queue_avail(&mut self, index: u32, paddr: u64) {
+        self.write_queue_sel(index);
+        self.write_reg32(Registers::QueueAvailLow, paddr as u32);
+        self.write_reg32(Registers::QueueAvailHigh, (paddr >> 32) as u32);
+    }
+
+    fn write_queue_used(&mut self, index: u32, paddr: u64) {
+        self.write_queue_sel(index);
+        self.write_reg32(Registers::QueueUsedLow, paddr as u32);
+        self.write_reg32(Registers::QueueUsedHigh, (paddr >> 32) as u32);
+    }
+
+    fn write_queue_ready(&mut self, index: u32, ready: u32) {
+        self.write_queue_sel(index);
+        self.write_reg32(Registers::QueueReady, ready);
+    }
+
+    fn read_queue_ready(&mut self, index: u32) -> u32 {
+        self.write_queue_sel(index);
+        self.read_reg32(Registers::QueueReady)
+    }
+
+    fn configure_queue(
+        &mut self,
+        index: u32,
+        size: u16,
+        desc_paddr: u64,
+        avail_paddr: u64,
+        used_paddr: u64,
+    ) -> Result<(), DriverError> {
+        info!("[virtio-net] queue{index}: QueueSel <- {index}");
+        let max = self.queue_num_max(index);
+        info!("[virtio-net] queue{index}: QueueNumMax -> {max}");
+        if size == 0 || size as u32 > max {
+            error!(
+                target: "net-console",
+                "[virtio-net] queue {index} unsupported size: requested={} max={}",
+                size,
+                max
+            );
+            return Err(DriverError::NoQueue);
+        }
+
+        self.write_queue_num(index, size);
+        info!("[virtio-net] queue{index}: QueueNum <- {size}");
+        let queue_num = self.read_queue_num(index);
+        info!("[virtio-net] queue{index}: QueueNum readback -> {queue_num}");
+        if queue_num != size as u32 {
+            let snapshot = self.queue_register_snapshot(index);
+            error!(
+                target: "net-console",
+                "[virtio-net] queue {index} size write failed: expected={} readback={} max={} sel={} ready={} status=0x{:02x}",
+                size,
+                queue_num,
+                snapshot.queue_num_max,
+                snapshot.queue_sel,
+                snapshot.queue_ready,
+                snapshot.status,
+            );
+            return Err(DriverError::NoQueue);
+        }
+
+        self.write_queue_desc(index, desc_paddr);
+        info!("[virtio-net] queue{index}: DESC <- 0x{desc_paddr:016x}");
+        self.write_queue_avail(index, avail_paddr);
+        info!("[virtio-net] queue{index}: AVAIL <- 0x{avail_paddr:016x}");
+        self.write_queue_used(index, used_paddr);
+        info!("[virtio-net] queue{index}: USED <- 0x{used_paddr:016x}");
+        fence(AtomicOrdering::SeqCst);
+        self.write_queue_ready(index, 1);
+        fence(AtomicOrdering::SeqCst);
+        info!("[virtio-net] queue{index}: QueueReady <- 1");
+        let ready = self.read_queue_ready(index);
+        info!("[virtio-net] queue{index}: QueueReady readback -> {ready}");
+        if ready != 1 {
+            error!(
+                target: "net-console",
+                "[virtio-net] queue {index} failed to enter ready state: ready_readback={}",
+                ready,
+            );
+            return Err(DriverError::NoQueue);
+        }
+
+        Ok(())
+    }
+
+    fn queue_register_snapshot(&mut self, index: u32) -> QueueRegisterSnapshot {
+        QueueRegisterSnapshot {
+            queue_sel: {
+                self.write_queue_sel(index);
+                self.read_reg32(Registers::QueueSel)
+            },
+            queue_num_max: self.queue_num_max(index),
+            queue_num: self.read_queue_num(index),
+            queue_ready: self.read_queue_ready(index),
+            status: self.read_reg32(Registers::Status),
+        }
+    }
+
+    fn notify(&mut self, queue: u32) {
+        self.write_reg32(Registers::QueueNotify, queue);
+    }
+
     fn acknowledge_interrupts(&mut self) -> (u32, u32) {
-        let status = self.read32(Registers::InterruptStatus);
+        let status = self.read_reg32(Registers::InterruptStatus);
         let mut ack = 0;
         if status != 0 {
-            self.write32(Registers::InterruptAck, status);
+            self.write_reg32(Registers::InterruptAck, status);
             ack = status;
         }
         (status, ack)
     }
 
     fn isr_status(&self) -> u32 {
-        self.read32(Registers::InterruptStatus)
+        self.read_reg32(Registers::InterruptStatus)
     }
 
     fn read_mac(&self) -> Option<EthernetAddress> {
         let mut bytes = [0u8; 6];
+        compiler_fence(AtomicOrdering::SeqCst);
         for (idx, byte) in bytes.iter_mut().enumerate() {
             *byte = unsafe {
                 read_volatile(
@@ -1148,6 +1253,7 @@ impl VirtioRegs {
                 )
             };
         }
+        compiler_fence(AtomicOrdering::SeqCst);
         if bytes.iter().all(|&b| b == 0) {
             None
         } else {
@@ -1163,24 +1269,24 @@ enum Registers {
     Version = 0x004,
     DeviceId = 0x008,
     VendorId = 0x00c,
-    HostFeatures = 0x010,
-    HostFeaturesSel = 0x014,
-    GuestFeatures = 0x020,
-    GuestFeaturesSel = 0x024,
+    DeviceFeatures = 0x010,
+    DeviceFeaturesSel = 0x014,
+    DriverFeatures = 0x020,
+    DriverFeaturesSel = 0x024,
     QueueSel = 0x030,
     QueueNumMax = 0x034,
     QueueNum = 0x038,
     QueueReady = 0x044,
+    QueueNotify = 0x050,
+    InterruptStatus = 0x060,
+    InterruptAck = 0x064,
+    Status = 0x070,
     QueueDescLow = 0x080,
     QueueDescHigh = 0x084,
     QueueAvailLow = 0x090,
     QueueAvailHigh = 0x094,
     QueueUsedLow = 0x0a0,
     QueueUsedHigh = 0x0a4,
-    QueueNotify = 0x050,
-    InterruptStatus = 0x060,
-    InterruptAck = 0x064,
-    Status = 0x070,
     Config = 0x100,
 }
 
@@ -1237,77 +1343,7 @@ impl VirtQueue {
             NonNull::new_unchecked(base_ptr.as_ptr().add(layout.used_offset) as *mut VirtqUsed)
         };
 
-        regs.select_queue(index);
-        let max = regs.queue_num_max();
-        if queue_size == 0 || queue_size as u32 > max {
-            error!(
-                target: "net-console",
-                "[virtio-net] queue {} unsupported size: requested={} max={}",
-                index,
-                queue_size,
-                max
-            );
-            return Err(DriverError::NoQueue);
-        }
-        regs.set_queue_size(queue_size);
-        let queue_num = regs.queue_num();
-        let queue_num_max = regs.queue_num_max();
-        info!(
-            target: "net-console",
-            "[virtio-net] queue {} size programmed: requested={} readback={} max={}",
-            index,
-            queue_size,
-            queue_num,
-            queue_num_max,
-        );
-        if queue_num != queue_size as u32 {
-            error!(
-                target: "net-console",
-                "[virtio-net] queue {} size write failed: expected={} readback={} max={} — aborting queue setup",
-                index,
-                queue_size,
-                queue_num,
-                queue_num_max,
-            );
-            let snapshot = regs.queue_register_snapshot();
-            error!(
-                target: "net-console",
-                "[virtio-net] queue {} register snapshot: sel={} num_max={} num={} ready={} status=0x{:02x}",
-                index,
-                snapshot.queue_sel,
-                snapshot.queue_num_max,
-                snapshot.queue_num,
-                snapshot.queue_ready,
-                snapshot.status,
-            );
-            return Err(DriverError::NoQueue);
-        }
-        regs.set_queue_desc(desc_paddr);
-        regs.set_queue_avail(avail_paddr);
-        regs.set_queue_used(used_paddr);
-        fence(AtomicOrdering::SeqCst);
-        regs.queue_ready(1);
-        fence(AtomicOrdering::SeqCst);
-        let ready = regs.queue_ready_state();
-        if ready != 1 {
-            error!(
-                target: "net-console",
-                "[virtio-net] queue {} failed to enter ready state: ready_readback={}",
-                index,
-                ready,
-            );
-            return Err(DriverError::NoQueue);
-        }
-        info!(
-            target: "net-console",
-            "[virtio-net] queue {} configured: size={} desc=0x{:x} avail=0x{:x} used=0x{:x} ready={}",
-            index,
-            queue_size,
-            desc_paddr,
-            avail_paddr,
-            used_paddr,
-            ready
-        );
+        regs.configure_queue(index, queue_size, desc_paddr, avail_paddr, used_paddr)?;
         info!(
             target: "net-console",
             "[virtio-net] queue {} layout: base_paddr=0x{:x} desc=0x{:x} avail=0x{:x} used=0x{:x} desc_len={} avail_len={} used_len={} total_len={}",
