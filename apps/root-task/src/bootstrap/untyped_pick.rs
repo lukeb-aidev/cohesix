@@ -3,7 +3,6 @@
 use core::{cmp::min, fmt::Write};
 
 use crate::bootstrap::log::force_uart_line;
-use crate::kernel::{read_program_counter, LoopHeartbeat};
 use crate::sel4::{BootInfo, BootInfoExt, PAGE_BITS, PAGE_TABLE_BITS};
 use heapless::String;
 use sel4_sys as sys;
@@ -139,13 +138,9 @@ pub fn ensure_device_pt_pool(bi: &'static BootInfo) {
     let total = (bi.untyped.end - bi.untyped.start) as usize;
     let entries = &bi.untypedList[..total];
     let ut_start = bi.untyped.start;
-    let mut heartbeat = LoopHeartbeat::with_limit("device-pt-scan", 1 << 22);
 
     for min_bits in [16u8, 12u8] {
         for (offset, desc) in entries.iter().enumerate() {
-            let mut state = String::<64>::new();
-            let _ = write!(state, "offset={offset} bits={}", desc.sizeBits);
-            heartbeat.tick(read_program_counter(), state.as_str());
             if desc.isDevice != 0 || (desc.sizeBits as u8) < min_bits {
                 continue;
             }
@@ -217,12 +212,8 @@ pub fn pick_untyped(bi: &'static BootInfo, min_bits: u8) -> UntypedSelection {
 
     ensure_device_pt_pool(bi);
     let reserved_device_pool = device_pt_pool_index();
-    let mut heartbeat = LoopHeartbeat::with_limit("untyped-scan", 1 << 22);
 
     for (offset, ut) in entries.iter().enumerate() {
-        let mut state = String::<64>::new();
-        let _ = write!(state, "offset={offset} bits={}", ut.sizeBits);
-        heartbeat.tick(read_program_counter(), state.as_str());
         if Some(offset) == reserved_device_pool {
             continue;
         }
@@ -246,7 +237,6 @@ pub fn pick_untyped(bi: &'static BootInfo, min_bits: u8) -> UntypedSelection {
         .enumerate()
         .find(|(index, ut)| ut.isDevice == 0 && Some(*index) != reserved_device_pool)
         .expect("bootinfo must provide at least one RAM-backed untyped capability");
-    heartbeat.tick(read_program_counter(), "fallback-search");
 
     let cap = bi.untyped.start + offset as sys::seL4_CPtr;
     let selection = UntypedSelection {

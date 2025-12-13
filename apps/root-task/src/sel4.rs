@@ -8,8 +8,7 @@
 use core::{
     arch::asm,
     convert::TryInto,
-    fmt::{self, Write},
-    mem,
+    fmt, mem,
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
@@ -22,7 +21,6 @@ use crate::bootstrap::DevicePtPoolConfig;
 use crate::debug_uart::debug_uart_str;
 use crate::sel4_view;
 use crate::serial;
-use heapless::String as HeaplessString;
 use heapless::Vec;
 pub use sel4_sys::{
     seL4_AllRights, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CNode_Mint,
@@ -527,61 +525,6 @@ pub fn pick_smallest_non_device_untyped(bi: &seL4_BootInfo) -> seL4_CPtr {
 static ROOT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
 static SEND_LOGGED: AtomicBool = AtomicBool::new(false);
 
-#[cfg(feature = "kernel")]
-#[inline(always)]
-fn panic_null_ipc_cap(kind: &str, callsite: &str) -> ! {
-    let mut line = HeaplessString::<112>::new();
-    let _ = write!(
-        line,
-        "[PANIC] IPC {kind} called with NULL cap at {callsite}\n",
-    );
-    debug_uart_str(line.as_str());
-    panic!("IPC {kind} called with NULL cap at {callsite}");
-}
-
-#[cfg(feature = "kernel")]
-#[inline(always)]
-fn log_ipc(kind: &str, cap: seL4_CPtr, label: Option<u64>, callsite: &str) {
-    let ident = debug_cap_identify(cap);
-    let mut line = HeaplessString::<160>::new();
-    if let Some(label) = label {
-        let _ = write!(
-            line,
-            "[ipc:{kind}] cap=0x{cap:04x} label=0x{label:08x} ident=0x{ident:08x} @ {callsite}\n",
-        );
-    } else {
-        let _ = write!(
-            line,
-            "[ipc:{kind}] cap=0x{cap:04x} ident=0x{ident:08x} @ {callsite}\n",
-        );
-    }
-    debug_uart_str(line.as_str());
-    if let Some(label) = label {
-        log::debug!(
-            target: "ipc.checked",
-            "[ipc:{kind}] cap=0x{cap:04x} label=0x{label:08x} ident=0x{ident:08x} @ {callsite}",
-        );
-    } else {
-        log::debug!(
-            target: "ipc.checked",
-            "[ipc:{kind}] cap=0x{cap:04x} ident=0x{ident:08x} @ {callsite}",
-        );
-    }
-}
-
-#[inline(always)]
-fn assert_valid_ipc_cap(dest: seL4_CPtr, context: &str) {
-    if dest == seL4_CapNull {
-        let mut line = HeaplessString::<96>::new();
-        let _ = write!(
-            line,
-            "[panic] IPC {context} called with null cap (slot=0x0000)"
-        );
-        debug_uart_str(line.as_str());
-        panic!("IPC {context} called with null cap (slot=0x0000)");
-    }
-}
-
 /// Error returned when guarded IPC cannot proceed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IpcError {
@@ -671,15 +614,15 @@ pub fn yield_now() {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn send_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
-    checked_send(dest, info, "sel4::send_unchecked");
+    unsafe {
+        sel4_sys::seL4_Send(dest, info);
+    }
 }
 
 /// Issues a raw seL4 call without validating the destination capability.
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageInfo {
-    assert_valid_ipc_cap(dest, "call");
-    log_ipc("call", dest, Some(info.label()), "sel4::call_unchecked");
     let length = info.length();
 
     let mut mr0_val = 0;
@@ -709,15 +652,8 @@ pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageIn
         mr3_ptr = &mut mr3_val;
     }
 
-    let reply = checked_call(
-        dest,
-        info,
-        mr0_ptr,
-        mr1_ptr,
-        mr2_ptr,
-        mr3_ptr,
-        "sel4::call_unchecked",
-    );
+    let reply =
+        unsafe { sel4_sys::seL4_CallWithMRs(dest, info, mr0_ptr, mr1_ptr, mr2_ptr, mr3_ptr) };
 
     if length > 0 {
         unsafe { sel4_sys::seL4_SetMR(0, mr0_val) };
@@ -739,8 +675,10 @@ pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageIn
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn signal_unchecked(dest: seL4_CPtr) {
-    assert_valid_ipc_cap(dest, "signal");
-    checked_signal(dest, "sel4::signal_unchecked");
+    let empty = seL4_MessageInfo::new(0, 0, 0, 0);
+    unsafe {
+        sel4_sys::seL4_Send(dest, empty);
+    }
 }
 
 #[inline(never)]
@@ -762,22 +700,12 @@ pub fn send_guarded(info: seL4_MessageInfo) -> Result<(), IpcError> {
         endpoint, seL4_CapNull,
         "send_guarded must not transmit on the null endpoint",
     );
-    let mut line = HeaplessString::<72>::new();
-    let _ = write!(
-        line,
-        "[dbg] logger.switch complete; about to send bootstrap to EP 0x{endpoint:04x}\n"
-    );
-    debug_uart_str(line.as_str());
+    debug_uart_str("[dbg] logger.switch complete; about to send bootstrap to EP 0x0130\n");
     if !SEND_LOGGED.swap(true, Ordering::AcqRel) {
         log::info!("bootstrap: send on ep slot=0x{slot:04x}", slot = endpoint,);
     }
     send_unchecked(endpoint, info);
-    let mut done_line = HeaplessString::<64>::new();
-    let _ = write!(
-        done_line,
-        "[dbg] bootstrap send to EP 0x{endpoint:04x} returned\n"
-    );
-    debug_uart_str(done_line.as_str());
+    debug_uart_str("[dbg] bootstrap send to EP 0x0130 returned\n");
     Ok(())
 }
 
@@ -795,7 +723,7 @@ pub fn call_guarded(
     let m1 = mr1.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
     let m2 = mr2.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
     let m3 = mr3.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
-    let info = checked_call(endpoint, info, m0, m1, m2, m3, "sel4::call_guarded");
+    let info = unsafe { sel4_sys::seL4_CallWithMRs(endpoint, info, m0, m1, m2, m3) };
     Ok(info)
 }
 
@@ -807,64 +735,6 @@ pub fn replyrecv_guarded(
 ) -> Result<seL4_MessageInfo, IpcError> {
     let endpoint = ensure_endpoint()?;
     let badge_ptr = badge.map_or(ptr::null_mut(), |b| b as *mut seL4_Word);
-    let message = checked_replyrecv(endpoint, info, badge_ptr, "sel4::replyrecv_guarded");
-    Ok(message)
-}
-
-#[cfg(feature = "kernel")]
-#[inline(always)]
-pub fn checked_send(dest: seL4_CPtr, info: seL4_MessageInfo, callsite: &str) {
-    if dest == seL4_CapNull {
-        panic_null_ipc_cap("send", callsite);
-    }
-    log_ipc("send", dest, Some(info.label()), callsite);
-    unsafe {
-        sel4_sys::seL4_Send(dest, info);
-    }
-}
-
-#[cfg(feature = "kernel")]
-#[inline(always)]
-pub fn checked_nbsend(dest: seL4_CPtr, info: seL4_MessageInfo, callsite: &str) {
-    if dest == seL4_CapNull {
-        panic_null_ipc_cap("nbsend", callsite);
-    }
-    log_ipc("nbsend", dest, Some(info.label()), callsite);
-    unsafe {
-        sel4_sys::seL4_NBSend(dest, info);
-    }
-}
-
-#[cfg(feature = "kernel")]
-#[inline(always)]
-pub fn checked_call(
-    dest: seL4_CPtr,
-    info: seL4_MessageInfo,
-    mr0: *mut seL4_Word,
-    mr1: *mut seL4_Word,
-    mr2: *mut seL4_Word,
-    mr3: *mut seL4_Word,
-    callsite: &str,
-) -> seL4_MessageInfo {
-    if dest == seL4_CapNull {
-        panic_null_ipc_cap("call", callsite);
-    }
-    log_ipc("call", dest, Some(info.label()), callsite);
-    unsafe { sel4_sys::seL4_CallWithMRs(dest, info, mr0, mr1, mr2, mr3) }
-}
-
-#[cfg(feature = "kernel")]
-#[inline(always)]
-pub fn checked_replyrecv(
-    dest: seL4_CPtr,
-    info: seL4_MessageInfo,
-    badge: *mut seL4_Word,
-    callsite: &str,
-) -> seL4_MessageInfo {
-    if dest == seL4_CapNull {
-        panic_null_ipc_cap("replyrecv", callsite);
-    }
-    log_ipc("replyrecv", dest, Some(info.label()), callsite);
 
     #[allow(non_snake_case)]
     unsafe extern "C" {
@@ -875,60 +745,8 @@ pub fn checked_replyrecv(
         ) -> seL4_MessageInfo;
     }
 
-    unsafe { seL4_ReplyRecv(dest, info, badge) }
-}
-
-#[cfg(feature = "kernel")]
-#[inline(always)]
-pub fn checked_signal(dest: seL4_CPtr, callsite: &str) {
-    if dest == seL4_CapNull {
-        panic_null_ipc_cap("signal", callsite);
-    }
-    let empty = seL4_MessageInfo::new(0, 0, 0, 0);
-    log_ipc("signal", dest, Some(empty.label()), callsite);
-    unsafe {
-        sel4_sys::seL4_Send(dest, empty);
-    }
-}
-
-#[cfg(feature = "kernel")]
-#[inline(always)]
-pub fn checked_wait(dest: seL4_CPtr, badge: *mut seL4_Word, callsite: &str) -> seL4_MessageInfo {
-    if dest == seL4_CapNull {
-        panic_null_ipc_cap("wait", callsite);
-    }
-    log_ipc("wait", dest, None, callsite);
-    unsafe { sel4_sys::seL4_Wait(dest, badge) }
-}
-
-#[cfg(feature = "kernel")]
-#[inline(always)]
-pub fn checked_nbwait(dest: seL4_CPtr, badge: *mut seL4_Word, callsite: &str) -> seL4_MessageInfo {
-    if dest == seL4_CapNull {
-        panic_null_ipc_cap("nbwait", callsite);
-    }
-    log_ipc("nbwait", dest, None, callsite);
-    unsafe { sel4_sys::seL4_NBWait(dest, badge) }
-}
-
-#[cfg(feature = "kernel")]
-#[inline(always)]
-pub fn checked_poll(dest: seL4_CPtr, badge: *mut seL4_Word, callsite: &str) -> seL4_MessageInfo {
-    if dest == seL4_CapNull {
-        panic_null_ipc_cap("poll", callsite);
-    }
-    log_ipc("poll", dest, None, callsite);
-    unsafe { sel4_sys::seL4_Poll(dest, badge) }
-}
-
-#[cfg(feature = "kernel")]
-#[inline(always)]
-pub fn checked_nbrecv(dest: seL4_CPtr, badge: *mut seL4_Word, callsite: &str) -> seL4_MessageInfo {
-    if dest == seL4_CapNull {
-        panic_null_ipc_cap("nbrecv", callsite);
-    }
-    log_ipc("nbrecv", dest, None, callsite);
-    unsafe { sel4_sys::seL4_NBRecv(dest, badge) }
+    let message = unsafe { seL4_ReplyRecv(endpoint, info, badge_ptr) };
+    Ok(message)
 }
 
 /// Returns the traversal depth (in bits) for init CNode syscall invocations.
@@ -1492,7 +1310,7 @@ pub fn bootinfo_debug_dump(view: &BootInfoView) {
 
 pub const PAGE_BITS: usize = 12;
 pub const PAGE_TABLE_BITS: usize = 12;
-pub const PAGE_SIZE: usize = 1 << PAGE_BITS;
+const PAGE_SIZE: usize = 1 << PAGE_BITS;
 const PAGE_TABLE_ALIGN: usize = 1 << 21;
 const PAGE_DIRECTORY_ALIGN: usize = 1 << 30;
 const PAGE_UPPER_DIRECTORY_ALIGN: usize = 1 << 39;
@@ -2058,7 +1876,7 @@ impl<'a> UntypedCatalog<'a> {
 }
 
 /// Virtual mapping of a physical device frame.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeviceFrame {
     cap: seL4_CPtr,
     paddr: usize,
@@ -2083,20 +1901,10 @@ impl DeviceFrame {
     pub fn paddr(&self) -> usize {
         self.paddr
     }
-
-    /// Construct a device frame for tests using a pre-allocated MMIO region.
-    #[cfg(test)]
-    pub(crate) unsafe fn from_raw_parts_for_test(ptr: NonNull<u8>) -> Self {
-        Self {
-            cap: 0,
-            paddr: 0,
-            ptr,
-        }
-    }
 }
 
 /// Virtual mapping of DMA-capable RAM used for driver buffers.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RamFrame {
     cap: seL4_CPtr,
     paddr: usize,

@@ -4,11 +4,10 @@
 #![allow(unsafe_code)]
 
 use crate::bootstrap::cspace::CSpaceCtx;
-use crate::bootstrap::log::force_uart_line;
 use crate::sel4 as sys;
 #[cfg(target_os = "none")]
 use crate::sel4::{BootInfoError, BootInfoView};
-use sel4_sys::{seL4_InvalidArgument, seL4_InvalidCapability, seL4_WordBits};
+use sel4_sys::seL4_WordBits;
 
 /// Helper that logs and forwards a `seL4_CNode_Mint` request through [`CSpaceCtx`].
 pub fn cnode_mint_to_slot(
@@ -44,42 +43,19 @@ pub fn raw_untyped_retype(
     node_offset: sys::seL4_Word,
     num_objects: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    if ut_cap == sys::seL4_CapNull || dest_root == sys::seL4_CapNull {
-        ::log::error!(
-            "[retype] seL4_Untyped_Retype null cap ut=0x{ut:04x} root=0x{root:04x}; returning error",
-            ut = ut_cap,
-            root = dest_root,
-        );
-        force_uart_line("boot: invalid cap arg (null) in retype; returning error");
-        return seL4_InvalidCapability;
-    }
-    if node_index == 0 || node_offset == 0 {
-        ::log::error!(
-            "[retype] seL4_Untyped_Retype attempted to use slot 0 index=0x{idx:04x} offset=0x{off:04x}; returning error",
-            idx = node_index,
-            off = node_offset,
-        );
-        force_uart_line("boot: invalid slot (0) in retype; returning error");
-        return seL4_InvalidArgument;
-    }
     let word_bits = seL4_WordBits as usize;
     let hex_width = (word_bits + 3) / 4;
-    let mut line = heapless::String::<128>::new();
-    let _ = core::fmt::write(
-        &mut line,
-        format_args!(
-            "[retype] ut=0x{ut:0width$x} root=0x{root:04x} depth={depth} index=0x{index:0width$x} offset=0x{offset:0width$x} n={num}",
-            ut = ut_cap,
-            root = dest_root,
-            depth = node_depth,
-            index = node_index,
-            offset = node_offset,
-            num = num_objects,
-            width = hex_width,
-        ),
+    ::log::info!(
+        "[retype] ut=0x{ut:0width$x} root=0x{root:04x} depth={depth} index=0x{index:0width$x} offset=0x{offset:0width$x} n={num}",
+        ut = ut_cap,
+        root = dest_root,
+        depth = node_depth,
+        index = node_index,
+        offset = node_offset,
+        num = num_objects,
+        width = hex_width,
     );
-    force_uart_line(line.as_str());
-    let err = unsafe {
+    unsafe {
         sys::seL4_Untyped_Retype(
             ut_cap,
             obj_type,
@@ -90,12 +66,7 @@ pub fn raw_untyped_retype(
             node_offset,
             num_objects,
         )
-    };
-    if err != sys::seL4_NoError {
-        force_uart_line("[retype] seL4_Untyped_Retype failed; returning error");
-        ::log::error!("[retype] seL4_Untyped_Retype err={err}");
     }
-    err
 }
 
 #[cfg(target_os = "none")]
