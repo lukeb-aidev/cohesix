@@ -57,6 +57,11 @@ impl CSpace {
         self.next_free
     }
 
+    #[inline(always)]
+    fn cnode_invocation_depth(&self) -> u8 {
+        self.bits
+    }
+
     fn assert_invariants(&self) {
         assert!(
             self.next_free >= self.empty_start,
@@ -125,7 +130,7 @@ impl CSpace {
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
-        let depth = sel4::word_bits() as u8;
+        let depth = self.cnode_invocation_depth();
         log::info!(
             "[cnode] Copy dst=0x{dst:04x} depth={depth}",
             dst = dst_slot,
@@ -150,7 +155,7 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
-        let depth = sel4::word_bits() as u8;
+        let depth = self.cnode_invocation_depth();
         let limit = 1u64 << self.bits;
         assert!(
             (dst_slot as u64) < limit,
@@ -213,5 +218,28 @@ pub fn cap_rights_read_write_grant() -> sel4_sys::seL4_CapRights {
     #[cfg(not(target_os = "none"))]
     {
         sel4_sys::seL4_CapRights_All
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cnode_invocation_depth_tracks_init_bits() {
+        let mut cspace = CSpace {
+            root: 2,
+            bits: 13,
+            next_free: 0,
+            empty_start: 0,
+            empty_end: 1,
+            reserved_floor: 0,
+            highest_next_free: 0,
+        };
+
+        assert_eq!(cspace.cnode_invocation_depth(), 13);
+
+        cspace.bits = 16;
+        assert_eq!(cspace.cnode_invocation_depth(), 16);
     }
 }
