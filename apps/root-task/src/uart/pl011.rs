@@ -70,8 +70,10 @@ unsafe fn read_reg(offset: usize) -> Option<u32> {
 #[inline(always)]
 unsafe fn write_reg(offset: usize, value: u32) -> bool {
     if let Some(base) = base_ptr() {
-        let ptr = base.add(offset) as *mut u32;
-        core::ptr::write_volatile(ptr, value);
+        unsafe {
+            let ptr = base.add(offset) as *mut u32;
+            core::ptr::write_volatile(ptr, value);
+        }
         true
     } else {
         false
