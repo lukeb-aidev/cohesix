@@ -13,3 +13,10 @@ fn panic(info: &PanicInfo) -> ! {
     crate::bootstrap::log::force_uart_line(line.as_str());
     crate::kernel::panic_handler(info)
 }
+
+/// Halt the current CPU in a tight spin to preserve state for debugging.
+pub fn park() -> ! {
+    loop {
+        core::hint::spin_loop();
+    }
+}

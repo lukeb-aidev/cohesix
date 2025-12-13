@@ -1957,12 +1957,25 @@ fn install_early_fault_handler(
         bootinfo_mut.empty.start = bootinfo_mut.empty.start.saturating_add(1);
     }
 
-    let ut = sel4::pick_smallest_non_device_untyped(&bootinfo_mut);
+    let ut = {
+        #[cfg(feature = "canonical_cspace")]
+        {
+            sel4::pick_smallest_non_device_untyped(&bootinfo_mut)
+        }
+
+        #[cfg(not(feature = "canonical_cspace"))]
+        {
+            sel4::first_regular_untyped(&bootinfo_mut)
+                .expect("bootinfo must provide at least one RAM-backed untyped capability")
+        }
+    };
     let err = unsafe {
         sel4_sys::seL4_Untyped_Retype(
             ut,
-            sel4_sys::seL4_EndpointObject as usize,
-            sel4_sys::seL4_EndpointBits as usize,
+            u64::try_from(sel4_sys::seL4_EndpointObject as usize)
+                .expect("Endpoint object type must fit in u64"),
+            u64::try_from(sel4_sys::seL4_EndpointBits as usize)
+                .expect("Endpoint bits must fit in u64"),
             cspace.root(),
             0,
             0,
@@ -2091,7 +2104,9 @@ fn pump_early_faults(ep_slot: sel4_sys::seL4_CPtr) -> ! {
         let len = info.length() as usize;
         let mut regs = heapless::Vec::<sel4_sys::seL4_Word, { MAX_FAULT_REGS }>::new();
         for idx in 0..len {
-            let word = unsafe { sel4_sys::seL4_GetMR(idx) };
+            let word = unsafe {
+                sel4_sys::seL4_GetMR(i32::try_from(idx).expect("fault register index must fit in i32"))
+            };
             let _ = regs.push(word);
         }
         let mut header = heapless::String::<96>::new();
