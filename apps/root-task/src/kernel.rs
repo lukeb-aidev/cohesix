@@ -80,6 +80,66 @@ fn debug_identify_boot_caps() {
     }
 }
 
+fn assert_bootstrap_invariants(view: &BootInfoView, ep_slot: sel4_sys::seL4_CPtr) {
+    let layout = [
+        ("TCB", sel4_sys::seL4_CapInitThreadTCB, 0x0001usize),
+        ("CNode", sel4_sys::seL4_CapInitThreadCNode, 0x0002usize),
+        ("VSpace", sel4_sys::seL4_CapInitThreadVSpace, 0x0003usize),
+        ("BootInfo", sel4_sys::seL4_CapBootInfoFrame, 0x0009usize),
+        ("IPCBuf", sel4_sys::seL4_CapInitThreadIPCBuffer, 0x000ausize),
+    ];
+
+    for (label, actual, expected) in layout {
+        if actual != expected as sel4_sys::seL4_CPtr {
+            let mut line = HeaplessString::<128>::new();
+            let _ = write!(
+                line,
+                "[panic] init cap {label} mismatch: expected=0x{expected:04x} actual=0x{actual:04x}",
+            );
+            boot_log::force_uart_line(line.as_str());
+            panic!("init cap {label} mismatch: expected=0x{expected:04x} actual=0x{actual:04x}",);
+        }
+    }
+
+    if ep_slot == sel4_sys::seL4_CapNull {
+        let mut line = HeaplessString::<96>::new();
+        let _ = write!(line, "[panic] root endpoint not published (slot=0x0000)");
+        boot_log::force_uart_line(line.as_str());
+        panic!("root endpoint not published (slot=0x0000)");
+    }
+
+    let ident = sel4::debug_cap_identify(ep_slot);
+    if ident != 0 && ident != sel4_sys::seL4_EndpointObject as sel4_sys::seL4_Word {
+        let mut line = HeaplessString::<128>::new();
+        let _ = write!(
+            line,
+            "[panic] root endpoint slot=0x{slot:04x} ident=0x{ident:08x} (expected Endpoint)",
+            slot = ep_slot,
+            ident = ident,
+        );
+        boot_log::force_uart_line(line.as_str());
+        panic!(
+            "root endpoint ident mismatch: slot=0x{slot:04x} ident=0x{ident:08x}",
+            slot = ep_slot,
+            ident = ident,
+        );
+    }
+
+    log::info!(
+        target: "root_task::kernel",
+        "[boot] invariant: caps(TCB=0x{tcb:04x}, CNode=0x{cnode:04x}, VSpace=0x{vspace:04x}, IPCBuf=0x{ipc:04x}, BootInfo=0x{bootinfo:04x}) root_ep=0x{ep:04x} ident=0x{ident:08x}",
+        tcb = sel4_sys::seL4_CapInitThreadTCB,
+        cnode = sel4_sys::seL4_CapInitThreadCNode,
+        vspace = sel4_sys::seL4_CapInitThreadVSpace,
+        ipc = sel4_sys::seL4_CapInitThreadIPCBuffer,
+        bootinfo = sel4_sys::seL4_CapBootInfoFrame,
+        ep = ep_slot,
+        ident = ident,
+    );
+
+    let _ = view;
+}
+
 /// Retypes a single notification object from the selected RAM-backed untyped and
 /// installs it into the init CSpace window ([0x010f..0x2000)). The destination
 /// slot is allocated from `CSpaceCtx`, ensuring it honours the init CSpace depth
@@ -973,6 +1033,7 @@ fn bootstrap<P: Platform>(
         ep = ep_slot
     );
     console.writeln_prefixed(ep_line.as_str());
+    assert_bootstrap_invariants(&bootinfo_view, ep_slot);
 
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
@@ -3255,7 +3316,11 @@ impl KernelIpc {
 
         loop {
             let mut badge: sel4_sys::seL4_Word = 0;
-            let info = unsafe { sel4_sys::seL4_NBRecv(self.fault_endpoint.raw(), &mut badge) };
+            let info = crate::sel4::checked_nbrecv(
+                self.fault_endpoint.raw(),
+                &mut badge,
+                "KernelIpc::poll_fault_endpoint",
+            );
             if !Self::message_present(&info, badge) {
                 return;
             }
@@ -3319,7 +3384,11 @@ impl KernelIpc {
             self.debug_uart_announced = true;
         }
         let mut badge: sel4_sys::seL4_Word = 0;
-        let info = unsafe { sel4_sys::seL4_Poll(self.control_ep.raw(), &mut badge) };
+        let info = crate::sel4::checked_poll(
+            self.control_ep.raw(),
+            &mut badge,
+            "KernelIpc::poll_endpoint",
+        );
         if !Self::message_present(&info, badge) {
             if bootstrap {
                 log::trace!(
