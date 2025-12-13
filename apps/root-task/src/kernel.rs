@@ -1754,7 +1754,13 @@ fn bootstrap<P: Platform>(
             panic!("logger switch failed: {err:?}");
         }
         crate::bp!("logger.switch.end");
-        debug_uart_str("[dbg] logger.switch complete; about to send bootstrap to EP 0x0130\n");
+        let mut dbg_line = HeaplessString::<80>::new();
+        let _ = write!(
+            dbg_line,
+            "[dbg] logger.switch complete; about to send bootstrap to EP 0x{slot:04x}\n",
+            slot = endpoints.control.raw(),
+        );
+        debug_uart_str(dbg_line.as_str());
         if !boot_log::bridge_disabled() {
             boot_tracer().advance(BootPhase::EPAttachWait);
         }
@@ -3066,6 +3072,10 @@ fn current_node_id() -> sel4_sys::seL4_NodeId {
 
 impl KernelIpc {
     pub(crate) fn new(control_ep: ControlEndpoint, fault_endpoint: FaultEndpoint) -> Self {
+        if control_ep.raw() == sel4_sys::seL4_CapNull {
+            debug_uart_str("[panic] KernelIpc constructed with null control endpoint\n");
+            panic!("KernelIpc requires a valid control endpoint");
+        }
         log::info!(
             "[ipc] root EP installed at slot=0x{ep:04x} (role=LOG+CONTROL / QUEEN bootstrap)",
             ep = control_ep.raw()
@@ -3299,7 +3309,13 @@ impl KernelIpc {
         }
 
         if !self.debug_uart_announced {
-            debug_uart_str("[dbg] EP 0x0130: dispatcher loop about to recv\n");
+            let mut line = HeaplessString::<72>::new();
+            let _ = write!(
+                line,
+                "[dbg] EP 0x{ep:04x}: dispatcher loop about to recv\n",
+                ep = self.control_ep.raw(),
+            );
+            debug_uart_str(line.as_str());
             self.debug_uart_announced = true;
         }
         let mut badge: sel4_sys::seL4_Word = 0;

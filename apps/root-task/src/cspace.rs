@@ -20,6 +20,8 @@ pub struct CSpace {
     next_free: seL4_CPtr,
     empty_start: seL4_CPtr,
     empty_end: seL4_CPtr,
+    reserved_floor: seL4_CPtr,
+    highest_next_free: seL4_CPtr,
 }
 
 impl CSpace {
@@ -32,6 +34,8 @@ impl CSpace {
             next_free: bi.empty.start,
             empty_start: bi.empty.start,
             empty_end: bi.empty.end,
+            reserved_floor: bi.empty.start,
+            highest_next_free: bi.empty.start,
         }
     }
 
@@ -53,22 +57,64 @@ impl CSpace {
         self.next_free
     }
 
+    fn assert_invariants(&self) {
+        assert!(
+            self.next_free >= self.empty_start,
+            "first_free moved below empty window start: next_free=0x{next:04x} start=0x{start:04x}",
+            next = self.next_free,
+            start = self.empty_start,
+        );
+        assert!(
+            self.next_free <= self.empty_end,
+            "first_free exceeded empty window end: next_free=0x{next:04x} end=0x{end:04x}",
+            next = self.next_free,
+            end = self.empty_end,
+        );
+        assert!(
+            self.next_free >= self.reserved_floor,
+            "first_free overlapped reserved range: next_free=0x{next:04x} reserved_floor=0x{floor:04x}",
+            next = self.next_free,
+            floor = self.reserved_floor,
+        );
+    }
+
     /// Allocates the next available slot from the init CSpace.
     pub fn alloc_slot(&mut self) -> Result<seL4_CPtr, seL4_Error> {
         let limit = 1u64 << self.bits;
         if (self.next_free as u64) >= limit || self.next_free >= self.empty_end {
             return Err(sel4_sys::seL4_NotEnoughMemory);
         }
+        self.assert_invariants();
         let slot = self.next_free;
         self.next_free = self.next_free.saturating_add(1);
+        self.highest_next_free = core::cmp::max(self.highest_next_free, self.next_free);
+        self.assert_invariants();
         Ok(slot)
     }
 
     /// Releases a slot previously returned by [`alloc_slot`], allowing it to be reused.
     pub fn release_slot(&mut self, slot: seL4_CPtr) {
-        if slot + 1 == self.next_free {
+        if slot + 1 == self.next_free && slot + 1 > self.reserved_floor {
             self.next_free = slot;
         }
+        self.assert_invariants();
+    }
+
+    /// Reserve a capability slot so the allocator will never hand it out again.
+    pub fn reserve_slot(&mut self, slot: seL4_CPtr) {
+        assert!(
+            slot >= self.empty_start && slot < self.empty_end,
+            "reserved slot 0x{slot:04x} outside empty window [0x{start:04x}..0x{end:04x})",
+            slot = slot,
+            start = self.empty_start,
+            end = self.empty_end,
+        );
+        self.reserved_floor = core::cmp::max(self.reserved_floor, slot.saturating_add(1));
+        if self.next_free < self.reserved_floor {
+            self.next_free = self.reserved_floor;
+        }
+        self.highest_next_free = core::cmp::max(self.highest_next_free, self.next_free);
+        self.assert_invariants();
     }
 
     /// Issues a `seL4_CNode_Copy` within the init CSpace.

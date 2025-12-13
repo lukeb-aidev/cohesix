@@ -37,6 +37,16 @@ impl MmioRegion {
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { slice::from_raw_parts_mut(self.vaddr, self.len) }
     }
+
+    #[cfg(test)]
+    pub(crate) unsafe fn from_raw_parts_for_test(vaddr: *mut u8, len: usize) -> Self {
+        Self {
+            paddr: 0,
+            vaddr,
+            len,
+            frames: Vec::new(),
+        }
+    }
 }
 
 /// Maps the requested MMIO window as device memory using the provided HAL.
