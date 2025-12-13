@@ -2,7 +2,7 @@
 //! Minimal PL011 UART driver for bootstrap diagnostics and console I/O.
 #![allow(unsafe_code)]
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::cspace::tuples::RetypeTuple;
 use sel4_sys::{
@@ -30,75 +30,121 @@ const CR_TXE: u32 = 1 << 8;
 const CR_RXE: u32 = 1 << 9;
 
 static UART_BASE: AtomicUsize = AtomicUsize::new(0);
+static UART_READY: AtomicBool = AtomicBool::new(false);
 
 /// Registers a mapped PL011 UART base for later console use.
 pub fn register_console_base(vaddr: usize) {
     UART_BASE.store(vaddr, Ordering::Release);
+    UART_READY.store(true, Ordering::Release);
+}
+
+/// Returns true when the PL011 base has been registered.
+pub fn is_ready() -> bool {
+    UART_READY.load(Ordering::Acquire)
 }
 
 #[inline(always)]
-fn base_ptr() -> *mut u8 {
+fn base_ptr() -> Option<*mut u8> {
+    if !is_ready() {
+        unsafe { seL4_DebugPutChar(b'!' as _) };
+        return None;
+    }
+
     let base = UART_BASE.load(Ordering::Acquire);
     if base == 0 {
-        panic!("PL011 console base not installed");
+        unsafe { seL4_DebugPutChar(b'!' as _) };
+        return None;
     }
-    base as *mut u8
+
+    Some(base as *mut u8)
 }
 
 #[inline(always)]
-unsafe fn read_reg(offset: usize) -> u32 {
-    unsafe {
-        let ptr = base_ptr().add(offset) as *const u32;
+unsafe fn read_reg(offset: usize) -> Option<u32> {
+    base_ptr().map(|base| unsafe {
+        let ptr = base.add(offset) as *const u32;
         core::ptr::read_volatile(ptr)
-    }
+    })
 }
 
 #[inline(always)]
-unsafe fn write_reg(offset: usize, value: u32) {
-    unsafe {
-        let ptr = base_ptr().add(offset) as *mut u32;
+unsafe fn write_reg(offset: usize, value: u32) -> bool {
+    if let Some(base) = base_ptr() {
+        let ptr = base.add(offset) as *mut u32;
         core::ptr::write_volatile(ptr, value);
+        true
+    } else {
+        false
     }
 }
 
-fn wait_tx_ready() {
+fn wait_tx_ready() -> bool {
     unsafe {
-        while read_reg(FR) & FR_TXFF != 0 {
+        while let Some(flags) = read_reg(FR) {
+            if flags & FR_TXFF == 0 {
+                return true;
+            }
             core::hint::spin_loop();
         }
     }
+
+    false
 }
 
-fn wait_rx_ready() {
+fn wait_rx_ready() -> bool {
     unsafe {
-        while read_reg(FR) & FR_RXFE != 0 {
+        while let Some(flags) = read_reg(FR) {
+            if flags & FR_RXFE == 0 {
+                return true;
+            }
             core::hint::spin_loop();
         }
     }
+
+    false
 }
 
 /// Initialise the PL011 UART for 115200 8N1 polled operation.
 pub fn init_pl011() {
+    if !is_ready() {
+        unsafe { seL4_DebugPutChar(b'!' as _) };
+        return;
+    }
+
     unsafe {
-        write_reg(CR, 0);
-        write_reg(ICR, 0x7ff);
-        write_reg(IBRD, 13); // 24 MHz / (16 * 115200)
-        write_reg(FBRD, 2);
-        write_reg(LCRH, (3 << 5) | (0 << 4));
-        write_reg(CR, CR_UARTEN | CR_TXE | CR_RXE);
+        if !write_reg(CR, 0) {
+            return;
+        }
+        if !write_reg(ICR, 0x7ff) {
+            return;
+        }
+        if !write_reg(IBRD, 13) {
+            return;
+        }
+        if !write_reg(FBRD, 2) {
+            return;
+        }
+        if !write_reg(LCRH, (3 << 5) | (0 << 4)) {
+            return;
+        }
+        let _ = write_reg(CR, CR_UARTEN | CR_TXE | CR_RXE);
     }
 }
 
 fn putc(byte: u8) {
-    wait_tx_ready();
+    if !wait_tx_ready() {
+        return;
+    }
     unsafe {
-        write_reg(DR, byte as u32);
+        let _ = write_reg(DR, byte as u32);
     }
 }
 
 fn getc_blocking() -> u8 {
-    wait_rx_ready();
-    unsafe { read_reg(DR) as u8 }
+    if !wait_rx_ready() {
+        return 0;
+    }
+    unsafe { read_reg(DR).unwrap_or(0) as u8 }
 }
 
 /// Write a single byte to the PL011 UART.
@@ -109,10 +155,9 @@ pub fn write_byte(byte: u8) {
 /// Poll for a pending byte without blocking.
 pub fn poll_byte() -> Option<u8> {
     unsafe {
-        if read_reg(FR) & FR_RXFE != 0 {
-            None
-        } else {
-            Some(read_reg(DR) as u8)
+        match read_reg(FR) {
+            Some(flags) if flags & FR_RXFE == 0 => read_reg(DR).map(|value| value as u8),
+            _ => None,
         }
     }
 }
