@@ -1153,9 +1153,12 @@ impl VirtioRegs {
         desc_paddr: u64,
         avail_paddr: u64,
         used_paddr: u64,
-    ) -> Result<(), DriverError> {
+    ) -> Result<u16, DriverError> {
         info!("[virtio-net] queue{index}: QueueSel <- {index}");
-        let max = self.queue_num_max(index);
+        self.write_reg32(Registers::QueueSel, index);
+        self.trace_queue_regs(index, "after select");
+
+        let max = self.read_reg32(Registers::QueueNumMax);
         info!("[virtio-net] queue{index}: QueueNumMax -> {max}");
         if size == 0 || size as u32 > max {
             error!(
@@ -1168,37 +1171,64 @@ impl VirtioRegs {
             return Err(DriverError::NoQueue);
         }
 
-        self.write_queue_num(index, size);
+        self.write_reg32(Registers::QueueNum, size as u32);
+        self.trace_queue_regs(index, "after queue num write");
         info!("[virtio-net] queue{index}: QueueNum <- {size}");
-        let queue_num = self.read_queue_num(index);
+        let queue_num = self.read_reg32(Registers::QueueNum);
+        self.trace_queue_regs(index, "after queue num read");
         info!("[virtio-net] queue{index}: QueueNum readback -> {queue_num}");
-        if queue_num != size as u32 {
-            let snapshot = self.queue_register_snapshot(index);
+        if queue_num == 0 {
             error!(
                 target: "net-console",
-                "[virtio-net] queue {index} size write failed: expected={} readback={} max={} sel={} ready={} status=0x{:02x}",
-                size,
-                queue_num,
-                snapshot.queue_num_max,
-                snapshot.queue_sel,
-                snapshot.queue_ready,
-                snapshot.status,
+                "[virtio-net] queue {index} rejected size; readback was zero (max={max})",
             );
             self.set_status(self.status() | STATUS_FAILED);
             return Err(DriverError::NoQueue);
         }
 
-        self.write_queue_desc(index, desc_paddr);
+        let configured_size = queue_num as u16;
+        if configured_size != size {
+            if queue_num > max || configured_size < 2 {
+                let snapshot = self.queue_register_snapshot(index);
+                error!(
+                    target: "net-console",
+                    "[virtio-net] queue {index} size write failed: expected={} readback={} max={} sel={} ready={} status=0x{:02x}",
+                    size,
+                    queue_num,
+                    snapshot.queue_num_max,
+                    snapshot.queue_sel,
+                    snapshot.queue_ready,
+                    snapshot.status,
+                );
+                self.set_status(self.status() | STATUS_FAILED);
+                return Err(DriverError::NoQueue);
+            }
+
+            warn!(
+                target: "net-console",
+                "[virtio-net] queue {index} size clamped by device: requested={} configured={} max={}",
+                size,
+                configured_size,
+                max,
+            );
+        }
+
+        self.write_reg32(Registers::QueueDescLow, desc_paddr as u32);
+        self.write_reg32(Registers::QueueDescHigh, (desc_paddr >> 32) as u32);
+        self.write_reg32(Registers::QueueAvailLow, avail_paddr as u32);
+        self.write_reg32(Registers::QueueAvailHigh, (avail_paddr >> 32) as u32);
+        self.write_reg32(Registers::QueueUsedLow, used_paddr as u32);
+        self.write_reg32(Registers::QueueUsedHigh, (used_paddr >> 32) as u32);
+        self.trace_queue_regs(index, "after queue addr program");
         info!("[virtio-net] queue{index}: DESC <- 0x{desc_paddr:016x}");
-        self.write_queue_avail(index, avail_paddr);
         info!("[virtio-net] queue{index}: AVAIL <- 0x{avail_paddr:016x}");
-        self.write_queue_used(index, used_paddr);
         info!("[virtio-net] queue{index}: USED <- 0x{used_paddr:016x}");
         hal::dma_wmb();
-        self.write_queue_ready(index, 1);
+        self.write_reg32(Registers::QueueReady, 1);
         hal::dma_wmb();
+        self.trace_queue_regs(index, "after ready set");
         info!("[virtio-net] queue{index}: QueueReady <- 1");
-        let ready = self.read_queue_ready(index);
+        let ready = self.read_reg32(Registers::QueueReady);
         info!("[virtio-net] queue{index}: QueueReady readback -> {ready}");
         if ready != 1 {
             error!(
@@ -1210,7 +1240,7 @@ impl VirtioRegs {
             return Err(DriverError::NoQueue);
         }
 
-        Ok(())
+        Ok(configured_size)
     }
 
     fn queue_register_snapshot(&mut self, index: u32) -> QueueRegisterSnapshot {
@@ -1225,6 +1255,27 @@ impl VirtioRegs {
             status: self.read_reg32(Registers::Status),
         }
     }
+
+    #[cfg(feature = "bootstrap-trace")]
+    fn trace_queue_regs(&mut self, index: u32, stage: &str) {
+        if index != RX_QUEUE_INDEX {
+            return;
+        }
+
+        let snapshot = self.queue_register_snapshot(index);
+        info!(
+            target: "net-console",
+            "[virtio-net:trace] queue{index} {stage}: sel={} num={} max={} ready={} status=0x{:02x}",
+            snapshot.queue_sel,
+            snapshot.queue_num,
+            snapshot.queue_num_max,
+            snapshot.queue_ready,
+            snapshot.status,
+        );
+    }
+
+    #[cfg(not(feature = "bootstrap-trace"))]
+    fn trace_queue_regs(&mut self, _index: u32, _stage: &str) {}
 
     fn notify(&mut self, queue: u32) {
         self.write_reg32(Registers::QueueNotify, queue);
@@ -1327,14 +1378,25 @@ impl VirtQueue {
         frame.as_mut_slice().fill(0);
 
         let frame_capacity = frame.as_mut_slice().len();
-        let layout = VirtqLayout::compute(queue_size, frame_capacity)?;
+        let mut layout = VirtqLayout::compute(queue_size, frame_capacity)?;
 
         let base_paddr = frame.paddr();
         let desc_paddr = base_paddr;
-        let avail_paddr = base_paddr + layout.avail_offset as u64;
-        let used_paddr = base_paddr + layout.used_offset as u64;
+        let mut avail_paddr = base_paddr + layout.avail_offset as u64;
+        let mut used_paddr = base_paddr + layout.used_offset as u64;
 
         layout.validate(base_paddr as usize, frame_capacity)?;
+
+        let mut configured_size =
+            regs.configure_queue(index, queue_size, desc_paddr, avail_paddr, used_paddr)?;
+        if configured_size != queue_size {
+            layout = VirtqLayout::compute(configured_size, frame_capacity)?;
+            avail_paddr = base_paddr + layout.avail_offset as u64;
+            used_paddr = base_paddr + layout.used_offset as u64;
+            layout.validate(base_paddr as usize, frame_capacity)?;
+            configured_size =
+                regs.configure_queue(index, configured_size, desc_paddr, avail_paddr, used_paddr)?;
+        }
 
         let desc_ptr = base_ptr.cast::<VirtqDesc>();
         let avail_ptr = unsafe {
@@ -1343,8 +1405,6 @@ impl VirtQueue {
         let used_ptr = unsafe {
             NonNull::new_unchecked(base_ptr.as_ptr().add(layout.used_offset) as *mut VirtqUsed)
         };
-
-        regs.configure_queue(index, queue_size, desc_paddr, avail_paddr, used_paddr)?;
         info!(
             target: "net-console",
             "[virtio-net] queue {} layout: base_paddr=0x{:x} desc=0x{:x} avail=0x{:x} used=0x{:x} desc_len={} avail_len={} used_len={} total_len={}",
@@ -1362,7 +1422,7 @@ impl VirtQueue {
         Ok(Self {
             _frame: frame,
             layout,
-            size: queue_size,
+            size: configured_size,
             desc: desc_ptr,
             avail: avail_ptr,
             used: used_ptr,
