@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Author: Lukas Bower
 #![cfg(feature = "net-console")]
 
 use std::str;
@@ -104,8 +105,9 @@ fn network_lines_round_trip_acknowledgements() {
         net_iface.inject_console_line("log\n");
     }
 
-    pump.poll();
-    pump.poll();
+    for _ in 0..3 {
+        pump.poll();
+    }
 
     let auth = handle.pop_tx().expect("auth acknowledgement missing");
     assert_eq!(str::from_utf8(auth.as_slice()).unwrap(), "OK AUTH\r\n");
@@ -176,6 +178,105 @@ fn tx_queue_saturation_updates_telemetry() {
     }
     assert!(drained > 0);
     assert!(pump.metrics().accepted_commands >= 1);
+}
+
+#[test]
+fn ping_requires_session_before_ack() {
+    let serial = LoopbackSerial::<{ DEFAULT_RX_CAPACITY }>::new();
+    let mut audit = AuditCapture::new();
+    let mut pump = build_pump(serial, &mut audit);
+    let (mut net, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 77));
+    pump = pump.with_network(&mut net);
+
+    {
+        let net_iface = pump.network_mut().expect("network not attached");
+        net_iface.inject_console_line("ping\n");
+    }
+
+    pump.poll();
+    pump.poll();
+
+    let mut frames = heapless::Vec::<heapless::String<96>, 8>::new();
+    while let Some(frame) = handle.pop_tx() {
+        let as_str = str::from_utf8(frame.as_slice())
+            .unwrap()
+            .trim_end()
+            .to_owned();
+        let mut line = heapless::String::new();
+        line.push_str(as_str.as_str()).unwrap();
+        frames.push(line).unwrap();
+    }
+
+    assert!(
+        frames.iter().any(|line| line.starts_with("OK AUTH")),
+        "auth acknowledgement missing ({frames:?})"
+    );
+    assert!(
+        frames
+            .iter()
+            .any(|line| line.starts_with("ERR PING reason=unauthenticated")),
+        "frames captured: {frames:?}"
+    );
+    assert!(pump.metrics().denied_commands >= 1 || !audit.denials.is_empty());
+}
+
+#[test]
+fn ping_round_trips_after_attach() {
+    let serial = LoopbackSerial::<{ DEFAULT_RX_CAPACITY }>::new();
+    let mut audit = AuditCapture::new();
+    let mut pump = build_pump(serial, &mut audit);
+    let (mut net, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 88));
+    pump = pump.with_network(&mut net);
+
+    {
+        let net_iface = pump.network_mut().expect("network not attached");
+        net_iface.inject_console_line("attach queen token\n");
+        net_iface.inject_console_line("ping\n");
+    }
+
+    for _ in 0..6 {
+        pump.poll();
+    }
+
+    let mut frames = heapless::Vec::<heapless::String<96>, 12>::new();
+    while let Some(frame) = handle.pop_tx() {
+        let as_str = str::from_utf8(frame.as_slice())
+            .unwrap()
+            .trim_end()
+            .to_owned();
+        let mut line = heapless::String::new();
+        line.push_str(as_str.as_str()).unwrap();
+        frames.push(line).unwrap();
+    }
+
+    let auth_seen = frames.iter().position(|line| line.starts_with("OK AUTH"));
+    let attach_seen = frames.iter().position(|line| line.starts_with("OK ATTACH"));
+    let pong_seen = frames.iter().position(|line| line.starts_with("PONG"));
+    let ack_seen = frames
+        .iter()
+        .position(|line| line.starts_with("OK PING reply=pong"));
+
+    assert!(
+        auth_seen.is_some(),
+        "auth acknowledgement missing ({frames:?})"
+    );
+    assert!(
+        attach_seen.is_some(),
+        "attach acknowledgement missing ({frames:?})"
+    );
+    assert!(
+        pong_seen.is_some(),
+        "PONG console line missing ({frames:?})"
+    );
+    assert!(
+        ack_seen.is_some(),
+        "ping acknowledgement missing ({frames:?})"
+    );
+    if let (Some(auth), Some(attach)) = (auth_seen, attach_seen) {
+        assert!(auth <= attach, "attach emitted before auth: {frames:?}");
+    }
+    assert!(pump.metrics().accepted_commands >= 2);
+    assert!(audit.info.iter().any(|line| line.contains("console: ping")));
 }
 
 #[test]

@@ -49,6 +49,7 @@ pub struct TcpConsoleServer {
     last_activity_ms: u64,
     auth_deadline_ms: Option<u64>,
     conn_id: Option<u64>,
+    outbound_drops: u64,
 }
 
 impl TcpConsoleServer {
@@ -97,6 +98,7 @@ impl TcpConsoleServer {
             last_activity_ms: 0,
             auth_deadline_ms: None,
             conn_id: None,
+            outbound_drops: 0,
         }
     }
 
@@ -138,6 +140,7 @@ impl TcpConsoleServer {
         self.last_activity_ms = 0;
         self.auth_deadline_ms = None;
         self.conn_id = None;
+        self.outbound_drops = 0;
     }
 
     /// Consume bytes received from the client, returning any resulting session event.
@@ -359,10 +362,16 @@ impl TcpConsoleServer {
         }
         if self.outbound.push_back(buf.clone()).is_err() {
             let _ = self.outbound.pop_front();
+            let _ = self.log_outbound_drop(line);
             self.outbound.push_back(buf).map_err(|_| ())
         } else {
             Ok(())
         }
+    }
+
+    /// Return true when outbound data is buffered for transmission.
+    pub fn has_outbound(&self) -> bool {
+        !self.outbound.is_empty()
     }
 
     /// Pop the next outbound console line, if any.
@@ -418,6 +427,16 @@ impl TcpConsoleServer {
             );
             result
         })
+    }
+
+    fn log_outbound_drop(&mut self, line: &str) {
+        self.outbound_drops = self.outbound_drops.saturating_add(1);
+        if self.outbound_drops == 1 || self.outbound_drops.is_power_of_two() {
+            warn!(
+                "[cohsh-net] outbound queue saturated (drops={}) line='{}'",
+                self.outbound_drops, line
+            );
+        }
     }
 }
 

@@ -1214,6 +1214,7 @@ impl<D: NetDevice> NetStack<D> {
         let mut activity = false;
         let mut log_closed_conn: Option<u64> = None;
         let mut record_closed_conn: Option<u64> = None;
+        let mut outbound_pending = self.server.has_outbound();
         let mut reset_session = false;
 
         {
@@ -1723,6 +1724,7 @@ impl<D: NetDevice> NetStack<D> {
                 self.auth_state,
                 &mut self.session_state,
             );
+            outbound_pending |= self.server.has_outbound();
 
             if matches!(socket.state(), TcpState::CloseWait | TcpState::Closed)
                 && self.session_active
@@ -1778,7 +1780,7 @@ impl<D: NetDevice> NetStack<D> {
             self.record_conn_closed(conn_id);
         }
 
-        activity
+        activity || outbound_pending
     }
 
     fn flush_outbound(

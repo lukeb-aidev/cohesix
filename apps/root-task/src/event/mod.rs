@@ -823,12 +823,6 @@ where
 
     fn process_console_line(&mut self, line: &HeaplessString<LINE>) {
         self.metrics.console_lines = self.metrics.console_lines.saturating_add(1);
-        let trimmed = line.trim();
-        if trimmed.eq_ignore_ascii_case("ping") {
-            self.emit_console_line("PONG");
-            self.emit_prompt();
-            return;
-        }
         if let Err(err) = self.feed_parser(line) {
             self.handle_console_error(err);
         }
@@ -943,10 +937,14 @@ where
                 }
             }
             Command::Ping => {
-                self.audit.info("console: ping");
-                self.metrics.accepted_commands += 1;
-                self.emit_console_line("PONG");
-                self.emit_ack_ok("PING", Some("reply=pong"));
+                if self.ensure_authenticated(SessionRole::Worker) {
+                    self.audit.info("console: ping");
+                    self.metrics.accepted_commands += 1;
+                    self.emit_console_line("PONG");
+                    self.emit_ack_ok("PING", Some("reply=pong"));
+                } else {
+                    self.emit_ack_err("PING", Some("reason=unauthenticated"));
+                }
             }
             Command::NetTest => {
                 #[cfg(feature = "net-console")]
