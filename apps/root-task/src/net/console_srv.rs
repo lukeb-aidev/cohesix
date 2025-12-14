@@ -359,6 +359,9 @@ impl TcpConsoleServer {
 
     /// Queue a console response for transmission to the authenticated client.
     pub fn enqueue_outbound(&mut self, line: &str) -> Result<(), ()> {
+        if line.trim().is_empty() {
+            return Ok(());
+        }
         let mut buf: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
         if buf.push_str(line).is_err() {
             return Err(());
@@ -603,5 +606,14 @@ mod tests {
 
         server.end_session();
         assert!(!server.should_timeout(2000));
+    }
+
+    #[test]
+    fn drops_whitespace_only_outbound_lines() {
+        let mut server = TcpConsoleServer::new(TOKEN, 10_000);
+        server.begin_session(0, Some(3));
+
+        assert!(server.enqueue_outbound("   \t").is_ok());
+        assert!(!server.has_outbound());
     }
 }

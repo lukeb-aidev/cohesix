@@ -149,6 +149,18 @@ fn emit_uart(payload: &[u8]) {
 
 /// Emit a UART line regardless of the current logger transport.
 pub fn force_uart_line(line: &str) {
+    if line.trim().is_empty() {
+        return;
+    }
+
+    if line.contains("serial fallback ready") {
+        static SERIAL_FALLBACK_EMITTED: AtomicBool = AtomicBool::new(false);
+
+        if SERIAL_FALLBACK_EMITTED.swap(true, Ordering::Relaxed) {
+            return;
+        }
+    }
+
     emit_uart(line.as_bytes());
     emit_uart(b"\r\n");
 }

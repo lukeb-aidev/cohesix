@@ -118,6 +118,9 @@ pub fn poll_byte() -> Option<u8> {
 }
 
 fn puts(line: &str) {
+    if line.trim().is_empty() {
+        return;
+    }
     for &byte in line.as_bytes() {
         if byte == b'\n' {
             putc(b'\r');
