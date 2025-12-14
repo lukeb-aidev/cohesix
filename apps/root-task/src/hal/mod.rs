@@ -62,7 +62,7 @@ impl MonotonicTimebase {
     }
 
     /// Sets the timebase to an absolute value in milliseconds.
-    pub fn set_now_ms(&self, now_ms: u64) {
+    pub fn set(&self, now_ms: u64) {
         self.counter_ms.store(now_ms, Ordering::Relaxed);
     }
 }
@@ -87,7 +87,7 @@ pub fn timebase() -> &'static dyn Timebase {
 
 /// Sets the shared default timebase to an absolute value.
 pub fn set_timebase_now_ms(now_ms: u64) {
-    DEFAULT_TIMEBASE.set_now_ms(now_ms);
+    DEFAULT_TIMEBASE.set(now_ms);
 }
 
 /// Advances the shared default timebase by the provided delta.
