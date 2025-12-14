@@ -477,6 +477,7 @@ where
         if let Some(tick) = self.timer.poll(timebase_now_ms) {
             self.now_ms = tick.now_ms;
             self.metrics.timer_ticks = self.metrics.timer_ticks.saturating_add(1);
+            crate::hal::set_timebase_now_ms(self.now_ms);
             #[cfg(feature = "timer-trace")]
             if tick.tick % 8_000 == 0 {
                 let message = format_message(format_args!(
@@ -1611,6 +1612,26 @@ mod tests {
     }
 
     #[test]
+    fn timer_tick_publishes_hal_timebase() {
+        crate::hal::set_timebase_now_ms(0);
+
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        pump.poll();
+
+        assert_eq!(crate::hal::timebase().now_ms(), 5);
+
+        crate::hal::set_timebase_now_ms(0);
+    }
+
+    #[test]
     fn authentication_throttles_failures() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
@@ -1958,6 +1979,7 @@ mod tests {
         store.register(Role::Queen, "pong").unwrap();
         let mut audit = AuditLog::new();
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump.session = Some(SessionRole::Queen);
         {
             let driver = pump.serial_mut().driver_mut();
             driver.push_rx(b"PING\n");
