@@ -85,6 +85,8 @@ const BOOTSTRAP_IDLE_SPINS: usize = 512;
 
 const CONSOLE_BANNER: &str = "[Cohesix] Root console ready (type 'help' for commands)";
 const CONSOLE_PROMPT: &str = "cohesix> ";
+#[cfg(feature = "net-console")]
+const NET_POLL_LOG_INTERVAL_MS: u64 = 1_000;
 
 #[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
 #[derive(Debug, Default)]
@@ -365,6 +367,8 @@ where
     throttle: AuthThrottle,
     #[cfg(feature = "net-console")]
     net: Option<&'a mut dyn NetPoller>,
+    #[cfg(feature = "net-console")]
+    last_net_poll_log_ms: Option<u64>,
     #[cfg(feature = "kernel")]
     ninedoor: Option<&'a mut NineDoorBridge>,
     #[cfg(feature = "kernel")]
@@ -415,6 +419,8 @@ where
             throttle: AuthThrottle::default(),
             #[cfg(feature = "net-console")]
             net: None,
+            #[cfg(feature = "net-console")]
+            last_net_poll_log_ms: None,
             #[cfg(feature = "kernel")]
             ninedoor: None,
             #[cfg(feature = "kernel")]
@@ -503,7 +509,13 @@ where
                     "net: poll link_up={} tx_drops={}",
                     telemetry.link_up, telemetry.tx_drops
                 ));
-                self.audit.info(message.as_str());
+                let should_log = self.last_net_poll_log_ms.map_or(true, |last| {
+                    self.now_ms.saturating_sub(last) >= NET_POLL_LOG_INTERVAL_MS
+                });
+                if should_log {
+                    self.audit.info(message.as_str());
+                    self.last_net_poll_log_ms = Some(self.now_ms);
+                }
             }
             let mut buffered: HeaplessVec<
                 HeaplessString<DEFAULT_LINE_CAPACITY>,
