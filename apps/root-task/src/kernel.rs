@@ -1118,8 +1118,11 @@ fn bootstrap<P: Platform>(
         );
     }
 
+    boot_log::force_uart_line("[breadcrumb] before trace_ep");
     crate::trace::trace_ep(ep_slot);
+    boot_log::force_uart_line("[breadcrumb] after trace_ep");
 
+    boot_log::force_uart_line("[breadcrumb] before ep publish line");
     let mut ep_line = heapless::String::<96>::new();
     let _ = write!(
         ep_line,
@@ -1127,12 +1130,29 @@ fn bootstrap<P: Platform>(
         ep = ep_slot
     );
     console.writeln_prefixed(ep_line.as_str());
+    boot_log::force_uart_line("[breadcrumb] after ep publish line");
 
     // Boot tracer phase advancement must not run before the root EP exists,
     // because faults cannot be delivered and tracer internals may touch memory.
+    boot_log::force_uart_line("[breadcrumb] before boot_tracer drain");
     for phase in pending_boot_phases.drain(..) {
+        let phase_marker = match phase {
+            BootPhase::Begin => "[breadcrumb] tracer phase=Begin",
+            BootPhase::CSpaceInit => "[breadcrumb] tracer phase=CSpaceInit",
+            BootPhase::UntypedEnumerate => "[breadcrumb] tracer phase=UntypedEnumerate",
+            BootPhase::RetypeBegin => "[breadcrumb] tracer phase=RetypeBegin",
+            BootPhase::RetypeProgress { .. } => "[breadcrumb] tracer phase=RetypeProgress",
+            BootPhase::RetypeDone => "[breadcrumb] tracer phase=RetypeDone",
+            BootPhase::DTBParseDeferred => "[breadcrumb] tracer phase=DTBParseDeferred",
+            BootPhase::DTBParseDone => "[breadcrumb] tracer phase=DTBParseDone",
+            BootPhase::EPAttachWait => "[breadcrumb] tracer phase=EPAttachWait",
+            BootPhase::EPAttachOk => "[breadcrumb] tracer phase=EPAttachOk",
+            BootPhase::HandOff => "[breadcrumb] tracer phase=HandOff",
+        };
+        boot_log::force_uart_line(phase_marker);
         boot_tracer().advance(phase);
     }
+    boot_log::force_uart_line("[breadcrumb] after boot_tracer drain");
 
     check_bootinfo("MARK 40");
     boot_log::force_uart_line("[MARK 40] before seL4_SetIPCBuffer");
