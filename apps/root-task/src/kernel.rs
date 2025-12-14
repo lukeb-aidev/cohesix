@@ -548,8 +548,100 @@ impl From<FatalBootstrapError> for BootError {
     }
 }
 
+#[derive(Default)]
+struct AbortTelemetry {
+    phase: &'static str,
+    substep: &'static str,
+    reason: &'static str,
+    error_code: Option<i32>,
+    last_mark: Option<&'static str>,
+    last_invariant: Option<&'static str>,
+    cspace_root: Option<u32>,
+    cspace_bits: Option<u8>,
+    first_free: Option<u32>,
+    empty_start: Option<u32>,
+    empty_end: Option<u32>,
+    ep_ready: bool,
+    root_ep: Option<u32>,
+    fault_ep: Option<u32>,
+    ipc_buffer: Option<usize>,
+    logger_switched: bool,
+}
+
+impl AbortTelemetry {
+    fn emit(&self) {
+        let phase = if self.phase.is_empty() {
+            "unknown"
+        } else {
+            self.phase
+        };
+        let sub = if self.substep.is_empty() {
+            "unspecified"
+        } else {
+            self.substep
+        };
+        let reason = if self.reason.is_empty() {
+            "unspecified"
+        } else {
+            self.reason
+        };
+        let mut head = heapless::String::<160>::new();
+        let _ = write!(head, "[boot:abort] phase={phase} sub={sub} reason={reason}");
+        if let Some(code) = self.error_code {
+            let _ = write!(head, "/{code}");
+        }
+        boot_log::force_uart_line(head.as_str());
+
+        let mut cspace = heapless::String::<192>::new();
+        let root = self.cspace_root.unwrap_or_default();
+        let bits = self.cspace_bits.unwrap_or_default();
+        let first_free = self.first_free.unwrap_or_default();
+        let start = self.empty_start.unwrap_or(first_free);
+        let end = self.empty_end.unwrap_or(first_free);
+        let _ = write!(
+            cspace,
+            "[boot:abort] cspace root=0x{root:04x} bits={bits} first_free=0x{first_free:04x} empty=[0x{start:04x}..0x{end:04x})"
+        );
+        boot_log::force_uart_line(cspace.as_str());
+
+        let mut endpoints = heapless::String::<192>::new();
+        let ipcbuf = self.ipc_buffer.map(|ptr| {
+            let mut tmp = heapless::String::<32>::new();
+            let _ = write!(&mut tmp, "0x{ptr:016x}");
+            tmp
+        });
+        let ipcbuf_label = ipcbuf.as_ref().map(|s| s.as_str()).unwrap_or("none");
+
+        let root_ep = self.root_ep.unwrap_or_default();
+        let fault_ep = self.fault_ep.unwrap_or_default();
+        let _ = write!(
+            endpoints,
+            "[boot:abort] ep_ready={} root_ep=0x{root_ep:04x} ipcbuf={} fault_ep=0x{fault_ep:04x} logger_ep={}",
+            self.ep_ready as u8,
+            ipcbuf_label,
+            self.logger_switched as u8,
+        );
+        boot_log::force_uart_line(endpoints.as_str());
+
+        let mut mark_line = heapless::String::<160>::new();
+        let _ = write!(
+            mark_line,
+            "[boot:abort] last_mark={} last_invariant={}",
+            self.last_mark.unwrap_or("none"),
+            self.last_invariant.unwrap_or("none"),
+        );
+        boot_log::force_uart_line(mark_line.as_str());
+    }
+}
+
+struct BootstrapCommit {
+    minimal_committed: bool,
+    full_committed: bool,
+    telemetry: AbortTelemetry,
+}
+
 struct BootStateGuard {
-    committed: bool,
+    commit: BootstrapCommit,
 }
 
 static BOOT_STATE: AtomicU8 = AtomicU8::new(BootState::Cold as u8);
@@ -645,7 +737,13 @@ impl BootStateGuard {
             Ordering::AcqRel,
             Ordering::Acquire,
         ) {
-            Ok(_) => Ok(Self { committed: false }),
+            Ok(_) => Ok(Self {
+                commit: BootstrapCommit {
+                    minimal_committed: false,
+                    full_committed: false,
+                    telemetry: AbortTelemetry::default(),
+                },
+            }),
             Err(state) if state == BootState::Booting as u8 || state == BootState::Booted as u8 => {
                 log::error!("[boot] bootstrap called twice; refusing re-entry");
                 Err(BootError::AlreadyBooted)
@@ -654,22 +752,68 @@ impl BootStateGuard {
         }
     }
 
-    fn commit(&mut self) {
+    fn record_phase(&mut self, phase: &'static str) {
+        self.commit.telemetry.phase = phase;
+    }
+
+    fn record_substep(&mut self, substep: &'static str) {
+        self.commit.telemetry.substep = substep;
+    }
+
+    fn record_reason(&mut self, reason: &'static str, error_code: Option<i32>) {
+        self.commit.telemetry.reason = reason;
+        self.commit.telemetry.error_code = error_code;
+    }
+
+    fn record_mark(&mut self, mark: &'static str) {
+        self.commit.telemetry.last_mark = Some(mark);
+    }
+
+    fn record_invariant(&mut self, invariant: &'static str) {
+        self.commit.telemetry.last_invariant = Some(invariant);
+    }
+
+    fn record_cspace(&mut self, root: u32, bits: u8, first_free: u32, empty: (u32, u32)) {
+        self.commit.telemetry.cspace_root = Some(root);
+        self.commit.telemetry.cspace_bits = Some(bits);
+        self.commit.telemetry.first_free = Some(first_free);
+        self.commit.telemetry.empty_start = Some(empty.0);
+        self.commit.telemetry.empty_end = Some(empty.1);
+    }
+
+    fn record_endpoints(&mut self, root_ep: u32, fault_ep: u32) {
+        self.commit.telemetry.root_ep = Some(root_ep);
+        self.commit.telemetry.fault_ep = Some(fault_ep);
+        self.commit.telemetry.ep_ready = root_ep != sel4_sys::seL4_CapNull;
+    }
+
+    fn record_ipc_buffer(&mut self, ipc_buffer: Option<usize>) {
+        self.commit.telemetry.ipc_buffer = ipc_buffer;
+    }
+
+    fn record_logger_switch(&mut self, ready: bool) {
+        self.commit.telemetry.logger_switched = ready;
+    }
+
+    fn commit_minimal(&mut self) {
         BOOT_STATE.store(BootState::Booted as u8, Ordering::Release);
-        self.committed = true;
+        self.commit.minimal_committed = true;
+    }
+
+    fn commit_full(&mut self) {
+        if !self.commit.minimal_committed {
+            self.commit_minimal();
+        }
+        self.commit.full_committed = true;
     }
 }
 
 impl Drop for BootStateGuard {
     fn drop(&mut self) {
-        if !self.committed {
+        if !self.commit.minimal_committed {
             log::error!("[boot] bootstrap exited without committing; refusing to reset boot state");
-            boot_log::force_uart_line(
-                "[boot] bootstrap aborted before commit; parking root-task thread",
-            );
-            loop {
-                unsafe { sel4_sys::seL4_Yield() };
-            }
+            self.commit.telemetry.emit();
+            panic!("[boot] bootstrap aborted before commit");
         }
     }
 }
@@ -751,8 +895,10 @@ fn bootstrap<P: Platform>(
     let mut sequencer = BootstrapSequencer::new();
 
     let bootinfo_view = canonical_bootinfo_view(&mut sequencer, bootinfo)?;
+    boot_guard.record_phase("BootInfoValidate");
 
     sequencer.advance(BootstrapPhase::MemoryLayoutBuild)?;
+    boot_guard.record_phase("MemoryLayoutBuild");
     let layout_snapshot = layout::dump_and_sanity_check();
 
     let bootinfo_source_vaddr = bootinfo as *const _ as usize;
@@ -824,6 +970,7 @@ fn bootstrap<P: Platform>(
     }
 
     crate::alloc::init_heap(heap_range.clone());
+    boot_guard.record_invariant("allocator.ready");
 
     boot_log::init_logger_bootstrap_only();
 
@@ -831,6 +978,7 @@ fn bootstrap<P: Platform>(
 
     let bootinfo_state = snapshot_bootinfo(bootinfo, &bootinfo_view)?;
     let bootinfo_snapshot = bootinfo_state.snapshot();
+    boot_guard.record_invariant("bootinfo.snapshot.ok");
 
     let mut build_line = heapless::String::<192>::new();
     let mut feature_report = heapless::String::<96>::new();
@@ -860,6 +1008,7 @@ fn bootstrap<P: Platform>(
     log::info!("{}", build_line.as_str());
 
     let mut boot_guard = BootStateGuard::acquire()?;
+    boot_guard.record_phase("start");
     debug_assert_eq!(
         BOOT_STATE.load(Ordering::Acquire),
         BootState::Booting as u8,
@@ -871,7 +1020,8 @@ fn bootstrap<P: Platform>(
 
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
 
-    let check_bootinfo = |mark: &'static str| {
+    let mut check_bootinfo = |guard: &mut BootStateGuard, mark: &'static str| {
+        guard.record_mark(mark);
         if let Err(err) = bootinfo_state.verify_mark(mark) {
             panic!("bootinfo canary tripped at {mark}: {err:?}");
         }
@@ -883,6 +1033,7 @@ fn bootstrap<P: Platform>(
             error_name(err),
         );
     }
+    boot_guard.record_invariant("cspace.alias.canonical");
     let (empty_start, empty_end) = bootinfo_view.init_cnode_empty_range();
     let cspace_window = CSpaceWindow::new(
         bootinfo_view.root_cnode_cap(),
@@ -891,6 +1042,12 @@ fn bootstrap<P: Platform>(
         empty_start,
         empty_end,
         empty_start,
+    );
+    boot_guard.record_cspace(
+        cspace_window.root,
+        cspace_window.bits,
+        cspace_window.first_free,
+        (empty_start, empty_end),
     );
     let mut console = DebugConsole::new(platform);
 
@@ -965,6 +1122,7 @@ fn bootstrap<P: Platform>(
 
     bootinfo_debug_dump(&bootinfo_view);
     let ipc_buffer_ptr = bootinfo_ref.ipc_buffer_ptr();
+    boot_guard.record_ipc_buffer(ipc_buffer_ptr.map(|ptr| ptr.as_ptr() as usize));
     if let Some(ptr) = ipc_buffer_ptr {
         let addr = ptr.as_ptr() as usize;
         assert_eq!(
@@ -1029,20 +1187,20 @@ fn bootstrap<P: Platform>(
         false
     };
 
-    check_bootinfo("MARK 30");
+    check_bootinfo(&mut boot_guard, "MARK 30");
     boot_log::force_uart_line("[MARK 30] after DTB deferred");
 
-    check_bootinfo("MARK 31");
+    check_bootinfo(&mut boot_guard, "MARK 31");
     boot_log::force_uart_line("[MARK 31] before canonical_cspace");
     #[cfg(feature = "canonical_cspace")]
     {
         crate::bootstrap::retype::canonical_cspace_console(bootinfo_ref);
     }
 
-    check_bootinfo("MARK 32");
+    check_bootinfo(&mut boot_guard, "MARK 32");
     boot_log::force_uart_line("[MARK 32] after canonical_cspace");
 
-    check_bootinfo("MARK 33");
+    check_bootinfo(&mut boot_guard, "MARK 33");
     boot_log::force_uart_line("[MARK 33] before cap-probes");
     #[cfg(feature = "cap-probes")]
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_variables))]
@@ -1072,27 +1230,28 @@ fn bootstrap<P: Platform>(
         }
     }
 
-    check_bootinfo("MARK 34");
+    check_bootinfo(&mut boot_guard, "MARK 34");
     boot_log::force_uart_line("[MARK 34] after cap-probes");
 
-    check_bootinfo("MARK 35");
+    check_bootinfo(&mut boot_guard, "MARK 35");
     boot_log::force_uart_line("[MARK 35] before ipc_vaddr");
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_variables))]
     let ipc_vaddr = ipc_buffer_ptr.map(|ptr| ptr.as_ptr() as usize);
     let ipc_frame = sel4_sys::seL4_CapInitThreadIPCBuffer;
 
-    check_bootinfo("MARK 36");
+    check_bootinfo(&mut boot_guard, "MARK 36");
     boot_log::force_uart_line("[MARK 36] before bootstrap-minimal");
     #[cfg(feature = "bootstrap-minimal")]
     {
-        check_bootinfo("MARK 37");
+        check_bootinfo(&mut boot_guard, "MARK 37");
         boot_log::force_uart_line("[MARK 37] enter bootstrap-minimal");
         log::warn!(
             "[boot] bootstrap-minimal: skipping EP retype/PL011 map/TCB copy; entering console"
         );
         crate::boot::ep::publish_root_ep(sel4_sys::seL4_CapNull);
         console.writeln_prefixed("[boot] bootstrap-minimal: entering console");
-        boot_guard.commit();
+        boot_guard.record_substep("commit.minimal.path");
+        boot_guard.commit_minimal();
         boot_log::force_uart_line("[console] serial fallback ready");
         if !crate::ipc::ep_is_valid(crate::sel4::root_endpoint()) {
             boot_log::force_uart_line(
@@ -1103,51 +1262,108 @@ fn bootstrap<P: Platform>(
         crate::userland::start_console_or_cohsh(platform);
     }
 
-    check_bootinfo("MARK 38");
+    check_bootinfo(&mut boot_guard, "MARK 38");
     boot_log::force_uart_line("[MARK 38] before bootstrap_ep");
     sequencer.advance(BootstrapPhase::IPCInstall)?;
-    let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_snapshot, &mut boot_cspace) {
-        Ok(slot) => {
-            check_bootinfo("MARK 39");
-            boot_log::force_uart_line("[MARK 39] after bootstrap_ep ok");
-            (slot, true)
-        }
-        Err(err) => {
-            crate::trace::trace_fail(b"bootstrap_ep", err);
-            let mut line = heapless::String::<160>::new();
-            let _ = write!(
-                line,
-                "bootstrap_ep failed: {} ({})",
-                err as i32,
-                error_name(err)
-            );
-            console.writeln_prefixed(line.as_str());
-            #[cfg(feature = "strict-bootstrap")]
-            {
-                panic!("bootstrap_ep failed: {}", error_name(err));
+    boot_guard.record_phase("IPCInstall");
+    boot_guard.record_substep("bootstrap_ep.pre");
+    let mut ep_report = crate::boot::ep::RootEpReport::default();
+    let mut ep_probe = heapless::String::<160>::new();
+    let _ = write!(
+        ep_probe,
+        "[boot] root-ep preflight ep_ready={} first_free=0x{slot:04x}",
+        sel4::ep_ready() as u8,
+        slot = boot_cspace.next_free_slot(),
+    );
+    boot_log::force_uart_line(ep_probe.as_str());
+    let (ep_slot, boot_ep_ok) =
+        match ep::bootstrap_ep(&bootinfo_snapshot, &mut boot_cspace, &mut ep_report) {
+            Ok(slot) => {
+                check_bootinfo(&mut boot_guard, "MARK 39");
+                boot_log::force_uart_line("[MARK 39] after bootstrap_ep ok");
+                (slot, true)
             }
-            #[cfg(not(feature = "strict-bootstrap"))]
-            {
-                log::error!(
-                    "[fail:bootstrap_ep] err={} ({})",
+            Err(err) => {
+                crate::trace::trace_fail(b"bootstrap_ep", err);
+                boot_guard.record_reason("bootstrap_ep", Some(err as i32));
+                let mut line = heapless::String::<160>::new();
+                let _ = write!(
+                    line,
+                    "bootstrap_ep failed: {} ({})",
                     err as i32,
                     error_name(err)
                 );
-                let fail_line = match err {
-                    sel4_sys::seL4_FailedLookup => "[FAIL] bootstrap_ep err=FailedLookup",
-                    sel4_sys::seL4_InvalidArgument => "[FAIL] bootstrap_ep err=InvalidArgument",
-                    sel4_sys::seL4_InvalidCapability => "[FAIL] bootstrap_ep err=InvalidCapability",
-                    sel4_sys::seL4_IllegalOperation => "[FAIL] bootstrap_ep err=IllegalOperation",
-                    sel4_sys::seL4_RangeError => "[FAIL] bootstrap_ep err=RangeError",
-                    _ => "[FAIL] bootstrap_ep err=UNKNOWN",
-                };
-                boot_log::force_uart_line(fail_line);
-                loop {
-                    unsafe { sel4_sys::seL4_Yield() };
+                console.writeln_prefixed(line.as_str());
+                #[cfg(feature = "strict-bootstrap")]
+                {
+                    panic!("bootstrap_ep failed: {}", error_name(err));
+                }
+                #[cfg(not(feature = "strict-bootstrap"))]
+                {
+                    log::error!(
+                        "[fail:bootstrap_ep] err={} ({})",
+                        err as i32,
+                        error_name(err)
+                    );
+                    let fail_line = match err {
+                        sel4_sys::seL4_FailedLookup => "[FAIL] bootstrap_ep err=FailedLookup",
+                        sel4_sys::seL4_InvalidArgument => "[FAIL] bootstrap_ep err=InvalidArgument",
+                        sel4_sys::seL4_InvalidCapability => {
+                            "[FAIL] bootstrap_ep err=InvalidCapability"
+                        }
+                        sel4_sys::seL4_IllegalOperation => {
+                            "[FAIL] bootstrap_ep err=IllegalOperation"
+                        }
+                        sel4_sys::seL4_RangeError => "[FAIL] bootstrap_ep err=RangeError",
+                        _ => "[FAIL] bootstrap_ep err=UNKNOWN",
+                    };
+                    boot_log::force_uart_line(fail_line);
+                    let mut structured = heapless::String::<192>::new();
+                    let _ = write!(
+                    structured,
+                    "[boot:abort] ep_slot=0x{slot:04x} verify={:?} retype={:?} ident=0x{ident:04x}",
+                    slot = ep_report.ep_slot,
+                    ep_report.verify_err,
+                    ep_report.retype_err,
+                    ident = ep_report.slot_ident,
+                );
+                    boot_log::force_uart_line(structured.as_str());
+                    let fallback_existing = sel4::ep_ready();
+                    let fallback_ident = sel4::debug_cap_identify(ep_report.ep_slot);
+                    let fallback_slot = if fallback_existing {
+                        sel4::root_endpoint()
+                    } else if fallback_ident == sel4_sys::seL4_CapEndpoint {
+                        ep_report.ep_slot
+                    } else {
+                        sel4_sys::seL4_CapNull
+                    };
+                    if fallback_slot != sel4_sys::seL4_CapNull {
+                        boot_log::force_uart_line(
+                            "[boot] bootstrap_ep fallback: reusing existing endpoint",
+                        );
+                        crate::boot::ep::publish_root_ep(fallback_slot);
+                        (fallback_slot, false)
+                    } else {
+                        panic!(
+                            "bootstrap_ep failed: {} ({}) without fallback",
+                            err as i32,
+                            error_name(err)
+                        );
+                    }
                 }
             }
-        }
-    };
+        };
+    let mut ep_status = heapless::String::<192>::new();
+    let _ = write!(
+        ep_status,
+        "[boot] root-ep report slot=0x{slot:04x} verify={:?} retype={:?} ident=0x{ident:04x} preexisting={}",
+        slot = ep_report.ep_slot,
+        ep_report.verify_err,
+        ep_report.retype_err,
+        ident = ep_report.slot_ident,
+        ep_report.preexisting as u8,
+    );
+    boot_log::force_uart_line(ep_status.as_str());
 
     if boot_ep_ok {
         let (empty_start, empty_end) = bootinfo_view.init_cnode_empty_range();
@@ -1167,6 +1383,7 @@ fn bootstrap<P: Platform>(
         }
 
         sel4::set_ep_validated(true);
+        boot_guard.record_invariant("root_ep.ready");
     } else {
         sel4::set_ep_validated(false);
         log::warn!(
@@ -1220,7 +1437,7 @@ fn bootstrap<P: Platform>(
         hard_guard_fail("ipcbuf", HardGuardViolation::IPCBufferNotAligned);
     }
 
-    check_bootinfo("MARK 40");
+    check_bootinfo(&mut boot_guard, "MARK 40");
     boot_log::force_uart_line("[MARK 40] before seL4_SetIPCBuffer");
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
@@ -1241,13 +1458,14 @@ fn bootstrap<P: Platform>(
         );
         console.writeln_prefixed(msg.as_str());
     }
+    boot_guard.record_invariant("ipc_buffer.installed");
 
     debug_assert_eq!(ep_slot, root_endpoint());
     let tcb_copy_slot = if let Some(ref info) = first_retypes {
         info.tcb_copy_slot
     } else {
         crate::bp!("tcb.copy.begin");
-        check_bootinfo("MARK 41");
+        check_bootinfo(&mut boot_guard, "MARK 41");
         boot_log::force_uart_line("[MARK 41] before tcb copy");
         let copy_slot = tcb::bootstrap_copy_init_tcb(bootinfo_ref, &mut boot_cspace)
             .unwrap_or_else(|err| {
@@ -1372,6 +1590,10 @@ fn bootstrap<P: Platform>(
             ep = ep_slot
         );
     }
+    boot_guard.record_endpoints(ep_slot, fault_ep_slot);
+    boot_guard.record_substep("commit.minimal.ready");
+    boot_guard.commit_minimal();
+    boot_log::force_uart_line("[boot] commit_minimal satisfied");
 
     let mut cs = CSpaceCtx::new(bootinfo_view, boot_cspace);
     cs.tcb_copy_slot = tcb_copy_slot;
@@ -1385,11 +1607,13 @@ fn bootstrap<P: Platform>(
     let mut retyped_objects: u32 = 0;
 
     sequencer.advance(BootstrapPhase::UntypedPlan)?;
+    boot_guard.record_phase("UntypedPlan");
     boot_tracer().advance(BootPhase::UntypedEnumerate);
     let mut notification_selection =
         pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
 
     sequencer.advance(BootstrapPhase::RetypeCommit)?;
+    boot_guard.record_phase("RetypeCommit");
     if let Err(err) = bootstrap_notification(&mut cs, &mut notification_selection) {
         let mut line = heapless::String::<160>::new();
         let err_code = err as i32;
@@ -1909,11 +2133,39 @@ fn bootstrap<P: Platform>(
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let net_backend_label = DEFAULT_NET_BACKEND.label();
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let virtio_present = false;
-        #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let net_stack: Option<NetStack> = {
-            log::warn!("[boot] net-console disabled until bootstrap invariants are stable");
-            None
+        let (net_stack, virtio_present) = {
+            use crate::net::stack::{init_net_console, NetConsoleError};
+
+            let config = crate::net::ConsoleNetConfig::default();
+            match init_net_console(&mut hal, config) {
+                Ok(stack) => {
+                    let mac = stack.hardware_address();
+                    let ip = stack.ipv4_address();
+                    let port = stack.console_listen_port();
+                    let mut ok_line = heapless::String::<160>::new();
+                    let _ = write!(ok_line, "[net-console] ready ip={ip} port={port} mac={mac}");
+                    boot_log::force_uart_line(ok_line.as_str());
+                    boot_guard.record_invariant("net-console.ready");
+                    (Some(stack), cfg!(feature = "net-backend-virtio"))
+                }
+                Err(err) => {
+                    let reason = match err {
+                        NetConsoleError::NoDevice => "no-device",
+                        NetConsoleError::InvalidConfig(_) => "invalid-config",
+                        NetConsoleError::Init(_) => "init-error",
+                    };
+                    let mut fail_line = heapless::String::<192>::new();
+                    let _ = write!(
+                        fail_line,
+                        "[net-console] disabled reason={reason} detail={err}"
+                    );
+                    boot_log::force_uart_line(fail_line.as_str());
+                    log::warn!("{}", fail_line.as_str());
+                    let virtio_present = cfg!(feature = "net-backend-virtio")
+                        && !matches!(err, NetConsoleError::NoDevice);
+                    (None, virtio_present)
+                }
+            }
         };
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
         let net_stack = None::<()>;
@@ -1976,14 +2228,22 @@ fn bootstrap<P: Platform>(
         boot_tracer().advance(BootPhase::DTBParseDone);
 
         crate::bp!("logger.switch.begin");
-        if cfg!(feature = "dev-virt") {
+        let logger_switch_ok = if cfg!(feature = "dev-virt") {
             log::info!(
                 target: "root_task::kernel",
                 "[boot] logger.switch: EP disabled in dev-virt (UART-only)"
             );
+            false
         } else if let Err(err) = boot_log::switch_logger_to_userland() {
             log::error!("[boot] logger switch failed: {:?}", err);
-            panic!("logger switch failed: {err:?}");
+            boot_guard.record_reason("logger.switch", None);
+            false
+        } else {
+            true
+        };
+        if logger_switch_ok {
+            boot_guard.record_logger_switch(true);
+            boot_guard.record_invariant("logger.switch.ok");
         }
         crate::bp!("logger.switch.end");
         debug_uart_str("[dbg] logger.switch complete; about to send bootstrap to EP 0x0130\n");
@@ -2025,7 +2285,7 @@ fn bootstrap<P: Platform>(
         boot_log::force_uart_line(summary.as_str());
         crate::bp!("bootstrap.done");
         boot_tracer().advance(BootPhase::HandOff);
-        boot_guard.commit();
+        boot_guard.commit_full();
         boot_log::force_uart_line("[console] serial fallback ready");
         crate::bootstrap::run_minimal(bootinfo_ref);
         #[cfg(all(feature = "net-console", feature = "kernel"))]
@@ -2034,6 +2294,7 @@ fn bootstrap<P: Platform>(
         let virtio_present_flag = false;
 
         sequencer.advance(BootstrapPhase::UserlandHandoff)?;
+        boot_guard.record_phase("UserlandHandoff");
 
         let features = BootFeatures {
             serial_console: cfg!(feature = "serial-console"),

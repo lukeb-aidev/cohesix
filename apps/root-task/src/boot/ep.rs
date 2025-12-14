@@ -14,6 +14,33 @@ use crate::serial;
 
 pub static mut ROOT_EP: seL4_CPtr = seL4_CapNull;
 
+/// Telemetry describing the root endpoint bootstrap attempt.
+#[derive(Debug, Clone, Copy)]
+pub struct RootEpReport {
+    /// Whether an endpoint had already been published on entry.
+    pub preexisting: bool,
+    /// Slot selected for the root endpoint.
+    pub ep_slot: seL4_CPtr,
+    /// Outcome of verifying the init CNode path.
+    pub verify_err: Option<seL4_Error>,
+    /// Outcome of the retype call.
+    pub retype_err: Option<seL4_Error>,
+    /// Result of `debug_cap_identify` on the selected slot.
+    pub slot_ident: u32,
+}
+
+impl Default for RootEpReport {
+    fn default() -> Self {
+        Self {
+            preexisting: false,
+            ep_slot: seL4_CapNull,
+            verify_err: None,
+            retype_err: None,
+            slot_ident: 0,
+        }
+    }
+}
+
 fn select_endpoint_untyped(view: &BootInfoView) -> Result<(seL4_CPtr, UntypedDesc), seL4_Error> {
     let bi = view.header();
     const MIN_ENDPOINT_BITS: u8 = 12;
@@ -63,9 +90,15 @@ pub fn publish_root_ep(ep: seL4_CPtr) {
 /// `first_free` is set within the kernel-advertised empty window
 /// `[empty_start..empty_end)`. This function consumes exactly one slot from that
 /// window and leaves ordering of earlier boot phases unchanged.
-pub fn bootstrap_ep(snapshot: &BootInfoSnapshot, cs: &mut CSpace) -> Result<seL4_CPtr, seL4_Error> {
+pub fn bootstrap_ep(
+    snapshot: &BootInfoSnapshot,
+    cs: &mut CSpace,
+    report: &mut RootEpReport,
+) -> Result<seL4_CPtr, seL4_Error> {
     let view = snapshot.view();
     if sel4::ep_ready() {
+        report.preexisting = true;
+        report.ep_slot = sel4::root_endpoint();
         return Ok(sel4::root_endpoint());
     }
 
@@ -91,6 +124,7 @@ pub fn bootstrap_ep(snapshot: &BootInfoSnapshot, cs: &mut CSpace) -> Result<seL4
     }
 
     let ep_slot = cs.alloc_slot()?;
+    report.ep_slot = ep_slot;
     serial::puts("[boot] bootstrap_ep: after alloc_slot\n");
     debug_assert_ne!(
         ep_slot,
@@ -138,8 +172,10 @@ pub fn bootstrap_ep(snapshot: &BootInfoSnapshot, cs: &mut CSpace) -> Result<seL4
     serial::puts("[boot] bootstrap_ep: before verify\n");
     if let Err(err) = verify_root_cnode_slot(bi, ep_slot as sel4_sys::seL4_Word) {
         serial::puts("[boot] bootstrap_ep: verify_root_cnode_slot failed\n");
+        report.verify_err = Some(err);
         return Err(err);
     }
+    report.verify_err = Some(sel4_sys::seL4_NoError);
 
     serial::puts("[boot] bootstrap_ep: before retype\n");
     let err = retype_endpoint_auto(
@@ -147,6 +183,7 @@ pub fn bootstrap_ep(snapshot: &BootInfoSnapshot, cs: &mut CSpace) -> Result<seL4
         ut as sel4_sys::seL4_Word,
         ep_slot as sel4_sys::seL4_Word,
     );
+    report.retype_err = Some(err);
     if err != sel4_sys::seL4_NoError {
         serial::puts("[boot] bootstrap_ep: retype_endpoint_auto failed\n");
         return Err(err);
@@ -155,7 +192,7 @@ pub fn bootstrap_ep(snapshot: &BootInfoSnapshot, cs: &mut CSpace) -> Result<seL4
     window.bump();
 
     let slot_ident = sel4::debug_cap_identify(ep_slot);
-    let _ = slot_ident;
+    report.slot_ident = slot_ident;
 
     publish_root_ep(ep_slot);
     serial::puts("[boot] bootstrap_ep: after publish\n");
