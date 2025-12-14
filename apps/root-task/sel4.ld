@@ -73,7 +73,8 @@ SECTIONS
     . = __stack_top;
   } :data
   ASSERT(ADDR(.stack) == __stack_bottom, "stack bottom must match computed bound");
-  ASSERT(. == __stack_top, "stack top must remain at computed bound");
+  ASSERT((ADDR(.stack) + SIZEOF(.stack)) == __stack_top,
+         "stack top must remain at computed bound");
 
   /*
    * Leave a guard gap below the IPC buffer to avoid stack overflows corrupting
@@ -82,7 +83,8 @@ SECTIONS
    * mapping.
    */
   . = __stack_top + __stack_guard;
-  ASSERT(. == __ipcbuf_vaddr, "IPC buffer virtual address must remain stable");
+  ASSERT((__stack_top + __stack_guard) == __ipcbuf_vaddr,
+         "IPC buffer virtual address must remain stable");
 
   PROVIDE(_end = __ipcbuf_vaddr);
 
