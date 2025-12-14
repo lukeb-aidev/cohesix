@@ -42,7 +42,13 @@ fn register_device_pt_pool(cap: sys::seL4_CPtr, size_bits: u8, index: usize, pad
         return;
     }
 
-    let total_bytes = 1usize << size_bits;
+    debug_assert!(
+        size_bits <= (usize::BITS.saturating_sub(1) as u8),
+        "device pt pool size_bits exceeds host word width",
+    );
+    let total_bytes = 1usize
+        .checked_shl(u32::from(size_bits))
+        .expect("device pt pool size_bits overflowed host word width");
     let config = DevicePtPoolConfig {
         ut_slot: cap,
         paddr,

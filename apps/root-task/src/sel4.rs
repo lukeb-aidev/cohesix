@@ -260,14 +260,8 @@ pub fn init_cnode_bits(bi: &seL4_BootInfo) -> u8 {
 
 /// Returns the `[start, end)` empty slot window advertised by bootinfo.
 #[inline(always)]
-pub fn empty_window(bi: &seL4_BootInfo) -> (u32, u32) {
-    let (start, end) = sel4_view::empty_window(bi);
-    (
-        start
-            .try_into()
-            .expect("empty window start must fit in u32"),
-        end.try_into().expect("empty window end must fit in u32"),
-    )
+pub fn empty_window(bi: &seL4_BootInfo) -> (seL4_Word, seL4_Word) {
+    sel4_view::empty_window(bi)
 }
 
 /// Errors raised while validating a bootinfo pointer and its extra region.
@@ -1356,9 +1350,7 @@ pub struct ReservedVaddrRanges {
 
 impl ReservedVaddrRanges {
     pub const fn new() -> Self {
-        Self {
-            ranges: Vec::new(),
-        }
+        Self { ranges: Vec::new() }
     }
 
     pub fn reserve(&mut self, range: core::ops::Range<usize>, label: &'static str) {
@@ -1372,7 +1364,7 @@ impl ReservedVaddrRanges {
     pub fn assert_free(&self, range: core::ops::Range<usize>, label: &str) {
         if let Some(conflict) = self.first_overlap(&range) {
             panic!(
-                "mapping {label} range [0x{start:08x}..0x{end:08x}) overlaps reserved [0x{conflict_start:08x}..0x{conflict_end:08x})",
+                "mapping {label} range [0x{start:016x}..0x{end:016x}) overlaps reserved [0x{conflict_start:016x}..0x{conflict_end:016x})",
                 start = range.start,
                 end = range.end,
                 conflict_start = conflict.start,
@@ -1402,19 +1394,13 @@ impl ReservedVaddrRanges {
         }
     }
 
-    fn first_overlap(
-        &self,
-        range: &core::ops::Range<usize>,
-    ) -> Option<&core::ops::Range<usize>> {
+    fn first_overlap(&self, range: &core::ops::Range<usize>) -> Option<&core::ops::Range<usize>> {
         self.ranges
             .iter()
             .find(|existing| Self::ranges_overlap(existing, range))
     }
 
-    fn ranges_overlap(
-        a: &core::ops::Range<usize>,
-        b: &core::ops::Range<usize>,
-    ) -> bool {
+    fn ranges_overlap(a: &core::ops::Range<usize>, b: &core::ops::Range<usize>) -> bool {
         a.start < b.end && b.start < a.end
     }
 
@@ -1423,6 +1409,14 @@ impl ReservedVaddrRanges {
     }
 
     fn assert_valid(&self, range: &core::ops::Range<usize>, label: &str) {
+        if (range.start >> 32) != 0 || (range.end >> 32) != 0 {
+            panic!(
+                "{} reserved range carries high bits in low-vaddr build start=0x{start:016x} end=0x{end:016x}",
+                label,
+                start = range.start,
+                end = range.end,
+            );
+        }
         assert!(
             range.start < range.end,
             "{} reserved range must be non-empty",
@@ -1707,13 +1701,20 @@ pub struct DevicePtPool {
 
 impl DevicePtPool {
     pub fn from_config(config: DevicePtPoolConfig) -> Self {
+        debug_assert!(
+            config.size_bits <= (usize::BITS.saturating_sub(1) as u8),
+            "device pt pool size_bits exceeds host word width",
+        );
+        let expected_bytes = 1usize
+            .checked_shl(u32::from(config.size_bits))
+            .expect("device pt pool size_bits overflowed host word width");
         Self {
             ut_slot: config.ut_slot,
             paddr: config.paddr,
             size_bits: config.size_bits,
             index: config.index,
             used_bytes: 0,
-            total_bytes: config.total_bytes,
+            total_bytes: expected_bytes,
         }
     }
 
@@ -2948,9 +2949,7 @@ impl<'a> KernelEnv<'a> {
         span: usize,
         label: &str,
     ) -> core::ops::Range<usize> {
-        let range = self
-            .reserved
-            .next_aligned_range(cursor, span, PAGE_SIZE);
+        let range = self.reserved.next_aligned_range(cursor, span, PAGE_SIZE);
         self.assert_reserved_clear(range.clone(), label);
         range
     }

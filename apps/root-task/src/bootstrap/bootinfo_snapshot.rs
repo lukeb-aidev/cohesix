@@ -5,8 +5,8 @@
 extern crate alloc;
 
 use alloc::alloc::{alloc, Layout};
-use core::mem;
 use core::fmt;
+use core::mem;
 use core::ptr;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -18,6 +18,17 @@ use crate::bootstrap::log::force_uart_line;
 use crate::sel4::{BootInfo, BootInfoError, BootInfoView};
 
 const MAX_CANARY_LINE: usize = 192;
+const HIGH_32_MASK: usize = 0xffff_ffff_0000_0000;
+
+#[inline(always)]
+fn assert_low_vaddr(label: &str, value: usize) {
+    if (value & HIGH_32_MASK) != 0 {
+        panic!(
+            "{} carries high address bits in low-vaddr build: 0x{value:016x}",
+            label,
+        );
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct BootInfoSnapshot {
@@ -73,6 +84,11 @@ impl BootInfoSnapshot {
             extra_len,
             checksum: 0,
         };
+
+        assert_low_vaddr("bootinfo header", snapshot.bootinfo_addr);
+        assert_low_vaddr("ipc buffer", snapshot.ipc_buffer);
+        assert_low_vaddr("bootinfo extra start", snapshot.extra_start);
+        assert_low_vaddr("bootinfo extra end", snapshot.extra_end);
 
         let checksum = snapshot.checksum();
         snapshot.checksum = checksum;
@@ -162,7 +178,10 @@ impl BootInfoSnapshot {
 impl fmt::Debug for BootInfoSnapshot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BootInfoSnapshot")
-            .field("bootinfo_addr", &format_args!("0x{:#x}", self.bootinfo_addr))
+            .field(
+                "bootinfo_addr",
+                &format_args!("0x{:#x}", self.bootinfo_addr),
+            )
             .field("init_cnode_bits", &self.init_cnode_bits)
             .field("empty_start", &self.empty_start)
             .field("empty_end", &self.empty_end)
@@ -201,6 +220,8 @@ impl BootInfoState {
         let snapshot = BootInfoSnapshot::capture(&source_view)?;
         let snapshot_view = snapshot.view();
 
+        assert_low_vaddr("bootinfo pointer", bootinfo as *const _ as usize);
+
         Ok(BOOTINFO_STATE.call_once(|| Self {
             view: snapshot_view,
             snapshot,
@@ -235,8 +256,8 @@ impl BootInfoState {
     }
 
     pub fn verify_mark(&self, mark: &'static str) -> Result<(), BootInfoCanaryError> {
-        let observed = BootInfoSnapshot::from_view(&self.view)
-            .map_err(|_| BootInfoCanaryError::Diverged {
+        let observed =
+            BootInfoSnapshot::from_view(&self.view).map_err(|_| BootInfoCanaryError::Diverged {
                 mark,
                 expected: self.snapshot,
                 observed: self.snapshot,

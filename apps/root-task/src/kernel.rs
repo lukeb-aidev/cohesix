@@ -936,10 +936,7 @@ fn bootstrap<P: Platform>(
             "IPC buffer must be page-aligned",
         );
         let ipc_page_base = align_down(addr, IPC_PAGE_BYTES);
-        reserved_vaddrs.reserve(
-            ipc_page_base..ipc_page_base + IPC_PAGE_BYTES,
-            "ipc-buffer",
-        );
+        reserved_vaddrs.reserve(ipc_page_base..ipc_page_base + IPC_PAGE_BYTES, "ipc-buffer");
         unsafe {
             sel4_sys::seL4_SetIPCBuffer(ptr.as_ptr());
         }

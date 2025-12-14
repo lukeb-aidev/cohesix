@@ -1815,7 +1815,7 @@ pub(super) struct RootPath {
 
 impl RootPath {
     #[inline(always)]
-    pub(super) fn from_bootinfo(slot: u32, bi: &sys::seL4_BootInfo) -> Self {
+    pub(super) fn from_bootinfo(slot: sys::seL4_CPtr, bi: &sys::seL4_BootInfo) -> Self {
         let init_bits = init_cnode_bits_u8(bi);
         let root = sel4::init_cnode_cptr(bi);
         let offset = slot as sys::seL4_Word;
@@ -1919,7 +1919,7 @@ pub mod canonical {
 
     #[inline(always)]
     fn build_root_path(slot: u32, bi: &sys::seL4_BootInfo) -> RootPath {
-        RootPath::from_bootinfo(slot, bi)
+        RootPath::from_bootinfo(slot as sys::seL4_CPtr, bi)
     }
 
     #[inline(always)]
@@ -2736,7 +2736,7 @@ mod tests {
     #[test]
     fn canonical_root_path_accepts_empty_window_slot() {
         let bootinfo = mock_bootinfo(0x20, 0x40, 6);
-        let path = super::RootPath::from_bootinfo(0x22, &bootinfo);
+        let path = super::RootPath::from_bootinfo(0x22 as sys::seL4_CPtr, &bootinfo);
         assert_eq!(path.root, sys::seL4_CapInitThreadCNode);
         assert_eq!(path.index, 0);
         assert_eq!(path.depth, canonical_depth_word());
@@ -2750,7 +2750,7 @@ mod tests {
 
         let bootinfo = mock_bootinfo(0x30, 0x50, 6);
         let result = panic::catch_unwind(|| {
-            let _ = super::RootPath::from_bootinfo(0x2F, &bootinfo);
+            let _ = super::RootPath::from_bootinfo(0x2F as sys::seL4_CPtr, &bootinfo);
         });
         assert!(result.is_err(), "slot before empty window should panic");
     }
