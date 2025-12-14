@@ -1656,7 +1656,7 @@ fn bootstrap<P: Platform>(
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let mut virtio_present = false;
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let mut net_stack = {
+        let net_stack = {
             log::info!("[boot] net-console: probing {net_backend_label}");
             log::info!("[net-console] init: enter");
             let net_console_config = ConsoleNetConfig::default();

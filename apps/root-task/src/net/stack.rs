@@ -66,6 +66,7 @@ const UDP_PAYLOAD_CAPACITY: usize = 512;
 const UDP_ECHO_PORT: u16 = 31_338;
 const UDP_BEACON_PORT: u16 = 40_000;
 const TCP_SMOKE_PORT: u16 = 31_339;
+const TCP_SMOKE_OUT_LOCAL_PORT: u16 = 31_340;
 const SELF_TEST_ENABLED: bool = cfg!(feature = "dev-virt") || cfg!(feature = "net-selftest");
 const SELF_TEST_BEACON_INTERVAL_MS: u64 = 250;
 const SELF_TEST_BEACON_WINDOW_MS: u64 = 5_000;
@@ -1151,7 +1152,6 @@ impl<D: NetDevice> NetStack<D> {
             match socket.recv() {
                 Ok((payload, meta)) => {
                     let endpoint = meta.endpoint;
-                    let mut reply_len = 0usize;
                     let mut reply = [0u8; UDP_PAYLOAD_CAPACITY];
                     let prefix = b"ECHO:";
                     reply[..prefix.len()].copy_from_slice(prefix);
@@ -1159,7 +1159,7 @@ impl<D: NetDevice> NetStack<D> {
                         core::cmp::min(payload.len(), reply.len().saturating_sub(prefix.len()));
                     reply[prefix.len()..prefix.len() + copy_len]
                         .copy_from_slice(&payload[..copy_len]);
-                    reply_len = prefix.len() + copy_len;
+                    let reply_len = prefix.len() + copy_len;
                     self.counters.udp_rx = self.counters.udp_rx.saturating_add(1);
                     if self.self_test.running {
                         self.self_test.record_udp_echo();
@@ -1293,13 +1293,16 @@ impl<D: NetDevice> NetStack<D> {
             if now_ms.saturating_sub(self.tcp_smoke_last_attempt_ms) >= 1_000 {
                 self.tcp_smoke_last_attempt_ms = now_ms;
                 self.tcp_smoke_outbound_sent = false;
-                match socket.connect(dest, 0) {
+                let local_endpoint = IpListenEndpoint {
+                    addr: Some(self.ip.into()),
+                    port: TCP_SMOKE_OUT_LOCAL_PORT,
+                };
+                let cx = self.interface.context();
+                match socket.connect(cx, dest, local_endpoint) {
                     Ok(()) => {
                         info!(
                             "[net-selftest] tcp-smoke outbound connect -> {}:{} (now_ms={})",
-                            dest.ip(),
-                            dest.port,
-                            now_ms
+                            dest.addr, dest.port, now_ms
                         );
                         activity = true;
                     }
@@ -1308,9 +1311,7 @@ impl<D: NetDevice> NetStack<D> {
                             self.counters.tcp_smoke_outbound_failures.saturating_add(1);
                         warn!(
                             "[net-selftest] tcp-smoke outbound connect failed dest={}:{} err={:?}",
-                            dest.ip(),
-                            dest.port,
-                            err
+                            dest.addr, dest.port, err
                         );
                     }
                 }
@@ -1330,9 +1331,7 @@ impl<D: NetDevice> NetStack<D> {
                         self.self_test.record_tcp_ok();
                         info!(
                             "[net-selftest] tcp-smoke outbound sent bytes={} dest={}:{}",
-                            sent,
-                            dest.ip(),
-                            dest.port
+                            sent, dest.addr, dest.port
                         );
                         socket.close();
                         activity = true;
