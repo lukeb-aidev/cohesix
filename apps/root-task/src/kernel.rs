@@ -751,17 +751,9 @@ fn bootstrap<P: Platform>(
     let mut sequencer = BootstrapSequencer::new();
 
     let bootinfo_view = canonical_bootinfo_view(&mut sequencer, bootinfo)?;
-    let bootinfo_state = snapshot_bootinfo(bootinfo, &bootinfo_view)?;
-    let bootinfo_snapshot = bootinfo_state.snapshot();
 
     sequencer.advance(BootstrapPhase::MemoryLayoutBuild)?;
     let layout_snapshot = layout::dump_and_sanity_check();
-
-    crate::alloc::init_heap();
-
-    boot_log::init_logger_bootstrap_only();
-
-    crate::sel4::log_sel4_type_sanity();
 
     let bootinfo_source_vaddr = bootinfo as *const _ as usize;
     let bootinfo_copy_vaddr = bootinfo_view.header() as *const _ as usize;
@@ -804,22 +796,41 @@ fn bootstrap<P: Platform>(
     log::info!("{}", reserved_line.as_str());
     boot_log::force_uart_line(reserved_line.as_str());
 
-    assert!(
-        !ranges_overlap(heap_range.clone(), bss_range.clone()),
-        "heap overlaps .bss (heap={heap_range:?} bss={bss_range:?})",
-    );
-    assert!(
-        !ranges_overlap(heap_range.clone(), stack_range.clone()),
-        "heap overlaps stack (heap={heap_range:?} stack={stack_range:?})",
-    );
-    assert!(
-        !ranges_overlap(device_range.clone(), heap_range.clone()),
-        "device page-table window overlaps heap (device={device_range:?} heap={heap_range:?})",
-    );
-    assert!(
-        !ranges_overlap(device_range.clone(), stack_range.clone()),
-        "device page-table window overlaps stack guard (device={device_range:?} stack={stack_range:?})",
-    );
+    let bootinfo_range = bootinfo_page_base..bootinfo_page_base + IPC_PAGE_BYTES;
+
+    if ranges_overlap(heap_range.clone(), bss_range.clone()) {
+        boot_log::force_uart_line("[alloc:init] heap overlaps .bss");
+        panic!("heap overlaps .bss (heap={heap_range:?} bss={bss_range:?})");
+    }
+    if ranges_overlap(heap_range.clone(), stack_range.clone()) {
+        boot_log::force_uart_line("[alloc:init] heap overlaps stack");
+        panic!("heap overlaps stack (heap={heap_range:?} stack={stack_range:?})");
+    }
+    if ranges_overlap(heap_range.clone(), bootinfo_range.clone()) {
+        boot_log::force_uart_line("[alloc:init] heap overlaps bootinfo frame");
+        panic!("heap overlaps bootinfo frame (heap={heap_range:?} bootinfo={bootinfo_range:?})");
+    }
+    if ranges_overlap(device_range.clone(), heap_range.clone()) {
+        boot_log::force_uart_line("[alloc:init] heap overlaps device window");
+        panic!(
+            "device page-table window overlaps heap (device={device_range:?} heap={heap_range:?})"
+        );
+    }
+    if ranges_overlap(device_range.clone(), stack_range.clone()) {
+        boot_log::force_uart_line("[alloc:init] stack overlaps device window");
+        panic!(
+            "device page-table window overlaps stack guard (device={device_range:?} stack={stack_range:?})"
+        );
+    }
+
+    crate::alloc::init_heap(heap_range.clone());
+
+    boot_log::init_logger_bootstrap_only();
+
+    crate::sel4::log_sel4_type_sanity();
+
+    let bootinfo_state = snapshot_bootinfo(bootinfo, &bootinfo_view)?;
+    let bootinfo_snapshot = bootinfo_state.snapshot();
 
     let mut build_line = heapless::String::<192>::new();
     let mut feature_report = heapless::String::<96>::new();

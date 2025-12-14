@@ -2,12 +2,7 @@
 //! BootInfo snapshotting utilities that defend against corruption during early bootstrap.
 #![allow(unsafe_code)]
 
-extern crate alloc;
-
-use alloc::alloc::{alloc, Layout};
 use core::fmt;
-use core::mem;
-use core::ptr;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use heapless::String;
@@ -21,14 +16,12 @@ const MAX_CANARY_LINE: usize = 192;
 const MAX_BOOTINFO_ALLOC: usize = 64 * 1024;
 const HIGH_32_MASK: usize = 0xffff_ffff_0000_0000;
 
-#[cfg(feature = "kernel")]
-const BOOT_HEAP_BYTES: usize = if crate::alloc::HEAP_BYTES > MAX_BOOTINFO_ALLOC {
-    crate::alloc::HEAP_BYTES
-} else {
-    MAX_BOOTINFO_ALLOC
-};
-#[cfg(not(feature = "kernel"))]
 const BOOT_HEAP_BYTES: usize = MAX_BOOTINFO_ALLOC;
+
+#[repr(align(16))]
+struct BootinfoBacking([u8; MAX_BOOTINFO_ALLOC]);
+
+static mut BOOTINFO_BACKING: BootinfoBacking = BootinfoBacking([0u8; MAX_BOOTINFO_ALLOC]);
 
 fn log_layout_violation(reason: &str, size: usize, align: usize) {
     let mut line = String::<MAX_CANARY_LINE>::new();
@@ -126,54 +119,21 @@ impl BootInfoSnapshot {
             .checked_add(extra_len)
             .ok_or(BootInfoError::Overflow)?;
 
-        let align = mem::align_of::<seL4_BootInfo>();
-
-        debug_assert!(
-            align.is_power_of_two(),
-            "bootinfo layout alignment must be a power of two (align=0x{align:x})",
-        );
-        debug_assert!(
-            align <= 0x1000,
-            "bootinfo layout alignment unexpectedly large (align=0x{align:x})",
-        );
-        debug_assert!(
-            total_size <= BOOT_HEAP_BYTES || total_size <= MAX_BOOTINFO_ALLOC,
-            "bootinfo layout exceeds heap guard: size=0x{total_size:x} heap_guard=0x{BOOT_HEAP_BYTES:x}",
-        );
-
-        if !align.is_power_of_two() || align > 0x1000 {
-            log_layout_violation("alignment rejected", total_size, align);
+        if total_size > BOOT_HEAP_BYTES {
+            log_layout_violation("size exceeds heap guard", total_size, 0);
             return Err(BootInfoError::Overflow);
         }
 
-        if total_size > BOOT_HEAP_BYTES && total_size > MAX_BOOTINFO_ALLOC {
-            log_layout_violation("size exceeds heap guard", total_size, align);
-            return Err(BootInfoError::Overflow);
+        let backing: &'static mut [u8] = unsafe { &mut BOOTINFO_BACKING.0[..total_size] };
+
+        backing[..header_bytes.len()].copy_from_slice(header_bytes);
+        if extra_len > 0 {
+            let extra_slice = view.extra();
+            backing[header_bytes.len()..header_bytes.len() + extra_len]
+                .copy_from_slice(extra_slice);
         }
 
-        let layout = Layout::from_size_align(total_size, align).map_err(|_| {
-            log_layout_violation("layout construction failed", total_size, align);
-            BootInfoError::Overflow
-        })?;
-
-        let backing_ptr = unsafe { alloc(layout) };
-        if backing_ptr.is_null() {
-            return Err(BootInfoError::Null);
-        }
-
-        unsafe {
-            ptr::copy_nonoverlapping(header_bytes.as_ptr(), backing_ptr, header_bytes.len());
-            if extra_len > 0 {
-                ptr::copy_nonoverlapping(
-                    view.extra().as_ptr(),
-                    backing_ptr.add(header_bytes.len()),
-                    extra_len,
-                );
-            }
-        }
-
-        let backing = unsafe { core::slice::from_raw_parts(backing_ptr, total_size) };
-        let bootinfo_ptr = backing_ptr as *const seL4_BootInfo;
+        let bootinfo_ptr = backing.as_ptr() as *const seL4_BootInfo;
         let bootinfo_ref = unsafe { &*bootinfo_ptr };
         let snapshot_view = BootInfoView::new(bootinfo_ref)?;
 

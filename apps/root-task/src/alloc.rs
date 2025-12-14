@@ -4,48 +4,102 @@
 #![cfg(feature = "kernel")]
 #![allow(unsafe_code)]
 
+use core::alloc::{GlobalAlloc, Layout};
+use core::ops::Range;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use linked_list_allocator::LockedHeap;
 
+use crate::bootstrap::{log as boot_log, no_alloc};
+
 /// Statically reserved heap span used during bootstrap.
 pub const HEAP_BYTES: usize = 512 * 1024;
 
-extern "C" {
-    static __heap_start: u8;
-    static __heap_end: u8;
-}
 static HEAP_INITIALISED: AtomicBool = AtomicBool::new(false);
 
-#[global_allocator]
-static GLOBAL_ALLOCATOR: LockedHeap = LockedHeap::empty();
+struct GuardedAllocator {
+    inner: LockedHeap,
+}
 
-/// Installs the global allocator over the statically reserved heap region.
-///
-/// The allocator is intentionally simple: a fixed 512 KiB window backed by a
-/// `LockedHeap` from `linked_list_allocator`. The heap size mirrors the upper
-/// bound of anticipated dynamic allocations during bootstrap (temporary `Vec`
-/// instances used when parsing bootinfo metadata or capturing UART traces).
-/// Additional memory hungry services are expected to provision dedicated pools
-/// backed by untyped retypes rather than drawing from this bootstrap heap.
-pub fn init_heap() {
-    if HEAP_INITIALISED
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_ok()
-    {
-        let start = core::ptr::addr_of!(__heap_start) as usize;
-        let end = core::ptr::addr_of!(__heap_end) as usize;
-        let len = end.saturating_sub(start);
-
-        debug_assert_eq!(
-            len, HEAP_BYTES,
-            "linker heap span ({len:#x}) diverges from allocator expectation ({HEAP_BYTES:#x})"
-        );
-
-        unsafe {
-            GLOBAL_ALLOCATOR
-                .lock()
-                .init(start as *mut u8, len.min(HEAP_BYTES));
+impl GuardedAllocator {
+    const fn new() -> Self {
+        Self {
+            inner: LockedHeap::empty(),
         }
     }
+
+    unsafe fn init(&self, span: Range<usize>) {
+        self.inner
+            .lock()
+            .init(span.start as *mut u8, span.end.saturating_sub(span.start));
+    }
+}
+
+unsafe impl GlobalAlloc for GuardedAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if !no_alloc::alloc_ready() {
+            no_alloc::assert_no_alloc("alloc");
+        }
+
+        self.inner.alloc(layout)
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        if !no_alloc::alloc_ready() {
+            no_alloc::assert_no_alloc("dealloc");
+        }
+
+        self.inner.dealloc(ptr, layout)
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        if !no_alloc::alloc_ready() {
+            no_alloc::assert_no_alloc("alloc_zeroed");
+        }
+
+        self.inner.alloc_zeroed(layout)
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if !no_alloc::alloc_ready() {
+            no_alloc::assert_no_alloc("realloc");
+        }
+
+        self.inner.realloc(ptr, layout, new_size)
+    }
+}
+
+#[global_allocator]
+static GLOBAL_ALLOCATOR: GuardedAllocator = GuardedAllocator::new();
+
+fn report_heap_error(tag: &str, detail: &str) -> ! {
+    let mut line = heapless::String::<96>::new();
+    let _ = core::fmt::write(&mut line, format_args!("[alloc:init] {tag}: {detail}"));
+    boot_log::force_uart_line(line.as_str());
+    panic!("{tag}: {detail}");
+}
+
+/// Installs the global allocator over the supplied heap span once all layout checks pass.
+pub fn init_heap(span: Range<usize>) {
+    if span.start >= span.end {
+        report_heap_error("invalid-span", "heap start >= end");
+    }
+
+    if (span.start & ((1usize << sel4_sys::seL4_PageBits) - 1)) != 0 {
+        report_heap_error("misaligned-span", "heap start not page aligned");
+    }
+
+    if HEAP_INITIALISED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    unsafe {
+        GLOBAL_ALLOCATOR.init(span);
+    }
+
+    no_alloc::mark_alloc_ready();
+    boot_log::force_uart_line("[boot] allocator ready");
 }

@@ -2,20 +2,21 @@
 //! Linear bootstrap phase tracking and invariant enforcement.
 #![allow(dead_code)]
 
-extern crate alloc;
+use core::fmt::Write;
 
-use alloc::{format, string::String};
+use heapless::String;
 
+use crate::bootstrap::log as boot_log;
 use crate::sel4::{BootInfo, BootInfoView};
 
 /// Fatal bootstrap error surfaced when invariants are violated.
 #[derive(Debug, Clone)]
 pub struct FatalBootstrapError {
-    message: String,
+    message: String<160>,
 }
 
 impl FatalBootstrapError {
-    fn new(message: String) -> Self {
+    fn new(message: String<160>) -> Self {
         Self { message }
     }
 
@@ -88,10 +89,9 @@ impl BootstrapSequencer {
         }
 
         if ORDERING[self.next] != phase {
-            let mut msg = String::from("bootstrap phase order violation: expected ");
-            msg.push_str(ORDERING[self.next].as_str());
-            msg.push_str(", saw ");
-            msg.push_str(phase.as_str());
+            let mut msg = String::<160>::from("bootstrap phase order violation: expected ");
+            let _ = write!(&mut msg, "{}", ORDERING[self.next].as_str());
+            let _ = write!(&mut msg, ", saw {}", phase.as_str());
             return Err(FatalBootstrapError::new(msg));
         }
 
@@ -108,15 +108,19 @@ impl BootstrapSequencer {
 
     /// Validates invariants that must hold for the init CSpace window.
     pub fn validate_bootinfo(&mut self, view: &BootInfoView) -> Result<(), FatalBootstrapError> {
+        boot_log::force_uart_line("[mark] bootinfo.validate.begin");
         self.advance(BootstrapPhase::BootInfoValidate)?;
 
         let init_bits = view.init_cnode_bits() as usize;
         let guard_bits: usize = 0;
         if init_bits > sel4_sys::seL4_WordBits as usize - guard_bits {
-            return Err(FatalBootstrapError::new(format!(
+            let mut msg = String::<160>::new();
+            let _ = write!(
+                msg,
                 "initThreadCNodeBits={} exceeds word width minus guard bits",
                 init_bits
-            )));
+            );
+            return Err(FatalBootstrapError::new(msg));
         }
 
         if view.root_cnode_cap() != sel4_sys::seL4_CapInitThreadCNode {
@@ -145,6 +149,8 @@ impl BootstrapSequencer {
             )));
         }
 
+        boot_log::force_uart_line("[mark] bootinfo.validate.ok");
+
         Ok(())
     }
 }
@@ -154,15 +160,19 @@ pub fn canonical_bootinfo_view(
     sequencer: &mut BootstrapSequencer,
     bootinfo: &'static BootInfo,
 ) -> Result<BootInfoView, FatalBootstrapError> {
+    boot_log::force_uart_line("[mark] bootinfo.view.begin");
     sequencer.advance(BootstrapPhase::CSpaceCanonicalise)?;
     match BootInfoView::new(bootinfo) {
         Ok(view) => {
             sequencer.validate_bootinfo(&view)?;
+            boot_log::force_uart_line("[mark] bootinfo.view.ok");
             Ok(view)
         }
-        Err(err) => Err(FatalBootstrapError::new(format!(
-            "bootinfo view construction failed: {err:?}"
-        ))),
+        Err(err) => {
+            let mut msg = String::<160>::new();
+            let _ = write!(msg, "bootinfo view construction failed: {err:?}");
+            Err(FatalBootstrapError::new(msg))
+        }
     }
 }
 
@@ -171,6 +181,9 @@ pub fn snapshot_bootinfo(
     bootinfo: &'static BootInfo,
     view: &BootInfoView,
 ) -> Result<&'static crate::bootstrap::bootinfo_snapshot::BootInfoState, FatalBootstrapError> {
-    crate::bootstrap::bootinfo_snapshot::BootInfoState::init(view.header())
-        .map_err(|err| FatalBootstrapError::new(format!("bootinfo snapshot failed: {err:?}")))
+    crate::bootstrap::bootinfo_snapshot::BootInfoState::init(view.header()).map_err(|err| {
+        let mut msg = String::<160>::new();
+        let _ = write!(msg, "bootinfo snapshot failed: {err:?}");
+        FatalBootstrapError::new(msg)
+    })
 }
