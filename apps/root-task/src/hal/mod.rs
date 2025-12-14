@@ -7,7 +7,11 @@
 //! current driver set depends on. This keeps the surface area small while
 //! providing a structured location for future peripherals.
 
-use core::{fmt, ptr::NonNull};
+use core::{
+    fmt,
+    ptr::NonNull,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 pub mod pci;
 
@@ -15,6 +19,63 @@ use crate::sel4::{DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, Ram
 use pci::{PciAddress, PciTopology};
 #[cfg(feature = "kernel")]
 use sel4_sys::seL4_Error;
+
+/// Timebase exists to unify timing for event pump + smoltcp; wiring will follow.
+pub trait Timebase {
+    /// Returns the current time in milliseconds.
+    fn now_ms(&self) -> u64;
+}
+
+/// Lightweight IRQ identifier used across drivers.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct Irq(pub u32);
+
+/// Abstraction over IRQ controller behaviour.
+pub trait IrqCtl {
+    /// Returns the next pending IRQ when available.
+    fn poll(&self) -> Option<Irq>;
+
+    /// Acknowledges a previously observed IRQ.
+    fn ack(&self, irq: Irq);
+}
+
+/// Deterministic, pump-driven timebase suitable for dev-virt.
+#[derive(Debug)]
+pub struct MonotonicTimebase {
+    counter_ms: AtomicU64,
+}
+
+impl MonotonicTimebase {
+    /// Constructs a new timebase seeded at zero.
+    pub const fn new() -> Self {
+        Self {
+            counter_ms: AtomicU64::new(0),
+        }
+    }
+
+    /// Advances the timebase by the supplied delta in milliseconds.
+    pub fn advance_ms(&self, delta_ms: u64) {
+        self.counter_ms.fetch_add(delta_ms, Ordering::Relaxed);
+    }
+}
+
+impl Timebase for MonotonicTimebase {
+    fn now_ms(&self) -> u64 {
+        self.counter_ms.load(Ordering::Relaxed)
+    }
+}
+
+static DEFAULT_TIMEBASE: MonotonicTimebase = MonotonicTimebase::new();
+
+/// Returns the shared default timebase for the root task.
+pub fn default_timebase() -> &'static dyn Timebase {
+    &DEFAULT_TIMEBASE
+}
+
+/// Advances the shared default timebase by the provided delta.
+pub fn advance_default_timebase(delta_ms: u64) {
+    DEFAULT_TIMEBASE.advance_ms(delta_ms);
+}
 
 /// Mapping permissions used by the HAL when creating virtual regions.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
