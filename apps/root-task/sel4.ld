@@ -4,12 +4,13 @@ OUTPUT_FORMAT(elf64-littleaarch64)
 OUTPUT_ARCH(aarch64)
 ENTRY(_start)
 
-STACK_SIZE = 0x40000;        /* 256 KiB stack for early boot logging/tracing. */
-STACK_GUARD_GAP = 0x2000;    /* Guard page below IPC buffer to catch stack overruns. */
-IPCBUF_VADDR = 0x00106000;   /* Kernel-advertised init thread IPC buffer mapping. */
+__ipcbuf_vaddr = 0x00106000; /* Kernel-advertised init thread IPC buffer mapping. */
+__stack_guard = 0x2000;      /* Guard page below IPC buffer to catch stack overruns. */
+__stack_size = 0x40000;      /* 256 KiB stack for early boot logging/tracing. */
 
-STACK_TOP = IPCBUF_VADDR - STACK_GUARD_GAP;
-STACK_BOTTOM = STACK_TOP - STACK_SIZE;
+__stack_top = __ipcbuf_vaddr - __stack_guard;
+__stack_bottom_unaligned = __stack_top - __stack_size;
+__stack_bottom = __stack_bottom_unaligned & ~0xfff;
 
 PHDRS {
   text PT_LOAD FLAGS(5); /* R+X */
@@ -59,18 +60,18 @@ SECTIONS
   . = ALIGN(0x1000);
   __heap_start = .;
   .heap (NOLOAD) : {
-    HEAP_SIZE = STACK_BOTTOM - __heap_start;
+    HEAP_SIZE = __stack_bottom - __heap_start;
     ASSERT(HEAP_SIZE > 0, "heap exhausted by text/data/bss");
     . = . + HEAP_SIZE;
   } :data
-  __heap_end = .;
+  __heap_end = __stack_bottom;
 
   /* Statically reserved stack region; the runtime uses __stack_top as the initial SP. */
-  . = STACK_BOTTOM;
-  ASSERT((STACK_BOTTOM & 0xfff) == 0, "stack bottom must be page aligned");
-  __stack_bottom = STACK_BOTTOM;
+  . = __stack_bottom;
+  ASSERT((__stack_bottom & 0xfff) == 0, "stack bottom must be page aligned");
+  ASSERT(. == __stack_bottom, "stack bottom must match computed bound");
   .stack (NOLOAD) : {
-    . = STACK_TOP;
+    . = __stack_top;
   } :data
   __stack_top = .;
 
@@ -80,10 +81,10 @@ SECTIONS
    * it). The init thread stack must never run right up against the IPC buffer
    * mapping.
    */
-  . = __stack_top + STACK_GUARD_GAP;
-  ASSERT(. == IPCBUF_VADDR, "IPC buffer virtual address must remain stable");
+  . = __stack_top + __stack_guard;
+  ASSERT(. == __ipcbuf_vaddr, "IPC buffer virtual address must remain stable");
 
-  PROVIDE(_end = IPCBUF_VADDR);
+  PROVIDE(_end = __ipcbuf_vaddr);
 
   /* Do NOT advance '.' to device/MMIO addresses here. Keep segments tight. */
 }
