@@ -6,8 +6,11 @@
 use core::fmt::Write;
 
 use heapless::String;
+use sel4_sys;
 
 use crate::bootstrap::log::force_uart_line;
+
+const STACK_ALIGNMENT: usize = 16;
 
 const REPORT_WIDTH: usize = 192;
 
@@ -99,14 +102,40 @@ impl LayoutSnapshot {
         Ok(())
     }
 
+    fn validate_alignments(&self, alignments: &[(&'static str, usize)]) -> Result<(), LayoutError> {
+        for (label, alignment) in alignments.iter().copied() {
+            if alignment.count_ones() != 1 {
+                return Err(LayoutError::InvalidAlignment { label, alignment });
+            }
+
+            if self.heap_start & (alignment - 1) != 0 {
+                return Err(LayoutError::HeapAlignment {
+                    alignment,
+                    heap_start: self.heap_start,
+                });
+            }
+
+            if self.stack_bottom & (alignment - 1) != 0 {
+                return Err(LayoutError::StackAlignment {
+                    alignment,
+                    stack_bottom: self.stack_bottom,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     fn fmt_report(&self) -> String<REPORT_WIDTH> {
         let mut line = String::<REPORT_WIDTH>::new();
         let _ = write!(
             line,
-            "[boot:layout] text=[0x{txt_start:08x}..0x{txt_end:08x}) rodata_end=0x{ro_end:08x} data_end=0x{data_end:08x} bss=[0x{bss_start:08x}..0x{bss_end:08x}) heap=[0x{heap_start:08x}..0x{heap_end:08x}) stack=[0x{stack_bottom:08x}..0x{stack_top:08x})",
+            "[boot:layout] text=[0x{txt_start:08x}..0x{txt_end:08x}) rodata=[0x{ro_start:08x}..0x{ro_end:08x}) data=[0x{data_start:08x}..0x{data_end:08x}) bss=[0x{bss_start:08x}..0x{bss_end:08x}) heap=[0x{heap_start:08x}..0x{heap_end:08x}) stack=[0x{stack_bottom:08x}..0x{stack_top:08x})",
             txt_start = self.text_start,
             txt_end = self.text_end,
+            ro_start = self.text_end,
             ro_end = self.rodata_end,
+            data_start = self.rodata_end,
             data_end = self.data_end,
             bss_start = self.bss_start,
             bss_end = self.bss_end,
@@ -117,6 +146,18 @@ impl LayoutSnapshot {
         );
         line
     }
+
+    pub fn heap_range(&self) -> core::ops::Range<usize> {
+        self.heap_start..self.heap_end
+    }
+
+    pub fn bss_range(&self) -> core::ops::Range<usize> {
+        self.bss_start..self.bss_end
+    }
+
+    pub fn stack_range(&self) -> core::ops::Range<usize> {
+        self.stack_bottom..self.stack_top
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +165,18 @@ enum LayoutError {
     HeapBeforeBssEnd(usize, usize),
     HeapOverlapsStack(usize, usize),
     StackOrder(usize, usize),
+    InvalidAlignment {
+        label: &'static str,
+        alignment: usize,
+    },
+    HeapAlignment {
+        alignment: usize,
+        heap_start: usize,
+    },
+    StackAlignment {
+        alignment: usize,
+        stack_bottom: usize,
+    },
 }
 
 impl LayoutError {
@@ -148,6 +201,30 @@ impl LayoutError {
                     "BOOT LAYOUT ERROR: stack ordering invalid (stack_bottom=0x{stack_bottom:08x} stack_top=0x{stack_top:08x})"
                 );
             }
+            Self::InvalidAlignment { label, alignment } => {
+                let _ = write!(
+                    line,
+                    "BOOT LAYOUT ERROR: alignment for {label} is not a power of two (alignment=0x{alignment:08x})"
+                );
+            }
+            Self::HeapAlignment {
+                alignment,
+                heap_start,
+            } => {
+                let _ = write!(
+                    line,
+                    "BOOT LAYOUT ERROR: heap_start misaligned (alignment=0x{alignment:08x} heap_start=0x{heap_start:08x})"
+                );
+            }
+            Self::StackAlignment {
+                alignment,
+                stack_bottom,
+            } => {
+                let _ = write!(
+                    line,
+                    "BOOT LAYOUT ERROR: stack_bottom misaligned (alignment=0x{alignment:08x} stack_bottom=0x{stack_bottom:08x})"
+                );
+            }
         }
         line
     }
@@ -156,22 +233,33 @@ impl LayoutError {
 /// Emit a single-line layout report and halt the system if the linker-provided
 /// segments overlap in an unexpected way. Safe to call before capability setup
 /// or DTB parsing.
-pub fn dump_and_sanity_check() {
+pub fn dump_and_sanity_check() -> LayoutSnapshot {
     let layout = LayoutSnapshot::from_linker();
     let report = layout.fmt_report();
 
     force_uart_line(report.as_str());
     log::info!("{}", report.as_str());
 
-    if let Err(err) = layout.validate() {
+    let alignments = [
+        ("stack", STACK_ALIGNMENT),
+        ("page", 1usize << sel4_sys::seL4_PageBits),
+    ];
+
+    if let Err(err) = layout
+        .validate()
+        .and_then(|_| layout.validate_alignments(&alignments))
+    {
         let error_line = err.render();
         force_uart_line(error_line.as_str());
         log::error!("{}", error_line.as_str());
-        crate::sel4::debug_halt();
-        loop {
-            core::hint::spin_loop();
-        }
+        panic!(
+            "{} layout={}",
+            error_line.as_str(),
+            layout.fmt_report().as_str()
+        );
     }
+
+    layout
 }
 
 #[cfg(test)]
@@ -194,5 +282,21 @@ mod tests {
     fn layout_validation_accepts_ordered_ranges() {
         let layout = LayoutSnapshot::new(0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
         assert_eq!(layout.validate(), Ok(()));
+        assert_eq!(
+            layout.validate_alignments(&[("heap", 2), ("stack", 8)]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn layout_validation_rejects_invalid_alignment() {
+        let layout = LayoutSnapshot::new(0, 1, 2, 3, 4, 8, 8, 16, 16, 24);
+        assert_eq!(
+            layout.validate_alignments(&[("heap", 3)]),
+            Err(LayoutError::InvalidAlignment {
+                label: "heap",
+                alignment: 3,
+            })
+        );
     }
 }

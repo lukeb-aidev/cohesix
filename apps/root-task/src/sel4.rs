@@ -1337,6 +1337,11 @@ const MAX_PAGE_DIRECTORIES: usize = 32;
 const MAX_PAGE_UPPER_DIRECTORIES: usize = 8;
 const DEVICE_VM_ATTRIBUTES: seL4_ARM_VMAttributes = 1 << 2;
 
+/// Returns the exclusive virtual address range reserved for device page tables and mappings.
+pub const fn device_window_range() -> core::ops::Range<usize> {
+    DEVICE_VADDR_BASE..DMA_VADDR_BASE
+}
+
 /// Simple bump allocator for CSpace slots rooted at the initial thread's CNode.
 pub struct SlotAllocator {
     cnode: seL4_CNode,

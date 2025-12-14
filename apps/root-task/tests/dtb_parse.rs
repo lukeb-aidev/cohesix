@@ -116,7 +116,10 @@ fn locate_dtb_rejects_truncated_header() {
     let mut extra = build_extra_fixture(&dtb, FDT_ID);
     extra.truncate(size_of::<seL4_Word>());
 
-    assert_eq!(locate_dtb(&extra, extra_range(&extra)), Err(ExtraError::Truncated));
+    assert_eq!(
+        locate_dtb(&extra, extra_range(&extra)),
+        Err(ExtraError::Truncated)
+    );
 }
 
 #[test]
@@ -126,7 +129,10 @@ fn locate_dtb_rejects_invalid_length() {
     let invalid = (size_of::<sel4_sys::seL4_BootInfoHeader>() - 4) as seL4_Word;
     write_word(invalid, &mut extra, size_of::<seL4_Word>());
 
-    assert_eq!(locate_dtb(&extra, extra_range(&extra)), Err(ExtraError::InvalidLength));
+    assert_eq!(
+        locate_dtb(&extra, extra_range(&extra)),
+        Err(ExtraError::InvalidLength)
+    );
 }
 
 #[test]
@@ -134,7 +140,10 @@ fn locate_dtb_reports_missing_record() {
     let dtb = build_dtb_fixture();
     let extra = build_extra_fixture(&dtb, 0);
 
-    assert_eq!(locate_dtb(&extra, extra_range(&extra)), Err(ExtraError::MissingDtb));
+    assert_eq!(
+        locate_dtb(&extra, extra_range(&extra)),
+        Err(ExtraError::MissingDtb)
+    );
 }
 
 #[test]

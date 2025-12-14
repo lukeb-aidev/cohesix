@@ -1183,6 +1183,10 @@ impl VirtQueue {
             capacity
         };
 
+        unsafe {
+            core::ptr::write_bytes(base_ptr.as_ptr(), 0, frame_capacity);
+        }
+
         if frame_capacity != page_bytes {
             error!(
                 target: "net-console",
@@ -1245,6 +1249,9 @@ impl VirtQueue {
                 "virtqueue indices must start at zero",
             ));
         }
+
+        debug_assert_eq!(avail_idx, 0, "virtqueue avail.idx must start at zero");
+        debug_assert_eq!(used_idx, 0, "virtqueue used.idx must start at zero");
 
         info!(
             target: "net-console",
