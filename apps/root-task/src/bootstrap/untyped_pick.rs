@@ -140,12 +140,53 @@ pub fn ensure_device_pt_pool(bi: &'static BootInfo) {
     let ut_start = bi.untyped.start;
 
     for min_bits in [16u8, 12u8] {
+        let mut best_index: Option<usize> = None;
+        let mut min_paddr: Option<usize> = None;
+        let mut max_paddr: Option<usize> = None;
+
         for (offset, desc) in entries.iter().enumerate() {
             if desc.isDevice != 0 || (desc.sizeBits as u8) < min_bits {
                 continue;
             }
-            let cap = ut_start + offset as sys::seL4_CPtr;
-            register_device_pt_pool(cap, desc.sizeBits as u8, offset, desc.paddr as usize);
+
+            let paddr = desc.paddr as usize;
+            min_paddr = Some(min_paddr.map_or(paddr, |current| current.min(paddr)));
+            max_paddr = Some(max_paddr.map_or(paddr, |current| current.max(paddr)));
+
+            match best_index {
+                None => best_index = Some(offset),
+                Some(best) => {
+                    let best_desc = &entries[best];
+                    let best_paddr = best_desc.paddr as usize;
+                    if paddr > best_paddr
+                        || (paddr == best_paddr && desc.sizeBits as u8 > best_desc.sizeBits as u8)
+                    {
+                        best_index = Some(offset);
+                    }
+                }
+            }
+        }
+
+        if let Some(index) = best_index {
+            let desc = &entries[index];
+            let cap = ut_start + index as sys::seL4_CPtr;
+
+            if let (Some(min_paddr), Some(max_paddr)) = (min_paddr, max_paddr) {
+                let mut line = String::<192>::new();
+                let _ = write!(
+                    line,
+                    "[bootstrap] device-pt untyped selected: idx={idx} cap=0x{cap:03x} sizeBits={bits} paddr=0x{paddr:08x} (candidates paddr range: 0x{min:08x}–0x{max:08x})",
+                    idx = index,
+                    cap = cap,
+                    bits = desc.sizeBits,
+                    paddr = desc.paddr,
+                    min = min_paddr,
+                    max = max_paddr,
+                );
+                force_uart_line(line.as_str());
+            }
+
+            register_device_pt_pool(cap, desc.sizeBits as u8, index, desc.paddr as usize);
             return;
         }
     }
