@@ -2,6 +2,7 @@
 //! Minimal PL011 UART driver for bootstrap diagnostics and console I/O.
 #![allow(unsafe_code)]
 
+use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::cspace::tuples::RetypeTuple;
@@ -34,6 +35,13 @@ static UART_BASE: AtomicUsize = AtomicUsize::new(0);
 /// Registers a mapped PL011 UART base for later console use.
 pub fn register_console_base(vaddr: usize) {
     UART_BASE.store(vaddr, Ordering::Release);
+}
+
+/// Returns the registered PL011 console base, if installed.
+#[must_use]
+pub fn console_base() -> Option<NonNull<u8>> {
+    let base = UART_BASE.load(Ordering::Acquire);
+    NonNull::new(base as *mut u8)
 }
 
 #[inline(always)]
