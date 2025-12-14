@@ -77,6 +77,8 @@ pub enum DriverError {
     NoQueue,
     /// Ran out of DMA buffers when provisioning virtio rings.
     BufferExhausted,
+    /// A virtqueue failed safety or consistency checks.
+    QueueInvariant(&'static str),
 }
 
 impl fmt::Display for DriverError {
@@ -87,6 +89,7 @@ impl fmt::Display for DriverError {
             Self::NoDevice => f.write_str("virtio-net device not found"),
             Self::NoQueue => f.write_str("virtio-net queues unavailable"),
             Self::BufferExhausted => f.write_str("virtio-net DMA buffer exhausted"),
+            Self::QueueInvariant(reason) => write!(f, "virtqueue invariant failed: {reason}"),
         }
     }
 }
@@ -286,12 +289,20 @@ impl VirtioNet {
             "[net-console] provisioning RX descriptors ({} entries)",
             rx_size
         );
-        let rx_queue = VirtQueue::new(&mut regs, queue_mem_rx, RX_QUEUE_INDEX, rx_size)?;
+        let rx_queue =
+            VirtQueue::new(&mut regs, queue_mem_rx, RX_QUEUE_INDEX, rx_size).map_err(|err| {
+                regs.set_status(STATUS_FAILED);
+                err
+            })?;
         info!(
             "[net-console] provisioning TX descriptors ({} entries)",
             tx_size
         );
-        let tx_queue = VirtQueue::new(&mut regs, queue_mem_tx, TX_QUEUE_INDEX, tx_size)?;
+        let tx_queue =
+            VirtQueue::new(&mut regs, queue_mem_tx, TX_QUEUE_INDEX, tx_size).map_err(|err| {
+                regs.set_status(STATUS_FAILED);
+                err
+            })?;
 
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
         for _ in 0..rx_size {
@@ -1161,11 +1172,52 @@ impl VirtQueue {
     ) -> Result<Self, DriverError> {
         let queue_size = size as u16;
         let base_ptr = frame.ptr();
-        frame.as_mut_slice().fill(0);
+        let page_bytes = 1usize << seL4_PageBits;
+        let frame_slice = frame.as_mut_slice();
+        let frame_capacity = frame_slice.len();
+
+        if frame_capacity != page_bytes {
+            error!(
+                target: "net-console",
+                "[virtio-net] virtqueue backing not 4KiB: capacity={} expected={}",
+                frame_capacity,
+                page_bytes
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtqueue backing must be exactly one page",
+            ));
+        }
+
+        let base_paddr = frame.paddr();
+        if base_paddr & (page_bytes - 1) != 0 {
+            error!(
+                target: "net-console",
+                "[virtio-net] virtqueue backing not page aligned: paddr=0x{base_paddr:x}"
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtqueue backing not page aligned",
+            ));
+        }
+
+        frame_slice.fill(0);
 
         let queue_align = core::mem::size_of::<VirtqUsedElem>();
-        let frame_capacity = frame.as_mut_slice().len();
         let layout = VirtqLayout::compute(size, queue_align, frame_capacity)?;
+
+        if layout.avail_offset + layout.avail_len > frame_capacity
+            || layout.used_offset + layout.used_len > frame_capacity
+        {
+            error!(
+                target: "net-console",
+                "[virtio-net] virtqueue layout exceeds backing: avail_end={} used_end={} capacity={}",
+                layout.avail_offset + layout.avail_len,
+                layout.used_offset + layout.used_len,
+                frame_capacity,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtqueue layout exceeds backing",
+            ));
+        }
 
         let desc_ptr = base_ptr.cast::<VirtqDesc>();
         let avail_ptr = unsafe {
@@ -1175,10 +1227,35 @@ impl VirtQueue {
             NonNull::new_unchecked(base_ptr.as_ptr().add(layout.used_offset) as *mut VirtqUsed)
         };
 
+        let avail_idx = unsafe { read_volatile(&(*avail_ptr.as_ptr()).idx) };
+        let used_idx = unsafe { read_volatile(&(*used_ptr.as_ptr()).idx) };
+
+        if avail_idx != 0 || used_idx != 0 {
+            error!(
+                target: "net-console",
+                "[virtio-net] virtqueue not zeroed: avail.idx={} used.idx={}",
+                avail_idx,
+                used_idx,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtqueue indices must start at zero",
+            ));
+        }
+
+        info!(
+            target: "net-console",
+            "[virtio-net] queue {index} layout: base_vaddr=0x{vaddr:016x} base_paddr=0x{paddr:016x} desc=+0x{desc_off:03x} avail=+0x{avail_off:03x} used=+0x{used_off:03x} total_len={total}",
+            vaddr = base_ptr.as_ptr() as usize,
+            paddr = base_paddr,
+            desc_off = 0,
+            avail_off = layout.avail_offset,
+            used_off = layout.used_offset,
+            total = layout.total_len,
+        );
+
         regs.select_queue(index);
         regs.set_queue_size(queue_size);
         regs.set_queue_align(queue_align as u32);
-        let base_paddr = frame.paddr();
         let queue_pfn = (base_paddr >> seL4_PageBits) as u32;
         regs.set_queue_pfn(queue_pfn);
         regs.queue_ready(1);
@@ -1188,19 +1265,6 @@ impl VirtQueue {
             index,
             queue_size,
             queue_pfn
-        );
-        info!(
-            target: "net-console",
-            "[virtio-net] queue {} layout: base_paddr=0x{:x} desc=0x{:x} avail=0x{:x} used=0x{:x} desc_len={} avail_len={} used_len={} total_len={}",
-            index,
-            base_paddr,
-            base_paddr,
-            base_paddr + layout.avail_offset,
-            base_paddr + layout.used_offset,
-            layout.desc_len,
-            layout.avail_len,
-            layout.used_len,
-            layout.total_len,
         );
 
         Ok(Self {
@@ -1217,6 +1281,15 @@ impl VirtQueue {
     }
 
     fn setup_descriptor(&self, index: u16, addr: u64, len: u32, flags: u16) {
+        if index >= self.size {
+            error!(
+                target: "net-console",
+                "[virtio-net] descriptor index out of range: index={} size={}",
+                index,
+                self.size,
+            );
+            return;
+        }
         let desc = unsafe { &mut *self.desc.as_ptr().add(index as usize) };
         desc.addr = addr;
         desc.len = len;
@@ -1225,6 +1298,15 @@ impl VirtQueue {
     }
 
     fn push_avail(&self, index: u16) {
+        if index >= self.size {
+            error!(
+                target: "net-console",
+                "[virtio-net] avail ring index out of range: index={} size={}",
+                index,
+                self.size,
+            );
+            return;
+        }
         let avail = self.avail.as_ptr();
         let idx = unsafe { read_volatile(&(*avail).idx) };
         let ring_slot = idx % self.size;
@@ -1286,6 +1368,18 @@ impl VirtQueue {
         let used = self.used.as_ptr();
         let idx = unsafe { read_volatile(&(*used).idx) };
         if self.last_used == idx {
+            return None;
+        }
+        let distance = idx.wrapping_sub(self.last_used);
+        if distance > self.size {
+            error!(
+                target: "net-console",
+                "[virtio-net] used ring advanced beyond queue size: last_used={} idx={} size={} distance={}",
+                self.last_used,
+                idx,
+                self.size,
+                distance,
+            );
             return None;
         }
         let ring_slot = self.last_used % self.size;
