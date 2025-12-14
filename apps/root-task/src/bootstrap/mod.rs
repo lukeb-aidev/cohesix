@@ -11,6 +11,8 @@ use crate::sel4::BootInfo;
 #[cfg(target_os = "none")]
 use crate::sel4::BootInfoView;
 
+/// BootInfo snapshotting and canary validation helpers.
+pub mod bootinfo_snapshot;
 /// Capability-space helpers extracted from the seL4 boot info structure.
 pub mod cspace;
 /// Slot encoding helpers for bootstrap-only capability syscalls.

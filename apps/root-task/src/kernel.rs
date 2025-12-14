@@ -9,7 +9,7 @@ use core::cell::RefCell;
 use core::cmp;
 use core::convert::TryFrom;
 use core::fmt::{self, Write};
-use core::ops::RangeInclusive;
+use core::ops::{Range, RangeInclusive};
 use core::panic::PanicInfo;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
@@ -28,6 +28,7 @@ use crate::bootstrap::cspace::cspace_first_retypes;
 use crate::bootstrap::cspace_sys;
 use crate::bootstrap::{
     boot_tracer,
+    bootinfo_snapshot::{BootInfoSnapshot, BootInfoState},
     cspace::{CSpaceCtx, CSpaceWindow, FirstRetypeResult},
     device_pt_pool, ensure_device_pt_pool, ipcbuf, layout, log as boot_log, pick_untyped,
     retype::{retype_one, retype_selection},
@@ -78,6 +79,11 @@ fn debug_identify_boot_caps() {
         let ty = unsafe { sel4_sys::seL4_CapIdentify(slot) };
         log::info!("[identify] slot=0x{slot:04x} ty=0x{ty:08x}");
     }
+}
+
+#[inline(always)]
+fn ranges_overlap(a: Range<usize>, b: Range<usize>) -> bool {
+    a.start < b.end && b.start < a.end
 }
 
 /// Retypes a single notification object from the selected RAM-backed untyped and
@@ -585,6 +591,8 @@ impl KernelEndpoints {
 pub struct BootContext {
     /// Bootinfo view captured during kernel bootstrap.
     pub bootinfo: BootInfoView,
+    /// Bootinfo snapshot captured at bootstrap start to detect corruption.
+    pub bootinfo_snapshot: BootInfoSnapshot,
     /// Feature flags summarising the current profile.
     pub features: BootFeatures,
     /// Root and fault endpoint bundle. The control endpoint handles LOG+CONTROL / queen
@@ -713,13 +721,40 @@ fn bootstrap<P: Platform>(
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     crate::sel4::install_debug_sink();
 
+    let layout_snapshot = layout::dump_and_sanity_check();
+
     crate::alloc::init_heap();
 
     boot_log::init_logger_bootstrap_only();
 
     crate::sel4::log_sel4_type_sanity();
 
-    layout::dump_and_sanity_check();
+    let bootinfo_state = BootInfoState::init(bootinfo)
+        .unwrap_or_else(|err| panic!("bootinfo snapshot failed: {err}"));
+    let bootinfo_view = bootinfo_state.view();
+    let bootinfo_snapshot = bootinfo_state.snapshot();
+
+    let heap_range = layout_snapshot.heap_range();
+    let bss_range = layout_snapshot.bss_range();
+    let stack_range = layout_snapshot.stack_range();
+    let device_range = crate::sel4::device_window_range();
+
+    assert!(
+        !ranges_overlap(heap_range.clone(), bss_range.clone()),
+        "heap overlaps .bss (heap={heap_range:?} bss={bss_range:?})",
+    );
+    assert!(
+        !ranges_overlap(heap_range.clone(), stack_range.clone()),
+        "heap overlaps stack (heap={heap_range:?} stack={stack_range:?})",
+    );
+    assert!(
+        !ranges_overlap(device_range.clone(), heap_range.clone()),
+        "device page-table window overlaps heap (device={device_range:?} heap={heap_range:?})",
+    );
+    assert!(
+        !ranges_overlap(device_range.clone(), stack_range.clone()),
+        "device page-table window overlaps stack guard (device={device_range:?} stack={stack_range:?})",
+    );
 
     let mut build_line = heapless::String::<192>::new();
     let mut feature_report = heapless::String::<96>::new();
@@ -758,18 +793,13 @@ fn bootstrap<P: Platform>(
     let mut pending_boot_phases = heapless::Vec::<BootPhase, 4>::new();
     let _ = pending_boot_phases.push(BootPhase::Begin);
 
-    let bootinfo_view = match BootInfoView::new(bootinfo) {
-        Ok(view) => view,
-        Err(err) => {
-            log::error!("[boot] invalid bootinfo: {err}");
-            #[cfg(feature = "kernel")]
-            crate::sel4::debug_halt();
-            loop {
-                core::hint::spin_loop();
-            }
+    let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
+
+    let check_bootinfo = |mark: &'static str| {
+        if let Err(err) = bootinfo_state.verify_mark(mark) {
+            panic!("bootinfo canary tripped at {mark}: {err:?}");
         }
     };
-    let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
     if let Err(err) = crate::bootstrap::cspace::ensure_canonical_root_alias(bootinfo_ref) {
         panic!(
             "failed to mint canonical init CNode alias: {} ({})",
@@ -912,16 +942,20 @@ fn bootstrap<P: Platform>(
         false
     };
 
+    check_bootinfo("MARK 30");
     boot_log::force_uart_line("[MARK 30] after DTB deferred");
 
+    check_bootinfo("MARK 31");
     boot_log::force_uart_line("[MARK 31] before canonical_cspace");
     #[cfg(feature = "canonical_cspace")]
     {
         crate::bootstrap::retype::canonical_cspace_console(bootinfo_ref);
     }
 
+    check_bootinfo("MARK 32");
     boot_log::force_uart_line("[MARK 32] after canonical_cspace");
 
+    check_bootinfo("MARK 33");
     boot_log::force_uart_line("[MARK 33] before cap-probes");
     #[cfg(feature = "cap-probes")]
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_variables))]
@@ -951,16 +985,20 @@ fn bootstrap<P: Platform>(
         }
     }
 
+    check_bootinfo("MARK 34");
     boot_log::force_uart_line("[MARK 34] after cap-probes");
 
+    check_bootinfo("MARK 35");
     boot_log::force_uart_line("[MARK 35] before ipc_vaddr");
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_variables))]
     let ipc_vaddr = ipc_buffer_ptr.map(|ptr| ptr.as_ptr() as usize);
     let ipc_frame = sel4_sys::seL4_CapInitThreadIPCBuffer;
 
+    check_bootinfo("MARK 36");
     boot_log::force_uart_line("[MARK 36] before bootstrap-minimal");
     #[cfg(feature = "bootstrap-minimal")]
     {
+        check_bootinfo("MARK 37");
         boot_log::force_uart_line("[MARK 37] enter bootstrap-minimal");
         log::warn!(
             "[boot] bootstrap-minimal: skipping EP retype/PL011 map/TCB copy; entering console"
@@ -978,9 +1016,11 @@ fn bootstrap<P: Platform>(
         crate::userland::start_console_or_cohsh(platform);
     }
 
+    check_bootinfo("MARK 38");
     boot_log::force_uart_line("[MARK 38] before bootstrap_ep");
     let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_view, &mut boot_cspace) {
         Ok(slot) => {
+            check_bootinfo("MARK 39");
             boot_log::force_uart_line("[MARK 39] after bootstrap_ep ok");
             (slot, true)
         }
@@ -1044,6 +1084,7 @@ fn bootstrap<P: Platform>(
         boot_tracer().advance(phase);
     }
 
+    check_bootinfo("MARK 40");
     boot_log::force_uart_line("[MARK 40] before seL4_SetIPCBuffer");
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
@@ -1070,6 +1111,7 @@ fn bootstrap<P: Platform>(
         info.tcb_copy_slot
     } else {
         crate::bp!("tcb.copy.begin");
+        check_bootinfo("MARK 41");
         boot_log::force_uart_line("[MARK 41] before tcb copy");
         let copy_slot = tcb::bootstrap_copy_init_tcb(bootinfo_ref, &mut boot_cspace)
             .unwrap_or_else(|err| {
@@ -1892,6 +1934,7 @@ fn bootstrap<P: Platform>(
         #[cfg(feature = "net-console")]
         let ctx = BootContext {
             bootinfo: bootinfo_view,
+            bootinfo_snapshot,
             features,
             endpoints,
             uart_slot,
@@ -1907,6 +1950,7 @@ fn bootstrap<P: Platform>(
         #[cfg(not(feature = "net-console"))]
         let ctx = BootContext {
             bootinfo: bootinfo_view,
+            bootinfo_snapshot,
             features,
             endpoints,
             uart_slot,
