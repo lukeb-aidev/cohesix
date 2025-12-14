@@ -61,7 +61,8 @@ use crate::sel4;
 use crate::sel4::first_regular_untyped;
 use crate::sel4::{
     bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, BootInfoView,
-    DevicePtPool, KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
+    DevicePtPool, KernelEnv, ReservedVaddrRanges, RetypeKind, RetypeStatus, IPC_PAGE_BYTES,
+    MSG_MAX_WORDS,
 };
 use crate::serial::{
     pl011::{Pl011, Pl011Mmio},
@@ -87,6 +88,12 @@ fn debug_identify_boot_caps() {
 #[inline(always)]
 fn ranges_overlap(a: Range<usize>, b: Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
+}
+
+#[inline(always)]
+fn align_down(value: usize, align: usize) -> usize {
+    debug_assert!(align.is_power_of_two());
+    value & !(align - 1)
 }
 
 /// Retypes a single notification object from the selected RAM-backed untyped and
@@ -734,15 +741,50 @@ fn bootstrap<P: Platform>(
 
     crate::sel4::log_sel4_type_sanity();
 
+    let bootinfo_source_vaddr = bootinfo as *const _ as usize;
     let bootinfo_state = BootInfoState::init(bootinfo)
         .unwrap_or_else(|err| panic!("bootinfo snapshot failed: {err}"));
     let bootinfo_view = bootinfo_state.view();
     let bootinfo_snapshot = bootinfo_state.snapshot();
+    let bootinfo_copy_vaddr = bootinfo_view.header() as *const _ as usize;
+
+    let mut bootinfo_line = heapless::String::<160>::new();
+    let _ = write!(
+        bootinfo_line,
+        "[bootinfo] kernel=0x{source:016x} snapshot=0x{copy:016x}",
+        source = bootinfo_source_vaddr,
+        copy = bootinfo_copy_vaddr,
+    );
+    boot_log::force_uart_line(bootinfo_line.as_str());
+    log::info!("{}", bootinfo_line.as_str());
 
     let heap_range = layout_snapshot.heap_range();
     let bss_range = layout_snapshot.bss_range();
     let stack_range = layout_snapshot.stack_range();
     let device_range = crate::sel4::device_window_range();
+
+    let bootinfo_page_base = align_down(bootinfo_source_vaddr, IPC_PAGE_BYTES);
+    let mut reserved_vaddrs = ReservedVaddrRanges::new();
+    reserved_vaddrs.reserve(heap_range.clone(), "heap");
+    reserved_vaddrs.reserve(stack_range.clone(), "stack");
+    reserved_vaddrs.reserve(
+        bootinfo_page_base..bootinfo_page_base + IPC_PAGE_BYTES,
+        "bootinfo-frame",
+    );
+
+    let mut reserved_line = heapless::String::<192>::new();
+    let _ = write!(
+        reserved_line,
+        "[vaddr] reserved heap=[0x{heap_start:08x}..0x{heap_end:08x}) stack=[0x{stack_start:08x}..0x{stack_end:08x}) bootinfo=[0x{bi_start:08x}..0x{bi_end:08x})",
+        heap_start = heap_range.start,
+        heap_end = heap_range.end,
+        stack_start = stack_range.start,
+        stack_end = stack_range.end,
+        bi_start = bootinfo_page_base,
+        bi_end = bootinfo_page_base + IPC_PAGE_BYTES,
+    );
+    log::info!("{}", reserved_line.as_str());
+    boot_log::force_uart_line(reserved_line.as_str());
 
     assert!(
         !ranges_overlap(heap_range.clone(), bss_range.clone()),
@@ -893,6 +935,11 @@ fn bootstrap<P: Platform>(
             0,
             "IPC buffer must be page-aligned",
         );
+        let ipc_page_base = align_down(addr, IPC_PAGE_BYTES);
+        reserved_vaddrs.reserve(
+            ipc_page_base..ipc_page_base + IPC_PAGE_BYTES,
+            "ipc-buffer",
+        );
         unsafe {
             sel4_sys::seL4_SetIPCBuffer(ptr.as_ptr());
         }
@@ -936,6 +983,7 @@ fn bootstrap<P: Platform>(
     let mut kernel_env = KernelEnv::new(
         bootinfo_ref,
         device_pt_pool().map(DevicePtPool::from_config),
+        reserved_vaddrs,
     );
     let extra_bytes = bootinfo_view.extra();
     let extra_range = bootinfo_view.extra_range();
@@ -1023,7 +1071,7 @@ fn bootstrap<P: Platform>(
 
     check_bootinfo("MARK 38");
     boot_log::force_uart_line("[MARK 38] before bootstrap_ep");
-    let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_view, &mut boot_cspace) {
+    let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_snapshot, &mut boot_cspace) {
         Ok(slot) => {
             check_bootinfo("MARK 39");
             boot_log::force_uart_line("[MARK 39] after bootstrap_ep ok");
@@ -1171,7 +1219,7 @@ fn bootstrap<P: Platform>(
 
     let mut fault_ep_slot = ep_slot;
     if ep_slot != sel4_sys::seL4_CapNull {
-        match crate::boot::ep::bootstrap_fault_ep(&bootinfo_view, &mut boot_cspace) {
+        match crate::boot::ep::bootstrap_fault_ep(&bootinfo_snapshot, &mut boot_cspace) {
             Ok(slot) => {
                 fault_ep_slot = slot;
                 log::info!(
@@ -1354,7 +1402,7 @@ fn bootstrap<P: Platform>(
     }
 
     #[cfg(feature = "kernel")]
-    let ninedoor: &'static mut NineDoorBridge = {
+    let _ninedoor: &'static mut NineDoorBridge = {
         let bridge = Box::new(NineDoorBridge::new());
         Box::leak(bridge)
     };
@@ -1670,7 +1718,7 @@ fn bootstrap<P: Platform>(
         panic!("PL011 MMIO not mapped but required ({label})");
     });
 
-    let mut uart_mmio = Pl011Mmio::mapped(pl011_paddr, uart_region.cap(), uart_region.ptr());
+    let uart_mmio = Pl011Mmio::mapped(pl011_paddr, uart_region.cap(), uart_region.ptr());
     uart_mmio.assert_page_coverage(1 << sel4::PAGE_BITS, 0x0ff);
     log::info!(
         target: "boot",
