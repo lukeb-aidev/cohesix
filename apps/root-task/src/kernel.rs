@@ -38,6 +38,8 @@ use crate::console::Console;
 use crate::cspace::tuples::assert_ipc_buffer_matches_bootinfo;
 use crate::cspace::CSpace;
 use crate::debug_uart::debug_uart_str;
+#[cfg(debug_assertions)]
+use crate::event::EventPump;
 use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, IpcDispatcher, TickEvent, TicketTable,
     TimerSource,
@@ -62,7 +64,8 @@ use crate::sel4::{
     DevicePtPool, KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
-    pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
+    pl011::{Pl011, Pl011Mmio},
+    SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
 use crate::uart::pl011::{self as early_uart, PL011_PADDR};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
@@ -601,6 +604,8 @@ pub struct BootContext {
     pub endpoints: KernelEndpoints,
     /// PL011 UART slot reserved for the serial console.
     pub uart_slot: Option<sel4_sys::seL4_CPtr>,
+    /// Mapping metadata for the PL011 UART.
+    pub uart_mmio: Option<Pl011Mmio>,
     pub(crate) serial: RefCell<
         Option<SerialPort<Pl011, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>>,
     >,
@@ -1658,50 +1663,46 @@ fn bootstrap<P: Platform>(
         }
     };
 
-    let uart_ptr = uart_region
-        .as_ref()
-        .map(|region| region.ptr())
-        .unwrap_or_else(|| {
-            core::ptr::NonNull::new(early_uart::PL011_VADDR as *mut u8)
-                .expect("PL011 virtual address must be non-null")
-        });
+    let uart_region = uart_region.unwrap_or_else(|| {
+        let label = pl011_map_error
+            .map(error_name)
+            .unwrap_or("mapping not available");
+        panic!("PL011 MMIO not mapped but required ({label})");
+    });
+
+    let mut uart_mmio = Pl011Mmio::mapped(pl011_paddr, uart_region.cap(), uart_region.ptr());
+    uart_mmio.assert_page_coverage(1 << sel4::PAGE_BITS, 0x0ff);
+    log::info!(
+        target: "boot",
+        "[uart:mmio] paddr=0x{paddr:08x} cap=0x{cap:04x} vaddr=0x{vaddr:016x} mapped={mapped}",
+        paddr = uart_mmio.paddr(),
+        cap = uart_mmio.cap().unwrap_or(sel4_sys::seL4_CapNull),
+        vaddr = uart_mmio.vaddr().as_ptr() as usize,
+        mapped = uart_mmio.is_mapped(),
+    );
 
     let mut map_line = heapless::String::<128>::new();
-    if uart_region.is_some() {
-        let mapped_vaddr = uart_ptr.as_ptr() as usize;
-        let _ = write!(
-            map_line,
-            "[vspace:map] pl011 paddr=0x{paddr:08x} -> vaddr=0x{vaddr:016x} attrs=UNCACHED OK",
-            vaddr = mapped_vaddr,
-            paddr = PL011_PADDR,
-        );
-    } else {
-        let fallback_vaddr = uart_ptr.as_ptr() as usize;
-        let _ = write!(
-            map_line,
-            "[vspace:map] pl011 mapping unavailable (err={label}); fallback vaddr=0x{vaddr:016x}",
-            vaddr = fallback_vaddr,
-            label = pl011_map_error.map(error_name).unwrap_or("unknown"),
-        );
-    }
+    let mapped_vaddr = uart_mmio.vaddr().as_ptr() as usize;
+    let _ = write!(
+        map_line,
+        "[vspace:map] pl011 paddr=0x{paddr:08x} -> vaddr=0x{vaddr:016x} attrs=UNCACHED OK",
+        vaddr = mapped_vaddr,
+        paddr = PL011_PADDR,
+    );
     console.writeln_prefixed(map_line.as_str());
 
-    if let Some(region) = uart_region.as_ref() {
-        uart_pl011::publish_uart_slot(region.cap());
-        early_uart::register_console_base(region.ptr().as_ptr() as usize);
-    }
+    uart_pl011::publish_uart_slot(uart_region.cap());
+    early_uart::register_console_base(mapped_vaddr);
 
-    let mut driver = Pl011::new(uart_ptr);
+    let mut driver = Pl011::new(uart_mmio.vaddr());
     driver.init();
     console.writeln_prefixed("[uart] init OK");
-    if uart_region.is_some() {
-        driver.write_str("[console] PL011 console online\n");
-    }
+    driver.write_str("[console] PL011 console online\n");
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     {
         unsafe {
             EARLY_UART_SINK = DebugSink {
-                context: uart_ptr.as_ptr().cast::<()>(),
+                context: uart_mmio.vaddr().as_ptr().cast::<()>(),
                 emit: pl011_debug_emit,
             };
         }
@@ -1740,7 +1741,7 @@ fn bootstrap<P: Platform>(
     driver.write_str("[cohesix:root-task] uart logger online\n");
     log::info!("[boot] after uart logger online");
 
-    let uart_slot = uart_region.as_ref().map(|region| region.cap());
+    let uart_slot = Some(uart_region.cap());
     let endpoints = KernelEndpoints::new(ep_slot, fault_ep_slot);
 
     #[cfg(feature = "debug-input")]
@@ -1938,6 +1939,7 @@ fn bootstrap<P: Platform>(
             features,
             endpoints,
             uart_slot,
+            uart_mmio: Some(uart_mmio),
             serial: RefCell::new(Some(serial)),
             timer: RefCell::new(Some(timer)),
             ipc: RefCell::new(Some(ipc)),
@@ -1954,6 +1956,7 @@ fn bootstrap<P: Platform>(
             features,
             endpoints,
             uart_slot,
+            uart_mmio: Some(uart_mmio),
             serial: RefCell::new(Some(serial)),
             timer: RefCell::new(Some(timer)),
             ipc: RefCell::new(Some(ipc)),

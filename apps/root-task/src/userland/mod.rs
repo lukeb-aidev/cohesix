@@ -28,11 +28,9 @@ use crate::net::NetPoller;
 use crate::platform::Platform;
 use crate::sel4;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
-use crate::serial::pl011::Pl011;
+use crate::serial::pl011::{Pl011, Pl011Mmio};
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
-use crate::uart::pl011::PL011_VADDR;
-#[cfg(all(feature = "serial-console", feature = "kernel"))]
-use core::ptr::NonNull;
+use crate::uart::pl011;
 use heapless::String as HeaplessString;
 
 #[cfg(feature = "net-console")]
@@ -53,7 +51,7 @@ pub fn main(ctx: BootContext) -> ! {
     );
 
     #[cfg(all(feature = "serial-console", feature = "kernel"))]
-    let uart_base = NonNull::new(PL011_VADDR as *mut u8);
+    let uart_base = ctx.uart_mmio.as_ref().map(Pl011Mmio::vaddr);
 
     let mut audit = LoggerAudit;
     let serial = ctx
@@ -239,7 +237,7 @@ pub mod serial_console {
         if let Some(uart_slot) = uart_pl011::uart_slot() {
             ::log::info!("[userland] starting PL011 root console bringup");
             let ep = sel4::root_endpoint();
-            if let Some(base) = NonNull::new(PL011_VADDR as *mut u8) {
+            if let Some(base) = pl011::console_base() {
                 let driver = Pl011::new(base);
                 let console = SerialConsole::new(driver);
                 let mut console = CohesixConsole::with_console(console, ep, uart_slot);

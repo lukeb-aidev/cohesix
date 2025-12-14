@@ -10,6 +10,7 @@ use embedded_io::ErrorType;
 use nb::Error as NbError;
 
 use super::{SerialDriver, SerialError};
+use sel4_sys::seL4_CPtr;
 
 /// Offset (in bytes) to the data register within the PL011 MMIO window.
 pub const DR_OFFSET: usize = 0x00;
@@ -27,6 +28,75 @@ pub const CR_OFFSET: usize = 0x30;
 pub const IMSC_OFFSET: usize = 0x38;
 /// Offset (in bytes) to the interrupt clear register.
 pub const ICR_OFFSET: usize = 0x44;
+
+/// MMIO mapping metadata for the PL011 UART.
+#[derive(Clone, Copy, Debug)]
+pub struct Pl011Mmio {
+    paddr: usize,
+    vaddr: NonNull<u8>,
+    cap: Option<seL4_CPtr>,
+}
+
+impl Pl011Mmio {
+    /// Construct a mapping descriptor using the supplied physical address, capability, and base pointer.
+    #[must_use]
+    pub fn new(paddr: usize, cap: Option<seL4_CPtr>, vaddr: NonNull<u8>) -> Self {
+        Self { paddr, vaddr, cap }
+    }
+
+    /// Construct a mapping descriptor from a required device-frame capability.
+    #[must_use]
+    pub fn mapped(paddr: usize, cap: seL4_CPtr, vaddr: NonNull<u8>) -> Self {
+        Self::new(paddr, Some(cap), vaddr)
+    }
+
+    /// Physical address backing the mapping.
+    #[must_use]
+    pub fn paddr(&self) -> usize {
+        self.paddr
+    }
+
+    /// Virtual address backing the mapping.
+    #[must_use]
+    pub fn vaddr(&self) -> NonNull<u8> {
+        self.vaddr
+    }
+
+    /// Capability slot used to map the UART, if available.
+    #[must_use]
+    pub fn cap(&self) -> Option<seL4_CPtr> {
+        self.cap
+    }
+
+    /// Whether the UART mapping is live.
+    #[must_use]
+    pub fn is_mapped(&self) -> bool {
+        self.cap.is_some()
+    }
+
+    /// Validate alignment and span coverage for the UART mapping.
+    pub fn assert_page_coverage(&self, page_size: usize, required_offset: usize) {
+        let base = self.vaddr.as_ptr() as usize;
+        assert_eq!(
+            base & (page_size - 1),
+            0,
+            "PL011 MMIO base must be page-aligned",
+        );
+        assert!(
+            required_offset < page_size,
+            "PL011 offset {} exceeds mapped page size {}",
+            required_offset,
+            page_size
+        );
+        let limit = base
+            .checked_add(page_size)
+            .expect("PL011 MMIO base overflowed while checking span");
+        assert!(
+            base + required_offset < limit,
+            "PL011 MMIO mapping does not cover required offset 0x{required_offset:x}"
+        );
+    }
+}
 
 const FR_TXFF: u32 = 1 << 5;
 const FR_RXFE: u32 = 1 << 4;
