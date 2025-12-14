@@ -69,10 +69,10 @@ SECTIONS
   /* Statically reserved stack region; the runtime uses __stack_top as the initial SP. */
   . = __stack_bottom;
   ASSERT((__stack_bottom & 0xfff) == 0, "stack bottom must be page aligned");
-  ASSERT(. == __stack_bottom, "stack bottom must match computed bound");
   .stack (NOLOAD) : {
     . = __stack_top;
   } :data
+  ASSERT(ADDR(.stack) == __stack_bottom, "stack bottom must match computed bound");
   __stack_top = .;
 
   /*
