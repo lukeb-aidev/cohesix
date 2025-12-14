@@ -854,7 +854,15 @@ fn bootstrap<P: Platform>(
             error_name(err),
         );
     }
-    let cspace_window = CSpaceWindow::from_bootinfo(&bootinfo_view);
+    let (empty_start, empty_end) = bootinfo_view.init_cnode_empty_range();
+    let cspace_window = CSpaceWindow::new(
+        bootinfo_view.root_cnode_cap(),
+        bootinfo_view.canonical_root_cap(),
+        cspace_sys::bits_as_u8(usize::from(bootinfo_view.init_cnode_bits())),
+        empty_start,
+        empty_end,
+        empty_start,
+    );
     let mut console = DebugConsole::new(platform);
 
     #[inline(always)]

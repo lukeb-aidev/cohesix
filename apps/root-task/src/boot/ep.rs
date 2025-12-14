@@ -7,7 +7,7 @@ use sel4_sys::{seL4_CPtr, seL4_CapNull, seL4_Error, seL4_IllegalOperation};
 use crate::boot::bi_extra::UntypedDesc;
 use crate::bootstrap::bootinfo_snapshot::BootInfoSnapshot;
 use crate::bootstrap::cspace::CSpaceWindow;
-use crate::bootstrap::cspace_sys::{retype_endpoint_auto, verify_root_cnode_slot};
+use crate::bootstrap::cspace_sys::{bits_as_u8, retype_endpoint_auto, verify_root_cnode_slot};
 use crate::cspace::CSpace;
 use crate::sel4::{self, BootInfoView};
 use crate::serial;
@@ -54,7 +54,7 @@ pub fn publish_root_ep(ep: seL4_CPtr) {
     unsafe {
         ROOT_EP = ep;
     }
-    log::info!("[boot] root endpoint published ep=0x{ep:04x}", ep = ep);
+    serial::puts("[boot] root endpoint published\n");
     crate::sel4::set_ep(ep);
 }
 
@@ -68,6 +68,8 @@ pub fn bootstrap_ep(snapshot: &BootInfoSnapshot, cs: &mut CSpace) -> Result<seL4
     if sel4::ep_ready() {
         return Ok(sel4::root_endpoint());
     }
+
+    serial::puts("[boot] bootstrap_ep: entry\n");
 
     let bi = view.header();
     let (ut, desc) = select_endpoint_untyped(&view)?;
@@ -89,27 +91,41 @@ pub fn bootstrap_ep(snapshot: &BootInfoSnapshot, cs: &mut CSpace) -> Result<seL4
     }
 
     let ep_slot = cs.alloc_slot()?;
-    log_window_state("alloc", cs.root(), cs.depth(), ep_slot, None);
+    serial::puts("[boot] bootstrap_ep: after alloc_slot\n");
     debug_assert_ne!(
         ep_slot,
         sel4::seL4_CapNull,
         "allocated endpoint slot must not be null",
     );
 
-    let mut window = CSpaceWindow::from_bootinfo(&view);
-    window.first_free = ep_slot;
-    window.assert_contains(ep_slot);
-    log_window_state(
-        "bootinfo",
-        window.root,
-        window.bits,
-        window.first_free,
-        Some((window.empty_start, window.empty_end)),
+    let (empty_start, empty_end) = view.init_cnode_empty_range();
+    assert!(
+        empty_start < empty_end,
+        "bootinfo empty window must have positive width",
     );
+    let init_bits = view.init_cnode_bits();
+    assert_eq!(init_bits, 13, "unexpected init CNode bits");
+    let init_root = view.root_cnode_cap();
+    assert_eq!(
+        init_root,
+        sel4_sys::seL4_CapInitThreadCNode,
+        "unexpected init thread CNode capability",
+    );
+
+    let mut window = CSpaceWindow::new(
+        init_root,
+        view.canonical_root_cap(),
+        bits_as_u8(usize::from(init_bits)),
+        empty_start,
+        empty_end,
+        ep_slot,
+    );
+    window.assert_contains(ep_slot);
+    serial::puts("[boot] bootstrap_ep: window ready\n");
     debug_assert_eq!(
         view.init_cnode_bits(),
         window.bits,
-        "canonical init CNode bits mismatch"
+        "canonical init CNode bits mismatch",
     );
 
     crate::trace::println!(
@@ -119,69 +135,30 @@ pub fn bootstrap_ep(snapshot: &BootInfoSnapshot, cs: &mut CSpace) -> Result<seL4
         slot = window.first_free,
     );
 
-    if crate::boot::flags::trace_dest() {
-        log::info!(
-            "[boot] endpoint retype dest root=0x{root:04x} depth={depth} slot=0x{slot:04x}",
-            root = window.root,
-            depth = window.bits,
-            slot = window.first_free,
-        );
-    }
-
-    log::trace!(
-        "B1: about to retype endpoint ut=0x{ut:04x} slot=0x{slot:04x}",
-        ut = ut,
-        slot = ep_slot,
-    );
-
+    serial::puts("[boot] bootstrap_ep: before verify\n");
     if let Err(err) = verify_root_cnode_slot(bi, ep_slot as sel4_sys::seL4_Word) {
-        log::error!(
-            "[boot] init CNode path probe failed slot=0x{slot:04x} err={err} ({name})",
-            slot = ep_slot,
-            err = err,
-            name = sel4::error_name(err),
-        );
+        serial::puts("[boot] bootstrap_ep: verify_root_cnode_slot failed\n");
         return Err(err);
     }
 
+    serial::puts("[boot] bootstrap_ep: before retype\n");
     let err = retype_endpoint_auto(
         bi,
         ut as sel4_sys::seL4_Word,
         ep_slot as sel4_sys::seL4_Word,
     );
-    log::info!(
-        "[ep] retype root=0x{root:04x} depth={depth} dst=0x{slot:04x} err={err}",
-        root = window.root,
-        depth = window.bits,
-        slot = ep_slot,
-        err = err,
-    );
     if err != sel4_sys::seL4_NoError {
-        log::trace!("B1.ret = Err({code})", code = sel4::error_name(err));
-        log::error!(
-            "[boot] endpoint retype failed slot=0x{slot:04x} err={err:?} ({name})",
-            slot = ep_slot,
-            err = err,
-            name = sel4::error_name(err),
-        );
+        serial::puts("[boot] bootstrap_ep: retype_endpoint_auto failed\n");
         return Err(err);
     }
-    log::trace!("B1.ret = Ok");
+    serial::puts("[boot] bootstrap_ep: after retype\n");
     window.bump();
-    log::info!("[cs] first_free=0x{slot:04x}", slot = cs.next_free_slot());
 
     let slot_ident = sel4::debug_cap_identify(ep_slot);
-    log::info!(
-        "[boot] endpoint slot=0x{slot:04x} identify=0x{ident:08x}",
-        slot = ep_slot,
-        ident = slot_ident,
-    );
+    let _ = slot_ident;
 
     publish_root_ep(ep_slot);
-    serial::puts(
-        "[boot] EP ready
-",
-    );
+    serial::puts("[boot] bootstrap_ep: after publish\n");
 
     Ok(ep_slot)
 }
@@ -218,8 +195,15 @@ pub fn bootstrap_fault_ep(
         "allocated endpoint slot must not be null",
     );
 
-    let mut window = CSpaceWindow::from_bootinfo(&view);
-    window.first_free = ep_slot;
+    let (empty_start, empty_end) = view.init_cnode_empty_range();
+    let mut window = CSpaceWindow::new(
+        view.root_cnode_cap(),
+        view.canonical_root_cap(),
+        bits_as_u8(usize::from(view.init_cnode_bits())),
+        empty_start,
+        empty_end,
+        ep_slot,
+    );
     window.assert_contains(ep_slot);
     log_window_state(
         "bootinfo",

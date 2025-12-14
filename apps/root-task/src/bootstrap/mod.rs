@@ -253,7 +253,15 @@ pub fn run_minimal(bootinfo: &'static BootInfo) {
     {
         match BootInfoView::new(bootinfo) {
             Ok(view) => {
-                let window = crate::bootstrap::cspace::CSpaceWindow::from_bootinfo(&view);
+                let (empty_start, empty_end) = view.init_cnode_empty_range();
+                let window = crate::bootstrap::cspace::CSpaceWindow::new(
+                    view.root_cnode_cap(),
+                    view.canonical_root_cap(),
+                    crate::bootstrap::cspace_sys::bits_as_u8(usize::from(view.init_cnode_bits())),
+                    empty_start,
+                    empty_end,
+                    empty_start,
+                );
                 ::log::info!(
                     "[cs: win] root=0x{root:04x} bits={bits} first_free=0x{slot:04x}",
                     root = window.root,
