@@ -29,9 +29,11 @@ impl GuardedAllocator {
     }
 
     unsafe fn init(&self, span: Range<usize>) {
-        self.inner
-            .lock()
-            .init(span.start as *mut u8, span.end.saturating_sub(span.start));
+        unsafe {
+            self.inner
+                .lock()
+                .init(span.start as *mut u8, span.end.saturating_sub(span.start));
+        }
     }
 }
 
@@ -41,7 +43,7 @@ unsafe impl GlobalAlloc for GuardedAllocator {
             no_alloc::assert_no_alloc("alloc");
         }
 
-        self.inner.alloc(layout)
+        unsafe { self.inner.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
@@ -49,7 +51,7 @@ unsafe impl GlobalAlloc for GuardedAllocator {
             no_alloc::assert_no_alloc("dealloc");
         }
 
-        self.inner.dealloc(ptr, layout)
+        unsafe { self.inner.dealloc(ptr, layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
@@ -57,7 +59,7 @@ unsafe impl GlobalAlloc for GuardedAllocator {
             no_alloc::assert_no_alloc("alloc_zeroed");
         }
 
-        self.inner.alloc_zeroed(layout)
+        unsafe { self.inner.alloc_zeroed(layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
@@ -65,7 +67,7 @@ unsafe impl GlobalAlloc for GuardedAllocator {
             no_alloc::assert_no_alloc("realloc");
         }
 
-        self.inner.realloc(ptr, layout, new_size)
+        unsafe { self.inner.realloc(ptr, layout, new_size) }
     }
 }
 

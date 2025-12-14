@@ -20,6 +20,14 @@ impl FatalBootstrapError {
         Self { message }
     }
 
+    fn from_str(message: &str) -> Self {
+        let mut buffer = String::<160>::new();
+        buffer
+            .push_str(message)
+            .expect("static bootstrap error messages fit within buffer");
+        Self::new(buffer)
+    }
+
     /// Returns the captured error message.
     #[must_use]
     pub fn message(&self) -> &str {
@@ -83,13 +91,15 @@ impl BootstrapSequencer {
 
     fn expect_next(&self, phase: BootstrapPhase) -> Result<(), FatalBootstrapError> {
         if self.next >= ORDERING.len() {
-            return Err(FatalBootstrapError::new(String::from(
+            return Err(FatalBootstrapError::from_str(
                 "bootstrap phase advance attempted after completion",
-            )));
+            ));
         }
 
         if ORDERING[self.next] != phase {
-            let mut msg = String::<160>::from("bootstrap phase order violation: expected ");
+            let mut msg = String::<160>::new();
+            msg.push_str("bootstrap phase order violation: expected ")
+                .expect("bootstrap error message fits in buffer");
             let _ = write!(&mut msg, "{}", ORDERING[self.next].as_str());
             let _ = write!(&mut msg, ", saw {}", phase.as_str());
             return Err(FatalBootstrapError::new(msg));
@@ -124,29 +134,29 @@ impl BootstrapSequencer {
         }
 
         if view.root_cnode_cap() != sel4_sys::seL4_CapInitThreadCNode {
-            return Err(FatalBootstrapError::new(String::from(
+            return Err(FatalBootstrapError::from_str(
                 "canonical root CNode mismatch: expected seL4_CapInitThreadCNode",
-            )));
+            ));
         }
 
         let (empty_start, empty_end) = view.init_cnode_empty_range();
         if empty_end <= empty_start {
-            return Err(FatalBootstrapError::new(String::from(
+            return Err(FatalBootstrapError::from_str(
                 "bootinfo empty CSpace window is empty",
-            )));
+            ));
         }
 
         if empty_start < sel4_sys::seL4_NumInitialCaps as sel4_sys::seL4_CPtr {
-            return Err(FatalBootstrapError::new(String::from(
+            return Err(FatalBootstrapError::from_str(
                 "first_free slot overlaps kernel-reserved capability range",
-            )));
+            ));
         }
 
         let capacity = 1usize << init_bits;
         if empty_end as usize > capacity {
-            return Err(FatalBootstrapError::new(String::from(
+            return Err(FatalBootstrapError::from_str(
                 "bootinfo empty window exceeds init CNode capacity",
-            )));
+            ));
         }
 
         boot_log::force_uart_line("[mark] bootinfo.validate.ok");
@@ -178,7 +188,7 @@ pub fn canonical_bootinfo_view(
 
 /// Ensures the bootinfo pointer can be snapshotted after validation.
 pub fn snapshot_bootinfo(
-    bootinfo: &'static BootInfo,
+    _bootinfo: &'static BootInfo,
     view: &BootInfoView,
 ) -> Result<&'static crate::bootstrap::bootinfo_snapshot::BootInfoState, FatalBootstrapError> {
     crate::bootstrap::bootinfo_snapshot::BootInfoState::init(view.header()).map_err(|err| {
