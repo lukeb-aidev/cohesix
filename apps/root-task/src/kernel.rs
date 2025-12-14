@@ -30,7 +30,12 @@ use crate::bootstrap::{
     boot_tracer,
     bootinfo_snapshot::{BootInfoSnapshot, BootInfoState},
     cspace::{CSpaceCtx, CSpaceWindow, FirstRetypeResult},
-    device_pt_pool, ensure_device_pt_pool, ipcbuf, layout, log as boot_log, pick_untyped,
+    device_pt_pool, ensure_device_pt_pool, ipcbuf, layout, log as boot_log,
+    phases::{
+        canonical_bootinfo_view, snapshot_bootinfo, BootstrapPhase, BootstrapSequencer,
+        FatalBootstrapError,
+    },
+    pick_untyped,
     retype::{retype_one, retype_selection},
     BootPhase, UntypedSelection,
 };
@@ -517,6 +522,8 @@ impl fmt::Display for TimerError {
 pub enum BootError {
     /// Indicates the bootstrap path has already been executed for this boot.
     AlreadyBooted,
+    /// Bootstrap invariants failed.
+    Fatal(String),
     /// Timer initialisation failed.
     TimerInit(TimerError),
 }
@@ -525,6 +532,7 @@ impl fmt::Display for BootError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AlreadyBooted => f.write_str("bootstrap already invoked"),
+            Self::Fatal(msg) => f.write_str(msg),
             Self::TimerInit(err) => write!(f, "timer init failed: {err}"),
         }
     }
@@ -533,6 +541,12 @@ impl fmt::Display for BootError {
 impl From<TimerError> for BootError {
     fn from(value: TimerError) -> Self {
         Self::TimerInit(value)
+    }
+}
+
+impl From<FatalBootstrapError> for BootError {
+    fn from(value: FatalBootstrapError) -> Self {
+        Self::Fatal(value.message().to_owned())
     }
 }
 
@@ -700,16 +714,19 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
     log::info!(target: "kernel", "[kernel] boot entrypoint: starting bootstrap");
     let ctx = match bootstrap(platform, bootinfo) {
         Ok(ctx) => ctx,
-        Err(err) => {
-            log::error!("[kernel:entry] bootstrap failed: {err}");
-            boot_log::force_uart_line("[kernel:entry] bootstrap failed; parking thread");
-            log::error!(
-                "[kernel:entry] unable to construct BootContext; refusing to bypass userland handoff"
-            );
-            loop {
-                unsafe { sel4_sys::seL4_Yield() };
+        Err(err) => match err {
+            BootError::Fatal(msg) => panic!("[bootstrap:fatal] {msg}"),
+            _ => {
+                log::error!("[kernel:entry] bootstrap failed: {err}");
+                boot_log::force_uart_line("[kernel:entry] bootstrap failed; parking thread");
+                log::error!(
+                        "[kernel:entry] unable to construct BootContext; refusing to bypass userland handoff"
+                    );
+                loop {
+                    unsafe { sel4_sys::seL4_Yield() };
+                }
             }
-        }
+        },
     };
 
     // Full boots must always proceed into userland; bootstrap-minimal remains a
@@ -733,6 +750,13 @@ fn bootstrap<P: Platform>(
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     crate::sel4::install_debug_sink();
 
+    let mut sequencer = BootstrapSequencer::new();
+
+    let bootinfo_view = canonical_bootinfo_view(&mut sequencer, bootinfo)?;
+    let bootinfo_state = snapshot_bootinfo(bootinfo, &bootinfo_view)?;
+    let bootinfo_snapshot = bootinfo_state.snapshot();
+
+    sequencer.advance(BootstrapPhase::MemoryLayoutBuild)?;
     let layout_snapshot = layout::dump_and_sanity_check();
 
     crate::alloc::init_heap();
@@ -742,10 +766,6 @@ fn bootstrap<P: Platform>(
     crate::sel4::log_sel4_type_sanity();
 
     let bootinfo_source_vaddr = bootinfo as *const _ as usize;
-    let bootinfo_state = BootInfoState::init(bootinfo)
-        .unwrap_or_else(|err| panic!("bootinfo snapshot failed: {err}"));
-    let bootinfo_view = bootinfo_state.view();
-    let bootinfo_snapshot = bootinfo_state.snapshot();
     let bootinfo_copy_vaddr = bootinfo_view.header() as *const _ as usize;
 
     let mut bootinfo_line = heapless::String::<160>::new();
@@ -1076,6 +1096,7 @@ fn bootstrap<P: Platform>(
 
     check_bootinfo("MARK 38");
     boot_log::force_uart_line("[MARK 38] before bootstrap_ep");
+    sequencer.advance(BootstrapPhase::IPCInstall)?;
     let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_snapshot, &mut boot_cspace) {
         Ok(slot) => {
             check_bootinfo("MARK 39");
@@ -1319,10 +1340,12 @@ fn bootstrap<P: Platform>(
     let mut consumed_slots: usize = cmp::max(initial_consumed, 2);
     let mut retyped_objects: u32 = 0;
 
+    sequencer.advance(BootstrapPhase::UntypedPlan)?;
     boot_tracer().advance(BootPhase::UntypedEnumerate);
     let mut notification_selection =
         pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
 
+    sequencer.advance(BootstrapPhase::RetypeCommit)?;
     if let Err(err) = bootstrap_notification(&mut cs, &mut notification_selection) {
         let mut line = heapless::String::<160>::new();
         let err_code = err as i32;
@@ -1842,39 +1865,14 @@ fn bootstrap<P: Platform>(
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let net_backend_label = DEFAULT_NET_BACKEND.label();
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let mut virtio_present = false;
+        let virtio_present = false;
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let net_stack = {
-            log::info!("[boot] net-console: probing {net_backend_label}");
-            log::info!("[net-console] init: enter");
-            let net_console_config = ConsoleNetConfig::default();
-            match init_net_console(&mut hal, net_console_config) {
-                Ok(stack) => {
-                    virtio_present = true;
-                    log::info!("[boot] net-console: init ok; handle registered");
-                    log::info!(
-                        "[net-console] init: success; tcp console will be available on port {}",
-                        net_console_config.listen_port
-                    );
-                    Some(stack)
-                }
-                Err(NetConsoleError::NoDevice) => {
-                    log::error!(
-                        "[boot] net-console: init failed: no {net_backend_label} device; continuing WITHOUT TCP console"
-                    );
-                    None
-                }
-                Err(err) => {
-                    log::error!(
-                        "[boot] net-console: init failed: {:?}; continuing WITHOUT TCP console",
-                        err
-                    );
-                    None
-                }
-            }
+            log::warn!("[boot] net-console disabled until bootstrap invariants are stable");
+            None
         };
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
-        let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
+        let net_stack = None::<()>;
         #[cfg(not(feature = "net-console"))]
         let net_stack = None::<()>;
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
@@ -1990,6 +1988,8 @@ fn bootstrap<P: Platform>(
         let virtio_present_flag = virtio_present;
         #[cfg(not(all(feature = "net-console", feature = "kernel")))]
         let virtio_present_flag = false;
+
+        sequencer.advance(BootstrapPhase::UserlandHandoff)?;
 
         let features = BootFeatures {
             serial_console: cfg!(feature = "serial-console"),
