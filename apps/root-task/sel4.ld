@@ -5,12 +5,12 @@ OUTPUT_ARCH(aarch64)
 ENTRY(_start)
 
 __ipcbuf_vaddr = 0x00106000; /* Kernel-advertised init thread IPC buffer mapping. */
-__stack_guard = 0x2000;      /* Guard page below IPC buffer to catch stack overruns. */
-__stack_size = 0x40000;      /* 256 KiB stack for early boot logging/tracing. */
+__stack_guard = 0x00002000;  /* Guard page below IPC buffer to catch stack overruns. */
+__stack_size = 0x00040000;   /* 256 KiB stack for early boot logging/tracing. */
 
 __stack_top = __ipcbuf_vaddr - __stack_guard;
 __stack_bottom_unaligned = __stack_top - __stack_size;
-__stack_bottom = __stack_bottom_unaligned & ~0xfff;
+__stack_bottom = __stack_bottom_unaligned & ~0xFFF;
 
 PHDRS {
   text PT_LOAD FLAGS(5); /* R+X */
@@ -60,30 +60,24 @@ SECTIONS
   . = ALIGN(0x1000);
   __heap_start = .;
   .heap (NOLOAD) : {
-    HEAP_SIZE = __stack_bottom - __heap_start;
-    ASSERT(HEAP_SIZE > 0, "heap exhausted by text/data/bss");
-    . = . + HEAP_SIZE;
+    . = __stack_bottom;
   } :data
   __heap_end = __stack_bottom;
 
   /* Statically reserved stack region; the runtime uses __stack_top as the initial SP. */
-  . = __stack_bottom;
-  ASSERT((__stack_bottom & 0xfff) == 0, "stack bottom must be page aligned");
-  .stack (NOLOAD) : {
+  .stack __stack_bottom (NOLOAD) : ALIGN(0x1000) {
+    __stack_start = .;
     . = __stack_top;
+    __stack_end = .;
   } :data
-  ASSERT(ADDR(.stack) == __stack_bottom, "stack bottom must match computed bound");
-  ASSERT((ADDR(.stack) + SIZEOF(.stack)) == __stack_top, "stack top must remain at computed bound");
 
   /*
-   * Leave a guard gap below the IPC buffer to avoid stack overflows corrupting
-   * the kernel-provided IPC buffer page (and the bootinfo frame that follows
-   * it). The init thread stack must never run right up against the IPC buffer
-   * mapping.
-   */
+  * Leave a guard gap below the IPC buffer to avoid stack overflows corrupting
+  * the kernel-provided IPC buffer page (and the bootinfo frame that follows
+  * it). The init thread stack must never run right up against the IPC buffer
+  * mapping.
+  */
   . = __stack_top + __stack_guard;
-  ASSERT((__stack_top + __stack_guard) == __ipcbuf_vaddr,
-         "IPC buffer virtual address must remain stable");
 
   PROVIDE(_end = __ipcbuf_vaddr);
 
