@@ -21,6 +21,8 @@ pub mod cspace_encode;
 pub mod cspace_sys;
 /// ABI guard helpers ensuring the seL4 FFI signatures remain pinned.
 pub mod ffi;
+/// Fail-fast invariants for the bootstrap guard rails.
+pub mod hard_guard;
 /// IPC buffer bring-up helpers with deterministic logging waypoints.
 pub mod ipcbuf;
 /// Single-page view wrapper for the init thread IPC buffer.

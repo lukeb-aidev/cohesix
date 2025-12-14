@@ -60,6 +60,7 @@ const CANONICAL_ROOT_SENTINEL: usize = usize::MAX;
 static CANONICAL_ROOT_CAP: AtomicUsize =
     AtomicUsize::new(sel4_sys::seL4_CapInitThreadCNode as usize);
 static CANONICAL_ROOT_SLOT: AtomicUsize = AtomicUsize::new(CANONICAL_ROOT_SENTINEL);
+static EP_VALIDATED: AtomicBool = AtomicBool::new(false);
 
 /// Logs ABI sanity for key seL4 types to validate the Rust FFI surface.
 pub fn log_sel4_type_sanity() {
@@ -563,6 +564,7 @@ pub fn set_ep(ep: seL4_CPtr) {
     ROOT_ENDPOINT.store(ep as usize, Ordering::Release);
     if ep == seL4_CapNull {
         SEND_LOGGED.store(false, Ordering::Release);
+        set_ep_validated(false);
     }
 }
 
@@ -570,6 +572,7 @@ pub fn set_ep(ep: seL4_CPtr) {
 #[inline]
 pub fn clear_ep() {
     ROOT_ENDPOINT.store(0, Ordering::Release);
+    set_ep_validated(false);
 }
 
 /// Returns the currently published root endpoint capability, if any.
@@ -584,6 +587,17 @@ pub fn root_endpoint() -> seL4_CPtr {
 #[must_use]
 pub fn ep_ready() -> bool {
     root_endpoint() != seL4_CapNull
+}
+
+#[inline]
+pub fn set_ep_validated(validated: bool) {
+    EP_VALIDATED.store(validated, Ordering::Release);
+}
+
+#[inline]
+#[must_use]
+pub fn ep_validated() -> bool {
+    EP_VALIDATED.load(Ordering::Acquire)
 }
 
 /// Writes a value into an IPC message register.

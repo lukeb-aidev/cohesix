@@ -35,11 +35,17 @@ fn guarded_ipc_reports_ep_not_ready() {
 fn ep_ready_toggles_with_set_and_clear() {
     sel4::clear_ep();
     assert!(!sel4::ep_ready());
+    assert!(!sel4::ep_validated());
 
     sel4::set_ep(0x1234);
     assert!(sel4::ep_ready());
     assert_eq!(sel4::root_endpoint(), 0x1234);
+    assert!(!sel4::ep_validated());
+
+    sel4::set_ep_validated(true);
+    assert!(sel4::ep_validated());
 
     sel4::clear_ep();
     assert!(!sel4::ep_ready());
+    assert!(!sel4::ep_validated());
 }

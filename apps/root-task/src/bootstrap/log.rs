@@ -295,6 +295,9 @@ fn try_enter_ep_only() {
     if !EP_ONLY_PERMITTED.load(Ordering::Acquire) {
         return;
     }
+    if !sel4::ep_validated() {
+        return;
+    }
     if LOGGER.transport() != LogTransport::UartMirroredEp {
         return;
     }

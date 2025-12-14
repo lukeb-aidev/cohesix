@@ -26,6 +26,7 @@ use crate::boot::{bi_extra, ep, tcb, uart_pl011};
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::cspace::cspace_first_retypes;
 use crate::bootstrap::cspace_sys;
+use crate::bootstrap::hard_guard::{hard_guard_fail, HardGuardViolation};
 use crate::bootstrap::{
     boot_tracer,
     bootinfo_snapshot::{BootInfoSnapshot, BootInfoState},
@@ -1140,7 +1141,26 @@ fn bootstrap<P: Platform>(
         }
     };
 
-    if !boot_ep_ok {
+    if boot_ep_ok {
+        let (empty_start, empty_end) = bootinfo_view.init_cnode_empty_range();
+        if !(empty_start <= ep_slot && ep_slot < empty_end) {
+            hard_guard_fail(
+                "bootstrap_ep",
+                HardGuardViolation::EPInvalidOrNotInEmptyWindow,
+            );
+        }
+
+        let ident = sel4::debug_cap_identify(ep_slot) as u32;
+        if ident == 0 {
+            hard_guard_fail(
+                "bootstrap_ep",
+                HardGuardViolation::EPIdentifyInvalid { ident },
+            );
+        }
+
+        sel4::set_ep_validated(true);
+    } else {
+        sel4::set_ep_validated(false);
         log::warn!(
             "[boot] continuing with existing root endpoint=0x{slot:04x}",
             slot = ep_slot
@@ -1183,6 +1203,15 @@ fn bootstrap<P: Platform>(
     }
     boot_log::force_uart_line("[breadcrumb] after boot_tracer drain");
 
+    let ipc_ptr_guard = match ipc_buffer_ptr {
+        Some(ptr) => ptr,
+        None => hard_guard_fail("ipcbuf", HardGuardViolation::IPCBufferMissing),
+    };
+
+    if (ipc_ptr_guard.as_ptr() as usize) & (IPC_PAGE_BYTES - 1) != 0 {
+        hard_guard_fail("ipcbuf", HardGuardViolation::IPCBufferNotAligned);
+    }
+
     check_bootinfo("MARK 40");
     boot_log::force_uart_line("[MARK 40] before seL4_SetIPCBuffer");
     unsafe {
@@ -1195,14 +1224,14 @@ fn bootstrap<P: Platform>(
             );
         }
 
-        if let Some(ipc_ptr) = ipc_buffer_ptr {
-            sel4_sys::seL4_SetIPCBuffer(ipc_ptr.as_ptr());
-            let mut msg = heapless::String::<64>::new();
-            let _ = write!(msg, "ipc buffer ptr=0x{:016x}", ipc_ptr.as_ptr() as usize);
-            console.writeln_prefixed(msg.as_str());
-        } else {
-            console.writeln_prefixed("bootinfo.ipcBuffer missing");
-        }
+        sel4_sys::seL4_SetIPCBuffer(ipc_ptr_guard.as_ptr());
+        let mut msg = heapless::String::<64>::new();
+        let _ = write!(
+            msg,
+            "ipc buffer ptr=0x{:016x}",
+            ipc_ptr_guard.as_ptr() as usize
+        );
+        console.writeln_prefixed(msg.as_str());
     }
 
     debug_assert_eq!(ep_slot, root_endpoint());
@@ -1235,15 +1264,22 @@ fn bootstrap<P: Platform>(
             Err(code) => {
                 let err = code as sel4_sys::seL4_Error;
                 if err == sel4_sys::seL4_IllegalOperation {
-                    log::warn!(
-                        "[boot] ipc buffer re-bind not accepted by kernel; using boot-provided mapping only: err={} ({})",
-                        err,
-                        error_name(err)
-                    );
-                    let fallback_view = kernel_env
-                        .ipc_buffer_view()
-                        .or_else(|| Some(kernel_env.record_boot_ipc_buffer(ipc_frame, ipc_vaddr)));
-                    fallback_view
+                    #[cfg(feature = "allow-ipcbuf-fallback")]
+                    {
+                        log::warn!(
+                            "[boot] ipc buffer re-bind not accepted by kernel; using boot-provided mapping only: err={} ({})",
+                            err,
+                            error_name(err)
+                        );
+                        let fallback_view = kernel_env.ipc_buffer_view().or_else(|| {
+                            Some(kernel_env.record_boot_ipc_buffer(ipc_frame, ipc_vaddr))
+                        });
+                        fallback_view
+                    }
+                    #[cfg(not(feature = "allow-ipcbuf-fallback"))]
+                    {
+                        hard_guard_fail("ipcbuf", HardGuardViolation::IPCBufferSetRejected { err });
+                    }
                 } else {
                     panic!("ipc buffer install failed: {} ({})", code, error_name(err));
                 }
