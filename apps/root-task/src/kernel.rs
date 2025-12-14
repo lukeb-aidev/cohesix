@@ -29,7 +29,7 @@ use crate::bootstrap::cspace_sys;
 use crate::bootstrap::{
     boot_tracer,
     cspace::{CSpaceCtx, CSpaceWindow, FirstRetypeResult},
-    device_pt_pool, ensure_device_pt_pool, ipcbuf, log as boot_log, pick_untyped,
+    device_pt_pool, ensure_device_pt_pool, ipcbuf, layout, log as boot_log, pick_untyped,
     retype::{retype_one, retype_selection},
     BootPhase, UntypedSelection,
 };
@@ -687,6 +687,8 @@ fn bootstrap<P: Platform>(
     boot_log::init_logger_bootstrap_only();
 
     crate::sel4::log_sel4_type_sanity();
+
+    layout::dump_and_sanity_check();
 
     let mut build_line = heapless::String::<192>::new();
     let mut feature_report = heapless::String::<96>::new();

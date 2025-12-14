@@ -10,7 +10,10 @@ use linked_list_allocator::LockedHeap;
 
 const HEAP_BYTES: usize = 512 * 1024;
 
-static mut HEAP: [u8; HEAP_BYTES] = [0; HEAP_BYTES];
+extern "C" {
+    static __heap_start: u8;
+    static __heap_end: u8;
+}
 static HEAP_INITIALISED: AtomicBool = AtomicBool::new(false);
 
 #[global_allocator]
@@ -29,9 +32,19 @@ pub fn init_heap() {
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
+        let start = unsafe { core::ptr::addr_of!(__heap_start) as usize };
+        let end = unsafe { core::ptr::addr_of!(__heap_end) as usize };
+        let len = end.saturating_sub(start);
+
+        debug_assert_eq!(
+            len, HEAP_BYTES,
+            "linker heap span ({len:#x}) diverges from allocator expectation ({HEAP_BYTES:#x})"
+        );
+
         unsafe {
-            let heap_ptr = core::ptr::addr_of_mut!(HEAP).cast::<u8>();
-            GLOBAL_ALLOCATOR.lock().init(heap_ptr, HEAP_BYTES);
+            GLOBAL_ALLOCATOR
+                .lock()
+                .init(start as *mut u8, len.min(HEAP_BYTES));
         }
     }
 }
