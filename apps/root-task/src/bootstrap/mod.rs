@@ -23,6 +23,8 @@ pub mod ffi;
 pub mod ipcbuf;
 /// Single-page view wrapper for the init thread IPC buffer.
 pub mod ipcbuf_view;
+/// Linker-derived layout diagnostics for early boot.
+pub mod layout;
 /// Early boot logging backends.
 pub mod log;
 /// Thin wrapper around `seL4_Untyped_Retype` tailored for the init CSpace policy.
