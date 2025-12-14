@@ -72,6 +72,11 @@ pub fn default_timebase() -> &'static dyn Timebase {
     &DEFAULT_TIMEBASE
 }
 
+/// Returns the active timebase used by the root task.
+pub fn timebase() -> &'static dyn Timebase {
+    default_timebase()
+}
+
 /// Advances the shared default timebase by the provided delta.
 pub fn advance_default_timebase(delta_ms: u64) {
     DEFAULT_TIMEBASE.advance_ms(delta_ms);

@@ -469,7 +469,12 @@ where
         self.serial.poll_io();
         self.consume_serial();
 
-        if let Some(tick) = self.timer.poll(self.now_ms) {
+        #[cfg(feature = "kernel")]
+        let timebase_now_ms = crate::hal::timebase().now_ms();
+        #[cfg(not(feature = "kernel"))]
+        let timebase_now_ms = self.now_ms;
+
+        if let Some(tick) = self.timer.poll(timebase_now_ms) {
             self.now_ms = tick.now_ms;
             self.metrics.timer_ticks = self.metrics.timer_ticks.saturating_add(1);
             #[cfg(feature = "timer-trace")]
@@ -480,6 +485,8 @@ where
                 ));
                 self.audit.info(message.as_str());
             }
+        } else {
+            self.now_ms = timebase_now_ms;
         }
 
         #[cfg(feature = "net-console")]
