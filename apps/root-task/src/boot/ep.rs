@@ -5,6 +5,7 @@
 use sel4_sys::{seL4_CPtr, seL4_CapNull, seL4_Error, seL4_IllegalOperation};
 
 use crate::boot::bi_extra::UntypedDesc;
+use crate::bootstrap::bootinfo_snapshot::BootInfoSnapshot;
 use crate::bootstrap::cspace::CSpaceWindow;
 use crate::bootstrap::cspace_sys::{retype_endpoint_auto, verify_root_cnode_slot};
 use crate::cspace::CSpace;
@@ -62,13 +63,17 @@ pub fn publish_root_ep(ep: seL4_CPtr) {
 /// `first_free` is set within the kernel-advertised empty window
 /// `[empty_start..empty_end)`. This function consumes exactly one slot from that
 /// window and leaves ordering of earlier boot phases unchanged.
-pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, seL4_Error> {
+pub fn bootstrap_ep(
+    snapshot: &BootInfoSnapshot,
+    cs: &mut CSpace,
+) -> Result<seL4_CPtr, seL4_Error> {
+    let view = snapshot.view();
     if sel4::ep_ready() {
         return Ok(sel4::root_endpoint());
     }
 
     let bi = view.header();
-    let (ut, desc) = select_endpoint_untyped(view)?;
+    let (ut, desc) = select_endpoint_untyped(&view)?;
 
     #[cfg(feature = "untyped-debug")]
     {
@@ -94,7 +99,7 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
         "allocated endpoint slot must not be null",
     );
 
-    let mut window = CSpaceWindow::from_bootinfo(view);
+    let mut window = CSpaceWindow::from_bootinfo(&view);
     window.first_free = ep_slot;
     window.assert_contains(ep_slot);
     log_window_state(
@@ -186,9 +191,13 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
 
 /// Retype an additional endpoint for dedicated fault handling without updating the
 /// published root endpoint.
-pub fn bootstrap_fault_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, seL4_Error> {
+pub fn bootstrap_fault_ep(
+    snapshot: &BootInfoSnapshot,
+    cs: &mut CSpace,
+) -> Result<seL4_CPtr, seL4_Error> {
+    let view = snapshot.view();
     let bi = view.header();
-    let (ut, desc) = select_endpoint_untyped(view)?;
+    let (ut, desc) = select_endpoint_untyped(&view)?;
 
     #[cfg(feature = "untyped-debug")]
     {
@@ -212,7 +221,7 @@ pub fn bootstrap_fault_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_C
         "allocated endpoint slot must not be null",
     );
 
-    let mut window = CSpaceWindow::from_bootinfo(view);
+    let mut window = CSpaceWindow::from_bootinfo(&view);
     window.first_free = ep_slot;
     window.assert_contains(ep_slot);
     log_window_state(

@@ -1349,6 +1349,88 @@ pub const fn device_window_range() -> core::ops::Range<usize> {
     DEVICE_VADDR_BASE..DMA_VADDR_BASE
 }
 
+#[derive(Clone, Debug)]
+pub struct ReservedVaddrRanges {
+    ranges: Vec<core::ops::Range<usize>, 8>,
+}
+
+impl ReservedVaddrRanges {
+    pub const fn new() -> Self {
+        Self {
+            ranges: Vec::new(),
+        }
+    }
+
+    pub fn reserve(&mut self, range: core::ops::Range<usize>, label: &'static str) {
+        self.assert_valid(&range, label);
+        self.assert_free(range.clone(), label);
+        self.ranges
+            .push(range)
+            .expect("reserved vaddr range capacity exceeded");
+    }
+
+    pub fn assert_free(&self, range: core::ops::Range<usize>, label: &str) {
+        if let Some(conflict) = self.first_overlap(&range) {
+            panic!(
+                "mapping {label} range [0x{start:08x}..0x{end:08x}) overlaps reserved [0x{conflict_start:08x}..0x{conflict_end:08x})",
+                start = range.start,
+                end = range.end,
+                conflict_start = conflict.start,
+                conflict_end = conflict.end,
+            );
+        }
+    }
+
+    pub fn next_aligned_range(
+        &self,
+        start: usize,
+        span: usize,
+        align: usize,
+    ) -> core::ops::Range<usize> {
+        assert!(align.is_power_of_two(), "alignment must be a power of two");
+        let mut candidate = Self::align_up(start, align);
+        loop {
+            let end = candidate
+                .checked_add(span)
+                .expect("virtual address allocation overflow");
+            let range = candidate..end;
+            if let Some(conflict) = self.first_overlap(&range) {
+                candidate = Self::align_up(conflict.end, align);
+                continue;
+            }
+            return range;
+        }
+    }
+
+    fn first_overlap(
+        &self,
+        range: &core::ops::Range<usize>,
+    ) -> Option<&core::ops::Range<usize>> {
+        self.ranges
+            .iter()
+            .find(|existing| Self::ranges_overlap(existing, range))
+    }
+
+    fn ranges_overlap(
+        a: &core::ops::Range<usize>,
+        b: &core::ops::Range<usize>,
+    ) -> bool {
+        a.start < b.end && b.start < a.end
+    }
+
+    fn align_up(value: usize, align: usize) -> usize {
+        (value.checked_add(align - 1).expect("alignment overflow")) & !(align - 1)
+    }
+
+    fn assert_valid(&self, range: &core::ops::Range<usize>, label: &str) {
+        assert!(
+            range.start < range.end,
+            "{} reserved range must be non-empty",
+            label
+        );
+    }
+}
+
 /// Simple bump allocator for CSpace slots rooted at the initial thread's CNode.
 pub struct SlotAllocator {
     cnode: seL4_CNode,
@@ -1985,6 +2067,7 @@ pub struct KernelEnv<'a> {
     ipcbuf_trace: bool,
     ipcbuf_view: Option<IpcBufView>,
     device_pt_pool: Option<DevicePtPool>,
+    reserved: ReservedVaddrRanges,
 }
 
 /// Diagnostic snapshot capturing resource utilisation within the [`KernelEnv`].
@@ -2214,7 +2297,11 @@ pub struct RetypeLog {
 
 impl<'a> KernelEnv<'a> {
     /// Builds a new environment from the seL4 bootinfo struct.
-    pub fn new(bootinfo: &'a seL4_BootInfo, device_pt_pool: Option<DevicePtPool>) -> Self {
+    pub fn new(
+        bootinfo: &'a seL4_BootInfo,
+        device_pt_pool: Option<DevicePtPool>,
+        reserved: ReservedVaddrRanges,
+    ) -> Self {
         let root_cnode_bits = bootinfo.init_cnode_bits();
         assert!(
             root_cnode_bits > 0,
@@ -2274,6 +2361,7 @@ impl<'a> KernelEnv<'a> {
             ipcbuf_trace: false,
             ipcbuf_view: None,
             device_pt_pool,
+            reserved,
         }
     }
 
@@ -2285,6 +2373,10 @@ impl<'a> KernelEnv<'a> {
     /// Records previously consumed bytes for a bootinfo-provided untyped.
     pub fn record_untyped_bytes(&mut self, index: usize, used_bytes: u128) {
         self.untyped.record_usage(index, used_bytes);
+    }
+
+    pub fn reserve_vaddr_range(&mut self, range: core::ops::Range<usize>, label: &'static str) {
+        self.reserved.reserve(range, label);
     }
 
     /// Returns a view over the init thread IPC buffer if it has been installed.
@@ -2418,17 +2510,13 @@ impl<'a> KernelEnv<'a> {
             return Err(err);
         }
         self.record_retype(trace, RetypeStatus::Ok);
-        let vaddr = self
-            .device_cursor
-            .checked_add(PAGE_SIZE)
-            .expect("device cursor overflow (address space exhausted)")
-            - PAGE_SIZE;
-        self.device_cursor += PAGE_SIZE;
-        self.map_frame(frame_slot, vaddr, DEVICE_VM_ATTRIBUTES, false)?;
+        let range = self.next_mapping_range(self.device_cursor, PAGE_SIZE, "device-frame");
+        self.device_cursor = range.end;
+        self.map_frame(frame_slot, range.start, DEVICE_VM_ATTRIBUTES, false)?;
         Ok(DeviceFrame {
             cap: frame_slot,
             paddr,
-            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(vaddr))
+            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(range.start))
                 .expect("device mapping address must be non-null"),
         })
     }
@@ -2586,17 +2674,13 @@ impl<'a> KernelEnv<'a> {
             return Err(err);
         }
         self.record_retype(trace, RetypeStatus::Ok);
-        let vaddr = self
-            .dma_cursor
-            .checked_add(PAGE_SIZE)
-            .expect("dma cursor overflow (address space exhausted)")
-            - PAGE_SIZE;
-        self.dma_cursor += PAGE_SIZE;
-        self.map_frame(frame_slot, vaddr, seL4_ARM_Page_Uncached, false)?;
+        let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "dma-frame");
+        self.dma_cursor = range.end;
+        self.map_frame(frame_slot, range.start, seL4_ARM_Page_Uncached, false)?;
         Ok(RamFrame {
             cap: frame_slot,
             paddr: reserved.paddr(),
-            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(vaddr))
+            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(range.start))
                 .expect("DMA mapping address must be non-null"),
         })
     }
@@ -2804,6 +2888,11 @@ impl<'a> KernelEnv<'a> {
     ) -> Result<(), seL4_Error> {
         Self::assert_page_aligned(vaddr);
 
+        let end = vaddr
+            .checked_add(PAGE_SIZE)
+            .expect("virtual address calculation overflow");
+        self.assert_reserved_clear(vaddr..end, "map_frame");
+
         let mut result = self.attempt_page_map(frame_cap, vaddr, attr);
         if result == seL4_NoError {
             if self.ipcbuf_trace {
@@ -2847,6 +2936,23 @@ impl<'a> KernelEnv<'a> {
     fn align_down(value: usize, align: usize) -> usize {
         debug_assert!(align.is_power_of_two());
         value & !(align - 1)
+    }
+
+    fn assert_reserved_clear(&self, range: core::ops::Range<usize>, label: &str) {
+        self.reserved.assert_free(range, label);
+    }
+
+    fn next_mapping_range(
+        &self,
+        cursor: usize,
+        span: usize,
+        label: &str,
+    ) -> core::ops::Range<usize> {
+        let range = self
+            .reserved
+            .next_aligned_range(cursor, span, PAGE_SIZE);
+        self.assert_reserved_clear(range.clone(), label);
+        range
     }
 
     fn attempt_page_map(
@@ -3617,7 +3723,7 @@ mod tests {
         };
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
-        let mut env = KernelEnv::new(bootinfo_ref, None);
+        let mut env = KernelEnv::new(bootinfo_ref, None, ReservedVaddrRanges::new());
         let reserved = ReservedUntyped {
             cap: 0x200,
             paddr: 0,
@@ -3652,7 +3758,7 @@ mod tests {
         };
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
-        let mut env = KernelEnv::new(bootinfo_ref, None);
+        let mut env = KernelEnv::new(bootinfo_ref, None, ReservedVaddrRanges::new());
         let dummy = ReservedUntyped {
             cap: 0x555,
             paddr: 0,
@@ -3704,7 +3810,7 @@ mod tests {
         };
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
-        let env = KernelEnv::new(bootinfo_ref, None);
+        let env = KernelEnv::new(bootinfo_ref, None, ReservedVaddrRanges::new());
         let init_root = bootinfo_ref.init_cnode_cap();
 
         let slot: seL4_CPtr = 0x00c8;
@@ -3739,7 +3845,7 @@ mod tests {
         };
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
-        let env = KernelEnv::new(bootinfo_ref, None);
+        let env = KernelEnv::new(bootinfo_ref, None, ReservedVaddrRanges::new());
         let init_root = bootinfo_ref.init_cnode_cap();
 
         let slot: seL4_CPtr = 0x0097;
@@ -3777,7 +3883,7 @@ mod tests {
         };
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
-        let env = KernelEnv::new(bootinfo_ref, None);
+        let env = KernelEnv::new(bootinfo_ref, None, ReservedVaddrRanges::new());
         let init_root = bootinfo_ref.init_cnode_cap();
         let expected_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
         let valid_trace = RetypeTrace {
