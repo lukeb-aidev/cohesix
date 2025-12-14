@@ -724,7 +724,8 @@ fn bootstrap<P: Platform>(
         "bootstrap state drift",
     );
     crate::bp!("bootstrap.begin");
-    boot_tracer().advance(BootPhase::Begin);
+    let mut pending_boot_phases = heapless::Vec::<BootPhase, 4>::new();
+    let _ = pending_boot_phases.push(BootPhase::Begin);
 
     let bootinfo_view = match BootInfoView::new(bootinfo) {
         Ok(view) => view,
@@ -794,7 +795,7 @@ fn bootstrap<P: Platform>(
             "dest path invalid: Copy BootInfo -> slot=0x{boot_first_free:04x} failed err={err}",
         ),
     }
-    boot_tracer().advance(BootPhase::CSpaceInit);
+    let _ = pending_boot_phases.push(BootPhase::CSpaceInit);
 
     log::info!("[kernel:entry] about to log stage0 entry");
     console.writeln_prefixed("entered from seL4 (stage0)");
@@ -874,7 +875,7 @@ fn bootstrap<P: Platform>(
     let extra_range = bootinfo_view.extra_range();
     let dtb_deferred = if !extra_bytes.is_empty() {
         console.writeln_prefixed("[boot] deferring DTB parse");
-        boot_tracer().advance(BootPhase::DTBParseDeferred);
+        let _ = pending_boot_phases.push(BootPhase::DTBParseDeferred);
         true
     } else {
         false
@@ -979,6 +980,12 @@ fn bootstrap<P: Platform>(
         ep = ep_slot
     );
     console.writeln_prefixed(ep_line.as_str());
+
+    // Boot tracer phase advancement must not run before the root EP exists,
+    // because faults cannot be delivered and tracer internals may touch memory.
+    for phase in pending_boot_phases.drain(..) {
+        boot_tracer().advance(phase);
+    }
 
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
