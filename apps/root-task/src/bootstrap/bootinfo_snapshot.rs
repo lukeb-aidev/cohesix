@@ -18,7 +18,29 @@ use crate::bootstrap::log::force_uart_line;
 use crate::sel4::{BootInfo, BootInfoError, BootInfoView};
 
 const MAX_CANARY_LINE: usize = 192;
+const MAX_BOOTINFO_ALLOC: usize = 64 * 1024;
 const HIGH_32_MASK: usize = 0xffff_ffff_0000_0000;
+
+#[cfg(feature = "kernel")]
+const BOOT_HEAP_BYTES: usize = if crate::alloc::HEAP_BYTES > MAX_BOOTINFO_ALLOC {
+    crate::alloc::HEAP_BYTES
+} else {
+    MAX_BOOTINFO_ALLOC
+};
+#[cfg(not(feature = "kernel"))]
+const BOOT_HEAP_BYTES: usize = MAX_BOOTINFO_ALLOC;
+
+fn log_layout_violation(reason: &str, size: usize, align: usize) {
+    let mut line = String::<MAX_CANARY_LINE>::new();
+    let _ = fmt::write(
+        &mut line,
+        format_args!(
+            "[bootinfo:snapshot] {reason}: size=0x{size:016x} align=0x{align:04x} heap_guard=0x{heap:016x}",
+            heap = BOOT_HEAP_BYTES
+        ),
+    );
+    force_uart_line(line.as_str());
+}
 
 #[inline(always)]
 fn assert_low_vaddr(label: &str, value: usize) {
@@ -103,8 +125,36 @@ impl BootInfoSnapshot {
             .len()
             .checked_add(extra_len)
             .ok_or(BootInfoError::Overflow)?;
-        let layout = Layout::from_size_align(total_size, mem::align_of::<seL4_BootInfo>())
-            .map_err(|_| BootInfoError::Overflow)?;
+
+        let align = mem::align_of::<seL4_BootInfo>();
+
+        debug_assert!(
+            align.is_power_of_two(),
+            "bootinfo layout alignment must be a power of two (align=0x{align:x})",
+        );
+        debug_assert!(
+            align <= 0x1000,
+            "bootinfo layout alignment unexpectedly large (align=0x{align:x})",
+        );
+        debug_assert!(
+            total_size <= BOOT_HEAP_BYTES || total_size <= MAX_BOOTINFO_ALLOC,
+            "bootinfo layout exceeds heap guard: size=0x{total_size:x} heap_guard=0x{BOOT_HEAP_BYTES:x}",
+        );
+
+        if !align.is_power_of_two() || align > 0x1000 {
+            log_layout_violation("alignment rejected", total_size, align);
+            return Err(BootInfoError::Overflow);
+        }
+
+        if total_size > BOOT_HEAP_BYTES && total_size > MAX_BOOTINFO_ALLOC {
+            log_layout_violation("size exceeds heap guard", total_size, align);
+            return Err(BootInfoError::Overflow);
+        }
+
+        let layout = Layout::from_size_align(total_size, align).map_err(|_| {
+            log_layout_violation("layout construction failed", total_size, align);
+            BootInfoError::Overflow
+        })?;
 
         let backing_ptr = unsafe { alloc(layout) };
         if backing_ptr.is_null() {

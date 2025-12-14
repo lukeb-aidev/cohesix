@@ -8,7 +8,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use linked_list_allocator::LockedHeap;
 
-const HEAP_BYTES: usize = 512 * 1024;
+/// Statically reserved heap span used during bootstrap.
+pub const HEAP_BYTES: usize = 512 * 1024;
 
 extern "C" {
     static __heap_start: u8;
