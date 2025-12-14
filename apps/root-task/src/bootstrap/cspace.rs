@@ -59,19 +59,23 @@ fn locate_bootinfo_frame_slot(bi: &seL4_BootInfo) -> Option<sel4::seL4_CPtr> {
 }
 
 impl CSpaceWindow {
-    /// Constructs a canonical window from the supplied bootinfo view. The initial
-    /// `first_free` is aligned to `bootinfo.empty_start` so callers must avoid
-    /// consuming slots below that bound to preserve the kernel's reserved layout.
+    /// Construct a window descriptor from explicit bootinfo-derived values.
     #[must_use]
-    pub fn from_bootinfo(view: &BootInfoView) -> Self {
-        let (first_free, end) = view.init_cnode_empty_range();
+    pub fn new(
+        root: sel4::seL4_CPtr,
+        canonical_root: sel4::seL4_CPtr,
+        bits: u8,
+        empty_start: sel4::seL4_CPtr,
+        empty_end: sel4::seL4_CPtr,
+        first_free: sel4::seL4_CPtr,
+    ) -> Self {
         Self {
-            root: view.root_cnode_cap(),
-            canonical_root: view.canonical_root_cap(),
-            bits: cspace_sys::bits_as_u8(usize::from(view.init_cnode_bits())),
+            root,
+            canonical_root,
+            bits,
             first_free,
-            empty_start: first_free,
-            empty_end: end,
+            empty_start,
+            empty_end,
         }
     }
 
