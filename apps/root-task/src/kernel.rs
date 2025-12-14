@@ -662,6 +662,20 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
     }
 
     boot_log::force_uart_line("[kernel:entry] root-task entry reached");
+    match boot_state {
+        x if x == BootState::Cold as u8 => {
+            boot_log::force_uart_line("[MARK] boot_state=COLD");
+        }
+        x if x == BootState::Booting as u8 => {
+            boot_log::force_uart_line("[MARK] boot_state=BOOTING");
+        }
+        x if x == BootState::Booted as u8 => {
+            boot_log::force_uart_line("[MARK] boot_state=BOOTED");
+        }
+        _ => {
+            boot_log::force_uart_line("[MARK] boot_state=UNKNOWN");
+        }
+    }
     log::info!("[kernel:entry] root-task entry reached");
     log::info!(target: "kernel", "[kernel] boot entrypoint: starting bootstrap");
     let ctx = match bootstrap(platform, bootinfo) {
@@ -898,11 +912,17 @@ fn bootstrap<P: Platform>(
         false
     };
 
+    boot_log::force_uart_line("[MARK 30] after DTB deferred");
+
+    boot_log::force_uart_line("[MARK 31] before canonical_cspace");
     #[cfg(feature = "canonical_cspace")]
     {
         crate::bootstrap::retype::canonical_cspace_console(bootinfo_ref);
     }
 
+    boot_log::force_uart_line("[MARK 32] after canonical_cspace");
+
+    boot_log::force_uart_line("[MARK 33] before cap-probes");
     #[cfg(feature = "cap-probes")]
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_variables))]
     let mut first_retypes: Option<FirstRetypeResult> = None;
@@ -931,12 +951,17 @@ fn bootstrap<P: Platform>(
         }
     }
 
+    boot_log::force_uart_line("[MARK 34] after cap-probes");
+
+    boot_log::force_uart_line("[MARK 35] before ipc_vaddr");
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_variables))]
     let ipc_vaddr = ipc_buffer_ptr.map(|ptr| ptr.as_ptr() as usize);
     let ipc_frame = sel4_sys::seL4_CapInitThreadIPCBuffer;
 
+    boot_log::force_uart_line("[MARK 36] before bootstrap-minimal");
     #[cfg(feature = "bootstrap-minimal")]
     {
+        boot_log::force_uart_line("[MARK 37] enter bootstrap-minimal");
         log::warn!(
             "[boot] bootstrap-minimal: skipping EP retype/PL011 map/TCB copy; entering console"
         );
@@ -953,8 +978,12 @@ fn bootstrap<P: Platform>(
         crate::userland::start_console_or_cohsh(platform);
     }
 
+    boot_log::force_uart_line("[MARK 38] before bootstrap_ep");
     let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_view, &mut boot_cspace) {
-        Ok(slot) => (slot, true),
+        Ok(slot) => {
+            boot_log::force_uart_line("[MARK 39] after bootstrap_ep ok");
+            (slot, true)
+        }
         Err(err) => {
             crate::trace::trace_fail(b"bootstrap_ep", err);
             let mut line = heapless::String::<160>::new();
@@ -976,7 +1005,26 @@ fn bootstrap<P: Platform>(
                     err as i32,
                     error_name(err)
                 );
-                (root_endpoint(), false)
+                let fail_line = match err {
+                    sel4_sys::seL4_Error::seL4_FailedLookup => {
+                        "[FAIL] bootstrap_ep err=FailedLookup"
+                    }
+                    sel4_sys::seL4_Error::seL4_InvalidArgument => {
+                        "[FAIL] bootstrap_ep err=InvalidArgument"
+                    }
+                    sel4_sys::seL4_Error::seL4_InvalidCapability => {
+                        "[FAIL] bootstrap_ep err=InvalidCapability"
+                    }
+                    sel4_sys::seL4_Error::seL4_IllegalOperation => {
+                        "[FAIL] bootstrap_ep err=IllegalOperation"
+                    }
+                    sel4_sys::seL4_Error::seL4_RangeError => "[FAIL] bootstrap_ep err=RangeError",
+                    _ => "[FAIL] bootstrap_ep err=UNKNOWN",
+                };
+                boot_log::force_uart_line(fail_line);
+                loop {
+                    unsafe { sel4_sys::seL4_Yield() };
+                }
             }
         }
     };
@@ -1004,6 +1052,7 @@ fn bootstrap<P: Platform>(
         boot_tracer().advance(phase);
     }
 
+    boot_log::force_uart_line("[MARK 40] before seL4_SetIPCBuffer");
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
         {
@@ -1029,6 +1078,7 @@ fn bootstrap<P: Platform>(
         info.tcb_copy_slot
     } else {
         crate::bp!("tcb.copy.begin");
+        boot_log::force_uart_line("[MARK 41] before tcb copy");
         let copy_slot = tcb::bootstrap_copy_init_tcb(bootinfo_ref, &mut boot_cspace)
             .unwrap_or_else(|err| {
                 panic!(
