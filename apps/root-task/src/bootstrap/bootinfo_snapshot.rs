@@ -118,10 +118,10 @@ impl BootInfoState {
         let _ = core::fmt::write(
             &mut line,
             format_args!(
-                "[bootinfo:canary] {mark} diverged: expected checksum=0x{exp:016x} observed=0x{obs:016x} checks={}",
-                self.snapshot.checksum,
-                observed.checksum,
-                self.check_count.load(Ordering::Relaxed)
+                "[bootinfo:canary] {mark} diverged: expected checksum=0x{exp:016x} observed=0x{obs:016x} checks={checks}",
+                exp = self.snapshot.checksum,
+                obs = observed.checksum,
+                checks = self.check_count.load(Ordering::Relaxed)
             ),
         );
         line
