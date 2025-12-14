@@ -77,9 +77,13 @@ SECTIONS
   * it). The init thread stack must never run right up against the IPC buffer
   * mapping.
   */
-  . = __stack_top + __stack_guard;
+  .stack_guard __stack_top (NOLOAD) : ALIGN(0x1000) {
+    __stack_guard_start = .;
+    . = __ipcbuf_vaddr;
+    __stack_guard_end = .;
+  } :data
 
-  PROVIDE(_end = __ipcbuf_vaddr);
+  PROVIDE(_end = .);
 
   /* Do NOT advance '.' to device/MMIO addresses here. Keep segments tight. */
 }
