@@ -122,6 +122,7 @@ static LOGGER_INSTALLED: AtomicBool = AtomicBool::new(false);
 static EP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static EP_ATTACHED: AtomicBool = AtomicBool::new(false);
 static BRIDGE_CREATED: AtomicBool = AtomicBool::new(false);
+static EP_ONLY_PERMITTED: AtomicBool = AtomicBool::new(false);
 const fn env_flag(value: Option<&'static str>) -> bool {
     match value {
         Some(val) => {
@@ -268,6 +269,7 @@ fn revert_to_uart(reason: &[u8]) {
     EP_REQUESTED.store(false, Ordering::Release);
     EP_ATTACHED.store(false, Ordering::Release);
     BRIDGE_CREATED.store(false, Ordering::Release);
+    EP_ONLY_PERMITTED.store(false, Ordering::Release);
     emit_uart(reason);
 }
 
@@ -284,6 +286,9 @@ fn enter_mirrored_transport() {
 
 fn try_enter_ep_only() {
     if NO_BRIDGE_MODE.load(Ordering::Acquire) {
+        return;
+    }
+    if !EP_ONLY_PERMITTED.load(Ordering::Acquire) {
         return;
     }
     if LOGGER.transport() != LogTransport::UartMirroredEp {
@@ -311,6 +316,7 @@ pub fn init_logger_bootstrap_only() {
     EP_REQUESTED.store(false, Ordering::Release);
     EP_ATTACHED.store(false, Ordering::Release);
     BRIDGE_CREATED.store(false, Ordering::Release);
+    EP_ONLY_PERMITTED.store(false, Ordering::Release);
     ::log::set_max_level(LevelFilter::Info);
 }
 
@@ -368,6 +374,17 @@ pub fn notify_bridge_detached() {
     }
 }
 
+/// Allow the logger transport to switch to EP-only once userland is stable.
+pub fn allow_ep_only_transport() {
+    if NO_BRIDGE_MODE.load(Ordering::Acquire) {
+        return;
+    }
+    EP_ONLY_PERMITTED.store(true, Ordering::Release);
+    if LOGGER.transport() == LogTransport::UartMirroredEp {
+        try_enter_ep_only();
+    }
+}
+
 /// Toggle the no-bridge mode, forcing the logger to remain on the UART transport.
 pub fn set_no_bridge_mode(enabled: bool) {
     NO_BRIDGE_MODE.store(enabled, Ordering::Release);
@@ -376,6 +393,7 @@ pub fn set_no_bridge_mode(enabled: bool) {
         EP_REQUESTED.store(false, Ordering::Release);
         EP_ATTACHED.store(false, Ordering::Release);
         BRIDGE_CREATED.store(false, Ordering::Release);
+        EP_ONLY_PERMITTED.store(false, Ordering::Release);
     }
 }
 

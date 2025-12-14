@@ -10,6 +10,7 @@ use core::sync::atomic::AtomicU64;
 
 #[cfg(feature = "serial-console")]
 use crate::boot::uart_pl011;
+use crate::bootstrap::log as boot_log;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::console::CohesixConsole;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
@@ -164,12 +165,16 @@ pub fn main(ctx: BootContext) -> ! {
             "[boot] TimersAndIPC: queen.start.ok"
         );
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.end");
+        boot_log::allow_ep_only_transport();
         pump.run();
     }
 
     #[cfg(not(all(feature = "serial-console", feature = "kernel")))]
     #[allow(clippy::diverging_sub_expression)]
-    pump.run();
+    {
+        boot_log::allow_ep_only_transport();
+        pump.run();
+    }
 }
 
 /// Start the userland console or Cohesix shell over the serial transport.
