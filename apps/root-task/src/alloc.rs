@@ -32,8 +32,8 @@ pub fn init_heap() {
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
-        let start = unsafe { core::ptr::addr_of!(__heap_start) as usize };
-        let end = unsafe { core::ptr::addr_of!(__heap_end) as usize };
+        let start = core::ptr::addr_of!(__heap_start) as usize;
+        let end = core::ptr::addr_of!(__heap_end) as usize;
         let len = end.saturating_sub(start);
 
         debug_assert_eq!(

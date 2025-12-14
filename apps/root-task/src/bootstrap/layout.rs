@@ -66,20 +66,18 @@ impl LayoutSnapshot {
     }
 
     fn from_linker() -> Self {
-        unsafe {
-            Self::new(
-                core::ptr::addr_of!(__text_start) as usize,
-                core::ptr::addr_of!(__text_end) as usize,
-                core::ptr::addr_of!(__rodata_end) as usize,
-                core::ptr::addr_of!(__data_end) as usize,
-                core::ptr::addr_of!(__bss_start__) as usize,
-                core::ptr::addr_of!(__bss_end__) as usize,
-                core::ptr::addr_of!(__heap_start) as usize,
-                core::ptr::addr_of!(__heap_end) as usize,
-                core::ptr::addr_of!(__stack_bottom) as usize,
-                core::ptr::addr_of!(__stack_top) as usize,
-            )
-        }
+        Self::new(
+            core::ptr::addr_of!(__text_start) as usize,
+            core::ptr::addr_of!(__text_end) as usize,
+            core::ptr::addr_of!(__rodata_end) as usize,
+            core::ptr::addr_of!(__data_end) as usize,
+            core::ptr::addr_of!(__bss_start__) as usize,
+            core::ptr::addr_of!(__bss_end__) as usize,
+            core::ptr::addr_of!(__heap_start) as usize,
+            core::ptr::addr_of!(__heap_end) as usize,
+            core::ptr::addr_of!(__stack_bottom) as usize,
+            core::ptr::addr_of!(__stack_top) as usize,
+        )
     }
 
     fn validate(&self) -> Result<(), LayoutError> {

@@ -1171,10 +1171,17 @@ impl VirtQueue {
         size: usize,
     ) -> Result<Self, DriverError> {
         let queue_size = size as u16;
+        let base_paddr = frame.paddr();
         let base_ptr = frame.ptr();
         let page_bytes = 1usize << seL4_PageBits;
-        let frame_slice = frame.as_mut_slice();
-        let frame_capacity = frame_slice.len();
+
+        let frame_capacity = {
+            let frame_slice = frame.as_mut_slice();
+            let capacity = frame_slice.len();
+
+            frame_slice.fill(0);
+            capacity
+        };
 
         if frame_capacity != page_bytes {
             error!(
@@ -1188,7 +1195,6 @@ impl VirtQueue {
             ));
         }
 
-        let base_paddr = frame.paddr();
         if base_paddr & (page_bytes - 1) != 0 {
             error!(
                 target: "net-console",
@@ -1198,8 +1204,6 @@ impl VirtQueue {
                 "virtqueue backing not page aligned",
             ));
         }
-
-        frame_slice.fill(0);
 
         let queue_align = core::mem::size_of::<VirtqUsedElem>();
         let layout = VirtqLayout::compute(size, queue_align, frame_capacity)?;
