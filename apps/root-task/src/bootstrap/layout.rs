@@ -28,7 +28,7 @@ extern "C" {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct LayoutSnapshot {
+pub struct LayoutSnapshot {
     text_start: usize,
     text_end: usize,
     rodata_end: usize,
