@@ -29,6 +29,8 @@ pub mod ipcbuf_view;
 pub mod layout;
 /// Early boot logging backends.
 pub mod log;
+/// Strict phase tracking and invariant enforcement for bootstrap.
+pub mod phases;
 /// Thin wrapper around `seL4_Untyped_Retype` tailored for the init CSpace policy.
 pub mod retype;
 /// Helpers for selecting RAM-backed untyped capabilities during bootstrap.
