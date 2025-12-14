@@ -1305,6 +1305,7 @@ mod imp {
     pub const seL4_CapInitThreadSC: seL4_CPtr =
         seL4_RootCNodeCapSlots_seL4_CapInitThreadSC as seL4_CPtr;
     pub const seL4_CapSMC: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapSMC as seL4_CPtr;
+    pub const seL4_NumInitialCaps: seL4_CPtr = seL4_CapSMC + 1;
 
     pub const seL4_WordBits: seL4_Word = (core::mem::size_of::<seL4_Word>() * 8) as seL4_Word;
 
@@ -1520,6 +1521,7 @@ mod imp {
     pub const seL4_CapSMMUCBControl: seL4_CPtr = 13;
     pub const seL4_CapInitThreadSC: seL4_CPtr = 14;
     pub const seL4_CapSMC: seL4_CPtr = 15;
+    pub const seL4_NumInitialCaps: seL4_CPtr = seL4_CapSMC + 1;
 
     pub const seL4_UntypedObject: seL4_Word = 0;
     pub const seL4_TCBObject: seL4_Word = 1;

@@ -4,7 +4,7 @@
 
 extern crate alloc;
 
-use alloc::{boxed::Box, format};
+use alloc::{borrow::ToOwned, boxed::Box, format, string::String};
 use core::cell::RefCell;
 use core::cmp;
 use core::convert::TryFrom;
@@ -29,7 +29,7 @@ use crate::bootstrap::cspace_sys;
 use crate::bootstrap::hard_guard::{hard_guard_fail, HardGuardViolation};
 use crate::bootstrap::{
     boot_tracer,
-    bootinfo_snapshot::{BootInfoSnapshot, BootInfoState},
+    bootinfo_snapshot::BootInfoSnapshot,
     cspace::{CSpaceCtx, CSpaceWindow, FirstRetypeResult},
     device_pt_pool, ensure_device_pt_pool, ipcbuf, layout, log as boot_log,
     phases::{
@@ -53,12 +53,9 @@ use crate::event::{
 use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
 #[cfg(all(feature = "net-console", feature = "kernel"))]
-use crate::net::{
-    init_net_console, ConsoleNetConfig, DefaultNetConsoleError as NetConsoleError,
-    DefaultNetStack as NetStack, CONSOLE_TCP_PORT, DEFAULT_NET_BACKEND,
-};
+use crate::net::{DefaultNetStack as NetStack, CONSOLE_TCP_PORT, DEFAULT_NET_BACKEND};
 #[cfg(all(feature = "net-console", not(feature = "kernel")))]
-use crate::net::{init_net_console, ConsoleNetConfig, NetConsoleError, NetStack, CONSOLE_TCP_PORT};
+use crate::net::{NetStack, CONSOLE_TCP_PORT};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::NineDoorBridge;
 use crate::platform::{Platform, SeL4Platform};
@@ -1903,7 +1900,7 @@ fn bootstrap<P: Platform>(
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let virtio_present = false;
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let net_stack = {
+        let net_stack: Option<NetStack> = {
             log::warn!("[boot] net-console disabled until bootstrap invariants are stable");
             None
         };

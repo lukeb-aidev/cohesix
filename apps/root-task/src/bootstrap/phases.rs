@@ -4,7 +4,7 @@
 
 extern crate alloc;
 
-use alloc::string::String;
+use alloc::{format, string::String};
 
 use crate::sel4::{BootInfo, BootInfoView};
 
@@ -170,7 +170,7 @@ pub fn canonical_bootinfo_view(
 pub fn snapshot_bootinfo(
     bootinfo: &'static BootInfo,
     view: &BootInfoView,
-) -> Result<crate::bootstrap::bootinfo_snapshot::BootInfoState, FatalBootstrapError> {
+) -> Result<&'static crate::bootstrap::bootinfo_snapshot::BootInfoState, FatalBootstrapError> {
     crate::bootstrap::bootinfo_snapshot::BootInfoState::init(view.header())
         .map_err(|err| FatalBootstrapError::new(format!("bootinfo snapshot failed: {err:?}")))
 }

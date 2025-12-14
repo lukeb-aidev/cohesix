@@ -1,6 +1,7 @@
 // Author: Lukas Bower
 
 #![allow(dead_code)]
+#![allow(unsafe_code)]
 
 use core::fmt::Write;
 
