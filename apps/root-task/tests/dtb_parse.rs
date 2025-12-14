@@ -3,11 +3,18 @@
 #![cfg(feature = "kernel")]
 
 use core::mem::size_of;
+use core::ops::Range;
 
 use root_task::boot::bi_extra::{locate_dtb, parse_dtb, ExtraError, ParseError};
 use sel4_sys::seL4_Word;
 
 const FDT_ID: seL4_Word = 6;
+
+fn extra_range(extra: &[u8]) -> Range<usize> {
+    let start = extra.as_ptr() as usize;
+    let end = start + extra.len();
+    start..end
+}
 
 fn write_be(word: u32, target: &mut [u8], offset: usize) {
     target[offset..offset + 4].copy_from_slice(&word.to_be_bytes());
@@ -99,7 +106,7 @@ fn locate_dtb_finds_payload() {
     let dtb = build_dtb_fixture();
     let extra = build_extra_fixture(&dtb, FDT_ID);
 
-    let located = locate_dtb(&extra).expect("dtb header present");
+    let located = locate_dtb(&extra, extra_range(&extra)).expect("dtb header present");
     assert_eq!(located, &dtb);
 }
 
@@ -109,7 +116,7 @@ fn locate_dtb_rejects_truncated_header() {
     let mut extra = build_extra_fixture(&dtb, FDT_ID);
     extra.truncate(size_of::<seL4_Word>());
 
-    assert_eq!(locate_dtb(&extra), Err(ExtraError::Truncated));
+    assert_eq!(locate_dtb(&extra, extra_range(&extra)), Err(ExtraError::Truncated));
 }
 
 #[test]
@@ -119,7 +126,7 @@ fn locate_dtb_rejects_invalid_length() {
     let invalid = (size_of::<sel4_sys::seL4_BootInfoHeader>() - 4) as seL4_Word;
     write_word(invalid, &mut extra, size_of::<seL4_Word>());
 
-    assert_eq!(locate_dtb(&extra), Err(ExtraError::InvalidLength));
+    assert_eq!(locate_dtb(&extra, extra_range(&extra)), Err(ExtraError::InvalidLength));
 }
 
 #[test]
@@ -127,5 +134,15 @@ fn locate_dtb_reports_missing_record() {
     let dtb = build_dtb_fixture();
     let extra = build_extra_fixture(&dtb, 0);
 
-    assert_eq!(locate_dtb(&extra), Err(ExtraError::MissingDtb));
+    assert_eq!(locate_dtb(&extra, extra_range(&extra)), Err(ExtraError::MissingDtb));
+}
+
+#[test]
+fn locate_dtb_rejects_range_mismatch() {
+    let dtb = build_dtb_fixture();
+    let extra = build_extra_fixture(&dtb, FDT_ID);
+    let mut range = extra_range(&extra);
+    range = (range.start + 1)..range.end;
+
+    assert_eq!(locate_dtb(&extra, range), Err(ExtraError::Bounds));
 }

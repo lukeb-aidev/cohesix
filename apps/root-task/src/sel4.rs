@@ -9,6 +9,7 @@ use core::{
     arch::asm,
     convert::TryInto,
     fmt, mem,
+    ops::Range,
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
@@ -320,7 +321,9 @@ impl fmt::Display for BootInfoError {
     }
 }
 
-fn bootinfo_extra_slice<'a>(header: &'a seL4_BootInfo) -> Result<&'a [u8], BootInfoError> {
+fn bootinfo_extra_slice<'a>(
+    header: &'a seL4_BootInfo,
+) -> Result<(&'a [u8], usize, usize), BootInfoError> {
     let addr = header as *const _ as usize;
     let required_align = mem::align_of::<seL4_BootInfo>();
     if required_align != 0 && addr % required_align != 0 {
@@ -332,7 +335,10 @@ fn bootinfo_extra_slice<'a>(header: &'a seL4_BootInfo) -> Result<&'a [u8], BootI
 
     let extra_len = header.extraLen as usize;
     if extra_len == 0 {
-        return Ok(&[]);
+        let extra_start = addr
+            .checked_add(mem::size_of::<seL4_BootInfo>())
+            .ok_or(BootInfoError::Overflow)?;
+        return Ok((&[], extra_start, extra_start));
     }
 
     let header_size = core::mem::size_of::<seL4_BootInfo>();
@@ -354,7 +360,7 @@ fn bootinfo_extra_slice<'a>(header: &'a seL4_BootInfo) -> Result<&'a [u8], BootI
     // readable memory for the root task. The calculations above ensure we do not
     // wrap the address space or overrun the reported length.
     let slice = unsafe { core::slice::from_raw_parts(extra_start as *const u8, extra_len) };
-    Ok(slice)
+    Ok((slice, extra_start, extra_end))
 }
 
 /// Immutable projection of the kernel-supplied bootinfo region.
@@ -362,6 +368,8 @@ fn bootinfo_extra_slice<'a>(header: &'a seL4_BootInfo) -> Result<&'a [u8], BootI
 pub struct BootInfoView {
     header: &'static seL4_BootInfo,
     extra_bytes: &'static [u8],
+    extra_start: usize,
+    extra_end: usize,
 }
 
 impl BootInfoView {
@@ -375,10 +383,12 @@ impl BootInfoView {
             ::log::error!("bootinfo initBits invalid: {init_bits} (expected <= seL4_WordBits)");
             return Err(BootInfoError::InitCNodeBits { bits: init_bits });
         }
-        let extra_bytes = bootinfo_extra_slice(header)?;
+        let (extra_bytes, extra_start, extra_end) = bootinfo_extra_slice(header)?;
         Ok(Self {
             header,
             extra_bytes,
+            extra_start,
+            extra_end,
         })
     }
 
@@ -417,6 +427,12 @@ impl BootInfoView {
     #[must_use]
     pub fn extra(&self) -> &'static [u8] {
         self.extra_bytes
+    }
+
+    /// Returns the virtual address range containing the bootinfo extra blob.
+    #[must_use]
+    pub fn extra_range(&self) -> Range<usize> {
+        self.extra_start..self.extra_end
     }
 
     /// Returns the raw bytes that back the bootinfo header.
