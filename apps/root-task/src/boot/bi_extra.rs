@@ -5,6 +5,7 @@ use core::fmt;
 use core::mem::size_of;
 use core::ops::Range;
 use core::str;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_UntypedDesc, seL4_Word};
 
@@ -24,6 +25,8 @@ const FDT_END_NODE: u32 = 0x0000_0002;
 const FDT_PROP: u32 = 0x0000_0003;
 const FDT_NOP: u32 = 0x0000_0004;
 const FDT_END: u32 = 0x0000_0009;
+
+static EXTRA_RANGE_WARNED: AtomicBool = AtomicBool::new(false);
 
 /// Errors encountered when parsing the bootinfo-provided device tree blob.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,7 +212,24 @@ fn read_le_word(blob: &[u8], offset: usize) -> Result<usize, ExtraError> {
 }
 
 /// Locates the DTB payload within the bootinfo extra blob.
-pub fn locate_dtb(extra: &[u8]) -> Result<&[u8], ExtraError> {
+pub fn locate_dtb(extra: &[u8], extra_range: Range<usize>) -> Result<&[u8], ExtraError> {
+    let slice_start = extra.as_ptr() as usize;
+    let slice_end = slice_start
+        .checked_add(extra.len())
+        .ok_or(ExtraError::Bounds)?;
+
+    if slice_start != extra_range.start || slice_end != extra_range.end {
+        if !EXTRA_RANGE_WARNED.swap(true, Ordering::Relaxed) {
+            log::warn!(
+                target: "root_task::boot::bi_extra",
+                "[boot] dtb locate skipped: bootinfo extra range mismatch: slice=0x{slice_start:016x}..0x{slice_end:016x} expected=0x{:016x}..0x{:016x}",
+                extra_range.start,
+                extra_range.end,
+            );
+        }
+        return Err(ExtraError::Bounds);
+    }
+
     if extra.len() < BOOTINFO_HEADER_SIZE {
         return Err(ExtraError::TooShort);
     }
@@ -234,6 +254,16 @@ pub fn locate_dtb(extra: &[u8]) -> Result<&[u8], ExtraError> {
             .ok_or(ExtraError::Bounds)?;
         if payload_end > extra.len() {
             return Err(ExtraError::Truncated);
+        }
+
+        let payload_start_addr = slice_start
+            .checked_add(payload_start)
+            .ok_or(ExtraError::Bounds)?;
+        let payload_end_addr = slice_start
+            .checked_add(payload_end)
+            .ok_or(ExtraError::Bounds)?;
+        if payload_start_addr < extra_range.start || payload_end_addr > extra_range.end {
+            return Err(ExtraError::Bounds);
         }
 
         if id == SEL4_BOOTINFO_HEADER_FDT_ID {

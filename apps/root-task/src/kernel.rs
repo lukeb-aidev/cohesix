@@ -871,10 +871,14 @@ fn bootstrap<P: Platform>(
         device_pt_pool().map(DevicePtPool::from_config),
     );
     let extra_bytes = bootinfo_view.extra();
-    if !extra_bytes.is_empty() {
+    let extra_range = bootinfo_view.extra_range();
+    let dtb_deferred = if !extra_bytes.is_empty() {
         console.writeln_prefixed("[boot] deferring DTB parse");
         boot_tracer().advance(BootPhase::DTBParseDeferred);
-    }
+        true
+    } else {
+        false
+    };
 
     #[cfg(feature = "canonical_cspace")]
     {
@@ -1711,8 +1715,10 @@ fn bootstrap<P: Platform>(
         crate::bp!("spawn.worker.end");
 
         crate::bp!("dtb.parse.begin");
-        if !extra_bytes.is_empty() {
-            match bi_extra::locate_dtb(extra_bytes) {
+        if dtb_deferred {
+            console.writeln_prefixed("[boot] dtb locate skipped/failed: deferred");
+        } else if !extra_bytes.is_empty() {
+            match bi_extra::locate_dtb(extra_bytes, extra_range.clone()) {
                 Ok(dtb_blob) => match bi_extra::parse_dtb(dtb_blob) {
                     Ok(dtb) => {
                         let header = dtb.header();
@@ -1735,7 +1741,7 @@ fn bootstrap<P: Platform>(
                 },
                 Err(err) => {
                     let mut msg = heapless::String::<112>::new();
-                    let _ = write!(msg, "[boot] dtb locate failed: {err}");
+                    let _ = write!(msg, "[boot] dtb locate skipped/failed: {err}");
                     console.writeln_prefixed(msg.as_str());
                 }
             }
