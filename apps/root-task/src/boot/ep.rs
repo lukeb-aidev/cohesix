@@ -63,10 +63,7 @@ pub fn publish_root_ep(ep: seL4_CPtr) {
 /// `first_free` is set within the kernel-advertised empty window
 /// `[empty_start..empty_end)`. This function consumes exactly one slot from that
 /// window and leaves ordering of earlier boot phases unchanged.
-pub fn bootstrap_ep(
-    snapshot: &BootInfoSnapshot,
-    cs: &mut CSpace,
-) -> Result<seL4_CPtr, seL4_Error> {
+pub fn bootstrap_ep(snapshot: &BootInfoSnapshot, cs: &mut CSpace) -> Result<seL4_CPtr, seL4_Error> {
     let view = snapshot.view();
     if sel4::ep_ready() {
         return Ok(sel4::root_endpoint());
