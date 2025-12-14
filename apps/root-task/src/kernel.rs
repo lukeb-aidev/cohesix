@@ -631,7 +631,13 @@ impl BootStateGuard {
 impl Drop for BootStateGuard {
     fn drop(&mut self) {
         if !self.committed {
-            BOOT_STATE.store(BootState::Cold as u8, Ordering::Release);
+            log::error!("[boot] bootstrap exited without committing; refusing to reset boot state");
+            boot_log::force_uart_line(
+                "[boot] bootstrap aborted before commit; parking root-task thread",
+            );
+            loop {
+                unsafe { sel4_sys::seL4_Yield() };
+            }
         }
     }
 }
@@ -644,6 +650,17 @@ impl Drop for BootStateGuard {
 /// here ensures we always enter the event-pump userland path or loudly fall
 /// back to the PL011 console when bootstrap fails.
 pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
+    let boot_state = BOOT_STATE.load(Ordering::Acquire);
+    if boot_state != BootState::Cold as u8 {
+        log::error!(
+            "[kernel:entry] bootstrap re-entry detected (state={boot_state}); parking thread"
+        );
+        boot_log::force_uart_line("[kernel:entry] re-entry detected; parking thread");
+        loop {
+            unsafe { sel4_sys::seL4_Yield() };
+        }
+    }
+
     boot_log::force_uart_line("[kernel:entry] root-task entry reached");
     log::info!("[kernel:entry] root-task entry reached");
     log::info!(target: "kernel", "[kernel] boot entrypoint: starting bootstrap");
