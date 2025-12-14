@@ -372,6 +372,13 @@ pub struct BootInfoView {
     extra_end: usize,
 }
 
+// SAFETY: The seL4 bootinfo region is mapped by the kernel for the lifetime of the
+// root task. The raw pointers within `seL4_BootInfo` reference kernel-owned memory
+// that remains valid and immutable after boot, so sharing `BootInfoView` across
+// threads does not introduce additional aliasing or mutation hazards.
+unsafe impl Send for BootInfoView {}
+unsafe impl Sync for BootInfoView {}
+
 impl BootInfoView {
     fn build(header: &'static seL4_BootInfo) -> Result<Self, BootInfoError> {
         let init_bits = canonical_cnode_bits(header) as usize;
