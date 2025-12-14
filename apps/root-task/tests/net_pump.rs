@@ -6,7 +6,7 @@ use std::str;
 
 use cohesix_ticket::Role;
 use root_task::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
-use root_task::net::NetStack;
+use root_task::net::{NetStack, CONSOLE_QUEUE_DEPTH, CONSOLE_TCP_PORT};
 use root_task::serial::{
     test_support::LoopbackSerial, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY,
     DEFAULT_TX_CAPACITY,
@@ -92,6 +92,22 @@ fn build_pump<'a>(
 }
 
 #[test]
+fn net_console_uses_default_port() {
+    let serial = LoopbackSerial::<{ DEFAULT_RX_CAPACITY }>::new();
+    let mut audit = AuditCapture::new();
+    let mut pump = build_pump(serial, &mut audit);
+    let (mut net, _handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 15));
+    pump = pump.with_network(&mut net);
+
+    let listen_port = pump
+        .network_mut()
+        .expect("network not attached")
+        .console_listen_port();
+
+    assert_eq!(listen_port, CONSOLE_TCP_PORT);
+}
+
+#[test]
 fn network_lines_round_trip_acknowledgements() {
     let serial = LoopbackSerial::<{ DEFAULT_RX_CAPACITY }>::new();
     let mut audit = AuditCapture::new();
@@ -119,6 +135,47 @@ fn network_lines_round_trip_acknowledgements() {
     assert_eq!(str::from_utf8(log.as_slice()).unwrap(), "OK LOG\r\n");
     assert!(pump.metrics().accepted_commands >= 2);
     assert!(audit.info.iter().any(|line| line.contains("console: log")));
+}
+
+#[test]
+fn auth_and_attach_survive_saturated_queue() {
+    let serial = LoopbackSerial::<{ DEFAULT_RX_CAPACITY }>::new();
+    let mut audit = AuditCapture::new();
+    let mut pump = build_pump(serial, &mut audit);
+    let (mut net, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 99));
+    pump = pump.with_network(&mut net);
+
+    {
+        let net_iface = pump.network_mut().expect("network not attached");
+        for _ in 0..(CONSOLE_QUEUE_DEPTH * 6) {
+            net_iface.send_console_line("NOISE");
+        }
+        net_iface.inject_console_line("attach queen token\n");
+    }
+
+    for _ in 0..6 {
+        pump.poll();
+    }
+
+    let mut frames = heapless::Vec::<heapless::String<96>, 16>::new();
+    while let Some(frame) = handle.pop_tx() {
+        let as_str = str::from_utf8(frame.as_slice())
+            .unwrap()
+            .trim_end()
+            .to_owned();
+        let mut line = heapless::String::new();
+        line.push_str(as_str.as_str()).unwrap();
+        let _ = frames.push(line);
+    }
+
+    assert!(
+        frames.iter().any(|line| line.starts_with("OK AUTH")),
+        "auth acknowledgement missing ({frames:?})"
+    );
+    assert!(
+        frames.iter().any(|line| line.starts_with("OK ATTACH")),
+        "attach acknowledgement missing ({frames:?})"
+    );
 }
 
 #[test]

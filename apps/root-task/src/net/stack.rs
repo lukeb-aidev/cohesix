@@ -123,6 +123,8 @@ impl<DE> From<DE> for NetStackError<DE> {
 pub enum NetConsoleError<DE> {
     /// No network device was found on the selected backend.
     NoDevice,
+    /// Provided network configuration was unusable.
+    InvalidConfig(&'static str),
     /// An error occurred during stack bring-up.
     Init(NetStackError<DE>),
 }
@@ -131,6 +133,7 @@ impl<DE: fmt::Display> fmt::Display for NetConsoleError<DE> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoDevice => f.write_str("network device not present"),
+            Self::InvalidConfig(reason) => write!(f, "invalid net config: {reason}"),
             Self::Init(err) => write!(f, "{err}"),
         }
     }
@@ -210,6 +213,10 @@ static TCP_SMOKE_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static mut TCP_SMOKE_RX_STORAGE: [u8; TCP_SMOKE_RX_BUFFER] = [0u8; TCP_SMOKE_RX_BUFFER];
 static TCP_SMOKE_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static mut TCP_SMOKE_TX_STORAGE: [u8; TCP_SMOKE_TX_BUFFER] = [0u8; TCP_SMOKE_TX_BUFFER];
+static TCP_SMOKE_OUT_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static mut TCP_SMOKE_OUT_RX_STORAGE: [u8; TCP_SMOKE_RX_BUFFER] = [0u8; TCP_SMOKE_RX_BUFFER];
+static TCP_SMOKE_OUT_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static mut TCP_SMOKE_OUT_TX_STORAGE: [u8; TCP_SMOKE_TX_BUFFER] = [0u8; TCP_SMOKE_TX_BUFFER];
 static UDP_BEACON_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static UDP_ECHO_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static mut UDP_BEACON_RX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
@@ -288,8 +295,11 @@ pub struct NetStack<D: NetDevice> {
     udp_beacon_handle: Option<SocketHandle>,
     udp_echo_handle: Option<SocketHandle>,
     tcp_smoke_handle: Option<SocketHandle>,
+    tcp_smoke_out_handle: Option<SocketHandle>,
     counters: NetCounters,
     self_test: SelfTestState,
+    tcp_smoke_outbound_sent: bool,
+    tcp_smoke_last_attempt_ms: u64,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -406,6 +416,34 @@ pub fn init_net_console<H>(
 where
     H: Hardware<Error = HalError>,
 {
+    let config = config.with_dev_virt_defaults();
+    let iface_ip = config.address.ip;
+    if config.listen_port == 0 || iface_ip == [0, 0, 0, 0] {
+        log::error!(
+            "[net-console] invalid configuration: listen_port={} iface_ip={:?}; disabling net-console",
+            config.listen_port, config.address.ip
+        );
+        return Err(NetConsoleError::InvalidConfig(
+            "listen_port/ip must be configured",
+        ));
+    }
+
+    let gateway_label = config
+        .address
+        .gateway
+        .map(|gateway| Ipv4Address::new(gateway[0], gateway[1], gateway[2], gateway[3]))
+        .unwrap_or(Ipv4Address::UNSPECIFIED);
+    let iface_ip = Ipv4Address::new(iface_ip[0], iface_ip[1], iface_ip[2], iface_ip[3]);
+    log::info!(
+        "[net-console] config: iface_ip={}/{} gateway={} listen_port={} udp_echo_port={} tcp_smoke_port={}",
+        iface_ip,
+        config.address.prefix_len,
+        gateway_label,
+        config.listen_port,
+        UDP_ECHO_PORT,
+        TCP_SMOKE_PORT
+    );
+
     NetStack::new(hal, config, DEFAULT_NET_BACKEND).map_err(NetConsoleError::from)
 }
 
@@ -713,6 +751,22 @@ impl<D: NetDevice> NetStack<D> {
         } else {
             None
         };
+        let tcp_smoke_out_rx_guard = if SELF_TEST_ENABLED {
+            Some(StorageGuard::acquire(
+                &TCP_SMOKE_OUT_RX_STORAGE_IN_USE,
+                NetStackError::TcpSmokeRxStorageInUse,
+            )?)
+        } else {
+            None
+        };
+        let tcp_smoke_out_tx_guard = if SELF_TEST_ENABLED {
+            Some(StorageGuard::acquire(
+                &TCP_SMOKE_OUT_TX_STORAGE_IN_USE,
+                NetStackError::TcpSmokeTxStorageInUse,
+            )?)
+        } else {
+            None
+        };
         let udp_beacon_guard = if SELF_TEST_ENABLED {
             Some(StorageGuard::acquire(
                 &UDP_BEACON_STORAGE_IN_USE,
@@ -789,8 +843,11 @@ impl<D: NetDevice> NetStack<D> {
             udp_beacon_handle: None,
             udp_echo_handle: None,
             tcp_smoke_handle: None,
+            tcp_smoke_out_handle: None,
             counters: NetCounters::default(),
             self_test: SelfTestState::new(SELF_TEST_ENABLED),
+            tcp_smoke_outbound_sent: false,
+            tcp_smoke_last_attempt_ms: 0,
         };
         stack.initialise_socket();
         stack.initialise_self_test_sockets();
@@ -801,6 +858,12 @@ impl<D: NetDevice> NetStack<D> {
             guard.disarm();
         }
         if let Some(guard) = tcp_smoke_tx_guard {
+            guard.disarm();
+        }
+        if let Some(guard) = tcp_smoke_out_rx_guard {
+            guard.disarm();
+        }
+        if let Some(guard) = tcp_smoke_out_tx_guard {
             guard.disarm();
         }
         if let Some(guard) = udp_beacon_guard {
@@ -910,6 +973,13 @@ impl<D: NetDevice> NetStack<D> {
                 );
                 self.tcp_smoke_handle = Some(self.sockets.add(tcp_socket));
             }
+        }
+
+        unsafe {
+            let rx_buffer = TcpSocketBuffer::new(&mut TCP_SMOKE_OUT_RX_STORAGE[..]);
+            let tx_buffer = TcpSocketBuffer::new(&mut TCP_SMOKE_OUT_TX_STORAGE[..]);
+            let tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
+            self.tcp_smoke_out_handle = Some(self.sockets.add(tcp_socket));
         }
     }
 
@@ -1021,6 +1091,7 @@ impl<D: NetDevice> NetStack<D> {
 
         activity |= self.poll_udp_echo();
         activity |= self.poll_tcp_smoke(now_ms);
+        activity |= self.poll_tcp_smoke_outbound(now_ms);
 
         if activity {
             self.bump_poll_counter();
@@ -1205,6 +1276,97 @@ impl<D: NetDevice> NetStack<D> {
 
         if matches!(socket.state(), TcpState::Closed) {
             let _ = socket.listen(TCP_SMOKE_PORT);
+        }
+
+        activity
+    }
+
+    fn poll_tcp_smoke_outbound(&mut self, now_ms: u64) -> bool {
+        if !self.self_test.running {
+            return false;
+        }
+
+        let Some(handle) = self.tcp_smoke_out_handle else {
+            return false;
+        };
+        let socket = self.sockets.get_mut::<TcpSocket>(handle);
+        let mut activity = false;
+        let dest_ip = self
+            .gateway
+            .unwrap_or_else(|| Ipv4Address::from(DEV_VIRT_GATEWAY));
+        let dest = IpEndpoint::new(dest_ip.into(), TCP_SMOKE_PORT);
+
+        if matches!(socket.state(), TcpState::Closed) {
+            if now_ms.saturating_sub(self.tcp_smoke_last_attempt_ms) >= 1_000 {
+                self.tcp_smoke_last_attempt_ms = now_ms;
+                self.tcp_smoke_outbound_sent = false;
+                match socket.connect(dest, 0) {
+                    Ok(()) => {
+                        info!(
+                            "[net-selftest] tcp-smoke outbound connect -> {}:{} (now_ms={})",
+                            dest.ip(),
+                            dest.port,
+                            now_ms
+                        );
+                        activity = true;
+                    }
+                    Err(err) => {
+                        self.counters.tcp_smoke_outbound_failures =
+                            self.counters.tcp_smoke_outbound_failures.saturating_add(1);
+                        warn!(
+                            "[net-selftest] tcp-smoke outbound connect failed dest={}:{} err={:?}",
+                            dest.ip(),
+                            dest.port,
+                            err
+                        );
+                    }
+                }
+            }
+            return activity;
+        }
+
+        if socket.state() == TcpState::Established && !self.tcp_smoke_outbound_sent {
+            if socket.can_send() {
+                match socket.send_slice(b"hi\n") {
+                    Ok(sent) => {
+                        self.counters.tcp_tx_bytes =
+                            self.counters.tcp_tx_bytes.saturating_add(sent as u64);
+                        self.counters.tcp_smoke_outbound =
+                            self.counters.tcp_smoke_outbound.saturating_add(1);
+                        self.tcp_smoke_outbound_sent = true;
+                        self.self_test.record_tcp_ok();
+                        info!(
+                            "[net-selftest] tcp-smoke outbound sent bytes={} dest={}:{}",
+                            sent,
+                            dest.ip(),
+                            dest.port
+                        );
+                        socket.close();
+                        activity = true;
+                    }
+                    Err(err) => {
+                        warn!(
+                            "[net-selftest] tcp-smoke outbound send failed err={:?}",
+                            err
+                        );
+                    }
+                }
+            }
+        }
+
+        if matches!(
+            socket.state(),
+            TcpState::CloseWait | TcpState::TimeWait | TcpState::LastAck
+        ) && !self.tcp_smoke_outbound_sent
+        {
+            self.counters.tcp_smoke_outbound_failures =
+                self.counters.tcp_smoke_outbound_failures.saturating_add(1);
+            warn!(
+                "[net-selftest] tcp-smoke outbound closed without send state={:?}",
+                socket.state()
+            );
+            socket.close();
+            activity = true;
         }
 
         activity
@@ -2010,6 +2172,8 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.server.end_session();
         self.session_active = false;
         self.telemetry = NetTelemetry::default();
+        self.tcp_smoke_outbound_sent = false;
+        self.tcp_smoke_last_attempt_ms = 0;
     }
 
     fn start_self_test(&mut self, now_ms: u64) -> bool {
@@ -2017,8 +2181,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             return false;
         }
         if self.self_test.start(now_ms) {
+            self.tcp_smoke_outbound_sent = false;
+            self.tcp_smoke_last_attempt_ms = now_ms.saturating_sub(1_000);
             info!(
-                "[net-selftest] starting run (udp dst=10.0.2.2:{} tcp dst=127.0.0.1:{})",
+                "[net-selftest] starting run (udp dst=10.0.2.2:{} tcp dst=10.0.2.2:{})",
                 UDP_ECHO_PORT, TCP_SMOKE_PORT
             );
             info!(
@@ -2030,13 +2196,17 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                 UDP_ECHO_PORT
             );
             info!(
-                "[net-selftest] host tcp smoke: printf \"hi\" | nc -v 127.0.0.1 {}",
+                "[net-selftest] host tcp smoke: printf \"hi\" | nc -v 10.0.2.2 {}",
                 TCP_SMOKE_PORT
             );
             true
         } else {
             false
         }
+    }
+
+    fn console_listen_port(&self) -> u16 {
+        self.listen_port
     }
 
     fn self_test_report(&self) -> NetSelfTestReport {
@@ -2051,6 +2221,8 @@ impl<D: NetDevice> Drop for NetStack<D> {
         TCP_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
         TCP_SMOKE_RX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
         TCP_SMOKE_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
+        TCP_SMOKE_OUT_RX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
+        TCP_SMOKE_OUT_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
         UDP_BEACON_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
         UDP_ECHO_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
     }

@@ -2,7 +2,7 @@
 
 //! TCP console session management shared between kernel and host stacks.
 
-use heapless::{Deque, String as HeaplessString};
+use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, info, warn};
 
 use super::{AUTH_TIMEOUT_MS, CONSOLE_QUEUE_DEPTH};
@@ -45,6 +45,7 @@ pub struct TcpConsoleServer {
     state: SessionState,
     line_buffer: HeaplessString<DEFAULT_LINE_CAPACITY>,
     inbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
+    priority_outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, { CONSOLE_QUEUE_DEPTH * 4 }>,
     outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
     last_activity_ms: u64,
     auth_deadline_ms: Option<u64>,
@@ -94,6 +95,7 @@ impl TcpConsoleServer {
             state: SessionState::Inactive,
             line_buffer: HeaplessString::new(),
             inbound: Deque::new(),
+            priority_outbound: Deque::new(),
             outbound: Deque::new(),
             last_activity_ms: 0,
             auth_deadline_ms: None,
@@ -107,6 +109,7 @@ impl TcpConsoleServer {
         self.set_state(SessionState::WaitingAuth);
         self.line_buffer.clear();
         self.inbound.clear();
+        self.priority_outbound.clear();
         self.outbound.clear();
         self.last_activity_ms = now_ms;
         self.auth_deadline_ms = None;
@@ -360,28 +363,59 @@ impl TcpConsoleServer {
         if buf.push_str(line).is_err() {
             return Err(());
         }
-        if self.outbound.push_back(buf.clone()).is_err() {
-            let _ = self.outbound.pop_front();
-            let _ = self.log_outbound_drop(line);
-            self.outbound.push_back(buf).map_err(|_| ())
+        let is_priority = Self::is_priority_line(buf.as_str());
+        if is_priority {
+            self.make_space_for_priority();
+            if self.priority_outbound.push_back(buf.clone()).is_err() {
+                warn!(
+                    "[cohsh-net] priority outbound queue unexpectedly full; preserving latest critical line"
+                );
+                let _ = self
+                    .priority_outbound
+                    .pop_front()
+                    .map(|line| self.insert_priority_into_outbound_front(line));
+                self.priority_outbound.push_back(buf).map_err(|_| ())
+            } else {
+                Ok(())
+            }
         } else {
+            if self.outbound.push_back(buf.clone()).is_err() {
+                if let Some(dropped) = self.evict_oldest_non_priority() {
+                    self.log_outbound_drop(dropped.as_str());
+                }
+                if self.outbound.push_back(buf).is_err() {
+                    self.log_outbound_drop(line);
+                    return Err(());
+                }
+            }
             Ok(())
         }
     }
 
     /// Return true when outbound data is buffered for transmission.
     pub fn has_outbound(&self) -> bool {
-        !self.outbound.is_empty()
+        !self.priority_outbound.is_empty() || !self.outbound.is_empty()
     }
 
     /// Pop the next outbound console line, if any.
     pub fn pop_outbound(&mut self) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
-        self.outbound.pop_front()
+        self.priority_outbound
+            .pop_front()
+            .or_else(|| self.outbound.pop_front())
     }
 
     /// Requeue an outbound line at the front of the queue.
     pub fn push_outbound_front(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) {
-        if self.outbound.push_front(line).is_err() {
+        if Self::is_priority_line(line.as_str()) {
+            self.make_space_for_priority();
+            if self.priority_outbound.push_front(line.clone()).is_err() {
+                let _ = self
+                    .priority_outbound
+                    .pop_back()
+                    .map(|line| self.insert_priority_into_outbound_front(line));
+                let _ = self.priority_outbound.push_front(line);
+            }
+        } else if self.outbound.push_front(line).is_err() {
             let _ = self.outbound.pop_back();
         }
     }
@@ -436,6 +470,56 @@ impl TcpConsoleServer {
                 "[cohsh-net] outbound queue saturated (drops={}) line='{}'",
                 self.outbound_drops, line
             );
+        }
+    }
+
+    fn is_priority_line(line: &str) -> bool {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        trimmed.starts_with("OK ") || trimmed.starts_with("ERR ") || trimmed == "END"
+    }
+
+    fn evict_oldest_non_priority(&mut self) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+        let mut scratch: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH> =
+            HeaplessVec::new();
+        let mut dropped: Option<HeaplessString<DEFAULT_LINE_CAPACITY>> = None;
+        while let Some(line) = self.outbound.pop_front() {
+            if dropped.is_none() && !Self::is_priority_line(line.as_str()) {
+                dropped = Some(line);
+                continue;
+            }
+            let _ = scratch.push(line);
+        }
+        for line in scratch {
+            let _ = self.outbound.push_back(line);
+        }
+        dropped
+    }
+
+    fn make_space_for_priority(&mut self) {
+        if !self.priority_outbound.is_full() {
+            return;
+        }
+
+        if let Some(dropped) = self.evict_oldest_non_priority() {
+            self.log_outbound_drop(dropped.as_str());
+        }
+
+        if self.priority_outbound.is_full() {
+            if let Some(line) = self.priority_outbound.pop_front() {
+                self.insert_priority_into_outbound_front(line);
+            }
+        }
+    }
+
+    fn insert_priority_into_outbound_front(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) {
+        if self.outbound.is_full() {
+            if let Some(dropped) = self.evict_oldest_non_priority() {
+                self.log_outbound_drop(dropped.as_str());
+            }
+        }
+        if self.outbound.push_front(line.clone()).is_err() {
+            let _ = self.outbound.pop_back();
+            let _ = self.outbound.push_front(line);
         }
     }
 }
