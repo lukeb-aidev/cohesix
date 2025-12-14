@@ -991,12 +991,17 @@ where
                             stats.tcp_rx_bytes,
                             stats.tcp_tx_bytes
                         ));
+                        let line_three = format_message(format_args!(
+                            "netstats: tcp_smoke_out={} tcp_smoke_out_failures={}",
+                            stats.tcp_smoke_outbound, stats.tcp_smoke_outbound_failures
+                        ));
                         let status_line = format_message(format_args!(
                             "nettest: enabled={} running={} last={:?}",
                             report.enabled, report.running, report.last_result
                         ));
                         self.emit_console_line(line_one.as_str());
                         self.emit_console_line(line_two.as_str());
+                        self.emit_console_line(line_three.as_str());
                         self.emit_console_line(status_line.as_str());
                         self.metrics.accepted_commands += 1;
                         self.emit_ack_ok("NETSTATS", None);

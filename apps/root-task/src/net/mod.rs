@@ -76,6 +76,26 @@ impl ConsoleNetConfig {
             address: NetAddressConfig::dev_virt(),
         }
     }
+
+    /// Apply development-friendly defaults for the QEMU `virt` target when
+    /// configuration inputs (e.g. DTB or bootinfo) are absent or incomplete.
+    #[must_use]
+    pub fn with_dev_virt_defaults(mut self) -> Self {
+        if self.listen_port == 0 {
+            self.listen_port = COHESIX_TCP_CONSOLE_PORT;
+        }
+        if self.address.ip == [0, 0, 0, 0] {
+            self.address.ip = DEV_VIRT_IP;
+            self.address.prefix_len = DEV_VIRT_PREFIX;
+        }
+        if self.address.prefix_len == 0 {
+            self.address.prefix_len = DEV_VIRT_PREFIX;
+        }
+        if self.address.gateway.is_none() {
+            self.address.gateway = Some(DEV_VIRT_GATEWAY);
+        }
+        self
+    }
 }
 
 /// Networking telemetry reported by the event pump.
@@ -125,6 +145,10 @@ pub struct NetCounters {
     pub tcp_rx_bytes: u64,
     /// TCP TX bytes submitted.
     pub tcp_tx_bytes: u64,
+    /// Successful outbound TCP smoke test completions.
+    pub tcp_smoke_outbound: u64,
+    /// Failed outbound TCP smoke test attempts.
+    pub tcp_smoke_outbound_failures: u64,
 }
 
 /// Outcome of the latest network self-test pass.
@@ -258,6 +282,11 @@ pub trait NetPoller {
 
     /// Reset the underlying transport (testing hook).
     fn reset(&mut self) {}
+
+    /// Expose the configured TCP console listen port.
+    fn console_listen_port(&self) -> u16 {
+        CONSOLE_TCP_PORT
+    }
 
     /// Start a network self-test run if supported.
     fn start_self_test(&mut self, _now_ms: u64) -> bool {
