@@ -73,7 +73,7 @@ SECTIONS
     . = __stack_top;
   } :data
   ASSERT(ADDR(.stack) == __stack_bottom, "stack bottom must match computed bound");
-  __stack_top = .;
+  ASSERT(. == __stack_top, "stack top must remain at computed bound");
 
   /*
    * Leave a guard gap below the IPC buffer to avoid stack overflows corrupting
