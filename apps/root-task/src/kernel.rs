@@ -1006,19 +1006,11 @@ fn bootstrap<P: Platform>(
                     error_name(err)
                 );
                 let fail_line = match err {
-                    sel4_sys::seL4_Error::seL4_FailedLookup => {
-                        "[FAIL] bootstrap_ep err=FailedLookup"
-                    }
-                    sel4_sys::seL4_Error::seL4_InvalidArgument => {
-                        "[FAIL] bootstrap_ep err=InvalidArgument"
-                    }
-                    sel4_sys::seL4_Error::seL4_InvalidCapability => {
-                        "[FAIL] bootstrap_ep err=InvalidCapability"
-                    }
-                    sel4_sys::seL4_Error::seL4_IllegalOperation => {
-                        "[FAIL] bootstrap_ep err=IllegalOperation"
-                    }
-                    sel4_sys::seL4_Error::seL4_RangeError => "[FAIL] bootstrap_ep err=RangeError",
+                    sel4_sys::seL4_FailedLookup => "[FAIL] bootstrap_ep err=FailedLookup",
+                    sel4_sys::seL4_InvalidArgument => "[FAIL] bootstrap_ep err=InvalidArgument",
+                    sel4_sys::seL4_InvalidCapability => "[FAIL] bootstrap_ep err=InvalidCapability",
+                    sel4_sys::seL4_IllegalOperation => "[FAIL] bootstrap_ep err=IllegalOperation",
+                    sel4_sys::seL4_RangeError => "[FAIL] bootstrap_ep err=RangeError",
                     _ => "[FAIL] bootstrap_ep err=UNKNOWN",
                 };
                 boot_log::force_uart_line(fail_line);
