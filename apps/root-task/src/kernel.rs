@@ -1402,7 +1402,7 @@ fn bootstrap<P: Platform>(
     }
 
     #[cfg(feature = "kernel")]
-    let _ninedoor: &'static mut NineDoorBridge = {
+    let ninedoor: &'static mut NineDoorBridge = {
         let bridge = Box::new(NineDoorBridge::new());
         Box::leak(bridge)
     };
