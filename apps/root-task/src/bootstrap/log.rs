@@ -149,6 +149,10 @@ fn emit_uart(payload: &[u8]) {
 }
 
 /// Emit a UART line regardless of the current logger transport.
+///
+/// This path deliberately avoids heap allocations, locks, or the `log` crate so
+/// it can always make forward progress even if the primary logging backend is
+/// stalled or unavailable.
 pub fn force_uart_line(line: &str) {
     if line.trim().is_empty() {
         return;

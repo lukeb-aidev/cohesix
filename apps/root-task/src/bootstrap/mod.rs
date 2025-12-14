@@ -164,38 +164,50 @@ impl BootTracer {
     /// Advances the tracer to the supplied phase, updating diagnostics and
     /// emitting a UART beacon describing the transition.
     pub fn advance(&self, phase: BootPhase) {
-        let mut guard = self.state.lock();
-        guard.phase = phase;
-        if let BootPhase::RetypeProgress { done, total } = phase {
-            guard.progress_done = done;
-            guard.progress_total = total;
+        let mut progress_done = 0u32;
+        let mut progress_total = 0u32;
+        if let Some(mut guard) = self.state.try_lock() {
+            guard.phase = phase;
+            if let BootPhase::RetypeProgress { done, total } = phase {
+                guard.progress_done = done;
+                guard.progress_total = total;
+            }
+            progress_done = guard.progress_done;
+            progress_total = guard.progress_total;
         }
         let _ = self.sequence.fetch_add(1, Ordering::AcqRel) + 1;
-        let done = guard.progress_done;
-        let total = guard.progress_total;
-        drop(guard);
-        let line = Self::render_phase(phase, done, total);
+        let line = Self::render_phase(phase, progress_done, progress_total);
         crate::bootstrap::log::force_uart_line(line.as_str());
     }
 
     /// Records the most recent CSpace slot touched while retyping.
     pub fn record_slot(&self, slot: u32) {
-        let mut guard = self.state.lock();
-        guard.last_slot = Some(slot);
+        if let Some(mut guard) = self.state.try_lock() {
+            guard.last_slot = Some(slot);
+        }
         let _ = self.sequence.fetch_add(1, Ordering::AcqRel) + 1;
     }
 
     /// Returns a snapshot of the current boot progress state for watchdogs.
     #[must_use]
     pub fn snapshot(&self) -> BootSnapshot {
-        let guard = self.state.lock();
-        BootSnapshot::new(
-            guard.phase,
-            self.sequence.load(Ordering::Acquire),
-            guard.last_slot,
-            guard.progress_done,
-            guard.progress_total,
-        )
+        if let Some(guard) = self.state.try_lock() {
+            BootSnapshot::new(
+                guard.phase,
+                self.sequence.load(Ordering::Acquire),
+                guard.last_slot,
+                guard.progress_done,
+                guard.progress_total,
+            )
+        } else {
+            BootSnapshot::new(
+                BootPhase::Begin,
+                self.sequence.load(Ordering::Acquire),
+                None,
+                0,
+                0,
+            )
+        }
     }
 }
 
