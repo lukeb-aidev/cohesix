@@ -7,15 +7,16 @@
 //! current driver set depends on. This keeps the surface area small while
 //! providing a structured location for future peripherals.
 
-use core::{
-    fmt,
-    ptr::NonNull,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use core::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "kernel")]
+use core::{fmt, ptr::NonNull};
 
+#[cfg(feature = "kernel")]
 pub mod pci;
 
+#[cfg(feature = "kernel")]
 use crate::sel4::{DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, RamFrame};
+#[cfg(feature = "kernel")]
 use pci::{PciAddress, PciTopology};
 #[cfg(feature = "kernel")]
 use sel4_sys::seL4_Error;
@@ -27,10 +28,12 @@ pub trait Timebase {
 }
 
 /// Lightweight IRQ identifier used across drivers.
+#[cfg(feature = "kernel")]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Irq(pub u32);
 
 /// Abstraction over IRQ controller behaviour.
+#[cfg(feature = "kernel")]
 pub trait IrqCtl {
     /// Returns the next pending IRQ when available.
     fn poll(&self) -> Option<Irq>;
@@ -57,6 +60,11 @@ impl MonotonicTimebase {
     pub fn advance_ms(&self, delta_ms: u64) {
         self.counter_ms.fetch_add(delta_ms, Ordering::Relaxed);
     }
+
+    /// Sets the timebase to an absolute value in milliseconds.
+    pub fn set_now_ms(&self, now_ms: u64) {
+        self.counter_ms.store(now_ms, Ordering::Relaxed);
+    }
 }
 
 impl Timebase for MonotonicTimebase {
@@ -77,18 +85,25 @@ pub fn timebase() -> &'static dyn Timebase {
     default_timebase()
 }
 
+/// Sets the shared default timebase to an absolute value.
+pub fn set_timebase_now_ms(now_ms: u64) {
+    DEFAULT_TIMEBASE.set_now_ms(now_ms);
+}
+
 /// Advances the shared default timebase by the provided delta.
 pub fn advance_default_timebase(delta_ms: u64) {
     DEFAULT_TIMEBASE.advance_ms(delta_ms);
 }
 
 /// Mapping permissions used by the HAL when creating virtual regions.
+#[cfg(feature = "kernel")]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct MapPerms {
     pub read: bool,
     pub write: bool,
 }
 
+#[cfg(feature = "kernel")]
 impl MapPerms {
     pub const R: Self = Self {
         read: true,
@@ -102,6 +117,7 @@ impl MapPerms {
 }
 
 /// HAL-managed mapping of device memory returned to drivers.
+#[cfg(feature = "kernel")]
 #[derive(Clone)]
 pub struct MappedRegion {
     frame: DeviceFrame,
@@ -109,6 +125,7 @@ pub struct MappedRegion {
     perms: MapPerms,
 }
 
+#[cfg(feature = "kernel")]
 impl MappedRegion {
     /// Constructs a mapped region from an existing device frame.
     #[must_use]
@@ -142,11 +159,13 @@ impl MappedRegion {
 }
 
 /// PCI command register flags manipulated by the HAL.
+#[cfg(feature = "kernel")]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct PciCommandFlags {
     bits: u16,
 }
 
+#[cfg(feature = "kernel")]
 impl PciCommandFlags {
     pub const IO_SPACE: Self = Self { bits: 1 << 0 };
     pub const MEMORY_SPACE: Self = Self { bits: 1 << 1 };
@@ -179,6 +198,7 @@ impl PciCommandFlags {
     }
 }
 
+#[cfg(feature = "kernel")]
 impl core::ops::BitOr for PciCommandFlags {
     type Output = Self;
 
@@ -187,6 +207,7 @@ impl core::ops::BitOr for PciCommandFlags {
     }
 }
 
+#[cfg(feature = "kernel")]
 impl core::ops::BitOrAssign for PciCommandFlags {
     fn bitor_assign(&mut self, rhs: Self) {
         self.bits |= rhs.bits;

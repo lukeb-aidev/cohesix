@@ -25,7 +25,6 @@ pub(crate) mod drivers;
 #[cfg(feature = "net-console")]
 pub mod net;
 
-#[cfg(feature = "kernel")]
 pub mod hal;
 
 #[cfg(feature = "kernel")]
