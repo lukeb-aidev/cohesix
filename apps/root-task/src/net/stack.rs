@@ -234,35 +234,25 @@ static mut UDP_ECHO_TX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_C
 
 /// Shared monotonic clock for the interface.
 #[derive(Debug, Default)]
-pub struct NetworkClock {
-    ticks_ms: portable_atomic::AtomicU64,
-}
+pub struct NetworkClock;
 
 impl NetworkClock {
     /// Creates a monotonic clock initialised to zero milliseconds.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            ticks_ms: portable_atomic::AtomicU64::new(0),
-        }
+        Self
     }
 
     /// Advances the clock by `delta_ms` and returns the resulting [`Instant`].
     pub fn advance(&self, delta_ms: u32) -> Instant {
-        let delta = u64::from(delta_ms);
-        let updated = self
-            .ticks_ms
-            .fetch_add(delta, portable_atomic::Ordering::Relaxed)
-            .saturating_add(delta);
-        let millis = i64::try_from(updated).unwrap_or(i64::MAX);
-        Instant::from_millis(millis)
+        let _ = delta_ms;
+        self.now()
     }
 
     /// Reads the current [`Instant`] without modifying the clock value.
     #[must_use]
     pub fn now(&self) -> Instant {
-        let current = self.ticks_ms.load(portable_atomic::Ordering::Relaxed);
-        let millis = i64::try_from(current).unwrap_or(i64::MAX);
+        let millis = i64::try_from(crate::hal::timebase().now_ms()).unwrap_or(i64::MAX);
         Instant::from_millis(millis)
     }
 }
@@ -783,6 +773,9 @@ impl<D: NetDevice> NetStack<D> {
         } else {
             None
         };
+
+        let init_now_ms = crate::hal::timebase().now_ms();
+        debug!("[net-console] init: timebase.now_ms={init_now_ms}");
 
         let clock = NetworkClock::new();
         let mut iface_config = IfaceConfig::new(HardwareAddress::Ethernet(mac));
