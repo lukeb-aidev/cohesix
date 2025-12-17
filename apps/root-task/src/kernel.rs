@@ -149,22 +149,57 @@ fn install_init_ipc_buffer(
 #[inline(always)]
 fn ipcbuf_sanity_probe(bootinfo_ref: &sel4_sys::seL4_BootInfo) {
     let depth = bootinfo_ref.init_cnode_depth() as sel4_sys::seL4_Word;
-    let slot = bootinfo_ref.init_tcb_cap();
-    let rights = sel4_sys::seL4_CapRights::new(0, 1, 1, 1);
+    let src = bootinfo_ref.init_tcb_cap();
+    let empty_start = bootinfo_ref.empty_first_slot() as sel4_sys::seL4_CPtr;
+    let empty_end = bootinfo_ref.empty_last_slot_excl() as sel4_sys::seL4_CPtr;
+
+    if empty_start >= empty_end {
+        crate::bootstrap::log::force_uart_line("[boot] ipcbuf sanity empty window invalid");
+        panic!(
+            "ipcbuf sanity failed: empty window invalid start=0x{empty_start:04x} end=0x{empty_end:04x}"
+        );
+    }
+
+    let mut dst = empty_start;
+    let candidate = dst.saturating_add(1);
+    if candidate < empty_end {
+        dst = candidate;
+    }
+
+    if dst < empty_start || dst >= empty_end {
+        crate::bootstrap::log::force_uart_line("[boot] ipcbuf sanity dst outside empty window");
+        panic!(
+            "ipcbuf sanity failed: dst outside empty window dst=0x{dst:04x} window=[0x{empty_start:04x}..0x{empty_end:04x})"
+        );
+    }
 
     let result = unsafe {
         sel4_sys::seL4_CNode_Copy(
             bootinfo_ref.init_cnode_cap(),
-            slot,
+            dst,
             depth,
             bootinfo_ref.init_cnode_cap(),
-            slot,
+            src,
             depth,
-            rights,
+            sel4_sys::seL4_AllRights,
         )
     };
 
+    let mut line = HeaplessString::<160>::new();
+    let _ = write!(
+        line,
+        "[boot] ipcbuf sanity copy src=0x{src:04x} dst=0x{dst:04x} empty=[0x{empty_start:04x}..0x{empty_end:04x}) err={} ({})",
+        result as i32,
+        error_name(result)
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+
     if result != sel4_sys::seL4_NoError {
+        if result == sel4_sys::seL4_DeleteFirst {
+            crate::bootstrap::log::force_uart_line(
+                "[boot] ipcbuf sanity dst not empty (bug: chose non-empty slot)",
+            );
+        }
         let mut line = HeaplessString::<112>::new();
         let _ = write!(
             line,
@@ -180,7 +215,26 @@ fn ipcbuf_sanity_probe(bootinfo_ref: &sel4_sys::seL4_BootInfo) {
         );
     }
 
-    crate::bootstrap::log::force_uart_line("[boot] ipcbuf sanity ok");
+    let delete_result =
+        unsafe { sel4_sys::seL4_CNode_Delete(bootinfo_ref.init_cnode_cap(), dst, depth) };
+
+    if delete_result != sel4_sys::seL4_NoError {
+        let mut delete_line = HeaplessString::<144>::new();
+        let _ = write!(
+            delete_line,
+            "[boot] ipcbuf sanity delete failed dst=0x{dst:04x} err={} ({})",
+            delete_result as i32,
+            error_name(delete_result)
+        );
+        crate::bootstrap::log::force_uart_line(delete_line.as_str());
+        panic!(
+            "ipcbuf sanity delete failed: {} ({})",
+            delete_result as i32,
+            error_name(delete_result)
+        );
+    }
+
+    crate::bootstrap::log::force_uart_line("[boot] ipcbuf sanity ok (copy+delete)");
 }
 
 /// Retypes a single notification object from the selected RAM-backed untyped and
