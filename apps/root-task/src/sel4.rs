@@ -8,7 +8,9 @@
 use core::{
     arch::asm,
     convert::TryInto,
-    fmt, mem,
+    fmt,
+    fmt::Write,
+    mem,
     ops::Range,
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -62,6 +64,7 @@ static CANONICAL_ROOT_CAP: AtomicUsize =
     AtomicUsize::new(sel4_sys::seL4_CapInitThreadCNode as usize);
 static CANONICAL_ROOT_SLOT: AtomicUsize = AtomicUsize::new(CANONICAL_ROOT_SENTINEL);
 static EP_VALIDATED: AtomicBool = AtomicBool::new(false);
+static IPC_SEND_UNLOCKED: AtomicBool = AtomicBool::new(false);
 
 /// Logs ABI sanity for key seL4 types to validate the Rust FFI surface.
 pub fn log_sel4_type_sanity() {
@@ -562,6 +565,7 @@ impl fmt::Display for IpcError {
 /// Publish the root endpoint capability once it has been retyped.
 #[inline]
 pub fn set_ep(ep: seL4_CPtr) {
+    lock_ipc_send();
     ROOT_ENDPOINT.store(ep as usize, Ordering::Release);
     if ep == seL4_CapNull {
         SEND_LOGGED.store(false, Ordering::Release);
@@ -572,6 +576,7 @@ pub fn set_ep(ep: seL4_CPtr) {
 /// Clear the root endpoint pointer. Intended for tests.
 #[inline]
 pub fn clear_ep() {
+    lock_ipc_send();
     ROOT_ENDPOINT.store(0, Ordering::Release);
     set_ep_validated(false);
 }
@@ -599,6 +604,22 @@ pub fn set_ep_validated(validated: bool) {
 #[must_use]
 pub fn ep_validated() -> bool {
     EP_VALIDATED.load(Ordering::Acquire)
+}
+
+#[inline]
+pub fn lock_ipc_send() {
+    IPC_SEND_UNLOCKED.store(false, Ordering::Release);
+}
+
+#[inline]
+pub fn unlock_ipc_send() {
+    IPC_SEND_UNLOCKED.store(true, Ordering::Release);
+}
+
+#[inline]
+#[must_use]
+pub fn ipc_send_unlocked() -> bool {
+    IPC_SEND_UNLOCKED.load(Ordering::Acquire)
 }
 
 /// Writes a value into an IPC message register.
@@ -646,6 +667,7 @@ pub fn yield_now() {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn send_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
+    guard_ipc_destination("send_unchecked", dest);
     unsafe {
         sel4_sys::seL4_Send(dest, info);
     }
@@ -655,6 +677,7 @@ pub fn send_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageInfo {
+    guard_ipc_destination("call_unchecked", dest);
     let length = info.length();
 
     let mut mr0_val = 0;
@@ -708,6 +731,7 @@ pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageIn
 #[inline(always)]
 pub fn signal_unchecked(dest: seL4_CPtr) {
     let empty = seL4_MessageInfo::new(0, 0, 0, 0);
+    guard_ipc_destination("signal_unchecked", dest);
     unsafe {
         sel4_sys::seL4_Send(dest, empty);
     }
@@ -721,6 +745,42 @@ fn ensure_endpoint() -> Result<seL4_CPtr, IpcError> {
         Err(IpcError::EpNotReady)
     } else {
         Ok(endpoint)
+    }
+}
+
+#[inline(never)]
+fn guard_ipc_destination(callsite: &str, dest: seL4_CPtr) {
+    let ep_slot = root_endpoint();
+    let ready = ep_ready();
+    let validated = ep_validated();
+    let unlocked = ipc_send_unlocked();
+
+    if dest == seL4_CapNull {
+        let mut line = HeaplessString::<160>::new();
+        let _ = write!(
+            line,
+            "[ipc-guard] callsite={callsite} cap=0x{cap:04x} ready={ready} validated={validated} unlocked={unlocked}",
+            cap = dest,
+            ready = ready as u8,
+            validated = validated as u8,
+            unlocked = unlocked as u8,
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+        panic!("[ipc-guard] null capability in {callsite}");
+    }
+
+    if dest == ep_slot && (!ready || !validated || !unlocked) {
+        let mut line = HeaplessString::<192>::new();
+        let _ = write!(
+            line,
+            "[ipc-guard] blocked callsite={callsite} cap=0x{cap:04x} ep_ready={ready} ep_validated={validated} ipc_unlocked={unlocked}",
+            cap = dest,
+            ready = ready as u8,
+            validated = validated as u8,
+            unlocked = unlocked as u8,
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+        panic!("[ipc-guard] IPC attempted before root endpoint ready ({callsite})");
     }
 }
 
@@ -751,6 +811,7 @@ pub fn call_guarded(
     mr3: Option<&mut seL4_Word>,
 ) -> Result<seL4_MessageInfo, IpcError> {
     let endpoint = ensure_endpoint()?;
+    guard_ipc_destination("call_guarded", endpoint);
     let m0 = mr0.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
     let m1 = mr1.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
     let m2 = mr2.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
@@ -766,6 +827,7 @@ pub fn replyrecv_guarded(
     badge: Option<&mut seL4_Word>,
 ) -> Result<seL4_MessageInfo, IpcError> {
     let endpoint = ensure_endpoint()?;
+    guard_ipc_destination("replyrecv_guarded", endpoint);
     let badge_ptr = badge.map_or(ptr::null_mut(), |b| b as *mut seL4_Word);
 
     #[allow(non_snake_case)]
