@@ -104,19 +104,23 @@ fn install_init_ipc_buffer(
     bootinfo_ref: &'static sel4_sys::seL4_BootInfo,
     reserved_vaddrs: &mut ReservedVaddrRanges,
     boot_guard: &mut BootStateGuard,
-) -> NonNull<sel4_sys::seL4_IPCBuffer> {
+) -> Result<(NonNull<sel4_sys::seL4_IPCBuffer>, IpcBufferMode), FatalBootstrapError> {
     let ipc_buffer_ptr = match bootinfo_ref.ipc_buffer_ptr() {
         Some(ptr) => ptr,
         None => {
             crate::bootstrap::log::force_uart_line("[boot] ipcbuf missing from bootinfo");
-            panic!("ipc buffer pointer missing");
+            return Err(FatalBootstrapError::from_str(
+                "ipc buffer pointer missing from bootinfo",
+            ));
         }
     };
 
     let addr = ipc_buffer_ptr.as_ptr() as usize;
     if addr & (IPC_PAGE_BYTES - 1) != 0 {
         crate::bootstrap::log::force_uart_line("[boot] ipcbuf misaligned");
-        panic!("ipc buffer not page aligned: 0x{addr:016x}");
+        let mut msg = HeaplessString::<96>::new();
+        let _ = write!(msg, "ipc buffer not page aligned: 0x{addr:016x}");
+        return Err(FatalBootstrapError::from_str(msg.as_str()));
     }
 
     let ipc_page_base = align_down(addr, IPC_PAGE_BYTES);
@@ -140,14 +144,14 @@ fn install_init_ipc_buffer(
     crate::bootstrap::log::force_uart_line(line.as_str());
 
     assert_ipc_buffer_matches_bootinfo(bootinfo_ref);
-    boot_guard.record_ipc_buffer(Some(addr));
+    boot_guard.record_ipc_buffer(Some(addr), Some(IpcBufferMode::InstalledEarly));
     boot_guard.record_invariant("ipc_buffer.installed");
 
-    ipc_buffer_ptr
+    Ok((ipc_buffer_ptr, IpcBufferMode::InstalledEarly))
 }
 
 #[inline(always)]
-fn ipcbuf_sanity_probe(bootinfo_ref: &sel4_sys::seL4_BootInfo) {
+fn ipcbuf_sanity_probe(bootinfo_ref: &sel4_sys::seL4_BootInfo) -> Result<(), FatalBootstrapError> {
     let depth = bootinfo_ref.init_cnode_depth() as sel4_sys::seL4_Word;
     let src = bootinfo_ref.init_tcb_cap();
     let empty_start = bootinfo_ref.empty_first_slot() as sel4_sys::seL4_CPtr;
@@ -155,9 +159,9 @@ fn ipcbuf_sanity_probe(bootinfo_ref: &sel4_sys::seL4_BootInfo) {
 
     if empty_start >= empty_end {
         crate::bootstrap::log::force_uart_line("[boot] ipcbuf sanity empty window invalid");
-        panic!(
-            "ipcbuf sanity failed: empty window invalid start=0x{empty_start:04x} end=0x{empty_end:04x}"
-        );
+        return Err(FatalBootstrapError::from_str(
+            "ipcbuf sanity failed: empty window invalid",
+        ));
     }
 
     let mut dst = empty_start;
@@ -168,9 +172,9 @@ fn ipcbuf_sanity_probe(bootinfo_ref: &sel4_sys::seL4_BootInfo) {
 
     if dst < empty_start || dst >= empty_end {
         crate::bootstrap::log::force_uart_line("[boot] ipcbuf sanity dst outside empty window");
-        panic!(
-            "ipcbuf sanity failed: dst outside empty window dst=0x{dst:04x} window=[0x{empty_start:04x}..0x{empty_end:04x})"
-        );
+        return Err(FatalBootstrapError::from_str(
+            "ipcbuf sanity failed: dst outside empty window",
+        ));
     }
 
     let result = unsafe {
@@ -208,11 +212,9 @@ fn ipcbuf_sanity_probe(bootinfo_ref: &sel4_sys::seL4_BootInfo) {
             error_name(result)
         );
         crate::bootstrap::log::force_uart_line(line.as_str());
-        panic!(
-            "ipcbuf sanity failed: {} ({})",
-            result as i32,
-            error_name(result)
-        );
+        return Err(FatalBootstrapError::from_str(
+            "ipcbuf sanity failed: copy failed",
+        ));
     }
 
     let delete_result =
@@ -227,14 +229,11 @@ fn ipcbuf_sanity_probe(bootinfo_ref: &sel4_sys::seL4_BootInfo) {
             error_name(delete_result)
         );
         crate::bootstrap::log::force_uart_line(delete_line.as_str());
-        panic!(
-            "ipcbuf sanity delete failed: {} ({})",
-            delete_result as i32,
-            error_name(delete_result)
-        );
+        return Err(FatalBootstrapError::from_str("ipcbuf sanity delete failed"));
     }
 
     crate::bootstrap::log::force_uart_line("[boot] ipcbuf sanity ok (copy+delete)");
+    Ok(())
 }
 
 /// Retypes a single notification object from the selected RAM-backed untyped and
@@ -636,6 +635,7 @@ enum BootState {
 enum EarlyBootPhase {
     Begin,
     BootInfoView,
+    CSpaceRecord,
     MemoryLayout,
     BootInfoSnapshot,
     IPCInstall,
@@ -646,9 +646,50 @@ impl EarlyBootPhase {
         match self {
             Self::Begin => "begin",
             Self::BootInfoView => "bootinfo.view",
+            Self::CSpaceRecord => "cspace.record",
             Self::MemoryLayout => "layout.build",
             Self::BootInfoSnapshot => "bootinfo.snapshot",
             Self::IPCInstall => "ipc.install",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IpcBufferMode {
+    InstalledEarly,
+    BootProvidedFallback,
+}
+
+impl IpcBufferMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::InstalledEarly => "installed-early",
+            Self::BootProvidedFallback => "boot-provided-fallback",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrecommitReason {
+    BootInfoView,
+    BootInfoSnapshot,
+    CSpaceRecord,
+    Sequencer,
+    MemoryLayout,
+    IpcInstall,
+    IpcSanity,
+}
+
+impl PrecommitReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::BootInfoView => "bootinfo-view",
+            Self::BootInfoSnapshot => "bootinfo-snapshot",
+            Self::CSpaceRecord => "cspace-record",
+            Self::Sequencer => "sequencer",
+            Self::MemoryLayout => "memory-layout",
+            Self::IpcInstall => "ipc-install",
+            Self::IpcSanity => "ipc-sanity",
         }
     }
 }
@@ -724,6 +765,7 @@ struct AbortTelemetry {
     root_ep: Option<sel4_sys::seL4_CPtr>,
     fault_ep: Option<sel4_sys::seL4_CPtr>,
     ipc_buffer: Option<usize>,
+    ipcbuf_mode: Option<IpcBufferMode>,
     logger_switched: bool,
 }
 
@@ -782,6 +824,12 @@ impl AbortTelemetry {
         );
         boot_log::force_uart_line(endpoints.as_str());
 
+        if let Some(mode) = self.ipcbuf_mode {
+            let mut ipc_mode = heapless::String::<96>::new();
+            let _ = write!(ipc_mode, "[boot:abort] ipcbuf_mode={}", mode.label());
+            boot_log::force_uart_line(ipc_mode.as_str());
+        }
+
         let mut mark_line = heapless::String::<160>::new();
         let _ = write!(
             mark_line,
@@ -793,13 +841,30 @@ impl AbortTelemetry {
     }
 }
 
-fn log_early_boot_exit<E: fmt::Display>(phase: EarlyBootPhase, step: &'static str, err: E) {
-    let mut line = HeaplessString::<128>::new();
+fn log_precommit_exit<E: fmt::Display>(
+    phase: EarlyBootPhase,
+    sub: &'static str,
+    fatal: bool,
+    reason: PrecommitReason,
+    sel4_err: Option<sel4_sys::seL4_Error>,
+    err: E,
+    file: &'static str,
+    line_no: u32,
+) {
+    let mut line = HeaplessString::<192>::new();
+    let sel4_err_label = sel4_err.map(crate::sel4::error_name).unwrap_or("none");
+    let sel4_err_code = sel4_err.unwrap_or_default() as i32;
     let _ = write!(
         line,
-        "[boot] early-exit at {}::{}: err={}",
+        "[boot] early-exit phase={} sub={} fatal={} reason={} sel4_err={}/{} @{}:{} detail={}",
         phase.label(),
-        step,
+        sub,
+        fatal as u8,
+        reason.as_str(),
+        sel4_err_label,
+        sel4_err_code,
+        file,
+        line_no,
         err
     );
     boot_log::force_uart_line(line.as_str());
@@ -834,6 +899,7 @@ impl PostCommitState {
 struct BootstrapCommit {
     minimal_committed: bool,
     full_committed: bool,
+    cspace_recorded: bool,
     telemetry: AbortTelemetry,
 }
 
@@ -938,6 +1004,7 @@ impl BootStateGuard {
                 commit: BootstrapCommit {
                     minimal_committed: false,
                     full_committed: false,
+                    cspace_recorded: false,
                     telemetry: AbortTelemetry::default(),
                 },
             }),
@@ -982,6 +1049,7 @@ impl BootStateGuard {
         self.commit.telemetry.first_free = Some(first_free);
         self.commit.telemetry.empty_start = Some(empty.0);
         self.commit.telemetry.empty_end = Some(empty.1);
+        self.commit.cspace_recorded = true;
     }
 
     fn record_endpoints(&mut self, root_ep: sel4_sys::seL4_CPtr, fault_ep: sel4_sys::seL4_CPtr) {
@@ -990,8 +1058,9 @@ impl BootStateGuard {
         self.commit.telemetry.ep_ready = root_ep != sel4_sys::seL4_CapNull;
     }
 
-    fn record_ipc_buffer(&mut self, ipc_buffer: Option<usize>) {
+    fn record_ipc_buffer(&mut self, ipc_buffer: Option<usize>, mode: Option<IpcBufferMode>) {
         self.commit.telemetry.ipc_buffer = ipc_buffer;
+        self.commit.telemetry.ipcbuf_mode = mode;
     }
 
     fn record_logger_switch(&mut self, ready: bool) {
@@ -1014,6 +1083,15 @@ impl BootStateGuard {
 impl Drop for BootStateGuard {
     fn drop(&mut self) {
         if !self.commit.minimal_committed {
+            if self.commit.cspace_recorded {
+                let root = self.commit.telemetry.cspace_root.unwrap_or_default();
+                let bits = self.commit.telemetry.cspace_bits.unwrap_or_default();
+                let empty_start = self.commit.telemetry.empty_start.unwrap_or_default();
+                let empty_end = self.commit.telemetry.empty_end.unwrap_or_default();
+                if root == 0 && bits == 0 && empty_start == 0 && empty_end == 0 {
+                    panic!("[boot] abort telemetry missing cspace after record");
+                }
+            }
             log::error!("[boot] bootstrap exited without committing; refusing to reset boot state");
             self.commit.telemetry.emit();
             panic!("[boot] bootstrap aborted before commit");
@@ -1100,7 +1178,16 @@ fn bootstrap<P: Platform>(
     let mut early_phase = EarlyBootPhase::BootInfoView;
 
     let bootinfo_view = canonical_bootinfo_view(&mut sequencer, bootinfo).map_err(|err| {
-        log_early_boot_exit(early_phase, "canonical_bootinfo_view", &err);
+        log_precommit_exit(
+            early_phase,
+            "canonical_bootinfo_view",
+            true,
+            PrecommitReason::BootInfoView,
+            None,
+            &err,
+            file!(),
+            line!(),
+        );
         err
     })?;
     boot_guard.record_phase("BootInfoValidate");
@@ -1109,7 +1196,16 @@ fn bootstrap<P: Platform>(
     sequencer
         .advance(BootstrapPhase::MemoryLayoutBuild)
         .map_err(|err| {
-            log_early_boot_exit(early_phase, "bootstrap_phase.MemoryLayoutBuild", &err);
+            log_precommit_exit(
+                early_phase,
+                "bootstrap_phase.MemoryLayoutBuild",
+                true,
+                PrecommitReason::MemoryLayout,
+                None,
+                &err,
+                file!(),
+                line!(),
+            );
             err
         })?;
     boot_guard.record_phase("MemoryLayoutBuild");
@@ -1192,7 +1288,16 @@ fn bootstrap<P: Platform>(
 
     early_phase = EarlyBootPhase::BootInfoSnapshot;
     let bootinfo_state = snapshot_bootinfo(bootinfo, &bootinfo_view).map_err(|err| {
-        log_early_boot_exit(early_phase, "snapshot_bootinfo", &err);
+        log_precommit_exit(
+            early_phase,
+            "snapshot_bootinfo",
+            true,
+            PrecommitReason::BootInfoSnapshot,
+            None,
+            &err,
+            file!(),
+            line!(),
+        );
         err
     })?;
     let bootinfo_snapshot = bootinfo_state.snapshot();
@@ -1236,17 +1341,22 @@ fn bootstrap<P: Platform>(
     let _ = pending_boot_phases.push(BootPhase::Begin);
 
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
-    let ipc_buffer_ptr =
-        install_init_ipc_buffer(bootinfo_ref, &mut reserved_vaddrs, &mut boot_guard);
-    ipcbuf_sanity_probe(bootinfo_ref);
-    early_phase = EarlyBootPhase::IPCInstall;
+    early_phase = EarlyBootPhase::CSpaceRecord;
     sequencer
-        .advance(BootstrapPhase::IPCInstall)
+        .advance(BootstrapPhase::CSpaceRecord)
         .map_err(|err| {
-            log_early_boot_exit(early_phase, "bootstrap_phase.IPCInstall", &err);
+            log_precommit_exit(
+                early_phase,
+                "bootstrap_phase.CSpaceRecord",
+                true,
+                PrecommitReason::CSpaceRecord,
+                None,
+                &err,
+                file!(),
+                line!(),
+            );
             err
         })?;
-    boot_guard.record_phase("IPCInstall");
 
     let check_bootinfo = |guard: &mut BootStateGuard, mark: &'static str| {
         guard.record_mark(mark);
@@ -1255,11 +1365,21 @@ fn bootstrap<P: Platform>(
         }
     };
     if let Err(err) = crate::bootstrap::cspace::ensure_canonical_root_alias(bootinfo_ref) {
-        panic!(
+        log_precommit_exit(
+            early_phase,
+            "cspace.ensure_canonical_root_alias",
+            true,
+            PrecommitReason::CSpaceRecord,
+            Some(err),
+            crate::sel4::error_name(err),
+            file!(),
+            line!(),
+        );
+        return Err(BootError::Fatal(format!(
             "failed to mint canonical init CNode alias: {} ({})",
             err,
             error_name(err),
-        );
+        )));
     }
     boot_guard.record_invariant("cspace.alias.canonical");
     let (empty_start, empty_end) = bootinfo_view.init_cnode_empty_range();
@@ -1277,6 +1397,53 @@ fn bootstrap<P: Platform>(
         cspace_window.first_free,
         (empty_start, empty_end),
     );
+    boot_guard.record_phase("CSpaceRecord");
+    let (ipc_buffer_ptr, mut ipcbuf_mode) =
+        install_init_ipc_buffer(bootinfo_ref, &mut reserved_vaddrs, &mut boot_guard).map_err(
+            |err| {
+                log_precommit_exit(
+                    EarlyBootPhase::IPCInstall,
+                    "install_init_ipc_buffer",
+                    true,
+                    PrecommitReason::IpcInstall,
+                    None,
+                    &err,
+                    file!(),
+                    line!(),
+                );
+                err
+            },
+        )?;
+    ipcbuf_sanity_probe(bootinfo_ref).map_err(|err| {
+        log_precommit_exit(
+            EarlyBootPhase::IPCInstall,
+            "ipcbuf_sanity_probe",
+            true,
+            PrecommitReason::IpcSanity,
+            None,
+            &err,
+            file!(),
+            line!(),
+        );
+        err
+    })?;
+    early_phase = EarlyBootPhase::IPCInstall;
+    sequencer
+        .advance(BootstrapPhase::IPCInstall)
+        .map_err(|err| {
+            log_precommit_exit(
+                early_phase,
+                "bootstrap_phase.IPCInstall",
+                true,
+                PrecommitReason::IpcInstall,
+                None,
+                &err,
+                file!(),
+                line!(),
+            );
+            err
+        })?;
+    boot_guard.record_phase("IPCInstall");
     let mut console = DebugConsole::new(platform);
 
     #[inline(always)]
@@ -1676,30 +1843,44 @@ fn bootstrap<P: Platform>(
             Ok(view) => Some(view),
             Err(code) => {
                 let err = code as sel4_sys::seL4_Error;
-                if err == sel4_sys::seL4_IllegalOperation {
-                    #[cfg(feature = "allow-ipcbuf-fallback")]
-                    {
-                        log::warn!(
-                            "[boot] ipc buffer re-bind not accepted by kernel; using boot-provided mapping only: err={} ({})",
-                            err,
-                            error_name(err)
-                        );
-                        let fallback_view = kernel_env.ipc_buffer_view().or_else(|| {
-                            Some(kernel_env.record_boot_ipc_buffer(ipc_frame, ipc_vaddr))
-                        });
-                        fallback_view
-                    }
-                    #[cfg(not(feature = "allow-ipcbuf-fallback"))]
-                    {
-                        hard_guard_fail("ipcbuf", HardGuardViolation::IPCBufferSetRejected { err });
-                    }
+                log_precommit_exit(
+                    EarlyBootPhase::IPCInstall,
+                    "ipcbuf.install-ipc-buffer",
+                    false,
+                    PrecommitReason::IpcInstall,
+                    Some(err),
+                    crate::sel4::error_name(err),
+                    file!(),
+                    line!(),
+                );
+                let fallback_view = kernel_env
+                    .ipc_buffer_view()
+                    .or_else(|| Some(kernel_env.record_boot_ipc_buffer(ipc_frame, ipc_vaddr)));
+                if let Some(view) = fallback_view {
+                    ipcbuf_mode = IpcBufferMode::BootProvidedFallback;
+                    Some(view)
                 } else {
-                    panic!("ipc buffer install failed: {} ({})", code, error_name(err));
+                    log_precommit_exit(
+                        EarlyBootPhase::IPCInstall,
+                        "ipcbuf.install-ipc-buffer.fatal",
+                        true,
+                        PrecommitReason::IpcInstall,
+                        Some(err),
+                        crate::sel4::error_name(err),
+                        file!(),
+                        line!(),
+                    );
+                    return Err(BootError::Fatal(format!(
+                        "ipc buffer install failed without fallback: {} ({})",
+                        code,
+                        error_name(err)
+                    )));
                 }
             }
         };
 
         if let Some(view) = ipc_view {
+            boot_guard.record_ipc_buffer(Some(ipc_vaddr), Some(ipcbuf_mode));
             let mut msg = heapless::String::<112>::new();
             let _ = write!(
                 msg,
@@ -2328,8 +2509,13 @@ fn bootstrap<P: Platform>(
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let (net_stack, virtio_present) = {
             use crate::net::{init_net_console, NetConsoleError};
+            let boot_state_now = BOOT_STATE.load(Ordering::Acquire);
 
-            if !sel4::ep_ready() {
+            if boot_state_now != BootState::Booted as u8 {
+                boot_log::force_uart_line("[net-console] disabled reason=boot-state err=0");
+                log::warn!("[net-console] skipped: boot state not running");
+                (None, false)
+            } else if !sel4::ep_ready() || !sel4::ep_validated() {
                 boot_log::force_uart_line("[net-console] disabled reason=no-root-ep err=0");
                 log::warn!("[net-console] skipped: root endpoint not ready");
                 (None, false)
