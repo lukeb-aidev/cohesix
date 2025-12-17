@@ -98,6 +98,75 @@ Connection handling (TCP transport):
 ### Script mode
 `--script <file>` feeds newline-delimited commands; blank lines and lines starting with `#` are ignored. Errors abort the script and bubble up as a non-zero exit.【F:apps/cohsh/src/lib.rs†L594-L605】
 
+## coh scripts (.coh)
+### Purpose
+- `.coh` is a deterministic, line-oriented scripting format for running `cohsh` command sequences non-interactively (including `coh> test` regression suites) using the exact same command handlers as the interactive `coh>` prompt.
+
+### Non-goals
+- No general-purpose shell.
+- No variables, loops, branching, includes, macros, or dynamic loading.
+- No network fetch of scripts at runtime.
+- Not intended as a programming language—only a deterministic batch format for `cohsh` commands plus assertions.
+
+### Execution model
+- Scripts run against the current `cohsh` session (already connected); the session is expected to be `AUTH`’d and `ATTACH`’d. Scripts (and `coh> test`) may validate session state and fail fast if invalid.
+- Each command line executes exactly as if typed at the `coh>` prompt (identical parsing and handlers, no special RPC path).
+- Execution is strict: on the first command failure or failed `EXPECT`, stop immediately and return `FAIL`.
+- On failure, report the failing line number, the command text, and the last command response line.
+
+### Syntax
+- One statement per line; blank lines are ignored.
+- `#` starts a comment to end of line.
+
+Two statement families:
+
+1. **Command line**
+   - Any line that does not start with `EXPECT` is interpreted as a `cohsh` command exactly as typed at `coh>`.
+
+2. **Assertion line**
+   - Assertions apply only to the **last executed command** and evaluate against the **last command response line** (single line as emitted by `cohsh` for that command).
+   - `EXPECT OK` — last command response line must begin with `OK`.
+   - `EXPECT ERR` — last command response line must begin with `ERR`.
+   - `EXPECT SUBSTR <text>` — last command response line must contain `<text>` as a substring (case-sensitive).
+   - `EXPECT NOT <text>` — last command response line must not contain `<text>`.
+
+An optional control statement is provided for bounded waits: `WAIT <ms>` pauses locally (does not issue a server command) for the requested duration.
+
+For streaming commands, the “response line” is the initial acknowledgement line (`OK …` or `ERR …` that starts the stream), not any subsequent streamed payload lines.
+
+### Determinism & bounds
+- Max script lines: 256; longer scripts are rejected.
+- Max execution time: bounded by `test --timeout`; scripts must not block indefinitely.
+- Explicit waiting is allowed via `WAIT <ms>` (line statement), capped at 2000 ms; longer waits are rejected.
+
+### Security posture
+- Scripts do not grant privileges: all actions remain subject to the session’s attached role/ticket and server-side access policy; scripts only automate what an operator could type interactively.
+
+### Examples
+Quick check (ping, proc read, and an expected error):
+```
+# connectivity and auth sanity
+ping
+EXPECT OK
+cat /proc/queen/state
+EXPECT OK
+echo forbidden > /queen/ctl
+EXPECT ERR
+```
+
+Disposable worker lifecycle with ID assertion:
+```
+spawn gpu ttl_s=60 streams=1
+EXPECT OK
+EXPECT SUBSTR worker-
+tail /worker/last/telemetry
+EXPECT OK
+WAIT 500
+kill last
+EXPECT OK
+EXPECT NOT ERR
+```
+
 ## End-to-End Workflow: QEMU + `cohsh` over TCP
 This section covers the development harness for running Cohesix on QEMU; production deployments target physical ARM64 hardware booted via UEFI with equivalent console and `cohsh` semantics.
 ### Terminal 1 – build and boot under QEMU
