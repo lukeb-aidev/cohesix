@@ -20,7 +20,7 @@ impl FatalBootstrapError {
         Self { message }
     }
 
-    fn from_str(message: &str) -> Self {
+    pub(crate) fn from_str(message: &str) -> Self {
         let mut buffer = String::<160>::new();
         buffer
             .push_str(message)

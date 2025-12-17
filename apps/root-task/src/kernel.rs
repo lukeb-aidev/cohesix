@@ -1917,7 +1917,7 @@ fn bootstrap<P: Platform>(
 
     boot_guard.record_endpoints(ep_slot, fault_ep_slot);
     let endpoints = KernelEndpoints::new(ep_slot, fault_ep_slot);
-    let mut bootstrap_ipc = KernelIpc::new(endpoints.control, endpoints.fault);
+    let bootstrap_ipc = KernelIpc::new(endpoints.control, endpoints.fault);
     boot_guard.record_substep("commit.minimal.ready");
     boot_guard.commit_minimal();
     boot_log::force_uart_line("[boot] commit_minimal satisfied");
@@ -2747,7 +2747,7 @@ const KERNEL_TIMER_PERIOD_MS: u64 = 5;
 #[cfg(feature = "bypass-timers-ipc")]
 fn run_timers_and_ipc_phase(
     endpoints: KernelEndpoints,
-    mut ipc: KernelIpc,
+    ipc: KernelIpc,
 ) -> Result<(KernelTimer, KernelIpc), (BootError, KernelIpc)> {
     log::warn!(
         target: "root_task::kernel",
@@ -2775,7 +2775,7 @@ fn run_timers_and_ipc_phase(
 #[cfg(not(feature = "bypass-timers-ipc"))]
 fn run_timers_and_ipc_phase(
     endpoints: KernelEndpoints,
-    mut ipc: KernelIpc,
+    ipc: KernelIpc,
 ) -> Result<(KernelTimer, KernelIpc), (BootError, KernelIpc)> {
     #[cfg(feature = "bypass-timers")]
     {
