@@ -4,10 +4,9 @@
 
 use core::mem;
 use std::boxed::Box;
-use std::panic::{self, AssertUnwindSafe};
 
 use root_task::bootstrap::cspace::CSpaceCtx;
-use root_task::bootstrap::phases::{BootstrapPhase, BootstrapSequencer};
+use root_task::bootstrap::phases::{self, BootstrapPhase, BootstrapSequencer};
 use root_task::bootstrap::state;
 use root_task::cspace::CSpace;
 use root_task::sel4::BootInfoView;
@@ -27,18 +26,9 @@ fn bootinfo_fixture(bits: u8, empty_start: u32, empty_end: u32) -> &'static seL4
 fn sequencer_matches_bootstrap_order() {
     state::reset_for_tests();
     let mut sequencer = BootstrapSequencer::new();
-    for phase in [
-        BootstrapPhase::CSpaceCanonicalise,
-        BootstrapPhase::BootInfoValidate,
-        BootstrapPhase::MemoryLayoutBuild,
-        BootstrapPhase::CSpaceRecord,
-        BootstrapPhase::IPCInstall,
-        BootstrapPhase::UntypedPlan,
-        BootstrapPhase::RetypeCommit,
-        BootstrapPhase::UserlandHandoff,
-    ] {
+    for phase in phases::ordering() {
         sequencer
-            .advance(phase)
+            .advance(*phase)
             .unwrap_or_else(|err| panic!("phase {phase:?} failed: {err}"));
     }
     let overflow = sequencer.advance(BootstrapPhase::UserlandHandoff);
@@ -82,12 +72,18 @@ fn bootinfo_validation_bounds_init_bits() {
     );
 
     let zero_bits = bootinfo_fixture(0, 0x10, 0x20);
-    let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
-        let _ = BootInfoView::new(zero_bits);
-    }));
+    let view = BootInfoView::new(zero_bits).expect("bootinfo view must construct");
+    state::reset_for_tests();
+    let mut sequencer = BootstrapSequencer::new();
+    sequencer
+        .advance(BootstrapPhase::CSpaceCanonicalise)
+        .expect("phase CSpaceCanonicalise must succeed");
+    let err = sequencer
+        .validate_bootinfo(&view)
+        .expect_err("zero init bits must be rejected at validation");
     assert!(
-        panic_result.is_err(),
-        "zero init bits should trip debug assertions"
+        err.message().contains("non-zero"),
+        "expected zero init bits to be rejected with a clear message"
     );
 }
 
@@ -103,4 +99,50 @@ fn slot_allocator_skips_reserved_range() {
         slot >= sel4_sys::seL4_NumInitialCaps,
         "allocator must not return kernel-reserved slots"
     );
+}
+
+#[test]
+fn ipc_install_allows_retypes_to_proceed() {
+    let (empty_start, empty_end) = (0x20, 0x28);
+    let bootinfo = bootinfo_fixture(12, empty_start, empty_end);
+    let view = BootInfoView::new(bootinfo).expect("bootinfo fixture must be valid");
+
+    state::reset_for_tests();
+    let mut sequencer = BootstrapSequencer::new();
+    sequencer
+        .advance(BootstrapPhase::CSpaceCanonicalise)
+        .expect("phase CSpaceCanonicalise must succeed");
+    sequencer
+        .validate_bootinfo(&view)
+        .expect("bootinfo must validate");
+    sequencer
+        .advance(BootstrapPhase::MemoryLayoutBuild)
+        .expect("MemoryLayoutBuild must follow BootInfoValidate");
+    sequencer
+        .advance(BootstrapPhase::CSpaceRecord)
+        .expect("CSpaceRecord must follow MemoryLayoutBuild");
+
+    let mut cspace = CSpace::from_bootinfo(bootinfo);
+    let ipc_slot = cspace
+        .alloc_slot()
+        .expect("IPC install must allocate a slot");
+    sequencer
+        .advance(BootstrapPhase::IPCInstall)
+        .expect("IPCInstall must precede retype planning");
+
+    assert_eq!(
+        ipc_slot, empty_start,
+        "IPC install should consume the first advertised empty slot"
+    );
+    assert!(
+        cspace.next_free_slot() < empty_end,
+        "remaining CSpace capacity must still be available for retype plan"
+    );
+
+    sequencer
+        .advance(BootstrapPhase::UntypedPlan)
+        .expect("UntypedPlan must follow IPCInstall");
+    sequencer
+        .advance(BootstrapPhase::RetypeCommit)
+        .expect("RetypeCommit must follow UntypedPlan");
 }

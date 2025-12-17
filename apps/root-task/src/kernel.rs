@@ -1339,7 +1339,7 @@ fn bootstrap<P: Platform>(
     crate::sel4::log_sel4_type_sanity();
 
     early_phase = EarlyBootPhase::BootInfoSnapshot;
-    let bootinfo_state = snapshot_bootinfo(bootinfo, &bootinfo_view).map_err(|err| {
+    let bootinfo_state = snapshot_bootinfo(&bootinfo_view).map_err(|err| {
         log_precommit_exit(
             early_phase,
             "snapshot_bootinfo",
