@@ -26,7 +26,7 @@ pub struct RootEpReport {
     /// Outcome of the retype call.
     pub retype_err: Option<seL4_Error>,
     /// Result of `debug_cap_identify` on the selected slot.
-    pub slot_ident: u32,
+    pub slot_ident: sel4_sys::seL4_Word,
 }
 
 impl Default for RootEpReport {
