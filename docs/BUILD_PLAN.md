@@ -541,6 +541,53 @@ Wrap the AArch64-specific VSpace cache operations in the HAL, wire them into man
 - `coh-rtc` refuses to emit bootstrap tables for DMA cache maintenance when `cache.kernel_ops` is disabled, keeping docs/code aligned with the manual’s capability requirements.
 
 ---
+## Milestone 8d — In-Session `test` Command + Preinstalled `.coh` Regression Scripts
+
+**Why now (context):** The TCP console is now viable, but operators and CI need a deterministic, single-command proof that `cohsh` protocol semantics and server-side Secure9P/NineDoor behaviours remain intact. An in-session `coh> test` that exercises client↔server flows via preinstalled scripts ensures regressions surface immediately, including namespace side effects and negative paths.
+
+**Goal**
+Provide `coh> test` that runs a bounded suite validating the `cohsh` control-plane contract end-to-end (client + server), returning deterministic PASS/FAIL plus optional machine-readable JSON suitable for CI.
+
+**Deliverables**
+- Interactive command surface
+  - `coh> test` defaults to a bounded “quick” suite; `--mode quick|full` switches coverage depth.
+  - Flags: `--json` (stable output schema), `--timeout <s>` (hard upper bound to prevent hangs), and optional safety `--no-mutate` (skips spawn/kill when operators prohibit mutation). Mutation is otherwise permitted for “full” coverage.
+  - Assumes session is already AUTH’d and ATTACH’d but revalidates both up front and fails fast if either is missing.
+- Preinstalled `.coh` regression scripts on the server filesystem (rootfs-installed by the build script, never fetched at runtime)
+  - Canonical path: `/proc/tests/` within the mounted namespace; scripts are installed into the CPIO rootfs during packaging.
+  - Versioned artefacts (names fixed):
+    - `selftest_quick.coh` — validates session state (AUTH/ATTACH), ping/ack grammar, bounded request/response round-trips.
+    - `selftest_full.coh` — validates Secure9P/NineDoor semantics and performs one disposable worker lifecycle (spawn → observe namespace/telemetry evidence → kill) to prove mutation paths.
+    - `selftest_negative.coh` — validates deterministic ERR paths (forbidden role action, `..` traversal rejection, bounded walk depth, oversized request vs `msize`, and no unintended mutation).
+- Script execution model
+  - `coh> test` executes the server-hosted `.coh` scripts (e.g., internally equivalent to `coh> run /proc/tests/selftest_full.coh` if the verb exists) so real client↔server control flow and namespace semantics are exercised; no client-embedded shortcuts.
+- Output contract
+  - Human output: checklist-style PASS/FAIL with the first failing step and a concise reason.
+  - JSON (`--json`): `{ ok, mode, elapsed_ms, checks:[{name, ok, detail, transcript_excerpt?}], version }` (versioned for compatibility).
+
+**Test coverage (what “full” must prove)**
+- AUTH/ATTACH validation with deterministic failure when missing.
+- Protocol grammar: deterministic OK/ERR acknowledgements, bounded retries, no silent failures.
+- Role enforcement: queen-only actions rejected when attached as a non-queen role (or simulated negative in the script when role switching is unavailable).
+- Secure9P correctness: walk/open/read/write/clunk flows, rejection of `..`, bounded walk depth, `msize`/frame bounds, read-only vs append-only semantics.
+- Disposable worker lifecycle: spawn a short-lived worker, observe namespace/telemetry evidence, kill the worker, and verify cleanup.
+
+**Commands**
+- `coh> test`
+- `coh> test --mode full`
+- `coh> test --mode full --json`
+- `coh> test --mode full --timeout 10`
+- `coh> test --mode full --no-mutate`
+- Example referencing the installed scripts: `coh> run /proc/tests/selftest_full.coh` (only if the existing verb is available; otherwise the `test` command drives the same execution path internally).
+
+**Checks (DoD)**
+- From an active interactive session, `coh> test --mode quick` completes within the default timeout and reports PASS on a healthy system.
+- `coh> test --mode full` completes within the default timeout and exercises: AUTH/ATTACH validation, at least one read-only read from `/proc/*`, at least one permitted control write (append-only where applicable), disposable worker spawn → observe → kill, and at least one negative test producing deterministic ERR output.
+- `--json` output matches the documented schema and remains stable for CI consumption (include `version`).
+- `.coh` scripts exist at `/proc/tests/`, are installed into the rootfs by the build process, and remain the single source of truth for the suite (rerun whenever console, Secure9P, namespace layout, or access policy changes).
+- Regression command reruns are documented: operators must execute this suite whenever console handling, Secure9P transport, namespace structure, or access policies change.
+
+---
 ## Milestone 9 — Secure9P Pipelining & Batching
 
 (Clarification) Milestones 9–15 intentionally build on the full 7d acknowledgement grammar. Do NOT attempt to pull 9P batching/pipelining earlier than 7d; doing so breaks test surfaces.
