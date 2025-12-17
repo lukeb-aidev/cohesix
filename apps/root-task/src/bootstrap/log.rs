@@ -62,7 +62,10 @@ impl BootstrapLogger {
     }
 
     fn set_transport(&self, transport: LogTransport) {
-        self.state.store(transport as u8, Ordering::Release);
+        let previous = self.state.swap(transport as u8, Ordering::AcqRel);
+        if previous != transport as u8 {
+            log_transport_marker(transport, latched_ep());
+        }
     }
 }
 
@@ -119,10 +122,13 @@ impl BootstrapLogger {
 
 static LOGGER: BootstrapLogger = BootstrapLogger::new();
 static LOGGER_INSTALLED: AtomicBool = AtomicBool::new(false);
+static LOGGER_EP: AtomicU32 = AtomicU32::new(0);
 static EP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static EP_ATTACHED: AtomicBool = AtomicBool::new(false);
 static BRIDGE_CREATED: AtomicBool = AtomicBool::new(false);
 static EP_ONLY_PERMITTED: AtomicBool = AtomicBool::new(false);
+static POST_COMMIT_IPC_UNLOCKED: AtomicBool = AtomicBool::new(false);
+static PRECOMMIT_IPC_FORBIDDEN: AtomicU32 = AtomicU32::new(0);
 const fn env_flag(value: Option<&'static str>) -> bool {
     match value {
         Some(val) => {
@@ -141,6 +147,66 @@ static PING_ACK: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(feature = "kernel")]
 static SEND_LOCK: Mutex<()> = Mutex::new(());
+
+fn latched_ep() -> sel4_sys::seL4_CPtr {
+    LOGGER_EP.load(Ordering::Acquire) as sel4_sys::seL4_CPtr
+}
+
+fn log_transport_marker(transport: LogTransport, ep: sel4_sys::seL4_CPtr) {
+    let mut line = HeaplessString::<80>::new();
+    match transport {
+        LogTransport::Uninitialised => return,
+        LogTransport::UartOnly => {
+            let _ = write!(line, "log.transport=UART_ONLY");
+        }
+        LogTransport::UartMirroredEp => {
+            let _ = write!(line, "log.transport=UART+EP_MIRROR ep=0x{ep:04x}");
+        }
+        LogTransport::EpOnly => {
+            let _ = write!(line, "log.transport=EP_ONLY ep=0x{ep:04x}");
+        }
+    }
+    force_uart_line(line.as_str());
+}
+
+fn ep_sink_permitted() -> bool {
+    if !POST_COMMIT_IPC_UNLOCKED.load(Ordering::Acquire) {
+        return false;
+    }
+    if !sel4::ep_ready() || !sel4::ep_validated() {
+        return false;
+    }
+    true
+}
+
+fn record_precommit_block(reason: &str) {
+    let count = PRECOMMIT_IPC_FORBIDDEN
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1);
+    if count == 1 {
+        let mut line = HeaplessString::<96>::new();
+        let _ = write!(line, "[log] precommit_ipc_forbidden reason={reason}");
+        force_uart_line(line.as_str());
+    }
+}
+
+fn maybe_enter_post_commit_transports() {
+    if NO_BRIDGE_MODE.load(Ordering::Acquire) {
+        return;
+    }
+    if !EP_REQUESTED.load(Ordering::Acquire) {
+        return;
+    }
+    if !ep_sink_permitted() {
+        return;
+    }
+    if BRIDGE_CREATED.load(Ordering::Acquire) {
+        enter_mirrored_transport();
+        if EP_ATTACHED.load(Ordering::Acquire) {
+            try_enter_ep_only();
+        }
+    }
+}
 
 fn emit_uart(payload: &[u8]) {
     for &byte in payload {
@@ -171,6 +237,11 @@ pub fn force_uart_line(line: &str) {
 }
 
 fn emit_ep(payload: &[u8]) -> Result<(), ()> {
+    if !ep_sink_permitted() {
+        record_precommit_block("transport-gate");
+        return Err(());
+    }
+
     #[cfg(feature = "kernel")]
     {
         if !sel4::ep_ready() {
@@ -274,6 +345,7 @@ fn revert_to_uart(reason: &[u8]) {
     EP_ATTACHED.store(false, Ordering::Release);
     BRIDGE_CREATED.store(false, Ordering::Release);
     EP_ONLY_PERMITTED.store(false, Ordering::Release);
+    LOGGER_EP.store(0, Ordering::Release);
     emit_uart(reason);
 }
 
@@ -284,6 +356,12 @@ fn enter_mirrored_transport() {
     if LOGGER.transport() == LogTransport::UartMirroredEp {
         return;
     }
+    if !ep_sink_permitted() {
+        record_precommit_block("ep-not-ready");
+        return;
+    }
+    let ep = sel4::root_endpoint();
+    LOGGER_EP.store(ep as u32, Ordering::Release);
     LOGGER.set_transport(LogTransport::UartMirroredEp);
     emit_uart(b"[trace] log transport: UART mirrored to EP\r\n");
 }
@@ -298,6 +376,10 @@ fn try_enter_ep_only() {
     if !sel4::ep_validated() {
         return;
     }
+    if !ep_sink_permitted() {
+        record_precommit_block("ep-not-permitted");
+        return;
+    }
     if LOGGER.transport() != LogTransport::UartMirroredEp {
         return;
     }
@@ -305,6 +387,8 @@ fn try_enter_ep_only() {
         emit_uart(b"[trace] EP log sink ping timeout; staying mirrored\r\n");
         return;
     }
+    let ep = sel4::root_endpoint();
+    LOGGER_EP.store(ep as u32, Ordering::Release);
     LOGGER.set_transport(LogTransport::EpOnly);
     let message = b"[trace] EP log sink attached; switching to EPOnly\r\n";
     let _ = emit_ep(message);
@@ -320,10 +404,12 @@ pub fn init_logger_bootstrap_only() {
         ::log::set_logger(&LOGGER).expect("bootstrap logger install must succeed");
     }
     LOGGER.set_transport(LogTransport::UartOnly);
+    LOGGER_EP.store(0, Ordering::Release);
     EP_REQUESTED.store(false, Ordering::Release);
     EP_ATTACHED.store(false, Ordering::Release);
     BRIDGE_CREATED.store(false, Ordering::Release);
     EP_ONLY_PERMITTED.store(false, Ordering::Release);
+    POST_COMMIT_IPC_UNLOCKED.store(false, Ordering::Release);
     ::log::set_max_level(LevelFilter::Info);
 }
 
@@ -338,12 +424,7 @@ pub fn switch_logger_to_userland() -> Result<(), Error> {
         LogTransport::UartOnly => {}
     }
     EP_REQUESTED.store(true, Ordering::Release);
-    if BRIDGE_CREATED.load(Ordering::Acquire) {
-        enter_mirrored_transport();
-        if EP_ATTACHED.load(Ordering::Acquire) {
-            try_enter_ep_only();
-        }
-    }
+    maybe_enter_post_commit_transports();
     Ok(())
 }
 
@@ -353,20 +434,13 @@ pub fn notify_bridge_created() {
         return;
     }
     BRIDGE_CREATED.store(true, Ordering::Release);
-    if EP_REQUESTED.load(Ordering::Acquire) {
-        enter_mirrored_transport();
-    }
+    maybe_enter_post_commit_transports();
 }
 
 /// Inform the logger that the NineDoor bridge has completed authentication.
 pub fn notify_bridge_attached() {
     EP_ATTACHED.store(true, Ordering::Release);
-    if EP_REQUESTED.load(Ordering::Acquire) {
-        if BRIDGE_CREATED.load(Ordering::Acquire) {
-            enter_mirrored_transport();
-            try_enter_ep_only();
-        }
-    }
+    maybe_enter_post_commit_transports();
 }
 
 /// Inform the logger that the bridge is no longer attached.
@@ -376,6 +450,7 @@ pub fn notify_bridge_detached() {
         LOGGER.transport(),
         LogTransport::EpOnly | LogTransport::UartMirroredEp
     ) {
+        LOGGER_EP.store(0, Ordering::Release);
         LOGGER.set_transport(LogTransport::UartOnly);
         emit_uart(b"[trace] NineDoor detached; returning to UART\r\n");
     }
@@ -390,6 +465,13 @@ pub fn allow_ep_only_transport() {
     if LOGGER.transport() == LogTransport::UartMirroredEp {
         try_enter_ep_only();
     }
+}
+
+/// Enable IPC-backed logging once the root endpoint is validated and the boot
+/// sequence has committed.
+pub fn unlock_post_commit_ipc_logging() {
+    POST_COMMIT_IPC_UNLOCKED.store(true, Ordering::Release);
+    maybe_enter_post_commit_transports();
 }
 
 /// Toggle the no-bridge mode, forcing the logger to remain on the UART transport.
@@ -412,6 +494,11 @@ pub fn ep_only_active() -> bool {
 /// Returns `true` when the bridge transport has been disabled via environment configuration.
 pub fn bridge_disabled() -> bool {
     NO_BRIDGE_MODE.load(Ordering::Acquire)
+}
+
+/// Returns the number of IPC attempts blocked while IPC logging was forbidden.
+pub fn precommit_ipc_forbidden() -> u32 {
+    PRECOMMIT_IPC_FORBIDDEN.load(Ordering::Acquire)
 }
 
 /// Decode an IPC payload emitted by the EP log sink and surface the payload via the audit sink.
