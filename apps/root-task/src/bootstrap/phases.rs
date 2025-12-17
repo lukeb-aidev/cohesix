@@ -75,9 +75,9 @@ const ORDERING: &[BootstrapPhase] = &[
     BootstrapPhase::BootInfoValidate,
     BootstrapPhase::MemoryLayoutBuild,
     BootstrapPhase::CSpaceRecord,
+    BootstrapPhase::IPCInstall,
     BootstrapPhase::UntypedPlan,
     BootstrapPhase::RetypeCommit,
-    BootstrapPhase::IPCInstall,
     BootstrapPhase::UserlandHandoff,
 ];
 
@@ -131,6 +131,11 @@ impl BootstrapSequencer {
         self.advance(BootstrapPhase::BootInfoValidate)?;
 
         let init_bits = view.init_cnode_bits() as usize;
+        if init_bits == 0 {
+            return Err(FatalBootstrapError::from_str(
+                "initThreadCNodeBits must be non-zero",
+            ));
+        }
         let guard_bits: usize = 0;
         if init_bits > sel4_sys::seL4_WordBits as usize - guard_bits {
             let mut msg = String::<160>::new();
@@ -175,7 +180,9 @@ impl BootstrapSequencer {
             return Err(FatalBootstrapError::new(msg));
         }
 
-        let capacity = 1usize << init_bits;
+        let capacity = 1usize
+            .checked_shl(init_bits as u32)
+            .ok_or_else(|| FatalBootstrapError::from_str("initThreadCNodeBits overflowed"))?;
         if empty_end as usize > capacity {
             let mut msg = String::<160>::new();
             let _ = write!(
