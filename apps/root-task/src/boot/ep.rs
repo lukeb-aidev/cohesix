@@ -2,15 +2,19 @@
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 
+use core::fmt::Write;
+
 use sel4_sys::{seL4_CPtr, seL4_CapNull, seL4_Error, seL4_IllegalOperation};
 
 use crate::boot::bi_extra::UntypedDesc;
 use crate::bootstrap::bootinfo_snapshot::BootInfoSnapshot;
 use crate::bootstrap::cspace::CSpaceWindow;
 use crate::bootstrap::cspace_sys::{bits_as_u8, retype_endpoint_auto, verify_root_cnode_slot};
+use crate::bootstrap::log as boot_log;
 use crate::cspace::CSpace;
 use crate::sel4::{self, BootInfoView};
 use crate::serial;
+use heapless::String as HeaplessString;
 
 pub static mut ROOT_EP: seL4_CPtr = seL4_CapNull;
 
@@ -95,16 +99,47 @@ pub fn bootstrap_ep(
     cs: &mut CSpace,
     report: &mut RootEpReport,
 ) -> Result<seL4_CPtr, seL4_Error> {
+    let ipc_ptr = unsafe { sel4_sys::seL4_GetIPCBuffer() };
+    if ipc_ptr.is_null() {
+        boot_log::force_uart_line("[boot] bootstrap_ep: ipcbuf missing");
+        panic!("bootstrap_ep requires installed IPC buffer");
+    }
+
     let view = snapshot.view();
     if sel4::ep_ready() {
         report.preexisting = true;
         report.ep_slot = sel4::root_endpoint();
+        let mut line = HeaplessString::<96>::new();
+        let _ = write!(
+            line,
+            "[boot] bootstrap_ep: preexisting ep=0x{ep:04x}",
+            ep = report.ep_slot
+        );
+        boot_log::force_uart_line(line.as_str());
         return Ok(sel4::root_endpoint());
     }
 
     serial::puts("[boot] bootstrap_ep: entry\n");
+    boot_log::force_uart_line("[boot] bootstrap_ep: entering");
 
     let bi = view.header();
+
+    let cs_first_free = cs.next_free_slot();
+    let (empty_start, empty_end) = view.init_cnode_empty_range();
+    if cs_first_free < empty_start || cs_first_free >= empty_end {
+        let mut line = HeaplessString::<144>::new();
+        let _ = write!(
+            line,
+            "[boot] bootstrap_ep: cspace window mismatch first_free=0x{first:04x} empty=[0x{start:04x}..0x{end:04x})",
+            first = cs_first_free,
+            start = empty_start,
+            end = empty_end,
+        );
+        boot_log::force_uart_line(line.as_str());
+        report.verify_err = Some(sel4_sys::seL4_RangeError);
+        return Err(sel4_sys::seL4_RangeError);
+    }
+
     let (ut, desc) = select_endpoint_untyped(&view)?;
 
     #[cfg(feature = "untyped-debug")]
@@ -126,13 +161,19 @@ pub fn bootstrap_ep(
     let ep_slot = cs.alloc_slot()?;
     report.ep_slot = ep_slot;
     serial::puts("[boot] bootstrap_ep: after alloc_slot\n");
+    let mut slot_line = HeaplessString::<96>::new();
+    let _ = write!(
+        slot_line,
+        "[boot] bootstrap_ep: slot=0x{slot:04x}",
+        slot = ep_slot
+    );
+    boot_log::force_uart_line(slot_line.as_str());
     debug_assert_ne!(
         ep_slot,
         sel4::seL4_CapNull,
         "allocated endpoint slot must not be null",
     );
 
-    let (empty_start, empty_end) = view.init_cnode_empty_range();
     assert!(
         empty_start < empty_end,
         "bootinfo empty window must have positive width",
@@ -170,14 +211,41 @@ pub fn bootstrap_ep(
     );
 
     serial::puts("[boot] bootstrap_ep: before verify\n");
+    let mut verify_line = HeaplessString::<112>::new();
+    let _ = write!(
+        verify_line,
+        "[boot] bootstrap_ep: verify slot=0x{slot:04x}",
+        slot = ep_slot
+    );
+    boot_log::force_uart_line(verify_line.as_str());
     if let Err(err) = verify_root_cnode_slot(bi, ep_slot as sel4_sys::seL4_Word) {
         serial::puts("[boot] bootstrap_ep: verify_root_cnode_slot failed\n");
         report.verify_err = Some(err);
+        let mut line = HeaplessString::<128>::new();
+        let err_code = err as i32;
+        let err_name = crate::sel4::error_name(err);
+        let _ = write!(
+            line,
+            "[boot] bootstrap_ep: verify failed slot=0x{slot:04x} err={err_code} ({err_name})",
+            slot = ep_slot,
+            err_code = err_code,
+            err_name = err_name,
+        );
+        boot_log::force_uart_line(line.as_str());
         return Err(err);
     }
     report.verify_err = Some(sel4_sys::seL4_NoError);
+    boot_log::force_uart_line("[boot] bootstrap_ep: verify ok");
 
     serial::puts("[boot] bootstrap_ep: before retype\n");
+    let mut retype_line = HeaplessString::<144>::new();
+    let _ = write!(
+        retype_line,
+        "[boot] bootstrap_ep: retype ut=0x{ut:04x} -> slot=0x{slot:04x}",
+        ut = ut,
+        slot = ep_slot
+    );
+    boot_log::force_uart_line(retype_line.as_str());
     let err = retype_endpoint_auto(
         bi,
         ut as sel4_sys::seL4_Word,
@@ -186,9 +254,21 @@ pub fn bootstrap_ep(
     report.retype_err = Some(err);
     if err != sel4_sys::seL4_NoError {
         serial::puts("[boot] bootstrap_ep: retype_endpoint_auto failed\n");
+        let mut line = HeaplessString::<128>::new();
+        let err_code = err as i32;
+        let err_name = crate::sel4::error_name(err);
+        let _ = write!(
+            line,
+            "[boot] bootstrap_ep: retype failed slot=0x{slot:04x} err={err_code} ({err_name})",
+            slot = ep_slot,
+            err_code = err_code,
+            err_name = err_name,
+        );
+        boot_log::force_uart_line(line.as_str());
         return Err(err);
     }
     serial::puts("[boot] bootstrap_ep: after retype\n");
+    boot_log::force_uart_line("[boot] bootstrap_ep: retype ok");
     window.bump();
 
     let slot_ident = sel4::debug_cap_identify(ep_slot);
@@ -196,6 +276,13 @@ pub fn bootstrap_ep(
 
     publish_root_ep(ep_slot);
     serial::puts("[boot] bootstrap_ep: after publish\n");
+    let mut publish_line = HeaplessString::<112>::new();
+    let _ = write!(
+        publish_line,
+        "[boot] bootstrap_ep: published ep=0x{slot:04x}",
+        slot = ep_slot
+    );
+    boot_log::force_uart_line(publish_line.as_str());
 
     Ok(ep_slot)
 }
