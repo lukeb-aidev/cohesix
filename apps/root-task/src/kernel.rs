@@ -1631,6 +1631,13 @@ fn bootstrap<P: Platform>(
         console.writeln_prefixed("[boot] bootstrap-minimal: entering console");
         boot_guard.record_substep("commit.minimal.path");
         boot_guard.commit_minimal();
+        boot_log::unlock_post_commit_ipc_logging();
+        let precommit_blocks = boot_log::precommit_ipc_forbidden();
+        if precommit_blocks > 0 {
+            let mut marker = HeaplessString::<96>::new();
+            let _ = write!(marker, "[log] precommit_ipc_forbidden={precommit_blocks}");
+            boot_log::force_uart_line(marker.as_str());
+        }
         boot_log::force_uart_line("[console] serial fallback ready");
         if !crate::ipc::ep_is_valid(crate::sel4::root_endpoint()) {
             boot_log::force_uart_line(
@@ -1920,6 +1927,13 @@ fn bootstrap<P: Platform>(
     let bootstrap_ipc = KernelIpc::new(endpoints.control, endpoints.fault);
     boot_guard.record_substep("commit.minimal.ready");
     boot_guard.commit_minimal();
+    boot_log::unlock_post_commit_ipc_logging();
+    let precommit_blocks = boot_log::precommit_ipc_forbidden();
+    if precommit_blocks > 0 {
+        let mut marker = HeaplessString::<96>::new();
+        let _ = write!(marker, "[log] precommit_ipc_forbidden={precommit_blocks}");
+        boot_log::force_uart_line(marker.as_str());
+    }
     boot_log::force_uart_line("[boot] commit_minimal satisfied");
     let mut post_commit = PostCommitState::new();
 
