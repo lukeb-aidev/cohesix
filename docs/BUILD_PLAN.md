@@ -547,6 +547,7 @@ Wrap the AArch64-specific VSpace cache operations in the HAL, wire them into man
 
 **Goal**
 Provide `coh> test` that runs a bounded suite validating the `cohsh` control-plane contract end-to-end (client + server), returning deterministic PASS/FAIL plus optional machine-readable JSON suitable for CI.
+Following the .coh script format as documented in docs/USERLAND_AND_CLI.md "## coh scripts" section.
 
 **Deliverables**
 - Interactive command surface
