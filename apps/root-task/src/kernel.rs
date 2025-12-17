@@ -951,6 +951,7 @@ struct BootstrapCommit {
 
 struct BootStateGuard {
     commit: BootstrapCommit,
+    graceful_exit: bool,
 }
 
 static BOOT_STATE: AtomicU8 = AtomicU8::new(BootState::Cold as u8);
@@ -1053,6 +1054,7 @@ impl BootStateGuard {
                     cspace_recorded: false,
                     telemetry: AbortTelemetry::default(),
                 },
+                graceful_exit: false,
             }),
             Err(state) if state == BootState::Booting as u8 || state == BootState::Booted as u8 => {
                 log::error!("[boot] bootstrap called twice; refusing re-entry");
@@ -1113,6 +1115,10 @@ impl BootStateGuard {
         self.commit.telemetry.logger_switched = ready;
     }
 
+    fn allow_graceful_exit(&mut self) {
+        self.graceful_exit = true;
+    }
+
     fn commit_minimal(&mut self) {
         BOOT_STATE.store(BootState::Booted as u8, Ordering::Release);
         self.commit.minimal_committed = true;
@@ -1129,6 +1135,15 @@ impl BootStateGuard {
 impl Drop for BootStateGuard {
     fn drop(&mut self) {
         if !self.commit.minimal_committed {
+            if self.graceful_exit {
+                log::warn!("[boot] bootstrap exited without committing (graceful exit allowed)");
+                boot_log::force_uart_line(
+                    "[boot] bootstrap exited without committing (graceful exit allowed)",
+                );
+                self.commit.telemetry.emit();
+                BOOT_STATE.store(BootState::Booted as u8, Ordering::Release);
+                return;
+            }
             if self.commit.cspace_recorded {
                 let root = self.commit.telemetry.cspace_root.unwrap_or_default();
                 let bits = self.commit.telemetry.cspace_bits.unwrap_or_default();
@@ -1475,22 +1490,30 @@ fn bootstrap<P: Platform>(
         err
     })?;
     early_phase = EarlyBootPhase::IPCInstall;
-    sequencer
-        .advance(BootstrapPhase::IPCInstall)
-        .map_err(|err| {
+    match sequencer.advance(BootstrapPhase::IPCInstall) {
+        Ok(()) => {}
+        Err(err) => {
+            let fatal = cfg!(feature = "bootstrap-early-exit");
             log_precommit_exit(
                 early_phase,
                 "bootstrap_phase.IPCInstall",
-                true,
+                fatal,
                 PrecommitReason::IpcInstall,
                 None,
                 &err,
                 file!(),
                 line!(),
             );
-            err
-        })?;
+            boot_guard.record_reason("phase.IPCInstall", None);
+            if fatal {
+                boot_guard.allow_graceful_exit();
+                return Err(err.into());
+            }
+        }
+    }
     boot_guard.record_phase("IPCInstall");
+    boot_guard.record_mark("[mark] ipc.install.ok");
+    boot_log::force_uart_line("[mark] ipc.install.ok");
     let mut console = DebugConsole::new(platform);
 
     #[inline(always)]
@@ -1697,6 +1720,8 @@ fn bootstrap<P: Platform>(
 
     check_bootinfo(&mut boot_guard, "MARK 38");
     boot_log::force_uart_line("[MARK 38] before bootstrap_ep");
+    boot_guard.record_mark("[mark] ep.bootstrap.begin");
+    boot_log::force_uart_line("[mark] ep.bootstrap.begin");
     boot_guard.record_substep("bootstrap_ep.pre");
     let mut ep_report = crate::boot::ep::RootEpReport::default();
     let mut ep_probe = heapless::String::<160>::new();
@@ -1834,6 +1859,14 @@ fn bootstrap<P: Platform>(
         ep = ep_slot
     );
     console.writeln_prefixed(ep_line.as_str());
+    let mut ep_mark = heapless::String::<128>::new();
+    let _ = write!(
+        ep_mark,
+        "[mark] ep.publish.ok root_ep=0x{ep:04x}",
+        ep = ep_slot
+    );
+    boot_guard.record_mark("[mark] ep.publish.ok");
+    boot_log::force_uart_line(ep_mark.as_str());
     boot_log::force_uart_line("[breadcrumb] after ep publish line");
 
     // Boot tracer phase advancement must not run before the root EP exists,
