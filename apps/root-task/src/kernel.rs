@@ -556,14 +556,14 @@ struct AbortTelemetry {
     error_code: Option<i32>,
     last_mark: Option<&'static str>,
     last_invariant: Option<&'static str>,
-    cspace_root: Option<u32>,
+    cspace_root: Option<sel4_sys::seL4_CPtr>,
     cspace_bits: Option<u8>,
-    first_free: Option<u32>,
-    empty_start: Option<u32>,
-    empty_end: Option<u32>,
+    first_free: Option<sel4_sys::seL4_CPtr>,
+    empty_start: Option<sel4_sys::seL4_CPtr>,
+    empty_end: Option<sel4_sys::seL4_CPtr>,
     ep_ready: bool,
-    root_ep: Option<u32>,
-    fault_ep: Option<u32>,
+    root_ep: Option<sel4_sys::seL4_CPtr>,
+    fault_ep: Option<sel4_sys::seL4_CPtr>,
     ipc_buffer: Option<usize>,
     logger_switched: bool,
 }
@@ -773,7 +773,13 @@ impl BootStateGuard {
         self.commit.telemetry.last_invariant = Some(invariant);
     }
 
-    fn record_cspace(&mut self, root: u32, bits: u8, first_free: u32, empty: (u32, u32)) {
+    fn record_cspace(
+        &mut self,
+        root: sel4_sys::seL4_CPtr,
+        bits: u8,
+        first_free: sel4_sys::seL4_CPtr,
+        empty: (sel4_sys::seL4_CPtr, sel4_sys::seL4_CPtr),
+    ) {
         self.commit.telemetry.cspace_root = Some(root);
         self.commit.telemetry.cspace_bits = Some(bits);
         self.commit.telemetry.first_free = Some(first_free);
@@ -781,7 +787,11 @@ impl BootStateGuard {
         self.commit.telemetry.empty_end = Some(empty.1);
     }
 
-    fn record_endpoints(&mut self, root_ep: u32, fault_ep: u32) {
+    fn record_endpoints(
+        &mut self,
+        root_ep: sel4_sys::seL4_CPtr,
+        fault_ep: sel4_sys::seL4_CPtr,
+    ) {
         self.commit.telemetry.root_ep = Some(root_ep);
         self.commit.telemetry.fault_ep = Some(fault_ep);
         self.commit.telemetry.ep_ready = root_ep != sel4_sys::seL4_CapNull;
@@ -893,6 +903,7 @@ fn bootstrap<P: Platform>(
     crate::sel4::install_debug_sink();
 
     let mut sequencer = BootstrapSequencer::new();
+    let mut boot_guard = BootStateGuard::acquire()?;
 
     let bootinfo_view = canonical_bootinfo_view(&mut sequencer, bootinfo)?;
     boot_guard.record_phase("BootInfoValidate");
@@ -1007,7 +1018,6 @@ fn bootstrap<P: Platform>(
     boot_log::force_uart_line(build_line.as_str());
     log::info!("{}", build_line.as_str());
 
-    let mut boot_guard = BootStateGuard::acquire()?;
     boot_guard.record_phase("start");
     debug_assert_eq!(
         BOOT_STATE.load(Ordering::Acquire),
@@ -1321,10 +1331,10 @@ fn bootstrap<P: Platform>(
                     let mut structured = heapless::String::<192>::new();
                     let _ = write!(
                     structured,
-                    "[boot:abort] ep_slot=0x{slot:04x} verify={:?} retype={:?} ident=0x{ident:04x}",
+                    "[boot:abort] ep_slot=0x{slot:04x} verify={verify:?} retype={retype:?} ident=0x{ident:04x}",
                     slot = ep_report.ep_slot,
-                    ep_report.verify_err,
-                    ep_report.retype_err,
+                    verify = ep_report.verify_err,
+                    retype = ep_report.retype_err,
                     ident = ep_report.slot_ident,
                 );
                     boot_log::force_uart_line(structured.as_str());
@@ -1332,7 +1342,7 @@ fn bootstrap<P: Platform>(
                     let fallback_ident = sel4::debug_cap_identify(ep_report.ep_slot);
                     let fallback_slot = if fallback_existing {
                         sel4::root_endpoint()
-                    } else if fallback_ident == sel4_sys::seL4_CapEndpoint {
+                    } else if fallback_ident == sel4_sys::seL4_EndpointObject {
                         ep_report.ep_slot
                     } else {
                         sel4_sys::seL4_CapNull
@@ -1356,12 +1366,12 @@ fn bootstrap<P: Platform>(
     let mut ep_status = heapless::String::<192>::new();
     let _ = write!(
         ep_status,
-        "[boot] root-ep report slot=0x{slot:04x} verify={:?} retype={:?} ident=0x{ident:04x} preexisting={}",
+        "[boot] root-ep report slot=0x{slot:04x} verify={verify:?} retype={retype:?} ident=0x{ident:04x} preexisting={preexisting}",
         slot = ep_report.ep_slot,
-        ep_report.verify_err,
-        ep_report.retype_err,
+        verify = ep_report.verify_err,
+        retype = ep_report.retype_err,
         ident = ep_report.slot_ident,
-        ep_report.preexisting as u8,
+        preexisting = ep_report.preexisting as u8,
     );
     boot_log::force_uart_line(ep_status.as_str());
 
@@ -2134,7 +2144,7 @@ fn bootstrap<P: Platform>(
         let net_backend_label = DEFAULT_NET_BACKEND.label();
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let (net_stack, virtio_present) = {
-            use crate::net::stack::{init_net_console, NetConsoleError};
+            use crate::net::{init_net_console, NetConsoleError};
 
             let config = crate::net::ConsoleNetConfig::default();
             match init_net_console(&mut hal, config) {
