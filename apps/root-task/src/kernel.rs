@@ -38,7 +38,7 @@ use crate::bootstrap::{
     },
     pick_untyped,
     retype::{retype_one, retype_selection},
-    BootPhase, UntypedSelection,
+    sel4_guard, BootPhase, UntypedSelection,
 };
 use crate::console::Console;
 use crate::cspace::tuples::assert_ipc_buffer_matches_bootinfo;
@@ -82,9 +82,26 @@ const DEVICE_FRAME_BITS: usize = 12;
 use sel4_panicking::{self, DebugSink};
 
 fn debug_identify_boot_caps() {
+    let guard_stage = "BootCaps.identify";
     for slot in 0u64..16u64 {
-        let ty = unsafe { sel4_sys::seL4_CapIdentify(slot) };
-        log::info!("[identify] slot=0x{slot:04x} ty=0x{ty:08x}");
+        let cap = slot as sel4_sys::seL4_CPtr;
+        if cap == sel4_sys::seL4_CapNull {
+            sel4_guard::uart_breadcrumb(
+                guard_stage,
+                "seL4_CapIdentify.skip",
+                "slot=0x0000 reason=null-cap",
+            );
+            continue;
+        }
+        let guarded_cap = sel4_guard::guard_cptr(guard_stage, "cap-identify.slot", cap);
+        let mut breadcrumb = HeaplessString::<128>::new();
+        let _ = write!(breadcrumb, "slot=0x{slot:04x}", slot = guarded_cap);
+        sel4_guard::uart_breadcrumb(guard_stage, "seL4_CapIdentify", breadcrumb.as_str());
+        let ty = unsafe { sel4_sys::seL4_CapIdentify(guarded_cap) };
+        log::info!(
+            "[identify] slot=0x{slot:04x} ty=0x{ty:08x}",
+            slot = guarded_cap
+        );
     }
 }
 
@@ -136,6 +153,13 @@ fn install_init_ipc_buffer(
             );
         }
 
+        let mut breadcrumb = HeaplessString::<160>::new();
+        let _ = write!(breadcrumb, "ipc_ptr=0x{addr:016x}", addr = addr);
+        sel4_guard::uart_breadcrumb(
+            "IPCInstall.install_init_ipc_buffer",
+            "seL4_SetIPCBuffer",
+            breadcrumb.as_str(),
+        );
         sel4_sys::seL4_SetIPCBuffer(ipc_buffer_ptr.as_ptr());
     }
 
@@ -156,6 +180,7 @@ fn ipcbuf_sanity_probe(bootinfo_ref: &sel4_sys::seL4_BootInfo) -> Result<(), Fat
     let src = bootinfo_ref.init_tcb_cap();
     let empty_start = bootinfo_ref.empty_first_slot() as sel4_sys::seL4_CPtr;
     let empty_end = bootinfo_ref.empty_last_slot_excl() as sel4_sys::seL4_CPtr;
+    let guard_stage = "IPCInstall.ipcbuf_sanity";
 
     if empty_start >= empty_end {
         crate::bootstrap::log::force_uart_line("[boot] ipcbuf sanity empty window invalid");
@@ -177,13 +202,27 @@ fn ipcbuf_sanity_probe(bootinfo_ref: &sel4_sys::seL4_BootInfo) -> Result<(), Fat
         ));
     }
 
+    let init_cnode =
+        sel4_guard::guard_cptr(guard_stage, "init_cnode", bootinfo_ref.init_cnode_cap());
+    let guarded_dst = sel4_guard::guard_cptr(guard_stage, "ipcbuf.dst", dst);
+    let guarded_src = sel4_guard::guard_cptr(guard_stage, "ipcbuf.src", src);
+    let mut breadcrumb = HeaplessString::<200>::new();
+    let _ = write!(
+        breadcrumb,
+        "root=0x{root:04x} dst=0x{dst:04x} src=0x{src:04x} depth={depth}",
+        root = init_cnode,
+        dst = guarded_dst,
+        src = guarded_src,
+        depth = depth
+    );
+    sel4_guard::uart_breadcrumb(guard_stage, "seL4_CNode_Copy", breadcrumb.as_str());
     let result = unsafe {
         sel4_sys::seL4_CNode_Copy(
-            bootinfo_ref.init_cnode_cap(),
-            dst,
+            init_cnode,
+            guarded_dst,
             depth,
-            bootinfo_ref.init_cnode_cap(),
-            src,
+            init_cnode,
+            guarded_src,
             depth,
             sel4_sys::seL4_AllRights,
         )
@@ -217,8 +256,15 @@ fn ipcbuf_sanity_probe(bootinfo_ref: &sel4_sys::seL4_BootInfo) -> Result<(), Fat
         ));
     }
 
-    let delete_result =
-        unsafe { sel4_sys::seL4_CNode_Delete(bootinfo_ref.init_cnode_cap(), dst, depth) };
+    let mut delete_line = HeaplessString::<200>::new();
+    let _ = write!(
+        delete_line,
+        "root=0x{root:04x} dst=0x{dst:04x} depth={depth}",
+        root = init_cnode,
+        dst = guarded_dst,
+    );
+    sel4_guard::uart_breadcrumb(guard_stage, "seL4_CNode_Delete", delete_line.as_str());
+    let delete_result = unsafe { sel4_sys::seL4_CNode_Delete(init_cnode, guarded_dst, depth) };
 
     if delete_result != sel4_sys::seL4_NoError {
         let mut delete_line = HeaplessString::<144>::new();
@@ -1191,6 +1237,7 @@ fn bootstrap<P: Platform>(
         err
     })?;
     boot_guard.record_phase("BootInfoValidate");
+    sel4_guard::install_bootinfo(&bootinfo_view);
 
     early_phase = EarlyBootPhase::MemoryLayout;
     sequencer

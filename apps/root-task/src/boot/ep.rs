@@ -11,6 +11,7 @@ use crate::bootstrap::bootinfo_snapshot::BootInfoSnapshot;
 use crate::bootstrap::cspace::CSpaceWindow;
 use crate::bootstrap::cspace_sys::{bits_as_u8, retype_endpoint_auto, verify_root_cnode_slot};
 use crate::bootstrap::log as boot_log;
+use crate::bootstrap::sel4_guard;
 use crate::cspace::CSpace;
 use crate::sel4::{self, BootInfoView};
 use crate::serial;
@@ -271,28 +272,33 @@ pub fn bootstrap_ep(
     boot_log::force_uart_line("[boot] bootstrap_ep: retype ok");
     window.bump();
 
-    let slot_ident = sel4::debug_cap_identify(ep_slot);
+    let guard_stage = "bootstrap_ep.identify";
+    let guarded_slot = sel4_guard::guard_cptr(guard_stage, "root_ep.slot", ep_slot);
+    let mut breadcrumb = HeaplessString::<128>::new();
+    let _ = write!(breadcrumb, "slot=0x{slot:04x}", slot = guarded_slot);
+    sel4_guard::uart_breadcrumb(guard_stage, "seL4_DebugCapIdentify", breadcrumb.as_str());
+    let slot_ident = sel4::debug_cap_identify(guarded_slot);
     report.slot_ident = slot_ident;
 
-    publish_root_ep(ep_slot);
+    publish_root_ep(guarded_slot);
     serial::puts("[boot] bootstrap_ep: after publish\n");
     let mut publish_line = HeaplessString::<112>::new();
     let _ = write!(
         publish_line,
         "[boot] bootstrap_ep: published ep=0x{slot:04x}",
-        slot = ep_slot
+        slot = guarded_slot
     );
     boot_log::force_uart_line(publish_line.as_str());
     let mut status_line = HeaplessString::<128>::new();
     let _ = write!(
         status_line,
         "[boot] bootstrap_ep: success slot=0x{slot:04x} badge=0x0000 published=1 ident=0x{ident:04x}",
-        slot = ep_slot,
+        slot = guarded_slot,
         ident = report.slot_ident as u32
     );
     boot_log::force_uart_line(status_line.as_str());
 
-    Ok(ep_slot)
+    Ok(guarded_slot)
 }
 
 /// Retype an additional endpoint for dedicated fault handling without updating the
@@ -377,20 +383,25 @@ pub fn bootstrap_fault_ep(
 
     window.bump();
     log::info!("[cs] first_free=0x{slot:04x}", slot = cs.next_free_slot());
-    let slot_ident = sel4::debug_cap_identify(ep_slot);
+    let guard_stage = "bootstrap_fault_ep.identify";
+    let guarded_slot = sel4_guard::guard_cptr(guard_stage, "fault_ep.slot", ep_slot);
+    let mut breadcrumb = HeaplessString::<128>::new();
+    let _ = write!(breadcrumb, "slot=0x{slot:04x}", slot = guarded_slot);
+    sel4_guard::uart_breadcrumb(guard_stage, "seL4_DebugCapIdentify", breadcrumb.as_str());
+    let slot_ident = sel4::debug_cap_identify(guarded_slot);
     log::info!(
         "[boot] fault endpoint slot=0x{slot:04x} identify=0x{ident:08x}",
-        slot = ep_slot,
+        slot = guarded_slot,
         ident = slot_ident,
     );
     let mut line = HeaplessString::<160>::new();
     let _ = write!(
         line,
         "[boot] fault-ep ready slot=0x{slot:04x} badge=0x0000 ident=0x{ident:04x} published=0",
-        slot = ep_slot,
+        slot = guarded_slot,
         ident = slot_ident as u32
     );
     boot_log::force_uart_line(line.as_str());
 
-    Ok(ep_slot)
+    Ok(guarded_slot)
 }

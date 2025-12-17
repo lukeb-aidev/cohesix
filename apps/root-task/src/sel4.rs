@@ -18,11 +18,12 @@ use crate::bootstrap::cspace_sys;
 use crate::bootstrap::ipcbuf_view::IpcBufView;
 #[cfg(feature = "kernel")]
 use crate::bootstrap::ktry;
+use crate::bootstrap::sel4_guard;
 use crate::bootstrap::DevicePtPoolConfig;
 use crate::debug_uart::debug_uart_str;
 use crate::sel4_view;
 use crate::serial;
-use heapless::Vec;
+use heapless::{String as HeaplessString, Vec};
 pub use sel4_sys::{
     seL4_AllRights, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CNode_Mint,
     seL4_CNode_Move, seL4_CPtr, seL4_CapASIDControl, seL4_CapBootInfoFrame, seL4_CapDomain,
@@ -2630,7 +2631,24 @@ impl<'a> KernelEnv<'a> {
             buffer_frame = buffer_frame,
         );
 
-        let result = unsafe { sel4_sys::seL4_TCB_SetIPCBuffer(tcb_cap, buffer_word, buffer_frame) };
+        let guard_stage = "IPCInstall.bind_ipc_buffer";
+        let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+        let guarded_frame = sel4_guard::guard_cptr(guard_stage, "ipc_frame", buffer_frame);
+        let tcb_cap = guarded_tcb;
+        let buffer_frame = guarded_frame;
+        let mut breadcrumb = HeaplessString::<192>::new();
+        let _ = fmt::write(
+            &mut breadcrumb,
+            format_args!(
+                "tcb=0x{tcb:04x} buffer=0x{buffer:08x} frame=0x{frame:04x}",
+                tcb = guarded_tcb,
+                buffer = buffer_word,
+                frame = guarded_frame
+            ),
+        );
+        sel4_guard::uart_breadcrumb(guard_stage, "seL4_TCB_SetIPCBuffer", breadcrumb.as_str());
+        let result =
+            unsafe { sel4_sys::seL4_TCB_SetIPCBuffer(guarded_tcb, buffer_word, guarded_frame) };
 
         if result == seL4_NoError {
             if self.ipcbuf_trace {
