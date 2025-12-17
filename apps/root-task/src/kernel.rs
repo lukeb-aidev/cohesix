@@ -632,6 +632,27 @@ enum BootState {
     Booted = 2,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EarlyBootPhase {
+    Begin,
+    BootInfoView,
+    MemoryLayout,
+    BootInfoSnapshot,
+    IPCInstall,
+}
+
+impl EarlyBootPhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Begin => "begin",
+            Self::BootInfoView => "bootinfo.view",
+            Self::MemoryLayout => "layout.build",
+            Self::BootInfoSnapshot => "bootinfo.snapshot",
+            Self::IPCInstall => "ipc.install",
+        }
+    }
+}
+
 /// Errors surfaced during timer bring-up.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TimerError {
@@ -769,6 +790,44 @@ impl AbortTelemetry {
             self.last_invariant.unwrap_or("none"),
         );
         boot_log::force_uart_line(mark_line.as_str());
+    }
+}
+
+fn log_early_boot_exit<E: fmt::Display>(phase: EarlyBootPhase, step: &'static str, err: E) {
+    let mut line = HeaplessString::<128>::new();
+    let _ = write!(
+        line,
+        "[boot] early-exit at {}::{}: err={}",
+        phase.label(),
+        step,
+        err
+    );
+    boot_log::force_uart_line(line.as_str());
+}
+
+struct PostCommitState {
+    failed: bool,
+}
+
+impl PostCommitState {
+    fn new() -> Self {
+        Self { failed: false }
+    }
+
+    fn flag_failure<E: fmt::Display>(&mut self, phase: &'static str, err: E) {
+        let mut line = HeaplessString::<192>::new();
+        let _ = write!(
+            line,
+            "[boot] post-commit bootstrap failed at {phase}: {err}; continuing in degraded mode",
+            err = err
+        );
+        boot_log::force_uart_line(line.as_str());
+        log::error!("{}", line.as_str());
+        self.failed = true;
+    }
+
+    fn failed(&self) -> bool {
+        self.failed
     }
 }
 
@@ -1038,11 +1097,21 @@ fn bootstrap<P: Platform>(
 
     let mut sequencer = BootstrapSequencer::new();
     let mut boot_guard = BootStateGuard::acquire()?;
+    let mut early_phase = EarlyBootPhase::BootInfoView;
 
-    let bootinfo_view = canonical_bootinfo_view(&mut sequencer, bootinfo)?;
+    let bootinfo_view = canonical_bootinfo_view(&mut sequencer, bootinfo).map_err(|err| {
+        log_early_boot_exit(early_phase, "canonical_bootinfo_view", &err);
+        err
+    })?;
     boot_guard.record_phase("BootInfoValidate");
 
-    sequencer.advance(BootstrapPhase::MemoryLayoutBuild)?;
+    early_phase = EarlyBootPhase::MemoryLayout;
+    sequencer
+        .advance(BootstrapPhase::MemoryLayoutBuild)
+        .map_err(|err| {
+            log_early_boot_exit(early_phase, "bootstrap_phase.MemoryLayoutBuild", &err);
+            err
+        })?;
     boot_guard.record_phase("MemoryLayoutBuild");
     let layout_snapshot = layout::dump_and_sanity_check();
 
@@ -1121,7 +1190,11 @@ fn bootstrap<P: Platform>(
 
     crate::sel4::log_sel4_type_sanity();
 
-    let bootinfo_state = snapshot_bootinfo(bootinfo, &bootinfo_view)?;
+    early_phase = EarlyBootPhase::BootInfoSnapshot;
+    let bootinfo_state = snapshot_bootinfo(bootinfo, &bootinfo_view).map_err(|err| {
+        log_early_boot_exit(early_phase, "snapshot_bootinfo", &err);
+        err
+    })?;
     let bootinfo_snapshot = bootinfo_state.snapshot();
     boot_guard.record_invariant("bootinfo.snapshot.ok");
 
@@ -1166,7 +1239,13 @@ fn bootstrap<P: Platform>(
     let ipc_buffer_ptr =
         install_init_ipc_buffer(bootinfo_ref, &mut reserved_vaddrs, &mut boot_guard);
     ipcbuf_sanity_probe(bootinfo_ref);
-    sequencer.advance(BootstrapPhase::IPCInstall)?;
+    early_phase = EarlyBootPhase::IPCInstall;
+    sequencer
+        .advance(BootstrapPhase::IPCInstall)
+        .map_err(|err| {
+            log_early_boot_exit(early_phase, "bootstrap_phase.IPCInstall", &err);
+            err
+        })?;
     boot_guard.record_phase("IPCInstall");
 
     let check_bootinfo = |guard: &mut BootStateGuard, mark: &'static str| {
@@ -1655,6 +1734,14 @@ fn bootstrap<P: Platform>(
         }
     }
 
+    boot_guard.record_endpoints(ep_slot, fault_ep_slot);
+    let endpoints = KernelEndpoints::new(ep_slot, fault_ep_slot);
+    let mut bootstrap_ipc = KernelIpc::new(endpoints.control, endpoints.fault);
+    boot_guard.record_substep("commit.minimal.ready");
+    boot_guard.commit_minimal();
+    boot_log::force_uart_line("[boot] commit_minimal satisfied");
+    let mut post_commit = PostCommitState::new();
+
     if fault_ep_slot != sel4_sys::seL4_CapNull {
         let guard_bits =
             sel4::word_bits().saturating_sub(bootinfo_ref.init_cnode_bits() as sel4_sys::seL4_Word);
@@ -1684,11 +1771,8 @@ fn bootstrap<P: Platform>(
                     error_name(fault_handler_err)
                 );
                 console.writeln_prefixed(line.as_str());
-                panic!(
-                    "fault handler installation failed: {} ({})",
-                    fault_handler_err as sel4_sys::seL4_Word,
-                    error_name(fault_handler_err)
-                );
+                boot_log::force_uart_line(line.as_str());
+                post_commit.flag_failure("fault.handler.install", error_name(fault_handler_err));
             }
         }
     } else {
@@ -1698,10 +1782,6 @@ fn bootstrap<P: Platform>(
             ep = ep_slot
         );
     }
-    boot_guard.record_endpoints(ep_slot, fault_ep_slot);
-    boot_guard.record_substep("commit.minimal.ready");
-    boot_guard.commit_minimal();
-    boot_log::force_uart_line("[boot] commit_minimal satisfied");
 
     let mut cs = CSpaceCtx::new(bootinfo_view, boot_cspace);
     cs.tcb_copy_slot = tcb_copy_slot;
@@ -1714,14 +1794,20 @@ fn bootstrap<P: Platform>(
     let mut consumed_slots: usize = cmp::max(initial_consumed, 2);
     let mut retyped_objects: u32 = 0;
 
-    sequencer.advance(BootstrapPhase::UntypedPlan)?;
-    boot_guard.record_phase("UntypedPlan");
-    boot_tracer().advance(BootPhase::UntypedEnumerate);
+    if let Err(err) = sequencer.advance(BootstrapPhase::UntypedPlan) {
+        post_commit.flag_failure("phase.UntypedPlan", &err);
+    } else {
+        boot_guard.record_phase("UntypedPlan");
+        boot_tracer().advance(BootPhase::UntypedEnumerate);
+    }
     let mut notification_selection =
         pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
 
-    sequencer.advance(BootstrapPhase::RetypeCommit)?;
-    boot_guard.record_phase("RetypeCommit");
+    if let Err(err) = sequencer.advance(BootstrapPhase::RetypeCommit) {
+        post_commit.flag_failure("phase.RetypeCommit", &err);
+    } else {
+        boot_guard.record_phase("RetypeCommit");
+    }
     if let Err(err) = bootstrap_notification(&mut cs, &mut notification_selection) {
         let mut line = heapless::String::<160>::new();
         let err_code = err as i32;
@@ -1765,7 +1851,7 @@ fn bootstrap<P: Platform>(
                 error_name(err)
             );
             console.writeln_prefixed(line.as_str());
-            panic!("retype plan failed: {}", error_name(err));
+            post_commit.flag_failure("retype.plan", error_name(err));
         }
     }
 
@@ -1833,6 +1919,8 @@ fn bootstrap<P: Platform>(
 
     let pl011_paddr = usize::try_from(PL011_PADDR)
         .expect("PL011 physical address must fit within usize on this platform");
+    let mut uart_slot: Option<sel4_sys::seL4_CPtr> = None;
+    let mut uart_mmio: Option<Pl011Mmio> = None;
     let (uart_region, pl011_map_error) = match hal.map_device(pl011_paddr) {
         Ok(region) => (Some(region), None),
         Err(HalError::Sel4(err)) => {
@@ -1928,7 +2016,7 @@ fn bootstrap<P: Platform>(
                     RetypeStatus::Ok => {
                         let _ = write!(
                             detail,
-                            "retype status=ok raw.untyped=0x{ucap:08x} raw.paddr=0x{paddr:08x} raw.size_bits={usize_bits} raw.slot=0x{slot:04x} raw.offset={offset} raw.depth={depth} raw.root=0x{root:04x} raw.node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
+                            "retype status=ok raw.untyped=0x{ucap:08x} raw.paddr=0x{paddr:08x} raw.size_bits={usize_bits} raw.slot=0x{slot:04x} raw.offset=0x{offset:04x} raw.depth={depth} raw.root=0x{root:04x} raw.node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
                             ucap = last.trace.untyped_cap,
                             paddr = last.trace.untyped_paddr,
                             usize_bits = last.trace.untyped_size_bits,
@@ -1944,7 +2032,7 @@ fn bootstrap<P: Platform>(
                     RetypeStatus::Err(code) => {
                         let _ = write!(
                             detail,
-                            "retype status={err}({code}) raw.untyped=0x{ucap:08x} raw.paddr=0x{paddr:08x} raw.size_bits={usize_bits} raw.slot=0x{slot:04x} raw.offset={offset} raw.depth={depth} raw.root=0x{root:04x} raw.node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
+                            "retype status={err}({code}) raw.untyped=0x{ucap:08x} raw.paddr=0x{paddr:08x} raw.size_bits={usize_bits} raw.slot=0x{slot:04x} raw.offset={offset:04x} raw.depth={depth} raw.root=0x{root:04x} raw.node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
                             err = error_name(code),
                             code = code,
                             ucap = last.trace.untyped_cap,
@@ -2078,15 +2166,8 @@ fn bootstrap<P: Platform>(
                 }
             }
 
-            log::error!(
-                "[pl011] UART map failed with {label} ({code}); halting because device console is required",
-                label = error_label,
-                code = error_code,
-            );
-            panic!(
-                "device mapping for PL011 failed: {} ({})",
-                error_label, error_code
-            );
+            post_commit.flag_failure("pl011.map.sel4", error_label);
+            (None, Some(err))
         }
         Err(HalError::Unsupported(reason)) => {
             let mut line = heapless::String::<128>::new();
@@ -2135,108 +2216,112 @@ fn bootstrap<P: Platform>(
         }
     };
 
-    let uart_region = uart_region.unwrap_or_else(|| {
+    if let Some(region) = uart_region {
+        let mmio = Pl011Mmio::mapped(pl011_paddr, region.cap(), region.ptr());
+        mmio.assert_page_coverage(1 << sel4::PAGE_BITS, 0x0ff);
+        log::info!(
+            target: "boot",
+            "[uart:mmio] paddr=0x{paddr:08x} cap=0x{cap:04x} vaddr=0x{vaddr:016x} mapped={mapped}",
+            paddr = mmio.paddr(),
+            cap = mmio.cap().unwrap_or(sel4_sys::seL4_CapNull),
+            vaddr = mmio.vaddr().as_ptr() as usize,
+            mapped = mmio.is_mapped(),
+        );
+
+        let mut map_line = heapless::String::<128>::new();
+        let mapped_vaddr = mmio.vaddr().as_ptr() as usize;
+        let _ = write!(
+            map_line,
+            "[vspace:map] pl011 paddr=0x{paddr:08x} -> vaddr=0x{vaddr:016x} attrs=UNCACHED OK",
+            vaddr = mapped_vaddr,
+            paddr = PL011_PADDR,
+        );
+        console.writeln_prefixed(map_line.as_str());
+
+        uart_pl011::publish_uart_slot(region.cap());
+        early_uart::register_console_base(mapped_vaddr);
+        uart_slot = Some(region.cap());
+        uart_mmio = Some(mmio);
+    } else {
         let label = pl011_map_error
             .map(error_name)
             .unwrap_or("mapping not available");
-        panic!("PL011 MMIO not mapped but required ({label})");
-    });
-
-    let uart_mmio = Pl011Mmio::mapped(pl011_paddr, uart_region.cap(), uart_region.ptr());
-    uart_mmio.assert_page_coverage(1 << sel4::PAGE_BITS, 0x0ff);
-    log::info!(
-        target: "boot",
-        "[uart:mmio] paddr=0x{paddr:08x} cap=0x{cap:04x} vaddr=0x{vaddr:016x} mapped={mapped}",
-        paddr = uart_mmio.paddr(),
-        cap = uart_mmio.cap().unwrap_or(sel4_sys::seL4_CapNull),
-        vaddr = uart_mmio.vaddr().as_ptr() as usize,
-        mapped = uart_mmio.is_mapped(),
-    );
-
-    let mut map_line = heapless::String::<128>::new();
-    let mapped_vaddr = uart_mmio.vaddr().as_ptr() as usize;
-    let _ = write!(
-        map_line,
-        "[vspace:map] pl011 paddr=0x{paddr:08x} -> vaddr=0x{vaddr:016x} attrs=UNCACHED OK",
-        vaddr = mapped_vaddr,
-        paddr = PL011_PADDR,
-    );
-    console.writeln_prefixed(map_line.as_str());
-
-    uart_pl011::publish_uart_slot(uart_region.cap());
-    early_uart::register_console_base(mapped_vaddr);
-
-    let mut driver = Pl011::new(uart_mmio.vaddr());
-    driver.init();
-    console.writeln_prefixed("[uart] init OK");
-    driver.write_str("[console] PL011 console online\n");
-    #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
-    {
-        unsafe {
-            EARLY_UART_SINK = DebugSink {
-                context: uart_mmio.vaddr().as_ptr().cast::<()>(),
-                emit: pl011_debug_emit,
-            };
-        }
-
-        let sink = unsafe { EARLY_UART_SINK };
-        let emit_addr = sink.emit as usize;
-        let ctx_addr = sink.context as usize;
-        let mut sink_line = heapless::String::<128>::new();
-        let _ = write!(
-            sink_line,
-            "[debug-sink] emit=0x{emit:016x} ctx=0x{ctx:016x}",
-            emit = emit_addr,
-            ctx = ctx_addr,
-        );
-        console.writeln_prefixed(sink_line.as_str());
-        if emit_addr & 0b11 != 0 {
-            panic!(
-                "debug sink emit pointer not 4-byte aligned: 0x{emit:016x}",
-                emit = emit_addr,
-            );
-        }
-        if emit_addr <= 0x1000 {
-            panic!(
-                "debug sink emit pointer unexpectedly low: 0x{emit:016x}",
-                emit = emit_addr,
-            );
-        }
-        if ctx_addr <= 0x1000 {
-            panic!(
-                "debug sink context pointer unexpectedly low: 0x{ctx:016x}",
-                ctx = ctx_addr,
-            );
-        }
-        sel4_panicking::install_debug_sink(sink);
+        post_commit.flag_failure("pl011.map", label);
+        console.writeln_prefixed("[uart] PL011 unavailable; continuing without serial console");
     }
-    driver.write_str("[cohesix:root-task] uart logger online\n");
-    log::info!("[boot] after uart logger online");
 
-    let uart_slot = Some(uart_region.cap());
-    let endpoints = KernelEndpoints::new(ep_slot, fault_ep_slot);
+    let mut serial: Option<
+        SerialPort<Pl011, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>,
+    > = None;
 
     #[cfg(feature = "debug-input")]
     {
-        let console_caps = ConsoleCaps {
-            init_cnode: bootinfo_ref.init_cnode_cap(),
-            init_vspace: sel4_sys::seL4_CapInitThreadVSpace,
-            init_tcb: bootinfo_ref.init_tcb_cap(),
-            console_endpoint_slot: first_retypes
-                .as_ref()
-                .map(|info| info.endpoint_slot)
-                .unwrap_or(crate::sel4::seL4_CapNull),
-            tcb_copy_slot: first_retypes.as_ref().map(|info| info.tcb_copy_slot),
-        };
-        start_console(driver, console_caps);
+        if let Some(ref mmio) = uart_mmio {
+            let mut driver = Pl011::new(mmio.vaddr());
+            driver.init();
+            console.writeln_prefixed("[uart] init OK");
+            driver.write_str("[console] PL011 console online\n");
+            driver.write_str("[cohesix:root-task] uart logger online\n");
+            let console_caps = ConsoleCaps {
+                init_cnode: bootinfo_ref.init_cnode_cap(),
+                init_vspace: sel4_sys::seL4_CapInitThreadVSpace,
+                init_tcb: bootinfo_ref.init_tcb_cap(),
+                console_endpoint_slot: first_retypes
+                    .as_ref()
+                    .map(|info| info.endpoint_slot)
+                    .unwrap_or(crate::sel4::seL4_CapNull),
+                tcb_copy_slot: first_retypes.as_ref().map(|info| info.tcb_copy_slot),
+            };
+            start_console(driver, console_caps);
+        } else {
+            post_commit.flag_failure("uart.debug-input", "pl011 mapping unavailable");
+        }
     }
 
     #[cfg(not(feature = "debug-input"))]
     {
-        let serial =
-            SerialPort::<_, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>::new(
-                driver,
-            );
+        if let Some(ref mmio) = uart_mmio {
+            let mut driver = Pl011::new(mmio.vaddr());
+            driver.init();
+            console.writeln_prefixed("[uart] init OK");
+            driver.write_str("[console] PL011 console online\n");
+            #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+            {
+                unsafe {
+                    EARLY_UART_SINK = DebugSink {
+                        context: mmio.vaddr().as_ptr().cast::<()>(),
+                        emit: pl011_debug_emit,
+                    };
+                }
+
+                let sink = unsafe { EARLY_UART_SINK };
+                let emit_addr = sink.emit as usize;
+                let ctx_addr = sink.context as usize;
+                let mut sink_line = heapless::String::<128>::new();
+                let _ = write!(
+                    sink_line,
+                    "[debug-sink] emit=0x{emit:016x} ctx=0x{ctx:016x}",
+                    emit = emit_addr,
+                    ctx = ctx_addr,
+                );
+                console.writeln_prefixed(sink_line.as_str());
+                if emit_addr & 0b11 != 0 || emit_addr <= 0x1000 || ctx_addr <= 0x1000 {
+                    post_commit.flag_failure("debug-sink", "debug sink address invalid");
+                } else {
+                    sel4_panicking::install_debug_sink(sink);
+                }
+            }
+            driver.write_str("[cohesix:root-task] uart logger online\n");
+            log::info!("[boot] after uart logger online");
+            serial = Some(SerialPort::<
+                _,
+                DEFAULT_RX_CAPACITY,
+                DEFAULT_TX_CAPACITY,
+                DEFAULT_LINE_CAPACITY,
+            >::new(driver));
+        } else {
+            console.writeln_prefixed("[uart] init skipped: PL011 mapping unavailable");
+        }
 
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let net_backend_label = DEFAULT_NET_BACKEND.label();
@@ -2290,14 +2375,14 @@ fn bootstrap<P: Platform>(
         let net_stack = None::<()>;
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
-        let (timer, ipc) = run_timers_and_ipc_phase(endpoints).map_err(|err| {
-            log::error!(
-                target: "root_task::kernel",
-                "[boot] TimersAndIPC: failed during bootstrap: {:?}",
-                err
-            );
-            err
-        })?;
+        let (timer, ipc) = match run_timers_and_ipc_phase(endpoints, bootstrap_ipc) {
+            Ok(ok) => ok,
+            Err((err, ipc)) => {
+                post_commit.flag_failure("timers+ipc", &err);
+                let timer = KernelTimer::bypass(KERNEL_TIMER_PERIOD_MS);
+                (timer, ipc)
+            }
+        };
 
         let mut tickets: TicketTable<4> = TicketTable::new();
         let _ = tickets.register(Role::Queen, "bootstrap");
@@ -2354,6 +2439,7 @@ fn bootstrap<P: Platform>(
         } else if let Err(err) = boot_log::switch_logger_to_userland() {
             log::error!("[boot] logger switch failed: {:?}", err);
             boot_guard.record_reason("logger.switch", None);
+            post_commit.flag_failure("logger.switch", format_args!("{err:?}"));
             false
         } else {
             true
@@ -2403,18 +2489,25 @@ fn bootstrap<P: Platform>(
         crate::bp!("bootstrap.done");
         boot_tracer().advance(BootPhase::HandOff);
         boot_guard.commit_full();
-        boot_log::force_uart_line("[console] serial fallback ready");
+        if serial.is_some() {
+            boot_log::force_uart_line("[console] serial fallback ready");
+        } else {
+            boot_log::force_uart_line("[console] serial fallback unavailable");
+        }
         crate::bootstrap::run_minimal(bootinfo_ref);
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let virtio_present_flag = virtio_present;
         #[cfg(not(all(feature = "net-console", feature = "kernel")))]
         let virtio_present_flag = false;
 
-        sequencer.advance(BootstrapPhase::UserlandHandoff)?;
-        boot_guard.record_phase("UserlandHandoff");
+        if let Err(err) = sequencer.advance(BootstrapPhase::UserlandHandoff) {
+            post_commit.flag_failure("phase.UserlandHandoff", &err);
+        } else {
+            boot_guard.record_phase("UserlandHandoff");
+        }
 
         let features = BootFeatures {
-            serial_console: cfg!(feature = "serial-console"),
+            serial_console: cfg!(feature = "serial-console") && serial.is_some(),
             net: net_stack.is_some(),
             net_console: cfg!(feature = "net-console") && net_stack.is_some(),
         };
@@ -2434,8 +2527,8 @@ fn bootstrap<P: Platform>(
             features,
             endpoints,
             uart_slot,
-            uart_mmio: Some(uart_mmio),
-            serial: RefCell::new(Some(serial)),
+            uart_mmio,
+            serial: RefCell::new(serial),
             timer: RefCell::new(Some(timer)),
             ipc: RefCell::new(Some(ipc)),
             tickets: RefCell::new(Some(tickets)),
@@ -2451,8 +2544,8 @@ fn bootstrap<P: Platform>(
             features,
             endpoints,
             uart_slot,
-            uart_mmio: Some(uart_mmio),
-            serial: RefCell::new(Some(serial)),
+            uart_mmio,
+            serial: RefCell::new(serial),
             timer: RefCell::new(Some(timer)),
             ipc: RefCell::new(Some(ipc)),
             tickets: RefCell::new(Some(tickets)),
@@ -2468,7 +2561,8 @@ const KERNEL_TIMER_PERIOD_MS: u64 = 5;
 #[cfg(feature = "bypass-timers-ipc")]
 fn run_timers_and_ipc_phase(
     endpoints: KernelEndpoints,
-) -> Result<(KernelTimer, KernelIpc), BootError> {
+    mut ipc: KernelIpc,
+) -> Result<(KernelTimer, KernelIpc), (BootError, KernelIpc)> {
     log::warn!(
         target: "root_task::kernel",
         "[boot] TimersAndIPC: BYPASSED via feature 'bypass-timers-ipc'"
@@ -2484,14 +2578,19 @@ fn run_timers_and_ipc_phase(
         "[boot] TimersAndIPC: constructing placeholder ipc dispatcher ep=0x{ep:04x}",
         ep = endpoints.control.raw()
     );
-    let ipc = KernelIpc::new(endpoints.control, endpoints.fault);
+    log::info!(
+        target: "root_task::kernel",
+        "[boot] TimersAndIPC: reusing bootstrap dispatcher ep=0x{ep:04x}",
+        ep = endpoints.control.raw()
+    );
     Ok((timer, ipc))
 }
 
 #[cfg(not(feature = "bypass-timers-ipc"))]
 fn run_timers_and_ipc_phase(
     endpoints: KernelEndpoints,
-) -> Result<(KernelTimer, KernelIpc), BootError> {
+    mut ipc: KernelIpc,
+) -> Result<(KernelTimer, KernelIpc), (BootError, KernelIpc)> {
     #[cfg(feature = "bypass-timers")]
     {
         log::warn!(
@@ -2512,7 +2611,6 @@ fn run_timers_and_ipc_phase(
             "[boot] TimersAndIPC: ipc.init.begin ep=0x{ep:04x}",
             ep = endpoints.control.raw()
         );
-        let ipc = KernelIpc::new(endpoints.control, endpoints.fault);
         log::info!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: ipc.init.end ep=0x{ep:04x} staged={staged}",
@@ -2530,14 +2628,17 @@ fn run_timers_and_ipc_phase(
             "[boot] TimersAndIPC: timers.init.begin period_ms={}",
             KERNEL_TIMER_PERIOD_MS
         );
-        let timer = KernelTimer::init(KERNEL_TIMER_PERIOD_MS).map_err(|err| {
-            log::error!(
-                target: "root_task::kernel",
-                "[boot] TimersAndIPC: timers.init.failed: {:?}",
-                err
-            );
-            err
-        })?;
+        let timer = match KernelTimer::init(KERNEL_TIMER_PERIOD_MS) {
+            Ok(timer) => timer,
+            Err(err) => {
+                log::error!(
+                    target: "root_task::kernel",
+                    "[boot] TimersAndIPC: timers.init.failed: {:?}",
+                    err
+                );
+                return Err((err.into(), ipc));
+            }
+        };
         log::info!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: timers.init.ok period_cycles={} last_cycles={}",
@@ -2560,7 +2661,6 @@ fn run_timers_and_ipc_phase(
             "[boot] TimersAndIPC: ipc.init.begin ep=0x{ep:04x}",
             ep = endpoints.control.raw()
         );
-        let ipc = KernelIpc::new(endpoints.control, endpoints.fault);
         log::info!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: ipc.init.end ep=0x{ep:04x} staged={staged}",

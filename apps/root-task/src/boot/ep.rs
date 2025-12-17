@@ -283,6 +283,14 @@ pub fn bootstrap_ep(
         slot = ep_slot
     );
     boot_log::force_uart_line(publish_line.as_str());
+    let mut status_line = HeaplessString::<128>::new();
+    let _ = write!(
+        status_line,
+        "[boot] bootstrap_ep: success slot=0x{slot:04x} badge=0x0000 published=1 ident=0x{ident:04x}",
+        slot = ep_slot,
+        ident = report.slot_ident as u32
+    );
+    boot_log::force_uart_line(status_line.as_str());
 
     Ok(ep_slot)
 }
@@ -356,6 +364,14 @@ pub fn bootstrap_fault_ep(
             err = err,
             name = sel4::error_name(err),
         );
+        let mut line = HeaplessString::<160>::new();
+        let _ = write!(
+            line,
+            "[boot] fault-ep failed slot=0x{slot:04x} badge=0x0000 err={err}",
+            slot = ep_slot,
+            err = err as i32
+        );
+        boot_log::force_uart_line(line.as_str());
         return Err(err);
     }
 
@@ -367,6 +383,14 @@ pub fn bootstrap_fault_ep(
         slot = ep_slot,
         ident = slot_ident,
     );
+    let mut line = HeaplessString::<160>::new();
+    let _ = write!(
+        line,
+        "[boot] fault-ep ready slot=0x{slot:04x} badge=0x0000 ident=0x{ident:04x} published=0",
+        slot = ep_slot,
+        ident = slot_ident as u32
+    );
+    boot_log::force_uart_line(line.as_str());
 
     Ok(ep_slot)
 }
