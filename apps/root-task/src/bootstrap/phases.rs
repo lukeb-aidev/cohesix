@@ -70,6 +70,8 @@ impl BootstrapPhase {
     }
 }
 
+/// Expected phase order mirroring the runtime sequence in
+/// `apps/root-task/src/kernel.rs::bootstrap`.
 const ORDERING: &[BootstrapPhase] = &[
     BootstrapPhase::CSpaceCanonicalise,
     BootstrapPhase::BootInfoValidate,
@@ -80,6 +82,12 @@ const ORDERING: &[BootstrapPhase] = &[
     BootstrapPhase::RetypeCommit,
     BootstrapPhase::UserlandHandoff,
 ];
+
+/// Returns the canonical bootstrap phase order.
+#[must_use]
+pub fn ordering() -> &'static [BootstrapPhase] {
+    ORDERING
+}
 
 /// Tracks bootstrap progress and rejects re-entry or phase reordering.
 pub struct BootstrapSequencer {
@@ -223,7 +231,6 @@ pub fn canonical_bootinfo_view(
 
 /// Ensures the bootinfo pointer can be snapshotted after validation.
 pub fn snapshot_bootinfo(
-    _bootinfo: &'static BootInfo,
     view: &BootInfoView,
 ) -> Result<&'static crate::bootstrap::bootinfo_snapshot::BootInfoState, FatalBootstrapError> {
     crate::bootstrap::bootinfo_snapshot::BootInfoState::init(view.header()).map_err(|err| {
