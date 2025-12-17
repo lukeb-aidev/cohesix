@@ -173,6 +173,10 @@ fn ep_sink_permitted() -> bool {
     if !POST_COMMIT_IPC_UNLOCKED.load(Ordering::Acquire) {
         return false;
     }
+    if !sel4::ipc_send_unlocked() {
+        record_precommit_block("ipc-locked");
+        return false;
+    }
     if !sel4::ep_ready() || !sel4::ep_validated() {
         return false;
     }

@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 use core::fmt;
+use core::fmt::Write;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use heapless::String;
@@ -10,6 +11,7 @@ use spin::Mutex;
 use crate::sel4::BootInfo;
 #[cfg(target_os = "none")]
 use crate::sel4::BootInfoView;
+use crate::sel4::{ep_ready, ep_validated, ipc_send_unlocked};
 
 /// BootInfo snapshotting and canary validation helpers.
 pub mod bootinfo_snapshot;
@@ -227,11 +229,31 @@ pub fn boot_tracer() -> &'static BootTracer {
     &BOOT_TRACER
 }
 
+/// Emits a bootstrap progress marker without triggering IPC before the root
+/// endpoint is fully provisioned.
+#[inline(always)]
+pub fn emit_boot_point(label: &str) {
+    if ep_ready() && ep_validated() && ipc_send_unlocked() {
+        ::log::info!("[boot] {label}");
+        return;
+    }
+
+    let mut line = String::<112>::new();
+    let _ = write!(
+        line,
+        "[boot:bypass] {label} (ep_ready={} ep_validated={} ipc_unlocked={})",
+        ep_ready() as u8,
+        ep_validated() as u8,
+        ipc_send_unlocked() as u8,
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+}
+
 #[macro_export]
 /// Emits a bootstrapping progress marker prefixed with `[boot]`.
 macro_rules! bp {
     ($name:expr) => {
-        ::log::info!(concat!("[boot] ", $name));
+        $crate::bootstrap::emit_boot_point($name);
     };
 }
 

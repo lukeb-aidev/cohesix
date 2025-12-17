@@ -1974,6 +1974,11 @@ fn bootstrap<P: Platform>(
     let bootstrap_ipc = KernelIpc::new(endpoints.control, endpoints.fault);
     boot_guard.record_substep("commit.minimal.ready");
     boot_guard.commit_minimal();
+    if sel4::ep_ready() && sel4::ep_validated() {
+        sel4::unlock_ipc_send();
+    } else {
+        boot_log::force_uart_line("[ipc-guard] IPC remained locked at commit_minimal");
+    }
     boot_log::unlock_post_commit_ipc_logging();
     let precommit_blocks = boot_log::precommit_ipc_forbidden();
     if precommit_blocks > 0 {
