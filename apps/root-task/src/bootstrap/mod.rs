@@ -37,6 +37,8 @@ pub mod no_alloc;
 pub mod phases;
 /// Thin wrapper around `seL4_Untyped_Retype` tailored for the init CSpace policy.
 pub mod retype;
+/// Guard rails for seL4 invocations during early bootstrap.
+pub mod sel4_guard;
 /// Helpers for selecting RAM-backed untyped capabilities during bootstrap.
 pub mod untyped_pick;
 

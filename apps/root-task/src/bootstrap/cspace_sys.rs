@@ -10,6 +10,7 @@ use crate::boot::flags;
 use crate::bootstrap::cspace::CSpaceWindow;
 #[cfg(target_os = "none")]
 use crate::bootstrap::log::force_uart_line;
+use crate::bootstrap::sel4_guard;
 use crate::sel4::{self, BootInfoExt};
 use core::convert::TryFrom;
 use core::fmt;
@@ -158,10 +159,29 @@ pub fn debug_identify_cap(label: &str, cap: sys::seL4_CPtr) {
 
 /// Logs the capability types present in the init thread CNode for the supplied slot range.
 pub fn dump_init_cnode_slots(range: Range<usize>) {
+    let guard_stage = "BootCaps.dump";
     for slot in range {
         let cap = slot as sys::seL4_CPtr;
-        let ty = unsafe { sys::seL4_CapIdentify(cap) };
-        ::log::info!("[cnode.slot] slot=0x{slot:04x} type=0x{ty:08x}");
+        if cap == sys::seL4_CapNull {
+            sel4_guard::uart_breadcrumb(
+                guard_stage,
+                "seL4_CapIdentify.skip",
+                "slot=0x0000 reason=null-cap",
+            );
+            continue;
+        }
+        let guarded_cap = sel4_guard::guard_cptr(guard_stage, "dump.slot", cap);
+        let mut breadcrumb = heapless::String::<96>::new();
+        let _ = fmt::write(
+            &mut breadcrumb,
+            format_args!("slot=0x{slot:04x}", slot = guarded_cap),
+        );
+        sel4_guard::uart_breadcrumb(guard_stage, "seL4_CapIdentify", breadcrumb.as_str());
+        let ty = unsafe { sys::seL4_CapIdentify(guarded_cap) };
+        ::log::info!(
+            "[cnode.slot] slot=0x{slot:04x} type=0x{ty:08x}",
+            slot = guarded_cap
+        );
     }
 }
 
@@ -820,37 +840,52 @@ pub fn retype_endpoint_raw(
 ) -> sys::seL4_Error {
     let init_bits = init_cnode_bits_u8(bi);
     check_slot_in_range(init_bits, dst as sys::seL4_CPtr);
-    let node_offset = dst;
     let canon_root = bi.canonical_root_cap();
+    let guard_stage = "EP.Retype";
+    let guarded_root = sel4_guard::guard_cptr(guard_stage, "root", canon_root);
+    let guarded_untyped = sel4_guard::guard_cptr(guard_stage, "untyped", ut as sys::seL4_CPtr);
+    let guarded_offset = sel4_guard::guard_cptr(guard_stage, "dst", dst as sys::seL4_CPtr);
+    let mut breadcrumb = heapless::String::<160>::new();
+    let _ = fmt::write(
+        &mut breadcrumb,
+        format_args!(
+            "root=0x{root:04x} ut=0x{ut:04x} dst=0x{dst:04x} depth={depth}",
+            root = guarded_root,
+            ut = guarded_untyped,
+            dst = guarded_offset,
+            depth = init_bits
+        ),
+    );
+    sel4_guard::uart_breadcrumb(guard_stage, "seL4_Untyped_Retype", breadcrumb.as_str());
 
     let result = {
         #[cfg(target_os = "none")]
         unsafe {
             sys::seL4_Untyped_Retype(
-                ut,
+                guarded_untyped,
                 seL4_EndpointObject as sys::seL4_Word,
                 0,
-                canon_root,
+                guarded_root,
                 0,
                 0u64,
-                node_offset,
+                guarded_offset,
                 1,
             )
         }
 
         #[cfg(not(target_os = "none"))]
         {
-            let _ = (bi, ut, dst, node_offset);
+            let _ = (bi, ut, dst);
             sys::seL4_NoError
         }
     };
 
     ::log::info!(
         "[retype.ep] root=0x{root:04x} slot=0x{slot:04x} depth={depth} ut=0x{ut:04x} err={err}",
-        root = canon_root,
-        slot = dst,
+        root = guarded_root,
+        slot = guarded_offset,
         depth = init_bits,
-        ut = ut,
+        ut = guarded_untyped,
         err = result,
     );
 
