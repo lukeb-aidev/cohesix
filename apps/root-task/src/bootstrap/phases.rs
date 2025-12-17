@@ -7,6 +7,7 @@ use core::fmt::Write;
 use heapless::String;
 
 use crate::bootstrap::log as boot_log;
+use crate::bootstrap::state;
 use crate::sel4::{BootInfo, BootInfoView};
 
 /// Fatal bootstrap error surfaced when invariants are violated.
@@ -113,6 +114,11 @@ impl BootstrapSequencer {
 
     /// Marks the supplied phase as executed, emitting a UART beacon.
     pub fn advance(&mut self, phase: BootstrapPhase) -> Result<(), FatalBootstrapError> {
+        if !state::phase_mutable("BootstrapSequencer::advance") {
+            return Err(FatalBootstrapError::from_str(
+                "bootstrap phase advance attempted after completion",
+            ));
+        }
         self.expect_next(phase)?;
         crate::bootstrap::log::force_uart_line(phase.as_str());
         self.next += 1;
@@ -143,23 +149,42 @@ impl BootstrapSequencer {
         }
 
         let (empty_start, empty_end) = view.init_cnode_empty_range();
+        let mut raw_line = String::<160>::new();
+        let _ = write!(
+            raw_line,
+            "[bootinfo:cspace] root=0x{root:04x} init_bits={init_bits} empty=[0x{start:04x}..0x{end:04x})",
+            root = view.root_cnode_cap(),
+            start = empty_start,
+            end = empty_end
+        );
+        boot_log::force_uart_line(raw_line.as_str());
         if empty_end <= empty_start {
             return Err(FatalBootstrapError::from_str(
-                "bootinfo empty CSpace window is empty",
+                "bootinfo empty CSpace window is empty or reversed",
             ));
         }
 
         if empty_start < sel4_sys::seL4_NumInitialCaps as sel4_sys::seL4_CPtr {
-            return Err(FatalBootstrapError::from_str(
-                "first_free slot overlaps kernel-reserved capability range",
-            ));
+            let mut msg = String::<160>::new();
+            let _ = write!(
+                msg,
+                "first_free slot overlaps kernel-reserved capability range: first_free=0x{start:04x} reserved_end=0x{reserved:04x}",
+                start = empty_start,
+                reserved = sel4_sys::seL4_NumInitialCaps
+            );
+            return Err(FatalBootstrapError::new(msg));
         }
 
         let capacity = 1usize << init_bits;
         if empty_end as usize > capacity {
-            return Err(FatalBootstrapError::from_str(
-                "bootinfo empty window exceeds init CNode capacity",
-            ));
+            let mut msg = String::<160>::new();
+            let _ = write!(
+                msg,
+                "bootinfo empty window exceeds init CNode capacity: end=0x{end:04x} capacity=0x{cap:04x}",
+                end = empty_end,
+                cap = capacity
+            );
+            return Err(FatalBootstrapError::new(msg));
         }
 
         boot_log::force_uart_line("[mark] bootinfo.validate.ok");

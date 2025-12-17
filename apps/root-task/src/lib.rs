@@ -78,6 +78,10 @@ pub mod bootstrap;
 /// Endpoint bootstrap primitives used during kernel bring-up.
 pub mod boot;
 
+#[cfg(feature = "kernel")]
+/// Runtime readiness flags shared between transports.
+pub mod readiness;
+
 /// IPC helpers that guard direct syscalls during early bring-up.
 pub mod ipc;
 

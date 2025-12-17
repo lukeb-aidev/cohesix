@@ -12,7 +12,7 @@ use core::fmt::{self, Write};
 use core::ops::{Range, RangeInclusive};
 use core::panic::PanicInfo;
 use core::ptr::{self, NonNull};
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[cfg(feature = "timers-arch-counter")]
 use core::arch::asm;
@@ -38,7 +38,9 @@ use crate::bootstrap::{
     },
     pick_untyped,
     retype::{retype_one, retype_selection},
-    sel4_guard, BootPhase, UntypedSelection,
+    sel4_guard,
+    state::{self, BootstrapReentry, BootstrapRunState as BootState},
+    BootPhase, UntypedSelection,
 };
 use crate::console::Console;
 use crate::cspace::tuples::assert_ipc_buffer_matches_bootinfo;
@@ -59,6 +61,7 @@ use crate::net::{NetStack, CONSOLE_TCP_PORT};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::NineDoorBridge;
 use crate::platform::{Platform, SeL4Platform};
+use crate::readiness;
 use crate::sel4;
 #[cfg(feature = "cap-probes")]
 use crate::sel4::first_regular_untyped;
@@ -670,13 +673,6 @@ pub fn start_console(uart: Pl011, caps: ConsoleCaps) -> ! {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum BootState {
-    Cold = 0,
-    Booting = 1,
-    Booted = 2,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EarlyBootPhase {
     Begin,
@@ -954,8 +950,6 @@ struct BootStateGuard {
     graceful_exit: bool,
 }
 
-static BOOT_STATE: AtomicU8 = AtomicU8::new(BootState::Cold as u8);
-
 /// Boot-time feature flags enabling optional subsystems.
 #[derive(Debug, Clone, Copy)]
 pub struct BootFeatures {
@@ -1041,13 +1035,8 @@ pub struct BootContext {
 
 impl BootStateGuard {
     fn acquire() -> Result<Self, BootError> {
-        match BOOT_STATE.compare_exchange(
-            BootState::Cold as u8,
-            BootState::Booting as u8,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => Ok(Self {
+        match state::enter_once("BootStateGuard::acquire") {
+            Ok(()) => Ok(Self {
                 commit: BootstrapCommit {
                     minimal_committed: false,
                     full_committed: false,
@@ -1056,11 +1045,13 @@ impl BootStateGuard {
                 },
                 graceful_exit: false,
             }),
-            Err(state) if state == BootState::Booting as u8 || state == BootState::Booted as u8 => {
-                log::error!("[boot] bootstrap called twice; refusing re-entry");
+            Err(BootstrapReentry::AlreadyAttempted(run_state)) => {
+                log::error!(
+                    "[boot] bootstrap called twice; refusing re-entry (state={})",
+                    run_state.label()
+                );
                 Err(BootError::AlreadyBooted)
             }
-            Err(_) => unreachable!("invalid bootstrap state transition"),
         }
     }
 
@@ -1083,6 +1074,14 @@ impl BootStateGuard {
 
     fn record_invariant(&mut self, invariant: &'static str) {
         self.commit.telemetry.last_invariant = Some(invariant);
+    }
+
+    fn current_phase(&self) -> &'static str {
+        self.commit.telemetry.phase
+    }
+
+    fn last_mark(&self) -> &'static str {
+        self.commit.telemetry.last_mark.unwrap_or("none")
     }
 
     fn record_cspace(
@@ -1120,7 +1119,6 @@ impl BootStateGuard {
     }
 
     fn commit_minimal(&mut self) {
-        BOOT_STATE.store(BootState::Booted as u8, Ordering::Release);
         self.commit.minimal_committed = true;
     }
 
@@ -1129,6 +1127,8 @@ impl BootStateGuard {
             self.commit_minimal();
         }
         self.commit.full_committed = true;
+        state::mark_committed();
+        crate::readiness::mark_bootstrap_committed();
     }
 }
 
@@ -1141,7 +1141,7 @@ impl Drop for BootStateGuard {
                     "[boot] bootstrap exited without committing (graceful exit allowed)",
                 );
                 self.commit.telemetry.emit();
-                BOOT_STATE.store(BootState::Booted as u8, Ordering::Release);
+                state::mark_aborted();
                 return;
             }
             if self.commit.cspace_recorded {
@@ -1155,7 +1155,10 @@ impl Drop for BootStateGuard {
             }
             log::error!("[boot] bootstrap exited without committing; refusing to reset boot state");
             self.commit.telemetry.emit();
+            state::mark_aborted();
             panic!("[boot] bootstrap aborted before commit");
+        } else if !self.commit.full_committed {
+            state::mark_aborted();
         }
     }
 }
@@ -1168,8 +1171,8 @@ impl Drop for BootStateGuard {
 /// here ensures we always enter the event-pump userland path or loudly fall
 /// back to the PL011 console when bootstrap fails.
 pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
-    let boot_state = BOOT_STATE.load(Ordering::Acquire);
-    if boot_state != BootState::Cold as u8 {
+    let boot_state = state::state();
+    if boot_state != BootState::Cold {
         log::error!(
             "[kernel:entry] bootstrap re-entry detected (state={boot_state}); parking thread"
         );
@@ -1180,20 +1183,7 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
     }
 
     boot_log::force_uart_line("[kernel:entry] root-task entry reached");
-    match boot_state {
-        x if x == BootState::Cold as u8 => {
-            boot_log::force_uart_line("[MARK] boot_state=COLD");
-        }
-        x if x == BootState::Booting as u8 => {
-            boot_log::force_uart_line("[MARK] boot_state=BOOTING");
-        }
-        x if x == BootState::Booted as u8 => {
-            boot_log::force_uart_line("[MARK] boot_state=BOOTED");
-        }
-        _ => {
-            boot_log::force_uart_line("[MARK] boot_state=UNKNOWN");
-        }
-    }
+    boot_log::force_uart_line("[MARK] boot_state=COLD");
     log::info!("[kernel:entry] root-task entry reached");
     log::info!(target: "kernel", "[kernel] boot entrypoint: starting bootstrap");
     let ctx = match bootstrap(platform, bootinfo) {
@@ -1363,7 +1353,41 @@ fn bootstrap<P: Platform>(
         err
     })?;
     let bootinfo_snapshot = bootinfo_state.snapshot();
+    bootinfo_state
+        .verify("snapshot", "[mark] bootinfo.snapshot")
+        .unwrap_or_else(|err| {
+            panic!("bootinfo snapshot diverged at snapshot: {err:?}");
+        });
+    let bootinfo_view = bootinfo_state.view();
+    sel4_guard::install_bootinfo(&bootinfo_view);
     boot_guard.record_invariant("bootinfo.snapshot.ok");
+    let snapshot_region = bootinfo_state.snapshot_region();
+    let mut snapshot_line = heapless::String::<160>::new();
+    let _ = write!(
+        snapshot_line,
+        "[bootinfo] snapshot region=[0x{start:016x}..0x{end:016x})",
+        start = snapshot_region.start,
+        end = snapshot_region.end
+    );
+    boot_log::force_uart_line(snapshot_line.as_str());
+    if ranges_overlap(snapshot_region.clone(), heap_range.clone()) {
+        panic!("bootinfo snapshot overlaps heap snapshot={snapshot_region:?} heap={heap_range:?}");
+    }
+    if ranges_overlap(snapshot_region.clone(), stack_range.clone()) {
+        panic!(
+            "bootinfo snapshot overlaps stack snapshot={snapshot_region:?} stack={stack_range:?}"
+        );
+    }
+    if ranges_overlap(snapshot_region.clone(), device_range.clone()) {
+        panic!(
+            "bootinfo snapshot overlaps device pt pool snapshot={snapshot_region:?} device={device_range:?}"
+        );
+    }
+    if ranges_overlap(snapshot_region.clone(), bootinfo_range.clone()) {
+        panic!(
+            "bootinfo snapshot overlaps bootinfo frame snapshot={snapshot_region:?} bootinfo={bootinfo_range:?}"
+        );
+    }
 
     let mut build_line = heapless::String::<192>::new();
     let mut feature_report = heapless::String::<96>::new();
@@ -1393,11 +1417,9 @@ fn bootstrap<P: Platform>(
     log::info!("{}", build_line.as_str());
 
     boot_guard.record_phase("start");
-    debug_assert_eq!(
-        BOOT_STATE.load(Ordering::Acquire),
-        BootState::Booting as u8,
-        "bootstrap state drift",
-    );
+    debug_assert_eq!(state::state(), BootState::Running, "bootstrap state drift",);
+    boot_guard.record_mark("[mark] bootstrap.enter");
+    boot_log::force_uart_line("[mark] bootstrap.enter");
     crate::bp!("bootstrap.begin");
     let mut pending_boot_phases = heapless::Vec::<BootPhase, 4>::new();
     let _ = pending_boot_phases.push(BootPhase::Begin);
@@ -1419,10 +1441,12 @@ fn bootstrap<P: Platform>(
             );
             err
         })?;
+    check_bootinfo(&mut boot_guard, "[mark] phase.CSpaceRecord");
 
     let check_bootinfo = |guard: &mut BootStateGuard, mark: &'static str| {
         guard.record_mark(mark);
-        if let Err(err) = bootinfo_state.verify_mark(mark) {
+        let phase_label = guard.current_phase();
+        if let Err(err) = bootinfo_state.verify(phase_label, guard.last_mark()) {
             panic!("bootinfo canary tripped at {mark}: {err:?}");
         }
     };
@@ -1459,6 +1483,7 @@ fn bootstrap<P: Platform>(
         cspace_window.first_free,
         (empty_start, empty_end),
     );
+    readiness::mark_cspace_window_ready();
     boot_guard.record_phase("CSpaceRecord");
     let (ipc_buffer_ptr, mut ipcbuf_mode) =
         install_init_ipc_buffer(bootinfo_ref, &mut reserved_vaddrs, &mut boot_guard).map_err(
@@ -1489,9 +1514,12 @@ fn bootstrap<P: Platform>(
         );
         err
     })?;
+    readiness::mark_ipc_buffer_installed();
     early_phase = EarlyBootPhase::IPCInstall;
     match sequencer.advance(BootstrapPhase::IPCInstall) {
-        Ok(()) => {}
+        Ok(()) => {
+            check_bootinfo(&mut boot_guard, "[mark] phase.IPCInstall");
+        }
         Err(err) => {
             let fatal = cfg!(feature = "bootstrap-early-exit");
             log_precommit_exit(
@@ -2079,6 +2107,7 @@ fn bootstrap<P: Platform>(
     } else {
         boot_guard.record_phase("UntypedPlan");
         boot_tracer().advance(BootPhase::UntypedEnumerate);
+        check_bootinfo(&mut boot_guard, "[mark] phase.UntypedPlan");
     }
     let mut notification_selection =
         pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
@@ -2087,6 +2116,7 @@ fn bootstrap<P: Platform>(
         post_commit.flag_failure("phase.RetypeCommit", &err);
     } else {
         boot_guard.record_phase("RetypeCommit");
+        check_bootinfo(&mut boot_guard, "[mark] phase.RetypeCommit");
     }
     if let Err(err) = bootstrap_notification(&mut cs, &mut notification_selection) {
         let mut line = heapless::String::<160>::new();
@@ -2603,18 +2633,14 @@ fn bootstrap<P: Platform>(
             console.writeln_prefixed("[uart] init skipped: PL011 mapping unavailable");
         }
 
+        check_bootinfo(&mut boot_guard, "[mark] net.init.pre");
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let net_backend_label = DEFAULT_NET_BACKEND.label();
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let (net_stack, virtio_present) = {
             use crate::net::{init_net_console, NetConsoleError};
-            let boot_state_now = BOOT_STATE.load(Ordering::Acquire);
 
-            if boot_state_now != BootState::Booted as u8 {
-                boot_log::force_uart_line("[net-console] disabled reason=boot-state err=0");
-                log::warn!("[net-console] skipped: boot state not running");
-                (None, false)
-            } else if !sel4::ep_ready() || !sel4::ep_validated() {
+            if !sel4::ep_ready() || !sel4::ep_validated() {
                 boot_log::force_uart_line("[net-console] disabled reason=no-root-ep err=0");
                 log::warn!("[net-console] skipped: root endpoint not ready");
                 (None, false)
@@ -2658,6 +2684,7 @@ fn bootstrap<P: Platform>(
         let net_stack = None::<()>;
         #[cfg(not(feature = "net-console"))]
         let net_stack = None::<()>;
+        check_bootinfo(&mut boot_guard, "[mark] net.init.post");
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
         let (timer, ipc) = match run_timers_and_ipc_phase(endpoints, bootstrap_ipc) {
@@ -2773,6 +2800,13 @@ fn bootstrap<P: Platform>(
         boot_log::force_uart_line(summary.as_str());
         crate::bp!("bootstrap.done");
         boot_tracer().advance(BootPhase::HandOff);
+        if let Err(err) = sequencer.advance(BootstrapPhase::UserlandHandoff) {
+            post_commit.flag_failure("phase.UserlandHandoff", &err);
+        } else {
+            boot_guard.record_phase("UserlandHandoff");
+            check_bootinfo(&mut boot_guard, "[mark] phase.UserlandHandoff");
+        }
+        boot_log::force_uart_line("[mark] bootstrap.commit");
         boot_guard.commit_full();
         if serial.is_some() {
             boot_log::force_uart_line("[console] serial fallback ready");
@@ -2784,12 +2818,6 @@ fn bootstrap<P: Platform>(
         let virtio_present_flag = virtio_present;
         #[cfg(not(all(feature = "net-console", feature = "kernel")))]
         let virtio_present_flag = false;
-
-        if let Err(err) = sequencer.advance(BootstrapPhase::UserlandHandoff) {
-            post_commit.flag_failure("phase.UserlandHandoff", &err);
-        } else {
-            boot_guard.record_phase("UserlandHandoff");
-        }
 
         let features = BootFeatures {
             serial_console: cfg!(feature = "serial-console") && serial.is_some(),

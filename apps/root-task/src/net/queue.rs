@@ -551,12 +551,10 @@ mod tests {
         assert!(stack.poll_with_time(2));
 
         let frame = handle.pop_tx().expect("frame not enqueued");
-        let rendered = core::str::from_utf8(frame.as_slice()).expect("frame not utf8");
-        assert_eq!(rendered, "OK TEST detail=42\r\n");
+        assert_eq!(frame.as_slice(), b"OK TEST detail=42\r\n");
 
         let ack = handle.pop_tx().expect("auth acknowledgement missing");
-        let ack_rendered = core::str::from_utf8(ack.as_slice()).expect("ack not utf8");
-        assert_eq!(ack_rendered, "OK AUTH\r\n");
+        assert_eq!(ack.as_slice(), b"OK AUTH\r\n");
     }
 
     #[test]
@@ -572,7 +570,6 @@ mod tests {
         assert!(stack.poll_with_time(1));
 
         let frame = handle.pop_tx().expect("auth failure frame missing");
-        let rendered = core::str::from_utf8(frame.as_slice()).expect("frame not utf8");
-        assert!(rendered.starts_with("ERR AUTH"));
+        assert!(frame.as_slice().starts_with(b"ERR AUTH"));
     }
 }

@@ -15,13 +15,23 @@ use crate::sel4::{BootInfo, BootInfoError, BootInfoView};
 const MAX_CANARY_LINE: usize = 192;
 const MAX_BOOTINFO_ALLOC: usize = 64 * 1024;
 const HIGH_32_MASK: usize = 0xffff_ffff_0000_0000;
+const BOOTINFO_CANARY_PRE: u64 = 0x0b0f_1ce5_ca4e_cafe;
+const BOOTINFO_CANARY_POST: u64 = 0x9ddf_1ce5_f00d_beef;
 
 const BOOT_HEAP_BYTES: usize = MAX_BOOTINFO_ALLOC;
 
-#[repr(align(16))]
-struct BootinfoBacking([u8; MAX_BOOTINFO_ALLOC]);
+#[repr(C, align(16))]
+struct BootinfoBacking {
+    pre: u64,
+    payload: [u8; MAX_BOOTINFO_ALLOC],
+    post: u64,
+}
 
-static mut BOOTINFO_BACKING: BootinfoBacking = BootinfoBacking([0u8; MAX_BOOTINFO_ALLOC]);
+static mut BOOTINFO_BACKING: BootinfoBacking = BootinfoBacking {
+    pre: BOOTINFO_CANARY_PRE,
+    payload: [0u8; MAX_BOOTINFO_ALLOC],
+    post: BOOTINFO_CANARY_POST,
+};
 
 fn log_layout_violation(reason: &str, size: usize, align: usize) {
     let mut line = String::<MAX_CANARY_LINE>::new();
@@ -124,7 +134,11 @@ impl BootInfoSnapshot {
             return Err(BootInfoError::Overflow);
         }
 
-        let backing: &'static mut [u8] = unsafe { &mut BOOTINFO_BACKING.0[..total_size] };
+        let backing: &'static mut [u8] = unsafe { &mut BOOTINFO_BACKING.payload[..total_size] };
+        unsafe {
+            BOOTINFO_BACKING.pre = BOOTINFO_CANARY_PRE;
+            BOOTINFO_BACKING.post = BOOTINFO_CANARY_POST;
+        }
 
         backing[..header_bytes.len()].copy_from_slice(header_bytes);
         if extra_len > 0 {
@@ -220,6 +234,7 @@ pub struct BootInfoState {
     view: BootInfoView,
     snapshot: BootInfoSnapshot,
     check_count: AtomicU64,
+    snapshot_region: core::ops::Range<usize>,
 }
 
 static BOOTINFO_STATE: Once<BootInfoState> = Once::new();
@@ -232,10 +247,17 @@ impl BootInfoState {
 
         assert_low_vaddr("bootinfo pointer", bootinfo as *const _ as usize);
 
+        let payload_start = snapshot.backing().as_ptr() as usize;
+        let payload_end = payload_start.saturating_add(snapshot.backing().len());
+        let canary_pre = unsafe { core::ptr::addr_of!(BOOTINFO_BACKING.pre) as usize };
+        let canary_post = unsafe { core::ptr::addr_of!(BOOTINFO_BACKING.post) as usize };
+        let canary_end = canary_post.saturating_add(core::mem::size_of::<u64>());
+
         Ok(BOOTINFO_STATE.call_once(|| Self {
             view: snapshot_view,
             snapshot,
             check_count: AtomicU64::new(0),
+            snapshot_region: canary_pre.min(payload_start)..canary_end.max(payload_end),
         }))
     }
 
@@ -245,6 +267,29 @@ impl BootInfoState {
 
     pub fn snapshot(&self) -> BootInfoSnapshot {
         self.snapshot
+    }
+
+    pub fn snapshot_region(&self) -> core::ops::Range<usize> {
+        self.snapshot_region.clone()
+    }
+
+    fn check_canaries(&self, phase: &'static str, last_mark: &'static str) {
+        let (pre, post) = unsafe { (BOOTINFO_BACKING.pre, BOOTINFO_BACKING.post) };
+        if pre == BOOTINFO_CANARY_PRE && post == BOOTINFO_CANARY_POST {
+            return;
+        }
+
+        let mut line = String::<MAX_CANARY_LINE>::new();
+        let _ = core::fmt::write(
+            &mut line,
+            format_args!(
+                "BOOTINFO_SNAPSHOT_CORRUPTED phase={phase} last_mark={last_mark} pre=0x{pre:016x} post=0x{post:016x} expected_pre=0x{exp_pre:016x} expected_post=0x{exp_post:016x}",
+                exp_pre = BOOTINFO_CANARY_PRE,
+                exp_post = BOOTINFO_CANARY_POST,
+            ),
+        );
+        force_uart_line(line.as_str());
+        panic!("{}", line.as_str());
     }
 
     fn format_panic_line(
@@ -265,7 +310,12 @@ impl BootInfoState {
         line
     }
 
-    pub fn verify_mark(&self, mark: &'static str) -> Result<(), BootInfoCanaryError> {
+    pub fn verify(
+        &self,
+        phase: &'static str,
+        mark: &'static str,
+    ) -> Result<(), BootInfoCanaryError> {
+        self.check_canaries(phase, mark);
         let observed =
             BootInfoSnapshot::from_view(&self.view).map_err(|_| BootInfoCanaryError::Diverged {
                 mark,

@@ -50,6 +50,7 @@ pub fn main(ctx: BootContext) -> ! {
         ctx.features.net,
         ctx.features.net_console
     );
+    boot_log::force_uart_line("[mark] bootstrap.runtime.enter");
 
     #[cfg(all(feature = "serial-console", feature = "kernel"))]
     let uart_base = ctx.uart_mmio.as_ref().map(Pl011Mmio::vaddr);
