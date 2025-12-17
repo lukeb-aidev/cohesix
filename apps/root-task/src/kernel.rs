@@ -53,7 +53,7 @@ use crate::event::{
 use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
 #[cfg(all(feature = "net-console", feature = "kernel"))]
-use crate::net::{DefaultNetStack as NetStack, CONSOLE_TCP_PORT, DEFAULT_NET_BACKEND};
+use crate::net::{DefaultNetStack as NetStack, NetPoller, CONSOLE_TCP_PORT, DEFAULT_NET_BACKEND};
 #[cfg(all(feature = "net-console", not(feature = "kernel")))]
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 #[cfg(feature = "kernel")]
@@ -1342,7 +1342,9 @@ fn bootstrap<P: Platform>(
                     let fallback_ident = sel4::debug_cap_identify(ep_report.ep_slot);
                     let fallback_slot = if fallback_existing {
                         sel4::root_endpoint()
-                    } else if fallback_ident == sel4_sys::seL4_EndpointObject {
+                    } else if fallback_ident
+                        == sel4_sys::seL4_EndpointObject as sel4::seL4_Word
+                    {
                         ep_report.ep_slot
                     } else {
                         sel4_sys::seL4_CapNull
