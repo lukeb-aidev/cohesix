@@ -48,6 +48,7 @@ use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
 #[cfg(feature = "net-backend-virtio")]
 use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNet};
 use crate::hal::{HalError, Hardware};
+use crate::readiness;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR};
 
@@ -201,6 +202,7 @@ struct SessionState {
     logged_first_recv: bool,
     connect_reported: bool,
     logged_first_send: bool,
+    not_ready_logged: bool,
 }
 
 static SOCKET_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
@@ -2018,10 +2020,10 @@ impl<D: NetDevice> NetStack<D> {
                     }
                     if pre_auth {
                         info!(
-                            "[net-console] conn {}: sent pre-auth line '{}' ({} bytes)",
+                            "[net-console] conn {}: sent pre-auth line len={} first_bytes={:02x?}",
                             conn_id.unwrap_or(0),
-                            core::str::from_utf8(line.as_bytes()).unwrap_or("<invalid>"),
-                            sent
+                            line.len(),
+                            &line.as_bytes()[..core::cmp::min(line.len(), 32)]
                         );
                         if line.starts_with("OK AUTH") || line.starts_with("ERR AUTH") {
                             info!(
@@ -2030,9 +2032,10 @@ impl<D: NetDevice> NetStack<D> {
                             );
                             log::info!(
                                 target: "net-console",
-                                "[net-console] send ACK on TCP session {}: {}",
+                                "[net-console] send ACK on TCP session {}: len={} first_bytes={:02x?}",
                                 conn_id.unwrap_or(0),
-                                core::str::from_utf8(line.as_bytes()).unwrap_or("<invalid>")
+                                line.len(),
+                                &line.as_bytes()[..core::cmp::min(line.len(), 32)]
                             );
                         }
                     }
@@ -2139,6 +2142,23 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         &mut self,
         visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
     ) {
+        if let Some((snapshot, reason)) = readiness::gate() {
+            if !self.session_state.not_ready_logged {
+                self.session_state.not_ready_logged = true;
+                let flags = snapshot.render_flags();
+                log::warn!(
+                    "[net] not-ready gate tripped: want=console-line reason={} have={}",
+                    reason,
+                    flags.as_str()
+                );
+                let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+                let _ = write!(line, "ERR not-ready reason={reason}\r\n");
+                let _ = self.server.enqueue_outbound(line.as_str());
+            }
+            self.server.drain_console_lines(&mut |_line| {});
+            return;
+        }
+        self.session_state.not_ready_logged = false;
         self.server.drain_console_lines(visitor);
     }
 
@@ -2172,6 +2192,19 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         if !SELF_TEST_ENABLED {
             return false;
         }
+        if let Some((snapshot, reason)) = readiness::gate() {
+            if !self.session_state.not_ready_logged {
+                self.session_state.not_ready_logged = true;
+                let flags = snapshot.render_flags();
+                log::warn!(
+                    "[net] not-ready gate tripped: want=net-selftest reason={} have={}",
+                    reason,
+                    flags.as_str()
+                );
+            }
+            return false;
+        }
+        self.session_state.not_ready_logged = false;
         if self.self_test.start(now_ms) {
             self.tcp_smoke_outbound_sent = false;
             self.tcp_smoke_last_attempt_ms = now_ms.saturating_sub(1_000);

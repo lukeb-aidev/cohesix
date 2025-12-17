@@ -13,6 +13,7 @@ use crate::bootstrap::cspace_sys::{bits_as_u8, retype_endpoint_auto, verify_root
 use crate::bootstrap::log as boot_log;
 use crate::bootstrap::sel4_guard;
 use crate::cspace::CSpace;
+use crate::readiness;
 use crate::sel4::{self, BootInfoView};
 use crate::serial;
 use heapless::String as HeaplessString;
@@ -87,6 +88,7 @@ pub fn publish_root_ep(ep: seL4_CPtr) {
         ROOT_EP = ep;
     }
     serial::puts("[boot] root endpoint published\n");
+    readiness::mark_root_ep_ready();
     crate::sel4::set_ep(ep);
 }
 
@@ -110,6 +112,7 @@ pub fn bootstrap_ep(
     if sel4::ep_ready() {
         report.preexisting = true;
         report.ep_slot = sel4::root_endpoint();
+        readiness::mark_root_ep_ready();
         let mut line = HeaplessString::<96>::new();
         let _ = write!(
             line,

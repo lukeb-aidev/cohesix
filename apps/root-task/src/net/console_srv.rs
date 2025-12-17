@@ -2,6 +2,8 @@
 
 //! TCP console session management shared between kernel and host stacks.
 
+use core::fmt::Write;
+
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, info, warn};
 
@@ -173,8 +175,9 @@ impl TcpConsoleServer {
                     self.last_activity_ms = now_ms;
                     log::debug!(
                         target: "net-console",
-                        "[tcp-console] line received: {:?}",
-                        core::str::from_utf8(line.as_bytes()).unwrap_or("<non-utf8>"),
+                        "[tcp-console] line received: len={} first_bytes={:02x?}",
+                        line.len(),
+                        &line.as_bytes()[..core::cmp::min(line.len(), 32)],
                     );
                     event = self.handle_line(line);
                     if matches!(event, SessionEvent::Close) {

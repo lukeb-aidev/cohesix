@@ -112,6 +112,7 @@ impl BootstrapLogger {
             }
             LogTransport::EpOnly => {
                 if emit_ep(line).is_err() {
+                    record_drop();
                     revert_to_uart(b"[trace] EP log sink stalled; reverting to UART\r\n");
                     emit_uart(line);
                 }
@@ -129,6 +130,7 @@ static BRIDGE_CREATED: AtomicBool = AtomicBool::new(false);
 static EP_ONLY_PERMITTED: AtomicBool = AtomicBool::new(false);
 static POST_COMMIT_IPC_UNLOCKED: AtomicBool = AtomicBool::new(false);
 static PRECOMMIT_IPC_FORBIDDEN: AtomicU32 = AtomicU32::new(0);
+static LOG_DROPS: AtomicU32 = AtomicU32::new(0);
 const fn env_flag(value: Option<&'static str>) -> bool {
     match value {
         Some(val) => {
@@ -210,6 +212,10 @@ fn maybe_enter_post_commit_transports() {
             try_enter_ep_only();
         }
     }
+}
+
+fn record_drop() {
+    LOG_DROPS.fetch_add(1, Ordering::AcqRel);
 }
 
 fn emit_uart(payload: &[u8]) {
@@ -295,6 +301,7 @@ fn send_frame(payload: &[u8]) -> Result<(), ()> {
 
     if offset < payload.len() {
         drop(guard);
+        record_drop();
         return Err(());
     }
 
@@ -305,6 +312,9 @@ fn send_frame(payload: &[u8]) -> Result<(), ()> {
     let info = seL4_MessageInfo::new(0, 0, 0, index as seL4_Word);
     let result = sel4::send_guarded(info);
     drop(guard);
+    if result.is_err() {
+        record_drop();
+    }
     result.map_err(|_| ())
 }
 
@@ -405,7 +415,11 @@ pub fn init_logger_bootstrap_only() {
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
-        ::log::set_logger(&LOGGER).expect("bootstrap logger install must succeed");
+        if let Err(err) = ::log::set_logger(&LOGGER) {
+            let mut line = HeaplessString::<80>::new();
+            let _ = write!(line, "[log] install failed: {err:?}");
+            force_uart_line(line.as_str());
+        }
     }
     LOGGER.set_transport(LogTransport::UartOnly);
     LOGGER_EP.store(0, Ordering::Release);

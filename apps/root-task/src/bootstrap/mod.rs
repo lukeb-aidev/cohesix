@@ -41,6 +41,8 @@ pub mod phases;
 pub mod retype;
 /// Guard rails for seL4 invocations during early bootstrap.
 pub mod sel4_guard;
+/// Run-state tracking to prevent bootstrap re-entry.
+pub mod state;
 /// Helpers for selecting RAM-backed untyped capabilities during bootstrap.
 pub mod untyped_pick;
 
