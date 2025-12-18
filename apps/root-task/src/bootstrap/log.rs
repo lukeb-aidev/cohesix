@@ -79,26 +79,32 @@ impl Log for BootstrapLogger {
             return;
         }
 
-        let mut formatted: HeaplessString<MAX_FRAME_LEN> = HeaplessString::new();
-        let _ = write!(
-            formatted,
-            "[{level} {target}] {message}",
-            level = record.level(),
-            target = record.target(),
-            message = record.args(),
-        );
-
-        let mut line = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
-        for &byte in formatted.as_bytes() {
-            if line.push(byte).is_err() {
-                break;
-            }
-        }
-        let _ = line.extend_from_slice(b"\r\n");
+        let line = format_record_line(record);
         self.emit(line.as_slice());
     }
 
     fn flush(&self) {}
+}
+
+fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
+    let mut formatted: HeaplessString<MAX_FRAME_LEN> = HeaplessString::new();
+    let _ = write!(
+        formatted,
+        "[{level} {target}] {message}",
+        level = record.level(),
+        target = record.target(),
+        message = record.args(),
+    );
+
+    let mut line = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
+    let max_payload = MAX_FRAME_LEN.saturating_sub(2);
+    for &byte in formatted.as_bytes().iter().take(max_payload) {
+        if line.push(byte).is_err() {
+            break;
+        }
+    }
+    let _ = line.extend_from_slice(b"\r\n");
+    line
 }
 
 impl BootstrapLogger {
@@ -108,12 +114,20 @@ impl BootstrapLogger {
             LogTransport::UartOnly => emit_uart(line),
             LogTransport::UartMirroredEp => {
                 emit_uart(line);
-                let _ = emit_ep(line);
+                if runtime_transport_ready() {
+                    let _ = emit_ep(line);
+                } else {
+                    record_drop();
+                }
             }
             LogTransport::EpOnly => {
-                if emit_ep(line).is_err() {
-                    record_drop();
-                    revert_to_uart(b"[trace] EP log sink stalled; reverting to UART\r\n");
+                if runtime_transport_ready() {
+                    if emit_ep(line).is_err() {
+                        record_drop();
+                        revert_to_uart(b"[trace] EP log sink stalled; reverting to UART\r\n");
+                        emit_uart(line);
+                    }
+                } else {
                     emit_uart(line);
                 }
             }
@@ -171,8 +185,9 @@ fn log_transport_marker(transport: LogTransport, ep: sel4_sys::seL4_CPtr) {
     force_uart_line(line.as_str());
 }
 
-fn ep_sink_permitted() -> bool {
+fn runtime_transport_ready() -> bool {
     if !POST_COMMIT_IPC_UNLOCKED.load(Ordering::Acquire) {
+        record_precommit_block("precommit");
         return false;
     }
     if !sel4::ipc_send_unlocked() {
@@ -183,6 +198,10 @@ fn ep_sink_permitted() -> bool {
         return false;
     }
     true
+}
+
+fn ep_sink_permitted() -> bool {
+    runtime_transport_ready()
 }
 
 fn record_precommit_block(reason: &str) {
@@ -249,6 +268,10 @@ pub fn force_uart_line(line: &str) {
 fn emit_ep(payload: &[u8]) -> Result<(), ()> {
     #[cfg(feature = "kernel")]
     {
+        if !runtime_transport_ready() {
+            record_drop();
+            return Err(());
+        }
         let mut frame = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
         if frame.push(FRAME_KIND_LINE).is_err() {
             return Err(());
@@ -289,6 +312,7 @@ fn send_frame(payload: &[u8]) -> Result<(), ()> {
 
 #[cfg(not(feature = "kernel"))]
 fn send_frame(_payload: &[u8]) -> Result<(), ()> {
+    record_drop();
     Err(())
 }
 
@@ -365,6 +389,7 @@ fn send_frame_with_stub(
 mod tests {
     use super::*;
 
+    #[cfg(feature = "kernel")]
     fn frame_bytes(frame: &[seL4_Word], expected_len: usize) -> HeaplessVec<u8, MAX_FRAME_LEN> {
         let mut bytes = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
         let mut offset = 0usize;
@@ -382,6 +407,7 @@ mod tests {
         bytes
     }
 
+    #[cfg(feature = "kernel")]
     #[test]
     fn frame_encoding_is_bounded() {
         let mut payload = [0u8; MAX_FRAME_LEN + 32];
@@ -398,6 +424,7 @@ mod tests {
         assert_eq!(&captured[..], &payload[..MAX_FRAME_LEN]);
     }
 
+    #[cfg(feature = "kernel")]
     #[test]
     fn missing_endpoint_is_non_fatal() {
         let mut invoked = false;
@@ -406,6 +433,54 @@ mod tests {
         });
         assert!(result.is_err());
         assert!(!invoked);
+    }
+
+    #[test]
+    fn bootstrap_formatting_truncates() {
+        let mut long = HeaplessString::<256>::new();
+        for _ in 0..256 {
+            let _ = long.push('A');
+        }
+
+        let record = Record::builder()
+            .args(format_args!("{}", long.as_str()))
+            .level(Level::Info)
+            .target("root_task::bootstrap::test")
+            .build();
+        let line = format_record_line(&record);
+        assert!(line.len() <= MAX_FRAME_LEN);
+        assert!(line.ends_with(b"\r\n"));
+        assert!(core::str::from_utf8(&line).is_ok());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_transport_drops_when_endpoint_missing() {
+        LOG_DROPS.store(0, Ordering::Release);
+        let mut invoked = false;
+        let result = send_frame_with_stub(b"stub", None, &mut |_, _, _| {
+            invoked = true;
+        });
+        assert!(result.is_err());
+        assert!(!invoked);
+        assert_eq!(LOG_DROPS.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn runtime_transport_drops_without_panicking_when_not_ready() {
+        LOG_DROPS.store(0, Ordering::Release);
+        POST_COMMIT_IPC_UNLOCKED.store(true, Ordering::Release);
+        sel4::set_ep(0x1234);
+        sel4::set_ep_validated(true);
+        sel4::unlock_ipc_send();
+
+        let result = emit_ep(b"runtime-drop-check");
+        assert!(result.is_err());
+        assert_eq!(LOG_DROPS.load(Ordering::Acquire), 1);
+
+        sel4::clear_ep();
+        sel4::lock_ipc_send();
+        POST_COMMIT_IPC_UNLOCKED.store(false, Ordering::Release);
     }
 }
 
