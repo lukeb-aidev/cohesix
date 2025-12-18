@@ -92,13 +92,17 @@ pub fn ordering() -> &'static [BootstrapPhase] {
 /// Tracks bootstrap progress and rejects re-entry or phase reordering.
 pub struct BootstrapSequencer {
     next: usize,
+    bootinfo_validated: bool,
 }
 
 impl BootstrapSequencer {
     /// Constructs a new sequencer positioned before the first phase.
     #[must_use]
     pub const fn new() -> Self {
-        Self { next: 0 }
+        Self {
+            next: 0,
+            bootinfo_validated: false,
+        }
     }
 
     fn expect_next(&self, phase: BootstrapPhase) -> Result<(), FatalBootstrapError> {
@@ -136,6 +140,12 @@ impl BootstrapSequencer {
     /// Validates invariants that must hold for the init CSpace window.
     pub fn validate_bootinfo(&mut self, view: &BootInfoView) -> Result<(), FatalBootstrapError> {
         boot_log::force_uart_line("[mark] bootinfo.validate.begin");
+        if self.bootinfo_validated {
+            boot_log::force_uart_line("[boot] bootinfo.validate.reentry detected; refusing");
+            return Err(FatalBootstrapError::from_str(
+                "BootInfoValidate already executed; bootinfo already canonicalised",
+            ));
+        }
         self.advance(BootstrapPhase::BootInfoValidate)?;
 
         let init_bits = view.init_cnode_bits() as usize;
@@ -203,6 +213,7 @@ impl BootstrapSequencer {
         }
 
         boot_log::force_uart_line("[mark] bootinfo.validate.ok");
+        self.bootinfo_validated = true;
 
         Ok(())
     }

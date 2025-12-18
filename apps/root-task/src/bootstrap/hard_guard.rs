@@ -55,6 +55,6 @@ pub fn hard_guard_fail(tag: &str, v: HardGuardViolation) -> ! {
 
     #[cfg(not(feature = "strict-bootstrap"))]
     loop {
-        unsafe { sel4_sys::seL4_Yield() };
+        crate::sel4::yield_now();
     }
 }

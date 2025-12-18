@@ -662,6 +662,11 @@ pub fn unlock_post_commit_ipc_logging() {
     maybe_enter_post_commit_transports();
 }
 
+/// Returns whether IPC logging is unlocked for post-commit boot sources.
+pub fn post_commit_ipc_unlocked() -> bool {
+    POST_COMMIT_IPC_UNLOCKED.load(Ordering::Acquire)
+}
+
 /// Toggle the no-bridge mode, forcing the logger to remain on the UART transport.
 pub fn set_no_bridge_mode(enabled: bool) {
     NO_BRIDGE_MODE.store(enabled, Ordering::Release);

@@ -16,7 +16,7 @@ use core::fmt;
 use crate::platform::Platform;
 
 #[cfg(feature = "kernel")]
-use crate::sel4::BootInfoExt;
+use crate::sel4::{self, BootInfoExt};
 
 use heapless::String;
 
@@ -98,8 +98,7 @@ impl fmt::Display for ConsoleError {
 pub fn start(ep_slot: u32, _bi: &sel4_sys::seL4_BootInfo) {
     log::info!("[console] ready on endpoint slot=0x{:04x}", ep_slot);
     loop {
-        let msg =
-            unsafe { sel4_sys::seL4_Recv(ep_slot as sel4_sys::seL4_CPtr, core::ptr::null_mut()) };
+        let msg = sel4::recv(ep_slot as sel4_sys::seL4_CPtr, core::ptr::null_mut());
         match msg {
             0 => log::info!("[console] recv: help | bi | ls-caps | echo"),
             _ => log::info!("[console] unknown verb id={}", msg),

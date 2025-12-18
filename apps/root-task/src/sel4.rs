@@ -23,6 +23,7 @@ use crate::bootstrap::cspace_sys;
 use crate::bootstrap::ipcbuf_view::IpcBufView;
 #[cfg(feature = "kernel")]
 use crate::bootstrap::ktry;
+use crate::bootstrap::log as boot_log;
 use crate::bootstrap::sel4_guard;
 use crate::bootstrap::DevicePtPoolConfig;
 use crate::debug_uart::debug_uart_str;
@@ -43,6 +44,9 @@ pub use sel4_sys::{
     seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
 };
 use static_assertions::const_assert;
+
+#[cfg(feature = "kernel")]
+mod syscall;
 
 /// Canonical capability rights representation exposed by seL4.
 pub type SeL4CapRights = sel4_sys::seL4_CapRights;
@@ -651,21 +655,29 @@ pub fn message_register(index: usize) -> seL4_Word {
 #[cfg(feature = "kernel")]
 #[inline]
 pub fn reply(info: seL4_MessageInfo) {
-    #[allow(non_snake_case)]
-    unsafe extern "C" {
-        fn seL4_Reply(msg_info: seL4_MessageInfo);
-    }
-
     unsafe {
-        seL4_Reply(info);
+        syscall::reply(info);
     }
+}
+
+#[cfg(feature = "kernel")]
+#[track_caller]
+#[inline]
+pub fn recv(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
+    unsafe { syscall::recv(dest, badge) }
+}
+
+#[cfg(feature = "kernel")]
+#[inline]
+pub fn wait(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
+    unsafe { syscall::wait(dest, badge) }
 }
 
 /// Yields the current thread to the scheduler.
 #[cfg(feature = "kernel")]
 #[inline]
 pub fn yield_now() {
-    unsafe { sel4_sys::seL4_Yield() };
+    unsafe { syscall::yield_now() };
 }
 
 /// Issues a raw seL4 send without validating the destination capability.
@@ -673,11 +685,13 @@ pub fn yield_now() {
 #[track_caller]
 #[inline(always)]
 pub fn send_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
-    let _ = bootstrap_send_trap(dest, Location::caller());
+    if bootstrap_send_trap(dest, Location::caller()) {
+        return;
+    }
 
     guard_ipc_destination("send_unchecked", dest);
     unsafe {
-        sel4_sys::seL4_Send(dest, info);
+        syscall::send(dest, info);
     }
 }
 
@@ -686,7 +700,9 @@ pub fn send_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
 #[track_caller]
 #[inline(always)]
 pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageInfo {
-    let _ = bootstrap_send_trap(dest, Location::caller());
+    if bootstrap_send_trap(dest, Location::caller()) {
+        return seL4_MessageInfo::new(0, 0, 0, 0);
+    }
     guard_ipc_destination("call_unchecked", dest);
     let length = info.length();
 
@@ -717,8 +733,7 @@ pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageIn
         mr3_ptr = &mut mr3_val;
     }
 
-    let reply =
-        unsafe { sel4_sys::seL4_CallWithMRs(dest, info, mr0_ptr, mr1_ptr, mr2_ptr, mr3_ptr) };
+    let reply = unsafe { syscall::call_with_mrs(dest, info, mr0_ptr, mr1_ptr, mr2_ptr, mr3_ptr) };
 
     if length > 0 {
         unsafe { sel4_sys::seL4_SetMR(0, mr0_val) };
@@ -743,7 +758,7 @@ pub fn signal_unchecked(dest: seL4_CPtr) {
     let empty = seL4_MessageInfo::new(0, 0, 0, 0);
     guard_ipc_destination("signal_unchecked", dest);
     unsafe {
-        sel4_sys::seL4_Send(dest, empty);
+        syscall::send(dest, empty);
     }
 }
 
@@ -768,6 +783,7 @@ fn bootstrap_send_trap(dest: seL4_CPtr, location: &Location) -> bool {
     let ready = ep_ready();
     let validated = ep_validated();
     let unlocked = ipc_send_unlocked();
+    let post_commit = boot_log::post_commit_ipc_unlocked();
     let snapshot = crate::bootstrap::boot_tracer().snapshot();
 
     let trace_count = BOOTSTRAP_SEND_INSTRUMENT_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -775,35 +791,45 @@ fn bootstrap_send_trap(dest: seL4_CPtr, location: &Location) -> bool {
         let mut trace_line = HeaplessString::<180>::new();
         let _ = write!(
             &mut trace_line,
-            "BOOTSTRAP_SEND_TRACE dest=0x{dest:04x} phase={:?} seq={} ready={} validated={} unlocked={} caller={}:{}",
+            "BOOTSTRAP_SEND_TRACE dest=0x{dest:04x} phase={:?} seq={} ready={} validated={} unlocked={} post_commit={} caller={}:{}",
             snapshot.phase,
             snapshot.sequence,
             ready as u8,
             validated as u8,
             unlocked as u8,
+            post_commit as u8,
             location.file(),
             location.line(),
         );
         emit_illegal_send_line(trace_line.as_str());
     }
 
-    if ready && validated && unlocked {
+    if ready && validated && unlocked && post_commit {
         return false;
     }
 
-    let mut line = HeaplessString::<ILLEGAL_SEND_LINE_CAP>::new();
+    let mut info_line = HeaplessString::<ILLEGAL_SEND_LINE_CAP>::new();
     let _ = write!(
-        &mut line,
-        "ILLEGAL_SEND cap=0x{dest:04x} phase={:?} seq={} ready={} validated={} unlocked={} caller={}:{}",
+        &mut info_line,
+        "ILLEGAL_SEND cap=0x{dest:04x} phase={:?} seq={} ready={} validated={} unlocked={} post_commit={}",
         snapshot.phase,
         snapshot.sequence,
         ready as u8,
         validated as u8,
         unlocked as u8,
+        post_commit as u8,
+    );
+    emit_illegal_send_line(info_line.as_str());
+
+    let mut caller_line = HeaplessString::<256>::new();
+    let _ = write!(
+        &mut caller_line,
+        "ILLEGAL_SEND caller={}:{}",
         location.file(),
         location.line(),
     );
-    emit_illegal_send_line(line.as_str());
+    emit_illegal_send_line(caller_line.as_str());
+
     true
 }
 
@@ -886,7 +912,7 @@ pub fn call_guarded(
     let m1 = mr1.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
     let m2 = mr2.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
     let m3 = mr3.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
-    let info = unsafe { sel4_sys::seL4_CallWithMRs(endpoint, info, m0, m1, m2, m3) };
+    let info = unsafe { syscall::call_with_mrs(endpoint, info, m0, m1, m2, m3) };
     Ok(info)
 }
 
@@ -900,16 +926,7 @@ pub fn replyrecv_guarded(
     guard_ipc_destination("replyrecv_guarded", endpoint);
     let badge_ptr = badge.map_or(ptr::null_mut(), |b| b as *mut seL4_Word);
 
-    #[allow(non_snake_case)]
-    unsafe extern "C" {
-        fn seL4_ReplyRecv(
-            dest: seL4_CPtr,
-            msg_info: seL4_MessageInfo,
-            sender_badge: *mut seL4_Word,
-        ) -> seL4_MessageInfo;
-    }
-
-    let message = unsafe { seL4_ReplyRecv(endpoint, info, badge_ptr) };
+    let message = unsafe { syscall::reply_recv(endpoint, info, badge_ptr) };
     Ok(message)
 }
 

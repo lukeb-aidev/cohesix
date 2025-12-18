@@ -1178,7 +1178,7 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
         );
         boot_log::force_uart_line("[kernel:entry] re-entry detected; parking thread");
         loop {
-            unsafe { sel4_sys::seL4_Yield() };
+            sel4::yield_now();
         }
     }
 
@@ -1197,7 +1197,7 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
                         "[kernel:entry] unable to construct BootContext; refusing to bypass userland handoff"
                     );
                 loop {
-                    unsafe { sel4_sys::seL4_Yield() };
+                    sel4::yield_now();
                 }
             }
         },
@@ -2724,7 +2724,6 @@ fn bootstrap<P: Platform>(
                             header.strings_offset(),
                         );
                         console.writeln_prefixed(msg.as_str());
-                        let _ = bi_extra::dump_bootinfo(&bootinfo_view, EARLY_DUMP_LIMIT);
                     }
                     Err(err) => {
                         let mut msg = heapless::String::<96>::new();
@@ -4139,9 +4138,7 @@ impl KernelIpc {
     }
 
     fn reply_empty() {
-        unsafe {
-            sel4_sys::seL4_Reply(sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0));
-        }
+        sel4::reply(sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0));
     }
 
     fn warn_fault_length(label: u64, len: usize, badge: sel4_sys::seL4_Word) {
@@ -4218,11 +4215,8 @@ impl KernelIpc {
             words_written = words_written.saturating_add(1);
         }
 
-        unsafe {
-            let info =
-                sel4_sys::seL4_MessageInfo::new(0, 0, 0, words_written as sel4_sys::seL4_Word);
-            sel4_sys::seL4_Reply(info);
-        }
+        let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, words_written as sel4_sys::seL4_Word);
+        sel4::reply(info);
     }
 
     fn reply_control_ack(&self, verb: &str, detail: Option<&str>) {

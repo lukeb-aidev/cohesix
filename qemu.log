@@ -1,0 +1,434 @@
+
+ELF-loader started on CPU: ARM Ltd. Cortex-A57 r1p0
+  paddr=[4064f000..4094908f]
+No DTB passed in from boot loader.
+Looking for DTB in CPIO archive...found at 40687a50.
+Loaded DTB from 40687a50.
+   paddr=[40237000..40238fff]
+ELF-loading image 'kernel' to 40000000
+  paddr=[40000000..40236fff]
+  vaddr=[ffffff8040000000..ffffff8040236fff]
+  virt_entry=ffffff8040000000
+ELF-loading image 'rootserver' to 40239000
+  paddr=[40239000..4033efff]
+  vaddr=[0..105fff]
+  virt_entry=0
+Enabling MMU and paging
+Jumping to kernel-image entry point...
+
+Bootstrapping kernel
+Warning: Could not infer GIC interrupt target ID, assuming 0.
+available phys memory regions: 1
+  [40000000..80000000)
+reserved virt address space regions: 3
+  [ffffff8040000000..ffffff8040237000)
+  [ffffff8040237000..ffffff8040238e11)
+  [ffffff8040239000..ffffff804033f000)
+Booting all finished, dropped to user space
+[kernel:entry] root-task entry reached
+[MARK] boot_state=COLD
+[mark] bootinfo.view.begin
+CSpaceCanonicalise
+[mark] bootinfo.validate.begin
+BootInfoValidate
+[bootinfo:cspace] root=0x0002 init_bits=13 empty=[0x0157..0x2000)
+[mark] bootinfo.validate.ok
+[mark] bootinfo.view.ok
+MemoryLayoutBuild
+[boot:layout] text=[0x00000000..0x0006535c) rodata=[0x0006535c..0x0006535c) data=[0x0006535c..0x00086628) bss=[0x00086628..0x00086910) heap=[0x00087000..0x000c4000) stack=[0x000c4000..0x00
+[bootinfo] kernel=0x0000000000107000 snapshot=0x0000000000107000
+[vaddr] reserved heap=[0x00087000..0x000c4000) stack=[0x000c4000..0x00104000) bootinfo=[0x00107000..0x00108000)
+[boot] allocator ready
+log.transport=UART_ONLY
+[INFO root_task::sel4] [sel4-type-sanity] seL4_Word size=8 align=8 seL4_CNode size=8 align=8 seL4_Error size=4 align=4
+[INFO root_task::sel4] [sel4-type-sanity] seL4_CapRights size=8 align=8 seL4_CPtr size=8 align=8
+[bootinfo] snapshot region=[0x00000000000765f0..0x0000000000086600)
+[breadcrumb] before BUILD log
+[BUILD] 02d95e76 2025-12-18T22:33:32.463992+00:00 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1]
+[INFO root_task::kernel] [BUILD] 02d95e76 2025-12-18T22:33:32.463992+00:00 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1]
+[breadcrumb] after BUILD log
+[mark] bootstrap.enter
+[boot:bypass] bootstrap.begin (ep_ready=0 ep_validated=0 ipc_unlocked=0)
+[breadcrumb] after bootstrap.begin
+[breadcrumb] before CSpaceRecord
+CSpaceRecord
+[INFO root_task::bootstrap::cspace] [cnode] canonical alias uses init CNode slot=0x0002
+[guard] stage=IPCInstall.install_init_ipc_buffer call=seL4_SetIPCBuffer ipc_ptr=0x0000000000106000
+[boot] ipcbuf installed early ptr=0x0000000000106000
+[guard] stage=IPCInstall.ipcbuf_sanity call=seL4_CNode_Copy root=0x0002 dst=0x0158 src=0x0001 depth=64
+[boot] ipcbuf sanity copy src=0x0001 dst=0x0158 empty=[0x0157..0x2000) err=0 (seL4_NoError)
+[guard] stage=IPCInstall.ipcbuf_sanity call=seL4_CNode_Delete root=0x0002 dst=0x0158 depth=64
+[boot] ipcbuf sanity ok (copy+delete)
+IPCInstall
+[mark] ipc.install.ok
+[INFO root_task::kernel] [rt-fix] cspace window [0x0157..0x2000), initBits=13, initCNode=0x0002
+[INFO root_task::bootstrap::cspace] [probe] skipping BootInfo frame slot verification during bring-up
+[INFO root_task::kernel] [probe] dest path OK at slot=0x0157
+[INFO root_task::kernel] [kernel:entry] about to log stage0 entry
+[cohesix:root-task] entered from seL4 (stage0)
+[cohesix:root-task] Cohesix boot: root-task online
+[cohesix:root-task] bootinfo @ 0x00000000000765f8 (header 3848 bytes)
+[cohesix:root-task] bootinfo.extraLen = 7713 bytes (~964 words)
+[cohesix:root-task] bootinfo.extra region [0x0000000000077500..0x0000000000079321)
+[cohesix:root-task] node_id=0 nodes=1 ipc_buffer=0x0000000000106000
+[cohesix:root-task] initThreadCNode=0x0002 bits=13 capacity=8192
+[cohesix:root-task] empty slots [0x0157..0x2000) span=7849
+[cohesix:root-task] cs: root=0x0002 bits=13 first_free=0x0157
+[cohesix:root-task] Cohesix v0 (AArch64/virt)
+[INFO root_task::sel4] [cohesix:root-task] bootinfo.raw: initCNode=0x2 initBits=13 empty=[0x0157..0x2000)
+[INFO root_task::kernel] [caps] Null=0 TCB=1 CNode=2 VSpace=3 IPCBuf=10 BootInfo=9
+[guard] stage=BootCaps.identify call=seL4_CapIdentify.skip slot=0x0000 reason=null-cap
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x0001
+[INFO root_task::kernel] [identify] slot=0x0001 ty=0x0000000c
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x0002
+[INFO root_task::kernel] [identify] slot=0x0002 ty=0x0000000a
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x0003
+[INFO root_task::kernel] [identify] slot=0x0003 ty=0x00000009
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x0004
+[INFO root_task::kernel] [identify] slot=0x0004 ty=0x0000000e
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x0005
+[INFO root_task::kernel] [identify] slot=0x0005 ty=0x0000000b
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x0006
+[INFO root_task::kernel] [identify] slot=0x0006 ty=0x0000000d
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x0007
+[INFO root_task::kernel] [identify] slot=0x0007 ty=0x00000000
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x0008
+[INFO root_task::kernel] [identify] slot=0x0008 ty=0x00000000
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x0009
+[INFO root_task::kernel] [identify] slot=0x0009 ty=0x00000001
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x000a
+[INFO root_task::kernel] [identify] slot=0x000a ty=0x00000001
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x000b
+[INFO root_task::kernel] [identify] slot=0x000b ty=0x00000014
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x000c
+[INFO root_task::kernel] [identify] slot=0x000c ty=0x00000000
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x000d
+[INFO root_task::kernel] [identify] slot=0x000d ty=0x00000000
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x000e
+[INFO root_task::kernel] [identify] slot=0x000e ty=0x00000000
+[guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x000f
+[INFO root_task::kernel] [identify] slot=0x000f ty=0x00000000
+[guard] stage=BootCaps.dump call=seL4_CapIdentify.skip slot=0x0000 reason=null-cap
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0001
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0001 type=0x0000000c
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0002
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0002 type=0x0000000a
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0003
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0003 type=0x00000009
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0004
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0004 type=0x0000000e
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0005
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0005 type=0x0000000b
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0006
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0006 type=0x0000000d
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0007
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0007 type=0x00000000
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0008
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0008 type=0x00000000
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0009
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0009 type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x000a
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x000a type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x000b
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x000b type=0x00000014
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x000c
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x000c type=0x00000000
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x000d
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x000d type=0x00000000
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x000e
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x000e type=0x00000000
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x000f
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x000f type=0x00000000
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0010
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0010 type=0x00000003
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0011
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0011 type=0x00000003
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0012
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0012 type=0x00000003
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0013
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0013 type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0014
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0014 type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0015
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0015 type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0016
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0016 type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0017
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0017 type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0018
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0018 type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x0019
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x0019 type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x001a
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x001a type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x001b
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x001b type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x001c
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x001c type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x001d
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x001d type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x001e
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x001e type=0x00000001
+[guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x001f
+[INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x001f type=0x00000001
+[bootstrap] device-pt untyped selected: idx=59 cap=0x156 sizeBits=17 paddr=0x7ffe0000 (candidates paddr range: 0x40000000â€“0x7ffe0000)
+[retype:plan] reserved device PageTable pool ut=0x156 bits=17 paddr=0x7ffe0000 capacity=131072B
+[INFO root_task::sel4] [cohesix:root-task] bootinfo.empty slots [0x0157..0x2000) span=7849 root_cnode_bits=13
+[INFO root_task::sel4] [device-pt] reserved pool ut=0x156 tables=32 bytes=131072
+[cohesix:root-task] [boot] deferring DTB parse
+[MARK 30] after DTB deferred
+[MARK 31] before canonical_cspace
+[MARK 32] after canonical_cspace
+[MARK 33] before cap-probes
+[MARK 34] after cap-probes
+[MARK 35] before ipc_vaddr
+[MARK 36] before bootstrap-minimal
+[MARK 38] before bootstrap_ep
+[mark] ep.bootstrap.begin
+[boot] root-ep preflight ep_ready=  first_free=0x0157
+[boot] bootstrap_ep: entry
+[boot] bootstrap_ep: entering
+[boot] bootstrap_ep: after alloc_slot
+[boot] bootstrap_ep: slot=0x0157
+[boot] bootstrap_ep: window ready
+[cs: root=0x2 bits=   first_free=0x157]
+[boot] bootstrap_ep: before verify
+[boot] bootstrap_ep: verify slot=0x0157
+[boot] bootstrap_ep: verify ok
+[boot] bootstrap_ep: before retype
+[boot] bootstrap_ep: retype ut=0x0139 -> slot=0x0157
+[guard] stage=EP.Retype call=seL4_Untyped_Retype root=0x0002 ut=0x0139 dst=0x0157 depth=  
+[ root_task::bootstrap::cspace_sys] [retype.ep] root=0x0002 slot=0x0157 depth=   ut=0x0139 err= 
+[boot] bootstrap_ep: after retype
+[boot] bootstrap_ep: retype ok
+[guard] stage=bootstrap_ep.identify call=seL4_DebugCapIdentify slot=0x0157
+[boot] root endpoint published
+[boot] bootstrap_ep: after publish
+[boot] bootstrap_ep: published ep=0x0157
+[boot] bootstrap_ep: success slot=0x0157 badge=0x0000 published=1 ident=0x0004
+[MARK 39] after bootstrap_ep ok
+[boot] root-ep report slot=0x0157 verify=Someh 0 retype=Someh 0 ident=0x0004 preexisting= 
+[breadcrumb] before trace_ep
+[ep=0x0000000000000157]
+[breadcrumb] after trace_ep
+[breadcrumb] before ep publish line
+[cohesix:root-task] [boot] root endpoint published ep=0x0157
+[mark] ep.publish.ok root_ep=0x0157
+[breadcrumb] after ep publish line
+[breadcrumb] before boot_tracer drain
+[breadcrumb] tracer phase=Begin
+[boot:phase] Begin
+[breadcrumb] tracer phase=CSpaceInit
+[boot:phase] CSpaceInit
+[breadcrumb] tracer phase=DTBParseDeferred
+[boot:phase] DTBParseDeferred
+[breadcrumb] after boot_tracer drain
+[MARK 40] ipcbuf ready before tcb copy
+[boot:bypass] tcb.copy.begin (ep_ready=  ep_validated=  ipc_unlocked= )
+[MARK 41] before tcb copy
+[ root_task::boot::tcb] [tcb] canonical root uses init TCB cap=0x0001; copy suppressed
+[boot:bypass] tcb.copy.end (ep_ready=  ep_validated=  ipc_unlocked= )
+[boot:bypass] ipcbuf.begin (ep_ready=  ep_validated=  ipc_unlocked= )
+[ root_task::sel4] [ipcbuf] capid frame=0x000a ty=0x00000001 (
+[ root_task::bootstrap::ipcbuf] [boot] using boot-provided IPC buffer without re-binding: tcb=0x0001 frame=0x000a vaddr=0x00106000
+[boot:bypass] ipcbuf.done (ep_ready=  ep_validated=  ipc_unlocked= )
+[cohesix:root-task] [boot] ipc buffer mapped @ 0x00106000
+[ root_task::boot::ep] [cs] alloc root=0x0002 bits=   first_free=0x0158 empty=[0x0158..0x0158)
+[ root_task::boot::ep] [cs] bootinfo root=0x0002 bits=   first_free=0x0158 empty=[0x0157..0x2000)
+[guard] stage=EP.Retype call=seL4_Untyped_Retype root=0x0002 ut=0x0139 dst=0x0158 depth=  
+[ root_task::bootstrap::cspace_sys] [retype.ep] root=0x0002 slot=0x0158 depth=   ut=0x0139 err= 
+[ root_task::boot::ep] [ep] fault ep retype root=0x0002 depth=   dst=0x0158 err= 
+[ root_task::boot::ep] [cs] first_free=0x0159
+[guard] stage=bootstrap_fault_ep.identify call=seL4_DebugCapIdentify slot=0x0158
+[ root_task::boot::ep] [boot] fault endpoint slot=0x0158 identify=0x00000004
+[boot] fault-ep ready slot=0x0158 badge=0x0000 ident=0x0004 published=0
+[ root_task::bootstrap] [boot] dedicated fault endpoint ready ep=0x0158
+[ root_task::kernel] [ipc] root EP installed at slot=0x0157 (role=LOG+CONTROL / QUEEN bootstrap)
+[ root_task::kernel] [ipc] EP 0x0157 loop online; waiting for messages
+[ root_task::kernel] [ipc] fault EP installed at slot=0x0158 (dedicated fault handler)
+[ root_task::kernel] [ipc] EP 0x0157: dispatcher thread initialised on core= 
+[boot] commit_minimal satisfied
+[ root_task::cspace] [cspace] using CSpace root=0x0002 (type=0x0000000a) as destRoot for CNode ops
+[ root_task::cspace] [cnode] Mint dst=0x0159 depth=  
+[ root_task::cspace] [cnode] Mint src=0x0158 depth=  
+[ root_task::kernel::fault] [fault] minted badged fault cap slot=0x0159 ep=0x0158 badge=0x0001
+[ root_task::kernel::fault] [fault] installed handler for init-tcb: tcb=0x0001 badge=0x0001 fault_cap=0x0159
+[ root_task::kernel::fault] [tcb] spawn init-tcb: badge=0x0001 tcb_cap=0x0001 entry=None sp=<unknown>
+[ root_task::bootstrap] [boot] fault handler installed tcb_slot=0x0001 ep=0x0158 badge=0x0001
+[ root_task::bootstrap::cspace] [boot] empty=[ 157.. 2000) cnode_bits=  
+[boot] empty=[ 157.. 2000) cnode_bits=  
+UntypedPlan
+[boot:phase] UntypedEnumerate
+[retype:plan] skipping Page from ut=0x139: 1xsp  B would exceed 6 e-B capacity (used=6 e-B)
+[retype:plan] ut=0x139 sz=   ->  xPT +   xPage (dest start=0x0157)
+RetypeCommit
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x015a guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x015a guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x015a index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0003 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x015a index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0003 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x000000000000015a n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ffi] seL4_CNode_Mint destRoot=0x0002 destIndex=0x000000000000015b destDepth=   srcRoot=0x0002 srcIndex=0x0000000000000002 srcDepth=   rights=0x0f badge=0x0000
+[ root_task::bootstrap::cspace] [cnode] mint-success path=direct:init-cnode dest=0x015b ident(init=0x0000000a,copy=0x0000000a) rights(init=RWGP,copy=RWGP)
+[ root_task::bootstrap] [boot] notification retyped ut=0x139 slot=0x015a
+[boot:phase] 
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x015c guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x015c guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x015c index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0009 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x015c index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0009 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x000000000000015c n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x015d guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x015d guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x015d index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x015d index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x000000000000015d n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x015e guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x015e guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x015e index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x015e index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x000000000000015e n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x015f guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x015f guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x015f index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x015f index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x000000000000015f n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x0160 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x0160 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x0160 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x0160 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x0000000000000160 n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x0161 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x0161 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x0161 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x0161 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x0000000000000161 n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x0162 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x0162 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x0162 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x0162 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x0000000000000162 n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x0163 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x0163 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x0163 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x0163 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x0000000000000163 n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x0164 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x0164 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x0164 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x0164 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x0000000000000164 n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x0165 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x0165 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x0165 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x0165 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x0000000000000165 n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x0166 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x0166 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x0166 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x0166 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x0000000000000166 n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x0167 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x0167 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x0167 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x0167 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x0000000000000167 n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x0168 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x0168 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x0168 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x0168 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x0000000000000168 n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x0169 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x0169 guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x0169 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x0169 index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x0000000000000169 n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[ root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x016a guard_depth=  root_bits=   window=[0x0157..0x2000)
+[retype] path=direct:init-cnode dest=0x016a guard_depth=  root_bits=   window=[0x0157..0x2000)
+[ root_task::bootstrap::retype] [retype] dst=0x016a index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[retype] dst=0x016a index= 00000000000002 depth=   root=0x0002 style=Raw ut=0x0139 obj=0x0007 sz=  n=  empty=[0x0157,0x2000)
+[ root_task::bootstrap::ffi] [retype] ut=0x0000000000000139 root=0x0002 depth=   index=0x0000000000000002 offset=0x000000000000016a n= 
+[ root_task::bootstrap::retype] [retype:ret] err=  style=Raw
+[retype:ret] err=  style=Raw
+[boot:phase] RetypeProgress  / 
+[boot:phase] 
+[ffi] seL4_CNode_Mint destRoot=0x0002 destIndex=0x000000000000016b destDepth=   srcRoot=0x0002 srcIndex=0x0000000000000002 srcDepth=   rights=0x0f badge=0x0000
+[ root_task::bootstrap::cspace] [cnode] mint-success path=direct:init-cnode dest=0x016b ident(init=0x0000000a,copy=0x0000000a) rights(init=RWGP,copy=RWGP)
+[
+[cohesix:root-task] bootinfo.empty slots [0x0157..0x2000) span=oo   root_cnode_bits=  
+[ root_task::bootstrap::cspace_sys] [retype] ut= 12b type= 7 size_bits=  root= 2 idx= 2 depth=   off= 16c n= 
+[ root_task::bootstrap::cspace_sys] [retype] ut= 156 type= 9 size_bits=  root= 2 idx= 2 depth=   off= 16d n= 
+[ root_task::bootstrap::cspace_sys] [retype] ut= 156 type= 9 size_bits=  root= 2 idx= 2 depth=   off= 16e n= 
+[ root_task::bootstrap::cspace_sys] [retype] ut= 156 type= 9 size_bits=  root= 2 idx= 2 depth=   off= 16f n= 
+[ boot] [uart:mmio] paddr=0x09000000 cap=0x016c vaddr=0x00000000a0000000 mapped=true
+[cohesix:root-task] [vspace:map] pl011 paddr=0x09000000 -> vaddr=0x00000000a0000000 attrs=UNCACHED OK
+[cohesix:root-task] [uart] init OK
+[console] PL011 console online
+[cohesix:root-task] uart logger online
+[ root_task::kernel] [boot] after uart logger online
+[ root_task::net::stack] [net-console] config: iface_ip=   ) root=0x  index=0x  depth= / l gateway=   ) root=0x  index=0x  depth=  listen_port=ç  do udp_echo_port=ç  or tcp_smoke_port=ç  : 
+[ root_task::net::stack] [net-console] init: constructing smoltcp stack
+[ root_task::net::stack] [net-console] init: bringing up rtl8139 with ip=   ) root=0x  index=0x  depth= / l netmask=   ) root=0x   index=0x   depth=  gateway=   ) root=0x  index=0x  dept
+[ root_task::net::stack] [net-console] init: creating rtl8139 device (listen_port=ç  do)
+[ root_task::drivers::rtl8139] [rtl8139] probing HAL PCI topology for RTL8139
+[net-console] disabled reason=no-device err=NoDevice
+[
+[ root_task::kernel] [boot] net-console init complete; continuing with timers and IPC
+[ root_task::kernel] [boot] phase: TimersAndIPC.begin
+[ root_task::kernel] [boot] TimersAndIPC: timers.init.begin period_ms= 
+[ root_task::kernel::timer] [timers] init: begin period_ms= 
+[ root_task::kernel::timer] [timers] init: timer_freq_hz=         Hz
+[ root_task::kernel::timer] [timers] init: compute period_cycles begin period_ms= 
+[ root_task::kernel::timer] [timers] init: ticks_per_period=quog  
+[ root_task::kernel::timer] [timers] init: computed period_cycles=quog  
+[ root_task::kernel::timer] [timers] init: configuring timer source (DummySoftTimer backend (architected counter disabled))
+[ root_task::kernel::timer] [timers] init: using dummy software counter; snapshots will not read CNT registers
+[ root_task::kernel::timer] [timers] init: baseline dummy counter=  (poll-only)
+[ root_task::kernel::timer] [timers] init: done; timers online (non-blocking)
+[ root_task::kernel] [boot] TimersAndIPC: timers.init.ok period_cycles=quog   last_cycles= 
+[ root_task::kernel] [boot] TimersAndIPC: timer.worker.spawn.begin
+[ root_task::kernel::timer] [timers] worker: spawn requested (deferred wait loop)
+[ root_task::kernel::timer] [timers] worker: cooperative polling (no blocking wait in init)
+[ root_task::kernel] [boot] TimersAndIPC: timer.worker.spawn.end
+[ root_task::kernel] [boot] TimersAndIPC: ipc.init.begin ep=0x0157
+[ root_task::kernel] [boot] TimersAndIPC: ipc.init.end ep=0x0157 staged=_okud
+[ root_task::bootstrap] [boot] spawn.worker.begin
+[ root_task::bootstrap] [boot] spawn.worker.end
+[ root_task::bootstrap] [boot] dtb.parse.begin
+[cohesix:root-task] [boot] dtb locate skipped/failed: deferred
+[ root_task::bootstrap] [boot] dtb.parse.end
+[boot:phase] @Ì
+[ root_task::bootstrap] [boot] logger.switch.begin
+log.transport=UART+EP_MIRROR ep=0x0157
+[trace] log transport: UART mirrored to EP
+[ root_task::bootstrap] [boot] logger.switch.end
+BOOTSTRAP_SEND_TRACE dest=0x0157 phase=DTBParseDone seq= l ready=  validated=  unlocked=  post_commit=  caller=apps/root-task/src/bootstrap/log.rs:ç  
+BOOTSTRAP_SEND_TRACE dest=0x0157 phase=DTBParseDone seq= l ready=  validated=  unlocked=  post_commit=  caller=apps/root-task/src/bootstrap/log.rs:ç  
