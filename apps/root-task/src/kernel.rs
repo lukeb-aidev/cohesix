@@ -1174,7 +1174,7 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
     let boot_state = state::state();
     if boot_state != BootState::Cold {
         log::error!(
-            "[kernel:entry] bootstrap re-entry detected (state={boot_state}); parking thread"
+            "[kernel:entry] bootstrap re-entry detected (state={boot_state:?}); parking thread"
         );
         boot_log::force_uart_line("[kernel:entry] re-entry detected; parking thread");
         loop {
@@ -1424,6 +1424,13 @@ fn bootstrap<P: Platform>(
     let mut pending_boot_phases = heapless::Vec::<BootPhase, 4>::new();
     let _ = pending_boot_phases.push(BootPhase::Begin);
 
+    let check_bootinfo = |guard: &mut BootStateGuard, mark: &'static str| {
+        guard.record_mark(mark);
+        let phase_label = guard.current_phase();
+        if let Err(err) = bootinfo_state.verify(phase_label, guard.last_mark()) {
+            panic!("bootinfo canary tripped at {mark}: {err:?}");
+        }
+    };
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
     early_phase = EarlyBootPhase::CSpaceRecord;
     sequencer
@@ -1442,14 +1449,6 @@ fn bootstrap<P: Platform>(
             err
         })?;
     check_bootinfo(&mut boot_guard, "[mark] phase.CSpaceRecord");
-
-    let check_bootinfo = |guard: &mut BootStateGuard, mark: &'static str| {
-        guard.record_mark(mark);
-        let phase_label = guard.current_phase();
-        if let Err(err) = bootinfo_state.verify(phase_label, guard.last_mark()) {
-            panic!("bootinfo canary tripped at {mark}: {err:?}");
-        }
-    };
     if let Err(err) = crate::bootstrap::cspace::ensure_canonical_root_alias(bootinfo_ref) {
         log_precommit_exit(
             early_phase,

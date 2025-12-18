@@ -2,8 +2,6 @@
 
 //! TCP console session management shared between kernel and host stacks.
 
-use core::fmt::Write;
-
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, info, warn};
 
