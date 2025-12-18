@@ -14,7 +14,7 @@ use crate::event::{AuditSink, BootstrapOp};
 use crate::sel4;
 
 #[cfg(feature = "kernel")]
-use sel4_sys::{seL4_MessageInfo, seL4_Word};
+use sel4_sys::{seL4_CPtr, seL4_MessageInfo, seL4_Word};
 #[cfg(feature = "kernel")]
 use spin::Mutex;
 
@@ -247,17 +247,8 @@ pub fn force_uart_line(line: &str) {
 }
 
 fn emit_ep(payload: &[u8]) -> Result<(), ()> {
-    if !ep_sink_permitted() {
-        record_precommit_block("transport-gate");
-        return Err(());
-    }
-
     #[cfg(feature = "kernel")]
     {
-        if !sel4::ep_ready() {
-            return Err(());
-        }
-
         let mut frame = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
         if frame.push(FRAME_KIND_LINE).is_err() {
             return Err(());
@@ -267,7 +258,7 @@ fn emit_ep(payload: &[u8]) -> Result<(), ()> {
                 break;
             }
         }
-        send_frame(frame.as_slice())
+        return send_frame(frame.as_slice());
     }
 
     #[cfg(not(feature = "kernel"))]
@@ -279,48 +270,143 @@ fn emit_ep(payload: &[u8]) -> Result<(), ()> {
 
 #[cfg(feature = "kernel")]
 fn send_frame(payload: &[u8]) -> Result<(), ()> {
-    let guard = SEND_LOCK.lock();
-    let mut words: [seL4_Word; crate::sel4::MSG_MAX_WORDS] = [0; crate::sel4::MSG_MAX_WORDS];
-    let mut index = 0usize;
-
-    words[index] = BootstrapOp::Log.encode();
-    index += 1;
-    words[index] = payload.len() as seL4_Word;
-    index += 1;
-
-    let mut offset = 0usize;
-    while offset < payload.len() && index < words.len() {
-        let remain = payload.len() - offset;
-        let mut chunk = [0u8; core::mem::size_of::<seL4_Word>()];
-        let copy_len = min(remain, chunk.len());
-        chunk[..copy_len].copy_from_slice(&payload[offset..offset + copy_len]);
-        words[index] = seL4_Word::from_le_bytes(chunk);
-        offset += copy_len;
-        index += 1;
-    }
-
-    if offset < payload.len() {
-        drop(guard);
+    let Some(endpoint) = logging_endpoint() else {
         record_drop();
         return Err(());
-    }
+    };
 
-    for (slot, word) in words[..index].iter().enumerate() {
+    let guard = SEND_LOCK.lock();
+    let frame = encode_frame_words(payload)?;
+    let info = seL4_MessageInfo::new(0, 0, 0, frame.len() as seL4_Word);
+    for (slot, word) in frame.iter().enumerate() {
         crate::sel4::set_message_register(slot, *word);
     }
 
-    let info = seL4_MessageInfo::new(0, 0, 0, index as seL4_Word);
-    let result = sel4::send_guarded(info);
+    sel4::send_unchecked(endpoint, info);
     drop(guard);
-    if result.is_err() {
-        record_drop();
-    }
-    result.map_err(|_| ())
+    Ok(())
 }
 
 #[cfg(not(feature = "kernel"))]
 fn send_frame(_payload: &[u8]) -> Result<(), ()> {
     Err(())
+}
+
+#[cfg(feature = "kernel")]
+fn logging_endpoint() -> Option<seL4_CPtr> {
+    if !ep_sink_permitted() {
+        record_precommit_block("transport-gate");
+        return None;
+    }
+    let ep: seL4_CPtr = sel4::root_endpoint();
+    if ep == sel4_sys::seL4_CapNull {
+        record_precommit_block("ep-null");
+        return None;
+    }
+    if !sel4::ep_validated() || !sel4::ipc_send_unlocked() {
+        record_precommit_block("ep-not-ready");
+        return None;
+    }
+    Some(ep)
+}
+
+#[cfg(feature = "kernel")]
+fn encode_frame_words(
+    payload: &[u8],
+) -> Result<HeaplessVec<seL4_Word, { crate::sel4::MSG_MAX_WORDS }>, ()> {
+    let mut words = HeaplessVec::<seL4_Word, { crate::sel4::MSG_MAX_WORDS }>::new();
+    let bounded_len = payload.len().min(MAX_FRAME_LEN);
+    if bounded_len < payload.len() {
+        record_drop();
+    }
+
+    if words.push(BootstrapOp::Log.encode()).is_err() {
+        record_drop();
+        return Err(());
+    }
+    if words.push(bounded_len as seL4_Word).is_err() {
+        record_drop();
+        return Err(());
+    }
+
+    let mut offset = 0usize;
+    while offset < bounded_len {
+        let remain = bounded_len - offset;
+        let mut chunk = [0u8; core::mem::size_of::<seL4_Word>()];
+        let copy_len = min(remain, chunk.len());
+        chunk[..copy_len].copy_from_slice(&payload[offset..offset + copy_len]);
+        let word = seL4_Word::from_le_bytes(chunk);
+        if words.push(word).is_err() {
+            record_drop();
+            return Err(());
+        }
+        offset += copy_len;
+    }
+
+    Ok(words)
+}
+
+#[cfg(all(test, feature = "kernel"))]
+fn send_frame_with_stub(
+    payload: &[u8],
+    endpoint: Option<seL4_CPtr>,
+    send: &mut dyn FnMut(seL4_CPtr, seL4_MessageInfo, &[seL4_Word]),
+) -> Result<(), ()> {
+    let ep = endpoint.ok_or_else(|| {
+        record_drop();
+    })?;
+    let frame = encode_frame_words(payload)?;
+    let info = seL4_MessageInfo::new(0, 0, 0, frame.len() as seL4_Word);
+    send(ep, info, frame.as_slice());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame_bytes(frame: &[seL4_Word], expected_len: usize) -> HeaplessVec<u8, MAX_FRAME_LEN> {
+        let mut bytes = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
+        let mut offset = 0usize;
+        for word in frame.iter().skip(2) {
+            for byte in word.to_le_bytes() {
+                if offset >= expected_len || bytes.push(byte).is_err() {
+                    break;
+                }
+                offset += 1;
+            }
+            if offset >= expected_len {
+                break;
+            }
+        }
+        bytes
+    }
+
+    #[test]
+    fn frame_encoding_is_bounded() {
+        let mut payload = [0u8; MAX_FRAME_LEN + 32];
+        for (idx, byte) in payload.iter_mut().enumerate() {
+            *byte = idx as u8;
+        }
+
+        let frame = encode_frame_words(&payload).expect("frame encoding must succeed");
+        assert_eq!(frame[0], BootstrapOp::Log.encode());
+        assert_eq!(frame[1], MAX_FRAME_LEN as seL4_Word);
+
+        let captured = frame_bytes(frame.as_slice(), MAX_FRAME_LEN);
+        assert_eq!(captured.len(), MAX_FRAME_LEN);
+        assert_eq!(&captured[..], &payload[..MAX_FRAME_LEN]);
+    }
+
+    #[test]
+    fn missing_endpoint_is_non_fatal() {
+        let mut invoked = false;
+        let result = send_frame_with_stub(b"stub", None, &mut |_, _, _| {
+            invoked = true;
+        });
+        assert!(result.is_err());
+        assert!(!invoked);
+    }
 }
 
 fn run_self_test() -> bool {
