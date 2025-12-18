@@ -1413,14 +1413,17 @@ fn bootstrap<P: Platform>(
         crate::built_info::BUILD_TS,
         feature_report
     );
+    debug_uart_str("[breadcrumb] before BUILD log\r\n");
     boot_log::force_uart_line(build_line.as_str());
     log::info!("{}", build_line.as_str());
+    debug_uart_str("[breadcrumb] after BUILD log\r\n");
 
     boot_guard.record_phase("start");
     debug_assert_eq!(state::state(), BootState::Running, "bootstrap state drift",);
     boot_guard.record_mark("[mark] bootstrap.enter");
     boot_log::force_uart_line("[mark] bootstrap.enter");
     crate::bp!("bootstrap.begin");
+    debug_uart_str("[breadcrumb] after bootstrap.begin\r\n");
     let mut pending_boot_phases = heapless::Vec::<BootPhase, 4>::new();
     let _ = pending_boot_phases.push(BootPhase::Begin);
 
@@ -1433,6 +1436,7 @@ fn bootstrap<P: Platform>(
     };
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
     early_phase = EarlyBootPhase::CSpaceRecord;
+    debug_uart_str("[breadcrumb] before CSpaceRecord\r\n");
     sequencer
         .advance(BootstrapPhase::CSpaceRecord)
         .map_err(|err| {

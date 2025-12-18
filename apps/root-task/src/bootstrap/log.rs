@@ -239,7 +239,7 @@ fn record_drop() {
 
 fn emit_uart(payload: &[u8]) {
     for &byte in payload {
-        sel4::debug_put_char(byte as i32);
+        sel4::debug_put_char_raw(byte);
     }
 }
 
@@ -451,6 +451,15 @@ mod tests {
         assert!(line.len() <= MAX_FRAME_LEN);
         assert!(line.ends_with(b"\r\n"));
         assert!(core::str::from_utf8(&line).is_ok());
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    #[test]
+    fn force_uart_line_routes_via_raw_helper() {
+        sel4::clear_debug_uart_capture();
+        force_uart_line("[bootstrap-test] raw uart helper");
+        let captured = sel4::take_debug_uart_capture();
+        assert_eq!(captured.as_slice(), b"[bootstrap-test] raw uart helper\r\n");
     }
 
     #[cfg(feature = "kernel")]

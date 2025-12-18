@@ -15,6 +15,8 @@ use core::{
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
+#[cfg(all(test, not(feature = "kernel")))]
+use spin::Mutex as SpinMutex;
 
 use crate::bootstrap::cspace_sys;
 use crate::bootstrap::ipcbuf_view::IpcBufView;
@@ -25,6 +27,8 @@ use crate::bootstrap::DevicePtPoolConfig;
 use crate::debug_uart::debug_uart_str;
 use crate::sel4_view;
 use crate::serial;
+#[cfg(all(test, not(feature = "kernel")))]
+use heapless::Vec as HeaplessVec;
 use heapless::{String as HeaplessString, Vec};
 pub use sel4_sys::{
     seL4_AllRights, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CNode_Mint,
@@ -854,7 +858,14 @@ pub fn init_cnode_depth(_bi: &seL4_BootInfo) -> u8 {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn debug_put_char(ch: i32) {
-    unsafe { seL4_DebugPutChar(ch as u8) }
+    debug_put_char_raw(ch as u8);
+}
+
+/// Emits a byte to the seL4 debug console using the raw debug syscall.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn debug_put_char_raw(byte: u8) {
+    unsafe { seL4_DebugPutChar(byte) }
 }
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
@@ -902,6 +913,43 @@ pub fn install_debug_sink() {}
 #[cfg(not(feature = "kernel"))]
 #[inline(always)]
 pub fn debug_put_char(_ch: i32) {}
+
+#[cfg(all(test, not(feature = "kernel")))]
+const DEBUG_UART_CAPTURE_LEN: usize = 512;
+
+#[cfg(all(test, not(feature = "kernel")))]
+static DEBUG_UART_CAPTURE: SpinMutex<HeaplessVec<u8, DEBUG_UART_CAPTURE_LEN>> =
+    SpinMutex::new(HeaplessVec::new());
+
+/// Emits a byte to the debug UART in host builds without touching MMIO.
+#[cfg(all(not(feature = "kernel")))]
+#[inline(always)]
+pub fn debug_put_char_raw(byte: u8) {
+    #[cfg(test)]
+    {
+        let mut guard = DEBUG_UART_CAPTURE.lock();
+        let _ = guard.push(byte);
+        return;
+    }
+
+    let _ = byte;
+}
+
+/// Clears the captured UART buffer in host tests.
+#[cfg(all(test, not(feature = "kernel")))]
+pub fn clear_debug_uart_capture() {
+    let mut guard = DEBUG_UART_CAPTURE.lock();
+    guard.clear();
+}
+
+/// Returns the captured UART bytes emitted during a host test.
+#[cfg(all(test, not(feature = "kernel")))]
+pub fn take_debug_uart_capture() -> HeaplessVec<u8, DEBUG_UART_CAPTURE_LEN> {
+    let mut guard = DEBUG_UART_CAPTURE.lock();
+    let mut out = HeaplessVec::new();
+    core::mem::swap(&mut *guard, &mut out);
+    out
+}
 
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
 #[no_mangle]
