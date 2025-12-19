@@ -20,7 +20,7 @@
 use core::fmt::{self, Write as FmtWrite};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, info, trace, warn};
-use portable_atomic::{AtomicBool, Ordering};
+use portable_atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use smoltcp::iface::{
     Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, SocketStorage,
 };
@@ -43,6 +43,7 @@ use super::{
     NetPoller, NetSelfTestReport, NetSelfTestResult, NetTelemetry, DEFAULT_NET_BACKEND,
     DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
 };
+use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 #[cfg(not(feature = "net-backend-virtio"))]
 use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
 #[cfg(feature = "net-backend-virtio")]
@@ -51,6 +52,7 @@ use crate::hal::{HalError, Hardware};
 use crate::readiness;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR};
+use spin::Mutex;
 
 const TCP_RX_BUFFER: usize = 2048;
 const TCP_TX_BUFFER: usize = 2048;
@@ -80,6 +82,7 @@ const SELF_TEST_ENABLED: bool = cfg!(feature = "dev-virt") || cfg!(feature = "ne
 const SELF_TEST_BEACON_INTERVAL_MS: u64 = 250;
 const SELF_TEST_BEACON_WINDOW_MS: u64 = 5_000;
 const SELF_TEST_WINDOW_MS: u64 = 15_000;
+const NET_INIT_TAG: &str = "net-console:init";
 
 #[cfg(feature = "net-backend-virtio")]
 type DefaultNetDevice = VirtioNet;
@@ -98,6 +101,8 @@ pub type DefaultNetConsoleError = NetConsoleError<DefaultDriverError>;
 #[derive(Debug)]
 pub enum NetStackError<DE> {
     Driver(DE),
+    AlreadyInitialisingOrOnline,
+    BootInfoCanary(&'static str),
     SocketStorageInUse,
     TcpRxStorageInUse,
     TcpTxStorageInUse,
@@ -113,6 +118,10 @@ impl<DE: fmt::Display> fmt::Display for NetStackError<DE> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Driver(err) => write!(f, "{err}"),
+            Self::AlreadyInitialisingOrOnline => {
+                f.write_str("network stack already initialising or online")
+            }
+            Self::BootInfoCanary(mark) => write!(f, "bootinfo canary diverged at {mark}"),
             Self::SocketStorageInUse => f.write_str("socket storage already in use"),
             Self::TcpRxStorageInUse => f.write_str("TCP RX storage already in use"),
             Self::TcpTxStorageInUse => f.write_str("TCP TX storage already in use"),
@@ -162,25 +171,163 @@ impl<DE: NetDriverError> From<NetStackError<DE>> for NetConsoleError<DE> {
     }
 }
 
+const NET_STATE_NEVER: u8 = 0;
+const NET_STATE_INITIALISING: u8 = 1;
+const NET_STATE_ONLINE: u8 = 2;
+const NET_STATE_FAILED: u8 = 3;
+
+static NETSTACK_STATE: AtomicU8 = AtomicU8::new(NET_STATE_NEVER);
+static NET_INIT_BOOT_COUNTER: AtomicU32 = AtomicU32::new(1);
+static NET_INIT_ATTEMPT_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Debug, Clone, Copy)]
+struct NetInitAttempt {
+    boot: u32,
+    attempt: u32,
+    id: u64,
+    tag: &'static str,
+}
+
+impl NetInitAttempt {
+    fn new(tag: &'static str) -> Self {
+        let boot = NET_INIT_BOOT_COUNTER.load(Ordering::Relaxed);
+        let attempt = NET_INIT_ATTEMPT_COUNTER
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        let id = ((boot as u64) << 32) | u64::from(attempt);
+        Self {
+            boot,
+            attempt,
+            id,
+            tag,
+        }
+    }
+
+    fn owner_id(&self) -> u64 {
+        self.id
+    }
+}
+
+#[derive(Debug)]
+struct NetStackInitGuard {
+    attempt: NetInitAttempt,
+    committed: bool,
+}
+
+impl NetStackInitGuard {
+    fn begin<DE>(tag: &'static str) -> Result<Self, NetStackError<DE>> {
+        let attempt = NetInitAttempt::new(tag);
+        let mut state = NETSTACK_STATE.load(Ordering::Acquire);
+        loop {
+            match state {
+                NET_STATE_NEVER | NET_STATE_FAILED => match NETSTACK_STATE.compare_exchange(
+                    state,
+                    NET_STATE_INITIALISING,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        info!(
+                            "[net-init] attempt_id=0x{:016x} state={state}->{} tag={tag}",
+                            attempt.id, NET_STATE_INITIALISING
+                        );
+                        return Ok(Self {
+                            attempt,
+                            committed: false,
+                        });
+                    }
+                    Err(next) => state = next,
+                },
+                NET_STATE_INITIALISING | NET_STATE_ONLINE => {
+                    warn!(
+                        "[net-init] concurrent attempt blocked state={} attempt_id=0x{:016x} tag={tag}",
+                        state,
+                        attempt.id
+                    );
+                    return Err(NetStackError::AlreadyInitialisingOrOnline);
+                }
+                other => {
+                    warn!(
+                        "[net-init] unexpected state={} while starting attempt_id=0x{:016x}",
+                        other, attempt.id
+                    );
+                    NETSTACK_STATE.store(NET_STATE_FAILED, Ordering::Release);
+                    state = NET_STATE_FAILED;
+                }
+            }
+        }
+    }
+
+    fn attempt(&self) -> &NetInitAttempt {
+        &self.attempt
+    }
+
+    fn commit_online(mut self) {
+        NETSTACK_STATE.store(NET_STATE_ONLINE, Ordering::Release);
+        self.committed = true;
+        info!(
+            "[net-init] attempt_id=0x{:016x} transitioned to online",
+            self.attempt.id
+        );
+    }
+}
+
+impl Drop for NetStackInitGuard {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        NETSTACK_STATE.store(NET_STATE_FAILED, Ordering::Release);
+        warn!(
+            "[net-init] attempt_id=0x{:016x} marked failed",
+            self.attempt.id
+        );
+    }
+}
+
 struct StorageGuard<'a> {
     flag: &'a AtomicBool,
+    owner: &'a AtomicU64,
+    tag: &'a Mutex<Option<&'static str>>,
 }
 
 impl<'a> StorageGuard<'a> {
     fn acquire<DE>(
         flag: &'a AtomicBool,
+        owner: &'a AtomicU64,
+        tag: &'a Mutex<Option<&'static str>>,
+        label: &'static str,
+        acquire_tag: &'static str,
+        owner_id: u64,
         busy_error: NetStackError<DE>,
     ) -> Result<Self, NetStackError<DE>> {
         if flag.swap(true, Ordering::AcqRel) {
+            let active_owner = owner.load(Ordering::Acquire);
+            let active_tag = tag
+                .try_lock()
+                .ok()
+                .and_then(|guard| *guard)
+                .unwrap_or("(unknown)");
+            warn!(
+                "[net-storage] guard={label} busy attempt_owner=0x{owner_id:016x} active_owner=0x{active_owner:016x} active_tag={active_tag}",
+            );
             Err(busy_error)
         } else {
-            Ok(Self { flag })
+            owner.store(owner_id, Ordering::Release);
+            if let Ok(mut tag_guard) = tag.try_lock() {
+                *tag_guard = Some(acquire_tag);
+            }
+            Ok(Self { flag, owner, tag })
         }
     }
 }
 
 impl Drop for StorageGuard<'_> {
     fn drop(&mut self) {
+        self.owner.store(0, Ordering::Release);
+        if let Ok(mut tag_guard) = self.tag.lock() {
+            *tag_guard = None;
+        }
         self.flag.store(false, Ordering::Release);
     }
 }
@@ -202,13 +349,46 @@ struct StorageReservation {
 }
 
 impl StorageReservation {
-    fn acquire<DE>(self_test_enabled: bool) -> Result<Self, NetStackError<DE>> {
-        let socket = StorageGuard::acquire(&SOCKET_STORAGE_IN_USE, NetStackError::SocketStorageInUse)?;
-        let tcp_rx = StorageGuard::acquire(&TCP_RX_STORAGE_IN_USE, NetStackError::TcpRxStorageInUse)?;
-        let tcp_tx = StorageGuard::acquire(&TCP_TX_STORAGE_IN_USE, NetStackError::TcpTxStorageInUse)?;
+    fn acquire<DE>(
+        self_test_enabled: bool,
+        owner: &NetInitAttempt,
+        tag: &'static str,
+    ) -> Result<Self, NetStackError<DE>> {
+        let socket = StorageGuard::acquire(
+            &SOCKET_STORAGE_IN_USE,
+            &SOCKET_STORAGE_OWNER,
+            &SOCKET_STORAGE_TAG,
+            "socket",
+            tag,
+            owner.owner_id(),
+            NetStackError::SocketStorageInUse,
+        )?;
+        let tcp_rx = StorageGuard::acquire(
+            &TCP_RX_STORAGE_IN_USE,
+            &TCP_RX_STORAGE_OWNER,
+            &TCP_RX_STORAGE_TAG,
+            "tcp-rx",
+            tag,
+            owner.owner_id(),
+            NetStackError::TcpRxStorageInUse,
+        )?;
+        let tcp_tx = StorageGuard::acquire(
+            &TCP_TX_STORAGE_IN_USE,
+            &TCP_TX_STORAGE_OWNER,
+            &TCP_TX_STORAGE_TAG,
+            "tcp-tx",
+            tag,
+            owner.owner_id(),
+            NetStackError::TcpTxStorageInUse,
+        )?;
         let tcp_smoke_rx = if self_test_enabled {
             Some(StorageGuard::acquire(
                 &TCP_SMOKE_RX_STORAGE_IN_USE,
+                &TCP_SMOKE_RX_STORAGE_OWNER,
+                &TCP_SMOKE_RX_STORAGE_TAG,
+                "tcp-smoke-rx",
+                tag,
+                owner.owner_id(),
                 NetStackError::TcpSmokeRxStorageInUse,
             )?)
         } else {
@@ -217,6 +397,11 @@ impl StorageReservation {
         let tcp_smoke_tx = if self_test_enabled {
             Some(StorageGuard::acquire(
                 &TCP_SMOKE_TX_STORAGE_IN_USE,
+                &TCP_SMOKE_TX_STORAGE_OWNER,
+                &TCP_SMOKE_TX_STORAGE_TAG,
+                "tcp-smoke-tx",
+                tag,
+                owner.owner_id(),
                 NetStackError::TcpSmokeTxStorageInUse,
             )?)
         } else {
@@ -225,6 +410,11 @@ impl StorageReservation {
         let tcp_smoke_out_rx = if self_test_enabled {
             Some(StorageGuard::acquire(
                 &TCP_SMOKE_OUT_RX_STORAGE_IN_USE,
+                &TCP_SMOKE_OUT_RX_STORAGE_OWNER,
+                &TCP_SMOKE_OUT_RX_STORAGE_TAG,
+                "tcp-smoke-out-rx",
+                tag,
+                owner.owner_id(),
                 NetStackError::TcpSmokeRxStorageInUse,
             )?)
         } else {
@@ -233,6 +423,11 @@ impl StorageReservation {
         let tcp_smoke_out_tx = if self_test_enabled {
             Some(StorageGuard::acquire(
                 &TCP_SMOKE_OUT_TX_STORAGE_IN_USE,
+                &TCP_SMOKE_OUT_TX_STORAGE_OWNER,
+                &TCP_SMOKE_OUT_TX_STORAGE_TAG,
+                "tcp-smoke-out-tx",
+                tag,
+                owner.owner_id(),
                 NetStackError::TcpSmokeTxStorageInUse,
             )?)
         } else {
@@ -241,6 +436,11 @@ impl StorageReservation {
         let udp_beacon = if self_test_enabled {
             Some(StorageGuard::acquire(
                 &UDP_BEACON_STORAGE_IN_USE,
+                &UDP_BEACON_STORAGE_OWNER,
+                &UDP_BEACON_STORAGE_TAG,
+                "udp-beacon",
+                tag,
+                owner.owner_id(),
                 NetStackError::UdpBeaconStorageInUse,
             )?)
         } else {
@@ -249,6 +449,11 @@ impl StorageReservation {
         let udp_echo = if self_test_enabled {
             Some(StorageGuard::acquire(
                 &UDP_ECHO_STORAGE_IN_USE,
+                &UDP_ECHO_STORAGE_OWNER,
+                &UDP_ECHO_STORAGE_TAG,
+                "udp-echo",
+                tag,
+                owner.owner_id(),
                 NetStackError::UdpEchoStorageInUse,
             )?)
         } else {
@@ -257,11 +462,21 @@ impl StorageReservation {
         #[cfg(feature = "net-outbound-probe")]
         let tcp_probe_rx = StorageGuard::acquire(
             &TCP_PROBE_RX_STORAGE_IN_USE,
+            &TCP_PROBE_RX_STORAGE_OWNER,
+            &TCP_PROBE_RX_STORAGE_TAG,
+            "tcp-probe-rx",
+            tag,
+            owner.owner_id(),
             NetStackError::TcpProbeRxStorageInUse,
         )?;
         #[cfg(feature = "net-outbound-probe")]
         let tcp_probe_tx = StorageGuard::acquire(
             &TCP_PROBE_TX_STORAGE_IN_USE,
+            &TCP_PROBE_TX_STORAGE_OWNER,
+            &TCP_PROBE_TX_STORAGE_TAG,
+            "tcp-probe-tx",
+            tag,
+            owner.owner_id(),
             NetStackError::TcpProbeTxStorageInUse,
         )?;
 
@@ -281,6 +496,36 @@ impl StorageReservation {
             tcp_probe_tx,
         })
     }
+}
+
+fn log_bootinfo_mark<DE>(
+    mark: &'static str,
+    attempt: &NetInitAttempt,
+) -> Result<(), NetStackError<DE>> {
+    if let Some(state) = BootInfoState::get() {
+        let region = state.snapshot_region();
+        let (pre, post) = state.canary_values();
+        info!(
+            "[bootinfo:net] attempt_id=0x{:016x} mark={mark} region=[0x{start:016x}..0x{end:016x}) len=0x{len:08x} pre=0x{pre:016x} post=0x{post:016x}",
+            attempt.id,
+            start = region.start,
+            end = region.end,
+            len = region.end.saturating_sub(region.start),
+        );
+        if let Err(err) = state.verify("net.init", mark) {
+            match err {
+                BootInfoCanaryError::Snapshot { .. } | BootInfoCanaryError::Diverged { .. } => {
+                    log::error!(
+                        "[bootinfo:net] canary divergence mark={mark} attempt_id=0x{:016x} err={err:?}",
+                        attempt.id
+                    );
+                    return Err(NetStackError::BootInfoCanary(mark));
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,30 +551,56 @@ struct SessionState {
 }
 
 static SOCKET_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static SOCKET_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+static SOCKET_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut SOCKET_STORAGE: [SocketStorage<'static>; SOCKET_CAPACITY] =
     [SocketStorage::EMPTY; SOCKET_CAPACITY];
 static TCP_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static TCP_RX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+static TCP_RX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut TCP_RX_STORAGE: [u8; TCP_RX_BUFFER] = [0u8; TCP_RX_BUFFER];
 static TCP_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static TCP_TX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+static TCP_TX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut TCP_TX_STORAGE: [u8; TCP_TX_BUFFER] = [0u8; TCP_TX_BUFFER];
 static TCP_SMOKE_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static TCP_SMOKE_RX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+static TCP_SMOKE_RX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut TCP_SMOKE_RX_STORAGE: [u8; TCP_SMOKE_RX_BUFFER] = [0u8; TCP_SMOKE_RX_BUFFER];
 static TCP_SMOKE_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static TCP_SMOKE_TX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+static TCP_SMOKE_TX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut TCP_SMOKE_TX_STORAGE: [u8; TCP_SMOKE_TX_BUFFER] = [0u8; TCP_SMOKE_TX_BUFFER];
 static TCP_SMOKE_OUT_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static TCP_SMOKE_OUT_RX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+static TCP_SMOKE_OUT_RX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut TCP_SMOKE_OUT_RX_STORAGE: [u8; TCP_SMOKE_RX_BUFFER] = [0u8; TCP_SMOKE_RX_BUFFER];
 static TCP_SMOKE_OUT_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static TCP_SMOKE_OUT_TX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+static TCP_SMOKE_OUT_TX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut TCP_SMOKE_OUT_TX_STORAGE: [u8; TCP_SMOKE_TX_BUFFER] = [0u8; TCP_SMOKE_TX_BUFFER];
 #[cfg(feature = "net-outbound-probe")]
 static TCP_PROBE_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "net-outbound-probe")]
+static TCP_PROBE_RX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "net-outbound-probe")]
+static TCP_PROBE_RX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
 #[cfg(feature = "net-outbound-probe")]
 static mut TCP_PROBE_RX_STORAGE: [u8; TCP_PROBE_BUFFER] = [0u8; TCP_PROBE_BUFFER];
 #[cfg(feature = "net-outbound-probe")]
 static TCP_PROBE_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "net-outbound-probe")]
+static TCP_PROBE_TX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "net-outbound-probe")]
+static TCP_PROBE_TX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
+#[cfg(feature = "net-outbound-probe")]
 static mut TCP_PROBE_TX_STORAGE: [u8; TCP_PROBE_BUFFER] = [0u8; TCP_PROBE_BUFFER];
 static UDP_BEACON_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static UDP_BEACON_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+static UDP_BEACON_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
 static UDP_ECHO_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static UDP_ECHO_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+static UDP_ECHO_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut UDP_BEACON_RX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
     [UdpPacketMetadata::EMPTY; UDP_METADATA_CAPACITY];
 static mut UDP_BEACON_TX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
@@ -375,6 +646,7 @@ pub struct NetStack<D: NetDevice> {
     interface: Interface,
     sockets: SocketSet<'static>,
     _reservation: StorageReservation,
+    init_attempt: NetInitAttempt,
     tcp_handle: SocketHandle,
     server: TcpConsoleServer,
     telemetry: NetTelemetry,
@@ -578,6 +850,10 @@ impl<D: NetDevice> NetStack<D> {
         self.session_state = SessionState::default();
         self.conn_bytes_read = 0;
         self.conn_bytes_written = 0;
+    }
+
+    fn log_init_canary(&self, mark: &'static str) -> Result<(), NetStackError<D::Error>> {
+        log_bootinfo_mark(mark, &self.init_attempt)
     }
 
     fn record_peer_endpoint(
@@ -791,6 +1067,7 @@ impl<D: NetDevice> NetStack<D> {
     where
         H: Hardware<Error = HalError>,
     {
+        let init_guard = NetStackInitGuard::begin::<D::Error>(NET_INIT_TAG)?;
         info!("[net-console] init: constructing smoltcp stack");
         debug_assert_ne!(config.listen_port, 0, "TCP console port must be non-zero");
         if cfg!(feature = "dev-virt") {
@@ -810,7 +1087,16 @@ impl<D: NetDevice> NetStack<D> {
             .address
             .gateway
             .map(|gateway| Ipv4Address::new(gateway[0], gateway[1], gateway[2], gateway[3]));
-        Self::with_ipv4(hal, ip, config.address.prefix_len, gateway, config, backend)
+        log_bootinfo_mark("net.init.begin", init_guard.attempt())?;
+        Self::with_ipv4(
+            hal,
+            ip,
+            config.address.prefix_len,
+            gateway,
+            config,
+            backend,
+            init_guard,
+        )
     }
 
     fn with_ipv4(
@@ -820,6 +1106,7 @@ impl<D: NetDevice> NetStack<D> {
         gateway: Option<Ipv4Address>,
         console_config: ConsoleNetConfig,
         backend: NetBackend,
+        mut init_guard: NetStackInitGuard,
     ) -> Result<Self, NetStackError<D::Error>> {
         let netmask = prefix_to_netmask(prefix);
         let gateway_label = gateway.unwrap_or(Ipv4Address::UNSPECIFIED);
@@ -837,7 +1124,11 @@ impl<D: NetDevice> NetStack<D> {
         let mac = device.mac();
         info!("[net-console] {backend_label} device online: mac={mac}");
 
-        let reservation = StorageReservation::acquire::<D::Error>(SELF_TEST_ENABLED)?;
+        let attempt = *init_guard.attempt();
+        log_bootinfo_mark("net.init.device", &attempt)?;
+
+        let reservation =
+            StorageReservation::acquire::<D::Error>(SELF_TEST_ENABLED, &attempt, attempt.tag)?;
 
         let init_now_ms = crate::hal::timebase().now_ms();
         debug!("[net-console] init: timebase.now_ms={init_now_ms}");
@@ -869,7 +1160,9 @@ impl<D: NetDevice> NetStack<D> {
                 );
             }
         }
+        log_bootinfo_mark("net.init.interface", &attempt)?;
         let sockets = SocketSet::new(unsafe { &mut SOCKET_STORAGE[..] });
+        log_bootinfo_mark("net.init.socketset", &attempt)?;
 
         let mut stack = Self {
             clock,
@@ -877,6 +1170,7 @@ impl<D: NetDevice> NetStack<D> {
             interface,
             sockets,
             _reservation: reservation,
+            init_attempt: attempt,
             tcp_handle: SocketHandle::default(),
             server: TcpConsoleServer::new(
                 console_config.auth_token,
@@ -914,10 +1208,10 @@ impl<D: NetDevice> NetStack<D> {
             #[cfg(feature = "net-outbound-probe")]
             probe_last_attempt_ms: 0,
         };
-        stack.initialise_socket();
-        stack.initialise_self_test_sockets();
+        stack.initialise_socket()?;
+        stack.initialise_self_test_sockets()?;
         #[cfg(feature = "net-outbound-probe")]
-        stack.initialise_probe_socket();
+        stack.initialise_probe_socket()?;
         info!(
             target: "net-console",
             "[net-console] init: TCP listener socket prepared (port={})",
@@ -928,10 +1222,12 @@ impl<D: NetDevice> NetStack<D> {
             "[net-console] init: success; tcp console wired (non-blocking, port={})",
             console_config.listen_port
         );
+        log_bootinfo_mark("net.init.post", &attempt)?;
+        init_guard.commit_online();
         Ok(stack)
     }
 
-    fn initialise_socket(&mut self) {
+    fn initialise_socket(&mut self) -> Result<(), NetStackError<D::Error>> {
         debug_assert!(SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
         debug_assert!(TCP_RX_STORAGE_IN_USE.load(Ordering::Acquire));
         debug_assert!(TCP_TX_STORAGE_IN_USE.load(Ordering::Acquire));
@@ -939,11 +1235,13 @@ impl<D: NetDevice> NetStack<D> {
         let tx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_TX_STORAGE[..]) };
         let tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
         self.tcp_handle = self.sockets.add(tcp_socket);
+        self.log_init_canary("net.init.socket.tcp")?;
+        Ok(())
     }
 
-    fn initialise_self_test_sockets(&mut self) {
+    fn initialise_self_test_sockets(&mut self) -> Result<(), NetStackError<D::Error>> {
         if !SELF_TEST_ENABLED {
-            return;
+            return Ok(());
         }
 
         unsafe {
@@ -967,6 +1265,7 @@ impl<D: NetDevice> NetStack<D> {
                 );
             } else {
                 self.udp_beacon_handle = Some(self.sockets.add(beacon_socket));
+                self.log_init_canary("net.init.socket.udp_beacon")?;
             }
         }
 
@@ -987,6 +1286,7 @@ impl<D: NetDevice> NetStack<D> {
                         UDP_ECHO_PORT, UDP_ECHO_PORT
                     );
                     self.udp_echo_handle = Some(self.sockets.add(echo_socket));
+                    self.log_init_canary("net.init.socket.udp_echo")?;
                 }
                 Err(UdpBindError::Unaddressable) => {
                     warn!(
@@ -1018,6 +1318,7 @@ impl<D: NetDevice> NetStack<D> {
                     TCP_SMOKE_PORT
                 );
                 self.tcp_smoke_handle = Some(self.sockets.add(tcp_socket));
+                self.log_init_canary("net.init.socket.tcp_smoke")?;
             }
         }
 
@@ -1026,17 +1327,23 @@ impl<D: NetDevice> NetStack<D> {
             let tx_buffer = TcpSocketBuffer::new(&mut TCP_SMOKE_OUT_TX_STORAGE[..]);
             let tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
             self.tcp_smoke_out_handle = Some(self.sockets.add(tcp_socket));
+            self.log_init_canary("net.init.socket.tcp_smoke_out")?;
         }
+
+        Ok(())
     }
 
     #[cfg(feature = "net-outbound-probe")]
-    fn initialise_probe_socket(&mut self) {
+    fn initialise_probe_socket(&mut self) -> Result<(), NetStackError<D::Error>> {
         unsafe {
             let rx_buffer = TcpSocketBuffer::new(&mut TCP_PROBE_RX_STORAGE[..]);
             let tx_buffer = TcpSocketBuffer::new(&mut TCP_PROBE_TX_STORAGE[..]);
             let tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
             self.tcp_probe_handle = Some(self.sockets.add(tcp_socket));
         }
+
+        self.log_init_canary("net.init.socket.tcp_probe")?;
+        Ok(())
     }
 
     /// Polls the network stack using a host-supplied monotonic timestamp in milliseconds.
@@ -2443,9 +2750,18 @@ mod tests {
     fn reservation_releases_on_error() {
         SOCKET_STORAGE_IN_USE.store(false, Ordering::Release);
         TCP_RX_STORAGE_IN_USE.store(false, Ordering::Release);
+        SOCKET_STORAGE_OWNER.store(0, Ordering::Release);
+        TCP_RX_STORAGE_OWNER.store(0, Ordering::Release);
+        if let Ok(mut tag) = SOCKET_STORAGE_TAG.lock() {
+            *tag = None;
+        }
+        if let Ok(mut tag) = TCP_RX_STORAGE_TAG.lock() {
+            *tag = None;
+        }
 
         TCP_RX_STORAGE_IN_USE.store(true, Ordering::Release);
-        let result = StorageReservation::acquire::<Infallible>(true);
+        let attempt = NetInitAttempt::new("test.reservation");
+        let result = StorageReservation::acquire::<Infallible>(true, &attempt, "test.reservation");
         assert!(matches!(result, Err(NetStackError::TcpRxStorageInUse)));
 
         assert!(!SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));

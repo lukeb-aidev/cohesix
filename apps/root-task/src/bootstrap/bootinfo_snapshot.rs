@@ -299,6 +299,11 @@ pub struct BootInfoState {
 static BOOTINFO_STATE: Once<BootInfoState> = Once::new();
 
 impl BootInfoState {
+    #[must_use]
+    pub fn get() -> Option<&'static Self> {
+        BOOTINFO_STATE.get()
+    }
+
     pub fn init(bootinfo: &'static BootInfo) -> Result<&'static Self, BootInfoError> {
         let source_view = BootInfoView::new(bootinfo)?;
         let snapshot = match BootInfoSnapshot::capture(&source_view) {
@@ -336,6 +341,11 @@ impl BootInfoState {
 
     pub fn snapshot_region(&self) -> core::ops::Range<usize> {
         self.snapshot_region.clone()
+    }
+
+    #[must_use]
+    pub fn canary_values(&self) -> (u64, u64) {
+        unsafe { (BOOTINFO_BACKING.pre, BOOTINFO_BACKING.post) }
     }
 
     fn check_canaries(&self, phase: &'static str, last_mark: &'static str) {
