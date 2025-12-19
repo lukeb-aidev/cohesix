@@ -15,7 +15,7 @@
 //! - With tracing enabled, `./cohsh --transport tcp --tcp-port 31337 --role queen`
 //!   should emit auth frame logs showing the exact bytes parsed on the server.
 #![allow(unsafe_code)]
-#![cfg(feature = "kernel")]
+#![cfg(any(test, feature = "kernel"))]
 
 use core::fmt::{self, Write as FmtWrite};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
@@ -104,6 +104,7 @@ pub enum NetStackError<DE> {
     AlreadyInitialisingOrOnline,
     BootInfoCanary(&'static str),
     SocketStorageInUse,
+    SocketStoragePoisoned,
     TcpRxStorageInUse,
     TcpTxStorageInUse,
     TcpSmokeRxStorageInUse,
@@ -123,6 +124,7 @@ impl<DE: fmt::Display> fmt::Display for NetStackError<DE> {
             }
             Self::BootInfoCanary(mark) => write!(f, "bootinfo canary diverged at {mark}"),
             Self::SocketStorageInUse => f.write_str("socket storage already in use"),
+            Self::SocketStoragePoisoned => f.write_str("socket storage poisoned"),
             Self::TcpRxStorageInUse => f.write_str("TCP RX storage already in use"),
             Self::TcpTxStorageInUse => f.write_str("TCP TX storage already in use"),
             Self::TcpSmokeRxStorageInUse => f.write_str("TCP smoke test RX storage already in use"),
@@ -285,110 +287,340 @@ impl Drop for NetStackInitGuard {
     }
 }
 
-struct StorageGuard<'a> {
-    flag: &'a AtomicBool,
-    owner: &'a AtomicU64,
-    tag_id: &'a AtomicU32,
-    tag_label: &'a Mutex<Option<&'static str>>,
+#[derive(Clone, Copy)]
+struct StorageTag {
+    id: u32,
+    label: &'static str,
 }
 
-impl<'a> StorageGuard<'a> {
-    fn compute_tag_id(tag: &'static str) -> u32 {
+impl StorageTag {
+    fn new(label: &'static str) -> Self {
         const OFFSET: u32 = 0x811c_9dc5;
         const PRIME: u32 = 0x0100_0193;
         let mut hash = OFFSET;
-        for byte in tag.as_bytes() {
+        for byte in label.as_bytes() {
             hash ^= u32::from(*byte);
             hash = hash.wrapping_mul(PRIME);
         }
-        // Avoid reserving the sentinel zero value for missing tags.
-        hash.max(1)
-    }
-
-    fn acquire<DE>(
-        flag: &'a AtomicBool,
-        owner: &'a AtomicU64,
-        tag_id: &'a AtomicU32,
-        tag_label: &'a Mutex<Option<&'static str>>,
-        label: &'static str,
-        acquire_tag: &'static str,
-        owner_id: u64,
-        busy_error: NetStackError<DE>,
-    ) -> Result<Self, NetStackError<DE>> {
-        let active_in_use = flag.load(Ordering::Acquire);
-        let active_owner = owner.load(Ordering::Acquire);
-        let active_tag_id = tag_id.load(Ordering::Acquire);
-        let active_tag_label = tag_label
-            .try_lock()
-            .and_then(|guard| *guard)
-            .unwrap_or("(unknown)");
-        if active_in_use {
-            let missing_metadata = active_owner == 0;
-            warn!(
-                "[net-storage] guard={label} busy attempt_owner=0x{owner_id:016x} in_use={active_in_use} active_owner=0x{active_owner:016x} active_tag=0x{active_tag_id:08x} active_tag_label={active_tag_label} missing_metadata={missing_metadata}",
-            );
-            debug_assert!(
-                !missing_metadata,
-                "storage guard {label} flagged busy without metadata"
-            );
-            return Err(busy_error);
-        }
-
-        match owner.compare_exchange(0, owner_id, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => {
-                let tag_value = Self::compute_tag_id(acquire_tag);
-                tag_id.store(tag_value, Ordering::Release);
-                if let Some(mut tag_guard) = tag_label.try_lock() {
-                    *tag_guard = Some(acquire_tag);
-                }
-                flag.store(true, Ordering::Release);
-                Ok(Self {
-                    flag,
-                    owner,
-                    tag_id,
-                    tag_label,
-                })
-            }
-            Err(active_owner) => {
-                let missing_metadata = active_in_use && active_owner == 0;
-                warn!(
-                    "[net-storage] guard={label} busy attempt_owner=0x{owner_id:016x} in_use={active_in_use} active_owner=0x{active_owner:016x} active_tag=0x{active_tag_id:08x} active_tag_label={active_tag_label} missing_metadata={missing_metadata}",
-                );
-                debug_assert!(
-                    !missing_metadata,
-                    "storage guard {label} owner contention without metadata"
-                );
-                Err(busy_error)
-            }
+        Self {
+            id: hash.max(1),
+            label,
         }
     }
 }
 
-impl Drop for StorageGuard<'_> {
-    fn drop(&mut self) {
-        self.flag.store(false, Ordering::Release);
-        self.tag_id.store(0, Ordering::Release);
-        if let Some(mut tag_guard) = self.tag_label.try_lock() {
-            *tag_guard = None;
-        }
-        self.owner.store(0, Ordering::Release);
+#[derive(Clone, Copy)]
+struct StorageMetadata {
+    flag: &'static AtomicBool,
+    owner: &'static AtomicU64,
+    tag_id: &'static AtomicU32,
+    tag_label: &'static Mutex<Option<&'static str>>,
+    label: &'static str,
+}
+
+struct StorageLease {
+    metadata: StorageMetadata,
+}
+
+impl StorageLease {
+    fn new(metadata: StorageMetadata) -> Self {
+        Self { metadata }
     }
+}
+
+impl Drop for StorageLease {
+    fn drop(&mut self) {
+        self.metadata.tag_id.store(0, Ordering::Release);
+        if let Some(mut guard) = self.metadata.tag_label.try_lock() {
+            *guard = None;
+        }
+        self.metadata.flag.store(false, Ordering::Release);
+        self.metadata.owner.store(0, Ordering::Release);
+    }
+}
+
+#[track_caller]
+fn reserve_storage<DE>(
+    metadata: StorageMetadata,
+    owner_id: u64,
+    tag: StorageTag,
+    busy_error: NetStackError<DE>,
+    poisoned_error: Option<NetStackError<DE>>,
+) -> Result<StorageLease, NetStackError<DE>> {
+    let caller = core::panic::Location::caller();
+    match metadata
+        .flag
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+    {
+        Ok(_) => {
+            metadata.owner.store(owner_id, Ordering::Release);
+            metadata.tag_id.store(tag.id, Ordering::Release);
+            if let Some(mut tag_guard) = metadata.tag_label.try_lock() {
+                *tag_guard = Some(tag.label);
+            }
+            metadata.flag.store(true, Ordering::Release);
+            Ok(StorageLease::new(metadata))
+        }
+        Err(_) => {
+            let active_owner = metadata.owner.load(Ordering::Acquire);
+            let active_tag_id = metadata.tag_id.load(Ordering::Acquire);
+            let active_tag_label = metadata
+                .tag_label
+                .try_lock()
+                .and_then(|guard| *guard)
+                .unwrap_or("(unknown)");
+            let poisoned = active_owner == 0;
+            if poisoned {
+                warn!(
+                    "[net-storage] poisoned {} reservation detected at {}:{} in_use={} active_owner=0x{active_owner:016x} active_tag=0x{active_tag_id:08x} active_tag_label={active_tag_label} attempt_owner=0x{owner_id:016x} attempt_tag={attempt_tag}",
+                    metadata.label,
+                    caller.file(),
+                    caller.line(),
+                    metadata.flag.load(Ordering::Acquire),
+                    attempt_tag = tag.label,
+                );
+                if let Some(poisoned_error) = poisoned_error {
+                    return Err(poisoned_error);
+                }
+            }
+            warn!(
+                "[net-storage] guard={} busy attempt_owner=0x{owner_id:016x} attempt_tag={} in_use={} active_owner=0x{active_owner:016x} active_tag=0x{active_tag_id:08x} active_tag_label={active_tag_label} poisoned={}",
+                metadata.label,
+                tag.label,
+                metadata.flag.load(Ordering::Acquire),
+                poisoned,
+            );
+            Err(busy_error)
+        }
+    }
+}
+
+#[track_caller]
+fn reserve_socket_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &SOCKET_STORAGE_IN_USE,
+            owner: &SOCKET_STORAGE_OWNER,
+            tag_id: &SOCKET_STORAGE_TAG_ID,
+            tag_label: &SOCKET_STORAGE_TAG_LABEL,
+            label: "socket",
+        },
+        owner_id,
+        tag,
+        NetStackError::SocketStorageInUse,
+        Some(NetStackError::SocketStoragePoisoned),
+    )
+}
+
+fn reserve_tcp_rx_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &TCP_RX_STORAGE_IN_USE,
+            owner: &TCP_RX_STORAGE_OWNER,
+            tag_id: &TCP_RX_STORAGE_TAG_ID,
+            tag_label: &TCP_RX_STORAGE_TAG_LABEL,
+            label: "tcp-rx",
+        },
+        owner_id,
+        tag,
+        NetStackError::TcpRxStorageInUse,
+        None,
+    )
+}
+
+fn reserve_tcp_tx_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &TCP_TX_STORAGE_IN_USE,
+            owner: &TCP_TX_STORAGE_OWNER,
+            tag_id: &TCP_TX_STORAGE_TAG_ID,
+            tag_label: &TCP_TX_STORAGE_TAG_LABEL,
+            label: "tcp-tx",
+        },
+        owner_id,
+        tag,
+        NetStackError::TcpTxStorageInUse,
+        None,
+    )
+}
+
+fn reserve_tcp_smoke_rx_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &TCP_SMOKE_RX_STORAGE_IN_USE,
+            owner: &TCP_SMOKE_RX_STORAGE_OWNER,
+            tag_id: &TCP_SMOKE_RX_STORAGE_TAG_ID,
+            tag_label: &TCP_SMOKE_RX_STORAGE_TAG_LABEL,
+            label: "tcp-smoke-rx",
+        },
+        owner_id,
+        tag,
+        NetStackError::TcpSmokeRxStorageInUse,
+        None,
+    )
+}
+
+fn reserve_tcp_smoke_tx_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &TCP_SMOKE_TX_STORAGE_IN_USE,
+            owner: &TCP_SMOKE_TX_STORAGE_OWNER,
+            tag_id: &TCP_SMOKE_TX_STORAGE_TAG_ID,
+            tag_label: &TCP_SMOKE_TX_STORAGE_TAG_LABEL,
+            label: "tcp-smoke-tx",
+        },
+        owner_id,
+        tag,
+        NetStackError::TcpSmokeTxStorageInUse,
+        None,
+    )
+}
+
+fn reserve_tcp_smoke_out_rx_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &TCP_SMOKE_OUT_RX_STORAGE_IN_USE,
+            owner: &TCP_SMOKE_OUT_RX_STORAGE_OWNER,
+            tag_id: &TCP_SMOKE_OUT_RX_STORAGE_TAG_ID,
+            tag_label: &TCP_SMOKE_OUT_RX_STORAGE_TAG_LABEL,
+            label: "tcp-smoke-out-rx",
+        },
+        owner_id,
+        tag,
+        NetStackError::TcpSmokeRxStorageInUse,
+        None,
+    )
+}
+
+fn reserve_tcp_smoke_out_tx_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &TCP_SMOKE_OUT_TX_STORAGE_IN_USE,
+            owner: &TCP_SMOKE_OUT_TX_STORAGE_OWNER,
+            tag_id: &TCP_SMOKE_OUT_TX_STORAGE_TAG_ID,
+            tag_label: &TCP_SMOKE_OUT_TX_STORAGE_TAG_LABEL,
+            label: "tcp-smoke-out-tx",
+        },
+        owner_id,
+        tag,
+        NetStackError::TcpSmokeTxStorageInUse,
+        None,
+    )
+}
+
+fn reserve_udp_beacon_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &UDP_BEACON_STORAGE_IN_USE,
+            owner: &UDP_BEACON_STORAGE_OWNER,
+            tag_id: &UDP_BEACON_STORAGE_TAG_ID,
+            tag_label: &UDP_BEACON_STORAGE_TAG_LABEL,
+            label: "udp-beacon",
+        },
+        owner_id,
+        tag,
+        NetStackError::UdpBeaconStorageInUse,
+        None,
+    )
+}
+
+fn reserve_udp_echo_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &UDP_ECHO_STORAGE_IN_USE,
+            owner: &UDP_ECHO_STORAGE_OWNER,
+            tag_id: &UDP_ECHO_STORAGE_TAG_ID,
+            tag_label: &UDP_ECHO_STORAGE_TAG_LABEL,
+            label: "udp-echo",
+        },
+        owner_id,
+        tag,
+        NetStackError::UdpEchoStorageInUse,
+        None,
+    )
+}
+
+#[cfg(feature = "net-outbound-probe")]
+fn reserve_tcp_probe_rx_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &TCP_PROBE_RX_STORAGE_IN_USE,
+            owner: &TCP_PROBE_RX_STORAGE_OWNER,
+            tag_id: &TCP_PROBE_RX_STORAGE_TAG_ID,
+            tag_label: &TCP_PROBE_RX_STORAGE_TAG_LABEL,
+            label: "tcp-probe-rx",
+        },
+        owner_id,
+        tag,
+        NetStackError::TcpProbeRxStorageInUse,
+        None,
+    )
+}
+
+#[cfg(feature = "net-outbound-probe")]
+fn reserve_tcp_probe_tx_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &TCP_PROBE_TX_STORAGE_IN_USE,
+            owner: &TCP_PROBE_TX_STORAGE_OWNER,
+            tag_id: &TCP_PROBE_TX_STORAGE_TAG_ID,
+            tag_label: &TCP_PROBE_TX_STORAGE_TAG_LABEL,
+            label: "tcp-probe-tx",
+        },
+        owner_id,
+        tag,
+        NetStackError::TcpProbeTxStorageInUse,
+        None,
+    )
 }
 
 struct StorageReservation {
-    socket: StorageGuard<'static>,
-    tcp_rx: StorageGuard<'static>,
-    tcp_tx: StorageGuard<'static>,
-    tcp_smoke_rx: Option<StorageGuard<'static>>,
-    tcp_smoke_tx: Option<StorageGuard<'static>>,
-    tcp_smoke_out_rx: Option<StorageGuard<'static>>,
-    tcp_smoke_out_tx: Option<StorageGuard<'static>>,
-    udp_beacon: Option<StorageGuard<'static>>,
-    udp_echo: Option<StorageGuard<'static>>,
+    socket: StorageLease,
+    tcp_rx: StorageLease,
+    tcp_tx: StorageLease,
+    tcp_smoke_rx: Option<StorageLease>,
+    tcp_smoke_tx: Option<StorageLease>,
+    tcp_smoke_out_rx: Option<StorageLease>,
+    tcp_smoke_out_tx: Option<StorageLease>,
+    udp_beacon: Option<StorageLease>,
+    udp_echo: Option<StorageLease>,
     #[cfg(feature = "net-outbound-probe")]
-    tcp_probe_rx: StorageGuard<'static>,
+    tcp_probe_rx: StorageLease,
     #[cfg(feature = "net-outbound-probe")]
-    tcp_probe_tx: StorageGuard<'static>,
+    tcp_probe_tx: StorageLease,
 }
 
 impl StorageReservation {
@@ -397,142 +629,59 @@ impl StorageReservation {
         owner: &NetInitAttempt,
         tag: &'static str,
     ) -> Result<Self, NetStackError<DE>> {
-        let socket = StorageGuard::acquire(
-            &SOCKET_STORAGE_IN_USE,
-            &SOCKET_STORAGE_OWNER,
-            &SOCKET_STORAGE_TAG_ID,
-            &SOCKET_STORAGE_TAG_LABEL,
-            "socket",
-            tag,
-            owner.owner_id(),
-            NetStackError::SocketStorageInUse,
-        )?;
-        let tcp_rx = StorageGuard::acquire(
-            &TCP_RX_STORAGE_IN_USE,
-            &TCP_RX_STORAGE_OWNER,
-            &TCP_RX_STORAGE_TAG_ID,
-            &TCP_RX_STORAGE_TAG_LABEL,
-            "tcp-rx",
-            tag,
-            owner.owner_id(),
-            NetStackError::TcpRxStorageInUse,
-        )?;
-        let tcp_tx = StorageGuard::acquire(
-            &TCP_TX_STORAGE_IN_USE,
-            &TCP_TX_STORAGE_OWNER,
-            &TCP_TX_STORAGE_TAG_ID,
-            &TCP_TX_STORAGE_TAG_LABEL,
-            "tcp-tx",
-            tag,
-            owner.owner_id(),
-            NetStackError::TcpTxStorageInUse,
-        )?;
+        let reservation_tag = StorageTag::new(tag);
+        let socket = reserve_socket_storage(owner.owner_id(), reservation_tag)?;
+        let tcp_rx = reserve_tcp_rx_storage(owner.owner_id(), reservation_tag)?;
+        let tcp_tx = reserve_tcp_tx_storage(owner.owner_id(), reservation_tag)?;
         let tcp_smoke_rx = if self_test_enabled {
-            Some(StorageGuard::acquire(
-                &TCP_SMOKE_RX_STORAGE_IN_USE,
-                &TCP_SMOKE_RX_STORAGE_OWNER,
-                &TCP_SMOKE_RX_STORAGE_TAG_ID,
-                &TCP_SMOKE_RX_STORAGE_TAG_LABEL,
-                "tcp-smoke-rx",
-                tag,
+            Some(reserve_tcp_smoke_rx_storage(
                 owner.owner_id(),
-                NetStackError::TcpSmokeRxStorageInUse,
+                reservation_tag,
             )?)
         } else {
             None
         };
         let tcp_smoke_tx = if self_test_enabled {
-            Some(StorageGuard::acquire(
-                &TCP_SMOKE_TX_STORAGE_IN_USE,
-                &TCP_SMOKE_TX_STORAGE_OWNER,
-                &TCP_SMOKE_TX_STORAGE_TAG_ID,
-                &TCP_SMOKE_TX_STORAGE_TAG_LABEL,
-                "tcp-smoke-tx",
-                tag,
+            Some(reserve_tcp_smoke_tx_storage(
                 owner.owner_id(),
-                NetStackError::TcpSmokeTxStorageInUse,
+                reservation_tag,
             )?)
         } else {
             None
         };
         let tcp_smoke_out_rx = if self_test_enabled {
-            Some(StorageGuard::acquire(
-                &TCP_SMOKE_OUT_RX_STORAGE_IN_USE,
-                &TCP_SMOKE_OUT_RX_STORAGE_OWNER,
-                &TCP_SMOKE_OUT_RX_STORAGE_TAG_ID,
-                &TCP_SMOKE_OUT_RX_STORAGE_TAG_LABEL,
-                "tcp-smoke-out-rx",
-                tag,
+            Some(reserve_tcp_smoke_out_rx_storage(
                 owner.owner_id(),
-                NetStackError::TcpSmokeRxStorageInUse,
+                reservation_tag,
             )?)
         } else {
             None
         };
         let tcp_smoke_out_tx = if self_test_enabled {
-            Some(StorageGuard::acquire(
-                &TCP_SMOKE_OUT_TX_STORAGE_IN_USE,
-                &TCP_SMOKE_OUT_TX_STORAGE_OWNER,
-                &TCP_SMOKE_OUT_TX_STORAGE_TAG_ID,
-                &TCP_SMOKE_OUT_TX_STORAGE_TAG_LABEL,
-                "tcp-smoke-out-tx",
-                tag,
+            Some(reserve_tcp_smoke_out_tx_storage(
                 owner.owner_id(),
-                NetStackError::TcpSmokeTxStorageInUse,
+                reservation_tag,
             )?)
         } else {
             None
         };
         let udp_beacon = if self_test_enabled {
-            Some(StorageGuard::acquire(
-                &UDP_BEACON_STORAGE_IN_USE,
-                &UDP_BEACON_STORAGE_OWNER,
-                &UDP_BEACON_STORAGE_TAG_ID,
-                &UDP_BEACON_STORAGE_TAG_LABEL,
-                "udp-beacon",
-                tag,
+            Some(reserve_udp_beacon_storage(
                 owner.owner_id(),
-                NetStackError::UdpBeaconStorageInUse,
+                reservation_tag,
             )?)
         } else {
             None
         };
         let udp_echo = if self_test_enabled {
-            Some(StorageGuard::acquire(
-                &UDP_ECHO_STORAGE_IN_USE,
-                &UDP_ECHO_STORAGE_OWNER,
-                &UDP_ECHO_STORAGE_TAG_ID,
-                &UDP_ECHO_STORAGE_TAG_LABEL,
-                "udp-echo",
-                tag,
-                owner.owner_id(),
-                NetStackError::UdpEchoStorageInUse,
-            )?)
+            Some(reserve_udp_echo_storage(owner.owner_id(), reservation_tag)?)
         } else {
             None
         };
         #[cfg(feature = "net-outbound-probe")]
-        let tcp_probe_rx = StorageGuard::acquire(
-            &TCP_PROBE_RX_STORAGE_IN_USE,
-            &TCP_PROBE_RX_STORAGE_OWNER,
-            &TCP_PROBE_RX_STORAGE_TAG_ID,
-            &TCP_PROBE_RX_STORAGE_TAG_LABEL,
-            "tcp-probe-rx",
-            tag,
-            owner.owner_id(),
-            NetStackError::TcpProbeRxStorageInUse,
-        )?;
+        let tcp_probe_rx = reserve_tcp_probe_rx_storage(owner.owner_id(), reservation_tag)?;
         #[cfg(feature = "net-outbound-probe")]
-        let tcp_probe_tx = StorageGuard::acquire(
-            &TCP_PROBE_TX_STORAGE_IN_USE,
-            &TCP_PROBE_TX_STORAGE_OWNER,
-            &TCP_PROBE_TX_STORAGE_TAG_ID,
-            &TCP_PROBE_TX_STORAGE_TAG_LABEL,
-            "tcp-probe-tx",
-            tag,
-            owner.owner_id(),
-            NetStackError::TcpProbeTxStorageInUse,
-        )?;
+        let tcp_probe_tx = reserve_tcp_probe_tx_storage(owner.owner_id(), reservation_tag)?;
 
         Ok(Self {
             socket,
@@ -856,16 +1005,30 @@ fn prefix_to_netmask(prefix_len: u8) -> Ipv4Address {
 
 #[cfg(debug_assertions)]
 fn debug_validate_socket_storage(marker: &'static str) {
-    let in_use = SOCKET_STORAGE_IN_USE.load(Ordering::Acquire);
-    if in_use {
-        let owner = SOCKET_STORAGE_OWNER.load(Ordering::Acquire);
-        if owner == 0 {
-            warn!(
-                "[net-storage] poisoned socket flag observed at {marker} in_use={in_use} owner=0x{owner:016x} tag=0x{tag:08x}",
-                tag = SOCKET_STORAGE_TAG_ID.load(Ordering::Acquire)
-            );
-            debug_assert_ne!(owner, 0, "socket storage poisoned at {marker}");
-        }
+    let metadata = StorageMetadata {
+        flag: &SOCKET_STORAGE_IN_USE,
+        owner: &SOCKET_STORAGE_OWNER,
+        tag_id: &SOCKET_STORAGE_TAG_ID,
+        tag_label: &SOCKET_STORAGE_TAG_LABEL,
+        label: "socket",
+    };
+    let in_use = metadata.flag.load(Ordering::Acquire);
+    if !in_use {
+        return;
+    }
+
+    let owner = metadata.owner.load(Ordering::Acquire);
+    let tag = metadata.tag_id.load(Ordering::Acquire);
+    let tag_label = metadata
+        .tag_label
+        .try_lock()
+        .and_then(|guard| *guard)
+        .unwrap_or("(unknown)");
+    if owner == 0 {
+        warn!(
+            "[net-storage] poisoned socket flag observed at {marker} in_use={in_use} owner=0x{owner:016x} tag=0x{tag:08x} tag_label={tag_label}",
+        );
+        debug_assert_ne!(owner, 0, "socket storage poisoned at {marker}");
     }
 }
 
@@ -2865,7 +3028,7 @@ mod tests {
     }
 
     #[test]
-    fn reservation_sets_metadata_before_flagging_in_use() {
+    fn reservation_sets_metadata_and_owner() {
         reset_socket_and_tcp_rx_state();
 
         let attempt = NetInitAttempt::new("test.acquisition");
@@ -2885,7 +3048,7 @@ mod tests {
     }
 
     #[test]
-    fn poisoned_flag_is_reported_as_busy() {
+    fn poisoned_flag_is_reported() {
         reset_socket_and_tcp_rx_state();
 
         SOCKET_STORAGE_IN_USE.store(true, Ordering::Release);
@@ -2895,9 +3058,29 @@ mod tests {
         let attempt = NetInitAttempt::new("test.poisoned");
         let result = StorageReservation::acquire::<Infallible>(false, &attempt, "test.poisoned");
 
-        assert!(matches!(result, Err(NetStackError::SocketStorageInUse)));
+        assert!(matches!(result, Err(NetStackError::SocketStoragePoisoned)));
         assert!(SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
         assert_eq!(SOCKET_STORAGE_OWNER.load(Ordering::Acquire), 0);
         assert_eq!(SOCKET_STORAGE_TAG_ID.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn busy_socket_reports_owner_and_tag() {
+        reset_socket_and_tcp_rx_state();
+
+        SOCKET_STORAGE_OWNER.store(0xdead_beef, Ordering::Release);
+        SOCKET_STORAGE_TAG_ID.store(0xcafe_0001, Ordering::Release);
+        if let Ok(mut tag) = SOCKET_STORAGE_TAG_LABEL.lock() {
+            *tag = Some("test.busy");
+        }
+        SOCKET_STORAGE_IN_USE.store(true, Ordering::Release);
+
+        let attempt = NetInitAttempt::new("test.busy");
+        let result = StorageReservation::acquire::<Infallible>(false, &attempt, "test.busy");
+
+        assert!(matches!(result, Err(NetStackError::SocketStorageInUse)));
+        assert!(SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert_eq!(SOCKET_STORAGE_OWNER.load(Ordering::Acquire), 0xdead_beef);
+        assert_eq!(SOCKET_STORAGE_TAG_ID.load(Ordering::Acquire), 0xcafe_0001);
     }
 }

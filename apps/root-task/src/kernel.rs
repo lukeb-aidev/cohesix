@@ -2774,13 +2774,13 @@ fn bootstrap<P: Platform>(
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let net_backend_label = DEFAULT_NET_BACKEND.label();
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let (net_stack, virtio_present) = {
+        let (net_stack, virtio_present, net_init_error) = {
             use crate::net::{init_net_console, NetConsoleError};
 
             if !sel4::ep_ready() || !sel4::ep_validated() {
                 boot_log::force_uart_line("[net-console] disabled reason=no-root-ep err=0");
                 log::warn!("[net-console] skipped: root endpoint not ready");
-                (None, false)
+                (None, false, None)
             } else {
                 let config = crate::net::ConsoleNetConfig::default();
                 match init_net_console(&mut hal, config) {
@@ -2793,7 +2793,7 @@ fn bootstrap<P: Platform>(
                             write!(ok_line, "[net-console] ready ip={ip} port={port} mac={mac}");
                         boot_log::force_uart_line(ok_line.as_str());
                         boot_guard.record_invariant("net-console.ready");
-                        (Some(stack), cfg!(feature = "net-backend-virtio"))
+                        (Some(stack), cfg!(feature = "net-backend-virtio"), None)
                     }
                     Err(err) => {
                         let (reason, err_code) = match err {
@@ -2812,7 +2812,9 @@ fn bootstrap<P: Platform>(
                         log::warn!("{} detail={err}", fail_line.as_str());
                         let virtio_present = cfg!(feature = "net-backend-virtio")
                             && !matches!(err, NetConsoleError::NoDevice);
-                        (None, virtio_present)
+                        let mut detail = heapless::String::<192>::new();
+                        let _ = write!(detail, "{err}");
+                        (None, virtio_present, Some(detail))
                     }
                 }
             }
@@ -2924,7 +2926,11 @@ fn bootstrap<P: Platform>(
             let _ = write!(listen, "[console] tcp listen :{CONSOLE_TCP_PORT}");
             console.writeln_prefixed(listen.as_str());
         } else {
-            log::warn!("[boot] net-console unavailable: {net_backend_label} did not initialise");
+            let detail = net_init_error
+                .as_ref()
+                .map(heapless::String::as_str)
+                .unwrap_or("net stack init failed");
+            log::warn!("[boot] net-console unavailable: net stack init failed ({detail})");
         }
         let caps_start = empty_start as u32;
         let caps_end = cs.next_candidate_slot();

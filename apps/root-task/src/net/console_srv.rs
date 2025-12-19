@@ -556,7 +556,7 @@ mod tests {
         let mut server = TcpConsoleServer::new(TOKEN, 10_000);
         server.begin_session(0, Some(2));
 
-        let payload = b"AUTH invalid\n";
+        let payload = b"AUTH wrongtok\n";
         let event = server.ingest(payload, 1);
 
         assert_eq!(event, SessionEvent::AuthFailed("invalid-token"));
