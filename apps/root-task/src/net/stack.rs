@@ -305,7 +305,6 @@ impl<'a> StorageGuard<'a> {
             let active_owner = owner.load(Ordering::Acquire);
             let active_tag = tag
                 .try_lock()
-                .ok()
                 .and_then(|guard| *guard)
                 .unwrap_or("(unknown)");
             warn!(
@@ -314,7 +313,7 @@ impl<'a> StorageGuard<'a> {
             Err(busy_error)
         } else {
             owner.store(owner_id, Ordering::Release);
-            if let Ok(mut tag_guard) = tag.try_lock() {
+            if let Some(mut tag_guard) = tag.try_lock() {
                 *tag_guard = Some(acquire_tag);
             }
             Ok(Self { flag, owner, tag })
@@ -325,9 +324,8 @@ impl<'a> StorageGuard<'a> {
 impl Drop for StorageGuard<'_> {
     fn drop(&mut self) {
         self.owner.store(0, Ordering::Release);
-        if let Ok(mut tag_guard) = self.tag.lock() {
-            *tag_guard = None;
-        }
+        let mut tag_guard = self.tag.lock();
+        *tag_guard = None;
         self.flag.store(false, Ordering::Release);
     }
 }
@@ -1106,7 +1104,7 @@ impl<D: NetDevice> NetStack<D> {
         gateway: Option<Ipv4Address>,
         console_config: ConsoleNetConfig,
         backend: NetBackend,
-        mut init_guard: NetStackInitGuard,
+        init_guard: NetStackInitGuard,
     ) -> Result<Self, NetStackError<D::Error>> {
         let netmask = prefix_to_netmask(prefix);
         let gateway_label = gateway.unwrap_or(Ipv4Address::UNSPECIFIED);
