@@ -1467,6 +1467,8 @@ fn bootstrap<P: Platform>(
                 "bootinfo snapshot overlaps bootinfo frame snapshot={region:?} bootinfo={bootinfo_range:?}"
             );
         }
+
+        probe_canary("[probe] after.snapshot.validation");
     }
 
     let bootinfo_snapshot = match bootinfo_snapshot_opt {
@@ -1475,6 +1477,12 @@ fn bootstrap<P: Platform>(
             let msg = String::from("bootinfo snapshot unavailable after fallback attempts");
             boot_log::force_uart_line(msg.as_str());
             return Err(BootError::Fatal(msg));
+        }
+    };
+
+    let mut probe_canary = |mark: &'static str| {
+        if let Some(state) = bootinfo_state {
+            let _ = state.probe(mark);
         }
     };
 
@@ -1579,6 +1587,7 @@ fn bootstrap<P: Platform>(
     );
     readiness::mark_cspace_window_ready();
     boot_guard.record_phase("CSpaceRecord");
+    probe_canary("[probe] after.CSpaceRecord");
     let (ipc_buffer_ptr, mut ipcbuf_mode) =
         install_init_ipc_buffer(bootinfo_ref, &mut reserved_vaddrs, &mut boot_guard).map_err(
             |err| {
@@ -1636,6 +1645,7 @@ fn bootstrap<P: Platform>(
     boot_guard.record_phase("IPCInstall");
     boot_guard.record_mark("[mark] ipc.install.ok");
     boot_log::force_uart_line("[mark] ipc.install.ok");
+    probe_canary("[probe] after.IPCInstall");
     debug_uart_str("[breadcrumb] after ipcbuf sanity ok\r\n");
     let mut state_line = HeaplessString::<256>::new();
     let _ = write!(
@@ -1968,6 +1978,7 @@ fn bootstrap<P: Platform>(
         preexisting = ep_report.preexisting as u8,
     );
     boot_log::force_uart_line(ep_status.as_str());
+    probe_canary("[probe] after.bootstrap_ep");
 
     if boot_ep_ok {
         let (empty_start, empty_end) = bootinfo_view.init_cnode_empty_range();
@@ -2225,6 +2236,7 @@ fn bootstrap<P: Platform>(
     let mut retyped_objects: u32 = 0;
 
     debug_uart_str("[breadcrumb] before UntypedPlan\r\n");
+    probe_canary("[probe] before.UntypedPlan");
     if let Err(err) = sequencer.advance(BootstrapPhase::UntypedPlan) {
         post_commit.flag_failure("phase.UntypedPlan", &err);
     } else {
@@ -2234,6 +2246,7 @@ fn bootstrap<P: Platform>(
     }
     let mut notification_selection =
         pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
+    probe_canary("[probe] after.UntypedPlan");
 
     if let Err(err) = sequencer.advance(BootstrapPhase::RetypeCommit) {
         post_commit.flag_failure("phase.RetypeCommit", &err);
@@ -2241,6 +2254,7 @@ fn bootstrap<P: Platform>(
         boot_guard.record_phase("RetypeCommit");
         check_bootinfo(&mut boot_guard, "[mark] phase.RetypeCommit");
     }
+    probe_canary("[probe] after.RetypeCommit");
     if let Err(err) = bootstrap_notification(&mut cs, &mut notification_selection) {
         let mut line = heapless::String::<160>::new();
         let err_code = err as i32;

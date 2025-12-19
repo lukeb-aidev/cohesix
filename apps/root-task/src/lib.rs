@@ -58,6 +58,9 @@ pub mod debug;
 /// UART-only debug helpers for scenarios where the logger path is unreliable.
 pub mod debug_uart;
 
+/// Shared bootinfo layout helpers used by snapshot verification logic.
+pub mod bootinfo_layout;
+
 #[cfg(feature = "kernel")]
 /// Capability operations and debug helpers built atop seL4 syscalls.
 pub mod caps;
