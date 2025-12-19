@@ -68,6 +68,14 @@ const UDP_ECHO_PORT: u16 = 31_338;
 const UDP_BEACON_PORT: u16 = 40_000;
 const TCP_SMOKE_PORT: u16 = 31_339;
 const TCP_SMOKE_OUT_LOCAL_PORT: u16 = 31_340;
+#[cfg(feature = "net-outbound-probe")]
+const TCP_PROBE_PORT: u16 = 31_338;
+#[cfg(feature = "net-outbound-probe")]
+const TCP_PROBE_BUFFER: usize = 128;
+#[cfg(feature = "net-outbound-probe")]
+const TCP_PROBE_RETRY_MS: u64 = 1_000;
+#[cfg(feature = "net-outbound-probe")]
+const TCP_PROBE_PAYLOAD: &[u8] = b"COHESIX-PING\n";
 const SELF_TEST_ENABLED: bool = cfg!(feature = "dev-virt") || cfg!(feature = "net-selftest");
 const SELF_TEST_BEACON_INTERVAL_MS: u64 = 250;
 const SELF_TEST_BEACON_WINDOW_MS: u64 = 5_000;
@@ -97,6 +105,8 @@ pub enum NetStackError<DE> {
     TcpSmokeTxStorageInUse,
     UdpBeaconStorageInUse,
     UdpEchoStorageInUse,
+    TcpProbeRxStorageInUse,
+    TcpProbeTxStorageInUse,
 }
 
 impl<DE: fmt::Display> fmt::Display for NetStackError<DE> {
@@ -110,6 +120,8 @@ impl<DE: fmt::Display> fmt::Display for NetStackError<DE> {
             Self::TcpSmokeTxStorageInUse => f.write_str("TCP smoke test TX storage already in use"),
             Self::UdpBeaconStorageInUse => f.write_str("UDP beacon storage already in use"),
             Self::UdpEchoStorageInUse => f.write_str("UDP echo storage already in use"),
+            Self::TcpProbeRxStorageInUse => f.write_str("TCP probe RX storage already in use"),
+            Self::TcpProbeTxStorageInUse => f.write_str("TCP probe TX storage already in use"),
         }
     }
 }
@@ -220,6 +232,14 @@ static TCP_SMOKE_OUT_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static mut TCP_SMOKE_OUT_RX_STORAGE: [u8; TCP_SMOKE_RX_BUFFER] = [0u8; TCP_SMOKE_RX_BUFFER];
 static TCP_SMOKE_OUT_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static mut TCP_SMOKE_OUT_TX_STORAGE: [u8; TCP_SMOKE_TX_BUFFER] = [0u8; TCP_SMOKE_TX_BUFFER];
+#[cfg(feature = "net-outbound-probe")]
+static TCP_PROBE_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "net-outbound-probe")]
+static mut TCP_PROBE_RX_STORAGE: [u8; TCP_PROBE_BUFFER] = [0u8; TCP_PROBE_BUFFER];
+#[cfg(feature = "net-outbound-probe")]
+static TCP_PROBE_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "net-outbound-probe")]
+static mut TCP_PROBE_TX_STORAGE: [u8; TCP_PROBE_BUFFER] = [0u8; TCP_PROBE_BUFFER];
 static UDP_BEACON_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static UDP_ECHO_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static mut UDP_BEACON_RX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
@@ -289,10 +309,16 @@ pub struct NetStack<D: NetDevice> {
     udp_echo_handle: Option<SocketHandle>,
     tcp_smoke_handle: Option<SocketHandle>,
     tcp_smoke_out_handle: Option<SocketHandle>,
+    #[cfg(feature = "net-outbound-probe")]
+    tcp_probe_handle: Option<SocketHandle>,
     counters: NetCounters,
     self_test: SelfTestState,
     tcp_smoke_outbound_sent: bool,
     tcp_smoke_last_attempt_ms: u64,
+    #[cfg(feature = "net-outbound-probe")]
+    probe_sent: bool,
+    #[cfg(feature = "net-outbound-probe")]
+    probe_last_attempt_ms: u64,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -776,6 +802,16 @@ impl<D: NetDevice> NetStack<D> {
         } else {
             None
         };
+        #[cfg(feature = "net-outbound-probe")]
+        let tcp_probe_rx_guard = StorageGuard::acquire(
+            &TCP_PROBE_RX_STORAGE_IN_USE,
+            NetStackError::TcpProbeRxStorageInUse,
+        )?;
+        #[cfg(feature = "net-outbound-probe")]
+        let tcp_probe_tx_guard = StorageGuard::acquire(
+            &TCP_PROBE_TX_STORAGE_IN_USE,
+            NetStackError::TcpProbeTxStorageInUse,
+        )?;
 
         let init_now_ms = crate::hal::timebase().now_ms();
         debug!("[net-console] init: timebase.now_ms={init_now_ms}");
@@ -840,13 +876,21 @@ impl<D: NetDevice> NetStack<D> {
             udp_echo_handle: None,
             tcp_smoke_handle: None,
             tcp_smoke_out_handle: None,
+            #[cfg(feature = "net-outbound-probe")]
+            tcp_probe_handle: None,
             counters: NetCounters::default(),
             self_test: SelfTestState::new(SELF_TEST_ENABLED),
             tcp_smoke_outbound_sent: false,
             tcp_smoke_last_attempt_ms: 0,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_sent: false,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_last_attempt_ms: 0,
         };
         stack.initialise_socket();
         stack.initialise_self_test_sockets();
+        #[cfg(feature = "net-outbound-probe")]
+        stack.initialise_probe_socket();
         socket_guard.disarm();
         rx_guard.disarm();
         tx_guard.disarm();
@@ -867,6 +911,11 @@ impl<D: NetDevice> NetStack<D> {
         }
         if let Some(guard) = udp_echo_guard {
             guard.disarm();
+        }
+        #[cfg(feature = "net-outbound-probe")]
+        {
+            tcp_probe_rx_guard.disarm();
+            tcp_probe_tx_guard.disarm();
         }
         info!(
             target: "net-console",
@@ -979,6 +1028,16 @@ impl<D: NetDevice> NetStack<D> {
         }
     }
 
+    #[cfg(feature = "net-outbound-probe")]
+    fn initialise_probe_socket(&mut self) {
+        unsafe {
+            let rx_buffer = TcpSocketBuffer::new(&mut TCP_PROBE_RX_STORAGE[..]);
+            let tx_buffer = TcpSocketBuffer::new(&mut TCP_PROBE_TX_STORAGE[..]);
+            let tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
+            self.tcp_probe_handle = Some(self.sockets.add(tcp_socket));
+        }
+    }
+
     /// Polls the network stack using a host-supplied monotonic timestamp in milliseconds.
     pub fn poll_with_time(&mut self, now_ms: u64) -> bool {
         if !self.service_logged {
@@ -1027,6 +1086,11 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         if self.service_self_test(now_ms, timestamp) {
+            activity = true;
+        }
+
+        #[cfg(feature = "net-outbound-probe")]
+        if self.service_outbound_probe(now_ms, timestamp) {
             activity = true;
         }
 
@@ -1101,6 +1165,101 @@ impl<D: NetDevice> NetStack<D> {
 
         if let Some(result) = self.self_test.conclude_if_needed(now_ms) {
             self.log_self_test_result(result);
+        }
+
+        activity
+    }
+
+    #[cfg(feature = "net-outbound-probe")]
+    fn service_outbound_probe(&mut self, now_ms: u64, timestamp: Instant) -> bool {
+        let Some(handle) = self.tcp_probe_handle else {
+            return false;
+        };
+        let socket = self.sockets.get_mut::<TcpSocket>(handle);
+        let dest = IpEndpoint::new(Ipv4Address::from(DEV_VIRT_GATEWAY).into(), TCP_PROBE_PORT);
+        let mut activity = false;
+
+        if self.probe_sent {
+            if socket.state() != TcpState::Closed {
+                socket.close();
+                activity = true;
+            }
+            return activity;
+        }
+
+        if matches!(socket.state(), TcpState::Closed) {
+            if self.probe_last_attempt_ms != 0
+                && now_ms.saturating_sub(self.probe_last_attempt_ms) < TCP_PROBE_RETRY_MS
+            {
+                return false;
+            }
+            self.probe_last_attempt_ms = now_ms;
+            let local_endpoint = IpListenEndpoint {
+                addr: Some(self.ip.into()),
+                port: 0,
+            };
+            let cx = self.interface.context();
+            match socket.connect(cx, dest, local_endpoint) {
+                Ok(()) => {
+                    log::info!(
+                        target: "net-probe",
+                        "[net-probe] outbound connect dest={}:{} now_ms={}",
+                        dest.addr,
+                        dest.port,
+                        now_ms
+                    );
+                    activity = true;
+                }
+                Err(err) => {
+                    log::warn!(
+                        target: "net-probe",
+                        "[net-probe] connect failed dest={}:{} err={:?}",
+                        dest.addr,
+                        dest.port,
+                        err
+                    );
+                }
+            }
+            return activity;
+        }
+
+        if socket.state() == TcpState::Established && socket.can_send() {
+            match socket.send_slice(TCP_PROBE_PAYLOAD) {
+                Ok(sent) => {
+                    log::info!(
+                        target: "net-probe",
+                        "[net-probe] sent payload bytes={} dest={}:{}", sent, dest.addr, dest.port
+                    );
+                    self.probe_sent = true;
+                    socket.close();
+                    activity = true;
+                }
+                Err(err) => {
+                    log::warn!(
+                        target: "net-probe",
+                        "[net-probe] send failed err={:?}",
+                        err
+                    );
+                    socket.close();
+                }
+            }
+
+            self.bump_poll_counter();
+            let poll_result = self
+                .interface
+                .poll(timestamp, &mut self.device, &mut self.sockets);
+            if poll_result != PollResult::None {
+                activity = true;
+            }
+            return activity;
+        }
+
+        if matches!(
+            socket.state(),
+            TcpState::CloseWait | TcpState::TimeWait | TcpState::LastAck
+        ) {
+            socket.close();
+            activity = true;
         }
 
         activity
@@ -2186,6 +2345,11 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.telemetry = NetTelemetry::default();
         self.tcp_smoke_outbound_sent = false;
         self.tcp_smoke_last_attempt_ms = 0;
+        #[cfg(feature = "net-outbound-probe")]
+        {
+            self.probe_sent = false;
+            self.probe_last_attempt_ms = 0;
+        }
     }
 
     fn start_self_test(&mut self, now_ms: u64) -> bool {
@@ -2248,6 +2412,10 @@ impl<D: NetDevice> Drop for NetStack<D> {
         TCP_SMOKE_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
         TCP_SMOKE_OUT_RX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
         TCP_SMOKE_OUT_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
+        #[cfg(feature = "net-outbound-probe")]
+        TCP_PROBE_RX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
+        #[cfg(feature = "net-outbound-probe")]
+        TCP_PROBE_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
         UDP_BEACON_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
         UDP_ECHO_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
     }
