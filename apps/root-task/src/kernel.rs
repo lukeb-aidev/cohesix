@@ -150,7 +150,7 @@ fn install_init_ipc_buffer(
     }
 
     let ipc_page_base = align_down(addr, IPC_PAGE_BYTES);
-    reserved_vaddrs.reserve(ipc_page_base..ipc_page_base + IPC_PAGE_BYTES, "ipc-buffer");
+    reserved_vaddrs.reserve(&(ipc_page_base..ipc_page_base + IPC_PAGE_BYTES), "ipc-buffer");
 
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
@@ -1300,9 +1300,9 @@ fn bootstrap<P: Platform>(
     let bootinfo_range = bootinfo_page_base..bootinfo_range_end;
     let bootinfo_pages = (bootinfo_range_end - bootinfo_page_base) / IPC_PAGE_BYTES;
     let mut reserved_vaddrs = ReservedVaddrRanges::new();
-    reserved_vaddrs.reserve(heap_range.clone(), "heap");
-    reserved_vaddrs.reserve(stack_range.clone(), "stack");
-    reserved_vaddrs.reserve(bootinfo_range, "bootinfo-frame");
+    reserved_vaddrs.reserve(&heap_range, "heap");
+    reserved_vaddrs.reserve(&stack_range, "stack");
+    reserved_vaddrs.reserve(&bootinfo_range, "bootinfo-frame");
 
     let mut reserved_line = heapless::String::<192>::new();
     let _ = write!(

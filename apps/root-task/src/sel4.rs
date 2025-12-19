@@ -1619,16 +1619,16 @@ impl ReservedVaddrRanges {
         Self { ranges: Vec::new() }
     }
 
-    pub fn reserve(&mut self, range: core::ops::Range<usize>, label: &'static str) {
-        self.assert_valid(&range, label);
-        self.assert_free(range.clone(), label);
+    pub fn reserve(&mut self, range: &core::ops::Range<usize>, label: &'static str) {
+        self.assert_valid(range, label);
+        self.assert_free(range, label);
         self.ranges
-            .push(range)
+            .push(range.clone())
             .expect("reserved vaddr range capacity exceeded");
     }
 
-    pub fn assert_free(&self, range: core::ops::Range<usize>, label: &str) {
-        if let Some(conflict) = self.first_overlap(&range) {
+    pub fn assert_free(&self, range: &core::ops::Range<usize>, label: &str) {
+        if let Some(conflict) = self.first_overlap(range) {
             panic!(
                 "mapping {label} range [0x{start:016x}..0x{end:016x}) overlaps reserved [0x{conflict_start:016x}..0x{conflict_end:016x})",
                 start = range.start,
@@ -2642,7 +2642,7 @@ impl<'a> KernelEnv<'a> {
         self.untyped.record_usage(index, used_bytes);
     }
 
-    pub fn reserve_vaddr_range(&mut self, range: core::ops::Range<usize>, label: &'static str) {
+    pub fn reserve_vaddr_range(&mut self, range: &core::ops::Range<usize>, label: &'static str) {
         self.reserved.reserve(range, label);
     }
 
