@@ -15,8 +15,8 @@ use core::fmt;
 
 use crate::platform::Platform;
 
-#[cfg(feature = "kernel")]
-use crate::sel4::{self, BootInfoExt};
+#[cfg(feature = "canonical_cspace")]
+use crate::sel4;
 
 use heapless::String;
 
