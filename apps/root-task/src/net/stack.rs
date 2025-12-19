@@ -70,7 +70,6 @@ const UDP_ECHO_PORT: u16 = 31_338;
 const UDP_BEACON_PORT: u16 = 40_000;
 const TCP_SMOKE_PORT: u16 = 31_339;
 const TCP_SMOKE_OUT_LOCAL_PORT: u16 = 31_340;
-const HOST_FORWARD_ENV: &str = "COHESIX_NET_HOSTFWD";
 #[cfg(feature = "net-outbound-probe")]
 const TCP_PROBE_PORT: u16 = 31_338;
 #[cfg(feature = "net-outbound-probe")]
@@ -1340,6 +1339,22 @@ impl<D: NetDevice> NetStack<D> {
             if let Some(endpoint) = endpoint {
                 *peer_endpoint = Some((endpoint.addr, endpoint.port));
             }
+        }
+    }
+
+    fn host_forward_override(&self) -> Option<&'static str> {
+        option_env!("COHESIX_NET_HOSTFWD")
+    }
+
+    fn selftest_host_target(&self, port: u16) -> HostCommandTarget {
+        let forward = self.host_forward_override();
+        let direct = render_host_selftest_target(None, port, self.ip);
+        let primary = render_host_selftest_target(forward, port, self.ip);
+
+        HostCommandTarget {
+            primary,
+            direct,
+            forwarded_hint: forward.is_some(),
         }
     }
 
@@ -3146,22 +3161,6 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         {
             self.probe_sent = false;
             self.probe_last_attempt_ms = 0;
-        }
-    }
-
-    fn host_forward_override(&self) -> Option<&'static str> {
-        option_env!(HOST_FORWARD_ENV)
-    }
-
-    fn selftest_host_target(&self, port: u16) -> HostCommandTarget {
-        let forward = self.host_forward_override();
-        let direct = render_host_selftest_target(None, port, self.ip);
-        let primary = render_host_selftest_target(forward, port, self.ip);
-
-        HostCommandTarget {
-            primary,
-            direct,
-            forwarded_hint: forward.is_some(),
         }
     }
 
