@@ -288,45 +288,90 @@ impl Drop for NetStackInitGuard {
 struct StorageGuard<'a> {
     flag: &'a AtomicBool,
     owner: &'a AtomicU64,
-    tag: &'a Mutex<Option<&'static str>>,
+    tag_id: &'a AtomicU32,
+    tag_label: &'a Mutex<Option<&'static str>>,
 }
 
 impl<'a> StorageGuard<'a> {
+    fn compute_tag_id(tag: &'static str) -> u32 {
+        const OFFSET: u32 = 0x811c_9dc5;
+        const PRIME: u32 = 0x0100_0193;
+        let mut hash = OFFSET;
+        for byte in tag.as_bytes() {
+            hash ^= u32::from(*byte);
+            hash = hash.wrapping_mul(PRIME);
+        }
+        // Avoid reserving the sentinel zero value for missing tags.
+        hash.max(1)
+    }
+
     fn acquire<DE>(
         flag: &'a AtomicBool,
         owner: &'a AtomicU64,
-        tag: &'a Mutex<Option<&'static str>>,
+        tag_id: &'a AtomicU32,
+        tag_label: &'a Mutex<Option<&'static str>>,
         label: &'static str,
         acquire_tag: &'static str,
         owner_id: u64,
         busy_error: NetStackError<DE>,
     ) -> Result<Self, NetStackError<DE>> {
-        if flag.swap(true, Ordering::AcqRel) {
-            let active_owner = owner.load(Ordering::Acquire);
-            let active_tag = tag
-                .try_lock()
-                .and_then(|guard| *guard)
-                .unwrap_or("(unknown)");
+        let active_in_use = flag.load(Ordering::Acquire);
+        let active_owner = owner.load(Ordering::Acquire);
+        let active_tag_id = tag_id.load(Ordering::Acquire);
+        let active_tag_label = tag_label
+            .try_lock()
+            .and_then(|guard| *guard)
+            .unwrap_or("(unknown)");
+        if active_in_use {
+            let missing_metadata = active_owner == 0;
             warn!(
-                "[net-storage] guard={label} busy attempt_owner=0x{owner_id:016x} active_owner=0x{active_owner:016x} active_tag={active_tag}",
+                "[net-storage] guard={label} busy attempt_owner=0x{owner_id:016x} in_use={active_in_use} active_owner=0x{active_owner:016x} active_tag=0x{active_tag_id:08x} active_tag_label={active_tag_label} missing_metadata={missing_metadata}",
             );
-            Err(busy_error)
-        } else {
-            owner.store(owner_id, Ordering::Release);
-            if let Some(mut tag_guard) = tag.try_lock() {
-                *tag_guard = Some(acquire_tag);
+            debug_assert!(
+                !missing_metadata,
+                "storage guard {label} flagged busy without metadata"
+            );
+            return Err(busy_error);
+        }
+
+        match owner.compare_exchange(0, owner_id, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => {
+                let tag_value = Self::compute_tag_id(acquire_tag);
+                tag_id.store(tag_value, Ordering::Release);
+                if let Some(mut tag_guard) = tag_label.try_lock() {
+                    *tag_guard = Some(acquire_tag);
+                }
+                flag.store(true, Ordering::Release);
+                Ok(Self {
+                    flag,
+                    owner,
+                    tag_id,
+                    tag_label,
+                })
             }
-            Ok(Self { flag, owner, tag })
+            Err(active_owner) => {
+                let missing_metadata = active_in_use && active_owner == 0;
+                warn!(
+                    "[net-storage] guard={label} busy attempt_owner=0x{owner_id:016x} in_use={active_in_use} active_owner=0x{active_owner:016x} active_tag=0x{active_tag_id:08x} active_tag_label={active_tag_label} missing_metadata={missing_metadata}",
+                );
+                debug_assert!(
+                    !missing_metadata,
+                    "storage guard {label} owner contention without metadata"
+                );
+                Err(busy_error)
+            }
         }
     }
 }
 
 impl Drop for StorageGuard<'_> {
     fn drop(&mut self) {
-        self.owner.store(0, Ordering::Release);
-        let mut tag_guard = self.tag.lock();
-        *tag_guard = None;
         self.flag.store(false, Ordering::Release);
+        self.tag_id.store(0, Ordering::Release);
+        if let Some(mut tag_guard) = self.tag_label.try_lock() {
+            *tag_guard = None;
+        }
+        self.owner.store(0, Ordering::Release);
     }
 }
 
@@ -355,7 +400,8 @@ impl StorageReservation {
         let socket = StorageGuard::acquire(
             &SOCKET_STORAGE_IN_USE,
             &SOCKET_STORAGE_OWNER,
-            &SOCKET_STORAGE_TAG,
+            &SOCKET_STORAGE_TAG_ID,
+            &SOCKET_STORAGE_TAG_LABEL,
             "socket",
             tag,
             owner.owner_id(),
@@ -364,7 +410,8 @@ impl StorageReservation {
         let tcp_rx = StorageGuard::acquire(
             &TCP_RX_STORAGE_IN_USE,
             &TCP_RX_STORAGE_OWNER,
-            &TCP_RX_STORAGE_TAG,
+            &TCP_RX_STORAGE_TAG_ID,
+            &TCP_RX_STORAGE_TAG_LABEL,
             "tcp-rx",
             tag,
             owner.owner_id(),
@@ -373,7 +420,8 @@ impl StorageReservation {
         let tcp_tx = StorageGuard::acquire(
             &TCP_TX_STORAGE_IN_USE,
             &TCP_TX_STORAGE_OWNER,
-            &TCP_TX_STORAGE_TAG,
+            &TCP_TX_STORAGE_TAG_ID,
+            &TCP_TX_STORAGE_TAG_LABEL,
             "tcp-tx",
             tag,
             owner.owner_id(),
@@ -383,7 +431,8 @@ impl StorageReservation {
             Some(StorageGuard::acquire(
                 &TCP_SMOKE_RX_STORAGE_IN_USE,
                 &TCP_SMOKE_RX_STORAGE_OWNER,
-                &TCP_SMOKE_RX_STORAGE_TAG,
+                &TCP_SMOKE_RX_STORAGE_TAG_ID,
+                &TCP_SMOKE_RX_STORAGE_TAG_LABEL,
                 "tcp-smoke-rx",
                 tag,
                 owner.owner_id(),
@@ -396,7 +445,8 @@ impl StorageReservation {
             Some(StorageGuard::acquire(
                 &TCP_SMOKE_TX_STORAGE_IN_USE,
                 &TCP_SMOKE_TX_STORAGE_OWNER,
-                &TCP_SMOKE_TX_STORAGE_TAG,
+                &TCP_SMOKE_TX_STORAGE_TAG_ID,
+                &TCP_SMOKE_TX_STORAGE_TAG_LABEL,
                 "tcp-smoke-tx",
                 tag,
                 owner.owner_id(),
@@ -409,7 +459,8 @@ impl StorageReservation {
             Some(StorageGuard::acquire(
                 &TCP_SMOKE_OUT_RX_STORAGE_IN_USE,
                 &TCP_SMOKE_OUT_RX_STORAGE_OWNER,
-                &TCP_SMOKE_OUT_RX_STORAGE_TAG,
+                &TCP_SMOKE_OUT_RX_STORAGE_TAG_ID,
+                &TCP_SMOKE_OUT_RX_STORAGE_TAG_LABEL,
                 "tcp-smoke-out-rx",
                 tag,
                 owner.owner_id(),
@@ -422,7 +473,8 @@ impl StorageReservation {
             Some(StorageGuard::acquire(
                 &TCP_SMOKE_OUT_TX_STORAGE_IN_USE,
                 &TCP_SMOKE_OUT_TX_STORAGE_OWNER,
-                &TCP_SMOKE_OUT_TX_STORAGE_TAG,
+                &TCP_SMOKE_OUT_TX_STORAGE_TAG_ID,
+                &TCP_SMOKE_OUT_TX_STORAGE_TAG_LABEL,
                 "tcp-smoke-out-tx",
                 tag,
                 owner.owner_id(),
@@ -435,7 +487,8 @@ impl StorageReservation {
             Some(StorageGuard::acquire(
                 &UDP_BEACON_STORAGE_IN_USE,
                 &UDP_BEACON_STORAGE_OWNER,
-                &UDP_BEACON_STORAGE_TAG,
+                &UDP_BEACON_STORAGE_TAG_ID,
+                &UDP_BEACON_STORAGE_TAG_LABEL,
                 "udp-beacon",
                 tag,
                 owner.owner_id(),
@@ -448,7 +501,8 @@ impl StorageReservation {
             Some(StorageGuard::acquire(
                 &UDP_ECHO_STORAGE_IN_USE,
                 &UDP_ECHO_STORAGE_OWNER,
-                &UDP_ECHO_STORAGE_TAG,
+                &UDP_ECHO_STORAGE_TAG_ID,
+                &UDP_ECHO_STORAGE_TAG_LABEL,
                 "udp-echo",
                 tag,
                 owner.owner_id(),
@@ -461,7 +515,8 @@ impl StorageReservation {
         let tcp_probe_rx = StorageGuard::acquire(
             &TCP_PROBE_RX_STORAGE_IN_USE,
             &TCP_PROBE_RX_STORAGE_OWNER,
-            &TCP_PROBE_RX_STORAGE_TAG,
+            &TCP_PROBE_RX_STORAGE_TAG_ID,
+            &TCP_PROBE_RX_STORAGE_TAG_LABEL,
             "tcp-probe-rx",
             tag,
             owner.owner_id(),
@@ -471,7 +526,8 @@ impl StorageReservation {
         let tcp_probe_tx = StorageGuard::acquire(
             &TCP_PROBE_TX_STORAGE_IN_USE,
             &TCP_PROBE_TX_STORAGE_OWNER,
-            &TCP_PROBE_TX_STORAGE_TAG,
+            &TCP_PROBE_TX_STORAGE_TAG_ID,
+            &TCP_PROBE_TX_STORAGE_TAG_LABEL,
             "tcp-probe-tx",
             tag,
             owner.owner_id(),
@@ -550,39 +606,48 @@ struct SessionState {
 
 static SOCKET_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static SOCKET_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
-static SOCKET_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
+static SOCKET_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+static SOCKET_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut SOCKET_STORAGE: [SocketStorage<'static>; SOCKET_CAPACITY] =
     [SocketStorage::EMPTY; SOCKET_CAPACITY];
 static TCP_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static TCP_RX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
-static TCP_RX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
+static TCP_RX_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+static TCP_RX_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut TCP_RX_STORAGE: [u8; TCP_RX_BUFFER] = [0u8; TCP_RX_BUFFER];
 static TCP_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static TCP_TX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
-static TCP_TX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
+static TCP_TX_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+static TCP_TX_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut TCP_TX_STORAGE: [u8; TCP_TX_BUFFER] = [0u8; TCP_TX_BUFFER];
 static TCP_SMOKE_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static TCP_SMOKE_RX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
-static TCP_SMOKE_RX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
+static TCP_SMOKE_RX_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+static TCP_SMOKE_RX_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut TCP_SMOKE_RX_STORAGE: [u8; TCP_SMOKE_RX_BUFFER] = [0u8; TCP_SMOKE_RX_BUFFER];
 static TCP_SMOKE_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static TCP_SMOKE_TX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
-static TCP_SMOKE_TX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
+static TCP_SMOKE_TX_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+static TCP_SMOKE_TX_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut TCP_SMOKE_TX_STORAGE: [u8; TCP_SMOKE_TX_BUFFER] = [0u8; TCP_SMOKE_TX_BUFFER];
 static TCP_SMOKE_OUT_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static TCP_SMOKE_OUT_RX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
-static TCP_SMOKE_OUT_RX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
+static TCP_SMOKE_OUT_RX_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+static TCP_SMOKE_OUT_RX_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut TCP_SMOKE_OUT_RX_STORAGE: [u8; TCP_SMOKE_RX_BUFFER] = [0u8; TCP_SMOKE_RX_BUFFER];
 static TCP_SMOKE_OUT_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static TCP_SMOKE_OUT_TX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
-static TCP_SMOKE_OUT_TX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
+static TCP_SMOKE_OUT_TX_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+static TCP_SMOKE_OUT_TX_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut TCP_SMOKE_OUT_TX_STORAGE: [u8; TCP_SMOKE_TX_BUFFER] = [0u8; TCP_SMOKE_TX_BUFFER];
 #[cfg(feature = "net-outbound-probe")]
 static TCP_PROBE_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "net-outbound-probe")]
 static TCP_PROBE_RX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
 #[cfg(feature = "net-outbound-probe")]
-static TCP_PROBE_RX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
+static TCP_PROBE_RX_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "net-outbound-probe")]
+static TCP_PROBE_RX_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 #[cfg(feature = "net-outbound-probe")]
 static mut TCP_PROBE_RX_STORAGE: [u8; TCP_PROBE_BUFFER] = [0u8; TCP_PROBE_BUFFER];
 #[cfg(feature = "net-outbound-probe")]
@@ -590,15 +655,19 @@ static TCP_PROBE_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "net-outbound-probe")]
 static TCP_PROBE_TX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
 #[cfg(feature = "net-outbound-probe")]
-static TCP_PROBE_TX_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
+static TCP_PROBE_TX_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "net-outbound-probe")]
+static TCP_PROBE_TX_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 #[cfg(feature = "net-outbound-probe")]
 static mut TCP_PROBE_TX_STORAGE: [u8; TCP_PROBE_BUFFER] = [0u8; TCP_PROBE_BUFFER];
 static UDP_BEACON_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static UDP_BEACON_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
-static UDP_BEACON_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
+static UDP_BEACON_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+static UDP_BEACON_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 static UDP_ECHO_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static UDP_ECHO_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
-static UDP_ECHO_STORAGE_TAG: Mutex<Option<&'static str>> = Mutex::new(None);
+static UDP_ECHO_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+static UDP_ECHO_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut UDP_BEACON_RX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
     [UdpPacketMetadata::EMPTY; UDP_METADATA_CAPACITY];
 static mut UDP_BEACON_TX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
@@ -785,6 +854,24 @@ fn prefix_to_netmask(prefix_len: u8) -> Ipv4Address {
     Ipv4Address::from_bits(mask)
 }
 
+#[cfg(debug_assertions)]
+fn debug_validate_socket_storage(marker: &'static str) {
+    let in_use = SOCKET_STORAGE_IN_USE.load(Ordering::Acquire);
+    if in_use {
+        let owner = SOCKET_STORAGE_OWNER.load(Ordering::Acquire);
+        if owner == 0 {
+            warn!(
+                "[net-storage] poisoned socket flag observed at {marker} in_use={in_use} owner=0x{owner:016x} tag=0x{tag:08x}",
+                tag = SOCKET_STORAGE_TAG_ID.load(Ordering::Acquire)
+            );
+            debug_assert_ne!(owner, 0, "socket storage poisoned at {marker}");
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn debug_validate_socket_storage(_: &'static str) {}
+
 /// Initialise the network console stack, translating low-level errors into
 /// user-facing diagnostics.
 pub fn init_net_console<H>(
@@ -805,6 +892,8 @@ where
             "listen_port/ip must be configured",
         ));
     }
+
+    debug_validate_socket_storage(concat!(file!(), ":", line!()));
 
     let gateway_label = config
         .address
@@ -2744,18 +2833,25 @@ mod tests {
 
     use super::*;
 
+    fn reset_socket_and_tcp_rx_state() {
+        SOCKET_STORAGE_IN_USE.store(false, Ordering::Release);
+        SOCKET_STORAGE_OWNER.store(0, Ordering::Release);
+        SOCKET_STORAGE_TAG_ID.store(0, Ordering::Release);
+        if let Ok(mut tag) = SOCKET_STORAGE_TAG_LABEL.lock() {
+            *tag = None;
+        }
+
+        TCP_RX_STORAGE_IN_USE.store(false, Ordering::Release);
+        TCP_RX_STORAGE_OWNER.store(0, Ordering::Release);
+        TCP_RX_STORAGE_TAG_ID.store(0, Ordering::Release);
+        if let Ok(mut tag) = TCP_RX_STORAGE_TAG_LABEL.lock() {
+            *tag = None;
+        }
+    }
+
     #[test]
     fn reservation_releases_on_error() {
-        SOCKET_STORAGE_IN_USE.store(false, Ordering::Release);
-        TCP_RX_STORAGE_IN_USE.store(false, Ordering::Release);
-        SOCKET_STORAGE_OWNER.store(0, Ordering::Release);
-        TCP_RX_STORAGE_OWNER.store(0, Ordering::Release);
-        if let Ok(mut tag) = SOCKET_STORAGE_TAG.lock() {
-            *tag = None;
-        }
-        if let Ok(mut tag) = TCP_RX_STORAGE_TAG.lock() {
-            *tag = None;
-        }
+        reset_socket_and_tcp_rx_state();
 
         TCP_RX_STORAGE_IN_USE.store(true, Ordering::Release);
         let attempt = NetInitAttempt::new("test.reservation");
@@ -2766,5 +2862,42 @@ mod tests {
         assert!(TCP_RX_STORAGE_IN_USE.load(Ordering::Acquire));
 
         TCP_RX_STORAGE_IN_USE.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn reservation_sets_metadata_before_flagging_in_use() {
+        reset_socket_and_tcp_rx_state();
+
+        let attempt = NetInitAttempt::new("test.acquisition");
+        let reservation =
+            StorageReservation::acquire::<Infallible>(false, &attempt, "test.acquisition")
+                .expect("reservation should succeed");
+
+        assert!(SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert_ne!(SOCKET_STORAGE_OWNER.load(Ordering::Acquire), 0);
+        assert_ne!(SOCKET_STORAGE_TAG_ID.load(Ordering::Acquire), 0);
+
+        drop(reservation);
+
+        assert!(!SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert_eq!(SOCKET_STORAGE_OWNER.load(Ordering::Acquire), 0);
+        assert_eq!(SOCKET_STORAGE_TAG_ID.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn poisoned_flag_is_reported_as_busy() {
+        reset_socket_and_tcp_rx_state();
+
+        SOCKET_STORAGE_IN_USE.store(true, Ordering::Release);
+        SOCKET_STORAGE_OWNER.store(0, Ordering::Release);
+        SOCKET_STORAGE_TAG_ID.store(0, Ordering::Release);
+
+        let attempt = NetInitAttempt::new("test.poisoned");
+        let result = StorageReservation::acquire::<Infallible>(false, &attempt, "test.poisoned");
+
+        assert!(matches!(result, Err(NetStackError::SocketStorageInUse)));
+        assert!(SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert_eq!(SOCKET_STORAGE_OWNER.load(Ordering::Acquire), 0);
+        assert_eq!(SOCKET_STORAGE_TAG_ID.load(Ordering::Acquire), 0);
     }
 }
