@@ -9,7 +9,7 @@
 
 use core::fmt::{self, Write as FmtWrite};
 use core::ptr::{read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use core::sync::atomic::{fence, AtomicBool, Ordering as AtomicOrdering};
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, warn};
@@ -39,6 +39,7 @@ const STATUS_DRIVER_OK: u32 = 1 << 2;
 const STATUS_FEATURES_OK: u32 = 1 << 3;
 const STATUS_FAILED: u32 = 1 << 7;
 
+const VIRTQ_DESC_F_NEXT: u16 = 1 << 0;
 const VIRTQ_DESC_F_WRITE: u16 = 1 << 1;
 
 const VIRTIO_NET_F_MAC: u32 = 1 << 5;
@@ -230,6 +231,11 @@ impl VirtioNet {
             rx_size,
             tx_size,
         );
+        info!(
+            target: "net-console",
+            "[net-console] virtio-net header size={} (virtio-net hdr provided for legacy and modern devices)",
+            VIRTIO_NET_HEADER_LEN
+        );
         regs.set_guest_features(negotiated_features);
         info!(
             target: "net-console",
@@ -305,7 +311,27 @@ impl VirtioNet {
             })?;
 
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
-        for _ in 0..rx_size {
+        let rx_chain_count = rx_size / 2;
+        if rx_chain_count == 0 {
+            regs.set_status(STATUS_FAILED);
+            error!(
+                target: "net-console",
+                "[virtio-net] RX queue size too small for header+payload descriptors: queue_size={}",
+                rx_size
+            );
+            return Err(DriverError::NoQueue);
+        }
+
+        if rx_size % 2 != 0 {
+            warn!(
+                target: "net-console",
+                "[virtio-net] RX queue size {} is odd; only {} descriptor pairs will be posted",
+                rx_size,
+                rx_chain_count
+            );
+        }
+
+        for _ in 0..rx_chain_count {
             let frame = hal.alloc_dma_frame().map_err(|err| {
                 regs.set_status(STATUS_FAILED);
                 DriverError::from(err)
@@ -431,15 +457,59 @@ impl VirtioNet {
     }
 
     fn initialise_queues(&mut self) {
-        for (index, buffer) in self.rx_buffers.iter().enumerate() {
-            let idx = index as u16;
+        let header_len = VIRTIO_NET_HEADER_LEN as u32;
+        let payload_len = core::cmp::min(
+            MAX_FRAME_LEN,
+            FRAME_BUFFER_LEN.saturating_sub(VIRTIO_NET_HEADER_LEN),
+        ) as u32;
+
+        for (slot, buffer) in self.rx_buffers.iter().enumerate() {
+            let head_idx = (slot as u16).saturating_mul(2);
+            let payload_idx = head_idx + 1;
+            let base_paddr = buffer.paddr();
+            let payload_paddr = base_paddr + VIRTIO_NET_HEADER_LEN;
             self.rx_queue.setup_descriptor(
-                idx,
-                buffer.paddr() as u64,
-                FRAME_BUFFER_LEN as u32,
+                head_idx,
+                base_paddr as u64,
+                header_len,
                 VIRTQ_DESC_F_WRITE,
+                Some(payload_idx),
             );
-            self.rx_queue.push_avail(idx);
+            self.rx_queue.setup_descriptor(
+                payload_idx,
+                payload_paddr as u64,
+                payload_len,
+                VIRTQ_DESC_F_WRITE,
+                None,
+            );
+            self.rx_queue.push_avail(head_idx);
+
+            if slot < 2 {
+                let head_desc = self.rx_queue.read_descriptor(head_idx);
+                let payload_desc = self.rx_queue.read_descriptor(payload_idx);
+                info!(
+                    target: "net-console",
+                    "[virtio-net] rx[{slot}] head_desc={} addr=0x{head_addr:016x} len={} flags=0x{head_flags:04x} next={} header_len={} payload_len={}",
+                    head_idx,
+                    head_addr = head_desc.addr,
+                    head_desc.len,
+                    head_flags = head_desc.flags,
+                    head_desc.next,
+                    header_len,
+                    payload_len,
+                );
+                info!(
+                    target: "net-console",
+                    "[virtio-net] rx[{slot}] payload_desc={} addr=0x{payload_addr:016x} len={} flags=0x{payload_flags:04x} next={} header_len={} payload_len={}",
+                    payload_idx,
+                    payload_addr = payload_desc.addr,
+                    payload_desc.len,
+                    payload_flags = payload_desc.flags,
+                    payload_desc.next,
+                    header_len,
+                    payload_len,
+                );
+            }
         }
         let (used_idx, avail_idx) = self.rx_queue.indices();
         let first_paddr = self.rx_buffers.first().map(|buf| buf.paddr()).unwrap_or(0);
@@ -467,6 +537,12 @@ impl VirtioNet {
                 "RX avail_idx should equal posted buffer count"
             );
         }
+        debug!(
+            target: "net-console",
+            "[virtio-net] rx kick notify={} avail.idx={}",
+            RX_QUEUE_INDEX,
+            avail_idx
+        );
         self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
         info!(
             "[virtio-net] RX queue armed: size={} buffers={} last_used={}",
@@ -532,14 +608,33 @@ impl VirtioNet {
     }
 
     fn requeue_rx(&mut self, id: u16) {
-        if let Some(buffer) = self.rx_buffers.get_mut(id as usize) {
-            self.rx_queue.setup_descriptor(
-                id,
-                buffer.paddr() as u64,
-                FRAME_BUFFER_LEN as u32,
-                VIRTQ_DESC_F_WRITE,
+        let slot = (id / 2) as usize;
+        let header_len = VIRTIO_NET_HEADER_LEN as u32;
+        if let Some(buffer) = self.rx_buffers.get_mut(slot) {
+            let head_idx = (slot as u16).saturating_mul(2);
+            let payload_idx = head_idx + 1;
+            let payload_len = core::cmp::min(
+                MAX_FRAME_LEN as u32,
+                buffer
+                    .as_mut_slice()
+                    .len()
+                    .saturating_sub(VIRTIO_NET_HEADER_LEN) as u32,
             );
-            self.rx_queue.push_avail(id);
+            self.rx_queue.setup_descriptor(
+                head_idx,
+                buffer.paddr() as u64,
+                header_len,
+                VIRTQ_DESC_F_WRITE,
+                Some(payload_idx),
+            );
+            self.rx_queue.setup_descriptor(
+                payload_idx,
+                (buffer.paddr() + VIRTIO_NET_HEADER_LEN) as u64,
+                payload_len,
+                VIRTQ_DESC_F_WRITE,
+                None,
+            );
+            self.rx_queue.push_avail(head_idx);
             let (used_idx, avail_idx) = self.rx_queue.indices();
             log::debug!(
                 target: "virtio-net",
@@ -549,6 +644,13 @@ impl VirtioNet {
                 avail_idx,
             );
             self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
+        } else {
+            warn!(
+                target: "net-console",
+                "[virtio-net] requeue_rx: id={} slot={} missing buffer entry",
+                id,
+                slot
+            );
         }
         debug!(target: "net-console", "[virtio-net] requeue_rx: id={id}");
     }
@@ -566,7 +668,7 @@ impl VirtioNet {
         if let Some(buffer) = self.tx_buffers.get_mut(id as usize) {
             let length = len.min(buffer.as_mut_slice().len());
             self.tx_queue
-                .setup_descriptor(id, buffer.paddr() as u64, length as u32, 0);
+                .setup_descriptor(id, buffer.paddr() as u64, length as u32, 0, None);
             self.tx_queue.push_avail(id);
             self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
             let slice = buffer.as_mut_slice();
@@ -912,9 +1014,18 @@ impl RxToken for VirtioRxToken {
         F: FnOnce(&[u8]) -> R,
     {
         let driver = unsafe { &mut *self.driver };
+        let slot = (self.id / 2) as usize;
+        if self.id % 2 != 0 {
+            warn!(
+                target: "net-console",
+                "[virtio-net] RX: odd descriptor id observed id={} len={}",
+                self.id,
+                self.len
+            );
+        }
         let buffer = driver
             .rx_buffers
-            .get_mut(self.id as usize)
+            .get_mut(slot)
             .expect("rx descriptor out of range");
         let available = core::cmp::min(self.len, buffer.as_mut_slice().len());
         if available < VIRTIO_NET_HEADER_LEN {
@@ -1338,7 +1449,7 @@ impl VirtQueue {
         })
     }
 
-    fn setup_descriptor(&self, index: u16, addr: u64, len: u32, flags: u16) {
+    fn setup_descriptor(&self, index: u16, addr: u64, len: u32, flags: u16, next: Option<u16>) {
         if index >= self.size {
             error!(
                 target: "net-console",
@@ -1351,8 +1462,11 @@ impl VirtQueue {
         let desc = unsafe { &mut *self.desc.as_ptr().add(index as usize) };
         desc.addr = addr;
         desc.len = len;
-        desc.flags = flags;
-        desc.next = 0;
+        desc.flags = match next {
+            Some(_) => flags | VIRTQ_DESC_F_NEXT,
+            None => flags,
+        };
+        desc.next = next.unwrap_or(0);
     }
 
     fn push_avail(&self, index: u16) {
@@ -1371,11 +1485,13 @@ impl VirtQueue {
         unsafe {
             let ring_ptr = (*avail).ring.as_ptr().add(ring_slot as usize) as *mut u16;
             write_volatile(ring_ptr, index);
+            fence(AtomicOrdering::Release);
             write_volatile(&mut (*avail).idx, idx.wrapping_add(1));
         }
     }
 
     fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) {
+        fence(AtomicOrdering::Release);
         regs.notify(queue);
     }
 
@@ -1392,6 +1508,10 @@ impl VirtQueue {
                 next = desc.next,
             );
         }
+    }
+
+    fn read_descriptor(&self, index: u16) -> VirtqDesc {
+        unsafe { read_volatile(self.desc.as_ptr().add(index as usize)) }
     }
 
     fn indices(&self) -> (u16, u16) {

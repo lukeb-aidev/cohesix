@@ -930,6 +930,7 @@ struct HostCommandTarget {
     primary: HeaplessString<48>,
     direct: HeaplessString<48>,
     forwarded_hint: bool,
+    loopback: HeaplessString<48>,
 }
 
 impl SelfTestState {
@@ -1350,11 +1351,13 @@ impl<D: NetDevice> NetStack<D> {
         let forward = self.host_forward_override();
         let direct = render_host_selftest_target(None, port, self.ip);
         let primary = render_host_selftest_target(forward, port, self.ip);
+        let loopback = render_host_selftest_target(Some("127.0.0.1"), port, self.ip);
 
         HostCommandTarget {
             primary,
             direct,
             forwarded_hint: forward.is_some(),
+            loopback,
         }
     }
 
@@ -3194,24 +3197,34 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                 "[net-selftest] host capture: tcpdump -i lo0 -n udp port {}",
                 UDP_ECHO_PORT
             );
-            info!(
-                "[net-selftest] host udp echo: echo -n \"ping\" | nc -u -w1 {}",
-                udp_target.primary
-            );
-            info!(
-                "[net-selftest] host tcp smoke: printf \"hi\" | nc -v {}",
-                tcp_target.primary
-            );
-            if udp_target.forwarded_hint {
+            if udp_target.forwarded_hint || tcp_target.forwarded_hint {
                 info!(
-                    "[net-selftest] host udp fallback (direct guest): echo -n \"ping\" | nc -u -w1 {}",
+                    "[net-selftest] host udp echo (hostfwd/tunnel): echo -n \"ping\" | nc -u -w1 {}",
+                    udp_target.primary
+                );
+                info!(
+                    "[net-selftest] host tcp smoke (hostfwd/tunnel): printf \"hi\" | nc -v {}",
+                    tcp_target.primary
+                );
+                info!(
+                    "[net-selftest] direct guest access requires bridge/tap networking; guest addr {}",
                     udp_target.direct
                 );
-            }
-            if tcp_target.forwarded_hint {
+            } else {
                 info!(
-                    "[net-selftest] host tcp fallback (direct guest): printf \"hi\" | nc -v {}",
-                    tcp_target.direct
+                    "[net-selftest] qemu user-net without hostfwd → add hostfwd=tcp::31338-:31338,hostfwd=tcp::31339-:31339 and use localhost",
+                );
+                info!(
+                    "[net-selftest] host udp echo (after hostfwd): echo -n \"ping\" | nc -u -w1 {}",
+                    udp_target.loopback
+                );
+                info!(
+                    "[net-selftest] host tcp smoke (after hostfwd): printf \"hi\" | nc -v {}",
+                    tcp_target.loopback
+                );
+                info!(
+                    "[net-selftest] direct guest address {} requires bridge/tap networking; skip on slirp",
+                    udp_target.direct
                 );
             }
             true
