@@ -29,7 +29,7 @@ use crate::bootstrap::cspace_sys;
 use crate::bootstrap::hard_guard::{hard_guard_fail, HardGuardViolation};
 use crate::bootstrap::{
     boot_tracer,
-    bootinfo_snapshot::BootInfoSnapshot,
+    bootinfo_snapshot::{BootInfoCanaryError, BootInfoSnapshot},
     cspace::{CSpaceCtx, CSpaceWindow, FirstRetypeResult},
     device_pt_pool, ensure_device_pt_pool, ipcbuf, layout, log as boot_log,
     phases::{
@@ -117,6 +117,12 @@ fn ranges_overlap(a: Range<usize>, b: Range<usize>) -> bool {
 fn align_down(value: usize, align: usize) -> usize {
     debug_assert!(align.is_power_of_two());
     value & !(align - 1)
+}
+
+#[inline(always)]
+fn align_up(value: usize, align: usize) -> usize {
+    debug_assert!(align.is_power_of_two());
+    value.checked_add(align - 1).expect("alignment overflow") & !(align - 1)
 }
 
 #[inline(always)]
@@ -1282,13 +1288,21 @@ fn bootstrap<P: Platform>(
     let device_range = crate::sel4::device_window_range();
 
     let bootinfo_page_base = align_down(bootinfo_source_vaddr, IPC_PAGE_BYTES);
+    let header_len = bootinfo_view.header_bytes().len();
+    let extra_len = bootinfo_view.extra_bytes();
+    let bootinfo_total_bytes = header_len
+        .checked_add(extra_len)
+        .expect("bootinfo size overflow");
+    let bootinfo_total_end = bootinfo_source_vaddr
+        .checked_add(bootinfo_total_bytes)
+        .expect("bootinfo end overflow");
+    let bootinfo_range_end = align_up(bootinfo_total_end, IPC_PAGE_BYTES);
+    let bootinfo_range = bootinfo_page_base..bootinfo_range_end;
+    let bootinfo_pages = (bootinfo_range_end - bootinfo_page_base) / IPC_PAGE_BYTES;
     let mut reserved_vaddrs = ReservedVaddrRanges::new();
     reserved_vaddrs.reserve(heap_range.clone(), "heap");
     reserved_vaddrs.reserve(stack_range.clone(), "stack");
-    reserved_vaddrs.reserve(
-        bootinfo_page_base..bootinfo_page_base + IPC_PAGE_BYTES,
-        "bootinfo-frame",
-    );
+    reserved_vaddrs.reserve(bootinfo_range, "bootinfo-frame");
 
     let mut reserved_line = heapless::String::<192>::new();
     let _ = write!(
@@ -1298,13 +1312,11 @@ fn bootstrap<P: Platform>(
         heap_end = heap_range.end,
         stack_start = stack_range.start,
         stack_end = stack_range.end,
-        bi_start = bootinfo_page_base,
-        bi_end = bootinfo_page_base + IPC_PAGE_BYTES,
+        bi_start = bootinfo_range.start,
+        bi_end = bootinfo_range_end,
     );
     log::info!("{}", reserved_line.as_str());
     boot_log::force_uart_line(reserved_line.as_str());
-
-    let bootinfo_range = bootinfo_page_base..bootinfo_page_base + IPC_PAGE_BYTES;
 
     if ranges_overlap(heap_range.clone(), bss_range.clone()) {
         boot_log::force_uart_line("[alloc:init] heap overlaps .bss");
@@ -1354,25 +1366,47 @@ fn bootstrap<P: Platform>(
         err
     })?;
     let bootinfo_snapshot = bootinfo_state.snapshot();
-    bootinfo_state
-        .verify("snapshot", "[mark] bootinfo.snapshot")
-        .unwrap_or_else(|err| {
-            panic!("bootinfo snapshot diverged at snapshot: {err:?}");
-        });
+    match bootinfo_state.verify("snapshot", "[mark] bootinfo.snapshot") {
+        Ok(()) => {}
+        Err(BootInfoCanaryError::Snapshot { mark, error }) => {
+            let msg = format!(
+                "bootinfo snapshot validation failed at {mark}: {error}",
+                mark = mark,
+                error = error
+            );
+            boot_log::force_uart_line(&msg);
+            log::error!("{}", msg);
+            return Err(BootError::Fatal(msg));
+        }
+        Err(BootInfoCanaryError::Diverged {
+            mark,
+            expected,
+            observed,
+        }) => {
+            panic!(
+                "bootinfo snapshot diverged at {mark}: expected={expected:?} observed={observed:?}"
+            );
+        }
+    }
     let bootinfo_view = bootinfo_state.view();
     sel4_guard::install_bootinfo(&bootinfo_view);
     boot_guard.record_invariant("bootinfo.snapshot.ok");
     let snapshot_region = bootinfo_state.snapshot_region();
-    let mut snapshot_state_line = HeaplessString::<192>::new();
+    let mut snapshot_state_line = HeaplessString::<256>::new();
     let backing_ptr = bootinfo_snapshot.backing().as_ptr() as usize;
     let backing_len = bootinfo_snapshot.backing().len();
+    let snapshot_pages = align_up(backing_len, IPC_PAGE_BYTES) / IPC_PAGE_BYTES;
     let _ = write!(
         snapshot_state_line,
-        "[state] snapshot_region=[0x{start:016x}..0x{end:016x}) backing=0x{back:016x} len=0x{len:08x}\r\n",
+        "[state] snapshot_region=[0x{start:016x}..0x{end:016x}) bootinfo=0x{bootinfo:016x} total=0x{total:08x} pages={boot_pages} backing=0x{back:016x} len=0x{len:08x} snap_pages={snap_pages}\r\n",
         start = snapshot_region.start,
         end = snapshot_region.end,
+        bootinfo = bootinfo_source_vaddr,
+        total = bootinfo_total_bytes,
+        boot_pages = bootinfo_pages,
         back = backing_ptr,
         len = backing_len,
+        snap_pages = snapshot_pages,
     );
     debug_uart_str(snapshot_state_line.as_str());
     let mut snapshot_line = heapless::String::<160>::new();

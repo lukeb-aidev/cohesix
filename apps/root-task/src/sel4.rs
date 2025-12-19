@@ -303,6 +303,8 @@ pub enum BootInfoError {
         start: usize,
         /// End address of the invalid bootinfo extra range.
         end: usize,
+        /// The backing limit inferred from bootinfo page counts.
+        limit: usize,
     },
 }
 
@@ -321,9 +323,9 @@ impl fmt::Display for BootInfoError {
                 f,
                 "initThreadCNodeSizeBits out of range: {bits} (expected <= 31)"
             ),
-            Self::ExtraRange { start, end } => write!(
+            Self::ExtraRange { start, end, limit } => write!(
                 f,
-                "bootinfo extra range invalid: [0x{start:016x}..0x{end:016x})"
+                "bootinfo extra range invalid: [0x{start:016x}..0x{end:016x}) limit=0x{limit:016x}"
             ),
         }
     }
@@ -361,24 +363,30 @@ fn bootinfo_extra_slice<'a>(
         return Err(BootInfoError::ExtraRange {
             start: extra_start,
             end: extra_end,
+            limit: extra_end,
         });
     }
 
     let page_base = addr & !(IPC_PAGE_BYTES - 1);
-    let page_end = page_base + IPC_PAGE_BYTES;
-    if extra_end > page_end {
-        let mut warn_line = HeaplessString::<160>::new();
-        let _ = write!(
-            &mut warn_line,
-            "[bootinfo] extra range out of bounds: [0x{start:016x}..0x{end:016x}) limit=0x{limit:016x}\r\n",
-            start = extra_start,
-            end = extra_end,
-            limit = page_end,
-        );
-        debug_uart_str(warn_line.as_str());
-        let safe_start = extra_start;
-        return Ok((&[], safe_start, safe_start));
-    }
+    let extra_page_frames = (header.extraBIPages.end as usize)
+        .checked_sub(header.extraBIPages.start as usize)
+        .ok_or(BootInfoError::Overflow)?;
+    let mapped_pages = extra_page_frames
+        .checked_add(1)
+        .ok_or(BootInfoError::Overflow)?;
+    let mapped_bytes = mapped_pages
+        .checked_mul(IPC_PAGE_BYTES)
+        .ok_or(BootInfoError::Overflow)?;
+    let bootinfo_limit = page_base
+        .checked_add(mapped_bytes)
+        .ok_or(BootInfoError::Overflow)?;
+        if extra_end > bootinfo_limit {
+            return Err(BootInfoError::ExtraRange {
+                start: extra_start,
+                end: extra_end,
+                limit: bootinfo_limit,
+            });
+        }
 
     // SAFETY: The kernel guarantees that bootinfo and its extra region are mapped as
     // readable memory for the root task. The calculations above ensure we do not

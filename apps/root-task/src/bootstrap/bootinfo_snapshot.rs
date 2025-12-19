@@ -222,11 +222,48 @@ impl fmt::Debug for BootInfoSnapshot {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub enum BootInfoSnapshotError {
+    BootInfo(BootInfoError),
+    OutOfBounds {
+        start: usize,
+        end: usize,
+        limit: usize,
+    },
+}
+
+impl fmt::Display for BootInfoSnapshotError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BootInfoSnapshotError::BootInfo(err) => fmt::Display::fmt(err, f),
+            BootInfoSnapshotError::OutOfBounds { start, end, limit } => write!(
+                f,
+                "bootinfo snapshot out of bounds: [0x{start:016x}..0x{end:016x}) limit=0x{limit:016x}"
+            ),
+        }
+    }
+}
+
+impl From<BootInfoError> for BootInfoSnapshotError {
+    fn from(err: BootInfoError) -> Self {
+        match err {
+            BootInfoError::ExtraRange { start, end, limit } => {
+                BootInfoSnapshotError::OutOfBounds { start, end, limit }
+            }
+            other => BootInfoSnapshotError::BootInfo(other),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum BootInfoCanaryError {
     Diverged {
         mark: &'static str,
         expected: BootInfoSnapshot,
         observed: BootInfoSnapshot,
+    },
+    Snapshot {
+        mark: &'static str,
+        error: BootInfoSnapshotError,
     },
 }
 
@@ -316,12 +353,12 @@ impl BootInfoState {
         mark: &'static str,
     ) -> Result<(), BootInfoCanaryError> {
         self.check_canaries(phase, mark);
-        let observed =
-            BootInfoSnapshot::from_view(&self.view).map_err(|_| BootInfoCanaryError::Diverged {
+        let observed = BootInfoSnapshot::from_view(&self.view).map_err(|err| {
+            BootInfoCanaryError::Snapshot {
                 mark,
-                expected: self.snapshot,
-                observed: self.snapshot,
-            })?;
+                error: err.into(),
+            }
+        })?;
         self.check_count.fetch_add(1, Ordering::AcqRel);
         if self.snapshot.matches(&observed) {
             return Ok(());
