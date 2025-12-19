@@ -14,6 +14,8 @@ pub use io::Console;
 use core::fmt;
 
 use crate::platform::Platform;
+#[cfg(feature = "kernel")]
+use crate::sel4::BootInfoExt;
 
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4;
