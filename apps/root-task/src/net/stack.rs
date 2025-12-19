@@ -164,7 +164,6 @@ impl<DE: NetDriverError> From<NetStackError<DE>> for NetConsoleError<DE> {
 
 struct StorageGuard<'a> {
     flag: &'a AtomicBool,
-    release_on_drop: bool,
 }
 
 impl<'a> StorageGuard<'a> {
@@ -175,23 +174,112 @@ impl<'a> StorageGuard<'a> {
         if flag.swap(true, Ordering::AcqRel) {
             Err(busy_error)
         } else {
-            Ok(Self {
-                flag,
-                release_on_drop: true,
-            })
+            Ok(Self { flag })
         }
-    }
-
-    fn disarm(mut self) {
-        self.release_on_drop = false;
     }
 }
 
 impl Drop for StorageGuard<'_> {
     fn drop(&mut self) {
-        if self.release_on_drop {
-            self.flag.store(false, Ordering::Release);
-        }
+        self.flag.store(false, Ordering::Release);
+    }
+}
+
+struct StorageReservation {
+    socket: StorageGuard<'static>,
+    tcp_rx: StorageGuard<'static>,
+    tcp_tx: StorageGuard<'static>,
+    tcp_smoke_rx: Option<StorageGuard<'static>>,
+    tcp_smoke_tx: Option<StorageGuard<'static>>,
+    tcp_smoke_out_rx: Option<StorageGuard<'static>>,
+    tcp_smoke_out_tx: Option<StorageGuard<'static>>,
+    udp_beacon: Option<StorageGuard<'static>>,
+    udp_echo: Option<StorageGuard<'static>>,
+    #[cfg(feature = "net-outbound-probe")]
+    tcp_probe_rx: StorageGuard<'static>,
+    #[cfg(feature = "net-outbound-probe")]
+    tcp_probe_tx: StorageGuard<'static>,
+}
+
+impl StorageReservation {
+    fn acquire<DE>(self_test_enabled: bool) -> Result<Self, NetStackError<DE>> {
+        let socket = StorageGuard::acquire(&SOCKET_STORAGE_IN_USE, NetStackError::SocketStorageInUse)?;
+        let tcp_rx = StorageGuard::acquire(&TCP_RX_STORAGE_IN_USE, NetStackError::TcpRxStorageInUse)?;
+        let tcp_tx = StorageGuard::acquire(&TCP_TX_STORAGE_IN_USE, NetStackError::TcpTxStorageInUse)?;
+        let tcp_smoke_rx = if self_test_enabled {
+            Some(StorageGuard::acquire(
+                &TCP_SMOKE_RX_STORAGE_IN_USE,
+                NetStackError::TcpSmokeRxStorageInUse,
+            )?)
+        } else {
+            None
+        };
+        let tcp_smoke_tx = if self_test_enabled {
+            Some(StorageGuard::acquire(
+                &TCP_SMOKE_TX_STORAGE_IN_USE,
+                NetStackError::TcpSmokeTxStorageInUse,
+            )?)
+        } else {
+            None
+        };
+        let tcp_smoke_out_rx = if self_test_enabled {
+            Some(StorageGuard::acquire(
+                &TCP_SMOKE_OUT_RX_STORAGE_IN_USE,
+                NetStackError::TcpSmokeRxStorageInUse,
+            )?)
+        } else {
+            None
+        };
+        let tcp_smoke_out_tx = if self_test_enabled {
+            Some(StorageGuard::acquire(
+                &TCP_SMOKE_OUT_TX_STORAGE_IN_USE,
+                NetStackError::TcpSmokeTxStorageInUse,
+            )?)
+        } else {
+            None
+        };
+        let udp_beacon = if self_test_enabled {
+            Some(StorageGuard::acquire(
+                &UDP_BEACON_STORAGE_IN_USE,
+                NetStackError::UdpBeaconStorageInUse,
+            )?)
+        } else {
+            None
+        };
+        let udp_echo = if self_test_enabled {
+            Some(StorageGuard::acquire(
+                &UDP_ECHO_STORAGE_IN_USE,
+                NetStackError::UdpEchoStorageInUse,
+            )?)
+        } else {
+            None
+        };
+        #[cfg(feature = "net-outbound-probe")]
+        let tcp_probe_rx = StorageGuard::acquire(
+            &TCP_PROBE_RX_STORAGE_IN_USE,
+            NetStackError::TcpProbeRxStorageInUse,
+        )?;
+        #[cfg(feature = "net-outbound-probe")]
+        let tcp_probe_tx = StorageGuard::acquire(
+            &TCP_PROBE_TX_STORAGE_IN_USE,
+            NetStackError::TcpProbeTxStorageInUse,
+        )?;
+
+        Ok(Self {
+            socket,
+            tcp_rx,
+            tcp_tx,
+            tcp_smoke_rx,
+            tcp_smoke_tx,
+            tcp_smoke_out_rx,
+            tcp_smoke_out_tx,
+            udp_beacon,
+            udp_echo,
+            #[cfg(feature = "net-outbound-probe")]
+            tcp_probe_rx,
+            #[cfg(feature = "net-outbound-probe")]
+            tcp_probe_tx,
+        })
     }
 }
 
@@ -286,6 +374,7 @@ pub struct NetStack<D: NetDevice> {
     device: D,
     interface: Interface,
     sockets: SocketSet<'static>,
+    _reservation: StorageReservation,
     tcp_handle: SocketHandle,
     server: TcpConsoleServer,
     telemetry: NetTelemetry,
@@ -748,70 +837,7 @@ impl<D: NetDevice> NetStack<D> {
         let mac = device.mac();
         info!("[net-console] {backend_label} device online: mac={mac}");
 
-        let socket_guard =
-            StorageGuard::acquire(&SOCKET_STORAGE_IN_USE, NetStackError::SocketStorageInUse)?;
-        let rx_guard =
-            StorageGuard::acquire(&TCP_RX_STORAGE_IN_USE, NetStackError::TcpRxStorageInUse)?;
-        let tx_guard =
-            StorageGuard::acquire(&TCP_TX_STORAGE_IN_USE, NetStackError::TcpTxStorageInUse)?;
-        let tcp_smoke_rx_guard = if SELF_TEST_ENABLED {
-            Some(StorageGuard::acquire(
-                &TCP_SMOKE_RX_STORAGE_IN_USE,
-                NetStackError::TcpSmokeRxStorageInUse,
-            )?)
-        } else {
-            None
-        };
-        let tcp_smoke_tx_guard = if SELF_TEST_ENABLED {
-            Some(StorageGuard::acquire(
-                &TCP_SMOKE_TX_STORAGE_IN_USE,
-                NetStackError::TcpSmokeTxStorageInUse,
-            )?)
-        } else {
-            None
-        };
-        let tcp_smoke_out_rx_guard = if SELF_TEST_ENABLED {
-            Some(StorageGuard::acquire(
-                &TCP_SMOKE_OUT_RX_STORAGE_IN_USE,
-                NetStackError::TcpSmokeRxStorageInUse,
-            )?)
-        } else {
-            None
-        };
-        let tcp_smoke_out_tx_guard = if SELF_TEST_ENABLED {
-            Some(StorageGuard::acquire(
-                &TCP_SMOKE_OUT_TX_STORAGE_IN_USE,
-                NetStackError::TcpSmokeTxStorageInUse,
-            )?)
-        } else {
-            None
-        };
-        let udp_beacon_guard = if SELF_TEST_ENABLED {
-            Some(StorageGuard::acquire(
-                &UDP_BEACON_STORAGE_IN_USE,
-                NetStackError::UdpBeaconStorageInUse,
-            )?)
-        } else {
-            None
-        };
-        let udp_echo_guard = if SELF_TEST_ENABLED {
-            Some(StorageGuard::acquire(
-                &UDP_ECHO_STORAGE_IN_USE,
-                NetStackError::UdpEchoStorageInUse,
-            )?)
-        } else {
-            None
-        };
-        #[cfg(feature = "net-outbound-probe")]
-        let tcp_probe_rx_guard = StorageGuard::acquire(
-            &TCP_PROBE_RX_STORAGE_IN_USE,
-            NetStackError::TcpProbeRxStorageInUse,
-        )?;
-        #[cfg(feature = "net-outbound-probe")]
-        let tcp_probe_tx_guard = StorageGuard::acquire(
-            &TCP_PROBE_TX_STORAGE_IN_USE,
-            NetStackError::TcpProbeTxStorageInUse,
-        )?;
+        let reservation = StorageReservation::acquire::<D::Error>(SELF_TEST_ENABLED)?;
 
         let init_now_ms = crate::hal::timebase().now_ms();
         debug!("[net-console] init: timebase.now_ms={init_now_ms}");
@@ -850,6 +876,7 @@ impl<D: NetDevice> NetStack<D> {
             device,
             interface,
             sockets,
+            _reservation: reservation,
             tcp_handle: SocketHandle::default(),
             server: TcpConsoleServer::new(
                 console_config.auth_token,
@@ -891,32 +918,6 @@ impl<D: NetDevice> NetStack<D> {
         stack.initialise_self_test_sockets();
         #[cfg(feature = "net-outbound-probe")]
         stack.initialise_probe_socket();
-        socket_guard.disarm();
-        rx_guard.disarm();
-        tx_guard.disarm();
-        if let Some(guard) = tcp_smoke_rx_guard {
-            guard.disarm();
-        }
-        if let Some(guard) = tcp_smoke_tx_guard {
-            guard.disarm();
-        }
-        if let Some(guard) = tcp_smoke_out_rx_guard {
-            guard.disarm();
-        }
-        if let Some(guard) = tcp_smoke_out_tx_guard {
-            guard.disarm();
-        }
-        if let Some(guard) = udp_beacon_guard {
-            guard.disarm();
-        }
-        if let Some(guard) = udp_echo_guard {
-            guard.disarm();
-        }
-        #[cfg(feature = "net-outbound-probe")]
-        {
-            tcp_probe_rx_guard.disarm();
-            tcp_probe_tx_guard.disarm();
-        }
         info!(
             target: "net-console",
             "[net-console] init: TCP listener socket prepared (port={})",
@@ -2415,24 +2416,6 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     }
 }
 
-impl<D: NetDevice> Drop for NetStack<D> {
-    fn drop(&mut self) {
-        SOCKET_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-        TCP_RX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-        TCP_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-        TCP_SMOKE_RX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-        TCP_SMOKE_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-        TCP_SMOKE_OUT_RX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-        TCP_SMOKE_OUT_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-        #[cfg(feature = "net-outbound-probe")]
-        TCP_PROBE_RX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-        #[cfg(feature = "net-outbound-probe")]
-        TCP_PROBE_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-        UDP_BEACON_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-        UDP_ECHO_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-    }
-}
-
 /// Cooperative polling loop that mirrors the serial console onto the TCP port.
 pub fn run_tcp_console<D: NetDevice>(
     console: &mut crate::console::Console,
@@ -2447,5 +2430,27 @@ pub fn run_tcp_console<D: NetDevice>(
             let _ = writeln!(console, "{line}");
         });
         now_ms = now_ms.saturating_add(5);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::convert::Infallible;
+
+    use super::*;
+
+    #[test]
+    fn reservation_releases_on_error() {
+        SOCKET_STORAGE_IN_USE.store(false, Ordering::Release);
+        TCP_RX_STORAGE_IN_USE.store(false, Ordering::Release);
+
+        TCP_RX_STORAGE_IN_USE.store(true, Ordering::Release);
+        let result = StorageReservation::acquire::<Infallible>(true);
+        assert!(matches!(result, Err(NetStackError::TcpRxStorageInUse)));
+
+        assert!(!SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert!(TCP_RX_STORAGE_IN_USE.load(Ordering::Acquire));
+
+        TCP_RX_STORAGE_IN_USE.store(false, Ordering::Release);
     }
 }
