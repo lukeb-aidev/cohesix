@@ -12,6 +12,7 @@ use super::cspace::{slot_in_empty_window, CSpaceCtx, DestCNode};
 use super::cspace_sys::{tuple_style, tuple_style_label, TupleStyle};
 use super::ffi::raw_untyped_retype;
 use crate::bootstrap::log::force_uart_line;
+use crate::bootstrap::bootinfo_snapshot::BootInfoState;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4::pick_smallest_non_device_untyped;
@@ -497,7 +498,14 @@ where
         return Ok(0);
     }
 
+    let mut probe_retype = |mark: &'static str| {
+        if let Some(state) = BootInfoState::get() {
+            let _ = state.probe(mark);
+        }
+    };
+
     tracer.advance(BootPhase::RetypeBegin);
+    probe_retype("[probe] retype.begin");
 
     let tables = selection.plan.page_tables.min(remaining_total);
     remaining_total = remaining_total.saturating_sub(tables);
@@ -505,6 +513,7 @@ where
     let total_target = tables + pages;
     if total_target == 0 {
         tracer.advance(BootPhase::RetypeDone);
+        probe_retype("[probe] retype.done.empty");
         return Ok(0);
     }
 
@@ -532,6 +541,7 @@ where
                     used_bytes,
                 );
                 tracer.advance(BootPhase::RetypeDone);
+                probe_retype("[probe] retype.done.capacity");
                 selection.used_bytes = used_bytes;
                 return Ok(done);
             }
@@ -541,12 +551,14 @@ where
                     let candidate = ctx.next_candidate_slot();
                     log_slot_alloc_failure(candidate, start, end, err);
                     tracer.advance(BootPhase::RetypeDone);
+                    probe_retype("[probe] retype.done.alloc_slot");
                     return Err(err);
                 }
             };
             if !slot_in_empty_window(slot, start, end) {
                 log_slot_out_of_range(slot, start, end);
                 tracer.advance(BootPhase::RetypeDone);
+                probe_retype("[probe] retype.done.window");
                 return Ok(done);
             }
             tracer.record_slot(slot as u32);
@@ -568,11 +580,13 @@ where
                         capacity_bytes,
                     );
                     tracer.advance(BootPhase::RetypeDone);
+                    probe_retype("[probe] retype.done.exhausted");
                     selection.used_bytes = logged_use;
                     return Ok(done);
                 }
                 log_retype_error(selection.cap, obj_type, slot, log_node_depth, result);
                 tracer.advance(BootPhase::RetypeDone);
+                probe_retype("[probe] retype.done.error");
                 return Err(result);
             }
             used_bytes = used_bytes.saturating_add(obj_bytes);
@@ -588,6 +602,7 @@ where
     }
 
     tracer.advance(BootPhase::RetypeDone);
+    probe_retype("[probe] retype.done");
     Ok(done)
 }
 

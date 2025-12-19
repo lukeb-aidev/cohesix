@@ -10,6 +10,7 @@ use sel4_sys::{seL4_BootInfo, seL4_Word};
 use spin::Once;
 
 use crate::bootstrap::log::force_uart_line;
+use crate::bootinfo_layout::{post_canary_offset, POST_CANARY_BYTES};
 use crate::sel4::{BootInfo, BootInfoError, BootInfoView, IPC_PAGE_BYTES};
 
 const MAX_CANARY_LINE: usize = 192;
@@ -23,14 +24,12 @@ const BOOT_HEAP_BYTES: usize = MAX_BOOTINFO_ALLOC;
 #[repr(C, align(16))]
 struct BootinfoBacking {
     pre: u64,
-    payload: [u8; MAX_BOOTINFO_ALLOC],
-    post: u64,
+    payload: [u8; MAX_BOOTINFO_ALLOC + POST_CANARY_BYTES],
 }
 
 static mut BOOTINFO_BACKING: BootinfoBacking = BootinfoBacking {
     pre: BOOTINFO_CANARY_PRE,
-    payload: [0u8; MAX_BOOTINFO_ALLOC],
-    post: BOOTINFO_CANARY_POST,
+    payload: [0u8; MAX_BOOTINFO_ALLOC + POST_CANARY_BYTES],
 };
 
 fn log_layout_violation(reason: &str, size: usize, align: usize) {
@@ -55,11 +54,33 @@ fn assert_low_vaddr(label: &str, value: usize) {
     }
 }
 
+#[inline(always)]
+fn post_canary_ptr(backing_len: usize) -> *const u64 {
+    let offset = post_canary_offset(backing_len);
+    let payload_ptr = unsafe { BOOTINFO_BACKING.payload.as_ptr() };
+    debug_assert!(
+        offset
+            .saturating_add(POST_CANARY_BYTES)
+            <= unsafe { BOOTINFO_BACKING.payload.len() },
+        "post canary offset out of bounds"
+    );
+    unsafe { payload_ptr.add(offset) as *const u64 }
+}
+
+#[inline(always)]
+fn set_post_canary(backing_len: usize) {
+    let ptr = post_canary_ptr(backing_len) as *mut u64;
+    unsafe {
+        core::ptr::write_volatile(ptr, BOOTINFO_CANARY_POST);
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct BootInfoSnapshot {
     view: BootInfoView,
     backing: &'static [u8],
     bootinfo_addr: usize,
+    post_canary_addr: usize,
     pub init_cnode_bits: u8,
     pub empty_start: seL4_Word,
     pub empty_end: seL4_Word,
@@ -92,11 +113,13 @@ impl BootInfoSnapshot {
         let extra_range = view.extra_range();
         let extra_len = view.extra_bytes();
         let untyped_count = (header.untyped.end - header.untyped.start) as usize;
+        let post_canary_addr = (backing.as_ptr() as usize).saturating_add(backing.len());
 
         let mut snapshot = Self {
             view,
             backing,
             bootinfo_addr: header as *const _ as usize,
+            post_canary_addr,
             init_cnode_bits: view.init_cnode_bits(),
             empty_start,
             empty_end,
@@ -135,9 +158,14 @@ impl BootInfoSnapshot {
         }
 
         let backing: &'static mut [u8] = unsafe { &mut BOOTINFO_BACKING.payload[..total_size] };
+        debug_assert!(
+            total_size
+                .saturating_add(POST_CANARY_BYTES)
+                <= unsafe { BOOTINFO_BACKING.payload.len() },
+            "snapshot backing truncated before post-canary"
+        );
         unsafe {
             BOOTINFO_BACKING.pre = BOOTINFO_CANARY_PRE;
-            BOOTINFO_BACKING.post = BOOTINFO_CANARY_POST;
         }
 
         backing[..header_bytes.len()].copy_from_slice(header_bytes);
@@ -146,6 +174,8 @@ impl BootInfoSnapshot {
             backing[header_bytes.len()..header_bytes.len() + accessible_extra_len]
                 .copy_from_slice(extra_slice);
         }
+
+        set_post_canary(backing.len());
 
         let bootinfo_ptr = backing.as_ptr() as *const seL4_BootInfo;
         let bootinfo_ref = unsafe { &*bootinfo_ptr };
@@ -180,6 +210,7 @@ impl BootInfoSnapshot {
             && self.bootinfo_addr == other.bootinfo_addr
             && self.backing.as_ptr() == other.backing.as_ptr()
             && self.backing.len() == other.backing.len()
+            && self.post_canary_addr == other.post_canary_addr
             && self.checksum == other.checksum
     }
 
@@ -196,6 +227,11 @@ impl BootInfoSnapshot {
     #[must_use]
     pub fn backing(&self) -> &'static [u8] {
         self.backing
+    }
+
+    #[must_use]
+    pub fn post_canary_addr(&self) -> usize {
+        self.post_canary_addr
     }
 }
 
@@ -216,6 +252,10 @@ impl fmt::Debug for BootInfoSnapshot {
             .field("extra_start", &self.extra_start)
             .field("extra_end", &self.extra_end)
             .field("extra_len", &self.extra_len)
+            .field(
+                "post_canary_addr",
+                &format_args!("0x{:#x}", self.post_canary_addr),
+            )
             .field("checksum", &self.checksum)
             .finish()
     }
@@ -320,15 +360,26 @@ impl BootInfoState {
         let payload_start = snapshot.backing().as_ptr() as usize;
         let payload_end = payload_start.saturating_add(snapshot.backing().len());
         let canary_pre = unsafe { core::ptr::addr_of!(BOOTINFO_BACKING.pre) as usize };
-        let canary_post = unsafe { core::ptr::addr_of!(BOOTINFO_BACKING.post) as usize };
-        let canary_end = canary_post.saturating_add(core::mem::size_of::<u64>());
+        let canary_post = snapshot.post_canary_addr();
+        let canary_end = canary_post.saturating_add(POST_CANARY_BYTES);
+        debug_assert!(
+            canary_post >= payload_end,
+            "post-canary must trail snapshot payload"
+        );
+        debug_assert!(
+            canary_end
+                <= payload_start.saturating_add(unsafe { BOOTINFO_BACKING.payload.len() }),
+            "post-canary escaped backing payload"
+        );
 
-        Ok(BOOTINFO_STATE.call_once(|| Self {
+        let state = BOOTINFO_STATE.call_once(|| Self {
             view: snapshot_view,
             snapshot,
             check_count: AtomicU64::new(0),
             snapshot_region: canary_pre.min(payload_start)..canary_end.max(payload_end),
-        }))
+        });
+        let _ = state.probe("[probe] snapshot.capture.complete");
+        Ok(state)
     }
 
     pub fn view(&self) -> BootInfoView {
@@ -345,11 +396,44 @@ impl BootInfoState {
 
     #[must_use]
     pub fn canary_values(&self) -> (u64, u64) {
-        unsafe { (BOOTINFO_BACKING.pre, BOOTINFO_BACKING.post) }
+        let post = unsafe { core::ptr::read_volatile(post_canary_ptr(self.snapshot.backing().len())) };
+        unsafe { (BOOTINFO_BACKING.pre, post) }
+    }
+
+    #[must_use]
+    pub fn canary_ok(&self) -> bool {
+        let (pre, post) = self.canary_values();
+        pre == BOOTINFO_CANARY_PRE && post == BOOTINFO_CANARY_POST
+    }
+
+    #[must_use]
+    pub fn canary_state(&self) -> (u64, u64, u64, u64) {
+        let (pre, post) = self.canary_values();
+        (pre, post, BOOTINFO_CANARY_PRE, BOOTINFO_CANARY_POST)
+    }
+
+    pub fn probe(&self, mark: &'static str) -> Result<(), BootInfoError> {
+        let (pre, post, exp_pre, exp_post) = self.canary_state();
+        let mut line = String::<MAX_CANARY_LINE>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "[bootinfo:probe] {mark} pre=0x{pre:016x} post=0x{post:016x} expected_pre=0x{exp_pre:016x} expected_post=0x{exp_post:016x} post_addr=0x{addr:016x}",
+                addr = self.snapshot.post_canary_addr(),
+            ),
+        );
+        force_uart_line(line.as_str());
+
+        if self.canary_ok() {
+            return Ok(());
+        }
+
+        self.check_canaries("probe", mark);
+        Ok(())
     }
 
     fn check_canaries(&self, phase: &'static str, last_mark: &'static str) {
-        let (pre, post) = unsafe { (BOOTINFO_BACKING.pre, BOOTINFO_BACKING.post) };
+        let (pre, post) = self.canary_values();
         if pre == BOOTINFO_CANARY_PRE && post == BOOTINFO_CANARY_POST {
             return;
         }
@@ -411,5 +495,32 @@ impl BootInfoState {
             expected: self.snapshot,
             observed,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::bootinfo_layout::{post_canary_offset, POST_CANARY_BYTES};
+
+    const BASE_ADDR: usize = 0x1000_0000;
+
+    fn align_up(value: usize, align: usize) -> usize {
+        (value + (align - 1)) & !(align - 1)
+    }
+
+    #[test]
+    fn post_canary_tracks_payload_len() {
+        let payload_len = 0x1800usize;
+        let full_backing_len = payload_len + POST_CANARY_BYTES;
+        let post_offset = post_canary_offset(payload_len);
+        let post_addr = BASE_ADDR + post_offset;
+        assert_eq!(post_addr, BASE_ADDR + full_backing_len - POST_CANARY_BYTES);
+
+        let aligned_len = align_up(full_backing_len, 0x1000);
+        assert_ne!(
+            BASE_ADDR + aligned_len - POST_CANARY_BYTES,
+            post_addr,
+            "post-canary must not follow aligned padding"
+        );
     }
 }
