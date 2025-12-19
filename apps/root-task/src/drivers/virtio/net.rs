@@ -412,18 +412,21 @@ impl VirtioNet {
     pub fn debug_snapshot(&mut self) {
         let isr = self.regs.isr_status();
         let status = self.regs.status();
+        let (rx_used_idx, rx_avail_idx) = self.rx_queue.indices();
 
         self.rx_queue.debug_dump("rx");
         self.tx_queue.debug_dump("tx");
 
         log::info!(
             target: "net-console",
-            "[virtio-net] debug_snapshot: status=0x{:02x} isr=0x{:02x} last_used_idx_debug={} rx_used_count={} rx_poll_count={}",
+            "[virtio-net] debug_snapshot: status=0x{:02x} isr=0x{:02x} last_used_idx_debug={} rx_used_count={} rx_poll_count={} rx.avail.idx={} rx.used.idx={}",
             status,
             isr,
             self.last_used_idx_debug,
             self.rx_used_count,
             self.rx_poll_count,
+            rx_avail_idx,
+            rx_used_idx,
         );
     }
 
@@ -439,6 +442,8 @@ impl VirtioNet {
             self.rx_queue.push_avail(idx);
         }
         let (used_idx, avail_idx) = self.rx_queue.indices();
+        let first_paddr = self.rx_buffers.first().map(|buf| buf.paddr()).unwrap_or(0);
+        let last_paddr = self.rx_buffers.last().map(|buf| buf.paddr()).unwrap_or(0);
         log::debug!(
             target: "virtio-net",
             "[RX] posted buffers={} used_idx={} avail_idx={}",
@@ -446,6 +451,22 @@ impl VirtioNet {
             used_idx,
             avail_idx,
         );
+        if avail_idx as usize != self.rx_buffers.len() {
+            warn!(
+                target: "net-console",
+                "[virtio-net] RX avail.idx {} does not match posted buffers {}",
+                avail_idx,
+                self.rx_buffers.len()
+            );
+        }
+        if cfg!(debug_assertions) {
+            debug_assert_eq!(used_idx, 0, "RX used_idx must start at zero");
+            debug_assert_eq!(
+                avail_idx as usize,
+                self.rx_buffers.len(),
+                "RX avail_idx should equal posted buffer count"
+            );
+        }
         self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
         info!(
             "[virtio-net] RX queue armed: size={} buffers={} last_used={}",
@@ -455,9 +476,13 @@ impl VirtioNet {
         );
         info!(
             target: "net-console",
-            "[virtio-net] RX queue initialised: size={} buffers={}",
+            "[virtio-net] RX queue initialised: size={} buffers={} avail.idx={} used.idx={} first_paddr=0x{first:08x} last_paddr=0x{last:08x}",
             self.rx_queue.size,
             self.rx_buffers.len(),
+            avail_idx,
+            used_idx,
+            first = first_paddr,
+            last = last_paddr,
         );
 
         log::info!(
@@ -763,6 +788,20 @@ impl Device for VirtioNet {
         self.poll_interrupts();
 
         let (used_idx, avail_idx) = self.rx_queue.indices();
+        if used_idx != self.last_used_idx_debug {
+            log::info!(
+                target: "net-console",
+                "[virtio-net] rx observed used.idx advance: prev={} now={} avail.idx={} rx_used_count={} rx_poll_count={} isr=0x{:02x} status=0x{:02x}",
+                self.last_used_idx_debug,
+                used_idx,
+                avail_idx,
+                self.rx_used_count,
+                self.rx_poll_count,
+                self.regs.isr_status(),
+                self.regs.status()
+            );
+            self.last_used_idx_debug = used_idx;
+        }
         log::debug!(
             target: "net-console",
             "[virtio-net] rx poll: avail.idx={} used.idx={} last_used={}",
@@ -780,6 +819,14 @@ impl Device for VirtioNet {
                 id,
                 len,
                 self.rx_used_count,
+            );
+            let (used_after, avail_after) = self.rx_queue.indices();
+            log::debug!(
+                target: "net-console",
+                "[virtio-net] RX ring post-drain: avail.idx={} used.idx={} last_used={}",
+                avail_after,
+                used_after,
+                self.rx_queue.last_used,
             );
             let driver_ptr = self as *mut _;
             let rx = VirtioRxToken {

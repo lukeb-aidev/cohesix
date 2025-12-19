@@ -70,6 +70,7 @@ const UDP_ECHO_PORT: u16 = 31_338;
 const UDP_BEACON_PORT: u16 = 40_000;
 const TCP_SMOKE_PORT: u16 = 31_339;
 const TCP_SMOKE_OUT_LOCAL_PORT: u16 = 31_340;
+const HOST_FORWARD_ENV: &str = "COHESIX_NET_HOSTFWD";
 #[cfg(feature = "net-outbound-probe")]
 const TCP_PROBE_PORT: u16 = 31_338;
 #[cfg(feature = "net-outbound-probe")]
@@ -926,6 +927,12 @@ struct SelfTestState {
     last_result: Option<NetSelfTestResult>,
 }
 
+struct HostCommandTarget {
+    primary: HeaplessString<48>,
+    direct: HeaplessString<48>,
+    forwarded_hint: bool,
+}
+
 impl SelfTestState {
     fn new(enabled: bool) -> Self {
         Self {
@@ -992,6 +999,25 @@ impl SelfTestState {
             last_result: self.last_result,
         }
     }
+}
+
+fn render_host_selftest_target(
+    host_forward: Option<&str>,
+    port: u16,
+    guest_ip: Ipv4Address,
+) -> HeaplessString<48> {
+    let mut target = HeaplessString::new();
+    if let Some(host) = host_forward {
+        if host.contains(':') {
+            let _ = write!(target, "{host}");
+        } else {
+            let _ = write!(target, "{host}:{port}");
+        }
+        return target;
+    }
+
+    let _ = write!(target, "{}:{}", guest_ip, port);
+    target
 }
 
 fn prefix_to_netmask(prefix_len: u8) -> Ipv4Address {
@@ -3123,6 +3149,22 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         }
     }
 
+    fn host_forward_override(&self) -> Option<&'static str> {
+        option_env!(HOST_FORWARD_ENV)
+    }
+
+    fn selftest_host_target(&self, port: u16) -> HostCommandTarget {
+        let forward = self.host_forward_override();
+        let direct = render_host_selftest_target(None, port, self.ip);
+        let primary = render_host_selftest_target(forward, port, self.ip);
+
+        HostCommandTarget {
+            primary,
+            direct,
+            forwarded_hint: forward.is_some(),
+        }
+    }
+
     fn start_self_test(&mut self, now_ms: u64) -> bool {
         if !SELF_TEST_ENABLED {
             return false;
@@ -3143,22 +3185,36 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         if self.self_test.start(now_ms) {
             self.tcp_smoke_outbound_sent = false;
             self.tcp_smoke_last_attempt_ms = now_ms.saturating_sub(1_000);
+            let udp_target = self.selftest_host_target(UDP_ECHO_PORT);
+            let tcp_target = self.selftest_host_target(TCP_SMOKE_PORT);
             info!(
-                "[net-selftest] starting run (udp dst=10.0.2.2:{} tcp dst=10.0.2.2:{})",
-                UDP_ECHO_PORT, TCP_SMOKE_PORT
+                "[net-selftest] starting run (udp dst={} tcp dst={})",
+                udp_target.direct, tcp_target.direct
             );
             info!(
                 "[net-selftest] host capture: tcpdump -i lo0 -n udp port {}",
                 UDP_ECHO_PORT
             );
             info!(
-                "[net-selftest] host udp echo: echo -n \"ping\" | nc -u -w1 127.0.0.1 {}",
-                UDP_ECHO_PORT
+                "[net-selftest] host udp echo: echo -n \"ping\" | nc -u -w1 {}",
+                udp_target.primary
             );
             info!(
-                "[net-selftest] host tcp smoke: printf \"hi\" | nc -v 10.0.2.2 {}",
-                TCP_SMOKE_PORT
+                "[net-selftest] host tcp smoke: printf \"hi\" | nc -v {}",
+                tcp_target.primary
             );
+            if udp_target.forwarded_hint {
+                info!(
+                    "[net-selftest] host udp fallback (direct guest): echo -n \"ping\" | nc -u -w1 {}",
+                    udp_target.direct
+                );
+            }
+            if tcp_target.forwarded_hint {
+                info!(
+                    "[net-selftest] host tcp fallback (direct guest): printf \"hi\" | nc -v {}",
+                    tcp_target.direct
+                );
+            }
             true
         } else {
             false
@@ -3226,6 +3282,23 @@ mod tests {
         assert!(TCP_RX_STORAGE_IN_USE.load(Ordering::Acquire));
 
         TCP_RX_STORAGE_IN_USE.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn host_selftest_targets_use_guest_ip_by_default() {
+        let ip = Ipv4Address::new(10, 0, 2, 15);
+        let target = render_host_selftest_target(None, UDP_ECHO_PORT, ip);
+        assert_eq!(target.as_str(), "10.0.2.15:31338");
+    }
+
+    #[test]
+    fn host_selftest_targets_prefer_forward_override() {
+        let ip = Ipv4Address::new(10, 0, 2, 15);
+        let default_override = render_host_selftest_target(Some("127.0.0.1"), TCP_SMOKE_PORT, ip);
+        assert_eq!(default_override.as_str(), "127.0.0.1:31339");
+
+        let explicit = render_host_selftest_target(Some("example.com:5555"), TCP_SMOKE_PORT, ip);
+        assert_eq!(explicit.as_str(), "example.com:5555");
     }
 
     #[test]
