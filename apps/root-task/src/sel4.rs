@@ -3223,7 +3223,7 @@ impl<'a> KernelEnv<'a> {
     }
 
     fn assert_reserved_clear(&self, range: core::ops::Range<usize>, label: &str) {
-        self.reserved.assert_free(range, label);
+        self.reserved.assert_free(&range, label);
     }
 
     fn next_mapping_range(
