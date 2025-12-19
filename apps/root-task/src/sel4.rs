@@ -333,7 +333,7 @@ impl fmt::Display for BootInfoError {
 
 fn bootinfo_extra_slice<'a>(
     header: &'a seL4_BootInfo,
-) -> Result<(&'a [u8], usize, usize), BootInfoError> {
+) -> Result<(&'a [u8], usize, usize, usize), BootInfoError> {
     let addr = header as *const _ as usize;
     let required_align = mem::align_of::<seL4_BootInfo>();
     if required_align != 0 && addr % required_align != 0 {
@@ -368,31 +368,21 @@ fn bootinfo_extra_slice<'a>(
     }
 
     let page_base = addr & !(IPC_PAGE_BYTES - 1);
-    let extra_page_frames = (header.extraBIPages.end as usize)
-        .checked_sub(header.extraBIPages.start as usize)
+    let required_bytes = extra_end
+        .checked_sub(page_base)
         .ok_or(BootInfoError::Overflow)?;
-    let mapped_pages = extra_page_frames
-        .checked_add(1)
-        .ok_or(BootInfoError::Overflow)?;
-    let mapped_bytes = mapped_pages
-        .checked_mul(IPC_PAGE_BYTES)
-        .ok_or(BootInfoError::Overflow)?;
+    let mapped_bytes = required_bytes
+        .saturating_add(IPC_PAGE_BYTES - 1)
+        & !(IPC_PAGE_BYTES - 1);
     let bootinfo_limit = page_base
         .checked_add(mapped_bytes)
         .ok_or(BootInfoError::Overflow)?;
-    if extra_end > bootinfo_limit {
-        return Err(BootInfoError::ExtraRange {
-            start: extra_start,
-            end: extra_end,
-            limit: bootinfo_limit,
-        });
-    }
 
     // SAFETY: The kernel guarantees that bootinfo and its extra region are mapped as
     // readable memory for the root task. The calculations above ensure we do not
     // wrap the address space or overrun the reported length.
     let slice = unsafe { core::slice::from_raw_parts(extra_start as *const u8, extra_len) };
-    Ok((slice, extra_start, extra_end))
+    Ok((slice, extra_start, extra_end, bootinfo_limit))
 }
 
 /// Immutable projection of the kernel-supplied bootinfo region.
@@ -402,6 +392,7 @@ pub struct BootInfoView {
     extra_bytes: &'static [u8],
     extra_start: usize,
     extra_end: usize,
+    extra_limit: usize,
 }
 
 // SAFETY: The seL4 bootinfo region is mapped by the kernel for the lifetime of the
@@ -422,12 +413,13 @@ impl BootInfoView {
             ::log::error!("bootinfo initBits invalid: {init_bits} (expected <= seL4_WordBits)");
             return Err(BootInfoError::InitCNodeBits { bits: init_bits });
         }
-        let (extra_bytes, extra_start, extra_end) = bootinfo_extra_slice(header)?;
+        let (extra_bytes, extra_start, extra_end, extra_limit) = bootinfo_extra_slice(header)?;
         Ok(Self {
             header,
             extra_bytes,
             extra_start,
             extra_end,
+            extra_limit,
         })
     }
 
@@ -480,6 +472,13 @@ impl BootInfoView {
             .checked_add(extra_len)
             .ok_or(BootInfoError::Overflow)?;
 
+        let page_base = addr & !(IPC_PAGE_BYTES - 1);
+        let required_bytes = extra_end
+            .checked_sub(page_base)
+            .ok_or(BootInfoError::Overflow)?;
+        let mapped_bytes = required_bytes
+            .saturating_add(IPC_PAGE_BYTES - 1)
+            & !(IPC_PAGE_BYTES - 1);
         let slice = unsafe { core::slice::from_raw_parts(extra_start as *const u8, extra_len) };
 
         Ok(Self {
@@ -487,6 +486,9 @@ impl BootInfoView {
             extra_bytes: slice,
             extra_start,
             extra_end,
+            extra_limit: extra_start
+                .checked_add(mapped_bytes)
+                .ok_or(BootInfoError::Overflow)?,
         })
     }
 
@@ -506,6 +508,12 @@ impl BootInfoView {
     #[must_use]
     pub fn extra_range(&self) -> Range<usize> {
         self.extra_start..self.extra_end
+    }
+
+    /// Returns the exclusive limit of the mapped bootinfo view.
+    #[must_use]
+    pub fn extra_limit(&self) -> usize {
+        self.extra_limit
     }
 
     /// Returns the raw bytes that back the bootinfo header.
