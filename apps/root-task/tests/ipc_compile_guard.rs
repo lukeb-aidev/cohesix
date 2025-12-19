@@ -10,7 +10,15 @@ use sel4_sys::seL4_MessageInfo;
 
 const IPC_SRC_DIR: &str = "apps/root-task/src";
 const SEL4_RS: &str = "sel4.rs";
-const FORBIDDEN_SYMBOLS: &[&str] = &["seL4_Send", "seL4_Call", "seL4_ReplyRecv"];
+const FORBIDDEN_SYMBOLS: &[&str] = &[
+    "seL4_Send",
+    "seL4_Call",
+    "seL4_ReplyRecv",
+    "seL4_Reply",
+    "seL4_Recv",
+    "seL4_NBRecv",
+    "seL4_Wait",
+];
 
 #[test]
 fn send_guarded_signature_is_callable() {

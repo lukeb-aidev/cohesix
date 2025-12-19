@@ -743,10 +743,6 @@ pub fn yield_now() {
 #[track_caller]
 #[inline(always)]
 pub fn send_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
-    if bootstrap_send_trap(dest, Location::caller()) {
-        return;
-    }
-
     guard_ipc_destination("send_unchecked", dest);
     unsafe {
         syscall::send(dest, info);
@@ -758,9 +754,6 @@ pub fn send_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
 #[track_caller]
 #[inline(always)]
 pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageInfo {
-    if bootstrap_send_trap(dest, Location::caller()) {
-        return seL4_MessageInfo::new(0, 0, 0, 0);
-    }
     guard_ipc_destination("call_unchecked", dest);
     let length = info.length();
 
@@ -821,7 +814,7 @@ pub fn signal_unchecked(dest: seL4_CPtr) {
 }
 
 #[cfg(feature = "kernel")]
-const ILLEGAL_SEND_LINE_CAP: usize = 1024;
+const IPC_TRAP_LINE_CAP: usize = 240;
 
 #[cfg(feature = "kernel")]
 static BOOTSTRAP_SEND_INSTRUMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -837,7 +830,19 @@ fn emit_illegal_send_line(line: &str) {
 }
 
 #[cfg(feature = "kernel")]
-fn bootstrap_send_trap(dest: seL4_CPtr, location: &Location) -> bool {
+#[derive(Clone, Copy, Debug)]
+pub enum IpcSyscallKind {
+    Send,
+    Call,
+    Reply,
+    ReplyRecv,
+    Recv,
+    NbRecv,
+    Wait,
+}
+
+#[cfg(feature = "kernel")]
+fn ipc_bootstrap_trap(kind: IpcSyscallKind, dest: seL4_CPtr, location: &Location) -> bool {
     let ready = ep_ready();
     let validated = ep_validated();
     let unlocked = ipc_send_unlocked();
@@ -846,10 +851,10 @@ fn bootstrap_send_trap(dest: seL4_CPtr, location: &Location) -> bool {
 
     let trace_count = BOOTSTRAP_SEND_INSTRUMENT_COUNT.fetch_add(1, Ordering::Relaxed);
     if trace_count < 3 {
-        let mut trace_line = HeaplessString::<180>::new();
+        let mut trace_line = HeaplessString::<IPC_TRAP_LINE_CAP>::new();
         let _ = write!(
             &mut trace_line,
-            "BOOTSTRAP_SEND_TRACE dest=0x{dest:04x} phase={:?} seq={} ready={} validated={} unlocked={} post_commit={} caller={}:{}",
+            "[ipc-trace] kind={kind:?} dest=0x{dest:04x} phase={:?} seq={} ready={} validated={} unlocked={} post_commit={} caller={}:{}",
             snapshot.phase,
             snapshot.sequence,
             ready as u8,
@@ -866,27 +871,20 @@ fn bootstrap_send_trap(dest: seL4_CPtr, location: &Location) -> bool {
         return false;
     }
 
-    let mut info_line = HeaplessString::<ILLEGAL_SEND_LINE_CAP>::new();
+    let mut info_line = HeaplessString::<IPC_TRAP_LINE_CAP>::new();
     let _ = write!(
         &mut info_line,
-        "ILLEGAL_SEND cap=0x{dest:04x} phase={:?} seq={} ready={} validated={} unlocked={} post_commit={}",
+        "[ipc-trap] kind={kind:?} cap=0x{dest:04x} phase={:?} seq={} ready={} validated={} unlocked={} post_commit={} caller={}:{}",
         snapshot.phase,
         snapshot.sequence,
         ready as u8,
         validated as u8,
         unlocked as u8,
         post_commit as u8,
-    );
-    emit_illegal_send_line(info_line.as_str());
-
-    let mut caller_line = HeaplessString::<256>::new();
-    let _ = write!(
-        &mut caller_line,
-        "ILLEGAL_SEND caller={}:{}",
         location.file(),
         location.line(),
     );
-    emit_illegal_send_line(caller_line.as_str());
+    emit_illegal_send_line(info_line.as_str());
 
     true
 }
@@ -934,7 +932,6 @@ fn guard_ipc_destination(callsite: &str, dest: seL4_CPtr) {
             unlocked = unlocked as u8,
         );
         crate::bootstrap::log::force_uart_line(line.as_str());
-        panic!("[ipc-guard] IPC attempted before root endpoint ready ({callsite})");
     }
 }
 
