@@ -10,7 +10,7 @@ use sel4_sys::{seL4_BootInfo, seL4_Word};
 use spin::Once;
 
 use crate::bootstrap::log::force_uart_line;
-use crate::sel4::{BootInfo, BootInfoError, BootInfoView};
+use crate::sel4::{BootInfo, BootInfoError, BootInfoView, IPC_PAGE_BYTES};
 
 const MAX_CANARY_LINE: usize = 192;
 const MAX_BOOTINFO_ALLOC: usize = 64 * 1024;
@@ -149,7 +149,7 @@ impl BootInfoSnapshot {
 
         let bootinfo_ptr = backing.as_ptr() as *const seL4_BootInfo;
         let bootinfo_ref = unsafe { &*bootinfo_ptr };
-        let snapshot_view = BootInfoView::new(bootinfo_ref)?;
+        let snapshot_view = BootInfoView::from_snapshot_source(view, bootinfo_ref)?;
 
         Ok(Self::from_parts(snapshot_view, backing))
     }
@@ -267,6 +267,28 @@ pub enum BootInfoCanaryError {
     },
 }
 
+fn log_snapshot_failure(view: &BootInfoView, error: &BootInfoError) {
+    let mut line = String::<MAX_CANARY_LINE>::new();
+    let bootinfo_ptr = view.header() as *const _ as usize;
+    let snapshot_ptr = unsafe { BOOTINFO_BACKING.payload.as_ptr() as usize };
+    let header_len = view.header_bytes().len();
+    let extra_len = view.extra().len();
+    let total_size = header_len.saturating_add(extra_len);
+    let pages = (total_size + IPC_PAGE_BYTES - 1) / IPC_PAGE_BYTES;
+    let limit_base = bootinfo_ptr & !(IPC_PAGE_BYTES - 1);
+    let limit_end = limit_base.saturating_add(pages.saturating_mul(IPC_PAGE_BYTES));
+    let extra_range = view.extra_range();
+    let _ = fmt::write(
+        &mut line,
+        format_args!(
+            "[bootinfo:snapshot:error] kind={error:?} src=0x{bootinfo_ptr:016x} dst=0x{snapshot_ptr:016x} total=0x{total_size:08x} pages={pages} limit=[0x{limit_base:016x}..0x{limit_end:016x}) extra=[0x{extra_start:016x}..0x{extra_end:016x}) len=0x{extra_len:08x}",
+            extra_start = extra_range.start,
+            extra_end = extra_range.end,
+        ),
+    );
+    force_uart_line(line.as_str());
+}
+
 pub struct BootInfoState {
     view: BootInfoView,
     snapshot: BootInfoSnapshot,
@@ -279,7 +301,13 @@ static BOOTINFO_STATE: Once<BootInfoState> = Once::new();
 impl BootInfoState {
     pub fn init(bootinfo: &'static BootInfo) -> Result<&'static Self, BootInfoError> {
         let source_view = BootInfoView::new(bootinfo)?;
-        let snapshot = BootInfoSnapshot::capture(&source_view)?;
+        let snapshot = match BootInfoSnapshot::capture(&source_view) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                log_snapshot_failure(&source_view, &err);
+                return Err(err);
+            }
+        };
         let snapshot_view = snapshot.view();
 
         assert_low_vaddr("bootinfo pointer", bootinfo as *const _ as usize);

@@ -380,13 +380,13 @@ fn bootinfo_extra_slice<'a>(
     let bootinfo_limit = page_base
         .checked_add(mapped_bytes)
         .ok_or(BootInfoError::Overflow)?;
-        if extra_end > bootinfo_limit {
-            return Err(BootInfoError::ExtraRange {
-                start: extra_start,
-                end: extra_end,
-                limit: bootinfo_limit,
-            });
-        }
+    if extra_end > bootinfo_limit {
+        return Err(BootInfoError::ExtraRange {
+            start: extra_start,
+            end: extra_end,
+            limit: bootinfo_limit,
+        });
+    }
 
     // SAFETY: The kernel guarantees that bootinfo and its extra region are mapped as
     // readable memory for the root task. The calculations above ensure we do not
@@ -454,6 +454,40 @@ impl BootInfoView {
         // contract documented for this method. All further bounds checks are
         // performed on the resulting reference.
         Self::build(header)
+    }
+
+    /// Constructs a [`BootInfoView`] for a snapshotted header using a validated
+    /// source view to bound the extra region.
+    pub fn from_snapshot_source(
+        source: &BootInfoView,
+        header: &'static seL4_BootInfo,
+    ) -> Result<Self, BootInfoError> {
+        let addr = header as *const _ as usize;
+        let required_align = mem::align_of::<seL4_BootInfo>();
+        if required_align != 0 && addr % required_align != 0 {
+            return Err(BootInfoError::Unaligned {
+                address: addr,
+                required: required_align,
+            });
+        }
+
+        let header_size = mem::size_of::<seL4_BootInfo>();
+        let extra_len = source.extra().len();
+        let extra_start = addr
+            .checked_add(header_size)
+            .ok_or(BootInfoError::Overflow)?;
+        let extra_end = extra_start
+            .checked_add(extra_len)
+            .ok_or(BootInfoError::Overflow)?;
+
+        let slice = unsafe { core::slice::from_raw_parts(extra_start as *const u8, extra_len) };
+
+        Ok(Self {
+            header,
+            extra_bytes: slice,
+            extra_start,
+            extra_end,
+        })
     }
 
     /// Returns the bootinfo header exposed by this view.

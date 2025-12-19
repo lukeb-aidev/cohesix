@@ -1234,7 +1234,7 @@ fn bootstrap<P: Platform>(
     let mut boot_guard = BootStateGuard::acquire()?;
     let mut early_phase = EarlyBootPhase::BootInfoView;
 
-    let bootinfo_view = canonical_bootinfo_view(&mut sequencer, bootinfo).map_err(|err| {
+    let mut bootinfo_view = canonical_bootinfo_view(&mut sequencer, bootinfo).map_err(|err| {
         log_precommit_exit(
             early_phase,
             "canonical_bootinfo_view",
@@ -1350,91 +1350,130 @@ fn bootstrap<P: Platform>(
 
     crate::sel4::log_sel4_type_sanity();
 
+    let mut bootinfo_snapshot_opt: Option<BootInfoSnapshot> = None;
+
     early_phase = EarlyBootPhase::BootInfoSnapshot;
     debug_uart_str("[breadcrumb] before bootinfo snapshot capture\r\n");
-    let bootinfo_state = snapshot_bootinfo(&bootinfo_view).map_err(|err| {
-        log_precommit_exit(
-            early_phase,
-            "snapshot_bootinfo",
-            true,
-            PrecommitReason::BootInfoSnapshot,
-            None,
-            &err,
-            file!(),
-            line!(),
-        );
-        err
-    })?;
-    let bootinfo_snapshot = bootinfo_state.snapshot();
-    match bootinfo_state.verify("snapshot", "[mark] bootinfo.snapshot") {
-        Ok(()) => {}
-        Err(BootInfoCanaryError::Snapshot { mark, error }) => {
-            let msg = format!(
-                "bootinfo snapshot validation failed at {mark}: {error}",
-                mark = mark,
-                error = error
+    let bootinfo_state = match snapshot_bootinfo(&bootinfo_view) {
+        Ok(state) => Some(state),
+        Err(err) => {
+            log_precommit_exit(
+                early_phase,
+                "snapshot_bootinfo",
+                false,
+                PrecommitReason::BootInfoSnapshot,
+                None,
+                &err,
+                file!(),
+                line!(),
             );
-            boot_log::force_uart_line(&msg);
-            log::error!("{}", msg);
+            let mut line = HeaplessString::<192>::new();
+            let _ = write!(
+                line,
+                "[bootinfo] snapshot failed: {}; continuing with validated view",
+                err
+            );
+            boot_log::force_uart_line(line.as_str());
+            log::warn!("{}", line.as_str());
+            boot_guard.record_invariant("bootinfo.snapshot.degraded");
+            match BootInfoSnapshot::from_view(&bootinfo_view) {
+                Ok(snapshot) => {
+                    bootinfo_snapshot_opt = Some(snapshot);
+                    boot_guard.record_invariant("bootinfo.snapshot.fallback");
+                }
+                Err(snapshot_err) => {
+                    let msg = format!(
+                        "bootinfo snapshot fallback failed: {snapshot_err}",
+                        snapshot_err = snapshot_err
+                    );
+                    boot_log::force_uart_line(&msg);
+                    return Err(BootError::Fatal(msg));
+                }
+            }
+            None
+        }
+    };
+
+    if let Some(state) = bootinfo_state {
+        let bootinfo_snapshot = state.snapshot();
+        match state.verify("snapshot", "[mark] bootinfo.snapshot") {
+            Ok(()) => {}
+            Err(BootInfoCanaryError::Snapshot { mark, error }) => {
+                let msg = format!(
+                    "bootinfo snapshot validation failed at {mark}: {error}",
+                    mark = mark,
+                    error = error
+                );
+                boot_log::force_uart_line(&msg);
+                log::error!("{}", msg);
+                return Err(BootError::Fatal(msg));
+            }
+            Err(BootInfoCanaryError::Diverged {
+                mark,
+                expected,
+                observed,
+            }) => {
+                panic!(
+                    "bootinfo snapshot diverged at {mark}: expected={expected:?} observed={observed:?}"
+                );
+            }
+        }
+        bootinfo_view = state.view();
+        sel4_guard::install_bootinfo(&bootinfo_view);
+        boot_guard.record_invariant("bootinfo.snapshot.ok");
+        bootinfo_snapshot_opt = Some(bootinfo_snapshot);
+        let mut snapshot_state_line = HeaplessString::<256>::new();
+        let backing_ptr = bootinfo_snapshot.backing().as_ptr() as usize;
+        let backing_len = bootinfo_snapshot.backing().len();
+        let snapshot_pages = align_up(backing_len, IPC_PAGE_BYTES) / IPC_PAGE_BYTES;
+        let region = state.snapshot_region();
+        let _ = write!(
+            snapshot_state_line,
+            "[state] snapshot_region=[0x{start:016x}..0x{end:016x}) bootinfo=0x{bootinfo:016x} total=0x{total:08x} pages={boot_pages} backing=0x{back:016x} len=0x{len:08x} snap_pages={snap_pages}\r\n",
+            start = region.start,
+            end = region.end,
+            bootinfo = bootinfo_source_vaddr,
+            total = bootinfo_total_bytes,
+            boot_pages = bootinfo_pages,
+            back = backing_ptr,
+            len = backing_len,
+            snap_pages = snapshot_pages,
+        );
+        debug_uart_str(snapshot_state_line.as_str());
+        let mut snapshot_line = heapless::String::<160>::new();
+        let _ = write!(
+            snapshot_line,
+            "[bootinfo] snapshot region=[0x{start:016x}..0x{end:016x})",
+            start = region.start,
+            end = region.end
+        );
+        boot_log::force_uart_line(snapshot_line.as_str());
+        if ranges_overlap(region.clone(), heap_range.clone()) {
+            panic!("bootinfo snapshot overlaps heap snapshot={region:?} heap={heap_range:?}");
+        }
+        if ranges_overlap(region.clone(), stack_range.clone()) {
+            panic!("bootinfo snapshot overlaps stack snapshot={region:?} stack={stack_range:?}");
+        }
+        if ranges_overlap(region.clone(), device_range.clone()) {
+            panic!(
+                "bootinfo snapshot overlaps device pt pool snapshot={region:?} device={device_range:?}"
+            );
+        }
+        if ranges_overlap(region.clone(), bootinfo_range.clone()) {
+            panic!(
+                "bootinfo snapshot overlaps bootinfo frame snapshot={region:?} bootinfo={bootinfo_range:?}"
+            );
+        }
+    }
+
+    let bootinfo_snapshot = match bootinfo_snapshot_opt {
+        Some(snapshot) => snapshot,
+        None => {
+            let msg = String::from("bootinfo snapshot unavailable after fallback attempts");
+            boot_log::force_uart_line(msg.as_str());
             return Err(BootError::Fatal(msg));
         }
-        Err(BootInfoCanaryError::Diverged {
-            mark,
-            expected,
-            observed,
-        }) => {
-            panic!(
-                "bootinfo snapshot diverged at {mark}: expected={expected:?} observed={observed:?}"
-            );
-        }
-    }
-    let bootinfo_view = bootinfo_state.view();
-    sel4_guard::install_bootinfo(&bootinfo_view);
-    boot_guard.record_invariant("bootinfo.snapshot.ok");
-    let snapshot_region = bootinfo_state.snapshot_region();
-    let mut snapshot_state_line = HeaplessString::<256>::new();
-    let backing_ptr = bootinfo_snapshot.backing().as_ptr() as usize;
-    let backing_len = bootinfo_snapshot.backing().len();
-    let snapshot_pages = align_up(backing_len, IPC_PAGE_BYTES) / IPC_PAGE_BYTES;
-    let _ = write!(
-        snapshot_state_line,
-        "[state] snapshot_region=[0x{start:016x}..0x{end:016x}) bootinfo=0x{bootinfo:016x} total=0x{total:08x} pages={boot_pages} backing=0x{back:016x} len=0x{len:08x} snap_pages={snap_pages}\r\n",
-        start = snapshot_region.start,
-        end = snapshot_region.end,
-        bootinfo = bootinfo_source_vaddr,
-        total = bootinfo_total_bytes,
-        boot_pages = bootinfo_pages,
-        back = backing_ptr,
-        len = backing_len,
-        snap_pages = snapshot_pages,
-    );
-    debug_uart_str(snapshot_state_line.as_str());
-    let mut snapshot_line = heapless::String::<160>::new();
-    let _ = write!(
-        snapshot_line,
-        "[bootinfo] snapshot region=[0x{start:016x}..0x{end:016x})",
-        start = snapshot_region.start,
-        end = snapshot_region.end
-    );
-    boot_log::force_uart_line(snapshot_line.as_str());
-    if ranges_overlap(snapshot_region.clone(), heap_range.clone()) {
-        panic!("bootinfo snapshot overlaps heap snapshot={snapshot_region:?} heap={heap_range:?}");
-    }
-    if ranges_overlap(snapshot_region.clone(), stack_range.clone()) {
-        panic!(
-            "bootinfo snapshot overlaps stack snapshot={snapshot_region:?} stack={stack_range:?}"
-        );
-    }
-    if ranges_overlap(snapshot_region.clone(), device_range.clone()) {
-        panic!(
-            "bootinfo snapshot overlaps device pt pool snapshot={snapshot_region:?} device={device_range:?}"
-        );
-    }
-    if ranges_overlap(snapshot_region.clone(), bootinfo_range.clone()) {
-        panic!(
-            "bootinfo snapshot overlaps bootinfo frame snapshot={snapshot_region:?} bootinfo={bootinfo_range:?}"
-        );
-    }
+    };
 
     let mut build_line = heapless::String::<192>::new();
     let mut feature_report = heapless::String::<96>::new();
@@ -1477,8 +1516,10 @@ fn bootstrap<P: Platform>(
     let check_bootinfo = |guard: &mut BootStateGuard, mark: &'static str| {
         guard.record_mark(mark);
         let phase_label = guard.current_phase();
-        if let Err(err) = bootinfo_state.verify(phase_label, guard.last_mark()) {
-            panic!("bootinfo canary tripped at {mark}: {err:?}");
+        if let Some(state) = bootinfo_state {
+            if let Err(err) = state.verify(phase_label, guard.last_mark()) {
+                panic!("bootinfo canary tripped at {mark}: {err:?}");
+            }
         }
     };
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
