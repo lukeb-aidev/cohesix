@@ -1397,7 +1397,7 @@ fn bootstrap<P: Platform>(
         }
     };
 
-    let mut probe_canary = |mark: &'static str| {
+    let probe_canary = |mark: &'static str| {
         if let Some(state) = bootinfo_state {
             let _ = state.probe(mark);
         }

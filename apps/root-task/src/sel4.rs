@@ -344,13 +344,6 @@ fn bootinfo_extra_slice<'a>(
     }
 
     let extra_len = header.extraLen as usize;
-    if extra_len == 0 {
-        let extra_start = addr
-            .checked_add(mem::size_of::<seL4_BootInfo>())
-            .ok_or(BootInfoError::Overflow)?;
-        return Ok((&[], extra_start, extra_start));
-    }
-
     let header_size = core::mem::size_of::<seL4_BootInfo>();
     let extra_start = addr
         .checked_add(header_size)
@@ -1569,7 +1562,7 @@ impl BootInfoExt for seL4_BootInfo {
 
     fn extra_bytes(&self) -> &[u8] {
         match bootinfo_extra_slice(self) {
-            Ok((slice, _, _)) => slice,
+            Ok((slice, _, _, _)) => slice,
             Err(err) => {
                 log::error!("invalid bootinfo extra region: {err}");
                 &[]
@@ -3292,8 +3285,8 @@ impl<'a> KernelEnv<'a> {
         let header_ptr = header_addr as *const u8;
         let header_byte = unsafe { ptr::read_volatile(header_ptr) };
 
-        let (extra_bytes, extra_start, extra_end) = match bootinfo_extra_slice(self.bootinfo) {
-            Ok((bytes, start, end)) => (bytes, start, end),
+        let (extra_bytes, extra_start, extra_end, _) = match bootinfo_extra_slice(self.bootinfo) {
+            Ok((bytes, start, end, limit)) => (bytes, start, end, limit),
             Err(err) => {
                 ::log::error!("[boot] bootinfo extra validation failed: {err}",);
                 crate::sel4::debug_halt();
@@ -3302,7 +3295,7 @@ impl<'a> KernelEnv<'a> {
         };
 
         debug_assert!(
-            extra_start < extra_end,
+            extra_bytes.is_empty() || extra_start < extra_end,
             "bootinfo extra range must be non-empty when len > 0"
         );
 
