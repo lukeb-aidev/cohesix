@@ -150,7 +150,10 @@ fn install_init_ipc_buffer(
     }
 
     let ipc_page_base = align_down(addr, IPC_PAGE_BYTES);
-    reserved_vaddrs.reserve(&(ipc_page_base..ipc_page_base + IPC_PAGE_BYTES), "ipc-buffer");
+    reserved_vaddrs.reserve(
+        &(ipc_page_base..ipc_page_base + IPC_PAGE_BYTES),
+        "ipc-buffer",
+    );
 
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
