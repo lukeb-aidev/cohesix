@@ -18,12 +18,14 @@ rustc-wrapper = "scripts/rustc-wrapper.sh"
 
 [profile.dev.package.root-task]
 incremental = false
+debug = 2
 
 [profile.release.package.root-task]
 incremental = false
 opt-level = "s"
 codegen-units = 1
-strip = "symbols"
+debug = 2
+strip = false
 
 [profile.dev.package.nine-door]
 incremental = false

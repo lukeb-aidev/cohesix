@@ -1175,6 +1175,18 @@ impl<D: NetDevice> NetStack<D> {
         let Some(handle) = self.tcp_probe_handle else {
             return false;
         };
+        if !self.service_logged {
+            return false;
+        }
+        if readiness::gate().is_some() {
+            return false;
+        }
+        if self.ip == Ipv4Address::UNSPECIFIED {
+            return false;
+        }
+        if !self.telemetry.link_up {
+            return false;
+        }
         let socket = self.sockets.get_mut::<TcpSocket>(handle);
         let dest = IpEndpoint::new(Ipv4Address::from(DEV_VIRT_GATEWAY).into(), TCP_PROBE_PORT);
         let mut activity = false;
