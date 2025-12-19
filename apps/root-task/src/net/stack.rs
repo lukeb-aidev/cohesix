@@ -83,6 +83,8 @@ const SELF_TEST_BEACON_INTERVAL_MS: u64 = 250;
 const SELF_TEST_BEACON_WINDOW_MS: u64 = 5_000;
 const SELF_TEST_WINDOW_MS: u64 = 15_000;
 const NET_INIT_TAG: &str = "net-console:init";
+#[cfg(any(feature = "bootstrap-trace", debug_assertions))]
+static STORAGE_ADDRESS_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "net-backend-virtio")]
 type DefaultNetDevice = VirtioNet;
@@ -1003,6 +1005,202 @@ fn prefix_to_netmask(prefix_len: u8) -> Ipv4Address {
     Ipv4Address::from_bits(mask)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct StorageAddressSnapshot {
+    label: &'static str,
+    flag: usize,
+    owner: usize,
+    tag: usize,
+    storage: usize,
+}
+
+impl StorageAddressSnapshot {
+    fn new<T>(
+        label: &'static str,
+        flag: &AtomicBool,
+        owner: &AtomicU64,
+        tag: &AtomicU32,
+        storage: *const T,
+    ) -> Self {
+        Self {
+            label,
+            flag: flag as *const _ as usize,
+            owner: owner as *const _ as usize,
+            tag: tag as *const _ as usize,
+            storage: storage as usize,
+        }
+    }
+}
+
+#[cfg(any(feature = "bootstrap-trace", debug_assertions))]
+fn log_storage_addresses_once(marker: &'static str) {
+    if STORAGE_ADDRESS_LOGGED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    let storage_snapshots = [
+        StorageAddressSnapshot::new(
+            "socket",
+            &SOCKET_STORAGE_IN_USE,
+            &SOCKET_STORAGE_OWNER,
+            &SOCKET_STORAGE_TAG_ID,
+            unsafe { SOCKET_STORAGE.as_ptr() },
+        ),
+        StorageAddressSnapshot::new(
+            "tcp-rx",
+            &TCP_RX_STORAGE_IN_USE,
+            &TCP_RX_STORAGE_OWNER,
+            &TCP_RX_STORAGE_TAG_ID,
+            unsafe { TCP_RX_STORAGE.as_ptr() },
+        ),
+        StorageAddressSnapshot::new(
+            "tcp-tx",
+            &TCP_TX_STORAGE_IN_USE,
+            &TCP_TX_STORAGE_OWNER,
+            &TCP_TX_STORAGE_TAG_ID,
+            unsafe { TCP_TX_STORAGE.as_ptr() },
+        ),
+        StorageAddressSnapshot::new(
+            "tcp-smoke-rx",
+            &TCP_SMOKE_RX_STORAGE_IN_USE,
+            &TCP_SMOKE_RX_STORAGE_OWNER,
+            &TCP_SMOKE_RX_STORAGE_TAG_ID,
+            unsafe { TCP_SMOKE_RX_STORAGE.as_ptr() },
+        ),
+        StorageAddressSnapshot::new(
+            "tcp-smoke-tx",
+            &TCP_SMOKE_TX_STORAGE_IN_USE,
+            &TCP_SMOKE_TX_STORAGE_OWNER,
+            &TCP_SMOKE_TX_STORAGE_TAG_ID,
+            unsafe { TCP_SMOKE_TX_STORAGE.as_ptr() },
+        ),
+        StorageAddressSnapshot::new(
+            "tcp-smoke-out-rx",
+            &TCP_SMOKE_OUT_RX_STORAGE_IN_USE,
+            &TCP_SMOKE_OUT_RX_STORAGE_OWNER,
+            &TCP_SMOKE_OUT_RX_STORAGE_TAG_ID,
+            unsafe { TCP_SMOKE_OUT_RX_STORAGE.as_ptr() },
+        ),
+        StorageAddressSnapshot::new(
+            "tcp-smoke-out-tx",
+            &TCP_SMOKE_OUT_TX_STORAGE_IN_USE,
+            &TCP_SMOKE_OUT_TX_STORAGE_OWNER,
+            &TCP_SMOKE_OUT_TX_STORAGE_TAG_ID,
+            unsafe { TCP_SMOKE_OUT_TX_STORAGE.as_ptr() },
+        ),
+        StorageAddressSnapshot::new(
+            "udp-beacon",
+            &UDP_BEACON_STORAGE_IN_USE,
+            &UDP_BEACON_STORAGE_OWNER,
+            &UDP_BEACON_STORAGE_TAG_ID,
+            unsafe { UDP_BEACON_RX_STORAGE.as_ptr() },
+        ),
+        StorageAddressSnapshot::new(
+            "udp-echo",
+            &UDP_ECHO_STORAGE_IN_USE,
+            &UDP_ECHO_STORAGE_OWNER,
+            &UDP_ECHO_STORAGE_TAG_ID,
+            unsafe { UDP_ECHO_RX_STORAGE.as_ptr() },
+        ),
+    ];
+
+    for snapshot in storage_snapshots {
+        info!(
+            target: "net-storage",
+            "[net-storage] addr marker={marker} label={} flag=0x{flag:016x} owner=0x{owner:016x} tag=0x{tag:016x} storage=0x{storage:016x}",
+            snapshot.label,
+            flag = snapshot.flag,
+            owner = snapshot.owner,
+            tag = snapshot.tag,
+            storage = snapshot.storage,
+        );
+    }
+
+    #[cfg(feature = "net-outbound-probe")]
+    {
+        let probe_snapshots = [
+            StorageAddressSnapshot::new(
+                "tcp-probe-rx",
+                &TCP_PROBE_RX_STORAGE_IN_USE,
+                &TCP_PROBE_RX_STORAGE_OWNER,
+                &TCP_PROBE_RX_STORAGE_TAG_ID,
+                unsafe { TCP_PROBE_RX_STORAGE.as_ptr() },
+            ),
+            StorageAddressSnapshot::new(
+                "tcp-probe-tx",
+                &TCP_PROBE_TX_STORAGE_IN_USE,
+                &TCP_PROBE_TX_STORAGE_OWNER,
+                &TCP_PROBE_TX_STORAGE_TAG_ID,
+                unsafe { TCP_PROBE_TX_STORAGE.as_ptr() },
+            ),
+        ];
+
+        for snapshot in probe_snapshots {
+            info!(
+                target: "net-storage",
+                "[net-storage] addr marker={marker} label={} flag=0x{flag:016x} owner=0x{owner:016x} tag=0x{tag:016x} storage=0x{storage:016x}",
+                snapshot.label,
+                flag = snapshot.flag,
+                owner = snapshot.owner,
+                tag = snapshot.tag,
+                storage = snapshot.storage,
+            );
+        }
+    }
+}
+
+#[cfg(not(any(feature = "bootstrap-trace", debug_assertions)))]
+fn log_storage_addresses_once(_: &'static str) {}
+
+fn tag_label_snapshot(tag_label: &Mutex<Option<&'static str>>) -> &'static str {
+    tag_label
+        .try_lock()
+        .and_then(|guard| *guard)
+        .unwrap_or("(unknown)")
+}
+
+fn log_socket_tripwire(marker: &'static str) {
+    let in_use = SOCKET_STORAGE_IN_USE.load(Ordering::Acquire);
+    let owner = SOCKET_STORAGE_OWNER.load(Ordering::Acquire);
+    let tag = SOCKET_STORAGE_TAG_ID.load(Ordering::Acquire);
+    let tag_label = tag_label_snapshot(&SOCKET_STORAGE_TAG_LABEL);
+
+    let addresses = StorageAddressSnapshot::new(
+        "socket",
+        &SOCKET_STORAGE_IN_USE,
+        &SOCKET_STORAGE_OWNER,
+        &SOCKET_STORAGE_TAG_ID,
+        unsafe { SOCKET_STORAGE.as_ptr() },
+    );
+
+    info!(
+        target: "net-storage",
+        "[net-storage] preinit marker={marker} in_use={} owner=0x{owner:016x} tag=0x{tag:08x} tag_label={tag_label} flag_addr=0x{flag:016x} owner_addr=0x{owner_addr:016x} tag_addr=0x{tag_addr:016x} storage_addr=0x{storage:016x}",
+        in_use,
+        owner = owner,
+        tag = tag,
+        flag = addresses.flag,
+        owner_addr = addresses.owner,
+        tag_addr = addresses.tag,
+        storage = addresses.storage,
+    );
+
+    if in_use && owner == 0 {
+        warn!(
+            target: "net-storage",
+            "[net-storage] POISONED BEFORE NET INIT marker={marker} in_use={} owner=0x{owner:016x} tag=0x{tag:08x} tag_label={tag_label}",
+            in_use,
+            owner = owner,
+            tag = tag,
+        );
+    }
+
+    log_storage_addresses_once(marker);
+}
+
 #[cfg(debug_assertions)]
 fn debug_validate_socket_storage(marker: &'static str) {
     let metadata = StorageMetadata {
@@ -1044,6 +1242,8 @@ pub fn init_net_console<H>(
 where
     H: Hardware<Error = HalError>,
 {
+    log_socket_tripwire(concat!(file!(), ":", line!()));
+
     let config = config.with_dev_virt_defaults();
     let iface_ip = config.address.ip;
     if config.listen_port == 0 || iface_ip == [0, 0, 0, 0] {
@@ -1377,6 +1577,7 @@ impl<D: NetDevice> NetStack<D> {
         let attempt = *init_guard.attempt();
         log_bootinfo_mark("net.init.device", &attempt)?;
 
+        log_storage_addresses_once("net.init.reservation");
         let reservation =
             StorageReservation::acquire::<D::Error>(SELF_TEST_ENABLED, &attempt, attempt.tag)?;
 
