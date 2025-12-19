@@ -1339,6 +1339,7 @@ fn bootstrap<P: Platform>(
     crate::sel4::log_sel4_type_sanity();
 
     early_phase = EarlyBootPhase::BootInfoSnapshot;
+    debug_uart_str("[breadcrumb] before bootinfo snapshot capture\r\n");
     let bootinfo_state = snapshot_bootinfo(&bootinfo_view).map_err(|err| {
         log_precommit_exit(
             early_phase,
@@ -1362,6 +1363,18 @@ fn bootstrap<P: Platform>(
     sel4_guard::install_bootinfo(&bootinfo_view);
     boot_guard.record_invariant("bootinfo.snapshot.ok");
     let snapshot_region = bootinfo_state.snapshot_region();
+    let mut snapshot_state_line = HeaplessString::<192>::new();
+    let backing_ptr = bootinfo_snapshot.backing().as_ptr() as usize;
+    let backing_len = bootinfo_snapshot.backing().len();
+    let _ = write!(
+        snapshot_state_line,
+        "[state] snapshot_region=[0x{start:016x}..0x{end:016x}) backing=0x{back:016x} len=0x{len:08x}\r\n",
+        start = snapshot_region.start,
+        end = snapshot_region.end,
+        back = backing_ptr,
+        len = backing_len,
+    );
+    debug_uart_str(snapshot_state_line.as_str());
     let mut snapshot_line = heapless::String::<160>::new();
     let _ = write!(
         snapshot_line,
@@ -1545,6 +1558,21 @@ fn bootstrap<P: Platform>(
     boot_guard.record_phase("IPCInstall");
     boot_guard.record_mark("[mark] ipc.install.ok");
     boot_log::force_uart_line("[mark] ipc.install.ok");
+    debug_uart_str("[breadcrumb] after ipcbuf sanity ok\r\n");
+    let mut state_line = HeaplessString::<256>::new();
+    let _ = write!(
+        state_line,
+        "[state] bootinfo=0x{bootinfo:016x} bootinfo_page=[0x{bi_start:016x}..0x{bi_end:016x}) ipcbuf=0x{ipc:016x} heap=[0x{heap_start:08x}..0x{heap_end:08x}) stack=[0x{stack_start:08x}..0x{stack_end:08x})\r\n",
+        bootinfo = bootinfo_ref as *const _ as usize,
+        bi_start = bootinfo_range.start,
+        bi_end = bootinfo_range.end,
+        ipc = ipc_buffer_ptr.as_ptr() as usize,
+        heap_start = heap_range.start,
+        heap_end = heap_range.end,
+        stack_start = stack_range.start,
+        stack_end = stack_range.end,
+    );
+    debug_uart_str(state_line.as_str());
     let mut console = DebugConsole::new(platform);
 
     #[inline(always)]
@@ -1659,6 +1687,18 @@ fn bootstrap<P: Platform>(
     );
     let extra_bytes = bootinfo_view.extra();
     let extra_range = bootinfo_view.extra_range();
+    let mut extra_state_line = HeaplessString::<192>::new();
+    let extra_ptr = extra_bytes.as_ptr() as usize;
+    let _ = write!(
+        extra_state_line,
+        "[state] extra_range=[0x{start:016x}..0x{end:016x}) ptr=0x{ptr:016x} len={len}\r\n",
+        start = extra_range.start,
+        end = extra_range.end,
+        ptr = extra_ptr,
+        len = extra_bytes.len(),
+    );
+    debug_uart_str(extra_state_line.as_str());
+    debug_uart_str("[breadcrumb] before DTB locate\r\n");
     let dtb_deferred = if !extra_bytes.is_empty() {
         console.writeln_prefixed("[boot] deferring DTB parse");
         let _ = pending_boot_phases.push(BootPhase::DTBParseDeferred);
@@ -1902,6 +1942,7 @@ fn bootstrap<P: Platform>(
 
     // Boot tracer phase advancement must not run before the root EP exists,
     // because faults cannot be delivered and tracer internals may touch memory.
+    debug_uart_str("[breadcrumb] before boot_tracer drain\r\n");
     boot_log::force_uart_line("[breadcrumb] before boot_tracer drain");
     for phase in pending_boot_phases.drain(..) {
         let phase_marker = match phase {
@@ -2105,6 +2146,7 @@ fn bootstrap<P: Platform>(
     let mut consumed_slots: usize = cmp::max(initial_consumed, 2);
     let mut retyped_objects: u32 = 0;
 
+    debug_uart_str("[breadcrumb] before UntypedPlan\r\n");
     if let Err(err) = sequencer.advance(BootstrapPhase::UntypedPlan) {
         post_commit.flag_failure("phase.UntypedPlan", &err);
     } else {
@@ -2743,6 +2785,7 @@ fn bootstrap<P: Platform>(
         crate::bp!("dtb.parse.end");
         boot_tracer().advance(BootPhase::DTBParseDone);
 
+        debug_uart_str("[breadcrumb] before logger.switch\r\n");
         crate::bp!("logger.switch.begin");
         let logger_switch_ok = if cfg!(feature = "dev-virt") {
             log::info!(

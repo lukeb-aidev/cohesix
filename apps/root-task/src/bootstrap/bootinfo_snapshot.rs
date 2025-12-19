@@ -122,11 +122,11 @@ impl BootInfoSnapshot {
 
     pub fn capture(view: &BootInfoView) -> Result<Self, BootInfoError> {
         let header_bytes = view.header_bytes();
-        let extra_len = view.extra_bytes();
+        let accessible_extra_len = view.extra().len();
 
         let total_size = header_bytes
             .len()
-            .checked_add(extra_len)
+            .checked_add(accessible_extra_len)
             .ok_or(BootInfoError::Overflow)?;
 
         if total_size > BOOT_HEAP_BYTES {
@@ -141,9 +141,9 @@ impl BootInfoSnapshot {
         }
 
         backing[..header_bytes.len()].copy_from_slice(header_bytes);
-        if extra_len > 0 {
+        if accessible_extra_len > 0 {
             let extra_slice = view.extra();
-            backing[header_bytes.len()..header_bytes.len() + extra_len]
+            backing[header_bytes.len()..header_bytes.len() + accessible_extra_len]
                 .copy_from_slice(extra_slice);
         }
 

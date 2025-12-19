@@ -4,7 +4,7 @@
 #![cfg(feature = "kernel")]
 
 use sel4_sys::{
-    seL4_CallWithMRs, seL4_CPtr, seL4_MessageInfo, seL4_NBRecv, seL4_Recv, seL4_Reply, seL4_Send,
+    seL4_CPtr, seL4_CallWithMRs, seL4_MessageInfo, seL4_NBRecv, seL4_Recv, seL4_Reply, seL4_Send,
     seL4_Wait, seL4_Word, seL4_Yield,
 };
 

@@ -364,6 +364,22 @@ fn bootinfo_extra_slice<'a>(
         });
     }
 
+    let page_base = addr & !(IPC_PAGE_BYTES - 1);
+    let page_end = page_base + IPC_PAGE_BYTES;
+    if extra_end > page_end {
+        let mut warn_line = HeaplessString::<160>::new();
+        let _ = write!(
+            &mut warn_line,
+            "[bootinfo] extra range out of bounds: [0x{start:016x}..0x{end:016x}) limit=0x{limit:016x}\r\n",
+            start = extra_start,
+            end = extra_end,
+            limit = page_end,
+        );
+        debug_uart_str(warn_line.as_str());
+        let safe_start = extra_start;
+        return Ok((&[], safe_start, safe_start));
+    }
+
     // SAFETY: The kernel guarantees that bootinfo and its extra region are mapped as
     // readable memory for the root task. The calculations above ensure we do not
     // wrap the address space or overrun the reported length.
