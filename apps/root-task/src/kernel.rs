@@ -1397,6 +1397,12 @@ fn bootstrap<P: Platform>(
         }
     };
 
+    let mut probe_canary = |mark: &'static str| {
+        if let Some(state) = bootinfo_state {
+            let _ = state.probe(mark);
+        }
+    };
+
     if let Some(state) = bootinfo_state {
         let bootinfo_snapshot = state.snapshot();
         match state.verify("snapshot", "[mark] bootinfo.snapshot") {
@@ -1477,12 +1483,6 @@ fn bootstrap<P: Platform>(
             let msg = String::from("bootinfo snapshot unavailable after fallback attempts");
             boot_log::force_uart_line(msg.as_str());
             return Err(BootError::Fatal(msg));
-        }
-    };
-
-    let mut probe_canary = |mark: &'static str| {
-        if let Some(state) = bootinfo_state {
-            let _ = state.probe(mark);
         }
     };
 

@@ -498,7 +498,7 @@ where
         return Ok(0);
     }
 
-    let mut probe_retype = |mark: &'static str| {
+    let probe_retype = |mark: &'static str| {
         if let Some(state) = BootInfoState::get() {
             let _ = state.probe(mark);
         }
