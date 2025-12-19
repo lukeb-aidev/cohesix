@@ -485,6 +485,16 @@ main() {
     install -m 0755 "$ROOTFS_DIR/root-task" "$ROOTSERVER_STAGE_PATH"
     log "Packaged component binary: $ROOTSERVER_STAGE_PATH"
     if [[ -f "$ROOTSERVER_STAGE_PATH" ]]; then
+        python3 - "$ROOTSERVER_STAGE_PATH" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+size = path.stat().st_size
+print(f"[cohesix-build] Staged rootserver size: {path} ({size} bytes)")
+PY
+    fi
+    if [[ -f "$ROOTSERVER_STAGE_PATH" ]]; then
         shasum -a 256 "$ROOTSERVER_STAGE_PATH" | awk '{print "[cohesix-build] rootserver sha256=" $1}'
     fi
 
