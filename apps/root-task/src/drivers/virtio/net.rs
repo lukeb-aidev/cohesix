@@ -569,7 +569,6 @@ impl VirtioNet {
     fn log_zero_len_enqueue(
         &mut self,
         queue_label: &'static str,
-        queue: &VirtQueue,
         head_id: u16,
         descs: &[DescSpec],
         header_len: Option<usize>,
@@ -586,6 +585,10 @@ impl VirtioNet {
         }
         *already_logged = true;
 
+        let queue = match queue_label {
+            "RX" => &self.rx_queue,
+            _ => &self.tx_queue,
+        };
         let (used_idx, avail_idx) = queue.indices();
         let pending = avail_idx.wrapping_sub(used_idx);
         let free_entries = queue.size.saturating_sub(pending);
@@ -608,11 +611,11 @@ impl VirtioNet {
         for (idx, spec) in descs.iter().enumerate() {
             error!(
                 target: "net-console",
-                "[virtio-net] zero-len chain desc[{idx}]: addr=0x{addr:016x} len={} flags=0x{flags:04x} next={:?}",
-                spec.len,
+                "[virtio-net] zero-len chain desc[{idx}]: addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next:?}",
+                len = spec.len,
                 addr = spec.addr,
                 flags = spec.flags,
-                spec.next,
+                next = spec.next,
             );
         }
     }
@@ -620,7 +623,6 @@ impl VirtioNet {
     fn validate_chain_nonzero(
         &mut self,
         queue_label: &'static str,
-        queue: &VirtQueue,
         head_id: u16,
         descs: &[DescSpec],
         header_len: Option<usize>,
@@ -636,7 +638,6 @@ impl VirtioNet {
         if zero_header || zero_payload || zero_capacity || zero_desc {
             self.log_zero_len_enqueue(
                 queue_label,
-                queue,
                 head_id,
                 descs,
                 header_len,
@@ -669,7 +670,6 @@ impl VirtioNet {
 
         self.validate_chain_nonzero(
             "RX",
-            &self.rx_queue,
             head_id,
             descs,
             Some(header_len),
@@ -712,7 +712,6 @@ impl VirtioNet {
 
         self.validate_chain_nonzero(
             "TX",
-            &self.tx_queue,
             head_id,
             descs,
             None,
@@ -752,7 +751,6 @@ impl VirtioNet {
         if self
             .validate_chain_nonzero(
                 "RX",
-                &self.rx_queue,
                 0,
                 &[],
                 Some(header_len),
@@ -765,6 +763,7 @@ impl VirtioNet {
             return;
         }
 
+        let rx_len = self.rx_buffers.len();
         for (slot, buffer) in self.rx_buffers.iter_mut().enumerate() {
             let head_idx = slot as u16;
             let buffer_capacity = FRAME_BUFFER_LEN.min(buffer.as_slice().len());
@@ -781,7 +780,7 @@ impl VirtioNet {
 
             Self::sync_rx_slot_for_device(buffer, header_len, payload_len);
 
-            let notify = slot + 1 == self.rx_buffers.len();
+            let notify = slot + 1 == rx_len;
             if self
                 .enqueue_rx_chain_checked(
                     head_idx,
@@ -1022,10 +1021,13 @@ impl VirtioNet {
         if self.device_faulted {
             return;
         }
-        if let Some(buffer) = self.tx_buffers.get_mut(id as usize) {
-            let length = len.min(buffer.as_mut_slice().len());
+        if let Some((length, addr)) = self
+            .tx_buffers
+            .get(id as usize)
+            .map(|buffer| (len.min(buffer.as_slice().len()), buffer.paddr()))
+        {
             let desc = [DescSpec {
-                addr: buffer.paddr() as u64,
+                addr: addr as u64,
                 len: length as u32,
                 flags: 0,
                 next: None,
@@ -1038,9 +1040,11 @@ impl VirtioNet {
                 self.tx_drops = self.tx_drops.saturating_add(1);
                 return;
             }
-            let slice = buffer.as_mut_slice();
-            for byte in &mut slice[length..] {
-                *byte = 0;
+            if let Some(buffer) = self.tx_buffers.get_mut(id as usize) {
+                let slice = buffer.as_mut_slice();
+                for byte in &mut slice[length..] {
+                    *byte = 0;
+                }
             }
             if !self.tx_post_logged {
                 info!(
