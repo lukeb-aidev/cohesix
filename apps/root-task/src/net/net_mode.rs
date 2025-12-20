@@ -61,7 +61,10 @@ pub struct NetTestDestinations {
 }
 
 fn env_ip(key: &str) -> Option<[u8; 4]> {
-    option_env!(key).and_then(parse_ipv4)
+    match key {
+        "COHESIX_NET_TEST_DST" => option_env!("COHESIX_NET_TEST_DST").and_then(parse_ipv4),
+        _ => None,
+    }
 }
 
 fn parse_ipv4(addr: &str) -> Option<[u8; 4]> {
