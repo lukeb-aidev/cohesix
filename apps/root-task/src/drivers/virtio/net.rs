@@ -69,6 +69,14 @@ static LOG_TCP_DEST_PORT: AtomicBool = AtomicBool::new(true);
 static RX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
 
+#[derive(Clone, Copy, Debug)]
+struct DescSpec {
+    addr: u64,
+    len: u32,
+    flags: u16,
+    next: Option<u16>,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct VirtioNetHdr {
@@ -558,30 +566,236 @@ impl VirtioNet {
         );
     }
 
+    fn log_zero_len_enqueue(
+        &mut self,
+        queue_label: &'static str,
+        queue: &VirtQueue,
+        head_id: u16,
+        descs: &[DescSpec],
+        header_len: Option<usize>,
+        payload_len: Option<usize>,
+        frame_capacity: Option<usize>,
+        used_len: Option<usize>,
+    ) {
+        let already_logged = match queue_label {
+            "RX" => &mut self.rx_zero_len_logged,
+            _ => &mut self.tx_zero_len_logged,
+        };
+        if *already_logged {
+            return;
+        }
+        *already_logged = true;
+
+        let (used_idx, avail_idx) = queue.indices();
+        let pending = avail_idx.wrapping_sub(used_idx);
+        let free_entries = queue.size.saturating_sub(pending);
+
+        error!(
+            target: "net-console",
+            "[virtio-net] blocked zero-len descriptor enqueue: queue={} head_id={} used_idx={} avail_idx={} last_used={} pending={} free_entries={} header_len={:?} payload_len={:?} frame_capacity={:?} used_len={:?}",
+            queue_label,
+            head_id,
+            used_idx,
+            avail_idx,
+            queue.last_used,
+            pending,
+            free_entries,
+            header_len,
+            payload_len,
+            frame_capacity,
+            used_len,
+        );
+        for (idx, spec) in descs.iter().enumerate() {
+            error!(
+                target: "net-console",
+                "[virtio-net] zero-len chain desc[{idx}]: addr=0x{addr:016x} len={} flags=0x{flags:04x} next={:?}",
+                spec.len,
+                addr = spec.addr,
+                flags = spec.flags,
+                spec.next,
+            );
+        }
+    }
+
+    fn validate_chain_nonzero(
+        &mut self,
+        queue_label: &'static str,
+        queue: &VirtQueue,
+        head_id: u16,
+        descs: &[DescSpec],
+        header_len: Option<usize>,
+        payload_len: Option<usize>,
+        frame_capacity: Option<usize>,
+        used_len: Option<usize>,
+    ) -> Result<(), ()> {
+        let zero_header = header_len.map_or(false, |len| len == 0);
+        let zero_payload = payload_len.map_or(false, |len| len == 0);
+        let zero_capacity = frame_capacity.map_or(false, |len| len == 0);
+        let zero_desc = descs.iter().any(|desc| desc.len == 0);
+
+        if zero_header || zero_payload || zero_capacity || zero_desc {
+            self.log_zero_len_enqueue(
+                queue_label,
+                queue,
+                head_id,
+                descs,
+                header_len,
+                payload_len,
+                frame_capacity,
+                used_len,
+            );
+            self.device_faulted = true;
+            self.last_error = Some("zero_len_desc");
+            return Err(());
+        }
+
+        Ok(())
+    }
+
+    fn enqueue_rx_chain_checked(
+        &mut self,
+        head_id: u16,
+        descs: &[DescSpec],
+        header_len: usize,
+        payload_len: usize,
+        frame_capacity: usize,
+        used_len: Option<usize>,
+        notify: bool,
+    ) -> Result<(), ()> {
+        self.check_device_health();
+        if self.device_faulted {
+            return Err(());
+        }
+
+        self.validate_chain_nonzero(
+            "RX",
+            &self.rx_queue,
+            head_id,
+            descs,
+            Some(header_len),
+            Some(payload_len),
+            Some(frame_capacity),
+            used_len,
+        )?;
+
+        for (idx, spec) in descs.iter().enumerate() {
+            let desc_index = head_id.wrapping_add(idx as u16);
+            let next = if idx + 1 < descs.len() {
+                Some(head_id.wrapping_add((idx + 1) as u16))
+            } else {
+                spec.next
+            };
+            self.rx_queue
+                .setup_descriptor(desc_index, spec.addr, spec.len, spec.flags, next);
+        }
+
+        self.rx_queue.sync_descriptor_table_for_device();
+        self.rx_queue.push_avail(head_id);
+        self.rx_queue.sync_avail_ring_for_device();
+        if notify && !self.device_faulted {
+            self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
+        }
+        Ok(())
+    }
+
+    fn enqueue_tx_chain_checked(
+        &mut self,
+        head_id: u16,
+        descs: &[DescSpec],
+        used_len: Option<usize>,
+        notify: bool,
+    ) -> Result<(), ()> {
+        self.check_device_health();
+        if self.device_faulted {
+            return Err(());
+        }
+
+        self.validate_chain_nonzero(
+            "TX",
+            &self.tx_queue,
+            head_id,
+            descs,
+            None,
+            None,
+            None,
+            used_len,
+        )?;
+
+        for (idx, spec) in descs.iter().enumerate() {
+            let desc_index = head_id.wrapping_add(idx as u16);
+            let next = if idx + 1 < descs.len() {
+                Some(head_id.wrapping_add((idx + 1) as u16))
+            } else {
+                spec.next
+            };
+            self.tx_queue
+                .setup_descriptor(desc_index, spec.addr, spec.len, spec.flags, next);
+        }
+
+        self.tx_queue.sync_descriptor_table_for_device();
+        self.tx_queue.push_avail(head_id);
+        self.tx_queue.sync_avail_ring_for_device();
+        if notify && !self.device_faulted {
+            self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
+        }
+        Ok(())
+    }
+
     fn initialise_queues(&mut self) {
-        let header_len = self.rx_header_len as u32;
-        let header_len_usize = self.rx_header_len as usize;
-        let payload_len = core::cmp::min(
+        let header_len = self.rx_header_len;
+        let payload_capacity = core::cmp::min(
             MAX_FRAME_LEN,
             FRAME_BUFFER_LEN.saturating_sub(self.rx_header_len),
-        ) as u32;
+        );
+        let frame_capacity = header_len.saturating_add(payload_capacity);
+
+        if self
+            .validate_chain_nonzero(
+                "RX",
+                &self.rx_queue,
+                0,
+                &[],
+                Some(header_len),
+                Some(payload_capacity),
+                Some(frame_capacity),
+                None,
+            )
+            .is_err()
+        {
+            return;
+        }
 
         for (slot, buffer) in self.rx_buffers.iter_mut().enumerate() {
             let head_idx = slot as u16;
-            let base_paddr = buffer.paddr();
+            let buffer_capacity = FRAME_BUFFER_LEN.min(buffer.as_slice().len());
+            let payload_len = buffer_capacity.saturating_sub(header_len);
             let total_len = header_len
                 .saturating_add(payload_len)
-                .min(buffer.as_slice().len() as u32);
-            self.rx_queue.setup_descriptor(
-                head_idx,
-                base_paddr as u64,
-                total_len,
-                VIRTQ_DESC_F_WRITE,
-                None,
-            );
-            self.rx_queue.push_avail(head_idx);
+                .min(buffer.as_slice().len()) as u32;
+            let desc = [DescSpec {
+                addr: buffer.paddr() as u64,
+                len: total_len,
+                flags: VIRTQ_DESC_F_WRITE,
+                next: None,
+            }];
 
-            Self::sync_rx_slot_for_device(buffer, header_len_usize, payload_len as usize);
+            Self::sync_rx_slot_for_device(buffer, header_len, payload_len);
+
+            let notify = slot + 1 == self.rx_buffers.len();
+            if self
+                .enqueue_rx_chain_checked(
+                    head_idx,
+                    &desc,
+                    header_len,
+                    payload_len,
+                    buffer_capacity,
+                    None,
+                    notify,
+                )
+                .is_err()
+            {
+                return;
+            }
 
             if slot < 2 {
                 let head_desc = self.rx_queue.read_descriptor(head_idx);
@@ -598,8 +812,6 @@ impl VirtioNet {
                 );
             }
         }
-        self.rx_queue.sync_descriptor_table_for_device();
-        self.rx_queue.sync_avail_ring_for_device();
         let (used_idx, avail_idx) = self.rx_queue.indices();
         let first_paddr = self.rx_buffers.first().map(|buf| buf.paddr()).unwrap_or(0);
         let last_paddr = self.rx_buffers.last().map(|buf| buf.paddr()).unwrap_or(0);
@@ -626,13 +838,6 @@ impl VirtioNet {
                 "RX avail_idx should equal posted buffer count"
             );
         }
-        debug!(
-            target: "net-console",
-            "[virtio-net] rx kick notify={} avail.idx={}",
-            RX_QUEUE_INDEX,
-            avail_idx
-        );
-        self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
         info!(
             "[virtio-net] RX queue armed: size={} buffers={} last_used={}",
             self.rx_queue.size,
@@ -746,44 +951,44 @@ impl VirtioNet {
         }
     }
 
-    fn requeue_rx(&mut self, id: u16) {
+    fn requeue_rx(&mut self, id: u16, used_len: Option<usize>) {
         self.check_device_health();
         if self.device_faulted {
             return;
         }
         let slot = id as usize;
-        let header_len = self.rx_header_len as u32;
-        let header_len_usize = self.rx_header_len as usize;
+        let header_len = self.rx_header_len;
         if let Some(buffer) = self.rx_buffers.get_mut(slot) {
-            let buffer_len = buffer.as_slice().len();
-            let total_len = FRAME_BUFFER_LEN.min(buffer_len) as u32;
-            if total_len == 0 {
-                if !self.rx_zero_len_logged {
-                    warn!(
-                        target: "net-console",
-                        "[virtio-net] requeue_rx: refusing to post zero-len descriptor id={} hdr_len={} buffer_len={buffer_len}",
-                        id,
-                        header_len,
-                    );
-                    self.rx_zero_len_logged = true;
-                }
+            let buffer_capacity = FRAME_BUFFER_LEN.min(buffer.as_slice().len());
+            let payload_len = buffer_capacity.saturating_sub(header_len);
+            let total_len = header_len
+                .saturating_add(payload_len)
+                .min(buffer.as_slice().len()) as u32;
+
+            let desc = [DescSpec {
+                addr: buffer.paddr() as u64,
+                len: total_len,
+                flags: VIRTQ_DESC_F_WRITE,
+                next: None,
+            }];
+
+            Self::sync_rx_slot_for_device(buffer, header_len, payload_len);
+
+            if self
+                .enqueue_rx_chain_checked(
+                    id,
+                    &desc,
+                    header_len,
+                    payload_len,
+                    buffer_capacity,
+                    used_len,
+                    true,
+                )
+                .is_err()
+            {
                 return;
             }
-            self.rx_queue.setup_descriptor(
-                id,
-                buffer.paddr() as u64,
-                total_len,
-                VIRTQ_DESC_F_WRITE,
-                None,
-            );
-            self.rx_queue.push_avail(id);
-            Self::sync_rx_slot_for_device(
-                buffer,
-                header_len_usize,
-                total_len.saturating_sub(header_len) as usize,
-            );
-            self.rx_queue.sync_descriptor_table_for_device();
-            self.rx_queue.sync_avail_ring_for_device();
+
             let (used_idx, avail_idx) = self.rx_queue.indices();
             log::debug!(
                 target: "virtio-net",
@@ -792,9 +997,6 @@ impl VirtioNet {
                 used_idx,
                 avail_idx,
             );
-            if !self.device_faulted {
-                self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
-            }
         } else {
             warn!(
                 target: "net-console",
@@ -820,38 +1022,21 @@ impl VirtioNet {
         if self.device_faulted {
             return;
         }
-        if len == 0 {
-            if !self.tx_zero_len_logged {
-                warn!(
-                    target: "net-console",
-                    "[virtio-net] drop TX descriptor id={} with zero length",
-                    id
-                );
-                self.tx_zero_len_logged = true;
-            }
-            self.tx_drops = self.tx_drops.saturating_add(1);
-            return;
-        }
         if let Some(buffer) = self.tx_buffers.get_mut(id as usize) {
             let length = len.min(buffer.as_mut_slice().len());
-            if length == 0 {
-                if !self.tx_zero_len_logged {
-                    warn!(
-                        target: "net-console",
-                        "[virtio-net] drop TX descriptor id={} with zero length (buffer_capacity={})",
-                        id,
-                        buffer.as_mut_slice().len(),
-                    );
-                    self.tx_zero_len_logged = true;
-                }
+            let desc = [DescSpec {
+                addr: buffer.paddr() as u64,
+                len: length as u32,
+                flags: 0,
+                next: None,
+            }];
+
+            if self
+                .enqueue_tx_chain_checked(id, &desc, Some(length), true)
+                .is_err()
+            {
                 self.tx_drops = self.tx_drops.saturating_add(1);
                 return;
-            }
-            self.tx_queue
-                .setup_descriptor(id, buffer.paddr() as u64, length as u32, 0, None);
-            self.tx_queue.push_avail(id);
-            if !self.device_faulted {
-                self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
             }
             let slice = buffer.as_mut_slice();
             for byte in &mut slice[length..] {
@@ -1219,7 +1404,7 @@ impl RxToken for VirtioRxToken {
                 "[virtio-net] RX: frame too small for virtio-net header (len={})",
                 available
             );
-            driver.requeue_rx(self.id);
+            driver.requeue_rx(self.id, Some(self.len));
             return f(&[]);
         }
 
@@ -1237,7 +1422,7 @@ impl RxToken for VirtioRxToken {
         log_tcp_trace("RX", payload);
         driver.rx_packets = driver.rx_packets.saturating_add(1);
         let result = f(payload);
-        driver.requeue_rx(self.id);
+        driver.requeue_rx(self.id, Some(self.len));
         result
     }
 }
