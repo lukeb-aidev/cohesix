@@ -21,6 +21,7 @@ use core::fmt::{self, Write as FmtWrite};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, info, trace, warn};
 use portable_atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use smoltcp::config::IFACE_NEIGHBOR_CACHE_COUNT;
 use smoltcp::iface::{
     Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, SocketStorage,
 };
@@ -71,13 +72,14 @@ const UDP_BEACON_PORT: u16 = 40_000;
 const TCP_SMOKE_PORT: u16 = 31_339;
 const TCP_SMOKE_OUT_LOCAL_PORT: u16 = 31_340;
 #[cfg(feature = "net-outbound-probe")]
-const TCP_PROBE_PORT: u16 = 31_338;
+const TCP_PROBE_PORT: u16 = TCP_SMOKE_PORT;
 #[cfg(feature = "net-outbound-probe")]
 const TCP_PROBE_BUFFER: usize = 128;
 #[cfg(feature = "net-outbound-probe")]
 const TCP_PROBE_RETRY_MS: u64 = 1_000;
 #[cfg(feature = "net-outbound-probe")]
 const TCP_PROBE_PAYLOAD: &[u8] = b"COHESIX-PING\n";
+const NEIGHBOR_CACHE_SIZE: usize = IFACE_NEIGHBOR_CACHE_COUNT;
 const SELF_TEST_ENABLED: bool = cfg!(feature = "dev-virt") || cfg!(feature = "net-selftest");
 const SELF_TEST_BEACON_INTERVAL_MS: u64 = 250;
 const SELF_TEST_BEACON_WINDOW_MS: u64 = 5_000;
@@ -753,6 +755,10 @@ struct SessionState {
     connect_reported: bool,
     logged_first_send: bool,
     not_ready_logged: bool,
+    last_flush_state: Option<TcpState>,
+    last_flush_auth_state: Option<AuthState>,
+    last_flush_log_ms: u64,
+    flush_blocked_since: Option<u64>,
 }
 
 static SOCKET_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
@@ -904,6 +910,8 @@ pub struct NetStack<D: NetDevice> {
     probe_last_log_ms: u64,
     #[cfg(feature = "net-outbound-probe")]
     probe_warned_once: bool,
+    #[cfg(feature = "net-outbound-probe")]
+    probe_hint_logged: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1664,6 +1672,14 @@ impl<D: NetDevice> NetStack<D> {
                 );
             }
         }
+        debug_assert!(
+            NEIGHBOR_CACHE_SIZE > 0,
+            "smoltcp neighbor cache must allow at least one entry"
+        );
+        info!(
+            "[net-console] iface cfg ip={}/{} gateway={} neighbor_cache_entries={}",
+            ip, prefix, gateway_label, NEIGHBOR_CACHE_SIZE,
+        );
         log_bootinfo_mark("net.init.interface", &attempt)?;
         let sockets = SocketSet::new(unsafe { &mut SOCKET_STORAGE[..] });
         log_bootinfo_mark("net.init.socketset", &attempt)?;
@@ -1717,6 +1733,8 @@ impl<D: NetDevice> NetStack<D> {
             probe_last_log_ms: 0,
             #[cfg(feature = "net-outbound-probe")]
             probe_warned_once: false,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_hint_logged: false,
         };
         stack.initialise_socket()?;
         stack.initialise_self_test_sockets()?;
@@ -1989,6 +2007,18 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     #[cfg(feature = "net-outbound-probe")]
+    fn log_probe_hint_once(&mut self, port: u16) {
+        if self.probe_hint_logged {
+            return;
+        }
+        info!(
+            target: "net-probe",
+            "[net-probe] host listener hint: nc -lv {port}",
+        );
+        self.probe_hint_logged = true;
+    }
+
+    #[cfg(feature = "net-outbound-probe")]
     fn service_outbound_probe(&mut self, now_ms: u64, timestamp: Instant) -> bool {
         let Some(handle) = self.tcp_probe_handle else {
             return false;
@@ -2029,16 +2059,20 @@ impl<D: NetDevice> NetStack<D> {
                 port: 0,
             };
             let cx = self.interface.context();
+            self.log_probe_hint_once(dest.port);
             match socket.connect(cx, dest, local_endpoint) {
                 Ok(()) => {
                     self.probe_fail_count = 0;
-                    log::info!(
-                        target: "net-probe",
-                        "[net-probe] outbound connect dest={}:{} now_ms={}",
-                        dest.addr,
-                        dest.port,
-                        now_ms
-                    );
+                    if !self.probe_warned_once {
+                        log::info!(
+                            target: "net-probe",
+                            "[net-probe] outbound connect dest={}:{} now_ms={}",
+                            dest.addr,
+                            dest.port,
+                            now_ms
+                        );
+                        self.probe_warned_once = true;
+                    }
                     activity = true;
                 }
                 Err(err) => {
@@ -2063,6 +2097,12 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         if socket.state() == TcpState::Established && socket.can_send() {
+            if !self.probe_sent {
+                log::info!(
+                    target: "net-probe",
+                    "[net-probe] established dest={}:{}", dest.addr, dest.port
+                );
+            }
             match socket.send_slice(TCP_PROBE_PAYLOAD) {
                 Ok(sent) => {
                     log::info!(
@@ -2951,15 +2991,53 @@ impl<D: NetDevice> NetStack<D> {
         if !socket.can_send() {
             return false;
         }
-        let mut activity = false;
         let pre_auth = !server.is_authenticated();
+        let mut activity = false;
         let mut budget = MAX_TX_BUDGET;
-        info!(
-            "[cohsh-net] flush_outbound: can_send={} pre_auth={} auth_state={:?}",
-            socket.can_send(),
-            pre_auth,
-            auth_state
-        );
+        let state_changed = session_state.last_flush_state != Some(socket.state());
+        let auth_changed = session_state.last_flush_auth_state != Some(auth_state);
+        let blocked_by_auth = pre_auth
+            && server
+                .peek_outbound()
+                .map(|line| {
+                    let line = line.as_str();
+                    !(line.starts_with("OK AUTH") || line.starts_with("ERR AUTH"))
+                })
+                .unwrap_or(false);
+
+        if blocked_by_auth {
+            let should_log = auth_changed
+                || state_changed
+                || now_ms.saturating_sub(session_state.last_flush_log_ms) >= 1_000;
+            if should_log {
+                info!(
+                    target: "cohsh-net",
+                    "[cohsh-net] flush_outbound blocked state={:?} auth_state={:?} queued={}",
+                    socket.state(),
+                    auth_state,
+                    server.has_outbound(),
+                );
+                session_state.last_flush_log_ms = now_ms;
+            }
+            session_state.flush_blocked_since.get_or_insert(now_ms);
+            session_state.last_flush_state = Some(socket.state());
+            session_state.last_flush_auth_state = Some(auth_state);
+            return false;
+        }
+
+        if state_changed || auth_changed {
+            info!(
+                target: "cohsh-net",
+                "[cohsh-net] flush_outbound state={:?} auth_state={:?} queued={} can_send={}",
+                socket.state(),
+                auth_state,
+                server.has_outbound(),
+                socket.can_send(),
+            );
+            session_state.last_flush_log_ms = now_ms;
+        }
+        session_state.flush_blocked_since = None;
+
         while budget > 0 && socket.can_send() {
             let Some(line) = server.pop_outbound() else {
                 break;
@@ -3068,6 +3146,8 @@ impl<D: NetDevice> NetStack<D> {
             }
             budget -= 1;
         }
+        session_state.last_flush_state = Some(socket.state());
+        session_state.last_flush_auth_state = Some(auth_state);
         activity
     }
 
@@ -3190,6 +3270,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             self.probe_last_attempt_ms = 0;
             self.probe_fail_count = 0;
             self.probe_last_log_ms = 0;
+            self.probe_hint_logged = false;
         }
     }
 

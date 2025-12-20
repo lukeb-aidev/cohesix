@@ -401,6 +401,13 @@ impl TcpConsoleServer {
         !self.priority_outbound.is_empty() || !self.outbound.is_empty()
     }
 
+    /// Peek at the next outbound line without removing it.
+    pub fn peek_outbound(&self) -> Option<&HeaplessString<DEFAULT_LINE_CAPACITY>> {
+        self.priority_outbound
+            .front()
+            .or_else(|| self.outbound.front())
+    }
+
     /// Pop the next outbound console line, if any.
     pub fn pop_outbound(&mut self) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
         self.priority_outbound
