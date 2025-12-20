@@ -27,7 +27,7 @@ use crate::net_consts::MAX_FRAME_LEN;
 use crate::sel4::{DeviceFrame, RamFrame};
 
 const FORENSICS: bool = true;
-const FORENSICS_PUBLISH_LOG_LIMIT: usize = 64;
+const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -1385,7 +1385,7 @@ impl VirtioNet {
             "RX" => &mut self.rx_publish_log_count,
             _ => &mut self.tx_publish_log_count,
         };
-        let should_log = force || (*counter as usize) < FORENSICS_PUBLISH_LOG_LIMIT;
+        let should_log = force || (*counter as u32) < FORENSICS_PUBLISH_LOG_LIMIT;
         if should_log {
             *counter = counter.saturating_add(1);
             let head_desc = match queue_kind {
@@ -1720,6 +1720,30 @@ impl VirtioNet {
                 next,
             });
         }
+
+        let header_len = self.rx_header_len;
+        let total_len = resolved_descs
+            .get(0)
+            .map(|desc| desc.len as usize)
+            .unwrap_or(0);
+        let payload_len = total_len.saturating_sub(header_len);
+        if total_len < header_len {
+            self.tx_anomaly(TxAnomalyReason::DescLenZero, "tx_total_lt_header");
+            return Err(());
+        }
+        if header_len == 0 {
+            self.tx_anomaly(TxAnomalyReason::DescLenZero, "tx_header_len_zero");
+            return Err(());
+        }
+        if payload_len == 0 {
+            self.tx_anomaly(TxAnomalyReason::DescLenZero, "tx_payload_len_zero");
+        }
+        let header_fields = self.inspect_tx_header(head_id, header_len);
+        let payload_overlaps = resolved_descs.get(0).map_or(false, |desc| {
+            let header_end = desc.addr.saturating_add(header_len as u64);
+            let payload_addr = desc.addr.saturating_add(header_len as u64);
+            payload_len > 0 && payload_addr < header_end
+        });
 
         fence(AtomicOrdering::Release);
         self.verify_descriptor_write("TX", QueueKind::Tx, head_id, &resolved_descs)?;
@@ -2395,13 +2419,13 @@ impl VirtioNet {
             head_id,
             total_len,
             header_len,
-            buf_start = buffer_range.0,
-            buf_end = buffer_range.1,
-            payload_start = payload_start,
-            payload_end = payload_end,
-            self.tx_queue.layout.desc_len,
-            self.tx_queue.layout.avail_len,
-        );
+                buf_start = buffer_range.0,
+                buf_end = buffer_range.1,
+                payload_start = payload_start,
+                payload_end = payload_end,
+                desc_len = self.tx_queue.layout.desc_len,
+                avail_len = self.tx_queue.layout.avail_len,
+            );
         for (idx, desc) in descs.iter().enumerate() {
             info!(
                 target: "virtio-net",
@@ -2436,7 +2460,7 @@ impl VirtioNet {
                 exp_addr = expected.addr,
                 exp_len = expected.len,
                 exp_flags = expected.flags,
-                expected.next,
+                exp_next = expected.next,
                 act_addr = actual.addr,
                 act_len = actual.len,
                 act_flags = actual.flags,
@@ -2938,27 +2962,34 @@ impl TxToken for VirtioTxToken {
                 .min(MAX_FRAME_LEN)
                 .min(max_len.saturating_sub(header_len));
             let total_len = payload_len + header_len;
-            let result = {
+            let result;
+            let written_len;
+            {
                 let mut_slice = &mut buffer.as_mut_slice()[..total_len];
                 let (header, payload) =
                     mut_slice.split_at_mut(core::cmp::min(header_len, total_len));
                 header.fill(0);
                 let copy_len = core::cmp::min(payload_len, MAX_FRAME_LEN);
                 let mut payload_before = [0u8; MAX_FRAME_LEN];
+                let mut payload_after = [0u8; MAX_FRAME_LEN];
                 payload_before[..copy_len].copy_from_slice(&payload[..copy_len]);
-                let result = f(payload);
-                let written_len =
-                    driver.compute_written_len(payload_len, &payload_before[..copy_len], payload);
-                driver.log_tx_attempt(attempt_seq, len, payload_len, written_len);
-                log_tcp_trace("TX", payload);
-                result
-            };
+                result = f(&mut payload[..payload_len]);
+                let after_len = core::cmp::min(payload_len, MAX_FRAME_LEN);
+                payload_after[..after_len].copy_from_slice(&payload[..after_len]);
+                written_len = driver.compute_written_len(
+                    payload_len,
+                    &payload_before[..copy_len],
+                    &payload_after[..after_len],
+                );
+                log_tcp_trace("TX", &payload[..payload_len]);
+            }
+            driver.log_tx_attempt(attempt_seq, len, payload_len, written_len);
             driver.submit_tx(id, total_len);
             driver.tx_packets = driver.tx_packets.saturating_add(1);
             result
         } else {
             let length = len.min(MAX_FRAME_LEN);
-            let mut scratch = [0u8; MAX_FRAME_LEN];
+            let scratch = [0u8; MAX_FRAME_LEN];
             let result = {
                 let mut payload = scratch;
                 let payload_slice = &mut payload[..length];
