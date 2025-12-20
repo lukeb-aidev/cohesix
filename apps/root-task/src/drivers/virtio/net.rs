@@ -2968,30 +2968,51 @@ impl VirtQueue {
             ));
         }
 
-        let queue_align = core::mem::size_of::<VirtqUsedElem>();
-        let layout = VirtqLayout::compute(size, queue_align, frame_capacity)?;
+        const LEGACY_QUEUE_ALIGN: usize = 4;
+        let layout = VirtqLayout::compute_legacy(size, frame_capacity)?;
 
-        if layout.avail_offset + layout.avail_len > frame_capacity
-            || layout.used_offset + layout.used_len > frame_capacity
-        {
+        let desc_end = layout.desc_offset + layout.desc_len;
+        let avail_end = layout.avail_offset + layout.avail_len;
+        let used_end = layout.used_offset + layout.used_len;
+
+        if layout.desc_offset != 0 {
             error!(
                 target: "net-console",
-                "[virtio-net] virtqueue layout exceeds backing: avail_end={} used_end={} capacity={}",
-                layout.avail_offset + layout.avail_len,
-                layout.used_offset + layout.used_len,
-                frame_capacity,
+                "[virtio-net][layout] descriptor offset must be zero: desc_off={}",
+                layout.desc_offset,
             );
             return Err(DriverError::QueueInvariant(
-                "virtqueue layout exceeds backing",
+                "virtqueue descriptor offset mismatch",
             ));
         }
 
-        let desc_end = layout.desc_len;
-        let avail_end = layout.avail_offset + layout.avail_len;
-        let used_end = layout.used_offset + layout.used_len;
+        if layout.avail_offset != layout.desc_len {
+            error!(
+                target: "net-console",
+                "[virtio-net][layout] avail offset mismatch: avail_off={} desc_len={} (expected equality)",
+                layout.avail_offset,
+                layout.desc_len,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtqueue avail offset mismatch",
+            ));
+        }
+
+        if layout.used_offset & (LEGACY_QUEUE_ALIGN - 1) != 0 {
+            error!(
+                target: "net-console",
+                "[virtio-net][layout] used ring misaligned: used_offset={} align={}",
+                layout.used_offset,
+                LEGACY_QUEUE_ALIGN,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtqueue used ring alignment violation",
+            ));
+        }
+
         if desc_end > layout.avail_offset
             || avail_end > layout.used_offset
-            || used_end > frame_capacity
+            || used_end > layout.total_len
             || layout.avail_offset < desc_end
             || layout.used_offset < avail_end
         {
@@ -3010,15 +3031,29 @@ impl VirtQueue {
             ));
         }
 
-        if layout.used_offset & (queue_align - 1) != 0 {
+        if used_end > frame_capacity {
             error!(
                 target: "net-console",
-                "[virtio-net][layout] used ring misaligned: used_offset={} align={}",
-                layout.used_offset,
-                queue_align,
+                "[virtio-net] virtqueue layout exceeds backing: avail_end={} used_end={} capacity={}",
+                avail_end,
+                used_end,
+                frame_capacity,
             );
             return Err(DriverError::QueueInvariant(
-                "virtqueue used ring alignment violation",
+                "virtqueue layout exceeds backing",
+            ));
+        }
+
+        if used_end != layout.total_len {
+            error!(
+                target: "net-console",
+                "[virtio-net][layout] total length mismatch: used_end={} total_len={} frame_capacity={}",
+                used_end,
+                layout.total_len,
+                frame_capacity,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtqueue total length mismatch",
             ));
         }
 
@@ -3059,12 +3094,15 @@ impl VirtQueue {
 
         info!(
             target: "net-console",
-            "[virtio-net][layout] queue={index} size={queue_size} qmem_vaddr=0x{vaddr:016x} qmem_paddr=0x{paddr:016x} desc@+0x{desc_off:03x} avail@+0x{avail_off:03x} used@+0x{used_off:03x} total_len={total}",
+            "[virtio-net][layout] queue={index} size={queue_size} qmem_vaddr=0x{vaddr:016x} qmem_paddr=0x{paddr:016x} desc@+0x{desc_off:03x}/len={desc_len} avail@+0x{avail_off:03x}/len={avail_len} used@+0x{used_off:03x}/len={used_len} total_len={total}",
             vaddr = base_ptr.as_ptr() as usize,
             paddr = base_paddr,
-            desc_off = 0,
+            desc_off = layout.desc_offset,
+            desc_len = layout.desc_len,
             avail_off = layout.avail_offset,
+            avail_len = layout.avail_len,
             used_off = layout.used_offset,
+            used_len = layout.used_len,
             total = layout.total_len,
         );
 
@@ -3079,7 +3117,7 @@ impl VirtQueue {
                 regs.set_queue_device_addr(base_paddr + layout.used_offset);
             }
             VirtioMmioMode::Legacy => {
-                regs.set_queue_align(queue_align as u32);
+                regs.set_queue_align(LEGACY_QUEUE_ALIGN as u32);
                 regs.set_queue_pfn(queue_pfn);
             }
         }
@@ -3346,6 +3384,7 @@ struct VirtqUsedElem {
 
 #[derive(Clone, Copy, Debug)]
 struct VirtqLayout {
+    desc_offset: usize,
     desc_len: usize,
     avail_offset: usize,
     avail_len: usize,
@@ -3355,24 +3394,33 @@ struct VirtqLayout {
 }
 
 impl VirtqLayout {
-    fn compute(
-        queue_size: usize,
-        queue_align: usize,
-        frame_capacity: usize,
-    ) -> Result<Self, DriverError> {
-        debug_assert!(queue_align.is_power_of_two());
+    fn compute_legacy(queue_size: usize, frame_capacity: usize) -> Result<Self, DriverError> {
+        const LEGACY_USED_ALIGNMENT: usize = 4;
 
-        let desc_len = core::mem::size_of::<VirtqDesc>()
+        debug_assert!(LEGACY_USED_ALIGNMENT.is_power_of_two());
+
+        let desc_offset = 0usize;
+        let desc_len = 16usize
             .checked_mul(queue_size)
             .ok_or(DriverError::NoQueue)?;
-        let avail_len = core::mem::size_of::<VirtqAvail>()
-            .checked_add(core::mem::size_of::<u16>() * queue_size)
+
+        let avail_offset = desc_offset
+            .checked_add(desc_len)
             .ok_or(DriverError::NoQueue)?;
-        let avail_offset = desc_len;
-        let used_offset = align_up(desc_len + avail_len, queue_align);
-        let used_len = core::mem::size_of::<VirtqUsed>()
-            .checked_add(core::mem::size_of::<VirtqUsedElem>() * queue_size)
+        let avail_ring_len = 2usize.checked_mul(queue_size).ok_or(DriverError::NoQueue)?;
+        let avail_len = 4usize
+            .checked_add(avail_ring_len)
+            .and_then(|v| v.checked_add(2))
             .ok_or(DriverError::NoQueue)?;
+
+        let used_offset = align_up(avail_offset + avail_len, LEGACY_USED_ALIGNMENT);
+        let used_elems_len = 8usize.checked_mul(queue_size).ok_or(DriverError::NoQueue)?;
+        let used_len = 4usize
+            .checked_add(4)
+            .and_then(|v| v.checked_add(used_elems_len))
+            .and_then(|v| v.checked_add(2))
+            .ok_or(DriverError::NoQueue)?;
+
         let total_len = used_offset
             .checked_add(used_len)
             .ok_or(DriverError::NoQueue)?;
@@ -3388,6 +3436,7 @@ impl VirtqLayout {
         }
 
         Ok(Self {
+            desc_offset,
             desc_len,
             avail_offset,
             avail_len,
