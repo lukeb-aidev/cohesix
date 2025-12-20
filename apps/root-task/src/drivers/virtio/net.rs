@@ -1050,11 +1050,11 @@ impl VirtioNet {
         for (idx, len, addr, gen) in posted {
             info!(
                 target: "net-console",
-                "[virtio-net][forensics] tx posted id={} len={} addr=0x{addr:016x} gen={} ",
-                idx,
-                len,
+                "[virtio-net][forensics] tx posted id={id} len={len} addr=0x{addr:016x} gen={gen} ",
+                id = idx,
+                len = len,
                 addr = addr,
-                gen,
+                gen = gen,
             );
         }
     }
@@ -1216,11 +1216,11 @@ impl VirtioNet {
                 observed_head,
                 desc.len,
                 expected.len,
-                addr = desc.addr,
-                expected_addr = expected.addr,
                 self.tx_queue.last_used,
                 self.tx_queue.indices().0,
                 self.tx_queue.indices().1,
+                addr = desc.addr,
+                expected_addr = expected.addr,
             );
             return self.tx_state_violation("tx_publish_mismatch", head_id, Some(slot));
         }
