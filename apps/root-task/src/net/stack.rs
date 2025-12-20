@@ -2058,11 +2058,14 @@ impl<D: NetDevice> NetStack<D> {
                 addr: Some(self.ip.into()),
                 port: 0,
             };
-            let cx = self.interface.context();
             drop(socket);
             self.log_probe_hint_once(dest.port);
-            let socket = self.sockets.get_mut::<TcpSocket>(handle);
-            match socket.connect(cx, dest, local_endpoint) {
+            let connect_result = {
+                let cx = self.interface.context();
+                let socket = self.sockets.get_mut::<TcpSocket>(handle);
+                socket.connect(cx, dest, local_endpoint)
+            };
+            match connect_result {
                 Ok(()) => {
                     self.probe_fail_count = 0;
                     if !self.probe_warned_once {
