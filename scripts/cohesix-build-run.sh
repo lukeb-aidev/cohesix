@@ -187,6 +187,9 @@ main() {
     DTB_OVERRIDE=""
     TRANSPORT="tcp"
     TCP_PORT=31337
+    UDP_ECHO_PORT=31338
+    TCP_SMOKE_PORT=31339
+    VIRTIO_MMIO_FORCE_LEGACY=${VIRTIO_MMIO_FORCE_LEGACY:-0}
     ROOT_TASK_FEATURES="kernel,bootstrap-trace"
 
     while [[ $# -gt 0 ]]; do
