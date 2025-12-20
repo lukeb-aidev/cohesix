@@ -902,6 +902,8 @@ pub struct NetStack<D: NetDevice> {
     probe_fail_count: u32,
     #[cfg(feature = "net-outbound-probe")]
     probe_last_log_ms: u64,
+    #[cfg(feature = "net-outbound-probe")]
+    probe_warned_once: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1713,6 +1715,8 @@ impl<D: NetDevice> NetStack<D> {
             probe_fail_count: 0,
             #[cfg(feature = "net-outbound-probe")]
             probe_last_log_ms: 0,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_warned_once: false,
         };
         stack.initialise_socket()?;
         stack.initialise_self_test_sockets()?;
@@ -2039,8 +2043,11 @@ impl<D: NetDevice> NetStack<D> {
                 }
                 Err(err) => {
                     self.probe_fail_count = self.probe_fail_count.saturating_add(1);
-                    if now_ms.saturating_sub(self.probe_last_log_ms) >= 1_000 {
+                    let should_log = !self.probe_warned_once
+                        || now_ms.saturating_sub(self.probe_last_log_ms) >= 5_000;
+                    if should_log {
                         self.probe_last_log_ms = now_ms;
+                        self.probe_warned_once = true;
                         log::warn!(
                             target: "net-probe",
                             "[net-probe] connect failed dest={}:{} err={:?} failures={}",
