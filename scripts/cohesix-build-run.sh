@@ -170,6 +170,10 @@ detect_gic_version() {
     echo "$result"
 }
 
+virtio_mmio_force_legacy_supported() {
+    "$QEMU_BIN" -global help 2>/dev/null | grep -q 'virtio-mmio\.force-legacy'
+}
+
 main() {
     SEL4_BUILD_DIR="${SEL4_BUILD:-$HOME/seL4/build}"
     OUT_DIR="out/cohesix"
@@ -574,30 +578,27 @@ PY
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
         log "Wiring virtio-net MMIO NIC for TCP console"
-        local hostfwd_entries=(
-            "hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT}"
-            "hostfwd=udp:127.0.0.1:${UDP_ECHO_PORT}-10.0.2.15:${UDP_ECHO_PORT}"
-            "hostfwd=tcp:127.0.0.1:${TCP_SMOKE_PORT}-10.0.2.15:${TCP_SMOKE_PORT}"
-        )
-        local hostfwd_joined
-        hostfwd_joined=$(IFS=','; echo "${hostfwd_entries[*]}")
-
-        local force_legacy_arg="false"
-        if [[ "${VIRTIO_MMIO_FORCE_LEGACY:-0}" -eq 1 ]]; then
-            force_legacy_arg="true"
-            log "virtio-mmio legacy requested: -global virtio-mmio.force-legacy=true (requires --features virtio-mmio-legacy)"
+        if virtio_mmio_force_legacy_supported; then
+            if [[ "${COHESIX_VIRTIO_MMIO_LEGACY:-0}" == "1" ]]; then
+                log "COHESIX_VIRTIO_MMIO_LEGACY=1 set; forcing virtio-mmio legacy mode"
+                QEMU_ARGS+=(-global virtio-mmio.force-legacy=true)
+            else
+                QEMU_ARGS+=(-global virtio-mmio.force-legacy=false)
+            fi
         else
-            log "virtio-mmio modern mode (v2): -global virtio-mmio.force-legacy=false"
+            log "Warning: QEMU does not expose virtio-mmio.force-legacy; cannot force modern mode"
         fi
-
         NETWORK_ARGS=(
-            -global "virtio-mmio.force-legacy=${force_legacy_arg}"
-            -netdev "user,id=net0,${hostfwd_joined}"
+            -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT},hostfwd=udp:127.0.0.1:31338-10.0.2.15:31338,hostfwd=tcp:127.0.0.1:31339-10.0.2.15:31339"
             -device "virtio-net-device,netdev=net0,mac=52:55:00:d1:55:01,bus=virtio-mmio-bus.0"
         )
-        log "TCP console: host 127.0.0.1:${TCP_PORT} -> guest 10.0.2.15:${TCP_PORT}"
-        log "UDP echo: host 127.0.0.1:${UDP_ECHO_PORT} -> guest 10.0.2.15:${UDP_ECHO_PORT}"
-        log "TCP smoke: host 127.0.0.1:${TCP_SMOKE_PORT} -> guest 10.0.2.15:${TCP_SMOKE_PORT}"
+        log "Hostfwd: tcp 127.0.0.1:${TCP_PORT} -> 10.0.2.15:${TCP_PORT}"
+        log "Hostfwd: udp 127.0.0.1:31338 -> 10.0.2.15:31338"
+        log "Hostfwd: tcp 127.0.0.1:31339 -> 10.0.2.15:31339"
+        log "Note: 10.0.2.15 is not directly reachable from the host under slirp"
+        log "sudo tcpdump -i lo0 -n 'tcp port ${TCP_PORT} or udp port 31338 or tcp port 31339'"
+        log "echo -n \"ping\" | nc -u -w1 127.0.0.1 31338"
+        log "printf \"hi\" | nc -v 127.0.0.1 31339"
         QEMU_ARGS+=("${NETWORK_ARGS[@]}")
     fi
 
