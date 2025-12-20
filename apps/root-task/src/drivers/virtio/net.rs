@@ -489,25 +489,25 @@ impl VirtioNet {
                 let payload_desc = self.rx_queue.read_descriptor(payload_idx);
                 info!(
                     target: "net-console",
-                    "[virtio-net] rx[{slot}] head_desc={} addr=0x{head_addr:016x} len={} flags=0x{head_flags:04x} next={} header_len={} payload_len={}",
-                    head_idx,
+                    "[virtio-net] rx[{slot}] head_desc={head_desc_idx} addr=0x{head_addr:016x} len={head_len} flags=0x{head_flags:04x} next={head_next} header_len={header_len} payload_len={payload_len}",
+                    head_desc_idx = head_idx,
                     head_addr = head_desc.addr,
-                    head_desc.len,
+                    head_len = head_desc.len,
                     head_flags = head_desc.flags,
-                    head_desc.next,
-                    header_len,
-                    payload_len,
+                    head_next = head_desc.next,
+                    header_len = header_len,
+                    payload_len = payload_len,
                 );
                 info!(
                     target: "net-console",
-                    "[virtio-net] rx[{slot}] payload_desc={} addr=0x{payload_addr:016x} len={} flags=0x{payload_flags:04x} next={} header_len={} payload_len={}",
-                    payload_idx,
+                    "[virtio-net] rx[{slot}] payload_desc={payload_desc_idx} addr=0x{payload_addr:016x} len={payload_len_val} flags=0x{payload_flags:04x} next={payload_next} header_len={header_len} payload_len={payload_len}",
+                    payload_desc_idx = payload_idx,
                     payload_addr = payload_desc.addr,
-                    payload_desc.len,
+                    payload_len_val = payload_desc.len,
                     payload_flags = payload_desc.flags,
-                    payload_desc.next,
-                    header_len,
-                    payload_len,
+                    payload_next = payload_desc.next,
+                    header_len = header_len,
+                    payload_len = payload_len,
                 );
             }
         }
