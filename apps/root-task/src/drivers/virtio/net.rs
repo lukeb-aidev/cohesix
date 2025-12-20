@@ -418,9 +418,11 @@ impl VirtioNet {
             mac
         );
 
+        let mmio_mode = regs.mode;
+
         let mut driver = Self {
             regs,
-            mmio_mode: regs.mode,
+            mmio_mode,
             rx_queue,
             tx_queue,
             rx_buffers,
