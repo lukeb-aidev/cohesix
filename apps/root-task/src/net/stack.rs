@@ -898,6 +898,10 @@ pub struct NetStack<D: NetDevice> {
     probe_sent: bool,
     #[cfg(feature = "net-outbound-probe")]
     probe_last_attempt_ms: u64,
+    #[cfg(feature = "net-outbound-probe")]
+    probe_fail_count: u32,
+    #[cfg(feature = "net-outbound-probe")]
+    probe_last_log_ms: u64,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1705,6 +1709,10 @@ impl<D: NetDevice> NetStack<D> {
             probe_sent: false,
             #[cfg(feature = "net-outbound-probe")]
             probe_last_attempt_ms: 0,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_fail_count: 0,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_last_log_ms: 0,
         };
         stack.initialise_socket()?;
         stack.initialise_self_test_sockets()?;
@@ -2019,6 +2027,7 @@ impl<D: NetDevice> NetStack<D> {
             let cx = self.interface.context();
             match socket.connect(cx, dest, local_endpoint) {
                 Ok(()) => {
+                    self.probe_fail_count = 0;
                     log::info!(
                         target: "net-probe",
                         "[net-probe] outbound connect dest={}:{} now_ms={}",
@@ -2029,13 +2038,18 @@ impl<D: NetDevice> NetStack<D> {
                     activity = true;
                 }
                 Err(err) => {
-                    log::warn!(
-                        target: "net-probe",
-                        "[net-probe] connect failed dest={}:{} err={:?}",
-                        dest.addr,
-                        dest.port,
-                        err
-                    );
+                    self.probe_fail_count = self.probe_fail_count.saturating_add(1);
+                    if now_ms.saturating_sub(self.probe_last_log_ms) >= 1_000 {
+                        self.probe_last_log_ms = now_ms;
+                        log::warn!(
+                            target: "net-probe",
+                            "[net-probe] connect failed dest={}:{} err={:?} failures={}",
+                            dest.addr,
+                            dest.port,
+                            err,
+                            self.probe_fail_count,
+                        );
+                    }
                 }
             }
             return activity;
@@ -3167,6 +3181,8 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         {
             self.probe_sent = false;
             self.probe_last_attempt_ms = 0;
+            self.probe_fail_count = 0;
+            self.probe_last_log_ms = 0;
         }
     }
 

@@ -51,9 +51,10 @@ enum VirtioMmioMode {
 const VIRTQ_DESC_F_NEXT: u16 = 1 << 0;
 const VIRTQ_DESC_F_WRITE: u16 = 1 << 1;
 
-const VIRTIO_NET_F_MAC: u32 = 1 << 5;
-const VIRTIO_NET_F_MRG_RXBUF: u32 = 1 << 15;
-const SUPPORTED_FEATURES: u32 = VIRTIO_NET_F_MAC | VIRTIO_NET_F_MRG_RXBUF;
+const VIRTIO_NET_F_MAC: u64 = 1 << 5;
+const VIRTIO_NET_F_MRG_RXBUF: u64 = 1 << 15;
+const VIRTIO_F_VERSION_1: u64 = 1 << 32;
+const SUPPORTED_NET_FEATURES: u64 = VIRTIO_NET_F_MAC | VIRTIO_NET_F_MRG_RXBUF;
 
 const RX_QUEUE_INDEX: u32 = 0;
 const TX_QUEUE_INDEX: u32 = 1;
@@ -157,7 +158,7 @@ pub struct VirtioNet {
     rx_buffers: HeaplessVec<RamFrame, RX_QUEUE_SIZE>,
     tx_buffers: HeaplessVec<RamFrame, TX_QUEUE_SIZE>,
     tx_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
-    negotiated_features: u32,
+    negotiated_features: u64,
     rx_header_len: usize,
     tx_drops: u32,
     tx_packets: u64,
@@ -167,6 +168,10 @@ pub struct VirtioNet {
     rx_poll_count: u64,
     rx_used_count: u64,
     last_used_idx_debug: u16,
+    last_progress_ms: u64,
+    last_snapshot_ms: u64,
+    stalled_snapshot_logged: bool,
+    last_error: Option<&'static str>,
 }
 
 impl VirtioNet {
@@ -183,6 +188,7 @@ impl VirtioNet {
             stride = VIRTIO_MMIO_STRIDE,
         );
         let mut regs = VirtioRegs::probe(hal)?;
+        let mmio_mode = regs.mode;
         info!(
             "[net-console] virtio-mmio device located: base=0x{base:08x}",
             base = regs.base().as_ptr() as usize
@@ -211,18 +217,20 @@ impl VirtioNet {
             regs.read32(Registers::Status)
         );
 
-        // Legacy virtio-mmio devices require the guest page size to be provided
-        // before queue PFNs are written. Without this, the device disregards the
-        // queue configuration and leaves RX/TX rings idle. Advertise the seL4
-        // 4KiB page size up-front so the PFN calculations below are interpreted
-        // correctly by the device.
-        let guest_page_size = 1u32 << seL4_PageBits;
-        regs.set_guest_page_size(guest_page_size);
-        info!(
-            target: "net-console",
-            "[net-console] guest page size set: {} bytes",
-            guest_page_size
-        );
+        if matches!(mmio_mode, VirtioMmioMode::Legacy) {
+            // Legacy virtio-mmio devices require the guest page size to be provided
+            // before queue PFNs are written. Without this, the device disregards the
+            // queue configuration and leaves RX/TX rings idle. Advertise the seL4
+            // 4KiB page size up-front so the PFN calculations below are interpreted
+            // correctly by the device.
+            let guest_page_size = 1u32 << seL4_PageBits;
+            regs.set_guest_page_size(guest_page_size);
+            info!(
+                target: "net-console",
+                "[net-console] guest page size set: {} bytes",
+                guest_page_size
+            );
+        }
 
         info!("[net-console] querying queue sizes");
         regs.select_queue(RX_QUEUE_INDEX);
@@ -267,7 +275,11 @@ impl VirtioNet {
 
         info!("[net-console] reading host feature bits");
         let host_features = regs.host_features();
-        let negotiated_features = host_features & SUPPORTED_FEATURES;
+        let supported_features = match mmio_mode {
+            VirtioMmioMode::Modern => SUPPORTED_NET_FEATURES | VIRTIO_F_VERSION_1,
+            VirtioMmioMode::Legacy => SUPPORTED_NET_FEATURES,
+        };
+        let negotiated_features = host_features & supported_features;
         info!(
             target: "virtio-net",
             "virtio-net features: {:#x}",
@@ -280,7 +292,7 @@ impl VirtioNet {
             VIRTIO_NET_HEADER_LEN_BASIC
         };
         info!(
-            "[net-console] features: host=0x{host:08x} negotiated=0x{guest:08x}",
+            "[net-console] features: host=0x{host:016x} negotiated=0x{guest:016x}",
             host = host_features,
             guest = negotiated_features
         );
@@ -355,8 +367,8 @@ impl VirtioNet {
             "[net-console] provisioning RX descriptors ({} entries)",
             rx_size
         );
-        let rx_queue =
-            VirtQueue::new(&mut regs, queue_mem_rx, RX_QUEUE_INDEX, rx_size).map_err(|err| {
+        let rx_queue = VirtQueue::new(&mut regs, queue_mem_rx, RX_QUEUE_INDEX, rx_size, mmio_mode)
+            .map_err(|err| {
                 regs.set_status(STATUS_FAILED);
                 err
             })?;
@@ -364,8 +376,8 @@ impl VirtioNet {
             "[net-console] provisioning TX descriptors ({} entries)",
             tx_size
         );
-        let tx_queue =
-            VirtQueue::new(&mut regs, queue_mem_tx, TX_QUEUE_INDEX, tx_size).map_err(|err| {
+        let tx_queue = VirtQueue::new(&mut regs, queue_mem_tx, TX_QUEUE_INDEX, tx_size, mmio_mode)
+            .map_err(|err| {
                 regs.set_status(STATUS_FAILED);
                 err
             })?;
@@ -418,7 +430,7 @@ impl VirtioNet {
             mac
         );
 
-        let mmio_mode = regs.mode;
+        let now_ms = crate::hal::timebase().now_ms();
 
         let mut driver = Self {
             regs,
@@ -438,6 +450,10 @@ impl VirtioNet {
             rx_poll_count: 0,
             rx_used_count: 0,
             last_used_idx_debug: 0,
+            last_progress_ms: now_ms,
+            last_snapshot_ms: now_ms,
+            stalled_snapshot_logged: false,
+            last_error: None,
         };
         driver.initialise_queues();
 
@@ -481,23 +497,40 @@ impl VirtioNet {
     }
 
     pub fn debug_snapshot(&mut self) {
+        let now_ms = crate::hal::timebase().now_ms();
+        let stalled = now_ms.saturating_sub(self.last_progress_ms) >= 1_000;
+        if !stalled {
+            return;
+        }
+
+        if self.stalled_snapshot_logged && now_ms.saturating_sub(self.last_snapshot_ms) < 1_000 {
+            return;
+        }
+
+        self.last_snapshot_ms = now_ms;
+        self.stalled_snapshot_logged = true;
+
         let isr = self.regs.isr_status();
         let status = self.regs.status();
         let (rx_used_idx, rx_avail_idx) = self.rx_queue.indices();
+        let (tx_used_idx, tx_avail_idx) = self.tx_queue.indices();
 
         self.rx_queue.debug_dump("rx");
         self.tx_queue.debug_dump("tx");
 
         log::info!(
             target: "net-console",
-            "[virtio-net] debug_snapshot: status=0x{:02x} isr=0x{:02x} last_used_idx_debug={} rx_used_count={} rx_poll_count={} rx.avail.idx={} rx.used.idx={}",
+            "[virtio-net] debug_snapshot: stalled_ms={} status=0x{:02x} isr=0x{:02x} tx_avail_idx={} tx_used_idx={} rx_avail_idx={} rx_used_idx={} last_error={} rx_used_count={} rx_poll_count={}",
+            now_ms.saturating_sub(self.last_progress_ms),
             status,
             isr,
-            self.last_used_idx_debug,
-            self.rx_used_count,
-            self.rx_poll_count,
+            tx_avail_idx,
+            tx_used_idx,
             rx_avail_idx,
             rx_used_idx,
+            self.last_error.unwrap_or("none"),
+            self.rx_used_count,
+            self.rx_poll_count,
         );
     }
 
@@ -637,11 +670,18 @@ impl VirtioNet {
         self.reclaim_tx();
     }
 
+    fn note_progress(&mut self) {
+        self.last_progress_ms = crate::hal::timebase().now_ms();
+        self.stalled_snapshot_logged = false;
+    }
+
     fn reclaim_tx(&mut self) {
         while let Some((id, _len)) = self.tx_queue.pop_used() {
             self.tx_used_count = self.tx_used_count.wrapping_add(1);
+            self.note_progress();
             if self.tx_free.push(id).is_err() {
                 self.tx_drops = self.tx_drops.saturating_add(1);
+                self.last_error = Some("tx_free_overflow");
             }
         }
     }
@@ -972,6 +1012,7 @@ impl Device for VirtioNet {
 
         if let Some((id, len)) = self.pop_rx() {
             self.rx_used_count = self.rx_used_count.wrapping_add(1);
+            self.note_progress();
             log::info!(
                 target: "net-console",
                 "[virtio-net] RX: used descriptor received: id={} len={} (rx_used_count={})",
@@ -1297,18 +1338,48 @@ impl VirtioRegs {
         self.write32(Registers::QueueNotify, queue);
     }
 
-    fn set_guest_features(&mut self, features: u32) {
+    fn set_guest_features(&mut self, features: u64) {
+        let lo = features as u32;
+        let hi = (features >> 32) as u32;
+
         self.write32(Registers::GuestFeaturesSel, 0);
-        self.write32(Registers::GuestFeatures, features);
+        self.write32(Registers::GuestFeatures, lo);
+
+        if matches!(self.mode, VirtioMmioMode::Modern) {
+            self.write32(Registers::GuestFeaturesSel, 1);
+            self.write32(Registers::GuestFeatures, hi);
+        }
     }
 
     fn set_guest_page_size(&mut self, page_size: u32) {
         self.write32(Registers::GuestPageSize, page_size);
     }
 
-    fn host_features(&mut self) -> u32 {
+    fn host_features(&mut self) -> u64 {
         self.write32(Registers::HostFeaturesSel, 0);
-        self.read32(Registers::HostFeatures)
+        let lo = self.read32(Registers::HostFeatures) as u64;
+        if matches!(self.mode, VirtioMmioMode::Modern) {
+            self.write32(Registers::HostFeaturesSel, 1);
+            let hi = self.read32(Registers::HostFeatures) as u64;
+            (hi << 32) | lo
+        } else {
+            lo
+        }
+    }
+
+    fn set_queue_desc_addr(&mut self, paddr: usize) {
+        self.write32(Registers::QueueDescLow, paddr as u32);
+        self.write32(Registers::QueueDescHigh, (paddr >> 32) as u32);
+    }
+
+    fn set_queue_driver_addr(&mut self, paddr: usize) {
+        self.write32(Registers::QueueDriverLow, paddr as u32);
+        self.write32(Registers::QueueDriverHigh, (paddr >> 32) as u32);
+    }
+
+    fn set_queue_device_addr(&mut self, paddr: usize) {
+        self.write32(Registers::QueueDeviceLow, paddr as u32);
+        self.write32(Registers::QueueDeviceHigh, (paddr >> 32) as u32);
     }
 
     fn acknowledge_interrupts(&mut self) -> (u32, u32) {
@@ -1551,6 +1622,12 @@ enum Registers {
     QueueNum = 0x038,
     QueueAlign = 0x03c,
     QueuePfn = 0x040,
+    QueueDescLow = 0x080,
+    QueueDescHigh = 0x084,
+    QueueDriverLow = 0x090,
+    QueueDriverHigh = 0x094,
+    QueueDeviceLow = 0x0a0,
+    QueueDeviceHigh = 0x0a4,
     QueueReady = 0x044,
     QueueNotify = 0x050,
     InterruptStatus = 0x060,
@@ -1577,6 +1654,7 @@ impl VirtQueue {
         mut frame: RamFrame,
         index: u32,
         size: usize,
+        mode: VirtioMmioMode,
     ) -> Result<Self, DriverError> {
         let queue_size = size as u16;
         let base_paddr = frame.paddr();
@@ -1674,16 +1752,27 @@ impl VirtQueue {
 
         regs.select_queue(index);
         regs.set_queue_size(queue_size);
-        regs.set_queue_align(queue_align as u32);
+
         let queue_pfn = (base_paddr >> seL4_PageBits) as u32;
-        regs.set_queue_pfn(queue_pfn);
+        match mode {
+            VirtioMmioMode::Modern => {
+                regs.set_queue_desc_addr(base_paddr);
+                regs.set_queue_driver_addr(base_paddr + layout.avail_offset);
+                regs.set_queue_device_addr(base_paddr + layout.used_offset);
+            }
+            VirtioMmioMode::Legacy => {
+                regs.set_queue_align(queue_align as u32);
+                regs.set_queue_pfn(queue_pfn);
+            }
+        }
         regs.queue_ready(1);
         info!(
             target: "net-console",
-            "[virtio-net] queue {} configured: size={} pfn=0x{:x}",
+            "[virtio-net] queue {} configured: size={} pfn=0x{:x} mode={:?}",
             index,
             queue_size,
-            queue_pfn
+            queue_pfn,
+            mode,
         );
 
         Ok(Self {
