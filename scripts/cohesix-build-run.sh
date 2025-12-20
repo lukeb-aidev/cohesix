@@ -585,7 +585,7 @@ PY
         log "Hostfwd: udp 127.0.0.1:31338 -> 10.0.2.15:31338"
         log "Hostfwd: tcp 127.0.0.1:31339 -> 10.0.2.15:31339"
         log "Note: 10.0.2.15 is not directly reachable from the host under slirp"
-        log "sudo tcpdump -i lo0 -n 'tcp port ${TCP_PORT} or udp port 31338 or tcp port 31339'"
+        log "sudo tcpdump -i lo0 -n -vv '(tcp port ${TCP_PORT} or udp port 31338 or tcp port 31339)'"
         log "echo -n \"ping\" | nc -u -w1 127.0.0.1 31338"
         log "printf \"hi\" | nc -v 127.0.0.1 31339"
         QEMU_ARGS+=("${NETWORK_ARGS[@]}")
