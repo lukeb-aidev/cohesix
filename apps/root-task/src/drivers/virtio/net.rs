@@ -25,6 +25,9 @@ use crate::net::{NetDevice, NetDeviceCounters, NetDriverError, CONSOLE_TCP_PORT}
 use crate::net_consts::MAX_FRAME_LEN;
 use crate::sel4::{DeviceFrame, RamFrame};
 
+const FORENSICS: bool = true;
+const FORENSICS_PUBLISH_LOG_LIMIT: usize = 64;
+
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
 const VIRTIO_MMIO_SLOTS: usize = 8;
@@ -77,6 +80,8 @@ static RX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
     [const { AtomicBool::new(false) }; VIRTIO_MMIO_SLOTS];
+static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
+static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug)]
 struct DescSpec {
@@ -90,6 +95,139 @@ struct DescSpec {
 enum QueueKind {
     Rx,
     Tx,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ForensicFaultReason {
+    InvalidIndex,
+    ZeroAddress,
+    ZeroLength,
+    InvalidNext,
+    LoopDetected,
+    UsedIdOutOfRange,
+    UsedDescriptorZero,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ForensicFault {
+    queue_name: &'static str,
+    qsize: u16,
+    head: u16,
+    idx: u16,
+    addr: u64,
+    len: u32,
+    flags: u16,
+    next: u16,
+    reason: ForensicFaultReason,
+}
+
+fn forensics_frozen() -> bool {
+    FORENSICS && FORENSICS_FROZEN.load(AtomicOrdering::Acquire)
+}
+
+fn mark_forensics_frozen() -> bool {
+    FORENSICS && !FORENSICS_FROZEN.swap(true, AtomicOrdering::AcqRel)
+}
+
+fn mark_forensics_dumped() -> bool {
+    FORENSICS && !FORENSICS_DUMPED.swap(true, AtomicOrdering::AcqRel)
+}
+
+fn validate_chain_pre_publish(
+    queue_name: &'static str,
+    qsize: u16,
+    desc: *mut VirtqDesc,
+    head: u16,
+) -> Result<(), ForensicFault> {
+    if qsize == 0 {
+        return Err(ForensicFault {
+            queue_name,
+            qsize,
+            head,
+            idx: head,
+            addr: 0,
+            len: 0,
+            flags: 0,
+            next: 0,
+            reason: ForensicFaultReason::InvalidIndex,
+        });
+    }
+
+    let mut idx = head;
+    for _ in 0..qsize {
+        if idx >= qsize {
+            return Err(ForensicFault {
+                queue_name,
+                qsize,
+                head,
+                idx,
+                addr: 0,
+                len: 0,
+                flags: 0,
+                next: 0,
+                reason: ForensicFaultReason::InvalidIndex,
+            });
+        }
+        let desc_ptr = unsafe { desc.add(idx as usize) };
+        let entry = unsafe { read_volatile(desc_ptr) };
+        if entry.addr == 0 {
+            return Err(ForensicFault {
+                queue_name,
+                qsize,
+                head,
+                idx,
+                addr: entry.addr,
+                len: entry.len,
+                flags: entry.flags,
+                next: entry.next,
+                reason: ForensicFaultReason::ZeroAddress,
+            });
+        }
+        if entry.len == 0 {
+            return Err(ForensicFault {
+                queue_name,
+                qsize,
+                head,
+                idx,
+                addr: entry.addr,
+                len: entry.len,
+                flags: entry.flags,
+                next: entry.next,
+                reason: ForensicFaultReason::ZeroLength,
+            });
+        }
+        let has_next = (entry.flags & VIRTQ_DESC_F_NEXT) != 0;
+        if has_next {
+            if entry.next >= qsize {
+                return Err(ForensicFault {
+                    queue_name,
+                    qsize,
+                    head,
+                    idx,
+                    addr: entry.addr,
+                    len: entry.len,
+                    flags: entry.flags,
+                    next: entry.next,
+                    reason: ForensicFaultReason::InvalidNext,
+                });
+            }
+            idx = entry.next;
+        } else {
+            return Ok(());
+        }
+    }
+
+    Err(ForensicFault {
+        queue_name,
+        qsize,
+        head,
+        idx,
+        addr: 0,
+        len: 0,
+        flags: 0,
+        next: 0,
+        reason: ForensicFaultReason::LoopDetected,
+    })
 }
 
 #[repr(C)]
@@ -214,6 +352,9 @@ pub struct VirtioNet {
     rx_underflow_logged_ids: HeaplessVec<u16, RX_QUEUE_SIZE>,
     last_error: Option<&'static str>,
     rx_requeue_logged_ids: HeaplessVec<u16, RX_QUEUE_SIZE>,
+    rx_publish_log_count: u32,
+    tx_publish_log_count: u32,
+    forensic_dump_captured: bool,
 }
 
 impl VirtioNet {
@@ -533,6 +674,9 @@ impl VirtioNet {
             rx_underflow_logged_ids: HeaplessVec::new(),
             last_error: None,
             rx_requeue_logged_ids: HeaplessVec::new(),
+            rx_publish_log_count: 0,
+            tx_publish_log_count: 0,
+            forensic_dump_captured: false,
         };
         driver.initialise_queues();
 
@@ -709,6 +853,153 @@ impl VirtioNet {
         Ok(())
     }
 
+    fn describe_fault_reason(reason: ForensicFaultReason) -> &'static str {
+        match reason {
+            ForensicFaultReason::InvalidIndex => "invalid_index",
+            ForensicFaultReason::ZeroAddress => "zero_addr",
+            ForensicFaultReason::ZeroLength => "zero_len",
+            ForensicFaultReason::InvalidNext => "invalid_next",
+            ForensicFaultReason::LoopDetected => "loop_detected",
+            ForensicFaultReason::UsedIdOutOfRange => "used_id_oob",
+            ForensicFaultReason::UsedDescriptorZero => "used_desc_zero",
+        }
+    }
+
+    fn log_forensic_fault(&self, fault: &ForensicFault) {
+        error!(
+            target: "net-console",
+            "[virtio-net][forensics] fault queue={} head={} idx={} qsize={} addr=0x{addr:016x} len={} flags=0x{flags:04x} next={} reason={}",
+            fault.queue_name,
+            fault.head,
+            fault.idx,
+            fault.qsize,
+            addr = fault.addr,
+            len = fault.len,
+            flags = fault.flags,
+            fault.next,
+            Self::describe_fault_reason(fault.reason),
+        );
+    }
+
+    fn handle_forensic_fault(&mut self, fault: ForensicFault) -> Result<(), ()> {
+        self.log_forensic_fault(&fault);
+        self.freeze_and_capture("forensic_fault");
+        self.device_faulted = true;
+        self.last_error.get_or_insert("forensic_fault");
+        Err(())
+    }
+
+    fn freeze_and_capture(&mut self, reason: &'static str) {
+        if mark_forensics_frozen() {
+            warn!(
+                target: "net-console",
+                "[virtio-net][forensics] freezing queue activity (reason={reason})"
+            );
+        }
+        self.device_faulted = true;
+        self.last_error.get_or_insert(reason);
+        self.capture_forensics_once(reason);
+    }
+
+    fn capture_forensics_once(&mut self, reason: &'static str) {
+        if !FORENSICS || self.forensic_dump_captured || !mark_forensics_dumped() {
+            return;
+        }
+        self.forensic_dump_captured = true;
+        let status = self.regs.status();
+        let isr = self.regs.interrupt_status();
+        error!(
+            target: "net-console",
+            "[virtio-net][forensics] capturing dump: reason={} status=0x{status:02x} isr=0x{isr:02x}",
+            reason,
+        );
+        self.rx_queue.debug_dump("rx");
+        self.tx_queue.debug_dump("tx");
+        self.dump_rx_window();
+        self.dump_descriptor_table("rx", &self.rx_queue);
+        self.dump_descriptor_table("tx", &self.tx_queue);
+    }
+
+    fn dump_descriptor_table(&self, label: &str, queue: &VirtQueue) {
+        for idx in 0..queue.size {
+            let desc = queue.read_descriptor(idx);
+            info!(
+                target: "net-console",
+                "[virtio-net][forensics] {label} desc[{idx}]: addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}",
+                addr = desc.addr,
+                len = desc.len,
+                flags = desc.flags,
+                next = desc.next,
+            );
+        }
+    }
+
+    fn dump_rx_window(&self) {
+        let qsize = usize::from(self.rx_queue.size);
+        if qsize == 0 {
+            return;
+        }
+        let avail = self.rx_queue.avail.as_ptr();
+        let avail_idx = unsafe { read_volatile(&(*avail).idx) };
+        let used_idx = self.rx_queue.last_used;
+        let window = core::cmp::min(qsize, 16);
+        let start = avail_idx.wrapping_sub(window as u16 / 2);
+        info!(
+            target: "net-console",
+            "[virtio-net][forensics] rx window: avail.idx={} used.idx={} size={}",
+            avail_idx,
+            used_idx,
+            qsize,
+        );
+        for offset in 0..window {
+            let slot_idx = start.wrapping_add(offset as u16);
+            let ring_slot = (slot_idx as usize) % qsize;
+            let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
+            let head = unsafe { read_volatile(ring_ptr) };
+            let desc = self.rx_queue.read_descriptor(head);
+            info!(
+                target: "net-console",
+                "[virtio-net][forensics] rx avail[{ring_slot}] -> head={head} desc{head}=0x{addr:016x}/{len}/0x{flags:04x}/next={next}",
+                addr = desc.addr,
+                len = desc.len,
+                flags = desc.flags,
+                next = desc.next,
+            );
+        }
+    }
+
+    fn log_publish_transaction(
+        &mut self,
+        queue_label: &'static str,
+        queue: &VirtQueue,
+        old_idx: u16,
+        new_idx: u16,
+        slot: u16,
+        head: u16,
+        force: bool,
+    ) {
+        if forensics_frozen() {
+            return;
+        }
+        let counter = match queue_label {
+            "RX" => &mut self.rx_publish_log_count,
+            _ => &mut self.tx_publish_log_count,
+        };
+        let should_log = force || (*counter as usize) < FORENSICS_PUBLISH_LOG_LIMIT;
+        if should_log {
+            *counter = counter.saturating_add(1);
+            let head_desc = queue.read_descriptor(head);
+            info!(
+                target: "net-console",
+                "[virtio-net][forensics] publish {queue_label} avail={old_idx}->{new_idx} slot={slot} head={head} desc{{addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}}}",
+                addr = head_desc.addr,
+                len = head_desc.len,
+                flags = head_desc.flags,
+                next = head_desc.next,
+            );
+        }
+    }
+
     fn log_pre_publish_if_suspicious(
         &mut self,
         queue_label: &'static str,
@@ -877,7 +1168,7 @@ impl VirtioNet {
         notify: bool,
     ) -> Result<(), ()> {
         self.check_device_health();
-        if self.device_faulted {
+        if self.device_faulted || forensics_frozen() {
             return Err(());
         }
 
@@ -918,12 +1209,30 @@ impl VirtioNet {
         self.rx_queue.sync_descriptor_table_for_device();
         self.log_pre_publish_if_suspicious("RX", QueueKind::Rx, head_id, &resolved_descs)?;
         fence(AtomicOrdering::Release);
-        let Some((slot, avail_idx)) = self.rx_queue.push_avail(head_id) else {
+        if let Err(fault) = validate_chain_pre_publish(
+            "RX",
+            self.rx_queue.size,
+            self.rx_queue.desc.as_ptr(),
+            head_id,
+        ) {
+            return self.handle_forensic_fault(fault);
+        }
+
+        let Some((slot, avail_idx, old_idx)) = self.rx_queue.push_avail(head_id) else {
             self.device_faulted = true;
             self.last_error.get_or_insert("rx_avail_write_failed");
             return Err(());
         };
         self.rx_queue.sync_avail_ring_for_device();
+        self.log_publish_transaction(
+            "RX",
+            &self.rx_queue,
+            old_idx,
+            avail_idx,
+            slot,
+            head_id,
+            false,
+        );
         if !RX_PUBLISH_FENCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             debug!(
                 target: "virtio-net",
@@ -947,7 +1256,7 @@ impl VirtioNet {
         notify: bool,
     ) -> Result<(), ()> {
         self.check_device_health();
-        if self.device_faulted {
+        if self.device_faulted || forensics_frozen() {
             return Err(());
         }
 
@@ -980,12 +1289,30 @@ impl VirtioNet {
         self.tx_queue.sync_descriptor_table_for_device();
         self.log_pre_publish_if_suspicious("TX", QueueKind::Tx, head_id, &resolved_descs)?;
         fence(AtomicOrdering::Release);
-        let Some((slot, avail_idx)) = self.tx_queue.push_avail(head_id) else {
+        if let Err(fault) = validate_chain_pre_publish(
+            "TX",
+            self.tx_queue.size,
+            self.tx_queue.desc.as_ptr(),
+            head_id,
+        ) {
+            return self.handle_forensic_fault(fault);
+        }
+
+        let Some((slot, avail_idx, old_idx)) = self.tx_queue.push_avail(head_id) else {
             self.device_faulted = true;
             self.last_error.get_or_insert("tx_avail_write_failed");
             return Err(());
         };
         self.tx_queue.sync_avail_ring_for_device();
+        self.log_publish_transaction(
+            "TX",
+            &self.tx_queue,
+            old_idx,
+            avail_idx,
+            slot,
+            head_id,
+            false,
+        );
         if !TX_PUBLISH_FENCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             debug!(
                 target: "virtio-net",
@@ -1180,9 +1507,11 @@ impl VirtioNet {
                     "[virtio-net] entered bad status (0x{status:02x}); continuing until forensic log captured"
                 );
                 self.bad_status_logged = true;
+                self.freeze_and_capture("device_bad_status");
             } else if !self.device_faulted {
                 self.device_faulted = true;
                 self.last_error.get_or_insert("device_faulted");
+                self.freeze_and_capture("device_bad_status_repeat");
             }
 
             self.bad_status_seen = true;
@@ -1195,60 +1524,84 @@ impl VirtioNet {
     }
 
     fn reclaim_tx(&mut self) {
-        while let Some((id, _len)) = self.tx_queue.pop_used() {
-            self.tx_used_count = self.tx_used_count.wrapping_add(1);
-            self.note_progress();
-            if self.tx_free.push(id).is_err() {
-                self.tx_drops = self.tx_drops.saturating_add(1);
-                self.last_error = Some("tx_free_overflow");
+        if forensics_frozen() {
+            return;
+        }
+        loop {
+            match self.tx_queue.pop_used("TX") {
+                Ok(Some((id, _len))) => {
+                    self.tx_used_count = self.tx_used_count.wrapping_add(1);
+                    self.note_progress();
+                    if self.tx_free.push(id).is_err() {
+                        self.tx_drops = self.tx_drops.saturating_add(1);
+                        self.last_error = Some("tx_free_overflow");
+                    }
+                }
+                Ok(None) => break,
+                Err(fault) => {
+                    let _ = self.handle_forensic_fault(fault);
+                    break;
+                }
             }
         }
     }
 
     fn pop_rx(&mut self) -> Option<(u16, usize)> {
-        if let Some((id, len)) = self.rx_queue.pop_used().map(|(id, len)| (id, len as usize)) {
-            let header_len = self.rx_header_len;
-            if len < header_len {
-                if !self
-                    .rx_underflow_logged_ids
-                    .iter()
-                    .any(|&logged| logged == id)
-                {
-                    let _ = self.rx_underflow_logged_ids.push(id);
-                    error!(
-                        target: "net-console",
-                        "[virtio-net] RX used entry shorter than header: id={} len={} header_len={} last_used={}",
-                        id,
-                        len,
-                        header_len,
-                        self.rx_queue.last_used,
-                    );
+        if forensics_frozen() {
+            return None;
+        }
+        match self.rx_queue.pop_used("RX") {
+            Ok(Some((id, len))) => {
+                let len = len as usize;
+                let header_len = self.rx_header_len;
+                if len < header_len {
+                    if !self
+                        .rx_underflow_logged_ids
+                        .iter()
+                        .any(|&logged| logged == id)
+                    {
+                        let _ = self.rx_underflow_logged_ids.push(id);
+                        error!(
+                            target: "net-console",
+                            "[virtio-net] RX used entry shorter than header: id={} len={} header_len={} last_used={}",
+                            id,
+                            len,
+                            header_len,
+                            self.rx_queue.last_used,
+                        );
+                    }
+                    self.rx_used_count = self.rx_used_count.wrapping_add(1);
+                    self.note_progress();
+                    self.requeue_rx(id, Some(len));
+                    return None;
                 }
-                self.rx_used_count = self.rx_used_count.wrapping_add(1);
-                self.note_progress();
-                self.requeue_rx(id, Some(len));
-                return None;
+                if let Some(buffer) = self.rx_buffers.get_mut(id as usize) {
+                    Self::sync_rx_slot_for_cpu(buffer, header_len, len);
+                }
+                self.last_used_idx_debug = self.rx_queue.last_used;
+                let (used_idx, avail_idx) = self.rx_queue.indices();
+                log::debug!(
+                    target: "virtio-net",
+                    "[RX] consumed used_idx={} avail_idx={}",
+                    used_idx,
+                    avail_idx,
+                );
+                Some((id, len))
             }
-            if let Some(buffer) = self.rx_buffers.get_mut(id as usize) {
-                Self::sync_rx_slot_for_cpu(buffer, header_len, len);
+            Ok(None) => None,
+            Err(fault) => {
+                let _ = self.handle_forensic_fault(fault);
+                None
             }
-            self.last_used_idx_debug = self.rx_queue.last_used;
-            let (used_idx, avail_idx) = self.rx_queue.indices();
-            log::debug!(
-                target: "virtio-net",
-                "[RX] consumed used_idx={} avail_idx={}",
-                used_idx,
-                avail_idx,
-            );
-            Some((id, len))
-        } else {
-            None
         }
     }
 
     fn requeue_rx(&mut self, id: u16, used_len: Option<usize>) {
         self.check_device_health();
         if self.device_faulted {
+            return;
+        }
+        if forensics_frozen() {
             return;
         }
         let slot = id as usize;
@@ -1360,6 +1713,9 @@ impl VirtioNet {
     fn submit_tx(&mut self, id: u16, len: usize) {
         self.check_device_health();
         if self.device_faulted {
+            return;
+        }
+        if forensics_frozen() {
             return;
         }
         if let Some((length, addr)) = self
@@ -2448,9 +2804,16 @@ impl VirtQueue {
         };
         let desc_ptr = unsafe { self.desc.as_ptr().add(index as usize) };
         unsafe { write_volatile(desc_ptr, desc) };
+        if FORENSICS {
+            let verify = unsafe { read_volatile(desc_ptr) };
+            debug_assert_eq!(verify.addr, desc.addr, "descriptor addr mismatch");
+            debug_assert_eq!(verify.len, desc.len, "descriptor len mismatch");
+            debug_assert_eq!(verify.flags, desc.flags, "descriptor flags mismatch");
+            debug_assert_eq!(verify.next, desc.next, "descriptor next mismatch");
+        }
     }
 
-    fn push_avail(&self, index: u16) -> Option<(u16, u16)> {
+    fn push_avail(&self, index: u16) -> Option<(u16, u16, u16)> {
         if index >= self.size {
             error!(
                 target: "net-console",
@@ -2475,7 +2838,7 @@ impl VirtQueue {
             let new_idx = idx.wrapping_add(1);
             write_volatile(&mut (*avail).idx, new_idx);
             fence(AtomicOrdering::Release);
-            Some((ring_slot as u16, new_idx))
+            Some((ring_slot as u16, new_idx, idx))
         }
     }
 
@@ -2558,12 +2921,12 @@ impl VirtQueue {
         );
     }
 
-    fn pop_used(&mut self) -> Option<(u16, u32)> {
+    fn pop_used(&mut self, queue_label: &'static str) -> Result<Option<(u16, u32)>, ForensicFault> {
         let used = self.used.as_ptr();
         self.sync_used_ring_for_cpu();
         let idx = unsafe { read_volatile(&(*used).idx) };
         if self.last_used == idx {
-            return None;
+            return Ok(None);
         }
         let distance = idx.wrapping_sub(self.last_used);
         if distance > self.size {
@@ -2575,7 +2938,7 @@ impl VirtQueue {
                 self.size,
                 distance,
             );
-            return None;
+            return Ok(None);
         }
         let qsize = usize::from(self.size);
 
@@ -2585,6 +2948,34 @@ impl VirtQueue {
         assert!(ring_slot < qsize, "used ring slot out of range");
         let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
         let elem = unsafe { read_volatile(elem_ptr) };
+        if elem.id >= u32::from(self.size) {
+            return Err(ForensicFault {
+                queue_name: queue_label,
+                qsize: self.size,
+                head: elem.id as u16,
+                idx: self.last_used,
+                addr: 0,
+                len: elem.len,
+                flags: 0,
+                next: 0,
+                reason: ForensicFaultReason::UsedIdOutOfRange,
+            });
+        }
+        let desc_idx = elem.id as usize;
+        let desc = unsafe { read_volatile(self.desc.as_ptr().add(desc_idx)) };
+        if desc.addr == 0 || desc.len == 0 {
+            return Err(ForensicFault {
+                queue_name: queue_label,
+                qsize: self.size,
+                head: elem.id as u16,
+                idx: self.last_used,
+                addr: desc.addr,
+                len: desc.len,
+                flags: desc.flags,
+                next: desc.next,
+                reason: ForensicFaultReason::UsedDescriptorZero,
+            });
+        }
         debug!(
             target: "net-console",
             "[virtio-net] pop_used: last_used={} idx={} ring_slot={} id={} len={}",
@@ -2595,7 +2986,7 @@ impl VirtQueue {
             elem.len,
         );
         self.last_used = self.last_used.wrapping_add(1);
-        Some((elem.id as u16, elem.len))
+        Ok(Some((elem.id as u16, elem.len)))
     }
 }
 
