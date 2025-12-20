@@ -65,6 +65,8 @@ const VIRTIO_NET_HEADER_LEN_BASIC: usize = core::mem::size_of::<VirtioNetHdr>();
 const VIRTIO_NET_HEADER_LEN_MRG: usize = core::mem::size_of::<VirtioNetHdrMrgRxbuf>();
 const FRAME_BUFFER_LEN: usize = MAX_FRAME_LEN + VIRTIO_NET_HEADER_LEN_MRG;
 static LOG_TCP_DEST_PORT: AtomicBool = AtomicBool::new(true);
+static RX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
+static TX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -168,9 +170,12 @@ pub struct VirtioNet {
     rx_poll_count: u64,
     rx_used_count: u64,
     last_used_idx_debug: u16,
+    last_snapshot_rx_used: u16,
+    last_snapshot_tx_used: u16,
     last_progress_ms: u64,
     last_snapshot_ms: u64,
     stalled_snapshot_logged: bool,
+    tx_post_logged: bool,
     last_error: Option<&'static str>,
 }
 
@@ -450,9 +455,12 @@ impl VirtioNet {
             rx_poll_count: 0,
             rx_used_count: 0,
             last_used_idx_debug: 0,
+            last_snapshot_rx_used: 0,
+            last_snapshot_tx_used: 0,
             last_progress_ms: now_ms,
             last_snapshot_ms: now_ms,
             stalled_snapshot_logged: false,
+            tx_post_logged: false,
             last_error: None,
         };
         driver.initialise_queues();
@@ -507,13 +515,22 @@ impl VirtioNet {
             return;
         }
 
-        self.last_snapshot_ms = now_ms;
-        self.stalled_snapshot_logged = true;
-
         let isr = self.regs.isr_status();
         let status = self.regs.status();
         let (rx_used_idx, rx_avail_idx) = self.rx_queue.indices();
         let (tx_used_idx, tx_avail_idx) = self.tx_queue.indices();
+
+        if self.stalled_snapshot_logged
+            && rx_used_idx == self.last_snapshot_rx_used
+            && tx_used_idx == self.last_snapshot_tx_used
+        {
+            return;
+        }
+
+        self.last_snapshot_rx_used = rx_used_idx;
+        self.last_snapshot_tx_used = tx_used_idx;
+        self.last_snapshot_ms = now_ms;
+        self.stalled_snapshot_logged = true;
 
         self.rx_queue.debug_dump("rx");
         self.tx_queue.debug_dump("tx");
@@ -772,12 +789,15 @@ impl VirtioNet {
             for byte in &mut slice[length..] {
                 *byte = 0;
             }
-            info!(
-                target: "net-console",
-                "[virtio-net] TX descriptor posted: id={} len={}",
-                id,
-                length
-            );
+            if !self.tx_post_logged {
+                info!(
+                    target: "net-console",
+                    "[virtio-net] TX descriptor posted: id={} len={}",
+                    id,
+                    length
+                );
+                self.tx_post_logged = true;
+            }
         }
     }
 }
@@ -1830,8 +1850,20 @@ impl VirtQueue {
     }
 
     fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) {
-        fence(AtomicOrdering::Release);
+        // Ensure descriptors and avail ring updates are visible to the device before the kick.
+        fence(AtomicOrdering::SeqCst);
         regs.notify(queue);
+        let notify_flag = match queue {
+            RX_QUEUE_INDEX => Some(&RX_NOTIFY_LOGGED),
+            TX_QUEUE_INDEX => Some(&TX_NOTIFY_LOGGED),
+            _ => None,
+        };
+        if let Some(flag) = notify_flag {
+            if !flag.swap(true, AtomicOrdering::AcqRel) {
+                let label = if queue == TX_QUEUE_INDEX { "TX" } else { "RX" };
+                info!(target: "virtio-net", "[virtio-net] notify queue={queue} ({label})");
+            }
+        }
     }
 
     fn sync_descriptor_table_for_device(&self) {
