@@ -2059,7 +2059,9 @@ impl<D: NetDevice> NetStack<D> {
                 port: 0,
             };
             let cx = self.interface.context();
+            drop(socket);
             self.log_probe_hint_once(dest.port);
+            let socket = self.sockets.get_mut::<TcpSocket>(handle);
             match socket.connect(cx, dest, local_endpoint) {
                 Ok(()) => {
                     self.probe_fail_count = 0;
