@@ -10,7 +10,6 @@ pub use cohesix_net_constants::{COHESIX_TCP_CONSOLE_PORT, COHSH_TCP_PORT, TCP_CO
 use heapless::String as HeaplessString;
 
 pub use crate::net_consts::MAX_FRAME_LEN;
-pub mod net_mode;
 
 /// Default IP address for the `dev-virt` target.
 pub const DEV_VIRT_IP: [u8; 4] = [10, 0, 2, 15];
@@ -29,7 +28,7 @@ pub const IDLE_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 pub const AUTH_TIMEOUT_MS: u64 = 5 * 1000;
 
 /// Number of console lines retained between pump cycles.
-pub const CONSOLE_QUEUE_DEPTH: usize = 16;
+pub const CONSOLE_QUEUE_DEPTH: usize = 8;
 
 /// Static IPv4 configuration for the TCP console listener.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
