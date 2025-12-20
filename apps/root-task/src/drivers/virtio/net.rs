@@ -710,15 +710,7 @@ impl VirtioNet {
             return Err(());
         }
 
-        self.validate_chain_nonzero(
-            "TX",
-            head_id,
-            descs,
-            None,
-            None,
-            None,
-            used_len,
-        )?;
+        self.validate_chain_nonzero("TX", head_id, descs, None, None, None, used_len)?;
 
         for (idx, spec) in descs.iter().enumerate() {
             let desc_index = head_id.wrapping_add(idx as u16);
@@ -764,21 +756,26 @@ impl VirtioNet {
         }
 
         let rx_len = self.rx_buffers.len();
-        for (slot, buffer) in self.rx_buffers.iter_mut().enumerate() {
+        for slot in 0..rx_len {
             let head_idx = slot as u16;
-            let buffer_capacity = FRAME_BUFFER_LEN.min(buffer.as_slice().len());
-            let payload_len = buffer_capacity.saturating_sub(header_len);
-            let total_len = header_len
-                .saturating_add(payload_len)
-                .min(buffer.as_slice().len()) as u32;
-            let desc = [DescSpec {
-                addr: buffer.paddr() as u64,
-                len: total_len,
-                flags: VIRTQ_DESC_F_WRITE,
-                next: None,
-            }];
+            let (desc, buffer_capacity, payload_len) = {
+                let buffer = &mut self.rx_buffers[slot];
+                let buffer_capacity = FRAME_BUFFER_LEN.min(buffer.as_slice().len());
+                let payload_len = buffer_capacity.saturating_sub(header_len);
+                let total_len = header_len
+                    .saturating_add(payload_len)
+                    .min(buffer.as_slice().len()) as u32;
+                let desc = [DescSpec {
+                    addr: buffer.paddr() as u64,
+                    len: total_len,
+                    flags: VIRTQ_DESC_F_WRITE,
+                    next: None,
+                }];
 
-            Self::sync_rx_slot_for_device(buffer, header_len, payload_len);
+                Self::sync_rx_slot_for_device(buffer, header_len, payload_len);
+
+                (desc, buffer_capacity, payload_len)
+            };
 
             let notify = slot + 1 == rx_len;
             if self
