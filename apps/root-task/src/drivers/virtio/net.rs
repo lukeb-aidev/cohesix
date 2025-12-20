@@ -464,6 +464,7 @@ impl VirtioNet {
 
     fn initialise_queues(&mut self) {
         let header_len = self.rx_header_len as u32;
+        let header_len_usize = self.rx_header_len as usize;
         let payload_len = core::cmp::min(
             MAX_FRAME_LEN,
             FRAME_BUFFER_LEN.saturating_sub(self.rx_header_len),
@@ -484,7 +485,7 @@ impl VirtioNet {
             );
             self.rx_queue.push_avail(head_idx);
 
-            self.sync_rx_slot_for_device(buffer, payload_len as usize);
+            Self::sync_rx_slot_for_device(buffer, header_len_usize, payload_len as usize);
 
             if slot < 2 {
                 let head_desc = self.rx_queue.read_descriptor(head_idx);
@@ -562,8 +563,7 @@ impl VirtioNet {
         );
     }
 
-    fn sync_rx_slot_for_device(&self, buffer: &RamFrame, payload_len: usize) {
-        let header_len = self.rx_header_len;
+    fn sync_rx_slot_for_device(buffer: &RamFrame, header_len: usize, payload_len: usize) {
         let header_ptr = buffer.ptr().as_ptr();
         let payload_ptr = unsafe { header_ptr.add(header_len) };
         let payload_len = core::cmp::min(
@@ -574,15 +574,15 @@ impl VirtioNet {
         dma_sync_for_device(payload_ptr, payload_len);
     }
 
-    fn sync_rx_slot_for_cpu(&self, buffer: &RamFrame, written_len: usize) {
-        let header_len = core::cmp::min(self.rx_header_len, written_len);
+    fn sync_rx_slot_for_cpu(buffer: &RamFrame, header_len: usize, written_len: usize) {
+        let header_len = core::cmp::min(header_len, written_len);
         let header_ptr = buffer.ptr().as_ptr();
         dma_sync_for_cpu(header_ptr, header_len);
         let payload_len = written_len
             .saturating_sub(header_len)
-            .min(buffer.as_slice().len().saturating_sub(self.rx_header_len));
+            .min(buffer.as_slice().len().saturating_sub(header_len));
         if payload_len > 0 {
-            let payload_ptr = unsafe { header_ptr.add(self.rx_header_len) };
+            let payload_ptr = unsafe { header_ptr.add(header_len) };
             dma_sync_for_cpu(payload_ptr, payload_len);
         }
     }
@@ -609,8 +609,9 @@ impl VirtioNet {
 
     fn pop_rx(&mut self) -> Option<(u16, usize)> {
         if let Some((id, len)) = self.rx_queue.pop_used().map(|(id, len)| (id, len as usize)) {
+            let header_len = self.rx_header_len;
             if let Some(buffer) = self.rx_buffers.get_mut(id as usize) {
-                self.sync_rx_slot_for_cpu(buffer, len);
+                Self::sync_rx_slot_for_cpu(buffer, header_len, len);
             }
             self.last_used_idx_debug = self.rx_queue.last_used;
             let (used_idx, avail_idx) = self.rx_queue.indices();
@@ -629,6 +630,7 @@ impl VirtioNet {
     fn requeue_rx(&mut self, id: u16) {
         let slot = id as usize;
         let header_len = self.rx_header_len as u32;
+        let header_len_usize = self.rx_header_len as usize;
         if let Some(buffer) = self.rx_buffers.get_mut(slot) {
             let total_len = core::cmp::min(
                 buffer.as_slice().len() as u32,
@@ -644,7 +646,11 @@ impl VirtioNet {
                 None,
             );
             self.rx_queue.push_avail(id);
-            self.sync_rx_slot_for_device(buffer, total_len.saturating_sub(header_len) as usize);
+            Self::sync_rx_slot_for_device(
+                buffer,
+                header_len_usize,
+                total_len.saturating_sub(header_len) as usize,
+            );
             self.rx_queue.sync_descriptor_table_for_device();
             self.rx_queue.sync_avail_ring_for_device();
             let (used_idx, avail_idx) = self.rx_queue.indices();
