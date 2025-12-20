@@ -82,6 +82,12 @@ struct DescSpec {
     next: Option<u16>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QueueKind {
+    Rx,
+    Tx,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct VirtioNetHdr {
@@ -673,12 +679,17 @@ impl VirtioNet {
     fn verify_descriptor_write(
         &mut self,
         queue_label: &'static str,
-        queue: &VirtQueue,
+        queue_kind: QueueKind,
         head_id: u16,
         expected_chain: &[DescSpec],
     ) -> Result<(), ()> {
         let mut mismatch = false;
         let mut actual_chain: HeaplessVec<VirtqDesc, MAX_QUEUE_SIZE> = HeaplessVec::new();
+
+        let queue = match queue_kind {
+            QueueKind::Rx => &self.rx_queue,
+            QueueKind::Tx => &self.tx_queue,
+        };
 
         for (idx, expected) in expected_chain.iter().enumerate() {
             let desc_index = head_id.wrapping_add(idx as u16);
@@ -804,7 +815,7 @@ impl VirtioNet {
             });
         }
 
-        self.verify_descriptor_write("RX", &self.rx_queue, head_id, &resolved_descs)?;
+        self.verify_descriptor_write("RX", QueueKind::Rx, head_id, &resolved_descs)?;
         self.rx_queue.sync_descriptor_table_for_device();
         self.rx_queue.push_avail(head_id);
         self.rx_queue.sync_avail_ring_for_device();
@@ -850,7 +861,7 @@ impl VirtioNet {
             });
         }
 
-        self.verify_descriptor_write("TX", &self.tx_queue, head_id, &resolved_descs)?;
+        self.verify_descriptor_write("TX", QueueKind::Tx, head_id, &resolved_descs)?;
         self.tx_queue.sync_descriptor_table_for_device();
         self.tx_queue.push_avail(head_id);
         self.tx_queue.sync_avail_ring_for_device();
@@ -2401,6 +2412,7 @@ impl VirtQueue {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug)]
 struct VirtqDesc {
     addr: u64,
     len: u32,
