@@ -73,6 +73,8 @@ const FRAME_BUFFER_LEN: usize = MAX_FRAME_LEN + VIRTIO_NET_HEADER_LEN_MRG;
 static LOG_TCP_DEST_PORT: AtomicBool = AtomicBool::new(true);
 static RX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
+static RX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
+static TX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug)]
 struct DescSpec {
@@ -815,10 +817,24 @@ impl VirtioNet {
             });
         }
 
+        fence(AtomicOrdering::Release);
         self.verify_descriptor_write("RX", QueueKind::Rx, head_id, &resolved_descs)?;
         self.rx_queue.sync_descriptor_table_for_device();
+        fence(AtomicOrdering::Release);
         self.rx_queue.push_avail(head_id);
+        fence(AtomicOrdering::Release);
         self.rx_queue.sync_avail_ring_for_device();
+        if !RX_PUBLISH_FENCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            let (_, avail_idx) = self.rx_queue.indices();
+            let slot = avail_idx.wrapping_sub(1) % self.rx_queue.size;
+            debug!(
+                target: "virtio-net",
+                "[virtio-net] enqueue publish: fences applied (rx) head={} slot={} avail_idx={}",
+                head_id,
+                slot,
+                avail_idx,
+            );
+        }
         if notify && !self.device_faulted {
             self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
         }
@@ -861,10 +877,24 @@ impl VirtioNet {
             });
         }
 
+        fence(AtomicOrdering::Release);
         self.verify_descriptor_write("TX", QueueKind::Tx, head_id, &resolved_descs)?;
         self.tx_queue.sync_descriptor_table_for_device();
+        fence(AtomicOrdering::Release);
         self.tx_queue.push_avail(head_id);
+        fence(AtomicOrdering::Release);
         self.tx_queue.sync_avail_ring_for_device();
+        if !TX_PUBLISH_FENCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            let (_, avail_idx) = self.tx_queue.indices();
+            let slot = avail_idx.wrapping_sub(1) % self.tx_queue.size;
+            debug!(
+                target: "virtio-net",
+                "[virtio-net] enqueue publish: fences applied (tx) head={} slot={} avail_idx={}",
+                head_id,
+                slot,
+                avail_idx,
+            );
+        }
         if notify && !self.device_faulted {
             self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
         }
@@ -2264,14 +2294,18 @@ impl VirtQueue {
             );
             return;
         }
-        let desc = unsafe { &mut *self.desc.as_ptr().add(index as usize) };
-        desc.addr = addr;
-        desc.len = len;
-        desc.flags = match next {
+        let flags = match next {
             Some(_) => flags | VIRTQ_DESC_F_NEXT,
             None => flags,
         };
-        desc.next = next.unwrap_or(0);
+        let desc = VirtqDesc {
+            addr,
+            len,
+            flags,
+            next: next.unwrap_or(0),
+        };
+        let desc_ptr = unsafe { self.desc.as_ptr().add(index as usize) };
+        unsafe { write_volatile(desc_ptr, desc) };
     }
 
     fn push_avail(&self, index: u16) {
@@ -2292,12 +2326,13 @@ impl VirtQueue {
             write_volatile(ring_ptr, index);
             fence(AtomicOrdering::Release);
             write_volatile(&mut (*avail).idx, idx.wrapping_add(1));
+            fence(AtomicOrdering::Release);
         }
     }
 
     fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) {
         // Ensure descriptors and avail ring updates are visible to the device before the kick.
-        fence(AtomicOrdering::SeqCst);
+        fence(AtomicOrdering::Release);
         regs.notify(queue);
         let notify_flag = match queue {
             RX_QUEUE_INDEX => Some(&RX_NOTIFY_LOGGED),
