@@ -1624,8 +1624,8 @@ impl VirtioNet {
         if payload_len == 0 {
             self.tx_anomaly(TxAnomalyReason::DescLenZero, "tx_payload_len_zero");
         }
-        let header_fields = self.inspect_tx_header(head_id, header_len);
-        let payload_overlaps = resolved_descs.get(0).map_or(false, |desc| {
+        let _header_fields = self.inspect_tx_header(head_id, header_len);
+        let _payload_overlaps = resolved_descs.get(0).map_or(false, |desc| {
             let header_end = desc.addr.saturating_add(header_len as u64);
             let payload_addr = desc.addr.saturating_add(header_len as u64);
             payload_len > 0 && payload_addr < header_end
@@ -2312,7 +2312,7 @@ impl VirtioNet {
         }
     }
 
-    fn compute_written_len(&self, payload_len: usize, before: &[u8], after: &[u8]) -> usize {
+    fn compute_written_len(payload_len: usize, before: &[u8], after: &[u8]) -> usize {
         let limit = core::cmp::min(payload_len, core::cmp::min(before.len(), after.len()));
         let mut written = 0usize;
         for idx in 0..limit {
@@ -2415,17 +2415,17 @@ impl VirtioNet {
         let avail_start = self.tx_queue.base_paddr + self.tx_queue.layout.avail_offset;
         info!(
             target: "virtio-net",
-            "[virtio-net][dma] tx ranges head={} total_len={} header_len={} buffer=0x{buf_start:016x}..0x{buf_end:016x} payload=0x{payload_start:016x}..0x{payload_end:016x} desc=0x{desc_start:016x}/{} avail=0x{avail_start:016x}/{}",
+            "[virtio-net][dma] tx ranges head={} total_len={} header_len={} buffer=0x{buf_start:016x}..0x{buf_end:016x} payload=0x{payload_start:016x}..0x{payload_end:016x} desc=0x{desc_start:016x}/{desc_len} avail=0x{avail_start:016x}/{avail_len}",
             head_id,
             total_len,
             header_len,
-                buf_start = buffer_range.0,
-                buf_end = buffer_range.1,
-                payload_start = payload_start,
-                payload_end = payload_end,
-                desc_len = self.tx_queue.layout.desc_len,
-                avail_len = self.tx_queue.layout.avail_len,
-            );
+            buf_start = buffer_range.0,
+            buf_end = buffer_range.1,
+            payload_start = payload_start,
+            payload_end = payload_end,
+            desc_len = self.tx_queue.layout.desc_len,
+            avail_len = self.tx_queue.layout.avail_len,
+        );
         for (idx, desc) in descs.iter().enumerate() {
             info!(
                 target: "virtio-net",
@@ -2454,7 +2454,7 @@ impl VirtioNet {
             }
             debug!(
                 target: "virtio-net",
-                "[virtio-net][dma-readback] head={} desc[{}] expected=0x{exp_addr:016x}/{exp_len}/0x{exp_flags:04x}/{:?} actual=0x{act_addr:016x}/{act_len}/0x{act_flags:04x}/{act_next}",
+                "[virtio-net][dma-readback] head={} desc[{}] expected=0x{exp_addr:016x}/{exp_len}/0x{exp_flags:04x}/{exp_next:?} actual=0x{act_addr:016x}/{act_len}/0x{act_flags:04x}/{act_next}",
                 head_id,
                 desc_index,
                 exp_addr = expected.addr,
@@ -2976,7 +2976,7 @@ impl TxToken for VirtioTxToken {
                 result = f(&mut payload[..payload_len]);
                 let after_len = core::cmp::min(payload_len, MAX_FRAME_LEN);
                 payload_after[..after_len].copy_from_slice(&payload[..after_len]);
-                written_len = driver.compute_written_len(
+                written_len = VirtioNet::compute_written_len(
                     payload_len,
                     &payload_before[..copy_len],
                     &payload_after[..after_len],
@@ -2997,7 +2997,7 @@ impl TxToken for VirtioTxToken {
                 snapshot[..length].copy_from_slice(payload_slice);
                 let result = f(payload_slice);
                 let written_len =
-                    driver.compute_written_len(length, &snapshot[..length], payload_slice);
+                    VirtioNet::compute_written_len(length, &snapshot[..length], payload_slice);
                 driver.log_tx_attempt(attempt_seq, len, length, written_len);
                 result
             };
