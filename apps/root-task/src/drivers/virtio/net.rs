@@ -1089,7 +1089,7 @@ impl VirtioNet {
             return;
         }
         let used = self.tx_queue.used.as_ptr();
-        self.tx_queue.sync_used_ring_for_cpu();
+        self.tx_queue.invalidate_used_header_for_cpu();
         let used_idx = unsafe { read_volatile(&(*used).idx) };
         let last_used = self.tx_queue.last_used;
         let window = core::cmp::min(qsize, 16);
@@ -1106,6 +1106,7 @@ impl VirtioNet {
             let slot_idx = start.wrapping_add(offset as u16);
             let ring_slot = (slot_idx as usize) % qsize;
             let ring_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
+            self.tx_queue.invalidate_used_elem_for_cpu(ring_slot);
             let elem = unsafe { read_volatile(ring_ptr) };
             info!(
                 target: "net-console",
