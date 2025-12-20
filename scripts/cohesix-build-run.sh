@@ -170,10 +170,6 @@ detect_gic_version() {
     echo "$result"
 }
 
-virtio_mmio_force_legacy_supported() {
-    "$QEMU_BIN" -global help 2>/dev/null | grep -q 'virtio-mmio\.force-legacy'
-}
-
 main() {
     SEL4_BUILD_DIR="${SEL4_BUILD:-$HOME/seL4/build}"
     OUT_DIR="out/cohesix"
@@ -578,16 +574,10 @@ PY
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
         log "Wiring virtio-net MMIO NIC for TCP console"
-        if virtio_mmio_force_legacy_supported; then
-            if [[ "${COHESIX_VIRTIO_MMIO_LEGACY:-0}" == "1" ]]; then
-                log "COHESIX_VIRTIO_MMIO_LEGACY=1 set; forcing virtio-mmio legacy mode"
-                QEMU_ARGS+=(-global virtio-mmio.force-legacy=true)
-            else
-                QEMU_ARGS+=(-global virtio-mmio.force-legacy=false)
-            fi
-        else
-            log "Warning: QEMU does not expose virtio-mmio.force-legacy; cannot force modern mode"
-        fi
+     
+        QEMU_ARGS+=(-global virtio-mmio.force-legacy=off)
+        
+       
         NETWORK_ARGS=(
             -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT},hostfwd=udp:127.0.0.1:31338-10.0.2.15:31338,hostfwd=tcp:127.0.0.1:31339-10.0.2.15:31339"
             -device "virtio-net-device,netdev=net0,mac=52:55:00:d1:55:01,bus=virtio-mmio-bus.0"
