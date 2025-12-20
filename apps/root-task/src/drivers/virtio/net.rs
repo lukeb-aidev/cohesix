@@ -91,6 +91,10 @@ pub enum DriverError {
     BufferExhausted,
     /// A virtqueue failed safety or consistency checks.
     QueueInvariant(&'static str),
+    /// The virtio MMIO header contained an unexpected magic value.
+    InvalidMagic(u32),
+    /// The virtio MMIO header advertised an unsupported version.
+    UnsupportedVersion(u32),
 }
 
 impl fmt::Display for DriverError {
@@ -102,6 +106,12 @@ impl fmt::Display for DriverError {
             Self::NoQueue => f.write_str("virtio-net queues unavailable"),
             Self::BufferExhausted => f.write_str("virtio-net DMA buffer exhausted"),
             Self::QueueInvariant(reason) => write!(f, "virtqueue invariant failed: {reason}"),
+            Self::InvalidMagic(magic) => {
+                write!(f, "virtio-mmio magic value unexpected: 0x{magic:08x}")
+            }
+            Self::UnsupportedVersion(version) => {
+                write!(f, "virtio-mmio version unsupported: 0x{version:08x}")
+            }
         }
     }
 }
@@ -1155,9 +1165,18 @@ impl VirtioRegs {
                 Err(err) => return Err(DriverError::from(err)),
             };
             let regs = VirtioRegs { mmio: frame };
-            let magic = regs.read32(Registers::MagicValue);
-            let version = regs.read32(Registers::Version);
-            let device_id = regs.read32(Registers::DeviceId);
+            let identifiers = regs.read_identifiers();
+            identifiers.log();
+            if let Err(err) = identifiers.validate() {
+                error!(
+                    "[net-console] virtio-mmio id rejected for slot {}: {}",
+                    slot, err
+                );
+                return Err(err);
+            }
+            let magic = identifiers.magic;
+            let version = identifiers.version;
+            let device_id = identifiers.device_id;
             let vendor_id = regs.read32(Registers::VendorId);
             info!(
                 "[net-console] slot={slot} mmio=0x{base:08x} id=0x{device_id:04x} vendor=0x{vendor_id:04x} magic=0x{magic:08x} version={version}",
@@ -1293,6 +1312,125 @@ impl VirtioRegs {
         } else {
             Some(EthernetAddress::from_bytes(&bytes))
         }
+    }
+
+    fn read_identifiers(&self) -> VirtioMmioId {
+        VirtioMmioId {
+            magic: self.read32(Registers::MagicValue),
+            version: self.read32(Registers::Version),
+            device_id: self.read32(Registers::DeviceId),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct VirtioMmioId {
+    magic: u32,
+    version: u32,
+    device_id: u32,
+}
+
+impl VirtioMmioId {
+    fn log(&self) {
+        info!(
+            target: "net-console",
+            "virtio-mmio id: magic=0x{magic:08x}, version=0x{version:08x}, device_id=0x{device_id:08x}",
+            magic = self.magic,
+            version = self.version,
+            device_id = self.device_id,
+        );
+    }
+
+    fn validate(&self) -> Result<(), DriverError> {
+        if self.magic != VIRTIO_MMIO_MAGIC {
+            error!(
+                target: "net-console",
+                "virtio-mmio header magic mismatch: expected=0x{expected:08x} actual=0x{actual:08x}",
+                expected = VIRTIO_MMIO_MAGIC,
+                actual = self.magic
+            );
+            return Err(DriverError::InvalidMagic(self.magic));
+        }
+        if self.version != VIRTIO_MMIO_VERSION_LEGACY {
+            error!(
+                target: "net-console",
+                "virtio-mmio version unsupported: 0x{version:08x}",
+                version = self.version
+            );
+            return Err(DriverError::UnsupportedVersion(self.version));
+        }
+        if self.version == VIRTIO_MMIO_VERSION_LEGACY {
+            let message = "legacy virtio-mmio interface selected";
+            #[cfg(feature = "virtio-mmio-legacy")]
+            {
+                warn!(target: "net-console", "{message}");
+            }
+            #[cfg(not(feature = "virtio-mmio-legacy"))]
+            {
+                error!(target: "net-console", "{message}");
+                return Err(DriverError::UnsupportedVersion(self.version));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(all(test, not(target_os = "none")))]
+mod tests {
+    use super::*;
+
+    fn make_fake_mmio(magic: u32, version: u32, device_id: u32) -> (NonNull<u8>, Box<[u32; 4]>) {
+        let mut backing = Box::new([0u32; 4]);
+        backing[0] = magic;
+        backing[1] = version;
+        backing[2] = device_id;
+        let base = NonNull::new(backing.as_mut_ptr() as *mut u8).expect("fake mmio base");
+        (base, backing)
+    }
+
+    fn read_identifiers_from_base(base: NonNull<u8>) -> VirtioMmioId {
+        unsafe {
+            VirtioMmioId {
+                magic: read_volatile(
+                    base.as_ptr().add(Registers::MagicValue as usize) as *const u32
+                ),
+                version: read_volatile(base.as_ptr().add(Registers::Version as usize) as *const u32),
+                device_id: read_volatile(
+                    base.as_ptr().add(Registers::DeviceId as usize) as *const u32
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn detects_invalid_magic() {
+        let (base, _backing) =
+            make_fake_mmio(0x0, VIRTIO_MMIO_VERSION_LEGACY, VIRTIO_DEVICE_ID_NET);
+        let identifiers = read_identifiers_from_base(base);
+        assert_eq!(identifiers.magic, 0x0);
+        assert!(matches!(
+            identifiers.validate(),
+            Err(DriverError::InvalidMagic(0x0))
+        ));
+    }
+
+    #[test]
+    fn gates_legacy_version() {
+        let (base, _backing) = make_fake_mmio(
+            VIRTIO_MMIO_MAGIC,
+            VIRTIO_MMIO_VERSION_LEGACY,
+            VIRTIO_DEVICE_ID_NET,
+        );
+        let identifiers = read_identifiers_from_base(base);
+        assert_eq!(identifiers.version, VIRTIO_MMIO_VERSION_LEGACY);
+        #[cfg(feature = "virtio-mmio-legacy")]
+        assert!(identifiers.validate().is_ok());
+        #[cfg(not(feature = "virtio-mmio-legacy"))]
+        assert!(matches!(
+            identifiers.validate(),
+            Err(DriverError::UnsupportedVersion(VIRTIO_MMIO_VERSION_LEGACY))
+        ));
     }
 }
 

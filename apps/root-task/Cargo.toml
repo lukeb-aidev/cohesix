@@ -63,6 +63,7 @@ tcp-echo-31337 = ["net-console"]
 net-outbound-probe = ["net-console"]
 net-backend-virtio = []
 net-selftest = ["net-console"]
+virtio-mmio-legacy = []
 bootstrap-trace = [
     "dep:spin",
 ]
