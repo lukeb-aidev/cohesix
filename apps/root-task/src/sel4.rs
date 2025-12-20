@@ -2955,7 +2955,7 @@ impl<'a> KernelEnv<'a> {
         self.record_retype(trace, RetypeStatus::Ok);
         let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "dma-frame");
         self.dma_cursor = range.end;
-        self.map_frame(frame_slot, range.start, seL4_ARM_Page_Uncached, false)?;
+        self.map_frame(frame_slot, range.start, seL4_ARM_Page_Default, false)?;
         Ok(RamFrame {
             cap: frame_slot,
             paddr: reserved.paddr(),

@@ -84,6 +84,7 @@ static RX_ARM_END_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_CLEAN_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
+static DMA_QMEM_LOGGED: AtomicBool = AtomicBool::new(false);
 static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
     [const { AtomicBool::new(false) }; VIRTIO_MMIO_SLOTS];
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
@@ -131,6 +132,7 @@ enum ForensicFaultReason {
     LoopDetected,
     UsedIdOutOfRange,
     UsedDescriptorZero,
+    UsedLenZeroRepeat,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -357,6 +359,7 @@ pub struct VirtioNet {
     tx_buffers: HeaplessVec<RamFrame, TX_QUEUE_SIZE>,
     tx_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
     tx_states: [TxState; TX_QUEUE_SIZE],
+    dma_cacheable: bool,
     tx_in_flight: u16,
     tx_gen: u32,
     tx_last_used_seen: u16,
@@ -595,25 +598,61 @@ impl VirtioNet {
                 }
             }
         };
+        let dma_cacheable = true;
+        if !DMA_QMEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            let rx_vaddr = queue_mem_rx.ptr().as_ptr() as usize;
+            let tx_vaddr = queue_mem_tx.ptr().as_ptr() as usize;
+            let rx_len = queue_mem_rx.as_slice().len();
+            let tx_len = queue_mem_tx.as_slice().len();
+            let rx_paddr = queue_mem_rx.paddr();
+            let tx_paddr = queue_mem_tx.paddr();
+            info!(
+                target: "virtio-net",
+                "[virtio-net][dma] qmem mapping cacheable={} rx_vaddr=0x{rx_vaddr:016x}..0x{rx_vend:016x} rx_paddr=0x{rx_paddr:016x}..0x{rx_pend:016x} tx_vaddr=0x{tx_vaddr:016x}..0x{tx_vend:016x} tx_paddr=0x{tx_paddr:016x}..0x{tx_pend:016x}",
+                dma_cacheable,
+                rx_vaddr = rx_vaddr,
+                rx_vend = rx_vaddr.saturating_add(rx_len),
+                rx_paddr = rx_paddr,
+                rx_pend = rx_paddr.saturating_add(rx_len),
+                tx_vaddr = tx_vaddr,
+                tx_vend = tx_vaddr.saturating_add(tx_len),
+                tx_paddr = tx_paddr,
+                tx_pend = tx_paddr.saturating_add(tx_len),
+            );
+        }
 
         info!(
             "[net-console] provisioning RX descriptors ({} entries)",
             rx_size
         );
-        let rx_queue = VirtQueue::new(&mut regs, queue_mem_rx, RX_QUEUE_INDEX, rx_size, mmio_mode)
-            .map_err(|err| {
-                regs.set_status(STATUS_FAILED);
-                err
-            })?;
+        let rx_queue = VirtQueue::new(
+            &mut regs,
+            queue_mem_rx,
+            RX_QUEUE_INDEX,
+            rx_size,
+            mmio_mode,
+            dma_cacheable,
+        )
+        .map_err(|err| {
+            regs.set_status(STATUS_FAILED);
+            err
+        })?;
         info!(
             "[net-console] provisioning TX descriptors ({} entries)",
             tx_size
         );
-        let tx_queue = VirtQueue::new(&mut regs, queue_mem_tx, TX_QUEUE_INDEX, tx_size, mmio_mode)
-            .map_err(|err| {
-                regs.set_status(STATUS_FAILED);
-                err
-            })?;
+        let tx_queue = VirtQueue::new(
+            &mut regs,
+            queue_mem_tx,
+            TX_QUEUE_INDEX,
+            tx_size,
+            mmio_mode,
+            dma_cacheable,
+        )
+        .map_err(|err| {
+            regs.set_status(STATUS_FAILED);
+            err
+        })?;
 
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
         for _ in 0..rx_size {
@@ -700,6 +739,7 @@ impl VirtioNet {
             tx_last_used_seen: 0,
             tx_progress_log_gate: 0,
             negotiated_features,
+            dma_cacheable,
             rx_header_len: net_header_len,
             rx_payload_capacity,
             rx_frame_capacity,
@@ -929,6 +969,7 @@ impl VirtioNet {
             ForensicFaultReason::LoopDetected => "loop_detected",
             ForensicFaultReason::UsedIdOutOfRange => "used_id_oob",
             ForensicFaultReason::UsedDescriptorZero => "used_desc_zero",
+            ForensicFaultReason::UsedLenZeroRepeat => "used_len_zero_repeat",
         }
     }
 
@@ -1948,7 +1989,7 @@ impl VirtioNet {
                     next: None,
                 }];
 
-                Self::sync_rx_slot_for_device(buffer, header_len, payload_len);
+                Self::sync_rx_slot_for_device(buffer, header_len, payload_len, self.dma_cacheable);
 
                 (desc, buffer_capacity, payload_len)
             };
@@ -2046,27 +2087,37 @@ impl VirtioNet {
         );
     }
 
-    fn sync_rx_slot_for_device(buffer: &RamFrame, header_len: usize, payload_len: usize) {
+    fn sync_rx_slot_for_device(
+        buffer: &RamFrame,
+        header_len: usize,
+        payload_len: usize,
+        cacheable: bool,
+    ) {
         let header_ptr = buffer.ptr().as_ptr();
         let payload_ptr = unsafe { header_ptr.add(header_len) };
         let payload_len = core::cmp::min(
             payload_len,
             buffer.as_slice().len().saturating_sub(header_len),
         );
-        dma_clean(header_ptr, header_len, false);
-        dma_clean(payload_ptr, payload_len, false);
+        dma_clean(header_ptr, header_len, cacheable);
+        dma_clean(payload_ptr, payload_len, cacheable);
     }
 
-    fn sync_rx_slot_for_cpu(buffer: &RamFrame, header_len: usize, written_len: usize) {
+    fn sync_rx_slot_for_cpu(
+        buffer: &RamFrame,
+        header_len: usize,
+        written_len: usize,
+        cacheable: bool,
+    ) {
         let header_len = core::cmp::min(header_len, written_len);
         let header_ptr = buffer.ptr().as_ptr();
-        dma_invalidate(header_ptr, header_len, false);
+        dma_invalidate(header_ptr, header_len, cacheable);
         let payload_len = written_len
             .saturating_sub(header_len)
             .min(buffer.as_slice().len().saturating_sub(header_len));
         if payload_len > 0 {
             let payload_ptr = unsafe { header_ptr.add(header_len) };
-            dma_invalidate(payload_ptr, payload_len, false);
+            dma_invalidate(payload_ptr, payload_len, cacheable);
         }
     }
 
@@ -2199,7 +2250,7 @@ impl VirtioNet {
                     return None;
                 }
                 if let Some(buffer) = self.rx_buffers.get_mut(id as usize) {
-                    Self::sync_rx_slot_for_cpu(buffer, header_len, len);
+                    Self::sync_rx_slot_for_cpu(buffer, header_len, len, self.dma_cacheable);
                 }
                 self.last_used_idx_debug = self.rx_queue.last_used;
                 let (used_idx, avail_idx) = self.rx_queue.indices();
@@ -2277,7 +2328,7 @@ impl VirtioNet {
                 next: None,
             }];
 
-            Self::sync_rx_slot_for_device(buffer, header_len, payload_len);
+            Self::sync_rx_slot_for_device(buffer, header_len, payload_len, self.dma_cacheable);
 
             if !self
                 .rx_requeue_logged_ids
@@ -2444,7 +2495,7 @@ impl VirtioNet {
             let capped_len = len.min(buffer.as_slice().len());
             let ptr = buffer.ptr().as_ptr();
             let start = ptr as usize;
-            dma_clean(ptr, capped_len, false);
+            dma_clean(ptr, capped_len, self.dma_cacheable);
             let payload_start = start.saturating_add(self.rx_header_len);
             let payload_end = payload_start.saturating_add(capped_len.saturating_sub(self.rx_header_len));
             if force_log || !self.tx_dma_log_once {
@@ -3516,6 +3567,8 @@ struct VirtQueue {
     last_used: u16,
     pfn: u32,
     base_paddr: usize,
+    cacheable: bool,
+    used_zero_len_head: Option<u16>,
 }
 
 impl VirtQueue {
@@ -3525,6 +3578,7 @@ impl VirtQueue {
         index: u32,
         size: usize,
         mode: VirtioMmioMode,
+        cacheable: bool,
     ) -> Result<Self, DriverError> {
         let queue_size = size as u16;
         let base_paddr = frame.paddr();
@@ -3738,6 +3792,8 @@ impl VirtQueue {
             last_used: used_idx,
             pfn: queue_pfn,
             base_paddr,
+            cacheable,
+            used_zero_len_head: None,
         })
     }
 
@@ -3819,15 +3875,34 @@ impl VirtQueue {
     }
 
     fn sync_descriptor_table_for_device(&self) {
-        dma_clean(self.desc.as_ptr() as *const u8, self.layout.desc_len, false);
+        dma_clean(
+            self.desc.as_ptr() as *const u8,
+            self.layout.desc_len,
+            self.cacheable,
+        );
     }
 
     fn sync_avail_ring_for_device(&self) {
-        dma_clean(self.avail.as_ptr() as *const u8, self.layout.avail_len, false);
+        dma_clean(
+            self.avail.as_ptr() as *const u8,
+            self.layout.avail_len,
+            self.cacheable,
+        );
     }
 
-    fn sync_used_ring_for_cpu(&self) {
-        dma_invalidate(self.used.as_ptr() as *const u8, self.layout.used_len, false);
+    fn invalidate_used_header_for_cpu(&self) {
+        let used_ptr = self.used.as_ptr() as *const u8;
+        dma_invalidate(used_ptr, core::mem::size_of::<u16>() * 2, self.cacheable);
+        fence(AtomicOrdering::SeqCst);
+    }
+
+    fn invalidate_used_elem_for_cpu(&self, ring_slot: usize) {
+        let elem_ptr = unsafe { (*self.used.as_ptr()).ring.as_ptr().add(ring_slot) as *const u8 };
+        dma_invalidate(
+            elem_ptr,
+            core::mem::size_of::<VirtqUsedElem>(),
+            self.cacheable,
+        );
         fence(AtomicOrdering::SeqCst);
     }
 
@@ -3854,7 +3929,7 @@ impl VirtQueue {
         let used = self.used.as_ptr();
         let avail = self.avail.as_ptr();
 
-        self.sync_used_ring_for_cpu();
+        self.invalidate_used_header_for_cpu();
         let used_idx = unsafe { read_volatile(&(*used).idx) };
         let avail_idx = unsafe { read_volatile(&(*avail).idx) };
 
@@ -3875,7 +3950,7 @@ impl VirtQueue {
         let used = self.used.as_ptr();
         let avail = self.avail.as_ptr();
 
-        self.sync_used_ring_for_cpu();
+        self.invalidate_used_header_for_cpu();
         let used_idx = unsafe { read_volatile(&(*used).idx) };
         let avail_idx = unsafe { read_volatile(&(*avail).idx) };
 
@@ -3892,7 +3967,7 @@ impl VirtQueue {
 
     fn pop_used(&mut self, queue_label: &'static str) -> Result<Option<(u16, u32)>, ForensicFault> {
         let used = self.used.as_ptr();
-        self.sync_used_ring_for_cpu();
+        self.invalidate_used_header_for_cpu();
         let idx = unsafe { read_volatile(&(*used).idx) };
         if self.last_used == idx {
             return Ok(None);
@@ -3916,7 +3991,41 @@ impl VirtQueue {
         let ring_slot = (self.last_used as usize) % qsize;
         assert!(ring_slot < qsize, "used ring slot out of range");
         let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
+        self.invalidate_used_elem_for_cpu(ring_slot);
         let elem = unsafe { read_volatile(elem_ptr) };
+        if elem.len == 0 {
+            let head_id = elem.id as u16;
+            let desc = unsafe { read_volatile(self.desc.as_ptr().add(head_id as usize)) };
+            if self.used_zero_len_head == Some(head_id) {
+                return Err(ForensicFault {
+                    queue_name: queue_label,
+                    qsize: self.size,
+                    head: head_id,
+                    idx: self.last_used,
+                    addr: desc.addr,
+                    len: elem.len,
+                    flags: desc.flags,
+                    next: desc.next,
+                    reason: ForensicFaultReason::UsedLenZeroRepeat,
+                });
+            }
+            self.used_zero_len_head = Some(head_id);
+            warn!(
+                target: "net-console",
+                "[virtio-net] used len zero: queue={} head={} idx={} ring_slot={} used_len={} desc_addr=0x{addr:016x} desc_len={len} desc_flags=0x{flags:04x} desc_next={next}",
+                queue_label,
+                head_id,
+                self.last_used,
+                ring_slot,
+                elem.len,
+                addr = desc.addr,
+                len = desc.len,
+                flags = desc.flags,
+                next = desc.next,
+            );
+            return Ok(None);
+        }
+        self.used_zero_len_head = None;
         if elem.id >= u32::from(self.size) {
             return Err(ForensicFault {
                 queue_name: queue_label,
