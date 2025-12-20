@@ -75,6 +75,8 @@ static RX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
 static RX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
+static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
+    [AtomicBool::new(false); VIRTIO_MMIO_SLOTS];
 
 #[derive(Clone, Copy, Debug)]
 struct DescSpec {
@@ -2366,6 +2368,15 @@ impl VirtQueue {
         debug_assert_eq!(avail_idx, 0, "virtqueue avail.idx must start at zero");
         debug_assert_eq!(used_idx, 0, "virtqueue used.idx must start at zero");
 
+        if (index as usize) < RING_SLOT_CANARY_LOGGED.len()
+            && !RING_SLOT_CANARY_LOGGED[index as usize].swap(true, AtomicOrdering::AcqRel)
+        {
+            info!(
+                target: "net-console",
+                "[virtio-net] queue {index} ring canary: size={queue_size} initial_avail_idx={avail_idx} slot_rule=idx%size",
+            );
+        }
+
         info!(
             target: "net-console",
             "[virtio-net] queue {index} layout: base_vaddr=0x{vaddr:016x} base_paddr=0x{paddr:016x} desc=+0x{desc_off:03x} avail=+0x{avail_off:03x} used=+0x{used_off:03x} total_len={total}",
@@ -2450,8 +2461,13 @@ impl VirtQueue {
             return None;
         }
         let avail = self.avail.as_ptr();
+        let qsize = usize::from(self.size);
+
+        assert!(qsize != 0, "virtqueue size must be non-zero");
+
         let idx = unsafe { read_volatile(&(*avail).idx) };
-        let ring_slot = idx % self.size;
+        let ring_slot = (idx as usize) % qsize;
+        assert!(ring_slot < qsize, "avail ring slot out of range");
         unsafe {
             let ring_ptr = (*avail).ring.as_ptr().add(ring_slot as usize) as *mut u16;
             write_volatile(ring_ptr, index);
@@ -2561,9 +2577,13 @@ impl VirtQueue {
             );
             return None;
         }
-        let ring_slot = self.last_used % self.size;
-        let elem_ptr =
-            unsafe { (*used).ring.as_ptr().add(ring_slot as usize) as *const VirtqUsedElem };
+        let qsize = usize::from(self.size);
+
+        assert!(qsize != 0, "virtqueue size must be non-zero");
+
+        let ring_slot = (self.last_used as usize) % qsize;
+        assert!(ring_slot < qsize, "used ring slot out of range");
+        let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
         let elem = unsafe { read_volatile(elem_ptr) };
         debug!(
             target: "net-console",
