@@ -183,6 +183,9 @@ main() {
     DTB_OVERRIDE=""
     TRANSPORT="tcp"
     TCP_PORT=31337
+    UDP_ECHO_PORT=31338
+    TCP_SMOKE_PORT=31339
+    VIRTIO_MMIO_FORCE_LEGACY=${VIRTIO_MMIO_FORCE_LEGACY:-0}
     ROOT_TASK_FEATURES="kernel,bootstrap-trace"
 
     while [[ $# -gt 0 ]]; do
@@ -571,11 +574,30 @@ PY
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
         log "Wiring virtio-net MMIO NIC for TCP console"
+        local hostfwd_entries=(
+            "hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT}"
+            "hostfwd=udp:127.0.0.1:${UDP_ECHO_PORT}-10.0.2.15:${UDP_ECHO_PORT}"
+            "hostfwd=tcp:127.0.0.1:${TCP_SMOKE_PORT}-10.0.2.15:${TCP_SMOKE_PORT}"
+        )
+        local hostfwd_joined
+        hostfwd_joined=$(IFS=','; echo "${hostfwd_entries[*]}")
+
+        local force_legacy_arg="false"
+        if [[ "${VIRTIO_MMIO_FORCE_LEGACY:-0}" -eq 1 ]]; then
+            force_legacy_arg="true"
+            log "virtio-mmio legacy requested: -global virtio-mmio.force-legacy=true (requires --features virtio-mmio-legacy)"
+        else
+            log "virtio-mmio modern mode (v2): -global virtio-mmio.force-legacy=false"
+        fi
+
         NETWORK_ARGS=(
-            -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT}"
+            -global "virtio-mmio.force-legacy=${force_legacy_arg}"
+            -netdev "user,id=net0,${hostfwd_joined}"
             -device "virtio-net-device,netdev=net0,mac=52:55:00:d1:55:01,bus=virtio-mmio-bus.0"
         )
         log "TCP console: host 127.0.0.1:${TCP_PORT} -> guest 10.0.2.15:${TCP_PORT}"
+        log "UDP echo: host 127.0.0.1:${UDP_ECHO_PORT} -> guest 10.0.2.15:${UDP_ECHO_PORT}"
+        log "TCP smoke: host 127.0.0.1:${TCP_SMOKE_PORT} -> guest 10.0.2.15:${TCP_SMOKE_PORT}"
         QEMU_ARGS+=("${NETWORK_ARGS[@]}")
     fi
 

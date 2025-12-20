@@ -181,7 +181,17 @@ SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
   --transport tcp
 ```
 The script builds `root-task` with the serial and TCP console features, compiles NineDoor and workers, copies host tools (`cohsh`, `gpu-bridge-host`) into `out/cohesix/host-tools/`, and assembles the CPIO payload.【F:scripts/cohesix-build-run.sh†L369-L454】【F:scripts/cohesix-build-run.sh†L402-L442】
-QEMU runs with `-serial mon:stdio` plus `-netdev user,id=net0,hostfwd=tcp:127.0.0.1:<port>-10.0.2.15:<port>` so the TCP console inside the development VM is reachable from the host.【F:scripts/cohesix-build-run.sh†L521-L553】 The script prints the ready command for `cohsh` once QEMU is live.【F:scripts/cohesix-build-run.sh†L548-L553】 In deployment, the same console and `cohsh` flows apply to UEFI-booted ARM64 hardware without the VM wrapper.
+QEMU runs with `-serial mon:stdio`, `-global virtio-mmio.force-legacy=false`, and a user-net device that forwards TCP/UDP ports 31337–31339 into the guest so the TCP console and self-tests are reachable from the host.【F:scripts/cohesix-build-run.sh†L518-L553】 The script prints the ready command for `cohsh` once QEMU is live.【F:scripts/cohesix-build-run.sh†L546-L553】 In deployment, the same console and `cohsh` flows apply to UEFI-booted ARM64 hardware without the VM wrapper.
+
+### Virtio-MMIO modes (modern by default)
+- **Modern v2 (default)**: no extra flags are required; the build wrapper forces `virtio-mmio.force-legacy=false` so QEMU exposes the modern header and the driver accepts it by default.【F:scripts/cohesix-build-run.sh†L518-L544】【F:apps/root-task/src/drivers/virtio/net.rs†L118-L157】 Use the host forwards above to reach the TCP console (31337), UDP echo self-test (31338), and TCP smoke test (31339).
+- **Legacy v1 (only for debugging)**: export `VIRTIO_MMIO_FORCE_LEGACY=1` before invoking the script **and** rebuild with `--features virtio-mmio-legacy`. The wrapper will switch QEMU to `-global virtio-mmio.force-legacy=true`; the driver will reject v1 unless the feature gate is enabled.【F:scripts/cohesix-build-run.sh†L518-L544】【F:apps/root-task/src/drivers/virtio/net.rs†L1379-L1411】 When debugging legacy, prefer bumping QEMU back to modern instead of carrying the feature in normal builds.
+
+### Verify the modern TCP path quickly
+- Start QEMU with the default `--transport tcp` flow above.
+- From the host, attach to the TCP console via `./cohsh --transport tcp --tcp-port 31337`.
+- Observe forwarded packets (helpful on macOS `lo0`): `sudo tcpdump -i lo0 -n tcp port 31337 or udp port 31338 or tcp port 31339`.
+- For smoke testing, send UDP to 31338 or TCP to 31339 and confirm traffic crosses the hostfwd path.
 
 ### Terminal 2 – host `cohsh` session over TCP
 From `out/cohesix/host-tools/`:
