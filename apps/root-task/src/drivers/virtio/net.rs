@@ -1385,7 +1385,7 @@ impl VirtioMmioId {
                     target: "net-console",
                     "virtio-mmio header magic mismatch: expected=0x{expected:08x} actual=0x{actual:08x}",
                     expected = VIRTIO_MMIO_MAGIC,
-                    actual
+                    actual = actual,
                 );
                 Err(DriverError::InvalidMagic(actual))
             }
