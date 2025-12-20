@@ -868,7 +868,7 @@ impl VirtioNet {
     fn log_forensic_fault(&self, fault: &ForensicFault) {
         error!(
             target: "net-console",
-            "[virtio-net][forensics] fault queue={} head={} idx={} qsize={} addr=0x{addr:016x} len={} flags=0x{flags:04x} next={} reason={}",
+            "[virtio-net][forensics] fault queue={} head={} idx={} qsize={} addr=0x{addr:016x} len={} flags=0x{flags:04x} next={next} reason={reason}",
             fault.queue_name,
             fault.head,
             fault.idx,
@@ -876,8 +876,8 @@ impl VirtioNet {
             addr = fault.addr,
             len = fault.len,
             flags = fault.flags,
-            fault.next,
-            Self::describe_fault_reason(fault.reason),
+            next = fault.next,
+            reason = Self::describe_fault_reason(fault.reason),
         );
     }
 
@@ -907,7 +907,7 @@ impl VirtioNet {
         }
         self.forensic_dump_captured = true;
         let status = self.regs.status();
-        let isr = self.regs.interrupt_status();
+        let isr = self.regs.isr_status();
         error!(
             target: "net-console",
             "[virtio-net][forensics] capturing dump: reason={} status=0x{status:02x} isr=0x{isr:02x}",
@@ -971,7 +971,7 @@ impl VirtioNet {
     fn log_publish_transaction(
         &mut self,
         queue_label: &'static str,
-        queue: &VirtQueue,
+        queue_kind: QueueKind,
         old_idx: u16,
         new_idx: u16,
         slot: u16,
@@ -988,7 +988,10 @@ impl VirtioNet {
         let should_log = force || (*counter as usize) < FORENSICS_PUBLISH_LOG_LIMIT;
         if should_log {
             *counter = counter.saturating_add(1);
-            let head_desc = queue.read_descriptor(head);
+            let head_desc = match queue_kind {
+                QueueKind::Rx => self.rx_queue.read_descriptor(head),
+                QueueKind::Tx => self.tx_queue.read_descriptor(head),
+            };
             info!(
                 target: "net-console",
                 "[virtio-net][forensics] publish {queue_label} avail={old_idx}->{new_idx} slot={slot} head={head} desc{{addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}}}",
@@ -1226,7 +1229,7 @@ impl VirtioNet {
         self.rx_queue.sync_avail_ring_for_device();
         self.log_publish_transaction(
             "RX",
-            &self.rx_queue,
+            QueueKind::Rx,
             old_idx,
             avail_idx,
             slot,
@@ -1306,7 +1309,7 @@ impl VirtioNet {
         self.tx_queue.sync_avail_ring_for_device();
         self.log_publish_transaction(
             "TX",
-            &self.tx_queue,
+            QueueKind::Tx,
             old_idx,
             avail_idx,
             slot,
