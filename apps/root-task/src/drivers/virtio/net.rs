@@ -20,6 +20,10 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
+use crate::drivers::virtio::mmio_policy::{
+    self, VirtioMmioMode, VirtioMmioPolicyError, VIRTIO_DEVICE_ID_NET, VIRTIO_MMIO_MAGIC,
+    VIRTIO_MMIO_VERSION_LEGACY, VIRTIO_MMIO_VERSION_MODERN,
+};
 use crate::hal::{HalError, Hardware};
 use crate::net::{NetDevice, NetDeviceCounters, NetDriverError, CONSOLE_TCP_PORT};
 use crate::net_consts::MAX_FRAME_LEN;
@@ -29,11 +33,6 @@ const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
 const VIRTIO_MMIO_SLOTS: usize = 8;
 
-const VIRTIO_MMIO_MAGIC: u32 = 0x7472_6976;
-const VIRTIO_MMIO_VERSION_LEGACY: u32 = 1;
-const VIRTIO_MMIO_VERSION_MODERN: u32 = 2;
-const VIRTIO_DEVICE_ID_NET: u32 = 1;
-
 const DEVICE_FRAME_BITS: usize = 12;
 
 const STATUS_ACKNOWLEDGE: u32 = 1 << 0;
@@ -41,12 +40,6 @@ const STATUS_DRIVER: u32 = 1 << 1;
 const STATUS_DRIVER_OK: u32 = 1 << 2;
 const STATUS_FEATURES_OK: u32 = 1 << 3;
 const STATUS_FAILED: u32 = 1 << 7;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum VirtioMmioMode {
-    Modern,
-    Legacy,
-}
 
 const VIRTQ_DESC_F_NEXT: u16 = 1 << 0;
 const VIRTQ_DESC_F_WRITE: u16 = 1 << 1;
@@ -120,7 +113,7 @@ impl fmt::Display for DriverError {
                 if *version == VIRTIO_MMIO_VERSION_LEGACY {
                     write!(
                         f,
-                        "legacy virtio-mmio v1 requires --features virtio-mmio-legacy or QEMU -global virtio-mmio.force-legacy=false"
+                        "legacy virtio-mmio v1 requires --features virtio-mmio-legacy or QEMU -global virtio-mmio.force-legacy=off"
                     )
                 } else {
                     write!(
@@ -1366,28 +1359,13 @@ impl VirtioMmioId {
     }
 
     fn evaluate(&self, vendor_id: u32) -> Result<VirtioMmioMode, DriverError> {
-        if self.magic != VIRTIO_MMIO_MAGIC {
-            error!(
-                target: "net-console",
-                "virtio-mmio header magic mismatch: expected=0x{expected:08x} actual=0x{actual:08x}",
-                expected = VIRTIO_MMIO_MAGIC,
-                actual = self.magic
-            );
-            return Err(DriverError::InvalidMagic(self.magic));
-        }
-
-        if self.device_id != VIRTIO_DEVICE_ID_NET {
-            warn!(
-                target: "net-console",
-                "virtio-mmio device_id=0x{device:04x} vendor=0x{vendor:04x} is not virtio-net",
-                device = self.device_id,
-                vendor = vendor_id,
-            );
-            return Err(DriverError::NoDevice);
-        }
-
-        match self.version {
-            VIRTIO_MMIO_VERSION_MODERN => {
+        match mmio_policy::evaluate(
+            self.magic,
+            self.version,
+            self.device_id,
+            cfg!(feature = "virtio-mmio-legacy"),
+        ) {
+            Ok(VirtioMmioMode::Modern) => {
                 info!(
                     target: "net-console",
                     "modern virtio-mmio v2 detected (vendor=0x{vendor:04x})",
@@ -1395,29 +1373,37 @@ impl VirtioMmioId {
                 );
                 Ok(VirtioMmioMode::Modern)
             }
-            VIRTIO_MMIO_VERSION_LEGACY => {
-                let message = "legacy virtio-mmio (v1) detected";
-                #[cfg(feature = "virtio-mmio-legacy")]
-                {
-                    warn!(target: "net-console", "{message}; feature virtio-mmio-legacy enabled");
-                    Ok(VirtioMmioMode::Legacy)
-                }
-                #[cfg(not(feature = "virtio-mmio-legacy"))]
-                {
-                    error!(
-                        target: "net-console",
-                        "{message}; rebuild with --features virtio-mmio-legacy or boot QEMU with -global virtio-mmio.force-legacy=false"
-                    );
-                    Err(DriverError::UnsupportedVersion(self.version))
-                }
+            Ok(VirtioMmioMode::Legacy) => {
+                warn!(
+                    target: "net-console",
+                    "legacy virtio-mmio (v1) detected; feature virtio-mmio-legacy enabled"
+                );
+                Ok(VirtioMmioMode::Legacy)
             }
-            other => {
+            Err(VirtioMmioPolicyError::InvalidMagic(actual)) => {
                 error!(
                     target: "net-console",
-                    "virtio-mmio version unsupported: 0x{other:08x} (expected 0x{modern:08x} or legacy v1)",
-                    modern = VIRTIO_MMIO_VERSION_MODERN
+                    "virtio-mmio header magic mismatch: expected=0x{expected:08x} actual=0x{actual:08x}",
+                    expected = VIRTIO_MMIO_MAGIC,
+                    actual
                 );
-                Err(DriverError::UnsupportedVersion(other))
+                Err(DriverError::InvalidMagic(actual))
+            }
+            Err(VirtioMmioPolicyError::WrongDevice(device_id)) => {
+                warn!(
+                    target: "net-console",
+                    "virtio-mmio device_id=0x{device:04x} vendor=0x{vendor:04x} is not virtio-net",
+                    device = device_id,
+                    vendor = vendor_id,
+                );
+                Err(DriverError::NoDevice)
+            }
+            Err(VirtioMmioPolicyError::UnsupportedVersion(version)) => {
+                error!(
+                    target: "net-console",
+                    "virtio-mmio version unsupported: 0x{version:08x} (expected v2); add QEMU -global virtio-mmio.force-legacy=off or rebuild with --features virtio-mmio-legacy for v1"
+                );
+                Err(DriverError::UnsupportedVersion(version))
             }
         }
     }
