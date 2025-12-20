@@ -40,6 +40,7 @@ const STATUS_ACKNOWLEDGE: u32 = 1 << 0;
 const STATUS_DRIVER: u32 = 1 << 1;
 const STATUS_DRIVER_OK: u32 = 1 << 2;
 const STATUS_FEATURES_OK: u32 = 1 << 3;
+const STATUS_DEVICE_NEEDS_RESET: u32 = 1 << 6;
 const STATUS_FAILED: u32 = 1 << 7;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -176,6 +177,9 @@ pub struct VirtioNet {
     last_snapshot_ms: u64,
     stalled_snapshot_logged: bool,
     tx_post_logged: bool,
+    device_faulted: bool,
+    rx_zero_len_logged: bool,
+    tx_zero_len_logged: bool,
     last_error: Option<&'static str>,
 }
 
@@ -461,6 +465,9 @@ impl VirtioNet {
             last_snapshot_ms: now_ms,
             stalled_snapshot_logged: false,
             tx_post_logged: false,
+            device_faulted: false,
+            rx_zero_len_logged: false,
+            tx_zero_len_logged: false,
             last_error: None,
         };
         driver.initialise_queues();
@@ -684,7 +691,23 @@ impl VirtioNet {
             status,
             isr_ack,
         );
+        self.check_device_health();
+        if self.device_faulted {
+            return;
+        }
         self.reclaim_tx();
+    }
+
+    fn check_device_health(&mut self) {
+        let status = self.regs.status();
+        if (status & (STATUS_DEVICE_NEEDS_RESET | STATUS_FAILED)) != 0 && !self.device_faulted {
+            warn!(
+                target: "net-console",
+                "[virtio-net] entered bad status (0x{status:02x}); halting queue activity"
+            );
+            self.device_faulted = true;
+            self.last_error = Some("device_faulted");
+        }
     }
 
     fn note_progress(&mut self) {
@@ -724,16 +747,28 @@ impl VirtioNet {
     }
 
     fn requeue_rx(&mut self, id: u16) {
+        self.check_device_health();
+        if self.device_faulted {
+            return;
+        }
         let slot = id as usize;
         let header_len = self.rx_header_len as u32;
         let header_len_usize = self.rx_header_len as usize;
         if let Some(buffer) = self.rx_buffers.get_mut(slot) {
-            let total_len = core::cmp::min(
-                buffer.as_slice().len() as u32,
-                header_len
-                    .saturating_add(MAX_FRAME_LEN as u32)
-                    .min(FRAME_BUFFER_LEN as u32),
-            );
+            let buffer_len = buffer.as_slice().len();
+            let total_len = FRAME_BUFFER_LEN.min(buffer_len) as u32;
+            if total_len == 0 {
+                if !self.rx_zero_len_logged {
+                    warn!(
+                        target: "net-console",
+                        "[virtio-net] requeue_rx: refusing to post zero-len descriptor id={} hdr_len={} buffer_len={buffer_len}",
+                        id,
+                        header_len,
+                    );
+                    self.rx_zero_len_logged = true;
+                }
+                return;
+            }
             self.rx_queue.setup_descriptor(
                 id,
                 buffer.paddr() as u64,
@@ -757,7 +792,9 @@ impl VirtioNet {
                 used_idx,
                 avail_idx,
             );
-            self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
+            if !self.device_faulted {
+                self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
+            }
         } else {
             warn!(
                 target: "net-console",
@@ -779,12 +816,43 @@ impl VirtioNet {
     }
 
     fn submit_tx(&mut self, id: u16, len: usize) {
+        self.check_device_health();
+        if self.device_faulted {
+            return;
+        }
+        if len == 0 {
+            if !self.tx_zero_len_logged {
+                warn!(
+                    target: "net-console",
+                    "[virtio-net] drop TX descriptor id={} with zero length",
+                    id
+                );
+                self.tx_zero_len_logged = true;
+            }
+            self.tx_drops = self.tx_drops.saturating_add(1);
+            return;
+        }
         if let Some(buffer) = self.tx_buffers.get_mut(id as usize) {
             let length = len.min(buffer.as_mut_slice().len());
+            if length == 0 {
+                if !self.tx_zero_len_logged {
+                    warn!(
+                        target: "net-console",
+                        "[virtio-net] drop TX descriptor id={} with zero length (buffer_capacity={})",
+                        id,
+                        buffer.as_mut_slice().len(),
+                    );
+                    self.tx_zero_len_logged = true;
+                }
+                self.tx_drops = self.tx_drops.saturating_add(1);
+                return;
+            }
             self.tx_queue
                 .setup_descriptor(id, buffer.paddr() as u64, length as u32, 0, None);
             self.tx_queue.push_avail(id);
-            self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
+            if !self.device_faulted {
+                self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
+            }
             let slice = buffer.as_mut_slice();
             for byte in &mut slice[length..] {
                 *byte = 0;
@@ -1006,6 +1074,10 @@ impl Device for VirtioNet {
 
         self.poll_interrupts();
 
+        if self.device_faulted {
+            return None;
+        }
+
         let (used_idx, avail_idx) = self.rx_queue.indices();
         if used_idx != self.last_used_idx_debug {
             log::info!(
@@ -1063,6 +1135,9 @@ impl Device for VirtioNet {
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
         self.poll_interrupts();
+        if self.device_faulted {
+            return None;
+        }
         if let Some(id) = self.tx_free.pop() {
             Some(VirtioTxToken::new(self as *mut _, Some(id)))
         } else {
