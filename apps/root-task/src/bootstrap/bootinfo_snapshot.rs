@@ -9,8 +9,8 @@ use heapless::String;
 use sel4_sys::{seL4_BootInfo, seL4_Word};
 use spin::Once;
 
-use crate::bootstrap::log::force_uart_line;
 use crate::bootinfo_layout::{post_canary_offset, POST_CANARY_BYTES};
+use crate::bootstrap::log::force_uart_line;
 use crate::sel4::{BootInfo, BootInfoError, BootInfoView, IPC_PAGE_BYTES};
 
 const MAX_CANARY_LINE: usize = 192;
@@ -59,9 +59,7 @@ fn post_canary_ptr(backing_len: usize) -> *const u64 {
     let offset = post_canary_offset(backing_len);
     let payload_ptr = unsafe { BOOTINFO_BACKING.payload.as_ptr() };
     debug_assert!(
-        offset
-            .saturating_add(POST_CANARY_BYTES)
-            <= unsafe { BOOTINFO_BACKING.payload.len() },
+        offset.saturating_add(POST_CANARY_BYTES) <= unsafe { BOOTINFO_BACKING.payload.len() },
         "post canary offset out of bounds"
     );
     unsafe { payload_ptr.add(offset) as *const u64 }
@@ -159,8 +157,7 @@ impl BootInfoSnapshot {
 
         let backing: &'static mut [u8] = unsafe { &mut BOOTINFO_BACKING.payload[..total_size] };
         debug_assert!(
-            total_size
-                .saturating_add(POST_CANARY_BYTES)
+            total_size.saturating_add(POST_CANARY_BYTES)
                 <= unsafe { BOOTINFO_BACKING.payload.len() },
             "snapshot backing truncated before post-canary"
         );
@@ -367,8 +364,7 @@ impl BootInfoState {
             "post-canary must trail snapshot payload"
         );
         debug_assert!(
-            canary_end
-                <= payload_start.saturating_add(unsafe { BOOTINFO_BACKING.payload.len() }),
+            canary_end <= payload_start.saturating_add(unsafe { BOOTINFO_BACKING.payload.len() }),
             "post-canary escaped backing payload"
         );
 
@@ -396,7 +392,8 @@ impl BootInfoState {
 
     #[must_use]
     pub fn canary_values(&self) -> (u64, u64) {
-        let post = unsafe { core::ptr::read_volatile(post_canary_ptr(self.snapshot.backing().len())) };
+        let post =
+            unsafe { core::ptr::read_volatile(post_canary_ptr(self.snapshot.backing().len())) };
         unsafe { (BOOTINFO_BACKING.pre, post) }
     }
 

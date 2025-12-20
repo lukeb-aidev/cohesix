@@ -11,8 +11,8 @@ use super::cspace::first_endpoint_retype;
 use super::cspace::{slot_in_empty_window, CSpaceCtx, DestCNode};
 use super::cspace_sys::{tuple_style, tuple_style_label, TupleStyle};
 use super::ffi::raw_untyped_retype;
-use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::bootinfo_snapshot::BootInfoState;
+use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4::pick_smallest_non_device_untyped;

@@ -364,9 +364,7 @@ fn bootinfo_extra_slice<'a>(
     let required_bytes = extra_end
         .checked_sub(page_base)
         .ok_or(BootInfoError::Overflow)?;
-    let mapped_bytes = required_bytes
-        .saturating_add(IPC_PAGE_BYTES - 1)
-        & !(IPC_PAGE_BYTES - 1);
+    let mapped_bytes = required_bytes.saturating_add(IPC_PAGE_BYTES - 1) & !(IPC_PAGE_BYTES - 1);
     let bootinfo_limit = page_base
         .checked_add(mapped_bytes)
         .ok_or(BootInfoError::Overflow)?;
@@ -469,9 +467,8 @@ impl BootInfoView {
         let required_bytes = extra_end
             .checked_sub(page_base)
             .ok_or(BootInfoError::Overflow)?;
-        let mapped_bytes = required_bytes
-            .saturating_add(IPC_PAGE_BYTES - 1)
-            & !(IPC_PAGE_BYTES - 1);
+        let mapped_bytes =
+            required_bytes.saturating_add(IPC_PAGE_BYTES - 1) & !(IPC_PAGE_BYTES - 1);
         let slice = unsafe { core::slice::from_raw_parts(extra_start as *const u8, extra_len) };
 
         Ok(Self {

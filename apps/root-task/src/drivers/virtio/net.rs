@@ -79,6 +79,10 @@ static RX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
 static RX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
+static RX_ARM_START_LOGGED: AtomicBool = AtomicBool::new(false);
+static RX_ARM_END_LOGGED: AtomicBool = AtomicBool::new(false);
+static DMA_CLEAN_LOGGED: AtomicBool = AtomicBool::new(false);
+static DMA_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
     [const { AtomicBool::new(false) }; VIRTIO_MMIO_SLOTS];
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
@@ -982,6 +986,10 @@ impl VirtioNet {
         self.dump_tx_states();
         self.dump_descriptor_table("rx", &self.rx_queue);
         self.dump_descriptor_table("tx", &self.tx_queue);
+        debug!(
+            target: "net-console",
+            "[virtio-net][forensics] capture complete (reason={reason})"
+        );
     }
 
     fn dump_descriptor_table(&self, label: &str, queue: &VirtQueue) {
@@ -1682,6 +1690,16 @@ impl VirtioNet {
         used_len: Option<usize>,
         notify: bool,
     ) -> Result<(), ()> {
+        let log_breadcrumb = self.tx_publish_log_count < 4 || self.tx_anomaly_logged;
+        if log_breadcrumb {
+            debug!(
+                target: "virtio-net",
+                "[virtio-net][tx-bc] begin head={} descs={} used_len={:?}",
+                head_id,
+                descs.len(),
+                used_len,
+            );
+        }
         self.check_device_health();
         if self.device_faulted || forensics_frozen() {
             return Err(());
@@ -1793,6 +1811,16 @@ impl VirtioNet {
         }
         self.verify_tx_publish(slot, head_id, &resolved_descs[0])?;
         self.tx_queue.sync_avail_ring_for_device();
+        if log_breadcrumb {
+            debug!(
+                target: "virtio-net",
+                "[virtio-net][tx-bc] avail synced head={} slot={} idx {}->{}",
+                head_id,
+                slot,
+                old_idx,
+                avail_idx,
+            );
+        }
         self.log_tx_dma_ranges(
             head_id,
             total_len,
@@ -1843,8 +1871,24 @@ impl VirtioNet {
                 avail_idx,
             );
         }
+        if log_breadcrumb {
+            debug!(
+                target: "virtio-net",
+                "[virtio-net][tx-bc] pre-kick head={} notify={}",
+                head_id,
+                notify,
+            );
+        }
         if notify && !self.device_faulted {
             self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
+            if log_breadcrumb {
+                debug!(
+                    target: "virtio-net",
+                    "[virtio-net][tx-bc] post-kick head={} slot={}",
+                    head_id,
+                    slot,
+                );
+            }
         }
         Ok(())
     }
@@ -1870,6 +1914,16 @@ impl VirtioNet {
         }
 
         let rx_len = self.rx_buffers.len();
+        if !RX_ARM_START_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            info!(
+                target: "virtio-net",
+                "[virtio-net][rx-arm] start buffers={} hdr_len={} payload_cap={} frame_cap={}",
+                rx_len,
+                header_len,
+                payload_capacity,
+                frame_capacity,
+            );
+        }
         for slot in 0..rx_len {
             let head_idx = slot as u16;
             let (desc, buffer_capacity, payload_len) = {
@@ -1929,6 +1983,15 @@ impl VirtioNet {
             }
         }
         let (used_idx, avail_idx) = self.rx_queue.indices();
+        if !RX_ARM_END_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            info!(
+                target: "virtio-net",
+                "[virtio-net][rx-arm] end buffers={} avail.idx={} used.idx={}",
+                rx_len,
+                avail_idx,
+                used_idx,
+            );
+        }
         let first_paddr = self.rx_buffers.first().map(|buf| buf.paddr()).unwrap_or(0);
         let last_paddr = self.rx_buffers.last().map(|buf| buf.paddr()).unwrap_or(0);
         log::debug!(
@@ -4006,6 +4069,15 @@ fn dma_clean(ptr: *const u8, len: usize) {
     if len == 0 {
         return;
     }
+    let log_once = !DMA_CLEAN_LOGGED.swap(true, AtomicOrdering::AcqRel);
+    if log_once {
+        info!(
+            target: "virtio-net",
+            "[virtio-net][dma] clean enter ptr=0x{ptr:016x} len={len}",
+            ptr = ptr as usize,
+            len = len,
+        );
+    }
     let (aligned_start, aligned_end, line) = dma_range_bounds(ptr, len);
     compiler_fence(AtomicOrdering::Release);
     let mut addr = aligned_start;
@@ -4016,6 +4088,14 @@ fn dma_clean(ptr: *const u8, len: usize) {
         }
         asm!("dsb ishst", "isb", options(nostack, preserves_flags));
     }
+    if log_once {
+        info!(
+            target: "virtio-net",
+            "[virtio-net][dma] clean exit ptr=0x{ptr:016x} len={len}",
+            ptr = ptr as usize,
+            len = len,
+        );
+    }
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -4023,6 +4103,15 @@ fn dma_clean(ptr: *const u8, len: usize) {
 fn dma_invalidate(ptr: *const u8, len: usize) {
     if len == 0 {
         return;
+    }
+    let log_once = !DMA_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel);
+    if log_once {
+        info!(
+            target: "virtio-net",
+            "[virtio-net][dma] invalidate enter ptr=0x{ptr:016x} len={len}",
+            ptr = ptr as usize,
+            len = len,
+        );
     }
     let (aligned_start, aligned_end, line) = dma_range_bounds(ptr, len);
     compiler_fence(AtomicOrdering::SeqCst);
@@ -4033,6 +4122,14 @@ fn dma_invalidate(ptr: *const u8, len: usize) {
             addr = addr.saturating_add(line);
         }
         asm!("dsb ish", "isb", options(nostack, preserves_flags));
+    }
+    if log_once {
+        info!(
+            target: "virtio-net",
+            "[virtio-net][dma] invalidate exit ptr=0x{ptr:016x} len={len}",
+            ptr = ptr as usize,
+            len = len,
+        );
     }
 }
 
