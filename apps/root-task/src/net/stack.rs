@@ -1350,13 +1350,16 @@ impl<D: NetDevice> NetStack<D> {
     fn selftest_host_target(&self, port: u16) -> HostCommandTarget {
         let forward = self.host_forward_override();
         let direct = render_host_selftest_target(None, port, self.ip);
-        let primary = render_host_selftest_target(forward, port, self.ip);
         let loopback = render_host_selftest_target(Some("127.0.0.1"), port, self.ip);
+        let primary = forward
+            .map(|host| render_host_selftest_target(Some(host), port, self.ip))
+            .unwrap_or_else(|| loopback.clone());
+        let forwarded_hint = forward.is_some();
 
         HostCommandTarget {
             primary,
             direct,
-            forwarded_hint: forward.is_some(),
+            forwarded_hint,
             loopback,
         }
     }
@@ -3191,7 +3194,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             let tcp_target = self.selftest_host_target(TCP_SMOKE_PORT);
             info!(
                 "[net-selftest] starting run (udp dst={} tcp dst={})",
-                udp_target.direct, tcp_target.direct
+                udp_target.primary, tcp_target.primary
             );
             info!(
                 "[net-selftest] host capture: tcpdump -i lo0 -n udp port {}",

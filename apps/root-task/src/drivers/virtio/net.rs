@@ -7,6 +7,8 @@
 #![cfg(all(feature = "kernel", feature = "net-console"))]
 #![allow(unsafe_code)]
 
+#[cfg(target_arch = "aarch64")]
+use core::arch::asm;
 use core::fmt::{self, Write as FmtWrite};
 use core::ptr::{read_volatile, write_volatile, NonNull};
 use core::sync::atomic::{fence, AtomicBool, Ordering as AtomicOrdering};
@@ -43,15 +45,17 @@ const VIRTQ_DESC_F_NEXT: u16 = 1 << 0;
 const VIRTQ_DESC_F_WRITE: u16 = 1 << 1;
 
 const VIRTIO_NET_F_MAC: u32 = 1 << 5;
-const SUPPORTED_FEATURES: u32 = VIRTIO_NET_F_MAC;
+const VIRTIO_NET_F_MRG_RXBUF: u32 = 1 << 15;
+const SUPPORTED_FEATURES: u32 = VIRTIO_NET_F_MAC | VIRTIO_NET_F_MRG_RXBUF;
 
 const RX_QUEUE_INDEX: u32 = 0;
 const TX_QUEUE_INDEX: u32 = 1;
 
 const RX_QUEUE_SIZE: usize = 16;
 const TX_QUEUE_SIZE: usize = 16;
-const VIRTIO_NET_HEADER_LEN: usize = core::mem::size_of::<VirtioNetHdr>();
-const FRAME_BUFFER_LEN: usize = MAX_FRAME_LEN + VIRTIO_NET_HEADER_LEN;
+const VIRTIO_NET_HEADER_LEN_BASIC: usize = core::mem::size_of::<VirtioNetHdr>();
+const VIRTIO_NET_HEADER_LEN_MRG: usize = core::mem::size_of::<VirtioNetHdrMrgRxbuf>();
+const FRAME_BUFFER_LEN: usize = MAX_FRAME_LEN + VIRTIO_NET_HEADER_LEN_MRG;
 static LOG_TCP_DEST_PORT: AtomicBool = AtomicBool::new(true);
 
 #[repr(C)]
@@ -63,6 +67,13 @@ struct VirtioNetHdr {
     gso_size: u16,
     csum_start: u16,
     csum_offset: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct VirtioNetHdrMrgRxbuf {
+    hdr: VirtioNetHdr,
+    num_buffers: u16,
 }
 
 /// Errors surfaced by the virtio network driver.
@@ -118,6 +129,8 @@ pub struct VirtioNet {
     rx_buffers: HeaplessVec<RamFrame, RX_QUEUE_SIZE>,
     tx_buffers: HeaplessVec<RamFrame, TX_QUEUE_SIZE>,
     tx_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
+    negotiated_features: u32,
+    rx_header_len: usize,
     tx_drops: u32,
     tx_packets: u64,
     tx_used_count: u64,
@@ -220,6 +233,17 @@ impl VirtioNet {
         let host_features = regs.host_features();
         let negotiated_features = host_features & SUPPORTED_FEATURES;
         info!(
+            target: "virtio-net",
+            "virtio-net features: {:#x}",
+            negotiated_features
+        );
+        let merge_rxbuf = negotiated_features & VIRTIO_NET_F_MRG_RXBUF != 0;
+        let net_header_len = if merge_rxbuf {
+            VIRTIO_NET_HEADER_LEN_MRG
+        } else {
+            VIRTIO_NET_HEADER_LEN_BASIC
+        };
+        info!(
             "[net-console] features: host=0x{host:08x} negotiated=0x{guest:08x}",
             host = host_features,
             guest = negotiated_features
@@ -234,7 +258,7 @@ impl VirtioNet {
         info!(
             target: "net-console",
             "[net-console] virtio-net header size={} (virtio-net hdr provided for legacy and modern devices)",
-            VIRTIO_NET_HEADER_LEN
+            net_header_len
         );
         regs.set_guest_features(negotiated_features);
         info!(
@@ -311,27 +335,7 @@ impl VirtioNet {
             })?;
 
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
-        let rx_chain_count = rx_size / 2;
-        if rx_chain_count == 0 {
-            regs.set_status(STATUS_FAILED);
-            error!(
-                target: "net-console",
-                "[virtio-net] RX queue size too small for header+payload descriptors: queue_size={}",
-                rx_size
-            );
-            return Err(DriverError::NoQueue);
-        }
-
-        if rx_size % 2 != 0 {
-            warn!(
-                target: "net-console",
-                "[virtio-net] RX queue size {} is odd; only {} descriptor pairs will be posted",
-                rx_size,
-                rx_chain_count
-            );
-        }
-
-        for _ in 0..rx_chain_count {
+        for _ in 0..rx_size {
             let frame = hal.alloc_dma_frame().map_err(|err| {
                 regs.set_status(STATUS_FAILED);
                 DriverError::from(err)
@@ -385,6 +389,8 @@ impl VirtioNet {
             rx_buffers,
             tx_buffers,
             tx_free,
+            negotiated_features,
+            rx_header_len: net_header_len,
             tx_drops: 0,
             tx_packets: 0,
             tx_used_count: 0,
@@ -457,39 +463,34 @@ impl VirtioNet {
     }
 
     fn initialise_queues(&mut self) {
-        let header_len = VIRTIO_NET_HEADER_LEN as u32;
+        let header_len = self.rx_header_len as u32;
         let payload_len = core::cmp::min(
             MAX_FRAME_LEN,
-            FRAME_BUFFER_LEN.saturating_sub(VIRTIO_NET_HEADER_LEN),
+            FRAME_BUFFER_LEN.saturating_sub(self.rx_header_len),
         ) as u32;
 
-        for (slot, buffer) in self.rx_buffers.iter().enumerate() {
-            let head_idx = (slot as u16).saturating_mul(2);
-            let payload_idx = head_idx + 1;
+        for (slot, buffer) in self.rx_buffers.iter_mut().enumerate() {
+            let head_idx = slot as u16;
             let base_paddr = buffer.paddr();
-            let payload_paddr = base_paddr + VIRTIO_NET_HEADER_LEN;
+            let total_len = header_len
+                .saturating_add(payload_len)
+                .min(buffer.as_slice().len() as u32);
             self.rx_queue.setup_descriptor(
                 head_idx,
                 base_paddr as u64,
-                header_len,
-                VIRTQ_DESC_F_WRITE,
-                Some(payload_idx),
-            );
-            self.rx_queue.setup_descriptor(
-                payload_idx,
-                payload_paddr as u64,
-                payload_len,
+                total_len,
                 VIRTQ_DESC_F_WRITE,
                 None,
             );
             self.rx_queue.push_avail(head_idx);
 
+            self.sync_rx_slot_for_device(buffer, payload_len as usize);
+
             if slot < 2 {
                 let head_desc = self.rx_queue.read_descriptor(head_idx);
-                let payload_desc = self.rx_queue.read_descriptor(payload_idx);
                 info!(
                     target: "net-console",
-                    "[virtio-net] rx[{slot}] head_desc={head_desc_idx} addr=0x{head_addr:016x} len={head_len} flags=0x{head_flags:04x} next={head_next} header_len={header_len} payload_len={payload_len}",
+                    "[virtio-net] rx[{slot}] desc={head_desc_idx} addr=0x{head_addr:016x} len={head_len} flags=0x{head_flags:04x} next={head_next} header_len={header_len} payload_len={payload_len}",
                     head_desc_idx = head_idx,
                     head_addr = head_desc.addr,
                     head_len = head_desc.len,
@@ -498,19 +499,10 @@ impl VirtioNet {
                     header_len = header_len,
                     payload_len = payload_len,
                 );
-                info!(
-                    target: "net-console",
-                    "[virtio-net] rx[{slot}] payload_desc={payload_desc_idx} addr=0x{payload_addr:016x} len={payload_len_val} flags=0x{payload_flags:04x} next={payload_next} header_len={header_len} payload_len={payload_len}",
-                    payload_desc_idx = payload_idx,
-                    payload_addr = payload_desc.addr,
-                    payload_len_val = payload_desc.len,
-                    payload_flags = payload_desc.flags,
-                    payload_next = payload_desc.next,
-                    header_len = header_len,
-                    payload_len = payload_len,
-                );
             }
         }
+        self.rx_queue.sync_descriptor_table_for_device();
+        self.rx_queue.sync_avail_ring_for_device();
         let (used_idx, avail_idx) = self.rx_queue.indices();
         let first_paddr = self.rx_buffers.first().map(|buf| buf.paddr()).unwrap_or(0);
         let last_paddr = self.rx_buffers.last().map(|buf| buf.paddr()).unwrap_or(0);
@@ -570,6 +562,31 @@ impl VirtioNet {
         );
     }
 
+    fn sync_rx_slot_for_device(&self, buffer: &RamFrame, payload_len: usize) {
+        let header_len = self.rx_header_len;
+        let header_ptr = buffer.ptr().as_ptr();
+        let payload_ptr = unsafe { header_ptr.add(header_len) };
+        let payload_len = core::cmp::min(
+            payload_len,
+            buffer.as_slice().len().saturating_sub(header_len),
+        );
+        dma_sync_for_device(header_ptr, header_len);
+        dma_sync_for_device(payload_ptr, payload_len);
+    }
+
+    fn sync_rx_slot_for_cpu(&self, buffer: &RamFrame, written_len: usize) {
+        let header_len = core::cmp::min(self.rx_header_len, written_len);
+        let header_ptr = buffer.ptr().as_ptr();
+        dma_sync_for_cpu(header_ptr, header_len);
+        let payload_len = written_len
+            .saturating_sub(header_len)
+            .min(buffer.as_slice().len().saturating_sub(self.rx_header_len));
+        if payload_len > 0 {
+            let payload_ptr = unsafe { header_ptr.add(self.rx_header_len) };
+            dma_sync_for_cpu(payload_ptr, payload_len);
+        }
+    }
+
     fn poll_interrupts(&mut self) {
         let (status, isr_ack) = self.regs.acknowledge_interrupts();
         log::debug!(
@@ -591,9 +608,10 @@ impl VirtioNet {
     }
 
     fn pop_rx(&mut self) -> Option<(u16, usize)> {
-        let result = self.rx_queue.pop_used().map(|(id, len)| (id, len as usize));
-
-        if result.is_some() {
+        if let Some((id, len)) = self.rx_queue.pop_used().map(|(id, len)| (id, len as usize)) {
+            if let Some(buffer) = self.rx_buffers.get_mut(id as usize) {
+                self.sync_rx_slot_for_cpu(buffer, len);
+            }
             self.last_used_idx_debug = self.rx_queue.last_used;
             let (used_idx, avail_idx) = self.rx_queue.indices();
             log::debug!(
@@ -602,39 +620,33 @@ impl VirtioNet {
                 used_idx,
                 avail_idx,
             );
+            Some((id, len))
+        } else {
+            None
         }
-
-        result
     }
 
     fn requeue_rx(&mut self, id: u16) {
-        let slot = (id / 2) as usize;
-        let header_len = VIRTIO_NET_HEADER_LEN as u32;
+        let slot = id as usize;
+        let header_len = self.rx_header_len as u32;
         if let Some(buffer) = self.rx_buffers.get_mut(slot) {
-            let head_idx = (slot as u16).saturating_mul(2);
-            let payload_idx = head_idx + 1;
-            let payload_len = core::cmp::min(
-                MAX_FRAME_LEN as u32,
-                buffer
-                    .as_mut_slice()
-                    .len()
-                    .saturating_sub(VIRTIO_NET_HEADER_LEN) as u32,
+            let total_len = core::cmp::min(
+                buffer.as_slice().len() as u32,
+                header_len
+                    .saturating_add(MAX_FRAME_LEN as u32)
+                    .min(FRAME_BUFFER_LEN as u32),
             );
             self.rx_queue.setup_descriptor(
-                head_idx,
+                id,
                 buffer.paddr() as u64,
-                header_len,
-                VIRTQ_DESC_F_WRITE,
-                Some(payload_idx),
-            );
-            self.rx_queue.setup_descriptor(
-                payload_idx,
-                (buffer.paddr() + VIRTIO_NET_HEADER_LEN) as u64,
-                payload_len,
+                total_len,
                 VIRTQ_DESC_F_WRITE,
                 None,
             );
-            self.rx_queue.push_avail(head_idx);
+            self.rx_queue.push_avail(id);
+            self.sync_rx_slot_for_device(buffer, total_len.saturating_sub(header_len) as usize);
+            self.rx_queue.sync_descriptor_table_for_device();
+            self.rx_queue.sync_avail_ring_for_device();
             let (used_idx, avail_idx) = self.rx_queue.indices();
             log::debug!(
                 target: "virtio-net",
@@ -1014,21 +1026,14 @@ impl RxToken for VirtioRxToken {
         F: FnOnce(&[u8]) -> R,
     {
         let driver = unsafe { &mut *self.driver };
-        let slot = (self.id / 2) as usize;
-        if self.id % 2 != 0 {
-            warn!(
-                target: "net-console",
-                "[virtio-net] RX: odd descriptor id observed id={} len={}",
-                self.id,
-                self.len
-            );
-        }
+        let slot = self.id as usize;
         let buffer = driver
             .rx_buffers
             .get_mut(slot)
             .expect("rx descriptor out of range");
+        let header_len = driver.rx_header_len;
         let available = core::cmp::min(self.len, buffer.as_mut_slice().len());
-        if available < VIRTIO_NET_HEADER_LEN {
+        if available < header_len {
             warn!(
                 "[virtio-net] RX: frame too small for virtio-net header (len={})",
                 available
@@ -1037,9 +1042,9 @@ impl RxToken for VirtioRxToken {
             return f(&[]);
         }
 
-        let payload_len = available - VIRTIO_NET_HEADER_LEN;
+        let payload_len = available - header_len;
         let mut_slice = &mut buffer.as_mut_slice()[..available];
-        let payload = &mut mut_slice[VIRTIO_NET_HEADER_LEN..VIRTIO_NET_HEADER_LEN + payload_len];
+        let payload = &mut mut_slice[header_len..header_len + payload_len];
         let preview_len = core::cmp::min(payload.len(), 16);
         log_tcp_dest_port_once(payload);
         log::debug!(
@@ -1079,20 +1084,21 @@ impl TxToken for VirtioTxToken {
                 .tx_buffers
                 .get_mut(id as usize)
                 .expect("tx descriptor out of range");
+            let header_len = driver.rx_header_len;
             let max_len = buffer.as_mut_slice().len();
-            if max_len <= VIRTIO_NET_HEADER_LEN {
+            if max_len <= header_len {
                 driver.tx_drops = driver.tx_drops.saturating_add(1);
                 return f(&mut []);
             }
 
             let payload_len = len
                 .min(MAX_FRAME_LEN)
-                .min(max_len.saturating_sub(VIRTIO_NET_HEADER_LEN));
-            let total_len = payload_len + VIRTIO_NET_HEADER_LEN;
+                .min(max_len.saturating_sub(header_len));
+            let total_len = payload_len + header_len;
             let result = {
                 let mut_slice = &mut buffer.as_mut_slice()[..total_len];
                 let (header, payload) =
-                    mut_slice.split_at_mut(core::cmp::min(VIRTIO_NET_HEADER_LEN, total_len));
+                    mut_slice.split_at_mut(core::cmp::min(header_len, total_len));
                 header.fill(0);
                 let result = f(payload);
                 log_tcp_trace("TX", payload);
@@ -1495,6 +1501,19 @@ impl VirtQueue {
         regs.notify(queue);
     }
 
+    fn sync_descriptor_table_for_device(&self) {
+        dma_sync_for_device(self.desc.as_ptr() as *const u8, self.layout.desc_len);
+    }
+
+    fn sync_avail_ring_for_device(&self) {
+        dma_sync_for_device(self.avail.as_ptr() as *const u8, self.layout.avail_len);
+    }
+
+    fn sync_used_ring_for_cpu(&self) {
+        dma_sync_for_cpu(self.used.as_ptr() as *const u8, self.layout.used_len);
+        fence(AtomicOrdering::SeqCst);
+    }
+
     fn debug_descriptors(&self, label: &str, count: usize) {
         let max = core::cmp::min(count, self.size as usize);
         for idx in 0..max {
@@ -1518,6 +1537,7 @@ impl VirtQueue {
         let used = self.used.as_ptr();
         let avail = self.avail.as_ptr();
 
+        self.sync_used_ring_for_cpu();
         let used_idx = unsafe { read_volatile(&(*used).idx) };
         let avail_idx = unsafe { read_volatile(&(*avail).idx) };
 
@@ -1528,6 +1548,7 @@ impl VirtQueue {
         let used = self.used.as_ptr();
         let avail = self.avail.as_ptr();
 
+        self.sync_used_ring_for_cpu();
         let used_idx = unsafe { read_volatile(&(*used).idx) };
         let avail_idx = unsafe { read_volatile(&(*avail).idx) };
 
@@ -1544,6 +1565,7 @@ impl VirtQueue {
 
     fn pop_used(&mut self) -> Option<(u16, u32)> {
         let used = self.used.as_ptr();
+        self.sync_used_ring_for_cpu();
         let idx = unsafe { read_volatile(&(*used).idx) };
         if self.last_used == idx {
             return None;
@@ -1665,3 +1687,53 @@ fn align_up(value: usize, align: usize) -> usize {
     debug_assert!(align.is_power_of_two());
     (value + align - 1) & !(align - 1)
 }
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn cache_line_len() -> usize {
+    64
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn dma_sync_for_device(ptr: *const u8, len: usize) {
+    let line = cache_line_len();
+    let start = ptr as usize;
+    let end = start.saturating_add(len);
+    let aligned_start = start & !(line - 1);
+    let aligned_end = (end + line - 1) & !(line - 1);
+    let mut addr = aligned_start;
+    unsafe {
+        while addr < aligned_end {
+            asm!("dc cvac, {addr}", addr = in(reg) addr, options(nostack, preserves_flags));
+            addr = addr.saturating_add(line);
+        }
+        asm!("dsb ishst", "isb", options(nostack, preserves_flags));
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn dma_sync_for_cpu(ptr: *const u8, len: usize) {
+    let line = cache_line_len();
+    let start = ptr as usize;
+    let end = start.saturating_add(len);
+    let aligned_start = start & !(line - 1);
+    let aligned_end = (end + line - 1) & !(line - 1);
+    let mut addr = aligned_start;
+    unsafe {
+        while addr < aligned_end {
+            asm!("dc civac, {addr}", addr = in(reg) addr, options(nostack, preserves_flags));
+            addr = addr.saturating_add(line);
+        }
+        asm!("dsb ish", "isb", options(nostack, preserves_flags));
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline(always)]
+fn dma_sync_for_device(_ptr: *const u8, _len: usize) {}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline(always)]
+fn dma_sync_for_cpu(_ptr: *const u8, _len: usize) {}
