@@ -868,7 +868,7 @@ impl VirtioNet {
     fn log_forensic_fault(&self, fault: &ForensicFault) {
         error!(
             target: "net-console",
-            "[virtio-net][forensics] fault queue={} head={} idx={} qsize={} addr=0x{addr:016x} len={} flags=0x{flags:04x} next={next} reason={reason}",
+            "[virtio-net][forensics] fault queue={} head={} idx={} qsize={} addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next} reason={reason}",
             fault.queue_name,
             fault.head,
             fault.idx,
