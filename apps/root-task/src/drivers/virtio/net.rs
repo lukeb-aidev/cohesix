@@ -184,6 +184,9 @@ pub struct VirtioNet {
     tx_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
     negotiated_features: u64,
     rx_header_len: usize,
+    rx_payload_capacity: usize,
+    rx_frame_capacity: usize,
+    rx_buffer_capacity: usize,
     tx_drops: u32,
     tx_packets: u64,
     tx_used_count: u64,
@@ -206,6 +209,7 @@ pub struct VirtioNet {
     tx_zero_len_logged: bool,
     rx_header_zero_logged: bool,
     rx_payload_zero_logged: bool,
+    rx_underflow_logged_ids: HeaplessVec<u16, RX_QUEUE_SIZE>,
     last_error: Option<&'static str>,
     rx_requeue_logged_ids: HeaplessVec<u16, RX_QUEUE_SIZE>,
 }
@@ -442,6 +446,27 @@ impl VirtioNet {
             })?;
         }
 
+        let rx_buffer_capacity = rx_buffers
+            .first()
+            .map(|frame| FRAME_BUFFER_LEN.min(frame.as_slice().len()))
+            .unwrap_or(0);
+        let rx_payload_capacity = rx_buffer_capacity.saturating_sub(net_header_len);
+        let rx_frame_capacity = net_header_len.saturating_add(rx_payload_capacity);
+        if net_header_len == 0 || rx_payload_capacity == 0 || rx_frame_capacity == 0 {
+            regs.set_status(STATUS_FAILED);
+            error!(
+                target: "net-console",
+                "[virtio-net] invalid RX capacity: header_len={} payload_capacity={} frame_capacity={} buffer_capacity={}",
+                net_header_len,
+                rx_payload_capacity,
+                rx_frame_capacity,
+                rx_buffer_capacity,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtio-net rx capacity must be non-zero",
+            ));
+        }
+
         let mut tx_free = HeaplessVec::<u16, TX_QUEUE_SIZE>::new();
         for idx in 0..tx_size {
             tx_free.push(idx as u16).map_err(|_| {
@@ -478,6 +503,9 @@ impl VirtioNet {
             tx_free,
             negotiated_features,
             rx_header_len: net_header_len,
+            rx_payload_capacity,
+            rx_frame_capacity,
+            rx_buffer_capacity,
             tx_drops: 0,
             tx_packets: 0,
             tx_used_count: 0,
@@ -500,6 +528,7 @@ impl VirtioNet {
             tx_zero_len_logged: false,
             rx_header_zero_logged: false,
             rx_payload_zero_logged: false,
+            rx_underflow_logged_ids: HeaplessVec::new(),
             last_error: None,
             rx_requeue_logged_ids: HeaplessVec::new(),
         };
@@ -678,6 +707,71 @@ impl VirtioNet {
         Ok(())
     }
 
+    fn log_pre_publish_if_suspicious(
+        &mut self,
+        queue_label: &'static str,
+        queue_kind: QueueKind,
+        head_id: u16,
+        descs: &[DescSpec],
+    ) -> Result<(), ()> {
+        let queue = match queue_kind {
+            QueueKind::Rx => &self.rx_queue,
+            QueueKind::Tx => &self.tx_queue,
+        };
+
+        let mut reasons = HeaplessString::<128>::new();
+        let mut suspicious = false;
+        for desc in descs {
+            if desc.len == 0 {
+                suspicious = true;
+                let _ = write!(reasons, "len0;");
+            }
+            if desc.addr == 0 {
+                suspicious = true;
+                let _ = write!(reasons, "addr0;");
+            }
+            if let Some(next) = desc.next {
+                if next >= queue.size {
+                    suspicious = true;
+                    let _ = write!(reasons, "next_oob({next});");
+                }
+                if desc.flags & VIRTQ_DESC_F_NEXT == 0 {
+                    suspicious = true;
+                    let _ = write!(reasons, "flags_missing_next;");
+                }
+            } else if desc.flags & VIRTQ_DESC_F_NEXT != 0 {
+                suspicious = true;
+                let _ = write!(reasons, "flags_unexpected_next;");
+            }
+        }
+
+        if suspicious {
+            error!(
+                target: "net-console",
+                "[virtio-net] suspicious descriptor publish blocked: queue={} head_id={} queue_size={} reasons={}",
+                queue_label,
+                head_id,
+                queue.size,
+                reasons.as_str(),
+            );
+            for (idx, desc) in descs.iter().enumerate() {
+                error!(
+                    target: "net-console",
+                    "[virtio-net] pre-publish desc[{idx}]: addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next:?}",
+                    addr = desc.addr,
+                    len = desc.len,
+                    flags = desc.flags,
+                    next = desc.next,
+                );
+            }
+            self.device_faulted = true;
+            self.last_error.get_or_insert("suspicious_desc");
+            return Err(());
+        }
+
+        Ok(())
+    }
+
     fn verify_descriptor_write(
         &mut self,
         queue_label: &'static str,
@@ -820,13 +914,15 @@ impl VirtioNet {
         fence(AtomicOrdering::Release);
         self.verify_descriptor_write("RX", QueueKind::Rx, head_id, &resolved_descs)?;
         self.rx_queue.sync_descriptor_table_for_device();
+        self.log_pre_publish_if_suspicious("RX", QueueKind::Rx, head_id, &resolved_descs)?;
         fence(AtomicOrdering::Release);
-        self.rx_queue.push_avail(head_id);
-        fence(AtomicOrdering::Release);
+        let Some((slot, avail_idx)) = self.rx_queue.push_avail(head_id) else {
+            self.device_faulted = true;
+            self.last_error.get_or_insert("rx_avail_write_failed");
+            return Err(());
+        };
         self.rx_queue.sync_avail_ring_for_device();
         if !RX_PUBLISH_FENCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
-            let (_, avail_idx) = self.rx_queue.indices();
-            let slot = avail_idx.wrapping_sub(1) % self.rx_queue.size;
             debug!(
                 target: "virtio-net",
                 "[virtio-net] enqueue publish: fences applied (rx) head={} slot={} avail_idx={}",
@@ -880,13 +976,15 @@ impl VirtioNet {
         fence(AtomicOrdering::Release);
         self.verify_descriptor_write("TX", QueueKind::Tx, head_id, &resolved_descs)?;
         self.tx_queue.sync_descriptor_table_for_device();
+        self.log_pre_publish_if_suspicious("TX", QueueKind::Tx, head_id, &resolved_descs)?;
         fence(AtomicOrdering::Release);
-        self.tx_queue.push_avail(head_id);
-        fence(AtomicOrdering::Release);
+        let Some((slot, avail_idx)) = self.tx_queue.push_avail(head_id) else {
+            self.device_faulted = true;
+            self.last_error.get_or_insert("tx_avail_write_failed");
+            return Err(());
+        };
         self.tx_queue.sync_avail_ring_for_device();
         if !TX_PUBLISH_FENCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
-            let (_, avail_idx) = self.tx_queue.indices();
-            let slot = avail_idx.wrapping_sub(1) % self.tx_queue.size;
             debug!(
                 target: "virtio-net",
                 "[virtio-net] enqueue publish: fences applied (tx) head={} slot={} avail_idx={}",
@@ -903,11 +1001,8 @@ impl VirtioNet {
 
     fn initialise_queues(&mut self) {
         let header_len = self.rx_header_len;
-        let payload_capacity = core::cmp::min(
-            MAX_FRAME_LEN,
-            FRAME_BUFFER_LEN.saturating_sub(self.rx_header_len),
-        );
-        let frame_capacity = header_len.saturating_add(payload_capacity);
+        let payload_capacity = self.rx_payload_capacity;
+        let frame_capacity = self.rx_frame_capacity;
 
         if self
             .validate_chain_nonzero(
@@ -929,10 +1024,16 @@ impl VirtioNet {
             let head_idx = slot as u16;
             let (desc, buffer_capacity, payload_len) = {
                 let buffer = &mut self.rx_buffers[slot];
-                let buffer_capacity = FRAME_BUFFER_LEN.min(buffer.as_slice().len());
-                let payload_len = buffer_capacity.saturating_sub(header_len);
+                let buffer_capacity = self
+                    .rx_buffer_capacity
+                    .min(buffer.as_slice().len())
+                    .min(FRAME_BUFFER_LEN);
+                let payload_len = self
+                    .rx_payload_capacity
+                    .min(buffer_capacity.saturating_sub(header_len));
                 let total_len = header_len
                     .saturating_add(payload_len)
+                    .min(buffer_capacity)
                     .min(buffer.as_slice().len()) as u32;
                 let desc = [DescSpec {
                     addr: buffer.paddr() as u64,
@@ -1105,6 +1206,27 @@ impl VirtioNet {
     fn pop_rx(&mut self) -> Option<(u16, usize)> {
         if let Some((id, len)) = self.rx_queue.pop_used().map(|(id, len)| (id, len as usize)) {
             let header_len = self.rx_header_len;
+            if len < header_len {
+                if !self
+                    .rx_underflow_logged_ids
+                    .iter()
+                    .any(|&logged| logged == id)
+                {
+                    let _ = self.rx_underflow_logged_ids.push(id);
+                    error!(
+                        target: "net-console",
+                        "[virtio-net] RX used entry shorter than header: id={} len={} header_len={} last_used={}",
+                        id,
+                        len,
+                        header_len,
+                        self.rx_queue.last_used,
+                    );
+                }
+                self.rx_used_count = self.rx_used_count.wrapping_add(1);
+                self.note_progress();
+                self.requeue_rx(id, Some(len));
+                return None;
+            }
             if let Some(buffer) = self.rx_buffers.get_mut(id as usize) {
                 Self::sync_rx_slot_for_cpu(buffer, header_len, len);
             }
@@ -1142,13 +1264,18 @@ impl VirtioNet {
             return;
         }
         if let Some(buffer) = self.rx_buffers.get_mut(slot) {
-            let buffer_capacity = FRAME_BUFFER_LEN.min(buffer.as_slice().len());
-            let payload_len = buffer_capacity.saturating_sub(header_len);
+            let buffer_capacity = self
+                .rx_buffer_capacity
+                .min(buffer.as_slice().len())
+                .min(FRAME_BUFFER_LEN);
+            let payload_len = self
+                .rx_payload_capacity
+                .min(buffer_capacity.saturating_sub(header_len));
             let frame_capacity = header_len.saturating_add(payload_len);
 
             debug_assert!(header_len > 0);
             debug_assert!(payload_len > 0);
-            debug_assert_eq!(frame_capacity, buffer_capacity);
+            debug_assert_eq!(frame_capacity, self.rx_frame_capacity);
 
             if payload_len == 0 {
                 if !self.rx_payload_zero_logged {
@@ -1661,6 +1788,10 @@ impl TxToken for VirtioTxToken {
         F: FnOnce(&mut [u8]) -> R,
     {
         let driver = unsafe { &mut *self.driver };
+        if len == 0 {
+            driver.tx_drops = driver.tx_drops.saturating_add(1);
+            return f(&mut []);
+        }
         if let Some(id) = self.desc {
             let buffer = driver
                 .tx_buffers
@@ -2308,7 +2439,7 @@ impl VirtQueue {
         unsafe { write_volatile(desc_ptr, desc) };
     }
 
-    fn push_avail(&self, index: u16) {
+    fn push_avail(&self, index: u16) -> Option<(u16, u16)> {
         if index >= self.size {
             error!(
                 target: "net-console",
@@ -2316,7 +2447,7 @@ impl VirtQueue {
                 index,
                 self.size,
             );
-            return;
+            return None;
         }
         let avail = self.avail.as_ptr();
         let idx = unsafe { read_volatile(&(*avail).idx) };
@@ -2325,8 +2456,10 @@ impl VirtQueue {
             let ring_ptr = (*avail).ring.as_ptr().add(ring_slot as usize) as *mut u16;
             write_volatile(ring_ptr, index);
             fence(AtomicOrdering::Release);
-            write_volatile(&mut (*avail).idx, idx.wrapping_add(1));
+            let new_idx = idx.wrapping_add(1);
+            write_volatile(&mut (*avail).idx, new_idx);
             fence(AtomicOrdering::Release);
+            Some((ring_slot, new_idx))
         }
     }
 
