@@ -76,7 +76,7 @@ static TX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
 static RX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
-    [AtomicBool::new(false); VIRTIO_MMIO_SLOTS];
+    [const { AtomicBool::new(false) }; VIRTIO_MMIO_SLOTS];
 
 #[derive(Clone, Copy, Debug)]
 struct DescSpec {
@@ -2475,7 +2475,7 @@ impl VirtQueue {
             let new_idx = idx.wrapping_add(1);
             write_volatile(&mut (*avail).idx, new_idx);
             fence(AtomicOrdering::Release);
-            Some((ring_slot, new_idx))
+            Some((ring_slot as u16, new_idx))
         }
     }
 
