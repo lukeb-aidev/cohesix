@@ -11,7 +11,7 @@
 use core::arch::asm;
 use core::fmt::{self, Write as FmtWrite};
 use core::ptr::{read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{fence, AtomicBool, Ordering as AtomicOrdering};
+use core::sync::atomic::{compiler_fence, fence, AtomicBool, Ordering as AtomicOrdering};
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, warn};
@@ -82,6 +82,7 @@ static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
     [const { AtomicBool::new(false) }; VIRTIO_MMIO_SLOTS];
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
 static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
+static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TxState {
@@ -1564,6 +1565,10 @@ impl VirtioNet {
             return Err(());
         }
 
+        let buffer_range = self
+            .clean_tx_buffer_for_device(head_id, resolved_descs[0].len as usize)
+            .unwrap_or((0, 0));
+
         let Some((slot, avail_idx, old_idx)) = self.tx_queue.push_avail(head_id) else {
             self.device_faulted = true;
             self.last_error.get_or_insert("tx_avail_write_failed");
@@ -1572,6 +1577,19 @@ impl VirtioNet {
         };
         self.verify_tx_publish(slot, head_id, &resolved_descs[0])?;
         self.tx_queue.sync_avail_ring_for_device();
+        dma_barrier();
+        if slot == 0 && !TX_WRAP_DMA_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            info!(
+                target: "virtio-net",
+                "[virtio-net][dma] tx wrap head={} len={} desc_bytes={} avail_bytes={} buffer=0x{buf_start:016x}..0x{buf_end:016x}",
+                head_id,
+                resolved_descs[0].len,
+                self.tx_queue.layout.desc_len,
+                self.tx_queue.layout.avail_len,
+                buf_start = buffer_range.0,
+                buf_end = buffer_range.1,
+            );
+        }
         self.log_publish_transaction(
             "TX",
             QueueKind::Tx,
@@ -1734,20 +1752,20 @@ impl VirtioNet {
             payload_len,
             buffer.as_slice().len().saturating_sub(header_len),
         );
-        dma_sync_for_device(header_ptr, header_len);
-        dma_sync_for_device(payload_ptr, payload_len);
+        dma_clean(header_ptr, header_len);
+        dma_clean(payload_ptr, payload_len);
     }
 
     fn sync_rx_slot_for_cpu(buffer: &RamFrame, header_len: usize, written_len: usize) {
         let header_len = core::cmp::min(header_len, written_len);
         let header_ptr = buffer.ptr().as_ptr();
-        dma_sync_for_cpu(header_ptr, header_len);
+        dma_invalidate(header_ptr, header_len);
         let payload_len = written_len
             .saturating_sub(header_len)
             .min(buffer.as_slice().len().saturating_sub(header_len));
         if payload_len > 0 {
             let payload_ptr = unsafe { header_ptr.add(header_len) };
-            dma_sync_for_cpu(payload_ptr, payload_len);
+            dma_invalidate(payload_ptr, payload_len);
         }
     }
 
@@ -2041,6 +2059,16 @@ impl VirtioNet {
                 self.tx_post_logged = true;
             }
         }
+    }
+
+    fn clean_tx_buffer_for_device(&self, head_id: u16, len: usize) -> Option<(usize, usize)> {
+        self.tx_buffers.get(head_id as usize).map(|buffer| {
+            let capped_len = len.min(buffer.as_slice().len());
+            let ptr = buffer.ptr().as_ptr();
+            let start = ptr as usize;
+            dma_clean(ptr, capped_len);
+            (start, start.saturating_add(capped_len))
+        })
     }
 }
 
@@ -3206,7 +3234,7 @@ impl VirtQueue {
 
     fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) {
         // Ensure descriptors and avail ring updates are visible to the device before the kick.
-        fence(AtomicOrdering::Release);
+        dma_barrier();
         regs.notify(queue);
         let notify_flag = match queue {
             RX_QUEUE_INDEX => Some(&RX_NOTIFY_LOGGED),
@@ -3222,15 +3250,15 @@ impl VirtQueue {
     }
 
     fn sync_descriptor_table_for_device(&self) {
-        dma_sync_for_device(self.desc.as_ptr() as *const u8, self.layout.desc_len);
+        dma_clean(self.desc.as_ptr() as *const u8, self.layout.desc_len);
     }
 
     fn sync_avail_ring_for_device(&self) {
-        dma_sync_for_device(self.avail.as_ptr() as *const u8, self.layout.avail_len);
+        dma_clean(self.avail.as_ptr() as *const u8, self.layout.avail_len);
     }
 
     fn sync_used_ring_for_cpu(&self) {
-        dma_sync_for_cpu(self.used.as_ptr() as *const u8, self.layout.used_len);
+        dma_invalidate(self.used.as_ptr() as *const u8, self.layout.used_len);
         fence(AtomicOrdering::SeqCst);
     }
 
@@ -3460,12 +3488,23 @@ fn cache_line_len() -> usize {
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn dma_sync_for_device(ptr: *const u8, len: usize) {
+fn dma_range_bounds(ptr: *const u8, len: usize) -> (usize, usize, usize) {
     let line = cache_line_len();
     let start = ptr as usize;
     let end = start.saturating_add(len);
     let aligned_start = start & !(line - 1);
     let aligned_end = (end + line - 1) & !(line - 1);
+    (aligned_start, aligned_end, line)
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn dma_clean(ptr: *const u8, len: usize) {
+    if len == 0 {
+        return;
+    }
+    let (aligned_start, aligned_end, line) = dma_range_bounds(ptr, len);
+    compiler_fence(AtomicOrdering::Release);
     let mut addr = aligned_start;
     unsafe {
         while addr < aligned_end {
@@ -3478,26 +3517,47 @@ fn dma_sync_for_device(ptr: *const u8, len: usize) {
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn dma_sync_for_cpu(ptr: *const u8, len: usize) {
-    let line = cache_line_len();
-    let start = ptr as usize;
-    let end = start.saturating_add(len);
-    let aligned_start = start & !(line - 1);
-    let aligned_end = (end + line - 1) & !(line - 1);
+fn dma_invalidate(ptr: *const u8, len: usize) {
+    if len == 0 {
+        return;
+    }
+    let (aligned_start, aligned_end, line) = dma_range_bounds(ptr, len);
+    compiler_fence(AtomicOrdering::SeqCst);
     let mut addr = aligned_start;
     unsafe {
         while addr < aligned_end {
-            asm!("dc civac, {addr}", addr = in(reg) addr, options(nostack, preserves_flags));
+            asm!("dc ivac, {addr}", addr = in(reg) addr, options(nostack, preserves_flags));
             addr = addr.saturating_add(line);
         }
         asm!("dsb ish", "isb", options(nostack, preserves_flags));
     }
 }
 
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn dma_sync_for_device(_ptr: *const u8, _len: usize) {}
+fn dma_barrier() {
+    compiler_fence(AtomicOrdering::Release);
+    unsafe {
+        asm!("dsb ishst", "isb", options(nostack, preserves_flags));
+    }
+}
 
 #[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
-fn dma_sync_for_cpu(_ptr: *const u8, _len: usize) {}
+fn cache_line_len() -> usize {
+    1
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline(always)]
+fn dma_clean(_ptr: *const u8, _len: usize) {}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline(always)]
+fn dma_invalidate(_ptr: *const u8, _len: usize) {}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline(always)]
+fn dma_barrier() {
+    compiler_fence(AtomicOrdering::Release);
+}
