@@ -137,6 +137,110 @@ sys.exit(1)
 PY
 }
 
+wait_for_port_or_exit() {
+    local host="$1"
+    local port="$2"
+    local timeout="$3"
+    local pid="$4"
+
+    local deadline=$((SECONDS + timeout))
+    while (( SECONDS < deadline )); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            return 1
+        fi
+        if python3 - "$host" "$port" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+try:
+    with socket.create_connection((host, port), timeout=0.5):
+        sys.exit(0)
+except OSError:
+    sys.exit(1)
+PY
+        then
+            return 0
+        fi
+        sleep 0.2
+    done
+
+    return 2
+}
+
+build_network_args() {
+    local smoke_port="$1"
+
+    NETWORK_ARGS=(
+        -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT},hostfwd=udp:127.0.0.1:${UDP_ECHO_PORT}-10.0.2.15:${UDP_ECHO_PORT},hostfwd=tcp:127.0.0.1:${smoke_port}-10.0.2.15:31339"
+        -device "virtio-net-device,netdev=net0,mac=52:55:00:d1:55:01,bus=virtio-mmio-bus.0"
+    )
+}
+
+log_tcp_hostfwd() {
+    local smoke_port="$1"
+
+    log "Hostfwd: tcp 127.0.0.1:${TCP_PORT} -> 10.0.2.15:${TCP_PORT}"
+    log "Hostfwd: udp 127.0.0.1:${UDP_ECHO_PORT} -> 10.0.2.15:${UDP_ECHO_PORT}"
+    log "Hostfwd: tcp 127.0.0.1:${smoke_port} -> 10.0.2.15:31339"
+    log "Note: 10.0.2.15 is not directly reachable from the host under slirp"
+    log "sudo tcpdump -i lo0 -n 'tcp port ${TCP_PORT} or udp port ${UDP_ECHO_PORT} or tcp port ${smoke_port}'"
+}
+
+print_tcp_summary() {
+    local smoke_port="$1"
+
+    log "Using smoke host port: ${smoke_port} (guest :31339)"
+    log "TCP console: nc -v 127.0.0.1 ${TCP_PORT}"
+    log "UDP echo: echo -n \"ping\" | nc -u -w1 127.0.0.1 ${UDP_ECHO_PORT}"
+    log "TCP smoke: printf \"hi\" | nc -v 127.0.0.1 ${smoke_port}"
+}
+
+run_qemu_attempt() {
+    local smoke_port="$1"
+    local log_file="$2"
+
+    QEMU_ARGS=("${BASE_QEMU_ARGS[@]}")
+    if [[ "$TRANSPORT" == "tcp" ]]; then
+        build_network_args "$smoke_port"
+        QEMU_ARGS+=("${NETWORK_ARGS[@]}")
+        log_tcp_hostfwd "$smoke_port"
+    fi
+
+    if [[ -n "$DTB_OVERRIDE" ]]; then
+        [[ -f "$DTB_OVERRIDE" ]] || fail "Specified DTB override not found: $DTB_OVERRIDE"
+        describe_file "DTB override" "$DTB_OVERRIDE"
+        QEMU_ARGS+=(-dtb "$DTB_OVERRIDE")
+    fi
+
+    if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
+        QEMU_ARGS+=("${EXTRA_QEMU_ARGS[@]}")
+    fi
+
+    log "Prepared QEMU command: ${QEMU_ARGS[*]}"
+
+    "$QEMU_BIN" "${QEMU_ARGS[@]}" > >(tee "$log_file") 2>&1 &
+    QEMU_PID=$!
+    trap 'kill $QEMU_PID 2>/dev/null || true' EXIT
+
+    if wait_for_port_or_exit "127.0.0.1" "$TCP_PORT" 60 "$QEMU_PID"; then
+        return 0
+    fi
+
+    local wait_status=$?
+    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+        wait "$QEMU_PID" || true
+    fi
+
+    case "$wait_status" in
+        2)
+            log "TCP console did not become ready on port $TCP_PORT"
+            ;;
+    esac
+    return 1
+}
+
 detect_gic_version() {
     local cfg_file=""
     local candidate
@@ -182,9 +286,13 @@ main() {
     CLEAN_OUT_DIR=0
     DTB_OVERRIDE=""
     TRANSPORT="tcp"
-    TCP_PORT=31337
-    UDP_ECHO_PORT=31338
-    TCP_SMOKE_PORT=31339
+    HOST_CONSOLE_PORT=31337
+    HOST_UDP_ECHO_PORT=31338
+    HOST_SMOKE_PORT=31339
+    HOST_SMOKE_PORT_FALLBACK=31349
+    TCP_PORT="$HOST_CONSOLE_PORT"
+    UDP_ECHO_PORT="$HOST_UDP_ECHO_PORT"
+    TCP_SMOKE_PORT="$HOST_SMOKE_PORT"
     VIRTIO_MMIO_FORCE_LEGACY=${VIRTIO_MMIO_FORCE_LEGACY:-0}
     ROOT_TASK_FEATURES="kernel,bootstrap-trace"
 
@@ -570,39 +678,13 @@ PY
     log "Auto-detected GIC version: gic-version=$GIC_VER"
 
     # Serial output from the PL011 console and root-task logger is expected on stdio via -serial mon:stdio; keep this wiring intact when adjusting runtime flags.
-    QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
+    BASE_QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
         log "Wiring virtio-net MMIO NIC for TCP console"
      
-        QEMU_ARGS+=(-global virtio-mmio.force-legacy=off)
-        
-       
-        NETWORK_ARGS=(
-            -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT},hostfwd=udp:127.0.0.1:31338-10.0.2.15:31338,hostfwd=tcp:127.0.0.1:31339-10.0.2.15:31339"
-            -device "virtio-net-device,netdev=net0,mac=52:55:00:d1:55:01,bus=virtio-mmio-bus.0"
-        )
-        log "Hostfwd: tcp 127.0.0.1:${TCP_PORT} -> 10.0.2.15:${TCP_PORT}"
-        log "Hostfwd: udp 127.0.0.1:31338 -> 10.0.2.15:31338"
-        log "Hostfwd: tcp 127.0.0.1:31339 -> 10.0.2.15:31339"
-        log "Note: 10.0.2.15 is not directly reachable from the host under slirp"
-        log "sudo tcpdump -i lo0 -n 'tcp port ${TCP_PORT} or udp port 31338 or tcp port 31339'"
-        log "echo -n \"ping\" | nc -u -w1 127.0.0.1 31338"
-        log "printf \"hi\" | nc -v 127.0.0.1 31339"
-        QEMU_ARGS+=("${NETWORK_ARGS[@]}")
+        BASE_QEMU_ARGS+=(-global virtio-mmio.force-legacy=off)
     fi
-
-    if [[ -n "$DTB_OVERRIDE" ]]; then
-        [[ -f "$DTB_OVERRIDE" ]] || fail "Specified DTB override not found: $DTB_OVERRIDE"
-        describe_file "DTB override" "$DTB_OVERRIDE"
-        QEMU_ARGS+=(-dtb "$DTB_OVERRIDE")
-    fi
-
-    if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
-        QEMU_ARGS+=("${EXTRA_QEMU_ARGS[@]}")
-    fi
-
-    log "Prepared QEMU command: ${QEMU_ARGS[*]}"
 
     if [[ "$RUN_QEMU" -eq 0 ]]; then
         log "--no-run supplied; build artefacts ready at $OUT_DIR"
@@ -610,16 +692,42 @@ PY
     fi
 
     if [[ "$DIRECT_QEMU" -eq 1 ]]; then
+        QEMU_ARGS=("${BASE_QEMU_ARGS[@]}")
+        if [[ "$TRANSPORT" == "tcp" ]]; then
+            build_network_args "$TCP_SMOKE_PORT"
+            QEMU_ARGS+=("${NETWORK_ARGS[@]}")
+        fi
+        if [[ -n "$DTB_OVERRIDE" ]]; then
+            [[ -f "$DTB_OVERRIDE" ]] || fail "Specified DTB override not found: $DTB_OVERRIDE"
+            describe_file "DTB override" "$DTB_OVERRIDE"
+            QEMU_ARGS+=(-dtb "$DTB_OVERRIDE")
+        fi
+        if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
+            QEMU_ARGS+=("${EXTRA_QEMU_ARGS[@]}")
+        fi
         exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
     fi
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
-        "$QEMU_BIN" "${QEMU_ARGS[@]}" &
-        QEMU_PID=$!
-        trap 'kill $QEMU_PID 2>/dev/null || true' EXIT
+        local_log="$(mktemp -t cohesix-qemu.log)"
+        if ! run_qemu_attempt "$TCP_SMOKE_PORT" "$local_log"; then
+            if grep -q "Could not set up host forwarding rule" "$local_log" && grep -q "31339" "$local_log"; then
+                log "Retrying QEMU with fallback smoke port ${HOST_SMOKE_PORT_FALLBACK}"
+                TCP_SMOKE_PORT="$HOST_SMOKE_PORT_FALLBACK"
+                local_log="$(mktemp -t cohesix-qemu.log)"
+                if ! run_qemu_attempt "$TCP_SMOKE_PORT" "$local_log"; then
+                    log "QEMU failed to start after retry; last log lines:"
+                    tail -n 50 "$local_log" >&2 || true
+                    exit 1
+                fi
+            else
+                log "QEMU failed to start; last log lines:"
+                tail -n 50 "$local_log" >&2 || true
+                exit 1
+            fi
+        fi
 
-        wait_for_port "127.0.0.1" "$TCP_PORT" 60
-
+        print_tcp_summary "$TCP_SMOKE_PORT"
         log "QEMU is running with serial console and TCP console on port $TCP_PORT"
         log "Run: ./cohsh --transport tcp --tcp-port $TCP_PORT    in another terminal."
 

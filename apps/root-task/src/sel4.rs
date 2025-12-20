@@ -239,8 +239,7 @@ pub const fn cap_data_guard(guard: seL4_Word, guard_size: seL4_Word) -> seL4_Wor
 use crate::boot::bi_extra::UntypedDesc;
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
-    seL4_ARM_VMAttributes, seL4_BootInfo, seL4_SlotRegion,
-    MAX_BOOTINFO_UNTYPEDS,
+    seL4_ARM_VMAttributes, seL4_BootInfo, seL4_SlotRegion, MAX_BOOTINFO_UNTYPEDS,
 };
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]

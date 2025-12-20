@@ -1297,7 +1297,7 @@ impl VirtioNet {
         self.freeze_and_capture("tx_anomaly");
     }
 
-    fn validate_tx_reclaim_state(&mut self, id: u16, len: u32) -> Result<(), ()> {
+    fn validate_tx_reclaim_state(&mut self, id: u16) -> Result<(), ()> {
         if self.tx_free.iter().any(|&entry| entry == id) {
             self.tx_anomaly(TxAnomalyReason::FreeListCorrupt, "tx_reclaim_already_free");
             return Err(());
@@ -1307,7 +1307,7 @@ impl VirtioNet {
             Some(TxState::Posted {
                 len: posted_len, ..
             }) => {
-                if *posted_len == 0 || len == 0 {
+                if *posted_len == 0 {
                     self.tx_anomaly(
                         TxAnomalyReason::RingIndexUnexpected,
                         "tx_reclaim_zero_len_state",
@@ -1833,6 +1833,7 @@ impl VirtioNet {
                 self.tx_anomaly_logged,
             )
             .unwrap_or((0, 0));
+        dma_barrier();
 
         let Some((slot, avail_idx, old_idx)) = self.tx_queue.push_avail(head_id) else {
             self.device_faulted = true;
@@ -2184,22 +2185,24 @@ impl VirtioNet {
         }
         self.tx_progress_log_gate = self.tx_progress_log_gate.wrapping_add(1);
         loop {
-            match self.tx_queue.pop_used("TX") {
+            match self.tx_queue.pop_used("TX", true) {
                 Ok(Some((id, len))) => {
                     let len_u32 = len;
                     self.record_tx_used_entry(id, len_u32);
                     if len_u32 == 0 {
                         self.tx_used_zero_streak = self.tx_used_zero_streak.saturating_add(1);
-                        if self.tx_used_zero_streak > 4 {
-                            self.tx_anomaly(
-                                TxAnomalyReason::UsedRingLenZeroBurst,
-                                "tx_used_ring_len_zero_burst",
+                        if self.tx_used_zero_streak == 1 || self.tx_used_zero_streak % 16 == 0 {
+                            warn!(
+                                target: "net-console",
+                                "[virtio-net] TX used len zero (id={} streak={})",
+                                id,
+                                self.tx_used_zero_streak,
                             );
                         }
                     } else {
                         self.tx_used_zero_streak = 0;
                     }
-                    if self.validate_tx_reclaim_state(id, len_u32).is_err() {
+                    if self.validate_tx_reclaim_state(id).is_err() {
                         break;
                     }
                     if self.record_tx_complete(id).is_err() {
@@ -2225,7 +2228,7 @@ impl VirtioNet {
         if forensics_frozen() {
             return None;
         }
-        match self.rx_queue.pop_used("RX") {
+        match self.rx_queue.pop_used("RX", false) {
             Ok(Some((id, len))) => {
                 let len = len as usize;
                 let header_len = self.rx_header_len;
@@ -3966,7 +3969,11 @@ impl VirtQueue {
         );
     }
 
-    fn pop_used(&mut self, queue_label: &'static str) -> Result<Option<(u16, u32)>, ForensicFault> {
+    fn pop_used(
+        &mut self,
+        queue_label: &'static str,
+        allow_zero_len: bool,
+    ) -> Result<Option<(u16, u32)>, ForensicFault> {
         let used = self.used.as_ptr();
         self.invalidate_used_header_for_cpu();
         let idx = unsafe { read_volatile(&(*used).idx) };
@@ -3997,36 +4004,42 @@ impl VirtQueue {
         if elem.len == 0 {
             let head_id = elem.id as u16;
             let desc = unsafe { read_volatile(self.desc.as_ptr().add(head_id as usize)) };
-            if self.used_zero_len_head == Some(head_id) {
-                return Err(ForensicFault {
-                    queue_name: queue_label,
-                    qsize: self.size,
-                    head: head_id,
-                    idx: self.last_used,
-                    addr: desc.addr,
-                    len: elem.len,
-                    flags: desc.flags,
-                    next: desc.next,
-                    reason: ForensicFaultReason::UsedLenZeroRepeat,
-                });
+            if allow_zero_len {
+                self.used_zero_len_head = None;
+            } else {
+                if self.used_zero_len_head == Some(head_id) {
+                    return Err(ForensicFault {
+                        queue_name: queue_label,
+                        qsize: self.size,
+                        head: head_id,
+                        idx: self.last_used,
+                        addr: desc.addr,
+                        len: elem.len,
+                        flags: desc.flags,
+                        next: desc.next,
+                        reason: ForensicFaultReason::UsedLenZeroRepeat,
+                    });
+                }
+                self.used_zero_len_head = Some(head_id);
+                warn!(
+                    target: "net-console",
+                    "[virtio-net] used len zero: queue={} head={} idx={} ring_slot={} used_len={} desc_addr=0x{addr:016x} desc_len={len} desc_flags=0x{flags:04x} desc_next={next}",
+                    queue_label,
+                    head_id,
+                    self.last_used,
+                    ring_slot,
+                    elem.len,
+                    addr = desc.addr,
+                    len = desc.len,
+                    flags = desc.flags,
+                    next = desc.next,
+                );
+                return Ok(None);
             }
-            self.used_zero_len_head = Some(head_id);
-            warn!(
-                target: "net-console",
-                "[virtio-net] used len zero: queue={} head={} idx={} ring_slot={} used_len={} desc_addr=0x{addr:016x} desc_len={len} desc_flags=0x{flags:04x} desc_next={next}",
-                queue_label,
-                head_id,
-                self.last_used,
-                ring_slot,
-                elem.len,
-                addr = desc.addr,
-                len = desc.len,
-                flags = desc.flags,
-                next = desc.next,
-            );
-            return Ok(None);
         }
-        self.used_zero_len_head = None;
+        if elem.len != 0 {
+            self.used_zero_len_head = None;
+        }
         if elem.id >= u32::from(self.size) {
             return Err(ForensicFault {
                 queue_name: queue_label,
