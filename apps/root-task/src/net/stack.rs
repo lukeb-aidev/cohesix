@@ -37,7 +37,6 @@ use smoltcp::wire::{
     EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, Ipv4Address,
 };
 
-use super::net_mode::{NetMode, NetTestDestinations};
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
     ConsoleNetConfig, NetBackend, NetConsoleEvent, NetCounters, NetDevice, NetDriverError,
@@ -871,8 +870,6 @@ pub struct NetStack<D: NetDevice> {
     telemetry: NetTelemetry,
     ip: Ipv4Address,
     gateway: Option<Ipv4Address>,
-    net_mode: NetMode,
-    self_test_destinations: NetTestDestinations,
     prefix_len: u8,
     listen_port: u16,
     session_active: bool,
@@ -1354,13 +1351,10 @@ impl<D: NetDevice> NetStack<D> {
         let forward = self.host_forward_override();
         let direct = render_host_selftest_target(None, port, self.ip);
         let loopback = render_host_selftest_target(Some("127.0.0.1"), port, self.ip);
-        let primary = match self.net_mode {
-            NetMode::SlirpHostFwd => forward
-                .map(|host| render_host_selftest_target(Some(host), port, self.ip))
-                .unwrap_or_else(|| loopback.clone()),
-            NetMode::Bridged { .. } => direct.clone(),
-        };
-        let forwarded_hint = matches!(self.net_mode, NetMode::SlirpHostFwd) || forward.is_some();
+        let primary = forward
+            .map(|host| render_host_selftest_target(Some(host), port, self.ip))
+            .unwrap_or_else(|| loopback.clone());
+        let forwarded_hint = forward.is_some();
 
         HostCommandTarget {
             primary,
@@ -1668,16 +1662,6 @@ impl<D: NetDevice> NetStack<D> {
         let sockets = SocketSet::new(unsafe { &mut SOCKET_STORAGE[..] });
         log_bootinfo_mark("net.init.socketset", &attempt)?;
 
-        let net_mode = NetMode::from_env(console_config.address.gateway);
-        let self_test_destinations = net_mode.destinations();
-        info!(
-            "[net-selftest] mode={:?} udp_dst={} tcp_dst={} outbound_allowed={}",
-            net_mode,
-            self_test_destinations.udp_echo,
-            self_test_destinations.tcp_smoke,
-            self_test_destinations.outbound_allowed
-        );
-
         let mut stack = Self {
             clock,
             device,
@@ -1693,8 +1677,6 @@ impl<D: NetDevice> NetStack<D> {
             telemetry: NetTelemetry::default(),
             ip,
             gateway,
-            net_mode,
-            self_test_destinations,
             prefix_len: prefix,
             listen_port: console_config.listen_port,
             session_active: false,
@@ -1798,8 +1780,8 @@ impl<D: NetDevice> NetStack<D> {
             match echo_socket.bind(echo_endpoint) {
                 Ok(()) => {
                     info!(
-                        "[net-selftest] udp-echo ready on 0.0.0.0:{} (test dst={}:{})",
-                        UDP_ECHO_PORT, self.self_test_destinations.udp_echo, UDP_ECHO_PORT
+                        "[net-selftest] udp-echo ready on 0.0.0.0:{} (beacon dst=10.0.2.2:{})",
+                        UDP_ECHO_PORT, UDP_ECHO_PORT
                     );
                     self.udp_echo_handle = Some(self.sockets.add(echo_socket));
                     self.log_init_canary("net.init.socket.udp_echo")?;
@@ -2105,9 +2087,6 @@ impl<D: NetDevice> NetStack<D> {
         let Some(handle) = self.udp_beacon_handle else {
             return false;
         };
-        if !self.self_test_destinations.outbound_allowed {
-            return false;
-        }
         let socket = self.sockets.get_mut::<UdpSocket>(handle);
         if !socket.can_send() {
             return false;
@@ -2115,7 +2094,7 @@ impl<D: NetDevice> NetStack<D> {
 
         let mut payload = HeaplessString::<64>::new();
         let _ = write!(&mut payload, "COHESIX_NET_OK {}", self.self_test.beacon_seq);
-        let gateway_addr = self.self_test_destinations.udp_echo;
+        let gateway_addr = Ipv4Address::from(DEV_VIRT_GATEWAY);
         let endpoint = IpEndpoint::new(gateway_addr.into(), UDP_ECHO_PORT);
         match socket.send_slice(payload.as_bytes(), endpoint) {
             Ok(()) => {
@@ -2279,16 +2258,14 @@ impl<D: NetDevice> NetStack<D> {
             return false;
         }
 
-        if !self.self_test_destinations.outbound_allowed {
-            return false;
-        }
-
         let Some(handle) = self.tcp_smoke_out_handle else {
             return false;
         };
         let socket = self.sockets.get_mut::<TcpSocket>(handle);
         let mut activity = false;
-        let dest_ip = self.self_test_destinations.tcp_smoke;
+        let dest_ip = self
+            .gateway
+            .unwrap_or_else(|| Ipv4Address::from(DEV_VIRT_GATEWAY));
         let dest = IpEndpoint::new(dest_ip.into(), TCP_SMOKE_PORT);
 
         if matches!(socket.state(), TcpState::Closed) {
@@ -3220,40 +3197,38 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                 udp_target.primary, tcp_target.primary
             );
             info!(
-                "[net-selftest] host capture: tcpdump -i lo0 -n -vv '(tcp port {} or udp port {} or tcp port {})'",
-                self.listen_port,
-                UDP_ECHO_PORT,
-                TCP_SMOKE_PORT
+                "[net-selftest] host capture: tcpdump -i lo0 -n udp port {}",
+                UDP_ECHO_PORT
             );
-            match self.net_mode {
-                NetMode::SlirpHostFwd => {
-                    info!(
-                        "[net-selftest] slirp host→guest udp: echo -n \"ping\" | nc -u -w1 {}",
-                        udp_target.primary
-                    );
-                    info!(
-                        "[net-selftest] slirp host→guest tcp: printf \"hi\" | nc -v {}",
-                        tcp_target.primary
-                    );
-                    info!(
-                        "[net-selftest] slirp direct guest address {} not reachable; rely on hostfwd to localhost",
-                        udp_target.direct
-                    );
-                }
-                NetMode::Bridged { .. } => {
-                    info!(
-                        "[net-selftest] bridged udp: echo -n \"ping\" | nc -u -w1 {}",
-                        udp_target.direct
-                    );
-                    info!(
-                        "[net-selftest] bridged tcp: printf \"hi\" | nc -v {}",
-                        tcp_target.direct
-                    );
-                    info!(
-                        "[net-selftest] loopback hostfwd (optional): udp {} tcp {}",
-                        udp_target.loopback, tcp_target.loopback
-                    );
-                }
+            if udp_target.forwarded_hint || tcp_target.forwarded_hint {
+                info!(
+                    "[net-selftest] host udp echo (hostfwd/tunnel): echo -n \"ping\" | nc -u -w1 {}",
+                    udp_target.primary
+                );
+                info!(
+                    "[net-selftest] host tcp smoke (hostfwd/tunnel): printf \"hi\" | nc -v {}",
+                    tcp_target.primary
+                );
+                info!(
+                    "[net-selftest] direct guest access requires bridge/tap networking; guest addr {}",
+                    udp_target.direct
+                );
+            } else {
+                info!(
+                    "[net-selftest] qemu user-net without hostfwd → add hostfwd=tcp::31338-:31338,hostfwd=tcp::31339-:31339 and use localhost",
+                );
+                info!(
+                    "[net-selftest] host udp echo (after hostfwd): echo -n \"ping\" | nc -u -w1 {}",
+                    udp_target.loopback
+                );
+                info!(
+                    "[net-selftest] host tcp smoke (after hostfwd): printf \"hi\" | nc -v {}",
+                    tcp_target.loopback
+                );
+                info!(
+                    "[net-selftest] direct guest address {} requires bridge/tap networking; skip on slirp",
+                    udp_target.direct
+                );
             }
             true
         } else {

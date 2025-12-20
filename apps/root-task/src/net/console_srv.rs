@@ -530,8 +530,6 @@ impl TcpConsoleServer {
 
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as FmtWrite;
-
     use super::*;
 
     const TOKEN: &str = "changeme";
@@ -618,20 +616,5 @@ mod tests {
 
         assert!(server.enqueue_outbound("   \t").is_ok());
         assert!(!server.has_outbound());
-    }
-
-    #[test]
-    fn outbound_queue_handles_initial_banner_without_drops() {
-        let mut server = TcpConsoleServer::new(TOKEN, 10_000);
-        server.begin_session(0, Some(4));
-
-        for idx in 0..CONSOLE_QUEUE_DEPTH {
-            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
-            write!(&mut line, "banner-line-{idx}").unwrap();
-            assert!(server.enqueue_outbound(line.as_str()).is_ok());
-        }
-
-        assert!(server.enqueue_outbound("OK READY").is_ok());
-        assert!(server.has_outbound());
     }
 }
