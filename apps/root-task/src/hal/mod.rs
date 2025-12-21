@@ -12,6 +12,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use core::{fmt, ptr::NonNull};
 
 #[cfg(feature = "kernel")]
+pub mod cache;
+
+#[cfg(feature = "kernel")]
 pub mod pci;
 
 #[cfg(feature = "kernel")]

@@ -2955,6 +2955,12 @@ impl<'a> KernelEnv<'a> {
         let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "dma-frame");
         self.dma_cursor = range.end;
         self.map_frame(frame_slot, range.start, seL4_ARM_Page_Default, false)?;
+        ::log::info!(
+            target: "hal",
+            "[hal] dma frame mapped vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=seL4_ARM_Page_Default",
+            vaddr = range.start,
+            paddr = reserved.paddr(),
+        );
         Ok(RamFrame {
             cap: frame_slot,
             paddr: reserved.paddr(),

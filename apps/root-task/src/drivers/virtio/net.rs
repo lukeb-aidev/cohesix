@@ -7,8 +7,6 @@
 #![cfg(all(feature = "kernel", feature = "net-console"))]
 #![allow(unsafe_code)]
 
-#[cfg(target_arch = "aarch64")]
-use core::arch::asm;
 use core::fmt::{self, Write as FmtWrite};
 use core::ptr::read_unaligned;
 use core::ptr::{read_volatile, write_volatile, NonNull};
@@ -21,10 +19,11 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
+use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::{HalError, Hardware};
 use crate::net::{NetDevice, NetDeviceCounters, NetDriverError, CONSOLE_TCP_PORT};
 use crate::net_consts::MAX_FRAME_LEN;
-use crate::sel4::{DeviceFrame, RamFrame};
+use crate::sel4::{seL4_CapInitThreadVSpace, DeviceFrame, RamFrame};
 
 const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
@@ -85,6 +84,7 @@ static DMA_CLEAN_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_QMEM_LOGGED: AtomicBool = AtomicBool::new(false);
+static USED_RING_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
     [const { AtomicBool::new(false) }; VIRTIO_MMIO_SLOTS];
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
@@ -598,7 +598,7 @@ impl VirtioNet {
                 }
             }
         };
-        let dma_cacheable = true;
+        let dma_cacheable = cfg!(feature = "cache-maintenance");
         if !DMA_QMEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             let rx_vaddr = queue_mem_rx.ptr().as_ptr() as usize;
             let tx_vaddr = queue_mem_tx.ptr().as_ptr() as usize;
@@ -608,7 +608,7 @@ impl VirtioNet {
             let tx_paddr = queue_mem_tx.paddr();
             info!(
                 target: "virtio-net",
-                "[virtio-net][dma] qmem mapping cacheable={} rx_vaddr=0x{rx_vaddr:016x}..0x{rx_vend:016x} rx_paddr=0x{rx_paddr:016x}..0x{rx_pend:016x} tx_vaddr=0x{tx_vaddr:016x}..0x{tx_vend:016x} tx_paddr=0x{tx_paddr:016x}..0x{tx_pend:016x}",
+                "[virtio-net][dma] qmem mapping cacheable={} map_attr=seL4_ARM_Page_Default rx_vaddr=0x{rx_vaddr:016x}..0x{rx_vend:016x} rx_paddr=0x{rx_paddr:016x}..0x{rx_pend:016x} tx_vaddr=0x{tx_vaddr:016x}..0x{tx_vend:016x} tx_paddr=0x{tx_paddr:016x}..0x{tx_pend:016x}",
                 dma_cacheable,
                 rx_vaddr = rx_vaddr,
                 rx_vend = rx_vaddr.saturating_add(rx_len),
@@ -2101,8 +2101,13 @@ impl VirtioNet {
             payload_len,
             buffer.as_slice().len().saturating_sub(header_len),
         );
-        dma_clean(header_ptr, header_len, cacheable);
-        dma_clean(payload_ptr, payload_len, cacheable);
+        dma_clean(header_ptr, header_len, cacheable, "clean rx buffer header");
+        dma_clean(
+            payload_ptr,
+            payload_len,
+            cacheable,
+            "clean rx buffer payload",
+        );
     }
 
     fn sync_rx_slot_for_cpu(
@@ -2113,13 +2118,23 @@ impl VirtioNet {
     ) {
         let header_len = core::cmp::min(header_len, written_len);
         let header_ptr = buffer.ptr().as_ptr();
-        dma_invalidate(header_ptr, header_len, cacheable);
+        dma_invalidate(
+            header_ptr,
+            header_len,
+            cacheable,
+            "invalidate rx buffer header",
+        );
         let payload_len = written_len
             .saturating_sub(header_len)
             .min(buffer.as_slice().len().saturating_sub(header_len));
         if payload_len > 0 {
             let payload_ptr = unsafe { header_ptr.add(header_len) };
-            dma_invalidate(payload_ptr, payload_len, cacheable);
+            dma_invalidate(
+                payload_ptr,
+                payload_len,
+                cacheable,
+                "invalidate rx buffer payload",
+            );
         }
     }
 
@@ -2499,7 +2514,7 @@ impl VirtioNet {
             let capped_len = len.min(buffer.as_slice().len());
             let ptr = buffer.ptr().as_ptr();
             let start = ptr as usize;
-            dma_clean(ptr, capped_len, self.dma_cacheable);
+            dma_clean(ptr, capped_len, self.dma_cacheable, "clean tx buffer");
             let payload_start = start.saturating_add(self.rx_header_len);
             let payload_end = payload_start.saturating_add(capped_len.saturating_sub(self.rx_header_len));
             if force_log || !self.tx_dma_log_once {
@@ -3883,6 +3898,7 @@ impl VirtQueue {
             self.desc.as_ptr() as *const u8,
             self.layout.desc_len,
             self.cacheable,
+            "clean descriptor table",
         );
     }
 
@@ -3891,21 +3907,36 @@ impl VirtQueue {
             self.avail.as_ptr() as *const u8,
             self.layout.avail_len,
             self.cacheable,
+            "clean avail ring",
         );
     }
 
     fn invalidate_used_header_for_cpu(&self) {
         let used_ptr = self.used.as_ptr() as *const u8;
-        dma_invalidate(used_ptr, core::mem::size_of::<u16>() * 2, self.cacheable);
+        dma_invalidate(
+            used_ptr,
+            core::mem::size_of::<u16>() * 2,
+            self.cacheable,
+            "invalidate used ring header",
+        );
         fence(AtomicOrdering::SeqCst);
     }
 
     fn invalidate_used_elem_for_cpu(&self, ring_slot: usize) {
         let elem_ptr = unsafe { (*self.used.as_ptr()).ring.as_ptr().add(ring_slot) as *const u8 };
+        if !USED_RING_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            info!(
+                target: "virtio-net",
+                "[virtio-net][dma] invalidate used ring entry slot={} addr=0x{addr:016x}",
+                ring_slot,
+                addr = elem_ptr as usize,
+            );
+        }
         dma_invalidate(
             elem_ptr,
             core::mem::size_of::<VirtqUsedElem>(),
             self.cacheable,
+            "invalidate used ring entry",
         );
         fence(AtomicOrdering::SeqCst);
     }
@@ -4184,27 +4215,7 @@ fn align_up(value: usize, align: usize) -> usize {
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn cache_line_len() -> usize {
-    64
-}
-
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn dma_range_bounds(ptr: *const u8, len: usize) -> (usize, usize, usize) {
-    let line = cache_line_len();
-    let start = ptr as usize;
-    let end = start.saturating_add(len);
-    let aligned_start = start & !(line - 1);
-    let mut aligned_end = end.saturating_add(line - 1) & !(line - 1);
-    if aligned_end <= aligned_start {
-        aligned_end = aligned_start.saturating_add(line);
-    }
-    (aligned_start, aligned_end, line)
-}
-
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn dma_clean(ptr: *const u8, len: usize, cacheable: bool) {
+fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
     if len == 0 {
         return;
     }
@@ -4212,12 +4223,16 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool) {
         if !DMA_SKIP_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             warn!(
                 target: "virtio-net",
-                "[virtio-net][dma] cache maintenance skipped (mapping not proven cacheable)",
+                "[virtio-net][dma] cache ops disabled (mapping not proven cacheable or feature off)",
             );
         }
         return;
     }
     let log_once = !DMA_CLEAN_LOGGED.swap(true, AtomicOrdering::AcqRel);
+    info!(
+        target: "virtio-net",
+        "[virtio-net][dma] cache op reason={reason}",
+    );
     if log_once {
         info!(
             target: "virtio-net",
@@ -4226,19 +4241,13 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool) {
             len = len,
         );
     }
-    let (aligned_start, aligned_end, line) = dma_range_bounds(ptr, len);
     compiler_fence(AtomicOrdering::Release);
-    let mut addr = aligned_start;
-    unsafe {
-        while addr < aligned_end {
-            asm!("dc cvac, {addr}", addr = in(reg) addr, options(nostack, preserves_flags));
-            let next = addr.saturating_add(line);
-            if next <= addr {
-                break;
-            }
-            addr = next;
-        }
-        asm!("dsb ishst", "isb", options(nostack, preserves_flags));
+    if let Err(err) = cache_clean(seL4_CapInitThreadVSpace, ptr as usize, len) {
+        warn!(
+            target: "virtio-net",
+            "[virtio-net][dma] clean syscall failed err={}",
+            err,
+        );
     }
     if log_once {
         info!(
@@ -4252,7 +4261,7 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool) {
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn dma_invalidate(ptr: *const u8, len: usize, cacheable: bool) {
+fn dma_invalidate(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
     if len == 0 {
         return;
     }
@@ -4260,12 +4269,16 @@ fn dma_invalidate(ptr: *const u8, len: usize, cacheable: bool) {
         if !DMA_SKIP_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             warn!(
                 target: "virtio-net",
-                "[virtio-net][dma] cache maintenance skipped (mapping not proven cacheable)",
+                "[virtio-net][dma] cache ops disabled (mapping not proven cacheable or feature off)",
             );
         }
         return;
     }
     let log_once = !DMA_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel);
+    info!(
+        target: "virtio-net",
+        "[virtio-net][dma] cache op reason={reason}",
+    );
     if log_once {
         info!(
             target: "virtio-net",
@@ -4274,19 +4287,13 @@ fn dma_invalidate(ptr: *const u8, len: usize, cacheable: bool) {
             len = len,
         );
     }
-    let (aligned_start, aligned_end, line) = dma_range_bounds(ptr, len);
     compiler_fence(AtomicOrdering::SeqCst);
-    let mut addr = aligned_start;
-    unsafe {
-        while addr < aligned_end {
-            asm!("dc ivac, {addr}", addr = in(reg) addr, options(nostack, preserves_flags));
-            let next = addr.saturating_add(line);
-            if next <= addr {
-                break;
-            }
-            addr = next;
-        }
-        asm!("dsb ish", "isb", options(nostack, preserves_flags));
+    if let Err(err) = cache_invalidate(seL4_CapInitThreadVSpace, ptr as usize, len) {
+        warn!(
+            target: "virtio-net",
+            "[virtio-net][dma] invalidate syscall failed err={}",
+            err,
+        );
     }
     if log_once {
         info!(
@@ -4309,17 +4316,11 @@ fn dma_barrier() {
 
 #[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
-fn cache_line_len() -> usize {
-    1
-}
+fn dma_clean(_ptr: *const u8, _len: usize, _cacheable: bool, _reason: &str) {}
 
 #[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
-fn dma_clean(_ptr: *const u8, _len: usize, _cacheable: bool) {}
-
-#[cfg(not(target_arch = "aarch64"))]
-#[inline(always)]
-fn dma_invalidate(_ptr: *const u8, _len: usize, _cacheable: bool) {}
+fn dma_invalidate(_ptr: *const u8, _len: usize, _cacheable: bool, _reason: &str) {}
 
 #[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
