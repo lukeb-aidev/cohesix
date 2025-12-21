@@ -11,7 +11,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "kernel")]
 use core::{fmt, ptr::NonNull};
 
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", target_os = "none"))]
 pub mod cache;
 
 #[cfg(feature = "kernel")]

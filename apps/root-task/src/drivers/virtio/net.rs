@@ -7,6 +7,7 @@
 #![cfg(all(feature = "kernel", feature = "net-console"))]
 #![allow(unsafe_code)]
 
+use core::arch::asm;
 use core::fmt::{self, Write as FmtWrite};
 use core::ptr::read_unaligned;
 use core::ptr::{read_volatile, write_volatile, NonNull};
