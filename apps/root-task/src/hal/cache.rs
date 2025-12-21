@@ -8,11 +8,15 @@ use core::convert::TryFrom;
 
 use log::info;
 use sel4_sys::{
-    seL4_ARM_VSpace_CleanInvalidate_Data, seL4_ARM_VSpace_Clean_Data,
-    seL4_ARM_VSpace_Invalidate_Data, seL4_CPtr, seL4_Error, seL4_RangeError, seL4_Word,
+    invocation_label_nInvocationLabels, seL4_CallWithMRs, seL4_CPtr, seL4_Error,
+    seL4_MessageInfo_get_label, seL4_MessageInfo_new, seL4_NoError, seL4_RangeError,
+    seL4_SetMR, seL4_Word,
 };
 
 const CACHE_LINE_BYTES: usize = 64;
+const ARMVSPACE_CLEAN_LABEL: seL4_Word = invocation_label_nInvocationLabels as seL4_Word;
+const ARMVSPACE_INVALIDATE_LABEL: seL4_Word = ARMVSPACE_CLEAN_LABEL + 1;
+const ARMVSPACE_CLEAN_INVALIDATE_LABEL: seL4_Word = ARMVSPACE_CLEAN_LABEL + 2;
 
 fn align_down(value: usize, align: usize) -> usize {
     debug_assert!(align.is_power_of_two());
@@ -39,7 +43,7 @@ fn call_cache_op(
     vspace: seL4_CPtr,
     vaddr: usize,
     len: usize,
-    f: unsafe fn(seL4_CPtr, seL4_Word, seL4_Word) -> seL4_Error,
+    label: seL4_Word,
 ) -> Result<(), seL4_Error> {
     if len == 0 {
         return Ok(());
@@ -62,7 +66,7 @@ fn call_cache_op(
         aligned_len = aligned_len,
     );
 
-    let err = unsafe { f(vspace, start_word, end_word) };
+    let err = unsafe { call_arm_vspace_op(label, vspace, start_word, end_word) };
     info!(
         target: "hal-cache",
         "[cache] CACHE_OP exit op={} err={}",
@@ -77,11 +81,11 @@ fn call_cache_op(
 }
 
 pub fn cache_clean(vspace: seL4_CPtr, vaddr: usize, len: usize) -> Result<(), seL4_Error> {
-    call_cache_op("clean", vspace, vaddr, len, seL4_ARM_VSpace_Clean_Data)
+    call_cache_op("clean", vspace, vaddr, len, ARMVSPACE_CLEAN_LABEL)
 }
 
 pub fn cache_invalidate(vspace: seL4_CPtr, vaddr: usize, len: usize) -> Result<(), seL4_Error> {
-    call_cache_op("invalidate", vspace, vaddr, len, seL4_ARM_VSpace_Invalidate_Data)
+    call_cache_op("invalidate", vspace, vaddr, len, ARMVSPACE_INVALIDATE_LABEL)
 }
 
 pub fn cache_clean_invalidate(
@@ -94,6 +98,35 @@ pub fn cache_clean_invalidate(
         vspace,
         vaddr,
         len,
-        seL4_ARM_VSpace_CleanInvalidate_Data,
+        ARMVSPACE_CLEAN_INVALIDATE_LABEL,
     )
+}
+
+unsafe fn call_arm_vspace_op(
+    label: seL4_Word,
+    vspace: seL4_CPtr,
+    start: seL4_Word,
+    end: seL4_Word,
+) -> seL4_Error {
+    let mut mr0 = start;
+    let mut mr1 = end;
+    let mut mr2 = 0;
+    let mut mr3 = 0;
+
+    let tag = seL4_MessageInfo_new(label, 0, 0, 2);
+    let out_tag = unsafe {
+        seL4_CallWithMRs(vspace, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3)
+    };
+    let result_word = seL4_MessageInfo_get_label(out_tag);
+
+    if result_word != seL4_NoError as seL4_Word {
+        unsafe {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
+        }
+    }
+
+    result_word as seL4_Error
 }

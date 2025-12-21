@@ -502,7 +502,7 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
         .allowlist_function("seL4_.*")
         .allowlist_type("seL4_.*|invocation_label|arch_invocation_label")
         .allowlist_var(
-            "seL4_.*|CNode.*|UntypedRetype|ARMPageTableMap|ARMPageMap|InvalidInvocation",
+            "seL4_.*|CNode.*|UntypedRetype|ARMPageTableMap|ARMPageMap|InvalidInvocation|ARMVSpace.*",
         );
 
     for fault_symbol in [
