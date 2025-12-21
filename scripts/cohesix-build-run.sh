@@ -200,6 +200,8 @@ print_tcp_summary() {
 run_qemu_attempt() {
     local smoke_port="$1"
     local log_file="$2"
+    local fifo_path
+    local tee_pid
 
     QEMU_ARGS=("${BASE_QEMU_ARGS[@]}")
     if [[ "$TRANSPORT" == "tcp" ]]; then
@@ -220,11 +222,17 @@ run_qemu_attempt() {
 
     log "Prepared QEMU command: ${QEMU_ARGS[*]}"
 
-    "$QEMU_BIN" "${QEMU_ARGS[@]}" > >(tee "$log_file") 2>&1 &
+    fifo_path="$(mktemp -t cohesix-qemu.fifo)"
+    rm -f "$fifo_path"
+    mkfifo "$fifo_path"
+    tee "$log_file" < "$fifo_path" &
+    tee_pid=$!
+    "$QEMU_BIN" "${QEMU_ARGS[@]}" > "$fifo_path" 2>&1 &
     QEMU_PID=$!
     trap 'kill $QEMU_PID 2>/dev/null || true' EXIT
 
     if wait_for_port_or_exit "127.0.0.1" "$TCP_PORT" 60 "$QEMU_PID"; then
+        rm -f "$fifo_path"
         return 0
     fi
 
@@ -232,6 +240,8 @@ run_qemu_attempt() {
     if ! kill -0 "$QEMU_PID" 2>/dev/null; then
         wait "$QEMU_PID" || true
     fi
+    wait "$tee_pid" 2>/dev/null || true
+    rm -f "$fifo_path"
 
     case "$wait_status" in
         2)
