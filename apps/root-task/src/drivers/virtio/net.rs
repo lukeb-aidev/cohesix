@@ -3320,13 +3320,14 @@ impl VirtioNet {
         if rl(RlTag::DescRaw, 256) {
             let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
             let existing = unsafe { read_volatile(ring_ptr) };
+            let idx_ptr = unsafe { &(*avail).idx as *const u16 } as usize;
             info!(
                 target: "virtio-forensics",
                 "[virtio-forensics] tx avail prewrite slot={} idx={} existing_head={} avail_idx_ptr=0x{:x}",
                 ring_slot,
                 avail_idx,
                 existing,
-                (&(*avail).idx as *const u16) as usize,
+                idx_ptr,
             );
         }
         // Avail ring publish is the final step so the device never observes a
