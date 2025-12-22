@@ -438,6 +438,9 @@ impl BootInfoState {
             post,
             BOOTINFO_CANARY_PRE,
             BOOTINFO_CANARY_POST,
+            self.snapshot.post_canary_addr(),
+            self.snapshot_region.start,
+            self.snapshot_region.end,
         );
         panic!("BOOTINFO_SNAPSHOT_CORRUPTED");
     }
@@ -452,7 +455,17 @@ impl BootInfoState {
             Ok(snapshot) => snapshot,
             Err(err) => {
                 let (pre, post, exp_pre, exp_post) = self.canary_state();
-                emit_corruption_report(phase, mark, pre, post, exp_pre, exp_post);
+                emit_corruption_report(
+                    phase,
+                    mark,
+                    pre,
+                    post,
+                    exp_pre,
+                    exp_post,
+                    self.snapshot.post_canary_addr(),
+                    self.snapshot_region.start,
+                    self.snapshot_region.end,
+                );
                 return Err(BootInfoCanaryError::Snapshot {
                     mark,
                     error: err.into(),
@@ -465,7 +478,17 @@ impl BootInfoState {
         }
 
         let (pre, post, exp_pre, exp_post) = self.canary_state();
-        emit_corruption_report(phase, mark, pre, post, exp_pre, exp_post);
+        emit_corruption_report(
+            phase,
+            mark,
+            pre,
+            post,
+            exp_pre,
+            exp_post,
+            self.snapshot.post_canary_addr(),
+            self.snapshot_region.start,
+            self.snapshot_region.end,
+        );
 
         Err(BootInfoCanaryError::Diverged {
             mark,
@@ -475,13 +498,16 @@ impl BootInfoState {
     }
 }
 
-pub(crate) fn emit_corruption_report(
+fn emit_corruption_report(
     phase: &str,
     last_mark: &str,
     pre: u64,
     post: u64,
     expected_pre: u64,
     expected_post: u64,
+    post_addr: usize,
+    region_start: usize,
+    region_end: usize,
 ) {
     uart_puts(b"BOOTINFO_SNAPSHOT_CORRUPTED");
     uart_putnl();
@@ -500,6 +526,78 @@ pub(crate) fn emit_corruption_report(
     uart_puts(b" expected_post=");
     uart_puthex_u64(expected_post);
     uart_putnl();
+    uart_hex_usize(b"post_addr=", post_addr);
+    let sp = current_sp();
+    uart_hex_usize(b"sp=", sp);
+    let sp_gt_post = sp > post_addr;
+    uart_puts(b"sp_gt_post=");
+    uart_puts(if sp_gt_post { b"1" } else { b"0" });
+    uart_putnl();
+    let delta = if sp_gt_post {
+        sp.saturating_sub(post_addr)
+    } else {
+        post_addr.saturating_sub(sp)
+    };
+    uart_hex_usize(b"sp_post_delta=", delta);
+    uart_hexdump_32(b"post_bytes=", post_addr, region_start, region_end);
+}
+
+#[cfg_attr(target_arch = "aarch64", allow(unsafe_code))]
+fn current_sp() -> usize {
+    #[cfg(target_arch = "aarch64")]
+    {
+        let sp: usize;
+        unsafe {
+            core::arch::asm!(
+                "mov {}, sp",
+                out(reg) sp,
+                options(nomem, nostack, preserves_flags)
+            );
+        }
+        sp
+    }
+
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        0
+    }
+}
+
+fn uart_hex_usize(label: &[u8], value: usize) {
+    uart_puts(label);
+    uart_puthex_u64(value as u64);
+    uart_putnl();
+}
+
+#[allow(unsafe_code)]
+fn uart_hexdump_32(label: &[u8], post_addr: usize, region_start: usize, region_end: usize) {
+    uart_puts(label);
+    let window_start = post_addr.saturating_sub(16);
+    let window_end = post_addr.saturating_add(16);
+    let start = core::cmp::max(window_start, region_start);
+    let end = core::cmp::min(window_end, region_end);
+    if end <= start {
+        uart_putnl();
+        return;
+    }
+    let mut first = true;
+    for addr in start..end {
+        if !first {
+            uart_puts(b" ");
+        }
+        first = false;
+        let byte = unsafe { core::ptr::read_volatile(addr as *const u8) };
+        uart_puthex_u8(byte);
+    }
+    uart_putnl();
+}
+
+fn uart_puthex_u8(value: u8) {
+    let hi = (value >> 4) & 0x0f;
+    let lo = value & 0x0f;
+    let hi_ascii = if hi < 10 { b'0' + hi } else { b'a' + (hi - 10) };
+    let lo_ascii = if lo < 10 { b'0' + lo } else { b'a' + (lo - 10) };
+    uart_puts(&[hi_ascii, lo_ascii]);
 }
 
 #[cfg(test)]

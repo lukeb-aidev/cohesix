@@ -21,6 +21,7 @@ use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
 use crate::bootstrap::bootinfo_snapshot::BootInfoState;
+use crate::bootstrap::log::{uart_puthex_u64, uart_putnl, uart_puts};
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::{HalError, Hardware};
 use crate::net::{NetDevice, NetDeviceCounters, NetDriverError, CONSOLE_TCP_PORT};
@@ -96,6 +97,9 @@ static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
 static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_OVERKILL_LOGGED: AtomicBool = AtomicBool::new(false);
+static BOOTINFO_ADDR_DIAG_EMITTED: AtomicBool = AtomicBool::new(false);
+
+const BOOTINFO_ADDR_DIAG: bool = matches!(option_env!("BOOTINFO_ADDR_DIAG"), Some("1"));
 
 const RL_TAGS: usize = 10;
 static RL_COUNTERS: [AtomicU32; RL_TAGS] = [const { AtomicU32::new(0) }; RL_TAGS];
@@ -222,6 +226,77 @@ fn bootinfo_probe(mark: &'static str) {
             len = region.end.saturating_sub(region.start),
         );
     }
+}
+
+fn emit_addr_diag_once(rx_queue: &VirtQueue, tx_queue: &VirtQueue) {
+    if !BOOTINFO_ADDR_DIAG {
+        return;
+    }
+    if BOOTINFO_ADDR_DIAG_EMITTED.swap(true, AtomicOrdering::AcqRel) {
+        return;
+    }
+    if let Some(state) = BootInfoState::get() {
+        let region = state.snapshot_region();
+        let post_addr = state.snapshot().post_canary_addr();
+        uart_puts(b"diag.bootinfo.region=0x");
+        uart_puthex_u64(region.start as u64);
+        uart_puts(b"..0x");
+        uart_puthex_u64(region.end as u64);
+        uart_putnl();
+        uart_puts(b"diag.bootinfo.post_addr=0x");
+        uart_puthex_u64(post_addr as u64);
+        uart_putnl();
+    }
+
+    uart_ring_diag(b"diag.virtio.ring.rx_desc=0x", rx_queue, rx_queue.layout.desc_offset, rx_queue.layout.desc_len);
+    uart_ring_diag(
+        b"diag.virtio.ring.rx_avail=0x",
+        rx_queue,
+        rx_queue.layout.avail_offset,
+        rx_queue.layout.avail_len,
+    );
+    uart_ring_diag(
+        b"diag.virtio.ring.rx_used=0x",
+        rx_queue,
+        rx_queue.layout.used_offset,
+        rx_queue.layout.used_len,
+    );
+    uart_ring_diag(b"diag.virtio.ring.tx_desc=0x", tx_queue, tx_queue.layout.desc_offset, tx_queue.layout.desc_len);
+    uart_ring_diag(
+        b"diag.virtio.ring.tx_avail=0x",
+        tx_queue,
+        tx_queue.layout.avail_offset,
+        tx_queue.layout.avail_len,
+    );
+    uart_ring_diag(
+        b"diag.virtio.ring.tx_used=0x",
+        tx_queue,
+        tx_queue.layout.used_offset,
+        tx_queue.layout.used_len,
+    );
+}
+
+fn uart_ring_diag(label: &[u8], queue: &VirtQueue, offset: usize, len: usize) {
+    uart_puts(label);
+    uart_puthex_u64(queue.base_paddr.saturating_add(offset) as u64);
+    uart_puts(b" len=0x");
+    uart_puthex_u64(len as u64);
+    uart_putnl();
+}
+
+fn uart_ring_oob(tag: &str, a_label: &[u8], a: usize, b_label: &[u8], b: usize, c_label: &[u8], c: usize) {
+    uart_puts(b"VIRTIO_RING_OOB ");
+    uart_puts(tag.as_bytes());
+    uart_puts(b" ");
+    uart_puts(a_label);
+    uart_puthex_u64(a as u64);
+    uart_puts(b" ");
+    uart_puts(b_label);
+    uart_puthex_u64(b as u64);
+    uart_puts(b" ");
+    uart_puts(c_label);
+    uart_puthex_u64(c as u64);
+    uart_putnl();
 }
 
 fn mark_forensics_frozen() -> bool {
@@ -760,6 +835,7 @@ impl VirtioNet {
             err
         })?;
         regs.read_queue_regs(TX_QUEUE_INDEX);
+        emit_addr_diag_once(&rx_queue, &tx_queue);
 
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
         for _ in 0..rx_size {
@@ -4665,6 +4741,19 @@ impl VirtQueue {
         let base_ptr = frame.ptr();
         let page_bytes = 1usize << seL4_PageBits;
 
+        if queue_size == 0 {
+            uart_ring_oob(
+                "queue_size_zero",
+                b"queue_size=0x",
+                queue_size as usize,
+                b"frame=0x",
+                page_bytes,
+                b"index=0x",
+                index as usize,
+            );
+            panic!("VIRTIO_RING_OOB");
+        }
+
         if index == RX_QUEUE_INDEX {
             bootinfo_probe("net.mmio.q0.desc.zero.before");
         }
@@ -4797,18 +4886,17 @@ impl VirtQueue {
         }
 
         if used_end > frame_capacity {
-            error!(
-                target: "net-console",
-                "[virtio-net] virtqueue layout exceeds backing: avail_end={} used_end={} capacity={}",
-                avail_end,
+            uart_ring_oob(
+                "layout_frame",
+                b"used_end=0x",
                 used_end,
+                b"cap=0x",
                 frame_capacity,
+                b"qsize=0x",
+                queue_size as usize,
             );
-            return Err(DriverError::QueueInvariant(
-                "virtqueue layout exceeds backing",
-            ));
+            panic!("VIRTIO_RING_OOB");
         }
-
         if used_end != layout.total_len {
             error!(
                 target: "net-console",
@@ -4922,13 +5010,30 @@ impl VirtQueue {
 
     fn setup_descriptor(&self, index: u16, addr: u64, len: u32, flags: u16, next: Option<u16>) {
         if index >= self.size {
-            error!(
-                target: "net-console",
-                "[virtio-net] descriptor index out of range: index={} size={}",
-                index,
-                self.size,
+            uart_ring_oob(
+                "desc_index",
+                b"index=0x",
+                index as usize,
+                b"size=0x",
+                self.size as usize,
+                b"desc=0x",
+                self.layout.desc_len,
             );
-            return;
+            panic!("VIRTIO_RING_OOB");
+        }
+        let desc_bytes = self.size as usize * core::mem::size_of::<VirtqDesc>();
+        let desc_offset = index as usize * core::mem::size_of::<VirtqDesc>();
+        if desc_offset + core::mem::size_of::<VirtqDesc>() > desc_bytes {
+            uart_ring_oob(
+                "desc_offset",
+                b"offset=0x",
+                desc_offset,
+                b"bytes=0x",
+                desc_bytes,
+                b"index=0x",
+                index as usize,
+            );
+            panic!("VIRTIO_RING_OOB");
         }
         let flags = match next {
             Some(_) => flags | VIRTQ_DESC_F_NEXT,
@@ -4952,23 +5057,51 @@ impl VirtQueue {
     }
 
     fn push_avail(&self, index: u16) -> Option<(u16, u16, u16)> {
-        if index >= self.size {
-            error!(
-                target: "net-console",
-                "[virtio-net] avail ring index out of range: index={} size={}",
-                index,
-                self.size,
-            );
-            return None;
-        }
         let avail = self.avail.as_ptr();
         let qsize = usize::from(self.size);
 
-        assert!(qsize != 0, "virtqueue size must be non-zero");
+        if qsize == 0 {
+            uart_ring_oob(
+                "avail_qsize_zero",
+                b"size=0x",
+                qsize,
+                b"index=0x",
+                index as usize,
+                b"avail=0x",
+                self.layout.avail_len,
+            );
+            panic!("VIRTIO_RING_OOB");
+        }
+        if index >= self.size {
+            uart_ring_oob(
+                "avail_index",
+                b"index=0x",
+                index as usize,
+                b"size=0x",
+                self.size as usize,
+                b"avail=0x",
+                self.layout.avail_len,
+            );
+            panic!("VIRTIO_RING_OOB");
+        }
 
         let idx = unsafe { read_volatile(&(*avail).idx) };
         let ring_slot = (idx as usize) % qsize;
         assert!(ring_slot < qsize, "avail ring slot out of range");
+        let ring_offset = ring_slot * core::mem::size_of::<u16>();
+        let ring_bytes = qsize * core::mem::size_of::<u16>();
+        if ring_offset + core::mem::size_of::<u16>() > ring_bytes {
+            uart_ring_oob(
+                "avail_offset",
+                b"offset=0x",
+                ring_offset,
+                b"bytes=0x",
+                ring_bytes,
+                b"slot=0x",
+                ring_slot,
+            );
+            panic!("VIRTIO_RING_OOB");
+        }
         unsafe {
             let ring_ptr = (*avail).ring.as_ptr().add(ring_slot as usize) as *mut u16;
             write_volatile(ring_ptr, index);
@@ -5116,6 +5249,19 @@ impl VirtQueue {
         queue_label: &'static str,
         allow_zero_len: bool,
     ) -> Result<Option<(u16, u32)>, ForensicFault> {
+        let qsize = usize::from(self.size);
+        if qsize == 0 {
+            uart_ring_oob(
+                "used_qsize_zero",
+                b"size=0x",
+                qsize,
+                b"used=0x",
+                self.layout.used_len,
+                b"last=0x",
+                self.last_used as usize,
+            );
+            panic!("VIRTIO_RING_OOB");
+        }
         let used = self.used.as_ptr();
         self.invalidate_used_header_for_cpu();
         let idx = unsafe { read_volatile(&(*used).idx) };
@@ -5124,22 +5270,34 @@ impl VirtQueue {
         }
         let distance = idx.wrapping_sub(self.last_used);
         if distance > self.size {
-            error!(
-                target: "net-console",
-                "[virtio-net] used ring advanced beyond queue size: last_used={} idx={} size={} distance={}",
-                self.last_used,
-                idx,
-                self.size,
-                distance,
+            uart_ring_oob(
+                "used_distance",
+                b"distance=0x",
+                distance as usize,
+                b"size=0x",
+                qsize,
+                b"idx=0x",
+                idx as usize,
             );
-            return Ok(None);
+            panic!("VIRTIO_RING_OOB");
         }
-        let qsize = usize::from(self.size);
-
-        assert!(qsize != 0, "virtqueue size must be non-zero");
 
         let ring_slot = (self.last_used as usize) % qsize;
         assert!(ring_slot < qsize, "used ring slot out of range");
+        let ring_offset = ring_slot * core::mem::size_of::<VirtqUsedElem>();
+        let ring_bytes = qsize * core::mem::size_of::<VirtqUsedElem>();
+        if ring_offset + core::mem::size_of::<VirtqUsedElem>() > ring_bytes {
+            uart_ring_oob(
+                "used_offset",
+                b"offset=0x",
+                ring_offset,
+                b"bytes=0x",
+                ring_bytes,
+                b"slot=0x",
+                ring_slot,
+            );
+            panic!("VIRTIO_RING_OOB");
+        }
         let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
         self.invalidate_used_elem_for_cpu(ring_slot);
         let elem = unsafe { read_volatile(elem_ptr) };
@@ -5183,17 +5341,16 @@ impl VirtQueue {
             self.used_zero_len_head = None;
         }
         if elem.id >= u32::from(self.size) {
-            return Err(ForensicFault {
-                queue_name: queue_label,
-                qsize: self.size,
-                head: elem.id as u16,
-                idx: self.last_used,
-                addr: 0,
-                len: elem.len,
-                flags: 0,
-                next: 0,
-                reason: ForensicFaultReason::UsedIdOutOfRange,
-            });
+            uart_ring_oob(
+                "used_head",
+                b"head=0x",
+                elem.id as usize,
+                b"size=0x",
+                qsize,
+                b"idx=0x",
+                idx as usize,
+            );
+            panic!("VIRTIO_RING_OOB");
         }
         let desc_idx = elem.id as usize;
         let desc = unsafe { read_volatile(self.desc.as_ptr().add(desc_idx)) };
