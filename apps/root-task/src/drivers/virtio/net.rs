@@ -654,6 +654,7 @@ impl VirtioNet {
             target: "net-console",
             "[net-console] status set to FEATURES_OK: 0x{status_after_features:02x}",
         );
+        bootinfo_probe("net.init.after_features_ok");
         if status_after_features & STATUS_FEATURES_OK == 0 {
             regs.set_status(STATUS_FAILED);
             error!(
@@ -663,7 +664,9 @@ impl VirtioNet {
             return Err(DriverError::NoQueue);
         }
 
+        bootinfo_probe("net.init.before_qmem_log");
         info!("[net-console] allocating virtqueue backing memory");
+        bootinfo_probe("net.init.after_qmem_log");
         bootinfo_probe("net.mmio.qmem.before");
 
         let queue_mem_rx = hal.alloc_dma_frame().map_err(|err| {
