@@ -158,12 +158,8 @@ fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
             let _ = write!(line, "[log] truncated_lines={count}");
             force_uart_line(line.as_str());
         }
-        if max_payload > 0 {
-            if guard.line.len() < max_payload {
-                let _ = guard.line.push(b'~');
-            } else if let Some(last) = guard.line.as_mut_slice().last_mut() {
-                *last = b'~';
-            }
+        if max_payload > 0 && guard.line.len() < max_payload {
+            let _ = guard.line.push(b'~');
         }
     }
 
