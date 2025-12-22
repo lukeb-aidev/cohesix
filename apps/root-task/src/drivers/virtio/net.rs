@@ -754,10 +754,19 @@ impl VirtioNet {
         bootinfo_probe("net.init.after_qmem_log");
         bootinfo_probe("net.mmio.qmem.before");
 
+        if let Err(err) = Self::verify_queue_layout(rx_size, tx_size) {
+            regs.set_status(STATUS_FAILED);
+            return Err(err);
+        }
+
         let queue_mem_rx = hal.alloc_dma_frame().map_err(|err| {
             regs.set_status(STATUS_FAILED);
             DriverError::from(err)
         })?;
+        if let Err(err) = Self::ensure_dma_frame_not_in_bootinfo(&queue_mem_rx, "rx_queue_mem") {
+            regs.set_status(STATUS_FAILED);
+            return Err(err);
+        }
         bootinfo_probe("net.mmio.qmem.rx.alloc");
 
         let queue_mem_tx = {
@@ -785,6 +794,10 @@ impl VirtioNet {
                 }
             }
         };
+        if let Err(err) = Self::ensure_dma_frame_not_in_bootinfo(&queue_mem_tx, "tx_queue_mem") {
+            regs.set_status(STATUS_FAILED);
+            return Err(err);
+        }
         bootinfo_probe("net.mmio.qmem.tx.alloc");
         let dma_cacheable = cfg!(feature = "cache-maintenance");
         if !DMA_QMEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
@@ -853,6 +866,10 @@ impl VirtioNet {
                 regs.set_status(STATUS_FAILED);
                 DriverError::from(err)
             })?;
+            if let Err(err) = Self::ensure_dma_frame_not_in_bootinfo(&frame, "rx_buffer") {
+                regs.set_status(STATUS_FAILED);
+                return Err(err);
+            }
             rx_buffers.push(frame).map_err(|_| {
                 regs.set_status(STATUS_FAILED);
                 DriverError::BufferExhausted
@@ -865,6 +882,10 @@ impl VirtioNet {
                 regs.set_status(STATUS_FAILED);
                 DriverError::from(err)
             })?;
+            if let Err(err) = Self::ensure_dma_frame_not_in_bootinfo(&frame, "tx_buffer") {
+                regs.set_status(STATUS_FAILED);
+                return Err(err);
+            }
             tx_buffers.push(frame).map_err(|_| {
                 regs.set_status(STATUS_FAILED);
                 DriverError::BufferExhausted
@@ -1041,6 +1062,53 @@ impl VirtioNet {
         driver.regs.read_queue_regs(RX_QUEUE_INDEX);
         driver.regs.read_queue_regs(TX_QUEUE_INDEX);
         Ok(driver)
+    }
+
+    fn verify_queue_layout(rx_size: usize, tx_size: usize) -> Result<(), DriverError> {
+        let page_bytes = 1usize << seL4_PageBits;
+        let rx_layout = VirtqLayout::compute_vq_layout(rx_size as u16, false)?;
+        let tx_layout = VirtqLayout::compute_vq_layout(tx_size as u16, false)?;
+        debug_assert!(rx_layout.total_len <= page_bytes);
+        debug_assert!(tx_layout.total_len <= page_bytes);
+        if rx_layout.total_len > page_bytes || tx_layout.total_len > page_bytes {
+            error!(
+                target: "net-console",
+                "[virtio-net] virtqueue layout exceeds backing: rx_total={} tx_total={} page={}",
+                rx_layout.total_len,
+                tx_layout.total_len,
+                page_bytes,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtqueue layout exceeds backing page",
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_dma_frame_not_in_bootinfo(
+        frame: &RamFrame,
+        label: &'static str,
+    ) -> Result<(), DriverError> {
+        let Some(state) = BootInfoState::get() else {
+            return Ok(());
+        };
+        let region = state.snapshot_region();
+        let start = frame.paddr();
+        let end = start.saturating_add(frame.as_slice().len());
+        if ranges_overlap(start, end, region.start, region.end) {
+            error!(
+                target: "net-console",
+                "[virtio-net] DMA frame overlaps bootinfo snapshot ({label}) frame=0x{start:016x}..0x{end:016x} bootinfo=0x{boot_start:016x}..0x{boot_end:016x}",
+                start = start,
+                end = end,
+                boot_start = region.start,
+                boot_end = region.end,
+            );
+            return Err(DriverError::QueueInvariant(
+                "dma frame overlaps bootinfo snapshot",
+            ));
+        }
+        Ok(())
     }
 
     /// Return the negotiated Ethernet address for the device.
