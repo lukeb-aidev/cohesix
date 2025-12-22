@@ -207,6 +207,23 @@ fn forensics_frozen() -> bool {
     FORENSICS && FORENSICS_FROZEN.load(AtomicOrdering::Acquire)
 }
 
+fn bootinfo_probe(mark: &'static str) {
+    if let Some(state) = BootInfoState::get() {
+        let region = state.snapshot_region();
+        let (pre, post) = state.canary_values();
+        info!(
+            target: "net-console",
+            "[bootinfo:net] mark={mark} region=[0x{start:016x}..0x{end:016x}) len=0x{len:08x} pre=0x{pre:016x} post=0x{post:016x}",
+            start = region.start,
+            end = region.end,
+            len = region.end.saturating_sub(region.start),
+        );
+        if let Err(err) = state.verify("net.mmio", mark) {
+            panic!("bootinfo snapshot corrupted at {mark}: {err:?}");
+        }
+    }
+}
+
 fn mark_forensics_frozen() -> bool {
     FORENSICS && !FORENSICS_FROZEN.swap(true, AtomicOrdering::AcqRel)
 }
@@ -647,11 +664,13 @@ impl VirtioNet {
         }
 
         info!("[net-console] allocating virtqueue backing memory");
+        bootinfo_probe("net.mmio.qmem.before");
 
         let queue_mem_rx = hal.alloc_dma_frame().map_err(|err| {
             regs.set_status(STATUS_FAILED);
             DriverError::from(err)
         })?;
+        bootinfo_probe("net.mmio.qmem.rx.alloc");
 
         let queue_mem_tx = {
             let mut attempt = 0;
@@ -678,6 +697,7 @@ impl VirtioNet {
                 }
             }
         };
+        bootinfo_probe("net.mmio.qmem.tx.alloc");
         let dma_cacheable = cfg!(feature = "cache-maintenance");
         if !DMA_QMEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             let rx_vaddr = queue_mem_rx.ptr().as_ptr() as usize;
@@ -717,9 +737,9 @@ impl VirtioNet {
             regs.set_status(STATUS_FAILED);
             err
         })?;
-        Self::log_bootinfo_mmio_mark("net.mmio.before");
+        bootinfo_probe("net.mmio.before");
         regs.read_queue_regs(RX_QUEUE_INDEX);
-        Self::log_bootinfo_mmio_mark("net.mmio.after");
+        bootinfo_probe("net.mmio.after");
         info!(
             "[net-console] provisioning TX descriptors ({} entries)",
             tx_size
@@ -1015,26 +1035,6 @@ impl VirtioNet {
         }
         if reason == "first_tx" {
             self.mmio_dumped_tx_first = true;
-        }
-    }
-
-    fn log_bootinfo_mmio_mark(mark: &'static str) {
-        if let Some(state) = BootInfoState::get() {
-            let region = state.snapshot_region();
-            let (pre, post) = state.canary_values();
-            info!(
-                target: "net-console",
-                "[bootinfo:net] mark={mark} region=[0x{start:016x}..0x{end:016x}) len=0x{len:08x} pre=0x{pre:016x} post=0x{post:016x}",
-                start = region.start,
-                end = region.end,
-                len = region.end.saturating_sub(region.start),
-            );
-            if let Err(err) = state.verify("net.mmio", mark) {
-                error!(
-                    target: "net-console",
-                    "[bootinfo:net] canary divergence mark={mark} err={err:?}"
-                );
-            }
         }
     }
 
@@ -4662,6 +4662,9 @@ impl VirtQueue {
         let base_ptr = frame.ptr();
         let page_bytes = 1usize << seL4_PageBits;
 
+        if index == RX_QUEUE_INDEX {
+            bootinfo_probe("net.mmio.q0.desc.zero.before");
+        }
         let frame_capacity = {
             let frame_slice = frame.as_mut_slice();
             let capacity = frame_slice.len();
@@ -4672,6 +4675,9 @@ impl VirtQueue {
 
         unsafe {
             core::ptr::write_bytes(base_ptr.as_ptr(), 0, frame_capacity);
+        }
+        if index == RX_QUEUE_INDEX {
+            bootinfo_probe("net.mmio.q0.desc.zero.after");
         }
 
         if frame_capacity != page_bytes {
@@ -4822,7 +4828,13 @@ impl VirtQueue {
         };
 
         let avail_idx = unsafe { read_volatile(&(*avail_ptr.as_ptr()).idx) };
+        if index == RX_QUEUE_INDEX {
+            bootinfo_probe("net.mmio.q0.avail.idx");
+        }
         let used_idx = unsafe { read_volatile(&(*used_ptr.as_ptr()).idx) };
+        if index == RX_QUEUE_INDEX {
+            bootinfo_probe("net.mmio.q0.used.idx");
+        }
 
         if avail_idx != 0 || used_idx != 0 {
             error!(
@@ -4878,6 +4890,9 @@ impl VirtQueue {
             }
         }
         regs.queue_ready(1);
+        if index == RX_QUEUE_INDEX {
+            bootinfo_probe("net.mmio.q0.config.done");
+        }
         info!(
             target: "net-console",
             "[virtio-net] queue {} configured: size={} pfn=0x{:x} mode={:?}",
