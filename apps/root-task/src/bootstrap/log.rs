@@ -98,22 +98,6 @@ fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
     );
 
     let mut line = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
-    if !LOG_LAYOUT_REPORTED.swap(true, Ordering::AcqRel) {
-        let post_addr = BootInfoState::get()
-            .map(|state| state.snapshot().post_canary_addr())
-            .unwrap_or(0);
-        let mut report = HeaplessString::<160>::new();
-        let _ = write!(
-            report,
-            "[log] buf formatted=0x{formatted:016x} len={flen} line=0x{line:016x} len={llen} post=0x{post:016x}",
-            formatted = formatted.as_bytes().as_ptr() as usize,
-            flen = MAX_FRAME_LEN,
-            line = line.as_slice().as_ptr() as usize,
-            llen = MAX_FRAME_LEN,
-            post = post_addr,
-        );
-        force_uart_line(report.as_str());
-    }
     let max_payload = MAX_FRAME_LEN.saturating_sub(2);
     for &byte in formatted.as_bytes().iter().take(max_payload) {
         if line.push(byte).is_err() {
@@ -121,6 +105,34 @@ fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
         }
     }
     let _ = line.extend_from_slice(b"\r\n");
+    if !LOG_LAYOUT_REPORTED.swap(true, Ordering::AcqRel) {
+        let post_addr = BootInfoState::get()
+            .map(|state| state.snapshot().post_canary_addr())
+            .unwrap_or(0);
+        let sp = current_sp();
+        let sp_gt_post = sp > post_addr;
+        let sp_post_delta = if sp_gt_post {
+            sp - post_addr
+        } else {
+            post_addr - sp
+        };
+        let mut report = HeaplessString::<224>::new();
+        let _ = write!(
+            report,
+            "[log] formatted=0x{formatted:016x} formatted_len={flen} formatted_cap={fcap} line=0x{line:016x} line_len={llen} line_cap={lcap} post=0x{post:016x} sp=0x{sp:016x} sp_gt_post={gt} sp_post_delta=0x{delta:016x}",
+            formatted = formatted.as_bytes().as_ptr() as usize,
+            flen = formatted.len(),
+            fcap = MAX_FRAME_LEN,
+            line = line.as_slice().as_ptr() as usize,
+            llen = line.len(),
+            lcap = MAX_FRAME_LEN,
+            post = post_addr,
+            sp = sp,
+            gt = sp_gt_post as u8,
+            delta = sp_post_delta,
+        );
+        force_uart_line(report.as_str());
+    }
     line
 }
 
@@ -256,9 +268,7 @@ fn record_drop() {
 }
 
 fn emit_uart(payload: &[u8]) {
-    for &byte in payload.iter().take(MAX_FRAME_LEN) {
-        sel4::debug_put_char_raw(byte);
-    }
+    uart_puts(payload);
 }
 
 /// Emit a UART line regardless of the current logger transport.
@@ -279,8 +289,51 @@ pub fn force_uart_line(line: &str) {
         }
     }
 
-    emit_uart(line.as_bytes());
-    emit_uart(b"\r\n");
+    uart_puts(line.as_bytes());
+    uart_putnl();
+}
+
+fn current_sp() -> usize {
+    #[cfg(target_arch = "aarch64")]
+    {
+        let sp: usize;
+        unsafe {
+            core::arch::asm!(
+                "mov {}, sp",
+                out(reg) sp,
+                options(nomem, nostack, preserves_flags)
+            );
+        }
+        sp
+    }
+
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        0
+    }
+}
+
+pub fn uart_puts(bytes: &[u8]) {
+    for &byte in bytes.iter() {
+        sel4::debug_put_char_raw(byte);
+    }
+}
+
+pub fn uart_putnl() {
+    uart_puts(b"\r\n");
+}
+
+pub fn uart_puthex_u64(value: u64) {
+    uart_puts(b"0x");
+    for shift in (0..64).step_by(4).rev() {
+        let nibble = ((value >> shift) & 0x0f) as u8;
+        let ascii = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + (nibble - 10)
+        };
+        sel4::debug_put_char_raw(ascii);
+    }
 }
 
 fn emit_ep(payload: &[u8]) -> Result<(), ()> {

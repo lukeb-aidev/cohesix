@@ -10,7 +10,7 @@ use sel4_sys::{seL4_BootInfo, seL4_Word};
 use spin::Once;
 
 use crate::bootinfo_layout::{post_canary_offset, POST_CANARY_BYTES};
-use crate::bootstrap::log::force_uart_line;
+use crate::bootstrap::log::{force_uart_line, uart_puthex_u64, uart_putnl, uart_puts};
 use crate::sel4::{BootInfo, BootInfoError, BootInfoView, IPC_PAGE_BYTES};
 
 const MAX_CANARY_LINE: usize = 192;
@@ -410,6 +410,7 @@ impl BootInfoState {
     }
 
     pub fn probe(&self, mark: &'static str) -> Result<(), BootInfoError> {
+        self.check_canaries("probe", mark);
         let (pre, post, exp_pre, exp_post) = self.canary_state();
         let mut line = String::<MAX_CANARY_LINE>::new();
         let _ = fmt::write(
@@ -421,11 +422,6 @@ impl BootInfoState {
         );
         force_uart_line(line.as_str());
 
-        if self.canary_ok() {
-            return Ok(());
-        }
-
-        self.check_canaries("probe", mark);
         Ok(())
     }
 
@@ -435,35 +431,15 @@ impl BootInfoState {
             return;
         }
 
-        let mut line = String::<MAX_CANARY_LINE>::new();
-        let _ = core::fmt::write(
-            &mut line,
-            format_args!(
-                "BOOTINFO_SNAPSHOT_CORRUPTED phase={phase} last_mark={last_mark} pre=0x{pre:016x} post=0x{post:016x} expected_pre=0x{exp_pre:016x} expected_post=0x{exp_post:016x}",
-                exp_pre = BOOTINFO_CANARY_PRE,
-                exp_post = BOOTINFO_CANARY_POST,
-            ),
+        emit_corruption_report(
+            phase,
+            last_mark,
+            pre,
+            post,
+            BOOTINFO_CANARY_PRE,
+            BOOTINFO_CANARY_POST,
         );
-        force_uart_line(line.as_str());
-        panic!("{}", line.as_str());
-    }
-
-    fn format_panic_line(
-        &self,
-        mark: &str,
-        observed: &BootInfoSnapshot,
-    ) -> String<MAX_CANARY_LINE> {
-        let mut line = String::<MAX_CANARY_LINE>::new();
-        let _ = core::fmt::write(
-            &mut line,
-            format_args!(
-                "[bootinfo:canary] {mark} diverged: expected checksum=0x{exp:016x} observed=0x{obs:016x} checks={checks}",
-                exp = self.snapshot.checksum,
-                obs = observed.checksum,
-                checks = self.check_count.load(Ordering::Relaxed)
-            ),
-        );
-        line
+        panic!("BOOTINFO_SNAPSHOT_CORRUPTED");
     }
 
     pub fn verify(
@@ -472,20 +448,24 @@ impl BootInfoState {
         mark: &'static str,
     ) -> Result<(), BootInfoCanaryError> {
         self.check_canaries(phase, mark);
-        let observed = BootInfoSnapshot::from_view(&self.view).map_err(|err| {
-            BootInfoCanaryError::Snapshot {
-                mark,
-                error: err.into(),
+        let observed = match BootInfoSnapshot::from_view(&self.view) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                let (pre, post, exp_pre, exp_post) = self.canary_state();
+                emit_corruption_report(phase, mark, pre, post, exp_pre, exp_post);
+                return Err(BootInfoCanaryError::Snapshot {
+                    mark,
+                    error: err.into(),
+                });
             }
-        })?;
+        };
         self.check_count.fetch_add(1, Ordering::AcqRel);
         if self.snapshot.matches(&observed) {
             return Ok(());
         }
 
-        let panic_line = self.format_panic_line(mark, &observed);
-        force_uart_line(panic_line.as_str());
-        log::error!("{}", panic_line.as_str());
+        let (pre, post, exp_pre, exp_post) = self.canary_state();
+        emit_corruption_report(phase, mark, pre, post, exp_pre, exp_post);
 
         Err(BootInfoCanaryError::Diverged {
             mark,
@@ -493,6 +473,33 @@ impl BootInfoState {
             observed,
         })
     }
+}
+
+pub(crate) fn emit_corruption_report(
+    phase: &str,
+    last_mark: &str,
+    pre: u64,
+    post: u64,
+    expected_pre: u64,
+    expected_post: u64,
+) {
+    uart_puts(b"BOOTINFO_SNAPSHOT_CORRUPTED");
+    uart_putnl();
+    uart_puts(b"phase=");
+    uart_puts(phase.as_bytes());
+    uart_putnl();
+    uart_puts(b"last_mark=");
+    uart_puts(last_mark.as_bytes());
+    uart_putnl();
+    uart_puts(b"pre=");
+    uart_puthex_u64(pre);
+    uart_puts(b" post=");
+    uart_puthex_u64(post);
+    uart_puts(b" expected_pre=");
+    uart_puthex_u64(expected_pre);
+    uart_puts(b" expected_post=");
+    uart_puthex_u64(expected_post);
+    uart_putnl();
 }
 
 #[cfg(test)]

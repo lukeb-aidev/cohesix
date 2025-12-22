@@ -209,6 +209,9 @@ fn forensics_frozen() -> bool {
 
 fn bootinfo_probe(mark: &'static str) {
     if let Some(state) = BootInfoState::get() {
+        if let Err(_err) = state.verify("net.mmio", mark) {
+            panic!("BOOTINFO_SNAPSHOT_CORRUPTED");
+        }
         let region = state.snapshot_region();
         let (pre, post) = state.canary_values();
         info!(
@@ -218,9 +221,6 @@ fn bootinfo_probe(mark: &'static str) {
             end = region.end,
             len = region.end.saturating_sub(region.start),
         );
-        if let Err(err) = state.verify("net.mmio", mark) {
-            panic!("bootinfo snapshot corrupted at {mark}: {err:?}");
-        }
     }
 }
 
