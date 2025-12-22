@@ -45,9 +45,6 @@ use super::{
     DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
 };
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
-#[cfg(not(feature = "net-backend-virtio"))]
-use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
-#[cfg(feature = "net-backend-virtio")]
 use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNet};
 use crate::hal::{HalError, Hardware};
 use crate::readiness;
@@ -88,15 +85,8 @@ const NET_INIT_TAG: &str = "net-console:init";
 #[cfg(any(feature = "bootstrap-trace", debug_assertions))]
 static STORAGE_ADDRESS_LOGGED: AtomicBool = AtomicBool::new(false);
 
-#[cfg(feature = "net-backend-virtio")]
 type DefaultNetDevice = VirtioNet;
-#[cfg(feature = "net-backend-virtio")]
 type DefaultDriverError = VirtioDriverError;
-
-#[cfg(not(feature = "net-backend-virtio"))]
-type DefaultNetDevice = Rtl8139Device;
-#[cfg(not(feature = "net-backend-virtio"))]
-type DefaultDriverError = Rtl8139DriverError;
 
 pub type DefaultNetStack = NetStack<DefaultNetDevice>;
 pub type DefaultNetStackError = NetStackError<DefaultDriverError>;

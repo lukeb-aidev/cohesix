@@ -244,10 +244,7 @@ pub trait NetDriverError: core::fmt::Display + core::fmt::Debug {
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NetBackend {
-    /// RTL8139 PCI NIC exposed by QEMU `virt`.
-    Rtl8139,
-    /// Virtio MMIO NIC (kept for experiments and debugging).
-    #[cfg(feature = "net-backend-virtio")]
+    /// Virtio MMIO NIC.
     Virtio,
 }
 
@@ -256,27 +253,13 @@ impl NetBackend {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Rtl8139 => "rtl8139",
-            #[cfg(feature = "net-backend-virtio")]
             Self::Virtio => "virtio-net",
         }
     }
 }
 
 /// Default NIC backend used for developer QEMU runs.
-#[cfg(all(
-    feature = "kernel",
-    feature = "net-console",
-    not(feature = "net-backend-virtio")
-))]
-pub const DEFAULT_NET_BACKEND: NetBackend = NetBackend::Rtl8139;
-
-/// Experimental virtio-net backend used only when explicitly selected.
-#[cfg(all(
-    feature = "kernel",
-    feature = "net-console",
-    feature = "net-backend-virtio"
-))]
+#[cfg(all(feature = "kernel", feature = "net-console"))]
 pub const DEFAULT_NET_BACKEND: NetBackend = NetBackend::Virtio;
 
 /// Networking integration exposed to the pump when the `net` feature is enabled.

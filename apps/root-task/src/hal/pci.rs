@@ -96,8 +96,8 @@ mod tests {
     fn sample_device() -> PciDeviceInfo {
         PciDeviceInfo {
             addr: PciAddress::new(0, 0, 1, 0),
-            vendor_id: 0x10ec,
-            device_id: 0x8139,
+            vendor_id: 0x1234,
+            device_id: 0x5678,
             class_code: 0x02,
             subclass: 0x00,
             prog_if: 0x00,
@@ -124,7 +124,7 @@ mod tests {
             devices: core::slice::from_ref(&device),
         };
 
-        let found = topology.find_by_vendor_device(0x10ec, 0x8139);
+        let found = topology.find_by_vendor_device(0x1234, 0x5678);
         assert!(found.is_some());
         let dev = found.unwrap();
         assert_eq!(dev.addr.bus, 0);

@@ -2819,8 +2819,10 @@ fn bootstrap<P: Platform>(
         check_bootinfo(&mut boot_guard, "[mark] net.init.pre");
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let net_backend_label = DEFAULT_NET_BACKEND.label();
+        #[cfg(not(all(feature = "net-console", feature = "kernel")))]
+        let net_backend_label = "none";
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let (net_stack, virtio_present, net_init_error) = {
+        let (net_stack, net_init_error) = {
             use crate::net::{init_net_console, NetConsoleError};
 
             if !sel4::ep_ready() || !sel4::ep_validated() {
@@ -2839,7 +2841,7 @@ fn bootstrap<P: Platform>(
                             write!(ok_line, "[net-console] ready ip={ip} port={port} mac={mac}");
                         boot_log::force_uart_line(ok_line.as_str());
                         boot_guard.record_invariant("net-console.ready");
-                        (Some(stack), cfg!(feature = "net-backend-virtio"), None)
+                        (Some(stack), None)
                     }
                     Err(err) => {
                         let (reason, err_code) = match err {
@@ -2856,11 +2858,9 @@ fn bootstrap<P: Platform>(
                         );
                         boot_log::force_uart_line(fail_line.as_str());
                         log::warn!("{} detail={err}", fail_line.as_str());
-                        let virtio_present = cfg!(feature = "net-backend-virtio")
-                            && !matches!(err, NetConsoleError::NoDevice);
                         let mut detail = heapless::String::<192>::new();
                         let _ = write!(detail, "{err}");
-                        (None, virtio_present, Some(detail))
+                        (None, Some(detail))
                     }
                 }
             }
@@ -3003,11 +3003,6 @@ fn bootstrap<P: Platform>(
             boot_log::force_uart_line("[console] serial fallback unavailable");
         }
         crate::bootstrap::run_minimal(bootinfo_ref);
-        #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let virtio_present_flag = virtio_present;
-        #[cfg(not(all(feature = "net-console", feature = "kernel")))]
-        let virtio_present_flag = false;
-
         let features = BootFeatures {
             serial_console: cfg!(feature = "serial-console") && serial.is_some(),
             net: net_stack.is_some(),
@@ -3016,8 +3011,8 @@ fn bootstrap<P: Platform>(
 
         log::info!(
             target: "boot",
-            "[boot] net init: virtio_present={} net={} net_console={}",
-            virtio_present_flag,
+            "[boot] net init: backend={} net={} net_console={}",
+            net_backend_label,
             features.net,
             features.net_console,
         );
