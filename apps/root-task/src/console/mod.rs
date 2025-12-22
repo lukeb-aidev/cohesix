@@ -62,6 +62,7 @@ pub enum Command {
     Quit,
     NetTest,
     NetStats,
+    NetDump,
     Spawn(String<MAX_JSON_LEN>),
     Kill(String<MAX_ID_LEN>),
 }
@@ -300,7 +301,7 @@ impl CohesixConsole {
             Command::Ping => self.emit_line("pong"),
             Command::Quit => self.emit_line("quit not supported on root console"),
             Command::Log => self.emit_line("log streaming unavailable"),
-            Command::NetTest | Command::NetStats => {
+            Command::NetTest | Command::NetStats | Command::NetDump => {
                 self.emit_line("network commands not available on root console")
             }
             Command::Attach { .. }
@@ -445,6 +446,7 @@ impl CommandParser {
             v if v.eq_ignore_ascii_case("ping") => Ok(Command::Ping),
             v if v.eq_ignore_ascii_case("nettest") => Ok(Command::NetTest),
             v if v.eq_ignore_ascii_case("netstats") => Ok(Command::NetStats),
+            v if v.eq_ignore_ascii_case("netdump") => Ok(Command::NetDump),
             v if v.eq_ignore_ascii_case("log") => Ok(Command::Log),
             v if v.eq_ignore_ascii_case("quit") => Ok(Command::Quit),
             v if v.eq_ignore_ascii_case("tail") => {
@@ -570,5 +572,10 @@ mod tests {
     #[test]
     fn netstats_command_parses() {
         assert_eq!(parse("netstats\n").unwrap(), Command::NetStats);
+    }
+
+    #[test]
+    fn netdump_command_parses() {
+        assert_eq!(parse("netdump\n").unwrap(), Command::NetDump);
     }
 }

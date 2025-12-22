@@ -706,6 +706,7 @@ where
         self.emit_console_line("  ping  - Respond with pong");
         self.emit_console_line("  nettest  - Run network self-test (dev-virt)");
         self.emit_console_line("  netstats - Show network counters");
+        self.emit_console_line("  netdump - Dump network forensics");
         self.emit_console_line("  quit  - Exit the console session");
     }
 
@@ -1046,6 +1047,24 @@ where
                     self.emit_ack_err("NETSTATS", Some("reason=net-disabled"));
                 }
             }
+            Command::NetDump => {
+                #[cfg(feature = "net-console")]
+                {
+                    if let Some(net) = self.net.as_mut() {
+                        net.debug_dump();
+                        self.metrics.accepted_commands += 1;
+                        self.emit_ack_ok("NETDUMP", None);
+                    } else {
+                        self.metrics.denied_commands += 1;
+                        self.emit_ack_err("NETDUMP", Some("reason=net-disabled"));
+                    }
+                }
+                #[cfg(not(feature = "net-console"))]
+                {
+                    self.metrics.denied_commands += 1;
+                    self.emit_ack_err("NETDUMP", Some("reason=net-disabled"));
+                }
+            }
             Command::Quit => {
                 self.audit.info("console: quit");
                 self.metrics.accepted_commands += 1;
@@ -1190,7 +1209,8 @@ where
             | Command::Mem
             | Command::Ping
             | Command::NetTest
-            | Command::NetStats => {
+            | Command::NetStats
+            | Command::NetDump => {
                 return Err(CommandDispatchError::UnsupportedForNineDoor { verb });
             }
         }
@@ -1380,6 +1400,7 @@ pub(crate) enum CommandVerb {
     Ping,
     NetTest,
     NetStats,
+    NetDump,
 }
 
 #[cfg(feature = "kernel")]
@@ -1399,6 +1420,7 @@ impl CommandVerb {
             Self::Ping => "PING",
             Self::NetTest => "NETTEST",
             Self::NetStats => "NETSTATS",
+            Self::NetDump => "NETDUMP",
         }
     }
 }
@@ -1420,6 +1442,7 @@ impl From<&Command> for CommandVerb {
             Command::Ping => Self::Ping,
             Command::NetTest => Self::NetTest,
             Command::NetStats => Self::NetStats,
+            Command::NetDump => Self::NetDump,
         }
     }
 }

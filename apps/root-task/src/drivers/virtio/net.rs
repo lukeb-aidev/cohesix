@@ -11,7 +11,7 @@ use core::arch::asm;
 use core::fmt::{self, Write as FmtWrite};
 use core::ptr::read_unaligned;
 use core::ptr::{read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{compiler_fence, fence, AtomicBool, Ordering as AtomicOrdering};
+use core::sync::atomic::{compiler_fence, fence, AtomicBool, AtomicU32, Ordering as AtomicOrdering};
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, warn};
@@ -29,6 +29,8 @@ use crate::sel4::{seL4_CapInitThreadVSpace, DeviceFrame, RamFrame};
 const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
 const NET_VIRTIO_TX_V2: bool = cfg!(feature = "net-virtio-tx-v2");
+const VIRTIO_DMA_OVERKILL: bool = true;
+const VIRTIO_DMA_OVERKILL_RING_EVERY: u32 = 256;
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -75,6 +77,7 @@ const MAX_QUEUE_SIZE: usize = if RX_QUEUE_SIZE > TX_QUEUE_SIZE {
 const VIRTIO_NET_HEADER_LEN_BASIC: usize = core::mem::size_of::<VirtioNetHdr>();
 const VIRTIO_NET_HEADER_LEN_MRG: usize = core::mem::size_of::<VirtioNetHdrMrgRxbuf>();
 const FRAME_BUFFER_LEN: usize = MAX_FRAME_LEN + VIRTIO_NET_HEADER_LEN_MRG;
+const VIRTIO_CACHELINE_BYTES: usize = 64;
 static LOG_TCP_DEST_PORT: AtomicBool = AtomicBool::new(true);
 static RX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -93,6 +96,50 @@ static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
 static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
+static DMA_OVERKILL_LOGGED: AtomicBool = AtomicBool::new(false);
+
+const RL_TAGS: usize = 10;
+static RL_COUNTERS: [AtomicU32; RL_TAGS] = [const { AtomicU32::new(0) }; RL_TAGS];
+
+#[derive(Clone, Copy, Debug)]
+enum RlTag {
+    TxNotify,
+    TxPublish,
+    TxPoll,
+    MmioReadback,
+    DescRaw,
+    Overkill,
+    UsedZero,
+    QueueRanges,
+    NetDump,
+    AvailScan,
+}
+
+impl RlTag {
+    const fn idx(self) -> usize {
+        match self {
+            Self::TxNotify => 0,
+            Self::TxPublish => 1,
+            Self::TxPoll => 2,
+            Self::MmioReadback => 3,
+            Self::DescRaw => 4,
+            Self::Overkill => 5,
+            Self::UsedZero => 6,
+            Self::QueueRanges => 7,
+            Self::NetDump => 8,
+            Self::AvailScan => 9,
+        }
+    }
+}
+
+fn rl(tag: RlTag, every: u32) -> bool {
+    if every == 0 {
+        return false;
+    }
+    let idx = tag.idx();
+    let count = RL_COUNTERS[idx].fetch_add(1, AtomicOrdering::Relaxed);
+    count % every == 0
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TxState {
@@ -373,6 +420,16 @@ pub struct VirtioNet {
     tx_v2_gen_counter: u32,
     tx_v2_gen: [u32; TX_QUEUE_SIZE],
     tx_v2_len: [u32; TX_QUEUE_SIZE],
+    tx_v2_last_published_seq: [u32; TX_QUEUE_SIZE],
+    tx_v2_last_used_seq: [u32; TX_QUEUE_SIZE],
+    tx_v2_publish_seq: u32,
+    tx_v2_recent_head: [u16; 16],
+    tx_v2_recent_len: [u32; 16],
+    tx_v2_recent_seq: [u32; 16],
+    tx_v2_last_published_head: u16,
+    tx_v2_last_published_len: u32,
+    tx_v2_last_published_seq: u32,
+    tx_v2_used_zero_streak: u8,
     tx_states: [TxState; TX_QUEUE_SIZE],
     dma_cacheable: bool,
     tx_in_flight: u16,
@@ -428,6 +485,8 @@ pub struct VirtioNet {
     tx_complete: u64,
     tx_v2_log_ms: u64,
     tx_v2_used_zero_log_ms: u64,
+    mmio_dumped_init: bool,
+    mmio_dumped_tx_first: bool,
     forensic_dump_captured: bool,
 }
 
@@ -768,6 +827,16 @@ impl VirtioNet {
             tx_v2_gen_counter: 1,
             tx_v2_gen: [0; TX_QUEUE_SIZE],
             tx_v2_len: [0; TX_QUEUE_SIZE],
+            tx_v2_last_published_seq: [0; TX_QUEUE_SIZE],
+            tx_v2_last_used_seq: [0; TX_QUEUE_SIZE],
+            tx_v2_publish_seq: 1,
+            tx_v2_recent_head: [0; 16],
+            tx_v2_recent_len: [0; 16],
+            tx_v2_recent_seq: [0; 16],
+            tx_v2_last_published_head: 0,
+            tx_v2_last_published_len: 0,
+            tx_v2_last_published_seq: 0,
+            tx_v2_used_zero_streak: 0,
             tx_states: [TxState::Free; TX_QUEUE_SIZE],
             tx_in_flight: 0,
             tx_gen: 1,
@@ -823,9 +892,13 @@ impl VirtioNet {
             tx_complete: 0,
             tx_v2_log_ms: now_ms,
             tx_v2_used_zero_log_ms: now_ms,
+            mmio_dumped_init: false,
+            mmio_dumped_tx_first: false,
             forensic_dump_captured: false,
         };
         driver.initialise_queues();
+        driver.log_mmio_state_once("init");
+        driver.check_queue_ranges_and_fingerprint();
 
         let queue0_pfn = driver.rx_queue.pfn;
         let queue1_pfn = driver.tx_queue.pfn;
@@ -912,6 +985,210 @@ impl VirtioNet {
             self.rx_used_count,
             self.rx_poll_count,
         );
+    }
+
+    pub fn debug_dump_forensics(&mut self) {
+        self.log_mmio_state("netdump", false);
+        self.dump_tx_window_small();
+        self.dump_tx_used_window_small();
+        self.dump_rx_window_small();
+        if NET_VIRTIO_TX_V2 {
+            self.dump_tx_v2_states_compact();
+        }
+    }
+
+    fn log_mmio_state_once(&mut self, reason: &'static str) {
+        if reason == "init" && self.mmio_dumped_init {
+            return;
+        }
+        if reason == "first_tx" && self.mmio_dumped_tx_first {
+            return;
+        }
+        self.log_mmio_state(reason, true);
+        if reason == "init" {
+            self.mmio_dumped_init = true;
+        }
+        if reason == "first_tx" {
+            self.mmio_dumped_tx_first = true;
+        }
+    }
+
+    fn log_mmio_state(&mut self, reason: &'static str, check_mismatch: bool) {
+        if !rl(RlTag::MmioReadback, 1) && reason == "notify" {
+            return;
+        }
+        let rx = self.regs.read_queue_state(RX_QUEUE_INDEX);
+        let tx = self.regs.read_queue_state(TX_QUEUE_INDEX);
+        let rx_expected_desc = self.rx_queue.base_paddr as u64 + self.rx_queue.layout.desc_offset as u64;
+        let rx_expected_avail = self.rx_queue.base_paddr as u64 + self.rx_queue.layout.avail_offset as u64;
+        let rx_expected_used = self.rx_queue.base_paddr as u64 + self.rx_queue.layout.used_offset as u64;
+        let tx_expected_desc = self.tx_queue.base_paddr as u64 + self.tx_queue.layout.desc_offset as u64;
+        let tx_expected_avail = self.tx_queue.base_paddr as u64 + self.tx_queue.layout.avail_offset as u64;
+        let tx_expected_used = self.tx_queue.base_paddr as u64 + self.tx_queue.layout.used_offset as u64;
+
+        info!(
+            target: "virtio-forensics",
+            "[virtio-forensics] mmio {reason} queue=RX mode={:?} sel={} size={} ready={} desc=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) avail=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) used=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) expected desc=0x{:016x} avail=0x{:016x} used=0x{:016x} align={} pfn=0x{:08x}",
+            self.mmio_mode,
+            rx.sel,
+            rx.size,
+            rx.ready,
+            rx.desc_addr(),
+            rx.desc_hi,
+            rx.desc_lo,
+            rx.driver_addr(),
+            rx.driver_hi,
+            rx.driver_lo,
+            rx.device_addr(),
+            rx.device_hi,
+            rx.device_lo,
+            rx_expected_desc,
+            rx_expected_avail,
+            rx_expected_used,
+            rx.align,
+            rx.pfn,
+        );
+        info!(
+            target: "virtio-forensics",
+            "[virtio-forensics] mmio {reason} queue=TX mode={:?} sel={} size={} ready={} desc=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) avail=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) used=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) expected desc=0x{:016x} avail=0x{:016x} used=0x{:016x} align={} pfn=0x{:08x}",
+            self.mmio_mode,
+            tx.sel,
+            tx.size,
+            tx.ready,
+            tx.desc_addr(),
+            tx.desc_hi,
+            tx.desc_lo,
+            tx.driver_addr(),
+            tx.driver_hi,
+            tx.driver_lo,
+            tx.device_addr(),
+            tx.device_hi,
+            tx.device_lo,
+            tx_expected_desc,
+            tx_expected_avail,
+            tx_expected_used,
+            tx.align,
+            tx.pfn,
+        );
+
+        if check_mismatch && matches!(self.mmio_mode, VirtioMmioMode::Modern) {
+            let rx_mismatch = rx.desc_addr() != rx_expected_desc
+                || rx.driver_addr() != rx_expected_avail
+                || rx.device_addr() != rx_expected_used;
+            let tx_mismatch = tx.desc_addr() != tx_expected_desc
+                || tx.driver_addr() != tx_expected_avail
+                || tx.device_addr() != tx_expected_used;
+            if rx_mismatch || tx_mismatch {
+                self.freeze_and_capture("mmio_queue_addr_mismatch");
+            }
+        }
+    }
+
+    fn notify_queue(&mut self, queue: u32, label: &'static str) {
+        let sel = self.regs.queue_sel();
+        let expected = if label == "TX" { TX_QUEUE_INDEX } else { RX_QUEUE_INDEX };
+        if label == "TX" && queue != expected {
+            warn!(
+                target: "virtio-forensics",
+                "[virtio-forensics] notify mismatch label={} expected_qidx={} actual_qidx={} sel={}",
+                label,
+                expected,
+                queue,
+                sel,
+            );
+            self.freeze_and_capture("notify_wrong_queue");
+            return;
+        }
+        if rl(RlTag::TxNotify, 256) {
+            let (rx_used_idx, rx_avail_idx) = self.rx_queue.indices();
+            let (tx_used_idx, tx_avail_idx) = self.tx_queue.indices();
+            info!(
+                target: "virtio-forensics",
+                "[virtio-forensics] notify label={} qidx={} sel={} rx(desc=0x{:016x} avail=0x{:016x} used=0x{:016x} size={}) tx(desc=0x{:016x} avail=0x{:016x} used=0x{:016x} size={}) rx_idx(a/u/l)=({}/{}/{}) tx_idx(a/u/l)=({}/{}/{})",
+                label,
+                queue,
+                sel,
+                self.rx_queue.base_paddr + self.rx_queue.layout.desc_offset,
+                self.rx_queue.base_paddr + self.rx_queue.layout.avail_offset,
+                self.rx_queue.base_paddr + self.rx_queue.layout.used_offset,
+                self.rx_queue.size,
+                self.tx_queue.base_paddr + self.tx_queue.layout.desc_offset,
+                self.tx_queue.base_paddr + self.tx_queue.layout.avail_offset,
+                self.tx_queue.base_paddr + self.tx_queue.layout.used_offset,
+                self.tx_queue.size,
+                rx_avail_idx,
+                rx_used_idx,
+                self.rx_queue.last_used,
+                tx_avail_idx,
+                tx_used_idx,
+                self.tx_queue.last_used,
+            );
+        }
+        if label == "TX" && rl(RlTag::MmioReadback, 256) {
+            self.log_mmio_state("notify", false);
+        }
+        if label == "RX" {
+            self.rx_queue.notify(&mut self.regs, queue);
+        } else {
+            self.tx_queue.notify(&mut self.regs, queue);
+        }
+    }
+
+    fn check_queue_ranges_and_fingerprint(&mut self) {
+        let rx_desc_start = self.rx_queue.base_paddr + self.rx_queue.layout.desc_offset;
+        let rx_desc_end = rx_desc_start + self.rx_queue.layout.desc_len;
+        let rx_avail_start = self.rx_queue.base_paddr + self.rx_queue.layout.avail_offset;
+        let rx_avail_end = rx_avail_start + self.rx_queue.layout.avail_len;
+        let rx_used_start = self.rx_queue.base_paddr + self.rx_queue.layout.used_offset;
+        let rx_used_end = rx_used_start + self.rx_queue.layout.used_len;
+
+        let tx_desc_start = self.tx_queue.base_paddr + self.tx_queue.layout.desc_offset;
+        let tx_desc_end = tx_desc_start + self.tx_queue.layout.desc_len;
+        let tx_avail_start = self.tx_queue.base_paddr + self.tx_queue.layout.avail_offset;
+        let tx_avail_end = tx_avail_start + self.tx_queue.layout.avail_len;
+        let tx_used_start = self.tx_queue.base_paddr + self.tx_queue.layout.used_offset;
+        let tx_used_end = tx_used_start + self.tx_queue.layout.used_len;
+
+        if rl(RlTag::QueueRanges, 1) {
+            info!(
+                target: "virtio-forensics",
+                "[virtio-forensics] queue ranges rx desc=0x{:x}..0x{:x} avail=0x{:x}..0x{:x} used=0x{:x}..0x{:x} | tx desc=0x{:x}..0x{:x} avail=0x{:x}..0x{:x} used=0x{:x}..0x{:x}",
+                rx_desc_start,
+                rx_desc_end,
+                rx_avail_start,
+                rx_avail_end,
+                rx_used_start,
+                rx_used_end,
+                tx_desc_start,
+                tx_desc_end,
+                tx_avail_start,
+                tx_avail_end,
+                tx_used_start,
+                tx_used_end,
+            );
+        }
+
+        let rx_total_start = rx_desc_start;
+        let rx_total_end = rx_used_end;
+        let tx_total_start = tx_desc_start;
+        let tx_total_end = tx_used_end;
+        if ranges_overlap(rx_total_start, rx_total_end, tx_total_start, tx_total_end) {
+            self.freeze_and_capture("queue_range_overlap");
+        }
+
+        let rx_fp = desc_fingerprint(&self.rx_queue);
+        let tx_fp = desc_fingerprint(&self.tx_queue);
+        info!(
+            target: "virtio-forensics",
+            "[virtio-forensics] queue fingerprint rx=0x{:016x} tx=0x{:016x} rx_base=0x{:x} tx_base=0x{:x}",
+            rx_fp,
+            tx_fp,
+            self.rx_queue.base_paddr,
+            self.tx_queue.base_paddr,
+        );
+        if self.rx_queue.base_paddr == self.tx_queue.base_paddr && rx_fp == tx_fp {
+            self.freeze_and_capture("queue_base_collision");
+        }
     }
 
     fn log_zero_len_enqueue(
@@ -1161,6 +1438,59 @@ impl VirtioNet {
         }
     }
 
+    fn dump_tx_window_small(&self) {
+        let qsize = usize::from(self.tx_queue.size);
+        if qsize == 0 {
+            return;
+        }
+        let avail = self.tx_queue.avail.as_ptr();
+        let avail_idx = unsafe { read_volatile(&(*avail).idx) };
+        let window = core::cmp::min(qsize, 8);
+        let start = avail_idx.wrapping_sub(window as u16);
+        for offset in 0..window {
+            let slot_idx = start.wrapping_add(offset as u16);
+            let ring_slot = (slot_idx as usize) % qsize;
+            let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
+            let head = unsafe { read_volatile(ring_ptr) };
+            let desc = self.tx_queue.read_descriptor(head);
+            info!(
+                target: "virtio-forensics",
+                "[virtio-forensics] tx avail[{ring_slot}] head={head} desc.addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}",
+                addr = desc.addr,
+                len = desc.len,
+                flags = desc.flags,
+                next = desc.next,
+            );
+        }
+    }
+
+    fn dump_tx_used_window_small(&self) {
+        let qsize = usize::from(self.tx_queue.size);
+        if qsize == 0 {
+            return;
+        }
+        let used = self.tx_queue.used.as_ptr();
+        self.tx_queue.invalidate_used_header_for_cpu();
+        let used_idx = unsafe { read_volatile(&(*used).idx) };
+        let last_used = self.tx_queue.last_used;
+        let window = core::cmp::min(qsize, 8);
+        let start = last_used.wrapping_sub(window as u16 / 2);
+        for offset in 0..window {
+            let slot_idx = start.wrapping_add(offset as u16);
+            let ring_slot = (slot_idx as usize) % qsize;
+            let ring_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
+            self.tx_queue.invalidate_used_elem_for_cpu(ring_slot);
+            let elem = unsafe { read_volatile(ring_ptr) };
+            info!(
+                target: "virtio-forensics",
+                "[virtio-forensics] tx used[{ring_slot}] id={} len={} used.idx={}",
+                elem.id,
+                elem.len,
+                used_idx,
+            );
+        }
+    }
+
     fn dump_tx_states(&self) {
         let mut free = 0usize;
         let mut posted = HeaplessVec::<(usize, u32, u64, u32), TX_QUEUE_SIZE>::new();
@@ -1207,11 +1537,16 @@ impl VirtioNet {
             }
             info!(
                 target: "net-console",
-                "[virtio-net][forensics] tx-v2 state id={} state={:?} gen={} len={}",
+                "[virtio-net][forensics] tx-v2 state id={} state={:?} gen={} len={} pub_seq={} used_seq={}",
                 idx,
                 state,
                 self.tx_v2_gen.get(idx as usize).copied().unwrap_or(0),
                 self.tx_v2_len.get(idx as usize).copied().unwrap_or(0),
+                self.tx_v2_last_published_seq
+                    .get(idx as usize)
+                    .copied()
+                    .unwrap_or(0),
+                self.tx_v2_last_used_seq.get(idx as usize).copied().unwrap_or(0),
             );
         }
         let sample_len = core::cmp::min(self.tx_v2_free.len(), 8);
@@ -1260,6 +1595,69 @@ impl VirtioNet {
                 len = desc.len,
                 flags = desc.flags,
                 next = desc.next,
+            );
+        }
+    }
+
+    fn dump_rx_window_small(&self) {
+        let qsize = usize::from(self.rx_queue.size);
+        if qsize == 0 {
+            return;
+        }
+        let avail = self.rx_queue.avail.as_ptr();
+        let avail_idx = unsafe { read_volatile(&(*avail).idx) };
+        let window = core::cmp::min(qsize, 8);
+        let start = avail_idx.wrapping_sub(window as u16);
+        for offset in 0..window {
+            let slot_idx = start.wrapping_add(offset as u16);
+            let ring_slot = (slot_idx as usize) % qsize;
+            let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
+            let head = unsafe { read_volatile(ring_ptr) };
+            let desc = self.rx_queue.read_descriptor(head);
+            info!(
+                target: "virtio-forensics",
+                "[virtio-forensics] rx avail[{ring_slot}] head={head} desc.addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}",
+                addr = desc.addr,
+                len = desc.len,
+                flags = desc.flags,
+                next = desc.next,
+            );
+        }
+    }
+
+    fn dump_tx_v2_states_compact(&self) {
+        let qsize = usize::from(self.tx_queue.size);
+        let mut posted = 0usize;
+        for idx in 0..qsize {
+            if self.tx_v2_state[idx] == TxV2State::Posted {
+                posted += 1;
+            }
+        }
+        info!(
+            target: "virtio-forensics",
+            "[virtio-forensics] tx-v2 state summary free={} posted={} last_pub(head={},len={},seq={})",
+            self.tx_v2_free.len(),
+            posted,
+            self.tx_v2_last_published_head,
+            self.tx_v2_last_published_len,
+            self.tx_v2_last_published_seq,
+        );
+        let sample_len = core::cmp::min(qsize, 8);
+        for idx in 0..sample_len {
+            let state = self.tx_v2_state[idx];
+            let gen = self.tx_v2_gen[idx];
+            let len = self.tx_v2_len[idx];
+            let pub_seq = self.tx_v2_last_published_seq[idx];
+            let used_seq = self.tx_v2_last_used_seq[idx];
+            info!(
+                target: "virtio-forensics",
+                "[virtio-forensics] tx-v2 id={} state={:?} gen={} len={} pub_seq={} used_seq={}",
+                idx,
+                state,
+                gen,
+                len,
+                pub_seq,
+                used_seq,
             );
         }
     }
@@ -1800,7 +2198,7 @@ impl VirtioNet {
             );
         }
         if notify && !self.device_faulted {
-            self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
+            self.notify_queue(RX_QUEUE_INDEX, "RX");
         }
         Ok(())
     }
@@ -2003,7 +2401,7 @@ impl VirtioNet {
             );
         }
         if notify && !self.device_faulted {
-            self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
+            self.notify_queue(TX_QUEUE_INDEX, "TX");
             if log_breadcrumb {
                 debug!(
                     target: "virtio-net",
@@ -2352,6 +2750,12 @@ impl VirtioNet {
                         self.tx_v2_len.get(id as usize).copied().unwrap_or(0),
                     );
                 }
+                self.tx_v2_used_zero_streak = self.tx_v2_used_zero_streak.saturating_add(1);
+                if self.tx_v2_used_zero_streak >= 8 && rl(RlTag::UsedZero, 8) {
+                    self.log_tx_v2_zero_len_snapshot(id);
+                }
+            } else {
+                self.tx_v2_used_zero_streak = 0;
             }
             if !self.tx_v2_mark_free(id) {
                 break;
@@ -2409,6 +2813,29 @@ impl VirtioNet {
         );
     }
 
+    fn log_tx_v2_zero_len_snapshot(&mut self, id: u16) {
+        let status = self.regs.status();
+        let isr = self.regs.isr_status();
+        let (used_idx, avail_idx) = self.tx_queue.indices();
+        let in_flight = self.tx_v2_in_flight_count();
+        let free = self.tx_v2_free.len();
+        info!(
+            target: "virtio-forensics",
+            "[virtio-forensics] tx-v2 used.len==0 snapshot id={} status=0x{:02x} isr=0x{:02x} avail.idx={} used.idx={} last_used={} free={} in_flight={} last_pub(head={},len={},seq={})",
+            id,
+            status,
+            isr,
+            avail_idx,
+            used_idx,
+            self.tx_queue.last_used,
+            free,
+            in_flight,
+            self.tx_v2_last_published_head,
+            self.tx_v2_last_published_len,
+            self.tx_v2_last_published_seq,
+        );
+    }
+
     fn tx_v2_mark_posted(&mut self, id: u16, len: u32) -> bool {
         let Some(state) = self.tx_v2_state.get_mut(id as usize) else {
             self.last_error.get_or_insert("tx_v2_state_oob");
@@ -2441,19 +2868,33 @@ impl VirtioNet {
             return false;
         }
         *state = TxV2State::Free;
+        if let Some(entry) = self.tx_v2_last_used_seq.get_mut(id as usize) {
+            let last_pub = self
+                .tx_v2_last_published_seq
+                .get(id as usize)
+                .copied()
+                .unwrap_or(0);
+            *entry = last_pub;
+        }
         true
     }
 
     fn tx_v2_invariant_violation(&mut self, reason: &'static str, id: u16) {
         warn!(
             target: "net-console",
-            "[virtio-net][tx-v2] invariant violation reason={} id={} state={:?} gen={} len={}",
+            "[virtio-net][tx-v2] invariant violation reason={} id={} state={:?} gen={} len={} pub_seq={} used_seq={}",
             reason,
             id,
             self.tx_v2_state.get(id as usize).copied().unwrap_or(TxV2State::Free),
             self.tx_v2_gen.get(id as usize).copied().unwrap_or(0),
             self.tx_v2_len.get(id as usize).copied().unwrap_or(0),
+            self.tx_v2_last_published_seq
+                .get(id as usize)
+                .copied()
+                .unwrap_or(0),
+            self.tx_v2_last_used_seq.get(id as usize).copied().unwrap_or(0),
         );
+        self.log_tx_v2_recent();
         self.freeze_and_capture(reason);
     }
 
@@ -2475,6 +2916,37 @@ impl VirtioNet {
             }
         }
         false
+    }
+
+    fn log_tx_v2_recent(&self) {
+        let sample_len = core::cmp::min(self.tx_v2_free.len(), 8);
+        let mut sample = HeaplessVec::<u16, 8>::new();
+        for idx in 0..sample_len {
+            if let Some(entry) = self.tx_v2_free.get(idx).copied() {
+                let _ = sample.push(entry);
+            }
+        }
+        info!(
+            target: "virtio-forensics",
+            "[virtio-forensics] tx-v2 recent publishes free_sample={:?}",
+            sample,
+        );
+        for idx in 0..self.tx_v2_recent_head.len() {
+            let head = self.tx_v2_recent_head[idx];
+            let len = self.tx_v2_recent_len[idx];
+            let seq = self.tx_v2_recent_seq[idx];
+            if seq == 0 {
+                continue;
+            }
+            info!(
+                target: "virtio-forensics",
+                "[virtio-forensics] tx-v2 recent idx={} seq={} head={} len={}",
+                idx,
+                seq,
+                head,
+                len,
+            );
+        }
     }
 
     fn pop_rx(&mut self) -> Option<(u16, usize)> {
@@ -2778,6 +3250,7 @@ impl VirtioNet {
             self.tx_v2_invariant_violation("tx_v2_double_submit", id);
             return;
         }
+        self.log_mmio_state_once("first_tx");
 
         let Some(buffer) = self.tx_buffers.get_mut(id as usize) else {
             self.last_error.get_or_insert("tx_v2_buffer_missing");
@@ -2808,34 +3281,172 @@ impl VirtioNet {
             }
         }
 
-        if cfg!(debug_assertions) && self.tx_v2_avail_contains(id) {
-            self.tx_v2_invariant_violation("tx_v2_dup_in_avail", id);
-            return;
+        if cfg!(debug_assertions) || rl(RlTag::AvailScan, 64) {
+            if self.tx_v2_avail_contains(id) {
+                self.tx_v2_invariant_violation("tx_v2_dup_in_avail", id);
+                return;
+            }
         }
+
+        let publish_seq = self.tx_v2_publish_seq;
+        self.tx_v2_publish_seq = self.tx_v2_publish_seq.wrapping_add(1);
+        self.tx_v2_last_published_head = id;
+        self.tx_v2_last_published_len = capped_len as u32;
+        self.tx_v2_last_published_seq = publish_seq;
+        if let Some(entry) = self.tx_v2_last_published_seq.get_mut(id as usize) {
+            *entry = publish_seq;
+        }
+        let recent_idx = (publish_seq as usize) % self.tx_v2_recent_head.len();
+        self.tx_v2_recent_head[recent_idx] = id;
+        self.tx_v2_recent_len[recent_idx] = capped_len as u32;
+        self.tx_v2_recent_seq[recent_idx] = publish_seq;
 
         if !self.tx_v2_mark_posted(id, capped_len as u32) {
             return;
         }
 
-        let _range = self
+        let buffer_range = self
             .clean_tx_buffer_for_device(id, capped_len, self.tx_anomaly_logged);
         self.tx_queue
             .setup_descriptor(id, addr, capped_len as u32, 0, None);
         self.tx_queue.sync_descriptor_table_for_device();
+        if !self.log_tx_desc_raw(id) {
+            return;
+        }
+
+        let avail = self.tx_queue.avail.as_ptr();
+        let avail_idx = unsafe { read_volatile(&(*avail).idx) };
+        let ring_slot = (avail_idx as usize) % usize::from(self.tx_queue.size);
+        if rl(RlTag::DescRaw, 256) {
+            let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
+            let existing = unsafe { read_volatile(ring_ptr) };
+            info!(
+                target: "virtio-forensics",
+                "[virtio-forensics] tx avail prewrite slot={} idx={} existing_head={} avail_idx_ptr=0x{:x}",
+                ring_slot,
+                avail_idx,
+                existing,
+                (&(*avail).idx as *const u16) as usize,
+            );
+        }
         // Avail ring publish is the final step so the device never observes a
         // descriptor before buffer and descriptor cache maintenance completes.
         if let Some((slot, _avail_idx, _old_idx)) = self.tx_queue.push_avail(id) {
             self.tx_queue.sync_avail_ring_for_device();
+            self.dma_overkill_tx(id, slot, buffer_range);
             self.tx_submit = self.tx_submit.wrapping_add(1);
             if slot == 0 && !self.tx_wrap_logged {
                 self.tx_wrap_logged = true;
             }
-            self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
+            self.notify_queue(TX_QUEUE_INDEX, "TX");
         } else {
             self.tx_v2_mark_free(id);
             let _ = self.tx_v2_free.push(id);
             self.last_error.get_or_insert("tx_v2_avail_write_failed");
         }
+    }
+
+    fn log_tx_desc_raw(&mut self, head_id: u16) -> bool {
+        let desc_ptr = unsafe { self.tx_queue.desc.as_ptr().add(head_id as usize) };
+        let raw_ptr = desc_ptr as *const u8;
+        let raw_lo;
+        let raw_hi;
+        unsafe {
+            raw_lo = read_unaligned(raw_ptr as *const u64);
+            raw_hi = read_unaligned(raw_ptr.add(8) as *const u64);
+        }
+        let desc = unsafe { read_volatile(desc_ptr) };
+        if rl(RlTag::DescRaw, 256) {
+            info!(
+                target: "virtio-forensics",
+                "[virtio-forensics] tx desc raw id={} raw_lo=0x{:016x} raw_hi=0x{:016x} addr=0x{:016x} len={} flags=0x{:04x} next={}",
+                head_id,
+                raw_lo,
+                raw_hi,
+                desc.addr,
+                desc.len,
+                desc.flags,
+                desc.next,
+            );
+        }
+        if desc.addr == 0 || desc.len == 0 {
+            warn!(
+                target: "virtio-forensics",
+                "[virtio-forensics] tx desc invalid id={} addr=0x{:016x} len={}",
+                head_id,
+                desc.addr,
+                desc.len,
+            );
+            self.freeze_and_capture("tx_desc_zero");
+            return false;
+        }
+        if desc.flags != 0 || desc.next != 0 {
+            warn!(
+                target: "virtio-forensics",
+                "[virtio-forensics] tx desc flags invalid id={} flags=0x{:04x} next={}",
+                head_id,
+                desc.flags,
+                desc.next,
+            );
+            self.freeze_and_capture("tx_desc_flags_invalid");
+            return false;
+        }
+        true
+    }
+
+    fn dma_overkill_tx(
+        &mut self,
+        head_id: u16,
+        ring_slot: u16,
+        buffer_range: Option<(usize, usize)>,
+    ) {
+        if !VIRTIO_DMA_OVERKILL {
+            return;
+        }
+        if !DMA_OVERKILL_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            info!(
+                target: "virtio-forensics",
+                "[virtio-forensics] dma_overkill=on",
+            );
+        }
+        if let Some((start, end)) = buffer_range {
+            let len = end.saturating_sub(start);
+            dma_overkill_range(start as *const u8, len, self.dma_cacheable, "tx buffer overkill");
+        }
+        let desc_ptr = unsafe { self.tx_queue.desc.as_ptr().add(head_id as usize) } as *const u8;
+        dma_overkill_range(
+            desc_ptr,
+            core::mem::size_of::<VirtqDesc>(),
+            self.dma_cacheable,
+            "tx desc overkill",
+        );
+        let avail = self.tx_queue.avail.as_ptr();
+        let ring_ptr =
+            unsafe { (*avail).ring.as_ptr().add(ring_slot as usize) as *const u16 } as *const u8;
+        dma_overkill_range(
+            ring_ptr,
+            core::mem::size_of::<u16>(),
+            self.dma_cacheable,
+            "tx avail slot overkill",
+        );
+        let idx_ptr = unsafe { &(*avail).idx as *const u16 } as *const u8;
+        dma_overkill_range(
+            idx_ptr,
+            core::mem::size_of::<u16>(),
+            self.dma_cacheable,
+            "tx avail idx overkill",
+        );
+        if rl(RlTag::Overkill, VIRTIO_DMA_OVERKILL_RING_EVERY) {
+            let base = self.tx_queue.desc.as_ptr() as *const u8;
+            dma_overkill_range(
+                base,
+                self.tx_queue.layout.total_len,
+                self.dma_cacheable,
+                "tx ring overkill",
+            );
+        }
+        // Confirm visibility before notifying as an experiment to isolate DMA ordering issues.
+        dma_barrier();
     }
 
     fn clean_tx_buffer_for_device(
@@ -3379,6 +3990,10 @@ impl NetDevice for VirtioNet {
     fn debug_snapshot(&mut self) {
         VirtioNet::debug_snapshot(self);
     }
+
+    fn debug_dump(&mut self) {
+        VirtioNet::debug_dump_forensics(self);
+    }
 }
 
 /// Receive token that hands out buffers backed by virtio RX descriptors.
@@ -3538,6 +4153,36 @@ struct VirtioRegs {
     mode: VirtioMmioMode,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct QueueMmioState {
+    index: u32,
+    sel: u32,
+    size: u16,
+    ready: u32,
+    desc_lo: u32,
+    desc_hi: u32,
+    driver_lo: u32,
+    driver_hi: u32,
+    device_lo: u32,
+    device_hi: u32,
+    align: u32,
+    pfn: u32,
+}
+
+impl QueueMmioState {
+    fn desc_addr(self) -> u64 {
+        (u64::from(self.desc_hi) << 32) | u64::from(self.desc_lo)
+    }
+
+    fn driver_addr(self) -> u64 {
+        (u64::from(self.driver_hi) << 32) | u64::from(self.driver_lo)
+    }
+
+    fn device_addr(self) -> u64 {
+        (u64::from(self.device_hi) << 32) | u64::from(self.device_lo)
+    }
+}
+
 impl VirtioRegs {
     fn probe<H>(hal: &mut H) -> Result<Self, DriverError>
     where
@@ -3638,6 +4283,10 @@ impl VirtioRegs {
         self.write32(Registers::QueueSel, index);
     }
 
+    fn queue_sel(&self) -> u32 {
+        self.read32(Registers::QueueSel)
+    }
+
     fn queue_num_max(&self) -> u32 {
         self.read32(Registers::QueueNumMax)
     }
@@ -3708,6 +4357,27 @@ impl VirtioRegs {
     fn set_queue_device_addr(&mut self, paddr: usize) {
         self.write32(Registers::QueueDeviceLow, paddr as u32);
         self.write32(Registers::QueueDeviceHigh, (paddr >> 32) as u32);
+    }
+
+    fn read_queue_state(&mut self, index: u32) -> QueueMmioState {
+        let sel_before = self.queue_sel();
+        self.select_queue(index);
+        let state = QueueMmioState {
+            index,
+            sel: self.queue_sel(),
+            size: self.read32(Registers::QueueNum) as u16,
+            ready: self.read32(Registers::QueueReady),
+            desc_lo: self.read32(Registers::QueueDescLow),
+            desc_hi: self.read32(Registers::QueueDescHigh),
+            driver_lo: self.read32(Registers::QueueDriverLow),
+            driver_hi: self.read32(Registers::QueueDriverHigh),
+            device_lo: self.read32(Registers::QueueDeviceLow),
+            device_hi: self.read32(Registers::QueueDeviceHigh),
+            align: self.read32(Registers::QueueAlign),
+            pfn: self.read32(Registers::QueuePfn),
+        };
+        self.select_queue(sel_before);
+        state
     }
 
     fn acknowledge_interrupts(&mut self) -> (u32, u32) {
@@ -4617,6 +5287,55 @@ impl VirtqLayout {
 fn align_up(value: usize, align: usize) -> usize {
     debug_assert!(align.is_power_of_two());
     (value + align - 1) & !(align - 1)
+}
+
+fn align_down(value: usize, align: usize) -> usize {
+    debug_assert!(align.is_power_of_two());
+    value & !(align - 1)
+}
+
+fn ranges_overlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> bool {
+    a_start < b_end && b_start < a_end
+}
+
+fn desc_fingerprint(queue: &VirtQueue) -> u64 {
+    let count = core::cmp::min(queue.size as usize, 2);
+    if count == 0 {
+        return 0;
+    }
+    let base = queue.desc.as_ptr() as *const u8;
+    let mut acc = 0u64;
+    for idx in 0..count {
+        let offset = idx * core::mem::size_of::<VirtqDesc>();
+        unsafe {
+            let ptr = base.add(offset);
+            let lo = read_unaligned(ptr as *const u64);
+            let hi = read_unaligned(ptr.add(8) as *const u64);
+            acc ^= lo ^ hi;
+        }
+    }
+    acc
+}
+
+fn align_cache_range(ptr: *const u8, len: usize) -> Option<(usize, usize)> {
+    if len == 0 {
+        return None;
+    }
+    let start = ptr as usize;
+    let end = start.saturating_add(len);
+    let aligned_start = align_down(start, VIRTIO_CACHELINE_BYTES);
+    let aligned_end = align_up(end, VIRTIO_CACHELINE_BYTES);
+    Some((aligned_start, aligned_end))
+}
+
+fn dma_overkill_range(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
+    let Some((aligned_start, aligned_end)) = align_cache_range(ptr, len) else {
+        return;
+    };
+    let aligned_len = aligned_end.saturating_sub(aligned_start);
+    let aligned_ptr = aligned_start as *const u8;
+    dma_clean(aligned_ptr, aligned_len, cacheable, reason);
+    dma_invalidate(aligned_ptr, aligned_len, cacheable, reason);
 }
 
 #[cfg(target_arch = "aarch64")]

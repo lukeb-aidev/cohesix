@@ -3212,6 +3212,10 @@ impl<D: NetDevice> NetStack<D> {
     pub fn telemetry(&self) -> NetTelemetry {
         self.telemetry
     }
+
+    pub fn debug_dump(&mut self) {
+        self.device.debug_dump();
+    }
 }
 
 impl<D: NetDevice> NetPoller for NetStack<D> {
@@ -3225,6 +3229,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
 
     fn stats(&self) -> NetCounters {
         self.counters
+    }
+
+    fn debug_dump(&mut self) {
+        self.device.debug_dump();
     }
 
     fn drain_console_lines(

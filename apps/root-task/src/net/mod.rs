@@ -224,6 +224,9 @@ pub trait NetDevice: Device {
     /// Optional debug snapshot hook surfaced to stack callers.
     fn debug_snapshot(&mut self);
 
+    /// Optional verbose dump hook surfaced to console commands.
+    fn debug_dump(&mut self) {}
+
     /// Counter snapshot for diagnostics.
     fn counters(&self) -> NetDeviceCounters {
         NetDeviceCounters::default()
@@ -288,6 +291,9 @@ pub trait NetPoller {
     fn stats(&self) -> NetCounters {
         NetCounters::default()
     }
+
+    /// Emit driver-specific forensics on demand.
+    fn debug_dump(&mut self) {}
 
     /// Drain any pending console lines produced by TCP listeners.
     fn drain_console_lines(
