@@ -2,6 +2,7 @@
 //! BootInfo snapshotting utilities that defend against corruption during early bootstrap.
 #![allow(unsafe_code)]
 
+use core::arch::asm;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -21,13 +22,13 @@ const BOOTINFO_CANARY_POST: u64 = 0x9ddf_1ce5_f00d_beef;
 
 const BOOT_HEAP_BYTES: usize = MAX_BOOTINFO_ALLOC;
 
-#[repr(C, align(16))]
+#[repr(C, align(4096))]
 struct BootinfoBacking {
     pre: u64,
     payload: [u8; MAX_BOOTINFO_ALLOC + POST_CANARY_BYTES],
 }
 
-static mut BOOTINFO_BACKING: BootinfoBacking = BootinfoBacking {
+static mut BOOTINFO_SNAPSHOT_BACKING: BootinfoBacking = BootinfoBacking {
     pre: BOOTINFO_CANARY_PRE,
     payload: [0u8; MAX_BOOTINFO_ALLOC + POST_CANARY_BYTES],
 };
@@ -57,9 +58,10 @@ fn assert_low_vaddr(label: &str, value: usize) {
 #[inline(always)]
 fn post_canary_ptr(backing_len: usize) -> *const u64 {
     let offset = post_canary_offset(backing_len);
-    let payload_ptr = unsafe { BOOTINFO_BACKING.payload.as_ptr() };
+    let payload_ptr = unsafe { BOOTINFO_SNAPSHOT_BACKING.payload.as_ptr() };
     debug_assert!(
-        offset.saturating_add(POST_CANARY_BYTES) <= unsafe { BOOTINFO_BACKING.payload.len() },
+        offset.saturating_add(POST_CANARY_BYTES)
+            <= unsafe { BOOTINFO_SNAPSHOT_BACKING.payload.len() },
         "post canary offset out of bounds"
     );
     unsafe { payload_ptr.add(offset) as *const u64 }
@@ -155,14 +157,15 @@ impl BootInfoSnapshot {
             return Err(BootInfoError::Overflow);
         }
 
-        let backing: &'static mut [u8] = unsafe { &mut BOOTINFO_BACKING.payload[..total_size] };
+        let backing: &'static mut [u8] =
+            unsafe { &mut BOOTINFO_SNAPSHOT_BACKING.payload[..total_size] };
         debug_assert!(
             total_size.saturating_add(POST_CANARY_BYTES)
-                <= unsafe { BOOTINFO_BACKING.payload.len() },
+                <= unsafe { BOOTINFO_SNAPSHOT_BACKING.payload.len() },
             "snapshot backing truncated before post-canary"
         );
         unsafe {
-            BOOTINFO_BACKING.pre = BOOTINFO_CANARY_PRE;
+            BOOTINFO_SNAPSHOT_BACKING.pre = BOOTINFO_CANARY_PRE;
         }
 
         backing[..header_bytes.len()].copy_from_slice(header_bytes);
@@ -307,7 +310,7 @@ pub enum BootInfoCanaryError {
 fn log_snapshot_failure(view: &BootInfoView, error: &BootInfoError) {
     let mut line = String::<MAX_CANARY_LINE>::new();
     let bootinfo_ptr = view.header() as *const _ as usize;
-    let snapshot_ptr = unsafe { BOOTINFO_BACKING.payload.as_ptr() as usize };
+    let snapshot_ptr = unsafe { BOOTINFO_SNAPSHOT_BACKING.payload.as_ptr() as usize };
     let header_len = view.header_bytes().len();
     let extra_len = view.extra().len();
     let total_size = header_len.saturating_add(extra_len);
@@ -356,6 +359,42 @@ pub(crate) fn ranges_overlap(a_start: u64, a_end: u64, b_start: u64, b_end: u64)
     a_start < b_end && b_start < a_end
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn read_sp() -> u64 {
+    let sp: u64;
+    unsafe {
+        asm!("mov {sp}, sp", sp = out(reg) sp, options(nostack, preserves_flags));
+    }
+    sp
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline(always)]
+fn read_sp() -> u64 {
+    0
+}
+
+pub(crate) fn assert_stack_not_in_protected(tag: &'static str) {
+    let (start, end) = protected_range_or_panic(tag);
+    let sp = read_sp();
+    if sp >= start && sp < end {
+        log::error!(
+            target: "bootinfo",
+            "[bootinfo] stack_overlaps_protected tag={tag} sp=0x{sp:016x} protected=0x{start:016x}..0x{end:016x}",
+            sp = sp,
+            start = start,
+            end = end,
+        );
+        panic!(
+            "[bootinfo] STACK_OVERLAP_BOOTINFO tag={tag} sp=0x{sp:016x} protected=0x{start:016x}..0x{end:016x}",
+            sp = sp,
+            start = start,
+            end = end,
+        );
+    }
+}
+
 impl BootInfoState {
     #[must_use]
     pub fn get() -> Option<&'static Self> {
@@ -377,7 +416,7 @@ impl BootInfoState {
 
         let payload_start = snapshot.backing().as_ptr() as usize;
         let payload_end = payload_start.saturating_add(snapshot.backing().len());
-        let canary_pre = unsafe { core::ptr::addr_of!(BOOTINFO_BACKING.pre) as usize };
+        let canary_pre = unsafe { core::ptr::addr_of!(BOOTINFO_SNAPSHOT_BACKING.pre) as usize };
         let canary_post = snapshot.post_canary_addr();
         let canary_end = canary_post.saturating_add(POST_CANARY_BYTES);
         debug_assert!(
@@ -385,7 +424,9 @@ impl BootInfoState {
             "post-canary must trail snapshot payload"
         );
         debug_assert!(
-            canary_end <= payload_start.saturating_add(unsafe { BOOTINFO_BACKING.payload.len() }),
+            canary_end
+                <= payload_start
+                    .saturating_add(unsafe { BOOTINFO_SNAPSHOT_BACKING.payload.len() }),
             "post-canary escaped backing payload"
         );
 
@@ -398,14 +439,21 @@ impl BootInfoState {
         if !PROTECTED_RANGE_LOGGED.swap(true, Ordering::AcqRel) {
             let region = state.snapshot_region();
             let post_addr = state.snapshot.post_canary_addr();
+            let base = state.snapshot.backing().as_ptr() as usize;
+            let len = state.snapshot.backing().len();
+            let sp = read_sp();
             log::info!(
                 target: "bootinfo",
-                "[bootinfo] protected_range start=0x{start:016x} end=0x{end:016x} post_addr=0x{post_addr:016x}",
+                "[bootinfo] protected_range base=0x{base:016x} len=0x{len:08x} start=0x{start:016x} end=0x{end:016x} post_addr=0x{post_addr:016x} sp=0x{sp:016x}",
+                base = base,
+                len = len,
                 start = region.start,
                 end = region.end,
                 post_addr = post_addr,
+                sp = sp,
             );
         }
+        assert_stack_not_in_protected("bootinfo.init");
         let _ = state.probe("[probe] snapshot.capture.complete");
         Ok(state)
     }
@@ -426,7 +474,7 @@ impl BootInfoState {
     pub fn canary_values(&self) -> (u64, u64) {
         let post =
             unsafe { core::ptr::read_volatile(post_canary_ptr(self.snapshot.backing().len())) };
-        unsafe { (BOOTINFO_BACKING.pre, post) }
+        unsafe { (BOOTINFO_SNAPSHOT_BACKING.pre, post) }
     }
 
     #[must_use]

@@ -20,7 +20,9 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
-use crate::bootstrap::bootinfo_snapshot::{protected_range, ranges_overlap, BootInfoState};
+use crate::bootstrap::bootinfo_snapshot::{
+    assert_stack_not_in_protected, protected_range, ranges_overlap, BootInfoState,
+};
 use crate::bootstrap::log::{uart_puthex_u64, uart_putnl, uart_puts};
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::{HalError, Hardware};
@@ -597,6 +599,7 @@ impl VirtioNet {
     where
         H: Hardware<Error = HalError>,
     {
+        assert_stack_not_in_protected("net.init.begin");
         info!("[net-console] init: probing virtio-mmio bus");
         info!(
             "[net-console] expecting virtio-net on virtio-mmio base=0x{base:08x}, slots=0-{max_slot}, stride=0x{stride:03x}",
@@ -740,6 +743,7 @@ impl VirtioNet {
             "[net-console] status set to FEATURES_OK: 0x{status_after_features:02x}",
         );
         bootinfo_probe("net.init.after_features_ok");
+        assert_stack_not_in_protected("net.init.after_features_ok");
         if status_after_features & STATUS_FEATURES_OK == 0 {
             regs.set_status(STATUS_FAILED);
             error!(
