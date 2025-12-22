@@ -293,6 +293,7 @@ pub fn force_uart_line(line: &str) {
     uart_putnl();
 }
 
+#[cfg_attr(target_arch = "aarch64", allow(unsafe_code))]
 fn current_sp() -> usize {
     #[cfg(target_arch = "aarch64")]
     {
