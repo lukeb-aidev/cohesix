@@ -2358,6 +2358,10 @@ pub struct KernelEnvSnapshot {
     pub page_directories_mapped: usize,
     /// Number of level-1 page upper directories currently mapped into the VSpace.
     pub page_upper_directories_mapped: usize,
+    /// Total number of device page tables reserved for the device window.
+    pub device_pt_pool_tables_total: Option<usize>,
+    /// Remaining device page tables available for new device mappings.
+    pub device_pt_pool_tables_remaining: Option<usize>,
     /// Summary of untyped catalogue utilisation.
     pub untyped: UntypedStats,
     /// Last observed retype attempt emitted by the environment.
@@ -2681,6 +2685,14 @@ impl<'a> KernelEnv<'a> {
     pub fn snapshot(&self) -> KernelEnvSnapshot {
         let cspace_capacity = self.slots.capacity();
         let cspace_remaining = self.slots.remaining();
+        let (device_pt_pool_tables_total, device_pt_pool_tables_remaining) =
+            if let Some(pool) = self.device_pt_pool.as_ref() {
+                let total = pool.total_bytes / pool.page_table_bytes();
+                let remaining = pool.remaining_tables();
+                (Some(total), Some(remaining))
+            } else {
+                (None, None)
+            };
         KernelEnvSnapshot {
             device_base: DEVICE_VADDR_BASE,
             device_cursor: self.device_cursor,
@@ -2694,6 +2706,8 @@ impl<'a> KernelEnv<'a> {
             page_tables_mapped: self.page_tables.count(),
             page_directories_mapped: self.page_directories.count(),
             page_upper_directories_mapped: self.page_upper_directories.count(),
+            device_pt_pool_tables_total,
+            device_pt_pool_tables_remaining,
             untyped: self.untyped.stats(),
             last_retype: self.last_retype,
         }

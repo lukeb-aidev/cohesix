@@ -125,6 +125,15 @@ fn align_up(value: usize, align: usize) -> usize {
     value.checked_add(align - 1).expect("alignment overflow") & !(align - 1)
 }
 
+fn device_pt_required_tables() -> usize {
+    let window = crate::sel4::device_window_range();
+    let span = window.end.saturating_sub(window.start);
+    let table_coverage = 1usize << (crate::sel4::PAGE_BITS + 9);
+    let l3_tables = (span + table_coverage - 1) / table_coverage;
+    let upper_tables = if span == 0 { 0 } else { 2 };
+    l3_tables.saturating_add(upper_tables)
+}
+
 #[inline(always)]
 fn install_init_ipc_buffer(
     bootinfo_ref: &'static sel4_sys::seL4_BootInfo,
@@ -1766,6 +1775,13 @@ fn bootstrap<P: Platform>(
     }
 
     ensure_device_pt_pool(bootinfo_ref);
+    if let Some(pool) = device_pt_pool() {
+        let required_tables = device_pt_required_tables();
+        let available_tables = pool.total_bytes / (1usize << crate::sel4::PAGE_TABLE_BITS);
+        if available_tables >= required_tables {
+            boot_guard.record_invariant("device_pt_pool.ready");
+        }
+    }
 
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
     let mut kernel_env = KernelEnv::new(
@@ -2389,6 +2405,36 @@ fn bootstrap<P: Platform>(
             }
 
             let snapshot = hal.snapshot();
+            let last_kind = snapshot.last_retype.map(|log| log.trace.kind);
+            let last_status = snapshot.last_retype.map(|log| log.status);
+            let mut summary = heapless::String::<200>::new();
+            let _ = write!(
+                summary,
+                "map_device summary: untyped used={used}/{total} device_used={dev_used}/{dev_total} ",
+                used = snapshot.untyped.used,
+                total = snapshot.untyped.total,
+                dev_used = snapshot.untyped.device_used,
+                dev_total = snapshot.untyped.device_total,
+            );
+            match (
+                snapshot.device_pt_pool_tables_remaining,
+                snapshot.device_pt_pool_tables_total,
+            ) {
+                (Some(remaining), Some(total)) => {
+                    let _ = write!(summary, "device_pt_tables={remaining}/{total} ");
+                }
+                _ => {
+                    let _ = write!(summary, "device_pt_tables=none ");
+                }
+            }
+            let _ = write!(
+                summary,
+                "last_retype={kind:?}/{status:?}",
+                kind = last_kind,
+                status = last_status,
+            );
+            console.writeln_prefixed(summary.as_str());
+
             let mut window = heapless::String::<160>::new();
             let _ = write!(
                 window,

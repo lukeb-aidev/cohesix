@@ -99,7 +99,7 @@ static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_OVERKILL_LOGGED: AtomicBool = AtomicBool::new(false);
 static BOOTINFO_ADDR_DIAG_EMITTED: AtomicBool = AtomicBool::new(false);
 
-const BOOTINFO_ADDR_DIAG: bool = matches!(option_env!("BOOTINFO_ADDR_DIAG"), Some("1"));
+const BOOTINFO_ADDR_DIAG: bool = option_env!("BOOTINFO_ADDR_DIAG").is_some();
 
 const RL_TAGS: usize = 10;
 static RL_COUNTERS: [AtomicU32; RL_TAGS] = [const { AtomicU32::new(0) }; RL_TAGS];

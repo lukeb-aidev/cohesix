@@ -3,7 +3,7 @@
 use core::{cmp::min, fmt::Write};
 
 use crate::bootstrap::log::force_uart_line;
-use crate::sel4::{BootInfo, BootInfoExt, PAGE_BITS, PAGE_TABLE_BITS};
+use crate::sel4::{device_window_range, BootInfo, BootInfoExt, PAGE_BITS, PAGE_TABLE_BITS};
 use heapless::String;
 use sel4_sys as sys;
 use spin::Mutex;
@@ -141,61 +141,96 @@ pub fn ensure_device_pt_pool(bi: &'static BootInfo) {
         return;
     }
 
+    // Each page table covers 512 entries of 4 KiB pages (2 MiB total on AArch64).
+    // Reserve enough tables to cover the whole device window plus the upper levels.
+    let window = device_window_range();
+    let span = window.end.saturating_sub(window.start);
+    let table_coverage = 1usize << (PAGE_BITS + 9);
+    let l3_tables = (span + table_coverage - 1) / table_coverage;
+    let upper_tables = if span == 0 { 0 } else { 2 };
+    let required_tables = l3_tables.saturating_add(upper_tables);
+    let required_bytes = required_tables.saturating_mul(1usize << PAGE_TABLE_BITS);
+
+    let mut plan_line = String::<192>::new();
+    let _ = write!(
+        plan_line,
+        "[retype:plan] device-pt window=[0x{start:08x}..0x{end:08x}) span={span} table_coverage={coverage} required_tables={tables} required_bytes={bytes}",
+        start = window.start,
+        end = window.end,
+        span = span,
+        coverage = table_coverage,
+        tables = required_tables,
+        bytes = required_bytes,
+    );
+    force_uart_line(plan_line.as_str());
+
     let total = (bi.untyped.end - bi.untyped.start) as usize;
     let entries = &bi.untypedList[..total];
     let ut_start = bi.untyped.start;
 
-    for min_bits in [16u8, 12u8] {
-        let mut best_index: Option<usize> = None;
-        let mut min_paddr: Option<usize> = None;
-        let mut max_paddr: Option<usize> = None;
+    let mut best_fit: Option<(usize, u8)> = None;
+    let mut largest: Option<(usize, u8)> = None;
 
-        for (offset, desc) in entries.iter().enumerate() {
-            if desc.isDevice != 0 || (desc.sizeBits as u8) < min_bits {
-                continue;
+    for (offset, desc) in entries.iter().enumerate() {
+        if desc.isDevice != 0 {
+            continue;
+        }
+        let size_bits = desc.sizeBits as u8;
+        if let Some((_, largest_bits)) = largest {
+            if size_bits > largest_bits {
+                largest = Some((offset, size_bits));
             }
+        } else {
+            largest = Some((offset, size_bits));
+        }
 
-            let paddr = desc.paddr as usize;
-            min_paddr = Some(min_paddr.map_or(paddr, |current| current.min(paddr)));
-            max_paddr = Some(max_paddr.map_or(paddr, |current| current.max(paddr)));
+        let capacity = 1usize
+            .checked_shl(u32::from(size_bits))
+            .unwrap_or(0);
+        if capacity < required_bytes {
+            continue;
+        }
 
-            match best_index {
-                None => best_index = Some(offset),
-                Some(best) => {
-                    let best_desc = &entries[best];
-                    let best_paddr = best_desc.paddr as usize;
-                    if paddr > best_paddr
-                        || (paddr == best_paddr && desc.sizeBits as u8 > best_desc.sizeBits as u8)
-                    {
-                        best_index = Some(offset);
-                    }
+        match best_fit {
+            None => best_fit = Some((offset, size_bits)),
+            Some((_, best_bits)) => {
+                if size_bits < best_bits {
+                    best_fit = Some((offset, size_bits));
                 }
             }
         }
-
-        if let Some(index) = best_index {
-            let desc = &entries[index];
-            let cap = ut_start + index as sys::seL4_CPtr;
-
-            if let (Some(min_paddr), Some(max_paddr)) = (min_paddr, max_paddr) {
-                let mut line = String::<192>::new();
-                let _ = write!(
-                    line,
-                    "[bootstrap] device-pt untyped selected: idx={idx} cap=0x{cap:03x} sizeBits={bits} paddr=0x{paddr:08x} (candidates paddr range: 0x{min:08x}–0x{max:08x})",
-                    idx = index,
-                    cap = cap,
-                    bits = desc.sizeBits,
-                    paddr = desc.paddr,
-                    min = min_paddr,
-                    max = max_paddr,
-                );
-                force_uart_line(line.as_str());
-            }
-
-            register_device_pt_pool(cap, desc.sizeBits as u8, index, desc.paddr as usize);
-            return;
-        }
     }
+
+    let (index, size_bits, satisfied) = if let Some((index, size_bits)) = best_fit {
+        (index, size_bits, true)
+    } else if let Some((index, size_bits)) = largest {
+        (index, size_bits, false)
+    } else {
+        force_uart_line("[bootstrap] device-pt pool unavailable: no RAM-backed untyped found");
+        return;
+    };
+
+    let desc = &entries[index];
+    let cap = ut_start + index as sys::seL4_CPtr;
+    let available_bytes = 1usize
+        .checked_shl(u32::from(size_bits))
+        .unwrap_or(0);
+    let available_tables = available_bytes / (1usize << PAGE_TABLE_BITS);
+    let mut line = String::<192>::new();
+    let _ = write!(
+        line,
+        "[bootstrap] device-pt pool selected: idx={idx} cap=0x{cap:03x} sizeBits={bits} paddr=0x{paddr:08x} tables={tables} required_tables={required} satisfied={ok}",
+        idx = index,
+        cap = cap,
+        bits = desc.sizeBits,
+        paddr = desc.paddr,
+        tables = available_tables,
+        required = required_tables,
+        ok = satisfied as u8,
+    );
+    force_uart_line(line.as_str());
+
+    register_device_pt_pool(cap, desc.sizeBits as u8, index, desc.paddr as usize);
 }
 
 fn plan_for_untyped(cap: sys::seL4_CPtr, size_bits: u8, dest_start: sys::seL4_CPtr) -> RetypePlan {
