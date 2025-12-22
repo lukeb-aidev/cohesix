@@ -28,6 +28,7 @@ use crate::sel4::{seL4_CapInitThreadVSpace, DeviceFrame, RamFrame};
 
 const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
+const NET_VIRTIO_TX_V2: bool = cfg!(feature = "net-virtio-tx-v2");
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -86,6 +87,7 @@ static DMA_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_QMEM_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_RING_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
+static VQ_LAYOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
     [const { AtomicBool::new(false) }; VIRTIO_MMIO_SLOTS];
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
@@ -3640,7 +3642,35 @@ impl VirtQueue {
         }
 
         const LEGACY_QUEUE_ALIGN: usize = 4;
-        let layout = VirtqLayout::compute_legacy(size, frame_capacity)?;
+        let layout = VirtqLayout::compute_vq_layout(queue_size, false)?;
+
+        debug_assert!(
+            layout.desc_offset + layout.desc_len <= layout.avail_offset,
+            "virtqueue layout overlap: desc/avail"
+        );
+        debug_assert!(
+            layout.avail_offset + layout.avail_len <= layout.used_offset,
+            "virtqueue layout overlap: avail/used"
+        );
+        debug_assert!(
+            layout.total_len <= frame_capacity,
+            "virtqueue layout exceeds backing"
+        );
+
+        if !VQ_LAYOUT_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            info!(
+                target: "net-console",
+                "[virtio-net][layout] computed: qsize={} desc@+0x{desc_off:03x}/len={desc_len} avail@+0x{avail_off:03x}/len={avail_len} used@+0x{used_off:03x}/len={used_len} total={total}",
+                queue_size,
+                desc_off = layout.desc_offset,
+                desc_len = layout.desc_len,
+                avail_off = layout.avail_offset,
+                avail_len = layout.avail_len,
+                used_off = layout.used_offset,
+                used_len = layout.used_len,
+                total = layout.total_len,
+            );
+        }
 
         let desc_end = layout.desc_offset + layout.desc_len;
         let avail_end = layout.avail_offset + layout.avail_len;
@@ -4156,55 +4186,45 @@ struct VirtqLayout {
 }
 
 impl VirtqLayout {
-    fn compute_legacy(queue_size: usize, frame_capacity: usize) -> Result<Self, DriverError> {
-        const LEGACY_USED_ALIGNMENT: usize = 4;
+    fn compute_vq_layout(queue_size: u16, event_idx: bool) -> Result<Self, DriverError> {
+        const AVAIL_ALIGN: usize = 2;
+        const USED_ALIGN: usize = 4;
 
-        debug_assert!(LEGACY_USED_ALIGNMENT.is_power_of_two());
+        debug_assert!(AVAIL_ALIGN.is_power_of_two());
+        debug_assert!(USED_ALIGN.is_power_of_two());
 
-        let desc_offset = 0usize;
-        let desc_len = 16usize
-            .checked_mul(queue_size)
+        let qsize = usize::from(queue_size);
+        let desc_off = 0usize;
+        let desc_bytes = 16usize.checked_mul(qsize).ok_or(DriverError::NoQueue)?;
+
+        let avail_off = align_up(desc_off + desc_bytes, AVAIL_ALIGN);
+        let avail_ring = 2usize.checked_mul(qsize).ok_or(DriverError::NoQueue)?;
+        let avail_event = if event_idx { 2usize } else { 0usize };
+        let avail_bytes = 4usize
+            .checked_add(avail_ring)
+            .and_then(|v| v.checked_add(avail_event))
             .ok_or(DriverError::NoQueue)?;
 
-        let avail_offset = desc_offset
-            .checked_add(desc_len)
-            .ok_or(DriverError::NoQueue)?;
-        let avail_ring_len = 2usize.checked_mul(queue_size).ok_or(DriverError::NoQueue)?;
-        let avail_len = 4usize
-            .checked_add(avail_ring_len)
-            .and_then(|v| v.checked_add(2))
-            .ok_or(DriverError::NoQueue)?;
-
-        let used_offset = align_up(avail_offset + avail_len, LEGACY_USED_ALIGNMENT);
-        let used_elems_len = 8usize.checked_mul(queue_size).ok_or(DriverError::NoQueue)?;
-        let used_len = 4usize
-            .checked_add(4)
-            .and_then(|v| v.checked_add(used_elems_len))
-            .and_then(|v| v.checked_add(2))
+        let used_off = align_up(avail_off + avail_bytes, USED_ALIGN);
+        let used_ring = 8usize.checked_mul(qsize).ok_or(DriverError::NoQueue)?;
+        let used_event = if event_idx { 2usize } else { 0usize };
+        let used_bytes = 4usize
+            .checked_add(used_ring)
+            .and_then(|v| v.checked_add(used_event))
             .ok_or(DriverError::NoQueue)?;
 
-        let total_len = used_offset
-            .checked_add(used_len)
+        let total = used_off
+            .checked_add(used_bytes)
             .ok_or(DriverError::NoQueue)?;
-
-        if total_len > frame_capacity {
-            error!(
-                target: "net-console",
-                "[net-console] virtqueue layout overflows frame: frame_len={} frame_capacity={}",
-                total_len,
-                frame_capacity,
-            );
-            return Err(DriverError::NoQueue);
-        }
 
         Ok(Self {
-            desc_offset,
-            desc_len,
-            avail_offset,
-            avail_len,
-            used_offset,
-            used_len,
-            total_len,
+            desc_offset: desc_off,
+            desc_len: desc_bytes,
+            avail_offset: avail_off,
+            avail_len: avail_bytes,
+            used_offset: used_off,
+            used_len: used_bytes,
+            total_len: total,
         })
     }
 }
