@@ -101,6 +101,12 @@ enum TxState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TxV2State {
+    Free,
+    Posted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TxAnomalyReason {
     SmoltcpRequestedZeroLen,
     ClosureWroteZero,
@@ -362,8 +368,11 @@ pub struct VirtioNet {
     tx_buffers: HeaplessVec<RamFrame, TX_QUEUE_SIZE>,
     tx_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
     tx_v2_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
-    tx_v2_in_flight: [bool; TX_QUEUE_SIZE],
     tx_v2_last_used: u16,
+    tx_v2_state: [TxV2State; TX_QUEUE_SIZE],
+    tx_v2_gen_counter: u32,
+    tx_v2_gen: [u32; TX_QUEUE_SIZE],
+    tx_v2_len: [u32; TX_QUEUE_SIZE],
     tx_states: [TxState; TX_QUEUE_SIZE],
     dma_cacheable: bool,
     tx_in_flight: u16,
@@ -418,6 +427,7 @@ pub struct VirtioNet {
     tx_submit: u64,
     tx_complete: u64,
     tx_v2_log_ms: u64,
+    tx_v2_used_zero_log_ms: u64,
     forensic_dump_captured: bool,
 }
 
@@ -753,8 +763,11 @@ impl VirtioNet {
             tx_buffers,
             tx_free,
             tx_v2_free,
-            tx_v2_in_flight: [false; TX_QUEUE_SIZE],
             tx_v2_last_used: 0,
+            tx_v2_state: [TxV2State::Free; TX_QUEUE_SIZE],
+            tx_v2_gen_counter: 1,
+            tx_v2_gen: [0; TX_QUEUE_SIZE],
+            tx_v2_len: [0; TX_QUEUE_SIZE],
             tx_states: [TxState::Free; TX_QUEUE_SIZE],
             tx_in_flight: 0,
             tx_gen: 1,
@@ -809,6 +822,7 @@ impl VirtioNet {
             tx_submit: 0,
             tx_complete: 0,
             tx_v2_log_ms: now_ms,
+            tx_v2_used_zero_log_ms: now_ms,
             forensic_dump_captured: false,
         };
         driver.initialise_queues();
@@ -1054,6 +1068,9 @@ impl VirtioNet {
         self.dump_tx_avail_window();
         self.dump_tx_used_window();
         self.dump_tx_states();
+        if NET_VIRTIO_TX_V2 {
+            self.dump_tx_v2_states();
+        }
         self.dump_descriptor_table("rx", &self.rx_queue);
         self.dump_descriptor_table("tx", &self.tx_queue);
         debug!(
@@ -1177,6 +1194,40 @@ impl VirtioNet {
                 gen = gen,
             );
         }
+    }
+
+    fn dump_tx_v2_states(&self) {
+        let mut free = 0usize;
+        let mut posted = 0usize;
+        for idx in 0..self.tx_queue.size {
+            let state = self.tx_v2_state.get(idx as usize).copied().unwrap_or(TxV2State::Free);
+            match state {
+                TxV2State::Free => free += 1,
+                TxV2State::Posted => posted += 1,
+            }
+            info!(
+                target: "net-console",
+                "[virtio-net][forensics] tx-v2 state id={} state={:?} gen={} len={}",
+                idx,
+                state,
+                self.tx_v2_gen.get(idx as usize).copied().unwrap_or(0),
+                self.tx_v2_len.get(idx as usize).copied().unwrap_or(0),
+            );
+        }
+        let sample_len = core::cmp::min(self.tx_v2_free.len(), 8);
+        let mut sample = HeaplessVec::<u16, 8>::new();
+        for idx in 0..sample_len {
+            if let Some(id) = self.tx_v2_free.get(idx).copied() {
+                let _ = sample.push(id);
+            }
+        }
+        info!(
+            target: "net-console",
+            "[virtio-net][forensics] tx-v2 summary free={} posted={} free_sample={:?}",
+            free,
+            posted,
+            sample,
+        );
     }
 
     fn dump_rx_window(&self) {
@@ -2284,30 +2335,27 @@ impl VirtioNet {
             let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
             let elem = unsafe { read_volatile(elem_ptr) };
             let id = elem.id as u16;
-            if elem.len == 0 {
-                self.tx_used_zero_streak = self.tx_used_zero_streak.saturating_add(1);
-                if self.tx_used_zero_streak == 1 || self.tx_used_zero_streak % 16 == 0 {
-                    warn!(
-                        target: "net-console",
-                        "[virtio-net][tx-v2] used len zero (id={} streak={})",
-                        id,
-                        self.tx_used_zero_streak,
-                    );
-                }
-            } else {
-                self.tx_used_zero_streak = 0;
-            }
             if id >= self.tx_queue.size {
                 self.last_error.get_or_insert("tx_v2_used_id_oob");
                 self.device_faulted = true;
                 break;
             }
-            if !self.tx_v2_in_flight[id as usize] {
-                self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
-                self.last_error.get_or_insert("tx_v2_complete_not_inflight");
+            if elem.len == 0 {
+                let now_ms = crate::hal::timebase().now_ms();
+                if now_ms.saturating_sub(self.tx_v2_used_zero_log_ms) >= 1_000 {
+                    self.tx_v2_used_zero_log_ms = now_ms;
+                    warn!(
+                        target: "net-console",
+                        "[virtio-net][tx-v2] used len zero id={} gen={} posted_len={}",
+                        id,
+                        self.tx_v2_gen.get(id as usize).copied().unwrap_or(0),
+                        self.tx_v2_len.get(id as usize).copied().unwrap_or(0),
+                    );
+                }
+            }
+            if !self.tx_v2_mark_free(id) {
                 break;
             }
-            self.tx_v2_in_flight[id as usize] = false;
             self.tx_complete = self.tx_complete.wrapping_add(1);
             self.tx_used_count = self.tx_used_count.wrapping_add(1);
             if self.tx_v2_free.push(id).is_err() {
@@ -2324,10 +2372,10 @@ impl VirtioNet {
 
     fn tx_v2_in_flight_count(&self) -> u16 {
         let limit = usize::from(self.tx_queue.size);
-        self.tx_v2_in_flight
+        self.tx_v2_state
             .iter()
             .take(limit)
-            .filter(|&&state| state)
+            .filter(|&&state| state == TxV2State::Posted)
             .count() as u16
     }
 
@@ -2359,6 +2407,74 @@ impl VirtioNet {
             self.tx_zero_len_attempt,
             self.tx_double_submit,
         );
+    }
+
+    fn tx_v2_mark_posted(&mut self, id: u16, len: u32) -> bool {
+        let Some(state) = self.tx_v2_state.get_mut(id as usize) else {
+            self.last_error.get_or_insert("tx_v2_state_oob");
+            return false;
+        };
+        if *state != TxV2State::Free {
+            self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
+            self.tx_v2_invariant_violation("tx_v2_post_not_free", id);
+            return false;
+        }
+        *state = TxV2State::Posted;
+        let gen = self.tx_v2_gen_counter;
+        self.tx_v2_gen_counter = self.tx_v2_gen_counter.wrapping_add(1);
+        if let Some(entry) = self.tx_v2_gen.get_mut(id as usize) {
+            *entry = gen;
+        }
+        if let Some(entry) = self.tx_v2_len.get_mut(id as usize) {
+            *entry = len;
+        }
+        true
+    }
+
+    fn tx_v2_mark_free(&mut self, id: u16) -> bool {
+        let Some(state) = self.tx_v2_state.get_mut(id as usize) else {
+            self.last_error.get_or_insert("tx_v2_state_oob");
+            return false;
+        };
+        if *state != TxV2State::Posted {
+            self.tx_v2_invariant_violation("tx_v2_reclaim_not_posted", id);
+            return false;
+        }
+        *state = TxV2State::Free;
+        true
+    }
+
+    fn tx_v2_invariant_violation(&mut self, reason: &'static str, id: u16) {
+        warn!(
+            target: "net-console",
+            "[virtio-net][tx-v2] invariant violation reason={} id={} state={:?} gen={} len={}",
+            reason,
+            id,
+            self.tx_v2_state.get(id as usize).copied().unwrap_or(TxV2State::Free),
+            self.tx_v2_gen.get(id as usize).copied().unwrap_or(0),
+            self.tx_v2_len.get(id as usize).copied().unwrap_or(0),
+        );
+        self.freeze_and_capture(reason);
+    }
+
+    fn tx_v2_avail_contains(&mut self, id: u16) -> bool {
+        let avail = self.tx_queue.avail.as_ptr();
+        let avail_idx = unsafe { read_volatile(&(*avail).idx) };
+        let qsize = usize::from(self.tx_queue.size);
+        let distance = avail_idx.wrapping_sub(self.tx_v2_last_used);
+        if distance > self.tx_queue.size {
+            return false;
+        }
+        for step in 0..distance {
+            let idx = self.tx_v2_last_used.wrapping_add(step);
+            let ring_slot = (idx as usize) % qsize;
+            let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
+            let head = unsafe { read_volatile(ring_ptr) };
+            if head == id {
+                return true;
+            }
+        }
+        false
     }
 
     fn pop_rx(&mut self) -> Option<(u16, usize)> {
@@ -2519,11 +2635,10 @@ impl VirtioNet {
     fn prepare_tx_token(&mut self) -> VirtioTxToken {
         let driver_ptr = self as *mut _;
         if NET_VIRTIO_TX_V2 {
-            if let Some(id) = self.tx_v2_free.pop() {
-                if self.tx_v2_in_flight[id as usize] {
-                    self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
-                    self.last_error.get_or_insert("tx_v2_free_inflight");
-                    return VirtioTxToken::new(driver_ptr, None);
+            while let Some(id) = self.tx_v2_free.pop() {
+                if self.tx_v2_state.get(id as usize) != Some(&TxV2State::Free) {
+                    self.tx_v2_invariant_violation("tx_v2_alloc_not_free", id);
+                    continue;
                 }
                 return VirtioTxToken::new(driver_ptr, Some(id));
             }
@@ -2658,9 +2773,9 @@ impl VirtioNet {
             self.last_error.get_or_insert("tx_v2_id_oob");
             return;
         }
-        if self.tx_v2_in_flight[id as usize] {
+        if self.tx_v2_state.get(id as usize) != Some(&TxV2State::Free) {
             self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
-            self.last_error.get_or_insert("tx_v2_double_submit");
+            self.tx_v2_invariant_violation("tx_v2_double_submit", id);
             return;
         }
 
@@ -2693,13 +2808,22 @@ impl VirtioNet {
             }
         }
 
-        self.tx_queue
-            .setup_descriptor(id, addr, capped_len as u32, 0, None);
-        self.tx_queue.sync_descriptor_table_for_device();
+        if cfg!(debug_assertions) && self.tx_v2_avail_contains(id) {
+            self.tx_v2_invariant_violation("tx_v2_dup_in_avail", id);
+            return;
+        }
+
+        if !self.tx_v2_mark_posted(id, capped_len as u32) {
+            return;
+        }
 
         let _range = self
             .clean_tx_buffer_for_device(id, capped_len, self.tx_anomaly_logged);
-        self.tx_v2_in_flight[id as usize] = true;
+        self.tx_queue
+            .setup_descriptor(id, addr, capped_len as u32, 0, None);
+        self.tx_queue.sync_descriptor_table_for_device();
+        // Avail ring publish is the final step so the device never observes a
+        // descriptor before buffer and descriptor cache maintenance completes.
         if let Some((slot, _avail_idx, _old_idx)) = self.tx_queue.push_avail(id) {
             self.tx_queue.sync_avail_ring_for_device();
             self.tx_submit = self.tx_submit.wrapping_add(1);
@@ -2708,7 +2832,7 @@ impl VirtioNet {
             }
             self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
         } else {
-            self.tx_v2_in_flight[id as usize] = false;
+            self.tx_v2_mark_free(id);
             let _ = self.tx_v2_free.push(id);
             self.last_error.get_or_insert("tx_v2_avail_write_failed");
         }
@@ -3165,7 +3289,11 @@ impl Device for VirtioNet {
             return None;
         }
         if NET_VIRTIO_TX_V2 {
-            if let Some(id) = self.tx_v2_free.pop() {
+            while let Some(id) = self.tx_v2_free.pop() {
+                if self.tx_v2_state.get(id as usize) != Some(&TxV2State::Free) {
+                    self.tx_v2_invariant_violation("tx_v2_alloc_not_free", id);
+                    continue;
+                }
                 return Some(VirtioTxToken::new(self as *mut _, Some(id)));
             }
             return None;
@@ -3366,6 +3494,20 @@ impl TxToken for VirtioTxToken {
                 log_tcp_trace("TX", &payload[..payload_len]);
             }
             driver.log_tx_attempt(attempt_seq, len, payload_len, written_len);
+            let total_len = if NET_VIRTIO_TX_V2 {
+                if written_len == 0 {
+                    driver.tx_zero_len_attempt = driver.tx_zero_len_attempt.wrapping_add(1);
+                    driver.tx_drops = driver.tx_drops.saturating_add(1);
+                    return result;
+                }
+                header_len.saturating_add(written_len)
+            } else {
+                total_len
+            };
+            if NET_VIRTIO_TX_V2 && total_len <= header_len {
+                driver.tx_drops = driver.tx_drops.saturating_add(1);
+                return result;
+            }
             driver.submit_tx(id, total_len);
             driver.tx_packets = driver.tx_packets.saturating_add(1);
             result
