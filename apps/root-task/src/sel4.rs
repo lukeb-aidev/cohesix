@@ -25,6 +25,7 @@ use crate::bootstrap::ipcbuf_view::IpcBufView;
 use crate::bootstrap::ktry;
 use crate::bootstrap::log as boot_log;
 use crate::bootstrap::sel4_guard;
+use crate::bootstrap::bootinfo_snapshot::{protected_range, protected_range_or_panic, ranges_overlap};
 use crate::bootstrap::DevicePtPoolConfig;
 use crate::debug_uart::debug_uart_str;
 use crate::sel4_view;
@@ -74,6 +75,7 @@ static CANONICAL_ROOT_CAP: AtomicUsize =
 static CANONICAL_ROOT_SLOT: AtomicUsize = AtomicUsize::new(CANONICAL_ROOT_SENTINEL);
 static EP_VALIDATED: AtomicBool = AtomicBool::new(false);
 static IPC_SEND_UNLOCKED: AtomicBool = AtomicBool::new(false);
+static DMA_BOOTINFO_REJECT_LOGS: AtomicUsize = AtomicUsize::new(0);
 
 /// Logs ABI sanity for key seL4 types to validate the Rust FFI surface.
 pub fn log_sel4_type_sanity() {
@@ -2945,42 +2947,82 @@ impl<'a> KernelEnv<'a> {
 
     /// Allocates a DMA-capable frame of RAM and maps it into the DMA window.
     pub fn alloc_dma_frame(&mut self) -> Result<RamFrame, seL4_Error> {
-        let reserved = self
-            .untyped
-            .reserve_ram(PAGE_BITS as u8)
-            .ok_or(seL4_NotEnoughMemory)?;
-        let frame_slot = self.allocate_slot();
-        let trace = self.prepare_retype_trace(
-            &reserved,
-            frame_slot,
-            sel4_sys::seL4_ARM_Page as seL4_Word,
-            PAGE_BITS as seL4_Word,
-            RetypeKind::DmaPage {
+        let protected = protected_range();
+        loop {
+            let reserved = self
+                .untyped
+                .reserve_ram(PAGE_BITS as u8)
+                .ok_or(seL4_NotEnoughMemory)?;
+            let paddr = reserved.paddr() as u64;
+            let end = paddr.saturating_add(PAGE_SIZE as u64);
+            if let Some((boot_start, boot_end)) = protected {
+                if ranges_overlap(paddr, end, boot_start, boot_end) {
+                    let count = DMA_BOOTINFO_REJECT_LOGS.fetch_add(1, Ordering::Relaxed);
+                    if count < 4 {
+                        ::log::warn!(
+                            target: "hal",
+                            "[hal] dma.alloc.reject.bootinfo paddr=0x{paddr:08x} bytes=0x{bytes:08x} bootinfo=0x{boot_start:016x}..0x{boot_end:016x}",
+                            paddr = paddr,
+                            bytes = PAGE_SIZE,
+                            boot_start = boot_start,
+                            boot_end = boot_end,
+                        );
+                    }
+                    self.untyped.release(&reserved);
+                    continue;
+                }
+            }
+            let frame_slot = self.allocate_slot();
+            let trace = self.prepare_retype_trace(
+                &reserved,
+                frame_slot,
+                sel4_sys::seL4_ARM_Page as seL4_Word,
+                PAGE_BITS as seL4_Word,
+                RetypeKind::DmaPage {
+                    paddr: reserved.paddr(),
+                },
+            );
+            self.record_retype(trace, RetypeStatus::Pending);
+            if let Err(err) = self.retype_page(reserved.cap(), &trace) {
+                self.record_retype(trace, RetypeStatus::Err(err));
+                self.untyped.release(&reserved);
+                return Err(err);
+            }
+            self.record_retype(trace, RetypeStatus::Ok);
+            let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "dma-frame");
+            self.dma_cursor = range.end;
+            self.map_frame(frame_slot, range.start, seL4_ARM_Page_Default, false)?;
+            ::log::info!(
+                target: "hal",
+                "[hal] dma frame mapped vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=seL4_ARM_Page_Default",
+                vaddr = range.start,
+                paddr = reserved.paddr(),
+            );
+            let (boot_start, boot_end) = protected_range_or_panic("alloc_dma_frame");
+            if ranges_overlap(paddr, end, boot_start, boot_end) {
+                ::log::error!(
+                    target: "hal",
+                    "[hal] dma.alloc.overlap tag=alloc_dma_frame paddr=0x{paddr:08x} bytes=0x{bytes:08x} protected=0x{boot_start:016x}..0x{boot_end:016x}",
+                    paddr = paddr,
+                    bytes = PAGE_SIZE,
+                    boot_start = boot_start,
+                    boot_end = boot_end,
+                );
+                panic!(
+                    "[hal] DMA_OVERLAP_BOOTINFO tag=alloc_dma_frame paddr=0x{paddr:08x} bytes=0x{bytes:08x} protected=0x{boot_start:016x}..0x{boot_end:016x}",
+                    paddr = paddr,
+                    bytes = PAGE_SIZE,
+                    boot_start = boot_start,
+                    boot_end = boot_end,
+                );
+            }
+            return Ok(RamFrame {
+                cap: frame_slot,
                 paddr: reserved.paddr(),
-            },
-        );
-        self.record_retype(trace, RetypeStatus::Pending);
-        if let Err(err) = self.retype_page(reserved.cap(), &trace) {
-            self.record_retype(trace, RetypeStatus::Err(err));
-            self.untyped.release(&reserved);
-            return Err(err);
+                ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(range.start))
+                    .expect("DMA mapping address must be non-null"),
+            });
         }
-        self.record_retype(trace, RetypeStatus::Ok);
-        let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "dma-frame");
-        self.dma_cursor = range.end;
-        self.map_frame(frame_slot, range.start, seL4_ARM_Page_Default, false)?;
-        ::log::info!(
-            target: "hal",
-            "[hal] dma frame mapped vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=seL4_ARM_Page_Default",
-            vaddr = range.start,
-            paddr = reserved.paddr(),
-        );
-        Ok(RamFrame {
-            cap: frame_slot,
-            paddr: reserved.paddr(),
-            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(range.start))
-                .expect("DMA mapping address must be non-null"),
-        })
     }
 
     fn retype_page(

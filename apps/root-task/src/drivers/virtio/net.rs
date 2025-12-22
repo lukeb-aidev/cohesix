@@ -20,7 +20,7 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
-use crate::bootstrap::bootinfo_snapshot::{protected_range, BootInfoState};
+use crate::bootstrap::bootinfo_snapshot::{protected_range, ranges_overlap, BootInfoState};
 use crate::bootstrap::log::{uart_puthex_u64, uart_putnl, uart_puts};
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::{HalError, Hardware};
@@ -759,6 +759,11 @@ impl VirtioNet {
             return Err(err);
         }
 
+        info!(
+            target: "net-console",
+            "[virtio-net] net.virtqueue.alloc kind=queue_mem_rx bytes=0x{bytes:08x}",
+            bytes = 1usize << seL4_PageBits,
+        );
         let queue_mem_rx = hal.alloc_dma_frame().map_err(|err| {
             regs.set_status(STATUS_FAILED);
             DriverError::from(err)
@@ -769,6 +774,11 @@ impl VirtioNet {
         }
         bootinfo_probe("net.mmio.qmem.rx.alloc");
 
+        info!(
+            target: "net-console",
+            "[virtio-net] net.virtqueue.alloc kind=queue_mem_tx bytes=0x{bytes:08x}",
+            bytes = 1usize << seL4_PageBits,
+        );
         let queue_mem_tx = {
             let mut attempt = 0;
             loop {
@@ -860,6 +870,11 @@ impl VirtioNet {
         regs.read_queue_regs(TX_QUEUE_INDEX);
         emit_addr_diag_once(&rx_queue, &tx_queue);
 
+        info!(
+            target: "net-console",
+            "[virtio-net] net.virtqueue.alloc kind=rx_buffer bytes=0x{bytes:08x}",
+            bytes = 1usize << seL4_PageBits,
+        );
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
         for _ in 0..rx_size {
             let frame = hal.alloc_dma_frame().map_err(|err| {
@@ -876,6 +891,11 @@ impl VirtioNet {
             })?;
         }
 
+        info!(
+            target: "net-console",
+            "[virtio-net] net.virtqueue.alloc kind=tx_buffer bytes=0x{bytes:08x}",
+            bytes = 1usize << seL4_PageBits,
+        );
         let mut tx_buffers = HeaplessVec::<RamFrame, TX_QUEUE_SIZE>::new();
         for _ in 0..tx_size {
             let frame = hal.alloc_dma_frame().map_err(|err| {
@@ -1094,12 +1114,7 @@ impl VirtioNet {
         };
         let start = frame.paddr() as u64;
         let end = start.saturating_add(frame.as_slice().len() as u64);
-        if ranges_overlap(
-            start as usize,
-            end as usize,
-            boot_start as usize,
-            boot_end as usize,
-        ) {
+        if ranges_overlap(start, end, boot_start, boot_end) {
             error!(
                 target: "net-console",
                 "[virtio-net] DMA frame overlaps bootinfo snapshot ({label}) frame=0x{start:016x}..0x{end:016x} bootinfo=0x{boot_start:016x}..0x{boot_end:016x}",
@@ -1299,7 +1314,12 @@ impl VirtioNet {
         let rx_total_end = rx_used_end;
         let tx_total_start = tx_desc_start;
         let tx_total_end = tx_used_end;
-        if ranges_overlap(rx_total_start, rx_total_end, tx_total_start, tx_total_end) {
+        if ranges_overlap(
+            rx_total_start as u64,
+            rx_total_end as u64,
+            tx_total_start as u64,
+            tx_total_end as u64,
+        ) {
             self.freeze_and_capture("queue_range_overlap");
         }
 
@@ -5632,10 +5652,6 @@ impl VirtqLayout {
 fn align_up(value: usize, align: usize) -> usize {
     debug_assert!(align.is_power_of_two());
     (value + align - 1) & !(align - 1)
-}
-
-fn ranges_overlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> bool {
-    a_start < b_end && b_start < a_end
 }
 
 fn desc_fingerprint_safe(queue: &VirtQueue) -> u64 {

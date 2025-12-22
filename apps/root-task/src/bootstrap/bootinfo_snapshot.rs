@@ -3,7 +3,7 @@
 #![allow(unsafe_code)]
 
 use core::fmt;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use heapless::String;
 use sel4_sys::{seL4_BootInfo, seL4_Word};
@@ -334,6 +334,7 @@ pub struct BootInfoState {
 }
 
 static BOOTINFO_STATE: Once<BootInfoState> = Once::new();
+static PROTECTED_RANGE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[must_use]
 pub(crate) fn protected_range() -> Option<(u64, u64)> {
@@ -341,6 +342,18 @@ pub(crate) fn protected_range() -> Option<(u64, u64)> {
         let region = state.snapshot_region();
         (region.start as u64, region.end as u64)
     })
+}
+
+#[must_use]
+pub(crate) fn protected_range_or_panic(tag: &'static str) -> (u64, u64) {
+    protected_range().unwrap_or_else(|| {
+        panic!("[bootinfo] protected_range unavailable: tag={tag}");
+    })
+}
+
+#[must_use]
+pub(crate) fn ranges_overlap(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> bool {
+    a_start < b_end && b_start < a_end
 }
 
 impl BootInfoState {
@@ -382,6 +395,17 @@ impl BootInfoState {
             check_count: AtomicU64::new(0),
             snapshot_region: canary_pre.min(payload_start)..canary_end.max(payload_end),
         });
+        if !PROTECTED_RANGE_LOGGED.swap(true, Ordering::AcqRel) {
+            let region = state.snapshot_region();
+            let post_addr = state.snapshot.post_canary_addr();
+            log::info!(
+                target: "bootinfo",
+                "[bootinfo] protected_range start=0x{start:016x} end=0x{end:016x} post_addr=0x{post_addr:016x}",
+                start = region.start,
+                end = region.end,
+                post_addr = post_addr,
+            );
+        }
         let _ = state.probe("[probe] snapshot.capture.complete");
         Ok(state)
     }
