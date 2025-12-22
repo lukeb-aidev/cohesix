@@ -20,7 +20,7 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
-use crate::bootstrap::bootinfo_snapshot::BootInfoState;
+use crate::bootstrap::bootinfo_snapshot::{protected_range, BootInfoState};
 use crate::bootstrap::log::{uart_puthex_u64, uart_putnl, uart_puts};
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::{HalError, Hardware};
@@ -1089,20 +1089,24 @@ impl VirtioNet {
         frame: &RamFrame,
         label: &'static str,
     ) -> Result<(), DriverError> {
-        let Some(state) = BootInfoState::get() else {
+        let Some((boot_start, boot_end)) = protected_range() else {
             return Ok(());
         };
-        let region = state.snapshot_region();
-        let start = frame.paddr();
-        let end = start.saturating_add(frame.as_slice().len());
-        if ranges_overlap(start, end, region.start, region.end) {
+        let start = frame.paddr() as u64;
+        let end = start.saturating_add(frame.as_slice().len() as u64);
+        if ranges_overlap(
+            start as usize,
+            end as usize,
+            boot_start as usize,
+            boot_end as usize,
+        ) {
             error!(
                 target: "net-console",
                 "[virtio-net] DMA frame overlaps bootinfo snapshot ({label}) frame=0x{start:016x}..0x{end:016x} bootinfo=0x{boot_start:016x}..0x{boot_end:016x}",
                 start = start,
                 end = end,
-                boot_start = region.start,
-                boot_end = region.end,
+                boot_start = boot_start,
+                boot_end = boot_end,
             );
             return Err(DriverError::QueueInvariant(
                 "dma frame overlaps bootinfo snapshot",
@@ -4809,6 +4813,24 @@ mod tests {
         write!(&mut unknown_msg, "{unknown_err}").unwrap();
         assert!(unknown_msg.contains("0x00000007"));
         assert!(unknown_msg.contains("v2"));
+    }
+
+    #[test]
+    fn ranges_overlap_is_end_exclusive() {
+        assert!(!ranges_overlap(0, 10, 10, 20));
+        assert!(ranges_overlap(0, 10, 9, 20));
+        assert!(ranges_overlap(10, 20, 0, 11));
+        assert!(!ranges_overlap(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn virtqueue_layout_fits_for_size_16() {
+        assert!(VirtioNet::verify_queue_layout(16, 16).is_ok());
+    }
+
+    #[test]
+    fn virtqueue_layout_rejects_large_sizes() {
+        assert!(VirtioNet::verify_queue_layout(256, 256).is_err());
     }
 }
 

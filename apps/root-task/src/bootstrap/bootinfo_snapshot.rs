@@ -335,6 +335,14 @@ pub struct BootInfoState {
 
 static BOOTINFO_STATE: Once<BootInfoState> = Once::new();
 
+#[must_use]
+pub(crate) fn protected_range() -> Option<(u64, u64)> {
+    BootInfoState::get().map(|state| {
+        let region = state.snapshot_region();
+        (region.start as u64, region.end as u64)
+    })
+}
+
 impl BootInfoState {
     #[must_use]
     pub fn get() -> Option<&'static Self> {
