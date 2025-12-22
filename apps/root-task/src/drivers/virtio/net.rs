@@ -20,6 +20,7 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
+use crate::bootstrap::bootinfo_snapshot::BootInfoState;
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::{HalError, Hardware};
 use crate::net::{NetDevice, NetDeviceCounters, NetDriverError, CONSOLE_TCP_PORT};
@@ -504,8 +505,9 @@ impl VirtioNet {
         let mut regs = VirtioRegs::probe(hal)?;
         let mmio_mode = regs.mode;
         info!(
-            "[net-console] virtio-mmio device located: base=0x{base:08x}",
-            base = regs.base().as_ptr() as usize
+            "[net-console] virtio-mmio device located: paddr=0x{paddr:08x} vaddr=0x{vaddr:08x}",
+            paddr = regs.mmio_paddr(),
+            vaddr = regs.base().as_ptr() as usize
         );
         match regs.mode {
             VirtioMmioMode::Modern => {
@@ -715,6 +717,9 @@ impl VirtioNet {
             regs.set_status(STATUS_FAILED);
             err
         })?;
+        Self::log_bootinfo_mmio_mark("net.mmio.before");
+        regs.read_queue_regs(RX_QUEUE_INDEX);
+        Self::log_bootinfo_mmio_mark("net.mmio.after");
         info!(
             "[net-console] provisioning TX descriptors ({} entries)",
             tx_size
@@ -731,6 +736,7 @@ impl VirtioNet {
             regs.set_status(STATUS_FAILED);
             err
         })?;
+        regs.read_queue_regs(TX_QUEUE_INDEX);
 
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
         for _ in 0..rx_size {
@@ -895,7 +901,6 @@ impl VirtioNet {
             forensic_dump_captured: false,
         };
         driver.initialise_queues();
-        driver.log_mmio_state_once("init");
 
         let queue0_pfn = driver.rx_queue.pfn;
         let queue1_pfn = driver.tx_queue.pfn;
@@ -922,6 +927,8 @@ impl VirtioNet {
             "[net-console] driver status set to DRIVER_OK (status=0x{:02x})",
             driver.regs.read32(Registers::Status)
         );
+        driver.regs.read_queue_regs(RX_QUEUE_INDEX);
+        driver.regs.read_queue_regs(TX_QUEUE_INDEX);
         Ok(driver)
     }
 
@@ -1011,76 +1018,32 @@ impl VirtioNet {
         }
     }
 
+    fn log_bootinfo_mmio_mark(mark: &'static str) {
+        if let Some(state) = BootInfoState::get() {
+            let region = state.snapshot_region();
+            let (pre, post) = state.canary_values();
+            info!(
+                target: "net-console",
+                "[bootinfo:net] mark={mark} region=[0x{start:016x}..0x{end:016x}) len=0x{len:08x} pre=0x{pre:016x} post=0x{post:016x}",
+                start = region.start,
+                end = region.end,
+                len = region.end.saturating_sub(region.start),
+            );
+            if let Err(err) = state.verify("net.mmio", mark) {
+                error!(
+                    target: "net-console",
+                    "[bootinfo:net] canary divergence mark={mark} err={err:?}"
+                );
+            }
+        }
+    }
+
     fn log_mmio_state(&mut self, reason: &'static str) {
         if reason == "notify" && !rl(RlTag::MmioReadback, 256) {
             return;
         }
-        let _ = self.mmio_readback_queue(RX_QUEUE_INDEX, "RX", reason);
-        let _ = self.mmio_readback_queue(TX_QUEUE_INDEX, "TX", reason);
-    }
-
-    fn mmio_readback_queue(
-        &mut self,
-        index: u32,
-        label: &'static str,
-        reason: &'static str,
-    ) -> QueueMmioState {
-        let state = self.regs.read_queue_state(index);
-        let (expected_desc, expected_avail, expected_used) = if index == RX_QUEUE_INDEX {
-            (
-                self.rx_queue.base_paddr as u64 + self.rx_queue.layout.desc_offset as u64,
-                self.rx_queue.base_paddr as u64 + self.rx_queue.layout.avail_offset as u64,
-                self.rx_queue.base_paddr as u64 + self.rx_queue.layout.used_offset as u64,
-            )
-        } else {
-            (
-                self.tx_queue.base_paddr as u64 + self.tx_queue.layout.desc_offset as u64,
-                self.tx_queue.base_paddr as u64 + self.tx_queue.layout.avail_offset as u64,
-                self.tx_queue.base_paddr as u64 + self.tx_queue.layout.used_offset as u64,
-            )
-        };
-        info!(
-            target: "virtio-forensics",
-            "[virtio-forensics] mmio {reason} queue={label} mode={:?} sel={} size={} ready={} desc=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) avail=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) used=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) expected desc=0x{:016x} avail=0x{:016x} used=0x{:016x} align={} pfn=0x{:08x}",
-            self.mmio_mode,
-            state.sel,
-            state.size,
-            state.ready,
-            state.desc_addr(),
-            state.desc_hi,
-            state.desc_lo,
-            state.driver_addr(),
-            state.driver_hi,
-            state.driver_lo,
-            state.device_addr(),
-            state.device_hi,
-            state.device_lo,
-            expected_desc,
-            expected_avail,
-            expected_used,
-            state.align,
-            state.pfn,
-        );
-        if matches!(self.mmio_mode, VirtioMmioMode::Modern) {
-            let suspicious = state.size == 0
-                || state.ready == 0
-                || state.desc_addr() == 0
-                || state.driver_addr() == 0
-                || state.device_addr() == 0;
-            if suspicious {
-                warn!(
-                    target: "virtio-forensics",
-                    "[virtio-forensics] mmio_readback_suspicious queue={label} sel={} size={} ready={} desc=0x{:016x} avail=0x{:016x} used=0x{:016x}",
-                    state.sel,
-                    state.size,
-                    state.ready,
-                    state.desc_addr(),
-                    state.driver_addr(),
-                    state.device_addr(),
-                );
-            }
-        }
-        state
+        let _ = self.regs.read_queue_regs(RX_QUEUE_INDEX);
+        let _ = self.regs.read_queue_regs(TX_QUEUE_INDEX);
     }
 
     fn notify_queue(&mut self, queue: u32, label: &'static str) {
@@ -4137,8 +4100,9 @@ struct VirtioRegs {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct QueueMmioState {
+struct QueueRegs {
     index: u32,
+    sel_requested: u32,
     sel: u32,
     size: u16,
     ready: u32,
@@ -4152,7 +4116,7 @@ struct QueueMmioState {
     pfn: u32,
 }
 
-impl QueueMmioState {
+impl QueueRegs {
     fn desc_addr(self) -> u64 {
         (u64::from(self.desc_hi) << 32) | u64::from(self.desc_lo)
     }
@@ -4167,6 +4131,10 @@ impl QueueMmioState {
 }
 
 impl VirtioRegs {
+    fn mmio_paddr(&self) -> usize {
+        self.mmio.paddr()
+    }
+
     fn probe<H>(hal: &mut H) -> Result<Self, DriverError>
     where
         H: Hardware<Error = HalError>,
@@ -4342,27 +4310,6 @@ impl VirtioRegs {
         self.write32(Registers::QueueDeviceHigh, (paddr >> 32) as u32);
     }
 
-    fn read_queue_state(&mut self, index: u32) -> QueueMmioState {
-        let sel_before = self.queue_sel();
-        self.select_queue(index);
-        let state = QueueMmioState {
-            index,
-            sel: self.queue_sel(),
-            size: self.read32(Registers::QueueNum) as u16,
-            ready: self.read32(Registers::QueueReady),
-            desc_lo: self.read32(Registers::QueueDescLow),
-            desc_hi: self.read32(Registers::QueueDescHigh),
-            driver_lo: self.read32(Registers::QueueDriverLow),
-            driver_hi: self.read32(Registers::QueueDriverHigh),
-            device_lo: self.read32(Registers::QueueDeviceLow),
-            device_hi: self.read32(Registers::QueueDeviceHigh),
-            align: self.read32(Registers::QueueAlign),
-            pfn: self.read32(Registers::QueuePfn),
-        };
-        self.select_queue(sel_before);
-        state
-    }
-
     fn acknowledge_interrupts(&mut self) -> (u32, u32) {
         let status = self.read32(Registers::InterruptStatus);
         let mut ack = 0;
@@ -4396,6 +4343,76 @@ impl VirtioRegs {
             version: self.read32(Registers::Version),
             device_id: self.read32(Registers::DeviceId),
         }
+    }
+
+    fn read_queue_regs(&mut self, index: u32) -> QueueRegs {
+        let sel_before = self.queue_sel();
+        self.select_queue(index);
+        let sel_readback = self.queue_sel();
+        if sel_readback != index {
+            warn!(
+                target: "virtio-forensics",
+                "[virtio-forensics] mmio queue_sel mismatch requested={} readback={}",
+                index,
+                sel_readback
+            );
+        }
+        let regs = QueueRegs {
+            index,
+            sel_requested: index,
+            sel: sel_readback,
+            size: self.read32(Registers::QueueNum) as u16,
+            ready: self.read32(Registers::QueueReady),
+            desc_lo: self.read32(Registers::QueueDescLow),
+            desc_hi: self.read32(Registers::QueueDescHigh),
+            driver_lo: self.read32(Registers::QueueDriverLow),
+            driver_hi: self.read32(Registers::QueueDriverHigh),
+            device_lo: self.read32(Registers::QueueDeviceLow),
+            device_hi: self.read32(Registers::QueueDeviceHigh),
+            align: self.read32(Registers::QueueAlign),
+            pfn: self.read32(Registers::QueuePfn),
+        };
+        info!(
+            target: "virtio-forensics",
+            "[virtio-forensics] mmio queue_regs sel_req={} sel={} size={} ready={} desc=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) avail=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) used=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) align={} pfn=0x{:08x}",
+            regs.sel_requested,
+            regs.sel,
+            regs.size,
+            regs.ready,
+            regs.desc_addr(),
+            regs.desc_hi,
+            regs.desc_lo,
+            regs.driver_addr(),
+            regs.driver_hi,
+            regs.driver_lo,
+            regs.device_addr(),
+            regs.device_hi,
+            regs.device_lo,
+            regs.align,
+            regs.pfn,
+        );
+        if matches!(self.mode, VirtioMmioMode::Modern) {
+            let suspicious = regs.size == 0
+                || regs.ready == 0
+                || regs.desc_addr() == 0
+                || regs.driver_addr() == 0
+                || regs.device_addr() == 0;
+            if suspicious {
+                warn!(
+                    target: "virtio-forensics",
+                    "[virtio-forensics] mmio_readback_suspicious queue={} sel={} size={} ready={} desc=0x{:016x} avail=0x{:016x} used=0x{:016x}",
+                    regs.index,
+                    regs.sel,
+                    regs.size,
+                    regs.ready,
+                    regs.desc_addr(),
+                    regs.driver_addr(),
+                    regs.device_addr(),
+                );
+            }
+        }
+        self.select_queue(sel_before);
+        regs
     }
 }
 
