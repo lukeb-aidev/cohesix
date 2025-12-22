@@ -120,6 +120,18 @@ pub struct NetDeviceCounters {
     pub rx_used_advances: u64,
     /// TX used ring advances observed by the driver.
     pub tx_used_advances: u64,
+    /// TX submissions observed by the driver.
+    pub tx_submit: u64,
+    /// TX completions observed by the driver.
+    pub tx_complete: u64,
+    /// TX free descriptors available.
+    pub tx_free: u64,
+    /// TX descriptors currently in flight.
+    pub tx_in_flight: u64,
+    /// TX double-submit attempts detected.
+    pub tx_double_submit: u64,
+    /// TX zero-length submit attempts detected.
+    pub tx_zero_len_attempt: u64,
 }
 
 /// Monotonic counters collected from the NIC driver and smoltcp sockets.
@@ -149,6 +161,18 @@ pub struct NetCounters {
     pub tcp_smoke_outbound: u64,
     /// Failed outbound TCP smoke test attempts.
     pub tcp_smoke_outbound_failures: u64,
+    /// TX submissions observed by the driver.
+    pub tx_submit: u64,
+    /// TX completions observed by the driver.
+    pub tx_complete: u64,
+    /// TX free descriptors available.
+    pub tx_free: u64,
+    /// TX descriptors currently in flight.
+    pub tx_in_flight: u64,
+    /// TX double-submit attempts detected.
+    pub tx_double_submit: u64,
+    /// TX zero-length submit attempts detected.
+    pub tx_zero_len_attempt: u64,
 }
 
 /// Outcome of the latest network self-test pass.

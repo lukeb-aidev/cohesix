@@ -361,6 +361,9 @@ pub struct VirtioNet {
     rx_buffers: HeaplessVec<RamFrame, RX_QUEUE_SIZE>,
     tx_buffers: HeaplessVec<RamFrame, TX_QUEUE_SIZE>,
     tx_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
+    tx_v2_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
+    tx_v2_in_flight: [bool; TX_QUEUE_SIZE],
+    tx_v2_last_used: u16,
     tx_states: [TxState; TX_QUEUE_SIZE],
     dma_cacheable: bool,
     tx_in_flight: u16,
@@ -410,6 +413,11 @@ pub struct VirtioNet {
     rx_requeue_logged_ids: HeaplessVec<u16, RX_QUEUE_SIZE>,
     rx_publish_log_count: u32,
     tx_publish_log_count: u32,
+    tx_double_submit: u64,
+    tx_zero_len_attempt: u64,
+    tx_submit: u64,
+    tx_complete: u64,
+    tx_v2_log_ms: u64,
     forensic_dump_captured: bool,
 }
 
@@ -710,6 +718,14 @@ impl VirtioNet {
             })?;
         }
 
+        let mut tx_v2_free = HeaplessVec::<u16, TX_QUEUE_SIZE>::new();
+        for idx in 0..tx_size {
+            tx_v2_free.push(idx as u16).map_err(|_| {
+                regs.set_status(STATUS_FAILED);
+                DriverError::BufferExhausted
+            })?;
+        }
+
         let fallback_mac = EthernetAddress::from_bytes(&[0x02, 0, 0, 0, 0, 1]);
         let mac = if negotiated_features & VIRTIO_NET_F_MAC != 0 {
             let reported = regs.read_mac().unwrap_or(fallback_mac);
@@ -736,6 +752,9 @@ impl VirtioNet {
             rx_buffers,
             tx_buffers,
             tx_free,
+            tx_v2_free,
+            tx_v2_in_flight: [false; TX_QUEUE_SIZE],
+            tx_v2_last_used: 0,
             tx_states: [TxState::Free; TX_QUEUE_SIZE],
             tx_in_flight: 0,
             tx_gen: 1,
@@ -785,6 +804,11 @@ impl VirtioNet {
             rx_requeue_logged_ids: HeaplessVec::new(),
             rx_publish_log_count: 0,
             tx_publish_log_count: 0,
+            tx_double_submit: 0,
+            tx_zero_len_attempt: 0,
+            tx_submit: 0,
+            tx_complete: 0,
+            tx_v2_log_ms: now_ms,
             forensic_dump_captured: false,
         };
         driver.initialise_queues();
@@ -2185,6 +2209,10 @@ impl VirtioNet {
         if forensics_frozen() {
             return;
         }
+        if NET_VIRTIO_TX_V2 {
+            self.reclaim_tx_v2();
+            return;
+        }
         let (used_idx, avail_idx) = self.tx_queue.indices();
         let should_log =
             used_idx != self.tx_last_used_seen || (self.tx_progress_log_gate & 0x3f) == 0;
@@ -2240,6 +2268,97 @@ impl VirtioNet {
                 }
             }
         }
+    }
+
+    fn reclaim_tx_v2(&mut self) {
+        let used = self.tx_queue.used.as_ptr();
+        self.tx_queue.invalidate_used_header_for_cpu();
+        let used_idx = unsafe { read_volatile(&(*used).idx) };
+        let qsize = usize::from(self.tx_queue.size);
+
+        assert!(qsize != 0, "virtqueue size must be non-zero");
+
+        while self.tx_v2_last_used != used_idx {
+            let ring_slot = (self.tx_v2_last_used as usize) % qsize;
+            self.tx_queue.invalidate_used_elem_for_cpu(ring_slot);
+            let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
+            let elem = unsafe { read_volatile(elem_ptr) };
+            let id = elem.id as u16;
+            if elem.len == 0 {
+                self.tx_used_zero_streak = self.tx_used_zero_streak.saturating_add(1);
+                if self.tx_used_zero_streak == 1 || self.tx_used_zero_streak % 16 == 0 {
+                    warn!(
+                        target: "net-console",
+                        "[virtio-net][tx-v2] used len zero (id={} streak={})",
+                        id,
+                        self.tx_used_zero_streak,
+                    );
+                }
+            } else {
+                self.tx_used_zero_streak = 0;
+            }
+            if id >= self.tx_queue.size {
+                self.last_error.get_or_insert("tx_v2_used_id_oob");
+                self.device_faulted = true;
+                break;
+            }
+            if !self.tx_v2_in_flight[id as usize] {
+                self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
+                self.last_error.get_or_insert("tx_v2_complete_not_inflight");
+                break;
+            }
+            self.tx_v2_in_flight[id as usize] = false;
+            self.tx_complete = self.tx_complete.wrapping_add(1);
+            self.tx_used_count = self.tx_used_count.wrapping_add(1);
+            if self.tx_v2_free.push(id).is_err() {
+                self.tx_drops = self.tx_drops.saturating_add(1);
+                self.last_error.get_or_insert("tx_v2_free_overflow");
+            }
+            self.tx_v2_last_used = self.tx_v2_last_used.wrapping_add(1);
+            self.note_progress();
+        }
+        self.tx_queue.last_used = self.tx_v2_last_used;
+
+        self.log_tx_v2_invariants();
+    }
+
+    fn tx_v2_in_flight_count(&self) -> u16 {
+        let limit = usize::from(self.tx_queue.size);
+        self.tx_v2_in_flight
+            .iter()
+            .take(limit)
+            .filter(|&&state| state)
+            .count() as u16
+    }
+
+    fn log_tx_v2_invariants(&mut self) {
+        let now_ms = crate::hal::timebase().now_ms();
+        if now_ms.saturating_sub(self.tx_v2_log_ms) < 1_000 {
+            return;
+        }
+        self.tx_v2_log_ms = now_ms;
+        let in_flight = self.tx_v2_in_flight_count();
+        let free = self.tx_v2_free.len() as u16;
+        let qsize = self.tx_queue.size;
+        if in_flight + free != qsize {
+            warn!(
+                target: "net-console",
+                "[virtio-net][tx-v2] invariant break: free={} in_flight={} qsize={}",
+                free,
+                in_flight,
+                qsize,
+            );
+        }
+        info!(
+            target: "net-console",
+            "[virtio-net][tx-v2] stats free={} in_flight={} submit={} complete={} zero_len={} double_submit={}",
+            free,
+            in_flight,
+            self.tx_submit,
+            self.tx_complete,
+            self.tx_zero_len_attempt,
+            self.tx_double_submit,
+        );
     }
 
     fn pop_rx(&mut self) -> Option<(u16, usize)> {
@@ -2399,6 +2518,17 @@ impl VirtioNet {
 
     fn prepare_tx_token(&mut self) -> VirtioTxToken {
         let driver_ptr = self as *mut _;
+        if NET_VIRTIO_TX_V2 {
+            if let Some(id) = self.tx_v2_free.pop() {
+                if self.tx_v2_in_flight[id as usize] {
+                    self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
+                    self.last_error.get_or_insert("tx_v2_free_inflight");
+                    return VirtioTxToken::new(driver_ptr, None);
+                }
+                return VirtioTxToken::new(driver_ptr, Some(id));
+            }
+            return VirtioTxToken::new(driver_ptr, None);
+        }
         if let Some(id) = self.tx_free.pop() {
             if let Some(state) = self.tx_states.get(id as usize) {
                 if !matches!(state, TxState::Free) {
@@ -2463,6 +2593,10 @@ impl VirtioNet {
     }
 
     fn submit_tx(&mut self, id: u16, len: usize) {
+        if NET_VIRTIO_TX_V2 {
+            self.submit_tx_v2(id, len);
+            return;
+        }
         self.check_device_health();
         if self.device_faulted {
             return;
@@ -2504,6 +2638,79 @@ impl VirtioNet {
                 );
                 self.tx_post_logged = true;
             }
+        }
+    }
+
+    fn submit_tx_v2(&mut self, id: u16, len: usize) {
+        self.check_device_health();
+        if self.device_faulted {
+            return;
+        }
+        if forensics_frozen() {
+            return;
+        }
+        if len == 0 {
+            self.tx_zero_len_attempt = self.tx_zero_len_attempt.wrapping_add(1);
+            debug_assert!(len != 0, "tx-v2 zero-length submit");
+            return;
+        }
+        if id >= self.tx_queue.size {
+            self.last_error.get_or_insert("tx_v2_id_oob");
+            return;
+        }
+        if self.tx_v2_in_flight[id as usize] {
+            self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
+            self.last_error.get_or_insert("tx_v2_double_submit");
+            return;
+        }
+
+        let Some(buffer) = self.tx_buffers.get_mut(id as usize) else {
+            self.last_error.get_or_insert("tx_v2_buffer_missing");
+            return;
+        };
+        let buffer_len = buffer.as_slice().len();
+        let capped_len = len.min(buffer_len);
+        let addr = buffer.paddr() as u64;
+        if capped_len == 0 {
+            self.tx_zero_len_attempt = self.tx_zero_len_attempt.wrapping_add(1);
+            debug_assert!(capped_len != 0, "tx-v2 zero-length buffer");
+            return;
+        }
+
+        if cfg!(debug_assertions) {
+            let start = addr;
+            let end = start.saturating_add(buffer_len as u64);
+            for (idx, other) in self.tx_buffers.iter().enumerate() {
+                if idx == id as usize {
+                    continue;
+                }
+                let other_start = other.paddr() as u64;
+                let other_end = other_start.saturating_add(other.as_slice().len() as u64);
+                assert!(
+                    end <= other_start || start >= other_end,
+                    "tx-v2 buffer overlap id={id} other={idx}"
+                );
+            }
+        }
+
+        self.tx_queue
+            .setup_descriptor(id, addr, capped_len as u32, 0, None);
+        self.tx_queue.sync_descriptor_table_for_device();
+
+        let _range = self
+            .clean_tx_buffer_for_device(id, capped_len, self.tx_anomaly_logged);
+        self.tx_v2_in_flight[id as usize] = true;
+        if let Some((slot, _avail_idx, _old_idx)) = self.tx_queue.push_avail(id) {
+            self.tx_queue.sync_avail_ring_for_device();
+            self.tx_submit = self.tx_submit.wrapping_add(1);
+            if slot == 0 && !self.tx_wrap_logged {
+                self.tx_wrap_logged = true;
+            }
+            self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
+        } else {
+            self.tx_v2_in_flight[id as usize] = false;
+            let _ = self.tx_v2_free.push(id);
+            self.last_error.get_or_insert("tx_v2_avail_write_failed");
         }
     }
 
@@ -2957,6 +3164,12 @@ impl Device for VirtioNet {
         if self.device_faulted {
             return None;
         }
+        if NET_VIRTIO_TX_V2 {
+            if let Some(id) = self.tx_v2_free.pop() {
+                return Some(VirtioTxToken::new(self as *mut _, Some(id)));
+            }
+            return None;
+        }
         if let Some(id) = self.tx_free.pop() {
             Some(VirtioTxToken::new(self as *mut _, Some(id)))
         } else {
@@ -2993,11 +3206,38 @@ impl NetDevice for VirtioNet {
     }
 
     fn counters(&self) -> NetDeviceCounters {
+        let tx_free = if NET_VIRTIO_TX_V2 {
+            self.tx_v2_free.len() as u64
+        } else {
+            self.tx_free.len() as u64
+        };
+        let tx_in_flight = if NET_VIRTIO_TX_V2 {
+            self.tx_v2_in_flight_count() as u64
+        } else {
+            self.tx_in_flight as u64
+        };
+        let (tx_submit, tx_complete, tx_double_submit, tx_zero_len_attempt) = if NET_VIRTIO_TX_V2
+        {
+            (
+                self.tx_submit,
+                self.tx_complete,
+                self.tx_double_submit,
+                self.tx_zero_len_attempt,
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
         NetDeviceCounters {
             rx_packets: self.rx_packets,
             tx_packets: self.tx_packets,
             rx_used_advances: self.rx_used_count,
             tx_used_advances: self.tx_used_count,
+            tx_submit,
+            tx_complete,
+            tx_free,
+            tx_in_flight,
+            tx_double_submit,
+            tx_zero_len_attempt,
         }
     }
 
@@ -3081,6 +3321,9 @@ impl TxToken for VirtioTxToken {
         let driver = unsafe { &mut *self.driver };
         let attempt_seq = driver.next_tx_attempt_seq();
         if len == 0 {
+            if NET_VIRTIO_TX_V2 {
+                driver.tx_zero_len_attempt = driver.tx_zero_len_attempt.wrapping_add(1);
+            }
             driver.tx_drops = driver.tx_drops.saturating_add(1);
             driver.log_tx_attempt(attempt_seq, len, 0, 0);
             return f(&mut []);
