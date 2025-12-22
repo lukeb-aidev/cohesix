@@ -10,6 +10,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use ::log::{Level, LevelFilter, Log, Metadata, Record};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
+use crate::bootstrap::bootinfo_snapshot::BootInfoState;
 use crate::event::{AuditSink, BootstrapOp};
 use crate::sel4;
 
@@ -97,6 +98,22 @@ fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
     );
 
     let mut line = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
+    if !LOG_LAYOUT_REPORTED.swap(true, Ordering::AcqRel) {
+        let post_addr = BootInfoState::get()
+            .map(|state| state.snapshot().post_canary_addr())
+            .unwrap_or(0);
+        let mut report = HeaplessString::<160>::new();
+        let _ = write!(
+            report,
+            "[log] buf formatted=0x{formatted:016x} len={flen} line=0x{line:016x} len={llen} post=0x{post:016x}",
+            formatted = formatted.as_bytes().as_ptr() as usize,
+            flen = MAX_FRAME_LEN,
+            line = line.as_slice().as_ptr() as usize,
+            llen = MAX_FRAME_LEN,
+            post = post_addr,
+        );
+        force_uart_line(report.as_str());
+    }
     let max_payload = MAX_FRAME_LEN.saturating_sub(2);
     for &byte in formatted.as_bytes().iter().take(max_payload) {
         if line.push(byte).is_err() {
@@ -145,6 +162,7 @@ static EP_ONLY_PERMITTED: AtomicBool = AtomicBool::new(false);
 static POST_COMMIT_IPC_UNLOCKED: AtomicBool = AtomicBool::new(false);
 static PRECOMMIT_IPC_FORBIDDEN: AtomicU32 = AtomicU32::new(0);
 static LOG_DROPS: AtomicU32 = AtomicU32::new(0);
+static LOG_LAYOUT_REPORTED: AtomicBool = AtomicBool::new(false);
 const fn env_flag(value: Option<&'static str>) -> bool {
     match value {
         Some(val) => {
@@ -238,7 +256,7 @@ fn record_drop() {
 }
 
 fn emit_uart(payload: &[u8]) {
-    for &byte in payload {
+    for &byte in payload.iter().take(MAX_FRAME_LEN) {
         sel4::debug_put_char_raw(byte);
     }
 }

@@ -10,6 +10,8 @@ use sel4_sys::{
     seL4_CPtr, seL4_Error, seL4_NoError, seL4_ObjectType, seL4_Untyped_Retype, seL4_Word,
 };
 
+const RETYPE_LOG_ENABLED: bool = false;
+
 #[cfg(any(test, feature = "test-support"))]
 use heapless::String as HeaplessString;
 
@@ -61,6 +63,9 @@ fn debug_retype_log(
     obj_type: seL4_ObjectType,
     err: Option<seL4_Error>,
 ) {
+    if !RETYPE_LOG_ENABLED {
+        return;
+    }
     let mut writer = DebugPutc;
     if write_retype_line(&mut writer, phase, args, err).is_err() {
         // UART output is best-effort; ignore truncation.
