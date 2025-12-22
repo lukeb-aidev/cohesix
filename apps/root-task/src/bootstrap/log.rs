@@ -41,6 +41,28 @@ const FRAME_KIND_LINE: u8 = 0x01;
 const FRAME_KIND_PING: u8 = 0x02;
 const MAX_FRAME_LEN: usize = 192;
 const PING_RETRIES: usize = 4096;
+const LOGGER_CANARY_VALUE: u32 = 0x4c4f_4742;
+
+#[repr(C)]
+struct LineGuard {
+    line: HeaplessVec<u8, MAX_FRAME_LEN>,
+    canary: u32,
+}
+
+impl LineGuard {
+    fn new() -> Self {
+        Self {
+            line: HeaplessVec::new(),
+            canary: LOGGER_CANARY_VALUE,
+        }
+    }
+
+    fn assert_canary(&self) {
+        if self.canary != LOGGER_CANARY_VALUE {
+            panic!("LOGGER_CANARY_CORRUPTED");
+        }
+    }
+}
 
 struct BootstrapLogger {
     state: AtomicU8,
@@ -89,22 +111,47 @@ impl Log for BootstrapLogger {
 
 fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
     let mut formatted: HeaplessString<MAX_FRAME_LEN> = HeaplessString::new();
-    let _ = write!(
+    if write!(
         formatted,
         "[{level} {target}] {message}",
         level = record.level(),
         target = record.target(),
         message = record.args(),
-    );
+    )
+    .is_err()
+    {
+        panic!(
+            "LOGGER_BUFFER_OVERFLOW formatted_len={} cap={}",
+            formatted.len(),
+            MAX_FRAME_LEN
+        );
+    }
 
-    let mut line = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
     let max_payload = MAX_FRAME_LEN.saturating_sub(2);
+    if formatted.len() > max_payload {
+        panic!(
+            "LOGGER_BUFFER_OVERFLOW formatted_len={} payload_cap={}",
+            formatted.len(),
+            max_payload
+        );
+    }
+    let mut guard = LineGuard::new();
     for &byte in formatted.as_bytes().iter().take(max_payload) {
-        if line.push(byte).is_err() {
-            break;
+        if guard.line.push(byte).is_err() {
+            panic!(
+                "LOGGER_BUFFER_OVERFLOW line_len={} cap={}",
+                guard.line.len(),
+                MAX_FRAME_LEN
+            );
         }
     }
-    let _ = line.extend_from_slice(b"\r\n");
+    if guard.line.extend_from_slice(b"\r\n").is_err() {
+        panic!(
+            "LOGGER_BUFFER_OVERFLOW line_len={} cap={}",
+            guard.line.len(),
+            MAX_FRAME_LEN
+        );
+    }
     if !LOG_LAYOUT_REPORTED.swap(true, Ordering::AcqRel) {
         let post_addr = BootInfoState::get()
             .map(|state| state.snapshot().post_canary_addr())
@@ -123,8 +170,8 @@ fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
             formatted = formatted.as_bytes().as_ptr() as usize,
             flen = formatted.len(),
             fcap = MAX_FRAME_LEN,
-            line = line.as_slice().as_ptr() as usize,
-            llen = line.len(),
+            line = guard.line.as_slice().as_ptr() as usize,
+            llen = guard.line.len(),
             lcap = MAX_FRAME_LEN,
             post = post_addr,
             sp = sp,
@@ -133,7 +180,8 @@ fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
         );
         force_uart_line(report.as_str());
     }
-    line
+    guard.assert_canary();
+    guard.line
 }
 
 impl BootstrapLogger {
@@ -161,6 +209,9 @@ impl BootstrapLogger {
                 }
             }
         }
+        if LOGGER_CANARY.load(Ordering::Acquire) != LOGGER_CANARY_VALUE {
+            panic!("LOGGER_CANARY_CORRUPTED");
+        }
     }
 }
 
@@ -175,6 +226,7 @@ static POST_COMMIT_IPC_UNLOCKED: AtomicBool = AtomicBool::new(false);
 static PRECOMMIT_IPC_FORBIDDEN: AtomicU32 = AtomicU32::new(0);
 static LOG_DROPS: AtomicU32 = AtomicU32::new(0);
 static LOG_LAYOUT_REPORTED: AtomicBool = AtomicBool::new(false);
+static LOGGER_CANARY: AtomicU32 = AtomicU32::new(LOGGER_CANARY_VALUE);
 const fn env_flag(value: Option<&'static str>) -> bool {
     match value {
         Some(val) => {
@@ -509,8 +561,8 @@ mod tests {
 
     #[test]
     fn bootstrap_formatting_truncates() {
-        let mut long = HeaplessString::<256>::new();
-        for _ in 0..256 {
+        let mut long = HeaplessString::<96>::new();
+        for _ in 0..96 {
             let _ = long.push('A');
         }
 

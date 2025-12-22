@@ -2992,12 +2992,18 @@ impl<'a> KernelEnv<'a> {
             let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "dma-frame");
             self.dma_cursor = range.end;
             self.map_frame(frame_slot, range.start, seL4_ARM_Page_Default, false)?;
+            if let Some(state) = crate::bootstrap::bootinfo_snapshot::BootInfoState::get() {
+                let _ = state.probe("before.dma_map_log");
+            }
             ::log::info!(
                 target: "hal",
                 "[hal] dma frame mapped vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=seL4_ARM_Page_Default",
                 vaddr = range.start,
                 paddr = reserved.paddr(),
             );
+            if let Some(state) = crate::bootstrap::bootinfo_snapshot::BootInfoState::get() {
+                let _ = state.probe("after.dma_map_log");
+            }
             let (boot_start, boot_end) = protected_range_or_panic("alloc_dma_frame");
             if ranges_overlap(paddr, end, boot_start, boot_end) {
                 ::log::error!(
