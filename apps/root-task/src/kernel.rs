@@ -119,6 +119,117 @@ fn align_down(value: usize, align: usize) -> usize {
     value & !(align - 1)
 }
 
+#[cfg_attr(target_arch = "aarch64", allow(unsafe_code))]
+fn current_sp() -> usize {
+    #[cfg(target_arch = "aarch64")]
+    {
+        let sp: usize;
+        unsafe {
+            core::arch::asm!(
+                "mov {}, sp",
+                out(reg) sp,
+                options(nomem, nostack, preserves_flags)
+            );
+        }
+        sp
+    }
+
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        0
+    }
+}
+
+fn install_stack_guard_page(
+    bootinfo: &sel4_sys::seL4_BootInfo,
+    layout_snapshot: &layout::LayoutSnapshot,
+) -> Result<(), BootError> {
+    let stack_range = layout_snapshot.stack_range();
+    let stack_bytes = stack_range.end.saturating_sub(stack_range.start);
+    if stack_bytes <= IPC_PAGE_BYTES {
+        return Err(BootError::Fatal(format!(
+            "stack too small for guard page: stack=0x{start:016x}..0x{end:016x} size=0x{size:08x}",
+            start = stack_range.start,
+            end = stack_range.end,
+            size = stack_bytes,
+        )));
+    }
+
+    let guard_lo = align_down(stack_range.start, IPC_PAGE_BYTES);
+    if guard_lo != stack_range.start {
+        return Err(BootError::Fatal(format!(
+            "stack base not page aligned: stack=0x{start:016x} guard_lo=0x{guard:016x}",
+            start = stack_range.start,
+            guard = guard_lo,
+        )));
+    }
+    let guard_hi = guard_lo + IPC_PAGE_BYTES;
+    let mapped_lo = guard_hi;
+    let mapped_hi = stack_range.end;
+    if mapped_hi <= mapped_lo {
+        return Err(BootError::Fatal(format!(
+            "stack mapping invalid after guard: mapped=0x{mapped_lo:016x}..0x{mapped_hi:016x}",
+            mapped_lo = mapped_lo,
+            mapped_hi = mapped_hi,
+        )));
+    }
+
+    let image_base = align_down(layout_snapshot.text_start(), IPC_PAGE_BYTES);
+    let Some(offset) = guard_lo.checked_sub(image_base) else {
+        return Err(BootError::Fatal(format!(
+            "stack guard below image base: guard=0x{guard:016x} image=0x{image:016x}",
+            guard = guard_lo,
+            image = image_base,
+        )));
+    };
+    if offset % IPC_PAGE_BYTES != 0 {
+        return Err(BootError::Fatal(format!(
+            "stack guard offset misaligned: offset=0x{offset:08x}",
+            offset = offset,
+        )));
+    }
+    let guard_index = offset / IPC_PAGE_BYTES;
+    let user_image = bootinfo.userImageFrames;
+    let frame_count = user_image.end.saturating_sub(user_image.start) as usize;
+    if guard_index >= frame_count {
+        return Err(BootError::Fatal(format!(
+            "stack guard index out of range: index={guard_index} frames={frame_count} userImageFrames=[0x{start:04x}..0x{end:04x})",
+            guard_index = guard_index,
+            frame_count = frame_count,
+            start = user_image.start,
+            end = user_image.end,
+        )));
+    }
+    let guard_cap = user_image
+        .start
+        .saturating_add(guard_index as sel4_sys::seL4_Word);
+    let err = unsafe { sel4_sys::seL4_ARM_Page_Unmap(guard_cap) };
+    if err != sel4_sys::seL4_NoError {
+        return Err(BootError::Fatal(format!(
+            "stack guard unmap failed: cap=0x{cap:04x} err={err} ({name})",
+            cap = guard_cap,
+            err = err,
+            name = error_name(err),
+        )));
+    }
+
+    let sp = current_sp();
+    let mut line = HeaplessString::<192>::new();
+    let _ = write!(
+        line,
+        "[boot] stack_guard mapped=[0x{mapped_lo:016x}..0x{mapped_hi:016x}) guard=[0x{guard_lo:016x}..0x{guard_hi:016x}) sp=0x{sp:016x}",
+        mapped_lo = mapped_lo,
+        mapped_hi = mapped_hi,
+        guard_lo = guard_lo,
+        guard_hi = guard_hi,
+        sp = sp,
+    );
+    boot_log::force_uart_line(line.as_str());
+    log::info!("{}", line.as_str());
+
+    Ok(())
+}
+
 #[inline(always)]
 fn align_up(value: usize, align: usize) -> usize {
     debug_assert!(align.is_power_of_two());
@@ -1354,6 +1465,8 @@ fn bootstrap<P: Platform>(
             "device page-table window overlaps stack guard (device={device_range:?} stack={stack_range:?})"
         );
     }
+
+    install_stack_guard_page(bootinfo_view.header(), &layout_snapshot)?;
 
     crate::alloc::init_heap(heap_range.clone());
     boot_guard.record_invariant("allocator.ready");

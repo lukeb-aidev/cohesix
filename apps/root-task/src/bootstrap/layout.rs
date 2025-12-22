@@ -155,6 +155,10 @@ impl LayoutSnapshot {
         self.bss_start..self.bss_end
     }
 
+    pub fn text_start(&self) -> usize {
+        self.text_start
+    }
+
     pub fn stack_range(&self) -> core::ops::Range<usize> {
         self.stack_bottom..self.stack_top
     }

@@ -1116,6 +1116,14 @@ mod imp {
     }
 
     #[inline(always)]
+    pub unsafe fn seL4_ARM_Page_Unmap(page: seL4_ARM_Page) -> seL4_Error {
+        let tag =
+            seL4_MessageInfo_new(arch_invocation_label_ARMPageUnmap as seL4_Word, 0, 0, 0);
+        let output_tag = seL4_Call(page, tag);
+        seL4_MessageInfo_get_label(output_tag) as seL4_Error
+    }
+
+    #[inline(always)]
     pub unsafe fn seL4_TCB_SetSpace(
         service: seL4_TCB,
         fault_ep: seL4_CPtr,
@@ -1948,6 +1956,11 @@ mod imp {
         _rights: seL4_CapRights_t,
         _attr: seL4_ARM_VMAttributes,
     ) -> seL4_Error {
+        unsupported_error()
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_Page_Unmap(_page: seL4_ARM_Page) -> seL4_Error {
         unsupported_error()
     }
 
