@@ -64,6 +64,7 @@ net-outbound-probe = ["net-console"]
 net-backend-virtio = []
 net-selftest = ["net-console"]
 virtio-mmio-legacy = []
+net-virtio-tx-v2 = []
 cache-maintenance = []
 bootstrap-trace = [
     "dep:spin",

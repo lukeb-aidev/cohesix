@@ -1015,6 +1015,15 @@ where
                             "netstats: tcp_smoke_out={} tcp_smoke_out_failures={}",
                             stats.tcp_smoke_outbound, stats.tcp_smoke_outbound_failures
                         ));
+                        let line_four = format_message(format_args!(
+                            "netstats: tx_submit={} tx_complete={} tx_free={} tx_in_flight={} tx_double_submit={} tx_zero_len_attempt={}",
+                            stats.tx_submit,
+                            stats.tx_complete,
+                            stats.tx_free,
+                            stats.tx_in_flight,
+                            stats.tx_double_submit,
+                            stats.tx_zero_len_attempt
+                        ));
                         let status_line = format_message(format_args!(
                             "nettest: enabled={} running={} last={:?}",
                             report.enabled, report.running, report.last_result
@@ -1022,6 +1031,7 @@ where
                         self.emit_console_line(line_one.as_str());
                         self.emit_console_line(line_two.as_str());
                         self.emit_console_line(line_three.as_str());
+                        self.emit_console_line(line_four.as_str());
                         self.emit_console_line(status_line.as_str());
                         self.metrics.accepted_commands += 1;
                         self.emit_ack_ok("NETSTATS", None);

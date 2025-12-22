@@ -422,6 +422,12 @@ impl NetDevice for Rtl8139Device {
             tx_packets: self.tx_packets,
             rx_used_advances: self.rx_packets,
             tx_used_advances: self.tx_packets,
+            tx_submit: 0,
+            tx_complete: 0,
+            tx_free: 0,
+            tx_in_flight: 0,
+            tx_double_submit: 0,
+            tx_zero_len_attempt: 0,
         }
     }
 
