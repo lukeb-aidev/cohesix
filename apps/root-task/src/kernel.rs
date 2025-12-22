@@ -2828,7 +2828,7 @@ fn bootstrap<P: Platform>(
             if !sel4::ep_ready() || !sel4::ep_validated() {
                 boot_log::force_uart_line("[net-console] disabled reason=no-root-ep err=0");
                 log::warn!("[net-console] skipped: root endpoint not ready");
-                (None, false, None)
+                (None, None)
             } else {
                 let config = crate::net::ConsoleNetConfig::default();
                 match init_net_console(&mut hal, config) {
