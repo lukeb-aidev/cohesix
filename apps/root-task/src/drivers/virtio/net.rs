@@ -23,6 +23,7 @@ use smoltcp::wire::EthernetAddress;
 use crate::bootstrap::bootinfo_snapshot::{
     assert_stack_not_in_protected, protected_range, ranges_overlap, BootInfoState,
 };
+use crate::kernel::stack_guard_check;
 use crate::bootstrap::log::{uart_puthex_u64, uart_putnl, uart_puts};
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::{HalError, Hardware};
@@ -600,6 +601,7 @@ impl VirtioNet {
         H: Hardware<Error = HalError>,
     {
         assert_stack_not_in_protected("net.init.begin");
+        stack_guard_check("net.init.begin");
         info!("[net-console] init: probing virtio-mmio bus");
         info!(
             "[net-console] expecting virtio-net on virtio-mmio base=0x{base:08x}, slots=0-{max_slot}, stride=0x{stride:03x}",
@@ -744,6 +746,7 @@ impl VirtioNet {
         );
         bootinfo_probe("net.init.after_features_ok");
         assert_stack_not_in_protected("net.init.after_features_ok");
+        stack_guard_check("net.init.after_features_ok");
         if status_after_features & STATUS_FEATURES_OK == 0 {
             regs.set_status(STATUS_FAILED);
             error!(
@@ -756,6 +759,7 @@ impl VirtioNet {
         bootinfo_probe("net.init.before_qmem_log");
         info!("[net-console] allocating virtqueue backing memory");
         bootinfo_probe("net.init.after_qmem_log");
+        stack_guard_check("net.mmio.qmem.before");
         bootinfo_probe("net.mmio.qmem.before");
 
         if let Err(err) = Self::verify_queue_layout(rx_size, tx_size) {
@@ -768,6 +772,7 @@ impl VirtioNet {
             "[virtio-net] net.virtqueue.alloc kind=queue_mem_rx bytes=0x{bytes:08x}",
             bytes = 1usize << seL4_PageBits,
         );
+        stack_guard_check("before.dma_map_log");
         let queue_mem_rx = hal.alloc_dma_frame().map_err(|err| {
             regs.set_status(STATUS_FAILED);
             DriverError::from(err)

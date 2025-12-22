@@ -80,6 +80,8 @@ use spin::Mutex;
 
 const EARLY_DUMP_LIMIT: usize = 512;
 const DEVICE_FRAME_BITS: usize = 12;
+const STACK_GUARD_PATTERN: u8 = 0xa5;
+const STACK_GUARD_CHECK_LEN: usize = 2048;
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::{self, DebugSink};
@@ -119,6 +121,9 @@ fn align_down(value: usize, align: usize) -> usize {
     value & !(align - 1)
 }
 
+static STACK_GUARD_BASE: AtomicU64 = AtomicU64::new(0);
+static STACK_GUARD_LEN: AtomicU64 = AtomicU64::new(0);
+
 #[cfg_attr(target_arch = "aarch64", allow(unsafe_code))]
 fn current_sp() -> usize {
     #[cfg(target_arch = "aarch64")]
@@ -137,6 +142,48 @@ fn current_sp() -> usize {
     #[cfg(not(target_arch = "aarch64"))]
     {
         0
+    }
+}
+
+fn init_stack_guard_canary(mapped_lo: usize) {
+    unsafe {
+        ptr::write_bytes(
+            mapped_lo as *mut u8,
+            STACK_GUARD_PATTERN,
+            STACK_GUARD_CHECK_LEN,
+        );
+    }
+    STACK_GUARD_BASE.store(mapped_lo as u64, Ordering::Release);
+    STACK_GUARD_LEN.store(STACK_GUARD_CHECK_LEN as u64, Ordering::Release);
+}
+
+pub(crate) fn stack_guard_check(tag: &'static str) {
+    let base = STACK_GUARD_BASE.load(Ordering::Acquire) as usize;
+    let len = STACK_GUARD_LEN.load(Ordering::Acquire) as usize;
+    if base == 0 || len == 0 {
+        return;
+    }
+    let mut clobbered = 0usize;
+    unsafe {
+        let slice = core::slice::from_raw_parts(base as *const u8, len);
+        for &byte in slice.iter() {
+            if byte != STACK_GUARD_PATTERN {
+                clobbered += 1;
+            }
+        }
+    }
+    if clobbered != 0 {
+        let sp = current_sp();
+        let mut line = HeaplessString::<160>::new();
+        let _ = write!(
+            line,
+            "[stack] guard tripped tag={tag} clobbered={clobbered} sp=0x{sp:016x}",
+            tag = tag,
+            clobbered = clobbered,
+            sp = sp,
+        );
+        boot_log::force_uart_line(line.as_str());
+        panic!("STACK_GUARD_TRIPPED");
     }
 }
 
@@ -226,6 +273,7 @@ fn install_stack_guard_page(
     );
     boot_log::force_uart_line(line.as_str());
     log::info!("{}", line.as_str());
+    init_stack_guard_canary(mapped_lo);
 
     Ok(())
 }
