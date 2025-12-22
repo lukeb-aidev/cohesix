@@ -64,6 +64,36 @@ impl LineGuard {
     }
 }
 
+struct TruncatingWriter<'a> {
+    buf: &'a mut HeaplessVec<u8, MAX_FRAME_LEN>,
+    max_len: usize,
+    truncated: bool,
+}
+
+impl<'a> TruncatingWriter<'a> {
+    fn new(buf: &'a mut HeaplessVec<u8, MAX_FRAME_LEN>, max_len: usize) -> Self {
+        Self {
+            buf,
+            max_len,
+            truncated: false,
+        }
+    }
+}
+
+impl Write for TruncatingWriter<'_> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for &byte in s.as_bytes() {
+            if self.buf.len() < self.max_len {
+                let _ = self.buf.push(byte);
+            } else {
+                self.truncated = true;
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
 struct BootstrapLogger {
     state: AtomicU8,
 }
@@ -110,47 +140,38 @@ impl Log for BootstrapLogger {
 }
 
 fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
-    let mut formatted: HeaplessString<MAX_FRAME_LEN> = HeaplessString::new();
-    if write!(
-        formatted,
+    let mut guard = LineGuard::new();
+    let max_payload = MAX_FRAME_LEN.saturating_sub(2);
+    let mut writer = TruncatingWriter::new(&mut guard.line, max_payload);
+    let _ = write!(
+        writer,
         "[{level} {target}] {message}",
         level = record.level(),
         target = record.target(),
         message = record.args(),
-    )
-    .is_err()
-    {
-        panic!(
-            "LOGGER_BUFFER_OVERFLOW formatted_len={} cap={}",
-            formatted.len(),
-            MAX_FRAME_LEN
-        );
-    }
+    );
 
-    let max_payload = MAX_FRAME_LEN.saturating_sub(2);
-    if formatted.len() > max_payload {
-        panic!(
-            "LOGGER_BUFFER_OVERFLOW formatted_len={} payload_cap={}",
-            formatted.len(),
-            max_payload
-        );
-    }
-    let mut guard = LineGuard::new();
-    for &byte in formatted.as_bytes().iter().take(max_payload) {
-        if guard.line.push(byte).is_err() {
-            panic!(
-                "LOGGER_BUFFER_OVERFLOW line_len={} cap={}",
-                guard.line.len(),
-                MAX_FRAME_LEN
-            );
+    if writer.truncated {
+        let count = TRUNCATED_LINES.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        if !TRUNCATION_LOGGED.swap(true, Ordering::AcqRel) {
+            let mut line = HeaplessString::<96>::new();
+            let _ = write!(line, "[log] truncated_lines={count}");
+            force_uart_line(line.as_str());
+        }
+        if max_payload > 0 {
+            if guard.line.len() < max_payload {
+                let _ = guard.line.push(b'~');
+            } else if let Some(last) = guard.line.as_mut_slice().last_mut() {
+                *last = b'~';
+            }
         }
     }
-    if guard.line.extend_from_slice(b"\r\n").is_err() {
-        panic!(
-            "LOGGER_BUFFER_OVERFLOW line_len={} cap={}",
-            guard.line.len(),
-            MAX_FRAME_LEN
-        );
+
+    let remaining = MAX_FRAME_LEN.saturating_sub(guard.line.len());
+    if remaining >= 2 {
+        let _ = guard.line.extend_from_slice(b"\r\n");
+    } else if remaining == 1 {
+        let _ = guard.line.push(b'\n');
     }
     if !LOG_LAYOUT_REPORTED.swap(true, Ordering::AcqRel) {
         let post_addr = BootInfoState::get()
@@ -166,10 +187,7 @@ fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
         let mut report = HeaplessString::<224>::new();
         let _ = write!(
             report,
-            "[log] formatted=0x{formatted:016x} formatted_len={flen} formatted_cap={fcap} line=0x{line:016x} line_len={llen} line_cap={lcap} post=0x{post:016x} sp=0x{sp:016x} sp_gt_post={gt} sp_post_delta=0x{delta:016x}",
-            formatted = formatted.as_bytes().as_ptr() as usize,
-            flen = formatted.len(),
-            fcap = MAX_FRAME_LEN,
+            "[log] line=0x{line:016x} line_len={llen} line_cap={lcap} post=0x{post:016x} sp=0x{sp:016x} sp_gt_post={gt} sp_post_delta=0x{delta:016x}",
             line = guard.line.as_slice().as_ptr() as usize,
             llen = guard.line.len(),
             lcap = MAX_FRAME_LEN,
@@ -227,6 +245,8 @@ static PRECOMMIT_IPC_FORBIDDEN: AtomicU32 = AtomicU32::new(0);
 static LOG_DROPS: AtomicU32 = AtomicU32::new(0);
 static LOG_LAYOUT_REPORTED: AtomicBool = AtomicBool::new(false);
 static LOGGER_CANARY: AtomicU32 = AtomicU32::new(LOGGER_CANARY_VALUE);
+static TRUNCATED_LINES: AtomicU32 = AtomicU32::new(0);
+static TRUNCATION_LOGGED: AtomicBool = AtomicBool::new(false);
 const fn env_flag(value: Option<&'static str>) -> bool {
     match value {
         Some(val) => {
@@ -561,8 +581,8 @@ mod tests {
 
     #[test]
     fn bootstrap_formatting_truncates() {
-        let mut long = HeaplessString::<96>::new();
-        for _ in 0..96 {
+        let mut long = HeaplessString::<256>::new();
+        for _ in 0..256 {
             let _ = long.push('A');
         }
 
@@ -573,7 +593,7 @@ mod tests {
             .build();
         let line = format_record_line(&record);
         assert!(line.len() <= MAX_FRAME_LEN);
-        assert!(line.ends_with(b"\r\n"));
+        assert!(line.ends_with(b"\r\n") || line.ends_with(b"\n"));
         assert!(core::str::from_utf8(&line).is_ok());
     }
 
