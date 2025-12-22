@@ -428,7 +428,7 @@ pub struct VirtioNet {
     tx_v2_recent_seq: [u32; 16],
     tx_v2_last_published_head: u16,
     tx_v2_last_published_len: u32,
-    tx_v2_last_published_seq: u32,
+    tx_v2_last_published_seq_latest: u32,
     tx_v2_used_zero_streak: u8,
     tx_states: [TxState; TX_QUEUE_SIZE],
     dma_cacheable: bool,
@@ -835,7 +835,7 @@ impl VirtioNet {
             tx_v2_recent_seq: [0; 16],
             tx_v2_last_published_head: 0,
             tx_v2_last_published_len: 0,
-            tx_v2_last_published_seq: 0,
+            tx_v2_last_published_seq_latest: 0,
             tx_v2_used_zero_streak: 0,
             tx_states: [TxState::Free; TX_QUEUE_SIZE],
             tx_in_flight: 0,
@@ -1640,7 +1640,7 @@ impl VirtioNet {
             posted,
             self.tx_v2_last_published_head,
             self.tx_v2_last_published_len,
-            self.tx_v2_last_published_seq,
+            self.tx_v2_last_published_seq_latest,
         );
         let sample_len = core::cmp::min(qsize, 8);
         for idx in 0..sample_len {
@@ -2832,7 +2832,7 @@ impl VirtioNet {
             in_flight,
             self.tx_v2_last_published_head,
             self.tx_v2_last_published_len,
-            self.tx_v2_last_published_seq,
+            self.tx_v2_last_published_seq_latest,
         );
     }
 
@@ -3292,7 +3292,7 @@ impl VirtioNet {
         self.tx_v2_publish_seq = self.tx_v2_publish_seq.wrapping_add(1);
         self.tx_v2_last_published_head = id;
         self.tx_v2_last_published_len = capped_len as u32;
-        self.tx_v2_last_published_seq = publish_seq;
+        self.tx_v2_last_published_seq_latest = publish_seq;
         if let Some(entry) = self.tx_v2_last_published_seq.get_mut(id as usize) {
             *entry = publish_seq;
         }
