@@ -168,6 +168,14 @@ enum TxAnomalyReason {
     DmaReadbackMismatch,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RxAnomalyReason {
+    DescLenZero,
+    HeaderLenZero,
+    PayloadLenZero,
+    TotalLtHeader,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct DescSpec {
     addr: u64,
@@ -529,6 +537,7 @@ pub struct VirtioNet {
     tx_progress_log_gate: u32,
     negotiated_features: u64,
     rx_header_len: usize,
+    tx_header_len: usize,
     rx_payload_capacity: usize,
     rx_frame_capacity: usize,
     rx_buffer_capacity: usize,
@@ -554,6 +563,7 @@ pub struct VirtioNet {
     descriptor_corrupt_logged: bool,
     tx_state_violation_logged: bool,
     tx_anomaly_logged: bool,
+    rx_anomaly_logged: bool,
     tx_descriptor_dumped: bool,
     tx_used_window_dumped: bool,
     tx_dma_log_once: bool,
@@ -948,6 +958,7 @@ impl VirtioNet {
             negotiated_features,
             dma_cacheable,
             rx_header_len: net_header_len,
+            tx_header_len: net_header_len,
             rx_payload_capacity,
             rx_frame_capacity,
             rx_buffer_capacity,
@@ -973,6 +984,7 @@ impl VirtioNet {
             descriptor_corrupt_logged: false,
             tx_state_violation_logged: false,
             tx_anomaly_logged: false,
+            rx_anomaly_logged: false,
             tx_descriptor_dumped: false,
             tx_used_window_dumped: false,
             tx_dma_log_once: false,
@@ -1845,6 +1857,29 @@ impl VirtioNet {
         self.freeze_and_capture("tx_anomaly");
     }
 
+    fn rx_anomaly(&mut self, reason: RxAnomalyReason, snapshot: &str) {
+        if self.rx_anomaly_logged {
+            self.freeze_and_capture("rx_anomaly_repeat");
+            return;
+        }
+        self.rx_anomaly_logged = true;
+        let (used_idx, avail_idx) = self.rx_queue.indices();
+        error!(
+            target: "net-console",
+            "[virtio-net][rx-anomaly] reason={:?} snapshot={} avail.idx={} used.idx={} last_used={} rx_used_count={} rx_poll_count={} device_faulted={} frozen={}",
+            reason,
+            snapshot,
+            avail_idx,
+            used_idx,
+            self.rx_queue.last_used,
+            self.rx_used_count,
+            self.rx_poll_count,
+            self.device_faulted,
+            forensics_frozen(),
+        );
+        self.freeze_and_capture("rx_anomaly");
+    }
+
     fn validate_tx_reclaim_state(&mut self, id: u16) -> Result<(), ()> {
         if self.tx_free.iter().any(|&entry| entry == id) {
             self.tx_anomaly(TxAnomalyReason::FreeListCorrupt, "tx_reclaim_already_free");
@@ -2185,27 +2220,40 @@ impl VirtioNet {
             used_len,
         )?;
 
-        let mut resolved_descs: HeaplessVec<DescSpec, RX_QUEUE_SIZE> = HeaplessVec::new();
-        for (idx, spec) in descs.iter().enumerate() {
-            let desc_index = head_id.wrapping_add(idx as u16);
-            let next = if idx + 1 < descs.len() {
-                Some(head_id.wrapping_add((idx + 1) as u16))
-            } else {
-                spec.next
-            };
-            self.rx_queue
-                .setup_descriptor(desc_index, spec.addr, spec.len, spec.flags, next);
-            let resolved_flags = match next {
-                Some(_) => spec.flags | VIRTQ_DESC_F_NEXT,
-                None => spec.flags,
-            };
-            let _ = resolved_descs.push(DescSpec {
-                addr: spec.addr,
-                len: spec.len,
-                flags: resolved_flags,
-                next,
-            });
+        debug_assert!(
+            descs.len() == 1,
+            "virtio-net currently supports single-descriptor RX chains only"
+        );
+        if descs.len() != 1 {
+            error!(
+                target: "net-console",
+                "[virtio-net] RX chain length {} unsupported (single-descriptor only)",
+                descs.len(),
+            );
+            self.device_faulted = true;
+            self.last_error.get_or_insert("rx_chain_len");
+            return Err(());
         }
+        let spec = descs[0];
+        if spec.next.is_some() || (spec.flags & VIRTQ_DESC_F_NEXT) != 0 {
+            error!(
+                target: "net-console",
+                "[virtio-net] RX chain contains NEXT link (single-descriptor only) head_id={}",
+                head_id,
+            );
+            self.device_faulted = true;
+            self.last_error.get_or_insert("rx_chain_next");
+            return Err(());
+        }
+        self.rx_queue
+            .setup_descriptor(head_id, spec.addr, spec.len, spec.flags, None);
+        let mut resolved_descs: HeaplessVec<DescSpec, RX_QUEUE_SIZE> = HeaplessVec::new();
+        let _ = resolved_descs.push(DescSpec {
+            addr: spec.addr,
+            len: spec.len,
+            flags: spec.flags,
+            next: None,
+        });
 
         let header_len = self.rx_header_len;
         let total_len = resolved_descs
@@ -2214,15 +2262,15 @@ impl VirtioNet {
             .unwrap_or(0);
         let payload_len = total_len.saturating_sub(header_len);
         if total_len < header_len {
-            self.tx_anomaly(TxAnomalyReason::DescLenZero, "tx_total_lt_header");
+            self.rx_anomaly(RxAnomalyReason::TotalLtHeader, "rx_total_lt_header");
             return Err(());
         }
         if header_len == 0 {
-            self.tx_anomaly(TxAnomalyReason::DescLenZero, "tx_header_len_zero");
+            self.rx_anomaly(RxAnomalyReason::HeaderLenZero, "rx_header_len_zero");
             return Err(());
         }
         if payload_len == 0 {
-            self.tx_anomaly(TxAnomalyReason::DescLenZero, "tx_payload_len_zero");
+            self.rx_anomaly(RxAnomalyReason::PayloadLenZero, "rx_payload_len_zero");
         }
         let _header_fields = self.inspect_tx_header(head_id, header_len);
         let _payload_overlaps = resolved_descs.get(0).map_or(false, |desc| {
@@ -2232,8 +2280,8 @@ impl VirtioNet {
         });
 
         fence(AtomicOrdering::Release);
-        self.verify_descriptor_write("RX", QueueKind::Rx, head_id, &resolved_descs)?;
         self.rx_queue.sync_descriptor_table_for_device();
+        self.verify_descriptor_write("RX", QueueKind::Rx, head_id, &resolved_descs)?;
         self.log_pre_publish_if_suspicious("RX", QueueKind::Rx, head_id, &resolved_descs)?;
         fence(AtomicOrdering::Release);
         if let Err(fault) = validate_chain_pre_publish(
@@ -2309,29 +2357,42 @@ impl VirtioNet {
         }
         self.validate_chain_nonzero("TX", head_id, descs, None, None, None, used_len)?;
 
-        let mut resolved_descs: HeaplessVec<DescSpec, TX_QUEUE_SIZE> = HeaplessVec::new();
-        for (idx, spec) in descs.iter().enumerate() {
-            let desc_index = head_id.wrapping_add(idx as u16);
-            let next = if idx + 1 < descs.len() {
-                Some(head_id.wrapping_add((idx + 1) as u16))
-            } else {
-                spec.next
-            };
-            self.tx_queue
-                .setup_descriptor(desc_index, spec.addr, spec.len, spec.flags, next);
-            let resolved_flags = match next {
-                Some(_) => spec.flags | VIRTQ_DESC_F_NEXT,
-                None => spec.flags,
-            };
-            let _ = resolved_descs.push(DescSpec {
-                addr: spec.addr,
-                len: spec.len,
-                flags: resolved_flags,
-                next,
-            });
+        debug_assert!(
+            descs.len() == 1,
+            "virtio-net currently supports single-descriptor TX chains only"
+        );
+        if descs.len() != 1 {
+            error!(
+                target: "net-console",
+                "[virtio-net] TX chain length {} unsupported (single-descriptor only)",
+                descs.len(),
+            );
+            self.device_faulted = true;
+            self.last_error.get_or_insert("tx_chain_len");
+            return Err(());
         }
+        let spec = descs[0];
+        if spec.next.is_some() || (spec.flags & VIRTQ_DESC_F_NEXT) != 0 {
+            error!(
+                target: "net-console",
+                "[virtio-net] TX chain contains NEXT link (single-descriptor only) head_id={}",
+                head_id,
+            );
+            self.device_faulted = true;
+            self.last_error.get_or_insert("tx_chain_next");
+            return Err(());
+        }
+        self.tx_queue
+            .setup_descriptor(head_id, spec.addr, spec.len, spec.flags, None);
+        let mut resolved_descs: HeaplessVec<DescSpec, TX_QUEUE_SIZE> = HeaplessVec::new();
+        let _ = resolved_descs.push(DescSpec {
+            addr: spec.addr,
+            len: spec.len,
+            flags: spec.flags,
+            next: None,
+        });
 
-        let header_len = self.rx_header_len;
+        let header_len = self.tx_header_len;
         let total_len = resolved_descs
             .get(0)
             .map(|desc| desc.len as usize)
@@ -2356,8 +2417,8 @@ impl VirtioNet {
         });
 
         fence(AtomicOrdering::Release);
-        self.verify_descriptor_write("TX", QueueKind::Tx, head_id, &resolved_descs)?;
         self.tx_queue.sync_descriptor_table_for_device();
+        self.verify_descriptor_write("TX", QueueKind::Tx, head_id, &resolved_descs)?;
         self.log_tx_descriptor_readback(head_id, &resolved_descs);
         self.log_pre_publish_if_suspicious("TX", QueueKind::Tx, head_id, &resolved_descs)?;
         fence(AtomicOrdering::Release);
@@ -3485,15 +3546,16 @@ impl VirtioNet {
             let ptr = buffer.ptr().as_ptr();
             let start = ptr as usize;
             dma_clean(ptr, capped_len, self.dma_cacheable, "clean tx buffer");
-            let payload_start = start.saturating_add(self.rx_header_len);
-            let payload_end = payload_start.saturating_add(capped_len.saturating_sub(self.rx_header_len));
+            let payload_start = start.saturating_add(self.tx_header_len);
+            let payload_end =
+                payload_start.saturating_add(capped_len.saturating_sub(self.tx_header_len));
             if force_log || !self.tx_dma_log_once {
                 self.tx_dma_log_once = true;
                 info!(
                     target: "virtio-net",
                     "[virtio-net][dma] tx buffer clean head={} header=0x{start:016x}..0x{hdr_end:016x} payload=0x{payload_start:016x}..0x{payload_end:016x}",
                     head_id,
-                    hdr_end = start.saturating_add(self.rx_header_len),
+                    hdr_end = start.saturating_add(self.tx_header_len),
                     payload_start = payload_start,
                     payload_end = payload_end,
                 );
@@ -4101,7 +4163,7 @@ impl TxToken for VirtioTxToken {
                 .tx_buffers
                 .get_mut(id as usize)
                 .expect("tx descriptor out of range");
-            let header_len = driver.rx_header_len;
+            let header_len = driver.tx_header_len;
             let max_len = buffer.as_mut_slice().len();
             if max_len <= header_len {
                 driver.tx_drops = driver.tx_drops.saturating_add(1);
@@ -4725,6 +4787,7 @@ struct VirtQueue {
     base_paddr: usize,
     cacheable: bool,
     used_zero_len_head: Option<u16>,
+    used_zero_len_repeat_logged: bool,
 }
 
 impl VirtQueue {
@@ -5005,6 +5068,7 @@ impl VirtQueue {
             base_paddr,
             cacheable,
             used_zero_len_head: None,
+            used_zero_len_repeat_logged: false,
         })
     }
 
@@ -5306,21 +5370,29 @@ impl VirtQueue {
             let desc = unsafe { read_volatile(self.desc.as_ptr().add(head_id as usize)) };
             if allow_zero_len {
                 self.used_zero_len_head = None;
+                self.used_zero_len_repeat_logged = false;
             } else {
                 if self.used_zero_len_head == Some(head_id) {
-                    return Err(ForensicFault {
-                        queue_name: queue_label,
-                        qsize: self.size,
-                        head: head_id,
-                        idx: self.last_used,
-                        addr: desc.addr,
-                        len: elem.len,
-                        flags: desc.flags,
-                        next: desc.next,
-                        reason: ForensicFaultReason::UsedLenZeroRepeat,
-                    });
+                    if !self.used_zero_len_repeat_logged {
+                        self.used_zero_len_repeat_logged = true;
+                        warn!(
+                            target: "net-console",
+                            "[virtio-net] used len zero repeated: queue={} head={} idx={} ring_slot={} used_len={} desc_addr=0x{addr:016x} desc_len={len} desc_flags=0x{flags:04x} desc_next={next}",
+                            queue_label,
+                            head_id,
+                            self.last_used,
+                            ring_slot,
+                            elem.len,
+                            addr = desc.addr,
+                            len = desc.len,
+                            flags = desc.flags,
+                            next = desc.next,
+                        );
+                    }
+                    return Ok(None);
                 }
                 self.used_zero_len_head = Some(head_id);
+                self.used_zero_len_repeat_logged = false;
                 warn!(
                     target: "net-console",
                     "[virtio-net] used len zero: queue={} head={} idx={} ring_slot={} used_len={} desc_addr=0x{addr:016x} desc_len={len} desc_flags=0x{flags:04x} desc_next={next}",
@@ -5339,6 +5411,7 @@ impl VirtQueue {
         }
         if elem.len != 0 {
             self.used_zero_len_head = None;
+            self.used_zero_len_repeat_logged = false;
         }
         if elem.id >= u32::from(self.size) {
             uart_ring_oob(
