@@ -29,8 +29,7 @@ use crate::sel4::{seL4_CapInitThreadVSpace, DeviceFrame, RamFrame};
 const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
 const NET_VIRTIO_TX_V2: bool = cfg!(feature = "net-virtio-tx-v2");
-const VIRTIO_DMA_OVERKILL: bool = true;
-const VIRTIO_DMA_OVERKILL_RING_EVERY: u32 = 256;
+const VIRTIO_DMA_OVERKILL: bool = false;
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -77,7 +76,6 @@ const MAX_QUEUE_SIZE: usize = if RX_QUEUE_SIZE > TX_QUEUE_SIZE {
 const VIRTIO_NET_HEADER_LEN_BASIC: usize = core::mem::size_of::<VirtioNetHdr>();
 const VIRTIO_NET_HEADER_LEN_MRG: usize = core::mem::size_of::<VirtioNetHdrMrgRxbuf>();
 const FRAME_BUFFER_LEN: usize = MAX_FRAME_LEN + VIRTIO_NET_HEADER_LEN_MRG;
-const VIRTIO_CACHELINE_BYTES: usize = 64;
 static LOG_TCP_DEST_PORT: AtomicBool = AtomicBool::new(true);
 static RX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -898,7 +896,6 @@ impl VirtioNet {
         };
         driver.initialise_queues();
         driver.log_mmio_state_once("init");
-        driver.check_queue_ranges_and_fingerprint();
 
         let queue0_pfn = driver.rx_queue.pfn;
         let queue1_pfn = driver.tx_queue.pfn;
@@ -988,7 +985,8 @@ impl VirtioNet {
     }
 
     pub fn debug_dump_forensics(&mut self) {
-        self.log_mmio_state("netdump", false);
+        self.log_mmio_state("netdump");
+        self.check_queue_ranges_and_fingerprint();
         self.dump_tx_window_small();
         self.dump_tx_used_window_small();
         self.dump_rx_window_small();
@@ -1004,7 +1002,7 @@ impl VirtioNet {
         if reason == "first_tx" && self.mmio_dumped_tx_first {
             return;
         }
-        self.log_mmio_state(reason, true);
+        self.log_mmio_state(reason);
         if reason == "init" {
             self.mmio_dumped_init = true;
         }
@@ -1013,75 +1011,76 @@ impl VirtioNet {
         }
     }
 
-    fn log_mmio_state(&mut self, reason: &'static str, check_mismatch: bool) {
-        if !rl(RlTag::MmioReadback, 1) && reason == "notify" {
+    fn log_mmio_state(&mut self, reason: &'static str) {
+        if reason == "notify" && !rl(RlTag::MmioReadback, 256) {
             return;
         }
-        let rx = self.regs.read_queue_state(RX_QUEUE_INDEX);
-        let tx = self.regs.read_queue_state(TX_QUEUE_INDEX);
-        let rx_expected_desc = self.rx_queue.base_paddr as u64 + self.rx_queue.layout.desc_offset as u64;
-        let rx_expected_avail = self.rx_queue.base_paddr as u64 + self.rx_queue.layout.avail_offset as u64;
-        let rx_expected_used = self.rx_queue.base_paddr as u64 + self.rx_queue.layout.used_offset as u64;
-        let tx_expected_desc = self.tx_queue.base_paddr as u64 + self.tx_queue.layout.desc_offset as u64;
-        let tx_expected_avail = self.tx_queue.base_paddr as u64 + self.tx_queue.layout.avail_offset as u64;
-        let tx_expected_used = self.tx_queue.base_paddr as u64 + self.tx_queue.layout.used_offset as u64;
+        let _ = self.mmio_readback_queue(RX_QUEUE_INDEX, "RX", reason);
+        let _ = self.mmio_readback_queue(TX_QUEUE_INDEX, "TX", reason);
+    }
 
+    fn mmio_readback_queue(
+        &mut self,
+        index: u32,
+        label: &'static str,
+        reason: &'static str,
+    ) -> QueueMmioState {
+        let state = self.regs.read_queue_state(index);
+        let (expected_desc, expected_avail, expected_used) = if index == RX_QUEUE_INDEX {
+            (
+                self.rx_queue.base_paddr as u64 + self.rx_queue.layout.desc_offset as u64,
+                self.rx_queue.base_paddr as u64 + self.rx_queue.layout.avail_offset as u64,
+                self.rx_queue.base_paddr as u64 + self.rx_queue.layout.used_offset as u64,
+            )
+        } else {
+            (
+                self.tx_queue.base_paddr as u64 + self.tx_queue.layout.desc_offset as u64,
+                self.tx_queue.base_paddr as u64 + self.tx_queue.layout.avail_offset as u64,
+                self.tx_queue.base_paddr as u64 + self.tx_queue.layout.used_offset as u64,
+            )
+        };
         info!(
             target: "virtio-forensics",
-            "[virtio-forensics] mmio {reason} queue=RX mode={:?} sel={} size={} ready={} desc=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) avail=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) used=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) expected desc=0x{:016x} avail=0x{:016x} used=0x{:016x} align={} pfn=0x{:08x}",
+            "[virtio-forensics] mmio {reason} queue={label} mode={:?} sel={} size={} ready={} desc=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) avail=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) used=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) expected desc=0x{:016x} avail=0x{:016x} used=0x{:016x} align={} pfn=0x{:08x}",
             self.mmio_mode,
-            rx.sel,
-            rx.size,
-            rx.ready,
-            rx.desc_addr(),
-            rx.desc_hi,
-            rx.desc_lo,
-            rx.driver_addr(),
-            rx.driver_hi,
-            rx.driver_lo,
-            rx.device_addr(),
-            rx.device_hi,
-            rx.device_lo,
-            rx_expected_desc,
-            rx_expected_avail,
-            rx_expected_used,
-            rx.align,
-            rx.pfn,
+            state.sel,
+            state.size,
+            state.ready,
+            state.desc_addr(),
+            state.desc_hi,
+            state.desc_lo,
+            state.driver_addr(),
+            state.driver_hi,
+            state.driver_lo,
+            state.device_addr(),
+            state.device_hi,
+            state.device_lo,
+            expected_desc,
+            expected_avail,
+            expected_used,
+            state.align,
+            state.pfn,
         );
-        info!(
-            target: "virtio-forensics",
-            "[virtio-forensics] mmio {reason} queue=TX mode={:?} sel={} size={} ready={} desc=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) avail=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) used=0x{:016x} (hi=0x{:08x} lo=0x{:08x}) expected desc=0x{:016x} avail=0x{:016x} used=0x{:016x} align={} pfn=0x{:08x}",
-            self.mmio_mode,
-            tx.sel,
-            tx.size,
-            tx.ready,
-            tx.desc_addr(),
-            tx.desc_hi,
-            tx.desc_lo,
-            tx.driver_addr(),
-            tx.driver_hi,
-            tx.driver_lo,
-            tx.device_addr(),
-            tx.device_hi,
-            tx.device_lo,
-            tx_expected_desc,
-            tx_expected_avail,
-            tx_expected_used,
-            tx.align,
-            tx.pfn,
-        );
-
-        if check_mismatch && matches!(self.mmio_mode, VirtioMmioMode::Modern) {
-            let rx_mismatch = rx.desc_addr() != rx_expected_desc
-                || rx.driver_addr() != rx_expected_avail
-                || rx.device_addr() != rx_expected_used;
-            let tx_mismatch = tx.desc_addr() != tx_expected_desc
-                || tx.driver_addr() != tx_expected_avail
-                || tx.device_addr() != tx_expected_used;
-            if rx_mismatch || tx_mismatch {
-                self.freeze_and_capture("mmio_queue_addr_mismatch");
+        if matches!(self.mmio_mode, VirtioMmioMode::Modern) {
+            let suspicious = state.size == 0
+                || state.ready == 0
+                || state.desc_addr() == 0
+                || state.driver_addr() == 0
+                || state.device_addr() == 0;
+            if suspicious {
+                warn!(
+                    target: "virtio-forensics",
+                    "[virtio-forensics] mmio_readback_suspicious queue={label} sel={} size={} ready={} desc=0x{:016x} avail=0x{:016x} used=0x{:016x}",
+                    state.sel,
+                    state.size,
+                    state.ready,
+                    state.desc_addr(),
+                    state.driver_addr(),
+                    state.device_addr(),
+                );
             }
         }
+        state
     }
 
     fn notify_queue(&mut self, queue: u32, label: &'static str) {
@@ -1104,10 +1103,12 @@ impl VirtioNet {
             let (tx_used_idx, tx_avail_idx) = self.tx_queue.indices();
             info!(
                 target: "virtio-forensics",
-                "[virtio-forensics] notify label={} qidx={} sel={} rx(desc=0x{:016x} avail=0x{:016x} used=0x{:016x} size={}) tx(desc=0x{:016x} avail=0x{:016x} used=0x{:016x} size={}) rx_idx(a/u/l)=({}/{}/{}) tx_idx(a/u/l)=({}/{}/{})",
+                "[virtio-forensics] notify label={} qidx={} sel={} status=0x{:02x} isr=0x{:02x} rx(desc=0x{:016x} avail=0x{:016x} used=0x{:016x} size={}) tx(desc=0x{:016x} avail=0x{:016x} used=0x{:016x} size={}) rx_idx(a/u/l)=({}/{}/{}) tx_idx(a/u/l)=({}/{}/{})",
                 label,
                 queue,
                 sel,
+                self.regs.status(),
+                self.regs.isr_status(),
                 self.rx_queue.base_paddr + self.rx_queue.layout.desc_offset,
                 self.rx_queue.base_paddr + self.rx_queue.layout.avail_offset,
                 self.rx_queue.base_paddr + self.rx_queue.layout.used_offset,
@@ -1125,7 +1126,7 @@ impl VirtioNet {
             );
         }
         if label == "TX" && rl(RlTag::MmioReadback, 256) {
-            self.log_mmio_state("notify", false);
+            self.log_mmio_state("notify");
         }
         if label == "RX" {
             self.rx_queue.notify(&mut self.regs, queue);
@@ -1176,8 +1177,8 @@ impl VirtioNet {
             self.freeze_and_capture("queue_range_overlap");
         }
 
-        let rx_fp = desc_fingerprint(&self.rx_queue);
-        let tx_fp = desc_fingerprint(&self.tx_queue);
+        let rx_fp = desc_fingerprint_safe(&self.rx_queue);
+        let tx_fp = desc_fingerprint_safe(&self.tx_queue);
         info!(
             target: "virtio-forensics",
             "[virtio-forensics] queue fingerprint rx=0x{:016x} tx=0x{:016x} rx_base=0x{:x} tx_base=0x{:x}",
@@ -1187,7 +1188,12 @@ impl VirtioNet {
             self.tx_queue.base_paddr,
         );
         if self.rx_queue.base_paddr == self.tx_queue.base_paddr && rx_fp == tx_fp {
-            self.freeze_and_capture("queue_base_collision");
+            warn!(
+                target: "virtio-forensics",
+                "[virtio-forensics] queue base collision rx_base=0x{:x} tx_base=0x{:x}",
+                self.rx_queue.base_paddr,
+                self.tx_queue.base_paddr,
+            );
         }
     }
 
@@ -1392,7 +1398,13 @@ impl VirtioNet {
             let ring_slot = (slot_idx as usize) % qsize;
             let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
             let head = unsafe { read_volatile(ring_ptr) };
-            let desc = self.tx_queue.read_descriptor(head);
+            let Some(desc) = self.tx_queue.read_descriptor_checked(head) else {
+                info!(
+                    target: "virtio-net",
+                    "[virtio-net][forensics] tx avail[{ring_slot}] -> head={head} desc=invalid",
+                );
+                continue;
+            };
             info!(
                 target: "net-console",
                 "[virtio-net][forensics] tx avail[{ring_slot}] -> head={head} desc{head}=0x{addr:016x}/{len}/0x{flags:04x}/next={next}",
@@ -1452,7 +1464,13 @@ impl VirtioNet {
             let ring_slot = (slot_idx as usize) % qsize;
             let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
             let head = unsafe { read_volatile(ring_ptr) };
-            let desc = self.tx_queue.read_descriptor(head);
+            let Some(desc) = self.tx_queue.read_descriptor_checked(head) else {
+                info!(
+                    target: "virtio-forensics",
+                    "[virtio-forensics] tx avail[{ring_slot}] head={head} desc=invalid",
+                );
+                continue;
+            };
             info!(
                 target: "virtio-forensics",
                 "[virtio-forensics] tx avail[{ring_slot}] head={head} desc.addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}",
@@ -1587,7 +1605,13 @@ impl VirtioNet {
             let ring_slot = (slot_idx as usize) % qsize;
             let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
             let head = unsafe { read_volatile(ring_ptr) };
-            let desc = self.rx_queue.read_descriptor(head);
+            let Some(desc) = self.rx_queue.read_descriptor_checked(head) else {
+                info!(
+                    target: "virtio-forensics",
+                    "[virtio-forensics] rx avail[{ring_slot}] head={head} desc=invalid",
+                );
+                continue;
+            };
             info!(
                 target: "net-console",
                 "[virtio-net][forensics] rx avail[{ring_slot}] -> head={head} desc{head}=0x{addr:016x}/{len}/0x{flags:04x}/next={next}",
@@ -1613,7 +1637,13 @@ impl VirtioNet {
             let ring_slot = (slot_idx as usize) % qsize;
             let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
             let head = unsafe { read_volatile(ring_ptr) };
-            let desc = self.rx_queue.read_descriptor(head);
+            let Some(desc) = self.rx_queue.read_descriptor_checked(head) else {
+                info!(
+                    target: "virtio-net",
+                    "[virtio-net][forensics] rx avail[{ring_slot}] -> head={head} desc=invalid",
+                );
+                continue;
+            };
             info!(
                 target: "virtio-forensics",
                 "[virtio-forensics] rx avail[{ring_slot}] head={head} desc.addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}",
@@ -3305,37 +3335,29 @@ impl VirtioNet {
             return;
         }
 
-        let buffer_range = self
-            .clean_tx_buffer_for_device(id, capped_len, self.tx_anomaly_logged);
+        let _buffer_range =
+            self.clean_tx_buffer_for_device(id, capped_len, self.tx_anomaly_logged);
         self.tx_queue
             .setup_descriptor(id, addr, capped_len as u32, 0, None);
         self.tx_queue.sync_descriptor_table_for_device();
-        if !self.log_tx_desc_raw(id) {
+        if !self.log_tx_desc_summary(id) {
             return;
-        }
-
-        let avail = self.tx_queue.avail.as_ptr();
-        let avail_idx = unsafe { read_volatile(&(*avail).idx) };
-        let ring_slot = (avail_idx as usize) % usize::from(self.tx_queue.size);
-        if rl(RlTag::DescRaw, 256) {
-            let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
-            let existing = unsafe { read_volatile(ring_ptr) };
-            let idx_ptr = unsafe { &(*avail).idx as *const u16 } as usize;
-            info!(
-                target: "virtio-forensics",
-                "[virtio-forensics] tx avail prewrite slot={} idx={} existing_head={} avail_idx_ptr=0x{:x}",
-                ring_slot,
-                avail_idx,
-                existing,
-                idx_ptr,
-            );
         }
         // Avail ring publish is the final step so the device never observes a
         // descriptor before buffer and descriptor cache maintenance completes.
         if let Some((slot, _avail_idx, _old_idx)) = self.tx_queue.push_avail(id) {
             self.tx_queue.sync_avail_ring_for_device();
-            self.dma_overkill_tx(id, slot, buffer_range);
+            self.dma_overkill_tx(id, slot, _buffer_range);
             self.tx_submit = self.tx_submit.wrapping_add(1);
+            if rl(RlTag::TxPublish, 256) {
+                info!(
+                    target: "virtio-forensics",
+                    "[virtio-forensics] tx publish id={} len={} slot={}",
+                    id,
+                    capped_len,
+                    slot,
+                );
+            }
             if slot == 0 && !self.tx_wrap_logged {
                 self.tx_wrap_logged = true;
             }
@@ -3347,23 +3369,21 @@ impl VirtioNet {
         }
     }
 
-    fn log_tx_desc_raw(&mut self, head_id: u16) -> bool {
-        let desc_ptr = unsafe { self.tx_queue.desc.as_ptr().add(head_id as usize) };
-        let raw_ptr = desc_ptr as *const u8;
-        let raw_lo;
-        let raw_hi;
-        unsafe {
-            raw_lo = read_unaligned(raw_ptr as *const u64);
-            raw_hi = read_unaligned(raw_ptr.add(8) as *const u64);
-        }
-        let desc = unsafe { read_volatile(desc_ptr) };
+    fn log_tx_desc_summary(&mut self, head_id: u16) -> bool {
+        let Some(desc) = self.tx_queue.read_descriptor_checked(head_id) else {
+            warn!(
+                target: "virtio-forensics",
+                "[virtio-forensics] tx desc invalid id={} (out of range)",
+                head_id,
+            );
+            self.freeze_and_capture("tx_desc_oob");
+            return false;
+        };
         if rl(RlTag::DescRaw, 256) {
             info!(
                 target: "virtio-forensics",
-                "[virtio-forensics] tx desc raw id={} raw_lo=0x{:016x} raw_hi=0x{:016x} addr=0x{:016x} len={} flags=0x{:04x} next={}",
+                "[virtio-forensics] tx desc id={} addr=0x{:016x} len={} flags=0x{:04x} next={}",
                 head_id,
-                raw_lo,
-                raw_hi,
                 desc.addr,
                 desc.len,
                 desc.flags,
@@ -3397,9 +3417,9 @@ impl VirtioNet {
 
     fn dma_overkill_tx(
         &mut self,
-        head_id: u16,
-        ring_slot: u16,
-        buffer_range: Option<(usize, usize)>,
+        _head_id: u16,
+        _ring_slot: u16,
+        _buffer_range: Option<(usize, usize)>,
     ) {
         if !VIRTIO_DMA_OVERKILL {
             return;
@@ -3407,47 +3427,9 @@ impl VirtioNet {
         if !DMA_OVERKILL_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             info!(
                 target: "virtio-forensics",
-                "[virtio-forensics] dma_overkill=on",
+                "[virtio-forensics] dma_overkill=on (disabled by default)",
             );
         }
-        if let Some((start, end)) = buffer_range {
-            let len = end.saturating_sub(start);
-            dma_overkill_range(start as *const u8, len, self.dma_cacheable, "tx buffer overkill");
-        }
-        let desc_ptr = unsafe { self.tx_queue.desc.as_ptr().add(head_id as usize) } as *const u8;
-        dma_overkill_range(
-            desc_ptr,
-            core::mem::size_of::<VirtqDesc>(),
-            self.dma_cacheable,
-            "tx desc overkill",
-        );
-        let avail = self.tx_queue.avail.as_ptr();
-        let ring_ptr =
-            unsafe { (*avail).ring.as_ptr().add(ring_slot as usize) as *const u16 } as *const u8;
-        dma_overkill_range(
-            ring_ptr,
-            core::mem::size_of::<u16>(),
-            self.dma_cacheable,
-            "tx avail slot overkill",
-        );
-        let idx_ptr = unsafe { &(*avail).idx as *const u16 } as *const u8;
-        dma_overkill_range(
-            idx_ptr,
-            core::mem::size_of::<u16>(),
-            self.dma_cacheable,
-            "tx avail idx overkill",
-        );
-        if rl(RlTag::Overkill, VIRTIO_DMA_OVERKILL_RING_EVERY) {
-            let base = self.tx_queue.desc.as_ptr() as *const u8;
-            dma_overkill_range(
-                base,
-                self.tx_queue.layout.total_len,
-                self.dma_cacheable,
-                "tx ring overkill",
-            );
-        }
-        // Confirm visibility before notifying as an experiment to isolate DMA ordering issues.
-        dma_barrier();
     }
 
     fn clean_tx_buffer_for_device(
@@ -5047,6 +5029,13 @@ impl VirtQueue {
         unsafe { read_volatile(self.desc.as_ptr().add(index as usize)) }
     }
 
+    fn read_descriptor_checked(&self, index: u16) -> Option<VirtqDesc> {
+        if index >= self.size {
+            return None;
+        }
+        Some(unsafe { read_volatile(self.desc.as_ptr().add(index as usize)) })
+    }
+
     fn indices(&self) -> (u16, u16) {
         let used = self.used.as_ptr();
         let avail = self.avail.as_ptr();
@@ -5290,53 +5279,23 @@ fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
 }
 
-fn align_down(value: usize, align: usize) -> usize {
-    debug_assert!(align.is_power_of_two());
-    value & !(align - 1)
-}
-
 fn ranges_overlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> bool {
     a_start < b_end && b_start < a_end
 }
 
-fn desc_fingerprint(queue: &VirtQueue) -> u64 {
+fn desc_fingerprint_safe(queue: &VirtQueue) -> u64 {
     let count = core::cmp::min(queue.size as usize, 2);
-    if count == 0 {
-        return 0;
-    }
-    let base = queue.desc.as_ptr() as *const u8;
     let mut acc = 0u64;
     for idx in 0..count {
-        let offset = idx * core::mem::size_of::<VirtqDesc>();
-        unsafe {
-            let ptr = base.add(offset);
-            let lo = read_unaligned(ptr as *const u64);
-            let hi = read_unaligned(ptr.add(8) as *const u64);
-            acc ^= lo ^ hi;
-        }
+        let Some(desc) = queue.read_descriptor_checked(idx as u16) else {
+            continue;
+        };
+        acc ^= desc.addr
+            ^ u64::from(desc.len)
+            ^ u64::from(desc.flags)
+            ^ u64::from(desc.next);
     }
     acc
-}
-
-fn align_cache_range(ptr: *const u8, len: usize) -> Option<(usize, usize)> {
-    if len == 0 {
-        return None;
-    }
-    let start = ptr as usize;
-    let end = start.saturating_add(len);
-    let aligned_start = align_down(start, VIRTIO_CACHELINE_BYTES);
-    let aligned_end = align_up(end, VIRTIO_CACHELINE_BYTES);
-    Some((aligned_start, aligned_end))
-}
-
-fn dma_overkill_range(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
-    let Some((aligned_start, aligned_end)) = align_cache_range(ptr, len) else {
-        return;
-    };
-    let aligned_len = aligned_end.saturating_sub(aligned_start);
-    let aligned_ptr = aligned_start as *const u8;
-    dma_clean(aligned_ptr, aligned_len, cacheable, reason);
-    dma_invalidate(aligned_ptr, aligned_len, cacheable, reason);
 }
 
 #[cfg(target_arch = "aarch64")]
