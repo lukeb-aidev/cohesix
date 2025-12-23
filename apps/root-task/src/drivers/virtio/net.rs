@@ -1312,8 +1312,8 @@ impl VirtioNet {
                     entry.gen,
                     entry.total_len,
                     addr = entry.addr,
-                    entry.slot_at_publish,
-                    entry.avail_idx_at_publish,
+                    slot = entry.slot_at_publish,
+                    avail_idx = entry.avail_idx_at_publish,
                 );
             }
         }
@@ -1525,13 +1525,13 @@ impl VirtioNet {
         slot: u16,
         avail_idx: u16,
     ) -> Result<(), ()> {
+        let gen = self.tx_posted_gen(head_id).unwrap_or(0);
         let Some(entry) = self.tx_owned.get_mut(head_id as usize) else {
             return self.tx_state_violation("tx_owned_oob", head_id, Some(slot));
         };
         if entry.is_some() {
             return self.tx_state_violation("tx_owned_double", head_id, Some(slot));
         }
-        let gen = self.tx_posted_gen(head_id).unwrap_or(0);
         *entry = Some(TxPosted {
             gen,
             total_len: total_len.min(u32::MAX as usize) as u32,
@@ -1642,11 +1642,11 @@ impl VirtioNet {
                 observed_head,
                 desc.len,
                 expected.len,
-                self.tx_queue.last_used,
-                self.tx_queue.indices().0,
-                self.tx_queue.indices().1,
                 addr = desc.addr,
                 expected_addr = expected.addr,
+                last_used = self.tx_queue.last_used,
+                used_idx = self.tx_queue.indices().0,
+                avail_idx = self.tx_queue.indices().1,
             );
             return self.tx_state_violation("tx_publish_mismatch", head_id, Some(slot));
         }
@@ -2034,8 +2034,8 @@ impl VirtioNet {
                 entry.gen,
                 entry.total_len,
                 addr = entry.addr,
-                entry.slot_at_publish,
-                entry.avail_idx_at_publish,
+                slot = entry.slot_at_publish,
+                avail_idx = entry.avail_idx_at_publish,
             );
             return self.tx_state_violation("tx_owned_in_use", head_id, None);
         }
