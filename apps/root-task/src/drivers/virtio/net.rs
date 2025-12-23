@@ -4106,7 +4106,7 @@ impl VirtioRegs {
                 }
                 Err(err) => return Err(DriverError::from(err)),
             };
-            let regs = VirtioRegs {
+            let mut regs = VirtioRegs {
                 mmio: frame,
                 mode: VirtioMmioMode::Modern,
             };
