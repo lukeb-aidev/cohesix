@@ -4867,6 +4867,7 @@ impl VirtQueue {
         );
 
         regs.select_queue(index);
+        regs.queue_ready(0);
         regs.set_queue_size(queue_size);
 
         let queue_pfn = (base_paddr >> seL4_PageBits) as u32;
@@ -4881,9 +4882,12 @@ impl VirtQueue {
                 regs.set_queue_pfn(queue_pfn);
             }
         }
+        dma_barrier();
         regs.queue_ready(1);
         #[cfg(feature = "virtio_diag_min")]
         if matches!(mode, VirtioMmioMode::Modern) {
+            regs.select_queue(index);
+            compiler_fence(AtomicOrdering::SeqCst);
             let want_desc = base_paddr as u64;
             let want_driver = (base_paddr + layout.avail_offset) as u64;
             let want_device = (base_paddr + layout.used_offset) as u64;
@@ -4963,6 +4967,7 @@ impl VirtQueue {
 
     fn reconfigure(&self, regs: &mut VirtioRegs, index: u32, mode: VirtioMmioMode) {
         regs.select_queue(index);
+        regs.queue_ready(0);
         regs.set_queue_size(self.size);
         match mode {
             VirtioMmioMode::Modern => {
@@ -4975,6 +4980,7 @@ impl VirtQueue {
                 regs.set_queue_pfn(self.pfn);
             }
         }
+        dma_barrier();
         regs.queue_ready(1);
     }
 
