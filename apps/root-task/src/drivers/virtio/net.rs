@@ -20,11 +20,12 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
+use crate::bootstrap::bootinfo_snapshot;
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::{HalError, Hardware};
 use crate::net::{NetDevice, NetDeviceCounters, NetDriverError, CONSOLE_TCP_PORT};
 use crate::net_consts::MAX_FRAME_LEN;
-use crate::sel4::{seL4_CapInitThreadVSpace, DeviceFrame, RamFrame};
+use crate::sel4::{dma_window_base, seL4_CapInitThreadVSpace, DeviceFrame, RamFrame};
 
 const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
@@ -876,12 +877,14 @@ impl VirtioNet {
         }
 
         info!(target: "virtio-net", "[virtio-net] DRIVER_OK about to set");
+        bootinfo_snapshot::debug_peek_canary("net.init.before_driver_ok");
         status |= STATUS_DRIVER_OK;
         driver.regs.set_status(status);
         info!(
             "[net-console] driver status set to DRIVER_OK (status=0x{:02x})",
             driver.regs.read32(Registers::Status)
         );
+        bootinfo_snapshot::debug_peek_canary("net.init.after_driver_ok");
         Ok(driver)
     }
 
@@ -2258,6 +2261,8 @@ impl VirtioNet {
         let payload_capacity = self.rx_payload_capacity;
         let frame_capacity = self.rx_frame_capacity;
 
+        bootinfo_snapshot::debug_peek_canary("net.init.rx.before_provision");
+
         if self
             .validate_chain_nonzero(
                 "RX",
@@ -2288,6 +2293,29 @@ impl VirtioNet {
             let head_idx = slot as u16;
             let (desc, buffer_capacity, payload_len) = {
                 let buffer = &mut self.rx_buffers[slot];
+                if cfg!(debug_assertions) {
+                    let vaddr = buffer.ptr().as_ptr() as usize;
+                    let paddr = buffer.paddr();
+                    let desc_addr = paddr as u64;
+                    debug!(
+                        target: "virtio-net",
+                        "[virtio-net][dma] rx buf[{slot}] vaddr=0x{vaddr:016x} paddr=0x{paddr:016x} desc_addr=0x{desc_addr:016x}",
+                        slot = slot,
+                        vaddr = vaddr,
+                        paddr = paddr,
+                        desc_addr = desc_addr,
+                    );
+                    debug_assert_eq!(desc_addr, paddr as u64, "rx desc addr must match paddr");
+                    debug_assert_eq!(
+                        paddr & ((1usize << seL4_PageBits) - 1),
+                        0,
+                        "rx buffer paddr must be 4K-aligned"
+                    );
+                    debug_assert!(
+                        vaddr >= dma_window_base(),
+                        "rx buffer vaddr must be within DMA window"
+                    );
+                }
                 let buffer_capacity = self
                     .rx_buffer_capacity
                     .min(buffer.as_slice().len())
@@ -2342,6 +2370,7 @@ impl VirtioNet {
                 );
             }
         }
+        bootinfo_snapshot::debug_peek_canary("net.init.rx.after_provision");
         let (used_idx, avail_idx) = self.rx_queue.indices_no_sync();
         if !RX_ARM_END_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             info!(
@@ -2362,6 +2391,7 @@ impl VirtioNet {
             used_idx,
             avail_idx,
         );
+        bootinfo_snapshot::debug_peek_canary("net.init.rx.after_notify");
         if avail_idx as usize != self.rx_buffers.len() {
             warn!(
                 target: "net-console",
@@ -3041,6 +3071,31 @@ impl VirtioNet {
             .get(id as usize)
             .map(|buffer| (len.min(buffer.as_slice().len()), buffer.paddr()))
         {
+            if cfg!(debug_assertions) {
+                if let Some(buffer) = self.tx_buffers.get(id as usize) {
+                    let vaddr = buffer.ptr().as_ptr() as usize;
+                    let paddr = buffer.paddr();
+                    let desc_addr = paddr as u64;
+                    debug!(
+                        target: "virtio-net",
+                        "[virtio-net][dma] tx buf[{id}] vaddr=0x{vaddr:016x} paddr=0x{paddr:016x} desc_addr=0x{desc_addr:016x}",
+                        id = id,
+                        vaddr = vaddr,
+                        paddr = paddr,
+                        desc_addr = desc_addr,
+                    );
+                    debug_assert_eq!(desc_addr, paddr as u64, "tx desc addr must match paddr");
+                    debug_assert_eq!(
+                        paddr & ((1usize << seL4_PageBits) - 1),
+                        0,
+                        "tx buffer paddr must be 4K-aligned"
+                    );
+                    debug_assert!(
+                        vaddr >= dma_window_base(),
+                        "tx buffer vaddr must be within DMA window"
+                    );
+                }
+            }
             let desc = [DescSpec {
                 addr: addr as u64,
                 len: length as u32,
@@ -3110,6 +3165,26 @@ impl VirtioNet {
         }
 
         if cfg!(debug_assertions) {
+            let vaddr = buffer.ptr().as_ptr() as usize;
+            let paddr = buffer.paddr();
+            debug!(
+                target: "virtio-net",
+                "[virtio-net][dma] tx-v2 buf[{id}] vaddr=0x{vaddr:016x} paddr=0x{paddr:016x} desc_addr=0x{addr:016x}",
+                id = id,
+                vaddr = vaddr,
+                paddr = paddr,
+                addr = addr,
+            );
+            debug_assert_eq!(addr, paddr as u64, "tx-v2 desc addr must match paddr");
+            debug_assert_eq!(
+                paddr & ((1usize << seL4_PageBits) - 1),
+                0,
+                "tx-v2 buffer paddr must be 4K-aligned"
+            );
+            debug_assert!(
+                vaddr >= dma_window_base(),
+                "tx-v2 buffer vaddr must be within DMA window"
+            );
             let start = addr;
             let end = start.saturating_add(buffer_len as u64);
             for (idx, other) in self.tx_buffers.iter().enumerate() {
@@ -4291,6 +4366,9 @@ struct VirtQueue {
     last_used: u16,
     pfn: u32,
     base_paddr: usize,
+    qmem_base_vaddr: usize,
+    qmem_len: usize,
+    base_offset: usize,
     cacheable: bool,
     used_zero_len_head: Option<u16>,
 }
@@ -4309,6 +4387,16 @@ impl VirtQueue {
         let frame_paddr = frame.paddr();
         let frame_ptr = frame.ptr();
         let page_bytes = 1usize << seL4_PageBits;
+        debug_assert_eq!(
+            core::mem::size_of::<VirtqDesc>(),
+            16,
+            "VirtqDesc must be 16 bytes"
+        );
+        debug_assert_eq!(
+            core::mem::size_of::<VirtqUsedElem>(),
+            8,
+            "VirtqUsedElem must be 8 bytes"
+        );
 
         let frame_capacity = {
             let frame_slice = frame.as_mut_slice();
@@ -4495,6 +4583,27 @@ impl VirtQueue {
         let used_ptr = unsafe {
             NonNull::new_unchecked(base_ptr.as_ptr().add(layout.used_offset) as *mut VirtqUsed)
         };
+        if cfg!(debug_assertions) {
+            let qmem_base = frame_ptr.as_ptr() as usize;
+            let desc_base = desc_ptr.as_ptr() as usize;
+            let avail_base = avail_ptr.as_ptr() as usize;
+            let used_base = used_ptr.as_ptr() as usize;
+            debug_assert_eq!(
+                desc_base,
+                qmem_base + base_offset + layout.desc_offset,
+                "virtqueue descriptor base drift"
+            );
+            debug_assert_eq!(
+                avail_base,
+                qmem_base + base_offset + layout.avail_offset,
+                "virtqueue avail base drift"
+            );
+            debug_assert_eq!(
+                used_base,
+                qmem_base + base_offset + layout.used_offset,
+                "virtqueue used base drift"
+            );
+        }
 
         let avail_idx = unsafe { read_volatile(&(*avail_ptr.as_ptr()).idx) };
         let used_idx = unsafe { read_volatile(&(*used_ptr.as_ptr()).idx) };
@@ -4572,6 +4681,9 @@ impl VirtQueue {
             last_used: used_idx,
             pfn: queue_pfn,
             base_paddr,
+            qmem_base_vaddr: frame_ptr.as_ptr() as usize,
+            qmem_len: frame_capacity,
+            base_offset,
             cacheable,
             used_zero_len_head: None,
         })
@@ -4591,8 +4703,8 @@ impl VirtQueue {
         if !cfg!(debug_assertions) {
             return;
         }
-        let base = self.desc.as_ptr() as usize;
-        let end = base.saturating_add(self.layout.total_len);
+        let base = self.qmem_base_vaddr;
+        let end = base.saturating_add(self.qmem_len);
         let start = ptr as usize;
         let finish = start.saturating_add(len);
         debug_assert!(

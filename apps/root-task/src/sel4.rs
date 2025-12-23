@@ -1604,6 +1604,11 @@ pub const fn device_window_range() -> core::ops::Range<usize> {
     DEVICE_VADDR_BASE..DMA_VADDR_BASE
 }
 
+/// Returns the base virtual address for DMA mappings.
+pub const fn dma_window_base() -> usize {
+    DMA_VADDR_BASE
+}
+
 #[derive(Clone, Debug)]
 pub struct ReservedVaddrRanges {
     ranges: Vec<core::ops::Range<usize>, 8>,

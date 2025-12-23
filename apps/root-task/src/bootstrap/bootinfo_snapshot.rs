@@ -410,6 +410,8 @@ impl BootInfoState {
     }
 
     pub fn probe(&self, mark: &'static str) -> Result<(), BootInfoError> {
+        #[cfg(debug_assertions)]
+        self.debug_log_canary_addrs(mark);
         let (pre, post, exp_pre, exp_post) = self.canary_state();
         let mut line = String::<MAX_CANARY_LINE>::new();
         let _ = fmt::write(
@@ -471,6 +473,8 @@ impl BootInfoState {
         phase: &'static str,
         mark: &'static str,
     ) -> Result<(), BootInfoCanaryError> {
+        #[cfg(debug_assertions)]
+        self.debug_log_canary_addrs(mark);
         self.check_canaries(phase, mark);
         let observed = BootInfoSnapshot::from_view(&self.view).map_err(|err| {
             BootInfoCanaryError::Snapshot {
@@ -493,7 +497,47 @@ impl BootInfoState {
             observed,
         })
     }
+
+    #[cfg(debug_assertions)]
+    fn debug_log_canary_addrs(&self, mark: &str) {
+        let pre_addr = unsafe { core::ptr::addr_of!(BOOTINFO_BACKING.pre) as usize };
+        let post_addr = self.snapshot.post_canary_addr();
+        let region = self.snapshot_region();
+        let mut line = String::<MAX_CANARY_LINE>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "[bootinfo:canary:addr] {mark} pre_addr=0x{pre_addr:016x} post_addr=0x{post_addr:016x} region=[0x{start:016x}..0x{end:016x})",
+                start = region.start,
+                end = region.end,
+            ),
+        );
+        force_uart_line(line.as_str());
+    }
 }
+
+#[cfg(debug_assertions)]
+pub fn debug_peek_canary(tag: &str) {
+    if let Some(state) = BootInfoState::get() {
+        let (pre, post, exp_pre, exp_post) = state.canary_state();
+        let pre_addr = unsafe { core::ptr::addr_of!(BOOTINFO_BACKING.pre) as usize };
+        let post_addr = state.snapshot.post_canary_addr();
+        let region = state.snapshot_region();
+        let mut line = String::<MAX_CANARY_LINE>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "[bootinfo:peek] {tag} pre=0x{pre:016x} post=0x{post:016x} expected_pre=0x{exp_pre:016x} expected_post=0x{exp_post:016x} pre_addr=0x{pre_addr:016x} post_addr=0x{post_addr:016x} region=[0x{start:016x}..0x{end:016x})",
+                start = region.start,
+                end = region.end,
+            ),
+        );
+        force_uart_line(line.as_str());
+    }
+}
+
+#[cfg(not(debug_assertions))]
+pub fn debug_peek_canary(_tag: &str) {}
 
 #[cfg(test)]
 mod tests {
