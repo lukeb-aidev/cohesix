@@ -366,6 +366,7 @@ pub struct VirtioNet {
     tx_v2_in_flight: [bool; TX_QUEUE_SIZE],
     tx_v2_last_used: u16,
     tx_states: [TxState; TX_QUEUE_SIZE],
+    tx_in_flight_map: [bool; TX_QUEUE_SIZE],
     dma_cacheable: bool,
     tx_in_flight: u16,
     tx_gen: u32,
@@ -781,6 +782,7 @@ impl VirtioNet {
             tx_v2_in_flight: [false; TX_QUEUE_SIZE],
             tx_v2_last_used: 0,
             tx_states: [TxState::Free; TX_QUEUE_SIZE],
+            tx_in_flight_map: [false; TX_QUEUE_SIZE],
             tx_in_flight: 0,
             tx_gen: 1,
             tx_last_used_seen: 0,
@@ -1412,6 +1414,9 @@ impl VirtioNet {
                 if self.tx_in_flight > 0 {
                     self.tx_in_flight -= 1;
                 }
+                if let Some(entry) = self.tx_in_flight_map.get_mut(id as usize) {
+                    *entry = false;
+                }
                 Ok(())
             }
             TxState::Free => self.tx_state_violation("tx_complete_free", id, None),
@@ -1424,6 +1429,9 @@ impl VirtioNet {
                 *state = TxState::Free;
                 if self.tx_in_flight > 0 {
                     self.tx_in_flight -= 1;
+                }
+                if let Some(entry) = self.tx_in_flight_map.get_mut(id as usize) {
+                    *entry = false;
                 }
             }
         }
@@ -1678,7 +1686,6 @@ impl VirtioNet {
         if self.device_faulted || forensics_frozen() {
             return Err(());
         }
-
         self.validate_chain_nonzero(
             "RX",
             head_id,
@@ -1800,32 +1807,29 @@ impl VirtioNet {
         if self.device_faulted || forensics_frozen() {
             return Err(());
         }
-
-        if descs.iter().any(|desc| desc.len == 0) {
-            self.tx_anomaly(TxAnomalyReason::DescLenZero, "enqueue_tx_chain_zero_len");
-            self.device_faulted = true;
-            return Err(());
-        }
         if descs.iter().any(|desc| desc.addr == 0) {
             self.tx_anomaly(TxAnomalyReason::DescAddrZero, "enqueue_tx_chain_zero_addr");
             self.device_faulted = true;
             return Err(());
         }
-        self.validate_chain_nonzero("TX", head_id, descs, None, None, None, used_len)?;
 
         let mut resolved_descs: HeaplessVec<DescSpec, TX_QUEUE_SIZE> = HeaplessVec::new();
+        let single_desc = descs.len() == 1;
         for (idx, spec) in descs.iter().enumerate() {
             let desc_index = head_id.wrapping_add(idx as u16);
-            let next = if idx + 1 < descs.len() {
+            let next = if single_desc {
+                None
+            } else if idx + 1 < descs.len() {
                 Some(head_id.wrapping_add((idx + 1) as u16))
             } else {
                 spec.next
             };
+            let flags = if single_desc { 0 } else { spec.flags };
             self.tx_queue
-                .setup_descriptor(desc_index, spec.addr, spec.len, spec.flags, next);
+                .setup_descriptor(desc_index, spec.addr, spec.len, flags, next);
             let resolved_flags = match next {
-                Some(_) => spec.flags | VIRTQ_DESC_F_NEXT,
-                None => spec.flags,
+                Some(_) => flags | VIRTQ_DESC_F_NEXT,
+                None => flags,
             };
             let _ = resolved_descs.push(DescSpec {
                 addr: spec.addr,
@@ -1834,6 +1838,7 @@ impl VirtioNet {
                 next,
             });
         }
+        fence(AtomicOrdering::Release);
 
         let header_len = self.rx_header_len;
         let total_len = resolved_descs
@@ -1859,7 +1864,6 @@ impl VirtioNet {
             payload_len > 0 && payload_addr < header_end
         });
 
-        fence(AtomicOrdering::Release);
         self.verify_descriptor_write("TX", QueueKind::Tx, head_id, &resolved_descs)?;
         self.tx_queue.sync_descriptor_table_for_device();
         self.log_tx_descriptor_readback(head_id, &resolved_descs);
@@ -1893,6 +1897,15 @@ impl VirtioNet {
             self.rollback_tx_post(head_id);
             return Err(());
         };
+        if resolved_descs[0].len == 0 {
+            panic!(
+                "tx publish len zero: head={} slot={} idx {}->{}",
+                head_id,
+                slot,
+                old_idx,
+                avail_idx,
+            );
+        }
         if slot == 0 && !self.tx_wrap_logged {
             self.tx_wrap_logged = true;
             info!(
@@ -1976,6 +1989,7 @@ impl VirtioNet {
                 notify,
             );
         }
+        fence(AtomicOrdering::Release);
         if notify && !self.device_faulted {
             self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
             if log_breadcrumb {
@@ -2555,6 +2569,15 @@ impl VirtioNet {
             return VirtioTxToken::new(driver_ptr, None);
         }
         if let Some(id) = self.tx_free.pop() {
+            assert!(
+                !self.tx_in_flight_map[id as usize],
+                "tx head already in-flight: id={} tx_free={} in_flight={} tx_gen={}",
+                id,
+                self.tx_free.len(),
+                self.tx_in_flight,
+                self.tx_gen,
+            );
+            self.tx_in_flight_map[id as usize] = true;
             if let Some(state) = self.tx_states.get(id as usize) {
                 if !matches!(state, TxState::Free) {
                     self.tx_anomaly(
@@ -3351,6 +3374,14 @@ impl TxToken for VirtioTxToken {
             }
             driver.tx_drops = driver.tx_drops.saturating_add(1);
             driver.log_tx_attempt(attempt_seq, len, 0, 0);
+            if let Some(id) = self.desc {
+                if !NET_VIRTIO_TX_V2 {
+                    if let Some(entry) = driver.tx_in_flight_map.get_mut(id as usize) {
+                        *entry = false;
+                    }
+                    let _ = driver.tx_free.push(id);
+                }
+            }
             return f(&mut []);
         }
         if let Some(id) = self.desc {
@@ -3391,7 +3422,8 @@ impl TxToken for VirtioTxToken {
                 log_tcp_trace("TX", &payload[..payload_len]);
             }
             driver.log_tx_attempt(attempt_seq, len, payload_len, written_len);
-            driver.submit_tx(id, total_len);
+            let submit_len = header_len.saturating_add(written_len);
+            driver.submit_tx(id, submit_len);
             driver.tx_packets = driver.tx_packets.saturating_add(1);
             result
         } else {
