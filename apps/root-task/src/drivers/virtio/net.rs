@@ -4227,16 +4227,22 @@ impl VirtioRegs {
         self.mmio.ptr()
     }
 
+    #[inline(always)]
     fn read32(&self, offset: Registers) -> u32 {
-        unsafe { read_volatile(self.base().as_ptr().add(offset as usize) as *const u32) }
+        mmio_fence();
+        let value =
+            unsafe { read_volatile(self.base().as_ptr().add(offset.offset()) as *const u32) };
+        mmio_fence();
+        value
     }
 
+    #[inline(always)]
     fn write32(&mut self, offset: Registers, value: u32) {
-        unsafe { write_volatile(self.base().as_ptr().add(offset as usize) as *mut u32, value) };
-    }
-
-    fn write16(&mut self, offset: Registers, value: u16) {
-        unsafe { write_volatile(self.base().as_ptr().add(offset as usize) as *mut u16, value) };
+        mmio_fence();
+        unsafe {
+            write_volatile(self.base().as_ptr().add(offset.offset()) as *mut u32, value);
+        }
+        mmio_fence();
     }
 
     fn reset_status(&mut self) {
@@ -4577,6 +4583,13 @@ enum Registers {
     Config = 0x100,
 }
 
+impl Registers {
+    #[inline(always)]
+    const fn offset(self) -> usize {
+        self as usize
+    }
+}
+
 struct VirtQueue {
     _frame: RamFrame,
     layout: VirtqLayout,
@@ -4871,9 +4884,20 @@ impl VirtQueue {
         #[cfg(feature = "virtio_diag_min")]
         {
             let sel = regs.read32(Registers::QueueSel);
+            let num_max = regs.read32(Registers::QueueNumMax);
             info!(
                 target: "virtio-net",
-                "[virtio_diag_min] queue={index} queue_sel readback=0x{sel:08x}",
+                "[virtio_diag_min] queue={index} queue_sel readback=0x{sel:08x} queue_num_max=0x{num_max:08x}",
+            );
+            let original_sel = sel;
+            let toggled = index ^ 1;
+            regs.select_queue(toggled);
+            let sel_toggled = regs.read32(Registers::QueueSel);
+            regs.select_queue(index);
+            let sel_restored = regs.read32(Registers::QueueSel);
+            info!(
+                target: "virtio-net",
+                "[virtio_diag_min] queue={index} queue_sel toggle orig=0x{original_sel:08x} toggled=0x{sel_toggled:08x} restored=0x{sel_restored:08x}",
             );
         }
         regs.queue_ready(0);
@@ -4914,31 +4938,31 @@ impl VirtQueue {
                 regs.set_queue_desc_addr(base_paddr);
                 #[cfg(feature = "virtio_diag_min")]
                 {
-                    let desc_low = regs.read32(Registers::QueueDescLow);
-                    let desc_high = regs.read32(Registers::QueueDescHigh);
+                    let desc = (u64::from(regs.read32(Registers::QueueDescHigh)) << 32)
+                        | u64::from(regs.read32(Registers::QueueDescLow));
                     info!(
                         target: "virtio-net",
-                        "[virtio_diag_min] queue={index} desc writeback low=0x{desc_low:08x} high=0x{desc_high:08x}",
+                        "[virtio_diag_min] queue={index} desc writeback=0x{desc:016x}",
                     );
                 }
                 regs.set_queue_driver_addr(base_paddr + layout.avail_offset);
                 #[cfg(feature = "virtio_diag_min")]
                 {
-                    let driver_low = regs.read32(Registers::QueueDriverLow);
-                    let driver_high = regs.read32(Registers::QueueDriverHigh);
+                    let driver = (u64::from(regs.read32(Registers::QueueDriverHigh)) << 32)
+                        | u64::from(regs.read32(Registers::QueueDriverLow));
                     info!(
                         target: "virtio-net",
-                        "[virtio_diag_min] queue={index} driver writeback low=0x{driver_low:08x} high=0x{driver_high:08x}",
+                        "[virtio_diag_min] queue={index} driver writeback=0x{driver:016x}",
                     );
                 }
                 regs.set_queue_device_addr(base_paddr + layout.used_offset);
                 #[cfg(feature = "virtio_diag_min")]
                 {
-                    let device_low = regs.read32(Registers::QueueDeviceLow);
-                    let device_high = regs.read32(Registers::QueueDeviceHigh);
+                    let device = (u64::from(regs.read32(Registers::QueueDeviceHigh)) << 32)
+                        | u64::from(regs.read32(Registers::QueueDeviceLow));
                     info!(
                         target: "virtio-net",
-                        "[virtio_diag_min] queue={index} device writeback low=0x{device_low:08x} high=0x{device_high:08x}",
+                        "[virtio_diag_min] queue={index} device writeback=0x{device:016x}",
                     );
                 }
             }
@@ -5549,6 +5573,15 @@ fn dma_invalidate(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
             ptr = ptr as usize,
             len = len,
         );
+    }
+}
+
+#[inline(always)]
+fn mmio_fence() {
+    compiler_fence(AtomicOrdering::SeqCst);
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        asm!("dsb sy", "isb", options(nostack, preserves_flags));
     }
 }
 
