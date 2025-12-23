@@ -1597,6 +1597,7 @@ const MAX_PAGE_TABLES: usize = 64;
 const MAX_PAGE_DIRECTORIES: usize = 32;
 const MAX_PAGE_UPPER_DIRECTORIES: usize = 8;
 const DEVICE_VM_ATTRIBUTES: seL4_ARM_VMAttributes = 1 << 2;
+const DMA_VM_ATTRIBUTES: seL4_ARM_VMAttributes = DEVICE_VM_ATTRIBUTES;
 
 /// Returns the exclusive virtual address range reserved for device page tables and mappings.
 pub const fn device_window_range() -> core::ops::Range<usize> {
@@ -2954,10 +2955,10 @@ impl<'a> KernelEnv<'a> {
         self.record_retype(trace, RetypeStatus::Ok);
         let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "dma-frame");
         self.dma_cursor = range.end;
-        self.map_frame(frame_slot, range.start, seL4_ARM_Page_Default, false)?;
+        self.map_frame(frame_slot, range.start, DMA_VM_ATTRIBUTES, false)?;
         ::log::info!(
             target: "hal",
-            "[hal] dma frame mapped vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=seL4_ARM_Page_Default",
+            "[hal] dma frame mapped vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=UNCACHED",
             vaddr = range.start,
             paddr = reserved.paddr(),
         );

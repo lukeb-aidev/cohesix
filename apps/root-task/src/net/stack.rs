@@ -83,6 +83,7 @@ const NEIGHBOR_CACHE_SIZE: usize = IFACE_NEIGHBOR_CACHE_COUNT;
 const SELF_TEST_ENABLED: bool = cfg!(feature = "dev-virt") || cfg!(feature = "net-selftest");
 const SELF_TEST_BEACON_INTERVAL_MS: u64 = 250;
 const SELF_TEST_BEACON_WINDOW_MS: u64 = 5_000;
+const SELF_TEST_UNHEALTHY_LOG_MS: u64 = 5_000;
 const SELF_TEST_WINDOW_MS: u64 = 15_000;
 const NET_INIT_TAG: &str = "net-console:init";
 #[cfg(any(feature = "bootstrap-trace", debug_assertions))]
@@ -938,6 +939,7 @@ struct SelfTestState {
     tcp_ok: bool,
     tcp_accept_seen: bool,
     last_result: Option<NetSelfTestResult>,
+    last_health_log_ms: u64,
 }
 
 struct HostCommandTarget {
@@ -966,6 +968,7 @@ impl SelfTestState {
         self.tcp_ok = false;
         self.tcp_accept_seen = false;
         self.last_result = None;
+        self.last_health_log_ms = 0;
     }
 
     fn start(&mut self, now_ms: u64) -> bool {
@@ -986,6 +989,14 @@ impl SelfTestState {
 
     fn record_tcp_ok(&mut self) {
         self.tcp_ok = true;
+    }
+
+    fn note_unhealthy(&mut self, now_ms: u64) -> bool {
+        if now_ms.saturating_sub(self.last_health_log_ms) >= SELF_TEST_UNHEALTHY_LOG_MS {
+            self.last_health_log_ms = now_ms;
+            return true;
+        }
+        false
     }
 
     fn conclude_if_needed(&mut self, now_ms: u64) -> Option<NetSelfTestResult> {
@@ -1978,12 +1989,18 @@ impl<D: NetDevice> NetStack<D> {
             return false;
         }
 
+        let device_healthy = self.device.is_healthy();
+        if !device_healthy && self.self_test.running && self.self_test.note_unhealthy(now_ms) {
+            warn!("[net-selftest] paused: device unhealthy");
+        }
+
         if let Some(result) = self.self_test.conclude_if_needed(now_ms) {
             self.log_self_test_result(result);
         }
 
         let mut activity = false;
         if self.self_test.running
+            && device_healthy
             && now_ms.saturating_sub(self.self_test.last_beacon_ms) >= SELF_TEST_BEACON_INTERVAL_MS
             && now_ms.saturating_sub(self.self_test.started_ms) <= SELF_TEST_BEACON_WINDOW_MS
         {
@@ -1993,7 +2010,9 @@ impl<D: NetDevice> NetStack<D> {
 
         activity |= self.poll_udp_echo();
         activity |= self.poll_tcp_smoke(now_ms);
-        activity |= self.poll_tcp_smoke_outbound(now_ms);
+        if device_healthy {
+            activity |= self.poll_tcp_smoke_outbound(now_ms);
+        }
 
         if activity {
             self.bump_poll_counter();

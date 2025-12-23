@@ -224,6 +224,11 @@ pub trait NetDevice: Device {
     /// Optional debug snapshot hook surfaced to stack callers.
     fn debug_snapshot(&mut self);
 
+    /// Returns whether the device is healthy enough for TX-heavy selftests.
+    fn is_healthy(&self) -> bool {
+        true
+    }
+
     /// Counter snapshot for diagnostics.
     fn counters(&self) -> NetDeviceCounters {
         NetDeviceCounters::default()
