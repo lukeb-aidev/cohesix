@@ -4868,8 +4868,24 @@ impl VirtQueue {
         );
 
         regs.select_queue(index);
+        #[cfg(feature = "virtio_diag_min")]
+        {
+            let sel = regs.read32(Registers::QueueSel);
+            info!(
+                target: "virtio-net",
+                "[virtio_diag_min] queue={index} queue_sel readback=0x{sel:08x}",
+            );
+        }
         regs.queue_ready(0);
         regs.set_queue_size(queue_size);
+        #[cfg(feature = "virtio_diag_min")]
+        {
+            let num = regs.read32(Registers::QueueNum);
+            info!(
+                target: "virtio-net",
+                "[virtio_diag_min] queue={index} queue_num readback=0x{num:08x}",
+            );
+        }
 
         let queue_pfn = (base_paddr >> seL4_PageBits) as u32;
         match mode {
@@ -4880,9 +4896,19 @@ impl VirtQueue {
                     let version = regs.read32(Registers::Version);
                     let device_id = regs.read32(Registers::DeviceId);
                     let vendor_id = regs.read32(Registers::VendorId);
+                    let desc_low = regs.read32(Registers::QueueDescLow);
+                    let desc_high = regs.read32(Registers::QueueDescHigh);
+                    let driver_low = regs.read32(Registers::QueueDriverLow);
+                    let driver_high = regs.read32(Registers::QueueDriverHigh);
+                    let device_low = regs.read32(Registers::QueueDeviceLow);
+                    let device_high = regs.read32(Registers::QueueDeviceHigh);
                     info!(
                         target: "virtio-net",
                         "[virtio_diag_min] queue={index} mmio id readback: magic=0x{magic:08x} version=0x{version:08x} device_id=0x{device_id:08x} vendor=0x{vendor_id:08x}",
+                    );
+                    info!(
+                        target: "virtio-net",
+                        "[virtio_diag_min] queue={index} addr pre-write desc=0x{desc_high:08x}{desc_low:08x} driver=0x{driver_high:08x}{driver_low:08x} device=0x{device_high:08x}{device_low:08x}",
                     );
                 }
                 regs.set_queue_desc_addr(base_paddr);
