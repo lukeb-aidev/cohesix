@@ -1670,15 +1670,15 @@ impl VirtioNet {
             let (used_idx, avail_idx) = self.tx_queue.indices();
             error!(
                 target: "net-console",
-                "[virtio-net] tx publish invariant failed: slot={} head={} observed_head={} desc_addr=0x{addr:016x} desc_len={len} used.idx={} avail.idx={} last_used={}",
+                "[virtio-net] tx publish invariant failed: slot={} head={} observed_head={} desc_addr=0x{addr:016x} desc_len={len} used.idx={used_idx} avail.idx={avail_idx} last_used={last_used}",
                 ring_slot,
                 head_id,
                 observed_head,
                 addr = desc.addr,
                 len = desc.len,
-                used_idx,
-                avail_idx,
-                self.tx_queue.last_used,
+                used_idx = used_idx,
+                avail_idx = avail_idx,
+                last_used = self.tx_queue.last_used,
             );
             self.freeze_and_capture("tx_publish_invariant");
             self.device_faulted = true;
