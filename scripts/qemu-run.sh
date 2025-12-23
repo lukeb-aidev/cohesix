@@ -52,6 +52,7 @@ SEL4_BUILD_DIR="${SEL4_BUILD:-$HOME/seL4/build}"
 DTB_OVERRIDE=""
 DEFAULT_TCP_PORT=31337
 TCP_PORT=""
+SELFTEST_TCP_PORT=31339
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -190,7 +191,8 @@ QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" \
     -cpu cortex-a57 \
     -m 1024 \
     -smp 1 \
-    -serial mon:stdio \
+    -serial stdio \
+    -monitor none \
     -display none \
     -kernel "$ELFLOADER" \
     -initrd "$ROOTFS_CPIO" \
@@ -207,11 +209,13 @@ if ! [[ "$TCP_PORT" =~ ^[0-9]+$ ]]; then
 fi
 
 NETWORK_ARGS=(
-    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT}"
+    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT},hostfwd=tcp:127.0.0.1:${SELFTEST_TCP_PORT}-10.0.2.15:${SELFTEST_TCP_PORT}"
     -device virtio-net-device,netdev=net0
 )
 log "Forwarding TCP console on 127.0.0.1:${TCP_PORT} (QEMU user networking)"
 log "Connect using: nc 127.0.0.1 ${TCP_PORT}"
+log "Forwarding net self-test on 127.0.0.1:${SELFTEST_TCP_PORT} (QEMU user networking)"
+log "Self-test check: nc 127.0.0.1 ${SELFTEST_TCP_PORT}"
 
 if [[ -n "$DTB_OVERRIDE" ]]; then
     if [[ ! -f "$DTB_OVERRIDE" ]]; then

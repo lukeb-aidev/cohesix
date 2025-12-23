@@ -8,9 +8,9 @@ use core::convert::TryFrom;
 
 use log::info;
 use sel4_sys::{
-    invocation_label_nInvocationLabels, seL4_CallWithMRs, seL4_CPtr, seL4_Error,
-    seL4_MessageInfo_get_label, seL4_MessageInfo_new, seL4_NoError, seL4_RangeError,
-    seL4_SetMR, seL4_Word,
+    invocation_label_nInvocationLabels, seL4_CPtr, seL4_CallWithMRs, seL4_Error,
+    seL4_MessageInfo_get_label, seL4_MessageInfo_new, seL4_NoError, seL4_RangeError, seL4_SetMR,
+    seL4_Word,
 };
 
 const CACHE_LINE_BYTES: usize = 64;
@@ -114,9 +114,7 @@ unsafe fn call_arm_vspace_op(
     let mut mr3 = 0;
 
     let tag = seL4_MessageInfo_new(label, 0, 0, 2);
-    let out_tag = unsafe {
-        seL4_CallWithMRs(vspace, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3)
-    };
+    let out_tag = unsafe { seL4_CallWithMRs(vspace, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3) };
     let result_word = seL4_MessageInfo_get_label(out_tag);
 
     if result_word != seL4_NoError as seL4_Word {

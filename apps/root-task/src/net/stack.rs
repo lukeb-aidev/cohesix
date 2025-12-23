@@ -41,8 +41,8 @@ use smoltcp::wire::{
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
     ConsoleNetConfig, NetBackend, NetConsoleEvent, NetCounters, NetDevice, NetDriverError,
-    NetPoller, NetSelfTestReport, NetSelfTestResult, NetStage, NetTelemetry, NET_STAGE,
-    DEFAULT_NET_BACKEND, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
+    NetPoller, NetSelfTestReport, NetSelfTestResult, NetStage, NetTelemetry, DEFAULT_NET_BACKEND,
+    DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG, NET_STAGE,
 };
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 #[cfg(not(feature = "net-backend-virtio"))]
@@ -1963,9 +1963,9 @@ impl<D: NetDevice> NetStack<D> {
         if self.stage_policy.tx_only && !self.tx_only_sent {
             let mut activity = self.send_udp_beacon();
             if activity {
-                let poll_result = self
-                    .interface
-                    .poll(timestamp, &mut self.device, &mut self.sockets);
+                let poll_result =
+                    self.interface
+                        .poll(timestamp, &mut self.device, &mut self.sockets);
                 if poll_result != PollResult::None {
                     log::info!("[net] smoltcp: tx-only poll now_ms={}", now_ms);
                 }
@@ -2015,7 +2015,8 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         #[cfg(feature = "net-outbound-probe")]
-        if self.stage_policy.allow_outbound_probe && self.service_outbound_probe(now_ms, timestamp) {
+        if self.stage_policy.allow_outbound_probe && self.service_outbound_probe(now_ms, timestamp)
+        {
             activity = true;
         }
 
@@ -2030,6 +2031,7 @@ impl<D: NetDevice> NetStack<D> {
 
     fn bump_poll_counter(&mut self) {
         self.counters.smoltcp_polls = self.counters.smoltcp_polls.saturating_add(1);
+        NET_DIAG.record_poll_call();
     }
 
     fn sync_device_counters(&mut self) {
@@ -2348,11 +2350,13 @@ impl<D: NetDevice> NetStack<D> {
         let socket = self.sockets.get_mut::<TcpSocket>(handle);
         if !socket.is_open() {
             let _ = socket.listen(TCP_SMOKE_PORT);
+            NET_DIAG.record_listener_bound();
             return false;
         }
 
         let mut activity = false;
         if socket.state() == TcpState::Established {
+            NET_DIAG.record_accept_attempt();
             if !self.self_test.tcp_accept_seen {
                 self.self_test.tcp_accept_seen = true;
                 self.counters.tcp_accepts = self.counters.tcp_accepts.saturating_add(1);
@@ -2376,6 +2380,7 @@ impl<D: NetDevice> NetStack<D> {
                 }
                 self.counters.tcp_rx_bytes =
                     self.counters.tcp_rx_bytes.saturating_add(copied as u64);
+                NET_DIAG.add_bytes_read(copied as u64);
                 info!(
                     "[net-selftest] tcp-smoke recv bytes={} state={:?}",
                     copied,
@@ -2386,10 +2391,12 @@ impl<D: NetDevice> NetStack<D> {
             }
 
             if socket.can_send() && (copied > 0 || !socket.can_recv()) {
-                match socket.send_slice(b"OK\n") {
+                match socket.send_slice(b"ok\n") {
                     Ok(sent) => {
                         self.counters.tcp_tx_bytes =
                             self.counters.tcp_tx_bytes.saturating_add(sent as u64);
+                        NET_DIAG.add_bytes_written(sent as u64);
+                        NET_DIAG.record_accept_success();
                         self.self_test.record_tcp_ok();
                         info!(
                             "[net-selftest] tcp-smoke reply sent bytes={} close_reason=active",
@@ -2409,6 +2416,7 @@ impl<D: NetDevice> NetStack<D> {
 
         if matches!(socket.state(), TcpState::Closed) {
             let _ = socket.listen(TCP_SMOKE_PORT);
+            NET_DIAG.record_listener_bound();
         }
 
         activity
@@ -2526,6 +2534,7 @@ impl<D: NetDevice> NetStack<D> {
                 }
                 match socket.listen(IpListenEndpoint::from(self.listen_port)) {
                     Ok(()) => {
+                        NET_DIAG.record_listener_bound();
                         info!(
                             "[net-console] tcp listener bound: port={} iface_ip={}",
                             self.listen_port, self.ip
@@ -2568,6 +2577,7 @@ impl<D: NetDevice> NetStack<D> {
             }
 
             if socket.state() == TcpState::Established && !self.session_active {
+                NET_DIAG.record_accept_attempt();
                 let client_id = self.client_counter.wrapping_add(1);
                 self.client_counter = client_id;
                 self.active_client_id = Some(client_id);
@@ -2673,6 +2683,7 @@ impl<D: NetDevice> NetStack<D> {
                     );
                 }
                 self.session_active = true;
+                NET_DIAG.record_accept_success();
                 self.counters.tcp_accepts = self.counters.tcp_accepts.saturating_add(1);
             }
 
@@ -2714,6 +2725,7 @@ impl<D: NetDevice> NetStack<D> {
                             let conn_id = self.active_client_id.unwrap_or(0);
                             self.conn_bytes_read =
                                 self.conn_bytes_read.saturating_add(copied as u64);
+                            NET_DIAG.add_bytes_read(copied as u64);
                             self.counters.tcp_rx_bytes =
                                 self.counters.tcp_rx_bytes.saturating_add(copied as u64);
                             let dump_len = core::cmp::min(copied, 32);
@@ -2745,6 +2757,7 @@ impl<D: NetDevice> NetStack<D> {
                                     Ok(sent) => {
                                         self.conn_bytes_written =
                                             self.conn_bytes_written.saturating_add(sent as u64);
+                                        NET_DIAG.add_bytes_written(sent as u64);
                                         self.counters.tcp_tx_bytes =
                                             self.counters.tcp_tx_bytes.saturating_add(sent as u64);
                                         Self::trace_conn_send(conn_id, &temp[..sent.min(copied)]);
@@ -3179,6 +3192,7 @@ impl<D: NetDevice> NetStack<D> {
                         &payload[..preview_len],
                     );
                     *conn_bytes_written = conn_bytes_written.saturating_add(sent as u64);
+                    NET_DIAG.add_bytes_written(sent as u64);
                     counters.tcp_tx_bytes = counters.tcp_tx_bytes.saturating_add(sent as u64);
                     if !session_state.logged_first_send {
                         info!(
