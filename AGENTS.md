@@ -18,7 +18,8 @@
 3. **Atomic Work** — Each task must land with compiling code (`cargo check`) and updated tests/docs. Keep commits focused.
 4. **Tiny TCB** — No POSIX emulation layers. GPU integration stays outside the VM. The code footprint must be self-contained and secure.
 5. **Capability Discipline** — Interactions occur through 9P namespaces using role-scoped capability tickets.
-6. **Tooling Alignment** — Use the macOS ARM64 toolchain in `TOOLCHAIN_MAC_ARM64.md`. Do not assume Linux-specific tooling in VM code.
+6. **Keep it Simple and Elegant** — Do not over engineer. Follow Rust best practice. Follow seL4 on aarch64 best practice. Always consider compatibility with docs/BUILD_PLAN.md.
+7. **Tooling Alignment** — Use the macOS ARM64 toolchain in `TOOLCHAIN_MAC_ARM64.md`. Do not assume Linux-specific tooling in VM code.
 
 ### Worker Bring-up
 - Root-task spawns **queen**, **worker-heart**, and **worker-gpu** per the sequencing in `docs/BUILD_PLAN.md`, handing out scheduling contexts that follow `docs/ROLES_AND_SCHEDULING.md` budgets.
