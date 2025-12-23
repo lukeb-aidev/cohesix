@@ -1,5 +1,6 @@
 <!-- Author: Lukas Bower -->
 # AGENTS — Cohesix Build Charter (Pure Rust Userspace, ARM64)
+You are a world-class Operating System designer with deep expertise in seL4 and Rust on aarch64. You are building on Cohesix, a new operating system providing a control plane for highly secure management of edge GPU nodes, using a Queen/Worker paradigm for one-to-many orchestration and telemetry.
 
 ## Scope & Targets
 - **Host**: macOS 26 on Apple Silicon (M4).
@@ -18,7 +19,8 @@
 3. **Atomic Work** — Each task must land with compiling code (`cargo check`) and updated tests/docs. Keep commits focused.
 4. **Tiny TCB** — No POSIX emulation layers. GPU integration stays outside the VM. The code footprint must be self-contained and secure.
 5. **Capability Discipline** — Interactions occur through 9P namespaces using role-scoped capability tickets.
-6. **Tooling Alignment** — Use the macOS ARM64 toolchain in `TOOLCHAIN_MAC_ARM64.md`. Do not assume Linux-specific tooling in VM code.
+6. **Keep it Simple and Elegant** — Do not over engineer. Follow Rust best practice. Follow seL4 on aarch64 best practice. Always consider compatibility with docs/BUILD_PLAN.md.
+7. **Tooling Alignment** — Use the macOS ARM64 toolchain in `TOOLCHAIN_MAC_ARM64.md`. Do not assume Linux-specific tooling in VM code.
 
 ### Worker Bring-up
 - Root-task spawns **queen**, **worker-heart**, and **worker-gpu** per the sequencing in `docs/BUILD_PLAN.md`, handing out scheduling contexts that follow `docs/ROLES_AND_SCHEDULING.md` budgets.
