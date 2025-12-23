@@ -30,6 +30,38 @@ pub const AUTH_TIMEOUT_MS: u64 = 5 * 1000;
 /// Number of console lines retained between pump cycles.
 pub const CONSOLE_QUEUE_DEPTH: usize = 8;
 
+/// Build-time network bring-up stage selector.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetStage {
+    ProbeOnly,
+    QueueInitOnly,
+    RxOnly,
+    TxOnly,
+    ArpOnly,
+    IcmpOnly,
+    TcpHandshakeOnly,
+    Full,
+}
+
+/// Compile-time staging selector for network bring-up.
+pub const NET_STAGE: NetStage = NetStage::Full;
+
+impl NetStage {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProbeOnly => "probe_only",
+            Self::QueueInitOnly => "queue_init_only",
+            Self::RxOnly => "rx_only",
+            Self::TxOnly => "tx_only",
+            Self::ArpOnly => "arp_only",
+            Self::IcmpOnly => "icmp_only",
+            Self::TcpHandshakeOnly => "tcp_handshake_only",
+            Self::Full => "full",
+        }
+    }
+}
+
 /// Static IPv4 configuration for the TCP console listener.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NetAddressConfig {
@@ -209,6 +241,15 @@ pub trait NetDevice: Device {
     where
         H: crate::hal::Hardware<Error = crate::hal::HalError>,
         Self: Sized;
+
+    /// Construct a device instance for the supplied bring-up stage.
+    fn create_with_stage<H>(hal: &mut H, _stage: NetStage) -> Result<Self, Self::Error>
+    where
+        H: crate::hal::Hardware<Error = crate::hal::HalError>,
+        Self: Sized,
+    {
+        Self::create(hal)
+    }
 
     /// Return the Ethernet MAC address for the device.
     fn mac(&self) -> EthernetAddress;

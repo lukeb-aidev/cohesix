@@ -66,6 +66,7 @@ net-selftest = ["net-console"]
 virtio-mmio-legacy = []
 net-virtio-tx-v2 = []
 cache-maintenance = []
+virtio_guard_queue = []
 bootstrap-trace = [
     "dep:spin",
 ]

@@ -265,6 +265,9 @@ pub trait Hardware {
     /// Allocates a DMA-capable frame and maps it into the DMA window.
     fn alloc_dma_frame(&mut self) -> Result<RamFrame, Self::Error>;
 
+    /// Reserves an unmapped guard page in the DMA window and returns its base.
+    fn reserve_dma_guard_page(&mut self) -> Result<usize, Self::Error>;
+
     /// Returns device coverage information for diagnostics.
     fn device_coverage(&self, paddr: usize, size_bits: usize) -> Option<DeviceCoverage>;
 
@@ -330,6 +333,10 @@ impl<'a> Hardware for KernelHal<'a> {
 
     fn alloc_dma_frame(&mut self) -> Result<RamFrame, Self::Error> {
         self.env.alloc_dma_frame().map_err(HalError::from)
+    }
+
+    fn reserve_dma_guard_page(&mut self) -> Result<usize, Self::Error> {
+        Ok(self.env.reserve_dma_guard_page())
     }
 
     fn device_coverage(&self, paddr: usize, size_bits: usize) -> Option<DeviceCoverage> {
