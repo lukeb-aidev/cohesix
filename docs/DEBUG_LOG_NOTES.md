@@ -32,3 +32,6 @@
 - Bootstrap IPC payloads probed during early boot are staged until the event pump registers all handlers; delivery only begins once `handlers_ready()` is signalled.
 - Opcode dispatch now uses the `BootstrapOp` enum and an explicit `match`, removing the former function-pointer table.
 - All IPC buffer diagnostics obtain data through `IpcBufView::prefix`, guaranteeing dumps never exceed 4096 bytes.
+
+## Virtio Guard Queue
+- When `virtio_guard_queue` is enabled, virtio-net logs `virtio.guard_queue=1 base=<va> len=<bytes> guard=<va>` to identify the guarded queue region and the unmapped tripwire page.

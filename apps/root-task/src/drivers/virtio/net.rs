@@ -29,6 +29,7 @@ use crate::sel4::{seL4_CapInitThreadVSpace, DeviceFrame, RamFrame};
 const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
 const NET_VIRTIO_TX_V2: bool = cfg!(feature = "net-virtio-tx-v2");
+const VIRTIO_GUARD_QUEUE: bool = cfg!(feature = "virtio_guard_queue");
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -609,6 +610,14 @@ impl VirtioNet {
                 }
             }
         };
+        let guard_vaddr = if VIRTIO_GUARD_QUEUE {
+            Some(hal.reserve_dma_guard_page().map_err(|err| {
+                regs.set_status(STATUS_FAILED);
+                DriverError::from(err)
+            })?)
+        } else {
+            None
+        };
         let dma_cacheable = cfg!(feature = "cache-maintenance");
         if !DMA_QMEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             let rx_vaddr = queue_mem_rx.ptr().as_ptr() as usize;
@@ -631,6 +640,20 @@ impl VirtioNet {
                 tx_pend = tx_paddr.saturating_add(tx_len),
             );
         }
+        if let Some(guard_vaddr) = guard_vaddr {
+            let rx_vaddr = queue_mem_rx.ptr().as_ptr() as usize;
+            let tx_vaddr = queue_mem_tx.ptr().as_ptr() as usize;
+            let page_bytes = 1usize << seL4_PageBits;
+            let base = core::cmp::min(rx_vaddr, tx_vaddr);
+            let end = core::cmp::max(rx_vaddr, tx_vaddr).saturating_add(page_bytes);
+            let len = end.saturating_sub(base);
+            info!(
+                target: "virtio-net",
+                "virtio.guard_queue=1 base=0x{base:016x} len={len} guard=0x{guard:016x}",
+                base = base,
+                guard = guard_vaddr,
+            );
+        }
 
         info!(
             "[net-console] provisioning RX descriptors ({} entries)",
@@ -643,6 +666,7 @@ impl VirtioNet {
             rx_size,
             mmio_mode,
             dma_cacheable,
+            VIRTIO_GUARD_QUEUE && matches!(mmio_mode, VirtioMmioMode::Modern),
         )
         .map_err(|err| {
             regs.set_status(STATUS_FAILED);
@@ -659,6 +683,7 @@ impl VirtioNet {
             tx_size,
             mmio_mode,
             dma_cacheable,
+            VIRTIO_GUARD_QUEUE && matches!(mmio_mode, VirtioMmioMode::Modern),
         )
         .map_err(|err| {
             regs.set_status(STATUS_FAILED);
@@ -3844,10 +3869,11 @@ impl VirtQueue {
         size: usize,
         mode: VirtioMmioMode,
         cacheable: bool,
+        end_align: bool,
     ) -> Result<Self, DriverError> {
         let queue_size = size as u16;
-        let base_paddr = frame.paddr();
-        let base_ptr = frame.ptr();
+        let frame_paddr = frame.paddr();
+        let frame_ptr = frame.ptr();
         let page_bytes = 1usize << seL4_PageBits;
 
         let frame_capacity = {
@@ -3859,7 +3885,7 @@ impl VirtQueue {
         };
 
         unsafe {
-            core::ptr::write_bytes(base_ptr.as_ptr(), 0, frame_capacity);
+            core::ptr::write_bytes(frame_ptr.as_ptr(), 0, frame_capacity);
         }
 
         if frame_capacity != page_bytes {
@@ -3874,10 +3900,10 @@ impl VirtQueue {
             ));
         }
 
-        if base_paddr & (page_bytes - 1) != 0 {
+        if frame_paddr & (page_bytes - 1) != 0 {
             error!(
                 target: "net-console",
-                "[virtio-net] virtqueue backing not page aligned: paddr=0x{base_paddr:x}"
+                "[virtio-net] virtqueue backing not page aligned: paddr=0x{frame_paddr:x}"
             );
             return Err(DriverError::QueueInvariant(
                 "virtqueue backing not page aligned",
@@ -3886,6 +3912,33 @@ impl VirtQueue {
 
         const LEGACY_QUEUE_ALIGN: usize = 4;
         let layout = VirtqLayout::compute_vq_layout(queue_size, false)?;
+        if end_align && matches!(mode, VirtioMmioMode::Legacy) {
+            error!(
+                target: "net-console",
+                "[virtio-net] end-aligned virtqueue unsupported for legacy mode"
+            );
+            return Err(DriverError::QueueInvariant(
+                "legacy virtqueue must be page-aligned",
+            ));
+        }
+        let base_offset = if end_align {
+            const DESC_ALIGN: usize = 16;
+            let raw_offset = frame_capacity.saturating_sub(layout.total_len);
+            raw_offset & !(DESC_ALIGN - 1)
+        } else {
+            0
+        };
+        assert!(
+            base_offset + layout.total_len <= frame_capacity,
+            "virtqueue backing overflow: base_offset=0x{base_offset:x} total_len=0x{total_len:x} capacity=0x{frame_capacity:x}",
+            base_offset = base_offset,
+            total_len = layout.total_len,
+            frame_capacity = frame_capacity,
+        );
+        let base_paddr = frame_paddr.saturating_add(base_offset);
+        let base_ptr = unsafe {
+            NonNull::new_unchecked(frame_ptr.as_ptr().add(base_offset) as *mut u8)
+        };
 
         debug_assert!(
             layout.desc_offset + layout.desc_len <= layout.avail_offset,
