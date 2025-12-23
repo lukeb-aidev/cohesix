@@ -468,8 +468,9 @@ impl VirtioNet {
         let mut regs = VirtioRegs::probe(hal)?;
         let mmio_mode = regs.mode;
         info!(
-            "[net-console] virtio-mmio device located: base=0x{base:08x}",
-            base = regs.base().as_ptr() as usize
+            "[net-console] virtio-mmio device located: paddr=0x{paddr:08x} vaddr=0x{vaddr:08x}",
+            paddr = regs.mmio.paddr(),
+            vaddr = regs.base().as_ptr() as usize
         );
         match regs.mode {
             VirtioMmioMode::Modern => {
@@ -4874,8 +4875,35 @@ impl VirtQueue {
         match mode {
             VirtioMmioMode::Modern => {
                 regs.set_queue_desc_addr(base_paddr);
+                #[cfg(feature = "virtio_diag_min")]
+                {
+                    let desc_low = regs.read32(Registers::QueueDescLow);
+                    let desc_high = regs.read32(Registers::QueueDescHigh);
+                    info!(
+                        target: "virtio-net",
+                        "[virtio_diag_min] queue={index} desc writeback low=0x{desc_low:08x} high=0x{desc_high:08x}",
+                    );
+                }
                 regs.set_queue_driver_addr(base_paddr + layout.avail_offset);
+                #[cfg(feature = "virtio_diag_min")]
+                {
+                    let driver_low = regs.read32(Registers::QueueDriverLow);
+                    let driver_high = regs.read32(Registers::QueueDriverHigh);
+                    info!(
+                        target: "virtio-net",
+                        "[virtio_diag_min] queue={index} driver writeback low=0x{driver_low:08x} high=0x{driver_high:08x}",
+                    );
+                }
                 regs.set_queue_device_addr(base_paddr + layout.used_offset);
+                #[cfg(feature = "virtio_diag_min")]
+                {
+                    let device_low = regs.read32(Registers::QueueDeviceLow);
+                    let device_high = regs.read32(Registers::QueueDeviceHigh);
+                    info!(
+                        target: "virtio-net",
+                        "[virtio_diag_min] queue={index} device writeback low=0x{device_low:08x} high=0x{device_high:08x}",
+                    );
+                }
             }
             VirtioMmioMode::Legacy => {
                 regs.set_queue_align(LEGACY_QUEUE_ALIGN as u32);
