@@ -3024,6 +3024,22 @@ impl<'a> KernelEnv<'a> {
                 return Err(err);
             }
             self.record_retype(trace, RetypeStatus::Ok);
+            {
+                let mut line = HeaplessString::<192>::new();
+                let ident = debug_cap_identify(frame_slot);
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "[bootinfo:guard] retype ut=0x{ut:04x} obj={obj} size_bits={bits} dst=0x{slot:04x} ident=0x{ident:08x}",
+                        ut = reserved.cap(),
+                        obj = objtype_name(trace.object_type),
+                        bits = trace.object_size_bits,
+                        slot = frame_slot,
+                        ident = ident,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
             let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "dma-frame");
             self.dma_cursor = range.end;
             self.map_frame(frame_slot, range.start, seL4_ARM_Page_Default, false)?;
@@ -3082,6 +3098,36 @@ impl<'a> KernelEnv<'a> {
             .checked_mul(PAGE_SIZE)
             .ok_or(seL4_RangeError)?;
         let range = self.next_mapping_range(self.dma_cursor, span, "bootinfo-guard");
+        if let Err(err) = self.try_reserve_vaddr_range(&range, "bootinfo-guard") {
+            let mut line = HeaplessString::<192>::new();
+            match err {
+                ReserveVaddrError::Overlap {
+                    conflict_start,
+                    conflict_end,
+                } => {
+                    let _ = fmt::write(
+                        &mut line,
+                        format_args!(
+                            "[bootinfo:guard] vaddr overlap=[0x{conflict_start:016x}..0x{conflict_end:016x}) range=[0x{start:016x}..0x{end:016x})",
+                            start = range.start,
+                            end = range.end,
+                        ),
+                    );
+                }
+                ReserveVaddrError::Capacity => {
+                    let _ = fmt::write(
+                        &mut line,
+                        format_args!(
+                            "[bootinfo:guard] vaddr reserve full range=[0x{start:016x}..0x{end:016x})",
+                            start = range.start,
+                            end = range.end,
+                        ),
+                    );
+                }
+            }
+            boot_log::force_uart_line(line.as_str());
+            return Err(seL4_NotEnoughMemory);
+        }
         self.dma_cursor = range.end;
 
         let mut caps = Vec::<seL4_CPtr, 32>::new();
@@ -3108,13 +3154,56 @@ impl<'a> KernelEnv<'a> {
             }
             self.record_retype(trace, RetypeStatus::Ok);
             let vaddr = range.start.saturating_add(idx.saturating_mul(PAGE_SIZE));
+            if (vaddr & (PAGE_SIZE - 1)) != 0 {
+                let mut line = HeaplessString::<160>::new();
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "[bootinfo:guard] vaddr misaligned idx={idx} vaddr=0x{vaddr:016x}",
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                return Err(seL4_AlignmentError);
+            }
+            let cap_ident = debug_cap_identify(frame_slot);
+            if cap_ident != sel4_sys::seL4_ARM_Page as seL4_Word {
+                let mut line = HeaplessString::<192>::new();
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "[bootinfo:guard] guard frame is not a frame; retype path wrong ident=0x{ident:08x} obj={obj} size_bits={bits}",
+                        ident = cap_ident,
+                        obj = objtype_name(trace.object_type),
+                        bits = trace.object_size_bits,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
             self.map_frame_with_rights(
                 frame_slot,
                 vaddr,
                 seL4_CapRights_ReadWrite,
                 attr,
                 true,
-            )?;
+            )
+            .map_err(|err| {
+                let mut line = HeaplessString::<256>::new();
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "[bootinfo:guard] map failed idx={idx} vaddr=0x{vaddr:016x} cap=0x{cap:04x} ident=0x{ident:08x} size_bits={bits} rights=0x{rights:02x} attr=0x{attr:02x} err={err} ({name})",
+                        cap = frame_slot,
+                        ident = cap_ident,
+                        bits = trace.object_size_bits,
+                        rights = seL4_CapRights_ReadWrite.raw(),
+                        attr = attr as seL4_Word,
+                        err = err,
+                        name = error_name(err),
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                err
+            })?;
             caps.push(frame_slot).map_err(|_| seL4_NotEnoughMemory)?;
         }
 
@@ -3413,6 +3502,28 @@ impl<'a> KernelEnv<'a> {
             }
         }
 
+        if result != seL4_NoError {
+            let mut line = HeaplessString::<256>::new();
+            let vspace = seL4_CapInitThreadVSpace;
+            let vspace_ident = debug_cap_identify(vspace);
+            let frame_ident = debug_cap_identify(frame_cap);
+            let _ = fmt::write(
+                &mut line,
+                format_args!(
+                    "[vspace:map] fail vaddr=0x{vaddr:016x} frame=0x{frame:04x} ident=0x{ident:08x} vspace=0x{vspace:04x} vspace_ident=0x{vspace_ident:08x} rights=0x{rights:02x} attr=0x{attr:02x} err={err} ({name})",
+                    vaddr = vaddr,
+                    frame = frame_cap,
+                    ident = frame_ident,
+                    vspace = vspace,
+                    vspace_ident = vspace_ident,
+                    rights = rights.raw(),
+                    attr = attr as seL4_Word,
+                    err = result,
+                    name = error_name(result),
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
         let _ = crate::bootstrap::ktry("ipcbuf.page.map", result as i32);
         Err(result)
     }
