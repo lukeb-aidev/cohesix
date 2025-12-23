@@ -67,6 +67,7 @@ virtio-mmio-legacy = []
 net-virtio-tx-v2 = []
 cache-maintenance = []
 virtio_guard_queue = []
+virtio_diag_min = []
 bootstrap-trace = [
     "dep:spin",
 ]

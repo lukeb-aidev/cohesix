@@ -90,6 +90,8 @@ static DMA_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_QMEM_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_RING_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static VQ_LAYOUT_LOGGED: AtomicBool = AtomicBool::new(false);
+static RX_DEFER_KICK_LOGGED: AtomicBool = AtomicBool::new(false);
+static RX_POST_DRIVER_OK_KICK_LOGGED: AtomicBool = AtomicBool::new(false);
 static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
     [const { AtomicBool::new(false) }; VIRTIO_MMIO_SLOTS];
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
@@ -276,6 +278,11 @@ fn ranges_overlap(a_start: usize, a_len: usize, b_start: usize, b_len: usize) ->
     let a_end = a_start.saturating_add(a_len);
     let b_end = b_start.saturating_add(b_len);
     a_start < b_end && b_start < a_end
+}
+
+#[inline(always)]
+fn defer_kicks_until_driver_ok() -> bool {
+    cfg!(feature = "virtio_diag_min")
 }
 
 #[repr(C)]
@@ -894,6 +901,9 @@ impl VirtioNet {
         }
 
         info!(target: "virtio-net", "[virtio-net] DRIVER_OK about to set");
+        #[cfg(feature = "virtio_diag_min")]
+        bootinfo_snapshot::debug_peek_canary("virtio_diag_min.before_driver_ok");
+        #[cfg(not(feature = "virtio_diag_min"))]
         bootinfo_snapshot::debug_peek_canary("net.init.before_driver_ok");
         status |= STATUS_DRIVER_OK;
         driver.regs.set_status(status);
@@ -901,6 +911,20 @@ impl VirtioNet {
             "[net-console] driver status set to DRIVER_OK (status=0x{:02x})",
             driver.regs.read32(Registers::Status)
         );
+        #[cfg(feature = "virtio_diag_min")]
+        {
+            if defer_kicks_until_driver_ok() && !driver.device_faulted {
+                if !RX_POST_DRIVER_OK_KICK_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+                    info!(
+                        target: "virtio-net",
+                        "[virtio_diag_min] kicked_after_driver_ok",
+                    );
+                }
+                driver.rx_queue.notify(&mut driver.regs, RX_QUEUE_INDEX);
+            }
+            bootinfo_snapshot::debug_peek_canary("virtio_diag_min.after_driver_ok");
+        }
+        #[cfg(not(feature = "virtio_diag_min"))]
         bootinfo_snapshot::debug_peek_canary("net.init.after_driver_ok");
         Ok(driver)
     }
@@ -2022,6 +2046,17 @@ impl VirtioNet {
             );
         }
         if notify && !self.device_faulted {
+            if defer_kicks_until_driver_ok()
+                && (self.regs.status() & STATUS_DRIVER_OK) == 0
+            {
+                if !RX_DEFER_KICK_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+                    info!(
+                        target: "virtio-net",
+                        "[virtio_diag_min] defer_kicks=1: skipped_kick_before_driver_ok",
+                    );
+                }
+                return Ok(());
+            }
             compiler_fence(AtomicOrdering::Release);
             fence(AtomicOrdering::Release);
             self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
@@ -2284,6 +2319,7 @@ impl VirtioNet {
         let payload_capacity = self.rx_payload_capacity;
         let frame_capacity = self.rx_frame_capacity;
 
+        #[cfg(not(feature = "virtio_diag_min"))]
         bootinfo_snapshot::debug_peek_canary("net.init.rx.before_provision");
 
         if self
@@ -2393,6 +2429,7 @@ impl VirtioNet {
                 );
             }
         }
+        #[cfg(not(feature = "virtio_diag_min"))]
         bootinfo_snapshot::debug_peek_canary("net.init.rx.after_provision");
         let (used_idx, avail_idx) = self.rx_queue.indices_no_sync();
         if !RX_ARM_END_LOGGED.swap(true, AtomicOrdering::AcqRel) {
@@ -2414,6 +2451,7 @@ impl VirtioNet {
             used_idx,
             avail_idx,
         );
+        #[cfg(not(feature = "virtio_diag_min"))]
         bootinfo_snapshot::debug_peek_canary("net.init.rx.after_notify");
         if avail_idx as usize != self.rx_buffers.len() {
             warn!(
@@ -4079,6 +4117,34 @@ impl VirtioRegs {
             let vendor_id = regs.read32(Registers::VendorId);
             match identifiers.evaluate(vendor_id) {
                 Ok(mode) => {
+                    #[cfg(feature = "virtio_diag_min")]
+                    {
+                        let magic_first = regs.read32(Registers::MagicValue);
+                        let version_first = regs.read32(Registers::Version);
+                        let device_first = regs.read32(Registers::DeviceId);
+                        let vendor_first = regs.read32(Registers::VendorId);
+                        compiler_fence(AtomicOrdering::SeqCst);
+                        let magic_second = regs.read32(Registers::MagicValue);
+                        let version_second = regs.read32(Registers::Version);
+                        let device_second = regs.read32(Registers::DeviceId);
+                        let vendor_second = regs.read32(Registers::VendorId);
+                        info!(
+                            target: "virtio-net",
+                            "[virtio_diag_min] mmio readback: magic=0x{magic_first:08x}/0x{magic_second:08x} version=0x{version_first:08x}/0x{version_second:08x} device=0x{device_first:08x}/0x{device_second:08x} vendor=0x{vendor_first:08x}/0x{vendor_second:08x}",
+                        );
+                        regs.write32(Registers::Status, STATUS_ACKNOWLEDGE);
+                        let status_read = regs.read32(Registers::Status);
+                        info!(
+                            target: "virtio-net",
+                            "[virtio_diag_min] mmio status ack readback=0x{status_read:02x}",
+                        );
+                        if status_read & STATUS_ACKNOWLEDGE == 0 {
+                            panic!(
+                                "virtio_diag_min: status ACKNOWLEDGE did not stick (read=0x{status_read:02x})"
+                            );
+                        }
+                        regs.write32(Registers::Status, 0);
+                    }
                     info!(
                         target: "net-console",
                         "[virtio-net] found device: slot={} mmio=0x{base:08x} device_id=0x{device_id:04x} vendor=0x{vendor_id:04x} version=0x{version:08x}",
@@ -4775,6 +4841,28 @@ impl VirtQueue {
             }
         }
         regs.queue_ready(1);
+        #[cfg(feature = "virtio_diag_min")]
+        if matches!(mode, VirtioMmioMode::Modern) {
+            let want_desc = base_paddr as u64;
+            let want_driver = (base_paddr + layout.avail_offset) as u64;
+            let want_device = (base_paddr + layout.used_offset) as u64;
+            let desc = (u64::from(regs.read32(Registers::QueueDescHigh)) << 32)
+                | u64::from(regs.read32(Registers::QueueDescLow));
+            let driver = (u64::from(regs.read32(Registers::QueueDriverHigh)) << 32)
+                | u64::from(regs.read32(Registers::QueueDriverLow));
+            let device = (u64::from(regs.read32(Registers::QueueDeviceHigh)) << 32)
+                | u64::from(regs.read32(Registers::QueueDeviceLow));
+            let ready = regs.read32(Registers::QueueReady);
+            info!(
+                target: "virtio-net",
+                "[virtio_diag_min] queue={index} ready={ready} desc=0x{desc:016x} driver=0x{driver:016x} device=0x{device:016x} want_desc=0x{want_desc:016x} want_driver=0x{want_driver:016x} want_device=0x{want_device:016x}",
+            );
+            if desc != want_desc || driver != want_driver || device != want_device {
+                panic!(
+                    "virtio_diag_min: queue {index} addr mismatch: desc=0x{desc:016x} driver=0x{driver:016x} device=0x{device:016x} (want desc=0x{want_desc:016x} driver=0x{want_driver:016x} device=0x{want_device:016x})"
+                );
+            }
+        }
         info!(
             target: "net-console",
             "[virtio-net] queue {} configured: size={} pfn=0x{:x} mode={:?}",
