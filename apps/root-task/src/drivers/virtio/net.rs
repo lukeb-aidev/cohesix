@@ -1525,6 +1525,9 @@ impl VirtioNet {
         slot: u16,
         avail_idx: u16,
     ) -> Result<(), ()> {
+        if head_id >= self.tx_queue.size || head_id as usize >= self.tx_owned.len() {
+            return self.tx_state_violation("tx_owned_id_oob", head_id, Some(slot));
+        }
         let gen = self.tx_posted_gen(head_id).unwrap_or(0);
         let Some(entry) = self.tx_owned.get_mut(head_id as usize) else {
             return self.tx_state_violation("tx_owned_oob", head_id, Some(slot));
@@ -1543,6 +1546,9 @@ impl VirtioNet {
     }
 
     fn release_tx_owned(&mut self, id: u16) -> Result<(), ()> {
+        if id >= self.tx_queue.size || id as usize >= self.tx_owned.len() {
+            return self.tx_state_violation("tx_owned_reclaim_id_oob", id, None);
+        }
         let Some(entry) = self.tx_owned.get_mut(id as usize) else {
             return self.tx_state_violation("tx_owned_reclaim_oob", id, None);
         };
@@ -2025,6 +2031,9 @@ impl VirtioNet {
             self.tx_anomaly(TxAnomalyReason::DescAddrZero, "enqueue_tx_chain_zero_addr");
             self.device_faulted = true;
             return Err(());
+        }
+        if head_id >= self.tx_queue.size {
+            return self.tx_state_violation("tx_head_oob", head_id, None);
         }
         if let Some(entry) = self.tx_owned.get(head_id as usize).and_then(|v| *v) {
             error!(
@@ -2620,6 +2629,11 @@ impl VirtioNet {
         }
         self.tx_progress_log_gate = self.tx_progress_log_gate.wrapping_add(1);
         let qsize = usize::from(self.tx_queue.size);
+        if qsize == 0 {
+            self.device_faulted = true;
+            self.last_error.get_or_insert("tx_qsize_zero");
+            return;
+        }
         while self.tx_queue.last_used != used_idx {
             let ring_slot = (self.tx_queue.last_used as usize) % qsize;
             self.tx_queue.invalidate_used_elem_for_cpu(ring_slot);
@@ -2642,16 +2656,15 @@ impl VirtioNet {
                 self.tx_used_zero_streak = 0;
             }
             if id >= self.tx_queue.size {
-                let desc = self.tx_queue.read_descriptor(id.min(self.tx_queue.size - 1));
                 let fault = ForensicFault {
                     queue_name: "TX",
                     qsize: self.tx_queue.size,
                     head: id,
                     idx: self.tx_queue.last_used,
-                    addr: desc.addr,
+                    addr: 0,
                     len: len_u32,
-                    flags: desc.flags,
-                    next: desc.next,
+                    flags: 0,
+                    next: 0,
                     reason: ForensicFaultReason::UsedIdOutOfRange,
                 };
                 let _ = self.handle_forensic_fault(fault);
@@ -4573,6 +4586,27 @@ impl VirtQueue {
         self.used_zero_len_head = None;
     }
 
+    #[inline(always)]
+    fn debug_check_ptr(&self, ptr: *const u8, len: usize, label: &str, index: u16) {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let base = self.desc.as_ptr() as usize;
+        let end = base.saturating_add(self.layout.total_len);
+        let start = ptr as usize;
+        let finish = start.saturating_add(len);
+        debug_assert!(
+            start >= base && finish <= end,
+            "virtqueue oob {}: ptr=0x{:x} len={} base=0x{:x} end=0x{:x} idx={}",
+            label,
+            start,
+            len,
+            base,
+            end,
+            index,
+        );
+    }
+
     fn reconfigure(&self, regs: &mut VirtioRegs, index: u32, mode: VirtioMmioMode) {
         regs.select_queue(index);
         regs.set_queue_size(self.size);
@@ -4611,6 +4645,12 @@ impl VirtQueue {
             next: next.unwrap_or(0),
         };
         let desc_ptr = unsafe { self.desc.as_ptr().add(index as usize) };
+        self.debug_check_ptr(
+            desc_ptr as *const u8,
+            core::mem::size_of::<VirtqDesc>(),
+            "desc_write",
+            index,
+        );
         unsafe { write_volatile(desc_ptr, desc) };
         if FORENSICS {
             let verify = unsafe { read_volatile(desc_ptr) };
@@ -4641,6 +4681,12 @@ impl VirtQueue {
         assert!(ring_slot < qsize, "avail ring slot out of range");
         unsafe {
             let ring_ptr = (*avail).ring.as_ptr().add(ring_slot as usize) as *mut u16;
+            self.debug_check_ptr(
+                ring_ptr as *const u8,
+                core::mem::size_of::<u16>(),
+                "avail_write",
+                ring_slot as u16,
+            );
             write_volatile(ring_ptr, index);
             fence(AtomicOrdering::Release);
             let new_idx = idx.wrapping_add(1);
@@ -4687,6 +4733,12 @@ impl VirtQueue {
 
     fn invalidate_used_header_for_cpu(&self) {
         let used_ptr = self.used.as_ptr() as *const u8;
+        self.debug_check_ptr(
+            used_ptr,
+            core::mem::size_of::<u16>() * 2,
+            "used_hdr",
+            0,
+        );
         dma_invalidate(
             used_ptr,
             core::mem::size_of::<u16>() * 2,
@@ -4698,6 +4750,12 @@ impl VirtQueue {
 
     fn invalidate_used_elem_for_cpu(&self, ring_slot: usize) {
         let elem_ptr = unsafe { (*self.used.as_ptr()).ring.as_ptr().add(ring_slot) as *const u8 };
+        self.debug_check_ptr(
+            elem_ptr,
+            core::mem::size_of::<VirtqUsedElem>(),
+            "used_elem",
+            ring_slot as u16,
+        );
         if !USED_RING_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             info!(
                 target: "virtio-net",
