@@ -1307,7 +1307,7 @@ impl VirtioNet {
             if let Some(entry) = *entry {
                 info!(
                     target: "net-console",
-                    "[virtio-net][forensics] tx_owned id={} gen={} total_len={} addr=0x{addr:016x} slot={} avail_idx={}",
+                    "[virtio-net][forensics] tx_owned id={} gen={} total_len={} addr=0x{addr:016x} slot={slot} avail_idx={avail_idx}",
                     id,
                     entry.gen,
                     entry.total_len,
@@ -1636,7 +1636,7 @@ impl VirtioNet {
         {
             error!(
                 target: "net-console",
-                "[virtio-net][forensics] tx publish verify failed: slot={} expected_head={} observed_head={} desc_len={} expected_len={} desc_addr=0x{addr:016x} expected_addr=0x{expected_addr:016x} last_used={} used.idx={} avail.idx={}",
+                "[virtio-net][forensics] tx publish verify failed: slot={} expected_head={} observed_head={} desc_len={} expected_len={} desc_addr=0x{addr:016x} expected_addr=0x{expected_addr:016x} last_used={last_used} used.idx={used_idx} avail.idx={avail_idx}",
                 ring_slot,
                 head_id,
                 observed_head,
@@ -1670,12 +1670,12 @@ impl VirtioNet {
             let (used_idx, avail_idx) = self.tx_queue.indices();
             error!(
                 target: "net-console",
-                "[virtio-net] tx publish invariant failed: slot={} head={} observed_head={} desc_addr=0x{addr:016x} desc_len={} used.idx={} avail.idx={} last_used={}",
+                "[virtio-net] tx publish invariant failed: slot={} head={} observed_head={} desc_addr=0x{addr:016x} desc_len={len} used.idx={} avail.idx={} last_used={}",
                 ring_slot,
                 head_id,
                 observed_head,
                 addr = desc.addr,
-                desc.len,
+                len = desc.len,
                 used_idx,
                 avail_idx,
                 self.tx_queue.last_used,
@@ -2029,7 +2029,7 @@ impl VirtioNet {
         if let Some(entry) = self.tx_owned.get(head_id as usize).and_then(|v| *v) {
             error!(
                 target: "net-console",
-                "[virtio-net] tx publish head already owned: head={} gen={} len={} addr=0x{addr:016x} slot={} avail_idx={}",
+                "[virtio-net] tx publish head already owned: head={} gen={} len={} addr=0x{addr:016x} slot={slot} avail_idx={avail_idx}",
                 head_id,
                 entry.gen,
                 entry.total_len,
