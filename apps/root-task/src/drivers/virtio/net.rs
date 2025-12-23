@@ -22,7 +22,9 @@ use smoltcp::wire::EthernetAddress;
 
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::{HalError, Hardware};
-use crate::net::{NetDevice, NetDeviceCounters, NetDriverError, NetStage, NET_STAGE, CONSOLE_TCP_PORT};
+use crate::net::{
+    NetDevice, NetDeviceCounters, NetDriverError, NetStage, CONSOLE_TCP_PORT, NET_DIAG, NET_STAGE,
+};
 use crate::net_consts::MAX_FRAME_LEN;
 use crate::sel4::{seL4_CapInitThreadVSpace, DeviceFrame, RamFrame};
 
@@ -85,6 +87,7 @@ static RX_ARM_START_LOGGED: AtomicBool = AtomicBool::new(false);
 static RX_ARM_END_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_CLEAN_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
+static RX_CACHE_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_QMEM_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_RING_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -1793,6 +1796,7 @@ impl VirtioNet {
             head_id,
             false,
         );
+        NET_DIAG.record_rx_desc_posted();
         if !RX_PUBLISH_FENCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             debug!(
                 target: "virtio-net",
@@ -2184,6 +2188,13 @@ impl VirtioNet {
         payload_len: usize,
         cacheable: bool,
     ) {
+        NET_DIAG.record_rx_cache_clean();
+        if !cacheable && !RX_CACHE_POLICY_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            log::info!(
+                target: "virtio-net",
+                "[virtio-net][dma] rx buffers mapped non-cacheable; cache clean should be redundant"
+            );
+        }
         let header_ptr = buffer.ptr().as_ptr();
         let payload_ptr = unsafe { header_ptr.add(header_len) };
         let payload_len = core::cmp::min(
@@ -2205,6 +2216,7 @@ impl VirtioNet {
         written_len: usize,
         cacheable: bool,
     ) {
+        NET_DIAG.record_rx_cache_invalidate();
         let header_len = core::cmp::min(header_len, written_len);
         let header_ptr = buffer.ptr().as_ptr();
         dma_invalidate(
@@ -2235,6 +2247,9 @@ impl VirtioNet {
             status,
             isr_ack,
         );
+        if status != 0 {
+            NET_DIAG.record_rx_irq();
+        }
         self.check_device_health();
         if self.device_faulted {
             return;
@@ -2316,7 +2331,9 @@ impl VirtioNet {
                     if self.record_tx_complete(id).is_err() {
                         break;
                     }
+                    NET_DIAG.record_tx_completion();
                     self.tx_used_count = self.tx_used_count.wrapping_add(1);
+                    NET_DIAG.record_tx_used_seen();
                     self.note_progress();
                     if self.tx_free.push(id).is_err() {
                         self.tx_drops = self.tx_drops.saturating_add(1);
@@ -2372,6 +2389,8 @@ impl VirtioNet {
             self.tx_v2_in_flight[id as usize] = false;
             self.tx_complete = self.tx_complete.wrapping_add(1);
             self.tx_used_count = self.tx_used_count.wrapping_add(1);
+            NET_DIAG.record_tx_completion();
+            NET_DIAG.record_tx_used_seen();
             if self.tx_v2_free.push(id).is_err() {
                 self.tx_drops = self.tx_drops.saturating_add(1);
                 self.last_error.get_or_insert("tx_v2_free_overflow");
@@ -2448,12 +2467,17 @@ impl VirtioNet {
                         );
                     }
                     self.rx_used_count = self.rx_used_count.wrapping_add(1);
+                    NET_DIAG.record_rx_used_seen(crate::hal::timebase().now_ms());
                     self.note_progress();
                     self.requeue_rx(id, Some(len));
                     return None;
                 }
                 if let Some(buffer) = self.rx_buffers.get_mut(id as usize) {
                     Self::sync_rx_slot_for_cpu(buffer, header_len, len, self.dma_cacheable);
+                    debug_assert!(
+                        NET_DIAG.snapshot().rx_cache_invalidate > 0,
+                        "rx cache invalidate must run before consuming RX buffers"
+                    );
                 }
                 self.last_used_idx_debug = self.rx_queue.last_used;
                 let (used_idx, avail_idx) = self.rx_queue.indices();
@@ -2463,6 +2487,9 @@ impl VirtioNet {
                     used_idx,
                     avail_idx,
                 );
+                self.rx_used_count = self.rx_used_count.wrapping_add(1);
+                NET_DIAG.record_rx_used_seen(crate::hal::timebase().now_ms());
+                self.note_progress();
                 Some((id, len))
             }
             Ok(None) => None,
@@ -2532,6 +2559,10 @@ impl VirtioNet {
             }];
 
             Self::sync_rx_slot_for_device(buffer, header_len, payload_len, self.dma_cacheable);
+            debug_assert!(
+                NET_DIAG.snapshot().rx_cache_clean > 0,
+                "rx cache clean must run before posting descriptors"
+            );
 
             if !self
                 .rx_requeue_logged_ids
@@ -2685,6 +2716,7 @@ impl VirtioNet {
                 self.tx_drops = self.tx_drops.saturating_add(1);
                 return;
             }
+            NET_DIAG.record_tx_submit();
             if let Some(buffer) = self.tx_buffers.get_mut(id as usize) {
                 let slice = buffer.as_mut_slice();
                 for byte in &mut slice[length..] {
@@ -2759,12 +2791,12 @@ impl VirtioNet {
             .setup_descriptor(id, addr, capped_len as u32, 0, None);
         self.tx_queue.sync_descriptor_table_for_device();
 
-        let _range = self
-            .clean_tx_buffer_for_device(id, capped_len, self.tx_anomaly_logged);
+        let _range = self.clean_tx_buffer_for_device(id, capped_len, self.tx_anomaly_logged);
         self.tx_v2_in_flight[id as usize] = true;
         if let Some((slot, _avail_idx, _old_idx)) = self.tx_queue.push_avail(id) {
             self.tx_queue.sync_avail_ring_for_device();
             self.tx_submit = self.tx_submit.wrapping_add(1);
+            NET_DIAG.record_tx_submit();
             if slot == 0 && !self.tx_wrap_logged {
                 self.tx_wrap_logged = true;
             }
@@ -3218,6 +3250,7 @@ impl Device for VirtioNet {
                 len,
             };
             let tx = self.prepare_tx_token();
+            NET_DIAG.record_rx_frame_to_stack();
             Some((rx, tx))
         } else {
             None
@@ -3292,8 +3325,7 @@ impl NetDevice for VirtioNet {
         } else {
             self.tx_in_flight as u64
         };
-        let (tx_submit, tx_complete, tx_double_submit, tx_zero_len_attempt) = if NET_VIRTIO_TX_V2
-        {
+        let (tx_submit, tx_complete, tx_double_submit, tx_zero_len_attempt) = if NET_VIRTIO_TX_V2 {
             (
                 self.tx_submit,
                 self.tx_complete,
@@ -3341,6 +3373,7 @@ impl RxToken for VirtioRxToken {
     where
         F: FnOnce(&[u8]) -> R,
     {
+        NET_DIAG.record_smoltcp_rx();
         let driver = unsafe { &mut *self.driver };
         let slot = self.id as usize;
         let buffer = driver
@@ -3404,6 +3437,7 @@ impl TxToken for VirtioTxToken {
             driver.log_tx_attempt(attempt_seq, len, 0, 0);
             return f(&mut []);
         }
+        NET_DIAG.record_smoltcp_tx();
         if let Some(id) = self.desc {
             let buffer = driver
                 .tx_buffers
@@ -4041,9 +4075,8 @@ impl VirtQueue {
             frame_capacity = frame_capacity,
         );
         let base_paddr = frame_paddr.saturating_add(base_offset);
-        let base_ptr = unsafe {
-            NonNull::new_unchecked(frame_ptr.as_ptr().add(base_offset) as *mut u8)
-        };
+        let base_ptr =
+            unsafe { NonNull::new_unchecked(frame_ptr.as_ptr().add(base_offset) as *mut u8) };
 
         debug_assert!(
             layout.desc_offset + layout.desc_len <= layout.avail_offset,
@@ -4324,6 +4357,11 @@ impl VirtQueue {
             TX_QUEUE_INDEX => Some(&TX_NOTIFY_LOGGED),
             _ => None,
         };
+        match queue {
+            RX_QUEUE_INDEX => NET_DIAG.record_rx_kick(),
+            TX_QUEUE_INDEX => NET_DIAG.record_tx_kick(),
+            _ => {}
+        }
         if let Some(flag) = notify_flag {
             if !flag.swap(true, AtomicOrdering::AcqRel) {
                 let label = if queue == TX_QUEUE_INDEX { "TX" } else { "RX" };
@@ -4352,6 +4390,7 @@ impl VirtQueue {
 
     fn invalidate_used_header_for_cpu(&self) {
         let used_ptr = self.used.as_ptr() as *const u8;
+        NET_DIAG.record_rx_cache_invalidate();
         dma_invalidate(
             used_ptr,
             core::mem::size_of::<u16>() * 2,
@@ -4482,7 +4521,11 @@ impl VirtQueue {
             base = self.base_vaddr,
         );
         let ring_offset = ring_addr - self.base_vaddr;
-        self.assert_offset_in_range(ring_offset, core::mem::size_of::<VirtqUsedElem>(), "used.ring");
+        self.assert_offset_in_range(
+            ring_offset,
+            core::mem::size_of::<VirtqUsedElem>(),
+            "used.ring",
+        );
         self.invalidate_used_elem_for_cpu(ring_slot);
         dma_barrier();
         let elem = unsafe { read_volatile(elem_ptr) };

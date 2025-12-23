@@ -5,6 +5,11 @@
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 use smoltcp::{phy::Device, wire::EthernetAddress};
 
+#[cfg(feature = "net")]
+pub mod diag;
+#[cfg(feature = "net")]
+pub use diag::{NetDiagSnapshot, NET_DIAG, NET_DIAG_FEATURED};
+
 use crate::serial::DEFAULT_LINE_CAPACITY;
 pub use cohesix_net_constants::{COHESIX_TCP_CONSOLE_PORT, COHSH_TCP_PORT, TCP_CONSOLE_PORT};
 use heapless::String as HeaplessString;

@@ -37,7 +37,10 @@ use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TIC
 #[cfg(feature = "kernel")]
 use crate::debug_uart::debug_uart_str;
 #[cfg(feature = "net-console")]
-use crate::net::{NetConsoleEvent, NetPoller, CONSOLE_QUEUE_DEPTH};
+use crate::net::{
+    NetConsoleEvent, NetDiagSnapshot, NetPoller, NetTelemetry, CONSOLE_QUEUE_DEPTH, NET_DIAG,
+    NET_DIAG_FEATURED,
+};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
 #[cfg(feature = "kernel")]
@@ -87,6 +90,8 @@ const CONSOLE_BANNER: &str = "[Cohesix] Root console ready (type 'help' for comm
 const CONSOLE_PROMPT: &str = "cohesix> ";
 #[cfg(feature = "net-console")]
 const NET_POLL_LOG_INTERVAL_MS: u64 = 1_000;
+#[cfg(feature = "net-console")]
+const NET_DIAG_STUCK_MS: u64 = 3_000;
 
 #[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
 #[derive(Debug, Default)]
@@ -368,7 +373,11 @@ where
     #[cfg(feature = "net-console")]
     net: Option<&'a mut dyn NetPoller>,
     #[cfg(feature = "net-console")]
-    last_net_poll_log_ms: Option<u64>,
+    last_net_diag_log_ms: Option<u64>,
+    #[cfg(feature = "net-console")]
+    last_net_diag_snapshot: Option<NetDiagSnapshot>,
+    #[cfg(feature = "net-console")]
+    net_diag_stuck_logged: bool,
     #[cfg(feature = "kernel")]
     ninedoor: Option<&'a mut NineDoorBridge>,
     #[cfg(feature = "kernel")]
@@ -420,7 +429,11 @@ where
             #[cfg(feature = "net-console")]
             net: None,
             #[cfg(feature = "net-console")]
-            last_net_poll_log_ms: None,
+            last_net_diag_log_ms: None,
+            #[cfg(feature = "net-console")]
+            last_net_diag_snapshot: None,
+            #[cfg(feature = "net-console")]
+            net_diag_stuck_logged: false,
             #[cfg(feature = "kernel")]
             ninedoor: None,
             #[cfg(feature = "kernel")]
@@ -498,24 +511,16 @@ where
 
         #[cfg(feature = "net-console")]
         if let Some(net) = self.net.as_mut() {
-            log::debug!(
-                target: "event",
-                "[event] pump: calling net-console poll (now_ms={})",
-                self.now_ms
-            );
-            if net.poll(self.now_ms) {
-                let telemetry = net.telemetry();
+            let activity = net.poll(self.now_ms);
+            let telemetry = net.telemetry();
+            if NET_DIAG_FEATURED {
+                self.log_net_diag(telemetry);
+            } else if activity {
                 let message = format_message(format_args!(
                     "net: poll link_up={} tx_drops={}",
                     telemetry.link_up, telemetry.tx_drops
                 ));
-                let should_log = self.last_net_poll_log_ms.map_or(true, |last| {
-                    self.now_ms.saturating_sub(last) >= NET_POLL_LOG_INTERVAL_MS
-                });
-                if should_log {
-                    self.audit.info(message.as_str());
-                    self.last_net_poll_log_ms = Some(self.now_ms);
-                }
+                self.audit.info(message.as_str());
             }
             let mut buffered: HeaplessVec<
                 HeaplessString<DEFAULT_LINE_CAPACITY>,
@@ -533,6 +538,75 @@ where
         self.ipc.dispatch(self.now_ms);
         #[cfg(feature = "kernel")]
         self.drain_bootstrap_ipc();
+    }
+
+    #[cfg(feature = "net-console")]
+    fn log_net_diag(&mut self, telemetry: NetTelemetry) {
+        if !NET_DIAG_FEATURED {
+            return;
+        }
+        let snapshot = NET_DIAG.snapshot();
+        let should_log = self.last_net_diag_log_ms.map_or(true, |last| {
+            self.now_ms.saturating_sub(last).saturating_add(1) >= NET_POLL_LOG_INTERVAL_MS
+        });
+        if should_log {
+            let line = format_message(format_args!(
+                "NETDIAG poll={} rx_irq={} rx_kick={} rx_post={} rx_used={} rx_stack={} sm_rx={} tx_sub={} tx_kick={} tx_used={} tx_comp={} sm_tx={} accept={}/{} rw={}/{} cache={}/{} link={} drops={}",
+                snapshot.poll_calls,
+                snapshot.rx_irq_count,
+                snapshot.rx_kicks,
+                snapshot.rx_desc_posted,
+                snapshot.rx_used_seen,
+                snapshot.rx_frames_to_stack,
+                snapshot.rx_frames_into_smoltcp,
+                snapshot.tx_submits,
+                snapshot.tx_kicks,
+                snapshot.tx_used_seen,
+                snapshot.tx_completions,
+                snapshot.tx_frames_from_smoltcp,
+                snapshot.accept_success,
+                snapshot.accept_attempts,
+                snapshot.bytes_read,
+                snapshot.bytes_written,
+                snapshot.rx_cache_clean,
+                snapshot.rx_cache_invalidate,
+                telemetry.link_up,
+                telemetry.tx_drops,
+            ));
+            self.audit.info(line.as_str());
+            self.last_net_diag_log_ms = Some(self.now_ms);
+        }
+        self.check_net_diag_progress(snapshot);
+        self.last_net_diag_snapshot = Some(snapshot);
+    }
+
+    #[cfg(feature = "net-console")]
+    fn check_net_diag_progress(&mut self, snapshot: NetDiagSnapshot) {
+        if let Some(prev) = self.last_net_diag_snapshot {
+            if snapshot.rx_used_seen != prev.rx_used_seen {
+                self.net_diag_stuck_logged = false;
+            }
+            let poll_delta = snapshot.poll_calls.saturating_sub(prev.poll_calls);
+            let irq_delta = snapshot.rx_irq_count.saturating_sub(prev.rx_irq_count);
+            let last_progress_ms = NET_DIAG.last_rx_used_change_ms();
+            if poll_delta > 0
+                && irq_delta > 0
+                && last_progress_ms > 0
+                && self.now_ms.saturating_sub(last_progress_ms) >= NET_DIAG_STUCK_MS
+                && !self.net_diag_stuck_logged
+            {
+                let warn_line = format_message(format_args!(
+                    "NETDIAG warn: rx_used_stuck ms={} poll_delta={} irq_delta={} rx_used={}",
+                    self.now_ms.saturating_sub(last_progress_ms),
+                    poll_delta,
+                    irq_delta,
+                    snapshot.rx_used_seen
+                ));
+                self.audit.info(warn_line.as_str());
+                self.net_diag_stuck_logged = true;
+                NET_DIAG.mark_stuck_warned();
+            }
+        }
     }
 
     #[cfg(feature = "kernel")]
