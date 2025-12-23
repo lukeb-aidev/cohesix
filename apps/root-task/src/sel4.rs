@@ -2969,6 +2969,14 @@ impl<'a> KernelEnv<'a> {
         })
     }
 
+    /// Reserves an unmapped guard page in the DMA window and returns its base.
+    pub fn reserve_dma_guard_page(&mut self) -> usize {
+        let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "dma-guard");
+        self.dma_cursor = range.end;
+        self.reserved.reserve(&range, "dma-guard");
+        range.start
+    }
+
     fn retype_page(
         &mut self,
         untyped_cap: seL4_Untyped,

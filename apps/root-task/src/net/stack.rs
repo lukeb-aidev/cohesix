@@ -41,8 +41,8 @@ use smoltcp::wire::{
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
     ConsoleNetConfig, NetBackend, NetConsoleEvent, NetCounters, NetDevice, NetDriverError,
-    NetPoller, NetSelfTestReport, NetSelfTestResult, NetTelemetry, DEFAULT_NET_BACKEND,
-    DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
+    NetPoller, NetSelfTestReport, NetSelfTestResult, NetStage, NetTelemetry, NET_STAGE,
+    DEFAULT_NET_BACKEND, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
 };
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 #[cfg(not(feature = "net-backend-virtio"))]
@@ -898,6 +898,8 @@ pub struct NetStack<D: NetDevice> {
     tcp_probe_handle: Option<SocketHandle>,
     counters: NetCounters,
     self_test: SelfTestState,
+    stage_policy: NetStagePolicy,
+    tx_only_sent: bool,
     tcp_smoke_outbound_sent: bool,
     tcp_smoke_last_attempt_ms: u64,
     #[cfg(feature = "net-outbound-probe")]
@@ -938,6 +940,15 @@ struct SelfTestState {
     tcp_ok: bool,
     tcp_accept_seen: bool,
     last_result: Option<NetSelfTestResult>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NetStagePolicy {
+    allow_tcp: bool,
+    allow_selftest: bool,
+    allow_outbound_probe: bool,
+    allow_console_io: bool,
+    tx_only: bool,
 }
 
 struct HostCommandTarget {
@@ -1631,7 +1642,43 @@ impl<D: NetDevice> NetStack<D> {
             "[net-console] init: creating {backend_label} device (listen_port={})",
             console_config.listen_port
         );
-        let mut device = D::create(hal)?;
+        let stage = NET_STAGE;
+        info!("[net-console] net.stage={}", stage.as_str());
+        let stage_policy = match stage {
+            NetStage::ProbeOnly
+            | NetStage::QueueInitOnly
+            | NetStage::RxOnly
+            | NetStage::ArpOnly
+            | NetStage::IcmpOnly => NetStagePolicy {
+                allow_tcp: false,
+                allow_selftest: false,
+                allow_outbound_probe: false,
+                allow_console_io: false,
+                tx_only: false,
+            },
+            NetStage::TxOnly => NetStagePolicy {
+                allow_tcp: false,
+                allow_selftest: SELF_TEST_ENABLED,
+                allow_outbound_probe: false,
+                allow_console_io: false,
+                tx_only: true,
+            },
+            NetStage::TcpHandshakeOnly => NetStagePolicy {
+                allow_tcp: true,
+                allow_selftest: false,
+                allow_outbound_probe: false,
+                allow_console_io: false,
+                tx_only: false,
+            },
+            NetStage::Full => NetStagePolicy {
+                allow_tcp: true,
+                allow_selftest: SELF_TEST_ENABLED,
+                allow_outbound_probe: true,
+                allow_console_io: true,
+                tx_only: false,
+            },
+        };
+        let mut device = D::create_with_stage(hal, stage)?;
         let mac = device.mac();
         info!("[net-console] {backend_label} device online: mac={mac}");
 
@@ -1639,8 +1686,11 @@ impl<D: NetDevice> NetStack<D> {
         log_bootinfo_mark("net.init.device", &attempt)?;
 
         log_storage_addresses_once("net.init.reservation");
-        let reservation =
-            StorageReservation::acquire::<D::Error>(SELF_TEST_ENABLED, &attempt, attempt.tag)?;
+        let reservation = StorageReservation::acquire::<D::Error>(
+            stage_policy.allow_selftest,
+            &attempt,
+            attempt.tag,
+        )?;
 
         let init_now_ms = crate::hal::timebase().now_ms();
         debug!("[net-console] init: timebase.now_ms={init_now_ms}");
@@ -1720,7 +1770,9 @@ impl<D: NetDevice> NetStack<D> {
             #[cfg(feature = "net-outbound-probe")]
             tcp_probe_handle: None,
             counters: NetCounters::default(),
-            self_test: SelfTestState::new(SELF_TEST_ENABLED),
+            self_test: SelfTestState::new(stage_policy.allow_selftest),
+            stage_policy,
+            tx_only_sent: false,
             tcp_smoke_outbound_sent: false,
             tcp_smoke_last_attempt_ms: 0,
             #[cfg(feature = "net-outbound-probe")]
@@ -1736,20 +1788,33 @@ impl<D: NetDevice> NetStack<D> {
             #[cfg(feature = "net-outbound-probe")]
             probe_hint_logged: false,
         };
-        stack.initialise_socket()?;
-        stack.initialise_self_test_sockets()?;
+        if stage_policy.allow_tcp {
+            stack.initialise_socket()?;
+        }
+        if stage_policy.allow_selftest {
+            stack.initialise_self_test_sockets()?;
+        }
         #[cfg(feature = "net-outbound-probe")]
-        stack.initialise_probe_socket()?;
-        info!(
-            target: "net-console",
-            "[net-console] init: TCP listener socket prepared (port={})",
-            console_config.listen_port
-        );
-        info!(
-            target: "net-console",
-            "[net-console] init: success; tcp console wired (non-blocking, port={})",
-            console_config.listen_port
-        );
+        if stage_policy.allow_outbound_probe {
+            stack.initialise_probe_socket()?;
+        }
+        if stage_policy.allow_tcp {
+            info!(
+                target: "net-console",
+                "[net-console] init: TCP listener socket prepared (port={})",
+                console_config.listen_port
+            );
+            info!(
+                target: "net-console",
+                "[net-console] init: success; tcp console wired (non-blocking, port={})",
+                console_config.listen_port
+            );
+        } else {
+            info!(
+                target: "net-console",
+                "[net-console] init: staged bring-up (tcp sockets disabled)"
+            );
+        }
         log_bootinfo_mark("net.init.post", &attempt)?;
         init_guard.commit_online();
         Ok(stack)
@@ -1895,6 +1960,26 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         self.bump_poll_counter();
+        if self.stage_policy.tx_only && !self.tx_only_sent {
+            let mut activity = self.send_udp_beacon();
+            if activity {
+                let poll_result = self
+                    .interface
+                    .poll(timestamp, &mut self.device, &mut self.sockets);
+                if poll_result != PollResult::None {
+                    log::info!("[net] smoltcp: tx-only poll now_ms={}", now_ms);
+                }
+            }
+            self.tx_only_sent = true;
+            self.telemetry.last_poll_ms = now_ms;
+            self.telemetry.tx_drops = self.device.tx_drop_count();
+            self.sync_device_counters();
+            if activity {
+                self.telemetry.link_up = true;
+            }
+            return activity;
+        }
+
         let mut poll_result = self
             .interface
             .poll(timestamp, &mut self.device, &mut self.sockets);
@@ -1902,7 +1987,11 @@ impl<D: NetDevice> NetStack<D> {
             log::info!("[net] smoltcp: events processed at now_ms={}", now_ms);
         }
         let mut activity = poll_result != PollResult::None;
-        let tcp_activity = self.process_tcp(now_ms);
+        let tcp_activity = if self.stage_policy.allow_tcp {
+            self.process_tcp(now_ms)
+        } else {
+            false
+        };
         if tcp_activity {
             activity = true;
         }
@@ -1921,12 +2010,12 @@ impl<D: NetDevice> NetStack<D> {
             }
         }
 
-        if self.service_self_test(now_ms, timestamp) {
+        if self.stage_policy.allow_selftest && self.service_self_test(now_ms, timestamp) {
             activity = true;
         }
 
         #[cfg(feature = "net-outbound-probe")]
-        if self.service_outbound_probe(now_ms, timestamp) {
+        if self.stage_policy.allow_outbound_probe && self.service_outbound_probe(now_ms, timestamp) {
             activity = true;
         }
 
@@ -2472,6 +2561,11 @@ impl<D: NetDevice> NetStack<D> {
                 self.peer_endpoint,
                 self.ip,
             );
+
+            if !self.stage_policy.allow_console_io && socket.state() == TcpState::Established {
+                socket.close();
+                return true;
+            }
 
             if socket.state() == TcpState::Established && !self.session_active {
                 let client_id = self.client_counter.wrapping_add(1);
@@ -3252,6 +3346,9 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     }
 
     fn send_console_line(&mut self, line: &str) {
+        if !self.stage_policy.allow_console_io {
+            return;
+        }
         if self.server.enqueue_outbound(line).is_err() {
             self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
         }
@@ -3275,6 +3372,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.telemetry = NetTelemetry::default();
         self.tcp_smoke_outbound_sent = false;
         self.tcp_smoke_last_attempt_ms = 0;
+        self.tx_only_sent = false;
         #[cfg(feature = "net-outbound-probe")]
         {
             self.probe_sent = false;
@@ -3286,6 +3384,9 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     }
 
     fn start_self_test(&mut self, now_ms: u64) -> bool {
+        if !self.stage_policy.allow_selftest {
+            return false;
+        }
         if !SELF_TEST_ENABLED {
             return false;
         }

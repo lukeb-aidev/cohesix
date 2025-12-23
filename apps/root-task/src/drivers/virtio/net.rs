@@ -22,13 +22,14 @@ use smoltcp::wire::EthernetAddress;
 
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::{HalError, Hardware};
-use crate::net::{NetDevice, NetDeviceCounters, NetDriverError, CONSOLE_TCP_PORT};
+use crate::net::{NetDevice, NetDeviceCounters, NetDriverError, NetStage, NET_STAGE, CONSOLE_TCP_PORT};
 use crate::net_consts::MAX_FRAME_LEN;
 use crate::sel4::{seL4_CapInitThreadVSpace, DeviceFrame, RamFrame};
 
 const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
 const NET_VIRTIO_TX_V2: bool = cfg!(feature = "net-virtio-tx-v2");
+const VIRTIO_GUARD_QUEUE: bool = cfg!(feature = "virtio_guard_queue");
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -300,6 +301,8 @@ pub enum DriverError {
     NoQueue,
     /// Ran out of DMA buffers when provisioning virtio rings.
     BufferExhausted,
+    /// Driver stopped early due to a staged bring-up selection.
+    Staged(NetStage),
     /// A virtqueue failed safety or consistency checks.
     QueueInvariant(&'static str),
     /// The virtio MMIO header contained an unexpected magic value.
@@ -316,6 +319,7 @@ impl fmt::Display for DriverError {
             Self::NoDevice => f.write_str("virtio-net device not found"),
             Self::NoQueue => f.write_str("virtio-net queues unavailable"),
             Self::BufferExhausted => f.write_str("virtio-net DMA buffer exhausted"),
+            Self::Staged(stage) => write!(f, "virtio-net staged stop: {}", stage.as_str()),
             Self::QueueInvariant(reason) => write!(f, "virtqueue invariant failed: {reason}"),
             Self::InvalidMagic(magic) => {
                 write!(f, "virtio-mmio magic value unexpected: 0x{magic:08x}")
@@ -356,6 +360,7 @@ impl NetDriverError for DriverError {
 pub struct VirtioNet {
     regs: VirtioRegs,
     mmio_mode: VirtioMmioMode,
+    stage: NetStage,
     rx_queue: VirtQueue,
     tx_queue: VirtQueue,
     rx_buffers: HeaplessVec<RamFrame, RX_QUEUE_SIZE>,
@@ -424,6 +429,14 @@ pub struct VirtioNet {
 impl VirtioNet {
     /// Create a new driver instance by probing the virtio MMIO slots.
     pub fn new<H>(hal: &mut H) -> Result<Self, DriverError>
+    where
+        H: Hardware<Error = HalError>,
+    {
+        Self::new_with_stage(hal, NET_STAGE)
+    }
+
+    /// Create a new driver instance for the requested bring-up stage.
+    pub fn new_with_stage<H>(hal: &mut H, stage: NetStage) -> Result<Self, DriverError>
     where
         H: Hardware<Error = HalError>,
     {
@@ -577,6 +590,10 @@ impl VirtioNet {
             return Err(DriverError::NoQueue);
         }
 
+        if stage == NetStage::ProbeOnly {
+            return Err(DriverError::Staged(stage));
+        }
+
         info!("[net-console] allocating virtqueue backing memory");
 
         let queue_mem_rx = hal.alloc_dma_frame().map_err(|err| {
@@ -609,6 +626,14 @@ impl VirtioNet {
                 }
             }
         };
+        let guard_vaddr = if VIRTIO_GUARD_QUEUE {
+            Some(hal.reserve_dma_guard_page().map_err(|err| {
+                regs.set_status(STATUS_FAILED);
+                DriverError::from(err)
+            })?)
+        } else {
+            None
+        };
         let dma_cacheable = cfg!(feature = "cache-maintenance");
         if !DMA_QMEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             let rx_vaddr = queue_mem_rx.ptr().as_ptr() as usize;
@@ -631,6 +656,20 @@ impl VirtioNet {
                 tx_pend = tx_paddr.saturating_add(tx_len),
             );
         }
+        if let Some(guard_vaddr) = guard_vaddr {
+            let rx_vaddr = queue_mem_rx.ptr().as_ptr() as usize;
+            let tx_vaddr = queue_mem_tx.ptr().as_ptr() as usize;
+            let page_bytes = 1usize << seL4_PageBits;
+            let base = core::cmp::min(rx_vaddr, tx_vaddr);
+            let end = core::cmp::max(rx_vaddr, tx_vaddr).saturating_add(page_bytes);
+            let len = end.saturating_sub(base);
+            info!(
+                target: "virtio-net",
+                "virtio.guard_queue=1 base=0x{base:016x} len={len} guard=0x{guard:016x}",
+                base = base,
+                guard = guard_vaddr,
+            );
+        }
 
         info!(
             "[net-console] provisioning RX descriptors ({} entries)",
@@ -643,6 +682,7 @@ impl VirtioNet {
             rx_size,
             mmio_mode,
             dma_cacheable,
+            VIRTIO_GUARD_QUEUE && matches!(mmio_mode, VirtioMmioMode::Modern),
         )
         .map_err(|err| {
             regs.set_status(STATUS_FAILED);
@@ -659,11 +699,16 @@ impl VirtioNet {
             tx_size,
             mmio_mode,
             dma_cacheable,
+            VIRTIO_GUARD_QUEUE && matches!(mmio_mode, VirtioMmioMode::Modern),
         )
         .map_err(|err| {
             regs.set_status(STATUS_FAILED);
             err
         })?;
+
+        if stage == NetStage::QueueInitOnly {
+            return Err(DriverError::Staged(stage));
+        }
 
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
         for _ in 0..rx_size {
@@ -747,6 +792,7 @@ impl VirtioNet {
         let mut driver = Self {
             regs,
             mmio_mode,
+            stage,
             rx_queue,
             tx_queue,
             rx_buffers,
@@ -1653,6 +1699,14 @@ impl VirtioNet {
         if self.device_faulted || forensics_frozen() {
             return Err(());
         }
+        assert!(
+            descs.len() <= usize::from(self.rx_queue.size),
+            "virtqueue rx chain too long: len={} qsize={} head_id={} base_vaddr=0x{base:016x}",
+            descs.len(),
+            self.rx_queue.size,
+            head_id,
+            base = self.rx_queue.base_vaddr,
+        );
 
         self.validate_chain_nonzero(
             "RX",
@@ -1775,6 +1829,14 @@ impl VirtioNet {
         if self.device_faulted || forensics_frozen() {
             return Err(());
         }
+        assert!(
+            descs.len() <= usize::from(self.tx_queue.size),
+            "virtqueue tx chain too long: len={} qsize={} head_id={} base_vaddr=0x{base:016x}",
+            descs.len(),
+            self.tx_queue.size,
+            head_id,
+            base = self.tx_queue.base_vaddr,
+        );
 
         if descs.iter().any(|desc| desc.len == 0) {
             self.tx_anomaly(TxAnomalyReason::DescLenZero, "enqueue_tx_chain_zero_len");
@@ -3087,6 +3149,9 @@ impl Device for VirtioNet {
         Self: 'a;
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+        if self.stage == NetStage::TxOnly {
+            return None;
+        }
         self.rx_poll_count = self.rx_poll_count.wrapping_add(1);
 
         if self.rx_poll_count % 1024 == 0 {
@@ -3160,6 +3225,9 @@ impl Device for VirtioNet {
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
+        if self.stage == NetStage::RxOnly {
+            return None;
+        }
         self.poll_interrupts();
         if self.device_faulted {
             return None;
@@ -3195,6 +3263,14 @@ impl NetDevice for VirtioNet {
         Self: Sized,
     {
         Self::new(hal)
+    }
+
+    fn create_with_stage<H>(hal: &mut H, stage: NetStage) -> Result<Self, Self::Error>
+    where
+        H: Hardware<Error = HalError>,
+        Self: Sized,
+    {
+        Self::new_with_stage(hal, stage)
     }
 
     fn mac(&self) -> EthernetAddress {
@@ -3832,11 +3908,65 @@ struct VirtQueue {
     last_used: u16,
     pfn: u32,
     base_paddr: usize,
+    base_vaddr: usize,
+    base_len: usize,
     cacheable: bool,
     used_zero_len_head: Option<u16>,
 }
 
 impl VirtQueue {
+    fn assert_index_in_range(&self, index: u16, label: &'static str) {
+        assert!(
+            index < self.size,
+            "virtqueue {label} index out of range: index={index} size={} base_vaddr=0x{base:016x} base_paddr=0x{paddr:016x}",
+            self.size,
+            base = self.base_vaddr,
+            paddr = self.base_paddr,
+        );
+    }
+
+    fn assert_offset_in_range(&self, offset: usize, len: usize, label: &'static str) {
+        let end = offset.saturating_add(len);
+        let ptr = self.base_vaddr.saturating_add(offset);
+        assert!(
+            end <= self.base_len,
+            "virtqueue {label} offset out of range: offset=0x{offset:x} len=0x{len:x} total=0x{total:x} ptr=0x{ptr:016x} base_vaddr=0x{base:016x} base_paddr=0x{paddr:016x}",
+            offset = offset,
+            len = len,
+            total = self.base_len,
+            ptr = ptr,
+            base = self.base_vaddr,
+            paddr = self.base_paddr,
+        );
+    }
+
+    fn assert_ring_slot(&self, idx: u16, slot: usize, label: &'static str) {
+        let qsize = usize::from(self.size);
+        assert!(
+            qsize.is_power_of_two(),
+            "virtqueue {label} size must be power-of-two: qsize={qsize} base_vaddr=0x{base:016x}",
+            base = self.base_vaddr,
+        );
+        assert!(
+            qsize != 0,
+            "virtqueue {label} size must be non-zero base_vaddr=0x{base:016x}",
+            base = self.base_vaddr,
+        );
+        assert!(
+            slot < qsize,
+            "virtqueue {label} slot out of range: idx={idx} slot={slot} qsize={qsize} base_vaddr=0x{base:016x}",
+            base = self.base_vaddr,
+        );
+        if qsize.is_power_of_two() {
+            let mask_slot = (idx as usize) & (qsize - 1);
+            assert!(
+                slot == mask_slot,
+                "virtqueue {label} wrap mismatch: idx={idx} slot={slot} mask_slot={mask_slot} qsize={qsize} base_vaddr=0x{base:016x}",
+                base = self.base_vaddr,
+            );
+        }
+    }
+
     fn new(
         regs: &mut VirtioRegs,
         mut frame: RamFrame,
@@ -3844,10 +3974,11 @@ impl VirtQueue {
         size: usize,
         mode: VirtioMmioMode,
         cacheable: bool,
+        end_align: bool,
     ) -> Result<Self, DriverError> {
         let queue_size = size as u16;
-        let base_paddr = frame.paddr();
-        let base_ptr = frame.ptr();
+        let frame_paddr = frame.paddr();
+        let frame_ptr = frame.ptr();
         let page_bytes = 1usize << seL4_PageBits;
 
         let frame_capacity = {
@@ -3859,7 +3990,7 @@ impl VirtQueue {
         };
 
         unsafe {
-            core::ptr::write_bytes(base_ptr.as_ptr(), 0, frame_capacity);
+            core::ptr::write_bytes(frame_ptr.as_ptr(), 0, frame_capacity);
         }
 
         if frame_capacity != page_bytes {
@@ -3874,10 +4005,10 @@ impl VirtQueue {
             ));
         }
 
-        if base_paddr & (page_bytes - 1) != 0 {
+        if frame_paddr & (page_bytes - 1) != 0 {
             error!(
                 target: "net-console",
-                "[virtio-net] virtqueue backing not page aligned: paddr=0x{base_paddr:x}"
+                "[virtio-net] virtqueue backing not page aligned: paddr=0x{frame_paddr:x}"
             );
             return Err(DriverError::QueueInvariant(
                 "virtqueue backing not page aligned",
@@ -3886,6 +4017,33 @@ impl VirtQueue {
 
         const LEGACY_QUEUE_ALIGN: usize = 4;
         let layout = VirtqLayout::compute_vq_layout(queue_size, false)?;
+        if end_align && matches!(mode, VirtioMmioMode::Legacy) {
+            error!(
+                target: "net-console",
+                "[virtio-net] end-aligned virtqueue unsupported for legacy mode"
+            );
+            return Err(DriverError::QueueInvariant(
+                "legacy virtqueue must be page-aligned",
+            ));
+        }
+        let base_offset = if end_align {
+            const DESC_ALIGN: usize = 16;
+            let raw_offset = frame_capacity.saturating_sub(layout.total_len);
+            raw_offset & !(DESC_ALIGN - 1)
+        } else {
+            0
+        };
+        assert!(
+            base_offset + layout.total_len <= frame_capacity,
+            "virtqueue backing overflow: base_offset=0x{base_offset:x} total_len=0x{total_len:x} capacity=0x{frame_capacity:x}",
+            base_offset = base_offset,
+            total_len = layout.total_len,
+            frame_capacity = frame_capacity,
+        );
+        let base_paddr = frame_paddr.saturating_add(base_offset);
+        let base_ptr = unsafe {
+            NonNull::new_unchecked(frame_ptr.as_ptr().add(base_offset) as *mut u8)
+        };
 
         debug_assert!(
             layout.desc_offset + layout.desc_len <= layout.avail_offset,
@@ -4085,21 +4243,20 @@ impl VirtQueue {
             last_used: used_idx,
             pfn: queue_pfn,
             base_paddr,
+            base_vaddr: base_ptr.as_ptr() as usize,
+            base_len: layout.total_len,
             cacheable,
             used_zero_len_head: None,
         })
     }
 
     fn setup_descriptor(&self, index: u16, addr: u64, len: u32, flags: u16, next: Option<u16>) {
-        if index >= self.size {
-            error!(
-                target: "net-console",
-                "[virtio-net] descriptor index out of range: index={} size={}",
-                index,
-                self.size,
-            );
-            return;
-        }
+        self.assert_index_in_range(index, "desc");
+        let desc_offset = self
+            .layout
+            .desc_offset
+            .saturating_add(core::mem::size_of::<VirtqDesc>().saturating_mul(index as usize));
+        self.assert_offset_in_range(desc_offset, core::mem::size_of::<VirtqDesc>(), "desc");
         let flags = match next {
             Some(_) => flags | VIRTQ_DESC_F_NEXT,
             None => flags,
@@ -4122,25 +4279,31 @@ impl VirtQueue {
     }
 
     fn push_avail(&self, index: u16) -> Option<(u16, u16, u16)> {
-        if index >= self.size {
-            error!(
-                target: "net-console",
-                "[virtio-net] avail ring index out of range: index={} size={}",
-                index,
-                self.size,
-            );
-            return None;
-        }
+        self.assert_index_in_range(index, "avail");
         let avail = self.avail.as_ptr();
         let qsize = usize::from(self.size);
 
-        assert!(qsize != 0, "virtqueue size must be non-zero");
-
         let idx = unsafe { read_volatile(&(*avail).idx) };
         let ring_slot = (idx as usize) % qsize;
-        assert!(ring_slot < qsize, "avail ring slot out of range");
+        self.assert_ring_slot(idx, ring_slot, "avail");
         unsafe {
+            let idx_ptr = &(*avail).idx as *const u16 as usize;
+            assert!(
+                idx_ptr >= self.base_vaddr,
+                "virtqueue avail.idx pointer below base: ptr=0x{idx_ptr:016x} base=0x{base:016x}",
+                base = self.base_vaddr,
+            );
+            let idx_offset = idx_ptr - self.base_vaddr;
+            self.assert_offset_in_range(idx_offset, core::mem::size_of::<u16>(), "avail.idx");
             let ring_ptr = (*avail).ring.as_ptr().add(ring_slot as usize) as *mut u16;
+            let ring_addr = ring_ptr as usize;
+            assert!(
+                ring_addr >= self.base_vaddr,
+                "virtqueue avail.ring pointer below base: ptr=0x{ring_addr:016x} base=0x{base:016x}",
+                base = self.base_vaddr,
+            );
+            let ring_offset = ring_addr - self.base_vaddr;
+            self.assert_offset_in_range(ring_offset, core::mem::size_of::<u16>(), "avail.ring");
             write_volatile(ring_ptr, index);
             fence(AtomicOrdering::Release);
             let new_idx = idx.wrapping_add(1);
@@ -4152,6 +4315,8 @@ impl VirtQueue {
 
     fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) {
         // Ensure descriptors and avail ring updates are visible to the device before the kick.
+        self.sync_descriptor_table_for_device();
+        self.sync_avail_ring_for_device();
         dma_barrier();
         regs.notify(queue);
         let notify_flag = match queue {
@@ -4299,13 +4464,36 @@ impl VirtQueue {
         }
         let qsize = usize::from(self.size);
 
-        assert!(qsize != 0, "virtqueue size must be non-zero");
-
         let ring_slot = (self.last_used as usize) % qsize;
-        assert!(ring_slot < qsize, "used ring slot out of range");
+        self.assert_ring_slot(self.last_used, ring_slot, "used");
         let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
+        let idx_ptr = &(*used).idx as *const u16 as usize;
+        assert!(
+            idx_ptr >= self.base_vaddr,
+            "virtqueue used.idx pointer below base: ptr=0x{idx_ptr:016x} base=0x{base:016x}",
+            base = self.base_vaddr,
+        );
+        let idx_offset = idx_ptr - self.base_vaddr;
+        self.assert_offset_in_range(idx_offset, core::mem::size_of::<u16>(), "used.idx");
+        let ring_addr = elem_ptr as usize;
+        assert!(
+            ring_addr >= self.base_vaddr,
+            "virtqueue used.ring pointer below base: ptr=0x{ring_addr:016x} base=0x{base:016x}",
+            base = self.base_vaddr,
+        );
+        let ring_offset = ring_addr - self.base_vaddr;
+        self.assert_offset_in_range(ring_offset, core::mem::size_of::<VirtqUsedElem>(), "used.ring");
         self.invalidate_used_elem_for_cpu(ring_slot);
+        dma_barrier();
         let elem = unsafe { read_volatile(elem_ptr) };
+        assert!(
+            elem.id < u32::from(self.size),
+            "virtqueue used.id out of range: id={} size={} ring_slot={} base_vaddr=0x{base:016x}",
+            elem.id,
+            self.size,
+            ring_slot,
+            base = self.base_vaddr,
+        );
         if elem.len == 0 {
             let head_id = elem.id as u16;
             let desc = unsafe { read_volatile(self.desc.as_ptr().add(head_id as usize)) };
