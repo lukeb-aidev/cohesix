@@ -271,6 +271,13 @@ fn validate_chain_pre_publish(
     })
 }
 
+#[inline(always)]
+fn ranges_overlap(a_start: usize, a_len: usize, b_start: usize, b_len: usize) -> bool {
+    let a_end = a_start.saturating_add(a_len);
+    let b_end = b_start.saturating_add(b_len);
+    a_start < b_end && b_start < a_end
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct VirtioNetHdr {
@@ -594,6 +601,15 @@ impl VirtioNet {
         }
 
         info!("[net-console] allocating virtqueue backing memory");
+        let hal_snapshot = hal.snapshot();
+        info!(
+            target: "virtio-net",
+            "[virtio-net][dma] window: dma_base=0x{dma_base:016x} dma_cursor=0x{dma_cursor:016x} device_base=0x{device_base:016x} device_cursor=0x{device_cursor:016x}",
+            dma_base = hal_snapshot.dma_base,
+            dma_cursor = hal_snapshot.dma_cursor,
+            device_base = hal_snapshot.device_base,
+            device_cursor = hal_snapshot.device_cursor,
+        );
 
         let queue_mem_rx = hal.alloc_dma_frame().map_err(|err| {
             regs.set_status(STATUS_FAILED);
@@ -856,6 +872,7 @@ impl VirtioNet {
             tx_reset_dumped: false,
             forensic_dump_captured: false,
         };
+        driver.debug_check_dma_pool();
         driver.initialise_queues();
 
         let queue0_pfn = driver.rx_queue.pfn;
@@ -1934,6 +1951,9 @@ impl VirtioNet {
                 next,
             });
         }
+        for desc in &resolved_descs {
+            self.debug_validate_desc_addr(QueueKind::Rx, desc);
+        }
 
         let header_len = self.rx_header_len;
         let total_len = resolved_descs
@@ -2076,6 +2096,9 @@ impl VirtioNet {
                 flags: resolved_flags,
                 next,
             });
+        }
+        for desc in &resolved_descs {
+            self.debug_validate_desc_addr(QueueKind::Tx, desc);
         }
         fence(AtomicOrdering::Release);
 
@@ -3126,6 +3149,96 @@ impl VirtioNet {
                 self.tx_post_logged = true;
             }
         }
+    }
+
+    fn debug_check_dma_pool(&self) {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let rx_frame_paddr = self.rx_queue.base_paddr.saturating_sub(self.rx_queue.base_offset);
+        let tx_frame_paddr = self.tx_queue.base_paddr.saturating_sub(self.tx_queue.base_offset);
+        let rx_q_len = self.rx_queue.qmem_len;
+        let tx_q_len = self.tx_queue.qmem_len;
+        for (idx, buffer) in self.rx_buffers.iter().enumerate() {
+            let start = buffer.paddr();
+            let len = buffer.as_slice().len();
+            debug_assert!(
+                !ranges_overlap(start, len, rx_frame_paddr, rx_q_len),
+                "RX buffer overlaps RX queue backing (idx={idx})"
+            );
+            debug_assert!(
+                !ranges_overlap(start, len, tx_frame_paddr, tx_q_len),
+                "RX buffer overlaps TX queue backing (idx={idx})"
+            );
+        }
+        for (idx, buffer) in self.tx_buffers.iter().enumerate() {
+            let start = buffer.paddr();
+            let len = buffer.as_slice().len();
+            debug_assert!(
+                !ranges_overlap(start, len, rx_frame_paddr, rx_q_len),
+                "TX buffer overlaps RX queue backing (idx={idx})"
+            );
+            debug_assert!(
+                !ranges_overlap(start, len, tx_frame_paddr, tx_q_len),
+                "TX buffer overlaps TX queue backing (idx={idx})"
+            );
+        }
+    }
+
+    fn debug_validate_desc_addr(&self, queue: QueueKind, desc: &DescSpec) {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        if desc.len == 0 {
+            return;
+        }
+        let addr = desc.addr as usize;
+        let len = desc.len as usize;
+        let mmio_start = VIRTIO_MMIO_BASE;
+        let mmio_end = VIRTIO_MMIO_BASE.saturating_add(VIRTIO_MMIO_STRIDE * VIRTIO_MMIO_SLOTS);
+        debug_assert!(
+            addr < mmio_start || addr >= mmio_end,
+            "descriptor addr inside virtio-mmio region: addr=0x{addr:016x}"
+        );
+        debug_assert!(
+            addr < dma_window_base(),
+            "descriptor addr looks like DMA vaddr: addr=0x{addr:016x}"
+        );
+        debug_assert_eq!(
+            addr & ((1usize << seL4_PageBits) - 1),
+            0,
+            "descriptor addr must be page aligned: addr=0x{addr:016x}"
+        );
+
+        let rx_frame_paddr = self.rx_queue.base_paddr.saturating_sub(self.rx_queue.base_offset);
+        let tx_frame_paddr = self.tx_queue.base_paddr.saturating_sub(self.tx_queue.base_offset);
+        let rx_q_len = self.rx_queue.qmem_len;
+        let tx_q_len = self.tx_queue.qmem_len;
+        debug_assert!(
+            !ranges_overlap(addr, len, rx_frame_paddr, rx_q_len),
+            "descriptor overlaps RX queue backing: addr=0x{addr:016x} len={len}"
+        );
+        debug_assert!(
+            !ranges_overlap(addr, len, tx_frame_paddr, tx_q_len),
+            "descriptor overlaps TX queue backing: addr=0x{addr:016x} len={len}"
+        );
+
+        let in_pool = match queue {
+            QueueKind::Rx => self.rx_buffers.iter().any(|buf| {
+                let start = buf.paddr();
+                let end = start.saturating_add(buf.as_slice().len());
+                addr >= start && addr.saturating_add(len) <= end
+            }),
+            QueueKind::Tx => self.tx_buffers.iter().any(|buf| {
+                let start = buf.paddr();
+                let end = start.saturating_add(buf.as_slice().len());
+                addr >= start && addr.saturating_add(len) <= end
+            }),
+        };
+        debug_assert!(
+            in_pool,
+            "descriptor addr outside DMA pool: queue={queue:?} addr=0x{addr:016x} len={len}"
+        );
     }
 
     fn submit_tx_v2(&mut self, id: u16, len: usize) {
