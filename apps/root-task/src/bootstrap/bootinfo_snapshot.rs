@@ -3,6 +3,8 @@
 #![allow(unsafe_code)]
 
 use core::fmt;
+#[cfg(target_arch = "aarch64")]
+use core::arch::asm;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use heapless::String;
@@ -18,6 +20,10 @@ const MAX_BOOTINFO_ALLOC: usize = 64 * 1024;
 const HIGH_32_MASK: usize = 0xffff_ffff_0000_0000;
 const BOOTINFO_CANARY_PRE: u64 = 0x0b0f_1ce5_ca4e_cafe;
 const BOOTINFO_CANARY_POST: u64 = 0x9ddf_1ce5_f00d_beef;
+const INTEGRITY_WINDOW_BYTES: usize = 128;
+const POST_WINDOW_BYTES: usize = 16;
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x100_0000_01b3;
 
 const BOOT_HEAP_BYTES: usize = MAX_BOOTINFO_ALLOC;
 
@@ -42,6 +48,40 @@ fn log_layout_violation(reason: &str, size: usize, align: usize) {
         ),
     );
     force_uart_line(line.as_str());
+}
+
+#[inline(always)]
+fn hash64(bytes: &[u8]) -> u64 {
+    let mut hash = FNV_OFFSET;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+#[inline(always)]
+fn read_bytes_volatile(ptr: *const u8, out: &mut [u8]) {
+    for (idx, slot) in out.iter_mut().enumerate() {
+        unsafe {
+            *slot = core::ptr::read_volatile(ptr.add(idx));
+        }
+    }
+}
+
+#[inline(always)]
+fn stack_hint() -> (usize, usize) {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        let sp: usize;
+        let lr: usize;
+        asm!("mov {sp}, sp", "mov {lr}, x30", sp = out(reg) sp, lr = out(reg) lr);
+        return (sp, lr);
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        (0, 0)
+    }
 }
 
 #[inline(always)]
@@ -326,11 +366,183 @@ fn log_snapshot_failure(view: &BootInfoView, error: &BootInfoError) {
     force_uart_line(line.as_str());
 }
 
+#[inline(always)]
+fn snapshot_region_bytes(region: &core::ops::Range<usize>) -> &'static [u8] {
+    let len = region.end.saturating_sub(region.start);
+    unsafe { core::slice::from_raw_parts(region.start as *const u8, len) }
+}
+
+#[inline(always)]
+fn read_post_window(post_addr: usize) -> [u8; POST_WINDOW_BYTES] {
+    let window_start = post_addr.saturating_sub(POST_WINDOW_BYTES / 2);
+    let mut window = [0u8; POST_WINDOW_BYTES];
+    read_bytes_volatile(window_start as *const u8, &mut window);
+    window
+}
+
+fn format_hex_window(bytes: &[u8; POST_WINDOW_BYTES]) -> String<MAX_CANARY_LINE> {
+    let mut line = String::<MAX_CANARY_LINE>::new();
+    for (idx, byte) in bytes.iter().enumerate() {
+        let _ = fmt::write(&mut line, format_args!("{byte:02x}"));
+        if idx + 1 != bytes.len() {
+            line.push(' ').ok();
+        }
+    }
+    line
+}
+
+fn first_diff_index(a: &[u8; POST_WINDOW_BYTES], b: &[u8; POST_WINDOW_BYTES]) -> Option<usize> {
+    a.iter().zip(b.iter()).position(|(lhs, rhs)| lhs != rhs)
+}
+
+struct IntegrityState {
+    region_start: usize,
+    region_end: usize,
+    post_addr: usize,
+    backing_len: usize,
+    expected_head: u64,
+    expected_tail: u64,
+    expected_post_hash: u64,
+    expected_post_word: u64,
+    expected_window: [u8; POST_WINDOW_BYTES],
+    last_head: AtomicU64,
+    last_tail: AtomicU64,
+    last_post_hash: AtomicU64,
+    last_post_word: AtomicU64,
+}
+
+impl IntegrityState {
+    fn new(region: core::ops::Range<usize>, backing_len: usize) -> Self {
+        let bytes = snapshot_region_bytes(&region);
+        let head_len = bytes.len().min(INTEGRITY_WINDOW_BYTES);
+        let tail_len = bytes.len().min(INTEGRITY_WINDOW_BYTES);
+        let head_hash = hash64(&bytes[..head_len]);
+        let tail_hash = hash64(&bytes[bytes.len().saturating_sub(tail_len)..]);
+        let post_word =
+            unsafe { core::ptr::read_volatile(post_canary_ptr(backing_len)) };
+        let post_bytes = post_word.to_le_bytes();
+        let post_hash = hash64(&post_bytes);
+        let post_addr = region.end.saturating_sub(POST_CANARY_BYTES);
+        let window = read_post_window(post_addr);
+        Self {
+            region_start: region.start,
+            region_end: region.end,
+            post_addr,
+            backing_len,
+            expected_head: head_hash,
+            expected_tail: tail_hash,
+            expected_post_hash: post_hash,
+            expected_post_word: post_word,
+            expected_window: window,
+            last_head: AtomicU64::new(head_hash),
+            last_tail: AtomicU64::new(tail_hash),
+            last_post_hash: AtomicU64::new(post_hash),
+            last_post_word: AtomicU64::new(post_word),
+        }
+    }
+
+    fn log_seal(&self) {
+        let mut line = String::<MAX_CANARY_LINE>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "[bootinfo:seal] region=[0x{start:016x}..0x{end:016x}) post_addr=0x{post:016x} head=0x{head:016x} tail=0x{tail:016x} post_hash=0x{post_hash:016x} post=0x{post_word:016x}",
+                start = self.region_start,
+                end = self.region_end,
+                post = self.post_addr,
+                head = self.expected_head,
+                tail = self.expected_tail,
+                post_hash = self.expected_post_hash,
+                post_word = self.expected_post_word,
+            ),
+        );
+        force_uart_line(line.as_str());
+    }
+
+    fn probe(&self, mark: &'static str) {
+        let region = self.region_start..self.region_end;
+        let bytes = snapshot_region_bytes(&region);
+        let head_len = bytes.len().min(INTEGRITY_WINDOW_BYTES);
+        let tail_len = bytes.len().min(INTEGRITY_WINDOW_BYTES);
+        let head_hash = hash64(&bytes[..head_len]);
+        let tail_hash = hash64(&bytes[bytes.len().saturating_sub(tail_len)..]);
+        let post_word =
+            unsafe { core::ptr::read_volatile(post_canary_ptr(self.backing_len)) };
+        let post_hash = hash64(&post_word.to_le_bytes());
+        let last_head = self.last_head.load(Ordering::Relaxed);
+        let last_tail = self.last_tail.load(Ordering::Relaxed);
+        let last_post_hash = self.last_post_hash.load(Ordering::Relaxed);
+        let last_post_word = self.last_post_word.load(Ordering::Relaxed);
+
+        if head_hash == last_head
+            && tail_hash == last_tail
+            && post_hash == last_post_hash
+            && post_word == last_post_word
+        {
+            return;
+        }
+
+        self.last_head.store(head_hash, Ordering::Relaxed);
+        self.last_tail.store(tail_hash, Ordering::Relaxed);
+        self.last_post_hash.store(post_hash, Ordering::Relaxed);
+        self.last_post_word.store(post_word, Ordering::Relaxed);
+
+        let mut changed = String::<64>::new();
+        if head_hash != last_head {
+            let _ = changed.push_str("head");
+        }
+        if tail_hash != last_tail {
+            if !changed.is_empty() {
+                let _ = changed.push(',');
+            }
+            let _ = changed.push_str("tail");
+        }
+        if post_hash != last_post_hash || post_word != last_post_word {
+            if !changed.is_empty() {
+                let _ = changed.push(',');
+            }
+            let _ = changed.push_str("post");
+        }
+
+        let (sp, lr) = stack_hint();
+        let mut line = String::<MAX_CANARY_LINE>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "[bootinfo:integrity] {mark} changed={changed} head=0x{head:016x} tail=0x{tail:016x} post_hash=0x{post_hash:016x} post=0x{post_word:016x} sp=0x{sp:016x} lr=0x{lr:016x}",
+                head = head_hash,
+                tail = tail_hash,
+                post_hash = post_hash,
+                post_word = post_word,
+                sp = sp,
+                lr = lr,
+            ),
+        );
+        force_uart_line(line.as_str());
+
+        let window = read_post_window(self.post_addr);
+        if window != self.expected_window {
+            let expected = format_hex_window(&self.expected_window);
+            let observed = format_hex_window(&window);
+            let diff = first_diff_index(&self.expected_window, &window).unwrap_or(0);
+            let mut win_line = String::<MAX_CANARY_LINE>::new();
+            let _ = fmt::write(
+                &mut win_line,
+                format_args!(
+                    "[bootinfo:integrity] {mark} post_window diff_at={diff} expected={expected} observed={observed}",
+                ),
+            );
+            force_uart_line(win_line.as_str());
+        }
+    }
+}
+
 pub struct BootInfoState {
     view: BootInfoView,
     snapshot: BootInfoSnapshot,
     check_count: AtomicU64,
     snapshot_region: core::ops::Range<usize>,
+    integrity: IntegrityState,
 }
 
 static BOOTINFO_STATE: Once<BootInfoState> = Once::new();
@@ -367,14 +579,27 @@ impl BootInfoState {
             canary_end <= payload_start.saturating_add(unsafe { BOOTINFO_BACKING.payload.len() }),
             "post-canary escaped backing payload"
         );
+        let backing_start = core::ptr::addr_of!(BOOTINFO_BACKING) as usize;
+        let backing_end = backing_start.saturating_add(core::mem::size_of::<BootinfoBacking>());
+        let region_start = canary_pre.min(payload_start);
+        let region_end = canary_end.max(payload_end);
+        assert!(region_start < region_end, "bootinfo snapshot region is empty");
+        assert_eq!(region_start & 0x7, 0, "bootinfo snapshot region unaligned");
+        assert_eq!(region_end & 0x7, 0, "bootinfo snapshot region unaligned");
+        assert!(
+            region_start >= backing_start && region_end <= backing_end,
+            "bootinfo snapshot region out of bounds"
+        );
 
         let state = BOOTINFO_STATE.call_once(|| Self {
             view: snapshot_view,
             snapshot,
             check_count: AtomicU64::new(0),
-            snapshot_region: canary_pre.min(payload_start)..canary_end.max(payload_end),
+            snapshot_region: region_start..region_end,
+            integrity: IntegrityState::new(region_start..region_end, snapshot.backing().len()),
         });
         let _ = state.probe("[probe] snapshot.capture.complete");
+        state.integrity.log_seal();
         Ok(state)
     }
 
@@ -412,6 +637,7 @@ impl BootInfoState {
     pub fn probe(&self, mark: &'static str) -> Result<(), BootInfoError> {
         #[cfg(debug_assertions)]
         self.debug_log_canary_addrs(mark);
+        self.integrity.probe(mark);
         let (pre, post, exp_pre, exp_post) = self.canary_state();
         let mut line = String::<MAX_CANARY_LINE>::new();
         let _ = fmt::write(
@@ -437,6 +663,7 @@ impl BootInfoState {
             return;
         }
 
+        self.integrity.probe(last_mark);
         let mut line = String::<MAX_CANARY_LINE>::new();
         let _ = core::fmt::write(
             &mut line,
@@ -475,6 +702,7 @@ impl BootInfoState {
     ) -> Result<(), BootInfoCanaryError> {
         #[cfg(debug_assertions)]
         self.debug_log_canary_addrs(mark);
+        self.integrity.probe(mark);
         self.check_canaries(phase, mark);
         let observed = BootInfoSnapshot::from_view(&self.view).map_err(|err| {
             BootInfoCanaryError::Snapshot {
@@ -513,6 +741,12 @@ impl BootInfoState {
             ),
         );
         force_uart_line(line.as_str());
+    }
+}
+
+pub fn probe_integrity(mark: &'static str) {
+    if let Some(state) = BootInfoState::get() {
+        state.integrity.probe(mark);
     }
 }
 

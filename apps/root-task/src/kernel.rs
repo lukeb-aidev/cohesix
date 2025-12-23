@@ -1588,6 +1588,7 @@ fn bootstrap<P: Platform>(
     readiness::mark_cspace_window_ready();
     boot_guard.record_phase("CSpaceRecord");
     probe_canary("[probe] after.CSpaceRecord");
+    crate::bootstrap::bootinfo_snapshot::probe_integrity("[probe] before.IPCInstall");
     let (ipc_buffer_ptr, mut ipcbuf_mode) =
         install_init_ipc_buffer(bootinfo_ref, &mut reserved_vaddrs, &mut boot_guard).map_err(
             |err| {
@@ -1646,6 +1647,7 @@ fn bootstrap<P: Platform>(
     boot_guard.record_mark("[mark] ipc.install.ok");
     boot_log::force_uart_line("[mark] ipc.install.ok");
     probe_canary("[probe] after.IPCInstall");
+    crate::bootstrap::bootinfo_snapshot::probe_integrity("[probe] after.IPCInstall");
     debug_uart_str("[breadcrumb] after ipcbuf sanity ok\r\n");
     let mut state_line = HeaplessString::<256>::new();
     let _ = write!(
@@ -1786,6 +1788,7 @@ fn bootstrap<P: Platform>(
         len = extra_bytes.len(),
     );
     debug_uart_str(extra_state_line.as_str());
+    crate::bootstrap::bootinfo_snapshot::probe_integrity("[probe] before.DTBLocate");
     debug_uart_str("[breadcrumb] before DTB locate\r\n");
     let dtb_deferred = if !extra_bytes.is_empty() {
         console.writeln_prefixed("[boot] deferring DTB parse");
@@ -1797,6 +1800,7 @@ fn bootstrap<P: Platform>(
 
     check_bootinfo(&mut boot_guard, "MARK 30");
     boot_log::force_uart_line("[MARK 30] after DTB deferred");
+    crate::bootstrap::bootinfo_snapshot::probe_integrity("[probe] after.DTBLocate");
 
     check_bootinfo(&mut boot_guard, "MARK 31");
     boot_log::force_uart_line("[MARK 31] before canonical_cspace");
