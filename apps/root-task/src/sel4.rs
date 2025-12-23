@@ -3067,6 +3067,61 @@ impl<'a> KernelEnv<'a> {
     }
 
     #[cfg(feature = "bootinfo_guard_pages")]
+    pub fn alloc_guard_frames(
+        &mut self,
+        pages: usize,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+    ) -> Result<(usize, Vec<seL4_CPtr, 32>), seL4_Error> {
+        if pages == 0 {
+            return Err(seL4_RangeError);
+        }
+        if self.slots.remaining() < pages.saturating_add(4) {
+            return Err(seL4_NotEnoughMemory);
+        }
+        let span = pages
+            .checked_mul(PAGE_SIZE)
+            .ok_or(seL4_RangeError)?;
+        let range = self.next_mapping_range(self.dma_cursor, span, "bootinfo-guard");
+        self.dma_cursor = range.end;
+
+        let mut caps = Vec::<seL4_CPtr, 32>::new();
+        for idx in 0..pages {
+            let reserved = self
+                .untyped
+                .reserve_ram(PAGE_BITS as u8)
+                .ok_or(seL4_NotEnoughMemory)?;
+            let frame_slot = self.allocate_slot();
+            let trace = self.prepare_retype_trace(
+                &reserved,
+                frame_slot,
+                sel4_sys::seL4_ARM_Page as seL4_Word,
+                PAGE_BITS as seL4_Word,
+                RetypeKind::DmaPage {
+                    paddr: reserved.paddr(),
+                },
+            );
+            self.record_retype(trace, RetypeStatus::Pending);
+            if let Err(err) = self.retype_page(reserved.cap(), &trace) {
+                self.record_retype(trace, RetypeStatus::Err(err));
+                self.untyped.release(&reserved);
+                return Err(err);
+            }
+            self.record_retype(trace, RetypeStatus::Ok);
+            let vaddr = range.start.saturating_add(idx.saturating_mul(PAGE_SIZE));
+            self.map_frame_with_rights(
+                frame_slot,
+                vaddr,
+                seL4_CapRights_ReadWrite,
+                attr,
+                true,
+            )?;
+            caps.push(frame_slot).map_err(|_| seL4_NotEnoughMemory)?;
+        }
+
+        Ok((range.start, caps))
+    }
+
+    #[cfg(feature = "bootinfo_guard_pages")]
     pub fn alloc_guard_frame(&mut self) -> Result<RamFrame, seL4_Error> {
         if self.slots.remaining() < 4 {
             return Err(seL4_NotEnoughMemory);

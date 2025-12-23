@@ -6,7 +6,7 @@ use core::arch::asm;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use heapless::String;
+use heapless::{String, Vec};
 use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Word};
 use spin::Once;
 
@@ -25,7 +25,9 @@ const BOOTINFO_CANARY_POST: u64 = 0x9ddf_1ce5_f00d_beef;
 #[allow(dead_code)]
 const SNAPSHOT_GUARD_PAGES: bool = cfg!(feature = "bootinfo_guard_pages");
 #[allow(dead_code)]
-const SNAPSHOT_GUARD_POST_PAD: usize = 16;
+const SNAPSHOT_GUARD_POST_PAD: usize = POST_CANARY_BYTES;
+#[cfg(feature = "bootinfo_guard_pages")]
+const MAX_GUARD_PAGES: usize = 32;
 
 const BOOT_HEAP_BYTES: usize = MAX_BOOTINFO_ALLOC;
 
@@ -43,12 +45,13 @@ static mut BOOTINFO_SNAPSHOT_BACKING: BootinfoBacking = BootinfoBacking {
 #[cfg(feature = "bootinfo_guard_pages")]
 #[derive(Clone, Debug)]
 struct GuardedBacking {
-    frame_cap: seL4_CPtr,
-    page_base: usize,
+    base_vaddr: usize,
+    pages_mapped: usize,
+    guard_vaddr: usize,
+    frame_caps: Vec<seL4_CPtr, MAX_GUARD_PAGES>,
     backing_start: usize,
     backing_len: usize,
     post_canary_addr: usize,
-    guard_range: core::ops::Range<usize>,
 }
 
 #[cfg(feature = "bootinfo_guard_pages")]
@@ -59,6 +62,15 @@ impl GuardedBacking {
                 core::ptr::with_exposed_provenance_mut::<u8>(self.backing_start) as *mut u8;
             core::slice::from_raw_parts_mut(ptr, self.backing_len)
         }
+    }
+
+    fn mapped_end(&self) -> usize {
+        self.base_vaddr
+            .saturating_add(self.pages_mapped.saturating_mul(IPC_PAGE_BYTES))
+    }
+
+    fn pre_canary_addr(&self) -> usize {
+        self.base_vaddr
     }
 }
 
@@ -73,13 +85,13 @@ static GUARD_READONLY: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "bootinfo_guard_pages")]
 #[cfg(target_os = "none")]
-fn guard_readonly_attr() -> sel4_sys::seL4_ARM_VMAttributes {
+fn guard_page_attr() -> sel4_sys::seL4_ARM_VMAttributes {
     sel4_sys::seL4_ARM_Page_Default | 0x04
 }
 
 #[cfg(feature = "bootinfo_guard_pages")]
 #[cfg(not(target_os = "none"))]
-fn guard_readonly_attr() -> sel4_sys::seL4_ARM_VMAttributes {
+fn guard_page_attr() -> sel4_sys::seL4_ARM_VMAttributes {
     sel4_sys::seL4_ARM_VMAttributes(sel4_sys::seL4_ARM_Page_Default.0 | 0x04)
 }
 
@@ -120,21 +132,30 @@ fn set_post_canary(backing_ptr: *const u8, backing_len: usize) {
 }
 
 #[cfg(feature = "bootinfo_guard_pages")]
+fn set_pre_canary(addr: usize) {
+    let ptr = addr as *mut u64;
+    unsafe {
+        core::ptr::write_volatile(ptr, BOOTINFO_CANARY_PRE);
+    }
+}
+
+#[cfg(feature = "bootinfo_guard_pages")]
 fn guarded_backing() -> Option<&'static GuardedBacking> {
     GUARDED_BACKING.get()
 }
 
 #[cfg(feature = "bootinfo_guard_pages")]
 fn guard_invariant_snapshot_in_page(snapshot: &BootInfoSnapshot, guarded: &GuardedBacking) {
-    let page_start = guarded.page_base;
-    let page_end = page_start.saturating_add(IPC_PAGE_BYTES);
+    let page_start = guarded.base_vaddr;
+    let page_end = guarded.mapped_end();
     let post_addr = snapshot.post_canary_addr();
-    if post_addr < page_start || post_addr >= page_end {
+    let post_end = post_addr.saturating_add(POST_CANARY_BYTES);
+    if post_addr < page_start || post_end > page_end {
         let mut line = String::<MAX_CANARY_LINE>::new();
         let _ = fmt::write(
             &mut line,
             format_args!(
-                "[bootinfo:guard] invariant failed: post_addr outside guard page base=0x{base:016x} post=0x{post:016x}",
+                "[bootinfo:guard] invariant failed: post_addr outside guard pages base=0x{base:016x} post=0x{post:016x}",
                 base = page_start,
                 post = post_addr,
             ),
@@ -151,7 +172,7 @@ fn guard_invariant_snapshot_in_page(snapshot: &BootInfoSnapshot, guarded: &Guard
         let _ = fmt::write(
             &mut line,
             format_args!(
-                "[bootinfo:guard] invariant failed: snapshot backing outside guard page base=0x{base:016x} backing=0x{start:016x}..0x{end:016x}",
+                "[bootinfo:guard] invariant failed: snapshot backing outside guard pages base=0x{base:016x} backing=0x{start:016x}..0x{end:016x}",
                 base = page_start,
                 start = backing_start,
                 end = backing_end,
@@ -159,6 +180,21 @@ fn guard_invariant_snapshot_in_page(snapshot: &BootInfoSnapshot, guarded: &Guard
         );
         force_uart_line(line.as_str());
         panic!("bootinfo guard backing escaped guard page");
+    }
+
+    let min_payload = page_start.saturating_add(core::mem::size_of::<u64>());
+    if backing_start < min_payload {
+        let mut line = String::<MAX_CANARY_LINE>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "[bootinfo:guard] invariant failed: backing overlaps pre-canary base=0x{base:016x} backing=0x{start:016x}",
+                base = page_start,
+                start = backing_start,
+            ),
+        );
+        force_uart_line(line.as_str());
+        panic!("bootinfo guard backing overlaps pre-canary");
     }
 }
 
@@ -176,16 +212,28 @@ pub fn install_guarded_backing(view: &BootInfoView, env: &mut KernelEnv) -> bool
         }
     };
 
-    if total_size > IPC_PAGE_BYTES.saturating_sub(SNAPSHOT_GUARD_POST_PAD) {
+    let pages_mapped = total_size
+        .saturating_add(IPC_PAGE_BYTES - 1)
+        .saturating_div(IPC_PAGE_BYTES)
+        .max(1);
+    if pages_mapped > MAX_GUARD_PAGES {
         if !GUARD_ALLOC_WARNED.swap(true, Ordering::AcqRel) {
-            force_uart_line("[bootinfo:guard] allocation failed: snapshot too large for guard page");
+            force_uart_line("[bootinfo:guard] allocation failed: guard pages exceed cap");
+        }
+        return false;
+    }
+    let mapped_bytes = pages_mapped.saturating_mul(IPC_PAGE_BYTES);
+    if total_size > mapped_bytes.saturating_sub(SNAPSHOT_GUARD_POST_PAD) {
+        if !GUARD_ALLOC_WARNED.swap(true, Ordering::AcqRel) {
+            force_uart_line("[bootinfo:guard] allocation failed: snapshot too large for guard pages");
         }
         return false;
     }
 
     force_uart_line("[mark] bootinfo.guard.alloc.begin");
-    let frame = match env.alloc_guard_frame() {
-        Ok(frame) => frame,
+    let (base_vaddr, frame_caps) = match env.alloc_guard_frames(pages_mapped, guard_page_attr())
+    {
+        Ok(range) => range,
         Err(err) => {
             if !GUARD_ALLOC_WARNED.swap(true, Ordering::AcqRel) {
                 let mut line = String::<MAX_CANARY_LINE>::new();
@@ -199,19 +247,18 @@ pub fn install_guarded_backing(view: &BootInfoView, env: &mut KernelEnv) -> bool
         }
     };
 
-    let page_base = frame.ptr().as_ptr() as usize;
-    let page_end = page_base.saturating_add(IPC_PAGE_BYTES);
-    let backing_start = page_end
+    let mapped_end = base_vaddr.saturating_add(mapped_bytes);
+    let backing_start = mapped_end
         .saturating_sub(SNAPSHOT_GUARD_POST_PAD)
         .saturating_sub(total_size);
-    if backing_start < page_base {
+    if backing_start < base_vaddr.saturating_add(core::mem::size_of::<u64>()) {
         if !GUARD_ALLOC_WARNED.swap(true, Ordering::AcqRel) {
-            force_uart_line("[bootinfo:guard] allocation failed: snapshot does not fit in page");
+            force_uart_line("[bootinfo:guard] allocation failed: snapshot does not fit in guard pages");
         }
         return false;
     }
 
-    let guard_start = page_end;
+    let guard_start = mapped_end;
     let guard_end = guard_start.saturating_add(IPC_PAGE_BYTES);
     let guard_range = guard_start..guard_end;
     if let Err(err) = env.try_reserve_vaddr_range(&guard_range, "bootinfo-guard") {
@@ -243,12 +290,13 @@ pub fn install_guarded_backing(view: &BootInfoView, env: &mut KernelEnv) -> bool
 
     let post_canary_addr = backing_start.saturating_add(total_size);
     let backing = GuardedBacking {
-        frame_cap: frame.cap(),
-        page_base,
+        base_vaddr,
+        pages_mapped,
+        guard_vaddr: guard_start,
+        frame_caps,
         backing_start,
         backing_len: total_size,
         post_canary_addr,
-        guard_range,
     };
     let backing = GUARDED_BACKING.call_once(|| backing);
     GUARD_READONLY.store(false, Ordering::Release);
@@ -257,13 +305,10 @@ pub fn install_guarded_backing(view: &BootInfoView, env: &mut KernelEnv) -> bool
     let _ = fmt::write(
         &mut line,
         format_args!(
-            "[mark] bootinfo.guard.alloc.done mapped=[0x{base:016x}..0x{end:016x}) guard=[0x{guard_start:016x}..0x{guard_end:016x}) base=0x{backing_start:016x} post_addr=0x{post_addr:016x}",
-            base = backing.page_base,
-            end = backing.page_base.saturating_add(IPC_PAGE_BYTES),
-            guard_start = backing.guard_range.start,
-            guard_end = backing.guard_range.end,
-            backing_start = backing.backing_start,
-            post_addr = backing.post_canary_addr,
+            "[mark] bootinfo.guard.alloc.done pages={pages} base=0x{base:016x} guard=0x{guard_start:016x}",
+            pages = backing.pages_mapped,
+            base = backing.base_vaddr,
+            guard_start = backing.guard_vaddr,
         ),
     );
     force_uart_line(line.as_str());
@@ -282,39 +327,37 @@ pub fn guard_protect_readonly(env: &mut KernelEnv, snapshot: &BootInfoSnapshot) 
     guard_invariant_snapshot_in_page(snapshot, guarded);
 
     force_uart_line("[mark] bootinfo.guard.protect.begin");
-    let unmap_err = unsafe { sel4_sys::seL4_ARM_Page_Unmap(guarded.frame_cap) };
-    if unmap_err != sel4_sys::seL4_NoError {
-        let mut line = String::<MAX_CANARY_LINE>::new();
-        let _ = fmt::write(
-            &mut line,
-            format_args!(
-                "[bootinfo:guard] protect failed: unmap err={unmap_err} base=0x{base:016x}",
-                base = guarded.page_base,
-            ),
-        );
-        force_uart_line(line.as_str());
-        panic!("bootinfo guard unmap failed");
-    }
-
     let rights = sel4_sys::seL4_CapRights::new(0, 0, 1, 0);
-    let attr = guard_readonly_attr();
-    if let Err(err) = env.map_frame_with_rights(
-        guarded.frame_cap,
-        guarded.page_base,
-        rights,
-        attr,
-        true,
-    ) {
-        let mut line = String::<MAX_CANARY_LINE>::new();
-        let _ = fmt::write(
-            &mut line,
-            format_args!(
-                "[bootinfo:guard] protect failed: remap err={err:?} base=0x{base:016x}",
-                base = guarded.page_base,
-            ),
-        );
-        force_uart_line(line.as_str());
-        panic!("bootinfo guard remap failed");
+    let attr = guard_page_attr();
+    for (idx, cap) in guarded.frame_caps.iter().copied().enumerate() {
+        let vaddr = guarded
+            .base_vaddr
+            .saturating_add(idx.saturating_mul(IPC_PAGE_BYTES));
+        let unmap_err = unsafe { sel4_sys::seL4_ARM_Page_Unmap(cap) };
+        if unmap_err != sel4_sys::seL4_NoError {
+            let mut line = String::<MAX_CANARY_LINE>::new();
+            let _ = fmt::write(
+                &mut line,
+                format_args!(
+                    "[bootinfo:guard] protect failed: unmap err={unmap_err} vaddr=0x{vaddr:016x}",
+                    vaddr = vaddr,
+                ),
+            );
+            force_uart_line(line.as_str());
+            panic!("bootinfo guard unmap failed");
+        }
+        if let Err(err) = env.map_frame_with_rights(cap, vaddr, rights, attr, true) {
+            let mut line = String::<MAX_CANARY_LINE>::new();
+            let _ = fmt::write(
+                &mut line,
+                format_args!(
+                    "[bootinfo:guard] protect failed: remap err={err:?} vaddr=0x{vaddr:016x}",
+                    vaddr = vaddr,
+                ),
+            );
+            force_uart_line(line.as_str());
+            panic!("bootinfo guard remap failed");
+        }
     }
 
     GUARD_READONLY.store(true, Ordering::Release);
@@ -322,8 +365,7 @@ pub fn guard_protect_readonly(env: &mut KernelEnv, snapshot: &BootInfoSnapshot) 
     let _ = fmt::write(
         &mut done_line,
         format_args!(
-            "[mark] bootinfo.guard.protect.done base=0x{base:016x}",
-            base = guarded.page_base,
+            "[mark] bootinfo.guard.protect.done",
         ),
     );
     force_uart_line(done_line.as_str());
@@ -333,8 +375,9 @@ pub fn guard_protect_readonly(env: &mut KernelEnv, snapshot: &BootInfoSnapshot) 
         let _ = fmt::write(
             &mut line,
             format_args!(
-                "bootinfo.guard.active=1 base=0x{base:016x} post=0x{post:016x}",
-                base = guarded.page_base,
+                "bootinfo.guard.active=1 base=0x{base:016x} len=0x{len:08x} post=0x{post:016x}",
+                base = guarded.base_vaddr,
+                len = snapshot.backing().len(),
                 post = snapshot.post_canary_addr(),
             ),
         );
@@ -455,6 +498,10 @@ impl BootInfoSnapshot {
 
         unsafe {
             BOOTINFO_SNAPSHOT_BACKING.pre = BOOTINFO_CANARY_PRE;
+        }
+        #[cfg(feature = "bootinfo_guard_pages")]
+        if let Some(guarded) = guarded_backing() {
+            set_pre_canary(guarded.pre_canary_addr());
         }
 
         backing[..header_bytes.len()].copy_from_slice(header_bytes);
@@ -741,11 +788,13 @@ impl BootInfoState {
             guard_invariant_snapshot_in_page(&snapshot, guarded);
         }
 
-        let state = BOOTINFO_STATE.call_once(|| Self {
-            view: snapshot_view,
-            snapshot,
-            check_count: AtomicU64::new(0),
-            snapshot_region: {
+        let snapshot_region = {
+            #[cfg(feature = "bootinfo_guard_pages")]
+            if let Some(guarded) = guarded_backing() {
+                let region_end = guarded.mapped_end();
+                let region_start = guarded.base_vaddr;
+                region_start..region_end
+            } else {
                 let region_start = if snapshot.uses_static_backing() {
                     let canary_pre =
                         unsafe { core::ptr::addr_of!(BOOTINFO_SNAPSHOT_BACKING.pre) as usize };
@@ -754,7 +803,24 @@ impl BootInfoState {
                     payload_start
                 };
                 region_start..canary_end.max(payload_end)
-            },
+            }
+            #[cfg(not(feature = "bootinfo_guard_pages"))]
+            {
+                let region_start = if snapshot.uses_static_backing() {
+                    let canary_pre =
+                        unsafe { core::ptr::addr_of!(BOOTINFO_SNAPSHOT_BACKING.pre) as usize };
+                    canary_pre.min(payload_start)
+                } else {
+                    payload_start
+                };
+                region_start..canary_end.max(payload_end)
+            }
+        };
+        let state = BOOTINFO_STATE.call_once(|| Self {
+            view: snapshot_view,
+            snapshot,
+            check_count: AtomicU64::new(0),
+            snapshot_region,
         });
         if !PROTECTED_RANGE_LOGGED.swap(true, Ordering::AcqRel) {
             let region = state.snapshot_region();
@@ -795,6 +861,11 @@ impl BootInfoState {
         let post = unsafe {
             core::ptr::read_volatile(self.snapshot.post_canary_addr() as *const u64)
         };
+        #[cfg(feature = "bootinfo_guard_pages")]
+        if let Some(guarded) = guarded_backing() {
+            let pre = unsafe { core::ptr::read_volatile(guarded.pre_canary_addr() as *const u64) };
+            return (pre, post);
+        }
         unsafe { (BOOTINFO_SNAPSHOT_BACKING.pre, post) }
     }
 
@@ -852,7 +923,7 @@ impl BootInfoState {
             let _ = fmt::write(
                 &mut line,
                 format_args!(
-                    "[bootinfo:guard] expected fault on write before canary; guarded={guarded} ro={ro}",
+                    "[bootinfo:guard] guard-active but canary changed (expected fault); check RO remap guarded={guarded} ro={ro}",
                     guarded = guarded_snapshot as u8,
                     ro = ro as u8,
                 ),
