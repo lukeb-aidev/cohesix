@@ -3163,7 +3163,7 @@ impl<'a> KernelEnv<'a> {
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
-                return Err(seL4_AlignmentError);
+                return Err(sel4_sys::seL4_AlignmentError);
             }
             let cap_ident = debug_cap_identify(frame_slot);
             if cap_ident != sel4_sys::seL4_ARM_Page as seL4_Word {
