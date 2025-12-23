@@ -4256,7 +4256,7 @@ impl VirtioRegs {
     }
 
     fn set_queue_size(&mut self, size: u16) {
-        self.write16(Registers::QueueNum, size);
+        self.write32(Registers::QueueNum, size as u32);
     }
 
     fn set_queue_align(&mut self, align: u32) {
@@ -4874,6 +4874,17 @@ impl VirtQueue {
         let queue_pfn = (base_paddr >> seL4_PageBits) as u32;
         match mode {
             VirtioMmioMode::Modern => {
+                #[cfg(feature = "virtio_diag_min")]
+                {
+                    let magic = regs.read32(Registers::MagicValue);
+                    let version = regs.read32(Registers::Version);
+                    let device_id = regs.read32(Registers::DeviceId);
+                    let vendor_id = regs.read32(Registers::VendorId);
+                    info!(
+                        target: "virtio-net",
+                        "[virtio_diag_min] queue={index} mmio id readback: magic=0x{magic:08x} version=0x{version:08x} device_id=0x{device_id:08x} vendor=0x{vendor_id:08x}",
+                    );
+                }
                 regs.set_queue_desc_addr(base_paddr);
                 #[cfg(feature = "virtio_diag_min")]
                 {
