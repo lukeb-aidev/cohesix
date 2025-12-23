@@ -493,6 +493,11 @@ impl VirtioNet {
 
         info!("[net-console] resetting virtio-net status register");
         regs.reset_status();
+        info!(
+            target: "net-console",
+            "[net-console] status after reset: 0x{:02x}",
+            regs.read32(Registers::Status)
+        );
         regs.set_status(STATUS_ACKNOWLEDGE);
         info!(
             target: "net-console",
@@ -629,6 +634,25 @@ impl VirtioNet {
             device_base = hal_snapshot.device_base,
             device_cursor = hal_snapshot.device_cursor,
         );
+        if let Some(state) = bootinfo_snapshot::BootInfoState::get() {
+            let region = state.snapshot_region();
+            let dma_start = hal_snapshot.dma_base;
+            let dma_len = hal_snapshot.dma_cursor.saturating_sub(hal_snapshot.dma_base);
+            let snap_len = region.end.saturating_sub(region.start);
+            if ranges_overlap(region.start, snap_len, dma_start, dma_len) {
+                error!(
+                    target: "net-console",
+                    "[virtio-net] bootinfo snapshot overlaps DMA window (snapshot=[0x{snap_start:016x}..0x{snap_end:016x}) dma=[0x{dma_start:016x}..0x{dma_end:016x}))",
+                    snap_start = region.start,
+                    snap_end = region.end,
+                    dma_end = hal_snapshot.dma_cursor,
+                );
+                regs.set_status(STATUS_FAILED);
+                return Err(DriverError::QueueInvariant(
+                    "bootinfo snapshot overlaps DMA window",
+                ));
+            }
+        }
 
         let queue_mem_rx = hal.alloc_dma_frame().map_err(|err| {
             regs.set_status(STATUS_FAILED);
@@ -660,6 +684,57 @@ impl VirtioNet {
                 }
             }
         };
+        let hal_snapshot_after_dma = hal.snapshot();
+        let rx_vaddr = queue_mem_rx.ptr().as_ptr() as usize;
+        let tx_vaddr = queue_mem_tx.ptr().as_ptr() as usize;
+        let rx_len = queue_mem_rx.as_slice().len();
+        let tx_len = queue_mem_tx.as_slice().len();
+        let rx_paddr = queue_mem_rx.paddr();
+        let tx_paddr = queue_mem_tx.paddr();
+        let dma_vaddr_start = dma_window_base();
+        let dma_vaddr_end = hal_snapshot_after_dma.dma_cursor;
+        let rx_vend = rx_vaddr.saturating_add(rx_len);
+        let tx_vend = tx_vaddr.saturating_add(tx_len);
+        if rx_vaddr < dma_vaddr_start
+            || rx_vend > dma_vaddr_end
+            || tx_vaddr < dma_vaddr_start
+            || tx_vend > dma_vaddr_end
+        {
+            error!(
+                target: "net-console",
+                "[virtio-net] DMA vaddr out of window: rx=0x{rx_vaddr:016x}..0x{rx_vend:016x} tx=0x{tx_vaddr:016x}..0x{tx_vend:016x} window=0x{dma_vaddr_start:016x}..0x{dma_vaddr_end:016x}",
+            );
+            regs.set_status(STATUS_FAILED);
+            return Err(DriverError::QueueInvariant("DMA vaddr outside window"));
+        }
+        if let Some(state) = bootinfo_snapshot::BootInfoState::get() {
+            let region = state.snapshot_region();
+            let snap_len = region.end.saturating_sub(region.start);
+            let dma_paddr_start = core::cmp::min(rx_paddr, tx_paddr);
+            let dma_paddr_end = core::cmp::max(
+                rx_paddr.saturating_add(rx_len),
+                tx_paddr.saturating_add(tx_len),
+            );
+            if ranges_overlap(
+                dma_paddr_start,
+                dma_paddr_end.saturating_sub(dma_paddr_start),
+                region.start,
+                snap_len,
+            ) {
+                error!(
+                    target: "net-console",
+                    "[virtio-net] bootinfo snapshot overlaps DMA paddr range (snapshot=[0x{snap_start:016x}..0x{snap_end:016x}) dma_paddr=[0x{dma_start:016x}..0x{dma_end:016x}))",
+                    snap_start = region.start,
+                    snap_end = region.end,
+                    dma_start = dma_paddr_start,
+                    dma_end = dma_paddr_end,
+                );
+                regs.set_status(STATUS_FAILED);
+                return Err(DriverError::QueueInvariant(
+                    "bootinfo snapshot overlaps DMA paddr range",
+                ));
+            }
+        }
         let guard_vaddr = if VIRTIO_GUARD_QUEUE {
             Some(hal.reserve_dma_guard_page().map_err(|err| {
                 regs.set_status(STATUS_FAILED);
@@ -670,12 +745,6 @@ impl VirtioNet {
         };
         let dma_cacheable = false;
         if !DMA_QMEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
-            let rx_vaddr = queue_mem_rx.ptr().as_ptr() as usize;
-            let tx_vaddr = queue_mem_tx.ptr().as_ptr() as usize;
-            let rx_len = queue_mem_rx.as_slice().len();
-            let tx_len = queue_mem_tx.as_slice().len();
-            let rx_paddr = queue_mem_rx.paddr();
-            let tx_paddr = queue_mem_tx.paddr();
             info!(
                 target: "virtio-net",
                 "[virtio-net][dma] qmem mapping cacheable={} map_attr=UNCACHED rx_vaddr=0x{rx_vaddr:016x}..0x{rx_vend:016x} rx_paddr=0x{rx_paddr:016x}..0x{rx_pend:016x} tx_vaddr=0x{tx_vaddr:016x}..0x{tx_vend:016x} tx_paddr=0x{tx_paddr:016x}..0x{tx_pend:016x}",
@@ -2672,8 +2741,23 @@ impl VirtioNet {
 
     fn reinit_device(&mut self) -> Result<(), &'static str> {
         self.regs.reset_status();
+        info!(
+            target: "net-console",
+            "[virtio-net] reinit status after reset: 0x{:02x}",
+            self.regs.read32(Registers::Status)
+        );
         self.regs.set_status(STATUS_ACKNOWLEDGE);
+        info!(
+            target: "net-console",
+            "[virtio-net] reinit status set to ACKNOWLEDGE: 0x{:02x}",
+            self.regs.read32(Registers::Status)
+        );
         self.regs.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER);
+        info!(
+            target: "net-console",
+            "[virtio-net] reinit status set to DRIVER: 0x{:02x}",
+            self.regs.read32(Registers::Status)
+        );
         if matches!(self.mmio_mode, VirtioMmioMode::Legacy) {
             let guest_page_size = 1u32 << seL4_PageBits;
             self.regs.set_guest_page_size(guest_page_size);
@@ -2682,6 +2766,10 @@ impl VirtioNet {
         let mut status = STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK;
         self.regs.set_status(status);
         let status_after = self.regs.read32(Registers::Status);
+        info!(
+            target: "net-console",
+            "[virtio-net] reinit status set to FEATURES_OK: 0x{status_after:02x}",
+        );
         if status_after & STATUS_FEATURES_OK == 0 {
             self.regs.set_status(STATUS_FAILED);
             return Err("features_ok_rejected");
@@ -2701,6 +2789,11 @@ impl VirtioNet {
         self.initialise_queues();
         status |= STATUS_DRIVER_OK;
         self.regs.set_status(status);
+        info!(
+            target: "net-console",
+            "[virtio-net] reinit status set to DRIVER_OK: 0x{:02x}",
+            self.regs.read32(Registers::Status)
+        );
         self.device_disabled = false;
         Ok(())
     }
@@ -4368,10 +4461,10 @@ impl VirtioRegs {
         driver_paddr: usize,
         device_paddr: usize,
     ) -> Result<(), DriverError> {
-        let base_vaddr = self.base_vaddr();
-        let base_paddr = self.base_paddr();
         #[cfg(feature = "virtio_diag_min")]
         {
+            let base_vaddr = self.base_vaddr();
+            let base_paddr = self.base_paddr();
             info!(
                 target: "virtio-net",
                 "[virtio_diag_min] queue={index} mmio base_vaddr=0x{base_vaddr:016x} base_paddr=0x{base_paddr:016x} sel_ptr=0x{sel_ptr:016x} num_ptr=0x{num_ptr:016x} desc_ptr=0x{desc_ptr:016x} driver_ptr=0x{driver_ptr:016x} device_ptr=0x{device_ptr:016x} ready_ptr=0x{ready_ptr:016x}",
@@ -4386,8 +4479,14 @@ impl VirtioRegs {
 
         self.mmio_write32_raw(VIRTIO_MMIO_QUEUE_SEL, index);
         let sel = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_SEL);
+        let num_max = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_NUM_MAX);
+        let ready_before = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_READY);
         #[cfg(feature = "virtio_diag_min")]
         {
+            info!(
+                target: "virtio-net",
+                "[virtio_diag_min] queue={index} queue_sel=0x{sel:08x} queue_num_max=0x{num_max:08x} queue_ready=0x{ready_before:08x}",
+            );
             let toggled = index ^ 1;
             self.mmio_write32_raw(VIRTIO_MMIO_QUEUE_SEL, toggled);
             let sel_toggled = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_SEL);
@@ -4409,6 +4508,19 @@ impl VirtioRegs {
             );
             return Err(DriverError::QueueInvariant(
                 "virtio-mmio queue_sel write did not stick",
+            ));
+        }
+        if num_max == 0 || (size as u32) > num_max {
+            self.log_queue_mmio_dump(
+                "queue_num_max_invalid",
+                index,
+                size,
+                desc_paddr as u64,
+                driver_paddr as u64,
+                device_paddr as u64,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtio-mmio queue_num_max invalid",
             ));
         }
 
@@ -4507,6 +4619,7 @@ impl VirtioRegs {
             ));
         }
 
+        mmio_device_barrier();
         self.mmio_write32_raw(VIRTIO_MMIO_QUEUE_READY, 1);
         let ready = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_READY);
         if ready != 1 {
@@ -4575,8 +4688,9 @@ impl VirtioRegs {
         );
         error!(
             target: "virtio-net",
-            "[virtio-mmio][queue] readback sel=0x{sel:08x} num=0x{num:08x} ready=0x{ready:08x} desc=0x{desc:016x} driver=0x{driver:016x} device=0x{device:016x}",
+            "[virtio-mmio][queue] readback sel=0x{sel:08x} num_max=0x{num_max:08x} num=0x{num:08x} ready=0x{ready:08x} desc=0x{desc:016x} driver=0x{driver:016x} device=0x{device:016x}",
             sel = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_SEL),
+            num_max = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_NUM_MAX),
             num = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_NUM),
             ready = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_READY),
             desc = (u64::from(self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_DESC_HIGH)) << 32)
@@ -4954,6 +5068,39 @@ impl VirtQueue {
         let base_ptr = unsafe {
             NonNull::new_unchecked(frame_ptr.as_ptr().add(base_offset) as *mut u8)
         };
+        let frame_pend = frame_paddr.saturating_add(frame_capacity);
+        let queue_pend = base_paddr.saturating_add(layout.total_len);
+        if base_paddr < frame_paddr || queue_pend > frame_pend {
+            error!(
+                target: "net-console",
+                "[virtio-net] virtqueue paddr outside DMA frame: base_paddr=0x{base_paddr:016x} end=0x{queue_pend:016x} frame=0x{frame_paddr:016x}..0x{frame_pend:016x}",
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtqueue paddr outside DMA frame",
+            ));
+        }
+        if let Some(state) = bootinfo_snapshot::BootInfoState::get() {
+            let region = state.snapshot_region();
+            let qmem_vaddr = base_ptr.as_ptr() as usize;
+            let qmem_vend = qmem_vaddr.saturating_add(layout.total_len);
+            let snap_len = region.end.saturating_sub(region.start);
+            if ranges_overlap(
+                region.start,
+                snap_len,
+                qmem_vaddr,
+                qmem_vend.saturating_sub(qmem_vaddr),
+            ) {
+                error!(
+                    target: "net-console",
+                    "[virtio-net] virtqueue vaddr overlaps bootinfo snapshot: qmem=0x{qmem_vaddr:016x}..0x{qmem_vend:016x} snapshot=0x{snap_start:016x}..0x{snap_end:016x}",
+                    snap_start = region.start,
+                    snap_end = region.end,
+                );
+                return Err(DriverError::QueueInvariant(
+                    "virtqueue vaddr overlaps bootinfo snapshot",
+                ));
+            }
+        }
 
         debug_assert!(
             layout.desc_offset + layout.desc_len <= layout.avail_offset,
@@ -5760,6 +5907,15 @@ fn dma_invalidate(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
 
 #[inline(always)]
 fn mmio_fence() {
+    compiler_fence(AtomicOrdering::SeqCst);
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        asm!("dsb sy", "isb", options(nostack, preserves_flags));
+    }
+}
+
+#[inline(always)]
+fn mmio_device_barrier() {
     compiler_fence(AtomicOrdering::SeqCst);
     #[cfg(target_arch = "aarch64")]
     unsafe {
