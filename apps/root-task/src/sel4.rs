@@ -1683,6 +1683,33 @@ impl ReservedVaddrRanges {
         }
     }
 
+    pub fn next_aligned_range_below(
+        &self,
+        start: usize,
+        span: usize,
+        align: usize,
+        limit: usize,
+    ) -> Option<core::ops::Range<usize>> {
+        assert!(align.is_power_of_two(), "alignment must be a power of two");
+        let mut candidate = Self::align_up(start, align);
+        loop {
+            let end = candidate.checked_add(span)?;
+            if end > limit {
+                return None;
+            }
+            let range = candidate..end;
+            if let Some(conflict) = self.first_overlap(&range) {
+                candidate = Self::align_up(conflict.end, align);
+                continue;
+            }
+            return Some(range);
+        }
+    }
+
+    pub fn overlap(&self, range: &core::ops::Range<usize>) -> Option<core::ops::Range<usize>> {
+        self.first_overlap(range).cloned()
+    }
+
     fn first_overlap(&self, range: &core::ops::Range<usize>) -> Option<&core::ops::Range<usize>> {
         self.ranges
             .iter()
@@ -3097,38 +3124,45 @@ impl<'a> KernelEnv<'a> {
         let span = pages
             .checked_mul(PAGE_SIZE)
             .ok_or(seL4_RangeError)?;
-        let range = self.next_mapping_range(self.dma_cursor, span, "bootinfo-guard");
-        if let Err(err) = self.try_reserve_vaddr_range(&range, "bootinfo-guard") {
-            let mut line = HeaplessString::<192>::new();
-            match err {
-                ReserveVaddrError::Overlap {
-                    conflict_start,
-                    conflict_end,
-                } => {
-                    let _ = fmt::write(
-                        &mut line,
-                        format_args!(
-                            "[bootinfo:guard] vaddr overlap=[0x{conflict_start:016x}..0x{conflict_end:016x}) range=[0x{start:016x}..0x{end:016x})",
-                            start = range.start,
-                            end = range.end,
-                        ),
-                    );
-                }
-                ReserveVaddrError::Capacity => {
-                    let _ = fmt::write(
-                        &mut line,
-                        format_args!(
-                            "[bootinfo:guard] vaddr reserve full range=[0x{start:016x}..0x{end:016x})",
-                            start = range.start,
-                            end = range.end,
-                        ),
-                    );
-                }
+        let range = match self
+            .reserved
+            .next_aligned_range_below(0, span, PAGE_SIZE, DEVICE_VADDR_BASE)
+        {
+            Some(range) => range,
+            None => {
+                boot_log::force_uart_line(
+                    "[bootinfo:guard] vaddr allocation failed below device window",
+                );
+                return Err(seL4_NotEnoughMemory);
             }
+        };
+        if range.start >= DEVICE_VADDR_BASE || range.end > DEVICE_VADDR_BASE {
+            let mut line = HeaplessString::<160>::new();
+            let _ = fmt::write(
+                &mut line,
+                format_args!(
+                    "[bootinfo:guard] vaddr rejected in device window range=[0x{start:016x}..0x{end:016x})",
+                    start = range.start,
+                    end = range.end,
+                ),
+            );
             boot_log::force_uart_line(line.as_str());
-            return Err(seL4_NotEnoughMemory);
+            return Err(seL4_InvalidArgument);
         }
-        self.dma_cursor = range.end;
+        {
+            let mut line = HeaplessString::<160>::new();
+            let _ = fmt::write(
+                &mut line,
+                format_args!(
+                    "[bootinfo:guard] vaddr selected base=0x{base:016x} span=0x{span:08x} device_window=0x{dev_start:08x}..0x{dev_end:08x}",
+                    base = range.start,
+                    span = span,
+                    dev_start = DEVICE_VADDR_BASE,
+                    dev_end = DMA_VADDR_BASE,
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
 
         let mut caps = Vec::<seL4_CPtr, 32>::new();
         for idx in 0..pages {
@@ -3153,6 +3187,22 @@ impl<'a> KernelEnv<'a> {
                 return Err(err);
             }
             self.record_retype(trace, RetypeStatus::Ok);
+            {
+                let mut line = HeaplessString::<192>::new();
+                let ident = debug_cap_identify(frame_slot);
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "[bootinfo:guard] retype ut=0x{ut:04x} obj={obj} size_bits={bits} dst=0x{slot:04x} ident=0x{ident:08x}",
+                        ut = reserved.cap(),
+                        obj = objtype_name(trace.object_type),
+                        bits = trace.object_size_bits,
+                        slot = frame_slot,
+                        ident = ident,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
             let vaddr = range.start.saturating_add(idx.saturating_mul(PAGE_SIZE));
             if (vaddr & (PAGE_SIZE - 1)) != 0 {
                 let mut line = HeaplessString::<160>::new();
@@ -3188,13 +3238,17 @@ impl<'a> KernelEnv<'a> {
             )
             .map_err(|err| {
                 let mut line = HeaplessString::<256>::new();
+                let vspace = seL4_CapInitThreadVSpace;
+                let vspace_ident = debug_cap_identify(vspace);
                 let _ = fmt::write(
                     &mut line,
                     format_args!(
-                        "[bootinfo:guard] map failed idx={idx} vaddr=0x{vaddr:016x} cap=0x{cap:04x} ident=0x{ident:08x} size_bits={bits} rights=0x{rights:02x} attr=0x{attr:02x} err={err} ({name})",
+                        "[bootinfo:guard] map failed idx={idx} vaddr=0x{vaddr:016x} cap=0x{cap:04x} ident=0x{ident:08x} size_bits={bits} vspace=0x{vspace:04x} vspace_ident=0x{vspace_ident:08x} rights=0x{rights:02x} attr=0x{attr:02x} err={err} ({name})",
                         cap = frame_slot,
                         ident = cap_ident,
                         bits = trace.object_size_bits,
+                        vspace = vspace,
+                        vspace_ident = vspace_ident,
                         rights = seL4_CapRights_ReadWrite.raw(),
                         attr = attr as seL4_Word,
                         err = err,
@@ -3207,6 +3261,7 @@ impl<'a> KernelEnv<'a> {
             caps.push(frame_slot).map_err(|_| seL4_NotEnoughMemory)?;
         }
 
+        self.reserve_vaddr_range(&range, "bootinfo-guard");
         Ok((range.start, caps))
     }
 
@@ -3464,7 +3519,22 @@ impl<'a> KernelEnv<'a> {
         let end = vaddr
             .checked_add(PAGE_SIZE)
             .expect("virtual address calculation overflow");
-        self.assert_reserved_clear(vaddr..end, "map_frame");
+        let range = vaddr..end;
+        if let Some(conflict) = self.reserved.overlap(&range) {
+            let mut line = HeaplessString::<256>::new();
+            let _ = fmt::write(
+                &mut line,
+                format_args!(
+                    "[vspace:map] reserved overlap range=[0x{start:016x}..0x{end:016x}) reserved=[0x{conflict_start:016x}..0x{conflict_end:016x})",
+                    start = range.start,
+                    end = range.end,
+                    conflict_start = conflict.start,
+                    conflict_end = conflict.end,
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            return Err(seL4_InvalidArgument);
+        }
 
         let mut result = self.attempt_page_map_with_rights(frame_cap, vaddr, rights, attr);
         if result == seL4_NoError {
