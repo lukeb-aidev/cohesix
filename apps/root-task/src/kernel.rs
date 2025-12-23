@@ -1514,6 +1514,7 @@ fn bootstrap<P: Platform>(
         );
     }
 
+    let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
     #[cfg(feature = "bootinfo_guard_pages")]
     let mut kernel_env_guard: Option<KernelEnv> = None;
     #[cfg(feature = "bootinfo_guard_pages")]
@@ -1730,7 +1731,6 @@ fn bootstrap<P: Platform>(
             }
         }
     };
-    let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
     early_phase = EarlyBootPhase::CSpaceRecord;
     debug_uart_str("[breadcrumb] before CSpaceRecord\r\n");
     sequencer

@@ -41,7 +41,7 @@ static mut BOOTINFO_SNAPSHOT_BACKING: BootinfoBacking = BootinfoBacking {
 };
 
 #[cfg(feature = "bootinfo_guard_pages")]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct GuardedBacking {
     frame_cap: seL4_CPtr,
     page_base: usize,
@@ -70,6 +70,18 @@ static GUARD_ALLOC_WARNED: AtomicBool = AtomicBool::new(false);
 static GUARD_ACTIVE_LOGGED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "bootinfo_guard_pages")]
 static GUARD_READONLY: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "bootinfo_guard_pages")]
+#[cfg(target_os = "none")]
+fn guard_readonly_attr() -> sel4_sys::seL4_ARM_VMAttributes {
+    sel4_sys::seL4_ARM_Page_Default | 0x04
+}
+
+#[cfg(feature = "bootinfo_guard_pages")]
+#[cfg(not(target_os = "none"))]
+fn guard_readonly_attr() -> sel4_sys::seL4_ARM_VMAttributes {
+    sel4_sys::seL4_ARM_VMAttributes(sel4_sys::seL4_ARM_Page_Default.0 | 0x04)
+}
 
 fn log_layout_violation(reason: &str, size: usize, align: usize) {
     let mut line = String::<MAX_CANARY_LINE>::new();
@@ -285,9 +297,7 @@ pub fn guard_protect_readonly(env: &mut KernelEnv, snapshot: &BootInfoSnapshot) 
     }
 
     let rights = sel4_sys::seL4_CapRights::new(0, 0, 1, 0);
-    let attr = sel4_sys::seL4_ARM_VMAttributes(
-        sel4_sys::seL4_ARM_Page_Default.0 | 0x04,
-    );
+    let attr = guard_readonly_attr();
     if let Err(err) = env.map_frame_with_rights(
         guarded.frame_cap,
         guarded.page_base,
@@ -714,7 +724,7 @@ impl BootInfoState {
         let canary_post = snapshot.post_canary_addr();
         let canary_end = canary_post.saturating_add(POST_CANARY_BYTES);
         if snapshot.uses_static_backing() {
-            let canary_pre = unsafe { core::ptr::addr_of!(BOOTINFO_SNAPSHOT_BACKING.pre) as usize };
+            let _canary_pre = unsafe { core::ptr::addr_of!(BOOTINFO_SNAPSHOT_BACKING.pre) as usize };
             debug_assert!(
                 canary_post >= payload_end,
                 "post-canary must trail snapshot payload"
