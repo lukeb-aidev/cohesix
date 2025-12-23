@@ -39,6 +39,16 @@ const VIRTIO_MMIO_SLOTS: usize = 8;
 const VIRTIO_MMIO_MAGIC: u32 = 0x7472_6976;
 const VIRTIO_MMIO_VERSION_LEGACY: u32 = 1;
 const VIRTIO_MMIO_VERSION_MODERN: u32 = 2;
+const VIRTIO_MMIO_QUEUE_SEL: u32 = 0x030;
+const VIRTIO_MMIO_QUEUE_NUM_MAX: u32 = 0x034;
+const VIRTIO_MMIO_QUEUE_NUM: u32 = 0x038;
+const VIRTIO_MMIO_QUEUE_READY: u32 = 0x044;
+const VIRTIO_MMIO_QUEUE_DESC_LOW: u32 = 0x080;
+const VIRTIO_MMIO_QUEUE_DESC_HIGH: u32 = 0x084;
+const VIRTIO_MMIO_QUEUE_DRIVER_LOW: u32 = 0x090;
+const VIRTIO_MMIO_QUEUE_DRIVER_HIGH: u32 = 0x094;
+const VIRTIO_MMIO_QUEUE_DEVICE_LOW: u32 = 0x0a0;
+const VIRTIO_MMIO_QUEUE_DEVICE_HIGH: u32 = 0x0a4;
 const VIRTIO_DEVICE_ID_NET: u32 = 1;
 
 const DEVICE_FRAME_BITS: usize = 12;
@@ -4228,19 +4238,40 @@ impl VirtioRegs {
     }
 
     #[inline(always)]
+    fn base_vaddr(&self) -> usize {
+        self.base().as_ptr() as usize
+    }
+
+    #[inline(always)]
+    fn base_paddr(&self) -> usize {
+        self.mmio.paddr()
+    }
+
+    #[inline(always)]
     fn read32(&self, offset: Registers) -> u32 {
+        self.mmio_read32_raw(offset.offset())
+    }
+
+    #[inline(always)]
+    fn write32(&mut self, offset: Registers, value: u32) {
+        self.mmio_write32_raw(offset.offset(), value);
+    }
+
+    #[inline(always)]
+    fn mmio_read32_raw(&self, off: u32) -> u32 {
         mmio_fence();
-        let value =
-            unsafe { read_volatile(self.base().as_ptr().add(offset.offset()) as *const u32) };
+        let value = unsafe {
+            read_volatile(self.base().as_ptr().add(off as usize) as *const u32)
+        };
         mmio_fence();
         value
     }
 
     #[inline(always)]
-    fn write32(&mut self, offset: Registers, value: u32) {
+    fn mmio_write32_raw(&mut self, off: u32, value: u32) {
         mmio_fence();
         unsafe {
-            write_volatile(self.base().as_ptr().add(offset.offset()) as *mut u32, value);
+            write_volatile(self.base().as_ptr().add(off as usize) as *mut u32, value);
         }
         mmio_fence();
     }
@@ -4327,6 +4358,234 @@ impl VirtioRegs {
     fn set_queue_device_addr(&mut self, paddr: usize) {
         self.write32(Registers::QueueDeviceLow, paddr as u32);
         self.write32(Registers::QueueDeviceHigh, (paddr >> 32) as u32);
+    }
+
+    fn program_queue_modern(
+        &mut self,
+        index: u32,
+        size: u16,
+        desc_paddr: usize,
+        driver_paddr: usize,
+        device_paddr: usize,
+    ) -> Result<(), DriverError> {
+        let base_vaddr = self.base_vaddr();
+        let base_paddr = self.base_paddr();
+        #[cfg(feature = "virtio_diag_min")]
+        {
+            info!(
+                target: "virtio-net",
+                "[virtio_diag_min] queue={index} mmio base_vaddr=0x{base_vaddr:016x} base_paddr=0x{base_paddr:016x} sel_ptr=0x{sel_ptr:016x} num_ptr=0x{num_ptr:016x} desc_ptr=0x{desc_ptr:016x} driver_ptr=0x{driver_ptr:016x} device_ptr=0x{device_ptr:016x} ready_ptr=0x{ready_ptr:016x}",
+                sel_ptr = base_vaddr + VIRTIO_MMIO_QUEUE_SEL as usize,
+                num_ptr = base_vaddr + VIRTIO_MMIO_QUEUE_NUM as usize,
+                desc_ptr = base_vaddr + VIRTIO_MMIO_QUEUE_DESC_LOW as usize,
+                driver_ptr = base_vaddr + VIRTIO_MMIO_QUEUE_DRIVER_LOW as usize,
+                device_ptr = base_vaddr + VIRTIO_MMIO_QUEUE_DEVICE_LOW as usize,
+                ready_ptr = base_vaddr + VIRTIO_MMIO_QUEUE_READY as usize,
+            );
+        }
+
+        self.mmio_write32_raw(VIRTIO_MMIO_QUEUE_SEL, index);
+        let sel = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_SEL);
+        #[cfg(feature = "virtio_diag_min")]
+        {
+            let toggled = index ^ 1;
+            self.mmio_write32_raw(VIRTIO_MMIO_QUEUE_SEL, toggled);
+            let sel_toggled = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_SEL);
+            self.mmio_write32_raw(VIRTIO_MMIO_QUEUE_SEL, index);
+            let sel_restored = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_SEL);
+            info!(
+                target: "virtio-net",
+                "[virtio_diag_min] queue={index} queue_sel toggle orig=0x{sel:08x} toggled=0x{sel_toggled:08x} restored=0x{sel_restored:08x}",
+            );
+        }
+        if sel != index {
+            self.log_queue_mmio_dump(
+                "queue_sel_write_mismatch",
+                index,
+                size,
+                desc_paddr as u64,
+                driver_paddr as u64,
+                device_paddr as u64,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtio-mmio queue_sel write did not stick",
+            ));
+        }
+
+        self.mmio_write32_raw(VIRTIO_MMIO_QUEUE_READY, 0);
+        let ready_zero = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_READY);
+        if ready_zero != 0 {
+            self.log_queue_mmio_dump(
+                "queue_ready_clear_failed",
+                index,
+                size,
+                desc_paddr as u64,
+                driver_paddr as u64,
+                device_paddr as u64,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtio-mmio queue_ready clear did not stick",
+            ));
+        }
+
+        self.mmio_write32_raw(VIRTIO_MMIO_QUEUE_NUM, size as u32);
+        let num = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_NUM);
+        if num != size as u32 {
+            self.log_queue_mmio_dump(
+                "queue_num_write_mismatch",
+                index,
+                size,
+                desc_paddr as u64,
+                driver_paddr as u64,
+                device_paddr as u64,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtio-mmio queue_num write did not stick",
+            ));
+        }
+
+        self.mmio_write32_raw(VIRTIO_MMIO_QUEUE_DESC_LOW, desc_paddr as u32);
+        self.mmio_write32_raw(
+            VIRTIO_MMIO_QUEUE_DESC_HIGH,
+            (desc_paddr >> 32) as u32,
+        );
+        let desc_rb = (u64::from(self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_DESC_HIGH)) << 32)
+            | u64::from(self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_DESC_LOW));
+        if desc_rb != desc_paddr as u64 {
+            self.log_queue_mmio_dump(
+                "queue_desc_write_mismatch",
+                index,
+                size,
+                desc_paddr as u64,
+                driver_paddr as u64,
+                device_paddr as u64,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtio-mmio queue_desc write did not stick",
+            ));
+        }
+
+        self.mmio_write32_raw(VIRTIO_MMIO_QUEUE_DRIVER_LOW, driver_paddr as u32);
+        self.mmio_write32_raw(
+            VIRTIO_MMIO_QUEUE_DRIVER_HIGH,
+            (driver_paddr >> 32) as u32,
+        );
+        let driver_rb = (u64::from(self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_DRIVER_HIGH)) << 32)
+            | u64::from(self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_DRIVER_LOW));
+        if driver_rb != driver_paddr as u64 {
+            self.log_queue_mmio_dump(
+                "queue_driver_write_mismatch",
+                index,
+                size,
+                desc_paddr as u64,
+                driver_paddr as u64,
+                device_paddr as u64,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtio-mmio queue_driver write did not stick",
+            ));
+        }
+
+        self.mmio_write32_raw(VIRTIO_MMIO_QUEUE_DEVICE_LOW, device_paddr as u32);
+        self.mmio_write32_raw(
+            VIRTIO_MMIO_QUEUE_DEVICE_HIGH,
+            (device_paddr >> 32) as u32,
+        );
+        let device_rb = (u64::from(self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_DEVICE_HIGH)) << 32)
+            | u64::from(self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_DEVICE_LOW));
+        if device_rb != device_paddr as u64 {
+            self.log_queue_mmio_dump(
+                "queue_device_write_mismatch",
+                index,
+                size,
+                desc_paddr as u64,
+                driver_paddr as u64,
+                device_paddr as u64,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtio-mmio queue_device write did not stick",
+            ));
+        }
+
+        self.mmio_write32_raw(VIRTIO_MMIO_QUEUE_READY, 1);
+        let ready = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_READY);
+        if ready != 1 {
+            self.log_queue_mmio_dump(
+                "queue_ready_set_failed",
+                index,
+                size,
+                desc_paddr as u64,
+                driver_paddr as u64,
+                device_paddr as u64,
+            );
+            return Err(DriverError::QueueInvariant(
+                "virtio-mmio queue_ready set did not stick",
+            ));
+        }
+
+        #[cfg(feature = "virtio_diag_min")]
+        {
+            info!(
+                target: "virtio-net",
+                "[virtio_diag_min] queue={index} queue_num readback=0x{num:08x} desc=0x{desc_rb:016x} driver=0x{driver_rb:016x} device=0x{device_rb:016x} ready=0x{ready:08x}",
+            );
+        }
+
+        Ok(())
+    }
+
+    fn log_queue_mmio_dump(
+        &self,
+        label: &str,
+        index: u32,
+        size: u16,
+        desc_paddr: u64,
+        driver_paddr: u64,
+        device_paddr: u64,
+    ) {
+        let base_vaddr = self.base_vaddr();
+        let base_paddr = self.base_paddr();
+        error!(
+            target: "virtio-net",
+            "[virtio-mmio][queue] {label}: queue={index} size={size} base_vaddr=0x{base_vaddr:016x} base_paddr=0x{base_paddr:016x}",
+        );
+        error!(
+            target: "virtio-net",
+            "[virtio-mmio][queue] off sel=0x{sel:03x} num=0x{num:03x} ready=0x{ready:03x} desc=0x{desc:03x} driver=0x{driver:03x} device=0x{device:03x}",
+            sel = VIRTIO_MMIO_QUEUE_SEL,
+            num = VIRTIO_MMIO_QUEUE_NUM,
+            ready = VIRTIO_MMIO_QUEUE_READY,
+            desc = VIRTIO_MMIO_QUEUE_DESC_LOW,
+            driver = VIRTIO_MMIO_QUEUE_DRIVER_LOW,
+            device = VIRTIO_MMIO_QUEUE_DEVICE_LOW,
+        );
+        error!(
+            target: "virtio-net",
+            "[virtio-mmio][queue] ptr sel=0x{sel_ptr:016x} num=0x{num_ptr:016x} ready=0x{ready_ptr:016x} desc=0x{desc_ptr:016x} driver=0x{driver_ptr:016x} device=0x{device_ptr:016x}",
+            sel_ptr = base_vaddr + VIRTIO_MMIO_QUEUE_SEL as usize,
+            num_ptr = base_vaddr + VIRTIO_MMIO_QUEUE_NUM as usize,
+            ready_ptr = base_vaddr + VIRTIO_MMIO_QUEUE_READY as usize,
+            desc_ptr = base_vaddr + VIRTIO_MMIO_QUEUE_DESC_LOW as usize,
+            driver_ptr = base_vaddr + VIRTIO_MMIO_QUEUE_DRIVER_LOW as usize,
+            device_ptr = base_vaddr + VIRTIO_MMIO_QUEUE_DEVICE_LOW as usize,
+        );
+        error!(
+            target: "virtio-net",
+            "[virtio-mmio][queue] expect desc=0x{desc_paddr:016x} driver=0x{driver_paddr:016x} device=0x{device_paddr:016x}",
+        );
+        error!(
+            target: "virtio-net",
+            "[virtio-mmio][queue] readback sel=0x{sel:08x} num=0x{num:08x} ready=0x{ready:08x} desc=0x{desc:016x} driver=0x{driver:016x} device=0x{device:016x}",
+            sel = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_SEL),
+            num = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_NUM),
+            ready = self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_READY),
+            desc = (u64::from(self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_DESC_HIGH)) << 32)
+                | u64::from(self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_DESC_LOW)),
+            driver = (u64::from(self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_DRIVER_HIGH)) << 32)
+                | u64::from(self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_DRIVER_LOW)),
+            device = (u64::from(self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_DEVICE_HIGH)) << 32)
+                | u64::from(self.mmio_read32_raw(VIRTIO_MMIO_QUEUE_DEVICE_LOW)),
+        );
     }
 
     fn acknowledge_interrupts(&mut self) -> (u32, u32) {
@@ -4585,8 +4844,8 @@ enum Registers {
 
 impl Registers {
     #[inline(always)]
-    const fn offset(self) -> usize {
-        self as usize
+    const fn offset(self) -> u32 {
+        self as u32
     }
 }
 
@@ -4883,118 +5142,31 @@ impl VirtQueue {
         regs.select_queue(index);
         #[cfg(feature = "virtio_diag_min")]
         {
-            let sel = regs.read32(Registers::QueueSel);
-            let num_max = regs.read32(Registers::QueueNumMax);
+            let sel = regs.mmio_read32_raw(VIRTIO_MMIO_QUEUE_SEL);
+            let num_max = regs.mmio_read32_raw(VIRTIO_MMIO_QUEUE_NUM_MAX);
             info!(
                 target: "virtio-net",
                 "[virtio_diag_min] queue={index} queue_sel readback=0x{sel:08x} queue_num_max=0x{num_max:08x}",
             );
-            let original_sel = sel;
-            let toggled = index ^ 1;
-            regs.select_queue(toggled);
-            let sel_toggled = regs.read32(Registers::QueueSel);
-            regs.select_queue(index);
-            let sel_restored = regs.read32(Registers::QueueSel);
-            info!(
-                target: "virtio-net",
-                "[virtio_diag_min] queue={index} queue_sel toggle orig=0x{original_sel:08x} toggled=0x{sel_toggled:08x} restored=0x{sel_restored:08x}",
-            );
         }
-        regs.queue_ready(0);
-        regs.set_queue_size(queue_size);
-        #[cfg(feature = "virtio_diag_min")]
-        {
-            let num = regs.read32(Registers::QueueNum);
-            info!(
-                target: "virtio-net",
-                "[virtio_diag_min] queue={index} queue_num readback=0x{num:08x}",
-            );
-        }
-
         let queue_pfn = (base_paddr >> seL4_PageBits) as u32;
         match mode {
             VirtioMmioMode::Modern => {
-                #[cfg(feature = "virtio_diag_min")]
-                {
-                    let magic = regs.read32(Registers::MagicValue);
-                    let version = regs.read32(Registers::Version);
-                    let device_id = regs.read32(Registers::DeviceId);
-                    let vendor_id = regs.read32(Registers::VendorId);
-                    let desc_low = regs.read32(Registers::QueueDescLow);
-                    let desc_high = regs.read32(Registers::QueueDescHigh);
-                    let driver_low = regs.read32(Registers::QueueDriverLow);
-                    let driver_high = regs.read32(Registers::QueueDriverHigh);
-                    let device_low = regs.read32(Registers::QueueDeviceLow);
-                    let device_high = regs.read32(Registers::QueueDeviceHigh);
-                    info!(
-                        target: "virtio-net",
-                        "[virtio_diag_min] queue={index} mmio id readback: magic=0x{magic:08x} version=0x{version:08x} device_id=0x{device_id:08x} vendor=0x{vendor_id:08x}",
-                    );
-                    info!(
-                        target: "virtio-net",
-                        "[virtio_diag_min] queue={index} addr pre-write desc=0x{desc_high:08x}{desc_low:08x} driver=0x{driver_high:08x}{driver_low:08x} device=0x{device_high:08x}{device_low:08x}",
-                    );
-                }
-                regs.set_queue_desc_addr(base_paddr);
-                #[cfg(feature = "virtio_diag_min")]
-                {
-                    let desc = (u64::from(regs.read32(Registers::QueueDescHigh)) << 32)
-                        | u64::from(regs.read32(Registers::QueueDescLow));
-                    info!(
-                        target: "virtio-net",
-                        "[virtio_diag_min] queue={index} desc writeback=0x{desc:016x}",
-                    );
-                }
-                regs.set_queue_driver_addr(base_paddr + layout.avail_offset);
-                #[cfg(feature = "virtio_diag_min")]
-                {
-                    let driver = (u64::from(regs.read32(Registers::QueueDriverHigh)) << 32)
-                        | u64::from(regs.read32(Registers::QueueDriverLow));
-                    info!(
-                        target: "virtio-net",
-                        "[virtio_diag_min] queue={index} driver writeback=0x{driver:016x}",
-                    );
-                }
-                regs.set_queue_device_addr(base_paddr + layout.used_offset);
-                #[cfg(feature = "virtio_diag_min")]
-                {
-                    let device = (u64::from(regs.read32(Registers::QueueDeviceHigh)) << 32)
-                        | u64::from(regs.read32(Registers::QueueDeviceLow));
-                    info!(
-                        target: "virtio-net",
-                        "[virtio_diag_min] queue={index} device writeback=0x{device:016x}",
-                    );
-                }
+                regs.program_queue_modern(
+                    index,
+                    queue_size,
+                    base_paddr,
+                    base_paddr + layout.avail_offset,
+                    base_paddr + layout.used_offset,
+                )?;
             }
             VirtioMmioMode::Legacy => {
+                regs.queue_ready(0);
+                regs.set_queue_size(queue_size);
                 regs.set_queue_align(LEGACY_QUEUE_ALIGN as u32);
                 regs.set_queue_pfn(queue_pfn);
-            }
-        }
-        dma_barrier();
-        regs.queue_ready(1);
-        #[cfg(feature = "virtio_diag_min")]
-        if matches!(mode, VirtioMmioMode::Modern) {
-            regs.select_queue(index);
-            compiler_fence(AtomicOrdering::SeqCst);
-            let want_desc = base_paddr as u64;
-            let want_driver = (base_paddr + layout.avail_offset) as u64;
-            let want_device = (base_paddr + layout.used_offset) as u64;
-            let desc = (u64::from(regs.read32(Registers::QueueDescHigh)) << 32)
-                | u64::from(regs.read32(Registers::QueueDescLow));
-            let driver = (u64::from(regs.read32(Registers::QueueDriverHigh)) << 32)
-                | u64::from(regs.read32(Registers::QueueDriverLow));
-            let device = (u64::from(regs.read32(Registers::QueueDeviceHigh)) << 32)
-                | u64::from(regs.read32(Registers::QueueDeviceLow));
-            let ready = regs.read32(Registers::QueueReady);
-            info!(
-                target: "virtio-net",
-                "[virtio_diag_min] queue={index} ready={ready} desc=0x{desc:016x} driver=0x{driver:016x} device=0x{device:016x} want_desc=0x{want_desc:016x} want_driver=0x{want_driver:016x} want_device=0x{want_device:016x}",
-            );
-            if desc != want_desc || driver != want_driver || device != want_device {
-                panic!(
-                    "virtio_diag_min: queue {index} addr mismatch: desc=0x{desc:016x} driver=0x{driver:016x} device=0x{device:016x} (want desc=0x{want_desc:016x} driver=0x{want_driver:016x} device=0x{want_device:016x})"
-                );
+                dma_barrier();
+                regs.queue_ready(1);
             }
         }
         info!(
@@ -5055,22 +5227,32 @@ impl VirtQueue {
     }
 
     fn reconfigure(&self, regs: &mut VirtioRegs, index: u32, mode: VirtioMmioMode) {
-        regs.select_queue(index);
-        regs.queue_ready(0);
-        regs.set_queue_size(self.size);
         match mode {
             VirtioMmioMode::Modern => {
-                regs.set_queue_desc_addr(self.base_paddr);
-                regs.set_queue_driver_addr(self.base_paddr + self.layout.avail_offset);
-                regs.set_queue_device_addr(self.base_paddr + self.layout.used_offset);
+                if let Err(err) = regs.program_queue_modern(
+                    index,
+                    self.size,
+                    self.base_paddr,
+                    self.base_paddr + self.layout.avail_offset,
+                    self.base_paddr + self.layout.used_offset,
+                ) {
+                    error!(
+                        target: "net-console",
+                        "[virtio-net] queue {index} reconfigure failed: {err}",
+                    );
+                    regs.set_status(STATUS_FAILED);
+                }
             }
             VirtioMmioMode::Legacy => {
+                regs.select_queue(index);
+                regs.queue_ready(0);
+                regs.set_queue_size(self.size);
                 regs.set_queue_align(4);
                 regs.set_queue_pfn(self.pfn);
+                dma_barrier();
+                regs.queue_ready(1);
             }
         }
-        dma_barrier();
-        regs.queue_ready(1);
     }
 
     fn setup_descriptor(&self, index: u16, addr: u64, len: u32, flags: u16, next: Option<u16>) {
