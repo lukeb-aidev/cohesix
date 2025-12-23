@@ -42,6 +42,7 @@ serial-console = []
 untyped-debug = []
 trace-heavy-init = []
 strict-bootstrap = []
+bootinfo_guard_pages = []
 kernel = [
     "dep:sel4-sys",
     "dep:sel4-runtime",

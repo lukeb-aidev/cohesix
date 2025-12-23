@@ -1514,6 +1514,26 @@ fn bootstrap<P: Platform>(
         );
     }
 
+    #[cfg(feature = "bootinfo_guard_pages")]
+    let mut kernel_env_guard: Option<KernelEnv> = None;
+    #[cfg(feature = "bootinfo_guard_pages")]
+    let mut guard_cspace_used: usize = 0;
+    #[cfg(feature = "bootinfo_guard_pages")]
+    {
+        ensure_device_pt_pool(bootinfo_ref);
+        let mut env = KernelEnv::new(
+            bootinfo_ref,
+            device_pt_pool().map(DevicePtPool::from_config),
+            reserved_vaddrs.clone(),
+        );
+        let _ = crate::bootstrap::bootinfo_snapshot::install_guarded_backing(
+            &bootinfo_view,
+            &mut env,
+        );
+        guard_cspace_used = env.snapshot().cspace_used;
+        kernel_env_guard = Some(env);
+    }
+
     install_stack_guard_page(bootinfo_view.header(), &layout_snapshot)?;
 
     crate::alloc::init_heap(heap_range.clone());
@@ -1774,6 +1794,14 @@ fn bootstrap<P: Platform>(
                 err
             },
         )?;
+    #[cfg(feature = "bootinfo_guard_pages")]
+    if let Some(env) = kernel_env_guard.as_mut() {
+        let ipc_page_base = align_down(ipc_buffer_ptr.as_ptr() as usize, IPC_PAGE_BYTES);
+        env.reserve_vaddr_range(
+            &(ipc_page_base..ipc_page_base + IPC_PAGE_BYTES),
+            "ipc-buffer",
+        );
+    }
     ipcbuf_sanity_probe(bootinfo_ref).map_err(|err| {
         log_precommit_exit(
             EarlyBootPhase::IPCInstall,
@@ -1862,7 +1890,26 @@ fn bootstrap<P: Platform>(
 
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
     let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
+    #[cfg(feature = "bootinfo_guard_pages")]
+    if guard_cspace_used > 0 {
+        for _ in 0..guard_cspace_used {
+            if boot_cspace.alloc_slot().is_err() {
+                boot_log::force_uart_line(
+                    "[bootinfo:guard] warning: failed to advance cspace for guard slots",
+                );
+                break;
+            }
+        }
+    }
     let boot_first_free = boot_cspace.next_free_slot();
+    #[cfg(feature = "bootinfo_guard_pages")]
+    {
+        let expected = cspace_window
+            .first_free
+            .saturating_add(guard_cspace_used as sel4_sys::seL4_CPtr);
+        debug_assert_eq!(boot_first_free, expected);
+    }
+    #[cfg(not(feature = "bootinfo_guard_pages"))]
     debug_assert_eq!(boot_first_free, cspace_window.first_free);
     debug_assert_eq!(boot_cspace.depth(), cspace_window.bits);
     let (_, empty_end) = bootinfo_view.init_cnode_empty_range();
@@ -1945,6 +1992,15 @@ fn bootstrap<P: Platform>(
     }
 
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
+    #[cfg(feature = "bootinfo_guard_pages")]
+    let mut kernel_env = kernel_env_guard.take().unwrap_or_else(|| {
+        KernelEnv::new(
+            bootinfo_ref,
+            device_pt_pool().map(DevicePtPool::from_config),
+            reserved_vaddrs,
+        )
+    });
+    #[cfg(not(feature = "bootinfo_guard_pages"))]
     let mut kernel_env = KernelEnv::new(
         bootinfo_ref,
         device_pt_pool().map(DevicePtPool::from_config),

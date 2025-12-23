@@ -1610,6 +1610,15 @@ pub struct ReservedVaddrRanges {
     ranges: Vec<core::ops::Range<usize>, 8>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReserveVaddrError {
+    Overlap {
+        conflict_start: usize,
+        conflict_end: usize,
+    },
+    Capacity,
+}
+
 impl ReservedVaddrRanges {
     pub const fn new() -> Self {
         Self { ranges: Vec::new() }
@@ -1621,6 +1630,24 @@ impl ReservedVaddrRanges {
         self.ranges
             .push(range.clone())
             .expect("reserved vaddr range capacity exceeded");
+    }
+
+    pub fn try_reserve(
+        &mut self,
+        range: &core::ops::Range<usize>,
+        label: &'static str,
+    ) -> Result<(), ReserveVaddrError> {
+        self.assert_valid(range, label);
+        if let Some(conflict) = self.first_overlap(range) {
+            return Err(ReserveVaddrError::Overlap {
+                conflict_start: conflict.start,
+                conflict_end: conflict.end,
+            });
+        }
+        self.ranges
+            .push(range.clone())
+            .map_err(|_| ReserveVaddrError::Capacity)?;
+        Ok(())
     }
 
     pub fn assert_free(&self, range: &core::ops::Range<usize>, label: &str) {
@@ -2646,6 +2673,14 @@ impl<'a> KernelEnv<'a> {
         self.reserved.reserve(range, label);
     }
 
+    pub fn try_reserve_vaddr_range(
+        &mut self,
+        range: &core::ops::Range<usize>,
+        label: &'static str,
+    ) -> Result<(), ReserveVaddrError> {
+        self.reserved.try_reserve(range, label)
+    }
+
     /// Returns a view over the init thread IPC buffer if it has been installed.
     pub fn ipc_buffer_view(&self) -> Option<IpcBufView> {
         self.ipcbuf_view
@@ -3029,6 +3064,43 @@ impl<'a> KernelEnv<'a> {
                     .expect("DMA mapping address must be non-null"),
             });
         }
+    }
+
+    #[cfg(feature = "bootinfo_guard_pages")]
+    pub fn alloc_guard_frame(&mut self) -> Result<RamFrame, seL4_Error> {
+        if self.slots.remaining() < 4 {
+            return Err(seL4_NotEnoughMemory);
+        }
+        let reserved = self
+            .untyped
+            .reserve_ram(PAGE_BITS as u8)
+            .ok_or(seL4_NotEnoughMemory)?;
+        let frame_slot = self.allocate_slot();
+        let trace = self.prepare_retype_trace(
+            &reserved,
+            frame_slot,
+            sel4_sys::seL4_ARM_Page as seL4_Word,
+            PAGE_BITS as seL4_Word,
+            RetypeKind::DmaPage {
+                paddr: reserved.paddr(),
+            },
+        );
+        self.record_retype(trace, RetypeStatus::Pending);
+        if let Err(err) = self.retype_page(reserved.cap(), &trace) {
+            self.record_retype(trace, RetypeStatus::Err(err));
+            self.untyped.release(&reserved);
+            return Err(err);
+        }
+        self.record_retype(trace, RetypeStatus::Ok);
+        let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "bootinfo-guard");
+        self.dma_cursor = range.end;
+        self.map_frame(frame_slot, range.start, seL4_ARM_Page_Default, false)?;
+        Ok(RamFrame {
+            cap: frame_slot,
+            paddr: reserved.paddr(),
+            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(range.start))
+                .expect("DMA mapping address must be non-null"),
+        })
     }
 
     fn retype_page(

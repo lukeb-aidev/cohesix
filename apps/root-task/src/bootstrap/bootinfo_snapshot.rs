@@ -14,11 +14,18 @@ use crate::bootinfo_layout::{post_canary_offset, POST_CANARY_BYTES};
 use crate::bootstrap::log::{force_uart_line, uart_puthex_u64, uart_putnl, uart_puts};
 use crate::sel4::{BootInfo, BootInfoError, BootInfoView, IPC_PAGE_BYTES};
 
+#[cfg(feature = "bootinfo_guard_pages")]
+use crate::sel4::{KernelEnv, ReserveVaddrError};
+
 const MAX_CANARY_LINE: usize = 192;
 const MAX_BOOTINFO_ALLOC: usize = 64 * 1024;
 const HIGH_32_MASK: usize = 0xffff_ffff_0000_0000;
 const BOOTINFO_CANARY_PRE: u64 = 0x0b0f_1ce5_ca4e_cafe;
 const BOOTINFO_CANARY_POST: u64 = 0x9ddf_1ce5_f00d_beef;
+#[allow(dead_code)]
+const SNAPSHOT_GUARD_PAGES: bool = cfg!(feature = "bootinfo_guard_pages");
+#[allow(dead_code)]
+const SNAPSHOT_GUARD_POST_PAD: usize = 16;
 
 const BOOT_HEAP_BYTES: usize = MAX_BOOTINFO_ALLOC;
 
@@ -32,6 +39,32 @@ static mut BOOTINFO_SNAPSHOT_BACKING: BootinfoBacking = BootinfoBacking {
     pre: BOOTINFO_CANARY_PRE,
     payload: [0u8; MAX_BOOTINFO_ALLOC + POST_CANARY_BYTES],
 };
+
+#[cfg(feature = "bootinfo_guard_pages")]
+#[derive(Clone, Copy, Debug)]
+struct GuardedBacking {
+    page_base: usize,
+    backing_start: usize,
+    backing_len: usize,
+    post_canary_addr: usize,
+    guard_range: core::ops::Range<usize>,
+}
+
+#[cfg(feature = "bootinfo_guard_pages")]
+impl GuardedBacking {
+    fn backing_slice(&self) -> &'static mut [u8] {
+        unsafe {
+            let ptr =
+                core::ptr::with_exposed_provenance_mut::<u8>(self.backing_start) as *mut u8;
+            core::slice::from_raw_parts_mut(ptr, self.backing_len)
+        }
+    }
+}
+
+#[cfg(feature = "bootinfo_guard_pages")]
+static GUARDED_BACKING: Once<GuardedBacking> = Once::new();
+#[cfg(feature = "bootinfo_guard_pages")]
+static GUARD_ALLOC_WARNED: AtomicBool = AtomicBool::new(false);
 
 fn log_layout_violation(reason: &str, size: usize, align: usize) {
     let mut line = String::<MAX_CANARY_LINE>::new();
@@ -56,23 +89,128 @@ fn assert_low_vaddr(label: &str, value: usize) {
 }
 
 #[inline(always)]
-fn post_canary_ptr(backing_len: usize) -> *const u64 {
+fn post_canary_ptr_for(backing_ptr: *const u8, backing_len: usize) -> *const u64 {
     let offset = post_canary_offset(backing_len);
-    let payload_ptr = unsafe { BOOTINFO_SNAPSHOT_BACKING.payload.as_ptr() };
-    debug_assert!(
-        offset.saturating_add(POST_CANARY_BYTES)
-            <= unsafe { BOOTINFO_SNAPSHOT_BACKING.payload.len() },
-        "post canary offset out of bounds"
-    );
-    unsafe { payload_ptr.add(offset) as *const u64 }
+    unsafe { backing_ptr.add(offset) as *const u64 }
 }
 
 #[inline(always)]
-fn set_post_canary(backing_len: usize) {
-    let ptr = post_canary_ptr(backing_len) as *mut u64;
+fn set_post_canary(backing_ptr: *const u8, backing_len: usize) {
+    let ptr = post_canary_ptr_for(backing_ptr, backing_len) as *mut u64;
     unsafe {
         core::ptr::write_volatile(ptr, BOOTINFO_CANARY_POST);
     }
+}
+
+#[cfg(feature = "bootinfo_guard_pages")]
+fn guarded_backing() -> Option<&'static GuardedBacking> {
+    GUARDED_BACKING.get()
+}
+
+#[cfg(feature = "bootinfo_guard_pages")]
+pub fn install_guarded_backing(view: &BootInfoView, env: &mut KernelEnv) -> bool {
+    let header_bytes = view.header_bytes();
+    let extra_len = view.extra_bytes();
+    let total_size = match header_bytes.len().checked_add(extra_len) {
+        Some(size) => size,
+        None => {
+            if !GUARD_ALLOC_WARNED.swap(true, Ordering::AcqRel) {
+                force_uart_line("[bootinfo:guard] allocation failed: snapshot size overflow");
+            }
+            return false;
+        }
+    };
+
+    if total_size > IPC_PAGE_BYTES.saturating_sub(SNAPSHOT_GUARD_POST_PAD) {
+        if !GUARD_ALLOC_WARNED.swap(true, Ordering::AcqRel) {
+            force_uart_line("[bootinfo:guard] allocation failed: snapshot too large for guard page");
+        }
+        return false;
+    }
+
+    force_uart_line("[mark] bootinfo.guard.alloc.begin");
+    let frame = match env.alloc_guard_frame() {
+        Ok(frame) => frame,
+        Err(err) => {
+            if !GUARD_ALLOC_WARNED.swap(true, Ordering::AcqRel) {
+                let mut line = String::<MAX_CANARY_LINE>::new();
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!("[bootinfo:guard] allocation failed: map err={err:?}"),
+                );
+                force_uart_line(line.as_str());
+            }
+            return false;
+        }
+    };
+
+    let page_base = frame.ptr().as_ptr() as usize;
+    let page_end = page_base.saturating_add(IPC_PAGE_BYTES);
+    let backing_start = page_end
+        .saturating_sub(SNAPSHOT_GUARD_POST_PAD)
+        .saturating_sub(total_size);
+    if backing_start < page_base {
+        if !GUARD_ALLOC_WARNED.swap(true, Ordering::AcqRel) {
+            force_uart_line("[bootinfo:guard] allocation failed: snapshot does not fit in page");
+        }
+        return false;
+    }
+
+    let guard_start = page_end;
+    let guard_end = guard_start.saturating_add(IPC_PAGE_BYTES);
+    let guard_range = guard_start..guard_end;
+    if let Err(err) = env.try_reserve_vaddr_range(&guard_range, "bootinfo-guard") {
+        if !GUARD_ALLOC_WARNED.swap(true, Ordering::AcqRel) {
+            let mut line = String::<MAX_CANARY_LINE>::new();
+            match err {
+                ReserveVaddrError::Overlap {
+                    conflict_start,
+                    conflict_end,
+                } => {
+                    let _ = fmt::write(
+                        &mut line,
+                        format_args!(
+                            "[bootinfo:guard] allocation failed: guard overlap=[0x{conflict_start:016x}..0x{conflict_end:016x})",
+                        ),
+                    );
+                }
+                ReserveVaddrError::Capacity => {
+                    let _ = fmt::write(
+                        &mut line,
+                        format_args!("[bootinfo:guard] allocation failed: vaddr reserve full"),
+                    );
+                }
+            }
+            force_uart_line(line.as_str());
+        }
+        return false;
+    }
+
+    let post_canary_addr = backing_start.saturating_add(total_size);
+    let backing = GuardedBacking {
+        page_base,
+        backing_start,
+        backing_len: total_size,
+        post_canary_addr,
+        guard_range,
+    };
+    let backing = GUARDED_BACKING.call_once(|| backing);
+
+    let mut line = String::<MAX_CANARY_LINE>::new();
+    let _ = fmt::write(
+        &mut line,
+        format_args!(
+            "[mark] bootinfo.guard.alloc.done mapped=[0x{base:016x}..0x{end:016x}) guard=[0x{guard_start:016x}..0x{guard_end:016x}) base=0x{backing_start:016x} post_addr=0x{post_addr:016x}",
+            base = backing.page_base,
+            end = backing.page_base.saturating_add(IPC_PAGE_BYTES),
+            guard_start = backing.guard_range.start,
+            guard_end = backing.guard_range.end,
+            backing_start = backing.backing_start,
+            post_addr = backing.post_canary_addr,
+        ),
+    );
+    force_uart_line(line.as_str());
+    true
 }
 
 #[derive(Clone, Copy)]
@@ -146,7 +284,6 @@ impl BootInfoSnapshot {
     pub fn capture(view: &BootInfoView) -> Result<Self, BootInfoError> {
         let header_bytes = view.header_bytes();
         let accessible_extra_len = view.extra().len();
-
         let total_size = header_bytes
             .len()
             .checked_add(accessible_extra_len)
@@ -157,6 +294,18 @@ impl BootInfoSnapshot {
             return Err(BootInfoError::Overflow);
         }
 
+        #[cfg(feature = "bootinfo_guard_pages")]
+        if SNAPSHOT_GUARD_PAGES {
+            if let Some(guarded) = guarded_backing() {
+                if guarded.backing_len == total_size {
+                    return Self::capture_with_backing(view, guarded.backing_slice());
+                }
+                if !GUARD_ALLOC_WARNED.swap(true, Ordering::AcqRel) {
+                    force_uart_line("[bootinfo:guard] guarded backing size mismatch; falling back");
+                }
+            }
+        }
+
         let backing: &'static mut [u8] =
             unsafe { &mut BOOTINFO_SNAPSHOT_BACKING.payload[..total_size] };
         debug_assert!(
@@ -164,6 +313,16 @@ impl BootInfoSnapshot {
                 <= unsafe { BOOTINFO_SNAPSHOT_BACKING.payload.len() },
             "snapshot backing truncated before post-canary"
         );
+        Self::capture_with_backing(view, backing)
+    }
+
+    fn capture_with_backing(
+        view: &BootInfoView,
+        backing: &'static mut [u8],
+    ) -> Result<Self, BootInfoError> {
+        let header_bytes = view.header_bytes();
+        let accessible_extra_len = view.extra().len();
+
         unsafe {
             BOOTINFO_SNAPSHOT_BACKING.pre = BOOTINFO_CANARY_PRE;
         }
@@ -175,7 +334,7 @@ impl BootInfoSnapshot {
                 .copy_from_slice(extra_slice);
         }
 
-        set_post_canary(backing.len());
+        set_post_canary(backing.as_ptr(), backing.len());
 
         let bootinfo_ptr = backing.as_ptr() as *const seL4_BootInfo;
         let bootinfo_ref = unsafe { &*bootinfo_ptr };
@@ -232,6 +391,11 @@ impl BootInfoSnapshot {
     #[must_use]
     pub fn post_canary_addr(&self) -> usize {
         self.post_canary_addr
+    }
+
+    fn uses_static_backing(&self) -> bool {
+        let static_ptr = unsafe { BOOTINFO_SNAPSHOT_BACKING.payload.as_ptr() };
+        self.backing.as_ptr() == static_ptr
     }
 }
 
@@ -310,7 +474,18 @@ pub enum BootInfoCanaryError {
 fn log_snapshot_failure(view: &BootInfoView, error: &BootInfoError) {
     let mut line = String::<MAX_CANARY_LINE>::new();
     let bootinfo_ptr = view.header() as *const _ as usize;
-    let snapshot_ptr = unsafe { BOOTINFO_SNAPSHOT_BACKING.payload.as_ptr() as usize };
+    let snapshot_ptr = {
+        #[cfg(feature = "bootinfo_guard_pages")]
+        if let Some(guarded) = guarded_backing() {
+            guarded.backing_start
+        } else {
+            unsafe { BOOTINFO_SNAPSHOT_BACKING.payload.as_ptr() as usize }
+        }
+        #[cfg(not(feature = "bootinfo_guard_pages"))]
+        unsafe {
+            BOOTINFO_SNAPSHOT_BACKING.payload.as_ptr() as usize
+        }
+    };
     let header_len = view.header_bytes().len();
     let extra_len = view.extra().len();
     let total_size = header_len.saturating_add(extra_len);
@@ -416,25 +591,36 @@ impl BootInfoState {
 
         let payload_start = snapshot.backing().as_ptr() as usize;
         let payload_end = payload_start.saturating_add(snapshot.backing().len());
-        let canary_pre = unsafe { core::ptr::addr_of!(BOOTINFO_SNAPSHOT_BACKING.pre) as usize };
         let canary_post = snapshot.post_canary_addr();
         let canary_end = canary_post.saturating_add(POST_CANARY_BYTES);
-        debug_assert!(
-            canary_post >= payload_end,
-            "post-canary must trail snapshot payload"
-        );
-        debug_assert!(
-            canary_end
-                <= payload_start
-                    .saturating_add(unsafe { BOOTINFO_SNAPSHOT_BACKING.payload.len() }),
-            "post-canary escaped backing payload"
-        );
+        if snapshot.uses_static_backing() {
+            let canary_pre = unsafe { core::ptr::addr_of!(BOOTINFO_SNAPSHOT_BACKING.pre) as usize };
+            debug_assert!(
+                canary_post >= payload_end,
+                "post-canary must trail snapshot payload"
+            );
+            debug_assert!(
+                canary_end
+                    <= payload_start
+                        .saturating_add(unsafe { BOOTINFO_SNAPSHOT_BACKING.payload.len() }),
+                "post-canary escaped backing payload"
+            );
+        }
 
         let state = BOOTINFO_STATE.call_once(|| Self {
             view: snapshot_view,
             snapshot,
             check_count: AtomicU64::new(0),
-            snapshot_region: canary_pre.min(payload_start)..canary_end.max(payload_end),
+            snapshot_region: {
+                let region_start = if snapshot.uses_static_backing() {
+                    let canary_pre =
+                        unsafe { core::ptr::addr_of!(BOOTINFO_SNAPSHOT_BACKING.pre) as usize };
+                    canary_pre.min(payload_start)
+                } else {
+                    payload_start
+                };
+                region_start..canary_end.max(payload_end)
+            },
         });
         if !PROTECTED_RANGE_LOGGED.swap(true, Ordering::AcqRel) {
             let region = state.snapshot_region();
@@ -472,8 +658,9 @@ impl BootInfoState {
 
     #[must_use]
     pub fn canary_values(&self) -> (u64, u64) {
-        let post =
-            unsafe { core::ptr::read_volatile(post_canary_ptr(self.snapshot.backing().len())) };
+        let post = unsafe {
+            core::ptr::read_volatile(self.snapshot.post_canary_addr() as *const u64)
+        };
         unsafe { (BOOTINFO_SNAPSHOT_BACKING.pre, post) }
     }
 
