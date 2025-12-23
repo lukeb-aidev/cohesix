@@ -3304,6 +3304,17 @@ impl<'a> KernelEnv<'a> {
         attr: sel4_sys::seL4_ARM_VMAttributes,
         strict: bool,
     ) -> Result<(), seL4_Error> {
+        self.map_frame_with_rights(frame_cap, vaddr, seL4_CapRights_ReadWrite, attr, strict)
+    }
+
+    pub(crate) fn map_frame_with_rights(
+        &mut self,
+        frame_cap: seL4_CPtr,
+        vaddr: usize,
+        rights: sel4_sys::seL4_CapRights,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+        strict: bool,
+    ) -> Result<(), seL4_Error> {
         Self::assert_page_aligned(vaddr);
 
         let end = vaddr
@@ -3311,7 +3322,7 @@ impl<'a> KernelEnv<'a> {
             .expect("virtual address calculation overflow");
         self.assert_reserved_clear(vaddr..end, "map_frame");
 
-        let mut result = self.attempt_page_map(frame_cap, vaddr, attr);
+        let mut result = self.attempt_page_map_with_rights(frame_cap, vaddr, rights, attr);
         if result == seL4_NoError {
             if self.ipcbuf_trace {
                 crate::bp!("ipcbuf.page.map.ok");
@@ -3331,7 +3342,7 @@ impl<'a> KernelEnv<'a> {
             if self.ipcbuf_trace {
                 crate::bp!("ipcbuf.page.map.retry");
             }
-            result = self.attempt_page_map(frame_cap, vaddr, attr);
+            result = self.attempt_page_map_with_rights(frame_cap, vaddr, rights, attr);
             if result == seL4_NoError {
                 if self.ipcbuf_trace {
                     crate::bp!("ipcbuf.page.map.ok");
@@ -3371,10 +3382,11 @@ impl<'a> KernelEnv<'a> {
         range
     }
 
-    fn attempt_page_map(
+    fn attempt_page_map_with_rights(
         &mut self,
         frame_cap: seL4_CPtr,
         vaddr: usize,
+        rights: sel4_sys::seL4_CapRights,
         attr: sel4_sys::seL4_ARM_VMAttributes,
     ) -> seL4_Error {
         if self.ipcbuf_trace {
@@ -3387,7 +3399,7 @@ impl<'a> KernelEnv<'a> {
                 frame_cap,
                 seL4_CapInitThreadVSpace,
                 vaddr_word,
-                seL4_CapRights_ReadWrite,
+                rights,
                 attr,
             )
         }

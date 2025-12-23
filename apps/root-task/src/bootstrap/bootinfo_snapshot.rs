@@ -7,7 +7,7 @@ use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use heapless::String;
-use sel4_sys::{seL4_BootInfo, seL4_Word};
+use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Word};
 use spin::Once;
 
 use crate::bootinfo_layout::{post_canary_offset, POST_CANARY_BYTES};
@@ -43,6 +43,7 @@ static mut BOOTINFO_SNAPSHOT_BACKING: BootinfoBacking = BootinfoBacking {
 #[cfg(feature = "bootinfo_guard_pages")]
 #[derive(Clone, Copy, Debug)]
 struct GuardedBacking {
+    frame_cap: seL4_CPtr,
     page_base: usize,
     backing_start: usize,
     backing_len: usize,
@@ -65,6 +66,10 @@ impl GuardedBacking {
 static GUARDED_BACKING: Once<GuardedBacking> = Once::new();
 #[cfg(feature = "bootinfo_guard_pages")]
 static GUARD_ALLOC_WARNED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "bootinfo_guard_pages")]
+static GUARD_ACTIVE_LOGGED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "bootinfo_guard_pages")]
+static GUARD_READONLY: AtomicBool = AtomicBool::new(false);
 
 fn log_layout_violation(reason: &str, size: usize, align: usize) {
     let mut line = String::<MAX_CANARY_LINE>::new();
@@ -105,6 +110,44 @@ fn set_post_canary(backing_ptr: *const u8, backing_len: usize) {
 #[cfg(feature = "bootinfo_guard_pages")]
 fn guarded_backing() -> Option<&'static GuardedBacking> {
     GUARDED_BACKING.get()
+}
+
+#[cfg(feature = "bootinfo_guard_pages")]
+fn guard_invariant_snapshot_in_page(snapshot: &BootInfoSnapshot, guarded: &GuardedBacking) {
+    let page_start = guarded.page_base;
+    let page_end = page_start.saturating_add(IPC_PAGE_BYTES);
+    let post_addr = snapshot.post_canary_addr();
+    if post_addr < page_start || post_addr >= page_end {
+        let mut line = String::<MAX_CANARY_LINE>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "[bootinfo:guard] invariant failed: post_addr outside guard page base=0x{base:016x} post=0x{post:016x}",
+                base = page_start,
+                post = post_addr,
+            ),
+        );
+        force_uart_line(line.as_str());
+        panic!("bootinfo guard post-canary escaped guard page");
+    }
+
+    let backing_start = snapshot.backing().as_ptr() as usize;
+    let backing_end = backing_start.saturating_add(snapshot.backing().len());
+    if backing_start != guarded.backing_start || backing_start < page_start || backing_end > page_end
+    {
+        let mut line = String::<MAX_CANARY_LINE>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "[bootinfo:guard] invariant failed: snapshot backing outside guard page base=0x{base:016x} backing=0x{start:016x}..0x{end:016x}",
+                base = page_start,
+                start = backing_start,
+                end = backing_end,
+            ),
+        );
+        force_uart_line(line.as_str());
+        panic!("bootinfo guard backing escaped guard page");
+    }
 }
 
 #[cfg(feature = "bootinfo_guard_pages")]
@@ -188,6 +231,7 @@ pub fn install_guarded_backing(view: &BootInfoView, env: &mut KernelEnv) -> bool
 
     let post_canary_addr = backing_start.saturating_add(total_size);
     let backing = GuardedBacking {
+        frame_cap: frame.cap(),
         page_base,
         backing_start,
         backing_len: total_size,
@@ -195,6 +239,7 @@ pub fn install_guarded_backing(view: &BootInfoView, env: &mut KernelEnv) -> bool
         guard_range,
     };
     let backing = GUARDED_BACKING.call_once(|| backing);
+    GUARD_READONLY.store(false, Ordering::Release);
 
     let mut line = String::<MAX_CANARY_LINE>::new();
     let _ = fmt::write(
@@ -210,6 +255,82 @@ pub fn install_guarded_backing(view: &BootInfoView, env: &mut KernelEnv) -> bool
         ),
     );
     force_uart_line(line.as_str());
+    true
+}
+
+#[cfg(feature = "bootinfo_guard_pages")]
+pub fn guard_protect_readonly(env: &mut KernelEnv, snapshot: &BootInfoSnapshot) -> bool {
+    if !SNAPSHOT_GUARD_PAGES {
+        return false;
+    }
+    let Some(guarded) = guarded_backing() else {
+        return false;
+    };
+
+    guard_invariant_snapshot_in_page(snapshot, guarded);
+
+    force_uart_line("[mark] bootinfo.guard.protect.begin");
+    let unmap_err = unsafe { sel4_sys::seL4_ARM_Page_Unmap(guarded.frame_cap) };
+    if unmap_err != sel4_sys::seL4_NoError {
+        let mut line = String::<MAX_CANARY_LINE>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "[bootinfo:guard] protect failed: unmap err={unmap_err} base=0x{base:016x}",
+                base = guarded.page_base,
+            ),
+        );
+        force_uart_line(line.as_str());
+        panic!("bootinfo guard unmap failed");
+    }
+
+    let rights = sel4_sys::seL4_CapRights::new(0, 0, 1, 0);
+    let attr = sel4_sys::seL4_ARM_VMAttributes(
+        sel4_sys::seL4_ARM_Page_Default.0 | 0x04,
+    );
+    if let Err(err) = env.map_frame_with_rights(
+        guarded.frame_cap,
+        guarded.page_base,
+        rights,
+        attr,
+        true,
+    ) {
+        let mut line = String::<MAX_CANARY_LINE>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "[bootinfo:guard] protect failed: remap err={err:?} base=0x{base:016x}",
+                base = guarded.page_base,
+            ),
+        );
+        force_uart_line(line.as_str());
+        panic!("bootinfo guard remap failed");
+    }
+
+    GUARD_READONLY.store(true, Ordering::Release);
+    let mut done_line = String::<MAX_CANARY_LINE>::new();
+    let _ = fmt::write(
+        &mut done_line,
+        format_args!(
+            "[mark] bootinfo.guard.protect.done base=0x{base:016x}",
+            base = guarded.page_base,
+        ),
+    );
+    force_uart_line(done_line.as_str());
+
+    if !GUARD_ACTIVE_LOGGED.swap(true, Ordering::AcqRel) {
+        let mut line = String::<MAX_CANARY_LINE>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "bootinfo.guard.active=1 base=0x{base:016x} post=0x{post:016x}",
+                base = guarded.page_base,
+                post = snapshot.post_canary_addr(),
+            ),
+        );
+        force_uart_line(line.as_str());
+    }
+
     true
 }
 
@@ -300,9 +421,8 @@ impl BootInfoSnapshot {
                 if guarded.backing_len == total_size {
                     return Self::capture_with_backing(view, guarded.backing_slice());
                 }
-                if !GUARD_ALLOC_WARNED.swap(true, Ordering::AcqRel) {
-                    force_uart_line("[bootinfo:guard] guarded backing size mismatch; falling back");
-                }
+                force_uart_line("[bootinfo:guard] guarded backing size mismatch; refusing fallback");
+                panic!("bootinfo guard backing size mismatch");
             }
         }
 
@@ -606,6 +726,10 @@ impl BootInfoState {
                 "post-canary escaped backing payload"
             );
         }
+        #[cfg(feature = "bootinfo_guard_pages")]
+        if let Some(guarded) = guarded_backing() {
+            guard_invariant_snapshot_in_page(&snapshot, guarded);
+        }
 
         let state = BOOTINFO_STATE.call_once(|| Self {
             view: snapshot_view,
@@ -709,6 +833,22 @@ impl BootInfoState {
             self.snapshot_region.start,
             self.snapshot_region.end,
         );
+        #[cfg(feature = "bootinfo_guard_pages")]
+        if let Some(guarded) = guarded_backing() {
+            let guarded_snapshot =
+                (self.snapshot.backing().as_ptr() as usize) == guarded.backing_start;
+            let ro = GUARD_READONLY.load(Ordering::Acquire);
+            let mut line = String::<MAX_CANARY_LINE>::new();
+            let _ = fmt::write(
+                &mut line,
+                format_args!(
+                    "[bootinfo:guard] expected fault on write before canary; guarded={guarded} ro={ro}",
+                    guarded = guarded_snapshot as u8,
+                    ro = ro as u8,
+                ),
+            );
+            force_uart_line(line.as_str());
+        }
         panic!("BOOTINFO_SNAPSHOT_CORRUPTED");
     }
 

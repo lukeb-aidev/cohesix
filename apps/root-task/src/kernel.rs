@@ -1621,6 +1621,13 @@ fn bootstrap<P: Platform>(
         sel4_guard::install_bootinfo(&bootinfo_view);
         boot_guard.record_invariant("bootinfo.snapshot.ok");
         bootinfo_snapshot_opt = Some(bootinfo_snapshot);
+        #[cfg(feature = "bootinfo_guard_pages")]
+        if let Some(env) = kernel_env_guard.as_mut() {
+            let _ = crate::bootstrap::bootinfo_snapshot::guard_protect_readonly(
+                env,
+                &bootinfo_snapshot,
+            );
+        }
         let mut snapshot_state_line = HeaplessString::<256>::new();
         let backing_ptr = bootinfo_snapshot.backing().as_ptr() as usize;
         let backing_len = bootinfo_snapshot.backing().len();
@@ -4271,13 +4278,21 @@ fn decode_fault_context(
                 .get(sel4_sys::seL4_VMFault_FSR as usize)
                 .copied()
                 .unwrap_or_default();
+            let access = if prefetch != 0 {
+                "exec"
+            } else if (fsr & (1u64 << 6)) != 0 {
+                "write"
+            } else {
+                "read"
+            };
             log::error!(
                 target: "root_task::kernel::fault",
-                "[fault] {tag_name} badge=0x{badge:04x} ip=0x{ip:016x} addr=0x{addr:016x} prefetch={prefetch} fsr=0x{fsr:08x} source={source_desc} count={count}",
+                "[fault] {tag_name} badge=0x{badge:04x} ip=0x{ip:016x} addr=0x{addr:016x} access={access} prefetch={prefetch} fsr=0x{fsr:08x} source={source_desc} count={count}",
                 badge = badge,
                 tag_name = tag_name,
                 ip = ip,
                 addr = addr,
+                access = access,
                 prefetch = prefetch,
                 fsr = fsr,
                 source_desc = source_desc,
