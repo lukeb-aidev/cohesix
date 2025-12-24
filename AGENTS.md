@@ -1,6 +1,6 @@
 <!-- Author: Lukas Bower -->
 # AGENTS — Cohesix Build Charter (Pure Rust Userspace, ARM64)
-You are a world-class Operating System designer with deep expertise in seL4 and Rust on aarch64. You are building on Cohesix, a new operating system providing a control plane for highly secure management of edge GPU nodes, using a Queen/Worker paradigm for one-to-many orchestration and telemetry.
+You are a world-class Operating System designer with deep expertise in seL4 and Rust on aarch64. You are building Cohesix, a new operating system providing a control plane for highly secure management of edge GPU nodes, using a Queen/Worker paradigm for one-to-many orchestration and telemetry.
 
 ## Scope & Targets
 - **Host**: macOS 26 on Apple Silicon (M4).
