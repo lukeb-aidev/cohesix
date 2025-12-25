@@ -18,15 +18,14 @@ The concrete research goals are to:
 
 Cohesix is intentionally opinionated. It prioritises determinism, auditability, and security over breadth, and treats those constraints as design inputs rather than limitations.
 
-
 ## What is Cohesix?
-Cohesix is a minimal orchestration operating system for secure edge management, targeting a defined set of [use cases](docs/USE_CASES.md)￼around AI hives and distributed GPU workloads.
+Cohesix is a minimal orchestration operating system for secure edge management, targeting a defined set of [use cases](docs/USE_CASES.md) around AI hives and distributed GPU workloads.
 
 Technically, Cohesix is a pure Rust userspace stack running on upstream seL4 on aarch64/virt (GICv3). Userspace is shipped as a static CPIO root filesystem containing the root task, the NineDoor Secure9P server, worker roles, and host-facing tools. All control and telemetry flows through Secure9P; there are no ad-hoc RPC channels or in-VM network services.
 
 Operators interact with Cohesix through two consoles:
 -	a local PL011 console for early bring-up and recovery, and
--	a remote TCP NineDoor console, consumed by cohsh, which provides the primary operational interface from Linux/Unix hosts.
+-	a remote TCP NineDoor console, consumed by the "cohsh" remote shell, which provides the primary operational interface from Linux/Unix hosts.
 
 The intended deployment target is physical ARM64 hardware booted via UEFI. QEMU aarch64/virt is used today for bring-up, CI, and testing, with the expectation that QEMU behaviour mirrors the eventual UEFI board profiles closely enough to surface real integration issues early.
 
