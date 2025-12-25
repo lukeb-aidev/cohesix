@@ -1,24 +1,38 @@
 <!-- Author: Lukas Bower -->
 # Cohesix
 ## Why Cohesix?
-I spent the early part of my career in film and braodcast technology, working with brilliant and creative people pushing the bounds of hardware and software. Some of that work involved custom OS development, and I have been fascinated by this ever since.
+Cohesix exists to explore a specific problem space: how to build a small, auditable, and secure control plane for orchestrating distributed edge GPU systems, without inheriting the complexity and attack surface of general-purpose operating systems.
 
-Cohesix is a Research OS project, where I am exploring ideas I have been pondering for a long time - which I can now explore with the support of AI agents in my limited free time. Writing an OS is the Mount Everest of technical challenges (which is part of the fun), but Cohesix also has some specific research goals:
+Earlier in my career, working in film and broadcast technology, I was exposed to environments where hardware and software stacks were routinely pushed beyond their intended limits. Some of that work involved custom operating systems and tightly constrained runtime environments. That experience left a lasting interest in systems where correctness, timing, and control matter more than convenience.
 
-- Validate the feasibility of a secure control plane to provide centralised and highly secure orchestration of edge GPU nodes
-- Explore a Queen/Worker paradigm for one-to-many orchestration and telemetry
-- Design a hive protocol based on Plan 9's 9P that manages the entire hive as a unit, underpinned by a client (called 'cohsh') that runs on Linux/Unix
-- Prove out a unified UI concept, leveraging 'cohsh', that provides a single hive-wide WASM interface on Linux/Unix
-- Integrate seamlessly with existing GPU edge ecosystems, such as NVidia CUDA on Linux/Jetson
+Cohesix is a research OS project that revisits those ideas with modern tools. Writing an operating system is deliberately difficult, but the motivation is practical rather than academic: to test whether a formally grounded microkernel, a file-oriented control plane, and a strictly bounded userspace can support real-world edge orchestration workloads.
+
+In practical terms, this project would not be feasible without the extensive use of AI agents. They are used throughout development for design iteration, architecture review, code synthesis, debugging assistance, and documentation refinement. This has made it possible to pursue a project of this scope and depth in limited free time, without compromising on technical ambition or rigor.
+
+The concrete research goals are to:
+-	Validate the feasibility of a centralised, highly secure control plane for orchestrating fleets of edge GPU nodes.
+- Explore a Queen / Worker model for one-to-many orchestration, lifecycle control, and telemetry.
+-	Design a hive protocol inspired by Plan 9’s 9P, where the entire system is managed as a single, coherent namespace.
+-	Prove that a single, uniform operator interface (cohsh) can scale from local bring-up to hive-wide automation.
+-	Integrate cleanly with existing edge GPU ecosystems (e.g. NVIDIA CUDA on Linux/Jetson) while keeping heavy dependencies outside the trusted computing base.
+
+Cohesix is intentionally opinionated. It prioritises determinism, auditability, and security over breadth, and treats those constraints as design inputs rather than limitations.
+
 
 ## What is Cohesix?
-Cohesix targets a number of [use cases](docs/USE_CASES.md) focused on secure edge management of AI hives.
+Cohesix is a minimal orchestration operating system for secure edge management, targeting a defined set of [use cases](docs/USE_CASES.md)￼around AI hives and distributed GPU workloads.
 
-Cohesix is a pure Rust userspace stack running atop upstream seL4 on `aarch64/virt (GICv3)`. Currently Userspace ships as a static rootfs CPIO containing the root task, NineDoor 9P server, workers, and Linux host-facing tools; all control flows through Secure9P. Operators interact via two consoles: the always-on PL011 root console and the remote TCP NineDoor console consumed by `cohsh`.
+Technically, Cohesix is a pure Rust userspace stack running on upstream seL4 on aarch64/virt (GICv3). Userspace is shipped as a static CPIO root filesystem containing the root task, the NineDoor Secure9P server, worker roles, and host-facing tools. All control and telemetry flows through Secure9P; there are no ad-hoc RPC channels or in-VM network services.
 
-Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
+Operators interact with Cohesix through two consoles:
+-	a local PL011 console for early bring-up and recovery, and
+-	a remote TCP NineDoor console, consumed by cohsh, which provides the primary operational interface from Linux/Unix hosts.
 
-Cohesix is NOT intended to replace general purpose operating systems. Developers using Cohesix should focus on its design goals of secure orchestration and telementry. Choesix deliberately avoid POSIX and Linux libraries to keep its surface area small and highly secure - Cohesix developers should embrace this design principle.
+The intended deployment target is physical ARM64 hardware booted via UEFI. QEMU aarch64/virt is used today for bring-up, CI, and testing, with the expectation that QEMU behaviour mirrors the eventual UEFI board profiles closely enough to surface real integration issues early.
+
+Cohesix is not a general-purpose operating system and is not intended to replace Linux or POSIX environments. It deliberately avoids POSIX semantics, libc, and dynamic linking in order to keep the system small, analyzable, and resistant to accidental complexity. Developers working on Cohesix are expected to embrace these constraints and design within them.
+
+In short, Cohesix is an experiment in treating orchestration itself as an operating system problem, with security and determinism as first-class concerns.
 
 ## Getting Started
 - Build and launch via `scripts/cohesix-build-run.sh`, pointing at your seL4 build and desired output directory; the script stages host tools alongside the VM image and enables the TCP console when `--transport tcp` is passed.
