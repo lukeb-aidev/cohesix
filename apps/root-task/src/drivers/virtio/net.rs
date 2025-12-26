@@ -35,6 +35,10 @@ const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
 const NET_VIRTIO_TX_V2: bool = cfg!(feature = "net-virtio-tx-v2");
 const VIRTIO_GUARD_QUEUE: bool = cfg!(feature = "virtio_guard_queue");
+#[cfg(feature = "dev-virt")]
+const DEV_VIRT_LOG_BOUND: usize = 160;
+#[cfg(feature = "dev-virt")]
+const DEV_VIRT_SANITY_EARLY_LOG: bool = false;
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -111,8 +115,6 @@ static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
 static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
-#[cfg(feature = "dev-virt")]
-const DEV_VIRT_LOG_BOUND: usize = 192;
 
 #[cfg(feature = "dev-virt")]
 macro_rules! log_bounded {
@@ -1024,7 +1026,7 @@ pub struct VirtioNet {
 impl VirtioNet {
     #[cfg(feature = "dev-virt")]
     fn tx_sanity_failure(&mut self, reason: &str, head: Option<u16>) {
-        error!(
+        log_bounded!(
             target: "virtio-net",
             "[virtio-net][tx-sanity] violation: reason={} head={:?}",
             reason,
@@ -1047,8 +1049,6 @@ impl VirtioNet {
 
     #[cfg(feature = "dev-virt")]
     fn tx_sanity_avail_post(&mut self, head: u16, slot: u16, new_idx: u16, old_idx: u16) {
-        self.tx_sanity
-            .log_mmio_state(&mut self.regs, TX_QUEUE_INDEX, true);
         match self
             .tx_sanity
             .record_avail_post(&self.tx_queue, head, slot, new_idx)
@@ -1061,7 +1061,9 @@ impl VirtioNet {
                 observed_idx,
             }) => {
                 let used_idx = self.tx_queue.indices_no_sync().0;
-                error!(
+                self.tx_sanity
+                    .log_mmio_state(&mut self.regs, TX_QUEUE_INDEX, true);
+                log_bounded!(
                     target: "virtio-net",
                     "[virtio-net][tx-sanity] avail readback mismatch: head={} slot={} expected_head={} observed_head={} expected_idx={} observed_idx={} old_idx={} used_idx={}",
                     head,
@@ -1078,7 +1080,9 @@ impl VirtioNet {
             Err(AvailPostError::Duplicate(dup)) => {
                 let used_idx = self.tx_queue.indices_no_sync().0;
                 let desc = self.tx_queue.read_descriptor(head);
-                error!(
+                self.tx_sanity
+                    .log_mmio_state(&mut self.regs, TX_QUEUE_INDEX, true);
+                log_bounded!(
                     target: "virtio-net",
                     "[virtio-net][tx-sanity] duplicate publish detected: head={} slot={} avail_idx={} used_idx={} last_used={} desc=0x{addr:016x}/len={len} flags=0x{flags:04x} dup_head={dup}",
                     head,
@@ -1640,7 +1644,7 @@ impl VirtioNet {
         driver.initialise_queues();
 
         #[cfg(feature = "dev-virt")]
-        {
+        if DEV_VIRT_SANITY_EARLY_LOG {
             driver.tx_sanity.log_layout(&driver.tx_queue, "init");
             driver
                 .tx_sanity
