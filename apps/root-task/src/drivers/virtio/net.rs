@@ -1027,6 +1027,7 @@ impl VirtioNet {
     #[cfg(feature = "dev-virt")]
     fn tx_sanity_failure(&mut self, reason: &str, head: Option<u16>) {
         log_bounded!(
+            error,
             target: "virtio-net",
             "[virtio-net][tx-sanity] violation: reason={} head={:?}",
             reason,
@@ -1064,6 +1065,7 @@ impl VirtioNet {
                 self.tx_sanity
                     .log_mmio_state(&mut self.regs, TX_QUEUE_INDEX, true);
                 log_bounded!(
+                    error,
                     target: "virtio-net",
                     "[virtio-net][tx-sanity] avail readback mismatch: head={} slot={} expected_head={} observed_head={} expected_idx={} observed_idx={} old_idx={} used_idx={}",
                     head,
@@ -1083,6 +1085,7 @@ impl VirtioNet {
                 self.tx_sanity
                     .log_mmio_state(&mut self.regs, TX_QUEUE_INDEX, true);
                 log_bounded!(
+                    error,
                     target: "virtio-net",
                     "[virtio-net][tx-sanity] duplicate publish detected: head={} slot={} avail_idx={} used_idx={} last_used={} desc=0x{addr:016x}/len={len} flags=0x{flags:04x} dup_head={dup}",
                     head,
