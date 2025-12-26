@@ -454,7 +454,6 @@ pub struct VirtioNet {
     tx_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
     tx_v2_last_used: u16,
     tx_head_mgr: TxHeadManager,
-    tx_head_mgr: TxHeadManager,
     tx_states: [TxState; TX_QUEUE_SIZE],
     dma_cacheable: bool,
     tx_in_flight: u16,
