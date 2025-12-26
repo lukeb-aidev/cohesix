@@ -31,15 +31,10 @@ use crate::net::{
 use crate::net_consts::MAX_FRAME_LEN;
 use crate::sel4::{seL4_CapInitThreadVSpace, DeviceFrame, RamFrame};
 
-const NET_QUIET_BOOT: bool = true;
-const FORENSICS: bool = false;
+const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
 const NET_VIRTIO_TX_V2: bool = cfg!(feature = "net-virtio-tx-v2");
 const VIRTIO_GUARD_QUEUE: bool = cfg!(feature = "virtio_guard_queue");
-#[cfg(feature = "dev-virt")]
-const DEV_VIRT_LOG_BOUND: usize = 160;
-#[cfg(feature = "dev-virt")]
-const DEV_VIRT_SANITY_EARLY_LOG: bool = false;
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -116,50 +111,6 @@ static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
 static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
-
-#[cfg(feature = "dev-virt")]
-macro_rules! log_bounded {
-    ($level:ident, target: $target:expr, $fmt:expr, $($args:tt)*) => {{
-        let mut __buf: HeaplessString<DEV_VIRT_LOG_BOUND> = HeaplessString::new();
-        if core::write!(&mut __buf, $fmt, $($args)*).is_err() {
-            let remaining = __buf.capacity().saturating_sub(__buf.len());
-            if remaining > 0 {
-                let ellipsis = "...";
-                if remaining >= ellipsis.len() {
-                    let _ = __buf.push_str(ellipsis);
-                } else {
-                    for _ in 0..remaining {
-                        let _ = __buf.push('.');
-                    }
-                }
-            }
-        }
-        log::$level!(target: $target, "{}", __buf);
-    }};
-    ($level:ident, target: $target:expr, $fmt:expr $(,)?) => {{
-        let mut __buf: HeaplessString<DEV_VIRT_LOG_BOUND> = HeaplessString::new();
-        if core::write!(&mut __buf, $fmt).is_err() {
-            let remaining = __buf.capacity().saturating_sub(__buf.len());
-            if remaining > 0 {
-                let ellipsis = "...";
-                if remaining >= ellipsis.len() {
-                    let _ = __buf.push_str(ellipsis);
-                } else {
-                    for _ in 0..remaining {
-                        let _ = __buf.push('.');
-                    }
-                }
-            }
-        }
-        log::$level!(target: $target, "{}", __buf);
-    }};
-    ($level:ident, $fmt:expr, $($args:tt)*) => {
-        log_bounded!($level, target: module_path!(), $fmt, $($args)*);
-    };
-    ($level:ident, $fmt:expr $(,)?) => {
-        log_bounded!($level, target: module_path!(), $fmt);
-    };
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TxHeadState {
@@ -753,32 +704,20 @@ impl TxSanity {
     }
 
     fn log_layout(&mut self, queue: &VirtQueue, label: &str) {
-        if NET_QUIET_BOOT {
-            return;
-        }
         if self.layout_logged {
             return;
         }
         self.layout_logged = true;
-        log_bounded!(
-            info,
+        info!(
             target: "virtio-net",
-            "[virtio-net][tx-sanity] layout ({label}): size={} base_v=0x{base_vaddr:016x} base_p=0x{base_paddr:016x} total=0x{total_len:03x}",
+            "[virtio-net][tx-sanity] layout check ({label}): qsize={} base_vaddr=0x{base_vaddr:016x} base_paddr=0x{base_paddr:016x} desc_off=0x{desc_off:03x} avail_off=0x{avail_off:03x} used_off=0x{used_off:03x} total_len=0x{total_len:03x}",
             queue.size,
             base_vaddr = queue.base_vaddr,
             base_paddr = queue.base_paddr,
-            total_len = self.layout.total_len,
-        );
-        log_bounded!(
-            debug,
-            target: "virtio-net",
-            "[virtio-net][tx-sanity] layout offsets: desc=0x{desc_off:03x}/len=0x{desc_len:03x} avail=0x{avail_off:03x}/len=0x{avail_len:03x} used=0x{used_off:03x}/len=0x{used_len:03x}",
             desc_off = self.layout.desc_offset,
-            desc_len = self.layout.desc_len,
             avail_off = self.layout.avail_offset,
-            avail_len = self.layout.avail_len,
             used_off = self.layout.used_offset,
-            used_len = self.layout.used_len,
+            total_len = self.layout.total_len,
         );
         debug_assert!(
             self.layout.desc_offset + self.layout.desc_len <= self.layout.avail_offset
@@ -789,9 +728,6 @@ impl TxSanity {
     }
 
     fn log_mmio_state(&mut self, regs: &mut VirtioRegs, queue_index: u32, for_tx: bool) {
-        if NET_QUIET_BOOT {
-            return;
-        }
         if for_tx {
             if self.tx_mmio_logged {
                 return;
@@ -804,10 +740,8 @@ impl TxSanity {
             self.mmio_logged = true;
         }
         regs.select_queue(queue_index);
-        compiler_fence(AtomicOrdering::SeqCst);
         let queue_ready = regs.queue_ready_value();
         let queue_num = regs.queue_num();
-        let expected_num = self.shadow.size;
         match self.mmio_mode {
             VirtioMmioMode::Modern => {
                 let desc_lo = regs.read32(Registers::QueueDescLow);
@@ -822,33 +756,25 @@ impl TxSanity {
                 let expected_desc = self.base_paddr as u64 + self.layout.desc_offset as u64;
                 let expected_driver = self.base_paddr as u64 + self.layout.avail_offset as u64;
                 let expected_device = self.base_paddr as u64 + self.layout.used_offset as u64;
-                log_bounded!(
-                    debug,
+                info!(
                     target: "virtio-net",
-                    "[virtio-net][tx-sanity] mmio modern queue={} ready={} num={}/{} desc=0x{desc_addr:016x} driver=0x{driver_addr:016x} device=0x{device_addr:016x}",
-                    queue_index,
+                    "[virtio-net][tx-sanity] mmio modern: ready={} num={} desc=0x{:08x}{:08x} driver=0x{:08x}{:08x} device=0x{:08x}{:08x}",
                     queue_ready,
                     queue_num,
-                    expected_num,
-                    desc_addr = desc_addr,
-                    driver_addr = driver_addr,
-                    device_addr = device_addr,
+                    desc_hi,
+                    desc_lo,
+                    driver_hi,
+                    driver_lo,
+                    device_hi,
+                    device_lo,
                 );
                 if desc_addr != expected_desc
                     || driver_addr != expected_driver
                     || device_addr != expected_device
                 {
-                    log_bounded!(
-                        error,
+                    error!(
                         target: "virtio-net",
-                        "[virtio-net][tx-sanity] mmio base mismatch queue={}: desc=0x{desc_addr:016x}/0x{expected_desc:016x} driver=0x{driver_addr:016x}/0x{expected_driver:016x} device=0x{device_addr:016x}/0x{expected_device:016x}",
-                        queue_index,
-                        desc_addr = desc_addr,
-                        expected_desc = expected_desc,
-                        driver_addr = driver_addr,
-                        expected_driver = expected_driver,
-                        device_addr = device_addr,
-                        expected_device = expected_device,
+                        "[virtio-net][tx-sanity] mmio base mismatch: desc=0x{desc_addr:016x} expected=0x{expected_desc:016x} driver=0x{driver_addr:016x} expected=0x{expected_driver:016x} device=0x{device_addr:016x} expected=0x{expected_device:016x}",
                     );
                 }
             }
@@ -856,24 +782,18 @@ impl TxSanity {
                 let queue_align = regs.queue_align();
                 let pfn = regs.queue_pfn();
                 let expected_pfn = (self.base_paddr >> seL4_PageBits) as u32;
-                log_bounded!(
-                    debug,
+                info!(
                     target: "virtio-net",
-                    "[virtio-net][tx-sanity] mmio legacy queue={} ready={} num={}/{} pfn=0x{pfn:08x} align=0x{align:08x}",
-                    queue_index,
+                    "[virtio-net][tx-sanity] mmio legacy: ready={} num={} pfn=0x{:08x} align=0x{:08x}",
                     queue_ready,
                     queue_num,
-                    expected_num,
-                    pfn = pfn,
-                    align = queue_align,
+                    pfn,
+                    queue_align,
                 );
                 if pfn != expected_pfn {
-                    log_bounded!(
-                        error,
+                    error!(
                         target: "virtio-net",
-                        "[virtio-net][tx-sanity] legacy PFN mismatch queue={}: pfn=0x{pfn:08x} expected=0x{expected:08x}",
-                        queue_index,
-                        pfn = pfn,
+                        "[virtio-net][tx-sanity] legacy PFN mismatch: pfn=0x{pfn:08x} expected=0x{expected:08x}",
                         expected = expected_pfn,
                     );
                 }
@@ -924,13 +844,12 @@ impl TxSanity {
 
     fn shadow_check(&self, queue: &VirtQueue, last_k: usize, reason: &str) {
         for (kind, slot, shadow, observed) in self.shadow.shadow_check(queue, last_k) {
-            log_bounded!(
-                error,
+            error!(
                 target: "virtio-net",
-                "[virtio-net][tx-sanity] shadow divergence ({reason}) kind={kind} slot={slot} shadow=0x{shadow:016x} observed=0x{observed:016x}",
-                reason = reason,
-                kind = kind,
-                slot = slot,
+                "[virtio-net][tx-sanity] shadow divergence reason={} kind={} slot={} shadow=0x{shadow:016x} observed=0x{observed:016x}",
+                reason,
+                kind,
+                slot,
                 shadow = shadow,
                 observed = observed,
             );
@@ -1031,24 +950,9 @@ pub struct VirtioNet {
 }
 
 impl VirtioNet {
-    fn verbose_logs_enabled(&self) -> bool {
-        !NET_QUIET_BOOT
-            || self.device_faulted
-            || self.tx_anomaly_logged
-            || self.bad_status_seen
-            || self.bad_status_logged
-            || self.forensic_dump_captured
-            || forensics_frozen()
-    }
-
-    fn should_log_verbose(&self, force: bool) -> bool {
-        force || self.verbose_logs_enabled()
-    }
-
     #[cfg(feature = "dev-virt")]
     fn tx_sanity_failure(&mut self, reason: &str, head: Option<u16>) {
-        log_bounded!(
-            error,
+        error!(
             target: "virtio-net",
             "[virtio-net][tx-sanity] violation: reason={} head={:?}",
             reason,
@@ -1071,6 +975,8 @@ impl VirtioNet {
 
     #[cfg(feature = "dev-virt")]
     fn tx_sanity_avail_post(&mut self, head: u16, slot: u16, new_idx: u16, old_idx: u16) {
+        self.tx_sanity
+            .log_mmio_state(&mut self.regs, TX_QUEUE_INDEX, true);
         match self
             .tx_sanity
             .record_avail_post(&self.tx_queue, head, slot, new_idx)
@@ -1083,10 +989,7 @@ impl VirtioNet {
                 observed_idx,
             }) => {
                 let used_idx = self.tx_queue.indices_no_sync().0;
-                self.tx_sanity
-                    .log_mmio_state(&mut self.regs, TX_QUEUE_INDEX, true);
-                log_bounded!(
-                    error,
+                error!(
                     target: "virtio-net",
                     "[virtio-net][tx-sanity] avail readback mismatch: head={} slot={} expected_head={} observed_head={} expected_idx={} observed_idx={} old_idx={} used_idx={}",
                     head,
@@ -1103,10 +1006,7 @@ impl VirtioNet {
             Err(AvailPostError::Duplicate(dup)) => {
                 let used_idx = self.tx_queue.indices_no_sync().0;
                 let desc = self.tx_queue.read_descriptor(head);
-                self.tx_sanity
-                    .log_mmio_state(&mut self.regs, TX_QUEUE_INDEX, true);
-                log_bounded!(
-                    error,
+                error!(
                     target: "virtio-net",
                     "[virtio-net][tx-sanity] duplicate publish detected: head={} slot={} avail_idx={} used_idx={} last_used={} desc=0x{addr:016x}/len={len} flags=0x{flags:04x} dup_head={dup}",
                     head,
@@ -1136,10 +1036,9 @@ impl VirtioNet {
         let used = q.used.as_ptr();
         let avail_idx = unsafe { read_volatile(&(*avail).idx) };
         let used_idx = unsafe { read_volatile(&(*used).idx) };
-        log_bounded!(
-            error,
+        error!(
             target: "virtio-net",
-            "[virtio-net][tx-sanity] dump reason={reason} base_v=0x{vaddr:016x} base_p=0x{paddr:016x} desc_off=0x{desc_off:03x} avail_off=0x{avail_off:03x} used_off=0x{used_off:03x} size={size}",
+            "[virtio-net][tx-sanity] dump reason={reason} base_vaddr=0x{vaddr:016x} base_paddr=0x{paddr:016x} desc_off=0x{desc_off:03x} avail_off=0x{avail_off:03x} used_off=0x{used_off:03x} size={size}",
             reason = reason,
             vaddr = q.base_vaddr,
             paddr = q.base_paddr,
@@ -1157,8 +1056,7 @@ impl VirtioNet {
             let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
             let head = unsafe { read_volatile(ring_ptr) };
             let desc = q.read_descriptor(head);
-            log_bounded!(
-                info,
+            info!(
                 target: "virtio-net",
                 "[virtio-net][tx-sanity] avail slot={} head={} desc=0x{addr:016x}/len={len} flags=0x{flags:04x} next={next}",
                 ring_slot,
@@ -1176,8 +1074,7 @@ impl VirtioNet {
             let ring_slot = (slot_idx as usize) % usize::from(q.size.max(1));
             let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
             let elem = unsafe { read_volatile(elem_ptr) };
-            log_bounded!(
-                info,
+            info!(
                 target: "virtio-net",
                 "[virtio-net][tx-sanity] used slot={} id={} len={}",
                 ring_slot,
@@ -1187,8 +1084,7 @@ impl VirtioNet {
         }
         if let Some(head) = focus_head {
             let desc = q.read_descriptor(head);
-            log_bounded!(
-                info,
+            info!(
                 target: "virtio-net",
                 "[virtio-net][tx-sanity] focus desc[{}]=0x{addr:016x}/len={len} flags=0x{flags:04x} next={next}",
                 head,
@@ -1220,51 +1116,41 @@ impl VirtioNet {
         H: Hardware<Error = HalError>,
     {
         info!("[net-console] init: probing virtio-mmio bus");
-        if !NET_QUIET_BOOT {
-            info!(
-                "[net-console] expecting virtio-net on virtio-mmio base=0x{base:08x}, slots=0-{max_slot}, stride=0x{stride:03x}",
-                base = VIRTIO_MMIO_BASE,
-                max_slot = VIRTIO_MMIO_SLOTS - 1,
-                stride = VIRTIO_MMIO_STRIDE,
-            );
-        }
+        info!(
+            "[net-console] expecting virtio-net on virtio-mmio base=0x{base:08x}, slots=0-{max_slot}, stride=0x{stride:03x}",
+            base = VIRTIO_MMIO_BASE,
+            max_slot = VIRTIO_MMIO_SLOTS - 1,
+            stride = VIRTIO_MMIO_STRIDE,
+        );
         let mut regs = VirtioRegs::probe(hal)?;
         let mmio_mode = regs.mode;
         info!(
             "[net-console] virtio-mmio device located: base=0x{base:08x}",
             base = regs.base().as_ptr() as usize
         );
-        if !NET_QUIET_BOOT {
-            match regs.mode {
-                VirtioMmioMode::Modern => {
-                    info!("[net-console] modern virtio-mmio v2 detected; continuing")
-                }
-                VirtioMmioMode::Legacy => {
-                    info!("[net-console] legacy virtio-mmio v1 enabled via feature flag")
-                }
+        match regs.mode {
+            VirtioMmioMode::Modern => {
+                info!("[net-console] modern virtio-mmio v2 detected; continuing")
+            }
+            VirtioMmioMode::Legacy => {
+                info!("[net-console] legacy virtio-mmio v1 enabled via feature flag")
             }
         }
 
-        if !NET_QUIET_BOOT {
-            info!("[net-console] resetting virtio-net status register");
-        }
+        info!("[net-console] resetting virtio-net status register");
         regs.reset_status();
         regs.set_status(STATUS_ACKNOWLEDGE);
-        if !NET_QUIET_BOOT {
-            info!(
-                target: "net-console",
-                "[net-console] status set to ACKNOWLEDGE: 0x{:02x}",
-                regs.read32(Registers::Status)
-            );
-        }
+        info!(
+            target: "net-console",
+            "[net-console] status set to ACKNOWLEDGE: 0x{:02x}",
+            regs.read32(Registers::Status)
+        );
         regs.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER);
-        if !NET_QUIET_BOOT {
-            info!(
-                target: "net-console",
-                "[net-console] status set to DRIVER: 0x{:02x}",
-                regs.read32(Registers::Status)
-            );
-        }
+        info!(
+            target: "net-console",
+            "[net-console] status set to DRIVER: 0x{:02x}",
+            regs.read32(Registers::Status)
+        );
 
         if matches!(mmio_mode, VirtioMmioMode::Legacy) {
             // Legacy virtio-mmio devices require the guest page size to be provided
@@ -1274,18 +1160,14 @@ impl VirtioNet {
             // correctly by the device.
             let guest_page_size = 1u32 << seL4_PageBits;
             regs.set_guest_page_size(guest_page_size);
-            if !NET_QUIET_BOOT {
-                info!(
-                    target: "net-console",
-                    "[net-console] guest page size set: {} bytes",
-                    guest_page_size
-                );
-            }
+            info!(
+                target: "net-console",
+                "[net-console] guest page size set: {} bytes",
+                guest_page_size
+            );
         }
 
-        if !NET_QUIET_BOOT {
-            info!("[net-console] querying queue sizes");
-        }
+        info!("[net-console] querying queue sizes");
         regs.select_queue(RX_QUEUE_INDEX);
         let rx_max = regs.queue_num_max();
         regs.select_queue(TX_QUEUE_INDEX);
@@ -1346,64 +1228,54 @@ impl VirtioNet {
             return Err(DriverError::NoQueue);
         }
 
-        if !NET_QUIET_BOOT {
-            info!("[net-console] reading host feature bits");
-        }
+        info!("[net-console] reading host feature bits");
         let host_features = regs.host_features();
         let supported_features = match mmio_mode {
             VirtioMmioMode::Modern => SUPPORTED_NET_FEATURES | VIRTIO_F_VERSION_1,
             VirtioMmioMode::Legacy => SUPPORTED_NET_FEATURES,
         };
         let negotiated_features = host_features & supported_features;
-        if !NET_QUIET_BOOT {
-            info!(
-                target: "virtio-net",
-                "virtio-net features: {:#x}",
-                negotiated_features
-            );
-        }
+        info!(
+            target: "virtio-net",
+            "virtio-net features: {:#x}",
+            negotiated_features
+        );
         let merge_rxbuf = negotiated_features & VIRTIO_NET_F_MRG_RXBUF != 0;
         let net_header_len = if merge_rxbuf {
             VIRTIO_NET_HEADER_LEN_MRG
         } else {
             VIRTIO_NET_HEADER_LEN_BASIC
         };
-        if !NET_QUIET_BOOT {
-            info!(
-                "[net-console] features: host=0x{host:016x} negotiated=0x{guest:016x}",
-                host = host_features,
-                guest = negotiated_features
-            );
-            log::info!(
-                target: "virtio-net",
-                "features: negotiated=0x{:x}, queue_sizes RX={} TX={}",
-                negotiated_features,
-                rx_size,
-                tx_size,
-            );
-            info!(
-                target: "net-console",
-                "[net-console] virtio-net header size={} (virtio-net hdr provided for legacy and modern devices)",
-                net_header_len
-            );
-        }
+        info!(
+            "[net-console] features: host=0x{host:016x} negotiated=0x{guest:016x}",
+            host = host_features,
+            guest = negotiated_features
+        );
+        log::info!(
+            target: "virtio-net",
+            "features: negotiated=0x{:x}, queue_sizes RX={} TX={}",
+            negotiated_features,
+            rx_size,
+            tx_size,
+        );
+        info!(
+            target: "net-console",
+            "[net-console] virtio-net header size={} (virtio-net hdr provided for legacy and modern devices)",
+            net_header_len
+        );
         regs.set_guest_features(negotiated_features);
-        if !NET_QUIET_BOOT {
-            info!(
-                target: "net-console",
-                "[net-console] guest features set: status=0x{:02x}",
-                regs.read32(Registers::Status)
-            );
-        }
+        info!(
+            target: "net-console",
+            "[net-console] guest features set: status=0x{:02x}",
+            regs.read32(Registers::Status)
+        );
         let mut status = STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK;
         regs.set_status(status);
         let status_after_features = regs.read32(Registers::Status);
-        if !NET_QUIET_BOOT {
-            info!(
-                target: "net-console",
-                "[net-console] status set to FEATURES_OK: 0x{status_after_features:02x}",
-            );
-        }
+        info!(
+            target: "net-console",
+            "[net-console] status set to FEATURES_OK: 0x{status_after_features:02x}",
+        );
         if status_after_features & STATUS_FEATURES_OK == 0 {
             regs.set_status(STATUS_FAILED);
             error!(
@@ -1417,9 +1289,7 @@ impl VirtioNet {
             return Err(DriverError::Staged(stage));
         }
 
-        if !NET_QUIET_BOOT {
-            info!("[net-console] allocating virtqueue backing memory");
-        }
+        info!("[net-console] allocating virtqueue backing memory");
         // Keep virtqueue rings fully visible to the device by mapping the backing pages uncached.
 
         let queue_mem_rx = hal
@@ -1467,7 +1337,7 @@ impl VirtioNet {
         let dma_cacheable = cfg!(feature = "cache-maintenance");
         // Note: virtqueue ring pages are mapped uncached; `dma_cacheable` governs whether we
         // perform cache maintenance for DMA *payload* buffers when the feature is enabled.
-        if !NET_QUIET_BOOT && !DMA_QMEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+        if !DMA_QMEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             let rx_vaddr = queue_mem_rx.ptr().as_ptr() as usize;
             let tx_vaddr = queue_mem_tx.ptr().as_ptr() as usize;
             let rx_len = queue_mem_rx.as_slice().len();
@@ -1495,22 +1365,18 @@ impl VirtioNet {
             let base = core::cmp::min(rx_vaddr, tx_vaddr);
             let end = core::cmp::max(rx_vaddr, tx_vaddr).saturating_add(page_bytes);
             let len = end.saturating_sub(base);
-            if !NET_QUIET_BOOT {
-                info!(
-                    target: "virtio-net",
-                    "virtio.guard_queue=1 base=0x{base:016x} len={len} guard=0x{guard:016x}",
-                    base = base,
-                    guard = guard_vaddr,
-                );
-            }
-        }
-
-        if !NET_QUIET_BOOT {
             info!(
-                "[net-console] provisioning RX descriptors ({} entries)",
-                rx_size
+                target: "virtio-net",
+                "virtio.guard_queue=1 base=0x{base:016x} len={len} guard=0x{guard:016x}",
+                base = base,
+                guard = guard_vaddr,
             );
         }
+
+        info!(
+            "[net-console] provisioning RX descriptors ({} entries)",
+            rx_size
+        );
         let rx_queue = VirtQueue::new(
             &mut regs,
             queue_mem_rx,
@@ -1526,12 +1392,10 @@ impl VirtioNet {
             regs.set_status(STATUS_FAILED);
             err
         })?;
-        if !NET_QUIET_BOOT {
-            info!(
-                "[net-console] provisioning TX descriptors ({} entries)",
-                tx_size
-            );
-        }
+        info!(
+            "[net-console] provisioning TX descriptors ({} entries)",
+            tx_size
+        );
         let tx_queue = VirtQueue::new(
             &mut regs,
             queue_mem_tx,
@@ -1604,24 +1468,18 @@ impl VirtioNet {
         let fallback_mac = EthernetAddress::from_bytes(&[0x02, 0, 0, 0, 0, 1]);
         let mac = if negotiated_features & VIRTIO_NET_F_MAC != 0 {
             let reported = regs.read_mac().unwrap_or(fallback_mac);
-            if !NET_QUIET_BOOT {
-                info!("[net-console] device-reported MAC: {reported}");
-            }
+            info!("[net-console] device-reported MAC: {reported}");
             reported
         } else {
             fallback_mac
         };
 
-        if NET_QUIET_BOOT {
-            info!("[net-console] device online: mac={mac}");
-        } else {
-            info!(
-                "[net-console] virtio-net ready: rx_buffers={} tx_buffers={} mac={}",
-                rx_buffers.len(),
-                tx_buffers.len(),
-                mac
-            );
-        }
+        info!(
+            "[net-console] virtio-net ready: rx_buffers={} tx_buffers={} mac={}",
+            rx_buffers.len(),
+            tx_buffers.len(),
+            mac
+        );
 
         let now_ms = crate::hal::timebase().now_ms();
 
@@ -1706,7 +1564,7 @@ impl VirtioNet {
         driver.initialise_queues();
 
         #[cfg(feature = "dev-virt")]
-        if DEV_VIRT_SANITY_EARLY_LOG {
+        {
             driver.tx_sanity.log_layout(&driver.tx_queue, "init");
             driver
                 .tx_sanity
@@ -1716,15 +1574,13 @@ impl VirtioNet {
         let queue0_pfn = driver.rx_queue.pfn;
         let queue1_pfn = driver.tx_queue.pfn;
         let status_reg_value = driver.regs.status();
-        if !NET_QUIET_BOOT {
-            log::info!(
-                target: "net-console",
-                "[virtio-net] post-setup: queue0_pfn=0x{:x}, queue1_pfn=0x{:x}, status=0x{:02x}",
-                queue0_pfn,
-                queue1_pfn,
-                status_reg_value,
-            );
-        }
+        log::info!(
+            target: "net-console",
+            "[virtio-net] post-setup: queue0_pfn=0x{:x}, queue1_pfn=0x{:x}, status=0x{:02x}",
+            queue0_pfn,
+            queue1_pfn,
+            status_reg_value,
+        );
         if queue0_pfn == queue1_pfn {
             warn!(
                 target: "net-console",
@@ -1733,9 +1589,7 @@ impl VirtioNet {
             );
         }
 
-        if !NET_QUIET_BOOT {
-            info!(target: "virtio-net", "[virtio-net] DRIVER_OK about to set");
-        }
+        info!(target: "virtio-net", "[virtio-net] DRIVER_OK about to set");
         status |= STATUS_DRIVER_OK;
         driver.regs.set_status(status);
         info!(
@@ -1971,9 +1825,6 @@ impl VirtioNet {
     }
 
     fn dump_descriptor_table(&self, label: &str, queue: &VirtQueue) {
-        if NET_QUIET_BOOT && !FORENSICS {
-            return;
-        }
         for idx in 0..queue.size {
             let desc = queue.read_descriptor(idx);
             info!(
@@ -1988,9 +1839,6 @@ impl VirtioNet {
     }
 
     fn dump_tx_avail_window(&self) {
-        if NET_QUIET_BOOT && !FORENSICS {
-            return;
-        }
         let qsize = usize::from(self.tx_queue.size);
         if qsize == 0 {
             return;
@@ -2025,9 +1873,6 @@ impl VirtioNet {
     }
 
     fn dump_tx_used_window(&self) {
-        if NET_QUIET_BOOT && !FORENSICS {
-            return;
-        }
         let qsize = usize::from(self.tx_queue.size);
         if qsize == 0 {
             return;
@@ -2062,9 +1907,6 @@ impl VirtioNet {
     }
 
     fn dump_tx_states(&self) {
-        if NET_QUIET_BOOT && !FORENSICS {
-            return;
-        }
         let free = self.tx_head_mgr.free_len() as usize;
         let mut posted = HeaplessVec::<(usize, u32, u64, u32, Option<u16>), TX_QUEUE_SIZE>::new();
         for (idx, entry) in self.tx_head_mgr.posted_entries() {
@@ -2104,9 +1946,6 @@ impl VirtioNet {
     }
 
     fn dump_rx_window(&self) {
-        if NET_QUIET_BOOT && !FORENSICS {
-            return;
-        }
         let qsize = usize::from(self.rx_queue.size);
         if qsize == 0 {
             return;
@@ -2188,9 +2027,6 @@ impl VirtioNet {
     }
 
     fn dump_tx_recent_entries(&self) {
-        if NET_QUIET_BOOT && !FORENSICS {
-            return;
-        }
         for (idx, (id, len)) in self.tx_used_recent.iter().enumerate() {
             error!(
                 target: "net-console",
@@ -2213,9 +2049,6 @@ impl VirtioNet {
     }
 
     fn dump_tx_descriptor_table_once(&mut self) {
-        if NET_QUIET_BOOT && !FORENSICS {
-            return;
-        }
         if self.tx_descriptor_dumped {
             return;
         }
@@ -2224,9 +2057,6 @@ impl VirtioNet {
     }
 
     fn dump_tx_used_window_once(&mut self) {
-        if NET_QUIET_BOOT && !FORENSICS {
-            return;
-        }
         if self.tx_used_window_dumped {
             return;
         }
@@ -2370,13 +2200,7 @@ impl VirtioNet {
         head: u16,
         force: bool,
     ) {
-        if !FORENSICS {
-            return;
-        }
         if forensics_frozen() {
-            return;
-        }
-        if !self.should_log_verbose(force) {
             return;
         }
         let counter = match queue_label {
@@ -2943,7 +2767,6 @@ impl VirtioNet {
         let header_len = self.rx_header_len;
         let payload_capacity = self.rx_payload_capacity;
         let frame_capacity = self.rx_frame_capacity;
-        let verbose = self.verbose_logs_enabled();
 
         if self
             .validate_chain_nonzero(
@@ -2961,7 +2784,7 @@ impl VirtioNet {
         }
 
         let rx_len = self.rx_buffers.len();
-        if verbose && !RX_ARM_START_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+        if !RX_ARM_START_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             info!(
                 target: "virtio-net",
                 "[virtio-net][rx-arm] start buffers={} hdr_len={} payload_cap={} frame_cap={}",
@@ -3014,7 +2837,7 @@ impl VirtioNet {
                 return;
             }
 
-            if verbose && slot < 2 {
+            if slot < 2 {
                 let head_desc = self.rx_queue.read_descriptor(head_idx);
                 info!(
                     target: "net-console",
@@ -3030,7 +2853,7 @@ impl VirtioNet {
             }
         }
         let (used_idx, avail_idx) = self.rx_queue.indices_no_sync();
-        if verbose && !RX_ARM_END_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+        if !RX_ARM_END_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             info!(
                 target: "virtio-net",
                 "[virtio-net][rx-arm] end buffers={} avail.idx={} used.idx={}",
@@ -3039,20 +2862,16 @@ impl VirtioNet {
                 used_idx,
             );
         }
-        if verbose {
-            info!(target: "virtio-net", "[virtio-net][rx-arm] complete");
-        }
+        info!(target: "virtio-net", "[virtio-net][rx-arm] complete");
         let first_paddr = self.rx_buffers.first().map(|buf| buf.paddr()).unwrap_or(0);
         let last_paddr = self.rx_buffers.last().map(|buf| buf.paddr()).unwrap_or(0);
-        if verbose {
-            log::debug!(
-                target: "virtio-net",
-                "[RX] posted buffers={} used_idx={} avail_idx={}",
-                self.rx_buffers.len(),
-                used_idx,
-                avail_idx,
-            );
-        }
+        log::debug!(
+            target: "virtio-net",
+            "[RX] posted buffers={} used_idx={} avail_idx={}",
+            self.rx_buffers.len(),
+            used_idx,
+            avail_idx,
+        );
         if avail_idx as usize != self.rx_buffers.len() {
             warn!(
                 target: "net-console",
@@ -3069,34 +2888,30 @@ impl VirtioNet {
                 "RX avail_idx should equal posted buffer count"
             );
         }
-        if verbose {
-            info!(
-                "[virtio-net] RX queue armed: size={} buffers={} last_used={}",
-                self.rx_queue.size,
-                self.rx_buffers.len(),
-                self.rx_queue.last_used,
-            );
-            info!(
-                target: "net-console",
-                "[virtio-net] RX queue initialised: size={} buffers={} avail.idx={} used.idx={} first_paddr=0x{first:08x} last_paddr=0x{last:08x}",
-                self.rx_queue.size,
-                self.rx_buffers.len(),
-                avail_idx,
-                used_idx,
-                first = first_paddr,
-                last = last_paddr,
-            );
-        }
+        info!(
+            "[virtio-net] RX queue armed: size={} buffers={} last_used={}",
+            self.rx_queue.size,
+            self.rx_buffers.len(),
+            self.rx_queue.last_used,
+        );
+        info!(
+            target: "net-console",
+            "[virtio-net] RX queue initialised: size={} buffers={} avail.idx={} used.idx={} first_paddr=0x{first:08x} last_paddr=0x{last:08x}",
+            self.rx_queue.size,
+            self.rx_buffers.len(),
+            avail_idx,
+            used_idx,
+            first = first_paddr,
+            last = last_paddr,
+        );
 
-        if verbose {
-            log::info!(
-                target: "net-console",
-                "[virtio-net] TX queue initialised: size={} buffers={} free_entries={}",
-                self.tx_queue.size,
-                self.tx_buffers.len(),
-                self.tx_head_mgr.free_len(),
-            );
-        }
+        log::info!(
+            target: "net-console",
+            "[virtio-net] TX queue initialised: size={} buffers={} free_entries={}",
+            self.tx_queue.size,
+            self.tx_buffers.len(),
+            self.tx_head_mgr.free_len(),
+        );
     }
 
     fn sync_rx_slot_for_device(
@@ -3210,7 +3025,7 @@ impl VirtioNet {
         let (used_idx, avail_idx) = self.tx_queue.indices();
         let should_log =
             used_idx != self.tx_last_used_seen || (self.tx_progress_log_gate & 0x3f) == 0;
-        if should_log && self.verbose_logs_enabled() {
+        if should_log {
             info!(
                 target: "net-console",
                 "[virtio-net] tx poll: avail.idx={} used.idx={} last_used={} in_flight={} tx_free={} tx_gen={}",
@@ -3305,9 +3120,6 @@ impl VirtioNet {
     }
 
     fn log_tx_v2_invariants(&mut self) {
-        if !self.verbose_logs_enabled() {
-            return;
-        }
         let now_ms = crate::hal::timebase().now_ms();
         if now_ms.saturating_sub(self.tx_v2_log_ms) < 1_000 {
             return;
@@ -3620,7 +3432,7 @@ impl VirtioNet {
             || payload_len != requested_len
             || (self.tx_attempt_log_gate & 0x3f) == 0;
         self.tx_attempt_log_gate = self.tx_attempt_log_gate.wrapping_add(1);
-        if should_log && self.verbose_logs_enabled() {
+        if should_log {
             info!(
                 target: "net-console",
                 "[virtio-net][tx-attempt] seq={} requested={} payload_len={} written={}",
@@ -3905,30 +3717,26 @@ impl VirtioNet {
         len: usize,
         force_log: bool,
     ) -> Option<(usize, usize)> {
-        let (start, capped_len, payload_start, payload_end) = {
-            let buffer = self.tx_buffers.get(head_id as usize)?;
+        self.tx_buffers.get(head_id as usize).map(|buffer| {
             let capped_len = len.min(buffer.as_slice().len());
             let ptr = buffer.ptr().as_ptr();
             let start = ptr as usize;
             dma_clean(ptr, capped_len, self.dma_cacheable, "clean tx buffer");
             let payload_start = start.saturating_add(self.rx_header_len);
             let payload_end = payload_start.saturating_add(capped_len.saturating_sub(self.rx_header_len));
-            (start, capped_len, payload_start, payload_end)
-        };
-
-        if self.should_log_verbose(force_log) && (force_log || !self.tx_dma_log_once) {
-            self.tx_dma_log_once = true;
-            info!(
-                target: "virtio-net",
-                "[virtio-net][dma] tx buffer clean head={} header=0x{start:016x}..0x{hdr_end:016x} payload=0x{payload_start:016x}..0x{payload_end:016x}",
-                head_id,
-                hdr_end = start.saturating_add(self.rx_header_len),
-                payload_start = payload_start,
-                payload_end = payload_end,
-            );
-        }
-
-        Some((start, start.saturating_add(capped_len)))
+            if force_log || !self.tx_dma_log_once {
+                self.tx_dma_log_once = true;
+                info!(
+                    target: "virtio-net",
+                    "[virtio-net][dma] tx buffer clean head={} header=0x{start:016x}..0x{hdr_end:016x} payload=0x{payload_start:016x}..0x{payload_end:016x}",
+                    head_id,
+                    hdr_end = start.saturating_add(self.rx_header_len),
+                    payload_start = payload_start,
+                    payload_end = payload_end,
+                );
+            }
+            (start, start.saturating_add(capped_len))
+        })
     }
 
     fn log_tx_dma_ranges(
@@ -3940,9 +3748,6 @@ impl VirtioNet {
         descs: &[DescSpec],
         force: bool,
     ) {
-        if !self.should_log_verbose(force) {
-            return;
-        }
         if !force && self.tx_dma_log_once {
             return;
         }
@@ -3978,9 +3783,6 @@ impl VirtioNet {
 
     fn log_tx_descriptor_readback(&mut self, head_id: u16, expected_chain: &[DescSpec]) {
         if !(cfg!(debug_assertions) || self.tx_anomaly_logged) {
-            return;
-        }
-        if NET_QUIET_BOOT && !self.verbose_logs_enabled() {
             return;
         }
         let mut mismatch = false;
@@ -4050,9 +3852,6 @@ impl VirtioNet {
         header_fields: Option<TxHeaderInspect>,
         descs: &[DescSpec],
     ) {
-        if !self.should_log_verbose(self.tx_anomaly_logged) {
-            return;
-        }
         if self.tx_publish_log_count >= FORENSICS_PUBLISH_LOG_LIMIT && !self.tx_anomaly_logged {
             return;
         }
@@ -4138,9 +3937,6 @@ fn tcp_flag_string(flags: u8) -> HeaplessString<8> {
 }
 
 fn log_tcp_trace(direction: &str, frame: &[u8]) {
-    if NET_QUIET_BOOT {
-        return;
-    }
     const IPV4_ETHERTYPE: u16 = 0x0800;
     if frame.len() < 34 {
         return;
@@ -4235,9 +4031,6 @@ fn log_tcp_trace(direction: &str, frame: &[u8]) {
 }
 
 fn log_first_tcp_dest_port(frame: &[u8]) {
-    if NET_QUIET_BOOT {
-        return;
-    }
     const IPV4_ETHERTYPE: u16 = 0x0800;
     const TCP_PROTOCOL: u8 = 0x06;
 
@@ -4275,9 +4068,6 @@ fn log_first_tcp_dest_port(frame: &[u8]) {
 }
 
 fn log_tcp_dest_port_once(frame: &[u8]) {
-    if NET_QUIET_BOOT {
-        return;
-    }
     if LOG_TCP_DEST_PORT.swap(false, AtomicOrdering::AcqRel) {
         log_first_tcp_dest_port(frame);
     }
@@ -4726,9 +4516,7 @@ impl VirtioRegs {
 
     #[cfg(feature = "dev-virt")]
     fn queue_num(&self) -> u16 {
-        unsafe {
-            read_volatile(self.base().as_ptr().add(Registers::QueueNum as usize) as *const u16)
-        }
+        self.read32(Registers::QueueNum) as u16
     }
 
     fn set_queue_align(&mut self, align: u32) {
@@ -5538,8 +5326,7 @@ impl VirtQueue {
             _ => {}
         }
         if let Some(flag) = notify_flag {
-            let first_notify = !flag.swap(true, AtomicOrdering::AcqRel);
-            if first_notify && !NET_QUIET_BOOT {
+            if !flag.swap(true, AtomicOrdering::AcqRel) {
                 let label = if queue == TX_QUEUE_INDEX { "TX" } else { "RX" };
                 info!(target: "virtio-net", "[virtio-net] notify queue={queue} ({label})");
             }
@@ -5578,7 +5365,7 @@ impl VirtQueue {
 
     fn invalidate_used_elem_for_cpu(&self, ring_slot: usize) {
         let elem_ptr = unsafe { (*self.used.as_ptr()).ring.as_ptr().add(ring_slot) as *const u8 };
-        if !NET_QUIET_BOOT && !USED_RING_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+        if !USED_RING_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             info!(
                 target: "virtio-net",
                 "[virtio-net][dma] invalidate used ring entry slot={} addr=0x{addr:016x}",
@@ -5596,9 +5383,6 @@ impl VirtQueue {
     }
 
     fn debug_descriptors(&self, label: &str, count: usize) {
-        if NET_QUIET_BOOT && !FORENSICS {
-            return;
-        }
         let max = core::cmp::min(count, self.size as usize);
         for idx in 0..max {
             let desc = unsafe { read_volatile(self.desc.as_ptr().add(idx)) };
@@ -5639,9 +5423,6 @@ impl VirtQueue {
     }
 
     pub fn debug_dump(&self, label: &str) {
-        if NET_QUIET_BOOT && !FORENSICS {
-            return;
-        }
         let used = self.used.as_ptr();
         let avail = self.avail.as_ptr();
 
@@ -5920,7 +5701,6 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
     if len == 0 {
         return;
     }
-    let log_enabled = !NET_QUIET_BOOT;
     #[cfg(test)]
     if let Some(hook) = *DMA_TEST_HOOK.lock() {
         hook(CacheOp::Clean, ptr as usize, len);
@@ -5935,20 +5715,18 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
         }
         return;
     }
-    let log_once = log_enabled && !DMA_CLEAN_LOGGED.swap(true, AtomicOrdering::AcqRel);
-    if log_enabled {
+    let log_once = !DMA_CLEAN_LOGGED.swap(true, AtomicOrdering::AcqRel);
+    info!(
+        target: "virtio-net",
+        "[virtio-net][dma] cache op reason={reason}",
+    );
+    if log_once {
         info!(
             target: "virtio-net",
-            "[virtio-net][dma] cache op reason={reason}",
+            "[virtio-net][dma] clean enter ptr=0x{ptr:016x} len={len}",
+            ptr = ptr as usize,
+            len = len,
         );
-        if log_once {
-            info!(
-                target: "virtio-net",
-                "[virtio-net][dma] clean enter ptr=0x{ptr:016x} len={len}",
-                ptr = ptr as usize,
-                len = len,
-            );
-        }
     }
     compiler_fence(AtomicOrdering::Release);
     if let Err(err) = cache_clean(seL4_CapInitThreadVSpace, ptr as usize, len) {
@@ -5974,7 +5752,6 @@ fn dma_invalidate(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
     if len == 0 {
         return;
     }
-    let log_enabled = !NET_QUIET_BOOT;
     #[cfg(test)]
     if let Some(hook) = *DMA_TEST_HOOK.lock() {
         hook(CacheOp::Invalidate, ptr as usize, len);
@@ -5989,20 +5766,18 @@ fn dma_invalidate(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
         }
         return;
     }
-    let log_once = log_enabled && !DMA_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel);
-    if log_enabled {
+    let log_once = !DMA_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel);
+    info!(
+        target: "virtio-net",
+        "[virtio-net][dma] cache op reason={reason}",
+    );
+    if log_once {
         info!(
             target: "virtio-net",
-            "[virtio-net][dma] cache op reason={reason}",
+            "[virtio-net][dma] invalidate enter ptr=0x{ptr:016x} len={len}",
+            ptr = ptr as usize,
+            len = len,
         );
-        if log_once {
-            info!(
-                target: "virtio-net",
-                "[virtio-net][dma] invalidate enter ptr=0x{ptr:016x} len={len}",
-                ptr = ptr as usize,
-                len = len,
-            );
-        }
     }
     compiler_fence(AtomicOrdering::SeqCst);
     if let Err(err) = cache_invalidate(seL4_CapInitThreadVSpace, ptr as usize, len) {
