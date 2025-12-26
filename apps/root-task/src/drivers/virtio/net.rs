@@ -111,6 +111,32 @@ static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
 static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "dev-virt")]
+const DEV_VIRT_LOG_BOUND: usize = 192;
+
+#[cfg(feature = "dev-virt")]
+macro_rules! log_bounded {
+    ($level:ident, target: $target:expr, $fmt:expr $(, $args:tt)* $(,)?) => {{
+        let mut __buf: HeaplessString<DEV_VIRT_LOG_BOUND> = HeaplessString::new();
+        if core::write!(&mut __buf, $fmt $(, $args)*).is_err() {
+            let remaining = __buf.capacity().saturating_sub(__buf.len());
+            if remaining > 0 {
+                let ellipsis = "...";
+                if remaining >= ellipsis.len() {
+                    let _ = __buf.push_str(ellipsis);
+                } else {
+                    for _ in 0..remaining {
+                        let _ = __buf.push('.');
+                    }
+                }
+            }
+        }
+        log::$level!(target: $target, "{}", __buf);
+    }};
+    ($level:ident, $fmt:expr $(, $args:tt)* $(,)?) => {
+        log_bounded!($level, target: module_path!(), $fmt $(, $args)*);
+    };
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TxHeadState {
@@ -708,16 +734,25 @@ impl TxSanity {
             return;
         }
         self.layout_logged = true;
-        info!(
+        log_bounded!(
+            info,
             target: "virtio-net",
-            "[virtio-net][tx-sanity] layout check ({label}): qsize={} base_vaddr=0x{base_vaddr:016x} base_paddr=0x{base_paddr:016x} desc_off=0x{desc_off:03x} avail_off=0x{avail_off:03x} used_off=0x{used_off:03x} total_len=0x{total_len:03x}",
+            "[virtio-net][tx-sanity] layout ({label}): size={} base_v=0x{base_vaddr:016x} base_p=0x{base_paddr:016x} total=0x{total_len:03x}",
             queue.size,
             base_vaddr = queue.base_vaddr,
             base_paddr = queue.base_paddr,
-            desc_off = self.layout.desc_offset,
-            avail_off = self.layout.avail_offset,
-            used_off = self.layout.used_offset,
             total_len = self.layout.total_len,
+        );
+        log_bounded!(
+            debug,
+            target: "virtio-net",
+            "[virtio-net][tx-sanity] layout offsets: desc=0x{desc_off:03x}/len=0x{desc_len:03x} avail=0x{avail_off:03x}/len=0x{avail_len:03x} used=0x{used_off:03x}/len=0x{used_len:03x}",
+            desc_off = self.layout.desc_offset,
+            desc_len = self.layout.desc_len,
+            avail_off = self.layout.avail_offset,
+            avail_len = self.layout.avail_len,
+            used_off = self.layout.used_offset,
+            used_len = self.layout.used_len,
         );
         debug_assert!(
             self.layout.desc_offset + self.layout.desc_len <= self.layout.avail_offset
@@ -740,8 +775,10 @@ impl TxSanity {
             self.mmio_logged = true;
         }
         regs.select_queue(queue_index);
+        compiler_fence(AtomicOrdering::SeqCst);
         let queue_ready = regs.queue_ready_value();
         let queue_num = regs.queue_num();
+        let expected_num = self.shadow.size;
         match self.mmio_mode {
             VirtioMmioMode::Modern => {
                 let desc_lo = regs.read32(Registers::QueueDescLow);
@@ -756,25 +793,33 @@ impl TxSanity {
                 let expected_desc = self.base_paddr as u64 + self.layout.desc_offset as u64;
                 let expected_driver = self.base_paddr as u64 + self.layout.avail_offset as u64;
                 let expected_device = self.base_paddr as u64 + self.layout.used_offset as u64;
-                info!(
+                log_bounded!(
+                    debug,
                     target: "virtio-net",
-                    "[virtio-net][tx-sanity] mmio modern: ready={} num={} desc=0x{:08x}{:08x} driver=0x{:08x}{:08x} device=0x{:08x}{:08x}",
+                    "[virtio-net][tx-sanity] mmio modern queue={} ready={} num={}/{} desc=0x{desc_addr:016x} driver=0x{driver_addr:016x} device=0x{device_addr:016x}",
+                    queue_index,
                     queue_ready,
                     queue_num,
-                    desc_hi,
-                    desc_lo,
-                    driver_hi,
-                    driver_lo,
-                    device_hi,
-                    device_lo,
+                    expected_num,
+                    desc_addr = desc_addr,
+                    driver_addr = driver_addr,
+                    device_addr = device_addr,
                 );
                 if desc_addr != expected_desc
                     || driver_addr != expected_driver
                     || device_addr != expected_device
                 {
-                    error!(
+                    log_bounded!(
+                        error,
                         target: "virtio-net",
-                        "[virtio-net][tx-sanity] mmio base mismatch: desc=0x{desc_addr:016x} expected=0x{expected_desc:016x} driver=0x{driver_addr:016x} expected=0x{expected_driver:016x} device=0x{device_addr:016x} expected=0x{expected_device:016x}",
+                        "[virtio-net][tx-sanity] mmio base mismatch queue={}: desc=0x{desc_addr:016x}/0x{expected_desc:016x} driver=0x{driver_addr:016x}/0x{expected_driver:016x} device=0x{device_addr:016x}/0x{expected_device:016x}",
+                        queue_index,
+                        desc_addr = desc_addr,
+                        expected_desc = expected_desc,
+                        driver_addr = driver_addr,
+                        expected_driver = expected_driver,
+                        device_addr = device_addr,
+                        expected_device = expected_device,
                     );
                 }
             }
@@ -782,18 +827,24 @@ impl TxSanity {
                 let queue_align = regs.queue_align();
                 let pfn = regs.queue_pfn();
                 let expected_pfn = (self.base_paddr >> seL4_PageBits) as u32;
-                info!(
+                log_bounded!(
+                    debug,
                     target: "virtio-net",
-                    "[virtio-net][tx-sanity] mmio legacy: ready={} num={} pfn=0x{:08x} align=0x{:08x}",
+                    "[virtio-net][tx-sanity] mmio legacy queue={} ready={} num={}/{} pfn=0x{pfn:08x} align=0x{align:08x}",
+                    queue_index,
                     queue_ready,
                     queue_num,
-                    pfn,
-                    queue_align,
+                    expected_num,
+                    pfn = pfn,
+                    align = queue_align,
                 );
                 if pfn != expected_pfn {
-                    error!(
+                    log_bounded!(
+                        error,
                         target: "virtio-net",
-                        "[virtio-net][tx-sanity] legacy PFN mismatch: pfn=0x{pfn:08x} expected=0x{expected:08x}",
+                        "[virtio-net][tx-sanity] legacy PFN mismatch queue={}: pfn=0x{pfn:08x} expected=0x{expected:08x}",
+                        queue_index,
+                        pfn = pfn,
                         expected = expected_pfn,
                     );
                 }
@@ -844,12 +895,13 @@ impl TxSanity {
 
     fn shadow_check(&self, queue: &VirtQueue, last_k: usize, reason: &str) {
         for (kind, slot, shadow, observed) in self.shadow.shadow_check(queue, last_k) {
-            error!(
+            log_bounded!(
+                error,
                 target: "virtio-net",
-                "[virtio-net][tx-sanity] shadow divergence reason={} kind={} slot={} shadow=0x{shadow:016x} observed=0x{observed:016x}",
-                reason,
-                kind,
-                slot,
+                "[virtio-net][tx-sanity] shadow divergence ({reason}) kind={kind} slot={slot} shadow=0x{shadow:016x} observed=0x{observed:016x}",
+                reason = reason,
+                kind = kind,
+                slot = slot,
                 shadow = shadow,
                 observed = observed,
             );
@@ -1036,9 +1088,10 @@ impl VirtioNet {
         let used = q.used.as_ptr();
         let avail_idx = unsafe { read_volatile(&(*avail).idx) };
         let used_idx = unsafe { read_volatile(&(*used).idx) };
-        error!(
+        log_bounded!(
+            error,
             target: "virtio-net",
-            "[virtio-net][tx-sanity] dump reason={reason} base_vaddr=0x{vaddr:016x} base_paddr=0x{paddr:016x} desc_off=0x{desc_off:03x} avail_off=0x{avail_off:03x} used_off=0x{used_off:03x} size={size}",
+            "[virtio-net][tx-sanity] dump reason={reason} base_v=0x{vaddr:016x} base_p=0x{paddr:016x} desc_off=0x{desc_off:03x} avail_off=0x{avail_off:03x} used_off=0x{used_off:03x} size={size}",
             reason = reason,
             vaddr = q.base_vaddr,
             paddr = q.base_paddr,
@@ -1056,7 +1109,8 @@ impl VirtioNet {
             let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
             let head = unsafe { read_volatile(ring_ptr) };
             let desc = q.read_descriptor(head);
-            info!(
+            log_bounded!(
+                info,
                 target: "virtio-net",
                 "[virtio-net][tx-sanity] avail slot={} head={} desc=0x{addr:016x}/len={len} flags=0x{flags:04x} next={next}",
                 ring_slot,
@@ -1074,7 +1128,8 @@ impl VirtioNet {
             let ring_slot = (slot_idx as usize) % usize::from(q.size.max(1));
             let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
             let elem = unsafe { read_volatile(elem_ptr) };
-            info!(
+            log_bounded!(
+                info,
                 target: "virtio-net",
                 "[virtio-net][tx-sanity] used slot={} id={} len={}",
                 ring_slot,
@@ -1084,7 +1139,8 @@ impl VirtioNet {
         }
         if let Some(head) = focus_head {
             let desc = q.read_descriptor(head);
-            info!(
+            log_bounded!(
+                info,
                 target: "virtio-net",
                 "[virtio-net][tx-sanity] focus desc[{}]=0x{addr:016x}/len={len} flags=0x{flags:04x} next={next}",
                 head,
@@ -4516,7 +4572,9 @@ impl VirtioRegs {
 
     #[cfg(feature = "dev-virt")]
     fn queue_num(&self) -> u16 {
-        self.read32(Registers::QueueNum) as u16
+        unsafe {
+            read_volatile(self.base().as_ptr().add(Registers::QueueNum as usize) as *const u16)
+        }
     }
 
     fn set_queue_align(&mut self, align: u32) {
