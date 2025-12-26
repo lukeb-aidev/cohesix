@@ -109,6 +109,12 @@ enum TxHeadState {
     Reclaimed,
 }
 
+impl Default for TxHeadState {
+    fn default() -> Self {
+        TxHeadState::Free
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TxHeadError {
     OutOfRange,
@@ -206,17 +212,19 @@ impl TxHeadManager {
     }
 
     fn mark_posted(&mut self, id: u16, slot: u16, len: u32, addr: u64) -> Result<u32, TxHeadError> {
-        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        if entry.state != TxHeadState::Prepared {
-            return Err(TxHeadError::InvalidState);
-        }
         let gen = self.next_gen;
+        {
+            let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
+            if entry.state != TxHeadState::Prepared {
+                return Err(TxHeadError::InvalidState);
+            }
+            entry.state = TxHeadState::Posted;
+            entry.slot = Some(slot);
+            entry.gen = gen;
+            entry.len = len;
+            entry.addr = addr;
+        }
         self.next_gen = self.next_gen.wrapping_add(1);
-        entry.state = TxHeadState::Posted;
-        entry.slot = Some(slot);
-        entry.gen = gen;
-        entry.len = len;
-        entry.addr = addr;
         Ok(gen)
     }
 
@@ -1592,7 +1600,8 @@ impl VirtioNet {
     /// has returned.
     fn guard_tx_post_state(&mut self, head_id: u16, slot: u16, desc: &DescSpec) -> Result<u32, ()> {
         if desc.len == 0 || desc.addr == 0 {
-            return self.tx_state_violation("tx_post_zero", head_id, Some(slot));
+            self.tx_state_violation("tx_post_zero", head_id, Some(slot))?;
+            return Err(());
         }
         match self
             .tx_head_mgr
