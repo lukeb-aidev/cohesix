@@ -4506,7 +4506,7 @@ impl VirtQueue {
         let ring_slot = (self.last_used as usize) % qsize;
         self.assert_ring_slot(self.last_used, ring_slot, "used");
         let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
-        let idx_ptr = &(*used).idx as *const u16 as usize;
+        let idx_ptr = unsafe { &(*used).idx as *const u16 as usize };
         assert!(
             idx_ptr >= self.base_vaddr,
             "virtqueue used.idx pointer below base: ptr=0x{idx_ptr:016x} base=0x{base:016x}",

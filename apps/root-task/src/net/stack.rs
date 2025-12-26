@@ -1961,7 +1961,7 @@ impl<D: NetDevice> NetStack<D> {
 
         self.bump_poll_counter();
         if self.stage_policy.tx_only && !self.tx_only_sent {
-            let mut activity = self.send_udp_beacon();
+            let activity = self.send_udp_beacon();
             if activity {
                 let poll_result =
                     self.interface
