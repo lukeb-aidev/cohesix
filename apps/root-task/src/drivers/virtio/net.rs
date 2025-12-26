@@ -3905,26 +3905,30 @@ impl VirtioNet {
         len: usize,
         force_log: bool,
     ) -> Option<(usize, usize)> {
-        self.tx_buffers.get(head_id as usize).map(|buffer| {
+        let (start, capped_len, payload_start, payload_end) = {
+            let buffer = self.tx_buffers.get(head_id as usize)?;
             let capped_len = len.min(buffer.as_slice().len());
             let ptr = buffer.ptr().as_ptr();
             let start = ptr as usize;
             dma_clean(ptr, capped_len, self.dma_cacheable, "clean tx buffer");
             let payload_start = start.saturating_add(self.rx_header_len);
             let payload_end = payload_start.saturating_add(capped_len.saturating_sub(self.rx_header_len));
-            if self.should_log_verbose(force_log) && (force_log || !self.tx_dma_log_once) {
-                self.tx_dma_log_once = true;
-                info!(
-                    target: "virtio-net",
-                    "[virtio-net][dma] tx buffer clean head={} header=0x{start:016x}..0x{hdr_end:016x} payload=0x{payload_start:016x}..0x{payload_end:016x}",
-                    head_id,
-                    hdr_end = start.saturating_add(self.rx_header_len),
-                    payload_start = payload_start,
-                    payload_end = payload_end,
-                );
-            }
-            (start, start.saturating_add(capped_len))
-        })
+            (start, capped_len, payload_start, payload_end)
+        };
+
+        if self.should_log_verbose(force_log) && (force_log || !self.tx_dma_log_once) {
+            self.tx_dma_log_once = true;
+            info!(
+                target: "virtio-net",
+                "[virtio-net][dma] tx buffer clean head={} header=0x{start:016x}..0x{hdr_end:016x} payload=0x{payload_start:016x}..0x{payload_end:016x}",
+                head_id,
+                hdr_end = start.saturating_add(self.rx_header_len),
+                payload_start = payload_start,
+                payload_end = payload_end,
+            );
+        }
+
+        Some((start, start.saturating_add(capped_len)))
     }
 
     fn log_tx_dma_ranges(
