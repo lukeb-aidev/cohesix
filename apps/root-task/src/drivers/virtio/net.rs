@@ -80,17 +80,6 @@ const MAX_QUEUE_SIZE: usize = if RX_QUEUE_SIZE > TX_QUEUE_SIZE {
 };
 const VIRTIO_NET_HEADER_LEN_BASIC: usize = core::mem::size_of::<VirtioNetHdr>();
 const VIRTIO_NET_HEADER_LEN_MRG: usize = core::mem::size_of::<VirtioNetHdrMrgRxbuf>();
-
-/// Virtio queue sizes must be powers of two. Clamp down to the nearest power-of-two.
-fn clamp_virtq_size(requested: usize) -> usize {
-    // Virtio requires queue size to be a power of two; never return 0 here.
-    // If requested is 0 we return 0 so callers can handle the "no queue" path.
-    if requested == 0 {
-        return 0;
-    }
-    // floor_pow2
-    1usize << (usize::BITS - 1 - requested.leading_zeros())
-}
 const FRAME_BUFFER_LEN: usize = MAX_FRAME_LEN + VIRTIO_NET_HEADER_LEN_MRG;
 static LOG_TCP_DEST_PORT: AtomicBool = AtomicBool::new(true);
 static RX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -149,114 +138,6 @@ struct TxHeadManager {
     entries: [TxHeadEntry; TX_QUEUE_SIZE],
     next_gen: u32,
     size: u16,
-}
-
-#[cfg(feature = "dev-virt")]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct TxShadowDesc {
-    desc: VirtqDesc,
-    valid: bool,
-}
-
-#[cfg(feature = "dev-virt")]
-#[derive(Debug)]
-struct TxShadowModel {
-    size: u16,
-    shadow_desc: [TxShadowDesc; TX_QUEUE_SIZE],
-    shadow_avail_ring: [u16; TX_QUEUE_SIZE],
-    shadow_avail_idx: u16,
-    in_flight: [bool; TX_QUEUE_SIZE],
-}
-
-#[cfg(feature = "dev-virt")]
-impl TxShadowModel {
-    fn new(size: u16) -> Self {
-        Self {
-            size,
-            shadow_desc: [TxShadowDesc::default(); TX_QUEUE_SIZE],
-            shadow_avail_ring: [0; TX_QUEUE_SIZE],
-            shadow_avail_idx: 0,
-            in_flight: [false; TX_QUEUE_SIZE],
-        }
-    }
-
-    fn record_desc(&mut self, head: u16, desc: VirtqDesc) {
-        if head < self.size {
-            self.shadow_desc[head as usize] = TxShadowDesc { desc, valid: true };
-        }
-    }
-
-    fn record_avail(
-        &mut self,
-        head: u16,
-        slot: u16,
-        observed_head: u16,
-        observed_idx: u16,
-    ) -> Option<u16> {
-        let qsize = usize::from(self.size).max(1);
-        let ring_slot = (slot as usize) % qsize;
-        self.shadow_avail_ring[ring_slot] = observed_head;
-        self.shadow_avail_idx = observed_idx;
-        let mut duplicate = None;
-        if (head as usize) < self.in_flight.len() {
-            if self.in_flight[head as usize] {
-                duplicate = Some(head);
-            }
-            self.in_flight[head as usize] = true;
-        }
-        duplicate
-    }
-
-    fn record_used(&mut self, head: u16) {
-        if (head as usize) < self.in_flight.len() {
-            self.in_flight[head as usize] = false;
-        }
-    }
-
-    fn shadow_check<'a>(
-        &'a self,
-        queue: &'a VirtQueue,
-        last_k: usize,
-    ) -> impl Iterator<Item = (&'static str, usize, u64, u64)> + 'a {
-        let qsize = usize::from(self.size).max(1);
-        let avail_idx = unsafe { read_volatile(&(*queue.avail.as_ptr()).idx) };
-        let used_idx = unsafe { read_volatile(&(*queue.used.as_ptr()).idx) };
-        let avail_window = core::cmp::min(last_k, qsize);
-        let mut ring_indices: HeaplessVec<usize, TX_QUEUE_SIZE> = HeaplessVec::new();
-        for offset in 0..avail_window {
-            let slot_idx = avail_idx
-                .wrapping_sub(avail_window as u16)
-                .wrapping_add(offset as u16);
-            let ring_slot = (slot_idx as usize) % qsize;
-            let _ = ring_indices.push(ring_slot);
-        }
-        ring_indices
-            .into_iter()
-            .filter_map(move |slot| {
-                let ring_ptr =
-                    unsafe { (*queue.avail.as_ptr()).ring.as_ptr().add(slot) as *const u16 };
-                let observed_head = unsafe { read_volatile(ring_ptr) };
-                let shadow_head = self.shadow_avail_ring[slot];
-                (observed_head != shadow_head).then_some((
-                    "avail",
-                    slot,
-                    shadow_head as u64,
-                    observed_head as u64,
-                ))
-            })
-            .chain((0..core::cmp::min(last_k, qsize)).filter_map(move |idx| {
-                let ring_slot = (used_idx
-                    .wrapping_sub(last_k as u16)
-                    .wrapping_add(idx as u16) as usize)
-                    % qsize;
-                let elem_ptr: *const VirtqUsedElem =
-                    unsafe { (*queue.used.as_ptr()).ring.as_ptr().add(ring_slot) };
-                let used = unsafe { read_volatile(elem_ptr) };
-                let in_shadow = (used.id as usize) < self.shadow_desc.len()
-                    && self.shadow_desc[used.id as usize].valid;
-                (!in_shadow).then_some(("used", ring_slot, 0, used.id as u64))
-            }))
-    }
 }
 
 impl TxHeadManager {
@@ -665,198 +546,6 @@ impl fmt::Display for DriverError {
     }
 }
 
-#[cfg(feature = "dev-virt")]
-struct TxSanity {
-    shadow: TxShadowModel,
-    layout: VirtqLayout,
-    base_vaddr: usize,
-    base_paddr: usize,
-    mmio_mode: VirtioMmioMode,
-    layout_logged: bool,
-    mmio_logged: bool,
-    tx_mmio_logged: bool,
-}
-
-#[cfg(feature = "dev-virt")]
-enum AvailPostError {
-    Duplicate(u16),
-    Mismatch {
-        expected_head: u16,
-        observed_head: u16,
-        expected_idx: u16,
-        observed_idx: u16,
-    },
-}
-
-#[cfg(feature = "dev-virt")]
-impl TxSanity {
-    fn new(queue: &VirtQueue, mmio_mode: VirtioMmioMode) -> Self {
-        Self {
-            shadow: TxShadowModel::new(queue.size),
-            layout: queue.layout,
-            base_vaddr: queue.base_vaddr,
-            base_paddr: queue.base_paddr,
-            mmio_mode,
-            layout_logged: false,
-            mmio_logged: false,
-            tx_mmio_logged: false,
-        }
-    }
-
-    fn log_layout(&mut self, queue: &VirtQueue, label: &str) {
-        if self.layout_logged {
-            return;
-        }
-        self.layout_logged = true;
-        info!(
-            target: "virtio-net",
-            "[virtio-net][tx-sanity] layout check ({label}): qsize={} base_vaddr=0x{base_vaddr:016x} base_paddr=0x{base_paddr:016x} desc_off=0x{desc_off:03x} avail_off=0x{avail_off:03x} used_off=0x{used_off:03x} total_len=0x{total_len:03x}",
-            queue.size,
-            base_vaddr = queue.base_vaddr,
-            base_paddr = queue.base_paddr,
-            desc_off = self.layout.desc_offset,
-            avail_off = self.layout.avail_offset,
-            used_off = self.layout.used_offset,
-            total_len = self.layout.total_len,
-        );
-        debug_assert!(
-            self.layout.desc_offset + self.layout.desc_len <= self.layout.avail_offset
-                && self.layout.avail_offset + self.layout.avail_len <= self.layout.used_offset
-                && self.layout.used_offset + self.layout.used_len <= self.layout.total_len,
-            "virtqueue layout overlap detected"
-        );
-    }
-
-    fn log_mmio_state(&mut self, regs: &mut VirtioRegs, queue_index: u32, for_tx: bool) {
-        if for_tx {
-            if self.tx_mmio_logged {
-                return;
-            }
-            self.tx_mmio_logged = true;
-        } else {
-            if self.mmio_logged {
-                return;
-            }
-            self.mmio_logged = true;
-        }
-        regs.select_queue(queue_index);
-        let queue_ready = regs.queue_ready_value();
-        let queue_num = regs.queue_num();
-        match self.mmio_mode {
-            VirtioMmioMode::Modern => {
-                let desc_lo = regs.read32(Registers::QueueDescLow);
-                let desc_hi = regs.read32(Registers::QueueDescHigh);
-                let driver_lo = regs.read32(Registers::QueueDriverLow);
-                let driver_hi = regs.read32(Registers::QueueDriverHigh);
-                let device_lo = regs.read32(Registers::QueueDeviceLow);
-                let device_hi = regs.read32(Registers::QueueDeviceHigh);
-                let desc_addr = (u64::from(desc_hi) << 32) | u64::from(desc_lo);
-                let driver_addr = (u64::from(driver_hi) << 32) | u64::from(driver_lo);
-                let device_addr = (u64::from(device_hi) << 32) | u64::from(device_lo);
-                let expected_desc = self.base_paddr as u64 + self.layout.desc_offset as u64;
-                let expected_driver = self.base_paddr as u64 + self.layout.avail_offset as u64;
-                let expected_device = self.base_paddr as u64 + self.layout.used_offset as u64;
-                info!(
-                    target: "virtio-net",
-                    "[virtio-net][tx-sanity] mmio modern: ready={} num={} desc=0x{:08x}{:08x} driver=0x{:08x}{:08x} device=0x{:08x}{:08x}",
-                    queue_ready,
-                    queue_num,
-                    desc_hi,
-                    desc_lo,
-                    driver_hi,
-                    driver_lo,
-                    device_hi,
-                    device_lo,
-                );
-                if desc_addr != expected_desc
-                    || driver_addr != expected_driver
-                    || device_addr != expected_device
-                {
-                    error!(
-                        target: "virtio-net",
-                        "[virtio-net][tx-sanity] mmio base mismatch: desc=0x{desc_addr:016x} expected=0x{expected_desc:016x} driver=0x{driver_addr:016x} expected=0x{expected_driver:016x} device=0x{device_addr:016x} expected=0x{expected_device:016x}",
-                    );
-                }
-            }
-            VirtioMmioMode::Legacy => {
-                let queue_align = regs.queue_align();
-                let pfn = regs.queue_pfn();
-                let expected_pfn = (self.base_paddr >> seL4_PageBits) as u32;
-                info!(
-                    target: "virtio-net",
-                    "[virtio-net][tx-sanity] mmio legacy: ready={} num={} pfn=0x{:08x} align=0x{:08x}",
-                    queue_ready,
-                    queue_num,
-                    pfn,
-                    queue_align,
-                );
-                if pfn != expected_pfn {
-                    error!(
-                        target: "virtio-net",
-                        "[virtio-net][tx-sanity] legacy PFN mismatch: pfn=0x{pfn:08x} expected=0x{expected:08x}",
-                        expected = expected_pfn,
-                    );
-                }
-            }
-        }
-    }
-
-    fn record_desc_write(&mut self, queue: &VirtQueue, head: u16, desc: VirtqDesc) -> bool {
-        fence(AtomicOrdering::SeqCst);
-        let desc_ptr = unsafe { queue.desc.as_ptr().add(head as usize) };
-        let read_back = unsafe { read_volatile(desc_ptr) };
-        self.shadow.record_desc(head, desc);
-        read_back == desc
-    }
-
-    fn record_avail_post(
-        &mut self,
-        queue: &VirtQueue,
-        head: u16,
-        slot: u16,
-        expected_idx: u16,
-    ) -> Result<(), AvailPostError> {
-        fence(AtomicOrdering::SeqCst);
-        let avail = queue.avail.as_ptr();
-        let ring_ptr = unsafe { (*avail).ring.as_ptr().add(slot as usize) as *const u16 };
-        let observed_head = unsafe { read_volatile(ring_ptr) };
-        let observed_idx = unsafe { read_volatile(&(*avail).idx) };
-        let duplicate = self
-            .shadow
-            .record_avail(head, slot, observed_head, observed_idx);
-        if observed_head != head || observed_idx != expected_idx {
-            return Err(AvailPostError::Mismatch {
-                expected_head: head,
-                observed_head,
-                expected_idx,
-                observed_idx,
-            });
-        }
-        if let Some(dup) = duplicate {
-            return Err(AvailPostError::Duplicate(dup));
-        }
-        Ok(())
-    }
-
-    fn record_used(&mut self, head: u16) {
-        self.shadow.record_used(head);
-    }
-
-    fn shadow_check(&self, queue: &VirtQueue, last_k: usize, reason: &str) {
-        for (kind, slot, shadow, observed) in self.shadow.shadow_check(queue, last_k) {
-            error!(
-                target: "virtio-net",
-                "[virtio-net][tx-sanity] shadow divergence reason={} kind={} slot={} shadow=0x{shadow:016x} observed=0x{observed:016x}",
-                reason,
-                kind,
-                slot,
-                shadow = shadow,
-                observed = observed,
-            );
-        }
-    }
-}
-
 impl From<HalError> for DriverError {
     fn from(err: HalError) -> Self {
         match err {
@@ -945,163 +634,9 @@ pub struct VirtioNet {
     tx_zero_len_log_ms: u64,
     tx_v2_log_ms: u64,
     forensic_dump_captured: bool,
-    #[cfg(feature = "dev-virt")]
-    tx_sanity: TxSanity,
 }
 
 impl VirtioNet {
-    #[cfg(feature = "dev-virt")]
-    fn tx_sanity_failure(&mut self, reason: &str, head: Option<u16>) {
-        error!(
-            target: "virtio-net",
-            "[virtio-net][tx-sanity] violation: reason={} head={:?}",
-            reason,
-            head
-        );
-        self.tx_sanity.shadow_check(&self.tx_queue, 8, reason);
-        self.tx_sanity_dump(reason, head);
-        #[cfg(debug_assertions)]
-        {
-            self.freeze_tx_publishes("tx_sanity_violation");
-        }
-    }
-
-    #[cfg(feature = "dev-virt")]
-    fn tx_sanity_desc_write(&mut self, head: u16, desc: VirtqDesc) {
-        if !self.tx_sanity.record_desc_write(&self.tx_queue, head, desc) {
-            self.tx_sanity_failure("desc_readback", Some(head));
-        }
-    }
-
-    #[cfg(feature = "dev-virt")]
-    fn tx_sanity_avail_post(&mut self, head: u16, slot: u16, new_idx: u16, old_idx: u16) {
-        self.tx_sanity
-            .log_mmio_state(&mut self.regs, TX_QUEUE_INDEX, true);
-        match self
-            .tx_sanity
-            .record_avail_post(&self.tx_queue, head, slot, new_idx)
-        {
-            Ok(()) => {}
-            Err(AvailPostError::Mismatch {
-                expected_head,
-                observed_head,
-                expected_idx,
-                observed_idx,
-            }) => {
-                let used_idx = self.tx_queue.indices_no_sync().0;
-                error!(
-                    target: "virtio-net",
-                    "[virtio-net][tx-sanity] avail readback mismatch: head={} slot={} expected_head={} observed_head={} expected_idx={} observed_idx={} old_idx={} used_idx={}",
-                    head,
-                    slot,
-                    expected_head,
-                    observed_head,
-                    expected_idx,
-                    observed_idx,
-                    old_idx,
-                    used_idx,
-                );
-                self.tx_sanity_failure("avail_readback", Some(head));
-            }
-            Err(AvailPostError::Duplicate(dup)) => {
-                let used_idx = self.tx_queue.indices_no_sync().0;
-                let desc = self.tx_queue.read_descriptor(head);
-                error!(
-                    target: "virtio-net",
-                    "[virtio-net][tx-sanity] duplicate publish detected: head={} slot={} avail_idx={} used_idx={} last_used={} desc=0x{addr:016x}/len={len} flags=0x{flags:04x} dup_head={dup}",
-                    head,
-                    slot,
-                    new_idx,
-                    used_idx,
-                    self.tx_queue.last_used,
-                    addr = desc.addr,
-                    flags = desc.flags,
-                    len = desc.len,
-                    dup = dup,
-                );
-                self.tx_sanity_failure("avail_duplicate", Some(head));
-            }
-        };
-    }
-
-    #[cfg(feature = "dev-virt")]
-    fn tx_sanity_used(&mut self, head: u16) {
-        self.tx_sanity.record_used(head);
-    }
-
-    #[cfg(feature = "dev-virt")]
-    fn tx_sanity_dump(&self, reason: &str, focus_head: Option<u16>) {
-        let q = &self.tx_queue;
-        let avail = q.avail.as_ptr();
-        let used = q.used.as_ptr();
-        let avail_idx = unsafe { read_volatile(&(*avail).idx) };
-        let used_idx = unsafe { read_volatile(&(*used).idx) };
-        error!(
-            target: "virtio-net",
-            "[virtio-net][tx-sanity] dump reason={reason} base_vaddr=0x{vaddr:016x} base_paddr=0x{paddr:016x} desc_off=0x{desc_off:03x} avail_off=0x{avail_off:03x} used_off=0x{used_off:03x} size={size}",
-            reason = reason,
-            vaddr = q.base_vaddr,
-            paddr = q.base_paddr,
-            desc_off = q.layout.desc_offset,
-            avail_off = q.layout.avail_offset,
-            used_off = q.layout.used_offset,
-            size = q.size,
-        );
-        let window = core::cmp::min(q.size as usize, 8);
-        for offset in 0..window {
-            let slot_idx = avail_idx
-                .wrapping_sub(window as u16)
-                .wrapping_add(offset as u16);
-            let ring_slot = (slot_idx as usize) % usize::from(q.size.max(1));
-            let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
-            let head = unsafe { read_volatile(ring_ptr) };
-            let desc = q.read_descriptor(head);
-            info!(
-                target: "virtio-net",
-                "[virtio-net][tx-sanity] avail slot={} head={} desc=0x{addr:016x}/len={len} flags=0x{flags:04x} next={next}",
-                ring_slot,
-                head,
-                addr = desc.addr,
-                flags = desc.flags,
-                len = desc.len,
-                next = desc.next,
-            );
-        }
-        for offset in 0..window {
-            let slot_idx = used_idx
-                .wrapping_sub(window as u16)
-                .wrapping_add(offset as u16);
-            let ring_slot = (slot_idx as usize) % usize::from(q.size.max(1));
-            let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
-            let elem = unsafe { read_volatile(elem_ptr) };
-            info!(
-                target: "virtio-net",
-                "[virtio-net][tx-sanity] used slot={} id={} len={}",
-                ring_slot,
-                elem.id,
-                elem.len,
-            );
-        }
-        if let Some(head) = focus_head {
-            let desc = q.read_descriptor(head);
-            info!(
-                target: "virtio-net",
-                "[virtio-net][tx-sanity] focus desc[{}]=0x{addr:016x}/len={len} flags=0x{flags:04x} next={next}",
-                head,
-                addr = desc.addr,
-                flags = desc.flags,
-                len = desc.len,
-                next = desc.next,
-            );
-        }
-    }
-
-    #[cfg(feature = "dev-virt")]
-    fn tx_shadow_check(&self, last_k: usize) {
-        self.tx_sanity
-            .shadow_check(&self.tx_queue, last_k, "manual");
-    }
-
     /// Create a new driver instance by probing the virtio MMIO slots.
     pub fn new<H>(hal: &mut H) -> Result<Self, DriverError>
     where
@@ -1172,13 +707,8 @@ impl VirtioNet {
         let rx_max = regs.queue_num_max();
         regs.select_queue(TX_QUEUE_INDEX);
         let tx_max = regs.queue_num_max();
-
-        // Virtio queues must be power-of-two sized; clamp down so we never
-        // program an invalid queue size.
-        let rx_req = core::cmp::min(rx_max as usize, RX_QUEUE_SIZE);
-        let tx_req = core::cmp::min(tx_max as usize, TX_QUEUE_SIZE);
-        let rx_size = clamp_virtq_size(rx_req);
-        let tx_size = clamp_virtq_size(tx_req);
+        let rx_size = core::cmp::min(rx_max as usize, RX_QUEUE_SIZE);
+        let tx_size = core::cmp::min(tx_max as usize, TX_QUEUE_SIZE);
         if rx_size == 0 || tx_size == 0 {
             regs.set_status(STATUS_FAILED);
             warn!(
@@ -1189,24 +719,9 @@ impl VirtioNet {
         }
 
         info!(
-            "[net-console] queue sizes: rx_max={} rx_req={} rx_size={} tx_max={} tx_req={} tx_size={}",
-            rx_max,
-            rx_req,
-            rx_size,
-            tx_max,
-            tx_req,
-            tx_size
+            "[net-console] queue sizes: rx_max={} rx_size={} tx_max={} tx_size={}",
+            rx_max, rx_size, tx_max, tx_size
         );
-        if rx_size != rx_req || tx_size != tx_req {
-            warn!(
-                target: "net-console",
-                "[virtio-net] queue sizes clamped to power-of-two: rx_req={} -> rx_size={} tx_req={} -> tx_size={}",
-                rx_req,
-                rx_size,
-                tx_req,
-                tx_size
-            );
-        }
 
         if (rx_size as u32) > rx_max {
             error!(
@@ -1335,8 +850,6 @@ impl VirtioNet {
             None
         };
         let dma_cacheable = cfg!(feature = "cache-maintenance");
-        // Note: virtqueue ring pages are mapped uncached; `dma_cacheable` governs whether we
-        // perform cache maintenance for DMA *payload* buffers when the feature is enabled.
         if !DMA_QMEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             let rx_vaddr = queue_mem_rx.ptr().as_ptr() as usize;
             let tx_vaddr = queue_mem_tx.ptr().as_ptr() as usize;
@@ -1346,7 +859,7 @@ impl VirtioNet {
             let tx_paddr = queue_mem_tx.paddr();
             info!(
                 target: "virtio-net",
-                "[virtio-net][dma] qmem mapping cacheable={} map_attr=seL4_ARM_Page_Uncached rx_vaddr=0x{rx_vaddr:016x}..0x{rx_vend:016x} rx_paddr=0x{rx_paddr:016x}..0x{rx_pend:016x} tx_vaddr=0x{tx_vaddr:016x}..0x{tx_vend:016x} tx_paddr=0x{tx_paddr:016x}..0x{tx_pend:016x}",
+                "[virtio-net][dma] qmem mapping cacheable={} map_attr=seL4_ARM_Page_Default rx_vaddr=0x{rx_vaddr:016x}..0x{rx_vend:016x} rx_paddr=0x{rx_paddr:016x}..0x{rx_pend:016x} tx_vaddr=0x{tx_vaddr:016x}..0x{tx_vend:016x} tx_paddr=0x{tx_paddr:016x}..0x{tx_pend:016x}",
                 dma_cacheable,
                 rx_vaddr = rx_vaddr,
                 rx_vend = rx_vaddr.saturating_add(rx_len),
@@ -1385,8 +898,6 @@ impl VirtioNet {
             mmio_mode,
             dma_cacheable,
             VIRTIO_GUARD_QUEUE && matches!(mmio_mode, VirtioMmioMode::Modern),
-            #[cfg(feature = "dev-virt")]
-            QueueKind::Rx,
         )
         .map_err(|err| {
             regs.set_status(STATUS_FAILED);
@@ -1404,8 +915,6 @@ impl VirtioNet {
             mmio_mode,
             dma_cacheable,
             VIRTIO_GUARD_QUEUE && matches!(mmio_mode, VirtioMmioMode::Modern),
-            #[cfg(feature = "dev-virt")]
-            QueueKind::Tx,
         )
         .map_err(|err| {
             regs.set_status(STATUS_FAILED);
@@ -1483,9 +992,6 @@ impl VirtioNet {
 
         let now_ms = crate::hal::timebase().now_ms();
 
-        #[cfg(feature = "dev-virt")]
-        let tx_sanity = TxSanity::new(&tx_queue, mmio_mode);
-
         let mut driver = Self {
             regs,
             mmio_mode,
@@ -1558,18 +1064,8 @@ impl VirtioNet {
             tx_zero_len_log_ms: now_ms,
             tx_v2_log_ms: now_ms,
             forensic_dump_captured: false,
-            #[cfg(feature = "dev-virt")]
-            tx_sanity,
         };
         driver.initialise_queues();
-
-        #[cfg(feature = "dev-virt")]
-        {
-            driver.tx_sanity.log_layout(&driver.tx_queue, "init");
-            driver
-                .tx_sanity
-                .log_mmio_state(&mut driver.regs, TX_QUEUE_INDEX, false);
-        }
 
         let queue0_pfn = driver.rx_queue.pfn;
         let queue1_pfn = driver.tx_queue.pfn;
@@ -2571,16 +2067,6 @@ impl VirtioNet {
                 flags: resolved_flags,
                 next,
             });
-            #[cfg(feature = "dev-virt")]
-            self.tx_sanity_desc_write(
-                desc_index,
-                VirtqDesc {
-                    addr: spec.addr,
-                    len: spec.len,
-                    flags: resolved_flags,
-                    next: next.unwrap_or(0),
-                },
-            );
         }
 
         let header_len = self.rx_header_len;
@@ -2638,26 +2124,10 @@ impl VirtioNet {
             self.freeze_tx_publishes("tx_publish_state_violation");
             return Err(());
         }
-        #[cfg(feature = "dev-virt")]
-        let (slot, avail_idx, old_idx) = match self.tx_queue.push_avail_with_readback(head_id) {
-            Some((slot, avail_idx, old_idx, _observed_head, _observed_idx)) => {
-                self.tx_sanity_avail_post(head_id, slot, avail_idx, old_idx);
-                (slot, avail_idx, old_idx)
-            }
-            None => {
-                self.device_faulted = true;
-                self.last_error.get_or_insert("tx_avail_write_failed");
-                return Err(());
-            }
-        };
-        #[cfg(not(feature = "dev-virt"))]
-        let (slot, avail_idx, old_idx) = match self.tx_queue.push_avail(head_id) {
-            Some(values) => values,
-            None => {
-                self.device_faulted = true;
-                self.last_error.get_or_insert("tx_avail_write_failed");
-                return Err(());
-            }
+        let Some((slot, avail_idx, old_idx)) = self.tx_queue.push_avail(head_id) else {
+            self.device_faulted = true;
+            self.last_error.get_or_insert("tx_avail_write_failed");
+            return Err(());
         };
         if self
             .guard_tx_post_state(head_id, slot, &resolved_descs[0])
@@ -3042,8 +2512,6 @@ impl VirtioNet {
         loop {
             match self.tx_queue.pop_used("TX", true) {
                 Ok(Some((id, len))) => {
-                    #[cfg(feature = "dev-virt")]
-                    self.tx_sanity_used(id);
                     self.record_tx_used_entry(id, len);
                     // used.len is ignored for TX; ownership returns solely via used.id and tracked state.
                     let reclaimed = match self.reclaim_posted_head(id) {
@@ -3084,8 +2552,6 @@ impl VirtioNet {
             let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
             let elem = unsafe { read_volatile(elem_ptr) };
             let id = elem.id as u16;
-            #[cfg(feature = "dev-virt")]
-            self.tx_sanity_used(id);
             if id >= self.tx_queue.size {
                 self.last_error.get_or_insert("tx_v2_used_id_oob");
                 self.device_faulted = true;
@@ -3634,16 +3100,6 @@ impl VirtioNet {
 
         self.tx_queue
             .setup_descriptor(id, addr, capped_len as u32, 0, None);
-        #[cfg(feature = "dev-virt")]
-        self.tx_sanity_desc_write(
-            id,
-            VirtqDesc {
-                addr,
-                len: capped_len as u32,
-                flags: 0,
-                next: 0,
-            },
-        );
         self.tx_queue.sync_descriptor_table_for_device();
 
         let desc = self.tx_queue.read_descriptor(id);
@@ -3665,50 +3121,34 @@ impl VirtioNet {
             self.freeze_tx_publishes("tx_v2_publish_state_violation");
             return;
         }
-        #[cfg(feature = "dev-virt")]
-        let (slot, avail_idx, _old_idx) = match self.tx_queue.push_avail_with_readback(id) {
-            Some((slot, avail_idx, old_idx, _observed_head, _observed_idx)) => {
-                self.tx_sanity_avail_post(id, slot, avail_idx, old_idx);
-                (slot, avail_idx, old_idx)
-            }
-            None => {
-                self.release_tx_head(id, "tx_v2_avail_write_failed");
-                self.last_error.get_or_insert("tx_v2_avail_write_failed");
+        if let Some((slot, avail_idx, _old_idx)) = self.tx_queue.push_avail(id) {
+            if self
+                .guard_tx_post_state(
+                    id,
+                    slot,
+                    &DescSpec {
+                        addr: desc.addr,
+                        len: desc.len,
+                        flags: desc.flags,
+                        next: None,
+                    },
+                )
+                .is_err()
+            {
                 return;
             }
-        };
-        #[cfg(not(feature = "dev-virt"))]
-        let (slot, avail_idx, _old_idx) = match self.tx_queue.push_avail(id) {
-            Some(values) => values,
-            None => {
-                self.release_tx_head(id, "tx_v2_avail_write_failed");
-                self.last_error.get_or_insert("tx_v2_avail_write_failed");
-                return;
+            self.debug_check_tx_avail_uniqueness(self.tx_queue.last_used, avail_idx);
+            self.tx_queue.sync_avail_ring_for_device();
+            self.tx_submit = self.tx_submit.wrapping_add(1);
+            NET_DIAG.record_tx_submit();
+            if slot == 0 && !self.tx_wrap_logged {
+                self.tx_wrap_logged = true;
             }
-        };
-        if self
-            .guard_tx_post_state(
-                id,
-                slot,
-                &DescSpec {
-                    addr: desc.addr,
-                    len: desc.len,
-                    flags: desc.flags,
-                    next: None,
-                },
-            )
-            .is_err()
-        {
-            return;
+            self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
+        } else {
+            self.release_tx_head(id, "tx_v2_avail_write_failed");
+            self.last_error.get_or_insert("tx_v2_avail_write_failed");
         }
-        self.debug_check_tx_avail_uniqueness(self.tx_queue.last_used, avail_idx);
-        self.tx_queue.sync_avail_ring_for_device();
-        self.tx_submit = self.tx_submit.wrapping_add(1);
-        NET_DIAG.record_tx_submit();
-        if slot == 0 && !self.tx_wrap_logged {
-            self.tx_wrap_logged = true;
-        }
-        self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
     }
 
     fn clean_tx_buffer_for_device(
@@ -4514,11 +3954,6 @@ impl VirtioRegs {
         self.write16(Registers::QueueNum, size);
     }
 
-    #[cfg(feature = "dev-virt")]
-    fn queue_num(&self) -> u16 {
-        self.read32(Registers::QueueNum) as u16
-    }
-
     fn set_queue_align(&mut self, align: u32) {
         self.write32(Registers::QueueAlign, align);
     }
@@ -4527,23 +3962,8 @@ impl VirtioRegs {
         self.write32(Registers::QueuePfn, pfn);
     }
 
-    #[cfg(feature = "dev-virt")]
-    fn queue_align(&self) -> u32 {
-        self.read32(Registers::QueueAlign)
-    }
-
-    #[cfg(feature = "dev-virt")]
-    fn queue_pfn(&self) -> u32 {
-        self.read32(Registers::QueuePfn)
-    }
-
     fn queue_ready(&mut self, ready: u32) {
         self.write32(Registers::QueueReady, ready);
-    }
-
-    #[cfg(feature = "dev-virt")]
-    fn queue_ready_value(&self) -> u32 {
-        self.read32(Registers::QueueReady)
     }
 
     fn status(&self) -> u32 {
@@ -4819,32 +4239,6 @@ mod tests {
         assert!(unknown_msg.contains("0x00000007"));
         assert!(unknown_msg.contains("v2"));
     }
-
-    #[cfg(feature = "dev-virt")]
-    #[test]
-    fn shadow_detects_duplicates() {
-        let mut shadow = TxShadowModel::new(4);
-        assert!(shadow.record_avail(1, 0, 1, 1).is_none());
-        let duplicate = shadow.record_avail(1, 1, 1, 2);
-        assert_eq!(duplicate, Some(1));
-        shadow.record_used(1);
-        assert!(!shadow.in_flight[1]);
-    }
-
-    #[cfg(feature = "dev-virt")]
-    #[test]
-    fn shadow_records_desc_writes() {
-        let mut shadow = TxShadowModel::new(2);
-        let desc = VirtqDesc {
-            addr: 0xdeadbeef,
-            len: 128,
-            flags: VIRTQ_DESC_F_NEXT,
-            next: 1,
-        };
-        shadow.record_desc(0, desc);
-        assert!(shadow.shadow_desc[0].valid);
-        assert_eq!(shadow.shadow_desc[0].desc.addr, 0xdeadbeef);
-    }
 }
 
 #[repr(u32)]
@@ -4892,8 +4286,6 @@ struct VirtQueue {
     base_len: usize,
     cacheable: bool,
     used_zero_len_head: Option<u16>,
-    #[cfg(feature = "dev-virt")]
-    queue_kind: QueueKind,
 }
 
 impl VirtQueue {
@@ -4957,7 +4349,6 @@ impl VirtQueue {
         mode: VirtioMmioMode,
         cacheable: bool,
         end_align: bool,
-        #[cfg(feature = "dev-virt")] queue_kind: QueueKind,
     ) -> Result<Self, DriverError> {
         let queue_size = size as u16;
         let frame_paddr = frame.paddr();
@@ -5229,8 +4620,6 @@ impl VirtQueue {
             base_len: layout.total_len,
             cacheable,
             used_zero_len_head: None,
-            #[cfg(feature = "dev-virt")]
-            queue_kind,
         })
     }
 
@@ -5295,18 +4684,6 @@ impl VirtQueue {
             fence(AtomicOrdering::Release);
             Some((ring_slot as u16, new_idx, idx))
         }
-    }
-
-    #[cfg(feature = "dev-virt")]
-    fn push_avail_with_readback(&self, index: u16) -> Option<(u16, u16, u16, u16, u16)> {
-        let (slot, new_idx, old_idx) = self.push_avail(index)?;
-        let avail = self.avail.as_ptr();
-        let qsize = usize::from(self.size);
-        let ring_ptr = unsafe { (*avail).ring.as_ptr().add(slot as usize % qsize) as *const u16 };
-        fence(AtomicOrdering::SeqCst);
-        let observed_head = unsafe { read_volatile(ring_ptr) };
-        let observed_idx = unsafe { read_volatile(&(*avail).idx) };
-        Some((slot, new_idx, old_idx, observed_head, observed_idx))
     }
 
     fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) {
@@ -5582,7 +4959,7 @@ impl VirtQueue {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 struct VirtqDesc {
     addr: u64,
     len: u32,
