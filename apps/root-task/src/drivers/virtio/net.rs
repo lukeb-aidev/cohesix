@@ -249,8 +249,8 @@ impl TxShadowModel {
                     .wrapping_sub(last_k as u16)
                     .wrapping_add(idx as u16) as usize)
                     % qsize;
-                let elem_ptr =
-                    unsafe { (*queue.used.as_ptr()).ring.as_ptr().add(ring_slot) as *const _ };
+                let elem_ptr: *const VirtqUsedElem =
+                    unsafe { (*queue.used.as_ptr()).ring.as_ptr().add(ring_slot) };
                 let used = unsafe { read_volatile(elem_ptr) };
                 let in_shadow = (used.id as usize) < self.shadow_desc.len()
                     && self.shadow_desc[used.id as usize].valid;
@@ -1038,8 +1038,8 @@ impl VirtioNet {
         let used_idx = unsafe { read_volatile(&(*used).idx) };
         error!(
             target: "virtio-net",
-            "[virtio-net][tx-sanity] dump reason={} base_vaddr=0x{vaddr:016x} base_paddr=0x{paddr:016x} desc_off=0x{desc_off:03x} avail_off=0x{avail_off:03x} used_off=0x{used_off:03x} size={}",
-            reason,
+            "[virtio-net][tx-sanity] dump reason={reason} base_vaddr=0x{vaddr:016x} base_paddr=0x{paddr:016x} desc_off=0x{desc_off:03x} avail_off=0x{avail_off:03x} used_off=0x{used_off:03x} size={size}",
+            reason = reason,
             vaddr = q.base_vaddr,
             paddr = q.base_paddr,
             desc_off = q.layout.desc_offset,
@@ -1483,6 +1483,9 @@ impl VirtioNet {
 
         let now_ms = crate::hal::timebase().now_ms();
 
+        #[cfg(feature = "dev-virt")]
+        let tx_sanity = TxSanity::new(&tx_queue, mmio_mode);
+
         let mut driver = Self {
             regs,
             mmio_mode,
@@ -1556,7 +1559,7 @@ impl VirtioNet {
             tx_v2_log_ms: now_ms,
             forensic_dump_captured: false,
             #[cfg(feature = "dev-virt")]
-            tx_sanity: TxSanity::new(&tx_queue, mmio_mode),
+            tx_sanity,
         };
         driver.initialise_queues();
 
@@ -5579,7 +5582,7 @@ impl VirtQueue {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct VirtqDesc {
     addr: u64,
     len: u32,
