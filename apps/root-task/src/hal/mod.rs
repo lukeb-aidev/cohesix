@@ -22,6 +22,8 @@ use crate::sel4::{DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, Ram
 #[cfg(feature = "kernel")]
 use pci::{PciAddress, PciTopology};
 #[cfg(feature = "kernel")]
+use sel4_sys::seL4_ARM_VMAttributes;
+#[cfg(feature = "kernel")]
 use sel4_sys::seL4_Error;
 
 /// Timebase exists to unify timing for event pump + smoltcp; wiring will follow.
@@ -265,6 +267,15 @@ pub trait Hardware {
     /// Allocates a DMA-capable frame and maps it into the DMA window.
     fn alloc_dma_frame(&mut self) -> Result<RamFrame, Self::Error>;
 
+    /// Allocates a DMA-capable frame with the requested cache attribute.
+    fn alloc_dma_frame_attr(
+        &mut self,
+        attr: seL4_ARM_VMAttributes,
+    ) -> Result<RamFrame, Self::Error> {
+        let _ = attr;
+        self.alloc_dma_frame()
+    }
+
     /// Reserves an unmapped guard page in the DMA window and returns its base.
     fn reserve_dma_guard_page(&mut self) -> Result<usize, Self::Error>;
 
@@ -333,6 +344,13 @@ impl<'a> Hardware for KernelHal<'a> {
 
     fn alloc_dma_frame(&mut self) -> Result<RamFrame, Self::Error> {
         self.env.alloc_dma_frame().map_err(HalError::from)
+    }
+
+    fn alloc_dma_frame_attr(
+        &mut self,
+        attr: seL4_ARM_VMAttributes,
+    ) -> Result<RamFrame, Self::Error> {
+        self.env.alloc_dma_frame_attr(attr).map_err(HalError::from)
     }
 
     fn reserve_dma_guard_page(&mut self) -> Result<usize, Self::Error> {

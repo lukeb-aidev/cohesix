@@ -2931,6 +2931,14 @@ impl<'a> KernelEnv<'a> {
 
     /// Allocates a DMA-capable frame of RAM and maps it into the DMA window.
     pub fn alloc_dma_frame(&mut self) -> Result<RamFrame, seL4_Error> {
+        self.alloc_dma_frame_attr(seL4_ARM_Page_Default)
+    }
+
+    /// Allocates a DMA-capable frame and maps it with the supplied cache attribute.
+    pub fn alloc_dma_frame_attr(
+        &mut self,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+    ) -> Result<RamFrame, seL4_Error> {
         let reserved = self
             .untyped
             .reserve_ram(PAGE_BITS as u8)
@@ -2954,12 +2962,14 @@ impl<'a> KernelEnv<'a> {
         self.record_retype(trace, RetypeStatus::Ok);
         let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "dma-frame");
         self.dma_cursor = range.end;
-        self.map_frame(frame_slot, range.start, seL4_ARM_Page_Default, false)?;
+        self.map_frame(frame_slot, range.start, attr, false)?;
+        let attr_raw: usize = unsafe { core::mem::transmute(attr) };
         ::log::info!(
             target: "hal",
-            "[hal] dma frame mapped vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=seL4_ARM_Page_Default",
+            "[hal] dma frame mapped vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=0x{attr:08x}",
             vaddr = range.start,
             paddr = reserved.paddr(),
+            attr = attr_raw,
         );
         Ok(RamFrame {
             cap: frame_slot,
