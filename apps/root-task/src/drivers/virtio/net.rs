@@ -107,10 +107,18 @@ enum TxState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TxHeadState {
+    Free,
+    Prepared,
+    Published,
+    InFlight,
+    Reclaimed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TxHeadError {
     OutOfRange,
-    AlreadyInFlight,
-    NotInFlight,
+    InvalidState,
     FreeListFull,
 }
 
@@ -118,7 +126,7 @@ enum TxHeadError {
 /// Manages virtio TX descriptor heads and prevents reuse while in-flight.
 struct TxHeadManager {
     free: HeaplessVec<u16, TX_QUEUE_SIZE>,
-    in_flight: [bool; TX_QUEUE_SIZE],
+    states: [TxHeadState; TX_QUEUE_SIZE],
     size: u16,
 }
 
@@ -130,9 +138,39 @@ impl TxHeadManager {
         }
         Self {
             free,
-            in_flight: [false; TX_QUEUE_SIZE],
+            states: [TxHeadState::Free; TX_QUEUE_SIZE],
             size,
         }
+    }
+
+    fn state(&self, id: u16) -> Option<TxHeadState> {
+        (id < self.size).then(|| self.states[id as usize])
+    }
+
+    fn transition(
+        &mut self,
+        id: u16,
+        from: TxHeadState,
+        to: TxHeadState,
+    ) -> Result<(), TxHeadError> {
+        if id >= self.size {
+            return Err(TxHeadError::OutOfRange);
+        }
+        let state = self
+            .states
+            .get_mut(id as usize)
+            .ok_or(TxHeadError::OutOfRange)?;
+        debug_assert!(
+            *state == from,
+            "tx head transition violation: id={id} state={:?} expected={:?}",
+            *state,
+            from
+        );
+        if *state != from {
+            return Err(TxHeadError::InvalidState);
+        }
+        *state = to;
+        Ok(())
     }
 
     fn alloc_head(&mut self) -> Option<u16> {
@@ -140,22 +178,33 @@ impl TxHeadManager {
         if id >= self.size {
             return None;
         }
-        if self.in_flight[id as usize] {
-            debug_assert!(!self.in_flight[id as usize], "tx head already in flight");
+        if self.states.get(id as usize) != Some(&TxHeadState::Free) {
+            debug_assert!(
+                false,
+                "tx head already reserved or in-flight: id={} state={:?}",
+                id,
+                self.states.get(id as usize)
+            );
             return None;
         }
-        self.in_flight[id as usize] = true;
+        self.states[id as usize] = TxHeadState::Prepared;
         Some(id)
     }
 
+    fn mark_published(&mut self, id: u16) -> Result<(), TxHeadError> {
+        self.transition(id, TxHeadState::Prepared, TxHeadState::Published)
+    }
+
+    fn mark_in_flight(&mut self, id: u16) -> Result<(), TxHeadError> {
+        self.transition(id, TxHeadState::Published, TxHeadState::InFlight)
+    }
+
+    fn mark_reclaimed(&mut self, id: u16) -> Result<(), TxHeadError> {
+        self.transition(id, TxHeadState::InFlight, TxHeadState::Reclaimed)
+    }
+
     fn reclaim_head(&mut self, id: u16) -> Result<(), TxHeadError> {
-        if id >= self.size {
-            return Err(TxHeadError::OutOfRange);
-        }
-        if !self.in_flight[id as usize] {
-            return Err(TxHeadError::NotInFlight);
-        }
-        self.in_flight[id as usize] = false;
+        self.transition(id, TxHeadState::Reclaimed, TxHeadState::Free)?;
         self.free.push(id).map_err(|_| TxHeadError::FreeListFull)
     }
 
@@ -163,15 +212,27 @@ impl TxHeadManager {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
-        if !self.in_flight[id as usize] {
-            return Err(TxHeadError::NotInFlight);
+        let state = self
+            .states
+            .get_mut(id as usize)
+            .ok_or(TxHeadError::OutOfRange)?;
+        if !matches!(state, TxHeadState::Prepared) {
+            debug_assert!(
+                false,
+                "tx head release violation: id={} state={:?}",
+                id, state
+            );
+            return Err(TxHeadError::InvalidState);
         }
-        self.in_flight[id as usize] = false;
+        *state = TxHeadState::Free;
         self.free.push(id).map_err(|_| TxHeadError::FreeListFull)
     }
 
     fn is_in_flight(&self, id: u16) -> bool {
-        id < self.size && self.in_flight[id as usize]
+        matches!(
+            self.state(id),
+            Some(TxHeadState::Published | TxHeadState::InFlight | TxHeadState::Reclaimed)
+        )
     }
 
     fn free_len(&self) -> u16 {
@@ -179,10 +240,10 @@ impl TxHeadManager {
     }
 
     fn in_flight_count(&self) -> u16 {
-        self.in_flight
+        self.states
             .iter()
             .take(self.size as usize)
-            .filter(|&&state| state)
+            .filter(|&&state| matches!(state, TxHeadState::Published | TxHeadState::InFlight))
             .count() as u16
     }
 }
@@ -504,9 +565,11 @@ pub struct VirtioNet {
     rx_publish_log_count: u32,
     tx_publish_log_count: u32,
     tx_double_submit: u64,
+    tx_drop_zero_len: u64,
     tx_zero_len_attempt: u64,
     tx_submit: u64,
     tx_complete: u64,
+    tx_zero_len_log_ms: u64,
     tx_v2_log_ms: u64,
     forensic_dump_captured: bool,
 }
@@ -936,9 +999,11 @@ impl VirtioNet {
             rx_publish_log_count: 0,
             tx_publish_log_count: 0,
             tx_double_submit: 0,
+            tx_drop_zero_len: 0,
             tx_zero_len_attempt: 0,
             tx_submit: 0,
             tx_complete: 0,
+            tx_zero_len_log_ms: now_ms,
             tx_v2_log_ms: now_ms,
             forensic_dump_captured: false,
         };
@@ -2463,9 +2528,11 @@ impl VirtioNet {
                 self.device_faulted = true;
                 break;
             }
-            if !self.tx_head_mgr.is_in_flight(id) {
+            if self.tx_head_mgr.mark_reclaimed(id).is_err() {
                 self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
                 self.last_error.get_or_insert("tx_v2_complete_not_inflight");
+                self.device_faulted = true;
+                self.freeze_and_capture("tx_v2_reclaim_state");
                 break;
             }
             if self.tx_head_mgr.reclaim_head(id).is_err() {
@@ -2753,6 +2820,24 @@ impl VirtioNet {
         }
     }
 
+    fn drop_zero_len_tx(&mut self, id: u16, payload_len: usize, written_len: usize) {
+        self.tx_drop_zero_len = self.tx_drop_zero_len.saturating_add(1);
+        let now_ms = crate::hal::timebase().now_ms();
+        if now_ms.saturating_sub(self.tx_zero_len_log_ms) >= 1_000 {
+            self.tx_zero_len_log_ms = now_ms;
+            debug!(
+                target: "net-console",
+                "[virtio-net][tx-drop] dropping zero-length payload head={} payload_len={} written={} drops={}",
+                id,
+                payload_len,
+                written_len,
+                self.tx_drop_zero_len,
+            );
+        }
+        self.tx_drops = self.tx_drops.saturating_add(1);
+        self.release_tx_head(id, "tx_v2_zero_len_drop");
+    }
+
     fn compute_written_len(payload_len: usize, before: &[u8], after: &[u8]) -> usize {
         let limit = core::cmp::min(payload_len, core::cmp::min(before.len(), after.len()));
         let mut written = 0usize;
@@ -2835,10 +2920,10 @@ impl VirtioNet {
             self.release_tx_head(id, "tx_v2_id_oob");
             return;
         }
-        if self.tx_head_mgr.is_in_flight(id) {
+        if !matches!(self.tx_head_mgr.state(id), Some(TxHeadState::Prepared)) {
             self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
-            self.last_error.get_or_insert("tx_v2_double_submit");
-            self.release_tx_head(id, "tx_v2_double_submit");
+            self.last_error.get_or_insert("tx_v2_state_not_prepared");
+            self.release_tx_head(id, "tx_v2_state_not_prepared");
             return;
         }
 
@@ -2877,8 +2962,34 @@ impl VirtioNet {
             .setup_descriptor(id, addr, capped_len as u32, 0, None);
         self.tx_queue.sync_descriptor_table_for_device();
 
+        let desc = self.tx_queue.read_descriptor(id);
+        let total_len = desc.len as usize;
+        debug_assert_ne!(total_len, 0, "tx-v2 descriptor length must be non-zero");
+        debug_assert_ne!(desc.addr, 0, "tx-v2 descriptor address must be non-zero");
+        if desc.addr == 0 || desc.len == 0 || total_len != capped_len {
+            self.device_faulted = true;
+            self.last_error.get_or_insert("tx_v2_desc_guard");
+            self.freeze_and_capture("tx_v2_desc_guard");
+            self.release_tx_head(id, "tx_v2_desc_guard");
+            return;
+        }
+
         let _range = self.clean_tx_buffer_for_device(id, capped_len, self.tx_anomaly_logged);
         if let Some((slot, _avail_idx, _old_idx)) = self.tx_queue.push_avail(id) {
+            if self.tx_head_mgr.mark_published(id).is_err() {
+                self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
+                self.last_error.get_or_insert("tx_v2_publish_state");
+                self.device_faulted = true;
+                self.freeze_and_capture("tx_v2_publish_state");
+                return;
+            }
+            if self.tx_head_mgr.mark_in_flight(id).is_err() {
+                self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
+                self.last_error.get_or_insert("tx_v2_inflight_state");
+                self.device_faulted = true;
+                self.freeze_and_capture("tx_v2_inflight_state");
+                return;
+            }
             self.tx_queue.sync_avail_ring_for_device();
             self.tx_submit = self.tx_submit.wrapping_add(1);
             NET_DIAG.record_tx_submit();
@@ -3566,6 +3677,11 @@ impl TxToken for VirtioTxToken {
                 log_tcp_trace("TX", &payload[..payload_len]);
             }
             driver.log_tx_attempt(attempt_seq, len, payload_len, written_len);
+            if payload_len == 0 || written_len == 0 {
+                driver.drop_zero_len_tx(id, payload_len, written_len);
+                return result;
+            }
+            debug_assert!(total_len > 0, "tx total_len must be non-zero before submit");
             driver.submit_tx(id, total_len);
             driver.tx_packets = driver.tx_packets.saturating_add(1);
             result
@@ -4948,10 +5064,17 @@ fn dma_barrier() {
 }
 
 #[cfg(test)]
-mod tests {
+mod tx_tests {
     use super::*;
 
     type TxVec = HeaplessVec<u16, TX_QUEUE_SIZE>;
+
+    fn complete_lifecycle(mgr: &mut TxHeadManager, id: u16) {
+        mgr.mark_published(id).expect("publish");
+        mgr.mark_in_flight(id).expect("in_flight");
+        mgr.mark_reclaimed(id).expect("reclaimed");
+        mgr.reclaim_head(id).expect("reclaim");
+    }
 
     #[test]
     fn tx_head_reuse_prevented() {
@@ -4965,7 +5088,7 @@ mod tests {
         assert!(mgr.alloc_head().is_none(), "queue should be exhausted");
         let reclaim_targets = [allocated[0], allocated[5], allocated[10]];
         for id in reclaim_targets {
-            assert!(mgr.reclaim_head(id).is_ok(), "reclaim should succeed");
+            complete_lifecycle(&mut mgr, id);
         }
         let mut recycled = TxVec::new();
         for _ in 0..reclaim_targets.len() {
@@ -4973,15 +5096,23 @@ mod tests {
                 .push(mgr.alloc_head().expect("recycled head available"))
                 .expect("push recycled");
         }
-        for id in recycled.iter() {
+        for id in recycled.iter().copied() {
+            complete_lifecycle(&mut mgr, id);
             assert!(
-                reclaim_targets.contains(id),
+                reclaim_targets.contains(&id),
                 "only reclaimed heads should be reissued"
             );
         }
-        assert!(
-            mgr.reclaim_head(reclaim_targets[0]).is_err(),
-            "double reclaim must fail"
+        for id in allocated
+            .into_iter()
+            .filter(|id| !reclaim_targets.contains(id))
+        {
+            complete_lifecycle(&mut mgr, id);
+        }
+        assert_eq!(
+            mgr.free_len(),
+            TX_QUEUE_SIZE as u16,
+            "all heads must return to free list after lifecycle completes"
         );
     }
 
@@ -4998,14 +5129,17 @@ mod tests {
             }
         }
 
-        fn submit(&mut self, len: usize) -> u16 {
+        fn submit(&mut self, payload_len: usize, written_len: usize, total_len: usize) -> u16 {
             let start_idx = self.avail_idx;
             if let Some(id) = self.mgr.alloc_head() {
-                if len == 0 {
+                if payload_len == 0 || written_len == 0 || total_len == 0 {
                     let _ = self.mgr.release_unused(id);
                     return start_idx;
                 }
                 self.avail_idx = self.avail_idx.wrapping_add(1);
+                let _ = self.mgr.mark_published(id);
+                let _ = self.mgr.mark_in_flight(id);
+                let _ = self.mgr.mark_reclaimed(id);
                 let _ = self.mgr.reclaim_head(id);
             }
             self.avail_idx
@@ -5016,12 +5150,47 @@ mod tests {
     fn tx_never_publishes_zero_len() {
         let mut harness = PublishHarness::new(4);
         let initial_idx = harness.avail_idx;
-        let idx_after_zero = harness.submit(0);
+        let idx_after_zero = harness.submit(0, 0, 0);
         assert_eq!(initial_idx, idx_after_zero, "avail.idx must not advance");
         assert_eq!(
             harness.mgr.free_len(),
             4,
             "zero-length submit must return head to free list"
+        );
+    }
+
+    #[test]
+    fn tx_written_zero_does_not_publish() {
+        let mut harness = PublishHarness::new(4);
+        let idx_after_drop = harness.submit(64, 0, 80);
+        assert_eq!(idx_after_drop, 0, "written zero should not publish");
+        assert_eq!(harness.mgr.free_len(), 4, "head must be released");
+    }
+
+    #[test]
+    fn tx_inflight_head_not_released_early() {
+        let mut mgr = TxHeadManager::new(2);
+        let head = mgr.alloc_head().expect("head available");
+        mgr.mark_published(head).expect("publish");
+        mgr.mark_in_flight(head).expect("in flight");
+        assert!(
+            mgr.release_unused(head).is_err(),
+            "in-flight head must not be released"
+        );
+        assert_eq!(mgr.free_len(), 0, "head remains reserved until reclaim");
+        complete_lifecycle(&mut mgr, head);
+        assert_eq!(mgr.free_len(), 2, "reclaim returns head to free list");
+    }
+
+    #[test]
+    fn tx_publish_requires_positive_total_len() {
+        let mut harness = PublishHarness::new(2);
+        let idx_after_valid = harness.submit(64, 64, 80);
+        assert_eq!(idx_after_valid, 1, "valid publish advances avail.idx");
+        let idx_after_zero_total = harness.submit(64, 64, 0);
+        assert_eq!(
+            idx_after_valid, idx_after_zero_total,
+            "zero total len must not advance avail.idx"
         );
     }
 
@@ -5037,11 +5206,11 @@ mod tests {
         for turn in 0..8 {
             let slot = turn % inflight.len();
             let id = inflight[slot];
-            assert!(mgr.reclaim_head(id).is_ok(), "reclaim should work");
+            complete_lifecycle(&mut mgr, id);
             inflight[slot] = mgr.alloc_head().expect("head recycled");
         }
         for id in inflight.iter() {
-            assert!(mgr.reclaim_head(*id).is_ok(), "final reclaim");
+            complete_lifecycle(&mut mgr, *id);
         }
         assert_eq!(mgr.free_len(), 4, "all heads reclaimed after wrap");
     }
