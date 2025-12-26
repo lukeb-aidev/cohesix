@@ -116,9 +116,9 @@ const DEV_VIRT_LOG_BOUND: usize = 192;
 
 #[cfg(feature = "dev-virt")]
 macro_rules! log_bounded {
-    ($level:ident, target: $target:expr, $fmt:expr $(, $args:tt)* $(,)?) => {{
+    ($level:ident, target: $target:expr, $fmt:expr $($args:tt)*) => {{
         let mut __buf: HeaplessString<DEV_VIRT_LOG_BOUND> = HeaplessString::new();
-        if core::write!(&mut __buf, $fmt $(, $args)*).is_err() {
+        if core::write!(&mut __buf, $fmt $($args)*).is_err() {
             let remaining = __buf.capacity().saturating_sub(__buf.len());
             if remaining > 0 {
                 let ellipsis = "...";
@@ -133,8 +133,8 @@ macro_rules! log_bounded {
         }
         log::$level!(target: $target, "{}", __buf);
     }};
-    ($level:ident, $fmt:expr $(, $args:tt)* $(,)?) => {
-        log_bounded!($level, target: module_path!(), $fmt $(, $args)*);
+    ($level:ident, $fmt:expr $($args:tt)*) => {
+        log_bounded!($level, target: module_path!(), $fmt $($args)*);
     };
 }
 
