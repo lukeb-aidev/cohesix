@@ -15,10 +15,12 @@ use core::sync::atomic::{compiler_fence, fence, AtomicBool, Ordering as AtomicOr
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, warn};
-use sel4_sys::{seL4_Error, seL4_NotEnoughMemory, seL4_PageBits};
+use sel4_sys::{seL4_ARM_Page_Uncached, seL4_Error, seL4_NotEnoughMemory, seL4_PageBits};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
+#[cfg(test)]
+use spin::Mutex;
 
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::{HalError, Hardware};
@@ -102,6 +104,87 @@ static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
 enum TxState {
     Free,
     Posted { len: u32, addr: u64, gen: u32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TxHeadError {
+    OutOfRange,
+    AlreadyInFlight,
+    NotInFlight,
+    FreeListFull,
+}
+
+#[derive(Clone, Debug)]
+/// Manages virtio TX descriptor heads and prevents reuse while in-flight.
+struct TxHeadManager {
+    free: HeaplessVec<u16, TX_QUEUE_SIZE>,
+    in_flight: [bool; TX_QUEUE_SIZE],
+    size: u16,
+}
+
+impl TxHeadManager {
+    fn new(size: u16) -> Self {
+        let mut free = HeaplessVec::<u16, TX_QUEUE_SIZE>::new();
+        for idx in 0..size {
+            let _ = free.push(idx);
+        }
+        Self {
+            free,
+            in_flight: [false; TX_QUEUE_SIZE],
+            size,
+        }
+    }
+
+    fn alloc_head(&mut self) -> Option<u16> {
+        let id = self.free.pop()?;
+        if id >= self.size {
+            return None;
+        }
+        if self.in_flight[id as usize] {
+            debug_assert!(!self.in_flight[id as usize], "tx head already in flight");
+            return None;
+        }
+        self.in_flight[id as usize] = true;
+        Some(id)
+    }
+
+    fn reclaim_head(&mut self, id: u16) -> Result<(), TxHeadError> {
+        if id >= self.size {
+            return Err(TxHeadError::OutOfRange);
+        }
+        if !self.in_flight[id as usize] {
+            return Err(TxHeadError::NotInFlight);
+        }
+        self.in_flight[id as usize] = false;
+        self.free.push(id).map_err(|_| TxHeadError::FreeListFull)
+    }
+
+    fn release_unused(&mut self, id: u16) -> Result<(), TxHeadError> {
+        if id >= self.size {
+            return Err(TxHeadError::OutOfRange);
+        }
+        if !self.in_flight[id as usize] {
+            return Err(TxHeadError::NotInFlight);
+        }
+        self.in_flight[id as usize] = false;
+        self.free.push(id).map_err(|_| TxHeadError::FreeListFull)
+    }
+
+    fn is_in_flight(&self, id: u16) -> bool {
+        id < self.size && self.in_flight[id as usize]
+    }
+
+    fn free_len(&self) -> u16 {
+        self.free.len() as u16
+    }
+
+    fn in_flight_count(&self) -> u16 {
+        self.in_flight
+            .iter()
+            .take(self.size as usize)
+            .filter(|&&state| state)
+            .count() as u16
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -369,9 +452,9 @@ pub struct VirtioNet {
     rx_buffers: HeaplessVec<RamFrame, RX_QUEUE_SIZE>,
     tx_buffers: HeaplessVec<RamFrame, TX_QUEUE_SIZE>,
     tx_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
-    tx_v2_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
-    tx_v2_in_flight: [bool; TX_QUEUE_SIZE],
     tx_v2_last_used: u16,
+    tx_head_mgr: TxHeadManager,
+    tx_head_mgr: TxHeadManager,
     tx_states: [TxState; TX_QUEUE_SIZE],
     dma_cacheable: bool,
     tx_in_flight: u16,
@@ -598,19 +681,24 @@ impl VirtioNet {
         }
 
         info!("[net-console] allocating virtqueue backing memory");
+        // Keep virtqueue rings fully visible to the device by mapping the backing pages uncached.
 
-        let queue_mem_rx = hal.alloc_dma_frame().map_err(|err| {
-            regs.set_status(STATUS_FAILED);
-            DriverError::from(err)
-        })?;
+        let queue_mem_rx = hal
+            .alloc_dma_frame_attr(seL4_ARM_Page_Uncached)
+            .map_err(|err| {
+                regs.set_status(STATUS_FAILED);
+                DriverError::from(err)
+            })?;
 
         let queue_mem_tx = {
             let mut attempt = 0;
             loop {
-                let frame = hal.alloc_dma_frame().map_err(|err| {
-                    regs.set_status(STATUS_FAILED);
-                    DriverError::from(err)
-                })?;
+                let frame = hal
+                    .alloc_dma_frame_attr(seL4_ARM_Page_Uncached)
+                    .map_err(|err| {
+                        regs.set_status(STATUS_FAILED);
+                        DriverError::from(err)
+                    })?;
                 if frame.paddr() != queue_mem_rx.paddr() {
                     break frame;
                 }
@@ -715,10 +803,12 @@ impl VirtioNet {
 
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
         for _ in 0..rx_size {
-            let frame = hal.alloc_dma_frame().map_err(|err| {
-                regs.set_status(STATUS_FAILED);
-                DriverError::from(err)
-            })?;
+            let frame = hal
+                .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+                .map_err(|err| {
+                    regs.set_status(STATUS_FAILED);
+                    DriverError::from(err)
+                })?;
             rx_buffers.push(frame).map_err(|_| {
                 regs.set_status(STATUS_FAILED);
                 DriverError::BufferExhausted
@@ -727,10 +817,12 @@ impl VirtioNet {
 
         let mut tx_buffers = HeaplessVec::<RamFrame, TX_QUEUE_SIZE>::new();
         for _ in 0..tx_size {
-            let frame = hal.alloc_dma_frame().map_err(|err| {
-                regs.set_status(STATUS_FAILED);
-                DriverError::from(err)
-            })?;
+            let frame = hal
+                .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+                .map_err(|err| {
+                    regs.set_status(STATUS_FAILED);
+                    DriverError::from(err)
+                })?;
             tx_buffers.push(frame).map_err(|_| {
                 regs.set_status(STATUS_FAILED);
                 DriverError::BufferExhausted
@@ -766,14 +858,6 @@ impl VirtioNet {
             })?;
         }
 
-        let mut tx_v2_free = HeaplessVec::<u16, TX_QUEUE_SIZE>::new();
-        for idx in 0..tx_size {
-            tx_v2_free.push(idx as u16).map_err(|_| {
-                regs.set_status(STATUS_FAILED);
-                DriverError::BufferExhausted
-            })?;
-        }
-
         let fallback_mac = EthernetAddress::from_bytes(&[0x02, 0, 0, 0, 0, 1]);
         let mac = if negotiated_features & VIRTIO_NET_F_MAC != 0 {
             let reported = regs.read_mac().unwrap_or(fallback_mac);
@@ -801,9 +885,8 @@ impl VirtioNet {
             rx_buffers,
             tx_buffers,
             tx_free,
-            tx_v2_free,
-            tx_v2_in_flight: [false; TX_QUEUE_SIZE],
             tx_v2_last_used: 0,
+            tx_head_mgr: TxHeadManager::new(tx_size as u16),
             tx_states: [TxState::Free; TX_QUEUE_SIZE],
             tx_in_flight: 0,
             tx_gen: 1,
@@ -2381,20 +2464,20 @@ impl VirtioNet {
                 self.device_faulted = true;
                 break;
             }
-            if !self.tx_v2_in_flight[id as usize] {
+            if !self.tx_head_mgr.is_in_flight(id) {
                 self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
                 self.last_error.get_or_insert("tx_v2_complete_not_inflight");
                 break;
             }
-            self.tx_v2_in_flight[id as usize] = false;
+            if self.tx_head_mgr.reclaim_head(id).is_err() {
+                self.tx_drops = self.tx_drops.saturating_add(1);
+                self.last_error.get_or_insert("tx_v2_reclaim");
+                break;
+            }
             self.tx_complete = self.tx_complete.wrapping_add(1);
             self.tx_used_count = self.tx_used_count.wrapping_add(1);
             NET_DIAG.record_tx_completion();
             NET_DIAG.record_tx_used_seen();
-            if self.tx_v2_free.push(id).is_err() {
-                self.tx_drops = self.tx_drops.saturating_add(1);
-                self.last_error.get_or_insert("tx_v2_free_overflow");
-            }
             self.tx_v2_last_used = self.tx_v2_last_used.wrapping_add(1);
             self.note_progress();
         }
@@ -2404,12 +2487,7 @@ impl VirtioNet {
     }
 
     fn tx_v2_in_flight_count(&self) -> u16 {
-        let limit = usize::from(self.tx_queue.size);
-        self.tx_v2_in_flight
-            .iter()
-            .take(limit)
-            .filter(|&&state| state)
-            .count() as u16
+        self.tx_head_mgr.in_flight_count()
     }
 
     fn log_tx_v2_invariants(&mut self) {
@@ -2418,8 +2496,8 @@ impl VirtioNet {
             return;
         }
         self.tx_v2_log_ms = now_ms;
-        let in_flight = self.tx_v2_in_flight_count();
-        let free = self.tx_v2_free.len() as u16;
+        let in_flight = self.tx_head_mgr.in_flight_count();
+        let free = self.tx_head_mgr.free_len();
         let qsize = self.tx_queue.size;
         if in_flight + free != qsize {
             warn!(
@@ -2612,12 +2690,7 @@ impl VirtioNet {
     fn prepare_tx_token(&mut self) -> VirtioTxToken {
         let driver_ptr = self as *mut _;
         if NET_VIRTIO_TX_V2 {
-            if let Some(id) = self.tx_v2_free.pop() {
-                if self.tx_v2_in_flight[id as usize] {
-                    self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
-                    self.last_error.get_or_insert("tx_v2_free_inflight");
-                    return VirtioTxToken::new(driver_ptr, None);
-                }
+            if let Some(id) = self.tx_head_mgr.alloc_head() {
                 return VirtioTxToken::new(driver_ptr, Some(id));
             }
             return VirtioTxToken::new(driver_ptr, None);
@@ -2671,6 +2744,13 @@ impl VirtioNet {
         }
         if written_len == 0 {
             self.tx_anomaly(TxAnomalyReason::ClosureWroteZero, "closure_wrote_zero");
+        }
+    }
+
+    fn release_tx_head(&mut self, id: u16, label: &'static str) {
+        if self.tx_head_mgr.release_unused(id).is_err() {
+            self.tx_drops = self.tx_drops.saturating_add(1);
+            self.last_error.get_or_insert(label);
         }
     }
 
@@ -2738,28 +2818,34 @@ impl VirtioNet {
     fn submit_tx_v2(&mut self, id: u16, len: usize) {
         self.check_device_health();
         if self.device_faulted {
+            self.release_tx_head(id, "tx_v2_device_faulted");
             return;
         }
         if forensics_frozen() {
+            self.release_tx_head(id, "tx_v2_forensics_frozen");
             return;
         }
         if len == 0 {
             self.tx_zero_len_attempt = self.tx_zero_len_attempt.wrapping_add(1);
             debug_assert!(len != 0, "tx-v2 zero-length submit");
+            self.release_tx_head(id, "tx_v2_zero_len");
             return;
         }
         if id >= self.tx_queue.size {
             self.last_error.get_or_insert("tx_v2_id_oob");
+            self.release_tx_head(id, "tx_v2_id_oob");
             return;
         }
-        if self.tx_v2_in_flight[id as usize] {
+        if self.tx_head_mgr.is_in_flight(id) {
             self.tx_double_submit = self.tx_double_submit.wrapping_add(1);
             self.last_error.get_or_insert("tx_v2_double_submit");
+            self.release_tx_head(id, "tx_v2_double_submit");
             return;
         }
 
         let Some(buffer) = self.tx_buffers.get_mut(id as usize) else {
             self.last_error.get_or_insert("tx_v2_buffer_missing");
+            self.release_tx_head(id, "tx_v2_buffer_missing");
             return;
         };
         let buffer_len = buffer.as_slice().len();
@@ -2768,6 +2854,7 @@ impl VirtioNet {
         if capped_len == 0 {
             self.tx_zero_len_attempt = self.tx_zero_len_attempt.wrapping_add(1);
             debug_assert!(capped_len != 0, "tx-v2 zero-length buffer");
+            self.release_tx_head(id, "tx_v2_capped_zero");
             return;
         }
 
@@ -2792,7 +2879,6 @@ impl VirtioNet {
         self.tx_queue.sync_descriptor_table_for_device();
 
         let _range = self.clean_tx_buffer_for_device(id, capped_len, self.tx_anomaly_logged);
-        self.tx_v2_in_flight[id as usize] = true;
         if let Some((slot, _avail_idx, _old_idx)) = self.tx_queue.push_avail(id) {
             self.tx_queue.sync_avail_ring_for_device();
             self.tx_submit = self.tx_submit.wrapping_add(1);
@@ -2802,8 +2888,7 @@ impl VirtioNet {
             }
             self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
         } else {
-            self.tx_v2_in_flight[id as usize] = false;
-            let _ = self.tx_v2_free.push(id);
+            self.release_tx_head(id, "tx_v2_avail_write_failed");
             self.last_error.get_or_insert("tx_v2_avail_write_failed");
         }
     }
@@ -3266,10 +3351,10 @@ impl Device for VirtioNet {
             return None;
         }
         if NET_VIRTIO_TX_V2 {
-            if let Some(id) = self.tx_v2_free.pop() {
-                return Some(VirtioTxToken::new(self as *mut _, Some(id)));
-            }
-            return None;
+            return self
+                .tx_head_mgr
+                .alloc_head()
+                .map(|id| VirtioTxToken::new(self as *mut _, Some(id)));
         }
         if let Some(id) = self.tx_free.pop() {
             Some(VirtioTxToken::new(self as *mut _, Some(id)))
@@ -3316,12 +3401,12 @@ impl NetDevice for VirtioNet {
 
     fn counters(&self) -> NetDeviceCounters {
         let tx_free = if NET_VIRTIO_TX_V2 {
-            self.tx_v2_free.len() as u64
+            self.tx_head_mgr.free_len() as u64
         } else {
             self.tx_free.len() as u64
         };
         let tx_in_flight = if NET_VIRTIO_TX_V2 {
-            self.tx_v2_in_flight_count() as u64
+            self.tx_head_mgr.in_flight_count() as u64
         } else {
             self.tx_in_flight as u64
         };
@@ -3432,6 +3517,9 @@ impl TxToken for VirtioTxToken {
         if len == 0 {
             if NET_VIRTIO_TX_V2 {
                 driver.tx_zero_len_attempt = driver.tx_zero_len_attempt.wrapping_add(1);
+                if let Some(id) = self.desc {
+                    driver.release_tx_head(id, "tx_v2_zero_len_release");
+                }
             }
             driver.tx_drops = driver.tx_drops.saturating_add(1);
             driver.log_tx_attempt(attempt_seq, len, 0, 0);
@@ -3447,6 +3535,9 @@ impl TxToken for VirtioTxToken {
             let max_len = buffer.as_mut_slice().len();
             if max_len <= header_len {
                 driver.tx_drops = driver.tx_drops.saturating_add(1);
+                if NET_VIRTIO_TX_V2 {
+                    driver.release_tx_head(id, "tx_v2_buffer_small");
+                }
                 return f(&mut []);
             }
 
@@ -4708,10 +4799,39 @@ fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CacheOp {
+    Clean,
+    Invalidate,
+}
+
+#[cfg(test)]
+static DMA_TEST_HOOK: Mutex<Option<fn(CacheOp, usize, usize)>> = Mutex::new(None);
+
+#[cfg(test)]
+fn with_dma_test_hook<F>(hook: Option<fn(CacheOp, usize, usize)>, f: F)
+where
+    F: FnOnce(),
+{
+    {
+        let mut guard = DMA_TEST_HOOK.lock();
+        *guard = hook;
+    }
+    f();
+    let mut guard = DMA_TEST_HOOK.lock();
+    *guard = None;
+}
+
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
 fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
     if len == 0 {
+        return;
+    }
+    #[cfg(test)]
+    if let Some(hook) = *DMA_TEST_HOOK.lock() {
+        hook(CacheOp::Clean, ptr as usize, len);
         return;
     }
     if !cacheable {
@@ -4758,6 +4878,11 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
 #[inline(always)]
 fn dma_invalidate(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
     if len == 0 {
+        return;
+    }
+    #[cfg(test)]
+    if let Some(hook) = *DMA_TEST_HOOK.lock() {
+        hook(CacheOp::Invalidate, ptr as usize, len);
         return;
     }
     if !cacheable {
@@ -4821,4 +4946,124 @@ fn dma_invalidate(_ptr: *const u8, _len: usize, _cacheable: bool, _reason: &str)
 #[inline(always)]
 fn dma_barrier() {
     compiler_fence(AtomicOrdering::Release);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type TxVec = HeaplessVec<u16, TX_QUEUE_SIZE>;
+
+    #[test]
+    fn tx_head_reuse_prevented() {
+        let mut mgr = TxHeadManager::new(TX_QUEUE_SIZE as u16);
+        let mut allocated = TxVec::new();
+        for _ in 0..TX_QUEUE_SIZE {
+            allocated
+                .push(mgr.alloc_head().expect("head available"))
+                .expect("push head");
+        }
+        assert!(mgr.alloc_head().is_none(), "queue should be exhausted");
+        let reclaim_targets = [allocated[0], allocated[5], allocated[10]];
+        for id in reclaim_targets {
+            assert!(mgr.reclaim_head(id).is_ok(), "reclaim should succeed");
+        }
+        let mut recycled = TxVec::new();
+        for _ in 0..reclaim_targets.len() {
+            recycled
+                .push(mgr.alloc_head().expect("recycled head available"))
+                .expect("push recycled");
+        }
+        for id in recycled.iter() {
+            assert!(
+                reclaim_targets.contains(id),
+                "only reclaimed heads should be reissued"
+            );
+        }
+        assert!(
+            mgr.reclaim_head(reclaim_targets[0]).is_err(),
+            "double reclaim must fail"
+        );
+    }
+
+    struct PublishHarness {
+        mgr: TxHeadManager,
+        avail_idx: u16,
+    }
+
+    impl PublishHarness {
+        fn new(size: u16) -> Self {
+            Self {
+                mgr: TxHeadManager::new(size),
+                avail_idx: 0,
+            }
+        }
+
+        fn submit(&mut self, len: usize) -> u16 {
+            let start_idx = self.avail_idx;
+            if let Some(id) = self.mgr.alloc_head() {
+                if len == 0 {
+                    let _ = self.mgr.release_unused(id);
+                    return start_idx;
+                }
+                self.avail_idx = self.avail_idx.wrapping_add(1);
+                let _ = self.mgr.reclaim_head(id);
+            }
+            self.avail_idx
+        }
+    }
+
+    #[test]
+    fn tx_never_publishes_zero_len() {
+        let mut harness = PublishHarness::new(4);
+        let initial_idx = harness.avail_idx;
+        let idx_after_zero = harness.submit(0);
+        assert_eq!(initial_idx, idx_after_zero, "avail.idx must not advance");
+        assert_eq!(
+            harness.mgr.free_len(),
+            4,
+            "zero-length submit must return head to free list"
+        );
+    }
+
+    #[test]
+    fn used_ring_wraparound_reclaim() {
+        let mut mgr = TxHeadManager::new(4);
+        let mut inflight = TxVec::new();
+        for _ in 0..4 {
+            inflight
+                .push(mgr.alloc_head().expect("head available"))
+                .expect("push inflight");
+        }
+        for turn in 0..8 {
+            let slot = turn % inflight.len();
+            let id = inflight[slot];
+            assert!(mgr.reclaim_head(id).is_ok(), "reclaim should work");
+            inflight[slot] = mgr.alloc_head().expect("head recycled");
+        }
+        for id in inflight.iter() {
+            assert!(mgr.reclaim_head(*id).is_ok(), "final reclaim");
+        }
+        assert_eq!(mgr.free_len(), 4, "all heads reclaimed after wrap");
+    }
+
+    static OP_LOG: Mutex<HeaplessVec<(CacheOp, usize, usize), 8>> = Mutex::new(HeaplessVec::new());
+
+    fn log_hook(op: CacheOp, ptr: usize, len: usize) {
+        let mut log = OP_LOG.lock();
+        let _ = log.push((op, ptr, len));
+    }
+
+    #[test]
+    fn cache_ops_called_in_right_places() {
+        let ptr = 0x1000usize as *const u8;
+        with_dma_test_hook(Some(log_hook), || {
+            dma_clean(ptr, 64, true, "test-clean");
+            dma_invalidate(ptr, 64, true, "test-invalidate");
+        });
+        let log = OP_LOG.lock();
+        assert_eq!(log.len(), 2, "both cache ops should be recorded");
+        assert_eq!(log[0].0, CacheOp::Clean);
+        assert_eq!(log[1].0, CacheOp::Invalidate);
+    }
 }
