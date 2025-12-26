@@ -80,6 +80,17 @@ const MAX_QUEUE_SIZE: usize = if RX_QUEUE_SIZE > TX_QUEUE_SIZE {
 };
 const VIRTIO_NET_HEADER_LEN_BASIC: usize = core::mem::size_of::<VirtioNetHdr>();
 const VIRTIO_NET_HEADER_LEN_MRG: usize = core::mem::size_of::<VirtioNetHdrMrgRxbuf>();
+
+/// Virtio queue sizes must be powers of two. Clamp down to the nearest power-of-two.
+fn clamp_virtq_size(requested: usize) -> usize {
+    // Virtio requires queue size to be a power of two; never return 0 here.
+    // If requested is 0 we return 0 so callers can handle the "no queue" path.
+    if requested == 0 {
+        return 0;
+    }
+    // floor_pow2
+    1usize << (usize::BITS - 1 - requested.leading_zeros())
+}
 const FRAME_BUFFER_LEN: usize = MAX_FRAME_LEN + VIRTIO_NET_HEADER_LEN_MRG;
 static LOG_TCP_DEST_PORT: AtomicBool = AtomicBool::new(true);
 static RX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -1161,8 +1172,13 @@ impl VirtioNet {
         let rx_max = regs.queue_num_max();
         regs.select_queue(TX_QUEUE_INDEX);
         let tx_max = regs.queue_num_max();
-        let rx_size = core::cmp::min(rx_max as usize, RX_QUEUE_SIZE);
-        let tx_size = core::cmp::min(tx_max as usize, TX_QUEUE_SIZE);
+
+        // Virtio queues must be power-of-two sized; clamp down so we never
+        // program an invalid queue size.
+        let rx_req = core::cmp::min(rx_max as usize, RX_QUEUE_SIZE);
+        let tx_req = core::cmp::min(tx_max as usize, TX_QUEUE_SIZE);
+        let rx_size = clamp_virtq_size(rx_req);
+        let tx_size = clamp_virtq_size(tx_req);
         if rx_size == 0 || tx_size == 0 {
             regs.set_status(STATUS_FAILED);
             warn!(
@@ -1173,9 +1189,24 @@ impl VirtioNet {
         }
 
         info!(
-            "[net-console] queue sizes: rx_max={} rx_size={} tx_max={} tx_size={}",
-            rx_max, rx_size, tx_max, tx_size
+            "[net-console] queue sizes: rx_max={} rx_req={} rx_size={} tx_max={} tx_req={} tx_size={}",
+            rx_max,
+            rx_req,
+            rx_size,
+            tx_max,
+            tx_req,
+            tx_size
         );
+        if rx_size != rx_req || tx_size != tx_req {
+            warn!(
+                target: "net-console",
+                "[virtio-net] queue sizes clamped to power-of-two: rx_req={} -> rx_size={} tx_req={} -> tx_size={}",
+                rx_req,
+                rx_size,
+                tx_req,
+                tx_size
+            );
+        }
 
         if (rx_size as u32) > rx_max {
             error!(
@@ -1304,6 +1335,8 @@ impl VirtioNet {
             None
         };
         let dma_cacheable = cfg!(feature = "cache-maintenance");
+        // Note: virtqueue ring pages are mapped uncached; `dma_cacheable` governs whether we
+        // perform cache maintenance for DMA *payload* buffers when the feature is enabled.
         if !DMA_QMEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             let rx_vaddr = queue_mem_rx.ptr().as_ptr() as usize;
             let tx_vaddr = queue_mem_tx.ptr().as_ptr() as usize;
@@ -1313,7 +1346,7 @@ impl VirtioNet {
             let tx_paddr = queue_mem_tx.paddr();
             info!(
                 target: "virtio-net",
-                "[virtio-net][dma] qmem mapping cacheable={} map_attr=seL4_ARM_Page_Default rx_vaddr=0x{rx_vaddr:016x}..0x{rx_vend:016x} rx_paddr=0x{rx_paddr:016x}..0x{rx_pend:016x} tx_vaddr=0x{tx_vaddr:016x}..0x{tx_vend:016x} tx_paddr=0x{tx_paddr:016x}..0x{tx_pend:016x}",
+                "[virtio-net][dma] qmem mapping cacheable={} map_attr=seL4_ARM_Page_Uncached rx_vaddr=0x{rx_vaddr:016x}..0x{rx_vend:016x} rx_paddr=0x{rx_paddr:016x}..0x{rx_pend:016x} tx_vaddr=0x{tx_vaddr:016x}..0x{tx_vend:016x} tx_paddr=0x{tx_paddr:016x}..0x{tx_pend:016x}",
                 dma_cacheable,
                 rx_vaddr = rx_vaddr,
                 rx_vend = rx_vaddr.saturating_add(rx_len),
