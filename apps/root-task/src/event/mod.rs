@@ -510,9 +510,23 @@ where
         }
 
         #[cfg(feature = "net-console")]
-        if let Some(net) = self.net.as_mut() {
+        let net_poll = if let Some(net) = self.net.as_mut() {
             let activity = net.poll(self.now_ms);
             let telemetry = net.telemetry();
+            let mut buffered: HeaplessVec<
+                HeaplessString<DEFAULT_LINE_CAPACITY>,
+                { CONSOLE_QUEUE_DEPTH },
+            > = HeaplessVec::new();
+            net.drain_console_lines(&mut |line| {
+                let _ = buffered.push(line);
+            });
+            Some((activity, telemetry, buffered))
+        } else {
+            None
+        };
+
+        #[cfg(feature = "net-console")]
+        if let Some((activity, telemetry, buffered)) = net_poll {
             if NET_DIAG_FEATURED {
                 self.log_net_diag(telemetry);
             } else if activity {
@@ -522,13 +536,6 @@ where
                 ));
                 self.audit.info(message.as_str());
             }
-            let mut buffered: HeaplessVec<
-                HeaplessString<DEFAULT_LINE_CAPACITY>,
-                { CONSOLE_QUEUE_DEPTH },
-            > = HeaplessVec::new();
-            net.drain_console_lines(&mut |line| {
-                let _ = buffered.push(line);
-            });
             for line in buffered {
                 self.handle_network_line(line);
             }
