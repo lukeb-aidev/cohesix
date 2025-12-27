@@ -35,6 +35,7 @@ const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
 const NET_VIRTIO_TX_V2: bool = cfg!(feature = "net-virtio-tx-v2");
 const VIRTIO_GUARD_QUEUE: bool = cfg!(feature = "virtio_guard_queue");
+const DMA_NONCOHERENT: bool = cfg!(target_arch = "aarch64");
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -2036,8 +2037,16 @@ impl VirtioNet {
             } else {
                 spec.next
             };
-            self.rx_queue
-                .setup_descriptor(desc_index, spec.addr, spec.len, spec.flags, next);
+            if self
+                .rx_queue
+                .setup_descriptor(desc_index, spec.addr, spec.len, spec.flags, next)
+                .is_err()
+            {
+                self.device_faulted = true;
+                self.last_error.get_or_insert("rx_desc_cache_clean_failed");
+                self.freeze_and_capture("rx_desc_cache_clean_failed");
+                return Err(());
+            }
             let resolved_flags = match next {
                 Some(_) => spec.flags | VIRTQ_DESC_F_NEXT,
                 None => spec.flags,
@@ -2091,10 +2100,13 @@ impl VirtioNet {
             return self.handle_forensic_fault(fault);
         }
 
-        let Some((slot, avail_idx, old_idx)) = self.rx_queue.push_avail(head_id) else {
-            self.device_faulted = true;
-            self.last_error.get_or_insert("rx_avail_write_failed");
-            return Err(());
+        let (slot, avail_idx, old_idx) = match self.rx_queue.push_avail(head_id) {
+            Ok(result) => result,
+            Err(_) => {
+                self.device_faulted = true;
+                self.last_error.get_or_insert("rx_avail_write_failed");
+                return Err(());
+            }
         };
         if self.rx_queue.sync_avail_ring_for_device().is_err() {
             self.freeze_and_capture("rx_avail_sync_failed");
@@ -2195,8 +2207,16 @@ impl VirtioNet {
             } else {
                 spec.next
             };
-            self.tx_queue
-                .setup_descriptor(desc_index, spec.addr, spec.len, spec.flags, next);
+            if self
+                .tx_queue
+                .setup_descriptor(desc_index, spec.addr, spec.len, spec.flags, next)
+                .is_err()
+            {
+                self.device_faulted = true;
+                self.last_error.get_or_insert("tx_desc_cache_clean_failed");
+                self.freeze_and_capture("tx_desc_cache_clean_failed");
+                return Err(());
+            }
             let resolved_flags = match next {
                 Some(_) => spec.flags | VIRTQ_DESC_F_NEXT,
                 None => spec.flags,
@@ -2277,10 +2297,13 @@ impl VirtioNet {
             self.freeze_tx_publishes("tx_publish_state_violation");
             return Err(());
         }
-        let Some((slot, avail_idx, old_idx)) = self.tx_queue.push_avail(head_id) else {
-            self.device_faulted = true;
-            self.last_error.get_or_insert("tx_avail_write_failed");
-            return Err(());
+        let (slot, avail_idx, old_idx) = match self.tx_queue.push_avail(head_id) {
+            Ok(result) => result,
+            Err(_) => {
+                self.device_faulted = true;
+                self.last_error.get_or_insert("tx_avail_write_failed");
+                return Err(());
+            }
         };
         if self
             .guard_tx_post_state(head_id, slot, &resolved_descs[0])
@@ -2644,6 +2667,13 @@ impl VirtioNet {
                 warn!(
                     target: "net-console",
                     "[virtio-net] entered bad status (0x{status:02x}); continuing until forensic log captured"
+                );
+                info!(
+                    target: "net-console",
+                    "[virtio-net][forensics] dma_noncoherent_active={} dma_cacheable={} arch_aarch64={}",
+                    DMA_NONCOHERENT && self.dma_cacheable,
+                    self.dma_cacheable,
+                    DMA_NONCOHERENT,
                 );
                 self.bad_status_logged = true;
                 self.freeze_and_capture("device_bad_status");
@@ -3310,8 +3340,18 @@ impl VirtioNet {
             }
         }
 
-        self.tx_queue
-            .setup_descriptor(id, addr, capped_len as u32, 0, None);
+        if self
+            .tx_queue
+            .setup_descriptor(id, addr, capped_len as u32, 0, None)
+            .is_err()
+        {
+            self.device_faulted = true;
+            self.last_error
+                .get_or_insert("tx_v2_desc_cache_clean_failed");
+            self.freeze_and_capture("tx_v2_desc_cache_clean_failed");
+            self.release_tx_head(id, "tx_v2_desc_cache_clean_failed");
+            return;
+        }
         if self.tx_queue.sync_descriptor_table_for_device().is_err() {
             self.freeze_and_capture("tx_v2_desc_sync_failed");
             self.release_tx_head(id, "tx_v2_desc_sync_failed");
@@ -3362,45 +3402,49 @@ impl VirtioNet {
             self.release_tx_head(id, "tx_v2_guard_reject");
             return;
         }
-        if let Some((slot, avail_idx, _old_idx)) = self.tx_queue.push_avail(id) {
-            if self
-                .guard_tx_post_state(
-                    id,
-                    slot,
-                    &DescSpec {
-                        addr: desc.addr,
-                        len: desc.len,
-                        flags: desc.flags,
-                        next: None,
-                    },
-                )
-                .is_err()
-            {
-                return;
+        match self.tx_queue.push_avail(id) {
+            Ok((slot, avail_idx, _old_idx)) => {
+                if self
+                    .guard_tx_post_state(
+                        id,
+                        slot,
+                        &DescSpec {
+                            addr: desc.addr,
+                            len: desc.len,
+                            flags: desc.flags,
+                            next: None,
+                        },
+                    )
+                    .is_err()
+                {
+                    return;
+                }
+                self.debug_check_tx_avail_uniqueness(self.tx_queue.last_used, avail_idx);
+                if self.tx_queue.sync_avail_ring_for_device().is_err() {
+                    self.freeze_and_capture("tx_v2_avail_sync_failed");
+                    self.release_tx_head(id, "tx_v2_avail_sync_failed");
+                    return;
+                }
+                self.tx_submit = self.tx_submit.wrapping_add(1);
+                NET_DIAG.record_tx_submit();
+                if slot == 0 && !self.tx_wrap_logged {
+                    self.tx_wrap_logged = true;
+                }
+                if self
+                    .tx_queue
+                    .notify(&mut self.regs, TX_QUEUE_INDEX)
+                    .is_err()
+                {
+                    self.freeze_and_capture("tx_v2_notify_failed");
+                    self.release_tx_head(id, "tx_v2_notify_failed");
+                    return;
+                }
             }
-            self.debug_check_tx_avail_uniqueness(self.tx_queue.last_used, avail_idx);
-            if self.tx_queue.sync_avail_ring_for_device().is_err() {
-                self.freeze_and_capture("tx_v2_avail_sync_failed");
-                self.release_tx_head(id, "tx_v2_avail_sync_failed");
-                return;
+            Err(_) => {
+                self.device_faulted = true;
+                self.last_error.get_or_insert("tx_v2_avail_write_failed");
+                self.release_tx_head(id, "tx_v2_avail_write_failed");
             }
-            self.tx_submit = self.tx_submit.wrapping_add(1);
-            NET_DIAG.record_tx_submit();
-            if slot == 0 && !self.tx_wrap_logged {
-                self.tx_wrap_logged = true;
-            }
-            if self
-                .tx_queue
-                .notify(&mut self.regs, TX_QUEUE_INDEX)
-                .is_err()
-            {
-                self.freeze_and_capture("tx_v2_notify_failed");
-                self.release_tx_head(id, "tx_v2_notify_failed");
-                return;
-            }
-        } else {
-            self.release_tx_head(id, "tx_v2_avail_write_failed");
-            self.last_error.get_or_insert("tx_v2_avail_write_failed");
         }
     }
 
@@ -4895,7 +4939,14 @@ impl VirtQueue {
         })
     }
 
-    fn setup_descriptor(&self, index: u16, addr: u64, len: u32, flags: u16, next: Option<u16>) {
+    fn setup_descriptor(
+        &self,
+        index: u16,
+        addr: u64,
+        len: u32,
+        flags: u16,
+        next: Option<u16>,
+    ) -> Result<(), DmaError> {
         self.assert_index_in_range(index, "desc");
         let desc_offset = self
             .layout
@@ -4921,9 +4972,11 @@ impl VirtQueue {
             debug_assert_eq!(verify.flags, desc.flags, "descriptor flags mismatch");
             debug_assert_eq!(verify.next, desc.next, "descriptor next mismatch");
         }
+        // AArch64 QEMU virtio is non-coherent here; barriers are insufficient; must clean/invalidate rings/descriptors.
+        self.clean_desc_entry_for_device(index)
     }
 
-    fn push_avail(&self, index: u16) -> Option<(u16, u16, u16)> {
+    fn push_avail(&self, index: u16) -> Result<(u16, u16, u16), DmaError> {
         self.assert_index_in_range(index, "avail");
         let avail = self.avail.as_ptr();
         let qsize = usize::from(self.size);
@@ -4950,10 +5003,16 @@ impl VirtQueue {
             let ring_offset = ring_addr - self.base_vaddr;
             self.assert_offset_in_range(ring_offset, core::mem::size_of::<u16>(), "avail.ring");
             write_volatile(ring_ptr, index);
+            if DMA_NONCOHERENT {
+                self.clean_avail_entry_for_device(ring_slot)?;
+            }
             virtq_publish_barrier();
             let new_idx = idx.wrapping_add(1);
             write_volatile(&mut (*avail).idx, new_idx);
-            Some((ring_slot as u16, new_idx, idx))
+            if DMA_NONCOHERENT {
+                self.clean_avail_idx_for_device()?;
+            }
+            Ok((ring_slot as u16, new_idx, idx))
         }
     }
 
@@ -4992,12 +5051,53 @@ impl VirtQueue {
         )
     }
 
+    fn clean_desc_entry_for_device(&self, index: u16) -> Result<(), DmaError> {
+        if !DMA_NONCOHERENT {
+            return Ok(());
+        }
+        let desc_ptr = unsafe { self.desc.as_ptr().add(index as usize) } as *const u8;
+        dma_clean(
+            desc_ptr,
+            core::mem::size_of::<VirtqDesc>(),
+            self.cacheable,
+            "clean descriptor entry",
+        )
+    }
+
     fn sync_avail_ring_for_device(&self) -> Result<(), DmaError> {
         dma_clean(
             self.avail.as_ptr() as *const u8,
             self.layout.avail_len,
             self.cacheable,
             "clean avail ring",
+        )
+    }
+
+    fn clean_avail_entry_for_device(&self, ring_slot: usize) -> Result<(), DmaError> {
+        if !DMA_NONCOHERENT {
+            return Ok(());
+        }
+        let avail = self.avail.as_ptr();
+        let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u8 };
+        dma_clean(
+            ring_ptr,
+            core::mem::size_of::<u16>(),
+            self.cacheable,
+            "clean avail ring slot",
+        )
+    }
+
+    fn clean_avail_idx_for_device(&self) -> Result<(), DmaError> {
+        if !DMA_NONCOHERENT {
+            return Ok(());
+        }
+        let avail = self.avail.as_ptr();
+        let idx_ptr = unsafe { &(*avail).idx as *const u16 as *const u8 };
+        dma_clean(
+            idx_ptr,
+            core::mem::size_of::<u16>(),
+            self.cacheable,
+            "clean avail idx",
         )
     }
 
