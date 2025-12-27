@@ -1710,11 +1710,11 @@ impl VirtioNet {
     fn log_tx_used_len_violation(&self, id: u16, used_len: u32, entry: &TxHeadEntry) {
         error!(
             target: "net-console",
-            "[virtio-net][forensics] tx used len violation: head={} used_len={} posted_len={} addr=0x{addr:016x} gen={} slot={:?}",
+            "[virtio-net][forensics] tx used len violation: head={} used_len={} posted_len={} addr=0x{:016x} gen={} slot={:?}",
             id,
             used_len,
             entry.len,
-            addr = entry.addr,
+            entry.addr,
             entry.gen,
             entry.slot,
         );
@@ -3509,7 +3509,7 @@ impl VirtioNet {
             return;
         }
         if meta.total_len != len || capped_len != meta.total_len {
-            self.tx_state_violation("tx_v2_len_mismatch", id, slot_hint)?;
+            let _ = self.tx_state_violation("tx_v2_len_mismatch", id, slot_hint);
             self.release_tx_head(id, "tx_v2_len_mismatch");
             return;
         }
@@ -3908,14 +3908,14 @@ impl VirtioNet {
             }
             error!(
                 target: "net-console",
-                "[virtio-net][forensics] tx_publish_hist[{idx}] seq={} gen={} head={} slot={} avail_idx={} len={} addr=0x{addr:016x} header_len={} payload_len={} written_len={}",
+                "[virtio-net][forensics] tx_publish_hist[{idx}] seq={} gen={} head={} slot={} avail_idx={} len={} addr=0x{:016x} header_len={} payload_len={} written_len={}",
                 record.seq,
                 record.gen,
                 record.head,
                 record.slot,
                 record.avail_idx,
                 record.len,
-                addr = record.addr,
+                record.addr,
                 record.header_len,
                 record.payload_len,
                 record.written_len,
