@@ -807,6 +807,7 @@ impl VirtioNet {
         }
 
         info!("[net-console] allocating virtqueue backing memory");
+        let queue_map_attr = seL4_ARM_Page_Uncached;
         // Keep virtqueue rings fully visible to the device by mapping the backing pages uncached.
 
         let queue_mem_rx = hal.alloc_dma_frame_attr(queue_map_attr).map_err(|err| {
@@ -847,7 +848,6 @@ impl VirtioNet {
         } else {
             None
         };
-        let queue_map_attr = seL4_ARM_Page_Uncached;
         let dma_cacheable = match queue_map_attr {
             seL4_ARM_Page_Uncached => false,
             other => {
@@ -3361,35 +3361,43 @@ impl VirtioNet {
         len: usize,
         force_log: bool,
     ) -> Option<(usize, usize)> {
-        self.tx_buffers.get(head_id as usize).and_then(|buffer| {
+        let (ptr, capped_len, start) = {
+            let buffer = match self.tx_buffers.get(head_id as usize) {
+                Some(buffer) => buffer,
+                None => return None,
+            };
             let capped_len = len.min(buffer.as_slice().len());
-            let ptr = buffer.ptr().as_ptr();
-            let start = ptr as usize;
-            if dma_clean(ptr, capped_len, self.dma_cacheable, "clean tx buffer").is_err() {
-                warn!(
-                    target: "net-console",
-                    "[virtio-net] tx cache clean failed head={} len={}",
-                    head_id,
-                    capped_len,
-                );
-                self.freeze_and_capture("tx_cache_clean_failed");
-                return None;
-            }
-            let payload_start = start.saturating_add(self.rx_header_len);
-            let payload_end = payload_start.saturating_add(capped_len.saturating_sub(self.rx_header_len));
-            if force_log || !self.tx_dma_log_once {
-                self.tx_dma_log_once = true;
-                info!(
-                    target: "virtio-net",
-                    "[virtio-net][dma] tx buffer clean head={} header=0x{start:016x}..0x{hdr_end:016x} payload=0x{payload_start:016x}..0x{payload_end:016x}",
-                    head_id,
-                    hdr_end = start.saturating_add(self.rx_header_len),
-                    payload_start = payload_start,
-                    payload_end = payload_end,
-                );
-            }
-            Some((start, start.saturating_add(capped_len)))
-        })
+            let buffer_ptr = buffer.ptr();
+            let start = buffer_ptr.as_ptr() as usize;
+            (buffer_ptr.as_ptr(), capped_len, start)
+        };
+
+        if dma_clean(ptr, capped_len, self.dma_cacheable, "clean tx buffer").is_err() {
+            warn!(
+                target: "net-console",
+                "[virtio-net] tx cache clean failed head={} len={}",
+                head_id,
+                capped_len,
+            );
+            self.freeze_and_capture("tx_cache_clean_failed");
+            return None;
+        }
+
+        let payload_start = start.saturating_add(self.rx_header_len);
+        let payload_end =
+            payload_start.saturating_add(capped_len.saturating_sub(self.rx_header_len));
+        if force_log || !self.tx_dma_log_once {
+            self.tx_dma_log_once = true;
+            info!(
+                target: "virtio-net",
+                "[virtio-net][dma] tx buffer clean head={} header=0x{start:016x}..0x{hdr_end:016x} payload=0x{payload_start:016x}..0x{payload_end:016x}",
+                head_id,
+                hdr_end = start.saturating_add(self.rx_header_len),
+                payload_start = payload_start,
+                payload_end = payload_end,
+            );
+        }
+        Some((start, start.saturating_add(capped_len)))
     }
 
     fn log_tx_dma_ranges(
@@ -4499,6 +4507,7 @@ struct VirtQueue {
     base_len: usize,
     cacheable: bool,
     used_zero_len_head: Option<u16>,
+    last_error: Option<&'static str>,
 }
 
 impl VirtQueue {
@@ -4833,6 +4842,7 @@ impl VirtQueue {
             base_len: layout.total_len,
             cacheable,
             used_zero_len_head: None,
+            last_error: None,
         })
     }
 
@@ -5023,6 +5033,16 @@ impl VirtQueue {
         let avail_idx = unsafe { read_volatile(&(*avail).idx) };
 
         (used_idx, avail_idx)
+    }
+
+    fn freeze_and_capture(&mut self, reason: &'static str) {
+        if mark_forensics_frozen() {
+            warn!(
+                target: "net-console",
+                "[virtio-net][queue] freezing queue activity (reason={reason})"
+            );
+        }
+        self.last_error.get_or_insert(reason);
     }
 
     pub fn debug_dump(&self, label: &str) {
