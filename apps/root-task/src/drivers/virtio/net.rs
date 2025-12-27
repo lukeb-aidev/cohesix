@@ -171,6 +171,7 @@ struct TxHeadEntry {
 struct TxHeadManager {
     free: HeaplessVec<u16, TX_QUEUE_SIZE>,
     entries: [TxHeadEntry; TX_QUEUE_SIZE],
+    in_flight: [bool; TX_QUEUE_SIZE],
     next_gen: u32,
     size: u16,
 }
@@ -184,6 +185,7 @@ impl TxHeadManager {
         Self {
             free,
             entries: [TxHeadEntry::default(); TX_QUEUE_SIZE],
+            in_flight: [false; TX_QUEUE_SIZE],
             next_gen: 1,
             size,
         }
@@ -210,6 +212,24 @@ impl TxHeadManager {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
+        if let Some(entry) = self.entries.get(id as usize) {
+            if matches!(from, TxHeadState::Posted) {
+                debug_assert!(
+                    self.in_flight[id as usize],
+                    "posted head must be marked in-flight: id={id} state={:?} in_flight={}",
+                    entry.state, self.in_flight[id as usize],
+                );
+            } else if matches!(
+                from,
+                TxHeadState::Free | TxHeadState::Prepared | TxHeadState::Reclaimed
+            ) {
+                debug_assert!(
+                    !self.in_flight[id as usize],
+                    "free/prepared head cannot be in-flight: id={id} state={:?} in_flight={}",
+                    entry.state, self.in_flight[id as usize],
+                );
+            }
+        }
         let state = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
         debug_assert!(
             state.state == from,
@@ -227,6 +247,14 @@ impl TxHeadManager {
     fn alloc_head(&mut self) -> Option<u16> {
         let id = self.free.pop()?;
         if id >= self.size {
+            return None;
+        }
+        if self.in_flight[id as usize] {
+            debug_assert!(
+                false,
+                "tx head marked in-flight but returned to free list: id={}",
+                id
+            );
             return None;
         }
         if self.state(id) != Some(TxHeadState::Free) {
@@ -253,12 +281,16 @@ impl TxHeadManager {
             if entry.state != TxHeadState::Prepared {
                 return Err(TxHeadError::InvalidState);
             }
+            if self.in_flight[id as usize] {
+                return Err(TxHeadError::InvalidState);
+            }
             entry.state = TxHeadState::Posted;
             entry.slot = Some(slot);
             entry.gen = gen;
             entry.len = len;
             entry.addr = addr;
         }
+        self.in_flight[id as usize] = true;
         self.next_gen = self.next_gen.wrapping_add(1);
         Ok(gen)
     }
@@ -270,6 +302,7 @@ impl TxHeadManager {
         }
         entry.state = TxHeadState::Prepared;
         entry.slot = None;
+        self.in_flight[id as usize] = false;
         Ok(())
     }
 
@@ -278,7 +311,11 @@ impl TxHeadManager {
         if entry.state != TxHeadState::Posted {
             return Err(TxHeadError::InvalidState);
         }
+        if !self.in_flight[id as usize] {
+            return Err(TxHeadError::InvalidState);
+        }
         entry.state = TxHeadState::Reclaimed;
+        self.in_flight[id as usize] = false;
         Ok(())
     }
 
@@ -309,11 +346,12 @@ impl TxHeadManager {
         state.len = 0;
         state.addr = 0;
         state.slot = None;
+        self.in_flight[id as usize] = false;
         self.free.push(id).map_err(|_| TxHeadError::FreeListFull)
     }
 
     fn is_in_flight(&self, id: u16) -> bool {
-        matches!(self.state(id), Some(TxHeadState::Posted))
+        matches!(self.state(id), Some(TxHeadState::Posted)) && self.in_flight[id as usize]
     }
 
     fn free_len(&self) -> u16 {
@@ -657,6 +695,7 @@ pub struct VirtioNet {
     rx_publish_log_count: u32,
     tx_publish_log_count: u32,
     tx_duplicate_publish_logged: bool,
+    tx_dup_used_logged: bool,
     #[cfg(debug_assertions)]
     tx_avail_duplicate_logged: bool,
     #[cfg(debug_assertions)]
@@ -1095,6 +1134,7 @@ impl VirtioNet {
             rx_publish_log_count: 0,
             tx_publish_log_count: 0,
             tx_duplicate_publish_logged: false,
+            tx_dup_used_logged: false,
             #[cfg(debug_assertions)]
             tx_avail_duplicate_logged: false,
             #[cfg(debug_assertions)]
@@ -1577,6 +1617,7 @@ impl VirtioNet {
             self.device_faulted,
             forensics_frozen(),
         );
+        self.log_tx_avail_window(avail_idx, core::cmp::min(self.tx_queue.size, 8));
         self.freeze_and_capture("tx_state_violation");
         Err(())
     }
@@ -1624,6 +1665,34 @@ impl VirtioNet {
         }
         self.tx_used_window_dumped = true;
         self.dump_tx_used_window();
+    }
+
+    fn log_tx_avail_window(&self, center: u16, window: u16) {
+        if window == 0 {
+            return;
+        }
+        let avail = self.tx_queue.avail.as_ptr();
+        let qsize = usize::from(self.tx_queue.size);
+        if qsize == 0 {
+            return;
+        }
+        let span = core::cmp::min(window, self.tx_queue.size);
+        let start = center.wrapping_sub(span / 2);
+        for offset in 0..span {
+            let idx = start.wrapping_add(offset);
+            let ring_slot = (idx as usize) % qsize;
+            let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u16 };
+            let head = unsafe { read_volatile(ring_ptr) };
+            let desc = self.tx_queue.read_descriptor(head);
+            error!(
+                target: "net-console",
+                "[virtio-net][forensics] tx avail[{ring_slot}] idx={idx} head={head} desc=0x{addr:016x}/{len} flags=0x{flags:04x} next={next}",
+                addr = desc.addr,
+                len = desc.len,
+                flags = desc.flags,
+                next = desc.next,
+            );
+        }
     }
 
     fn tx_anomaly(&mut self, reason: TxAnomalyReason, snapshot: &str) {
@@ -1736,12 +1805,28 @@ impl VirtioNet {
 
     fn reclaim_posted_head(&mut self, id: u16) -> Result<bool, ()> {
         match self.tx_head_mgr.state(id) {
-            Some(TxHeadState::Posted) => self
-                .tx_head_mgr
-                .mark_reclaimed(id)
-                .and_then(|_| self.tx_head_mgr.reclaim_head(id))
-                .map(|_| true)
-                .map_err(|_| ()),
+            Some(TxHeadState::Posted) => {
+                if !self.tx_head_mgr.is_in_flight(id) {
+                    self.tx_dup_used_ignored = self.tx_dup_used_ignored.saturating_add(1);
+                    if !self.tx_dup_used_logged {
+                        self.tx_dup_used_logged = true;
+                        warn!(
+                            target: "net-console",
+                            "[virtio-net][tx] duplicate used entry for head={} ignored (not in-flight) used.idx={} avail.idx={}",
+                            id,
+                            self.tx_queue.last_used,
+                            self.tx_queue.indices_no_sync().1,
+                        );
+                        self.log_tx_avail_window(self.tx_queue.indices_no_sync().1, 4);
+                    }
+                    return Ok(false);
+                }
+                self.tx_head_mgr
+                    .mark_reclaimed(id)
+                    .and_then(|_| self.tx_head_mgr.reclaim_head(id))
+                    .map(|_| true)
+                    .map_err(|_| ())
+            }
             Some(TxHeadState::Free | TxHeadState::Reclaimed) => {
                 self.tx_dup_used_ignored = self.tx_dup_used_ignored.saturating_add(1);
                 Ok(false)
@@ -4978,6 +5063,8 @@ impl VirtQueue {
             Some(_) => flags | VIRTQ_DESC_F_NEXT,
             None => flags,
         };
+        debug_assert_ne!(len, 0, "descriptor length must be non-zero");
+        debug_assert_ne!(addr, 0, "descriptor address must be non-zero");
         let desc = VirtqDesc {
             addr,
             len,
@@ -4985,6 +5072,9 @@ impl VirtQueue {
             next: next.unwrap_or(0),
         };
         let desc_ptr = unsafe { self.desc.as_ptr().add(index as usize) };
+        unsafe {
+            core::ptr::write_bytes(desc_ptr, 0, 1);
+        }
         unsafe { write_volatile(desc_ptr, desc) };
         if FORENSICS {
             let verify = unsafe { read_volatile(desc_ptr) };
@@ -4997,6 +5087,12 @@ impl VirtQueue {
         self.clean_desc_entry_for_device(index)
     }
 
+    /// Publish an available descriptor after descriptors have been written and cleaned.
+    /// Ordering is enforced as:
+    /// 1) descriptor writes + cache maintenance
+    /// 2) avail.ring slot
+    /// 3) avail.idx
+    /// 4) notify (performed by the caller)
     fn push_avail(&self, index: u16) -> Result<(u16, u16, u16), DmaError> {
         self.assert_index_in_range(index, "avail");
         let avail = self.avail.as_ptr();
@@ -5023,10 +5119,12 @@ impl VirtQueue {
             );
             let ring_offset = ring_addr - self.base_vaddr;
             self.assert_offset_in_range(ring_offset, core::mem::size_of::<u16>(), "avail.ring");
+            virtq_publish_barrier();
             write_volatile(ring_ptr, index);
             if DMA_NONCOHERENT {
                 self.clean_avail_entry_for_device(ring_slot)?;
             }
+            virtq_publish_barrier();
             let new_idx = idx.wrapping_add(1);
             write_volatile(&mut (*avail).idx, new_idx);
             if DMA_NONCOHERENT {
