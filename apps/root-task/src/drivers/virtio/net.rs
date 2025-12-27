@@ -3433,13 +3433,13 @@ impl VirtioNet {
                 self.debug_check_tx_avail_uniqueness(self.tx_queue.last_used, avail_idx);
                 log::debug!(
                     target: "virtio-net",
-                    "[virtio-net][tx-submit] head={} paddr=0x{addr:016x} len={} avail_idx={}→{} slot={}",
-                    id,
+                    "[virtio-net][tx-submit] head={head} paddr=0x{addr:016x} len={len} avail_idx={old_idx}→{avail_idx} slot={slot}",
+                    head = id,
                     addr = desc.addr,
-                    desc.len,
-                    old_idx,
-                    avail_idx,
-                    slot
+                    len = desc.len,
+                    old_idx = old_idx,
+                    avail_idx = avail_idx,
+                    slot = slot
                 );
                 if self.tx_queue.sync_avail_ring_for_device().is_err() {
                     self.freeze_and_capture("tx_v2_avail_sync_failed");
