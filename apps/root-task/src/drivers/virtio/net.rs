@@ -102,6 +102,24 @@ static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
 static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
 
+#[inline]
+fn virtq_publish_barrier() {
+    // Virtio spec requires a barrier before updating avail.idx; AArch64 needs explicit fences.
+    fence(AtomicOrdering::Release);
+}
+
+#[inline]
+fn virtq_notify_barrier() {
+    // Ensure avail.idx and descriptor writes are visible before device notification on AArch64.
+    fence(AtomicOrdering::Release);
+}
+
+#[inline]
+fn virtq_consume_barrier() {
+    // Ensure used ring reads observe device writes after fetching used.idx on AArch64.
+    fence(AtomicOrdering::Acquire);
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TxHeadState {
     Free,
@@ -587,6 +605,9 @@ pub struct VirtioNet {
     tx_attempt_seq: u64,
     tx_attempt_log_gate: u64,
     rx_packets: u64,
+    rx_publish_calls: u64,
+    tx_publish_calls: u64,
+    used_poll_calls: u64,
     mac: EthernetAddress,
     rx_poll_count: u64,
     rx_used_count: u64,
@@ -1022,6 +1043,9 @@ impl VirtioNet {
             tx_attempt_seq: 0,
             tx_attempt_log_gate: 0,
             rx_packets: 0,
+            rx_publish_calls: 0,
+            tx_publish_calls: 0,
+            used_poll_calls: 0,
             mac,
             rx_poll_count: 0,
             rx_used_count: 0,
@@ -1147,7 +1171,7 @@ impl VirtioNet {
 
         log::info!(
             target: "net-console",
-            "[virtio-net] debug_snapshot: stalled_ms={} status=0x{:02x} isr=0x{:02x} tx_avail_idx={} tx_used_idx={} rx_avail_idx={} rx_used_idx={} last_error={} rx_used_count={} rx_poll_count={} tx_dup_publish_blocked={} tx_dup_used_ignored={} tx_invalid_used_state={} tx_alloc_blocked_inflight={}",
+            "[virtio-net] debug_snapshot: stalled_ms={} status=0x{:02x} isr=0x{:02x} tx_avail_idx={} tx_used_idx={} rx_avail_idx={} rx_used_idx={} last_error={} rx_used_count={} rx_poll_count={} used_poll_calls={} tx_publish_calls={} rx_publish_calls={} tx_dup_publish_blocked={} tx_dup_used_ignored={} tx_invalid_used_state={} tx_alloc_blocked_inflight={}",
             now_ms.saturating_sub(self.last_progress_ms),
             status,
             isr,
@@ -1158,6 +1182,9 @@ impl VirtioNet {
             self.last_error.unwrap_or("none"),
             self.rx_used_count,
             self.rx_poll_count,
+            self.used_poll_calls,
+            self.tx_publish_calls,
+            self.rx_publish_calls,
             self.tx_dup_publish_blocked,
             self.tx_dup_used_ignored,
             self.tx_invalid_used_state,
@@ -1984,6 +2011,7 @@ impl VirtioNet {
             Some(frame_capacity),
             used_len,
         )?;
+        self.rx_publish_calls = self.rx_publish_calls.wrapping_add(1);
 
         let mut resolved_descs: HeaplessVec<DescSpec, RX_QUEUE_SIZE> = HeaplessVec::new();
         for (idx, spec) in descs.iter().enumerate() {
@@ -2031,14 +2059,14 @@ impl VirtioNet {
             payload_len > 0 && payload_addr < header_end
         });
 
-        fence(AtomicOrdering::Release);
+        virtq_publish_barrier();
         self.verify_descriptor_write("RX", QueueKind::Rx, head_id, &resolved_descs)?;
         if self.rx_queue.sync_descriptor_table_for_device().is_err() {
             self.freeze_and_capture("rx_desc_sync_failed");
             return Err(());
         }
         self.log_pre_publish_if_suspicious("RX", QueueKind::Rx, head_id, &resolved_descs)?;
-        fence(AtomicOrdering::Release);
+        virtq_publish_barrier();
         if let Err(fault) = validate_chain_pre_publish(
             "RX",
             self.rx_queue.size,
@@ -2142,6 +2170,7 @@ impl VirtioNet {
             return Err(());
         }
         self.validate_chain_nonzero("TX", head_id, descs, None, None, None, used_len)?;
+        self.tx_publish_calls = self.tx_publish_calls.wrapping_add(1);
 
         let mut resolved_descs: HeaplessVec<DescSpec, TX_QUEUE_SIZE> = HeaplessVec::new();
         for (idx, spec) in descs.iter().enumerate() {
@@ -2189,7 +2218,7 @@ impl VirtioNet {
             payload_len > 0 && payload_addr < header_end
         });
 
-        fence(AtomicOrdering::Release);
+        virtq_publish_barrier();
         self.verify_descriptor_write("TX", QueueKind::Tx, head_id, &resolved_descs)?;
         if self.tx_queue.sync_descriptor_table_for_device().is_err() {
             self.freeze_and_capture("tx_desc_sync_failed");
@@ -2197,7 +2226,7 @@ impl VirtioNet {
         }
         self.log_tx_descriptor_readback(head_id, &resolved_descs);
         self.log_pre_publish_if_suspicious("TX", QueueKind::Tx, head_id, &resolved_descs)?;
-        fence(AtomicOrdering::Release);
+        virtq_publish_barrier();
         if let Err(fault) = validate_chain_pre_publish(
             "TX",
             self.tx_queue.size,
@@ -2626,6 +2655,7 @@ impl VirtioNet {
             self.reclaim_tx_v2();
             return;
         }
+        self.used_poll_calls = self.used_poll_calls.wrapping_add(1);
         let (used_idx, avail_idx) = self.tx_queue.indices();
         let should_log =
             used_idx != self.tx_last_used_seen || (self.tx_progress_log_gate & 0x3f) == 0;
@@ -2673,12 +2703,14 @@ impl VirtioNet {
     }
 
     fn reclaim_tx_v2(&mut self) {
+        self.used_poll_calls = self.used_poll_calls.wrapping_add(1);
         let used = self.tx_queue.used.as_ptr();
         if self.tx_queue.invalidate_used_header_for_cpu().is_err() {
             self.freeze_and_capture("tx_v2_used_header_invalidate_failed");
             return;
         }
         let used_idx = unsafe { read_volatile(&(*used).idx) };
+        virtq_consume_barrier();
         let qsize = usize::from(self.tx_queue.size);
 
         assert!(qsize != 0, "virtqueue size must be non-zero");
@@ -2834,6 +2866,7 @@ impl VirtioNet {
         if forensics_frozen() {
             return None;
         }
+        self.used_poll_calls = self.used_poll_calls.wrapping_add(1);
         match self.rx_queue.pop_used("RX", false) {
             Ok(Some((id, len))) => {
                 let len = len as usize;
@@ -3295,6 +3328,7 @@ impl VirtioNet {
             self.freeze_tx_publishes("tx_v2_publish_state_violation");
             return;
         }
+        self.tx_publish_calls = self.tx_publish_calls.wrapping_add(1);
         let (_, avail_idx_before) = self.tx_queue.indices_no_sync();
         if self
             .validate_tx_publish_guard(
@@ -4901,10 +4935,9 @@ impl VirtQueue {
             let ring_offset = ring_addr - self.base_vaddr;
             self.assert_offset_in_range(ring_offset, core::mem::size_of::<u16>(), "avail.ring");
             write_volatile(ring_ptr, index);
-            fence(AtomicOrdering::Release);
+            virtq_publish_barrier();
             let new_idx = idx.wrapping_add(1);
             write_volatile(&mut (*avail).idx, new_idx);
-            fence(AtomicOrdering::Release);
             Some((ring_slot as u16, new_idx, idx))
         }
     }
@@ -4914,7 +4947,7 @@ impl VirtQueue {
         self.sync_descriptor_table_for_device()?;
         self.sync_avail_ring_for_device()?;
         dma_barrier();
-        fence(AtomicOrdering::Release);
+        virtq_notify_barrier();
         regs.notify(queue);
         let notify_flag = match queue {
             RX_QUEUE_INDEX => Some(&RX_NOTIFY_LOGGED),
@@ -5088,6 +5121,7 @@ impl VirtQueue {
             return Ok(None);
         }
         let idx = unsafe { read_volatile(&(*used).idx) };
+        virtq_consume_barrier();
         if self.last_used == idx {
             return Ok(None);
         }
