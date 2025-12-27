@@ -42,6 +42,11 @@ if [ ! -f "${VARSTORE}" ]; then
     qemu-img create -f raw "${VARSTORE}" 64M >/dev/null
 fi
 
+CONSOLE_PORT="${CONSOLE_PORT:-31337}"
+UDP_ECHO_PORT="${UDP_ECHO_PORT:-31338}"
+TCP_SMOKE_PORT="${TCP_SMOKE_PORT:-31339}"
+NETDEV_OPTS="${NETDEV_OPTS:-user,id=net0,hostfwd=tcp::${CONSOLE_PORT}-:${CONSOLE_PORT},hostfwd=udp::${UDP_ECHO_PORT}-:${UDP_ECHO_PORT},hostfwd=tcp::${TCP_SMOKE_PORT}-:${TCP_SMOKE_PORT}}"
+
 exec qemu-system-aarch64 \
     -machine virt,gic-version=2 \
     -cpu cortex-a57 -m 1024 -smp 1 \
@@ -49,5 +54,5 @@ exec qemu-system-aarch64 \
     -bios "${QEMU_FIRM}" \
     -drive if=none,id=esp,format=raw,file="${ESP_IMG}" \
     -device virtio-blk-pci,drive=esp \
-    -device virtio-net-pci,netdev=net0 \
-    -netdev user,id=net0
+    -device rtl8139,netdev=net0 \
+    -netdev "${NETDEV_OPTS}"
