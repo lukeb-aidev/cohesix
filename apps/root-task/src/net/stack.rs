@@ -61,6 +61,7 @@ const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
 const SOCKET_CAPACITY: usize = 6;
 const MAX_TX_BUDGET: usize = 8;
+const FLUSH_BLOCKED_HEARTBEAT_MS: u64 = 2_000;
 const RANDOM_SEED: u64 = 0x5a5a_5a5a_1234_5678;
 const ECHO_MODE: bool = cfg!(feature = "tcp-echo-31337");
 const ERR_AUTH_REASON_TIMEOUT: &str = "ERR AUTH reason=timeout";
@@ -746,6 +747,13 @@ enum AuthState {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CohshBlockedSnapshot {
+    tcp_state: TcpState,
+    auth_state: AuthState,
+    queued: bool,
+}
+
 #[derive(Debug, Default)]
 struct SessionState {
     last_state: Option<TcpState>,
@@ -759,6 +767,7 @@ struct SessionState {
     last_flush_auth_state: Option<AuthState>,
     last_flush_log_ms: u64,
     flush_blocked_since: Option<u64>,
+    last_blocked_snapshot: Option<CohshBlockedSnapshot>,
 }
 
 static SOCKET_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
@@ -3095,6 +3104,21 @@ impl<D: NetDevice> NetStack<D> {
         activity || outbound_pending
     }
 
+    #[inline]
+    // Activity-only logging to prevent endless spam in steady state.
+    fn should_log_flush_blocked(
+        session_state: &SessionState,
+        snapshot: CohshBlockedSnapshot,
+        now_ms: u64,
+    ) -> bool {
+        let activity = session_state
+            .last_blocked_snapshot
+            .map_or(true, |prev| prev != snapshot);
+        let heartbeat =
+            now_ms.saturating_sub(session_state.last_flush_log_ms) >= FLUSH_BLOCKED_HEARTBEAT_MS;
+        activity || heartbeat
+    }
+
     fn flush_outbound(
         server: &mut TcpConsoleServer,
         telemetry: &mut NetTelemetry,
@@ -3124,10 +3148,12 @@ impl<D: NetDevice> NetStack<D> {
                 .unwrap_or(false);
 
         if blocked_by_auth {
-            let should_log = auth_changed
-                || state_changed
-                || now_ms.saturating_sub(session_state.last_flush_log_ms) >= 1_000;
-            if should_log {
+            let blocked_snapshot = CohshBlockedSnapshot {
+                tcp_state: socket.state(),
+                auth_state,
+                queued: server.has_outbound(),
+            };
+            if Self::should_log_flush_blocked(session_state, blocked_snapshot, now_ms) {
                 info!(
                     target: "cohsh-net",
                     "[cohsh-net] flush_outbound blocked state={:?} auth_state={:?} queued={}",
@@ -3138,11 +3164,13 @@ impl<D: NetDevice> NetStack<D> {
                 session_state.last_flush_log_ms = now_ms;
             }
             session_state.flush_blocked_since.get_or_insert(now_ms);
+            session_state.last_blocked_snapshot = Some(blocked_snapshot);
             session_state.last_flush_state = Some(socket.state());
             session_state.last_flush_auth_state = Some(auth_state);
             return false;
         }
 
+        session_state.last_blocked_snapshot = None;
         if state_changed || auth_changed {
             info!(
                 target: "cohsh-net",
