@@ -104,19 +104,34 @@ static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[inline]
 fn virtq_publish_barrier() {
-    // Virtio spec requires a barrier before updating avail.idx; AArch64 needs explicit fences.
+    compiler_fence(AtomicOrdering::Release);
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        asm!("dmb ishst", options(nostack, preserves_flags));
+    }
+    #[cfg(not(target_arch = "aarch64"))]
     fence(AtomicOrdering::Release);
 }
 
 #[inline]
 fn virtq_notify_barrier() {
-    // Ensure avail.idx and descriptor writes are visible before device notification on AArch64.
+    compiler_fence(AtomicOrdering::Release);
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        asm!("dmb ish", options(nostack, preserves_flags));
+    }
+    #[cfg(not(target_arch = "aarch64"))]
     fence(AtomicOrdering::Release);
 }
 
 #[inline]
-fn virtq_consume_barrier() {
-    // Ensure used ring reads observe device writes after fetching used.idx on AArch64.
+fn virtq_used_load_barrier() {
+    compiler_fence(AtomicOrdering::Acquire);
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        asm!("dmb ishld", options(nostack, preserves_flags));
+    }
+    #[cfg(not(target_arch = "aarch64"))]
     fence(AtomicOrdering::Acquire);
 }
 
@@ -2710,7 +2725,7 @@ impl VirtioNet {
             return;
         }
         let used_idx = unsafe { read_volatile(&(*used).idx) };
-        virtq_consume_barrier();
+        virtq_used_load_barrier();
         let qsize = usize::from(self.tx_queue.size);
 
         assert!(qsize != 0, "virtqueue size must be non-zero");
@@ -5121,7 +5136,7 @@ impl VirtQueue {
             return Ok(None);
         }
         let idx = unsafe { read_volatile(&(*used).idx) };
-        virtq_consume_barrier();
+        virtq_used_load_barrier();
         if self.last_used == idx {
             return Ok(None);
         }
