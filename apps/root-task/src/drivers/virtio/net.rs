@@ -275,13 +275,16 @@ impl TxHeadManager {
     }
 
     fn mark_posted(&mut self, id: u16, slot: u16, len: u32, addr: u64) -> Result<u32, TxHeadError> {
+        if id >= self.size {
+            return Err(TxHeadError::OutOfRange);
+        }
         let gen = self.next_gen;
+        if self.in_flight[id as usize] {
+            return Err(TxHeadError::InvalidState);
+        }
         {
             let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
             if entry.state != TxHeadState::Prepared {
-                return Err(TxHeadError::InvalidState);
-            }
-            if self.in_flight[id as usize] {
                 return Err(TxHeadError::InvalidState);
             }
             entry.state = TxHeadState::Posted;
@@ -307,11 +310,14 @@ impl TxHeadManager {
     }
 
     fn mark_reclaimed(&mut self, id: u16) -> Result<(), TxHeadError> {
-        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        if entry.state != TxHeadState::Posted {
-            return Err(TxHeadError::InvalidState);
+        if id >= self.size {
+            return Err(TxHeadError::OutOfRange);
         }
         if !self.in_flight[id as usize] {
+            return Err(TxHeadError::InvalidState);
+        }
+        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
+        if entry.state != TxHeadState::Posted {
             return Err(TxHeadError::InvalidState);
         }
         entry.state = TxHeadState::Reclaimed;
