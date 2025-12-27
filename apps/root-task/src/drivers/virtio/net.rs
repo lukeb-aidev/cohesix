@@ -92,6 +92,7 @@ static DMA_CLEAN_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static RX_CACHE_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
+static DMA_ERROR_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_QMEM_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_RING_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static VQ_LAYOUT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -808,22 +809,18 @@ impl VirtioNet {
         info!("[net-console] allocating virtqueue backing memory");
         // Keep virtqueue rings fully visible to the device by mapping the backing pages uncached.
 
-        let queue_mem_rx = hal
-            .alloc_dma_frame_attr(seL4_ARM_Page_Uncached)
-            .map_err(|err| {
-                regs.set_status(STATUS_FAILED);
-                DriverError::from(err)
-            })?;
+        let queue_mem_rx = hal.alloc_dma_frame_attr(queue_map_attr).map_err(|err| {
+            regs.set_status(STATUS_FAILED);
+            DriverError::from(err)
+        })?;
 
         let queue_mem_tx = {
             let mut attempt = 0;
             loop {
-                let frame = hal
-                    .alloc_dma_frame_attr(seL4_ARM_Page_Uncached)
-                    .map_err(|err| {
-                        regs.set_status(STATUS_FAILED);
-                        DriverError::from(err)
-                    })?;
+                let frame = hal.alloc_dma_frame_attr(queue_map_attr).map_err(|err| {
+                    regs.set_status(STATUS_FAILED);
+                    DriverError::from(err)
+                })?;
                 if frame.paddr() != queue_mem_rx.paddr() {
                     break frame;
                 }
@@ -850,7 +847,18 @@ impl VirtioNet {
         } else {
             None
         };
-        let dma_cacheable = cfg!(feature = "cache-maintenance");
+        let queue_map_attr = seL4_ARM_Page_Uncached;
+        let dma_cacheable = match queue_map_attr {
+            seL4_ARM_Page_Uncached => false,
+            other => {
+                error!(
+                    target: "net-console",
+                    "[virtio-net] unsupported queue map attribute: attr=0x{other:08x}; virtio-net disabled",
+                );
+                regs.set_status(STATUS_FAILED);
+                return Err(DriverError::NoQueue);
+            }
+        };
         if !DMA_QMEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             let rx_vaddr = queue_mem_rx.ptr().as_ptr() as usize;
             let tx_vaddr = queue_mem_tx.ptr().as_ptr() as usize;
@@ -858,9 +866,10 @@ impl VirtioNet {
             let tx_len = queue_mem_tx.as_slice().len();
             let rx_paddr = queue_mem_rx.paddr();
             let tx_paddr = queue_mem_tx.paddr();
+            let map_attr_raw: usize = unsafe { core::mem::transmute(queue_map_attr) };
             info!(
                 target: "virtio-net",
-                "[virtio-net][dma] qmem mapping cacheable={} map_attr=seL4_ARM_Page_Default rx_vaddr=0x{rx_vaddr:016x}..0x{rx_vend:016x} rx_paddr=0x{rx_paddr:016x}..0x{rx_pend:016x} tx_vaddr=0x{tx_vaddr:016x}..0x{tx_vend:016x} tx_paddr=0x{tx_paddr:016x}..0x{tx_pend:016x}",
+                "[virtio-net][dma] qmem mapping cacheable={} map_attr=0x{map_attr_raw:08x} rx_vaddr=0x{rx_vaddr:016x}..0x{rx_vend:016x} rx_paddr=0x{rx_paddr:016x}..0x{rx_pend:016x} tx_vaddr=0x{tx_vaddr:016x}..0x{tx_vend:016x} tx_paddr=0x{tx_paddr:016x}..0x{tx_pend:016x}",
                 dma_cacheable,
                 rx_vaddr = rx_vaddr,
                 rx_vend = rx_vaddr.saturating_add(rx_len),
@@ -928,12 +937,10 @@ impl VirtioNet {
 
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
         for _ in 0..rx_size {
-            let frame = hal
-                .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
-                .map_err(|err| {
-                    regs.set_status(STATUS_FAILED);
-                    DriverError::from(err)
-                })?;
+            let frame = hal.alloc_dma_frame_attr(queue_map_attr).map_err(|err| {
+                regs.set_status(STATUS_FAILED);
+                DriverError::from(err)
+            })?;
             rx_buffers.push(frame).map_err(|_| {
                 regs.set_status(STATUS_FAILED);
                 DriverError::BufferExhausted
@@ -942,12 +949,10 @@ impl VirtioNet {
 
         let mut tx_buffers = HeaplessVec::<RamFrame, TX_QUEUE_SIZE>::new();
         for _ in 0..tx_size {
-            let frame = hal
-                .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
-                .map_err(|err| {
-                    regs.set_status(STATUS_FAILED);
-                    DriverError::from(err)
-                })?;
+            let frame = hal.alloc_dma_frame_attr(queue_map_attr).map_err(|err| {
+                regs.set_status(STATUS_FAILED);
+                DriverError::from(err)
+            })?;
             tx_buffers.push(frame).map_err(|_| {
                 regs.set_status(STATUS_FAILED);
                 DriverError::BufferExhausted
@@ -1376,7 +1381,13 @@ impl VirtioNet {
             return;
         }
         let used = self.tx_queue.used.as_ptr();
-        self.tx_queue.invalidate_used_header_for_cpu();
+        if self.tx_queue.invalidate_used_header_for_cpu().is_err() {
+            warn!(
+                target: "net-console",
+                "[virtio-net][forensics] used header invalidate failed; aborting dump"
+            );
+            return;
+        }
         let used_idx = unsafe { read_volatile(&(*used).idx) };
         let last_used = self.tx_queue.last_used;
         let window = core::cmp::min(qsize, 16);
@@ -1393,7 +1404,17 @@ impl VirtioNet {
             let slot_idx = start.wrapping_add(offset as u16);
             let ring_slot = (slot_idx as usize) % qsize;
             let ring_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
-            self.tx_queue.invalidate_used_elem_for_cpu(ring_slot);
+            if self
+                .tx_queue
+                .invalidate_used_elem_for_cpu(ring_slot)
+                .is_err()
+            {
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][forensics] used elem invalidate failed slot={ring_slot}; aborting dump"
+                );
+                return;
+            }
             let elem = unsafe { read_volatile(ring_ptr) };
             info!(
                 target: "net-console",
@@ -1924,6 +1945,7 @@ impl VirtioNet {
 
             self.device_faulted = true;
             self.last_error = Some("descriptor_write_corrupt");
+            self.freeze_and_capture("descriptor_visibility_mismatch");
             return Err(());
         }
 
@@ -2011,7 +2033,10 @@ impl VirtioNet {
 
         fence(AtomicOrdering::Release);
         self.verify_descriptor_write("RX", QueueKind::Rx, head_id, &resolved_descs)?;
-        self.rx_queue.sync_descriptor_table_for_device();
+        if self.rx_queue.sync_descriptor_table_for_device().is_err() {
+            self.freeze_and_capture("rx_desc_sync_failed");
+            return Err(());
+        }
         self.log_pre_publish_if_suspicious("RX", QueueKind::Rx, head_id, &resolved_descs)?;
         fence(AtomicOrdering::Release);
         if let Err(fault) = validate_chain_pre_publish(
@@ -2028,7 +2053,10 @@ impl VirtioNet {
             self.last_error.get_or_insert("rx_avail_write_failed");
             return Err(());
         };
-        self.rx_queue.sync_avail_ring_for_device();
+        if self.rx_queue.sync_avail_ring_for_device().is_err() {
+            self.freeze_and_capture("rx_avail_sync_failed");
+            return Err(());
+        }
         self.log_publish_transaction(
             "RX",
             QueueKind::Rx,
@@ -2049,7 +2077,14 @@ impl VirtioNet {
             );
         }
         if notify && !self.device_faulted {
-            self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
+            if self
+                .rx_queue
+                .notify(&mut self.regs, RX_QUEUE_INDEX)
+                .is_err()
+            {
+                self.freeze_and_capture("rx_notify_failed");
+                return Err(());
+            }
         }
         Ok(())
     }
@@ -2156,7 +2191,10 @@ impl VirtioNet {
 
         fence(AtomicOrdering::Release);
         self.verify_descriptor_write("TX", QueueKind::Tx, head_id, &resolved_descs)?;
-        self.tx_queue.sync_descriptor_table_for_device();
+        if self.tx_queue.sync_descriptor_table_for_device().is_err() {
+            self.freeze_and_capture("tx_desc_sync_failed");
+            return Err(());
+        }
         self.log_tx_descriptor_readback(head_id, &resolved_descs);
         self.log_pre_publish_if_suspicious("TX", QueueKind::Tx, head_id, &resolved_descs)?;
         fence(AtomicOrdering::Release);
@@ -2175,7 +2213,7 @@ impl VirtioNet {
                 resolved_descs[0].len as usize,
                 self.tx_anomaly_logged,
             )
-            .unwrap_or((0, 0));
+            .ok_or(())?;
         // Ensure cache maintenance and descriptor writes are visible before handing ownership to the device.
         dma_barrier();
 
@@ -2220,7 +2258,10 @@ impl VirtioNet {
             );
         }
         self.verify_tx_publish(slot, head_id, &resolved_descs[0])?;
-        self.tx_queue.sync_avail_ring_for_device();
+        if self.tx_queue.sync_avail_ring_for_device().is_err() {
+            self.freeze_and_capture("tx_avail_sync_failed");
+            return Err(());
+        }
         self.debug_check_tx_avail_uniqueness(self.tx_queue.last_used, avail_idx);
         if log_breadcrumb {
             debug!(
@@ -2291,7 +2332,14 @@ impl VirtioNet {
             );
         }
         if notify && !self.device_faulted {
-            self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
+            if self
+                .tx_queue
+                .notify(&mut self.regs, TX_QUEUE_INDEX)
+                .is_err()
+            {
+                self.freeze_and_capture("tx_notify_failed");
+                return Err(());
+            }
             if log_breadcrumb {
                 debug!(
                     target: "virtio-net",
@@ -2357,7 +2405,20 @@ impl VirtioNet {
                     next: None,
                 }];
 
-                Self::sync_rx_slot_for_device(buffer, header_len, payload_len, self.dma_cacheable);
+                if let Err(err) = Self::sync_rx_slot_for_device(
+                    buffer,
+                    header_len,
+                    payload_len,
+                    self.dma_cacheable,
+                ) {
+                    warn!(
+                        target: "net-console",
+                        "[virtio-net] rx cache clean failed slot={} err={err:?}; freezing queue",
+                        slot
+                    );
+                    self.freeze_and_capture("rx_cache_clean_failed");
+                    return;
+                }
 
                 (desc, buffer_capacity, payload_len)
             };
@@ -2460,7 +2521,7 @@ impl VirtioNet {
         header_len: usize,
         payload_len: usize,
         cacheable: bool,
-    ) {
+    ) -> Result<(), DmaError> {
         NET_DIAG.record_rx_cache_clean();
         if !cacheable && !RX_CACHE_POLICY_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             log::info!(
@@ -2474,13 +2535,14 @@ impl VirtioNet {
             payload_len,
             buffer.as_slice().len().saturating_sub(header_len),
         );
-        dma_clean(header_ptr, header_len, cacheable, "clean rx buffer header");
+        dma_clean(header_ptr, header_len, cacheable, "clean rx buffer header")?;
         dma_clean(
             payload_ptr,
             payload_len,
             cacheable,
             "clean rx buffer payload",
-        );
+        )?;
+        Ok(())
     }
 
     fn sync_rx_slot_for_cpu(
@@ -2488,7 +2550,7 @@ impl VirtioNet {
         header_len: usize,
         written_len: usize,
         cacheable: bool,
-    ) {
+    ) -> Result<(), DmaError> {
         NET_DIAG.record_rx_cache_invalidate();
         let header_len = core::cmp::min(header_len, written_len);
         let header_ptr = buffer.ptr().as_ptr();
@@ -2497,7 +2559,7 @@ impl VirtioNet {
             header_len,
             cacheable,
             "invalidate rx buffer header",
-        );
+        )?;
         let payload_len = written_len
             .saturating_sub(header_len)
             .min(buffer.as_slice().len().saturating_sub(header_len));
@@ -2508,8 +2570,9 @@ impl VirtioNet {
                 payload_len,
                 cacheable,
                 "invalidate rx buffer payload",
-            );
+            )?;
         }
+        Ok(())
     }
 
     fn poll_interrupts(&mut self) {
@@ -2611,7 +2674,10 @@ impl VirtioNet {
 
     fn reclaim_tx_v2(&mut self) {
         let used = self.tx_queue.used.as_ptr();
-        self.tx_queue.invalidate_used_header_for_cpu();
+        if self.tx_queue.invalidate_used_header_for_cpu().is_err() {
+            self.freeze_and_capture("tx_v2_used_header_invalidate_failed");
+            return;
+        }
         let used_idx = unsafe { read_volatile(&(*used).idx) };
         let qsize = usize::from(self.tx_queue.size);
 
@@ -2619,7 +2685,14 @@ impl VirtioNet {
 
         while self.tx_v2_last_used != used_idx {
             let ring_slot = (self.tx_v2_last_used as usize) % qsize;
-            self.tx_queue.invalidate_used_elem_for_cpu(ring_slot);
+            if self
+                .tx_queue
+                .invalidate_used_elem_for_cpu(ring_slot)
+                .is_err()
+            {
+                self.freeze_and_capture("tx_v2_used_elem_invalidate_failed");
+                return;
+            }
             let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
             let elem = unsafe { read_volatile(elem_ptr) };
             let id = elem.id as u16;
@@ -2788,7 +2861,17 @@ impl VirtioNet {
                     return None;
                 }
                 if let Some(buffer) = self.rx_buffers.get_mut(id as usize) {
-                    Self::sync_rx_slot_for_cpu(buffer, header_len, len, self.dma_cacheable);
+                    if let Err(err) =
+                        Self::sync_rx_slot_for_cpu(buffer, header_len, len, self.dma_cacheable)
+                    {
+                        warn!(
+                            target: "net-console",
+                            "[virtio-net] rx cache invalidate failed id={} err={err:?}; freezing queue",
+                            id
+                        );
+                        self.freeze_and_capture("rx_cache_invalidate_failed");
+                        return None;
+                    }
                     debug_assert!(
                         NET_DIAG.snapshot().rx_cache_invalidate > 0,
                         "rx cache invalidate must run before consuming RX buffers"
@@ -2873,7 +2956,17 @@ impl VirtioNet {
                 next: None,
             }];
 
-            Self::sync_rx_slot_for_device(buffer, header_len, payload_len, self.dma_cacheable);
+            if let Err(err) =
+                Self::sync_rx_slot_for_device(buffer, header_len, payload_len, self.dma_cacheable)
+            {
+                warn!(
+                    target: "net-console",
+                    "[virtio-net] rx requeue cache clean failed id={} err={err:?}",
+                    id
+                );
+                self.freeze_and_capture("rx_requeue_cache_clean_failed");
+                return;
+            }
             debug_assert!(
                 NET_DIAG.snapshot().rx_cache_clean > 0,
                 "rx cache clean must run before posting descriptors"
@@ -3171,7 +3264,11 @@ impl VirtioNet {
 
         self.tx_queue
             .setup_descriptor(id, addr, capped_len as u32, 0, None);
-        self.tx_queue.sync_descriptor_table_for_device();
+        if self.tx_queue.sync_descriptor_table_for_device().is_err() {
+            self.freeze_and_capture("tx_v2_desc_sync_failed");
+            self.release_tx_head(id, "tx_v2_desc_sync_failed");
+            return;
+        }
 
         let desc = self.tx_queue.read_descriptor(id);
         let total_len = desc.len as usize;
@@ -3185,7 +3282,13 @@ impl VirtioNet {
             return;
         }
 
-        let _range = self.clean_tx_buffer_for_device(id, capped_len, self.tx_anomaly_logged);
+        if self
+            .clean_tx_buffer_for_device(id, capped_len, self.tx_anomaly_logged)
+            .is_none()
+        {
+            self.release_tx_head(id, "tx_v2_cache_clean_failed");
+            return;
+        }
         if !matches!(self.tx_head_mgr.state(id), Some(TxHeadState::Prepared)) {
             self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
             #[cfg(debug_assertions)]
@@ -3227,13 +3330,25 @@ impl VirtioNet {
                 return;
             }
             self.debug_check_tx_avail_uniqueness(self.tx_queue.last_used, avail_idx);
-            self.tx_queue.sync_avail_ring_for_device();
+            if self.tx_queue.sync_avail_ring_for_device().is_err() {
+                self.freeze_and_capture("tx_v2_avail_sync_failed");
+                self.release_tx_head(id, "tx_v2_avail_sync_failed");
+                return;
+            }
             self.tx_submit = self.tx_submit.wrapping_add(1);
             NET_DIAG.record_tx_submit();
             if slot == 0 && !self.tx_wrap_logged {
                 self.tx_wrap_logged = true;
             }
-            self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
+            if self
+                .tx_queue
+                .notify(&mut self.regs, TX_QUEUE_INDEX)
+                .is_err()
+            {
+                self.freeze_and_capture("tx_v2_notify_failed");
+                self.release_tx_head(id, "tx_v2_notify_failed");
+                return;
+            }
         } else {
             self.release_tx_head(id, "tx_v2_avail_write_failed");
             self.last_error.get_or_insert("tx_v2_avail_write_failed");
@@ -3246,11 +3361,20 @@ impl VirtioNet {
         len: usize,
         force_log: bool,
     ) -> Option<(usize, usize)> {
-        self.tx_buffers.get(head_id as usize).map(|buffer| {
+        self.tx_buffers.get(head_id as usize).and_then(|buffer| {
             let capped_len = len.min(buffer.as_slice().len());
             let ptr = buffer.ptr().as_ptr();
             let start = ptr as usize;
-            dma_clean(ptr, capped_len, self.dma_cacheable, "clean tx buffer");
+            if dma_clean(ptr, capped_len, self.dma_cacheable, "clean tx buffer").is_err() {
+                warn!(
+                    target: "net-console",
+                    "[virtio-net] tx cache clean failed head={} len={}",
+                    head_id,
+                    capped_len,
+                );
+                self.freeze_and_capture("tx_cache_clean_failed");
+                return None;
+            }
             let payload_start = start.saturating_add(self.rx_header_len);
             let payload_end = payload_start.saturating_add(capped_len.saturating_sub(self.rx_header_len));
             if force_log || !self.tx_dma_log_once {
@@ -3264,7 +3388,7 @@ impl VirtioNet {
                     payload_end = payload_end,
                 );
             }
-            (start, start.saturating_add(capped_len))
+            Some((start, start.saturating_add(capped_len)))
         })
     }
 
@@ -4775,11 +4899,12 @@ impl VirtQueue {
         }
     }
 
-    fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) {
+    fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) -> Result<(), DmaError> {
         // Ensure descriptors and avail ring updates are visible to the device before the kick.
-        self.sync_descriptor_table_for_device();
-        self.sync_avail_ring_for_device();
+        self.sync_descriptor_table_for_device()?;
+        self.sync_avail_ring_for_device()?;
         dma_barrier();
+        fence(AtomicOrdering::Release);
         regs.notify(queue);
         let notify_flag = match queue {
             RX_QUEUE_INDEX => Some(&RX_NOTIFY_LOGGED),
@@ -4797,27 +4922,28 @@ impl VirtQueue {
                 info!(target: "virtio-net", "[virtio-net] notify queue={queue} ({label})");
             }
         }
+        Ok(())
     }
 
-    fn sync_descriptor_table_for_device(&self) {
+    fn sync_descriptor_table_for_device(&self) -> Result<(), DmaError> {
         dma_clean(
             self.desc.as_ptr() as *const u8,
             self.layout.desc_len,
             self.cacheable,
             "clean descriptor table",
-        );
+        )
     }
 
-    fn sync_avail_ring_for_device(&self) {
+    fn sync_avail_ring_for_device(&self) -> Result<(), DmaError> {
         dma_clean(
             self.avail.as_ptr() as *const u8,
             self.layout.avail_len,
             self.cacheable,
             "clean avail ring",
-        );
+        )
     }
 
-    fn invalidate_used_header_for_cpu(&self) {
+    fn invalidate_used_header_for_cpu(&self) -> Result<(), DmaError> {
         let used_ptr = self.used.as_ptr() as *const u8;
         NET_DIAG.record_rx_cache_invalidate();
         dma_invalidate(
@@ -4825,11 +4951,12 @@ impl VirtQueue {
             core::mem::size_of::<u16>() * 2,
             self.cacheable,
             "invalidate used ring header",
-        );
+        )?;
         fence(AtomicOrdering::SeqCst);
+        Ok(())
     }
 
-    fn invalidate_used_elem_for_cpu(&self, ring_slot: usize) {
+    fn invalidate_used_elem_for_cpu(&self, ring_slot: usize) -> Result<(), DmaError> {
         let elem_ptr = unsafe { (*self.used.as_ptr()).ring.as_ptr().add(ring_slot) as *const u8 };
         if !USED_RING_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             info!(
@@ -4844,8 +4971,9 @@ impl VirtQueue {
             core::mem::size_of::<VirtqUsedElem>(),
             self.cacheable,
             "invalidate used ring entry",
-        );
+        )?;
         fence(AtomicOrdering::SeqCst);
+        Ok(())
     }
 
     fn debug_descriptors(&self, label: &str, count: usize) {
@@ -4871,7 +4999,16 @@ impl VirtQueue {
         let used = self.used.as_ptr();
         let avail = self.avail.as_ptr();
 
-        self.invalidate_used_header_for_cpu();
+        if let Err(err) = self.invalidate_used_header_for_cpu() {
+            if !DMA_ERROR_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+                warn!(
+                    target: "net-console",
+                    "[virtio-net] used header invalidate failed err={err:?}; freezing queue"
+                );
+            }
+            mark_forensics_frozen();
+            return (self.last_used, self.last_used);
+        }
         let used_idx = unsafe { read_volatile(&(*used).idx) };
         let avail_idx = unsafe { read_volatile(&(*avail).idx) };
 
@@ -4892,7 +5029,13 @@ impl VirtQueue {
         let used = self.used.as_ptr();
         let avail = self.avail.as_ptr();
 
-        self.invalidate_used_header_for_cpu();
+        if let Err(err) = self.invalidate_used_header_for_cpu() {
+            warn!(
+                target: "net-console",
+                "[virtio-net] debug dump skipped cache invalidate err={err:?}"
+            );
+            return;
+        }
         let used_idx = unsafe { read_volatile(&(*used).idx) };
         let avail_idx = unsafe { read_volatile(&(*avail).idx) };
 
@@ -4913,7 +5056,17 @@ impl VirtQueue {
         allow_zero_len: bool,
     ) -> Result<Option<(u16, u32)>, ForensicFault> {
         let used = self.used.as_ptr();
-        self.invalidate_used_header_for_cpu();
+        if let Err(err) = self.invalidate_used_header_for_cpu() {
+            warn!(
+                target: "net-console",
+                "[virtio-net] used header invalidate failed queue={} err={err:?}; freezing",
+                queue_label
+            );
+            self.last_error
+                .get_or_insert("used_header_invalidate_failed");
+            self.freeze_and_capture("used_header_invalidate_failed");
+            return Ok(None);
+        }
         let idx = unsafe { read_volatile(&(*used).idx) };
         if self.last_used == idx {
             return Ok(None);
@@ -4955,7 +5108,18 @@ impl VirtQueue {
             core::mem::size_of::<VirtqUsedElem>(),
             "used.ring",
         );
-        self.invalidate_used_elem_for_cpu(ring_slot);
+        if let Err(err) = self.invalidate_used_elem_for_cpu(ring_slot) {
+            warn!(
+                target: "net-console",
+                "[virtio-net] used element invalidate failed queue={} slot={} err={err:?}; freezing",
+                queue_label,
+                ring_slot
+            );
+            self.last_error
+                .get_or_insert("used_element_invalidate_failed");
+            self.freeze_and_capture("used_element_invalidate_failed");
+            return Ok(None);
+        }
         dma_barrier();
         let elem = unsafe { read_volatile(elem_ptr) };
         assert!(
@@ -5137,6 +5301,11 @@ fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
 }
 
+#[derive(Clone, Copy, Debug)]
+enum DmaError {
+    CacheOperationFailed,
+}
+
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CacheOp {
@@ -5163,23 +5332,23 @@ where
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
+fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) -> Result<(), DmaError> {
     if len == 0 {
-        return;
+        return Ok(());
     }
     #[cfg(test)]
     if let Some(hook) = *DMA_TEST_HOOK.lock() {
         hook(CacheOp::Clean, ptr as usize, len);
-        return;
+        return Ok(());
     }
     if !cacheable {
         if !DMA_SKIP_LOGGED.swap(true, AtomicOrdering::AcqRel) {
-            warn!(
+            info!(
                 target: "virtio-net",
-                "[virtio-net][dma] cache ops disabled (mapping not proven cacheable or feature off)",
+                "[virtio-net][dma] cache ops skipped (mapping non-cacheable)",
             );
         }
-        return;
+        return Ok(());
     }
     let log_once = !DMA_CLEAN_LOGGED.swap(true, AtomicOrdering::AcqRel);
     info!(
@@ -5196,11 +5365,16 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
     }
     compiler_fence(AtomicOrdering::Release);
     if let Err(err) = cache_clean(seL4_CapInitThreadVSpace, ptr as usize, len) {
-        warn!(
-            target: "virtio-net",
-            "[virtio-net][dma] clean syscall failed err={}",
-            err,
-        );
+        if !DMA_ERROR_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            error!(
+                target: "virtio-net",
+                "[virtio-net][dma] clean syscall failed err={} ptr=0x{ptr:016x} len={len} reason={reason}",
+                err,
+                ptr = ptr as usize,
+            );
+        }
+        mark_forensics_frozen();
+        return Err(DmaError::CacheOperationFailed);
     }
     if log_once {
         info!(
@@ -5210,27 +5384,33 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
             len = len,
         );
     }
+    Ok(())
 }
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn dma_invalidate(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
+fn dma_invalidate(
+    ptr: *const u8,
+    len: usize,
+    cacheable: bool,
+    reason: &str,
+) -> Result<(), DmaError> {
     if len == 0 {
-        return;
+        return Ok(());
     }
     #[cfg(test)]
     if let Some(hook) = *DMA_TEST_HOOK.lock() {
         hook(CacheOp::Invalidate, ptr as usize, len);
-        return;
+        return Ok(());
     }
     if !cacheable {
         if !DMA_SKIP_LOGGED.swap(true, AtomicOrdering::AcqRel) {
-            warn!(
+            info!(
                 target: "virtio-net",
-                "[virtio-net][dma] cache ops disabled (mapping not proven cacheable or feature off)",
+                "[virtio-net][dma] cache ops skipped (mapping non-cacheable)",
             );
         }
-        return;
+        return Ok(());
     }
     let log_once = !DMA_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel);
     info!(
@@ -5247,11 +5427,16 @@ fn dma_invalidate(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
     }
     compiler_fence(AtomicOrdering::SeqCst);
     if let Err(err) = cache_invalidate(seL4_CapInitThreadVSpace, ptr as usize, len) {
-        warn!(
-            target: "virtio-net",
-            "[virtio-net][dma] invalidate syscall failed err={}",
-            err,
-        );
+        if !DMA_ERROR_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            error!(
+                target: "virtio-net",
+                "[virtio-net][dma] invalidate syscall failed err={} ptr=0x{ptr:016x} len={len} reason={reason}",
+                err,
+                ptr = ptr as usize,
+            );
+        }
+        mark_forensics_frozen();
+        return Err(DmaError::CacheOperationFailed);
     }
     if log_once {
         info!(
@@ -5261,6 +5446,7 @@ fn dma_invalidate(ptr: *const u8, len: usize, cacheable: bool, reason: &str) {
             len = len,
         );
     }
+    Ok(())
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -5274,11 +5460,25 @@ fn dma_barrier() {
 
 #[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
-fn dma_clean(_ptr: *const u8, _len: usize, _cacheable: bool, _reason: &str) {}
+fn dma_clean(
+    _ptr: *const u8,
+    _len: usize,
+    _cacheable: bool,
+    _reason: &str,
+) -> Result<(), DmaError> {
+    Ok(())
+}
 
 #[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
-fn dma_invalidate(_ptr: *const u8, _len: usize, _cacheable: bool, _reason: &str) {}
+fn dma_invalidate(
+    _ptr: *const u8,
+    _len: usize,
+    _cacheable: bool,
+    _reason: &str,
+) -> Result<(), DmaError> {
+    Ok(())
+}
 
 #[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
@@ -5445,8 +5645,8 @@ mod tx_tests {
     fn cache_ops_called_in_right_places() {
         let ptr = 0x1000usize as *const u8;
         with_dma_test_hook(Some(log_hook), || {
-            dma_clean(ptr, 64, true, "test-clean");
-            dma_invalidate(ptr, 64, true, "test-invalidate");
+            let _ = dma_clean(ptr, 64, true, "test-clean");
+            let _ = dma_invalidate(ptr, 64, true, "test-invalidate");
         });
         let log = OP_LOG.lock();
         assert_eq!(log.len(), 2, "both cache ops should be recorded");
