@@ -33,6 +33,7 @@ use crate::sel4::{seL4_CapInitThreadVSpace, DeviceFrame, RamFrame};
 
 const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
+const TX_PUBLISH_HISTORY: usize = 32;
 const NET_VIRTIO_TX_V2: bool = cfg!(feature = "net-virtio-tx-v2");
 const VIRTIO_GUARD_QUEUE: bool = cfg!(feature = "virtio_guard_queue");
 const DMA_NONCOHERENT: bool = cfg!(target_arch = "aarch64");
@@ -95,6 +96,7 @@ static RX_CACHE_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_ERROR_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_QMEM_LOGGED: AtomicBool = AtomicBool::new(false);
+static DMA_BUFFER_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_RING_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static VQ_LAYOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
@@ -166,6 +168,20 @@ struct TxHeadEntry {
     addr: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct TxPublishRecord {
+    seq: u64,
+    gen: u32,
+    head: u16,
+    slot: u16,
+    avail_idx: u16,
+    len: u32,
+    addr: u64,
+    header_len: u16,
+    payload_len: u16,
+    written_len: u16,
+}
+
 #[derive(Clone, Debug)]
 /// Manages virtio TX descriptor heads and prevents reuse while in-flight.
 struct TxHeadManager {
@@ -199,6 +215,27 @@ impl TxHeadManager {
 
     fn entry_mut(&mut self, id: u16) -> Option<&mut TxHeadEntry> {
         self.entries.get_mut(id as usize)
+    }
+
+    fn entry_copy(&self, id: u16) -> Option<TxHeadEntry> {
+        self.entries.get(id as usize).copied()
+    }
+
+    fn state_bitmap(&self) -> (u32, u32, u32, u32) {
+        let mut free = 0u32;
+        let mut prepared = 0u32;
+        let mut posted = 0u32;
+        let mut reclaimed = 0u32;
+        for (idx, entry) in self.entries.iter().enumerate().take(self.size as usize) {
+            let bit = 1u32 << idx;
+            match entry.state {
+                TxHeadState::Free => free |= bit,
+                TxHeadState::Prepared => prepared |= bit,
+                TxHeadState::Posted => posted |= bit,
+                TxHeadState::Reclaimed => reclaimed |= bit,
+            }
+        }
+        (free, prepared, posted, reclaimed)
     }
 
     fn transition(
@@ -528,6 +565,17 @@ struct TxHeaderInspect {
     csum_offset: u16,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct TxPublishMeta {
+    attempt_seq: u64,
+    header_len: usize,
+    payload_len: usize,
+    written_len: usize,
+    total_len: usize,
+    buffer_vaddr: (usize, usize),
+    buffer_paddr: (usize, usize),
+}
+
 /// Errors surfaced by the virtio network driver.
 #[derive(Debug)]
 pub enum DriverError {
@@ -673,6 +721,8 @@ pub struct VirtioNet {
     tx_zero_len_log_ms: u64,
     tx_v2_log_ms: u64,
     forensic_dump_captured: bool,
+    tx_publish_history: [TxPublishRecord; TX_PUBLISH_HISTORY],
+    tx_publish_history_next: usize,
 }
 
 impl VirtioNet {
@@ -996,6 +1046,69 @@ impl VirtioNet {
             })?;
         }
 
+        if !DMA_BUFFER_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            let map_attr_raw: usize = unsafe { core::mem::transmute(queue_map_attr) };
+            let rx_bounds = rx_buffers.get(0).map(|buf| {
+                let vstart = buf.ptr().as_ptr() as usize;
+                let vend = vstart.saturating_add(buf.as_slice().len());
+                let pstart = buf.paddr();
+                (
+                    vstart,
+                    vend,
+                    pstart,
+                    pstart.saturating_add(buf.as_slice().len()),
+                )
+            });
+            let tx_bounds = tx_buffers.get(0).map(|buf| {
+                let vstart = buf.ptr().as_ptr() as usize;
+                let vend = vstart.saturating_add(buf.as_slice().len());
+                let pstart = buf.paddr();
+                (
+                    vstart,
+                    vend,
+                    pstart,
+                    pstart.saturating_add(buf.as_slice().len()),
+                )
+            });
+            let rx_range = rx_bounds.map_or_else(
+                || {
+                    let mut out = HeaplessString::<96>::new();
+                    let _ = out.push_str("n/a");
+                    out
+                },
+                |(vs, ve, ps, pe)| {
+                    let mut out = HeaplessString::<96>::new();
+                    let _ = write!(
+                        &mut out,
+                        "0x{vs:016x}..0x{ve:016x} p=0x{ps:016x}..0x{pe:016x}"
+                    );
+                    out
+                },
+            );
+            let tx_range = tx_bounds.map_or_else(
+                || {
+                    let mut out = HeaplessString::<96>::new();
+                    let _ = out.push_str("n/a");
+                    out
+                },
+                |(vs, ve, ps, pe)| {
+                    let mut out = HeaplessString::<96>::new();
+                    let _ = write!(
+                        &mut out,
+                        "0x{vs:016x}..0x{ve:016x} p=0x{ps:016x}..0x{pe:016x}"
+                    );
+                    out
+                },
+            );
+            info!(
+                target: "virtio-net",
+                "[virtio-net][dma] buffer mapping cacheable={} map_attr=0x{map_attr_raw:08x} rx_buf={} tx_buf={}",
+                dma_cacheable,
+                rx_range.as_str(),
+                tx_range.as_str(),
+            );
+        }
+
         let rx_buffer_capacity = rx_buffers
             .first()
             .map(|frame| FRAME_BUFFER_LEN.min(frame.as_slice().len()))
@@ -1111,6 +1224,8 @@ impl VirtioNet {
             tx_zero_len_log_ms: now_ms,
             tx_v2_log_ms: now_ms,
             forensic_dump_captured: false,
+            tx_publish_history: [TxPublishRecord::default(); TX_PUBLISH_HISTORY],
+            tx_publish_history_next: 0,
         };
         driver.initialise_queues();
 
@@ -1474,9 +1589,11 @@ impl VirtioNet {
         for (idx, entry) in self.tx_head_mgr.posted_entries() {
             let _ = posted.push((idx, entry.len, entry.addr, entry.gen, entry.slot));
         }
+        let (free_bits, prepared_bits, posted_bits, reclaimed_bits) =
+            self.tx_head_mgr.state_bitmap();
         info!(
             target: "net-console",
-            "[virtio-net][forensics] tx states: free={} posted={} in_flight={} tx_free_len={} tx_gen={} last_used={} used.idx={} avail.idx={}",
+            "[virtio-net][forensics] tx states: free={} posted={} in_flight={} tx_free_len={} tx_gen={} last_used={} used.idx={} avail.idx={} bitmap[free=0x{free_bits:08x} prepared=0x{prepared_bits:08x} posted=0x{posted_bits:08x} reclaimed=0x{reclaimed_bits:08x}]",
             free,
             posted.len(),
             self.tx_head_mgr.in_flight_count(),
@@ -1577,6 +1694,8 @@ impl VirtioNet {
             self.device_faulted,
             forensics_frozen(),
         );
+        self.dump_tx_publish_history();
+        self.dump_tx_recent_entries();
         self.freeze_and_capture("tx_state_violation");
         Err(())
     }
@@ -1586,6 +1705,19 @@ impl VirtioNet {
             let _ = self.tx_used_recent.remove(0);
         }
         let _ = self.tx_used_recent.push((id, len));
+    }
+
+    fn log_tx_used_len_violation(&self, id: u16, used_len: u32, entry: &TxHeadEntry) {
+        error!(
+            target: "net-console",
+            "[virtio-net][forensics] tx used len violation: head={} used_len={} posted_len={} addr=0x{addr:016x} gen={} slot={:?}",
+            id,
+            used_len,
+            entry.len,
+            addr = entry.addr,
+            entry.gen,
+            entry.slot,
+        );
     }
 
     fn dump_tx_recent_entries(&self) {
@@ -1649,6 +1781,7 @@ impl VirtioNet {
         self.dump_tx_used_window_once();
         self.dump_tx_states();
         self.dump_tx_recent_entries();
+        self.dump_tx_publish_history();
         self.freeze_and_capture("tx_anomaly");
     }
 
@@ -1734,26 +1867,33 @@ impl VirtioNet {
         Ok(())
     }
 
-    fn reclaim_posted_head(&mut self, id: u16) -> Result<bool, ()> {
-        match self.tx_head_mgr.state(id) {
-            Some(TxHeadState::Posted) => self
-                .tx_head_mgr
-                .mark_reclaimed(id)
-                .and_then(|_| self.tx_head_mgr.reclaim_head(id))
-                .map(|_| true)
-                .map_err(|_| ()),
-            Some(TxHeadState::Free | TxHeadState::Reclaimed) => {
+    fn reclaim_posted_head(&mut self, id: u16, used_len: u32) -> Result<bool, ()> {
+        let Some(entry) = self.tx_head_mgr.entry_copy(id) else {
+            self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
+            self.tx_state_violation("tx_used_oob", id, None)?;
+            return Err(());
+        };
+        match entry.state {
+            TxHeadState::Posted => {
+                if used_len == 0 {
+                    self.log_tx_used_len_violation(id, used_len, &entry);
+                    self.tx_state_violation("tx_used_len_zero", id, entry.slot)?;
+                    return Err(());
+                }
+                if used_len > entry.len {
+                    self.log_tx_used_len_violation(id, used_len, &entry);
+                    self.tx_state_violation("tx_used_len_overflow", id, entry.slot)?;
+                    return Err(());
+                }
+                self.tx_head_mgr
+                    .mark_reclaimed(id)
+                    .and_then(|_| self.tx_head_mgr.reclaim_head(id))
+                    .map(|_| true)
+                    .map_err(|_| ())
+            }
+            _ => {
                 self.tx_dup_used_ignored = self.tx_dup_used_ignored.saturating_add(1);
-                Ok(false)
-            }
-            Some(TxHeadState::Prepared) => {
-                self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
-                self.tx_state_violation("tx_used_invalid_state", id, None)?;
-                Err(())
-            }
-            None => {
-                self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
-                self.tx_state_violation("tx_used_oob", id, None)?;
+                self.tx_state_violation("tx_used_unposted", id, entry.slot)?;
                 Err(())
             }
         }
@@ -2150,6 +2290,7 @@ impl VirtioNet {
         descs: &[DescSpec],
         used_len: Option<usize>,
         notify: bool,
+        publish_meta: Option<&TxPublishMeta>,
     ) -> Result<(), ()> {
         let Some(state) = self.tx_head_mgr.state(head_id) else {
             self.tx_drops = self.tx_drops.saturating_add(1);
@@ -2176,6 +2317,20 @@ impl VirtioNet {
         self.check_device_health();
         if self.device_faulted || forensics_frozen() {
             return Err(());
+        }
+        let (_, avail_idx_before) = self.tx_queue.indices_no_sync();
+        let slot_hint = self.tx_avail_slot_hint(avail_idx_before);
+        if let Some(meta) = publish_meta {
+            if meta.total_len == 0 || meta.written_len == 0 || meta.payload_len == 0 {
+                self.log_tx_zero_guard(
+                    head_id,
+                    slot_hint,
+                    avail_idx_before,
+                    self.tx_head_mgr.next_gen(),
+                    meta,
+                );
+                return Err(());
+            }
         }
         assert!(
             descs.len() <= usize::from(self.tx_queue.size),
@@ -2278,10 +2433,20 @@ impl VirtioNet {
                 self.tx_anomaly_logged,
             )
             .ok_or(())?;
+        if let Some(meta) = publish_meta {
+            if let Some(desc) = resolved_descs.first() {
+                let start = meta.buffer_paddr.0 as u64;
+                let end = meta.buffer_paddr.1 as u64;
+                let desc_end = desc.addr.saturating_add(desc.len as u64);
+                if desc.addr == 0 || desc.addr < start || desc_end > end {
+                    self.tx_state_violation("tx_desc_bounds", head_id, None)?;
+                    return Err(());
+                }
+            }
+        }
         // Ensure cache maintenance and descriptor writes are visible before handing ownership to the device.
         dma_barrier();
 
-        let (_, avail_idx_before) = self.tx_queue.indices_no_sync();
         if self
             .validate_tx_publish_guard(head_id, &resolved_descs, header_len, avail_idx_before)
             .is_err()
@@ -2305,12 +2470,18 @@ impl VirtioNet {
                 return Err(());
             }
         };
-        if self
-            .guard_tx_post_state(head_id, slot, &resolved_descs[0])
-            .is_err()
-        {
-            return Err(());
-        }
+        let gen = match self.guard_tx_post_state(head_id, slot, &resolved_descs[0]) {
+            Ok(gen) => gen,
+            Err(_) => return Err(()),
+        };
+        self.record_tx_publish_history(
+            head_id,
+            slot,
+            avail_idx,
+            gen,
+            &resolved_descs[0],
+            publish_meta,
+        );
         if slot == 0 && !self.tx_wrap_logged {
             self.tx_wrap_logged = true;
             info!(
@@ -2398,6 +2569,7 @@ impl VirtioNet {
                 notify,
             );
         }
+        virtq_publish_barrier();
         if notify && !self.device_faulted {
             if self
                 .tx_queue
@@ -2723,7 +2895,7 @@ impl VirtioNet {
                 Ok(Some((id, len))) => {
                     self.record_tx_used_entry(id, len);
                     // used.len is ignored for TX; ownership returns solely via used.id and tracked state.
-                    let reclaimed = match self.reclaim_posted_head(id) {
+                    let reclaimed = match self.reclaim_posted_head(id, len) {
                         Ok(reclaimed) => reclaimed,
                         Err(()) => break,
                     };
@@ -2779,7 +2951,7 @@ impl VirtioNet {
                 break;
             }
             // used.len is advisory; the head lifecycle is guarded by state, not the device-provided length.
-            let reclaimed = match self.reclaim_posted_head(id) {
+            let reclaimed = match self.reclaim_posted_head(id, elem.len) {
                 Ok(reclaimed) => reclaimed,
                 Err(()) => break,
             };
@@ -3217,9 +3389,9 @@ impl VirtioNet {
             .filter(|&len| len > 0 && written_len > 0)
     }
 
-    fn submit_tx(&mut self, id: u16, len: usize) {
+    fn submit_tx(&mut self, id: u16, len: usize, meta: TxPublishMeta) {
         if NET_VIRTIO_TX_V2 {
-            self.submit_tx_v2(id, len);
+            self.submit_tx_v2(id, len, meta);
             return;
         }
         if self.tx_publish_blocked() {
@@ -3248,7 +3420,7 @@ impl VirtioNet {
             }];
 
             if self
-                .enqueue_tx_chain_checked(id, &desc, Some(length), true)
+                .enqueue_tx_chain_checked(id, &desc, Some(length), true, Some(&meta))
                 .is_err()
             {
                 self.tx_drops = self.tx_drops.saturating_add(1);
@@ -3274,7 +3446,7 @@ impl VirtioNet {
         }
     }
 
-    fn submit_tx_v2(&mut self, id: u16, len: usize) {
+    fn submit_tx_v2(&mut self, id: u16, len: usize, meta: TxPublishMeta) {
         self.check_device_health();
         if self.device_faulted {
             self.release_tx_head(id, "tx_v2_device_faulted");
@@ -3288,6 +3460,8 @@ impl VirtioNet {
             self.release_tx_head(id, "tx_v2_publish_blocked");
             return;
         }
+        let (_, avail_idx_before) = self.tx_queue.indices_no_sync();
+        let slot_hint = self.tx_avail_slot_hint(avail_idx_before);
         if len == 0 {
             self.tx_zero_len_attempt = self.tx_zero_len_attempt.wrapping_add(1);
             debug_assert!(len != 0, "tx-v2 zero-length submit");
@@ -3321,6 +3495,22 @@ impl VirtioNet {
             self.tx_zero_len_attempt = self.tx_zero_len_attempt.wrapping_add(1);
             debug_assert!(capped_len != 0, "tx-v2 zero-length buffer");
             self.release_tx_head(id, "tx_v2_capped_zero");
+            return;
+        }
+        if meta.total_len == 0 || meta.written_len == 0 || meta.payload_len == 0 {
+            self.log_tx_zero_guard(
+                id,
+                slot_hint,
+                avail_idx_before,
+                self.tx_head_mgr.next_gen(),
+                &meta,
+            );
+            self.release_tx_head(id, "tx_v2_zero_guard");
+            return;
+        }
+        if meta.total_len != len || capped_len != meta.total_len {
+            self.tx_state_violation("tx_v2_len_mismatch", id, slot_hint)?;
+            self.release_tx_head(id, "tx_v2_len_mismatch");
             return;
         }
 
@@ -3404,21 +3594,17 @@ impl VirtioNet {
         }
         match self.tx_queue.push_avail(id) {
             Ok((slot, avail_idx, _old_idx)) => {
-                if self
-                    .guard_tx_post_state(
-                        id,
-                        slot,
-                        &DescSpec {
-                            addr: desc.addr,
-                            len: desc.len,
-                            flags: desc.flags,
-                            next: None,
-                        },
-                    )
-                    .is_err()
-                {
-                    return;
-                }
+                let desc_spec = DescSpec {
+                    addr: desc.addr,
+                    len: desc.len,
+                    flags: desc.flags,
+                    next: None,
+                };
+                let gen = match self.guard_tx_post_state(id, slot, &desc_spec) {
+                    Ok(gen) => gen,
+                    Err(_) => return,
+                };
+                self.record_tx_publish_history(id, slot, avail_idx, gen, &desc_spec, Some(&meta));
                 self.debug_check_tx_avail_uniqueness(self.tx_queue.last_used, avail_idx);
                 if self.tx_queue.sync_avail_ring_for_device().is_err() {
                     self.freeze_and_capture("tx_v2_avail_sync_failed");
@@ -3430,6 +3616,7 @@ impl VirtioNet {
                 if slot == 0 && !self.tx_wrap_logged {
                     self.tx_wrap_logged = true;
                 }
+                virtq_publish_barrier();
                 if self
                     .tx_queue
                     .notify(&mut self.regs, TX_QUEUE_INDEX)
@@ -3642,6 +3829,96 @@ impl VirtioNet {
                 len = desc.len,
                 flags = desc.flags,
                 next = desc.next,
+            );
+        }
+    }
+
+    fn tx_avail_slot_hint(&self, avail_idx: u16) -> Option<u16> {
+        let qsize = usize::from(self.tx_queue.size);
+        if qsize == 0 {
+            return None;
+        }
+        Some((avail_idx as usize % qsize) as u16)
+    }
+
+    fn log_tx_zero_guard(
+        &mut self,
+        head_id: u16,
+        slot: Option<u16>,
+        avail_idx: u16,
+        gen: u32,
+        meta: &TxPublishMeta,
+    ) {
+        error!(
+            target: "net-console",
+            "[virtio-net][tx-guard] blocked zero-length publish: seq={} gen={} head={} slot={:?} avail_idx={} header_len={} payload_len={} written_len={} total_len={} buf_vaddr=0x{vstart:016x}..0x{vend:016x} buf_paddr=0x{pstart:016x}..0x{pend:016x}",
+            meta.attempt_seq,
+            gen,
+            head_id,
+            slot,
+            avail_idx,
+            meta.header_len,
+            meta.payload_len,
+            meta.written_len,
+            meta.total_len,
+            vstart = meta.buffer_vaddr.0,
+            vend = meta.buffer_vaddr.1,
+            pstart = meta.buffer_paddr.0,
+            pend = meta.buffer_paddr.1,
+        );
+        self.tx_drop_zero_len = self.tx_drop_zero_len.saturating_add(1);
+    }
+
+    fn record_tx_publish_history(
+        &mut self,
+        head_id: u16,
+        slot: u16,
+        avail_idx: u16,
+        gen: u32,
+        desc: &DescSpec,
+        meta: Option<&TxPublishMeta>,
+    ) {
+        let idx = self.tx_publish_history_next % TX_PUBLISH_HISTORY;
+        let mut record = TxPublishRecord {
+            seq: meta.map(|m| m.attempt_seq).unwrap_or(0),
+            gen,
+            head: head_id,
+            slot,
+            avail_idx,
+            len: desc.len,
+            addr: desc.addr,
+            header_len: meta.map(|m| m.header_len as u16).unwrap_or(0),
+            payload_len: meta.map(|m| m.payload_len as u16).unwrap_or(0),
+            written_len: meta.map(|m| m.written_len as u16).unwrap_or(0),
+        };
+        if desc.len == 0 || desc.addr == 0 {
+            record.seq = record.seq.wrapping_add(1);
+        }
+        self.tx_publish_history[idx] = record;
+        self.tx_publish_history_next = (self.tx_publish_history_next + 1) % TX_PUBLISH_HISTORY;
+    }
+
+    fn dump_tx_publish_history(&self) {
+        let start = self.tx_publish_history_next % TX_PUBLISH_HISTORY;
+        for offset in 0..TX_PUBLISH_HISTORY {
+            let idx = (start + offset) % TX_PUBLISH_HISTORY;
+            let record = self.tx_publish_history[idx];
+            if record.len == 0 && record.addr == 0 && record.gen == 0 && record.seq == 0 {
+                continue;
+            }
+            error!(
+                target: "net-console",
+                "[virtio-net][forensics] tx_publish_hist[{idx}] seq={} gen={} head={} slot={} avail_idx={} len={} addr=0x{addr:016x} header_len={} payload_len={} written_len={}",
+                record.seq,
+                record.gen,
+                record.head,
+                record.slot,
+                record.avail_idx,
+                record.len,
+                addr = record.addr,
+                record.header_len,
+                record.payload_len,
+                record.written_len,
             );
         }
     }
@@ -4090,7 +4367,12 @@ impl TxToken for VirtioTxToken {
                 .get_mut(id as usize)
                 .expect("tx descriptor out of range");
             let header_len = driver.rx_header_len;
-            let max_len = buffer.as_mut_slice().len();
+            let buffer_len = buffer.as_slice().len();
+            let max_len = buffer_len;
+            let buffer_vstart = buffer.ptr().as_ptr() as usize;
+            let buffer_vend = buffer_vstart.saturating_add(buffer_len);
+            let buffer_pstart = buffer.paddr();
+            let buffer_pend = buffer_pstart.saturating_add(buffer_len);
             if max_len <= header_len {
                 driver.tx_drops = driver.tx_drops.saturating_add(1);
                 if NET_VIRTIO_TX_V2 {
@@ -4130,7 +4412,16 @@ impl TxToken for VirtioTxToken {
                 return result;
             };
             debug_assert!(total_len > 0, "tx total_len must be non-zero before submit");
-            driver.submit_tx(id, total_len);
+            let publish_meta = TxPublishMeta {
+                attempt_seq,
+                header_len,
+                payload_len,
+                written_len,
+                total_len,
+                buffer_vaddr: (buffer_vstart, buffer_vend),
+                buffer_paddr: (buffer_pstart, buffer_pend),
+            };
+            driver.submit_tx(id, total_len, publish_meta);
             driver.tx_packets = driver.tx_packets.saturating_add(1);
             result
         } else {
