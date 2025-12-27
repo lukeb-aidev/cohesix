@@ -89,7 +89,9 @@ const BOOTSTRAP_IDLE_SPINS: usize = 512;
 const CONSOLE_BANNER: &str = "[Cohesix] Root console ready (type 'help' for commands)";
 const CONSOLE_PROMPT: &str = "cohesix> ";
 #[cfg(feature = "net-console")]
-const NET_POLL_LOG_INTERVAL_MS: u64 = 1_000;
+const NET_DIAG_HEARTBEAT_MS: u64 = 5_000;
+#[cfg(feature = "net-console")]
+const NET_DIAG_HEARTBEAT_POLLS: u64 = 1_024;
 #[cfg(feature = "net-console")]
 const NET_DIAG_STUCK_MS: u64 = 3_000;
 
@@ -350,6 +352,14 @@ impl AuthThrottle {
     }
 }
 
+#[cfg(feature = "net-console")]
+#[derive(Clone, Copy)]
+struct NetDiagLogSnapshot {
+    snapshot: NetDiagSnapshot,
+    link_up: bool,
+    tx_drops: u64,
+}
+
 /// Networking integration exposed to the pump when the `net` feature is enabled.
 /// Event pump orchestrating serial, timer, IPC, and optional networking work.
 pub struct EventPump<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>
@@ -374,6 +384,8 @@ where
     net: Option<&'a mut dyn NetPoller>,
     #[cfg(feature = "net-console")]
     last_net_diag_log_ms: Option<u64>,
+    #[cfg(feature = "net-console")]
+    last_net_diag_emitted: Option<NetDiagLogSnapshot>,
     #[cfg(feature = "net-console")]
     last_net_diag_snapshot: Option<NetDiagSnapshot>,
     #[cfg(feature = "net-console")]
@@ -430,6 +442,8 @@ where
             net: None,
             #[cfg(feature = "net-console")]
             last_net_diag_log_ms: None,
+            #[cfg(feature = "net-console")]
+            last_net_diag_emitted: None,
             #[cfg(feature = "net-console")]
             last_net_diag_snapshot: None,
             #[cfg(feature = "net-console")]
@@ -548,15 +562,39 @@ where
     }
 
     #[cfg(feature = "net-console")]
+    // Activity-only logging to prevent endless spam in steady state.
+    fn should_log_net_diag(&self, snapshot: NetDiagSnapshot, telemetry: NetTelemetry) -> bool {
+        let activity = self.last_net_diag_emitted.map_or(true, |prev| {
+            Self::net_diag_changed(prev.snapshot, snapshot)
+                || prev.link_up != telemetry.link_up
+                || prev.tx_drops != telemetry.tx_drops
+        });
+        let heartbeat_poll = self.last_net_diag_emitted.map_or(false, |prev| {
+            snapshot.poll_calls.saturating_sub(prev.snapshot.poll_calls) >= NET_DIAG_HEARTBEAT_POLLS
+        });
+        let heartbeat_time = self.last_net_diag_log_ms.map_or(false, |last| {
+            self.now_ms.saturating_sub(last) >= NET_DIAG_HEARTBEAT_MS
+        });
+
+        activity || heartbeat_poll || heartbeat_time
+    }
+
+    #[cfg(feature = "net-console")]
+    fn net_diag_changed(prev: NetDiagSnapshot, curr: NetDiagSnapshot) -> bool {
+        let mut prev = prev;
+        let mut curr = curr;
+        prev.poll_calls = 0;
+        curr.poll_calls = 0;
+        prev != curr
+    }
+
+    #[cfg(feature = "net-console")]
     fn log_net_diag(&mut self, telemetry: NetTelemetry) {
         if !NET_DIAG_FEATURED {
             return;
         }
         let snapshot = NET_DIAG.snapshot();
-        let should_log = self.last_net_diag_log_ms.map_or(true, |last| {
-            self.now_ms.saturating_sub(last).saturating_add(1) >= NET_POLL_LOG_INTERVAL_MS
-        });
-        if should_log {
+        if self.should_log_net_diag(snapshot, telemetry) {
             let line = format_message(format_args!(
                 "NETDIAG poll={} rx_irq={} rx_kick={} rx_post={} rx_used={} rx_stack={} sm_rx={} tx_sub={} tx_kick={} tx_used={} tx_comp={} sm_tx={} accept={}/{} rw={}/{} cache={}/{} link={} drops={}",
                 snapshot.poll_calls,
@@ -582,6 +620,11 @@ where
             ));
             self.audit.info(line.as_str());
             self.last_net_diag_log_ms = Some(self.now_ms);
+            self.last_net_diag_emitted = Some(NetDiagLogSnapshot {
+                snapshot,
+                link_up: telemetry.link_up,
+                tx_drops: telemetry.tx_drops,
+            });
         }
         self.check_net_diag_progress(snapshot);
         self.last_net_diag_snapshot = Some(snapshot);
