@@ -606,6 +606,7 @@ pub struct VirtioNet {
     tx_used_window_dumped: bool,
     tx_dma_log_once: bool,
     tx_publish_verify_count: u32,
+    tx_publish_guard_logged: bool,
     rx_zero_len_logged: bool,
     tx_zero_len_logged: bool,
     rx_header_zero_logged: bool,
@@ -1036,6 +1037,7 @@ impl VirtioNet {
             tx_used_window_dumped: false,
             tx_dma_log_once: false,
             tx_publish_verify_count: 0,
+            tx_publish_guard_logged: false,
             rx_zero_len_logged: false,
             tx_zero_len_logged: false,
             rx_header_zero_logged: false,
@@ -1618,6 +1620,56 @@ impl VirtioNet {
         }
     }
 
+    fn validate_tx_publish_guard(
+        &mut self,
+        head_id: u16,
+        descs: &[DescSpec],
+        header_len: usize,
+        avail_idx: u16,
+    ) -> Result<(), ()> {
+        let required_header = core::cmp::max(header_len as u32, VIRTIO_NET_HEADER_LEN_BASIC as u32);
+        let mut total_len: u32 = 0;
+        let mut zero_len = false;
+        for desc in descs {
+            if desc.len == 0 {
+                zero_len = true;
+            }
+            total_len = total_len.saturating_add(desc.len);
+        }
+        let head_state = self.tx_head_mgr.state(head_id);
+        let in_flight = self.tx_head_mgr.is_in_flight(head_id);
+        let first_len = descs.first().map(|d| d.len).unwrap_or(0);
+        let sum_mismatch = first_len != total_len;
+        let guard_failed = zero_len || total_len < required_header || in_flight || sum_mismatch;
+        if guard_failed {
+            if !self.tx_publish_guard_logged {
+                self.tx_publish_guard_logged = true;
+                let qsize = core::cmp::max(usize::from(self.tx_queue.size), 1);
+                let slot = (avail_idx as usize % qsize) as u16;
+                let next_idx = avail_idx.wrapping_add(1);
+                error!(
+                    target: "net-console",
+                    "[virtio-net][tx-guard] blocked publish: head={} state={:?} slot={} avail_idx={}->{} descs={} first_len={} total_len={} required_header={} in_flight={} zero_len_desc={} sum_mismatch={}",
+                    head_id,
+                    head_state,
+                    slot,
+                    avail_idx,
+                    next_idx,
+                    descs.len(),
+                    first_len,
+                    total_len,
+                    required_header,
+                    in_flight,
+                    zero_len,
+                    sum_mismatch,
+                );
+            }
+            self.tx_drops = self.tx_drops.saturating_add(1);
+            return Err(());
+        }
+        Ok(())
+    }
+
     fn reclaim_posted_head(&mut self, id: u16) -> Result<bool, ()> {
         match self.tx_head_mgr.state(id) {
             Some(TxHeadState::Posted) => self
@@ -2009,6 +2061,15 @@ impl VirtioNet {
         used_len: Option<usize>,
         notify: bool,
     ) -> Result<(), ()> {
+        let Some(state) = self.tx_head_mgr.state(head_id) else {
+            self.tx_drops = self.tx_drops.saturating_add(1);
+            self.last_error.get_or_insert("tx_head_state_missing");
+            return Err(());
+        };
+        if !matches!(state, TxHeadState::Prepared) {
+            self.drop_duplicate_publish(head_id, state);
+            return Err(());
+        }
         let log_breadcrumb = self.tx_publish_log_count < 4 || self.tx_anomaly_logged;
         if log_breadcrumb {
             debug!(
@@ -2118,6 +2179,16 @@ impl VirtioNet {
         // Ensure cache maintenance and descriptor writes are visible before handing ownership to the device.
         dma_barrier();
 
+        let (_, avail_idx_before) = self.tx_queue.indices_no_sync();
+        if self
+            .validate_tx_publish_guard(head_id, &resolved_descs, header_len, avail_idx_before)
+            .is_err()
+        {
+            if matches!(self.tx_head_mgr.state(head_id), Some(TxHeadState::Prepared)) {
+                self.release_tx_head(head_id, "tx_guard_reject");
+            }
+            return Err(());
+        }
         if !matches!(self.tx_head_mgr.state(head_id), Some(TxHeadState::Prepared)) {
             self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
             #[cfg(debug_assertions)]
@@ -3058,8 +3129,8 @@ impl VirtioNet {
             return;
         }
         let Some(state) = self.tx_head_mgr.state(id) else {
-            self.last_error.get_or_insert("tx_v2_state_unknown");
-            self.release_tx_head(id, "tx_v2_state_unknown");
+            self.last_error.get_or_insert("tx_v2_state_missing");
+            self.release_tx_head(id, "tx_v2_state_missing");
             return;
         };
         if !matches!(state, TxHeadState::Prepared) {
@@ -3119,6 +3190,24 @@ impl VirtioNet {
             self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
             #[cfg(debug_assertions)]
             self.freeze_tx_publishes("tx_v2_publish_state_violation");
+            return;
+        }
+        let (_, avail_idx_before) = self.tx_queue.indices_no_sync();
+        if self
+            .validate_tx_publish_guard(
+                id,
+                &[DescSpec {
+                    addr: desc.addr,
+                    len: desc.len,
+                    flags: desc.flags,
+                    next: None,
+                }],
+                self.rx_header_len,
+                avail_idx_before,
+            )
+            .is_err()
+        {
+            self.release_tx_head(id, "tx_v2_guard_reject");
             return;
         }
         if let Some((slot, avail_idx, _old_idx)) = self.tx_queue.push_avail(id) {
