@@ -357,7 +357,7 @@ impl AuthThrottle {
 struct NetDiagLogSnapshot {
     snapshot: NetDiagSnapshot,
     link_up: bool,
-    tx_drops: u64,
+    tx_drops: u32,
 }
 
 /// Networking integration exposed to the pump when the `net` feature is enabled.
