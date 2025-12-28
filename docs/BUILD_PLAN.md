@@ -157,6 +157,161 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 
 > **Future Note:** A host-side WASM GUI is expected as a hive dashboard layered on the `cohsh` protocol; it does not alter kernel/userspace boundaries or introduce new in-VM services.
 
+## Milestone 6a — GPU Model Lifecycle & Telemetry Semantics (LoRA-ready)
+
+**Why this exists (context)**  
+Milestone 6 proved the **GPU lease boundary and host bridge mechanics** using kernel-style job submission. That validated the architecture, but it does not yet express **model lifecycle state** or **learning-oriented telemetry semantics**, which are required for PEFT / LoRA feedback loops at scale.
+
+Milestone 6a adds **no new execution capabilities** and **no new control channels**. It introduces only **file-level conventions and minimal host-bridge extensions** so Cohesix can orchestrate *model state* and *learning telemetry* without becoming an ML runtime.
+
+This milestone is intentionally boring.
+
+---
+
+### Goal
+
+Extend the existing `gpu-bridge-host` and GPU namespace with:
+1. **Model lifecycle surfaces** (selection + activation, not execution)
+2. **Well-defined telemetry semantics** suitable for LoRA / PEFT pipelines
+
+while preserving:
+- CUDA/NVML strictly outside the VM
+- Secure9P as the only control plane
+- WorkerGpu as a namespace-only role
+- Deterministic memory and rate bounds
+
+---
+
+### Deliverables
+
+#### 1. GPU Model Lifecycle Namespace (Host-side only)
+
+Extend the mirrored GPU namespace with a **model lifecycle view**:
+
+/gpu/models/
+available/
+<model_id>/
+manifest.toml
+active -> <model_id>
+
+Properties:
+- `available/` is read-only to VM roles
+- `active` is a writable symlink-like pointer (atomic swap)
+- Model artifacts live on the host filesystem; Cohesix sees references only
+- Activation semantics are host-defined (reload / restart / hot-swap)
+
+**Non-goals**
+- No model uploads via 9P
+- No artifact streaming
+- No training or conversion logic
+
+---
+
+#### 2. Telemetry Schema for Learning Loops
+
+Define and document a **versioned telemetry schema** for GPU learning feedback.
+
+Required fields (minimum):
+- `schema_version`
+- `device_id`
+- `model_id`
+- `lora_id` (optional)
+- `time_window`
+- `token_count`
+- `latency_histogram`
+
+Optional fields:
+- confidence / entropy
+- drift indicators
+- operator feedback flags
+
+Telemetry continues to flow through existing paths:
+
+/gpu/telemetry/*
+/worker//telemetry
+
+Constraints:
+- Size-bounded records
+- Append-only semantics
+- Explicit windowing (no unbounded streams)
+
+---
+
+#### 3. Worker Behavior (No New Roles)
+
+WorkerGpu behavior remains minimal:
+- Observe `/gpu/models/active`
+- Include `model_id` / `lora_id` in forwarded telemetry
+- Enforce existing rate and size limits
+
+No new worker types or privileges are introduced.
+
+---
+
+#### 4. Queen Export Compatibility (No Training Logic)
+
+Ensure telemetry emitted under the new schema can be **exported unchanged** via:
+
+/queen/telemetry/*
+/queen/export/lora_jobs/*
+
+Milestone 6a does **not** implement training, scheduling, or PEFT tooling.
+It only guarantees that exported telemetry is:
+- Structured
+- Bounded
+- Policy-checkable
+- ML-pipeline friendly
+
+---
+
+### Files & Components Touched
+
+- `gpu-bridge-host`
+  - Add model lifecycle surfaces
+  - Implement atomic model activation
+  - Emit telemetry records with schema tags
+
+- `docs/GPU_NODES.md`
+  - Document `/gpu/models/*`
+  - Clarify separation between job execution vs model state
+
+- `docs/INTERFACES.md`
+  - Telemetry schema definition
+  - Explicit size and rate limits
+
+- `docs/USE_CASES.md`
+  - Reference LoRA / PEFT edge feedback loop (informational)
+
+No changes to:
+- seL4 kernel usage
+- Secure9P protocol
+- NineDoor access policy logic
+- Worker role definitions
+
+---
+
+### Checks (Definition of Done)
+
+- Existing Milestone 6 GPU kernel tests still pass unchanged
+- Switching `/gpu/models/active` causes host-side model reload
+- Telemetry records include valid schema headers
+- Oversized or malformed telemetry is rejected
+- Worker cannot upload models or bypass leases
+- No new in-VM dependencies introduced
+
+---
+
+### Outcome
+
+After Milestone 6a:
+- Cohesix can safely coordinate **model evolution at the edge**
+- PEFT / LoRA pipelines can consume telemetry without bespoke glue
+- GPU execution remains host-owned
+- The control plane remains deterministic, auditable, and small
+
+Milestone 6 stays about **capability**.  
+Milestone 6a is about **intent**.
+
 ## Milestone 7a — Root-Task Event Pump & Authenticated Kernel Entry
 **Status:** Complete — Event pump replaces the spin loop; authenticated console flow and serial integration are live. Preserve PL011 logging and audit ordering during follow-up changes.
 **Deliverables**
