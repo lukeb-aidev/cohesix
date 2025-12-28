@@ -65,4 +65,250 @@ GPU workers do not schedule hardware directly; they receive tickets and leases f
 - Tickets for `/gpu/*` paths are issued only to `WorkerGpu` roles.
 - All control traffic is logged to `/log/queen.log` with ticket IDs for audit.
 
+# LoRA Feedback Loop Walkthrough  
+**Jetson Nano → Cohesix Worker → Queen → PEFT/LoRA Farm → Queen → Worker → Jetson Nano**
+
+This walkthrough describes a **pragmatic, end-to-end LoRA optimisation loop** using Cohesix as the **secure control plane**, while keeping CUDA, TensorRT, and training stacks **outside the VM and outside the TCB**.
+
+The design assumes:
+- Many **NVIDIA Jetson Nano** devices at the edge
+- Each Jetson hosts a **Cohesix Worker VM**
+- A single **Cohesix Queen** in the cloud
+- An external **PEFT / LoRA training farm** (Kubernetes, Slurm, managed GPUs)
+
+No new IPC mechanisms are introduced. Everything flows through **Secure9P namespaces and files**.
+
+---
+
+## 1. Runtime Inference on Jetson Nano (Outside Cohesix)
+
+**Where inference runs**
+- CUDA / TensorRT / PyTorch run on the **Jetson host OS**
+- Cohesix never loads CUDA, NVML, or drivers
+
+**Active model**
+- Base model + LoRA adapter
+- Loaded by the host inference process
+- Selected by Cohesix via file pointers (not APIs)
+
+**Why this matters**
+- Keeps the Cohesix TCB small
+- Allows native Jetson tooling and performance
+- Avoids re-implementing ML runtimes
+
+---
+
+## 2. Telemetry Generation (Host → `/gpu/telemetry`)  
+
+During inference, the host process emits **summarised telemetry**, not raw data or gradients.
+
+Typical fields:
+- Token counts
+- Latency histograms
+- Confidence / entropy
+- Input class distribution
+- Drift indicators
+- Optional human feedback flags
+
+The host GPU bridge appends telemetry records into the Cohesix-mirrored namespace:
+
+/gpu/telemetry/
+batch_000123.cbor
+batch_000124.cbor
+
+Properties:
+- Append-only
+- Size-bounded
+- Structured (CBOR or JSON)
+- Tagged with:
+  - `model_id`
+  - `lora_id`
+  - `device_id`
+  - `time_window`
+  - `ticket_id`
+
+No streaming, no sockets, no RPC.
+
+---
+
+## 3. Worker Collection & Thinning  
+
+Each Jetson runs a **Cohesix Worker** with a role-scoped ticket.
+
+The worker:
+- Reads `/gpu/telemetry/*`
+- Applies optional thinning / aggregation
+- Emits consolidated telemetry upstream:
+
+/worker/self/telemetry/
+window_2025-01-08.cbor
+
+This step is important on Jetson:
+- Bandwidth-aware
+- Offline-tolerant
+- Deterministic memory use
+
+---
+
+## 4. Secure Uplink to the Queen  
+
+The Worker writes telemetry into the Queen namespace via Secure9P:
+
+/queen/telemetry/jetson-42/
+window_2025-01-08.cbor
+
+Transport characteristics:
+- Secure9P over authenticated transport
+- msize-bounded frames
+- Rate-limited
+- Fully auditable (append-only)
+
+If the link drops:
+- Telemetry spools locally
+- Resumes when connectivity returns
+
+---
+
+## 5. Queen Aggregation & Policy Gating  
+
+The Queen:
+- Aggregates telemetry from many workers
+- Applies policy:
+  - Minimum sample size
+  - Drift thresholds
+  - Time windows
+  - Manual approval (optional)
+
+When criteria are met, the Queen **exports a LoRA training job**:
+
+/queen/export/lora_jobs/job_8932/
+telemetry.cbor
+base_model.ref
+policy.toml
+
+This directory is the **contract boundary** between Cohesix and ML tooling.
+
+---
+
+## 6. External PEFT / LoRA Training (Out of Band)
+
+A LoRA farm watches `/queen/export/lora_jobs/`.
+
+This can be:
+- HuggingFace PEFT
+- QLoRA
+- Axolotl
+- Lightning / Accelerate
+- Running on Kubernetes, Slurm, or managed GPUs
+
+Cohesix does **not**:
+- Run training
+- Schedule GPUs
+- Manage ML frameworks
+
+It only:
+- Supplies telemetry
+- Tracks provenance
+- Enforces policy
+
+---
+
+## 7. LoRA Artifact Import (Farm → Queen)
+
+The training job produces:
+- `adapter.safetensors`
+- `lora.json` (rank, alpha, target layers)
+- Validation metrics
+
+These are written back into the Queen namespace:
+
+/queen/models/lora/llama3-edge-v7/
+adapter.safetensors
+manifest.toml
+metrics.json
+
+The Queen records:
+- Parent model hash
+- Telemetry window used
+- Training job ID
+- Approval status
+
+---
+
+## 8. Model Distribution to Workers  
+
+Workers observe the model registry:
+
+/worker/models/
+llama3-edge-v7/
+
+Before activation, the Worker:
+- Verifies signatures / hashes
+- Checks memory and VRAM budgets
+- Confirms compatibility with base model
+
+When approved, the Worker updates the GPU namespace pointer:
+
+/gpu/models/active -> llama3-edge-v7
+
+---
+
+## 9. Jetson Hot-Swap or Restart  
+
+The host inference process:
+- Detects the model pointer change
+- Reloads the LoRA adapter (hot-swap or restart)
+- Continues inference with the new adapter
+
+Post-deployment telemetry flows immediately, closing the loop.
+
+---
+
+## 10. What Cohesix Provides (and What It Doesn’t)
+
+**Cohesix provides**
+- Secure telemetry paths
+- Deterministic control plane
+- Policy enforcement
+- Provenance & audit
+- Safe model distribution
+
+**Cohesix deliberately does not**
+- Run CUDA
+- Train models
+- Stream tensors
+- Replace ML ecosystems
+
+---
+
+## 11. Minimal Glue Required for Adoption  
+
+To deploy this at scale, only a few thin adapters are needed:
+
+### Host-side
+- `gpu-bridge`
+  - Writes `/gpu/telemetry`
+  - Watches `/gpu/models`
+  - Loads LoRA adapters via TensorRT / PyTorch
+
+### Cloud-side
+- `lora-farm-exporter`
+  - Reads `/queen/export`
+  - Launches PEFT jobs
+  - Writes results back to `/queen/models`
+
+Everything else already exists in the protocol.
+
+---
+
+## 12. Bottom Line
+
+- The Secure9P + namespace model is sufficient
+- No protocol changes are required
+- The loop scales from 1 Jetson to thousands
+- ML teams keep their existing tools
+- Cohesix stays small, auditable, and boring — on purpose
+
+That’s exactly what you want for real deployment.
+
 Future work (per `BUILD_PLAN.md` milestones): ticket arbitration across multiple workers, lease renewal/expiry enforcement, GPU worker lifecycle hooks, and CI coverage of the `/gpu/<id>/` namespace surface.
