@@ -27,7 +27,9 @@ use smoltcp::wire::EthernetAddress;
 #[cfg(test)]
 use spin::Mutex;
 
+use crate::bootstrap::bootinfo_snapshot::BootInfoState;
 use crate::debug::watched_write_bytes;
+use crate::guards;
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::dma::{self, PinnedDmaRange};
 use crate::hal::{HalError, Hardware};
@@ -35,7 +37,7 @@ use crate::net::{
     NetDevice, NetDeviceCounters, NetDriverError, NetStage, CONSOLE_TCP_PORT, NET_DIAG, NET_STAGE,
 };
 use crate::net_consts::MAX_FRAME_LEN;
-use crate::sel4::{seL4_CapInitThreadVSpace, DeviceFrame, RamFrame};
+use crate::sel4::{seL4_CapInitThreadVSpace, DeviceFrame, RamFrame, BOOTINFO_WINDOW_GUARD};
 
 const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
@@ -74,6 +76,8 @@ const VIRTIO_NET_F_MAC: u64 = 1 << 5;
 const VIRTIO_NET_F_MRG_RXBUF: u64 = 1 << 15;
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 const SUPPORTED_NET_FEATURES: u64 = VIRTIO_NET_F_MAC | VIRTIO_NET_F_MRG_RXBUF;
+
+const PAGE_BYTES: usize = 1 << seL4_PageBits;
 
 const RX_QUEUE_INDEX: u32 = 0;
 const TX_QUEUE_INDEX: u32 = 1;
@@ -114,6 +118,85 @@ static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
 static mut VIRTIO_NET_STORAGE: MaybeUninit<VirtioNet> = MaybeUninit::uninit();
 #[cfg(debug_assertions)]
 static VIRTIO_NET_SIZE_LOGGED: AtomicBool = AtomicBool::new(false);
+
+fn check_bootinfo_canary(mark: &'static str) -> Result<(), DriverError> {
+    if let Some(state) = BootInfoState::get() {
+        if let Err(err) = state.verify("virtio-net", mark) {
+            error!(
+                target: "virtio-net",
+                "[bootinfo:virtio] canary divergence mark={mark} err={err:?}"
+            );
+            return Err(DriverError::QueueInvariant("bootinfo canary diverged"));
+        }
+    }
+    Ok(())
+}
+
+fn bootinfo_protected_ranges() -> HeaplessVec<Range<usize>, 4> {
+    let mut ranges = HeaplessVec::<Range<usize>, 4>::new();
+    if let Some(state) = BootInfoState::get() {
+        let _ = ranges.push(state.snapshot_region());
+    }
+    if let Some((ptr, len)) = BOOTINFO_WINDOW_GUARD.watched_region() {
+        let start = ptr as usize;
+        let end = start.saturating_add(len);
+        let _ = ranges.push(start..end);
+    }
+    let text = guards::text_bounds();
+    if text.start < text.end {
+        let _ = ranges.push(text);
+    }
+    ranges
+}
+
+fn assert_no_overlap(paddr: usize, len: usize, label: &'static str) {
+    let end = paddr.saturating_add(len);
+    for protected in bootinfo_protected_ranges() {
+        if end <= protected.start || paddr >= protected.end {
+            continue;
+        }
+        panic!(
+            "[virtio-net] DMA range overlaps protected region: label={} paddr=[0x{paddr:016x}..0x{end:016x}) protected=[0x{prot_start:016x}..0x{prot_end:016x})",
+            label,
+            prot_start = protected.start,
+            prot_end = protected.end,
+        );
+    }
+}
+
+fn log_dma_programming(label: &str, vaddr: usize, paddr: usize, len: usize) {
+    let align_ok = paddr & (PAGE_BYTES - 1) == 0;
+    info!(
+        target: "virtio-net",
+        "[virtio-net][dma] {label}: vaddr=0x{vaddr:016x} paddr=0x{paddr:016x} len=0x{len:08x} page_aligned={align_ok}",
+        label = label,
+        vaddr = vaddr,
+        paddr = paddr,
+        len = len,
+    );
+}
+
+fn assert_dma_region(label: &'static str, vaddr: usize, paddr: usize, len: usize) {
+    let aligned = paddr & (PAGE_BYTES - 1) == 0;
+    if !aligned && len > PAGE_BYTES {
+        panic!(
+            "[virtio-net] DMA region not page aligned: label={} paddr=0x{paddr:016x} len=0x{len:x}",
+            label
+        );
+    } else if !aligned {
+        warn!(
+            target: "virtio-net",
+            "[virtio-net] DMA region misaligned (len within single page): label={} paddr=0x{paddr:016x} len=0x{len:x}",
+            label
+        );
+    }
+    assert!(
+        paddr != vaddr,
+        "[virtio-net] DMA region paddr mirrors vaddr (likely virtual): label={} vaddr=0x{vaddr:016x} paddr=0x{paddr:016x}",
+        label
+    );
+    assert_no_overlap(paddr, len, label);
+}
 
 #[inline]
 fn virtq_publish_barrier() {
@@ -1134,6 +1217,7 @@ impl VirtioNet {
             "[net-console] status set to ACKNOWLEDGE: 0x{:02x}",
             regs.read32(Registers::Status)
         );
+        check_bootinfo_canary("virtio.status.ack")?;
         regs.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER);
         info!(
             target: "net-console",
@@ -1245,6 +1329,7 @@ impl VirtioNet {
             target: "net-console",
             "[net-console] status set to FEATURES_OK: 0x{status_after_features:02x}",
         );
+        check_bootinfo_canary("virtio.status.features_ok")?;
         if status_after_features & STATUS_FEATURES_OK == 0 {
             regs.set_status(STATUS_FAILED);
             error!(
@@ -3194,6 +3279,15 @@ impl VirtioNet {
                     .saturating_add(payload_len)
                     .min(buffer_capacity)
                     .min(buffer.as_slice().len()) as u32;
+                let vaddr = buffer.ptr().as_ptr() as usize;
+                let paddr = buffer.paddr();
+                log_dma_programming(
+                    "virtq.rx.buffer",
+                    vaddr,
+                    paddr,
+                    usize::from(total_len),
+                );
+                assert_dma_region("virtq.rx.buffer", vaddr, paddr, usize::from(total_len));
                 let desc = [DescSpec {
                     addr: buffer.paddr() as u64,
                     len: total_len,
@@ -3766,6 +3860,15 @@ impl VirtioNet {
 
             let total_len = frame_capacity.min(buffer.as_slice().len()) as u32;
 
+            let vaddr = buffer.ptr().as_ptr() as usize;
+            let paddr = buffer.paddr();
+            log_dma_programming("virtq.rx.buffer.requeue", vaddr, paddr, usize::from(total_len));
+            assert_dma_region(
+                "virtq.rx.buffer.requeue",
+                vaddr,
+                paddr,
+                usize::from(total_len),
+            );
             let desc = [DescSpec {
                 addr: buffer.paddr() as u64,
                 len: total_len,
@@ -3979,6 +4082,11 @@ impl VirtioNet {
             .get(id as usize)
             .map(|buffer| (len.min(buffer.as_slice().len()), buffer.paddr()))
         {
+            if let Some(buffer) = self.tx_buffers.get(id as usize) {
+                let vaddr = buffer.ptr().as_ptr() as usize;
+                log_dma_programming("virtq.tx.buffer", vaddr, addr, length);
+                assert_dma_region("virtq.tx.buffer", vaddr, addr, length);
+            }
             let desc = [DescSpec {
                 addr: addr as u64,
                 len: length as u32,
@@ -4062,6 +4170,9 @@ impl VirtioNet {
             self.release_tx_head(id, "tx_v2_capped_zero");
             return;
         }
+        let vaddr = buffer.ptr().as_ptr() as usize;
+        log_dma_programming("virtq.tx.buffer", vaddr, addr as usize, capped_len);
+        assert_dma_region("virtq.tx.buffer", vaddr, addr as usize, capped_len);
 
         if cfg!(debug_assertions) {
             let start = addr;
@@ -5689,6 +5800,7 @@ impl VirtQueue {
         cacheable: bool,
         end_align: bool,
     ) -> Result<Self, DriverError> {
+        check_bootinfo_canary("virtio.queue.addr.pre")?;
         let queue_size = size as u16;
         let frame_paddr = frame.paddr();
         let frame_ptr = frame.ptr();
@@ -5811,6 +5923,42 @@ impl VirtQueue {
         let desc_vaddr = base_vaddr.saturating_add(layout.desc_offset);
         let avail_vaddr = base_vaddr.saturating_add(layout.avail_offset);
         let used_vaddr = base_vaddr.saturating_add(layout.used_offset);
+        log_dma_programming(
+            "virtq.desc",
+            desc_vaddr,
+            base_paddr + layout.desc_offset,
+            layout.desc_len,
+        );
+        log_dma_programming(
+            "virtq.avail",
+            avail_vaddr,
+            base_paddr + layout.avail_offset,
+            layout.avail_len,
+        );
+        log_dma_programming(
+            "virtq.used",
+            used_vaddr,
+            base_paddr + layout.used_offset,
+            layout.used_len,
+        );
+        assert_dma_region(
+            "virtq.desc",
+            desc_vaddr,
+            base_paddr + layout.desc_offset,
+            layout.desc_len,
+        );
+        assert_dma_region(
+            "virtq.avail",
+            avail_vaddr,
+            base_paddr + layout.avail_offset,
+            layout.avail_len,
+        );
+        assert_dma_region(
+            "virtq.used",
+            used_vaddr,
+            base_paddr + layout.used_offset,
+            layout.used_len,
+        );
         let addr_slot = (index as usize) % VIRTIO_MMIO_SLOTS;
         if !VQ_ADDRESS_LOGGED[addr_slot].swap(true, AtomicOrdering::AcqRel) {
             info!(
@@ -5973,6 +6121,7 @@ impl VirtQueue {
                 regs.set_queue_pfn(queue_pfn);
             }
         }
+        check_bootinfo_canary("virtio.queue.addr.post")?;
         regs.queue_ready(1);
         info!(
             target: "net-console",
