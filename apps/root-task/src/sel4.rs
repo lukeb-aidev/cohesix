@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: seL4 resource management helpers for the root task.
 //! seL4 resource management helpers for the root task.
 #![cfg(any(test, feature = "kernel"))]
 #![allow(dead_code)]
@@ -74,6 +75,7 @@ static CANONICAL_ROOT_CAP: AtomicUsize =
 static CANONICAL_ROOT_SLOT: AtomicUsize = AtomicUsize::new(CANONICAL_ROOT_SENTINEL);
 static EP_VALIDATED: AtomicBool = AtomicBool::new(false);
 static IPC_SEND_UNLOCKED: AtomicBool = AtomicBool::new(false);
+static BOOTINFO_WINDOW_DUMPED: AtomicBool = AtomicBool::new(false);
 
 /// Logs ABI sanity for key seL4 types to validate the Rust FFI surface.
 pub fn log_sel4_type_sanity() {
@@ -2705,6 +2707,33 @@ impl<'a> KernelEnv<'a> {
         self.untyped.device_coverage(paddr, size_bits)
     }
 
+    fn dump_bootinfo_window_once(&self, label: &str) {
+        if BOOTINFO_WINDOW_DUMPED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let empty = &self.bootinfo.empty;
+        let dump_len = mem::size_of::<sel4_sys::seL4_SlotRegion>().min(64);
+        let empty_bytes =
+            unsafe { core::slice::from_raw_parts(empty as *const _ as *const u8, dump_len) };
+        let mut line = HeaplessString::<256>::new();
+        let _ = write!(
+            &mut line,
+            "[bootinfo.window] label={} start=0x{start:04x} end=0x{end:04x} bytes=",
+            label,
+            start = empty.start,
+            end = empty.end
+        );
+        for byte in empty_bytes.iter() {
+            if write!(&mut line, "{byte:02x}").is_err() {
+                break;
+            }
+        }
+        boot_log::force_uart_line(line.as_str());
+    }
+
     /// Allocates a new CSpace slot, panicking if the root CNode is exhausted.
     pub fn allocate_slot(&mut self) -> seL4_CPtr {
         let slot = self
@@ -2713,8 +2742,12 @@ impl<'a> KernelEnv<'a> {
             .expect("cspace exhausted while allocating seL4 objects");
         let empty_start = self.bootinfo.empty.start;
         let empty_end = self.bootinfo.empty.end;
+        let slot_valid = slot >= empty_start && slot < empty_end;
+        if !slot_valid {
+            self.dump_bootinfo_window_once("allocate_slot");
+        }
         assert!(
-            slot >= empty_start && slot < empty_end,
+            slot_valid,
             "allocated slot 0x{slot:04x} outside bootinfo window [0x{start:04x}..0x{end:04x})",
             start = empty_start,
             end = empty_end,

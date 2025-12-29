@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Smoltcp-backed TCP console stack for the in-VM root task.
 
 //! Smoltcp-backed TCP console stack for the in-VM root task.
 //!
@@ -1443,23 +1444,35 @@ impl<D: NetDevice> NetStack<D> {
         );
     }
 
+    #[inline]
+    fn trace_conn_prefix(payload: &[u8]) -> ([u8; 16], usize) {
+        const PREFIX_CAP: usize = 16;
+        let mut prefix = [0u8; PREFIX_CAP];
+        let prefix_len = payload.len().min(PREFIX_CAP);
+        if prefix_len > 0 {
+            prefix[..prefix_len].copy_from_slice(&payload[..prefix_len]);
+        }
+        debug_assert!(prefix_len <= PREFIX_CAP);
+        (prefix, prefix_len)
+    }
+
     fn trace_conn_recv(conn_id: u64, payload: &[u8]) {
-        let prefix = payload.len().min(16);
+        let (prefix, prefix_len) = Self::trace_conn_prefix(payload);
         log::info!(
             "[cohsh-net] conn id={} recv bytes={} first16={:02x?}",
             conn_id,
             payload.len(),
-            &payload[..prefix]
+            &prefix[..prefix_len]
         );
     }
 
     fn trace_conn_send(conn_id: u64, payload: &[u8]) {
-        let prefix = payload.len().min(16);
+        let (prefix, prefix_len) = Self::trace_conn_prefix(payload);
         log::info!(
             "[cohsh-net] conn id={} send bytes={} first16={:02x?}",
             conn_id,
             payload.len(),
-            &payload[..prefix]
+            &prefix[..prefix_len]
         );
     }
 
@@ -3730,5 +3743,25 @@ mod tests {
         assert!(SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
         assert_eq!(SOCKET_STORAGE_OWNER.load(Ordering::Acquire), 0xdead_beef);
         assert_eq!(SOCKET_STORAGE_TAG_ID.load(Ordering::Acquire), 0xcafe_0001);
+    }
+
+    #[test]
+    fn trace_conn_prefix_clamps_to_capacity() {
+        let mut payload = [0u8; 32];
+        for (i, byte) in payload.iter_mut().enumerate() {
+            *byte = i as u8;
+        }
+
+        let (prefix, prefix_len) = NetStack::<DefaultNetDevice>::trace_conn_prefix(&payload);
+        assert_eq!(prefix_len, 16);
+        assert_eq!(&prefix[..prefix_len], &payload[..16]);
+    }
+
+    #[test]
+    fn trace_conn_prefix_handles_short_payload() {
+        let payload = [1u8, 2u8, 3u8];
+        let (prefix, prefix_len) = NetStack::<DefaultNetDevice>::trace_conn_prefix(&payload);
+        assert_eq!(prefix_len, payload.len());
+        assert_eq!(&prefix[..prefix_len], payload);
     }
 }
