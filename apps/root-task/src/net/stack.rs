@@ -40,6 +40,7 @@ use smoltcp::wire::{
 
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
+    outbound::{OutboundCoalescer, OutboundLane, SendError},
     ConsoleNetConfig, NetBackend, NetConsoleEvent, NetCounters, NetDevice, NetDriverError,
     NetPoller, NetSelfTestReport, NetSelfTestResult, NetStage, NetTelemetry, DEFAULT_NET_BACKEND,
     DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG, NET_STAGE,
@@ -60,7 +61,7 @@ const TCP_TX_BUFFER: usize = 2048;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
 const SOCKET_CAPACITY: usize = 6;
-const MAX_TX_BUDGET: usize = 8;
+const OUTBOUND_FRAME_CAPACITY: usize = super::outbound::MAX_PAYLOAD + 2;
 const FLUSH_BLOCKED_HEARTBEAT_MS: u64 = 2_000;
 const RANDOM_SEED: u64 = 0x5a5a_5a5a_1234_5678;
 const ECHO_MODE: bool = cfg!(feature = "tcp-echo-31337");
@@ -883,6 +884,7 @@ pub struct NetStack<D: NetDevice> {
     init_attempt: NetInitAttempt,
     tcp_handle: SocketHandle,
     server: TcpConsoleServer,
+    outbound: OutboundCoalescer,
     telemetry: NetTelemetry,
     ip: Ipv4Address,
     gateway: Option<Ipv4Address>,
@@ -1760,6 +1762,7 @@ impl<D: NetDevice> NetStack<D> {
                 console_config.auth_token,
                 console_config.idle_timeout_ms,
             ),
+            outbound: OutboundCoalescer::new(),
             telemetry: NetTelemetry::default(),
             ip,
             gateway,
@@ -2753,6 +2756,7 @@ impl<D: NetDevice> NetStack<D> {
                     );
                     let _ = Self::flush_outbound(
                         &mut self.server,
+                        &mut self.outbound,
                         &mut self.telemetry,
                         &mut self.conn_bytes_written,
                         &mut self.counters,
@@ -2925,6 +2929,7 @@ impl<D: NetDevice> NetStack<D> {
                                     );
                                     activity |= Self::flush_outbound(
                                         &mut self.server,
+                                        &mut self.outbound,
                                         &mut self.telemetry,
                                         &mut self.conn_bytes_written,
                                         &mut self.counters,
@@ -2950,6 +2955,7 @@ impl<D: NetDevice> NetStack<D> {
                                 SessionEvent::Close => {
                                     let _ = Self::flush_outbound(
                                         &mut self.server,
+                                        &mut self.outbound,
                                         &mut self.telemetry,
                                         &mut self.conn_bytes_written,
                                         &mut self.counters,
@@ -3051,6 +3057,7 @@ impl<D: NetDevice> NetStack<D> {
                 let _ = self.server.enqueue_outbound(ERR_AUTH_REASON_TIMEOUT);
                 activity |= Self::flush_outbound(
                     &mut self.server,
+                    &mut self.outbound,
                     &mut self.telemetry,
                     &mut self.conn_bytes_written,
                     &mut self.counters,
@@ -3095,6 +3102,7 @@ impl<D: NetDevice> NetStack<D> {
                 let _ = self.server.enqueue_outbound(ERR_CONSOLE_REASON_TIMEOUT);
                 activity |= Self::flush_outbound(
                     &mut self.server,
+                    &mut self.outbound,
                     &mut self.telemetry,
                     &mut self.conn_bytes_written,
                     &mut self.counters,
@@ -3123,6 +3131,7 @@ impl<D: NetDevice> NetStack<D> {
 
             activity |= Self::flush_outbound(
                 &mut self.server,
+                &mut self.outbound,
                 &mut self.telemetry,
                 &mut self.conn_bytes_written,
                 &mut self.counters,
@@ -3208,6 +3217,7 @@ impl<D: NetDevice> NetStack<D> {
 
     fn flush_outbound(
         server: &mut TcpConsoleServer,
+        outbound: &mut OutboundCoalescer,
         telemetry: &mut NetTelemetry,
         conn_bytes_written: &mut u64,
         counters: &mut NetCounters,
@@ -3222,9 +3232,9 @@ impl<D: NetDevice> NetStack<D> {
         }
         let pre_auth = !server.is_authenticated();
         let mut activity = false;
-        let mut budget = MAX_TX_BUDGET;
         let state_changed = session_state.last_flush_state != Some(socket.state());
         let auth_changed = session_state.last_flush_auth_state != Some(auth_state);
+        let queued = server.has_outbound() || outbound.has_pending();
         let blocked_by_auth = pre_auth
             && server
                 .peek_outbound()
@@ -3238,7 +3248,7 @@ impl<D: NetDevice> NetStack<D> {
             let blocked_snapshot = CohshBlockedSnapshot {
                 tcp_state: socket.state(),
                 auth_state,
-                queued: server.has_outbound(),
+                queued,
             };
             if Self::should_log_flush_blocked(session_state, blocked_snapshot, now_ms) {
                 info!(
@@ -3246,7 +3256,7 @@ impl<D: NetDevice> NetStack<D> {
                     "[cohsh-net] flush_outbound blocked state={:?} auth_state={:?} queued={}",
                     socket.state(),
                     auth_state,
-                    server.has_outbound(),
+                    queued,
                 );
                 session_state.last_flush_log_ms = now_ms;
             }
@@ -3264,47 +3274,58 @@ impl<D: NetDevice> NetStack<D> {
                 "[cohsh-net] flush_outbound state={:?} auth_state={:?} queued={} can_send={}",
                 socket.state(),
                 auth_state,
-                server.has_outbound(),
+                queued,
                 socket.can_send(),
             );
             session_state.last_flush_log_ms = now_ms;
         }
         session_state.flush_blocked_since = None;
-
-        while budget > 0 && socket.can_send() {
-            let Some(line) = server.pop_outbound() else {
-                break;
-            };
+        while let Some(line) = server.pop_outbound() {
             if pre_auth && !(line.starts_with("OK AUTH") || line.starts_with("ERR AUTH")) {
                 server.push_outbound_front(line);
                 break;
             }
-            let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 2 }> = HeaplessVec::new();
-            if payload.extend_from_slice(line.as_bytes()).is_err()
-                || payload.extend_from_slice(b"\r\n").is_err()
-            {
-                server.push_outbound_front(line);
-                telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
-                break;
+            let lane = if TcpConsoleServer::is_priority_line(line.as_str()) {
+                OutboundLane::Control
+            } else {
+                OutboundLane::Log
+            };
+            match lane {
+                OutboundLane::Control => {
+                    if outbound.enqueue_control(line.as_bytes()).is_err() {
+                        server.push_outbound_front(line);
+                        break;
+                    }
+                }
+                OutboundLane::Log => outbound.enqueue_log(line.as_bytes()),
             }
-            if pre_auth {
+        }
+
+        let mut outcome = outbound.flush(now_ms, |payload, lane| {
+            let mut frame: HeaplessVec<u8, OUTBOUND_FRAME_CAPACITY> = HeaplessVec::new();
+            if frame.extend_from_slice(payload).is_err()
+                || frame.extend_from_slice(b"\r\n").is_err()
+            {
+                return Err(SendError::Fault);
+            }
+            if pre_auth && matches!(lane, OutboundLane::Control) {
                 info!(
                     "[net-console] handshake: sending {}-byte response to client",
-                    payload.len()
+                    frame.len()
                 );
                 info!(
                     "[cohsh-net] send: auth response len={} role='AUTH'",
-                    payload.len()
+                    frame.len()
                 );
             }
-            match socket.send_slice(payload.as_slice()) {
-                Ok(sent) if sent == payload.len() => {
+            match socket.send_slice(frame.as_slice()) {
+                Ok(sent) if sent == frame.len() => {
                     let preview_len = core::cmp::min(sent, 32);
                     log::debug!(
                         target: "net-console",
                         "[tcp] send on console socket: len={} first_bytes={:02x?}",
                         sent,
-                        &payload[..preview_len],
+                        &frame[..preview_len],
                     );
                     *conn_bytes_written = conn_bytes_written.saturating_add(sent as u64);
                     NET_DIAG.add_bytes_written(sent as u64);
@@ -3316,70 +3337,62 @@ impl<D: NetDevice> NetStack<D> {
                         );
                         session_state.logged_first_send = true;
                     }
+                    if server.is_authenticated() {
+                        server.mark_activity(now_ms);
+                    }
+                    let conn_id = conn_id.unwrap_or(0);
+                    Self::trace_conn_send(conn_id, frame.as_slice());
                     #[cfg(feature = "net-trace-31337")]
                     {
                         let tcp_state = socket.state();
-                        let dump_len = payload.len().min(32);
+                        let dump_len = frame.len().min(32);
                         info!(
                             "[cohsh-net] send: {} bytes (state={:?}, auth_state={:?}): {:02x?}",
                             sent,
                             tcp_state,
                             auth_state,
-                            &payload[..dump_len]
+                            &frame[..dump_len]
                         );
                     }
-                    if pre_auth {
+                    if pre_auth && matches!(lane, OutboundLane::Control) {
                         info!(
-                            "[net-console] conn {}: sent pre-auth line len={} first_bytes={:02x?}",
-                            conn_id.unwrap_or(0),
-                            line.len(),
-                            &line.as_bytes()[..core::cmp::min(line.len(), 32)]
+                            "[net-console] conn {}: sent pre-auth payload len={} first_bytes={:02x?}",
+                            conn_id,
+                            frame.len(),
+                            &frame[..core::cmp::min(frame.len(), 32)]
                         );
-                        if line.starts_with("OK AUTH") || line.starts_with("ERR AUTH") {
-                            info!(
-                                "[net-console] auth response sent; session state = {:?}",
-                                auth_state
-                            );
-                            log::info!(
-                                target: "net-console",
-                                "[net-console] send ACK on TCP session {}: len={} first_bytes={:02x?}",
-                                conn_id.unwrap_or(0),
-                                line.len(),
-                                &line.as_bytes()[..core::cmp::min(line.len(), 32)]
-                            );
-                        }
+                        info!(
+                            "[net-console] auth response sent; session state = {:?}",
+                            auth_state
+                        );
                     }
-                    if server.is_authenticated() {
-                        server.mark_activity(now_ms);
-                    }
-                    let conn_id = conn_id.unwrap_or(0);
-                    Self::trace_conn_send(conn_id, payload.as_slice());
-                    #[cfg(feature = "net-trace-31337")]
-                    trace!(
-                        "[net-auth][conn={}] wrote {} bytes in state {:?}",
-                        conn_id,
-                        sent,
-                        auth_state
-                    );
-                    activity = true;
+                    Ok(())
                 }
-                Ok(_) => {
-                    server.push_outbound_front(line);
-                    telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
-                    break;
-                }
+                Ok(_) => Err(SendError::WouldBlock),
                 Err(err) => {
                     warn!(
                         target: "root_task::net",
                         "[tcp] send.err err={err:?}"
                     );
-                    server.push_outbound_front(line);
-                    telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
-                    break;
+                    Err(SendError::WouldBlock)
                 }
             }
-            budget -= 1;
+        });
+        if outcome.sent_frames > 0 {
+            activity = true;
         }
+        if outcome.would_block {
+            telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
+        }
+        let stats = outbound.stats();
+        NET_DIAG.update_outbound_stats(
+            u64::from(stats.queued_lines),
+            u64::from(stats.queued_bytes),
+            stats.drops,
+            stats.frames_sent,
+            stats.bytes_sent,
+            stats.would_block,
+        );
         session_state.last_flush_state = Some(socket.state());
         session_state.last_flush_auth_state = Some(auth_state);
         activity
@@ -3499,6 +3512,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.server.end_session();
         self.session_active = false;
         self.telemetry = NetTelemetry::default();
+        self.outbound.reset();
         self.tcp_smoke_outbound_sent = false;
         self.tcp_smoke_last_attempt_ms = 0;
         self.tx_only_sent = false;

@@ -29,8 +29,8 @@ use crate::net::DefaultNetStack as NetStack;
 #[cfg(feature = "net-console")]
 use crate::net::NetPoller;
 use crate::platform::Platform;
-use crate::sel4;
 use crate::profile;
+use crate::sel4;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::serial::pl011::{Pl011, Pl011Mmio};
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
@@ -188,10 +188,7 @@ pub fn start_console_or_cohsh<P: Platform>(platform: &P) -> ! {
         "[userland] serial-console enabled: {}",
         profile::SERIAL_CONSOLE
     );
-    ::log::info!(
-        "[userland] net-console enabled: {}",
-        profile::NET_CONSOLE
-    );
+    ::log::info!("[userland] net-console enabled: {}", profile::NET_CONSOLE);
     serial_console::banner(platform);
     serial_console::run(platform)
 }

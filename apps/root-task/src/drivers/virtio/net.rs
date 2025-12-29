@@ -981,6 +981,12 @@ impl NetDriverError for DriverError {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum TxPublishError {
+    InvalidDescriptor,
+    Queue(DmaError),
+}
+
 /// Virtio-net MMIO implementation providing a smoltcp PHY device.
 pub struct VirtioNet {
     regs: VirtioRegs,
@@ -1045,6 +1051,7 @@ pub struct VirtioNet {
     tx_duplicate_publish_logged: bool,
     tx_dup_used_logged: bool,
     tx_used_gen_mismatch_logged: bool,
+    tx_invalid_publish_logged: bool,
     #[cfg(debug_assertions)]
     tx_avail_duplicate_logged: bool,
     #[cfg(debug_assertions)]
@@ -1054,6 +1061,7 @@ pub struct VirtioNet {
     tx_dup_used_ignored: u64,
     tx_invalid_used_state: u64,
     tx_alloc_blocked_inflight: u64,
+    tx_invalid_publish: u64,
     tx_drop_zero_len: u64,
     tx_zero_len_attempt: u64,
     tx_submit: u64,
@@ -1501,6 +1509,7 @@ impl VirtioNet {
             tx_duplicate_publish_logged: false,
             tx_dup_used_logged: false,
             tx_used_gen_mismatch_logged: false,
+            tx_invalid_publish_logged: false,
             #[cfg(debug_assertions)]
             tx_avail_duplicate_logged: false,
             #[cfg(debug_assertions)]
@@ -1510,6 +1519,7 @@ impl VirtioNet {
             tx_dup_used_ignored: 0,
             tx_invalid_used_state: 0,
             tx_alloc_blocked_inflight: 0,
+            tx_invalid_publish: 0,
             tx_drop_zero_len: 0,
             tx_zero_len_attempt: 0,
             tx_submit: 0,
@@ -2108,6 +2118,40 @@ impl VirtioNet {
             return Err(());
         }
         Ok(())
+    }
+
+    fn publish_tx_avail(
+        &mut self,
+        head_id: u16,
+        publish_slot: u16,
+    ) -> Result<(u16, u16, u16), TxPublishError> {
+        let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
+        let desc = self.tx_queue.read_descriptor(head_id);
+        let total_len = self
+            .tx_head_mgr
+            .entry(head_id)
+            .map(|entry| entry.last_len)
+            .unwrap_or(0);
+        if validate_tx_publish_descriptor(
+            head_id,
+            publish_slot,
+            &desc,
+            total_len,
+            avail_idx,
+            used_idx,
+            self.tx_head_mgr.in_flight_count(),
+            self.tx_head_mgr.free_len(),
+            &mut self.tx_invalid_publish_logged,
+        )
+        .is_err()
+        {
+            self.tx_invalid_publish = self.tx_invalid_publish.saturating_add(1);
+            self.last_error.get_or_insert("tx_invalid_descriptor");
+            return Err(TxPublishError::InvalidDescriptor);
+        }
+        self.tx_queue
+            .push_avail(head_id)
+            .map_err(TxPublishError::Queue)
     }
 
     fn clear_tx_desc_chain(&mut self, head: u16) {
@@ -2952,9 +2996,13 @@ impl VirtioNet {
         }
         #[cfg(debug_assertions)]
         self.debug_trace_tx_publish_state(head_id, publish_slot, "pre_push_avail");
-        let (slot, avail_idx, old_idx) = match self.tx_queue.push_avail(head_id) {
+        let (slot, avail_idx, old_idx) = match self.publish_tx_avail(head_id, publish_slot) {
             Ok(result) => result,
-            Err(_) => {
+            Err(TxPublishError::InvalidDescriptor) => {
+                self.tx_drops = self.tx_drops.saturating_add(1);
+                return Err(());
+            }
+            Err(TxPublishError::Queue(_)) => {
                 self.device_faulted = true;
                 self.last_error.get_or_insert("tx_avail_write_failed");
                 self.tx_state_violation("tx_avail_write_failed", head_id, Some(publish_slot))?;
@@ -4171,7 +4219,7 @@ impl VirtioNet {
         {
             return;
         }
-        match self.tx_queue.push_avail(id) {
+        match self.publish_tx_avail(id, publish_slot) {
             Ok((slot, avail_idx, old_idx)) => {
                 if slot != publish_slot {
                     let _ = self.tx_head_mgr.cancel_publish(id);
@@ -4240,7 +4288,11 @@ impl VirtioNet {
                     return;
                 }
             }
-            Err(_) => {
+            Err(TxPublishError::InvalidDescriptor) => {
+                self.tx_drops = self.tx_drops.saturating_add(1);
+                return;
+            }
+            Err(TxPublishError::Queue(_)) => {
                 self.device_faulted = true;
                 self.last_error.get_or_insert("tx_v2_avail_write_failed");
                 self.release_tx_head(id, "tx_v2_avail_write_failed");
@@ -6648,6 +6700,39 @@ fn dma_barrier() {
     compiler_fence(AtomicOrdering::Release);
 }
 
+fn validate_tx_publish_descriptor(
+    head_id: u16,
+    slot: u16,
+    desc: &VirtqDesc,
+    total_len: u32,
+    avail_idx: u16,
+    used_idx: u16,
+    in_flight: u16,
+    tx_free: u16,
+    logged: &mut bool,
+) -> Result<(), ()> {
+    if desc.addr == 0 || desc.len == 0 || total_len == 0 {
+        if !*logged {
+            *logged = true;
+            error!(
+                target: "net-console",
+                "[virtio-net][tx-publish-guard] invalid descriptor blocked: head={} slot={} avail.idx={} used.idx={} in_flight={} tx_free={} desc_addr=0x{addr:016x} desc_len={} total_len={}",
+                head_id,
+                slot,
+                avail_idx,
+                used_idx,
+                in_flight,
+                tx_free,
+                addr = desc.addr,
+                desc_len = desc.len,
+                total_len = total_len,
+            );
+        }
+        return Err(());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tx_tests {
     use super::*;
@@ -6987,5 +7072,33 @@ mod tx_tests {
         assert_eq!(log.len(), 2, "both cache ops should be recorded");
         assert_eq!(log[0].0, CacheOp::Clean);
         assert_eq!(log[1].0, CacheOp::Invalidate);
+    }
+
+    #[test]
+    fn publish_guard_rejects_zero_len_descriptor() {
+        let desc = VirtqDesc {
+            addr: 0x1000,
+            len: 0,
+            flags: 0,
+            next: 0,
+        };
+        let mut logged = false;
+        let result = validate_tx_publish_descriptor(1, 0, &desc, 0, 2, 1, 0, 4, &mut logged);
+        assert!(result.is_err(), "zero-length descriptor must be blocked");
+        assert!(logged, "invalid descriptor must log once");
+    }
+
+    #[test]
+    fn publish_guard_rejects_zero_addr_descriptor() {
+        let desc = VirtqDesc {
+            addr: 0,
+            len: 64,
+            flags: 0,
+            next: 0,
+        };
+        let mut logged = false;
+        let result = validate_tx_publish_descriptor(2, 1, &desc, 64, 5, 3, 0, 4, &mut logged);
+        assert!(result.is_err(), "zero-address descriptor must be blocked");
+        assert!(logged, "invalid descriptor must log once");
     }
 }
