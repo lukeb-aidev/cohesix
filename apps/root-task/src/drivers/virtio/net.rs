@@ -218,9 +218,9 @@ impl TxHeadManager {
             );
             return None;
         }
+        let gen = self.next_gen;
+        self.next_gen = self.next_gen.wrapping_add(1);
         if let Some(entry) = self.entry_mut(id) {
-            let gen = self.next_gen;
-            self.next_gen = self.next_gen.wrapping_add(1);
             entry.state = TxHeadState::Prepared { gen };
             entry.last_len = 0;
             entry.last_addr = 0;
@@ -273,14 +273,17 @@ impl TxHeadManager {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
-        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        let (slot, gen) = match entry.state {
-            TxHeadState::Published { slot, gen } => (slot, gen),
-            _ => return Err(TxHeadError::InvalidState),
+        let (slot, gen) = {
+            let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
+            match entry.state {
+                TxHeadState::Published { slot, gen } => (slot, gen),
+                _ => return Err(TxHeadError::InvalidState),
+            }
         };
         if self.published_for_slot(slot) != Some((id, gen)) {
             return Err(TxHeadError::InvalidState);
         }
+        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
         entry.state = TxHeadState::InFlight { slot, gen };
         Ok((slot, gen))
     }
@@ -293,11 +296,13 @@ impl TxHeadManager {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
-        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        let (slot, gen) = match entry.state {
-            TxHeadState::InFlight { slot, gen } => (slot, gen),
-            TxHeadState::Published { slot, gen } => (slot, gen),
-            _ => return Err(TxHeadError::InvalidState),
+        let (slot, gen) = {
+            let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
+            match entry.state {
+                TxHeadState::InFlight { slot, gen } => (slot, gen),
+                TxHeadState::Published { slot, gen } => (slot, gen),
+                _ => return Err(TxHeadError::InvalidState),
+            }
         };
         if let Some(expected) = expected_gen {
             if expected != gen {
@@ -307,6 +312,7 @@ impl TxHeadManager {
         if self.published_for_slot(slot) != Some((id, gen)) {
             return Err(TxHeadError::InvalidState);
         }
+        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
         entry.state = TxHeadState::Completed { gen };
         if let Some(slot_entry) = self.published_slots.get_mut(slot as usize) {
             if matches!(slot_entry, Some((head, g)) if *head == id && *g == gen) {
@@ -332,14 +338,17 @@ impl TxHeadManager {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
-        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        let (slot, gen) = match entry.state {
-            TxHeadState::Published { slot, gen } => (slot, gen),
-            _ => return Err(TxHeadError::InvalidState),
+        let slot = {
+            let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
+            match entry.state {
+                TxHeadState::Published { slot, .. } => slot,
+                _ => return Err(TxHeadError::InvalidState),
+            }
         };
         let next = self.next_gen;
         self.next_gen = self.next_gen.wrapping_add(1);
         self.clear_slot(slot);
+        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
         entry.state = TxHeadState::Prepared { gen: next };
         Ok(())
     }
@@ -1791,7 +1800,7 @@ impl VirtioNet {
             return;
         }
         let mut idx = head;
-        for depth in 0..qsize {
+        for _depth in 0..qsize {
             let desc_ptr = unsafe { self.tx_queue.desc.as_ptr().add(idx as usize) };
             let desc = unsafe { read_volatile(desc_ptr) };
             unsafe {
@@ -1890,9 +1899,9 @@ impl VirtioNet {
         {
             error!(
                 target: "net-console",
-                "[virtio-net][tx-tripwire] publish aborted head={} slot={} addr=0x{addr:016x} len={} expected_addr=0x{expected_addr:016x} expected_len={} header_len={} payload_len={} next_ok={} flags=0x{flags:04x} next={} expected_next={}",
-                head_id,
-                slot,
+                "[virtio-net][tx-tripwire] publish aborted head={head} slot={slot} addr=0x{addr:016x} len={len} expected_addr=0x{expected_addr:016x} expected_len={expected_len} header_len={header_len} payload_len={payload_len} next_ok={next_ok} flags=0x{flags:04x} next={next} expected_next={expected_next}",
+                head = head_id,
+                slot = slot,
                 addr = desc.addr,
                 len = desc.len,
                 expected_addr = expected.addr,
