@@ -1707,11 +1707,18 @@ impl BootinfoWindowGuard {
             post = state.post_canary,
         );
         let _ = write!(&mut line, "{hexdump}");
-        if let Some((label, context)) = watch_hint_for(
+        if let Some(hint) = watch_hint_for(
             state.region_ptr as usize,
             mem::size_of::<sel4_sys::seL4_SlotRegion>(),
         ) {
-            let _ = write!(&mut line, " nearest_writer={label}:{context}");
+            if let Some(context) = hint.context {
+                let _ = write!(&mut line, " nearest_writer={context}");
+                if let (Some(file), Some(line_no)) = (hint.location_file, hint.location_line) {
+                    let _ = write!(&mut line, " at {file}:{line_no}");
+                }
+            } else {
+                let _ = write!(&mut line, " nearest_writer_label={}", hint.label);
+            }
         }
         boot_log::force_uart_line(line.as_str());
         log::error!("{}", line.as_str());
@@ -1743,6 +1750,74 @@ impl BootinfoWindowGuard {
 }
 
 pub static BOOTINFO_WINDOW_GUARD: BootinfoWindowGuard = BootinfoWindowGuard::new();
+
+#[inline(always)]
+fn ranges_overlap_usize(a: &Range<usize>, b: &Range<usize>) -> bool {
+    a.start < b.end && b.start < a.end
+}
+
+#[inline(always)]
+fn bootinfo_watch_range() -> Option<Range<usize>> {
+    BOOTINFO_WINDOW_GUARD
+        .watched_region()
+        .map(|(ptr, len)| ptr as usize..ptr as usize + len)
+}
+
+#[track_caller]
+pub fn store_u64_watched(dst: *mut u64, val: u64, ctx: &'static str) {
+    if let Some(range) = bootinfo_watch_range() {
+        let dst_range = dst as usize..dst as usize + core::mem::size_of::<u64>();
+        if ranges_overlap_usize(&dst_range, &range) {
+            let ascii_bytes = val.to_ne_bytes();
+            let ascii = ascii_bytes.map(|byte| {
+                if byte.is_ascii_graphic() || byte == b' ' {
+                    byte
+                } else {
+                    b'.'
+                }
+            });
+            let ascii_str = core::str::from_utf8(&ascii).unwrap_or("????????");
+            let location = Location::caller();
+            panic!(
+                "[bootinfo.window.store] dst=0x{dst:016x} val=0x{val:016x} ascii={ascii_str} ctx={ctx} location={file}:{line}",
+                dst = dst as usize,
+                val = val,
+                file = location.file(),
+                line = location.line(),
+            );
+        }
+    }
+    unsafe { core::ptr::write(dst, val) };
+}
+
+#[track_caller]
+pub fn store_bootinfo_empty_start(
+    empty: &mut sel4_sys::seL4_SlotRegion,
+    val: seL4_CPtr,
+    ctx: &'static str,
+) {
+    store_u64_watched(&mut empty.start as *mut _ as *mut u64, val as u64, ctx);
+}
+
+#[track_caller]
+pub fn store_bootinfo_empty_end(
+    empty: &mut sel4_sys::seL4_SlotRegion,
+    val: seL4_CPtr,
+    ctx: &'static str,
+) {
+    store_u64_watched(&mut empty.end as *mut _ as *mut u64, val as u64, ctx);
+}
+
+#[track_caller]
+pub fn store_bootinfo_empty_region(
+    empty: &mut sel4_sys::seL4_SlotRegion,
+    start: seL4_CPtr,
+    end: seL4_CPtr,
+    ctx: &'static str,
+) {
+    store_bootinfo_empty_start(empty, start, ctx);
+    store_bootinfo_empty_end(empty, end, ctx);
+}
 
 pub const PAGE_BITS: usize = 12;
 pub const PAGE_TABLE_BITS: usize = 12;
@@ -4210,10 +4285,7 @@ mod tests {
     #[test]
     fn retype_trace_targets_root_cnode_slot() {
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
-        bootinfo.empty = seL4_SlotRegion {
-            start: 0,
-            end: 1 << 13,
-        };
+        store_bootinfo_empty_region(&mut bootinfo.empty, 0, 1 << 13, "test.retype_trace_root");
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let mut env = KernelEnv::new(bootinfo_ref, None, ReservedVaddrRanges::new());
@@ -4245,10 +4317,7 @@ mod tests {
     #[test]
     fn retype_sanitiser_uses_canonical_depth() {
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
-        bootinfo.empty = seL4_SlotRegion {
-            start: 0,
-            end: 1 << 13,
-        };
+        store_bootinfo_empty_region(&mut bootinfo.empty, 0, 1 << 13, "test.retype_sanitiser");
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let mut env = KernelEnv::new(bootinfo_ref, None, ReservedVaddrRanges::new());
@@ -4297,10 +4366,7 @@ mod tests {
     #[test]
     fn retype_bounds_use_bootinfo_bits_not_path_depth() {
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
-        bootinfo.empty = seL4_SlotRegion {
-            start: 0,
-            end: 1 << 13,
-        };
+        store_bootinfo_empty_region(&mut bootinfo.empty, 0, 1 << 13, "test.retype_bounds");
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref, None, ReservedVaddrRanges::new());
@@ -4332,10 +4398,12 @@ mod tests {
     #[test]
     fn retype_trace_is_root_slot() {
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
-        bootinfo.empty = seL4_SlotRegion {
-            start: 0,
-            end: 1 << 13,
-        };
+        store_bootinfo_empty_region(
+            &mut bootinfo.empty,
+            0,
+            1 << 13,
+            "test.retype_trace_root_slot",
+        );
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref, None, ReservedVaddrRanges::new());
@@ -4370,10 +4438,12 @@ mod tests {
         use std::panic::{self, AssertUnwindSafe};
 
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
-        bootinfo.empty = seL4_SlotRegion {
-            start: 0,
-            end: 1 << 13,
-        };
+        store_bootinfo_empty_region(
+            &mut bootinfo.empty,
+            0,
+            1 << 13,
+            "test.retype_trace_validate",
+        );
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref, None, ReservedVaddrRanges::new());
@@ -4438,16 +4508,26 @@ mod tests {
 
         crate::debug::clear_watches();
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
-        bootinfo.empty = seL4_SlotRegion {
-            start: 0x100,
-            end: 0x200,
-        };
+        store_bootinfo_empty_region(
+            &mut bootinfo.empty,
+            0x100,
+            0x200,
+            "test.bootinfo_guard.initial",
+        );
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let guard = BootinfoWindowGuard::new();
         guard.arm(bootinfo_ref);
-        bootinfo_ref.empty.start = 0x5b205d74656e3a3a;
-        bootinfo_ref.empty.end = 0x736e6f632d74656e;
+        store_bootinfo_empty_start(
+            &mut bootinfo_ref.empty,
+            0x5b205d74656e3a3a,
+            "test.bootinfo_guard.corrupt_start",
+        );
+        store_bootinfo_empty_end(
+            &mut bootinfo_ref.empty,
+            0x736e6f632d74656e,
+            "test.bootinfo_guard.corrupt_end",
+        );
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
             guard.check("test.marker");
         }));

@@ -2,6 +2,7 @@
 
 //! TCP console session management shared between kernel and host stacks.
 
+use core::ops::Range;
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, info, warn};
 use portable_atomic::{AtomicBool, Ordering};
@@ -103,6 +104,11 @@ impl TcpConsoleServer {
                 len = DEFAULT_LINE_CAPACITY,
             );
         }
+    }
+
+    pub fn line_buffer_range(&self) -> Range<usize> {
+        let ptr = self.line_buffer.as_bytes().as_ptr() as usize;
+        ptr..ptr + DEFAULT_LINE_CAPACITY
     }
 
     fn set_state(&mut self, next: SessionState) {

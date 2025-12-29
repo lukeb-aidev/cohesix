@@ -11,6 +11,7 @@ pub mod diag;
 pub use diag::{NetDiagSnapshot, NET_DIAG, NET_DIAG_FEATURED};
 
 use crate::serial::DEFAULT_LINE_CAPACITY;
+use core::ops::Range;
 #[cfg(all(feature = "net", feature = "kernel"))]
 pub mod outbound;
 pub use cohesix_net_constants::{COHESIX_TCP_CONSOLE_PORT, COHSH_TCP_PORT, TCP_CONSOLE_PORT};
@@ -286,6 +287,11 @@ pub trait NetDevice: Device {
     /// Counter snapshot for diagnostics.
     fn counters(&self) -> NetDeviceCounters {
         NetDeviceCounters::default()
+    }
+
+    /// Returns the primary queue memory bounds, if applicable, for overlap diagnostics.
+    fn buffer_bounds(&self) -> Option<Range<usize>> {
+        None
     }
 }
 

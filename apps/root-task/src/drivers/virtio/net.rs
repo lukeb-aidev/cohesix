@@ -13,6 +13,7 @@ use core::arch::asm;
 use core::fmt::{self, Write as FmtWrite};
 #[cfg(feature = "net-backend-virtio")]
 use core::mem::MaybeUninit;
+use core::ops::Range;
 use core::ptr::read_unaligned;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 use core::sync::atomic::{compiler_fence, fence, AtomicBool, Ordering as AtomicOrdering};
@@ -4989,6 +4990,16 @@ impl NetDevice for VirtioNetStatic {
 
     fn debug_snapshot(&mut self) {
         self.driver.debug_snapshot();
+    }
+
+    fn buffer_bounds(&self) -> Option<Range<usize>> {
+        let rx_start = self.driver.rx_queue.base_vaddr;
+        let rx_end = rx_start.saturating_add(self.driver.rx_queue.base_len);
+        let tx_start = self.driver.tx_queue.base_vaddr;
+        let tx_end = tx_start.saturating_add(self.driver.tx_queue.base_len);
+        let start = rx_start.min(tx_start);
+        let end = rx_end.max(tx_end);
+        Some(start..end)
     }
 }
 
