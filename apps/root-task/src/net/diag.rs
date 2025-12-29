@@ -1,9 +1,11 @@
 // Author: Lukas Bower
+// Purpose: Lightweight networking diagnostics for smoltcp and virtio surfaces.
 
 //! Minimal, copyable diagnostics for the networking stack.
 //! Counters are intentionally monotonic and safe to snapshot without locks.
 
 use portable_atomic::{AtomicBool, AtomicU64, Ordering};
+use crate::profile;
 
 /// Monotonic snapshot of networking choke points.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -220,7 +222,7 @@ impl NetDiag {
 }
 
 /// Compile-time toggle for NETDIAG emissions without enabling the TCP console.
-pub const NET_DIAG_FEATURED: bool = cfg!(feature = "net-diag") || cfg!(feature = "net-console");
+pub const NET_DIAG_FEATURED: bool = profile::NET_DIAG_FEATURED;
 
 /// Global diagnostics instance.
 pub static NET_DIAG: NetDiag = NetDiag::new();

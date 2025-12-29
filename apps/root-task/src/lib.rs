@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Root-task library surface exposing console and networking modules for tests.
 #![cfg_attr(feature = "kernel", no_std)]
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -12,8 +13,13 @@ compile_error!("enable the `kernel` feature when building root-task for seL4 tar
 
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
 pub mod arch;
+#[cfg(feature = "kernel")]
+/// Audit helpers for boot sequencing and readiness checkpoints.
+pub mod audit;
 pub mod console;
 pub mod event;
+/// Compile-time profile surface exposed to kernels and tests.
+pub mod profile;
 pub mod serial;
 
 #[cfg(feature = "net-console")]
@@ -93,6 +99,10 @@ pub mod sel4;
 
 #[cfg(feature = "kernel")]
 pub mod sel4_view;
+
+#[cfg(feature = "kernel")]
+/// Static manifest entry points for tickets and namespace mounts.
+pub mod manifest;
 
 #[cfg(feature = "kernel")]
 /// NineDoor 9P bridge exposed inside the VM environment.

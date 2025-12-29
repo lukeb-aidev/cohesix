@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Userland hand-off and runtime wiring for console and networking surfaces.
 //! Minimal userland entrypoints exposed by the root task.
 #![allow(unsafe_code)]
 
@@ -15,6 +16,7 @@ use crate::bootstrap::log as boot_log;
 use crate::console::CohesixConsole;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::console::Console as SerialConsole;
+#[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::debug_uart::debug_uart_str;
 use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, CapabilityValidator, EventPump,
@@ -28,6 +30,7 @@ use crate::net::DefaultNetStack as NetStack;
 use crate::net::NetPoller;
 use crate::platform::Platform;
 use crate::sel4;
+use crate::profile;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::serial::pl011::{Pl011, Pl011Mmio};
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
@@ -183,11 +186,11 @@ pub fn main(ctx: BootContext) -> ! {
 pub fn start_console_or_cohsh<P: Platform>(platform: &P) -> ! {
     ::log::info!(
         "[userland] serial-console enabled: {}",
-        cfg!(feature = "serial-console")
+        profile::SERIAL_CONSOLE
     );
     ::log::info!(
         "[userland] net-console enabled: {}",
-        cfg!(feature = "net-console")
+        profile::NET_CONSOLE
     );
     serial_console::banner(platform);
     serial_console::run(platform)
