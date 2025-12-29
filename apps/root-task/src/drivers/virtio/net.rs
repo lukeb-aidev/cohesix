@@ -6515,7 +6515,7 @@ fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DmaError {
     CacheOperationFailed,
 }
@@ -6716,7 +6716,7 @@ fn validate_tx_publish_descriptor(
             *logged = true;
             error!(
                 target: "net-console",
-                "[virtio-net][tx-publish-guard] invalid descriptor blocked: head={} slot={} avail.idx={} used.idx={} in_flight={} tx_free={} desc_addr=0x{addr:016x} desc_len={} total_len={}",
+                "[virtio-net][tx-publish-guard] invalid descriptor blocked: head={} slot={} avail.idx={} used.idx={} in_flight={} tx_free={} desc_addr=0x{addr:016x} desc_len={desc_len} total_len={total_len}",
                 head_id,
                 slot,
                 avail_idx,

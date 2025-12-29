@@ -47,7 +47,7 @@ pub struct FlushOutcome {
     pub blocked_for_tokens: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct LineBuf {
     len: u16,
     buf: [u8; LINE_CAP],
@@ -92,6 +92,12 @@ impl LineBuf {
 
     fn is_empty(&self) -> bool {
         self.len == 0
+    }
+}
+
+impl Default for LineBuf {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -230,7 +236,7 @@ impl OutboundCoalescer {
 
             match send(&plan.payload[..plan.payload_len], lane) {
                 Ok(()) => {
-                    self.commit_payload(plan, lane);
+                    self.commit_payload(&plan, lane);
                     outcome.sent_frames = outcome.sent_frames.saturating_add(1);
                     outcome.sent_bytes = outcome.sent_bytes.saturating_add(plan.payload_len as u32);
                     bytes_sent_this_poll = bytes_sent_this_poll.saturating_add(plan.payload_len);
@@ -290,19 +296,22 @@ impl OutboundCoalescer {
         if consumed == 0 || payload.is_empty() {
             None
         } else {
+            let payload_len = payload.len();
             Some(PlannedPayload {
                 payload,
-                payload_len: payload.len(),
+                payload_len,
                 consumed_lines: consumed,
                 consumed_bytes,
             })
         }
     }
 
-    fn commit_payload(&mut self, plan: PlannedPayload, lane: OutboundLane) {
+    fn commit_payload(&mut self, plan: &PlannedPayload, lane: OutboundLane) {
         match lane {
-            OutboundLane::Control => self.pop_front_batch(&mut self.ctrl_q, plan.consumed_lines),
-            OutboundLane::Log => self.pop_front_batch(&mut self.log_q, plan.consumed_lines),
+            OutboundLane::Control => {
+                Self::pop_front_batch(&mut self.ctrl_q, plan.consumed_lines)
+            }
+            OutboundLane::Log => Self::pop_front_batch(&mut self.log_q, plan.consumed_lines),
         }
         self.queued_lines = self.queued_lines.saturating_sub(plan.consumed_lines as u32);
         self.queued_bytes = self.queued_bytes.saturating_sub(plan.consumed_bytes as u32);
@@ -313,7 +322,7 @@ impl OutboundCoalescer {
         self.bytes_sent = self.bytes_sent.saturating_add(plan.payload_len as u64);
     }
 
-    fn pop_front_batch<const N: usize>(&mut self, queue: &mut Deque<LineBuf, N>, count: usize) {
+    fn pop_front_batch<const N: usize>(queue: &mut Deque<LineBuf, N>, count: usize) {
         for _ in 0..count {
             let _ = queue.pop_front();
         }
