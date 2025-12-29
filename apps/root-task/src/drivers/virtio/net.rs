@@ -139,10 +139,10 @@ fn virtq_used_load_barrier() {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TxHeadState {
     Free,
-    Prepared,
-    Published,
-    InFlight,
-    Completed,
+    Prepared { gen: u32 },
+    Published { slot: u16, gen: u32 },
+    InFlight { slot: u16, gen: u32 },
+    Completed { gen: u32 },
 }
 
 impl Default for TxHeadState {
@@ -156,16 +156,14 @@ enum TxHeadError {
     OutOfRange,
     InvalidState,
     FreeListFull,
+    SlotBusy,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct TxHeadEntry {
     state: TxHeadState,
-    gen: u32,
-    inflight_gen: Option<u32>,
-    slot: Option<u16>,
-    len: u32,
-    addr: u64,
+    last_len: u32,
+    last_addr: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -173,6 +171,7 @@ struct TxHeadEntry {
 struct TxHeadManager {
     free: HeaplessVec<u16, TX_QUEUE_SIZE>,
     entries: [TxHeadEntry; TX_QUEUE_SIZE],
+    published_slots: [Option<(u16, u32)>; TX_QUEUE_SIZE],
     next_gen: u32,
     size: u16,
 }
@@ -186,6 +185,7 @@ impl TxHeadManager {
         Self {
             free,
             entries: [TxHeadEntry::default(); TX_QUEUE_SIZE],
+            published_slots: [None; TX_QUEUE_SIZE],
             next_gen: 1,
             size,
         }
@@ -208,7 +208,7 @@ impl TxHeadManager {
         if id >= self.size {
             return None;
         }
-        if self.state(id) != Some(TxHeadState::Free) {
+        if !matches!(self.state(id), Some(TxHeadState::Free)) {
             let _ = self.free.push(id);
             debug_assert!(
                 false,
@@ -219,11 +219,11 @@ impl TxHeadManager {
             return None;
         }
         if let Some(entry) = self.entry_mut(id) {
-            entry.state = TxHeadState::Prepared;
-            entry.slot = None;
-            entry.len = 0;
-            entry.addr = 0;
-            entry.inflight_gen = None;
+            let gen = self.next_gen;
+            self.next_gen = self.next_gen.wrapping_add(1);
+            entry.state = TxHeadState::Prepared { gen };
+            entry.last_len = 0;
+            entry.last_addr = 0;
         }
         Some(id)
     }
@@ -238,56 +238,82 @@ impl TxHeadManager {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
-        let gen = self.next_gen;
-        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        if entry.state != TxHeadState::Prepared {
-            debug_assert!(
-                false,
-                "tx head already published or in-flight: id={} state={:?}",
-                id, entry.state
-            );
-            return Err(TxHeadError::InvalidState);
+        if slot >= self.size {
+            return Err(TxHeadError::OutOfRange);
         }
-        entry.state = TxHeadState::Published;
-        entry.slot = Some(slot);
-        entry.gen = gen;
-        entry.len = len;
-        entry.addr = addr;
-        entry.inflight_gen = Some(gen);
-        self.next_gen = self.next_gen.wrapping_add(1);
+        if self
+            .published_slots
+            .get(slot as usize)
+            .copied()
+            .flatten()
+            .is_some()
+        {
+            return Err(TxHeadError::SlotBusy);
+        }
+        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
+        let gen = match entry.state {
+            TxHeadState::Prepared { gen } => gen,
+            _ => {
+                debug_assert!(
+                    false,
+                    "tx head already published or in-flight: id={} state={:?}",
+                    id, entry.state
+                );
+                return Err(TxHeadError::InvalidState);
+            }
+        };
+        entry.state = TxHeadState::Published { slot, gen };
+        entry.last_len = len;
+        entry.last_addr = addr;
+        self.published_slots[slot as usize] = Some((id, gen));
         Ok(gen)
     }
 
-    fn mark_in_flight(&mut self, id: u16) -> Result<(), TxHeadError> {
+    fn mark_in_flight(&mut self, id: u16) -> Result<(u16, u32), TxHeadError> {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
         let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        if entry.state != TxHeadState::Published {
+        let (slot, gen) = match entry.state {
+            TxHeadState::Published { slot, gen } => (slot, gen),
+            _ => return Err(TxHeadError::InvalidState),
+        };
+        if self.published_for_slot(slot) != Some((id, gen)) {
             return Err(TxHeadError::InvalidState);
         }
-        debug_assert!(
-            entry.inflight_gen.is_some(),
-            "published head must track generation before entering InFlight"
-        );
-        entry.state = TxHeadState::InFlight;
-        Ok(())
+        entry.state = TxHeadState::InFlight { slot, gen };
+        Ok((slot, gen))
     }
 
-    fn mark_completed(&mut self, id: u16) -> Result<(), TxHeadError> {
+    fn mark_completed(
+        &mut self,
+        id: u16,
+        expected_gen: Option<u32>,
+    ) -> Result<(u16, u32), TxHeadError> {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
         let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        if entry.state != TxHeadState::InFlight {
+        let (slot, gen) = match entry.state {
+            TxHeadState::InFlight { slot, gen } => (slot, gen),
+            TxHeadState::Published { slot, gen } => (slot, gen),
+            _ => return Err(TxHeadError::InvalidState),
+        };
+        if let Some(expected) = expected_gen {
+            if expected != gen {
+                return Err(TxHeadError::InvalidState);
+            }
+        }
+        if self.published_for_slot(slot) != Some((id, gen)) {
             return Err(TxHeadError::InvalidState);
         }
-        debug_assert!(
-            entry.inflight_gen.is_some(),
-            "in-flight head must carry generation before completion"
-        );
-        entry.state = TxHeadState::Completed;
-        Ok(())
+        entry.state = TxHeadState::Completed { gen };
+        if let Some(slot_entry) = self.published_slots.get_mut(slot as usize) {
+            if matches!(slot_entry, Some((head, g)) if *head == id && *g == gen) {
+                *slot_entry = None;
+            }
+        }
+        Ok((slot, gen))
     }
 
     fn reclaim_head(&mut self, id: u16) -> Result<(), TxHeadError> {
@@ -295,13 +321,27 @@ impl TxHeadManager {
             return Err(TxHeadError::OutOfRange);
         }
         let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        if entry.state != TxHeadState::Completed {
+        if !matches!(entry.state, TxHeadState::Completed { .. }) {
             return Err(TxHeadError::InvalidState);
         }
         entry.state = TxHeadState::Free;
-        entry.slot = None;
-        entry.inflight_gen = None;
         self.free.push(id).map_err(|_| TxHeadError::FreeListFull)
+    }
+
+    fn cancel_publish(&mut self, id: u16) -> Result<(), TxHeadError> {
+        if id >= self.size {
+            return Err(TxHeadError::OutOfRange);
+        }
+        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
+        let (slot, gen) = match entry.state {
+            TxHeadState::Published { slot, gen } => (slot, gen),
+            _ => return Err(TxHeadError::InvalidState),
+        };
+        let next = self.next_gen;
+        self.next_gen = self.next_gen.wrapping_add(1);
+        self.clear_slot(slot);
+        entry.state = TxHeadState::Prepared { gen: next };
+        Ok(())
     }
 
     fn release_unused(&mut self, id: u16) -> Result<(), TxHeadError> {
@@ -309,7 +349,7 @@ impl TxHeadManager {
             return Err(TxHeadError::OutOfRange);
         }
         let state = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        if state.state != TxHeadState::Prepared {
+        if !matches!(state.state, TxHeadState::Prepared { .. }) {
             debug_assert!(
                 false,
                 "tx head release violation: id={} state={:?}",
@@ -318,13 +358,13 @@ impl TxHeadManager {
             return Err(TxHeadError::InvalidState);
         }
         state.state = TxHeadState::Free;
-        state.slot = None;
-        state.inflight_gen = None;
+        state.last_len = 0;
+        state.last_addr = 0;
         self.free.push(id).map_err(|_| TxHeadError::FreeListFull)
     }
 
     fn is_in_flight(&self, id: u16) -> bool {
-        matches!(self.state(id), Some(TxHeadState::InFlight))
+        matches!(self.state(id), Some(TxHeadState::InFlight { .. }))
     }
 
     fn free_len(&self) -> u16 {
@@ -335,7 +375,12 @@ impl TxHeadManager {
         self.entries
             .iter()
             .take(self.size as usize)
-            .filter(|entry| matches!(entry.state, TxHeadState::Published | TxHeadState::InFlight))
+            .filter(|entry| {
+                matches!(
+                    entry.state,
+                    TxHeadState::Published { .. } | TxHeadState::InFlight { .. }
+                )
+            })
             .count() as u16
     }
 
@@ -345,12 +390,37 @@ impl TxHeadManager {
             .enumerate()
             .take(self.size as usize)
             .filter(|(_, entry)| {
-                matches!(entry.state, TxHeadState::Published | TxHeadState::InFlight)
+                matches!(
+                    entry.state,
+                    TxHeadState::Published { .. } | TxHeadState::InFlight { .. }
+                )
             })
     }
 
     fn next_gen(&self) -> u32 {
         self.next_gen
+    }
+
+    fn published_for_slot(&self, slot: u16) -> Option<(u16, u32)> {
+        self.published_slots.get(slot as usize).copied().flatten()
+    }
+
+    fn clear_slot(&mut self, slot: u16) {
+        if let Some(slot_entry) = self.published_slots.get_mut(slot as usize) {
+            *slot_entry = None;
+        }
+    }
+
+    fn generation(&self, id: u16) -> Option<u32> {
+        self.entries
+            .get(id as usize)
+            .and_then(|entry| match entry.state {
+                TxHeadState::Prepared { gen }
+                | TxHeadState::Published { gen, .. }
+                | TxHeadState::InFlight { gen, .. }
+                | TxHeadState::Completed { gen } => Some(gen),
+                TxHeadState::Free => None,
+            })
     }
 }
 
@@ -1489,9 +1559,16 @@ impl VirtioNet {
 
     fn dump_tx_states(&self) {
         let free = self.tx_head_mgr.free_len() as usize;
-        let mut posted = HeaplessVec::<(usize, u32, u64, u32, Option<u16>), TX_QUEUE_SIZE>::new();
+        let mut posted =
+            HeaplessVec::<(usize, u32, u64, u32, u16, TxHeadState), TX_QUEUE_SIZE>::new();
         for (idx, entry) in self.tx_head_mgr.posted_entries() {
-            let _ = posted.push((idx, entry.len, entry.addr, entry.gen, entry.slot));
+            let (slot, gen) = match entry.state {
+                TxHeadState::Published { slot, gen } | TxHeadState::InFlight { slot, gen } => {
+                    (slot, gen)
+                }
+                _ => (0, 0),
+            };
+            let _ = posted.push((idx, entry.last_len, entry.last_addr, gen, slot, entry.state));
         }
         info!(
             target: "net-console",
@@ -1513,15 +1590,16 @@ impl VirtioNet {
             self.tx_invalid_used_state,
             self.tx_alloc_blocked_inflight,
         );
-        for (idx, len, addr, gen, slot) in posted {
+        for (idx, len, addr, gen, slot, state) in posted {
             info!(
                 target: "net-console",
-                "[virtio-net][forensics] tx posted id={id} len={len} addr=0x{addr:016x} gen={gen} slot={slot:?}",
+                "[virtio-net][forensics] tx posted id={id} len={len} addr=0x{addr:016x} gen={gen} slot={slot} state={state:?}",
                 id = idx,
                 len = len,
                 addr = addr,
                 gen = gen,
                 slot = slot,
+                state = state,
             );
         }
     }
@@ -1700,6 +1778,43 @@ impl VirtioNet {
         self.freeze_and_capture("tx_anomaly");
     }
 
+    fn clear_tx_desc_chain(&mut self, head: u16) {
+        match self.tx_head_mgr.state(head) {
+            Some(TxHeadState::Published { .. }) | Some(TxHeadState::InFlight { .. }) => {
+                let _ = self.tx_state_violation("tx_clear_active", head, None);
+                return;
+            }
+            _ => {}
+        }
+        let qsize = usize::from(self.tx_queue.size);
+        if qsize == 0 {
+            return;
+        }
+        let mut idx = head;
+        for depth in 0..qsize {
+            let desc_ptr = unsafe { self.tx_queue.desc.as_ptr().add(idx as usize) };
+            let desc = unsafe { read_volatile(desc_ptr) };
+            unsafe {
+                write_volatile(
+                    desc_ptr,
+                    VirtqDesc {
+                        addr: 0,
+                        len: 0,
+                        flags: 0,
+                        next: 0,
+                    },
+                );
+            }
+            if desc.flags & VIRTQ_DESC_F_NEXT == 0 {
+                break;
+            }
+            if desc.next >= self.tx_queue.size || desc.next == idx {
+                break;
+            }
+            idx = desc.next;
+        }
+    }
+
     /// Prevent TX head reuse while the device may still follow the descriptor chain.
     ///
     /// Root cause: the previous implementation keyed reuse solely off the free
@@ -1717,20 +1832,25 @@ impl VirtioNet {
             self.tx_state_violation("tx_post_zero", head_id, Some(slot))?;
             return Err(());
         }
+        if self.tx_head_mgr.published_for_slot(slot).is_some() {
+            self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
+            #[cfg(debug_assertions)]
+            self.freeze_tx_publishes("tx_slot_occupied");
+            self.tx_state_violation("tx_slot_occupied", head_id, Some(slot))?;
+            return Err(());
+        }
         match self
             .tx_head_mgr
             .mark_published(head_id, slot, desc.len, desc.addr)
         {
-            Ok(gen) => match self.tx_head_mgr.mark_in_flight(head_id) {
-                Ok(()) => Ok(gen),
-                Err(_) => {
-                    self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
-                    #[cfg(debug_assertions)]
-                    self.freeze_tx_publishes("tx_inflight_transition_failed");
-                    self.tx_state_violation("tx_inflight_transition_failed", head_id, Some(slot))?;
-                    Err(())
-                }
-            },
+            Ok(gen) => Ok(gen),
+            Err(TxHeadError::SlotBusy) => {
+                self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
+                #[cfg(debug_assertions)]
+                self.freeze_tx_publishes("tx_slot_busy");
+                self.tx_state_violation("tx_slot_busy", head_id, Some(slot))?;
+                Err(())
+            }
             Err(_) => {
                 self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
                 #[cfg(debug_assertions)]
@@ -1739,6 +1859,57 @@ impl VirtioNet {
                 Err(())
             }
         }
+    }
+
+    fn tx_pre_publish_tripwire(
+        &mut self,
+        head_id: u16,
+        slot: u16,
+        expected: &DescSpec,
+        header_len: usize,
+        payload_len: usize,
+    ) -> Result<(), ()> {
+        let desc = self.tx_queue.read_descriptor(head_id);
+        let next_expected = expected.next.unwrap_or(0);
+        let next_flag_expected = expected.next.is_some();
+        let next_flag_observed = (desc.flags & VIRTQ_DESC_F_NEXT) != 0;
+        let len_ok =
+            desc.len == expected.len && desc.len >= header_len.saturating_add(payload_len) as u32;
+        let flags_ok = (desc.flags & !VIRTQ_DESC_F_NEXT) == (expected.flags & !VIRTQ_DESC_F_NEXT);
+        let next_ok = if next_flag_expected {
+            next_flag_observed && desc.next == next_expected
+        } else {
+            !next_flag_observed && desc.next == next_expected
+        };
+        if desc.addr == 0
+            || desc.len == 0
+            || !len_ok
+            || desc.addr != expected.addr
+            || !next_ok
+            || !flags_ok
+        {
+            error!(
+                target: "net-console",
+                "[virtio-net][tx-tripwire] publish aborted head={} slot={} addr=0x{addr:016x} len={} expected_addr=0x{expected_addr:016x} expected_len={} header_len={} payload_len={} next_ok={} flags=0x{flags:04x} next={} expected_next={}",
+                head_id,
+                slot,
+                addr = desc.addr,
+                len = desc.len,
+                expected_addr = expected.addr,
+                expected_len = expected.len,
+                header_len = header_len,
+                payload_len = payload_len,
+                next_ok = next_ok,
+                flags = desc.flags,
+                next = desc.next,
+                expected_next = next_expected,
+            );
+            self.tx_state_violation("tx_tripwire", head_id, Some(slot))?;
+            self.device_faulted = true;
+            self.last_error.get_or_insert("tx_tripwire");
+            return Err(());
+        }
+        Ok(())
     }
 
     fn validate_tx_publish_guard(
@@ -1791,13 +1962,17 @@ impl VirtioNet {
         Ok(())
     }
 
-    fn reclaim_posted_head(&mut self, id: u16) -> Result<bool, ()> {
+    fn reclaim_posted_head(&mut self, id: u16, ring_slot: u16) -> Result<bool, ()> {
         let Some(entry) = self.tx_head_mgr.entry(id).copied() else {
             self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
             self.tx_state_violation("tx_used_oob", id, None)?;
             return Err(());
         };
-        if !matches!(entry.state, TxHeadState::InFlight) {
+        let (expected_slot, expected_gen) = match entry.state {
+            TxHeadState::InFlight { slot, gen } => (slot, gen),
+            _ => (u16::MAX, 0),
+        };
+        if !matches!(entry.state, TxHeadState::InFlight { .. }) {
             self.tx_dup_used_ignored = self.tx_dup_used_ignored.saturating_add(1);
             if !self.tx_dup_used_logged {
                 self.tx_dup_used_logged = true;
@@ -1806,7 +1981,7 @@ impl VirtioNet {
                     "[virtio-net][tx] used entry ignored: head={} state={:?} gen={} used.idx={} avail.idx={}",
                     id,
                     entry.state,
-                    entry.gen,
+                    expected_gen,
                     self.tx_queue.last_used,
                     self.tx_queue.indices_no_sync().1,
                 );
@@ -1814,30 +1989,28 @@ impl VirtioNet {
             }
             return Ok(false);
         }
-        let expected_gen = entry.inflight_gen;
-        if expected_gen != Some(entry.gen) || expected_gen.is_none() {
-            self.tx_dup_used_ignored = self.tx_dup_used_ignored.saturating_add(1);
-            if !self.tx_used_gen_mismatch_logged {
-                self.tx_used_gen_mismatch_logged = true;
-                warn!(
-                    target: "net-console",
-                    "[virtio-net][tx] used entry gen mismatch head={} expected_gen={:?} entry_gen={} used.idx={} avail.idx={}",
-                    id,
-                    expected_gen,
-                    entry.gen,
-                    self.tx_queue.last_used,
-                    self.tx_queue.indices_no_sync().1,
-                );
-            }
-            return Ok(false);
+        if expected_slot != ring_slot {
+            self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
+            self.tx_state_violation("tx_used_slot_mismatch", id, Some(ring_slot))?;
+            return Err(());
+        }
+        if self.tx_head_mgr.published_for_slot(ring_slot) != Some((id, expected_gen)) {
+            self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
+            self.tx_state_violation("tx_used_mapping_mismatch", id, Some(ring_slot))?;
+            return Err(());
         }
         // Completion only flips state; descriptor contents are preserved until the next prepare to
         // avoid exposing zeroed entries to an in-flight device read.
         self.tx_head_mgr
-            .mark_completed(id)
-            .and_then(|_| self.tx_head_mgr.reclaim_head(id))
+            .mark_completed(id, Some(expected_gen))
+            .and_then(|_| {
+                self.clear_tx_desc_chain(id);
+                self.tx_head_mgr.reclaim_head(id)
+            })
             .map(|_| true)
-            .map_err(|_| ())
+            .map_err(|_| {
+                self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
+            })
     }
 
     fn verify_tx_publish(
@@ -2237,7 +2410,7 @@ impl VirtioNet {
             self.last_error.get_or_insert("tx_head_state_missing");
             return Err(());
         };
-        if !matches!(state, TxHeadState::Prepared) {
+        if !matches!(state, TxHeadState::Prepared { .. }) {
             self.drop_duplicate_publish(head_id, state);
             return Err(());
         }
@@ -2367,30 +2540,65 @@ impl VirtioNet {
             .validate_tx_publish_guard(head_id, &resolved_descs, header_len, avail_idx_before)
             .is_err()
         {
-            if matches!(self.tx_head_mgr.state(head_id), Some(TxHeadState::Prepared)) {
+            if matches!(
+                self.tx_head_mgr.state(head_id),
+                Some(TxHeadState::Prepared { .. })
+            ) {
                 self.release_tx_head(head_id, "tx_guard_reject");
             }
             return Err(());
         }
-        if !matches!(self.tx_head_mgr.state(head_id), Some(TxHeadState::Prepared)) {
+        if !matches!(
+            self.tx_head_mgr.state(head_id),
+            Some(TxHeadState::Prepared { .. })
+        ) {
             self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
             #[cfg(debug_assertions)]
             self.freeze_tx_publishes("tx_publish_state_violation");
             return Err(());
         }
-        let (slot, avail_idx, old_idx) = match self.tx_queue.push_avail(head_id) {
-            Ok(result) => result,
-            Err(_) => {
-                self.device_faulted = true;
-                self.last_error.get_or_insert("tx_avail_write_failed");
-                return Err(());
-            }
-        };
+        let qsize = usize::from(self.tx_queue.size);
+        if qsize == 0 {
+            self.tx_state_violation("tx_qsize_zero", head_id, None)?;
+            return Err(());
+        }
+        let publish_slot = (avail_idx_before as usize % qsize) as u16;
         if self
-            .guard_tx_post_state(head_id, slot, &resolved_descs[0])
+            .guard_tx_post_state(head_id, publish_slot, &resolved_descs[0])
             .is_err()
         {
             return Err(());
+        }
+        self.tx_pre_publish_tripwire(
+            head_id,
+            publish_slot,
+            &resolved_descs[0],
+            header_len,
+            payload_len,
+        )?;
+        let (slot, avail_idx, old_idx) = match self.tx_queue.push_avail(head_id) {
+            Ok(result) => result,
+            Err(_) => {
+                let _ = self.tx_head_mgr.cancel_publish(head_id);
+                self.device_faulted = true;
+                self.last_error.get_or_insert("tx_avail_write_failed");
+                self.tx_state_violation("tx_avail_write_failed", head_id, Some(publish_slot))?;
+                return Err(());
+            }
+        };
+        if slot != publish_slot {
+            self.tx_state_violation("tx_slot_mismatch", head_id, Some(slot))?;
+            return Err(());
+        }
+        match self.tx_head_mgr.mark_in_flight(head_id) {
+            Ok(_) => {}
+            Err(_) => {
+                self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
+                #[cfg(debug_assertions)]
+                self.freeze_tx_publishes("tx_inflight_transition_failed");
+                self.tx_state_violation("tx_inflight_transition_failed", head_id, Some(slot))?;
+                return Err(());
+            }
         }
         if slot == 0 && !self.tx_wrap_logged {
             self.tx_wrap_logged = true;
@@ -2801,10 +3009,10 @@ impl VirtioNet {
         self.tx_progress_log_gate = self.tx_progress_log_gate.wrapping_add(1);
         loop {
             match self.tx_queue.pop_used("TX", true) {
-                Ok(Some((id, len))) => {
+                Ok(Some((id, len, ring_slot))) => {
                     self.record_tx_used_entry(id, len);
                     // used.len is ignored for TX; ownership returns solely via used.id and tracked state.
-                    let reclaimed = match self.reclaim_posted_head(id) {
+                    let reclaimed = match self.reclaim_posted_head(id, ring_slot) {
                         Ok(reclaimed) => reclaimed,
                         Err(()) => break,
                     };
@@ -2870,7 +3078,7 @@ impl VirtioNet {
                 break;
             }
             // used.len is advisory; the head lifecycle is guarded by state, not the device-provided length.
-            let reclaimed = match self.reclaim_posted_head(id) {
+            let reclaimed = match self.reclaim_posted_head(id, ring_slot as u16) {
                 Ok(reclaimed) => reclaimed,
                 Err(()) => break,
             };
@@ -3004,7 +3212,7 @@ impl VirtioNet {
         }
         self.used_poll_calls = self.used_poll_calls.wrapping_add(1);
         match self.rx_queue.pop_used("RX", false) {
-            Ok(Some((id, len))) => {
+            Ok(Some((id, len, _slot))) => {
                 let len = len as usize;
                 let header_len = self.rx_header_len;
                 if len < header_len {
@@ -3395,7 +3603,7 @@ impl VirtioNet {
             self.release_tx_head(id, "tx_v2_state_missing");
             return;
         };
-        if !matches!(state, TxHeadState::Prepared) {
+        if !matches!(state, TxHeadState::Prepared { .. }) {
             self.drop_duplicate_publish(id, state);
             return;
         }
@@ -3431,8 +3639,10 @@ impl VirtioNet {
             }
         }
 
-        if !matches!(self.tx_head_mgr.state(id), Some(TxHeadState::Prepared))
-            && !self.tx_desc_clear_violation_logged
+        if !matches!(
+            self.tx_head_mgr.state(id),
+            Some(TxHeadState::Prepared { .. })
+        ) && !self.tx_desc_clear_violation_logged
         {
             // Clear-on-prepare only: descriptors stay intact after completion so late device reads
             // never observe a zeroed entry. If we ever clear outside the prepare phase, log it.
@@ -3442,7 +3652,7 @@ impl VirtioNet {
                 "[virtio-net][tx] descriptor clear while state={:?} head={} gen={}",
                 self.tx_head_mgr.state(id),
                 id,
-                self.tx_head_mgr.entry(id).map(|entry| entry.gen).unwrap_or(0),
+                self.tx_head_mgr.generation(id).unwrap_or(0),
             );
         }
         if self
@@ -3482,7 +3692,10 @@ impl VirtioNet {
             self.release_tx_head(id, "tx_v2_cache_clean_failed");
             return;
         }
-        if !matches!(self.tx_head_mgr.state(id), Some(TxHeadState::Prepared)) {
+        if !matches!(
+            self.tx_head_mgr.state(id),
+            Some(TxHeadState::Prepared { .. })
+        ) {
             self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
             #[cfg(debug_assertions)]
             self.freeze_tx_publishes("tx_v2_publish_state_violation");
@@ -3507,25 +3720,66 @@ impl VirtioNet {
             self.release_tx_head(id, "tx_v2_guard_reject");
             return;
         }
+        let qsize = usize::from(self.tx_queue.size);
+        if qsize == 0 {
+            self.release_tx_head(id, "tx_v2_qsize_zero");
+            return;
+        }
+        let publish_slot = (avail_idx_before as usize % qsize) as u16;
+        let payload_len = total_len.saturating_sub(self.rx_header_len);
+        if self
+            .guard_tx_post_state(
+                id,
+                publish_slot,
+                &DescSpec {
+                    addr: desc.addr,
+                    len: desc.len,
+                    flags: desc.flags,
+                    next: None,
+                },
+            )
+            .is_err()
+        {
+            return;
+        }
+        if self
+            .tx_pre_publish_tripwire(
+                id,
+                publish_slot,
+                &DescSpec {
+                    addr: desc.addr,
+                    len: desc.len,
+                    flags: desc.flags,
+                    next: None,
+                },
+                self.rx_header_len,
+                payload_len,
+            )
+            .is_err()
+        {
+            return;
+        }
         // Ensure descriptor writes and cache maintenance complete before exposing the head to the
         // device via the avail ring.
         virtq_publish_barrier();
         match self.tx_queue.push_avail(id) {
             Ok((slot, avail_idx, old_idx)) => {
-                if self
-                    .guard_tx_post_state(
-                        id,
-                        slot,
-                        &DescSpec {
-                            addr: desc.addr,
-                            len: desc.len,
-                            flags: desc.flags,
-                            next: None,
-                        },
-                    )
-                    .is_err()
-                {
+                if slot != publish_slot {
+                    let _ = self.tx_head_mgr.cancel_publish(id);
+                    self.tx_state_violation("tx_v2_slot_mismatch", id, Some(slot))
+                        .ok();
                     return;
+                }
+                match self.tx_head_mgr.mark_in_flight(id) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
+                        #[cfg(debug_assertions)]
+                        self.freeze_tx_publishes("tx_v2_inflight_transition_failed");
+                        self.tx_state_violation("tx_v2_inflight_transition_failed", id, Some(slot))
+                            .ok();
+                        return;
+                    }
                 }
                 self.debug_check_tx_avail_uniqueness(self.tx_queue.last_used, avail_idx);
                 log::debug!(
@@ -3561,6 +3815,7 @@ impl VirtioNet {
                 }
             }
             Err(_) => {
+                let _ = self.tx_head_mgr.cancel_publish(id);
                 self.device_faulted = true;
                 self.last_error.get_or_insert("tx_v2_avail_write_failed");
                 self.release_tx_head(id, "tx_v2_avail_write_failed");
@@ -4119,6 +4374,11 @@ impl NetDevice for VirtioNet {
         self.tx_drops
     }
 
+    fn debug_scan_tx_avail_duplicates(&mut self) {
+        let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
+        self.debug_check_tx_avail_uniqueness(used_idx, avail_idx);
+    }
+
     fn counters(&self) -> NetDeviceCounters {
         let tx_free = self.tx_head_mgr.free_len() as u64;
         let tx_in_flight = self.tx_head_mgr.in_flight_count() as u64;
@@ -4143,6 +4403,10 @@ impl NetDevice for VirtioNet {
             tx_in_flight,
             tx_double_submit,
             tx_zero_len_attempt,
+            tx_dup_publish_blocked: self.tx_dup_publish_blocked as u64,
+            tx_dup_used_ignored: self.tx_dup_used_ignored as u64,
+            tx_invalid_used_state: self.tx_invalid_used_state as u64,
+            tx_alloc_blocked_inflight: self.tx_alloc_blocked_inflight as u64,
         }
     }
 
@@ -5399,7 +5663,7 @@ impl VirtQueue {
         &mut self,
         queue_label: &'static str,
         allow_zero_len: bool,
-    ) -> Result<Option<(u16, u32)>, ForensicFault> {
+    ) -> Result<Option<(u16, u32, u16)>, ForensicFault> {
         let used = self.used.as_ptr();
         if let Err(err) = self.invalidate_used_header_for_cpu() {
             warn!(
@@ -5553,7 +5817,7 @@ impl VirtQueue {
             elem.len,
         );
         self.last_used = self.last_used.wrapping_add(1);
-        Ok(Some((elem.id as u16, elem.len)))
+        Ok(Some((elem.id as u16, elem.len, ring_slot as u16)))
     }
 }
 
@@ -5851,12 +6115,12 @@ mod tx_tests {
 
     fn reclaim_once(mgr: &mut TxHeadManager, id: u16) -> bool {
         match mgr.state(id) {
-            Some(TxHeadState::InFlight) => {
-                mgr.mark_completed(id).expect("completed");
+            Some(TxHeadState::InFlight { gen, .. }) => {
+                mgr.mark_completed(id, Some(gen)).expect("completed");
                 mgr.reclaim_head(id).expect("reclaim");
                 true
             }
-            Some(TxHeadState::Free | TxHeadState::Completed) => false,
+            Some(TxHeadState::Free | TxHeadState::Completed { .. }) => false,
             _ => panic!("invalid state for reclaim"),
         }
     }
@@ -5877,7 +6141,8 @@ mod tx_tests {
         }
         assert!(mgr.alloc_head().is_none(), "queue should be exhausted");
         for id in 0..TX_QUEUE_SIZE {
-            mgr.mark_completed(id as u16).expect("completed");
+            let gen = mgr.generation(id as u16).expect("gen present");
+            mgr.mark_completed(id as u16, Some(gen)).expect("completed");
             mgr.reclaim_head(id as u16).expect("reclaim");
         }
         assert_eq!(
@@ -5919,7 +6184,10 @@ mod tx_tests {
             1,
             "posted head must stay reserved until a used entry arrives"
         );
-        assert!(matches!(mgr.state(head), Some(TxHeadState::InFlight)));
+        assert!(matches!(
+            mgr.state(head),
+            Some(TxHeadState::InFlight { .. })
+        ));
     }
 
     #[test]
@@ -5941,23 +6209,24 @@ mod tx_tests {
         let head = mgr.alloc_head().expect("head available");
         alloc_and_post(&mut mgr, head, 0);
         let posted = entry_for(&mgr, head);
-        assert_eq!(posted.len, 64, "len retained while posted");
-        mgr.mark_completed(head).expect("mark completed");
+        assert_eq!(posted.last_len, 64, "len retained while posted");
+        let gen = mgr.generation(head).expect("generation present");
+        mgr.mark_completed(head, Some(gen)).expect("mark completed");
         let reclaimed = entry_for(&mgr, head);
         assert_eq!(
-            reclaimed.len, 64,
+            reclaimed.last_len, 64,
             "reclaim transition must not clear descriptor metadata"
         );
         mgr.reclaim_head(head).expect("free");
         let freed = entry_for(&mgr, head);
         assert_eq!(
-            freed.len, 64,
+            freed.last_len, 64,
             "head metadata remains intact until the next prepare"
         );
         let _ = mgr.alloc_head().expect("head reusable after free");
         let reset = entry_for(&mgr, head);
         assert_eq!(
-            reset.len, 0,
+            reset.last_len, 0,
             "clear-on-prepare ensures descriptors reset only when reused"
         );
     }

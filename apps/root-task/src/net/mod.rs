@@ -169,6 +169,14 @@ pub struct NetDeviceCounters {
     pub tx_double_submit: u64,
     /// TX zero-length submit attempts detected.
     pub tx_zero_len_attempt: u64,
+    /// TX publishes rejected due to duplicate or busy slot state.
+    pub tx_dup_publish_blocked: u64,
+    /// TX used entries ignored due to duplicate completions.
+    pub tx_dup_used_ignored: u64,
+    /// TX used entries referencing unexpected heads or generations.
+    pub tx_invalid_used_state: u64,
+    /// TX allocations blocked while descriptors remain in-flight.
+    pub tx_alloc_blocked_inflight: u64,
 }
 
 /// Monotonic counters collected from the NIC driver and smoltcp sockets.
@@ -269,6 +277,9 @@ pub trait NetDevice: Device {
 
     /// Optional debug snapshot hook surfaced to stack callers.
     fn debug_snapshot(&mut self);
+
+    /// Optional debug hook to validate TX avail ring state.
+    fn debug_scan_tx_avail_duplicates(&mut self) {}
 
     /// Counter snapshot for diagnostics.
     fn counters(&self) -> NetDeviceCounters {
