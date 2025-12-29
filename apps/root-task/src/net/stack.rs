@@ -950,6 +950,7 @@ struct SelfTestState {
     udp_echo_ok: bool,
     tcp_ok: bool,
     tcp_accept_seen: bool,
+    tx_invariant_failed: bool,
     last_result: Option<NetSelfTestResult>,
 }
 
@@ -988,6 +989,7 @@ impl SelfTestState {
         self.udp_echo_ok = false;
         self.tcp_ok = false;
         self.tcp_accept_seen = false;
+        self.tx_invariant_failed = false;
         self.last_result = None;
     }
 
@@ -2076,6 +2078,40 @@ impl<D: NetDevice> NetStack<D> {
         }
     }
 
+    fn enforce_tx_invariants(&mut self) {
+        if !self.self_test.running {
+            return;
+        }
+        let counters = self.device.counters();
+        if counters.tx_dup_publish_blocked == 0
+            && counters.tx_invalid_used_state == 0
+            && counters.tx_alloc_blocked_inflight == 0
+        {
+            return;
+        }
+        if !self.self_test.tx_invariant_failed {
+            self.self_test.tx_invariant_failed = true;
+            error!(
+                "[net-selftest] tx invariant violation: dup_publish_blocked={} invalid_used_state={} alloc_blocked_inflight={} dup_used_ignored={}",
+                counters.tx_dup_publish_blocked,
+                counters.tx_invalid_used_state,
+                counters.tx_alloc_blocked_inflight,
+                counters.tx_dup_used_ignored,
+            );
+        }
+        let result = NetSelfTestResult {
+            tx_ok: false,
+            udp_echo_ok: false,
+            tcp_ok: false,
+        };
+        self.self_test.tx_ok = false;
+        self.self_test.udp_echo_ok = false;
+        self.self_test.tcp_ok = false;
+        self.self_test.running = false;
+        self.self_test.last_result = Some(result);
+        self.log_self_test_result(result);
+    }
+
     fn service_self_test(&mut self, now_ms: u64, timestamp: Instant) -> bool {
         if !SELF_TEST_ENABLED {
             return false;
@@ -2277,56 +2313,69 @@ impl<D: NetDevice> NetStack<D> {
         let Some(handle) = self.udp_beacon_handle else {
             return 0;
         };
-        let socket = self.sockets.get_mut::<UdpSocket>(handle);
         let gateway_addr = Ipv4Address::from(DEV_VIRT_GATEWAY);
         let mut sent = 0;
-        while sent < max_packets {
-            if consume_burst && self.self_test.burst_remaining == 0 {
-                break;
-            }
-            if !socket.can_send() {
-                break;
-            }
-            let mut payload = HeaplessString::<64>::new();
-            let _ = write!(&mut payload, "COHESIX_NET_OK {}", self.self_test.beacon_seq);
-            let endpoint = IpEndpoint::new(gateway_addr.into(), UDP_ECHO_PORT);
-            match socket.send_slice(payload.as_bytes(), endpoint) {
-                Ok(()) => {
-                    self.counters.udp_tx = self.counters.udp_tx.saturating_add(1);
-                    self.self_test.beacon_seq = self.self_test.beacon_seq.wrapping_add(1);
-                    self.self_test.beacons_sent = self.self_test.beacons_sent.saturating_add(1);
-                    self.self_test.record_tx();
-                    if consume_burst {
-                        self.self_test.burst_remaining =
-                            self.self_test.burst_remaining.saturating_sub(1);
-                    }
-                    if self.self_test.beacons_sent < 8 {
-                        info!(
-                            "[net-selftest] udp-beacon queued seq={} -> {}:{} payload='{}'",
-                            self.self_test.beacon_seq.saturating_sub(1),
-                            gateway_addr,
-                            UDP_ECHO_PORT,
-                            payload
-                        );
-                    } else {
-                        debug!(
-                            "[net-selftest] udp-beacon queued seq={} -> {}:{} payload='{}'",
-                            self.self_test.beacon_seq.saturating_sub(1),
-                            gateway_addr,
-                            UDP_ECHO_PORT,
-                            payload
-                        );
-                    }
-                    sent = sent.saturating_add(1);
-                }
-                Err(err) => {
-                    warn!(
-                        "[net-selftest] udp-beacon send failed seq={} err={:?}",
-                        self.self_test.beacon_seq, err
-                    );
+        let mut request_tx_scan = false;
+        {
+            let socket = self.sockets.get_mut::<UdpSocket>(handle);
+            while sent < max_packets {
+                if consume_burst && self.self_test.burst_remaining == 0 {
                     break;
                 }
+                if !socket.can_send() {
+                    break;
+                }
+                let mut payload = HeaplessString::<64>::new();
+                let _ = write!(&mut payload, "COHESIX_NET_OK {}", self.self_test.beacon_seq);
+                let endpoint = IpEndpoint::new(gateway_addr.into(), UDP_ECHO_PORT);
+                match socket.send_slice(payload.as_bytes(), endpoint) {
+                    Ok(()) => {
+                        self.counters.udp_tx = self.counters.udp_tx.saturating_add(1);
+                        self.self_test.beacon_seq = self.self_test.beacon_seq.wrapping_add(1);
+                        self.self_test.beacons_sent = self.self_test.beacons_sent.saturating_add(1);
+                        self.self_test.record_tx();
+                        if consume_burst {
+                            self.self_test.burst_remaining =
+                                self.self_test.burst_remaining.saturating_sub(1);
+                        }
+                        if self.self_test.running
+                            && self.self_test.beacons_sent >= 8
+                            && (self.self_test.beacons_sent & 0xf) == 0
+                        {
+                            request_tx_scan = true;
+                        }
+                        if self.self_test.beacons_sent < 8 {
+                            info!(
+                                "[net-selftest] udp-beacon queued seq={} -> {}:{} payload='{}'",
+                                self.self_test.beacon_seq.saturating_sub(1),
+                                gateway_addr,
+                                UDP_ECHO_PORT,
+                                payload
+                            );
+                        } else {
+                            debug!(
+                                "[net-selftest] udp-beacon queued seq={} -> {}:{} payload='{}'",
+                                self.self_test.beacon_seq.saturating_sub(1),
+                                gateway_addr,
+                                UDP_ECHO_PORT,
+                                payload
+                            );
+                        }
+                        sent = sent.saturating_add(1);
+                    }
+                    Err(err) => {
+                        warn!(
+                            "[net-selftest] udp-beacon send failed seq={} err={:?}",
+                            self.self_test.beacon_seq, err
+                        );
+                        break;
+                    }
+                }
             }
+        }
+        if request_tx_scan {
+            self.device.debug_scan_tx_avail_duplicates();
+            self.enforce_tx_invariants();
         }
         sent
     }
