@@ -1,4 +1,5 @@
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Catalogue high-value Cohesix use cases and their operational constraints. -->
 # USE_CASES.md
 Author: Lukas Bower — October 15, 2025
 
@@ -10,6 +11,7 @@ This document enumerates concrete, high‑value **use cases** for Cohesix across
 - **Queen/Worker orchestration:** one Queen coordinating many Workers via explicit tickets, role budgets, and bounded resources; no hidden daemons.
 - **Tiny TCB + deterministic envelope:** upstream seL4 with pure Rust userspace, no POSIX/libc stacks, no in-VM GPU stacks; memory and I/O are bounded and deterministic.
 - **Coexists with existing ecosystems:** host-side sidecars mirror namespaces (Kubernetes, CUDA/NVML, OT protocols, storage, model registries) over 9P so Cohesix stays the boundary orchestrator, not a general OS.
+- **LoRA/PEFT ready:** model lifecycle pointers (`/gpu/models/active`) and schema-tagged telemetry (`/gpu/telemetry/schema.json`) make feedback loops ingestible by external training farms without expanding the VM’s TCB.
 - **Cohesix is not:**
   - a Linux replacement
   - an in-VM container runtime

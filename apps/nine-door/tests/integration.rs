@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Integration tests for NineDoor host namespace and GPU workflow.
 #![forbid(unsafe_code)]
 
 use cohesix_ticket::Role;
@@ -213,10 +214,22 @@ fn spawn_emit_kill_logs_revocation() {
 fn queen_spawns_gpu_worker_and_runs_job() {
     let server = NineDoor::new();
     let bridge = gpu_bridge_host::GpuBridge::mock();
-    let nodes = bridge.serialise_namespace().expect("serialise namespace");
-    server.install_gpu_nodes(&nodes).expect("install gpu nodes");
+    let topology = bridge.serialise_namespace().expect("serialise namespace");
+    server
+        .install_gpu_nodes(&topology)
+        .expect("install gpu nodes");
 
     let mut queen = attach_queen(&server);
+    let active_model_path = vec!["gpu".to_owned(), "models".to_owned(), "active".to_owned()];
+    queen
+        .walk(1, 2, &active_model_path)
+        .expect("walk active model");
+    queen
+        .open(2, OpenMode::read_only())
+        .expect("open active model");
+    let active_model = String::from_utf8(queen.read(2, 0, MAX_MSIZE).unwrap()).unwrap();
+    assert!(active_model.contains("vision-lora-edge"));
+
     let spawn_payload = "{\"spawn\":\"gpu\",\"lease\":{\"gpu_id\":\"GPU-0\",\"mem_mb\":4096,\"streams\":2,\"ttl_s\":120,\"priority\":5}}\n";
     write_queen_command(&mut queen, spawn_payload);
 

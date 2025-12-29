@@ -1,4 +1,6 @@
 // Author: Lukas Bower
+// Purpose: Host-side GPU bridge utilities for Cohesix, including mock/NVML discovery,
+// namespace serialisation, and telemetry/model lifecycle helpers.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -7,8 +9,11 @@
 //! `/gpu` mount. When built with the `nvml` feature the bridge performs real
 //! discovery through `nvml-wrapper`.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, ensure, Result};
 use std::fmt::Write;
+
+const TELEMETRY_SCHEMA_VERSION: &str = "gpu-telemetry/v1";
+const MAX_TELEMETRY_BYTES: usize = 4096;
 
 /// Summary information about a GPU surfaced to the VM namespace.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +74,187 @@ impl GpuNamespace {
     #[must_use]
     pub fn status_payload(&self) -> &str {
         &self.status_seed
+    }
+}
+
+/// Model manifest mirrored into `/gpu/models/available/<id>/manifest.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelManifest {
+    /// Identifier for the model, used in paths and telemetry.
+    pub model_id: String,
+    /// TOML manifest content documenting the model artefact.
+    pub manifest_toml: String,
+}
+
+/// Host-side model catalog with an active pointer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuModelCatalog {
+    /// Available models exported into `/gpu/models/available`.
+    pub available: Vec<ModelManifest>,
+    /// Active model identifier referenced by `/gpu/models/active`.
+    pub active: String,
+}
+
+impl GpuModelCatalog {
+    /// Payload for the active pointer file.
+    #[must_use]
+    pub fn active_pointer_payload(&self) -> String {
+        format!("{}\n", self.active)
+    }
+}
+
+/// Structured telemetry schema for LoRA/PEFT feedback loops.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelemetrySchema {
+    /// Schema version tag.
+    pub version: String,
+    /// Maximum size in bytes for a single record.
+    pub max_record_bytes: usize,
+    /// Required fields enforced by the bridge.
+    pub required_fields: Vec<String>,
+    /// Optional fields accepted by the bridge.
+    pub optional_fields: Vec<String>,
+}
+
+impl TelemetrySchema {
+    /// Construct the default LoRA-aware telemetry schema.
+    #[must_use]
+    pub fn lora_v1() -> Self {
+        Self {
+            version: TELEMETRY_SCHEMA_VERSION.to_string(),
+            max_record_bytes: MAX_TELEMETRY_BYTES,
+            required_fields: vec![
+                "schema_version".to_string(),
+                "device_id".to_string(),
+                "model_id".to_string(),
+                "time_window".to_string(),
+                "token_count".to_string(),
+                "latency_histogram".to_string(),
+            ],
+            optional_fields: vec![
+                "lora_id".to_string(),
+                "confidence".to_string(),
+                "entropy".to_string(),
+                "drift".to_string(),
+                "feedback_flags".to_string(),
+            ],
+        }
+    }
+
+    /// Serialise the schema into a JSON descriptor for `/gpu/telemetry/schema.json`.
+    #[must_use]
+    pub fn descriptor_json(&self) -> String {
+        let mut out = String::new();
+        out.push('{');
+        write!(
+            &mut out,
+            "\"schema_version\":\"{}\",",
+            escape_json_string(&self.version)
+        )
+        .expect("write to string");
+        write!(
+            &mut out,
+            "\"max_record_bytes\":{},\"required_fields\":[{}],\"optional_fields\":[{}]}}",
+            self.max_record_bytes,
+            self.required_fields
+                .iter()
+                .map(|field| format!("\"{}\"", escape_json_string(field)))
+                .collect::<Vec<_>>()
+                .join(","),
+            self.optional_fields
+                .iter()
+                .map(|field| format!("\"{}\"", escape_json_string(field)))
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+        .expect("write to string");
+        out
+    }
+}
+
+/// Telemetry record emitted by GPU workers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TelemetryRecord {
+    /// Device identifier.
+    pub device_id: String,
+    /// Active model identifier.
+    pub model_id: String,
+    /// Optional LoRA adapter identifier.
+    pub lora_id: Option<String>,
+    /// Bounded time window label (e.g. ISO8601 interval).
+    pub time_window: String,
+    /// Token count processed in the window.
+    pub token_count: u64,
+    /// Latency histogram buckets in microseconds.
+    pub latency_histogram: Vec<u64>,
+    /// Optional confidence / entropy score.
+    pub confidence: Option<f32>,
+    /// Optional entropy measurement.
+    pub entropy: Option<f32>,
+    /// Optional drift indicator.
+    pub drift: Option<String>,
+    /// Optional operator feedback flags.
+    pub feedback_flags: Option<String>,
+}
+
+impl TelemetryRecord {
+    /// Encode the telemetry record as JSON under the provided schema with size validation.
+    pub fn to_json(&self, schema: &TelemetrySchema) -> Result<String> {
+        ensure!(
+            schema.version == TELEMETRY_SCHEMA_VERSION,
+            "unsupported telemetry schema version: {}",
+            schema.version
+        );
+        let mut json = String::new();
+        write!(
+            &mut json,
+            "{{\"schema_version\":\"{}\",\"device_id\":\"{}\",\"model_id\":\"{}\",\"time_window\":\"{}\",\"token_count\":{},\"latency_histogram\":[{}]",
+            escape_json_string(&schema.version),
+            escape_json_string(&self.device_id),
+            escape_json_string(&self.model_id),
+            escape_json_string(&self.time_window),
+            self.token_count,
+            self.latency_histogram
+                .iter()
+                .map(|bucket| bucket.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+        .expect("write to string");
+        if let Some(lora_id) = &self.lora_id {
+            write!(
+                &mut json,
+                ",\"lora_id\":\"{}\"",
+                escape_json_string(lora_id)
+            )
+            .expect("write to string");
+        }
+        if let Some(confidence) = self.confidence {
+            write!(&mut json, ",\"confidence\":{confidence:.6}").expect("write to string");
+        }
+        if let Some(entropy) = self.entropy {
+            write!(&mut json, ",\"entropy\":{entropy:.6}").expect("write to string");
+        }
+        if let Some(drift) = &self.drift {
+            write!(&mut json, ",\"drift\":\"{}\"", escape_json_string(drift))
+                .expect("write to string");
+        }
+        if let Some(flags) = &self.feedback_flags {
+            write!(
+                &mut json,
+                ",\"feedback_flags\":\"{}\"",
+                escape_json_string(flags)
+            )
+            .expect("write to string");
+        }
+        json.push('}');
+        ensure!(
+            json.len() <= schema.max_record_bytes,
+            "telemetry record exceeds max size: {} > {}",
+            json.len(),
+            schema.max_record_bytes
+        );
+        Ok(json)
     }
 }
 
@@ -136,6 +322,17 @@ pub struct GpuBridge {
     inventory: Box<dyn Inventory + Send + Sync>,
 }
 
+/// Serialised GPU topology (nodes, models, telemetry schema).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuNamespaceSnapshot {
+    /// Per-GPU nodes.
+    pub nodes: Vec<SerialisedGpuNode>,
+    /// Model lifecycle metadata.
+    pub models: GpuModelCatalog,
+    /// Telemetry schema descriptor.
+    pub telemetry_schema: TelemetrySchema,
+}
+
 impl GpuBridge {
     /// Create a bridge using the mock inventory.
     pub fn mock() -> Self {
@@ -166,8 +363,10 @@ impl GpuBridge {
             .collect())
     }
 
-    /// Construct JSON payloads ready for NineDoor ingestion.
-    pub fn serialise_namespace(&self) -> Result<Vec<SerialisedGpuNode>> {
+    /// Construct JSON payloads ready for NineDoor ingestion, including models and telemetry schema.
+    pub fn serialise_namespace(&self) -> Result<GpuNamespaceSnapshot> {
+        let models = self.build_model_catalog();
+        let telemetry_schema = TelemetrySchema::lora_v1();
         self.build_namespace()?
             .into_iter()
             .map(|namespace| {
@@ -181,7 +380,54 @@ impl GpuBridge {
                     status_payload,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()
+            .map(|nodes| GpuNamespaceSnapshot {
+                nodes,
+                models,
+                telemetry_schema,
+            })
+    }
+
+    fn build_model_catalog(&self) -> GpuModelCatalog {
+        let available = vec![
+            ModelManifest {
+                model_id: "vision-base-v1".into(),
+                manifest_toml: r#"
+[model]
+id = "vision-base-v1"
+source = "s3://artifacts/models/vision-base-v1/"
+format = "gguf"
+
+[metadata]
+tokens = 4096
+owner = "mlops"
+activation = "cold-reload"
+"#
+                .trim()
+                .to_string(),
+            },
+            ModelManifest {
+                model_id: "vision-lora-edge".into(),
+                manifest_toml: r#"
+[model]
+id = "vision-lora-edge"
+base = "vision-base-v1"
+lora = "s3://artifacts/models/lora/edge-pack-01/"
+format = "gguf+lora"
+
+[metadata]
+tokens = 4096
+owner = "mlops"
+activation = "hot-swap"
+"#
+                .trim()
+                .to_string(),
+            },
+        ];
+        GpuModelCatalog {
+            active: "vision-lora-edge".into(),
+            available,
+        }
     }
 }
 
@@ -208,41 +454,62 @@ pub fn status_entry(job: &str, state: &str, detail: &str) -> String {
     )
 }
 
-/// Format a namespace as pretty JSON compatible with the former serde output.
+/// Format a namespace snapshot as pretty JSON, including models and telemetry schema.
 #[must_use]
-pub fn namespace_to_json_pretty(nodes: &[SerialisedGpuNode]) -> String {
-    if nodes.is_empty() {
-        return "[]".to_string();
-    }
-
+pub fn namespace_to_json_pretty(snapshot: &GpuNamespaceSnapshot) -> String {
     let mut out = String::new();
-    out.push('[');
-    out.push('\n');
-    for (index, node) in nodes.iter().enumerate() {
+    out.push_str("{\n  \"nodes\": [\n");
+    for (index, node) in snapshot.nodes.iter().enumerate() {
         if index > 0 {
             out.push_str(",\n");
         }
-        out.push_str("  {\n");
+        out.push_str("    {\n");
         out.push_str(&format!(
-            "    \"id\": \"{}\",\n",
+            "      \"id\": \"{}\",\n",
             escape_json_string(&node.id)
         ));
         out.push_str(&format!(
-            "    \"info_payload\": \"{}\",\n",
+            "      \"info_payload\": \"{}\",\n",
             escape_json_string(&node.info_payload)
         ));
         out.push_str(&format!(
-            "    \"ctl_payload\": \"{}\",\n",
+            "      \"ctl_payload\": \"{}\",\n",
             escape_json_string(&node.ctl_payload)
         ));
         out.push_str(&format!(
-            "    \"status_payload\": \"{}\"\n",
+            "      \"status_payload\": \"{}\"\n",
             escape_json_string(&node.status_payload)
         ));
-        out.push_str("  }");
+        out.push_str("    }");
     }
-    out.push('\n');
-    out.push(']');
+    out.push_str("\n  ],\n");
+    out.push_str("  \"models\": {\n");
+    out.push_str(&format!(
+        "    \"active\": \"{}\",\n",
+        escape_json_string(&snapshot.models.active)
+    ));
+    out.push_str("    \"available\": [\n");
+    for (index, manifest) in snapshot.models.available.iter().enumerate() {
+        if index > 0 {
+            out.push_str(",\n");
+        }
+        out.push_str("      {\n");
+        out.push_str(&format!(
+            "        \"model_id\": \"{}\",\n",
+            escape_json_string(&manifest.model_id)
+        ));
+        out.push_str(&format!(
+            "        \"manifest_toml\": \"{}\"\n",
+            escape_json_string(&manifest.manifest_toml)
+        ));
+        out.push_str("      }");
+    }
+    out.push_str("\n    ]\n  },\n");
+    out.push_str(&format!(
+        "  \"telemetry_schema\": {}\n",
+        snapshot.telemetry_schema.descriptor_json()
+    ));
+    out.push('}');
     out
 }
 
@@ -289,9 +556,11 @@ mod tests {
     #[test]
     fn mock_inventory_produces_namespace() {
         let bridge = GpuBridge::mock();
-        let nodes = bridge.build_namespace().unwrap();
-        assert_eq!(nodes.len(), 2);
-        assert!(nodes[0].info_payload().contains("GPU-0"));
+        let snapshot = bridge.serialise_namespace().unwrap();
+        assert_eq!(snapshot.nodes.len(), 2);
+        assert!(snapshot.nodes[0].info_payload.contains("GPU-0"));
+        assert_eq!(snapshot.models.active, "vision-lora-edge");
+        assert_eq!(snapshot.telemetry_schema.version, TELEMETRY_SCHEMA_VERSION);
     }
 
     #[test]
@@ -311,16 +580,47 @@ mod tests {
 
     #[test]
     fn namespace_serialises_to_pretty_json() {
-        let nodes = vec![SerialisedGpuNode {
-            id: "GPU-0".into(),
-            info_payload: "{\"id\":\"GPU-0\"}".into(),
-            ctl_payload: "LEASE GPU-0".into(),
-            status_payload: "ready".into(),
-        }];
-        let json = namespace_to_json_pretty(&nodes);
-        assert_eq!(
-            json,
-            "[\n  {\n    \"id\": \"GPU-0\",\n    \"info_payload\": \"{\\\"id\\\":\\\"GPU-0\\\"}\",\n    \"ctl_payload\": \"LEASE GPU-0\",\n    \"status_payload\": \"ready\"\n  }\n]"
+        let snapshot = GpuNamespaceSnapshot {
+            nodes: vec![SerialisedGpuNode {
+                id: "GPU-0".into(),
+                info_payload: "{\"id\":\"GPU-0\"}".into(),
+                ctl_payload: "LEASE GPU-0".into(),
+                status_payload: "ready".into(),
+            }],
+            models: GpuModelCatalog {
+                available: vec![ModelManifest {
+                    model_id: "foo".into(),
+                    manifest_toml: "base = \"foo\"".into(),
+                }],
+                active: "foo".into(),
+            },
+            telemetry_schema: TelemetrySchema::lora_v1(),
+        };
+        let json = namespace_to_json_pretty(&snapshot);
+        assert!(
+            json.contains("\"telemetry_schema\""),
+            "telemetry schema missing: {json}"
         );
+        assert!(json.contains("\"active\": \"foo\""));
+        assert!(json.contains("\"ctl_payload\": \"LEASE GPU-0\""));
+    }
+
+    #[test]
+    fn telemetry_record_respects_size_limits() {
+        let schema = TelemetrySchema::lora_v1();
+        let record = TelemetryRecord {
+            device_id: "dev-1".into(),
+            model_id: "vision-base-v1".into(),
+            lora_id: Some("adapter-a".into()),
+            time_window: "2025-01-01T00:00:00Z/2025-01-01T00:05:00Z".into(),
+            token_count: 1024,
+            latency_histogram: vec![1, 2, 3],
+            confidence: Some(0.98),
+            entropy: None,
+            drift: None,
+            feedback_flags: Some("hf:pos".into()),
+        };
+        let encoded = record.to_json(&schema).expect("encode");
+        assert!(encoded.len() <= schema.max_record_bytes);
     }
 }

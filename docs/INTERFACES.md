@@ -1,4 +1,5 @@
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Canonical interface definitions for NineDoor, queen/worker verbs, GPU bridge files, and telemetry schemas. -->
 # Cohesix Interfaces (Queen/Worker, NineDoor, GPU Bridge)
 
 The queen/worker verbs and `/queen/ctl` schema form the hive control API: one Queen instance uses these interfaces to control many workers over the shared Secure9P namespace.
@@ -42,6 +43,11 @@ Path: `/queen/ctl` (append-only JSON lines)
 - Path: `/worker/<id>/telemetry` (append-only, newline-delimited records).
 - Heartbeat payload: `{"tick":42,"ts_ms":123456789}`.
 - GPU payload: `{"job":"jid-9","state":"RUNNING","detail":"scheduled"}` followed by `{"job":"jid-9","state":"OK","detail":"completed"}`.
+- GPU telemetry schema (Milestone 6a):
+  - Descriptor: `/gpu/telemetry/schema.json` (read-only, versioned)
+  - Records must include `schema_version`, `device_id`, `model_id`, `time_window`, `token_count`, `latency_histogram`.
+  - Optional fields: `lora_id`, `confidence`, `entropy`, `drift`, `feedback_flags`.
+  - Max record size: 4096 bytes; append-only semantics enforced by host bridge before forwarding to `/queen/telemetry/*`.
 
 ## 5. GPU Bridge Files (host-mirrored)
 | Path | Mode | Description |
@@ -50,6 +56,13 @@ Path: `/queen/ctl` (append-only JSON lines)
 | `/gpu/<id>/ctl` | append-only | Lease management: `LEASE`, `RELEASE`, `PRIORITY <n>` |
 | `/gpu/<id>/job` | append-only | JSON job descriptors (validated hash, grid/block dims, optional `payload_b64`) |
 | `/gpu/<id>/status` | read-only append stream | Job lifecycle entries (QUEUED/RUNNING/OK/ERR) |
+| `/gpu/models/available/<model_id>/manifest.toml` | read-only | Host-authored model manifests; no uploads from the VM |
+| `/gpu/models/active` | append-only pointer | Symlink-like pointer to the active model (atomic swap on host) |
+| `/gpu/telemetry/schema.json` | read-only | Versioned schema descriptor (`gpu-telemetry/v1`) with field and size limits |
+| `/gpu/telemetry/*` | append-only | Bounded telemetry windows tagged with `model_id` / `lora_id`; forwarded unchanged to `/queen/telemetry/*` and `/queen/export/lora_jobs/*` |
+
+- WorkerGpu must read `/gpu/models/active` before emitting telemetry and propagate the `model_id`/`lora_id` into every record.
+- Telemetry writes that exceed `max_record_bytes` or omit required fields are rejected by the host bridge prior to mirroring.
 
 ## 6. Root Task RPC (internal trait)
 ```rust

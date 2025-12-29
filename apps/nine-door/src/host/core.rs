@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Core NineDoor Secure9P server state machine and namespace plumbing.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -6,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::{BudgetSpec, Role};
-use gpu_bridge_host::{status_entry, SerialisedGpuNode};
+use gpu_bridge_host::{status_entry, GpuNamespaceSnapshot};
 use log::{debug, info, trace};
 use secure9p_wire::{
     Codec, ErrorCode, OpenMode, Qid, Request, RequestBody, Response, ResponseBody, SessionId,
@@ -73,9 +74,9 @@ impl ServerCore {
 
     pub(crate) fn install_gpu_nodes(
         &mut self,
-        nodes: &[SerialisedGpuNode],
+        topology: &GpuNamespaceSnapshot,
     ) -> Result<(), NineDoorError> {
-        self.control.install_gpu_nodes(nodes)
+        self.control.install_gpu_nodes(topology)
     }
 
     pub(crate) fn handle_frame(
@@ -714,8 +715,8 @@ impl ControlPlane {
         self.services.get(service).cloned()
     }
 
-    fn install_gpu_nodes(&mut self, nodes: &[SerialisedGpuNode]) -> Result<(), NineDoorError> {
-        for node in nodes {
+    fn install_gpu_nodes(&mut self, topology: &GpuNamespaceSnapshot) -> Result<(), NineDoorError> {
+        for node in &topology.nodes {
             self.namespace.set_gpu_node(
                 &node.id,
                 node.info_payload.as_bytes(),
@@ -724,6 +725,9 @@ impl ControlPlane {
             )?;
             self.gpu_nodes.insert(node.id.clone());
         }
+        self.namespace.set_gpu_models(&topology.models)?;
+        self.namespace
+            .set_gpu_telemetry_schema(&topology.telemetry_schema)?;
         Ok(())
     }
 
