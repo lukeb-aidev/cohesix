@@ -43,6 +43,7 @@ const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
 const NET_VIRTIO_TX_V2: bool = cfg!(feature = "net-virtio-tx-v2");
 const VIRTIO_GUARD_QUEUE: bool = cfg!(feature = "virtio_guard_queue");
+const VIRTIO_DMA_TRACE: bool = cfg!(feature = "net-diag") || cfg!(feature = "trace-heavy-init");
 const DMA_NONCOHERENT: bool = cfg!(target_arch = "aarch64");
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
@@ -107,6 +108,7 @@ static DMA_ERROR_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_QMEM_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_RING_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static VQ_LAYOUT_LOGGED: AtomicBool = AtomicBool::new(false);
+static DMA_FORCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static VQ_ADDRESS_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
     [const { AtomicBool::new(false) }; VIRTIO_MMIO_SLOTS];
 static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
@@ -2257,6 +2259,13 @@ impl VirtioNet {
         }
         let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
         let desc = self.tx_queue.read_descriptor(head_id);
+        debug_assert!(
+            desc.len != 0 && desc.addr != 0,
+            "tx publish descriptor must be non-zero: head={} len={} addr=0x{:016x}",
+            head_id,
+            desc.len,
+            desc.addr
+        );
         let total_len = self
             .tx_head_mgr
             .entry(head_id)
@@ -3204,17 +3213,16 @@ impl VirtioNet {
         }
         #[cfg(debug_assertions)]
         self.debug_trace_tx_publish_state(head_id, slot, "post_mark_in_flight");
-        if slot == 0 && !self.tx_wrap_logged {
+        let wrap_boundary = (old_idx as usize % qsize) > (avail_idx as usize % qsize);
+        if wrap_boundary && !self.tx_wrap_logged {
             self.tx_wrap_logged = true;
             info!(
                 target: "virtio-net",
-                "[virtio-net][tx-wrap] avail_idx {}->{} slot={} head={} free={} in_flight={}",
-                old_idx,
-                avail_idx,
-                slot,
-                head_id,
-                self.tx_head_mgr.free_len(),
-                self.tx_head_mgr.in_flight_count(),
+                "[virtio-net][tx-wrap] avail_idx {old_idx}->{avail_idx} slot={slot} head={head_id} free={free} in_flight={in_flight} wrap_detected={wrap_detected} qsize={qsize}",
+                free = self.tx_head_mgr.free_len(),
+                in_flight = self.tx_head_mgr.in_flight_count(),
+                wrap_detected = wrap_boundary,
+                qsize = qsize,
             );
         }
         self.verify_tx_publish(slot, head_id, &resolved_descs[0])?;
@@ -3274,6 +3282,28 @@ impl VirtioNet {
             header_fields,
             &resolved_descs,
         );
+        if VIRTIO_DMA_TRACE {
+            let desc_snapshot = self.tx_queue.read_descriptor(head_id);
+            let avail_slot_val = self.tx_queue.read_avail_slot(slot as usize);
+            let avail_idx_now = self.tx_queue.read_avail_idx();
+            debug!(
+                target: "virtio-net",
+                "[virtio-net][tx-trace] pre-kick head={head_id} slot={slot} desc=0x{addr:016x}/{len} flags=0x{flags:04x} next={next} avail_slot={avail_slot} avail_idx_now={avail_idx_now} old_idx={old_idx}",
+                head_id = head_id,
+                slot = slot,
+                addr = desc_snapshot.addr,
+                len = desc_snapshot.len,
+                flags = desc_snapshot.flags,
+                next = desc_snapshot.next,
+                avail_slot = avail_slot_val,
+                avail_idx_now = avail_idx_now,
+                old_idx = old_idx,
+            );
+            debug_assert!(
+                desc_snapshot.len != 0 && desc_snapshot.addr != 0,
+                "tx-trace: descriptor must be initialised before kick"
+            );
+        }
         if !TX_PUBLISH_FENCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             debug!(
                 target: "virtio-net",
@@ -4500,8 +4530,43 @@ impl VirtioNet {
                 }
                 self.tx_submit = self.tx_submit.wrapping_add(1);
                 NET_DIAG.record_tx_submit();
-                if slot == 0 && !self.tx_wrap_logged {
+                let qsize = usize::from(self.tx_queue.size);
+                let wrap_boundary =
+                    qsize != 0 && (old_idx as usize % qsize) > (avail_idx as usize % qsize);
+                if wrap_boundary && !self.tx_wrap_logged {
                     self.tx_wrap_logged = true;
+                    info!(
+                        target: "virtio-net",
+                        "[virtio-net][tx-wrap] v2 avail_idx {}->{} slot={} head={} wrap_detected={} qsize={}",
+                        old_idx,
+                        avail_idx,
+                        slot,
+                        id,
+                        wrap_boundary,
+                        qsize,
+                    );
+                }
+                if VIRTIO_DMA_TRACE {
+                    let desc_snapshot = self.tx_queue.read_descriptor(id);
+                    let avail_slot_val = self.tx_queue.read_avail_slot(slot as usize);
+                    let avail_idx_now = self.tx_queue.read_avail_idx();
+                    debug!(
+                        target: "virtio-net",
+                        "[virtio-net][tx-trace] v2 pre-kick head={head_id} slot={slot} desc=0x{addr:016x}/{len} flags=0x{flags:04x} next={next} avail_slot={avail_slot} avail_idx_now={avail_idx_now} old_idx={old_idx}",
+                        head_id = id,
+                        slot = slot,
+                        addr = desc_snapshot.addr,
+                        len = desc_snapshot.len,
+                        flags = desc_snapshot.flags,
+                        next = desc_snapshot.next,
+                        avail_slot = avail_slot_val,
+                        avail_idx_now = avail_idx_now,
+                        old_idx = old_idx,
+                    );
+                    debug_assert!(
+                        desc_snapshot.len != 0 && desc_snapshot.addr != 0,
+                        "tx-trace: v2 descriptor must be initialised before kick"
+                    );
                 }
                 if self
                     .tx_queue
@@ -6589,6 +6654,23 @@ impl VirtQueue {
         unsafe { read_volatile(self.desc.as_ptr().add(index as usize)) }
     }
 
+    fn read_avail_slot(&self, slot: usize) -> u16 {
+        let avail = self.avail.as_ptr();
+        self.assert_offset_in_range(
+            self.layout
+                .avail_offset
+                .saturating_add(core::mem::size_of::<u16>() * slot),
+            core::mem::size_of::<u16>(),
+            "avail.ring.read",
+        );
+        unsafe { read_volatile((*avail).ring.as_ptr().add(slot)) }
+    }
+
+    fn read_avail_idx(&self) -> u16 {
+        let avail = self.avail.as_ptr();
+        unsafe { read_volatile(&(*avail).idx) }
+    }
+
     fn indices(&self) -> (u16, u16) {
         let used = self.used.as_ptr();
         let avail = self.avail.as_ptr();
@@ -6906,6 +6988,8 @@ fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
 }
 
+const DMA_FORCE_CACHE_MAINTENANCE: bool = DMA_NONCOHERENT;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DmaError {
     CacheOperationFailed,
@@ -6941,12 +7025,13 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) -> Resul
     if len == 0 {
         return Ok(());
     }
+    let perform_cache_op = cacheable || DMA_FORCE_CACHE_MAINTENANCE;
     #[cfg(test)]
     if let Some(hook) = *DMA_TEST_HOOK.lock() {
         hook(CacheOp::Clean, ptr as usize, len);
         return Ok(());
     }
-    if !cacheable {
+    if !perform_cache_op {
         if !DMA_SKIP_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             info!(
                 target: "virtio-net",
@@ -6955,12 +7040,20 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) -> Resul
         }
         return Ok(());
     }
+    if !cacheable && !DMA_FORCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+        info!(
+            target: "virtio-net",
+            "[virtio-net][dma] forcing cache maintenance for non-cacheable mapping",
+        );
+    }
     let log_once = !DMA_CLEAN_LOGGED.swap(true, AtomicOrdering::AcqRel);
-    info!(
-        target: "virtio-net",
-        "[virtio-net][dma] cache op reason={reason}",
-    );
-    if log_once {
+    if VIRTIO_DMA_TRACE || log_once {
+        info!(
+            target: "virtio-net",
+            "[virtio-net][dma] cache op reason={reason}",
+        );
+    }
+    if VIRTIO_DMA_TRACE || log_once {
         info!(
             target: "virtio-net",
             "[virtio-net][dma] clean enter ptr=0x{ptr:016x} len={len}",
@@ -6981,7 +7074,7 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) -> Resul
         mark_forensics_frozen();
         return Err(DmaError::CacheOperationFailed);
     }
-    if log_once {
+    if VIRTIO_DMA_TRACE || log_once {
         info!(
             target: "virtio-net",
             "[virtio-net][dma] clean exit ptr=0x{ptr:016x} len={len}",
@@ -7003,12 +7096,13 @@ fn dma_invalidate(
     if len == 0 {
         return Ok(());
     }
+    let perform_cache_op = cacheable || DMA_FORCE_CACHE_MAINTENANCE;
     #[cfg(test)]
     if let Some(hook) = *DMA_TEST_HOOK.lock() {
         hook(CacheOp::Invalidate, ptr as usize, len);
         return Ok(());
     }
-    if !cacheable {
+    if !perform_cache_op {
         if !DMA_SKIP_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             info!(
                 target: "virtio-net",
@@ -7017,12 +7111,20 @@ fn dma_invalidate(
         }
         return Ok(());
     }
+    if !cacheable && !DMA_FORCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+        info!(
+            target: "virtio-net",
+            "[virtio-net][dma] forcing cache maintenance for non-cacheable mapping",
+        );
+    }
     let log_once = !DMA_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel);
-    info!(
-        target: "virtio-net",
-        "[virtio-net][dma] cache op reason={reason}",
-    );
-    if log_once {
+    if VIRTIO_DMA_TRACE || log_once {
+        info!(
+            target: "virtio-net",
+            "[virtio-net][dma] cache op reason={reason}",
+        );
+    }
+    if VIRTIO_DMA_TRACE || log_once {
         info!(
             target: "virtio-net",
             "[virtio-net][dma] invalidate enter ptr=0x{ptr:016x} len={len}",
@@ -7043,7 +7145,7 @@ fn dma_invalidate(
         mark_forensics_frozen();
         return Err(DmaError::CacheOperationFailed);
     }
-    if log_once {
+    if VIRTIO_DMA_TRACE || log_once {
         info!(
             target: "virtio-net",
             "[virtio-net][dma] invalidate exit ptr=0x{ptr:016x} len={len}",
@@ -7486,7 +7588,8 @@ mod tx_tests {
         );
     }
 
-    static OP_LOG: Mutex<HeaplessVec<(CacheOp, usize, usize), 8>> = Mutex::new(HeaplessVec::new());
+    static OP_LOG: Mutex<HeaplessVec<(CacheOp, usize, usize), 192>> =
+        Mutex::new(HeaplessVec::new());
 
     fn log_hook(op: CacheOp, ptr: usize, len: usize) {
         let mut log = OP_LOG.lock();
@@ -7496,6 +7599,7 @@ mod tx_tests {
     #[test]
     fn cache_ops_called_in_right_places() {
         let ptr = 0x1000usize as *const u8;
+        OP_LOG.lock().clear();
         with_dma_test_hook(Some(log_hook), || {
             let _ = dma_clean(ptr, 64, true, "test-clean");
             let _ = dma_invalidate(ptr, 64, true, "test-invalidate");
@@ -7504,6 +7608,32 @@ mod tx_tests {
         assert_eq!(log.len(), 2, "both cache ops should be recorded");
         assert_eq!(log[0].0, CacheOp::Clean);
         assert_eq!(log[1].0, CacheOp::Invalidate);
+    }
+
+    #[test]
+    fn cache_ops_forced_for_uncached_wraparound_metadata() {
+        OP_LOG.lock().clear();
+        let publishes = usize::from(TX_QUEUE_SIZE) * 2 + 4;
+        let desc_ptr = 0x2000usize as *const u8;
+        let idx_ptr = 0x4000usize as *const u8;
+        with_dma_test_hook(Some(log_hook), || {
+            for idx in 0..publishes {
+                let slot_ptr = (0x3000usize
+                    + (idx % usize::from(TX_QUEUE_SIZE)) * core::mem::size_of::<u16>())
+                    as *const u8;
+                let _ = dma_clean(desc_ptr, 32, false, "wrap-desc");
+                let _ = dma_clean(slot_ptr, core::mem::size_of::<u16>(), false, "wrap-slot");
+                let _ = dma_clean(idx_ptr, core::mem::size_of::<u16>(), false, "wrap-idx");
+            }
+        });
+        let log = OP_LOG.lock();
+        let expected = publishes * 3;
+        assert!(
+            log.len() >= expected,
+            "cache ops must run for uncached mappings across wraps (got {} expected >= {})",
+            log.len(),
+            expected
+        );
     }
 
     #[test]
