@@ -254,6 +254,23 @@ impl TxHeadManager {
         Some(id)
     }
 
+    fn submit_ready(&self, id: u16, slot: u16) -> Result<(), TxHeadError> {
+        if id >= self.size || slot >= self.size {
+            return Err(TxHeadError::OutOfRange);
+        }
+        match self.state(id) {
+            Some(TxHeadState::Published { slot: s, .. }) if s == slot => {}
+            _ => return Err(TxHeadError::InvalidState),
+        }
+        if !self.in_avail(id) {
+            return Err(TxHeadError::InvalidState);
+        }
+        if self.publish_present(id) {
+            return Err(TxHeadError::InvalidState);
+        }
+        Ok(())
+    }
+
     fn mark_published(
         &mut self,
         id: u16,
@@ -619,6 +636,13 @@ impl TxHeadManager {
 
     fn in_avail(&self, id: u16) -> bool {
         self.in_avail.get(id as usize).copied().unwrap_or(false)
+    }
+
+    fn publish_present(&self, id: u16) -> bool {
+        self.publish_present
+            .get(id as usize)
+            .copied()
+            .unwrap_or(false)
     }
 }
 
@@ -2222,14 +2246,15 @@ impl VirtioNet {
             return Err(());
         }
         // Completion only flips state; descriptor contents are preserved until the next prepare to
-        // avoid exposing zeroed entries to an in-flight device read.
+        // avoid exposing zeroed entries to an in-flight device read. Clearing is deferred until
+        // reclaim time to ensure the device no longer owns the descriptors.
         self.tx_head_mgr
             .mark_completed(id, Some(expected_gen))
-            .and_then(|_| {
+            .and_then(|_| self.tx_head_mgr.reclaim_head(id))
+            .map(|_| {
                 self.clear_tx_desc_chain(id);
-                self.tx_head_mgr.reclaim_head(id)
+                true
             })
-            .map(|_| true)
             .map_err(|_| {
                 self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
             })
@@ -2791,6 +2816,17 @@ impl VirtioNet {
             .guard_tx_post_state(head_id, publish_slot, &resolved_descs[0])
             .is_err()
         {
+            return Err(());
+        }
+        if self
+            .tx_head_mgr
+            .submit_ready(head_id, publish_slot)
+            .is_err()
+        {
+            self.device_faulted = true;
+            self.last_error.get_or_insert("tx_double_advertise");
+            self.freeze_tx_publishes("tx_double_advertise");
+            self.tx_state_violation("tx_double_advertise", head_id, Some(publish_slot))?;
             return Err(());
         }
         #[cfg(debug_assertions)]
@@ -3987,6 +4023,16 @@ impl VirtioNet {
             return;
         }
         if self
+            .tx_head_mgr
+            .submit_ready(id, publish_slot)
+            .is_err()
+        {
+            self.device_faulted = true;
+            self.last_error.get_or_insert("tx_double_advertise");
+            self.freeze_tx_publishes("tx_double_advertise");
+            return;
+        }
+        if self
             .tx_pre_publish_tripwire(
                 id,
                 publish_slot,
@@ -4014,6 +4060,12 @@ impl VirtioNet {
                     let _ = self.tx_head_mgr.cancel_publish(id);
                     self.tx_state_violation("tx_v2_slot_mismatch", id, Some(slot))
                         .ok();
+                    return;
+                }
+                if self.tx_head_mgr.submit_ready(id, slot).is_err() {
+                    self.device_faulted = true;
+                    self.last_error.get_or_insert("tx_double_advertise");
+                    self.freeze_tx_publishes("tx_double_advertise");
                     return;
                 }
                 if self
@@ -6740,6 +6792,43 @@ mod tx_tests {
         assert!(
             matches!(mgr.state(head), Some(TxHeadState::Published { .. })),
             "state remains published after failed completion"
+        );
+    }
+
+    #[test]
+    fn double_advertise_is_blocked() {
+        let mut mgr = TxHeadManager::new(2);
+        let head = mgr.alloc_head().expect("head available");
+        let _gen = mgr
+            .mark_published(head, 0, 64, 0x1000)
+            .expect("publish");
+        mgr.submit_ready(head, 0).expect("first advertise allowed");
+        mgr.note_avail_publish(head, 0, 1)
+            .expect("record first publish");
+        assert!(
+            mgr.submit_ready(head, 0).is_err(),
+            "second advertise must be rejected while still tracked in avail"
+        );
+    }
+
+    #[test]
+    fn clear_only_after_reclaim() {
+        let mut mgr = TxHeadManager::new(1);
+        let head = mgr.alloc_head().expect("head available");
+        let gen = mgr
+            .mark_published(head, 0, 64, 0x1000)
+            .expect("publish");
+        mgr.note_avail_publish(head, 0, 0)
+            .expect("advertise noted");
+        mgr.mark_in_flight(head).expect("in-flight");
+        assert!(
+            mgr.reclaim_head(head).is_err(),
+            "reclaim must fail while advertised/in-flight"
+        );
+        mgr.mark_completed(head, Some(gen)).expect("complete");
+        assert!(
+            mgr.reclaim_head(head).is_ok(),
+            "reclaim succeeds only after completion clears advertise tracking"
         );
     }
 
