@@ -14,6 +14,7 @@ use core::fmt::{self, Write as FmtWrite};
 use core::ptr::read_unaligned;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 use core::sync::atomic::{compiler_fence, fence, AtomicBool, Ordering as AtomicOrdering};
+use core::mem::MaybeUninit;
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, warn};
@@ -103,6 +104,10 @@ static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
 static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "net-backend-virtio")]
+static mut VIRTIO_NET_STORAGE: MaybeUninit<VirtioNet> = MaybeUninit::uninit();
+#[cfg(debug_assertions)]
+static VIRTIO_NET_SIZE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[inline]
 fn virtq_publish_barrier() {
@@ -174,7 +179,10 @@ struct TxHeadManager {
     entries: [TxHeadEntry; TX_QUEUE_SIZE],
     published_slots: [Option<(u16, u32)>; TX_QUEUE_SIZE],
     in_avail: [bool; TX_QUEUE_SIZE],
-    publish_records: [Option<TxPublishRecord>; TX_QUEUE_SIZE],
+    publish_present: [bool; TX_QUEUE_SIZE],
+    publish_slot: [u16; TX_QUEUE_SIZE],
+    publish_gen: [u32; TX_QUEUE_SIZE],
+    publish_avail_idx: [u16; TX_QUEUE_SIZE],
     next_gen: u32,
     size: u16,
 }
@@ -197,7 +205,10 @@ impl TxHeadManager {
             entries: [TxHeadEntry::default(); TX_QUEUE_SIZE],
             published_slots: [None; TX_QUEUE_SIZE],
             in_avail: [false; TX_QUEUE_SIZE],
-            publish_records: [None; TX_QUEUE_SIZE],
+            publish_present: [false; TX_QUEUE_SIZE],
+            publish_slot: [0; TX_QUEUE_SIZE],
+            publish_gen: [0; TX_QUEUE_SIZE],
+            publish_avail_idx: [0; TX_QUEUE_SIZE],
             next_gen: 1,
             size,
         }
@@ -237,8 +248,8 @@ impl TxHeadManager {
             entry.last_len = 0;
             entry.last_addr = 0;
         }
-        if let Some(record) = self.publish_records.get_mut(id as usize) {
-            *record = None;
+        if let Some(flag) = self.publish_present.get_mut(id as usize) {
+            *flag = false;
         }
         Some(id)
     }
@@ -345,10 +356,10 @@ impl TxHeadManager {
             return Err(TxHeadError::InvalidState);
         }
         let record = self
-            .publish_records
+            .publish_present
             .get_mut(id as usize)
             .ok_or(TxHeadError::OutOfRange)?;
-        if record.is_some() {
+        if *record {
             debug_assert!(
                 false,
                 "tx head already recorded as published: id={} slot={} state={:?}",
@@ -358,11 +369,16 @@ impl TxHeadManager {
             );
             return Err(TxHeadError::InvalidState);
         }
-        *record = Some(TxPublishRecord {
-            slot,
-            gen,
-            avail_idx,
-        });
+        *record = true;
+        if let Some(record_slot) = self.publish_slot.get_mut(id as usize) {
+            *record_slot = slot;
+        }
+        if let Some(record_gen) = self.publish_gen.get_mut(id as usize) {
+            *record_gen = gen;
+        }
+        if let Some(record_avail) = self.publish_avail_idx.get_mut(id as usize) {
+            *record_avail = avail_idx;
+        }
         Ok(())
     }
 
@@ -375,25 +391,43 @@ impl TxHeadManager {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
-        let record = self
-            .publish_records
+        let record_present = self
+            .publish_present
             .get_mut(id as usize)
-            .ok_or(TxHeadError::OutOfRange)?
-            .take()
-            .ok_or(TxHeadError::InvalidState)?;
-        if record.slot != expected_slot || record.gen != expected_gen {
+            .ok_or(TxHeadError::OutOfRange)?;
+        if !*record_present {
+            return Err(TxHeadError::InvalidState);
+        }
+        let slot = *self
+            .publish_slot
+            .get(id as usize)
+            .ok_or(TxHeadError::OutOfRange)?;
+        let gen = *self
+            .publish_gen
+            .get(id as usize)
+            .ok_or(TxHeadError::OutOfRange)?;
+        let avail_idx = *self
+            .publish_avail_idx
+            .get(id as usize)
+            .ok_or(TxHeadError::OutOfRange)?;
+        *record_present = false;
+        if slot != expected_slot || gen != expected_gen {
             debug_assert!(
                 false,
                 "tx publish record mismatch: id={} expected_slot={} expected_gen={} recorded_slot={} recorded_gen={}",
                 id,
                 expected_slot,
                 expected_gen,
-                record.slot,
-                record.gen,
+                slot,
+                gen,
             );
             return Err(TxHeadError::InvalidState);
         }
-        Ok(record)
+        Ok(TxPublishRecord {
+            slot,
+            gen,
+            avail_idx,
+        })
     }
 
     fn mark_completed(
@@ -437,6 +471,9 @@ impl TxHeadManager {
         if let Some(flag) = self.in_avail.get_mut(id as usize) {
             *flag = false;
         }
+        if let Some(present) = self.publish_present.get_mut(id as usize) {
+            *present = false;
+        }
         Ok((slot, gen))
     }
 
@@ -458,8 +495,8 @@ impl TxHeadManager {
             return Err(TxHeadError::InvalidState);
         }
         entry.state = TxHeadState::Free;
-        if let Some(record) = self.publish_records.get_mut(id as usize) {
-            *record = None;
+        if let Some(present) = self.publish_present.get_mut(id as usize) {
+            *present = false;
         }
         self.free.push(id).map_err(|_| TxHeadError::FreeListFull)
     }
@@ -483,8 +520,8 @@ impl TxHeadManager {
         if let Some(flag) = self.in_avail.get_mut(id as usize) {
             *flag = false;
         }
-        if let Some(record) = self.publish_records.get_mut(id as usize) {
-            *record = None;
+        if let Some(present) = self.publish_present.get_mut(id as usize) {
+            *present = false;
         }
         Ok(())
     }
@@ -514,8 +551,8 @@ impl TxHeadManager {
         state.state = TxHeadState::Free;
         state.last_len = 0;
         state.last_addr = 0;
-        if let Some(record) = self.publish_records.get_mut(id as usize) {
-            *record = None;
+        if let Some(present) = self.publish_present.get_mut(id as usize) {
+            *present = false;
         }
         self.free.push(id).map_err(|_| TxHeadError::FreeListFull)
     }
@@ -922,6 +959,12 @@ pub struct VirtioNet {
     forensic_dump_captured: bool,
 }
 
+/// Virtio-net driver stored in static memory to avoid large stack frames during init.
+#[cfg(feature = "net-backend-virtio")]
+pub struct VirtioNetStatic {
+    driver: &'static mut VirtioNet,
+}
+
 impl VirtioNet {
     /// Create a new driver instance by probing the virtio MMIO slots.
     pub fn new<H>(hal: &mut H) -> Result<Self, DriverError>
@@ -936,6 +979,15 @@ impl VirtioNet {
     where
         H: Hardware<Error = HalError>,
     {
+        #[cfg(debug_assertions)]
+        if !VIRTIO_NET_SIZE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            info!(
+                "[net-console] virtio-net sizes: VirtioNet={} TxHeadManager={} TxHeadEntry={}",
+                core::mem::size_of::<Self>(),
+                core::mem::size_of::<TxHeadManager>(),
+                core::mem::size_of::<TxHeadEntry>(),
+            );
+        }
         info!("[net-console] init: probing virtio-mmio bus");
         info!(
             "[net-console] expecting virtio-net on virtio-mmio base=0x{base:08x}, slots=0-{max_slot}, stride=0x{stride:03x}",
@@ -4667,6 +4719,79 @@ impl NetDevice for VirtioNet {
     }
 }
 
+#[cfg(feature = "net-backend-virtio")]
+impl NetDevice for VirtioNetStatic {
+    type Error = DriverError;
+
+    fn create<H>(hal: &mut H) -> Result<Self, Self::Error>
+    where
+        H: Hardware<Error = HalError>,
+        Self: Sized,
+    {
+        Self::create_with_stage(hal, NET_STAGE)
+    }
+
+    fn create_with_stage<H>(hal: &mut H, stage: NetStage) -> Result<Self, Self::Error>
+    where
+        H: Hardware<Error = HalError>,
+        Self: Sized,
+    {
+        let driver = unsafe { VIRTIO_NET_STORAGE.write(VirtioNet::new_with_stage(hal, stage)?) };
+        Ok(Self { driver })
+    }
+
+    fn mac(&self) -> EthernetAddress {
+        self.driver.mac()
+    }
+
+    fn tx_drop_count(&self) -> u32 {
+        self.driver.tx_drop_count()
+    }
+
+    fn debug_scan_tx_avail_duplicates(&mut self) {
+        self.driver.debug_scan_tx_avail_duplicates();
+    }
+
+    fn counters(&self) -> NetDeviceCounters {
+        self.driver.counters()
+    }
+
+    fn name() -> &'static str
+    where
+        Self: Sized,
+    {
+        VirtioNet::name()
+    }
+
+    fn debug_snapshot(&mut self) {
+        self.driver.debug_snapshot();
+    }
+}
+
+#[cfg(feature = "net-backend-virtio")]
+impl Device for VirtioNetStatic {
+    type RxToken<'a>
+        = VirtioRxToken
+    where
+        Self: 'a;
+    type TxToken<'a>
+        = VirtioTxToken
+    where
+        Self: 'a;
+
+    fn receive(&mut self, timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+        self.driver.receive(timestamp)
+    }
+
+    fn transmit(&mut self, timestamp: Instant) -> Option<Self::TxToken<'_>> {
+        self.driver.transmit(timestamp)
+    }
+
+    fn capabilities(&self) -> DeviceCapabilities {
+        self.driver.capabilities()
+    }
+}
+
 /// Receive token that hands out buffers backed by virtio RX descriptors.
 pub struct VirtioRxToken {
     driver: *mut VirtioNet,
@@ -6548,8 +6673,8 @@ mod tx_tests {
         mgr.mark_completed(head, Some(gen)).expect("complete");
         mgr.reclaim_head(head).expect("reclaim");
         assert_eq!(
-            mgr.publish_records[head as usize], None,
-            "record cleared after reclaim"
+            mgr.publish_present[head as usize], false,
+            "record cleared after reclaim flag reset"
         );
     }
 
