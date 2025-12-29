@@ -437,11 +437,11 @@ impl TxHeadManager {
             );
             return Err(TxHeadError::InvalidState);
         }
+        self.mark_advertised(id)?;
         let record = self
             .publish_present
             .get_mut(id as usize)
             .ok_or(TxHeadError::OutOfRange)?;
-        self.mark_advertised(id)?;
         if *record {
             debug_assert!(
                 false,
