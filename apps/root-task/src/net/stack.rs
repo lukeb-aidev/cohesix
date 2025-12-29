@@ -54,8 +54,8 @@ use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
 use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNetStatic};
 use crate::hal::{HalError, Hardware};
 use crate::readiness;
-use crate::serial::DEFAULT_LINE_CAPACITY;
 use crate::sel4::BOOTINFO_WINDOW_GUARD;
+use crate::serial::DEFAULT_LINE_CAPACITY;
 use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR};
 use spin::Mutex;
 
@@ -3355,7 +3355,7 @@ impl<D: NetDevice> NetStack<D> {
             }
         }
 
-        let mut outcome = outbound.flush(now_ms, |payload, lane| {
+        let outcome = outbound.flush(now_ms, |payload, lane| {
             let mut frame: HeaplessVec<u8, OUTBOUND_FRAME_CAPACITY> = HeaplessVec::new();
             if frame.extend_from_slice(payload).is_err()
                 || frame.extend_from_slice(b"\r\n").is_err()

@@ -5,7 +5,6 @@
 
 use core::fmt::Write;
 use core::ops::Range;
-use core::sync::atomic::{AtomicBool, Ordering};
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use sel4_sys::{seL4_CPtr, seL4_Word};
@@ -30,7 +29,7 @@ const WATCH_ENABLED: bool = cfg!(any(
     test
 ));
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct WatchRange {
     label: &'static str,
     range: Range<usize>,
@@ -67,30 +66,28 @@ pub fn watch_range(label: &'static str, ptr: *const u8, len: usize) {
     if !WATCH_ENABLED || len == 0 {
         return;
     }
-    if let Ok(mut guards) = WATCHED.lock() {
-        let range = ptr as usize..ptr as usize + len;
-        if let Some(existing) = guards.iter_mut().find(|guard| guard.label == label) {
-            existing.range = range;
-            existing.reported = false;
-            existing.last_context = None;
-            existing.last_dst = 0;
-            existing.last_src_preview = [0u8; SRC_PREVIEW_BYTES];
-            existing.last_src_len = 0;
-            return;
-        }
-        if guards.is_full() {
-            return;
-        }
-        let _ = guards.push(WatchRange::new(label, range));
+    let mut guards = WATCHED.lock();
+    let range = ptr as usize..ptr as usize + len;
+    if let Some(existing) = guards.iter_mut().find(|guard| guard.label == label) {
+        existing.range = range;
+        existing.reported = false;
+        existing.last_context = None;
+        existing.last_dst = 0;
+        existing.last_src_preview = [0u8; SRC_PREVIEW_BYTES];
+        existing.last_src_len = 0;
+        return;
     }
+    if guards.is_full() {
+        return;
+    }
+    let _ = guards.push(WatchRange::new(label, range));
 }
 
 /// Clears any registered watch ranges (intended for tests).
 #[cfg(test)]
 pub fn clear_watches() {
-    if let Ok(mut guards) = WATCHED.lock() {
-        guards.clear();
-    }
+    let mut guards = WATCHED.lock();
+    guards.clear();
 }
 
 fn write_log_line(
@@ -126,25 +123,19 @@ pub fn watch_hint_for(ptr: usize, len: usize) -> Option<(&'static str, &'static 
         return None;
     }
     let target = ptr..ptr.saturating_add(len);
-    if let Ok(guards) = WATCHED.lock() {
-        for guard in guards.iter() {
-            if ranges_overlap(&guard.range, &target) {
-                if let Some(context) = guard.last_context {
-                    return Some((guard.label, context));
-                }
-                return Some((guard.label, "unreported"));
+    let guards = WATCHED.lock();
+    for guard in guards.iter() {
+        if ranges_overlap(&guard.range, &target) {
+            if let Some(context) = guard.last_context {
+                return Some((guard.label, context));
             }
+            return Some((guard.label, "unreported"));
         }
     }
     None
 }
 
-fn record_overlap(
-    guard: &mut WatchRange,
-    context: &'static str,
-    dst_ptr: usize,
-    src: &[u8],
-) {
+fn record_overlap(guard: &mut WatchRange, context: &'static str, dst_ptr: usize, src: &[u8]) {
     guard.last_context = Some(context);
     guard.last_dst = dst_ptr;
     let preview_len = src.len().min(SRC_PREVIEW_BYTES);
@@ -165,23 +156,22 @@ pub fn maybe_report_str_write(
     }
     let dst_range = dst_ptr as usize..dst_ptr as usize + dst_len;
     let src = unsafe { core::slice::from_raw_parts(src_ptr, src_len.min(SRC_PREVIEW_BYTES)) };
-    if let Ok(mut guards) = WATCHED.lock() {
-        for guard in guards.iter_mut() {
-            if ranges_overlap(&guard.range, &dst_range) {
-                record_overlap(guard, context, dst_ptr as usize, src);
-                if !guard.reported {
-                    guard.reported = true;
-                    write_log_line(
-                        guard.label,
-                        context,
-                        dst_ptr as usize,
-                        dst_len,
-                        &guard.range,
-                        src,
-                    );
-                }
-                return true;
+    let mut guards = WATCHED.lock();
+    for guard in guards.iter_mut() {
+        if ranges_overlap(&guard.range, &dst_range) {
+            record_overlap(guard, context, dst_ptr as usize, src);
+            if !guard.reported {
+                guard.reported = true;
+                write_log_line(
+                    guard.label,
+                    context,
+                    dst_ptr as usize,
+                    dst_len,
+                    &guard.range,
+                    src,
+                );
             }
+            return true;
         }
     }
     false
