@@ -415,6 +415,11 @@ impl TxHeadManager {
         len: u32,
         addr: u64,
     ) -> Result<u32, TxHeadError> {
+        debug_assert_ne!(len, 0, "tx head publish length must be non-zero");
+        debug_assert_ne!(addr, 0, "tx head publish address must be non-zero");
+        if len == 0 || addr == 0 {
+            return Err(TxHeadError::InvalidState);
+        }
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
@@ -2214,6 +2219,14 @@ impl VirtioNet {
         head_id: u16,
         publish_slot: u16,
     ) -> Result<(u16, u16, u16), TxPublishError> {
+        if !matches!(
+            self.tx_head_mgr.state(head_id),
+            Some(TxHeadState::Published { slot, .. }) if slot == publish_slot
+        ) || !self.tx_head_mgr.in_avail(head_id)
+        {
+            let _ = self.tx_state_violation("tx_publish_state", head_id, Some(publish_slot));
+            return Err(TxPublishError::InvalidDescriptor);
+        }
         let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
         let desc = self.tx_queue.read_descriptor(head_id);
         let total_len = self
@@ -2422,6 +2435,29 @@ impl VirtioNet {
                 );
             }
             self.tx_drops = self.tx_drops.saturating_add(1);
+            return Err(());
+        }
+        Ok(())
+    }
+
+    fn tx_publish_preflight(
+        &mut self,
+        head_id: u16,
+        slot: u16,
+        desc: &DescSpec,
+        payload_len: usize,
+    ) -> Result<(), ()> {
+        if desc.addr == 0 || desc.len == 0 || payload_len == 0 {
+            error!(
+                target: "net-console",
+                "[virtio-net][tx-preflight] invalid descriptor before publish: head={} slot={} addr=0x{addr:016x} len={len} payload_len={payload_len}",
+                head_id,
+                slot,
+                addr = desc.addr,
+                len = desc.len,
+                payload_len = payload_len,
+            );
+            let _ = self.tx_state_violation("tx_preflight", head_id, Some(slot));
             return Err(());
         }
         Ok(())
@@ -3038,6 +3074,12 @@ impl VirtioNet {
             return Err(());
         }
         let publish_slot = (avail_idx_before as usize % qsize) as u16;
+        if self
+            .tx_publish_preflight(head_id, publish_slot, &resolved_descs[0], payload_len)
+            .is_err()
+        {
+            return Err(());
+        }
         trace!(
             target: "net-console",
             "[virtio-net][tx-submit-path=A] head={} slot={} avail_idx_before={}",
@@ -3283,12 +3325,7 @@ impl VirtioNet {
                     u32::try_from(total_len).expect("rx buffer length must fit in u32");
                 let vaddr = buffer.ptr().as_ptr() as usize;
                 let paddr = buffer.paddr();
-                log_dma_programming(
-                    "virtq.rx.buffer",
-                    vaddr,
-                    paddr,
-                    total_len,
-                );
+                log_dma_programming("virtq.rx.buffer", vaddr, paddr, total_len);
                 assert_dma_region("virtq.rx.buffer", vaddr, paddr, total_len);
                 let desc = [DescSpec {
                     addr: buffer.paddr() as u64,
@@ -3867,12 +3904,7 @@ impl VirtioNet {
             let vaddr = buffer.ptr().as_ptr() as usize;
             let paddr = buffer.paddr();
             log_dma_programming("virtq.rx.buffer.requeue", vaddr, paddr, total_len);
-            assert_dma_region(
-                "virtq.rx.buffer.requeue",
-                vaddr,
-                paddr,
-                total_len,
-            );
+            assert_dma_region("virtq.rx.buffer.requeue", vaddr, paddr, total_len);
             let desc = [DescSpec {
                 addr: buffer.paddr() as u64,
                 len: total_len_u32,
@@ -4282,6 +4314,24 @@ impl VirtioNet {
         }
         let publish_slot = (avail_idx_before as usize % qsize) as u16;
         let payload_len = total_len.saturating_sub(self.rx_header_len);
+        if self
+            .tx_publish_preflight(
+                id,
+                publish_slot,
+                &DescSpec {
+                    addr: desc.addr,
+                    len: desc.len,
+                    flags: desc.flags,
+                    next: None,
+                },
+                payload_len,
+            )
+            .is_err()
+        {
+            self.tx_drops = self.tx_drops.saturating_add(1);
+            self.release_tx_head(id, "tx_v2_preflight_reject");
+            return;
+        }
         trace!(
             target: "net-console",
             "[virtio-net][tx-submit-path=B] head={} slot={} avail_idx_before={}",
@@ -7000,6 +7050,47 @@ mod tx_tests {
             Some(head),
             "head becomes reusable only after reclaim"
         );
+    }
+
+    #[test]
+    fn tx_publish_wrap_requires_reclaim_before_reuse() {
+        const QSIZE: u16 = 4;
+        let mut mgr = TxHeadManager::new(QSIZE);
+        let mut avail_idx: u16 = 0;
+        let mut in_flight: HeaplessVec<(u16, u32), 8> = HeaplessVec::new();
+
+        for seq in 0..(QSIZE as usize + 2) {
+            if mgr.free_len() == 0 {
+                let (head, gen) = in_flight.remove(0);
+                mgr.mark_completed(head, Some(gen)).expect("completed");
+                mgr.reclaim_head(head).expect("reclaim");
+            }
+            let head = mgr.alloc_head().expect("head available");
+            let slot = avail_idx % QSIZE;
+            let len = 64 + seq as u32;
+            let addr = 0x3000 + seq as u64;
+            let gen = mgr.mark_published(head, slot, len, addr).expect("publish");
+            mgr.note_avail_publish(head, slot, avail_idx)
+                .expect("advertise");
+            mgr.mark_in_flight(head).expect("in-flight");
+
+            assert!(
+                !in_flight.iter().any(|(h, _)| *h == head),
+                "head {} published twice without reclaim",
+                head
+            );
+            assert!(len > 0);
+            assert_ne!(addr, 0);
+
+            in_flight.push((head, gen)).expect("track in-flight");
+            avail_idx = avail_idx.wrapping_add(1);
+        }
+
+        for (head, gen) in in_flight {
+            mgr.mark_completed(head, Some(gen)).expect("completed");
+            mgr.reclaim_head(head).expect("reclaim");
+        }
+        assert_eq!(mgr.free_len(), QSIZE);
     }
 
     #[test]
