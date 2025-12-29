@@ -334,7 +334,10 @@ impl TxHeadManager {
             );
             return Err(TxHeadError::InvalidState);
         }
-        if !matches!(entry.state, TxHeadState::Published { .. }) {
+        if !matches!(
+            entry.state,
+            TxHeadState::Published { .. } | TxHeadState::InFlight { .. }
+        ) {
             debug_assert!(
                 false,
                 "tx head not published during advertise mark: id={} state={:?}",
@@ -396,7 +399,9 @@ impl TxHeadManager {
             return Err(TxHeadError::OutOfRange);
         }
         match self.state(id) {
-            Some(TxHeadState::Published { slot: s, .. }) if s == slot => {}
+            Some(
+                TxHeadState::Published { slot: s, .. } | TxHeadState::InFlight { slot: s, .. },
+            ) if s == slot => {}
             _ => return Err(TxHeadError::InvalidState),
         }
         if !self.in_avail(id) {
@@ -406,6 +411,24 @@ impl TxHeadManager {
             return Err(TxHeadError::InvalidState);
         }
         Ok(())
+    }
+
+    fn promote_published_to_inflight(&mut self, id: u16) -> Result<(u16, u32), TxHeadError> {
+        if id >= self.size {
+            return Err(TxHeadError::OutOfRange);
+        }
+        let in_avail = self.in_avail.get(id as usize).copied().unwrap_or(false);
+        if !in_avail {
+            return Err(TxHeadError::InvalidState);
+        }
+        let (slot, gen) = match self.state(id) {
+            Some(TxHeadState::Published { slot, gen }) => (slot, gen),
+            Some(TxHeadState::InFlight { slot, gen }) => return Ok((slot, gen)),
+            _ => return Err(TxHeadError::InvalidState),
+        };
+        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
+        entry.state = TxHeadState::InFlight { slot, gen };
+        Ok((slot, gen))
     }
 
     fn mark_published(
@@ -518,7 +541,11 @@ impl TxHeadManager {
         }
         let entry = self.entry(id).copied().ok_or(TxHeadError::OutOfRange)?;
         let gen = match entry.state {
-            TxHeadState::Published { slot: s, gen } if s == slot => gen,
+            TxHeadState::Published { slot: s, gen } | TxHeadState::InFlight { slot: s, gen }
+                if s == slot =>
+            {
+                gen
+            }
             _ => return Err(TxHeadError::InvalidState),
         };
         if !self.in_avail.get(id as usize).copied().unwrap_or(false) {
@@ -2221,7 +2248,8 @@ impl VirtioNet {
     ) -> Result<(u16, u16, u16), TxPublishError> {
         if !matches!(
             self.tx_head_mgr.state(head_id),
-            Some(TxHeadState::Published { slot, .. }) if slot == publish_slot
+            Some(TxHeadState::Published { slot, .. } | TxHeadState::InFlight { slot, .. })
+                if slot == publish_slot
         ) || !self.tx_head_mgr.in_avail(head_id)
         {
             let _ = self.tx_state_violation("tx_publish_state", head_id, Some(publish_slot));
@@ -2257,6 +2285,15 @@ impl VirtioNet {
     }
 
     fn clear_tx_desc_chain(&mut self, head: u16) {
+        let state = self.tx_head_mgr.state(head);
+        debug_assert!(
+            !matches!(
+                state,
+                Some(TxHeadState::Published { .. }) | Some(TxHeadState::InFlight { .. })
+            ),
+            "tx descriptor clear attempted while active: head={} state={state:?}",
+            head
+        );
         match self.tx_head_mgr.state(head) {
             Some(TxHeadState::Published { .. }) | Some(TxHeadState::InFlight { .. }) => {
                 let _ = self.tx_state_violation("tx_clear_active", head, None);
@@ -4377,6 +4414,13 @@ impl VirtioNet {
         {
             return;
         }
+        if self.tx_head_mgr.promote_published_to_inflight(id).is_err() {
+            self.tx_state_violation("tx_v2_inflight_prep_failed", id, Some(publish_slot))
+                .ok();
+            #[cfg(debug_assertions)]
+            self.freeze_tx_publishes("tx_v2_inflight_prep_failed");
+            return;
+        }
         // Ensure descriptor writes and cache maintenance complete before exposing the head to the
         // device via the avail ring.
         virtq_publish_barrier();
@@ -4424,6 +4468,18 @@ impl VirtioNet {
                         return;
                     }
                 }
+                let desc_snapshot = self.tx_queue.read_descriptor(id);
+                debug!(
+                    target: "virtio-net",
+                    "[virtio-net][tx-publish-forensics] head={} old_avail={} slot={} desc=0x{addr:016x}/{len} flags=0x{flags:04x} next={next}",
+                    id,
+                    old_idx,
+                    slot,
+                    addr = desc_snapshot.addr,
+                    len = desc_snapshot.len,
+                    flags = desc_snapshot.flags,
+                    next = desc_snapshot.next
+                );
                 self.debug_check_tx_avail_uniqueness(self.tx_queue.last_used, avail_idx);
                 log::debug!(
                     target: "virtio-net",
@@ -4610,7 +4666,7 @@ impl VirtioNet {
     fn debug_assert_tx_publish_ready(&self, head_id: u16, slot: u16) {
         let state = self.tx_head_mgr.state(head_id);
         debug_assert!(
-            matches!(state, Some(TxHeadState::Published { slot: s, .. }) if s == slot),
+            matches!(state, Some(TxHeadState::Published { slot: s, .. } | TxHeadState::InFlight { slot: s, .. }) if s == slot),
             "tx publish state mismatch: head={} slot={} state={state:?}",
             head_id,
             slot,
@@ -5636,7 +5692,7 @@ impl VirtioMmioId {
 mod tests {
     use super::*;
     use core::fmt::Write as FmtWrite;
-    use heapless::String as HeaplessString;
+    use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
     fn make_fake_mmio(magic: u32, version: u32, device_id: u32) -> (NonNull<u8>, Box<[u32; 4]>) {
         let mut backing = Box::new([0u32; 4]);
@@ -5740,6 +5796,86 @@ mod tests {
         write!(&mut unknown_msg, "{unknown_err}").unwrap();
         assert!(unknown_msg.contains("0x00000007"));
         assert!(unknown_msg.contains("v2"));
+    }
+
+    #[cfg(all(
+        feature = "net-backend-virtio",
+        feature = "net-virtio-tx-v2",
+        feature = "net-console",
+        feature = "kernel"
+    ))]
+    #[test]
+    fn tx_avail_wrap_preserves_descriptor_and_slot() {
+        const QSIZE: u16 = 8;
+        let layout = VirtqLayout::compute_vq_layout(QSIZE, false).expect("layout");
+        let mut backing = vec![0u8; layout.total_len];
+        let base_ptr = backing.as_mut_ptr();
+        let desc_ptr = NonNull::new(base_ptr as *mut VirtqDesc).expect("desc ptr");
+        let avail_ptr =
+            NonNull::new(unsafe { base_ptr.add(layout.avail_offset) } as *mut VirtqAvail)
+                .expect("avail ptr");
+        let used_ptr = NonNull::new(unsafe { base_ptr.add(layout.used_offset) } as *mut VirtqUsed)
+            .expect("used ptr");
+        let mut queue = VirtQueue {
+            _frame: unsafe { core::mem::zeroed() },
+            layout,
+            size: QSIZE,
+            desc: desc_ptr,
+            avail: avail_ptr,
+            used: used_ptr,
+            last_used: 0,
+            pfn: 0,
+            base_paddr: base_ptr as usize,
+            base_vaddr: base_ptr as usize,
+            base_len: layout.total_len,
+            _dma: None,
+            cacheable: false,
+            used_zero_len_head: None,
+            last_error: None,
+        };
+        let mut head_mgr = TxHeadManager::new(QSIZE);
+        let mut in_flight: HeaplessVec<u16, TX_QUEUE_SIZE> = HeaplessVec::new();
+
+        for publish in 0..(usize::from(QSIZE) + 4) {
+            if head_mgr.free_len() == 0 {
+                let completed = in_flight.remove(0);
+                head_mgr.mark_completed(completed, None).unwrap();
+                head_mgr.reclaim_head(completed).unwrap();
+            }
+            let head = head_mgr.alloc_head().expect("head alloc");
+            let (_, old_avail) = queue.indices_no_sync();
+            let slot = (old_avail as usize % usize::from(QSIZE)) as u16;
+            let addr = 0x2000u64 + publish as u64 * 0x10 + u64::from(head);
+            queue
+                .setup_descriptor(head, addr, 64, 0, None)
+                .expect("desc setup");
+            head_mgr
+                .mark_published(head, slot, 64, addr)
+                .expect("mark published");
+            head_mgr
+                .promote_published_to_inflight(head)
+                .expect("promote inflight");
+            virtq_publish_barrier();
+            let (ring_slot, new_idx, observed_old) = queue.push_avail(head).unwrap();
+            assert_eq!(observed_old, old_avail);
+            assert_eq!(ring_slot, slot);
+            let ring_ptr = unsafe {
+                (*queue.avail.as_ptr())
+                    .ring
+                    .as_ptr()
+                    .add(ring_slot as usize)
+            };
+            let ring_head = unsafe { read_volatile(ring_ptr) };
+            assert_eq!(ring_head, head);
+            let desc = queue.read_descriptor(head);
+            assert_ne!(desc.addr, 0);
+            assert_ne!(desc.len, 0);
+            head_mgr
+                .note_avail_publish(head, ring_slot, new_idx)
+                .expect("record publish");
+            head_mgr.mark_in_flight(head).expect("mark inflight");
+            in_flight.push(head).unwrap();
+        }
     }
 }
 
@@ -6262,9 +6398,9 @@ impl VirtQueue {
         let avail = self.avail.as_ptr();
         let qsize = usize::from(self.size);
 
-        let idx = unsafe { read_volatile(&(*avail).idx) };
-        let ring_slot = (idx as usize) % qsize;
-        self.assert_ring_slot(idx, ring_slot, "avail");
+        let old_avail = unsafe { read_volatile(&(*avail).idx) };
+        let ring_slot = (old_avail as usize) % qsize;
+        self.assert_ring_slot(old_avail, ring_slot, "avail");
         unsafe {
             let idx_ptr = &(*avail).idx as *const u16 as usize;
             assert!(
@@ -6285,17 +6421,31 @@ impl VirtQueue {
             self.assert_offset_in_range(ring_offset, core::mem::size_of::<u16>(), "avail.ring");
             virtq_publish_barrier();
             write_volatile(ring_ptr, index);
+            debug_assert_eq!(
+                ring_slot,
+                (old_avail as usize) % qsize,
+                "tx publish slot mismatch: old_avail={} ring_slot={} qsize={}",
+                old_avail,
+                ring_slot,
+                qsize
+            );
+            let ring_written = read_volatile(ring_ptr);
+            debug_assert_eq!(
+                ring_written, index,
+                "tx publish ring write mismatch: slot={} expected_head={} observed_head={} old_avail={}",
+                ring_slot, index, ring_written, old_avail
+            );
             if DMA_NONCOHERENT {
                 self.clean_avail_entry_for_device(ring_slot)?;
             }
             virtq_publish_barrier();
-            let new_idx = idx.wrapping_add(1);
+            let new_idx = old_avail.wrapping_add(1);
             write_volatile(&mut (*avail).idx, new_idx);
             if DMA_NONCOHERENT {
                 self.clean_avail_idx_for_device()?;
             }
             virtq_publish_barrier();
-            Ok((ring_slot as u16, new_idx, idx))
+            Ok((ring_slot as u16, new_idx, old_avail))
         }
     }
 
