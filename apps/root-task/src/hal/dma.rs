@@ -53,7 +53,12 @@ impl PinnedDmaRange {
 
 /// Validate and record a DMA-capable range.
 #[inline(always)]
-pub fn pin(vaddr: usize, paddr: usize, len: usize, label: &'static str) -> Result<PinnedDmaRange, PinError> {
+pub fn pin(
+    vaddr: usize,
+    paddr: usize,
+    len: usize,
+    label: &'static str,
+) -> Result<PinnedDmaRange, PinError> {
     if vaddr == 0 {
         log_pin_error(label, "null-vaddr");
         return Err(PinError::NullVaddr);
@@ -82,10 +87,7 @@ pub fn unpin(range: &PinnedDmaRange) {
         &mut line,
         format_args!(
             "[dma] unpin label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
-            range.label,
-            range.vaddr,
-            range.paddr,
-            range.len,
+            range.label, range.vaddr, range.paddr, range.len,
         ),
     );
     boot_log::force_uart_line(line.as_str());

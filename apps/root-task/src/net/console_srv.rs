@@ -484,7 +484,7 @@ impl TcpConsoleServer {
         }
     }
 
-    fn is_priority_line(line: &str) -> bool {
+    pub(crate) fn is_priority_line(line: &str) -> bool {
         let trimmed = line.trim_end_matches(['\r', '\n']);
         trimmed.starts_with("OK ") || trimmed.starts_with("ERR ") || trimmed == "END"
     }

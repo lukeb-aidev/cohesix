@@ -596,7 +596,7 @@ where
         let snapshot = NET_DIAG.snapshot();
         if self.should_log_net_diag(snapshot, telemetry) {
             let line = format_message(format_args!(
-                "NETDIAG poll={} rx_irq={} rx_kick={} rx_post={} rx_used={} rx_stack={} sm_rx={} tx_sub={} tx_kick={} tx_used={} tx_comp={} sm_tx={} accept={}/{} rw={}/{} cache={}/{} link={} drops={}",
+                "NETDIAG poll={} rx_irq={} rx_kick={} rx_post={} rx_used={} rx_stack={} sm_rx={} tx_sub={} tx_kick={} tx_used={} tx_comp={} sm_tx={} accept={}/{} rw={}/{} cache={}/{} txq={}/{} txdrop={} txframes={} txbytes={} txwblk={} link={} drops={}",
                 snapshot.poll_calls,
                 snapshot.rx_irq_count,
                 snapshot.rx_kicks,
@@ -615,6 +615,12 @@ where
                 snapshot.bytes_written,
                 snapshot.rx_cache_clean,
                 snapshot.rx_cache_invalidate,
+                snapshot.outbound_queued_lines,
+                snapshot.outbound_queued_bytes,
+                snapshot.outbound_drops,
+                snapshot.outbound_frames,
+                snapshot.outbound_bytes,
+                snapshot.outbound_would_block,
                 telemetry.link_up,
                 telemetry.tx_drops,
             ));

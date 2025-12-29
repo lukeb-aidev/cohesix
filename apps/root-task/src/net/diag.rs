@@ -4,8 +4,8 @@
 //! Minimal, copyable diagnostics for the networking stack.
 //! Counters are intentionally monotonic and safe to snapshot without locks.
 
-use portable_atomic::{AtomicBool, AtomicU64, Ordering};
 use crate::profile;
+use portable_atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Monotonic snapshot of networking choke points.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -29,6 +29,12 @@ pub struct NetDiagSnapshot {
     pub bytes_written: u64,
     pub rx_cache_clean: u64,
     pub rx_cache_invalidate: u64,
+    pub outbound_queued_lines: u64,
+    pub outbound_queued_bytes: u64,
+    pub outbound_drops: u64,
+    pub outbound_frames: u64,
+    pub outbound_bytes: u64,
+    pub outbound_would_block: u64,
 }
 
 /// Global diagnostics backing the NETDIAG line.
@@ -52,6 +58,12 @@ pub struct NetDiag {
     bytes_written: AtomicU64,
     rx_cache_clean: AtomicU64,
     rx_cache_invalidate: AtomicU64,
+    outbound_queued_lines: AtomicU64,
+    outbound_queued_bytes: AtomicU64,
+    outbound_drops: AtomicU64,
+    outbound_frames: AtomicU64,
+    outbound_bytes: AtomicU64,
+    outbound_would_block: AtomicU64,
     last_rx_used_change_ms: AtomicU64,
     stuck_warned: AtomicBool,
 }
@@ -78,6 +90,12 @@ impl NetDiag {
             bytes_written: AtomicU64::new(0),
             rx_cache_clean: AtomicU64::new(0),
             rx_cache_invalidate: AtomicU64::new(0),
+            outbound_queued_lines: AtomicU64::new(0),
+            outbound_queued_bytes: AtomicU64::new(0),
+            outbound_drops: AtomicU64::new(0),
+            outbound_frames: AtomicU64::new(0),
+            outbound_bytes: AtomicU64::new(0),
+            outbound_would_block: AtomicU64::new(0),
             last_rx_used_change_ms: AtomicU64::new(0),
             stuck_warned: AtomicBool::new(false),
         }
@@ -105,6 +123,12 @@ impl NetDiag {
             bytes_written: self.bytes_written.load(Ordering::Relaxed),
             rx_cache_clean: self.rx_cache_clean.load(Ordering::Relaxed),
             rx_cache_invalidate: self.rx_cache_invalidate.load(Ordering::Relaxed),
+            outbound_queued_lines: self.outbound_queued_lines.load(Ordering::Relaxed),
+            outbound_queued_bytes: self.outbound_queued_bytes.load(Ordering::Relaxed),
+            outbound_drops: self.outbound_drops.load(Ordering::Relaxed),
+            outbound_frames: self.outbound_frames.load(Ordering::Relaxed),
+            outbound_bytes: self.outbound_bytes.load(Ordering::Relaxed),
+            outbound_would_block: self.outbound_would_block.load(Ordering::Relaxed),
         }
     }
 
@@ -203,6 +227,27 @@ impl NetDiag {
     #[inline]
     pub fn record_rx_cache_invalidate(&self) {
         let _ = self.rx_cache_invalidate.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn update_outbound_stats(
+        &self,
+        queued_lines: u64,
+        queued_bytes: u64,
+        drops: u64,
+        frames: u64,
+        bytes: u64,
+        would_block: u64,
+    ) {
+        self.outbound_queued_lines
+            .store(queued_lines, Ordering::Relaxed);
+        self.outbound_queued_bytes
+            .store(queued_bytes, Ordering::Relaxed);
+        self.outbound_drops.store(drops, Ordering::Relaxed);
+        self.outbound_frames.store(frames, Ordering::Relaxed);
+        self.outbound_bytes.store(bytes, Ordering::Relaxed);
+        self.outbound_would_block
+            .store(would_block, Ordering::Relaxed);
     }
 
     #[inline]

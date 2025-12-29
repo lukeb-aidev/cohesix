@@ -18,7 +18,6 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(feature = "timers-arch-counter")]
 use core::arch::asm;
 
-use crate::console::proto::{render_ack, AckLine, AckStatus};
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
 use crate::arch::aarch64::timer::timer_freq_hz;
 #[cfg(feature = "kernel")]
@@ -43,6 +42,7 @@ use crate::bootstrap::{
     state::{self, BootstrapReentry, BootstrapRunState as BootState},
     BootPhase, UntypedSelection,
 };
+use crate::console::proto::{render_ack, AckLine, AckStatus};
 use crate::console::Console;
 use crate::cspace::tuples::assert_ipc_buffer_matches_bootinfo;
 use crate::cspace::CSpace;
@@ -62,8 +62,8 @@ use crate::net::{DefaultNetStack as NetStack, NetPoller, CONSOLE_TCP_PORT, DEFAU
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::NineDoorBridge;
-use crate::profile;
 use crate::platform::{Platform, SeL4Platform};
+use crate::profile;
 use crate::readiness;
 use crate::sel4;
 #[cfg(feature = "cap-probes")]
