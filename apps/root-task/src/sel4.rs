@@ -1711,8 +1711,7 @@ impl BootinfoWindowGuard {
         unsafe {
             BOOTINFO_WINDOW_STORAGE = expected;
         }
-        let window_ptr: *const BootinfoWindow =
-            unsafe { core::ptr::addr_of!(BOOTINFO_WINDOW_STORAGE) };
+        let window_ptr: *const BootinfoWindow = core::ptr::addr_of!(BOOTINFO_WINDOW_STORAGE);
         let snapshot_state = BootInfoState::get();
         let snapshot_ptr = snapshot_state.map(|state| state.snapshot_ptr() as usize);
         let snapshot_window_ptr = snapshot_state.map(|state| state.snapshot_window_ptr() as usize);

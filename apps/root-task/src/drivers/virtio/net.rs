@@ -3278,19 +3278,21 @@ impl VirtioNet {
                 let total_len = header_len
                     .saturating_add(payload_len)
                     .min(buffer_capacity)
-                    .min(buffer.as_slice().len()) as u32;
+                    .min(buffer.as_slice().len());
+                let total_len_u32 =
+                    u32::try_from(total_len).expect("rx buffer length must fit in u32");
                 let vaddr = buffer.ptr().as_ptr() as usize;
                 let paddr = buffer.paddr();
                 log_dma_programming(
                     "virtq.rx.buffer",
                     vaddr,
                     paddr,
-                    usize::from(total_len),
+                    total_len,
                 );
-                assert_dma_region("virtq.rx.buffer", vaddr, paddr, usize::from(total_len));
+                assert_dma_region("virtq.rx.buffer", vaddr, paddr, total_len);
                 let desc = [DescSpec {
                     addr: buffer.paddr() as u64,
-                    len: total_len,
+                    len: total_len_u32,
                     flags: VIRTQ_DESC_F_WRITE,
                     next: None,
                 }];
@@ -3858,20 +3860,22 @@ impl VirtioNet {
                 return;
             }
 
-            let total_len = frame_capacity.min(buffer.as_slice().len()) as u32;
+            let total_len = frame_capacity.min(buffer.as_slice().len());
+            let total_len_u32 =
+                u32::try_from(total_len).expect("requeue buffer length must fit in u32");
 
             let vaddr = buffer.ptr().as_ptr() as usize;
             let paddr = buffer.paddr();
-            log_dma_programming("virtq.rx.buffer.requeue", vaddr, paddr, usize::from(total_len));
+            log_dma_programming("virtq.rx.buffer.requeue", vaddr, paddr, total_len);
             assert_dma_region(
                 "virtq.rx.buffer.requeue",
                 vaddr,
                 paddr,
-                usize::from(total_len),
+                total_len,
             );
             let desc = [DescSpec {
                 addr: buffer.paddr() as u64,
-                len: total_len,
+                len: total_len_u32,
                 flags: VIRTQ_DESC_F_WRITE,
                 next: None,
             }];
