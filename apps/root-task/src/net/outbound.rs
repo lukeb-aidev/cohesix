@@ -265,7 +265,8 @@ impl OutboundCoalescer {
         };
 
         while let Some(line) = iter.next() {
-            let line_len = usize::from(line.len);
+            let line_slice = line.as_slice();
+            let line_len = line_slice.len();
             if line_len == 0 {
                 consumed = consumed.saturating_add(1);
                 continue;
@@ -283,10 +284,7 @@ impl OutboundCoalescer {
                     break;
                 }
             }
-            if payload
-                .extend_from_slice(&line.as_slice()[..line_len])
-                .is_err()
-            {
+            if payload.extend_from_slice(line_slice).is_err() {
                 break;
             }
             consumed = consumed.saturating_add(1);
@@ -308,9 +306,7 @@ impl OutboundCoalescer {
 
     fn commit_payload(&mut self, plan: &PlannedPayload, lane: OutboundLane) {
         match lane {
-            OutboundLane::Control => {
-                Self::pop_front_batch(&mut self.ctrl_q, plan.consumed_lines)
-            }
+            OutboundLane::Control => Self::pop_front_batch(&mut self.ctrl_q, plan.consumed_lines),
             OutboundLane::Log => Self::pop_front_batch(&mut self.log_q, plan.consumed_lines),
         }
         self.queued_lines = self.queued_lines.saturating_sub(plan.consumed_lines as u32);
