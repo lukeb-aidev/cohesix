@@ -48,6 +48,19 @@ struct WatchRange {
     reported: bool,
 }
 
+/// Captures metadata about the last write observed for a watched range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WatchHint {
+    /// Label associated with the watched region.
+    pub label: &'static str,
+    /// Context string supplied by the writer, if available.
+    pub context: Option<&'static str>,
+    /// File that issued the write, if recorded.
+    pub location_file: Option<&'static str>,
+    /// Line that issued the write, if recorded.
+    pub location_line: Option<u32>,
+}
+
 impl WatchRange {
     const fn new(label: &'static str, range: Range<usize>) -> Self {
         Self {
@@ -143,7 +156,7 @@ fn write_log_line(
 }
 
 /// Returns a hint describing the most recent write to the supplied pointer, if any.
-pub fn watch_hint_for(ptr: usize, len: usize) -> Option<(&'static str, &'static str)> {
+pub fn watch_hint_for(ptr: usize, len: usize) -> Option<WatchHint> {
     if !WATCH_ENABLED {
         return None;
     }
@@ -151,10 +164,12 @@ pub fn watch_hint_for(ptr: usize, len: usize) -> Option<(&'static str, &'static 
     let guards = WATCHED.lock();
     for guard in guards.iter() {
         if ranges_overlap(&guard.range, &target) {
-            if let Some(context) = guard.last_context {
-                return Some((guard.label, context));
-            }
-            return Some((guard.label, "unreported"));
+            return Some(WatchHint {
+                label: guard.label,
+                context: guard.last_context,
+                location_file: guard.last_location_file,
+                location_line: guard.last_location_line,
+            });
         }
     }
     None
@@ -311,6 +326,68 @@ pub fn maybe_report_write_with_preview(
 /// Controls whether write-watch overlaps trigger an immediate panic.
 pub fn trip_on_overlap(enabled: bool) {
     TRIP_ON_OVERLAP.store(enabled, Ordering::Release);
+}
+
+/// Guard writes performed by formatting/logging sinks to ensure watched ranges are not mutated.
+#[track_caller]
+pub fn sink_write_watched(
+    dst_ptr: *mut u8,
+    dst_len: usize,
+    src_ptr: *const u8,
+    src_len: usize,
+    context: &'static str,
+) {
+    if !WATCH_ENABLED || dst_len == 0 {
+        return;
+    }
+    let location = Location::caller();
+    let dst_range = dst_ptr as usize..dst_ptr as usize + dst_len;
+    let (preview_buf, preview_len) = capture_preview(src_ptr, src_len, None);
+    let mut guards = WATCHED.lock();
+    for guard in guards.iter_mut() {
+        if ranges_overlap(&guard.range, &dst_range) {
+            record_overlap(
+                guard,
+                context,
+                dst_ptr as usize,
+                dst_len,
+                src_ptr as usize,
+                src_len,
+                &preview_buf[..preview_len],
+                location,
+            );
+            guard.reported = true;
+            let overlap = &guard.range;
+            let mut line = HeaplessString::<MAX_WATCH_LOG>::new();
+            let _ = core::fmt::write(
+                &mut line,
+                format_args!(
+                    "[sink-write-watch] label={} context={context} location={file}:{line} dst=[0x{dst:016x}..0x{end:016x}) src=[0x{src:016x} len=0x{src_len:08x}] overlap=[0x{ow_start:016x}..0x{ow_end:016x}) preview=",
+                    guard.label,
+                    dst = dst_ptr as usize,
+                    end = dst_ptr as usize + dst_len,
+                    src = src_ptr as usize,
+                    src_len = src_len,
+                    file = location.file(),
+                    line = location.line(),
+                    ow_start = overlap.start,
+                    ow_end = overlap.end,
+                ),
+            );
+            for byte in &preview_buf[..preview_len] {
+                if write!(&mut line, "{byte:02x}").is_err() {
+                    break;
+                }
+            }
+            log::error!("{}", line.as_str());
+            panic!(
+                "sink-write-watch overlap: context={context} label={} location={}:{}",
+                guard.label,
+                location.file(),
+                location.line()
+            );
+        }
+    }
 }
 
 /// Wrapper around `ptr::copy_nonoverlapping` that reports overlaps against watched ranges.

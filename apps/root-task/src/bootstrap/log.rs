@@ -10,6 +10,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use ::log::{Level, LevelFilter, Log, Metadata, Record};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
+use crate::debug::sink_write_watched;
 use crate::event::{AuditSink, BootstrapOp};
 use crate::sel4;
 
@@ -97,6 +98,14 @@ fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
     );
 
     let mut line = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
+    // Guard against accidental writes into watched regions during formatting.
+    sink_write_watched(
+        line.as_mut_slice().as_mut_ptr(),
+        MAX_FRAME_LEN,
+        formatted.as_bytes().as_ptr(),
+        formatted.as_bytes().len(),
+        "bootstrap.format_record_line",
+    );
     let max_payload = MAX_FRAME_LEN.saturating_sub(2);
     for &byte in formatted.as_bytes().iter().take(max_payload) {
         if line.push(byte).is_err() {

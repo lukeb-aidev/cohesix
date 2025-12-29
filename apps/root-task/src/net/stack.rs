@@ -20,6 +20,7 @@
 
 use core::fmt::{self, Write as FmtWrite};
 use core::mem;
+use core::ops::Range;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, trace, warn};
 use portable_atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
@@ -1415,6 +1416,43 @@ impl<D: NetDevice> NetStack<D> {
         self.server.log_buffer_addresses_once(marker);
     }
 
+    fn watched_bootinfo_range() -> Option<Range<usize>> {
+        BOOTINFO_WINDOW_GUARD
+            .watched_region()
+            .map(|(ptr, len)| ptr as usize..ptr as usize + len)
+    }
+
+    fn assert_range_disjoint(range: &Range<usize>, boot_range: &Range<usize>, label: &'static str) {
+        if range.start < boot_range.end && boot_range.start < range.end {
+            error!(
+                target: "bootinfo.window",
+                "[bootinfo.window] overlap label={label} range=[0x{start:016x}..0x{end:016x}) bootinfo=[0x{boot_start:016x}..0x{boot_end:016x})",
+                start = range.start,
+                end = range.end,
+                boot_start = boot_range.start,
+                boot_end = boot_range.end,
+            );
+            panic!(
+                "bootinfo.window overlap: {label} range=[0x{start:016x}..0x{end:016x}) bootinfo=[0x{boot_start:016x}..0x{boot_end:016x})",
+                start = range.start,
+                end = range.end,
+                boot_start = boot_range.start,
+                boot_end = boot_range.end,
+            );
+        }
+    }
+
+    fn assert_bootinfo_overlaps(&self) {
+        let Some(boot_range) = Self::watched_bootinfo_range() else {
+            return;
+        };
+        let console_range = self.server.line_buffer_range();
+        Self::assert_range_disjoint(&console_range, &boot_range, "net.console.line_buffer");
+        if let Some(queue_range) = self.device.buffer_bounds() {
+            Self::assert_range_disjoint(&queue_range, &boot_range, "net.device.queue");
+        }
+    }
+
     fn log_init_canary(&self, mark: &'static str) -> Result<(), NetStackError<D::Error>> {
         log_bootinfo_mark(mark, &self.init_attempt)
     }
@@ -1875,6 +1913,7 @@ impl<D: NetDevice> NetStack<D> {
             #[cfg(feature = "net-outbound-probe")]
             probe_hint_logged: false,
         };
+        stack.assert_bootinfo_overlaps();
         stack.log_buffer_addresses_once("net.init.buffers");
         if stage_policy.allow_tcp {
             stack.initialise_socket()?;

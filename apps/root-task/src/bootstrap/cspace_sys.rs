@@ -2570,6 +2570,7 @@ mod tests {
         encode_cnode_depth, init_cnode_dest, init_cnode_direct_destination_words_for_test,
         init_root_index, path_depth, sel4, sys, untyped_retype_into_init_root,
     };
+    use crate::sel4::store_bootinfo_empty_region;
 
     #[test]
     fn encode_slot_aligns_to_word_bits() {
@@ -2582,8 +2583,12 @@ mod tests {
     fn mock_bootinfo(empty_start: u32, empty_end: u32, bits: u8) -> sys::seL4_BootInfo {
         let mut bootinfo: sys::seL4_BootInfo = unsafe { core::mem::zeroed() };
         bootinfo.initThreadCNodeSizeBits = bits as _;
-        bootinfo.empty.start = empty_start as _;
-        bootinfo.empty.end = empty_end as _;
+        store_bootinfo_empty_region(
+            &mut bootinfo.empty,
+            empty_start as _,
+            empty_end as _,
+            "test.cspace_sys.mock",
+        );
         bootinfo
     }
 
@@ -2623,8 +2628,12 @@ mod tests {
         unsafe {
             let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 13;
-            bootinfo.empty.start = 0x00a6;
-            bootinfo.empty.end = 0x0800;
+            store_bootinfo_empty_region(
+                &mut bootinfo.empty,
+                0x00a6,
+                0x0800,
+                "test.cspace_sys.retype",
+            );
             super::install_test_bootinfo_for_tests(bootinfo);
         }
 

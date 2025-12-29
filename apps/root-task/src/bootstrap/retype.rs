@@ -328,14 +328,17 @@ fn object_name(obj_type: sys::seL4_ObjectType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sel4_sys::{seL4_BootInfo, seL4_CapInitThreadCNode, seL4_SlotRegion};
+    use crate::sel4::store_bootinfo_empty_region;
+    use sel4_sys::{seL4_BootInfo, seL4_CapInitThreadCNode};
 
     fn mock_bootinfo(empty_start: u32, empty_end: u32, bits: u8) -> BootInfoView {
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
-        bootinfo.empty = seL4_SlotRegion {
-            start: empty_start,
-            end: empty_end,
-        };
+        store_bootinfo_empty_region(
+            &mut bootinfo.empty,
+            empty_start,
+            empty_end,
+            "test.retype.mock",
+        );
         bootinfo.initThreadCNodeSizeBits = bits as usize as u8;
         let leaked: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         BootInfoView::new(leaked).expect("bootinfo view must be valid")
