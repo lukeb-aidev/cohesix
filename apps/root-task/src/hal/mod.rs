@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Hardware abstraction layer façade for drivers and platform helpers.
 
 //! Lightweight hardware abstraction used by the root task to decouple
 //! low-level seL4 primitives from driver code.
@@ -13,6 +14,9 @@ use core::{fmt, ptr::NonNull};
 
 #[cfg(all(feature = "kernel", target_os = "none"))]
 pub mod cache;
+
+#[cfg(feature = "kernel")]
+pub mod dma;
 
 #[cfg(feature = "kernel")]
 pub mod pci;

@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: seL4 bootstrap, capability setup, and runtime hand-off for root-task.
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 
@@ -18,10 +19,10 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use core::arch::asm;
 
 use crate::console::proto::{render_ack, AckLine, AckStatus};
-use cohesix_ticket::Role;
-
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
 use crate::arch::aarch64::timer::timer_freq_hz;
+#[cfg(feature = "kernel")]
+use crate::audit::boot as audit_boot;
 use crate::boot::{bi_extra, ep, tcb, uart_pl011};
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::cspace::cspace_first_retypes;
@@ -54,12 +55,14 @@ use crate::event::{
 };
 use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
+use crate::manifest;
 #[cfg(all(feature = "net-console", feature = "kernel"))]
 use crate::net::{DefaultNetStack as NetStack, NetPoller, CONSOLE_TCP_PORT, DEFAULT_NET_BACKEND};
 #[cfg(all(feature = "net-console", not(feature = "kernel")))]
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::NineDoorBridge;
+use crate::profile;
 use crate::platform::{Platform, SeL4Platform};
 use crate::readiness;
 use crate::sel4;
@@ -1489,11 +1492,11 @@ fn bootstrap<P: Platform>(
     let mut build_line = heapless::String::<192>::new();
     let mut feature_report = heapless::String::<96>::new();
     for (idx, (label, enabled)) in [
-        ("kernel", cfg!(feature = "kernel")),
+        ("kernel", profile::KERNEL),
         ("bootstrap-trace", cfg!(feature = "bootstrap-trace")),
-        ("serial-console", cfg!(feature = "serial-console")),
-        ("net", cfg!(feature = "net")),
-        ("net-console", cfg!(feature = "net-console")),
+        ("serial-console", profile::SERIAL_CONSOLE),
+        ("net", profile::NET),
+        ("net-console", profile::NET_CONSOLE),
     ]
     .into_iter()
     .enumerate()
@@ -1711,9 +1714,7 @@ fn bootstrap<P: Platform>(
     }
     let _ = pending_boot_phases.push(BootPhase::CSpaceInit);
 
-    log::info!("[kernel:entry] about to log stage0 entry");
-    console.writeln_prefixed("entered from seL4 (stage0)");
-    console.writeln_prefixed("Cohesix boot: root-task online");
+    audit_boot::emit_stage0_header(|line| console.writeln_prefixed(line));
 
     #[cfg(debug_assertions)]
     log_text_span();
@@ -1730,7 +1731,7 @@ fn bootstrap<P: Platform>(
     );
     console.writeln_prefixed(cs_line.as_str());
 
-    console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
+    audit_boot::emit_version_banner(|line| console.writeln_prefixed(line));
 
     bootinfo_debug_dump(&bootinfo_view);
 
@@ -2836,9 +2837,9 @@ fn bootstrap<P: Platform>(
         };
 
         let mut tickets: TicketTable<4> = TicketTable::new();
-        let _ = tickets.register(Role::Queen, "bootstrap");
-        let _ = tickets.register(Role::WorkerHeartbeat, "worker");
-        let _ = tickets.register(Role::WorkerGpu, "worker-gpu");
+        for spec in manifest::ticket_inventory() {
+            let _ = tickets.register(spec.role, spec.token);
+        }
 
         crate::bp!("spawn.worker.begin");
         crate::bp!("spawn.worker.end");
@@ -2963,9 +2964,9 @@ fn bootstrap<P: Platform>(
         let virtio_present_flag = false;
 
         let features = BootFeatures {
-            serial_console: cfg!(feature = "serial-console") && serial.is_some(),
+            serial_console: profile::SERIAL_CONSOLE && serial.is_some(),
             net: net_stack.is_some(),
-            net_console: cfg!(feature = "net-console") && net_stack.is_some(),
+            net_console: profile::NET_CONSOLE && net_stack.is_some(),
         };
 
         log::info!(

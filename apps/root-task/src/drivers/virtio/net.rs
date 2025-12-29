@@ -14,6 +14,7 @@ use core::fmt::{self, Write as FmtWrite};
 use core::ptr::read_unaligned;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 use core::sync::atomic::{compiler_fence, fence, AtomicBool, Ordering as AtomicOrdering};
+#[cfg(feature = "net-backend-virtio")]
 use core::mem::MaybeUninit;
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
@@ -26,6 +27,7 @@ use smoltcp::wire::EthernetAddress;
 use spin::Mutex;
 
 use crate::hal::cache::{cache_clean, cache_invalidate};
+use crate::hal::dma::{self, PinnedDmaRange};
 use crate::hal::{HalError, Hardware};
 use crate::net::{
     NetDevice, NetDeviceCounters, NetDriverError, NetStage, CONSOLE_TCP_PORT, NET_DIAG, NET_STAGE,
@@ -5438,6 +5440,7 @@ struct VirtQueue {
     base_paddr: usize,
     base_vaddr: usize,
     base_len: usize,
+    _dma: Option<PinnedDmaRange>,
     cacheable: bool,
     used_zero_len_head: Option<u16>,
     last_error: Option<&'static str>,
@@ -5572,6 +5575,20 @@ impl VirtQueue {
         let base_paddr = frame_paddr.saturating_add(base_offset);
         let base_ptr =
             unsafe { NonNull::new_unchecked(frame_ptr.as_ptr().add(base_offset) as *mut u8) };
+        let base_vaddr = base_ptr.as_ptr() as usize;
+
+        let dma = match dma::pin(base_vaddr, base_paddr, layout.total_len, "virtq") {
+            Ok(range) => Some(range),
+            Err(err) => {
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][dma] pin skipped for queue {}: {:?}",
+                    index,
+                    err
+                );
+                None
+            }
+        };
 
         debug_assert!(
             layout.desc_offset + layout.desc_len <= layout.avail_offset,
@@ -5725,7 +5742,7 @@ impl VirtQueue {
         info!(
             target: "net-console",
             "[virtio-net][layout] queue={index} size={queue_size} qmem_vaddr=0x{vaddr:016x} qmem_paddr=0x{paddr:016x} desc@+0x{desc_off:03x}/len={desc_len} avail@+0x{avail_off:03x}/len={avail_len} used@+0x{used_off:03x}/len={used_len} total_len={total}",
-            vaddr = base_ptr.as_ptr() as usize,
+            vaddr = base_vaddr,
             paddr = base_paddr,
             desc_off = layout.desc_offset,
             desc_len = layout.desc_len,
@@ -5771,8 +5788,9 @@ impl VirtQueue {
             last_used: used_idx,
             pfn: queue_pfn,
             base_paddr,
-            base_vaddr: base_ptr.as_ptr() as usize,
+            base_vaddr,
             base_len: layout.total_len,
+            _dma: dma,
             cacheable,
             used_zero_len_head: None,
             last_error: None,
