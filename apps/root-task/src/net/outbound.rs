@@ -268,8 +268,7 @@ impl OutboundCoalescer {
         let start = usize::from(offset);
         let end = start.saturating_add(len);
         if end > OUTBOUND_RING_CAP {
-            self.slots[slot_idx as usize] = LineSlot::default();
-            slot.in_use = false;
+            *slot = LineSlot::default();
             self.rollback_ring(prev_head, prev_used);
             let _ = self.free_list.push_front(slot_idx);
             return Err(());
@@ -284,8 +283,7 @@ impl OutboundCoalescer {
             OutboundLane::Log => self.log_q.push_back(slot_idx),
         };
         if push_result.is_err() {
-            self.slots[slot_idx as usize] = LineSlot::default();
-            slot.in_use = false;
+            *slot = LineSlot::default();
             self.rollback_ring(prev_head, prev_used);
             let _ = self.free_list.push_front(slot_idx);
             return Err(());
@@ -299,8 +297,7 @@ impl OutboundCoalescer {
                     let _ = self.log_q.pop_back();
                 }
             }
-            self.slots[slot_idx as usize] = LineSlot::default();
-            slot.in_use = false;
+            *slot = LineSlot::default();
             self.rollback_ring(prev_head, prev_used);
             let _ = self.free_list.push_front(slot_idx);
             return Err(());
@@ -524,10 +521,18 @@ impl OutboundCoalescer {
     }
 
     fn commit_payload(&mut self, plan: &PlannedPayload, lane: OutboundLane) {
-        match lane {
-            OutboundLane::Control => self.pop_front_batch(&mut self.ctrl_q, plan.consumed_lines),
-            OutboundLane::Log => self.pop_front_batch(&mut self.log_q, plan.consumed_lines),
+        {
+            let queue = match lane {
+                OutboundLane::Control => &mut self.ctrl_q,
+                OutboundLane::Log => &mut self.log_q,
+            };
+            for _ in 0..plan.consumed_lines {
+                if let Some(slot_idx) = queue.pop_front() {
+                    self.release_slot(slot_idx);
+                }
+            }
         }
+        self.reclaim_ring();
         self.queued_lines = self.queued_lines.saturating_sub(plan.consumed_lines as u32);
         self.queued_bytes = self.queued_bytes.saturating_sub(plan.consumed_bytes as u32);
         if lane == OutboundLane::Log {
@@ -535,15 +540,6 @@ impl OutboundCoalescer {
         }
         self.frames_sent = self.frames_sent.saturating_add(1);
         self.bytes_sent = self.bytes_sent.saturating_add(plan.payload_len as u64);
-    }
-
-    fn pop_front_batch<const N: usize>(&mut self, queue: &mut Deque<SlotIdx, N>, count: usize) {
-        for _ in 0..count {
-            if let Some(slot_idx) = queue.pop_front() {
-                self.release_slot(slot_idx);
-            }
-        }
-        self.reclaim_ring();
     }
 
     fn refill(&mut self, now_ms: u64) {
