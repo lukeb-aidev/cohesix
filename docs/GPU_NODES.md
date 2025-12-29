@@ -1,9 +1,19 @@
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Describe host-side GPU bridge behaviour, namespaces, and telemetry/model lifecycle semantics. -->
 # GPU Nodes — Out-of-VM Acceleration Strategy
 
 ## 1. Rationale
 CUDA/NVML stacks are large and platform-specific. Keeping them outside the seL4 guest (whether running on QEMU or physical UEFI hardware) preserves determinism and minimises the trusted computing base (TCB). The Cohesix instance interacts with GPUs exclusively through a capability-guarded 9P namespace mirrored by host workers.
 GPU workers (`worker-gpu`) are another worker type under the hive’s Queen, not standalone services.
+
+## 0. Model Lifecycle Surfaces (Milestone 6a)
+- Namespace:
+  - `/gpu/models/available/<model_id>/manifest.toml` (read-only)
+  - `/gpu/models/active` (append-only pointer; host swaps atomically)
+- Properties:
+  - Manifests live on the **host filesystem**; Cohesix only sees TOML descriptors and the active pointer.
+  - Activation is a host concern (reload/restart/hot-swap); no new verbs or control planes were added.
+  - WorkerGpu reads `/gpu/models/active` and annotates telemetry with `model_id` / `lora_id` but cannot upload artefacts.
 
 ## 2. Host GPU Worker Architecture
 - **Process**: Rust binary running on macOS or a Linux edge node, outside the Cohesix instance, paired with the GPU bridge host.
@@ -126,8 +136,22 @@ Properties:
   - `device_id`
   - `time_window`
   - `ticket_id`
+  - `schema_version` (currently `gpu-telemetry/v1`)
 
 No streaming, no sockets, no RPC.
+
+### Telemetry Schema (Milestone 6a)
+- Descriptor path: `/gpu/telemetry/schema.json` (read-only)
+- Version: `gpu-telemetry/v1`
+- Required fields:
+  - `schema_version`, `device_id`, `model_id`, `time_window`, `token_count`, `latency_histogram`
+- Optional fields:
+  - `lora_id`, `confidence`, `entropy`, `drift`, `feedback_flags`
+- Bounds:
+  - Max record size: 4096 bytes (enforced by host bridge)
+  - Append-only writes; workers must clamp window sizes before writing
+- Export:
+  - Records forward unchanged to `/queen/telemetry/*` and `/queen/export/lora_jobs/*`
 
 ---
 
@@ -138,6 +162,7 @@ Each Jetson runs a **Cohesix Worker** with a role-scoped ticket.
 The worker:
 - Reads `/gpu/telemetry/*`
 - Applies optional thinning / aggregation
+- Propagates `model_id` / `lora_id` from `/gpu/models/active` into every forwarded record
 - Emits consolidated telemetry upstream:
 
 /worker/self/telemetry/

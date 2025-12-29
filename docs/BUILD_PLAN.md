@@ -1,4 +1,5 @@
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Track Cohesix milestones, deliverables, and completion criteria for ARM64 Pure Rust userspace builds. -->
 # Cohesix Build Plan (ARM64, Pure Rust Userspace)
 Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
 
@@ -158,6 +159,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 > **Future Note:** A host-side WASM GUI is expected as a hive dashboard layered on the `cohsh` protocol; it does not alter kernel/userspace boundaries or introduce new in-VM services.
 
 ## Milestone 6a — GPU Model Lifecycle & Telemetry Semantics (LoRA-ready)
+**Status:** Complete — host bridge and documentation now define model lifecycle surfaces, schema-tagged telemetry, and export guarantees without altering in-VM capabilities.
 
 **Why this exists (context)**  
 Milestone 6 proved the **GPU lease boundary and host bridge mechanics** using kernel-style job submission. That validated the architecture, but it does not yet express **model lifecycle state** or **learning-oriented telemetry semantics**, which are required for PEFT / LoRA feedback loops at scale.

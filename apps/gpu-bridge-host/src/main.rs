@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: CLI entry point for the host-side GPU bridge; prints mirrored namespace metadata.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -9,7 +10,7 @@
 use anyhow::Result;
 use clap::{ArgAction, Parser};
 
-use gpu_bridge_host::{auto_bridge, namespace_to_json_pretty, SerialisedGpuNode};
+use gpu_bridge_host::{auto_bridge, namespace_to_json_pretty, GpuNamespaceSnapshot};
 
 /// CLI arguments for the GPU bridge host tool.
 #[derive(Debug, Parser)]
@@ -26,7 +27,7 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     let bridge = auto_bridge(args.mock)?;
-    let namespace: Vec<SerialisedGpuNode> = bridge.serialise_namespace()?;
+    let namespace: GpuNamespaceSnapshot = bridge.serialise_namespace()?;
     if args.list {
         println!("{}", namespace_to_json_pretty(&namespace));
     }

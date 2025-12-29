@@ -1,10 +1,12 @@
 // Author: Lukas Bower
+// Purpose: Synthetic namespace builder backing the NineDoor Secure9P server.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
+use gpu_bridge_host::{GpuModelCatalog, TelemetrySchema};
 use secure9p_wire::{ErrorCode, Qid, QidType};
 
 use super::tracefs::TraceFs;
@@ -241,6 +243,55 @@ impl Namespace {
         self.set_append_only_file(&base, "ctl", ctl)?;
         self.set_append_only_file(&base, "status", status)?;
         self.set_append_only_file(&base, "job", b"")?;
+        Ok(())
+    }
+
+    /// Install the GPU model lifecycle namespace.
+    pub fn set_gpu_models(&mut self, catalog: &GpuModelCatalog) -> Result<(), NineDoorError> {
+        let root = vec!["gpu".to_owned()];
+        self.ensure_dir(&root, "models")?;
+        let models_root = vec!["gpu".to_owned(), "models".to_owned()];
+        self.ensure_dir(&models_root, "available")?;
+        let available_root = vec![
+            "gpu".to_owned(),
+            "models".to_owned(),
+            "available".to_owned(),
+        ];
+        for manifest in &catalog.available {
+            self.ensure_dir(&available_root, &manifest.model_id)?;
+            let model_path = vec![
+                "gpu".to_owned(),
+                "models".to_owned(),
+                "available".to_owned(),
+                manifest.model_id.clone(),
+            ];
+            self.set_read_only_file(
+                &model_path,
+                "manifest.toml",
+                manifest.manifest_toml.as_bytes(),
+            )?;
+        }
+        self.set_append_only_file(
+            &models_root,
+            "active",
+            catalog.active_pointer_payload().as_bytes(),
+        )?;
+        Ok(())
+    }
+
+    /// Install the telemetry schema descriptor under `/gpu/telemetry/schema.json`.
+    pub fn set_gpu_telemetry_schema(
+        &mut self,
+        schema: &TelemetrySchema,
+    ) -> Result<(), NineDoorError> {
+        let root = vec!["gpu".to_owned()];
+        self.ensure_dir(&root, "telemetry")?;
+        let telemetry_root = vec!["gpu".to_owned(), "telemetry".to_owned()];
+        self.set_read_only_file(
+            &telemetry_root,
+            "schema.json",
+            schema.descriptor_json().as_bytes(),
+        )?;
         Ok(())
     }
 

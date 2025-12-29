@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Public NineDoor Secure9P server interface and in-process transport helpers.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -13,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use cohesix_ticket::{BudgetSpec, Role, TicketTemplate};
-use gpu_bridge_host::SerialisedGpuNode;
+use gpu_bridge_host::GpuNamespaceSnapshot;
 use secure9p_wire::{
     Codec, CodecError, ErrorCode, FrameHeader, OpenMode, Qid, Request, RequestBody, ResponseBody,
     SessionId, MAX_MSIZE, VERSION,
@@ -129,9 +130,9 @@ impl NineDoor {
     }
 
     /// Install GPU namespace nodes discovered by the host bridge.
-    pub fn install_gpu_nodes(&self, nodes: &[SerialisedGpuNode]) -> Result<(), NineDoorError> {
+    pub fn install_gpu_nodes(&self, topology: &GpuNamespaceSnapshot) -> Result<(), NineDoorError> {
         let mut core = self.inner.lock().expect("poisoned nine-door lock");
-        core.install_gpu_nodes(nodes)
+        core.install_gpu_nodes(topology)
     }
 }
 
