@@ -146,14 +146,46 @@ pub const fn canonical_cnode_depth(init_bits: u8, word_bits: u8) -> u8 {
 }
 
 #[inline(always)]
+#[track_caller]
 pub fn canonical_cnode_bits(bi: &sel4_sys::seL4_BootInfo) -> u8 {
-    let init_bits = bi.initThreadCNodeSizeBits as u8;
+    let caller = Location::caller();
+    let init_bits_raw = bi.initThreadCNodeSizeBits as usize;
+    let word_bits = sel4_sys::seL4_WordBits as usize;
+    let empty_start = bi.empty.start as usize;
+    let empty_end = bi.empty.end as usize;
+    let derived_bits = if empty_end > 0 {
+        Some(empty_end.next_power_of_two().trailing_zeros() as usize)
+    } else {
+        None
+    };
+    let snapshot_bits = BootInfoState::get().map(|state| state.snapshot().init_cnode_bits as usize);
+
+    if init_bits_raw == 0 || init_bits_raw > word_bits {
+        let fallback_bits = snapshot_bits
+            .filter(|bits| *bits > 0 && *bits <= word_bits)
+            .or(derived_bits.filter(|bits| *bits > 0 && *bits <= word_bits))
+            .unwrap_or(word_bits);
+
+        log::error!(
+            "[sel4.cnode-bits] invalid initBits raw={} word_bits={} empty=[0x{empty_start:04x}..0x{empty_end:04x}) derived_bits={derived_bits:?} snapshot_bits={snapshot_bits:?} fallback={fallback_bits} caller={}:{}",
+            init_bits_raw,
+            word_bits,
+            caller.file(),
+            caller.line(),
+        );
+        debug_assert!(
+            init_bits_raw <= word_bits,
+            "initBits must not exceed word width"
+        );
+        return fallback_bits as u8;
+    }
+
     assert!(
-        init_bits as usize <= sel4_sys::seL4_WordBits as usize,
+        init_bits_raw <= word_bits,
         "initBits must not exceed word width"
     );
-    debug_assert!(init_bits > 0, "init CNode capacity must be non-zero");
-    init_bits
+    debug_assert!(init_bits_raw > 0, "init CNode capacity must be non-zero");
+    init_bits_raw as u8
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3098,7 +3130,15 @@ impl<'a> KernelEnv<'a> {
     }
 
     /// Maps a physical device frame into the root task's device window.
+    #[track_caller]
     pub fn map_device(&mut self, paddr: usize) -> Result<DeviceFrame, seL4_Error> {
+        let caller = Location::caller();
+        log::debug!(
+            "[sel4.map_device] paddr=0x{paddr:08x} caller={}:{} device_cursor=0x{device_cursor:08x}",
+            caller.file(),
+            caller.line(),
+            device_cursor = self.device_cursor,
+        );
         let reserved = self
             .untyped
             .reserve_device(paddr, PAGE_BITS)
@@ -4378,6 +4418,30 @@ mod tests {
         assert!(keeper.remember_base(base1).is_err());
         assert!(keeper.contains_base(base0));
         assert_eq!(keeper.count(), 1);
+    }
+
+    #[test]
+    fn canonical_cnode_bits_accepts_word_width() {
+        use core::mem::MaybeUninit;
+
+        let mut bi: sel4_sys::seL4_BootInfo = unsafe { MaybeUninit::zeroed().assume_init() };
+        bi.initThreadCNodeSizeBits = sel4_sys::seL4_WordBits as sel4_sys::seL4_Word;
+        bi.empty.end = 1;
+
+        let bits = canonical_cnode_bits(&bi);
+        assert_eq!(bits, sel4_sys::seL4_WordBits as u8);
+    }
+
+    #[test]
+    fn canonical_cnode_bits_clamps_overflow() {
+        use core::mem::MaybeUninit;
+
+        let mut bi: sel4_sys::seL4_BootInfo = unsafe { MaybeUninit::zeroed().assume_init() };
+        bi.initThreadCNodeSizeBits = (sel4_sys::seL4_WordBits as usize * 4) as sel4_sys::seL4_Word;
+        bi.empty.end = 0;
+
+        let bits = canonical_cnode_bits(&bi);
+        assert_eq!(bits, sel4_sys::seL4_WordBits as u8);
     }
 
     #[test]
