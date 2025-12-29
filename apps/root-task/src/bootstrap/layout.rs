@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Early linker layout diagnostics and reporting during root-task bootstrap.
 //! Early memory layout diagnostics to detect linker regressions before endpoint setup.
 #![allow(dead_code)]
 #![allow(unsafe_code)]
@@ -11,6 +12,7 @@ use sel4_sys;
 use crate::bootstrap::log::force_uart_line;
 
 const STACK_ALIGNMENT: usize = 16;
+const EXPECTED_STACK_SIZE: usize = 128 * 1024;
 
 const REPORT_WIDTH: usize = 192;
 
@@ -99,6 +101,13 @@ impl LayoutSnapshot {
             return Err(LayoutError::StackOrder(self.stack_bottom, self.stack_top));
         }
 
+        if self.stack_top - self.stack_bottom != EXPECTED_STACK_SIZE {
+            return Err(LayoutError::StackSize {
+                expected: EXPECTED_STACK_SIZE,
+                actual: self.stack_top - self.stack_bottom,
+            });
+        }
+
         Ok(())
     }
 
@@ -177,6 +186,10 @@ enum LayoutError {
         alignment: usize,
         stack_bottom: usize,
     },
+    StackSize {
+        expected: usize,
+        actual: usize,
+    },
 }
 
 impl LayoutError {
@@ -225,6 +238,12 @@ impl LayoutError {
                     "BOOT LAYOUT ERROR: stack_bottom misaligned (alignment=0x{alignment:08x} stack_bottom=0x{stack_bottom:08x})"
                 );
             }
+            Self::StackSize { expected, actual } => {
+                let _ = write!(
+                    line,
+                    "BOOT LAYOUT ERROR: stack size mismatch (expected=0x{expected:08x} actual=0x{actual:08x})"
+                );
+            }
         }
         line
     }
@@ -264,7 +283,7 @@ pub fn dump_and_sanity_check() -> LayoutSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{LayoutError, LayoutSnapshot};
+    use super::{LayoutError, LayoutSnapshot, EXPECTED_STACK_SIZE};
 
     #[test]
     fn layout_validation_flags_overlap() {
@@ -280,11 +299,34 @@ mod tests {
 
     #[test]
     fn layout_validation_accepts_ordered_ranges() {
-        let layout = LayoutSnapshot::new(0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+        let layout = LayoutSnapshot::new(
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            8 + EXPECTED_STACK_SIZE,
+        );
         assert_eq!(layout.validate(), Ok(()));
         assert_eq!(
             layout.validate_alignments(&[("heap", 2), ("stack", 8)]),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn layout_validation_rejects_stack_size_mismatch() {
+        let layout = LayoutSnapshot::new(0, 1, 2, 3, 4, 5, 6, 7, 8, 8 + EXPECTED_STACK_SIZE + 1);
+        assert_eq!(
+            layout.validate(),
+            Err(LayoutError::StackSize {
+                expected: EXPECTED_STACK_SIZE,
+                actual: EXPECTED_STACK_SIZE + 1,
+            })
         );
     }
 

@@ -1,4 +1,5 @@
 /* Author: Lukas Bower */
+/* Purpose: Linker script for the AArch64 root-task image layout (single PT_LOAD runs). */
 /* Minimal AArch64 seL4 rootserver linker script (no jumps inside PT_LOAD) */
 OUTPUT_FORMAT(elf64-littleaarch64)
 OUTPUT_ARCH(aarch64)
@@ -6,11 +7,17 @@ ENTRY(_start)
 
 __ipcbuf_vaddr = 0x00106000; /* Kernel-advertised init thread IPC buffer mapping. */
 __stack_guard = 0x00002000;  /* Guard page below IPC buffer to catch stack overruns. */
-__stack_size = 0x00040000;   /* 256 KiB stack for early boot logging/tracing. */
+__stack_size = 0x00020000;   /* 128 KiB stack for early boot logging/tracing. */
 
 __stack_top = __ipcbuf_vaddr - __stack_guard;
 __stack_bottom_unaligned = __stack_top - __stack_size;
 __stack_bottom = __stack_bottom_unaligned & ~0xFFF;
+
+/* Derived ranges (page-aligned):
+ *   stack=[0x000e4000..0x00104000) size=128 KiB
+ *   guard=[0x00104000..0x00106000)
+ *   heap  grows up to stack_bottom with no backward '.' adjustments.
+ */
 
 PHDRS {
   text PT_LOAD FLAGS(5); /* R+X */
