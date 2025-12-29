@@ -1653,11 +1653,21 @@ impl BootinfoWindowGuard {
         let mut slot = self.state.lock();
         *slot = Some(BootinfoWindowState::new(region_ptr, capacity));
         watch_range(
-            "bootinfo.empty",
+            "bootinfo.window",
             region_ptr as *const u8,
             mem::size_of::<sel4_sys::seL4_SlotRegion>(),
         );
         self.armed.store(true, Ordering::Release);
+    }
+
+    pub fn watched_region(&self) -> Option<(*const u8, usize)> {
+        let slot = self.state.lock();
+        slot.as_ref().map(|state| {
+            (
+                state.region_ptr.cast(),
+                mem::size_of::<sel4_sys::seL4_SlotRegion>(),
+            )
+        })
     }
 
     fn hexdump_slot_region(&self, ptr: *const sel4_sys::seL4_SlotRegion) -> HeaplessString<192> {

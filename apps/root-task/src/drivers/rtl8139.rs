@@ -8,7 +8,7 @@
 //! without relying on virtio.
 #![allow(unsafe_code)]
 
-use core::ptr::{read_volatile, write_bytes, write_volatile};
+use core::ptr::{read_volatile, write_volatile};
 
 use heapless::Vec as HeaplessVec;
 use log::{debug, error, info, warn};
@@ -16,6 +16,7 @@ use smoltcp::phy::{self, Device, DeviceCapabilities};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
+use crate::debug::{watched_copy_nonoverlapping, watched_write_bytes};
 use crate::hal::pci::{PciBarKind, PciDeviceInfo};
 use crate::hal::{HalError, Hardware, MapPerms, MappedRegion, PciCommandFlags};
 use crate::net::{NetDevice, NetDeviceCounters, NetDriverError};
@@ -290,8 +291,8 @@ impl Rtl8139Device {
         let buffer = &self.tx_buffers[slot];
         unsafe {
             let dst = buffer.ptr().as_ptr();
-            write_bytes(dst, 0, TX_BUFFER_LEN);
-            core::ptr::copy_nonoverlapping(packet.as_ptr(), dst, packet.len());
+            watched_write_bytes(dst, 0, TX_BUFFER_LEN, "rtl8139.tx.zero");
+            watched_copy_nonoverlapping(packet.as_ptr(), dst, packet.len(), "rtl8139.tx.copy");
             write_volatile(
                 self.regs.ptr().as_ptr().add(RTL_REG_TSD0 + slot * 4) as *mut u32,
                 packet.len() as u32,

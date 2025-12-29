@@ -11,7 +11,7 @@ pub mod diag;
 pub use diag::{NetDiagSnapshot, NET_DIAG, NET_DIAG_FEATURED};
 
 use crate::serial::DEFAULT_LINE_CAPACITY;
-#[cfg(feature = "net")]
+#[cfg(all(feature = "net", feature = "kernel"))]
 pub mod outbound;
 pub use cohesix_net_constants::{COHESIX_TCP_CONSOLE_PORT, COHSH_TCP_PORT, TCP_CONSOLE_PORT};
 use heapless::String as HeaplessString;
