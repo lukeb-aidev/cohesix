@@ -174,8 +174,16 @@ struct TxHeadManager {
     entries: [TxHeadEntry; TX_QUEUE_SIZE],
     published_slots: [Option<(u16, u32)>; TX_QUEUE_SIZE],
     in_avail: [bool; TX_QUEUE_SIZE],
+    publish_records: [Option<TxPublishRecord>; TX_QUEUE_SIZE],
     next_gen: u32,
     size: u16,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct TxPublishRecord {
+    slot: u16,
+    gen: u32,
+    avail_idx: u16,
 }
 
 impl TxHeadManager {
@@ -189,6 +197,7 @@ impl TxHeadManager {
             entries: [TxHeadEntry::default(); TX_QUEUE_SIZE],
             published_slots: [None; TX_QUEUE_SIZE],
             in_avail: [false; TX_QUEUE_SIZE],
+            publish_records: [None; TX_QUEUE_SIZE],
             next_gen: 1,
             size,
         }
@@ -227,6 +236,9 @@ impl TxHeadManager {
             entry.state = TxHeadState::Prepared { gen };
             entry.last_len = 0;
             entry.last_addr = 0;
+        }
+        if let Some(record) = self.publish_records.get_mut(id as usize) {
+            *record = None;
         }
         Some(id)
     }
@@ -293,19 +305,6 @@ impl TxHeadManager {
         let (slot, gen, already_in_flight) = match state {
             TxHeadState::InFlight { slot, gen } => (slot, gen, true),
             TxHeadState::Published { slot, gen } => (slot, gen, false),
-            TxHeadState::Prepared { gen } => {
-                let slot = self
-                    .published_slots
-                    .iter()
-                    .enumerate()
-                    .find_map(|(idx, entry)| {
-                        entry.as_ref().copied().and_then(|(head, entry_gen)| {
-                            (head == id && entry_gen == gen).then_some(idx as u16)
-                        })
-                    })
-                    .ok_or(TxHeadError::InvalidState)?;
-                (slot, gen, false)
-            }
             _ => return Err(TxHeadError::InvalidState),
         };
         if self.published_for_slot(slot) != Some((id, gen)) {
@@ -325,6 +324,76 @@ impl TxHeadManager {
         let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
         entry.state = TxHeadState::InFlight { slot, gen };
         Ok((slot, gen))
+    }
+
+    fn note_avail_publish(&mut self, id: u16, slot: u16, avail_idx: u16) -> Result<(), TxHeadError> {
+        if id >= self.size {
+            return Err(TxHeadError::OutOfRange);
+        }
+        let entry = self.entry(id).copied().ok_or(TxHeadError::OutOfRange)?;
+        let gen = match entry.state {
+            TxHeadState::Published { slot: s, gen } if s == slot => gen,
+            _ => return Err(TxHeadError::InvalidState),
+        };
+        if !self.in_avail.get(id as usize).copied().unwrap_or(false) {
+            debug_assert!(
+                false,
+                "tx head not marked in avail during publish: id={} slot={}",
+                id,
+                slot
+            );
+            return Err(TxHeadError::InvalidState);
+        }
+        let record = self
+            .publish_records
+            .get_mut(id as usize)
+            .ok_or(TxHeadError::OutOfRange)?;
+        if record.is_some() {
+            debug_assert!(
+                false,
+                "tx head already recorded as published: id={} slot={} state={:?}",
+                id,
+                slot,
+                entry.state
+            );
+            return Err(TxHeadError::InvalidState);
+        }
+        *record = Some(TxPublishRecord {
+            slot,
+            gen,
+            avail_idx,
+        });
+        Ok(())
+    }
+
+    fn take_publish_record(
+        &mut self,
+        id: u16,
+        expected_slot: u16,
+        expected_gen: u32,
+    ) -> Result<TxPublishRecord, TxHeadError> {
+        if id >= self.size {
+            return Err(TxHeadError::OutOfRange);
+        }
+        let record = self
+            .publish_records
+            .get_mut(id as usize)
+            .ok_or(TxHeadError::OutOfRange)?
+            .take()
+            .ok_or(TxHeadError::InvalidState)?;
+        if record.slot != expected_slot || record.gen != expected_gen {
+            debug_assert!(
+                false,
+                "tx publish record mismatch: id={} expected_slot={} expected_gen={} recorded_slot={} recorded_gen={}",
+                id,
+                expected_slot,
+                expected_gen,
+                record.slot,
+                record.gen,
+            );
+            return Err(TxHeadError::InvalidState);
+        }
+        Ok(record)
     }
 
     fn mark_completed(
@@ -389,6 +458,9 @@ impl TxHeadManager {
             return Err(TxHeadError::InvalidState);
         }
         entry.state = TxHeadState::Free;
+        if let Some(record) = self.publish_records.get_mut(id as usize) {
+            *record = None;
+        }
         self.free.push(id).map_err(|_| TxHeadError::FreeListFull)
     }
 
@@ -410,6 +482,9 @@ impl TxHeadManager {
         entry.state = TxHeadState::Prepared { gen: next };
         if let Some(flag) = self.in_avail.get_mut(id as usize) {
             *flag = false;
+        }
+        if let Some(record) = self.publish_records.get_mut(id as usize) {
+            *record = None;
         }
         Ok(())
     }
@@ -439,6 +514,9 @@ impl TxHeadManager {
         state.state = TxHeadState::Free;
         state.last_len = 0;
         state.last_addr = 0;
+        if let Some(record) = self.publish_records.get_mut(id as usize) {
+            *record = None;
+        }
         self.free.push(id).map_err(|_| TxHeadError::FreeListFull)
     }
 
@@ -2082,6 +2160,15 @@ impl VirtioNet {
             self.tx_state_violation("tx_used_mapping_mismatch", id, Some(ring_slot))?;
             return Err(());
         }
+        if self
+            .tx_head_mgr
+            .take_publish_record(id, ring_slot, expected_gen)
+            .is_err()
+        {
+            self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
+            self.tx_state_violation("tx_used_record_mismatch", id, Some(ring_slot))?;
+            return Err(());
+        }
         // Completion only flips state; descriptor contents are preserved until the next prepare to
         // avoid exposing zeroed entries to an in-flight device read.
         self.tx_head_mgr
@@ -2680,6 +2767,15 @@ impl VirtioNet {
         };
         if slot != publish_slot {
             self.tx_state_violation("tx_slot_mismatch", head_id, Some(slot))?;
+            return Err(());
+        }
+        if let Err(_) = self
+            .tx_head_mgr
+            .note_avail_publish(head_id, slot, avail_idx)
+        {
+            self.tx_state_violation("tx_avail_record_failed", head_id, Some(slot))?;
+            #[cfg(debug_assertions)]
+            self.freeze_tx_publishes("tx_avail_record_failed");
             return Err(());
         }
         #[cfg(debug_assertions)]
@@ -3866,6 +3962,17 @@ impl VirtioNet {
                     let _ = self.tx_head_mgr.cancel_publish(id);
                     self.tx_state_violation("tx_v2_slot_mismatch", id, Some(slot))
                         .ok();
+                    return;
+                }
+                if self
+                    .tx_head_mgr
+                    .note_avail_publish(id, slot, avail_idx)
+                    .is_err()
+                {
+                    self.tx_state_violation("tx_v2_avail_record_failed", id, Some(slot))
+                        .ok();
+                    #[cfg(debug_assertions)]
+                    self.freeze_tx_publishes("tx_v2_avail_record_failed");
                     return;
                 }
                 match self.tx_head_mgr.mark_in_flight(id) {
@@ -6401,6 +6508,75 @@ mod tx_tests {
         assert!(
             gen2 != gen1,
             "each publish generation must advance even for the same head"
+        );
+    }
+
+    #[test]
+    fn tx_publish_record_prevents_republish_without_reclaim() {
+        let mut mgr = TxHeadManager::new(2);
+        let head = mgr.alloc_head().expect("head available");
+        let gen = mgr
+            .mark_published(head, 0, 64, 0x1000)
+            .expect("publish");
+        mgr.note_avail_publish(head, 0, 0)
+            .expect("avail record");
+        mgr.mark_in_flight(head).expect("in-flight");
+        assert!(
+            mgr.mark_published(head, 1, 64, 0x2000).is_err(),
+            "head cannot be republished until reclaim"
+        );
+        mgr.mark_completed(head, Some(gen)).expect("complete");
+        mgr.reclaim_head(head).expect("reclaim");
+        let reused = mgr.alloc_head().expect("head reusable after reclaim");
+        assert_eq!(reused, head, "head returns to free list after reclaim");
+    }
+
+    #[test]
+    fn tx_publish_record_taken_on_reclaim() {
+        let mut mgr = TxHeadManager::new(1);
+        let head = mgr.alloc_head().expect("head available");
+        let gen = mgr
+            .mark_published(head, 0, 64, 0x1000)
+            .expect("publish");
+        mgr.note_avail_publish(head, 0, 5)
+            .expect("record publish");
+        mgr.mark_in_flight(head).expect("in-flight");
+        let record = mgr
+            .take_publish_record(head, 0, gen)
+            .expect("record fetched");
+        assert_eq!(record.avail_idx, 5, "avail idx recorded");
+        mgr.mark_completed(head, Some(gen)).expect("complete");
+        mgr.reclaim_head(head).expect("reclaim");
+        assert_eq!(
+            mgr.publish_records[head as usize], None,
+            "record cleared after reclaim"
+        );
+    }
+
+    #[test]
+    fn tx_wrap_publish_and_reclaim_cycle() {
+        let mut mgr = TxHeadManager::new(4);
+        for idx in 0..6 {
+            let head = mgr.alloc_head().expect("head available");
+            let slot = (idx % 4) as u16;
+            let gen = mgr
+                .mark_published(head, slot, 64, 0x3000 + idx as u64)
+                .expect("publish");
+            mgr.note_avail_publish(head, slot, idx as u16)
+                .expect("record publish");
+            mgr.mark_in_flight(head).expect("in-flight");
+            let record = mgr
+                .take_publish_record(head, slot, gen)
+                .expect("record retrieved");
+            assert_eq!(record.slot, slot, "slot recorded correctly");
+            assert_eq!(record.gen, gen, "generation recorded correctly");
+            mgr.mark_completed(head, Some(gen)).expect("complete");
+            mgr.reclaim_head(head).expect("reclaim");
+        }
+        assert_eq!(
+            mgr.free_len(),
+            4,
+            "all heads return to free after wrap-around lifecycle"
         );
     }
 
