@@ -19,6 +19,7 @@
 #![cfg(any(test, feature = "kernel"))]
 
 use core::fmt::{self, Write as FmtWrite};
+use core::mem;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, trace, warn};
 use portable_atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
@@ -91,8 +92,8 @@ const SELF_TEST_BEACON_WINDOW_MS: u64 = 5_000;
 const SELF_TEST_WINDOW_MS: u64 = 15_000;
 const SELF_TEST_TX_WRAP_BURST: u32 = 72;
 const NET_INIT_TAG: &str = "net-console:init";
-#[cfg(any(feature = "bootstrap-trace", debug_assertions))]
 static STORAGE_ADDRESS_LOGGED: AtomicBool = AtomicBool::new(false);
+static NET_WATCH_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "net-backend-virtio")]
 type DefaultNetDevice = VirtioNetStatic;
@@ -1082,6 +1083,7 @@ struct StorageAddressSnapshot {
     owner: usize,
     tag: usize,
     storage: usize,
+    storage_len: usize,
 }
 
 impl StorageAddressSnapshot {
@@ -1091,6 +1093,7 @@ impl StorageAddressSnapshot {
         owner: &AtomicU64,
         tag: &AtomicU32,
         storage: *const T,
+        storage_len: usize,
     ) -> Self {
         Self {
             label,
@@ -1098,11 +1101,11 @@ impl StorageAddressSnapshot {
             owner: owner as *const _ as usize,
             tag: tag as *const _ as usize,
             storage: storage as usize,
+            storage_len,
         }
     }
 }
 
-#[cfg(any(feature = "bootstrap-trace", debug_assertions))]
 fn log_storage_addresses_once(marker: &'static str) {
     if STORAGE_ADDRESS_LOGGED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -1118,6 +1121,7 @@ fn log_storage_addresses_once(marker: &'static str) {
             &SOCKET_STORAGE_OWNER,
             &SOCKET_STORAGE_TAG_ID,
             unsafe { SOCKET_STORAGE.as_ptr() },
+            SOCKET_CAPACITY * mem::size_of::<SocketStorage<'static>>(),
         ),
         StorageAddressSnapshot::new(
             "tcp-rx",
@@ -1125,6 +1129,7 @@ fn log_storage_addresses_once(marker: &'static str) {
             &TCP_RX_STORAGE_OWNER,
             &TCP_RX_STORAGE_TAG_ID,
             unsafe { TCP_RX_STORAGE.as_ptr() },
+            TCP_RX_BUFFER,
         ),
         StorageAddressSnapshot::new(
             "tcp-tx",
@@ -1132,6 +1137,7 @@ fn log_storage_addresses_once(marker: &'static str) {
             &TCP_TX_STORAGE_OWNER,
             &TCP_TX_STORAGE_TAG_ID,
             unsafe { TCP_TX_STORAGE.as_ptr() },
+            TCP_TX_BUFFER,
         ),
         StorageAddressSnapshot::new(
             "tcp-smoke-rx",
@@ -1139,6 +1145,7 @@ fn log_storage_addresses_once(marker: &'static str) {
             &TCP_SMOKE_RX_STORAGE_OWNER,
             &TCP_SMOKE_RX_STORAGE_TAG_ID,
             unsafe { TCP_SMOKE_RX_STORAGE.as_ptr() },
+            TCP_SMOKE_RX_BUFFER,
         ),
         StorageAddressSnapshot::new(
             "tcp-smoke-tx",
@@ -1146,6 +1153,7 @@ fn log_storage_addresses_once(marker: &'static str) {
             &TCP_SMOKE_TX_STORAGE_OWNER,
             &TCP_SMOKE_TX_STORAGE_TAG_ID,
             unsafe { TCP_SMOKE_TX_STORAGE.as_ptr() },
+            TCP_SMOKE_TX_BUFFER,
         ),
         StorageAddressSnapshot::new(
             "tcp-smoke-out-rx",
@@ -1153,6 +1161,7 @@ fn log_storage_addresses_once(marker: &'static str) {
             &TCP_SMOKE_OUT_RX_STORAGE_OWNER,
             &TCP_SMOKE_OUT_RX_STORAGE_TAG_ID,
             unsafe { TCP_SMOKE_OUT_RX_STORAGE.as_ptr() },
+            TCP_SMOKE_RX_BUFFER,
         ),
         StorageAddressSnapshot::new(
             "tcp-smoke-out-tx",
@@ -1160,6 +1169,7 @@ fn log_storage_addresses_once(marker: &'static str) {
             &TCP_SMOKE_OUT_TX_STORAGE_OWNER,
             &TCP_SMOKE_OUT_TX_STORAGE_TAG_ID,
             unsafe { TCP_SMOKE_OUT_TX_STORAGE.as_ptr() },
+            TCP_SMOKE_TX_BUFFER,
         ),
         StorageAddressSnapshot::new(
             "udp-beacon",
@@ -1167,6 +1177,7 @@ fn log_storage_addresses_once(marker: &'static str) {
             &UDP_BEACON_STORAGE_OWNER,
             &UDP_BEACON_STORAGE_TAG_ID,
             unsafe { UDP_BEACON_RX_STORAGE.as_ptr() },
+            UDP_PAYLOAD_CAPACITY,
         ),
         StorageAddressSnapshot::new(
             "udp-echo",
@@ -1174,18 +1185,20 @@ fn log_storage_addresses_once(marker: &'static str) {
             &UDP_ECHO_STORAGE_OWNER,
             &UDP_ECHO_STORAGE_TAG_ID,
             unsafe { UDP_ECHO_RX_STORAGE.as_ptr() },
+            UDP_PAYLOAD_CAPACITY,
         ),
     ];
 
     for snapshot in storage_snapshots {
         info!(
             target: "net-storage",
-            "[net-storage] addr marker={marker} label={} flag=0x{flag:016x} owner=0x{owner:016x} tag=0x{tag:016x} storage=0x{storage:016x}",
+            "[net-storage] addr marker={marker} label={} flag=0x{flag:016x} owner=0x{owner:016x} tag=0x{tag:016x} storage=0x{storage:016x} len=0x{len:08x}",
             snapshot.label,
             flag = snapshot.flag,
             owner = snapshot.owner,
             tag = snapshot.tag,
             storage = snapshot.storage,
+            len = snapshot.storage_len,
         );
     }
 
@@ -1198,6 +1211,7 @@ fn log_storage_addresses_once(marker: &'static str) {
                 &TCP_PROBE_RX_STORAGE_OWNER,
                 &TCP_PROBE_RX_STORAGE_TAG_ID,
                 unsafe { TCP_PROBE_RX_STORAGE.as_ptr() },
+                TCP_PROBE_BUFFER,
             ),
             StorageAddressSnapshot::new(
                 "tcp-probe-tx",
@@ -1205,25 +1219,47 @@ fn log_storage_addresses_once(marker: &'static str) {
                 &TCP_PROBE_TX_STORAGE_OWNER,
                 &TCP_PROBE_TX_STORAGE_TAG_ID,
                 unsafe { TCP_PROBE_TX_STORAGE.as_ptr() },
+                TCP_PROBE_BUFFER,
             ),
         ];
 
         for snapshot in probe_snapshots {
             info!(
                 target: "net-storage",
-                "[net-storage] addr marker={marker} label={} flag=0x{flag:016x} owner=0x{owner:016x} tag=0x{tag:016x} storage=0x{storage:016x}",
+                "[net-storage] addr marker={marker} label={} flag=0x{flag:016x} owner=0x{owner:016x} tag=0x{tag:016x} storage=0x{storage:016x} len=0x{len:08x}",
                 snapshot.label,
                 flag = snapshot.flag,
                 owner = snapshot.owner,
                 tag = snapshot.tag,
                 storage = snapshot.storage,
+                len = snapshot.storage_len,
             );
         }
     }
 }
 
-#[cfg(not(any(feature = "bootstrap-trace", debug_assertions)))]
-fn log_storage_addresses_once(_: &'static str) {}
+fn log_net_watch_targets(marker: &'static str) {
+    if NET_WATCH_LOGGED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    if let Some((ptr, len)) = BOOTINFO_WINDOW_GUARD.watched_region() {
+        info!(
+            target: "bootinfo.window",
+            "[bootinfo.window] addr marker={marker} ptr=0x{ptr:016x} len=0x{len:08x}",
+            ptr = ptr as usize,
+            len = len,
+        );
+    } else {
+        info!(
+            target: "bootinfo.window",
+            "[bootinfo.window] addr marker={marker} state=unavailable"
+        );
+    }
+    log_storage_addresses_once(marker);
+}
 
 fn tag_label_snapshot(tag_label: &Mutex<Option<&'static str>>) -> &'static str {
     tag_label
@@ -1244,11 +1280,12 @@ fn log_socket_tripwire(marker: &'static str) {
         &SOCKET_STORAGE_OWNER,
         &SOCKET_STORAGE_TAG_ID,
         unsafe { SOCKET_STORAGE.as_ptr() },
+        SOCKET_CAPACITY * mem::size_of::<SocketStorage<'static>>(),
     );
 
     info!(
         target: "net-storage",
-        "[net-storage] preinit marker={marker} in_use={} owner=0x{owner:016x} tag=0x{tag:08x} tag_label={tag_label} flag_addr=0x{flag:016x} owner_addr=0x{owner_addr:016x} tag_addr=0x{tag_addr:016x} storage_addr=0x{storage:016x}",
+        "[net-storage] preinit marker={marker} in_use={} owner=0x{owner:016x} tag=0x{tag:08x} tag_label={tag_label} flag_addr=0x{flag:016x} owner_addr=0x{owner_addr:016x} tag_addr=0x{tag_addr:016x} storage_addr=0x{storage:016x} len=0x{len:08x}",
         in_use,
         owner = owner,
         tag = tag,
@@ -1256,6 +1293,7 @@ fn log_socket_tripwire(marker: &'static str) {
         owner_addr = addresses.owner,
         tag_addr = addresses.tag,
         storage = addresses.storage,
+        len = addresses.storage_len,
     );
 
     if in_use && owner == 0 {
@@ -1370,6 +1408,11 @@ impl<D: NetDevice> NetStack<D> {
         self.session_state = SessionState::default();
         self.conn_bytes_read = 0;
         self.conn_bytes_written = 0;
+    }
+
+    fn log_buffer_addresses_once(&mut self, marker: &'static str) {
+        self.outbound.log_buffer_addresses_once(marker);
+        self.server.log_buffer_addresses_once(marker);
     }
 
     fn log_init_canary(&self, mark: &'static str) -> Result<(), NetStackError<D::Error>> {
@@ -1716,6 +1759,7 @@ impl<D: NetDevice> NetStack<D> {
                 tx_only: false,
             },
         };
+        log_net_watch_targets("net.init.begin");
         BOOTINFO_WINDOW_GUARD.check("net.init.device.pre");
         let mut device = D::create_with_stage(hal, stage)?;
         BOOTINFO_WINDOW_GUARD.check("net.init.device.post");
@@ -1831,6 +1875,7 @@ impl<D: NetDevice> NetStack<D> {
             #[cfg(feature = "net-outbound-probe")]
             probe_hint_logged: false,
         };
+        stack.log_buffer_addresses_once("net.init.buffers");
         if stage_policy.allow_tcp {
             stack.initialise_socket()?;
         }

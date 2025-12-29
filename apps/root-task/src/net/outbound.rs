@@ -4,6 +4,8 @@
 use core::cmp::min;
 
 use heapless::{Deque, Vec as HeaplessVec};
+use log::info;
+use portable_atomic::{AtomicBool, Ordering};
 
 use crate::debug::maybe_report_str_write;
 use crate::serial::DEFAULT_LINE_CAPACITY;
@@ -130,6 +132,41 @@ pub struct OutboundCoalescer {
 }
 
 impl OutboundCoalescer {
+    fn queue_buf_ptr<const N: usize>(queue: &mut Deque<LineBuf, N>) -> Option<usize> {
+        if queue.is_full() {
+            return None;
+        }
+        let dummy = LineBuf::new();
+        queue.push_back(dummy).ok()?;
+        let ptr = queue.back().map(|buf| buf.buf.as_ptr() as usize);
+        let _ = queue.pop_back();
+        ptr
+    }
+
+    pub fn log_buffer_addresses_once(&mut self, marker: &'static str) {
+        static LOGGED: AtomicBool = AtomicBool::new(false);
+        if LOGGED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        if let Some(ptr) = Self::queue_buf_ptr(&mut self.log_q) {
+            info!(
+                target: "net-console",
+                "[net-console] addr marker={marker} label=log-linebuf ptr=0x{ptr:016x} len=0x{len:04x}",
+                len = LINE_CAP,
+            );
+        }
+        if let Some(ptr) = Self::queue_buf_ptr(&mut self.ctrl_q) {
+            info!(
+                target: "net-console",
+                "[net-console] addr marker={marker} label=ctrl-linebuf ptr=0x{ptr:016x} len=0x{len:04x}",
+                len = LINE_CAP,
+            );
+        }
+    }
+
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -366,18 +403,20 @@ struct PlannedPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::debug::{clear_watches, watch_hint_for, watch_range};
+    use crate::debug::{clear_watches, trip_on_overlap, watch_hint_for, watch_range};
 
     const LOG_LINE: &[u8] = b"line";
 
     #[test]
     fn linebuf_store_reports_overlap() {
         clear_watches();
+        trip_on_overlap(false);
         let mut buf = LineBuf::new();
         let ptr = buf.buf.as_mut_ptr();
         watch_range("linebuf", ptr as *const u8, LINE_CAP);
         let payload = [b'x'; LINE_CAP + 8];
         buf.store(&payload);
+        trip_on_overlap(true);
         let hint = watch_hint_for(ptr as usize, LINE_CAP);
         assert!(
             hint.is_some(),

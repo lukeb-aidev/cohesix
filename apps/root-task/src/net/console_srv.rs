@@ -4,6 +4,7 @@
 
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, info, warn};
+use portable_atomic::{AtomicBool, Ordering};
 
 use super::{AUTH_TIMEOUT_MS, CONSOLE_QUEUE_DEPTH};
 use crate::console::proto::{render_ack, AckStatus, LineFormatError};
@@ -54,6 +55,56 @@ pub struct TcpConsoleServer {
 }
 
 impl TcpConsoleServer {
+    fn snapshot_queue_ptr<const N: usize>(
+        queue: &mut Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, N>,
+    ) -> Option<usize> {
+        if queue.is_full() {
+            return None;
+        }
+        let sample: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+        queue.push_back(sample).ok()?;
+        let ptr = queue.back().map(|line| line.as_bytes().as_ptr() as usize);
+        let _ = queue.pop_back();
+        ptr
+    }
+
+    pub fn log_buffer_addresses_once(&mut self, marker: &'static str) {
+        static LOGGED: AtomicBool = AtomicBool::new(false);
+        if LOGGED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let line_ptr = self.line_buffer.as_bytes().as_ptr() as usize;
+        info!(
+            target: "net-console",
+            "[net-console] addr marker={marker} label=line-buffer ptr=0x{line_ptr:016x} len=0x{len:04x}",
+            len = DEFAULT_LINE_CAPACITY,
+        );
+        if let Some(ptr) = Self::snapshot_queue_ptr(&mut self.inbound) {
+            info!(
+                target: "net-console",
+                "[net-console] addr marker={marker} label=inbound-queue ptr=0x{ptr:016x} len=0x{len:04x}",
+                len = DEFAULT_LINE_CAPACITY,
+            );
+        }
+        if let Some(ptr) = Self::snapshot_queue_ptr(&mut self.priority_outbound) {
+            info!(
+                target: "net-console",
+                "[net-console] addr marker={marker} label=priority-outbound ptr=0x{ptr:016x} len=0x{len:04x}",
+                len = DEFAULT_LINE_CAPACITY,
+            );
+        }
+        if let Some(ptr) = Self::snapshot_queue_ptr(&mut self.outbound) {
+            info!(
+                target: "net-console",
+                "[net-console] addr marker={marker} label=outbound ptr=0x{ptr:016x} len=0x{len:04x}",
+                len = DEFAULT_LINE_CAPACITY,
+            );
+        }
+    }
+
     fn set_state(&mut self, next: SessionState) {
         if self.state != next {
             info!("[cohsh-net][auth] state: {:?} -> {:?}", self.state, next);

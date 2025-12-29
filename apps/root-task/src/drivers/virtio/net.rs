@@ -26,6 +26,7 @@ use smoltcp::wire::EthernetAddress;
 #[cfg(test)]
 use spin::Mutex;
 
+use crate::debug::watched_write_bytes;
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::dma::{self, PinnedDmaRange};
 use crate::hal::{HalError, Hardware};
@@ -101,6 +102,8 @@ static DMA_ERROR_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_QMEM_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_RING_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static VQ_LAYOUT_LOGGED: AtomicBool = AtomicBool::new(false);
+static VQ_ADDRESS_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
+    [const { AtomicBool::new(false) }; VIRTIO_MMIO_SLOTS];
 static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
     [const { AtomicBool::new(false) }; VIRTIO_MMIO_SLOTS];
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
@@ -5689,7 +5692,12 @@ impl VirtQueue {
         };
 
         unsafe {
-            core::ptr::write_bytes(frame_ptr.as_ptr(), 0, frame_capacity);
+            watched_write_bytes(
+                frame_ptr.as_ptr(),
+                0,
+                frame_capacity,
+                "virtqueue.frame.zero",
+            );
         }
 
         if frame_capacity != page_bytes {
@@ -5788,6 +5796,25 @@ impl VirtQueue {
         let desc_end = layout.desc_offset + layout.desc_len;
         let avail_end = layout.avail_offset + layout.avail_len;
         let used_end = layout.used_offset + layout.used_len;
+
+        let desc_vaddr = base_vaddr.saturating_add(layout.desc_offset);
+        let avail_vaddr = base_vaddr.saturating_add(layout.avail_offset);
+        let used_vaddr = base_vaddr.saturating_add(layout.used_offset);
+        let addr_slot = (index as usize) % VIRTIO_MMIO_SLOTS;
+        if !VQ_ADDRESS_LOGGED[addr_slot].swap(true, AtomicOrdering::AcqRel) {
+            info!(
+                target: "net-console",
+                "[virtio-net][layout] addr queue={} base_vaddr=0x{base_vaddr:016x} base_paddr=0x{base_paddr:016x} desc=[0x{desc:016x} len=0x{desc_len:04x}] avail=[0x{avail:016x} len=0x{avail_len:04x}] used=[0x{used:016x} len=0x{used_len:04x}] total=0x{total:04x}",
+                index,
+                desc = desc_vaddr,
+                desc_len = layout.desc_len,
+                avail = avail_vaddr,
+                avail_len = layout.avail_len,
+                used = used_vaddr,
+                used_len = layout.used_len,
+                total = layout.total_len,
+            );
+        }
 
         if layout.desc_offset != 0 {
             error!(
