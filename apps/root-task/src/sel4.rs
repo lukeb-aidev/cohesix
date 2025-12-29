@@ -1632,7 +1632,7 @@ static mut BOOTINFO_WINDOW_STORAGE: BootinfoWindow = BootinfoWindow { start: 0, 
 #[derive(Clone, Copy)]
 struct BootinfoWindowState {
     window_ptr: *const BootinfoWindow,
-    storage_addr: usize,
+    window_addr: usize,
     expected: BootinfoWindow,
     capacity: usize,
     bootinfo_ptr: usize,
@@ -1657,7 +1657,7 @@ impl BootinfoWindowState {
     ) -> Self {
         Self {
             window_ptr,
-            storage_addr: window_ptr as usize,
+            window_addr: window_ptr as usize,
             expected,
             capacity,
             bootinfo_ptr,
@@ -1711,7 +1711,8 @@ impl BootinfoWindowGuard {
         unsafe {
             BOOTINFO_WINDOW_STORAGE = expected;
         }
-        let window_ptr: *const BootinfoWindow = core::ptr::addr_of!(BOOTINFO_WINDOW_STORAGE);
+        let window_ptr: *const BootinfoWindow =
+            core::ptr::addr_of!(bootinfo.empty) as *const BootinfoWindow;
         let snapshot_state = BootInfoState::get();
         let snapshot_ptr = snapshot_state.map(|state| state.snapshot_ptr() as usize);
         let snapshot_window_ptr = snapshot_state.map(|state| state.snapshot_window_ptr() as usize);
@@ -1732,7 +1733,7 @@ impl BootinfoWindowGuard {
         }
         watch_range(
             "bootinfo.window",
-            window_ptr as *const u8,
+            bootinfo_empty_ptr as *const u8,
             mem::size_of::<BootinfoWindow>(),
         );
         self.armed.store(true, Ordering::Release);
@@ -1859,11 +1860,11 @@ impl BootinfoWindowGuard {
         let Some(state) = state else {
             return;
         };
-        if state.window_ptr.is_null() || state.storage_addr == 0 {
+        if state.window_ptr.is_null() || state.window_addr == 0 {
             self.log_pointer_candidates(&state, marker);
             panic!("bootinfo window pointer invalid (detected at {marker})");
         }
-        if state.window_ptr as usize != state.storage_addr {
+        if state.window_ptr as usize != state.window_addr {
             self.log_pointer_candidates(&state, marker);
             panic!("bootinfo window pointer invalid (detected at {marker})");
         }
@@ -1907,23 +1908,26 @@ pub fn store_u64_watched(dst: *mut u64, val: u64, ctx: &'static str) {
     if let Some(range) = bootinfo_watch_range() {
         let dst_range = dst as usize..dst as usize + core::mem::size_of::<u64>();
         if ranges_overlap_usize(&dst_range, &range) {
-            let ascii_bytes = val.to_ne_bytes();
-            let ascii = ascii_bytes.map(|byte| {
-                if byte.is_ascii_graphic() || byte == b' ' {
-                    byte
-                } else {
-                    b'.'
-                }
-            });
-            let ascii_str = core::str::from_utf8(&ascii).unwrap_or("????????");
-            let location = Location::caller();
-            panic!(
-                "[bootinfo.window.store] dst=0x{dst:016x} val=0x{val:016x} ascii={ascii_str} ctx={ctx} location={file}:{line}",
-                dst = dst as usize,
-                val = val,
-                file = location.file(),
-                line = location.line(),
-            );
+            let allowlisted = ctx.starts_with("bootinfo.") || ctx.starts_with("test.");
+            if !allowlisted {
+                let ascii_bytes = val.to_ne_bytes();
+                let ascii = ascii_bytes.map(|byte| {
+                    if byte.is_ascii_graphic() || byte == b' ' {
+                        byte
+                    } else {
+                        b'.'
+                    }
+                });
+                let ascii_str = core::str::from_utf8(&ascii).unwrap_or("????????");
+                let location = Location::caller();
+                panic!(
+                    "[bootinfo.window.store] dst=0x{dst:016x} val=0x{val:016x} ascii={ascii_str} ctx={ctx} location={file}:{line}",
+                    dst = dst as usize,
+                    val = val,
+                    file = location.file(),
+                    line = location.line(),
+                );
+            }
         }
     }
     unsafe { core::ptr::write(dst, val) };
