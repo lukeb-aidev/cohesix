@@ -521,14 +521,19 @@ impl OutboundCoalescer {
     }
 
     fn commit_payload(&mut self, plan: &PlannedPayload, lane: OutboundLane) {
-        {
-            let queue = match lane {
-                OutboundLane::Control => &mut self.ctrl_q,
-                OutboundLane::Log => &mut self.log_q,
-            };
-            for _ in 0..plan.consumed_lines {
-                if let Some(slot_idx) = queue.pop_front() {
-                    self.release_slot(slot_idx);
+        match lane {
+            OutboundLane::Control => {
+                for _ in 0..plan.consumed_lines {
+                    if let Some(slot_idx) = self.ctrl_q.pop_front() {
+                        self.release_slot(slot_idx);
+                    }
+                }
+            }
+            OutboundLane::Log => {
+                for _ in 0..plan.consumed_lines {
+                    if let Some(slot_idx) = self.log_q.pop_front() {
+                        self.release_slot(slot_idx);
+                    }
                 }
             }
         }
