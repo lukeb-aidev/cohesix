@@ -19,6 +19,7 @@ use core::{
 };
 use spin::Mutex as SpinMutex;
 
+use crate::bootstrap::bootinfo_snapshot::{BootInfoState, BootinfoWindow};
 use crate::bootstrap::cspace_sys;
 use crate::bootstrap::ipcbuf_view::IpcBufView;
 #[cfg(feature = "kernel")]
@@ -1594,33 +1595,53 @@ const BOOTINFO_WINDOW_GUARD_ENABLED: bool = cfg!(any(
     feature = "net-console",
     feature = "net-diag"
 ));
+static mut BOOTINFO_WINDOW_STORAGE: BootinfoWindow = BootinfoWindow { start: 0, end: 0 };
 
 #[derive(Clone, Copy)]
 struct BootinfoWindowState {
-    region_ptr: *const sel4_sys::seL4_SlotRegion,
-    expected_start: seL4_CPtr,
-    expected_end: seL4_CPtr,
+    window_ptr: *const BootinfoWindow,
+    storage_addr: usize,
+    expected: BootinfoWindow,
     capacity: usize,
+    bootinfo_ptr: usize,
+    bootinfo_empty_ptr: usize,
+    snapshot_ptr: Option<usize>,
+    snapshot_window_ptr: Option<usize>,
+    snapshot_empty_ptr: Option<usize>,
     pre_canary: u64,
     post_canary: u64,
 }
 
 impl BootinfoWindowState {
-    fn new(region_ptr: *const sel4_sys::seL4_SlotRegion, capacity: usize) -> Self {
-        let region = unsafe { &*region_ptr };
+    fn new(
+        window_ptr: *const BootinfoWindow,
+        expected: BootinfoWindow,
+        capacity: usize,
+        bootinfo_ptr: usize,
+        bootinfo_empty_ptr: usize,
+        snapshot_ptr: Option<usize>,
+        snapshot_window_ptr: Option<usize>,
+        snapshot_empty_ptr: Option<usize>,
+    ) -> Self {
         Self {
-            region_ptr,
-            expected_start: region.start,
-            expected_end: region.end,
+            window_ptr,
+            storage_addr: window_ptr as usize,
+            expected,
             capacity,
+            bootinfo_ptr,
+            bootinfo_empty_ptr,
+            snapshot_ptr,
+            snapshot_window_ptr,
+            snapshot_empty_ptr,
             pre_canary: BOOTINFO_WINDOW_CANARY_PRE,
             post_canary: BOOTINFO_WINDOW_CANARY_POST,
         }
     }
 }
 
-// SAFETY: Bootinfo lives for the duration of the root task, and the referenced slot region
-// is only read to monitor for corruption, so sharing this pointer across threads is safe.
+// SAFETY: The bootinfo window state references a static BootinfoWindow storage region that
+// lives for the duration of the root task. The guard only reads this window snapshot, so
+// sharing the pointer across threads is safe.
 unsafe impl Send for BootinfoWindowState {}
 
 pub struct BootinfoWindowGuard {
@@ -1649,30 +1670,52 @@ impl BootinfoWindowGuard {
         let capacity = 1usize
             .checked_shl(bootinfo.init_cnode_bits() as u32)
             .unwrap_or(usize::MAX);
-        let region_ptr: *const sel4_sys::seL4_SlotRegion = &bootinfo.empty;
+        let expected = BootinfoWindow {
+            start: bootinfo.empty.start,
+            end: bootinfo.empty.end,
+        };
+        let bootinfo_ptr = bootinfo as *const _ as usize;
+        let bootinfo_empty_ptr = core::ptr::addr_of!(bootinfo.empty) as usize;
+        unsafe {
+            BOOTINFO_WINDOW_STORAGE = expected;
+        }
+        let window_ptr: *const BootinfoWindow =
+            unsafe { core::ptr::addr_of!(BOOTINFO_WINDOW_STORAGE) };
+        let snapshot_state = BootInfoState::get();
+        let snapshot_ptr = snapshot_state.map(|state| state.snapshot_ptr() as usize);
+        let snapshot_window_ptr = snapshot_state.map(|state| state.snapshot_window_ptr() as usize);
+        let snapshot_empty_ptr = snapshot_state.map(|state| state.snapshot_empty_ptr() as usize);
         let mut slot = self.state.lock();
-        *slot = Some(BootinfoWindowState::new(region_ptr, capacity));
+        *slot = Some(BootinfoWindowState::new(
+            window_ptr,
+            expected,
+            capacity,
+            bootinfo_ptr,
+            bootinfo_empty_ptr,
+            snapshot_ptr,
+            snapshot_window_ptr,
+            snapshot_empty_ptr,
+        ));
+        if let Some(state) = slot.as_ref() {
+            self.log_pointer_candidates(state, "arm");
+        }
         watch_range(
             "bootinfo.window",
-            region_ptr as *const u8,
-            mem::size_of::<sel4_sys::seL4_SlotRegion>(),
+            window_ptr as *const u8,
+            mem::size_of::<BootinfoWindow>(),
         );
         self.armed.store(true, Ordering::Release);
     }
 
     pub fn watched_region(&self) -> Option<(*const u8, usize)> {
         let slot = self.state.lock();
-        slot.as_ref().map(|state| {
-            (
-                state.region_ptr.cast(),
-                mem::size_of::<sel4_sys::seL4_SlotRegion>(),
-            )
-        })
+        slot.as_ref()
+            .map(|state| (state.window_ptr.cast(), mem::size_of::<BootinfoWindow>()))
     }
 
-    fn hexdump_slot_region(&self, ptr: *const sel4_sys::seL4_SlotRegion) -> HeaplessString<192> {
+    fn hexdump_window(&self, ptr: *const BootinfoWindow) -> HeaplessString<192> {
         let mut line = HeaplessString::<192>::new();
-        let dump_len = mem::size_of::<sel4_sys::seL4_SlotRegion>().min(32);
+        let dump_len = mem::size_of::<BootinfoWindow>().min(32);
         let bytes = unsafe { core::slice::from_raw_parts(ptr as *const u8, dump_len) };
         for byte in bytes {
             if write!(&mut line, "{byte:02x}").is_err() {
@@ -1682,6 +1725,56 @@ impl BootinfoWindowGuard {
         line
     }
 
+    fn log_pointer_candidates(&self, state: &BootinfoWindowState, marker: &'static str) {
+        let observed = if state.window_ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { &*state.window_ptr })
+        };
+        let mut line = HeaplessString::<320>::new();
+        let _ = write!(
+            &mut line,
+            "[bootinfo.window.pointers] marker={marker} bootinfo=0x{bootinfo:016x} bootinfo.empty=0x{empty:016x} guard.window=0x{window:016x} expected=[0x{start:04x}..0x{end:04x}) capacity=0x{cap:04x}",
+            bootinfo = state.bootinfo_ptr,
+            empty = state.bootinfo_empty_ptr,
+            window = state.window_ptr as usize,
+            start = state.expected.start,
+            end = state.expected.end,
+            cap = state.capacity
+        );
+        if let Some(observed_window) = observed {
+            let _ = write!(
+                &mut line,
+                " observed=[0x{obs_start:04x}..0x{obs_end:04x})",
+                obs_start = observed_window.start,
+                obs_end = observed_window.end
+            );
+        }
+        if let Some(snapshot_ptr) = state.snapshot_ptr {
+            let _ = write!(
+                &mut line,
+                " snapshot=0x{snapshot:016x}",
+                snapshot = snapshot_ptr
+            );
+        }
+        if let Some(snapshot_window_ptr) = state.snapshot_window_ptr {
+            let _ = write!(
+                &mut line,
+                " snapshot.window=0x{ptr:016x}",
+                ptr = snapshot_window_ptr
+            );
+        }
+        if let Some(snapshot_empty_ptr) = state.snapshot_empty_ptr {
+            let _ = write!(
+                &mut line,
+                " snapshot.empty=0x{ptr:016x}",
+                ptr = snapshot_empty_ptr
+            );
+        }
+        boot_log::force_uart_line(line.as_str());
+        log::info!("{}", line.as_str());
+    }
+
     fn log_forensics(
         &self,
         state: &BootinfoWindowState,
@@ -1689,6 +1782,7 @@ impl BootinfoWindowGuard {
         end: seL4_CPtr,
         marker: &'static str,
     ) {
+        self.log_pointer_candidates(state, marker);
         if self
             .reported
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -1697,20 +1791,22 @@ impl BootinfoWindowGuard {
             return;
         }
 
-        let hexdump = self.hexdump_slot_region(state.region_ptr);
+        let hexdump = self.hexdump_window(state.window_ptr);
         let mut line = HeaplessString::<256>::new();
         let _ = write!(
             &mut line,
-            "[bootinfo.window.guard] marker={marker} ptr=0x{ptr:016x} start=0x{start:04x} end=0x{end:04x} canary_pre=0x{pre:016x} canary_post=0x{post:016x} bytes=",
-            ptr = state.region_ptr as usize,
+            "[bootinfo.window.guard] marker={marker} ptr=0x{ptr:016x} start=0x{start:04x} end=0x{end:04x} expected_start=0x{exp_start:04x} expected_end=0x{exp_end:04x} capacity=0x{cap:04x} canary_pre=0x{pre:016x} canary_post=0x{post:016x} bytes=",
+            ptr = state.window_ptr as usize,
+            exp_start = state.expected.start,
+            exp_end = state.expected.end,
+            cap = state.capacity,
             pre = state.pre_canary,
             post = state.post_canary,
         );
         let _ = write!(&mut line, "{hexdump}");
-        if let Some(hint) = watch_hint_for(
-            state.region_ptr as usize,
-            mem::size_of::<sel4_sys::seL4_SlotRegion>(),
-        ) {
+        if let Some(hint) =
+            watch_hint_for(state.window_ptr as usize, mem::size_of::<BootinfoWindow>())
+        {
             if let Some(context) = hint.context {
                 let _ = write!(&mut line, " nearest_writer={context}");
                 if let (Some(file), Some(line_no)) = (hint.location_file, hint.location_line) {
@@ -1732,16 +1828,28 @@ impl BootinfoWindowGuard {
         let Some(state) = state else {
             return;
         };
-        let slot_region = unsafe { &*state.region_ptr };
-        let start = slot_region.start;
-        let end = slot_region.end;
-        let start_end_valid = start < end && end as usize <= state.capacity;
-        let start_end_expected =
-            start == state.expected_start && end == state.expected_end && start_end_valid;
+        if state.window_ptr.is_null() || state.storage_addr == 0 {
+            self.log_pointer_candidates(&state, marker);
+            panic!("bootinfo window pointer invalid (detected at {marker})");
+        }
+        if state.window_ptr as usize != state.storage_addr {
+            self.log_pointer_candidates(&state, marker);
+            panic!("bootinfo window pointer invalid (detected at {marker})");
+        }
+        let window = unsafe { &*state.window_ptr };
+        let start = window.start;
+        let end = window.end;
+        let start_end_valid =
+            start <= end && start >= state.expected.start && (end as usize) <= state.capacity;
+        let start_end_expected = start == state.expected.start && end == state.expected.end;
         let canaries_ok = state.pre_canary == BOOTINFO_WINDOW_CANARY_PRE
             && state.post_canary == BOOTINFO_WINDOW_CANARY_POST;
-        if start_end_expected && canaries_ok {
+        if start_end_expected && start_end_valid && canaries_ok {
             return;
+        }
+        if !start_end_valid {
+            self.log_forensics(&state, start, end, marker);
+            panic!("bootinfo window range invalid (detected at {marker})");
         }
 
         self.log_forensics(&state, start, end, marker);
