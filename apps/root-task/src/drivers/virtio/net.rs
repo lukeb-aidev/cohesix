@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Virtio MMIO network device driver for the root task, including TX/RX queue management and invariants.
 //! Virtio MMIO network device driver used by the root task.
 //!
 //! Virtio MMIO network device driver used by the root task on the ARM `virt`
@@ -172,6 +173,7 @@ struct TxHeadManager {
     free: HeaplessVec<u16, TX_QUEUE_SIZE>,
     entries: [TxHeadEntry; TX_QUEUE_SIZE],
     published_slots: [Option<(u16, u32)>; TX_QUEUE_SIZE],
+    in_avail: [bool; TX_QUEUE_SIZE],
     next_gen: u32,
     size: u16,
 }
@@ -186,6 +188,7 @@ impl TxHeadManager {
             free,
             entries: [TxHeadEntry::default(); TX_QUEUE_SIZE],
             published_slots: [None; TX_QUEUE_SIZE],
+            in_avail: [false; TX_QUEUE_SIZE],
             next_gen: 1,
             size,
         }
@@ -250,6 +253,16 @@ impl TxHeadManager {
         {
             return Err(TxHeadError::SlotBusy);
         }
+        if self.in_avail.get(id as usize).copied().unwrap_or(false) {
+            debug_assert!(
+                false,
+                "tx head already tracked in avail: id={} slot={} state={:?}",
+                id,
+                slot,
+                entry.state
+            );
+            return Err(TxHeadError::InvalidState);
+        }
         let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
         let gen = match entry.state {
             TxHeadState::Prepared { gen } => gen,
@@ -266,12 +279,24 @@ impl TxHeadManager {
         entry.last_len = len;
         entry.last_addr = addr;
         self.published_slots[slot as usize] = Some((id, gen));
+        if let Some(flag) = self.in_avail.get_mut(id as usize) {
+            *flag = true;
+        }
         Ok(gen)
     }
 
     fn mark_in_flight(&mut self, id: u16) -> Result<(u16, u32), TxHeadError> {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
+        }
+        if self.in_avail.get(id as usize).copied().unwrap_or(false) {
+            debug_assert!(
+                false,
+                "tx head already present in avail: id={} state={:?}",
+                id,
+                self.state(id)
+            );
+            return Err(TxHeadError::InvalidState);
         }
         let (slot, gen) = {
             let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
@@ -285,6 +310,16 @@ impl TxHeadManager {
         }
         let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
         entry.state = TxHeadState::InFlight { slot, gen };
+        if !self.in_avail.get(id as usize).copied().unwrap_or(false) {
+            debug_assert!(
+                false,
+                "tx head not marked in avail on inflight transition: id={} slot={} gen={}",
+                id,
+                slot,
+                gen
+            );
+            return Err(TxHeadError::InvalidState);
+        }
         Ok((slot, gen))
     }
 
@@ -300,7 +335,6 @@ impl TxHeadManager {
             let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
             match entry.state {
                 TxHeadState::InFlight { slot, gen } => (slot, gen),
-                TxHeadState::Published { slot, gen } => (slot, gen),
                 _ => return Err(TxHeadError::InvalidState),
             }
         };
@@ -312,12 +346,25 @@ impl TxHeadManager {
         if self.published_for_slot(slot) != Some((id, gen)) {
             return Err(TxHeadError::InvalidState);
         }
+        if !self.in_avail.get(id as usize).copied().unwrap_or(false) {
+            debug_assert!(
+                false,
+                "tx head completion without avail presence: id={} slot={} gen={}",
+                id,
+                slot,
+                gen
+            );
+            return Err(TxHeadError::InvalidState);
+        }
         let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
         entry.state = TxHeadState::Completed { gen };
         if let Some(slot_entry) = self.published_slots.get_mut(slot as usize) {
             if matches!(slot_entry, Some((head, g)) if *head == id && *g == gen) {
                 *slot_entry = None;
             }
+        }
+        if let Some(flag) = self.in_avail.get_mut(id as usize) {
+            *flag = false;
         }
         Ok((slot, gen))
     }
@@ -328,6 +375,15 @@ impl TxHeadManager {
         }
         let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
         if !matches!(entry.state, TxHeadState::Completed { .. }) {
+            return Err(TxHeadError::InvalidState);
+        }
+        if self.in_avail.get(id as usize).copied().unwrap_or(false) {
+            debug_assert!(
+                false,
+                "tx head reclaim while still marked in avail: id={} state={:?}",
+                id,
+                entry.state
+            );
             return Err(TxHeadError::InvalidState);
         }
         entry.state = TxHeadState::Free;
@@ -350,6 +406,9 @@ impl TxHeadManager {
         self.clear_slot(slot);
         let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
         entry.state = TxHeadState::Prepared { gen: next };
+        if let Some(flag) = self.in_avail.get_mut(id as usize) {
+            *flag = false;
+        }
         Ok(())
     }
 
@@ -358,6 +417,15 @@ impl TxHeadManager {
             return Err(TxHeadError::OutOfRange);
         }
         let state = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
+        if self.in_avail.get(id as usize).copied().unwrap_or(false) {
+            debug_assert!(
+                false,
+                "tx head release while still marked in avail: id={} state={:?}",
+                id,
+                state.state
+            );
+            return Err(TxHeadError::InvalidState);
+        }
         if !matches!(state.state, TxHeadState::Prepared { .. }) {
             debug_assert!(
                 false,
@@ -430,6 +498,10 @@ impl TxHeadManager {
                 | TxHeadState::Completed { gen } => Some(gen),
                 TxHeadState::Free => None,
             })
+    }
+
+    fn in_avail(&self, id: u16) -> bool {
+        self.in_avail.get(id as usize).copied().unwrap_or(false)
     }
 }
 
@@ -2585,10 +2657,11 @@ impl VirtioNet {
             header_len,
             payload_len,
         )?;
+        #[cfg(debug_assertions)]
+        self.debug_assert_tx_publish_ready(head_id, publish_slot);
         let (slot, avail_idx, old_idx) = match self.tx_queue.push_avail(head_id) {
             Ok(result) => result,
             Err(_) => {
-                let _ = self.tx_head_mgr.cancel_publish(head_id);
                 self.device_faulted = true;
                 self.last_error.get_or_insert("tx_avail_write_failed");
                 self.tx_state_violation("tx_avail_write_failed", head_id, Some(publish_slot))?;
@@ -3771,6 +3844,8 @@ impl VirtioNet {
         // Ensure descriptor writes and cache maintenance complete before exposing the head to the
         // device via the avail ring.
         virtq_publish_barrier();
+        #[cfg(debug_assertions)]
+        self.debug_assert_tx_publish_ready(id, publish_slot);
         match self.tx_queue.push_avail(id) {
             Ok((slot, avail_idx, old_idx)) => {
                 if slot != publish_slot {
@@ -3824,7 +3899,6 @@ impl VirtioNet {
                 }
             }
             Err(_) => {
-                let _ = self.tx_head_mgr.cancel_publish(id);
                 self.device_faulted = true;
                 self.last_error.get_or_insert("tx_v2_avail_write_failed");
                 self.release_tx_head(id, "tx_v2_avail_write_failed");
@@ -3954,6 +4028,34 @@ impl VirtioNet {
                 "tx_desc_readback_mismatch",
             );
         }
+    }
+
+    #[cfg(debug_assertions)]
+    fn debug_assert_tx_publish_ready(&self, head_id: u16, slot: u16) {
+        let state = self.tx_head_mgr.state(head_id);
+        debug_assert!(
+            matches!(state, Some(TxHeadState::Published { slot: s, .. }) if s == slot),
+            "tx publish state mismatch: head={} slot={} state={state:?}",
+            head_id,
+            slot,
+        );
+        debug_assert!(
+            self.tx_head_mgr.in_avail(head_id),
+            "tx head not marked in avail before publish: head={} slot={}",
+            head_id,
+            slot
+        );
+        let desc = self.tx_queue.read_descriptor(head_id);
+        debug_assert_ne!(
+            desc.addr, 0,
+            "tx publish descriptor addr zero: head={} slot={}",
+            head_id, slot
+        );
+        debug_assert_ne!(
+            desc.len, 0,
+            "tx publish descriptor len zero: head={} slot={}",
+            head_id, slot
+        );
     }
 
     #[cfg(debug_assertions)]
@@ -6270,6 +6372,27 @@ mod tx_tests {
             "zero written length must not produce a publishable descriptor"
         );
         assert_eq!(requested, 66, "requested length is not used for publishing");
+    }
+
+    #[test]
+    fn tx_completion_requires_inflight() {
+        let mut mgr = TxHeadManager::new(1);
+        let head = mgr.alloc_head().expect("head available");
+        let gen = mgr
+            .mark_published(head, 0, 64, 0x1000)
+            .expect("publish");
+        assert!(
+            mgr.mark_completed(head, Some(gen)).is_err(),
+            "completion must fail when head is not in-flight"
+        );
+        assert!(
+            mgr.reclaim_head(head).is_err(),
+            "head remains unavailable until a used entry is observed"
+        );
+        assert!(
+            matches!(mgr.state(head), Some(TxHeadState::Published { .. })),
+            "state remains published after failed completion"
+        );
     }
 
     static OP_LOG: Mutex<HeaplessVec<(CacheOp, usize, usize), 8>> = Mutex::new(HeaplessVec::new());
