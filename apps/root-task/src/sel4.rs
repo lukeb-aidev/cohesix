@@ -26,8 +26,8 @@ use crate::bootstrap::ktry;
 use crate::bootstrap::log as boot_log;
 use crate::bootstrap::sel4_guard;
 use crate::bootstrap::DevicePtPoolConfig;
-use crate::debug_uart::debug_uart_str;
 use crate::debug::{watch_hint_for, watch_range};
+use crate::debug_uart::debug_uart_str;
 use crate::sel4_view;
 use crate::serial;
 #[cfg(all(test, not(feature = "kernel")))]
@@ -1619,6 +1619,10 @@ impl BootinfoWindowState {
     }
 }
 
+// SAFETY: Bootinfo lives for the duration of the root task, and the referenced slot region
+// is only read to monitor for corruption, so sharing this pointer across threads is safe.
+unsafe impl Send for BootinfoWindowState {}
+
 pub struct BootinfoWindowGuard {
     state: SpinMutex<Option<BootinfoWindowState>>,
     armed: AtomicBool,
@@ -1638,7 +1642,7 @@ impl BootinfoWindowGuard {
         BOOTINFO_WINDOW_GUARD_ENABLED
     }
 
-    pub fn arm(&self, bootinfo: &'static seL4_BootInfo) {
+    pub fn arm(&self, bootinfo: &seL4_BootInfo) {
         if !self.enabled() {
             return;
         }
@@ -1646,9 +1650,8 @@ impl BootinfoWindowGuard {
             .checked_shl(bootinfo.init_cnode_bits() as u32)
             .unwrap_or(usize::MAX);
         let region_ptr: *const sel4_sys::seL4_SlotRegion = &bootinfo.empty;
-        if let Ok(mut slot) = self.state.lock() {
-            *slot = Some(BootinfoWindowState::new(region_ptr, capacity));
-        }
+        let mut slot = self.state.lock();
+        *slot = Some(BootinfoWindowState::new(region_ptr, capacity));
         watch_range(
             "bootinfo.empty",
             region_ptr as *const u8,
@@ -1694,9 +1697,10 @@ impl BootinfoWindowGuard {
             post = state.post_canary,
         );
         let _ = write!(&mut line, "{hexdump}");
-        if let Some((label, context)) =
-            watch_hint_for(state.region_ptr as usize, mem::size_of::<sel4_sys::seL4_SlotRegion>())
-        {
+        if let Some((label, context)) = watch_hint_for(
+            state.region_ptr as usize,
+            mem::size_of::<sel4_sys::seL4_SlotRegion>(),
+        ) {
             let _ = write!(&mut line, " nearest_writer={label}:{context}");
         }
         boot_log::force_uart_line(line.as_str());
@@ -1707,13 +1711,7 @@ impl BootinfoWindowGuard {
         if !self.enabled() || !self.armed.load(Ordering::Acquire) {
             return;
         }
-        let state = {
-            if let Ok(slot) = self.state.lock() {
-                slot.clone()
-            } else {
-                None
-            }
-        };
+        let state = { self.state.lock().clone() };
         let Some(state) = state else {
             return;
         };
