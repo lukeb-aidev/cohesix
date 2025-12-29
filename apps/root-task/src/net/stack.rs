@@ -19,7 +19,7 @@
 
 use core::fmt::{self, Write as FmtWrite};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
-use log::{debug, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use portable_atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use smoltcp::config::IFACE_NEIGHBOR_CACHE_COUNT;
 use smoltcp::iface::{
