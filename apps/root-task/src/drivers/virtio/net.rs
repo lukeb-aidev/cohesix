@@ -254,12 +254,13 @@ impl TxHeadManager {
             return Err(TxHeadError::SlotBusy);
         }
         if self.in_avail.get(id as usize).copied().unwrap_or(false) {
+            let state = self.state(id);
             debug_assert!(
                 false,
                 "tx head already tracked in avail: id={} slot={} state={:?}",
                 id,
                 slot,
-                entry.state
+                state
             );
             return Err(TxHeadError::InvalidState);
         }
@@ -373,17 +374,18 @@ impl TxHeadManager {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
-        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        if !matches!(entry.state, TxHeadState::Completed { .. }) {
-            return Err(TxHeadError::InvalidState);
-        }
         if self.in_avail.get(id as usize).copied().unwrap_or(false) {
+            let state = self.state(id);
             debug_assert!(
                 false,
                 "tx head reclaim while still marked in avail: id={} state={:?}",
                 id,
-                entry.state
+                state
             );
+            return Err(TxHeadError::InvalidState);
+        }
+        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
+        if !matches!(entry.state, TxHeadState::Completed { .. }) {
             return Err(TxHeadError::InvalidState);
         }
         entry.state = TxHeadState::Free;
@@ -416,16 +418,17 @@ impl TxHeadManager {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
-        let state = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
         if self.in_avail.get(id as usize).copied().unwrap_or(false) {
+            let state = self.state(id);
             debug_assert!(
                 false,
                 "tx head release while still marked in avail: id={} state={:?}",
                 id,
-                state.state
+                state
             );
             return Err(TxHeadError::InvalidState);
         }
+        let state = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
         if !matches!(state.state, TxHeadState::Prepared { .. }) {
             debug_assert!(
                 false,
