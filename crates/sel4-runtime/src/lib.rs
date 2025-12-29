@@ -17,8 +17,10 @@ struct TlsBaseCell;
 static mut __tls_base: TlsBaseCell = TlsBaseCell;
 
 // Increased to accommodate the large bootstrap stack frame in the root-task
-// without spilling into unmapped memory during early bring-up.
-const STACK_BYTES: usize = 64 * 1024;
+// without spilling into unmapped memory during early bring-up. Keep this in
+// sync with `__stack_size` in `apps/root-task/sel4.ld` to avoid future stack
+// overruns.
+const STACK_BYTES: usize = 256 * 1024;
 
 #[allow(dead_code)]
 #[repr(align(16))]
