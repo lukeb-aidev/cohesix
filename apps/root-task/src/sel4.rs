@@ -17,7 +17,6 @@ use core::{
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-#[cfg(all(test, not(feature = "kernel")))]
 use spin::Mutex as SpinMutex;
 
 use crate::bootstrap::cspace_sys;
@@ -28,6 +27,7 @@ use crate::bootstrap::log as boot_log;
 use crate::bootstrap::sel4_guard;
 use crate::bootstrap::DevicePtPoolConfig;
 use crate::debug_uart::debug_uart_str;
+use crate::debug::{watch_hint_for, watch_range};
 use crate::sel4_view;
 use crate::serial;
 #[cfg(all(test, not(feature = "kernel")))]
@@ -1587,6 +1587,155 @@ pub fn bootinfo_debug_dump(view: &BootInfoView) {
     debug_assert!(init_bits > 0, "BootInfo initBits is 0 — capacity invalid");
 }
 
+const BOOTINFO_WINDOW_CANARY_PRE: u64 = 0xd00d_f00d_5a5a_cafe;
+const BOOTINFO_WINDOW_CANARY_POST: u64 = 0xface_feed_beef_c0de;
+const BOOTINFO_WINDOW_GUARD_ENABLED: bool = cfg!(any(
+    debug_assertions,
+    feature = "net-console",
+    feature = "net-diag"
+));
+
+#[derive(Clone, Copy)]
+struct BootinfoWindowState {
+    region_ptr: *const sel4_sys::seL4_SlotRegion,
+    expected_start: seL4_CPtr,
+    expected_end: seL4_CPtr,
+    capacity: usize,
+    pre_canary: u64,
+    post_canary: u64,
+}
+
+impl BootinfoWindowState {
+    fn new(region_ptr: *const sel4_sys::seL4_SlotRegion, capacity: usize) -> Self {
+        let region = unsafe { &*region_ptr };
+        Self {
+            region_ptr,
+            expected_start: region.start,
+            expected_end: region.end,
+            capacity,
+            pre_canary: BOOTINFO_WINDOW_CANARY_PRE,
+            post_canary: BOOTINFO_WINDOW_CANARY_POST,
+        }
+    }
+}
+
+pub struct BootinfoWindowGuard {
+    state: SpinMutex<Option<BootinfoWindowState>>,
+    armed: AtomicBool,
+    reported: AtomicBool,
+}
+
+impl BootinfoWindowGuard {
+    pub const fn new() -> Self {
+        Self {
+            state: SpinMutex::new(None),
+            armed: AtomicBool::new(false),
+            reported: AtomicBool::new(false),
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        BOOTINFO_WINDOW_GUARD_ENABLED
+    }
+
+    pub fn arm(&self, bootinfo: &'static seL4_BootInfo) {
+        if !self.enabled() {
+            return;
+        }
+        let capacity = 1usize
+            .checked_shl(bootinfo.init_cnode_bits() as u32)
+            .unwrap_or(usize::MAX);
+        let region_ptr: *const sel4_sys::seL4_SlotRegion = &bootinfo.empty;
+        if let Ok(mut slot) = self.state.lock() {
+            *slot = Some(BootinfoWindowState::new(region_ptr, capacity));
+        }
+        watch_range(
+            "bootinfo.empty",
+            region_ptr as *const u8,
+            mem::size_of::<sel4_sys::seL4_SlotRegion>(),
+        );
+        self.armed.store(true, Ordering::Release);
+    }
+
+    fn hexdump_slot_region(&self, ptr: *const sel4_sys::seL4_SlotRegion) -> HeaplessString<192> {
+        let mut line = HeaplessString::<192>::new();
+        let dump_len = mem::size_of::<sel4_sys::seL4_SlotRegion>().min(32);
+        let bytes = unsafe { core::slice::from_raw_parts(ptr as *const u8, dump_len) };
+        for byte in bytes {
+            if write!(&mut line, "{byte:02x}").is_err() {
+                break;
+            }
+        }
+        line
+    }
+
+    fn log_forensics(
+        &self,
+        state: &BootinfoWindowState,
+        start: seL4_CPtr,
+        end: seL4_CPtr,
+        marker: &'static str,
+    ) {
+        if self
+            .reported
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        let hexdump = self.hexdump_slot_region(state.region_ptr);
+        let mut line = HeaplessString::<256>::new();
+        let _ = write!(
+            &mut line,
+            "[bootinfo.window.guard] marker={marker} ptr=0x{ptr:016x} start=0x{start:04x} end=0x{end:04x} canary_pre=0x{pre:016x} canary_post=0x{post:016x} bytes=",
+            ptr = state.region_ptr as usize,
+            pre = state.pre_canary,
+            post = state.post_canary,
+        );
+        let _ = write!(&mut line, "{hexdump}");
+        if let Some((label, context)) =
+            watch_hint_for(state.region_ptr as usize, mem::size_of::<sel4_sys::seL4_SlotRegion>())
+        {
+            let _ = write!(&mut line, " nearest_writer={label}:{context}");
+        }
+        boot_log::force_uart_line(line.as_str());
+        log::error!("{}", line.as_str());
+    }
+
+    pub fn check(&self, marker: &'static str) {
+        if !self.enabled() || !self.armed.load(Ordering::Acquire) {
+            return;
+        }
+        let state = {
+            if let Ok(slot) = self.state.lock() {
+                slot.clone()
+            } else {
+                None
+            }
+        };
+        let Some(state) = state else {
+            return;
+        };
+        let slot_region = unsafe { &*state.region_ptr };
+        let start = slot_region.start;
+        let end = slot_region.end;
+        let start_end_valid = start < end && end as usize <= state.capacity;
+        let start_end_expected =
+            start == state.expected_start && end == state.expected_end && start_end_valid;
+        let canaries_ok = state.pre_canary == BOOTINFO_WINDOW_CANARY_PRE
+            && state.post_canary == BOOTINFO_WINDOW_CANARY_POST;
+        if start_end_expected && canaries_ok {
+            return;
+        }
+
+        self.log_forensics(&state, start, end, marker);
+        panic!("bootinfo window corrupted (detected at {marker})");
+    }
+}
+
+pub static BOOTINFO_WINDOW_GUARD: BootinfoWindowGuard = BootinfoWindowGuard::new();
+
 pub const PAGE_BITS: usize = 12;
 pub const PAGE_TABLE_BITS: usize = 12;
 const PAGE_SIZE: usize = 1 << PAGE_BITS;
@@ -2596,6 +2745,7 @@ impl<'a> KernelEnv<'a> {
             bootinfo.empty,
             root_cnode_bits as seL4_Word,
         );
+        BOOTINFO_WINDOW_GUARD.arm(bootinfo);
         let pool_index = device_pt_pool.as_ref().map(|pool| pool.index);
         if let Some(pool) = device_pt_pool.as_ref() {
             let remaining_tables = pool.remaining_tables();
@@ -2736,6 +2886,7 @@ impl<'a> KernelEnv<'a> {
 
     /// Allocates a new CSpace slot, panicking if the root CNode is exhausted.
     pub fn allocate_slot(&mut self) -> seL4_CPtr {
+        BOOTINFO_WINDOW_GUARD.check("allocate_slot");
         let slot = self
             .slots
             .alloc()
@@ -2972,6 +3123,7 @@ impl<'a> KernelEnv<'a> {
         &mut self,
         attr: sel4_sys::seL4_ARM_VMAttributes,
     ) -> Result<RamFrame, seL4_Error> {
+        BOOTINFO_WINDOW_GUARD.check("alloc_dma_frame_attr");
         let reserved = self
             .untyped
             .reserve_ram(PAGE_BITS as u8)
@@ -4270,5 +4422,27 @@ mod tests {
             env.sanitise_retype_trace(mismatch);
         }));
         assert!(mismatch_check.is_err());
+    }
+
+    #[test]
+    fn bootinfo_window_guard_rejects_ascii_like_bounds() {
+        use std::panic::{self, AssertUnwindSafe};
+
+        crate::debug::clear_watches();
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.empty = seL4_SlotRegion {
+            start: 0x100,
+            end: 0x200,
+        };
+        bootinfo.initThreadCNodeSizeBits = 13;
+        let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
+        let guard = BootinfoWindowGuard::new();
+        guard.arm(bootinfo_ref);
+        bootinfo_ref.empty.start = 0x5b205d74656e3a3a;
+        bootinfo_ref.empty.end = 0x736e6f632d74656e;
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            guard.check("test.marker");
+        }));
+        assert!(result.is_err(), "guard must panic on window corruption");
     }
 }

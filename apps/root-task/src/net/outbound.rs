@@ -5,6 +5,7 @@ use core::cmp::min;
 
 use heapless::{Deque, Vec as HeaplessVec};
 
+use crate::debug::maybe_report_str_write;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 
 pub const MAX_PAYLOAD: usize = 1200;
@@ -79,10 +80,24 @@ impl LineBuf {
         } else {
             copy_len
         };
+        let _ = maybe_report_str_write(
+            self.buf.as_mut_ptr(),
+            head_len,
+            line.as_ptr(),
+            line.len(),
+            "linebuf.store.head",
+        );
         self.buf[..head_len].copy_from_slice(&line[..head_len]);
         let mut written = head_len;
         if truncated && written < LINE_CAP {
             let suffix_len = min(TRUNCATION_SUFFIX.len(), LINE_CAP.saturating_sub(written));
+            let _ = maybe_report_str_write(
+                self.buf[written..].as_mut_ptr(),
+                suffix_len,
+                TRUNCATION_SUFFIX.as_ptr(),
+                suffix_len,
+                "linebuf.store.suffix",
+            );
             self.buf[written..written + suffix_len]
                 .copy_from_slice(&TRUNCATION_SUFFIX[..suffix_len]);
             written = written.saturating_add(suffix_len);
@@ -351,8 +366,24 @@ struct PlannedPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::debug::{clear_watches, watch_hint_for, watch_range};
 
     const LOG_LINE: &[u8] = b"line";
+
+    #[test]
+    fn linebuf_store_reports_overlap() {
+        clear_watches();
+        let mut buf = LineBuf::new();
+        let ptr = buf.buf.as_mut_ptr();
+        watch_range("linebuf", ptr as *const u8, LINE_CAP);
+        let payload = [b'x'; LINE_CAP + 8];
+        buf.store(&payload);
+        let hint = watch_hint_for(ptr as usize, LINE_CAP);
+        assert!(
+            hint.is_some(),
+            "watcher should record overlap during line buffer store"
+        );
+    }
 
     #[test]
     fn coalesces_multiple_lines() {

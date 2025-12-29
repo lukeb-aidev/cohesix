@@ -47,6 +47,7 @@ use super::{
     DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG, NET_STAGE,
 };
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
+use crate::debug::maybe_report_str_write;
 #[cfg(not(feature = "net-backend-virtio"))]
 use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
 #[cfg(feature = "net-backend-virtio")]
@@ -54,6 +55,7 @@ use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNetSta
 use crate::hal::{HalError, Hardware};
 use crate::readiness;
 use crate::serial::DEFAULT_LINE_CAPACITY;
+use crate::sel4::BOOTINFO_WINDOW_GUARD;
 use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR};
 use spin::Mutex;
 
@@ -1450,6 +1452,13 @@ impl<D: NetDevice> NetStack<D> {
         let mut prefix = [0u8; PREFIX_CAP];
         let prefix_len = payload.len().min(PREFIX_CAP);
         if prefix_len > 0 {
+            let _ = maybe_report_str_write(
+                prefix.as_mut_ptr(),
+                prefix_len,
+                payload.as_ptr(),
+                prefix_len,
+                "trace_conn_prefix",
+            );
             prefix[..prefix_len].copy_from_slice(&payload[..prefix_len]);
         }
         debug_assert!(prefix_len <= PREFIX_CAP);
@@ -1707,19 +1716,23 @@ impl<D: NetDevice> NetStack<D> {
                 tx_only: false,
             },
         };
+        BOOTINFO_WINDOW_GUARD.check("net.init.device.pre");
         let mut device = D::create_with_stage(hal, stage)?;
+        BOOTINFO_WINDOW_GUARD.check("net.init.device.post");
         let mac = device.mac();
         info!("[net-console] {backend_label} device online: mac={mac}");
 
         let attempt = *init_guard.attempt();
         log_bootinfo_mark("net.init.device", &attempt)?;
 
+        BOOTINFO_WINDOW_GUARD.check("net.init.storage.pre");
         log_storage_addresses_once("net.init.reservation");
         let reservation = StorageReservation::acquire::<D::Error>(
             stage_policy.allow_selftest,
             &attempt,
             attempt.tag,
         )?;
+        BOOTINFO_WINDOW_GUARD.check("net.init.storage.post");
 
         let init_now_ms = crate::hal::timebase().now_ms();
         debug!("[net-console] init: timebase.now_ms={init_now_ms}");
@@ -2408,9 +2421,23 @@ impl<D: NetDevice> NetStack<D> {
                     let endpoint = meta.endpoint;
                     let mut reply = [0u8; UDP_PAYLOAD_CAPACITY];
                     let prefix = b"ECHO:";
+                    let _ = maybe_report_str_write(
+                        reply.as_mut_ptr(),
+                        prefix.len(),
+                        prefix.as_ptr(),
+                        prefix.len(),
+                        "udp_echo.prefix",
+                    );
                     reply[..prefix.len()].copy_from_slice(prefix);
                     let copy_len =
                         core::cmp::min(payload.len(), reply.len().saturating_sub(prefix.len()));
+                    let _ = maybe_report_str_write(
+                        reply[prefix.len()..].as_mut_ptr(),
+                        copy_len,
+                        payload.as_ptr(),
+                        copy_len,
+                        "udp_echo.payload",
+                    );
                     reply[prefix.len()..prefix.len() + copy_len]
                         .copy_from_slice(&payload[..copy_len]);
                     let reply_len = prefix.len() + copy_len;
@@ -2483,6 +2510,13 @@ impl<D: NetDevice> NetStack<D> {
             while socket.can_recv() {
                 let recv_result = socket.recv(|data| {
                     let copy_len = core::cmp::min(data.len(), temp.len());
+                    let _ = maybe_report_str_write(
+                        temp.as_mut_ptr(),
+                        copy_len,
+                        data.as_ptr(),
+                        copy_len,
+                        "tcp_smoke.payload",
+                    );
                     temp[..copy_len].copy_from_slice(&data[..copy_len]);
                     copied = copy_len;
                     (copy_len, ())
@@ -2828,6 +2862,13 @@ impl<D: NetDevice> NetStack<D> {
                             &data[..preview_len],
                         );
                         let copy_len = core::cmp::min(data.len(), temp.len());
+                        let _ = maybe_report_str_write(
+                            temp.as_mut_ptr(),
+                            copy_len,
+                            data.as_ptr(),
+                            copy_len,
+                            "tcp_console.recv",
+                        );
                         temp[..copy_len].copy_from_slice(&data[..copy_len]);
                         copied = copy_len;
                         (copy_len, ())
