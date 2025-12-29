@@ -8,6 +8,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use heapless::String;
 use sel4_sys::{seL4_BootInfo, seL4_Word};
 use spin::Once;
+use static_assertions::const_assert;
 
 use crate::bootinfo_layout::{post_canary_offset, POST_CANARY_BYTES};
 use crate::bootstrap::log::force_uart_line;
@@ -20,6 +21,15 @@ const BOOTINFO_CANARY_PRE: u64 = 0x0b0f_1ce5_ca4e_cafe;
 const BOOTINFO_CANARY_POST: u64 = 0x9ddf_1ce5_f00d_beef;
 
 const BOOT_HEAP_BYTES: usize = MAX_BOOTINFO_ALLOC;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BootinfoWindow {
+    pub start: seL4_Word,
+    pub end: seL4_Word,
+}
+
+const_assert!(core::mem::size_of::<BootinfoWindow>() == 16);
 
 #[repr(C, align(16))]
 struct BootinfoBacking {
@@ -82,6 +92,7 @@ pub struct BootInfoSnapshot {
     pub init_cnode_bits: u8,
     pub empty_start: seL4_Word,
     pub empty_end: seL4_Word,
+    pub window: BootinfoWindow,
     pub untyped_start: seL4_Word,
     pub untyped_end: seL4_Word,
     pub untyped_count: usize,
@@ -108,6 +119,10 @@ impl BootInfoSnapshot {
     fn from_parts(view: BootInfoView, backing: &'static [u8]) -> Self {
         let header = view.header();
         let (empty_start, empty_end) = view.init_cnode_empty_range();
+        let window = BootinfoWindow {
+            start: empty_start,
+            end: empty_end,
+        };
         let extra_range = view.extra_range();
         let extra_len = view.extra_bytes();
         let untyped_count = (header.untyped.end - header.untyped.start) as usize;
@@ -121,6 +136,7 @@ impl BootInfoSnapshot {
             init_cnode_bits: view.init_cnode_bits(),
             empty_start,
             empty_end,
+            window,
             untyped_start: header.untyped.start,
             untyped_end: header.untyped.end,
             untyped_count,
@@ -197,6 +213,7 @@ impl BootInfoSnapshot {
         self.init_cnode_bits == other.init_cnode_bits
             && self.empty_start == other.empty_start
             && self.empty_end == other.empty_end
+            && self.window == other.window
             && self.untyped_start == other.untyped_start
             && self.untyped_end == other.untyped_end
             && self.untyped_count == other.untyped_count
@@ -222,6 +239,16 @@ impl BootInfoSnapshot {
     }
 
     #[must_use]
+    pub fn window_ptr(&self) -> *const BootinfoWindow {
+        &self.window as *const _
+    }
+
+    #[must_use]
+    pub fn empty_region_ptr(&self) -> *const sel4_sys::seL4_SlotRegion {
+        &self.view.header().empty as *const _
+    }
+
+    #[must_use]
     pub fn backing(&self) -> &'static [u8] {
         self.backing
     }
@@ -242,6 +269,7 @@ impl fmt::Debug for BootInfoSnapshot {
             .field("init_cnode_bits", &self.init_cnode_bits)
             .field("empty_start", &self.empty_start)
             .field("empty_end", &self.empty_end)
+            .field("window", &self.window)
             .field("untyped_start", &self.untyped_start)
             .field("untyped_end", &self.untyped_end)
             .field("untyped_count", &self.untyped_count)
@@ -384,6 +412,26 @@ impl BootInfoState {
 
     pub fn snapshot(&self) -> BootInfoSnapshot {
         self.snapshot
+    }
+
+    #[must_use]
+    pub fn snapshot_ref(&self) -> &BootInfoSnapshot {
+        &self.snapshot
+    }
+
+    #[must_use]
+    pub fn snapshot_ptr(&self) -> *const BootInfoSnapshot {
+        &self.snapshot as *const _
+    }
+
+    #[must_use]
+    pub fn snapshot_window_ptr(&self) -> *const BootinfoWindow {
+        self.snapshot.window_ptr()
+    }
+
+    #[must_use]
+    pub fn snapshot_empty_ptr(&self) -> *const sel4_sys::seL4_SlotRegion {
+        self.snapshot.empty_region_ptr()
     }
 
     pub fn snapshot_region(&self) -> core::ops::Range<usize> {
