@@ -299,7 +299,7 @@ impl TxHeadManager {
                     .iter()
                     .enumerate()
                     .find_map(|(idx, entry)| {
-                        entry.copied().and_then(|(head, entry_gen)| {
+                        entry.as_ref().copied().and_then(|(head, entry_gen)| {
                             (head == id && entry_gen == gen).then_some(idx as u16)
                         })
                     })
