@@ -11,14 +11,14 @@
 #[cfg(target_arch = "aarch64")]
 use core::arch::asm;
 use core::fmt::{self, Write as FmtWrite};
+#[cfg(feature = "net-backend-virtio")]
+use core::mem::MaybeUninit;
 use core::ptr::read_unaligned;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 use core::sync::atomic::{compiler_fence, fence, AtomicBool, Ordering as AtomicOrdering};
-#[cfg(feature = "net-backend-virtio")]
-use core::mem::MaybeUninit;
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use sel4_sys::{seL4_ARM_Page_Uncached, seL4_Error, seL4_NotEnoughMemory, seL4_PageBits};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
@@ -181,6 +181,7 @@ struct TxHeadManager {
     entries: [TxHeadEntry; TX_QUEUE_SIZE],
     published_slots: [Option<(u16, u32)>; TX_QUEUE_SIZE],
     in_avail: [bool; TX_QUEUE_SIZE],
+    advertised: [bool; TX_QUEUE_SIZE],
     publish_present: [bool; TX_QUEUE_SIZE],
     publish_slot: [u16; TX_QUEUE_SIZE],
     publish_gen: [u32; TX_QUEUE_SIZE],
@@ -207,6 +208,7 @@ impl TxHeadManager {
             entries: [TxHeadEntry::default(); TX_QUEUE_SIZE],
             published_slots: [None; TX_QUEUE_SIZE],
             in_avail: [false; TX_QUEUE_SIZE],
+            advertised: [false; TX_QUEUE_SIZE],
             publish_present: [false; TX_QUEUE_SIZE],
             publish_slot: [0; TX_QUEUE_SIZE],
             publish_gen: [0; TX_QUEUE_SIZE],
@@ -228,20 +230,66 @@ impl TxHeadManager {
         self.entries.get_mut(id as usize)
     }
 
+    fn is_advertised(&self, id: u16) -> bool {
+        self.advertised.get(id as usize).copied().unwrap_or(false)
+    }
+
+    fn mark_advertised(&mut self, id: u16) -> Result<(), TxHeadError> {
+        if id >= self.size {
+            return Err(TxHeadError::OutOfRange);
+        }
+        let entry = self.entry(id).copied().ok_or(TxHeadError::OutOfRange)?;
+        if self.is_advertised(id) {
+            debug_assert!(
+                false,
+                "tx head already advertised: id={} state={:?}",
+                id, entry.state
+            );
+            return Err(TxHeadError::InvalidState);
+        }
+        if !matches!(entry.state, TxHeadState::Published { .. }) {
+            debug_assert!(
+                false,
+                "tx head not published during advertise mark: id={} state={:?}",
+                id, entry.state
+            );
+            return Err(TxHeadError::InvalidState);
+        }
+        if let Some(flag) = self.advertised.get_mut(id as usize) {
+            *flag = true;
+        }
+        Ok(())
+    }
+
+    fn clear_advertised(&mut self, id: u16) -> Result<(), TxHeadError> {
+        if id >= self.size {
+            return Err(TxHeadError::OutOfRange);
+        }
+        if !self.is_advertised(id) {
+            debug_assert!(false, "tx head not advertised: id={}", id);
+            return Err(TxHeadError::InvalidState);
+        }
+        if let Some(flag) = self.advertised.get_mut(id as usize) {
+            *flag = false;
+        }
+        Ok(())
+    }
+
     fn alloc_head(&mut self) -> Option<u16> {
         let id = self.free.pop()?;
         if id >= self.size {
             return None;
         }
-        if !matches!(self.state(id), Some(TxHeadState::Free)) {
+        let state = self.state(id);
+        if !matches!(state, Some(TxHeadState::Free)) || self.is_advertised(id) {
+            mark_forensics_frozen();
             let _ = self.free.push(id);
-            debug_assert!(
-                false,
-                "tx head already reserved: id={} state={:?}",
+            panic!(
+                "tx head allocation invariant violated: id={} state={:?} advertised={}",
                 id,
-                self.state(id)
+                state,
+                self.is_advertised(id)
             );
-            return None;
         }
         let gen = self.next_gen;
         self.next_gen = self.next_gen.wrapping_add(1);
@@ -285,6 +333,9 @@ impl TxHeadManager {
         }
         if slot >= self.size {
             return Err(TxHeadError::OutOfRange);
+        }
+        if self.is_advertised(id) {
+            return Err(TxHeadError::InvalidState);
         }
         if self
             .published_slots
@@ -330,6 +381,14 @@ impl TxHeadManager {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
+        if !self.is_advertised(id) {
+            debug_assert!(
+                false,
+                "tx head missing advertised flag on inflight transition: id={}",
+                id
+            );
+            return Err(TxHeadError::InvalidState);
+        }
         let in_avail = self.in_avail.get(id as usize).copied().unwrap_or(false);
         let state = self.state(id).ok_or(TxHeadError::OutOfRange)?;
         let (slot, gen, already_in_flight) = match state {
@@ -356,7 +415,12 @@ impl TxHeadManager {
         Ok((slot, gen))
     }
 
-    fn note_avail_publish(&mut self, id: u16, slot: u16, avail_idx: u16) -> Result<(), TxHeadError> {
+    fn note_avail_publish(
+        &mut self,
+        id: u16,
+        slot: u16,
+        avail_idx: u16,
+    ) -> Result<(), TxHeadError> {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
@@ -369,8 +433,7 @@ impl TxHeadManager {
             debug_assert!(
                 false,
                 "tx head not marked in avail during publish: id={} slot={}",
-                id,
-                slot
+                id, slot
             );
             return Err(TxHeadError::InvalidState);
         }
@@ -378,13 +441,12 @@ impl TxHeadManager {
             .publish_present
             .get_mut(id as usize)
             .ok_or(TxHeadError::OutOfRange)?;
+        self.mark_advertised(id)?;
         if *record {
             debug_assert!(
                 false,
                 "tx head already recorded as published: id={} slot={} state={:?}",
-                id,
-                slot,
-                entry.state
+                id, slot, entry.state
             );
             return Err(TxHeadError::InvalidState);
         }
@@ -469,6 +531,14 @@ impl TxHeadManager {
                 return Err(TxHeadError::InvalidState);
             }
         }
+        if !self.is_advertised(id) {
+            debug_assert!(
+                false,
+                "tx head completion missing advertised mark: id={} slot={} gen={}",
+                id, slot, gen
+            );
+            return Err(TxHeadError::InvalidState);
+        }
         if self.published_for_slot(slot) != Some((id, gen)) {
             return Err(TxHeadError::InvalidState);
         }
@@ -500,6 +570,10 @@ impl TxHeadManager {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
         }
+        if !self.is_advertised(id) {
+            debug_assert!(false, "tx head reclaim without advertise mark: id={}", id);
+            return Err(TxHeadError::InvalidState);
+        }
         if self.in_avail.get(id as usize).copied().unwrap_or(false) {
             let state = self.state(id);
             debug_assert!(
@@ -514,6 +588,7 @@ impl TxHeadManager {
             return Err(TxHeadError::InvalidState);
         }
         entry.state = TxHeadState::Free;
+        self.clear_advertised(id)?;
         if let Some(present) = self.publish_present.get_mut(id as usize) {
             *present = false;
         }
@@ -523,6 +598,9 @@ impl TxHeadManager {
     fn cancel_publish(&mut self, id: u16) -> Result<(), TxHeadError> {
         if id >= self.size {
             return Err(TxHeadError::OutOfRange);
+        }
+        if self.is_advertised(id) {
+            return Err(TxHeadError::InvalidState);
         }
         let slot = {
             let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
@@ -2017,6 +2095,21 @@ impl VirtioNet {
         self.freeze_and_capture("tx_anomaly");
     }
 
+    fn assert_tx_desc_len_nonzero(
+        &mut self,
+        head_id: u16,
+        context: &'static str,
+    ) -> Result<(), ()> {
+        let desc = self.tx_queue.read_descriptor(head_id);
+        if desc.len == 0 {
+            self.device_faulted = true;
+            self.last_error.get_or_insert(context);
+            self.freeze_and_capture(context);
+            return Err(());
+        }
+        Ok(())
+    }
+
     fn clear_tx_desc_chain(&mut self, head: u16) {
         match self.tx_head_mgr.state(head) {
             Some(TxHeadState::Published { .. }) | Some(TxHeadState::InFlight { .. }) => {
@@ -2812,6 +2905,13 @@ impl VirtioNet {
             return Err(());
         }
         let publish_slot = (avail_idx_before as usize % qsize) as u16;
+        trace!(
+            target: "net-console",
+            "[virtio-net][tx-submit-path=A] head={} slot={} avail_idx_before={}",
+            head_id,
+            publish_slot,
+            avail_idx_before
+        );
         #[cfg(debug_assertions)]
         self.debug_trace_tx_publish_state(head_id, publish_slot, "pre_guard_tx_post_state");
         if self
@@ -2844,6 +2944,12 @@ impl VirtioNet {
         self.debug_trace_tx_publish_state(head_id, publish_slot, "post_pre_publish_tripwire");
         #[cfg(debug_assertions)]
         self.debug_assert_tx_publish_ready(head_id, publish_slot);
+        if self
+            .assert_tx_desc_len_nonzero(head_id, "tx_desc_len_zero_before_avail")
+            .is_err()
+        {
+            return Err(());
+        }
         #[cfg(debug_assertions)]
         self.debug_trace_tx_publish_state(head_id, publish_slot, "pre_push_avail");
         let (slot, avail_idx, old_idx) = match self.tx_queue.push_avail(head_id) {
@@ -4009,6 +4115,13 @@ impl VirtioNet {
         }
         let publish_slot = (avail_idx_before as usize % qsize) as u16;
         let payload_len = total_len.saturating_sub(self.rx_header_len);
+        trace!(
+            target: "net-console",
+            "[virtio-net][tx-submit-path=B] head={} slot={} avail_idx_before={}",
+            id,
+            publish_slot,
+            avail_idx_before
+        );
         if self
             .guard_tx_post_state(
                 id,
@@ -4024,11 +4137,7 @@ impl VirtioNet {
         {
             return;
         }
-        if self
-            .tx_head_mgr
-            .submit_ready(id, publish_slot)
-            .is_err()
-        {
+        if self.tx_head_mgr.submit_ready(id, publish_slot).is_err() {
             self.device_faulted = true;
             self.last_error.get_or_insert("tx_double_advertise");
             self.freeze_tx_publishes("tx_double_advertise");
@@ -4056,6 +4165,12 @@ impl VirtioNet {
         virtq_publish_barrier();
         #[cfg(debug_assertions)]
         self.debug_assert_tx_publish_ready(id, publish_slot);
+        if self
+            .assert_tx_desc_len_nonzero(id, "tx_v2_desc_len_zero_before_avail")
+            .is_err()
+        {
+            return;
+        }
         match self.tx_queue.push_avail(id) {
             Ok((slot, avail_idx, old_idx)) => {
                 if slot != publish_slot {
@@ -5827,9 +5942,6 @@ impl VirtQueue {
             next: next.unwrap_or(0),
         };
         let desc_ptr = unsafe { self.desc.as_ptr().add(index as usize) };
-        unsafe {
-            core::ptr::write_bytes(desc_ptr, 0, 1);
-        }
         unsafe { write_volatile(desc_ptr, desc) };
         if FORENSICS {
             let verify = unsafe { read_volatile(desc_ptr) };
@@ -6549,6 +6661,7 @@ mod tx_tests {
         let gen = mgr
             .mark_published(id, slot, 64, 0x1000 + id as u64)
             .expect("publish");
+        mgr.note_avail_publish(id, slot, slot).expect("advertise");
         mgr.mark_in_flight(id).expect("in-flight");
         gen
     }
@@ -6577,6 +6690,8 @@ mod tx_tests {
             assert_eq!(head, idx as u16, "heads issued sequentially");
             mgr.mark_published(head, idx as u16, 64, 0x2000 + idx as u64)
                 .expect("publish");
+            mgr.note_avail_publish(head, idx as u16, idx as u16)
+                .expect("advertise");
             mgr.mark_in_flight(head).expect("in-flight");
         }
         assert!(mgr.alloc_head().is_none(), "queue should be exhausted");
@@ -6597,6 +6712,7 @@ mod tx_tests {
         let mut mgr = TxHeadManager::new(2);
         let head = mgr.alloc_head().expect("head available");
         mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
+        mgr.note_avail_publish(head, 0, 0).expect("advertise");
         mgr.mark_in_flight(head).expect("in-flight");
         assert!(
             mgr.alloc_head().is_none(),
@@ -6611,6 +6727,18 @@ mod tx_tests {
     }
 
     #[test]
+    #[should_panic(expected = "tx head allocation invariant violated")]
+    fn tx_allocator_reuse_without_reclaim_panics() {
+        let mut mgr = TxHeadManager::new(2);
+        let head = mgr.alloc_head().expect("head available");
+        mgr.mark_published(head, 0, 64, 0x4000).expect("publish");
+        mgr.note_avail_publish(head, 0, 0).expect("advertise");
+        mgr.mark_in_flight(head).expect("in-flight");
+        mgr.free.push(head).expect("forced duplicate free entry");
+        let _ = mgr.alloc_head();
+    }
+
+    #[test]
     fn tx_mark_inflight_accepts_published_state() {
         let mut mgr = TxHeadManager::new(2);
         let head = mgr.alloc_head().expect("head available");
@@ -6619,6 +6747,8 @@ mod tx_tests {
             mgr.in_avail(head),
             "publish should mark head as tracked in avail ring"
         );
+        mgr.note_avail_publish(head, 0, 0)
+            .expect("advertise before inflight");
         assert_eq!(
             mgr.mark_in_flight(head).expect("in-flight after publish"),
             (0, gen),
@@ -6710,11 +6840,8 @@ mod tx_tests {
     fn tx_publish_record_prevents_republish_without_reclaim() {
         let mut mgr = TxHeadManager::new(2);
         let head = mgr.alloc_head().expect("head available");
-        let gen = mgr
-            .mark_published(head, 0, 64, 0x1000)
-            .expect("publish");
-        mgr.note_avail_publish(head, 0, 0)
-            .expect("avail record");
+        let gen = mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
+        mgr.note_avail_publish(head, 0, 0).expect("avail record");
         mgr.mark_in_flight(head).expect("in-flight");
         assert!(
             mgr.mark_published(head, 1, 64, 0x2000).is_err(),
@@ -6730,11 +6857,8 @@ mod tx_tests {
     fn tx_publish_record_taken_on_reclaim() {
         let mut mgr = TxHeadManager::new(1);
         let head = mgr.alloc_head().expect("head available");
-        let gen = mgr
-            .mark_published(head, 0, 64, 0x1000)
-            .expect("publish");
-        mgr.note_avail_publish(head, 0, 5)
-            .expect("record publish");
+        let gen = mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
+        mgr.note_avail_publish(head, 0, 5).expect("record publish");
         mgr.mark_in_flight(head).expect("in-flight");
         let record = mgr
             .take_publish_record(head, 0, gen)
@@ -6817,9 +6941,7 @@ mod tx_tests {
     fn double_advertise_is_blocked() {
         let mut mgr = TxHeadManager::new(2);
         let head = mgr.alloc_head().expect("head available");
-        let _gen = mgr
-            .mark_published(head, 0, 64, 0x1000)
-            .expect("publish");
+        let _gen = mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
         mgr.submit_ready(head, 0).expect("first advertise allowed");
         mgr.note_avail_publish(head, 0, 1)
             .expect("record first publish");
@@ -6833,11 +6955,8 @@ mod tx_tests {
     fn clear_only_after_reclaim() {
         let mut mgr = TxHeadManager::new(1);
         let head = mgr.alloc_head().expect("head available");
-        let gen = mgr
-            .mark_published(head, 0, 64, 0x1000)
-            .expect("publish");
-        mgr.note_avail_publish(head, 0, 0)
-            .expect("advertise noted");
+        let gen = mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
+        mgr.note_avail_publish(head, 0, 0).expect("advertise noted");
         mgr.mark_in_flight(head).expect("in-flight");
         assert!(
             mgr.reclaim_head(head).is_err(),
