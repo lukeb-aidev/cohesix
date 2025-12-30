@@ -948,6 +948,51 @@ where
         false
     }
 
+    #[cfg(all(feature = "kernel", target_os = "none"))]
+    fn emit_cache_log(&mut self, count: usize) {
+        struct CacheLineWriter<
+            'a,
+            'b,
+            D,
+            T,
+            I,
+            V,
+            const RX: usize,
+            const TX: usize,
+            const LINE: usize,
+        >
+        where
+            D: SerialDriver,
+            T: TimerSource,
+            I: IpcDispatcher,
+            V: CapabilityValidator,
+        {
+            pump: &'a mut EventPump<'b, D, T, I, V, RX, TX, LINE>,
+        }
+
+        impl<'a, 'b, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize> fmt::Write
+            for CacheLineWriter<'a, 'b, D, T, I, V, RX, TX, LINE>
+        where
+            D: SerialDriver,
+            T: TimerSource,
+            I: IpcDispatcher,
+            V: CapabilityValidator,
+        {
+            fn write_str(&mut self, s: &str) -> fmt::Result {
+                for line in s.split('\n') {
+                    if line.is_empty() {
+                        continue;
+                    }
+                    self.pump.emit_console_line(line);
+                }
+                Ok(())
+            }
+        }
+
+        let mut writer = CacheLineWriter { pump: self };
+        crate::hal::cache::write_recent_ops(&mut writer, count);
+    }
+
     fn emit_ack(&mut self, status: AckStatus, verb: &str, detail: Option<&str>) {
         let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
         let ack_line = AckLine {
@@ -1107,6 +1152,21 @@ where
                 } else {
                     self.metrics.denied_commands += 1;
                     self.emit_ack_err("MEM", Some("reason=unavailable"));
+                }
+            }
+            Command::CacheLog { count } => {
+                let count = usize::from(count.unwrap_or(64));
+                #[cfg(all(feature = "kernel", target_os = "none"))]
+                {
+                    self.emit_cache_log(count);
+                    self.metrics.accepted_commands += 1;
+                    self.emit_ack_ok("CACHELOG", None);
+                }
+                #[cfg(not(all(feature = "kernel", target_os = "none")))]
+                {
+                    let _ = count;
+                    self.metrics.denied_commands += 1;
+                    self.emit_ack_err("CACHELOG", Some("reason=unsupported"));
                 }
             }
             Command::Ping => {
@@ -1341,6 +1401,7 @@ where
             | Command::BootInfo
             | Command::Caps
             | Command::Mem
+            | Command::CacheLog { .. }
             | Command::Ping
             | Command::NetTest
             | Command::NetStats => {
