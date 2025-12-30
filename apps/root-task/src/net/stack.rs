@@ -29,8 +29,8 @@ use smoltcp::iface::{
     Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, SocketStorage,
 };
 use smoltcp::socket::tcp::{
-    RecvError as TcpRecvError, Socket as TcpSocket, SocketBuffer as TcpSocketBuffer,
-    State as TcpState,
+    ConnectError as TcpConnectError, RecvError as TcpRecvError, Socket as TcpSocket,
+    SocketBuffer as TcpSocketBuffer, State as TcpState,
 };
 use smoltcp::socket::udp::{
     BindError as UdpBindError, PacketBuffer as UdpPacketBuffer,
@@ -78,6 +78,9 @@ const UDP_ECHO_PORT: u16 = 31_338;
 const UDP_BEACON_PORT: u16 = 40_000;
 const TCP_SMOKE_PORT: u16 = 31_339;
 const TCP_SMOKE_OUT_LOCAL_PORT: u16 = 31_340;
+const TCP_CONSOLE_SELFTEST_LOCAL_PORT: u16 = 31_341;
+const CONSOLE_SELFTEST_RECOVERY_DEADLINE_MS: u64 = 3_000;
+const CONSOLE_SELFTEST_RETRY_MS: u64 = 250;
 #[cfg(feature = "net-outbound-probe")]
 const TCP_PROBE_PORT: u16 = TCP_SMOKE_PORT;
 #[cfg(feature = "net-outbound-probe")]
@@ -931,6 +934,8 @@ pub struct NetStack<D: NetDevice> {
     probe_warned_once: bool,
     #[cfg(feature = "net-outbound-probe")]
     probe_hint_logged: bool,
+    last_now_ms: Option<u64>,
+    time_stall_warned: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -958,6 +963,11 @@ struct SelfTestState {
     tcp_ok: bool,
     tcp_accept_seen: bool,
     tx_invariant_failed: bool,
+    console_probe_started_ms: u64,
+    console_probe_established: bool,
+    console_probe_banner_seen: bool,
+    console_probe_done: bool,
+    console_ok: bool,
     last_result: Option<NetSelfTestResult>,
 }
 
@@ -997,6 +1007,11 @@ impl SelfTestState {
         self.tcp_ok = false;
         self.tcp_accept_seen = false;
         self.tx_invariant_failed = false;
+        self.console_probe_started_ms = 0;
+        self.console_probe_established = false;
+        self.console_probe_banner_seen = false;
+        self.console_probe_done = false;
+        self.console_ok = false;
         self.last_result = None;
     }
 
@@ -1020,16 +1035,21 @@ impl SelfTestState {
         self.tcp_ok = true;
     }
 
+    fn record_console_ok(&mut self) {
+        self.console_ok = true;
+    }
+
     fn conclude_if_needed(&mut self, now_ms: u64) -> Option<NetSelfTestResult> {
         if !self.running {
             return None;
         }
         let deadline_reached = now_ms.saturating_sub(self.started_ms) >= SELF_TEST_WINDOW_MS;
-        if self.tx_ok && self.udp_echo_ok && self.tcp_ok || deadline_reached {
+        if self.tx_ok && self.udp_echo_ok && self.tcp_ok && self.console_ok || deadline_reached {
             let result = NetSelfTestResult {
                 tx_ok: self.tx_ok,
                 udp_echo_ok: self.udp_echo_ok,
                 tcp_ok: self.tcp_ok,
+                console_ok: self.console_ok,
             };
             self.last_result = Some(result);
             self.running = false;
@@ -1409,6 +1429,34 @@ impl<D: NetDevice> NetStack<D> {
         self.session_state = SessionState::default();
         self.conn_bytes_read = 0;
         self.conn_bytes_written = 0;
+    }
+
+    fn reset_session_state_with(&mut self, tcp_state: Option<TcpState>) {
+        self.reset_session_state();
+        if let Some(state) = tcp_state {
+            self.session_state.last_state = Some(state);
+        }
+    }
+
+    fn guarded_connect(
+        socket: &mut TcpSocket,
+        cx: smoltcp::iface::Context,
+        dest: IpEndpoint,
+        local_endpoint: IpListenEndpoint,
+        role: &'static str,
+    ) -> Result<(), TcpConnectError> {
+        let state = socket.state();
+        if state != TcpState::Closed {
+            warn!(
+                target: "root_task::net",
+                "[tcp] connect.guard blocked role={} state={:?}",
+                role,
+                state
+            );
+            return Err(TcpConnectError::InvalidState);
+        }
+        debug_assert_eq!(state, TcpState::Closed);
+        socket.connect(cx, dest, local_endpoint)
     }
 
     fn log_buffer_addresses_once(&mut self, marker: &'static str) {
@@ -1912,6 +1960,8 @@ impl<D: NetDevice> NetStack<D> {
             probe_warned_once: false,
             #[cfg(feature = "net-outbound-probe")]
             probe_hint_logged: false,
+            last_now_ms: None,
+            time_stall_warned: false,
         };
         stack.assert_bootinfo_overlaps();
         stack.log_buffer_addresses_once("net.init.buffers");
@@ -2072,6 +2122,23 @@ impl<D: NetDevice> NetStack<D> {
             info!("[net-console] service loop running");
             self.service_logged = true;
         }
+        if let Some(previous) = self.last_now_ms {
+            if now_ms < previous {
+                warn!(
+                    "[net-console] timebase regression detected: prev_now_ms={} now_ms={}",
+                    previous, now_ms
+                );
+            } else if now_ms == previous && !self.time_stall_warned {
+                warn!(
+                    "[net-console] timebase stalled: now_ms={} (no forward progress)",
+                    now_ms
+                );
+                self.time_stall_warned = true;
+            } else if now_ms > previous {
+                self.time_stall_warned = false;
+            }
+        }
+        self.last_now_ms = Some(now_ms);
 
         let last = self.telemetry.last_poll_ms;
         let delta = now_ms.saturating_sub(last);
@@ -2177,8 +2244,8 @@ impl<D: NetDevice> NetStack<D> {
 
     fn log_self_test_result(&self, result: NetSelfTestResult) {
         info!(
-            "[net-selftest] result tx_ok={} udp_echo_ok={} tcp_ok={}",
-            result.tx_ok, result.udp_echo_ok, result.tcp_ok
+            "[net-selftest] result tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={}",
+            result.tx_ok, result.udp_echo_ok, result.tcp_ok, result.console_ok
         );
         if !result.tx_ok {
             info!("[net-selftest] hint: TX not visible → queue notify / cache / descriptors");
@@ -2188,6 +2255,8 @@ impl<D: NetDevice> NetStack<D> {
             );
         } else if !result.tcp_ok {
             info!("[net-selftest] hint: TCP accepts but no bytes → poll loop scheduling / RX path");
+        } else if !result.console_ok {
+            info!("[net-selftest] hint: TCP console banner missing or listener not recycling");
         }
     }
 
@@ -2216,10 +2285,12 @@ impl<D: NetDevice> NetStack<D> {
             tx_ok: false,
             udp_echo_ok: false,
             tcp_ok: false,
+            console_ok: false,
         };
         self.self_test.tx_ok = false;
         self.self_test.udp_echo_ok = false;
         self.self_test.tcp_ok = false;
+        self.self_test.console_ok = false;
         self.self_test.running = false;
         self.self_test.last_result = Some(result);
         self.log_self_test_result(result);
@@ -2328,7 +2399,7 @@ impl<D: NetDevice> NetStack<D> {
             let connect_result = {
                 let cx = self.interface.context();
                 let socket = self.sockets.get_mut::<TcpSocket>(handle);
-                socket.connect(cx, dest, local_endpoint)
+                Self::guarded_connect(socket, cx, dest, local_endpoint, "outbound-probe")
             };
             match connect_result {
                 Ok(()) => {
@@ -2652,6 +2723,123 @@ impl<D: NetDevice> NetStack<D> {
         activity
     }
 
+    fn poll_console_listener_selftest(&mut self, socket: &mut TcpSocket, now_ms: u64) -> bool {
+        if self.self_test.console_probe_done {
+            return false;
+        }
+        if self.self_test.console_probe_started_ms == 0 {
+            self.self_test.console_probe_started_ms = now_ms;
+        }
+
+        let mut activity = false;
+        let dest = IpEndpoint::new(self.ip.into(), self.listen_port);
+        if matches!(socket.state(), TcpState::Closed) && !self.self_test.console_probe_banner_seen {
+            if now_ms.saturating_sub(self.tcp_smoke_last_attempt_ms) >= CONSOLE_SELFTEST_RETRY_MS {
+                self.tcp_smoke_last_attempt_ms = now_ms;
+                let local_endpoint = IpListenEndpoint {
+                    addr: Some(self.ip.into()),
+                    port: TCP_CONSOLE_SELFTEST_LOCAL_PORT,
+                };
+                let cx = self.interface.context();
+                match Self::guarded_connect(socket, cx, dest, local_endpoint, "console-selftest") {
+                    Ok(()) => {
+                        info!(
+                            "[net-selftest] console listener selftest connect -> {}:{} (now_ms={})",
+                            dest.addr, dest.port, now_ms
+                        );
+                        activity = true;
+                    }
+                    Err(err) => {
+                        warn!(
+                            "[net-selftest] console listener selftest connect failed err={:?}",
+                            err
+                        );
+                    }
+                }
+            }
+        }
+
+        if socket.state() == TcpState::Established {
+            if !self.self_test.console_probe_established {
+                self.self_test.console_probe_established = true;
+                info!("[net-selftest] console listener selftest established");
+            }
+            if socket.can_recv() {
+                let mut copied = 0usize;
+                let mut temp = [0u8; 64];
+                let recv_result = socket.recv(|data| {
+                    let len = core::cmp::min(data.len(), temp.len());
+                    let _ = maybe_report_str_write(
+                        temp.as_mut_ptr(),
+                        len,
+                        data.as_ptr(),
+                        len,
+                        "console_selftest.payload",
+                    );
+                    temp[..len].copy_from_slice(&data[..len]);
+                    copied = len;
+                    (len, ())
+                });
+                match recv_result {
+                    Ok(()) if copied > 0 => {
+                        self.self_test.console_probe_banner_seen = true;
+                        let preview_len = core::cmp::min(copied, 16);
+                        info!(
+                            "[net-selftest] console listener banner bytes={} first={:02x?}",
+                            copied,
+                            &temp[..preview_len]
+                        );
+                        socket.close();
+                        activity = true;
+                    }
+                    Ok(()) => {}
+                    Err(err) => {
+                        warn!(
+                            "[net-selftest] console listener selftest recv failed err={:?}",
+                            err
+                        );
+                    }
+                }
+            }
+        }
+
+        if self.self_test.console_probe_banner_seen
+            && matches!(
+                socket.state(),
+                TcpState::CloseWait | TcpState::FinWait1 | TcpState::FinWait2 | TcpState::LastAck
+            )
+        {
+            socket.close();
+        }
+
+        if self.self_test.console_probe_banner_seen
+            && matches!(socket.state(), TcpState::Closed)
+            && !self.session_active
+            && matches!(self.session_state.last_state, Some(TcpState::Listen))
+        {
+            self.self_test.console_probe_done = true;
+            self.self_test.record_console_ok();
+            self.tcp_smoke_last_attempt_ms = now_ms;
+            info!(
+                "[net-selftest] console listener selftest recovered to listen (now_ms={})",
+                now_ms
+            );
+        }
+
+        let elapsed = now_ms.saturating_sub(self.self_test.console_probe_started_ms);
+        if elapsed >= CONSOLE_SELFTEST_RECOVERY_DEADLINE_MS && !self.self_test.console_probe_done {
+            warn!(
+                "[net-selftest] console listener selftest timed out banner={} established={} state={:?}",
+                self.self_test.console_probe_banner_seen,
+                self.self_test.console_probe_established,
+                socket.state()
+            );
+            self.self_test.console_probe_done = true;
+        }
+
+        activity
+    }
+
     fn poll_tcp_smoke_outbound(&mut self, now_ms: u64) -> bool {
         if !self.self_test.running {
             return false;
@@ -2661,6 +2849,9 @@ impl<D: NetDevice> NetStack<D> {
             return false;
         };
         let socket = self.sockets.get_mut::<TcpSocket>(handle);
+        if !self.self_test.console_probe_done {
+            return self.poll_console_listener_selftest(socket, now_ms);
+        }
         let mut activity = false;
         let dest_ip = self
             .gateway
@@ -2676,7 +2867,8 @@ impl<D: NetDevice> NetStack<D> {
                     port: TCP_SMOKE_OUT_LOCAL_PORT,
                 };
                 let cx = self.interface.context();
-                match socket.connect(cx, dest, local_endpoint) {
+                match Self::guarded_connect(socket, cx, dest, local_endpoint, "tcp-smoke-outbound")
+                {
                     Ok(()) => {
                         info!(
                             "[net-selftest] tcp-smoke outbound connect -> {}:{} (now_ms={})",
@@ -2748,6 +2940,9 @@ impl<D: NetDevice> NetStack<D> {
         let mut record_closed_conn: Option<u64> = None;
         let mut outbound_pending = self.server.has_outbound();
         let mut reset_session = false;
+        let mut reset_tcp_state: Option<TcpState> = None;
+        let mut last_tcp_state = TcpState::Closed;
+        let mut allow_flush = true;
 
         {
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
@@ -2792,6 +2987,7 @@ impl<D: NetDevice> NetStack<D> {
                     self.session_active = false;
                     self.active_client_id = None;
                 }
+                reset_tcp_state = Some(socket.state());
             }
 
             Self::log_tcp_state_change(
@@ -2814,6 +3010,7 @@ impl<D: NetDevice> NetStack<D> {
                 self.conn_bytes_read = 0;
                 self.conn_bytes_written = 0;
                 reset_session = true;
+                reset_tcp_state = Some(socket.state());
                 Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
                 let (peer_label, peer_port) = Self::peer_parts(self.peer_endpoint, socket);
                 let local_port = socket
@@ -3219,6 +3416,8 @@ impl<D: NetDevice> NetStack<D> {
                 log_closed_conn = Some(conn_id);
                 record_closed_conn = Some(conn_id);
                 self.active_client_id = None;
+                reset_session = true;
+                reset_tcp_state = Some(socket.state());
                 activity |= true;
             }
 
@@ -3264,39 +3463,57 @@ impl<D: NetDevice> NetStack<D> {
                 log_closed_conn = Some(conn_id);
                 record_closed_conn = Some(conn_id);
                 self.active_client_id = None;
+                reset_session = true;
+                reset_tcp_state = Some(socket.state());
                 activity |= true;
             }
 
-            activity |= Self::flush_outbound(
-                &mut self.server,
-                &mut self.outbound,
-                &mut self.telemetry,
-                &mut self.conn_bytes_written,
-                &mut self.counters,
-                socket,
-                now_ms,
-                self.active_client_id,
-                self.auth_state,
-                &mut self.session_state,
-            );
-            outbound_pending |= self.server.has_outbound();
-
-            if matches!(socket.state(), TcpState::CloseWait | TcpState::Closed)
-                && self.session_active
-            {
+            let tcp_state = socket.state();
+            if matches!(
+                tcp_state,
+                TcpState::CloseWait
+                    | TcpState::FinWait1
+                    | TcpState::FinWait2
+                    | TcpState::LastAck
+                    | TcpState::TimeWait
+            ) {
                 info!(
-                    "[net-console] TCP client #{} closed (state={:?})",
+                    "[net-console] TCP client #{} closing (state={:?})",
                     self.active_client_id.unwrap_or(0),
-                    socket.state()
+                    tcp_state
                 );
                 debug!(
                     "[net-console][auth] state={:?} client={} closing socket state={:?}",
                     self.auth_state,
                     self.active_client_id.unwrap_or(0),
-                    socket.state()
+                    tcp_state
                 );
                 Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
-                socket.close();
+                self.outbound.reset();
+                self.server.end_session();
+                self.session_active = false;
+                outbound_pending = false;
+                let conn_id = self.active_client_id.unwrap_or(0);
+                log_closed_conn = Some(conn_id);
+                record_closed_conn = Some(conn_id);
+                self.active_client_id = None;
+                self.peer_endpoint = None;
+                Self::set_auth_state(
+                    &mut self.auth_state,
+                    self.active_client_id,
+                    AuthState::Start,
+                );
+                if socket.state() != TcpState::Closed {
+                    socket.abort();
+                }
+                reset_session = true;
+                reset_tcp_state = Some(socket.state());
+                allow_flush = false;
+            }
+
+            if matches!(socket.state(), TcpState::Closed) && self.session_active {
+                Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
+                self.outbound.reset();
                 self.server.end_session();
                 self.session_active = false;
                 let conn_id = self.active_client_id.unwrap_or(0);
@@ -3309,7 +3526,25 @@ impl<D: NetDevice> NetStack<D> {
                     self.active_client_id,
                     AuthState::Start,
                 );
-                activity |= true;
+                reset_session = true;
+                reset_tcp_state = Some(socket.state());
+                allow_flush = false;
+            }
+
+            if allow_flush {
+                activity |= Self::flush_outbound(
+                    &mut self.server,
+                    &mut self.outbound,
+                    &mut self.telemetry,
+                    &mut self.conn_bytes_written,
+                    &mut self.counters,
+                    socket,
+                    now_ms,
+                    self.active_client_id,
+                    self.auth_state,
+                    &mut self.session_state,
+                );
+                outbound_pending |= self.server.has_outbound();
             }
 
             let snapshot = PollSnapshot {
@@ -3322,10 +3557,14 @@ impl<D: NetDevice> NetStack<D> {
                 staged_events: self.events.len(),
             };
             self.log_poll_snapshot(snapshot);
+            last_tcp_state = socket.state();
         }
 
         if reset_session {
-            self.reset_session_state();
+            let state = reset_tcp_state.or(Some(last_tcp_state));
+            self.reset_session_state_with(state);
+        } else if self.session_state.last_state.is_none() {
+            self.session_state.last_state = Some(last_tcp_state);
         }
 
         if let Some(conn_id) = log_closed_conn {
@@ -3654,6 +3893,13 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.tcp_smoke_outbound_sent = false;
         self.tcp_smoke_last_attempt_ms = 0;
         self.tx_only_sent = false;
+        self.self_test.console_probe_done = false;
+        self.self_test.console_probe_banner_seen = false;
+        self.self_test.console_probe_established = false;
+        self.self_test.console_probe_started_ms = 0;
+        self.self_test.console_ok = false;
+        self.last_now_ms = None;
+        self.time_stall_warned = false;
         #[cfg(feature = "net-outbound-probe")]
         {
             self.probe_sent = false;

@@ -234,6 +234,8 @@ pub struct NetSelfTestResult {
     pub udp_echo_ok: bool,
     /// Whether the TCP smoke test completed.
     pub tcp_ok: bool,
+    /// Whether the TCP console listener responded and recovered.
+    pub console_ok: bool,
 }
 
 /// Summary of the self-test subsystem for consoles.
