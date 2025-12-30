@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Event pump coordinating serial, timer, networking, and IPC work for the root task.
 
 //! Cooperative event pump coordinating serial, timer, networking, and IPC work.
 //!
@@ -741,9 +742,15 @@ where
                 uart = context.uart_slot.unwrap_or(crate::sel4::seL4_CapNull),
             );
         }
-        self.emit_console_line(CONSOLE_BANNER);
-        self.emit_console_line("Cohesix console ready");
-        self.emit_help();
+        self.emit_serial_line(CONSOLE_BANNER);
+        self.emit_serial_line("Cohesix console ready");
+        self.emit_help_serial_only();
+        #[cfg(feature = "net-console")]
+        if let Some(net) = self.net.as_mut() {
+            net.send_console_line(
+                "[net-console] authenticate using AUTH <role> <token> to receive console output",
+            );
+        }
         debug_uart_str("[dbg] console: writing 'cohesix>' prompt\n");
         self.emit_prompt();
         self.serial.poll_io();
@@ -815,12 +822,16 @@ where
 
     /// Emit a console line to the serial console and any attached TCP clients.
     pub fn emit_console_line(&mut self, line: &str) {
-        self.serial.enqueue_tx(line.as_bytes());
-        self.serial.enqueue_tx(b"\r\n");
+        self.emit_serial_line(line);
         #[cfg(feature = "net-console")]
         if let Some(net) = self.net.as_mut() {
             net.send_console_line(line);
         }
+    }
+
+    fn emit_serial_line(&mut self, line: &str) {
+        self.serial.enqueue_tx(line.as_bytes());
+        self.serial.enqueue_tx(b"\r\n");
     }
 
     fn emit_prompt(&mut self) {
@@ -837,6 +848,18 @@ where
         self.emit_console_line("  nettest  - Run network self-test (dev-virt)");
         self.emit_console_line("  netstats - Show network counters");
         self.emit_console_line("  quit  - Exit the console session");
+    }
+
+    fn emit_help_serial_only(&mut self) {
+        self.emit_serial_line("Commands:");
+        self.emit_serial_line("  help  - Show this help");
+        self.emit_serial_line("  bi    - Show bootinfo summary");
+        self.emit_serial_line("  caps  - Show capability slots");
+        self.emit_serial_line("  mem   - Show untyped summary");
+        self.emit_serial_line("  ping  - Respond with pong");
+        self.emit_serial_line("  nettest  - Run network self-test (dev-virt)");
+        self.emit_serial_line("  netstats - Show network counters");
+        self.emit_serial_line("  quit  - Exit the console session");
     }
 
     #[cfg(feature = "kernel")]

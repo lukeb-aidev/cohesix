@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Host-side mock network queue and TCP console stack used in tests.
 
 #![cfg(not(feature = "kernel"))]
 
@@ -357,7 +358,7 @@ impl NetStack {
         let mut activity = false;
         let pre_auth = !self.server.is_authenticated();
         while let Some(line) = self.server.pop_outbound() {
-            if pre_auth && !(line.starts_with("OK AUTH") || line.starts_with("ERR AUTH")) {
+            if pre_auth && !TcpConsoleServer::is_preauth_transmit_allowed(line.as_str()) {
                 self.server.push_outbound_front(line);
                 break;
             }
