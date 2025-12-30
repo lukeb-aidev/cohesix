@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Console parser and interactive shell for the root task.
 
 #![allow(unsafe_code)]
 
@@ -64,6 +65,9 @@ pub enum Command {
     NetStats,
     Spawn(String<MAX_JSON_LEN>),
     Kill(String<MAX_ID_LEN>),
+    CacheLog {
+        count: Option<u16>,
+    },
 }
 
 /// Errors surfaced by the console parser.
@@ -76,6 +80,7 @@ pub enum ConsoleError {
     MissingArgument(&'static str),
     ValueTooLong(&'static str),
     RateLimited(u64),
+    InvalidValue(&'static str),
 }
 
 impl fmt::Display for ConsoleError {
@@ -86,6 +91,7 @@ impl fmt::Display for ConsoleError {
             Self::InvalidVerb => write!(f, "unsupported console command"),
             Self::MissingArgument(arg) => write!(f, "missing required argument: {arg}"),
             Self::ValueTooLong(arg) => write!(f, "argument {arg} exceeds allowed length"),
+            Self::InvalidValue(arg) => write!(f, "invalid value for argument {arg}"),
             Self::RateLimited(delay) => {
                 write!(
                     f,
@@ -237,6 +243,7 @@ impl CohesixConsole {
         self.emit_line("  caps  - Show capability slots");
         self.emit_line("  mem   - Show untyped summary");
         self.emit_line("  ping  - Respond with pong");
+        self.emit_line("  cachelog [n] - Dump recent cache operations");
         self.emit_line("  quit  - Exit the console session");
     }
 
@@ -302,6 +309,18 @@ impl CohesixConsole {
             Command::Log => self.emit_line("log streaming unavailable"),
             Command::NetTest | Command::NetStats => {
                 self.emit_line("network commands not available on root console")
+            }
+            Command::CacheLog { count } => {
+                let count = usize::from(count.unwrap_or(64));
+                #[cfg(all(feature = "kernel", target_os = "none"))]
+                {
+                    crate::hal::cache::write_recent_ops(self, count);
+                    self.console.flush();
+                }
+                #[cfg(not(target_os = "none"))]
+                {
+                    self.emit_line("cachelog unavailable on host targets");
+                }
             }
             Command::Attach { .. }
             | Command::Tail { .. }
@@ -446,6 +465,18 @@ impl CommandParser {
             v if v.eq_ignore_ascii_case("nettest") => Ok(Command::NetTest),
             v if v.eq_ignore_ascii_case("netstats") => Ok(Command::NetStats),
             v if v.eq_ignore_ascii_case("log") => Ok(Command::Log),
+            v if v.eq_ignore_ascii_case("cachelog") => {
+                if remainder.is_empty() {
+                    return Ok(Command::CacheLog { count: None });
+                }
+                let count = remainder
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .parse::<u16>()
+                    .map_err(|_| ConsoleError::InvalidValue("count"))?;
+                Ok(Command::CacheLog { count: Some(count) })
+            }
             v if v.eq_ignore_ascii_case("quit") => Ok(Command::Quit),
             v if v.eq_ignore_ascii_case("tail") => {
                 if remainder.is_empty() {
@@ -570,5 +601,29 @@ mod tests {
     #[test]
     fn netstats_command_parses() {
         assert_eq!(parse("netstats\n").unwrap(), Command::NetStats);
+    }
+
+    #[test]
+    fn cachelog_parses_default() {
+        assert_eq!(
+            parse("cachelog\n").unwrap(),
+            Command::CacheLog { count: None }
+        );
+    }
+
+    #[test]
+    fn cachelog_parses_count() {
+        assert_eq!(
+            parse("cachelog 32\n").unwrap(),
+            Command::CacheLog { count: Some(32) }
+        );
+    }
+
+    #[test]
+    fn cachelog_rejects_invalid_count() {
+        assert_eq!(
+            parse("cachelog nope\n").unwrap_err(),
+            ConsoleError::InvalidValue("count")
+        );
     }
 }
