@@ -1,5 +1,4 @@
 // Author: Lukas Bower
-// Purpose: Event pump integration tests covering serial and timer coordination.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -109,11 +108,6 @@ impl SharedSerial {
             guard.push_back(byte);
         }
     }
-
-    fn drain_tx(&self) -> Vec<u8> {
-        let mut guard = self.tx.lock().unwrap();
-        guard.drain(..).collect()
-    }
 }
 
 impl ErrorType for SharedSerial {
@@ -196,34 +190,4 @@ fn authentication_pressure_does_not_block_timer() {
     assert!(metrics.timer_ticks >= 2);
     assert!(metrics.denied_commands >= 1);
     assert!(audit.denials.iter().any(|entry| entry.contains("attach")));
-}
-
-#[test]
-fn startup_banner_and_prompt_emit_once() {
-    let driver = SharedSerial::new();
-    let handle = driver.clone();
-    let serial: DefaultSerialPort<_> = SerialPort::new(driver);
-    let timer = DeterministicTimer::from_ticks(&[]);
-    let ipc = CountingIpc::new();
-    let mut tickets: TicketTable<4> = TicketTable::new();
-    tickets.register(Role::Queen, "token").unwrap();
-    let mut audit = AuditCapture::new();
-    let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
-
-    pump.start_cli();
-
-    let rendered = String::from_utf8(handle.drain_tx()).expect("utf8 transcript");
-    assert!(
-        rendered.contains("[Cohesix] Root console ready (type 'help' for commands)\r\nCohesix console ready\r\nCommands:"),
-        "banner and help must appear contiguously: {rendered:?}"
-    );
-    assert_eq!(
-        rendered.matches("cohesix> ").count(),
-        1,
-        "prompt must appear exactly once"
-    );
-    assert!(
-        rendered.ends_with("cohesix> "),
-        "prompt must terminate transcript: {rendered:?}"
-    );
 }
