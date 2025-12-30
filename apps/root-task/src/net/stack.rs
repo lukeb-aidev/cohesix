@@ -9,6 +9,8 @@
 //! - `tcp-echo-31337` bypasses console authentication and echoes any bytes
 //!   received on port 31337 back to the sender for plumbing checks (`nc
 //!   127.0.0.1 31337`).
+//! - `net-outbound-probe` verifies outbound TCP SYN/handshake to a configurable
+//!   external IP:port (no DNS).
 //!
 //! Host sanity checks:
 //! - With `tcp-echo-31337`, run `nc 127.0.0.1 31337` and type input; expect
@@ -79,7 +81,9 @@ const UDP_BEACON_PORT: u16 = 40_000;
 const TCP_SMOKE_PORT: u16 = 31_339;
 const TCP_SMOKE_OUT_LOCAL_PORT: u16 = 31_340;
 #[cfg(feature = "net-outbound-probe")]
-const TCP_PROBE_PORT: u16 = TCP_SMOKE_PORT;
+const TCP_PROBE_PORT: u16 = 80;
+#[cfg(feature = "net-outbound-probe")]
+const TCP_PROBE_DEFAULT_IP: Ipv4Address = Ipv4Address::new(1, 1, 1, 1);
 #[cfg(feature = "net-outbound-probe")]
 const TCP_PROBE_BUFFER: usize = 128;
 #[cfg(feature = "net-outbound-probe")]
@@ -923,8 +927,6 @@ pub struct NetStack<D: NetDevice> {
     tcp_smoke_outbound_sent: bool,
     tcp_smoke_last_attempt_ms: u64,
     #[cfg(feature = "net-outbound-probe")]
-    probe_sent: bool,
-    #[cfg(feature = "net-outbound-probe")]
     probe_last_attempt_ms: u64,
     #[cfg(feature = "net-outbound-probe")]
     probe_fail_count: u32,
@@ -934,6 +936,16 @@ pub struct NetStack<D: NetDevice> {
     probe_warned_once: bool,
     #[cfg(feature = "net-outbound-probe")]
     probe_hint_logged: bool,
+    #[cfg(feature = "net-outbound-probe")]
+    probe_last_success_ms: u64,
+    #[cfg(feature = "net-outbound-probe")]
+    probe_success_count: u32,
+    #[cfg(feature = "net-outbound-probe")]
+    probe_attempts: u32,
+    #[cfg(feature = "net-outbound-probe")]
+    probe_disabled: bool,
+    #[cfg(feature = "net-outbound-probe")]
+    probe_last_state: Option<TcpState>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1907,8 +1919,6 @@ impl<D: NetDevice> NetStack<D> {
             tcp_smoke_outbound_sent: false,
             tcp_smoke_last_attempt_ms: 0,
             #[cfg(feature = "net-outbound-probe")]
-            probe_sent: false,
-            #[cfg(feature = "net-outbound-probe")]
             probe_last_attempt_ms: 0,
             #[cfg(feature = "net-outbound-probe")]
             probe_fail_count: 0,
@@ -1918,6 +1928,16 @@ impl<D: NetDevice> NetStack<D> {
             probe_warned_once: false,
             #[cfg(feature = "net-outbound-probe")]
             probe_hint_logged: false,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_last_success_ms: 0,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_success_count: 0,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_attempts: 0,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_disabled: false,
+            #[cfg(feature = "net-outbound-probe")]
+            probe_last_state: None,
         };
         stack.assert_bootinfo_overlaps();
         stack.log_buffer_addresses_once("net.init.buffers");
@@ -2284,9 +2304,47 @@ impl<D: NetDevice> NetStack<D> {
         }
         info!(
             target: "net-probe",
-            "[net-probe] host listener hint: nc -lv {port}",
+            "[net-probe] host sniff hint: run tcpdump on host to observe SYNs (dest port {port})",
         );
         self.probe_hint_logged = true;
+    }
+
+    #[cfg(feature = "net-outbound-probe")]
+    fn parse_ipv4_env(var: &str) -> Option<Ipv4Address> {
+        let mut octets = [0u8; 4];
+        let mut iter = var.split('.');
+        for slot in &mut octets {
+            let part = iter.next()?;
+            *slot = part.parse().ok()?;
+        }
+        if iter.next().is_some() {
+            return None;
+        }
+        Some(Ipv4Address::new(octets[0], octets[1], octets[2], octets[3]))
+    }
+
+    #[cfg(feature = "net-outbound-probe")]
+    fn parse_probe_port_env(var: &str) -> Option<u16> {
+        var.parse().ok()
+    }
+
+    #[cfg(feature = "net-outbound-probe")]
+    fn probe_destination_from_env(ip_env: Option<&str>, port_env: Option<&str>) -> IpEndpoint {
+        let ip = ip_env
+            .and_then(Self::parse_ipv4_env)
+            .unwrap_or(TCP_PROBE_DEFAULT_IP);
+        let port = port_env
+            .and_then(Self::parse_probe_port_env)
+            .unwrap_or(TCP_PROBE_PORT);
+        IpEndpoint::new(IpAddress::Ipv4(ip), port)
+    }
+
+    #[cfg(feature = "net-outbound-probe")]
+    fn probe_destination() -> IpEndpoint {
+        Self::probe_destination_from_env(
+            option_env!("COHESIX_NET_PROBE_IP"),
+            option_env!("COHESIX_NET_PROBE_PORT"),
+        )
     }
 
     #[cfg(feature = "net-outbound-probe")]
@@ -2297,34 +2355,57 @@ impl<D: NetDevice> NetStack<D> {
         if !self.service_logged {
             return false;
         }
+        if self.probe_disabled {
+            return false;
+        }
         if readiness::gate().is_some() {
             return false;
         }
         if self.ip == Ipv4Address::UNSPECIFIED {
             return false;
         }
+        let gateway = self.gateway.unwrap_or(Ipv4Address::UNSPECIFIED);
+        if gateway == Ipv4Address::UNSPECIFIED {
+            if !self.probe_warned_once {
+                log::warn!(
+                    target: "net-probe",
+                    "[net-probe][tcp] disabled (no default gateway configured)"
+                );
+                self.probe_warned_once = true;
+                self.probe_disabled = true;
+            }
+            return false;
+        }
         if !self.telemetry.link_up {
             return false;
         }
         let socket = self.sockets.get_mut::<TcpSocket>(handle);
-        let dest = IpEndpoint::new(Ipv4Address::from(DEV_VIRT_GATEWAY).into(), TCP_PROBE_PORT);
+        let dest = Self::probe_destination();
         let mut activity = false;
 
-        if self.probe_sent {
-            if socket.state() != TcpState::Closed {
-                socket.close();
-                activity = true;
-            }
-            return activity;
+        let state = socket.state();
+        if self.probe_last_state != Some(state) {
+            log::info!(
+                target: "net-probe",
+                "[net-probe][tcp] state={:?} attempt={} dest={}:{} local={:?} remote={:?}",
+                state,
+                self.probe_attempts,
+                dest.addr,
+                dest.port,
+                socket.local_endpoint(),
+                socket.remote_endpoint()
+            );
+            self.probe_last_state = Some(state);
         }
 
-        if matches!(socket.state(), TcpState::Closed) {
+        if matches!(state, TcpState::Closed) {
             if self.probe_last_attempt_ms != 0
                 && now_ms.saturating_sub(self.probe_last_attempt_ms) < TCP_PROBE_RETRY_MS
             {
                 return false;
             }
             self.probe_last_attempt_ms = now_ms;
+            self.probe_attempts = self.probe_attempts.saturating_add(1);
             let local_endpoint = IpListenEndpoint {
                 addr: Some(self.ip.into()),
                 port: 0,
@@ -2342,9 +2423,11 @@ impl<D: NetDevice> NetStack<D> {
                     if !self.probe_warned_once {
                         log::info!(
                             target: "net-probe",
-                            "[net-probe] outbound connect dest={}:{} now_ms={}",
+                            "[net-probe][tcp] connect attempt={} dest={}:{} gateway={:?} now_ms={}",
+                            self.probe_attempts,
                             dest.addr,
                             dest.port,
+                            gateway,
                             now_ms
                         );
                         self.probe_warned_once = true;
@@ -2360,11 +2443,12 @@ impl<D: NetDevice> NetStack<D> {
                         self.probe_warned_once = true;
                         log::warn!(
                             target: "net-probe",
-                            "[net-probe] connect failed dest={}:{} err={:?} failures={}",
+                            "[net-probe][tcp] connect failed dest={}:{} err={:?} failures={} attempt={}",
                             dest.addr,
                             dest.port,
                             err,
                             self.probe_fail_count,
+                            self.probe_attempts,
                         );
                     }
                 }
@@ -2373,26 +2457,32 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         if socket.state() == TcpState::Established && socket.can_send() {
-            if !self.probe_sent {
-                log::info!(
-                    target: "net-probe",
-                    "[net-probe] established dest={}:{}", dest.addr, dest.port
-                );
-            }
+            log::info!(
+                target: "net-probe",
+                "[net-probe][tcp] established dest={}:{} local={:?} remote={:?}",
+                dest.addr,
+                dest.port,
+                socket.local_endpoint(),
+                socket.remote_endpoint()
+            );
             match socket.send_slice(TCP_PROBE_PAYLOAD) {
                 Ok(sent) => {
                     log::info!(
                         target: "net-probe",
-                        "[net-probe] sent payload bytes={} dest={}:{}", sent, dest.addr, dest.port
+                        "[net-probe][tcp] sent payload bytes={} dest={}:{}",
+                        sent,
+                        dest.addr,
+                        dest.port
                     );
-                    self.probe_sent = true;
+                    self.probe_last_success_ms = now_ms;
+                    self.probe_success_count = self.probe_success_count.saturating_add(1);
                     socket.close();
                     activity = true;
                 }
                 Err(err) => {
                     log::warn!(
                         target: "net-probe",
-                        "[net-probe] send failed err={:?}",
+                        "[net-probe][tcp] send failed err={:?}",
                         err
                     );
                     socket.close();
@@ -3690,11 +3780,15 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.tx_only_sent = false;
         #[cfg(feature = "net-outbound-probe")]
         {
-            self.probe_sent = false;
             self.probe_last_attempt_ms = 0;
             self.probe_fail_count = 0;
             self.probe_last_log_ms = 0;
             self.probe_hint_logged = false;
+            self.probe_last_success_ms = 0;
+            self.probe_success_count = 0;
+            self.probe_attempts = 0;
+            self.probe_disabled = false;
+            self.probe_last_state = None;
         }
     }
 
@@ -3931,5 +4025,43 @@ mod tests {
         let (prefix, prefix_len) = NetStack::<DefaultNetDevice>::trace_conn_prefix(&payload);
         assert_eq!(prefix_len, payload.len());
         assert_eq!(&prefix[..prefix_len], payload);
+    }
+
+    #[cfg(feature = "net-outbound-probe")]
+    #[test]
+    fn parse_ipv4_env_parses_valid_octets() {
+        let parsed = NetStack::<DefaultNetDevice>::parse_ipv4_env("8.8.4.4");
+        assert_eq!(parsed, Some(Ipv4Address::new(8, 8, 4, 4)));
+    }
+
+    #[cfg(feature = "net-outbound-probe")]
+    #[test]
+    fn parse_ipv4_env_rejects_invalid_inputs() {
+        assert_eq!(NetStack::<DefaultNetDevice>::parse_ipv4_env("1.2.3"), None);
+        assert_eq!(
+            NetStack::<DefaultNetDevice>::parse_ipv4_env("1.2.3.999"),
+            None
+        );
+        assert_eq!(
+            NetStack::<DefaultNetDevice>::parse_ipv4_env("1.2.3.4.5"),
+            None
+        );
+    }
+
+    #[cfg(feature = "net-outbound-probe")]
+    #[test]
+    fn probe_destination_defaults_to_external_ip() {
+        let dest = NetStack::<DefaultNetDevice>::probe_destination_from_env(None, None);
+        assert_eq!(dest.addr, IpAddress::Ipv4(TCP_PROBE_DEFAULT_IP));
+        assert_eq!(dest.port, TCP_PROBE_PORT);
+    }
+
+    #[cfg(feature = "net-outbound-probe")]
+    #[test]
+    fn probe_destination_respects_env_overrides() {
+        let dest =
+            NetStack::<DefaultNetDevice>::probe_destination_from_env(Some("8.8.8.8"), Some("443"));
+        assert_eq!(dest.addr, IpAddress::Ipv4(Ipv4Address::new(8, 8, 8, 8)));
+        assert_eq!(dest.port, 443);
     }
 }
