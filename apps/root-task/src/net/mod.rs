@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Networking subsystem abstractions and configuration for console transports.
 
 //! Networking subsystem abstractions for host and seL4 targets.
 
@@ -11,7 +12,6 @@ pub mod diag;
 pub use diag::{NetDiagSnapshot, NET_DIAG, NET_DIAG_FEATURED};
 
 use crate::serial::DEFAULT_LINE_CAPACITY;
-use core::ops::Range;
 #[cfg(all(feature = "net", feature = "kernel"))]
 pub mod outbound;
 pub use cohesix_net_constants::{COHESIX_TCP_CONSOLE_PORT, COHSH_TCP_PORT, TCP_CONSOLE_PORT};

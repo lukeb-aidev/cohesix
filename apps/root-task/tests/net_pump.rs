@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Author: Lukas Bower
+// Purpose: Integration-oriented tests for net console event pump interactions.
 #![cfg(feature = "net-console")]
 
 use std::str;
@@ -201,6 +201,48 @@ fn attach_with_bad_ticket_is_rejected() {
         .unwrap()
         .starts_with("ERR ATTACH"));
     assert!(pump.metrics().denied_commands >= 1 || !audit.denials.is_empty());
+}
+
+#[test]
+fn preauth_clients_receive_hint_instead_of_banner() {
+    let serial = LoopbackSerial::<{ DEFAULT_RX_CAPACITY }>::new();
+    let mut audit = AuditCapture::new();
+    let mut pump = build_pump(serial, &mut audit);
+    let (mut net, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 77));
+    pump = pump.with_network(&mut net);
+
+    pump.start_cli();
+    for _ in 0..3 {
+        pump.poll();
+    }
+
+    let mut frames: heapless::Vec<heapless::String<96>, 16> = heapless::Vec::new();
+    while let Some(frame) = handle.pop_tx() {
+        let as_str = str::from_utf8(frame.as_slice())
+            .unwrap()
+            .trim_end()
+            .to_owned();
+        let mut line = heapless::String::new();
+        line.push_str(as_str.as_str()).unwrap();
+        let _ = frames.push(line);
+    }
+
+    assert!(
+        frames
+            .iter()
+            .any(|line| line.starts_with("[net-console] authenticate using AUTH")),
+        "authentication hint missing from pre-auth output: {frames:?}"
+    );
+    assert!(
+        !frames
+            .iter()
+            .any(|line| line.contains("Cohesix console ready")),
+        "banner leaked to pre-auth client: {frames:?}"
+    );
+    assert!(
+        !frames.iter().any(|line| line.contains("Commands:")),
+        "help leaked to pre-auth client: {frames:?}"
+    );
 }
 
 #[test]

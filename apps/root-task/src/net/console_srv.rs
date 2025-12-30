@@ -20,7 +20,9 @@ const AUTH_PREFIX: &str = "AUTH ";
 const DETAIL_REASON_EXPECTED_TOKEN: &str = "reason=expected-token";
 const DETAIL_REASON_INVALID_LENGTH: &str = "reason=invalid-length";
 const DETAIL_REASON_INVALID_TOKEN: &str = "reason=invalid-token";
-const PREAUTH_BUFFER_CAPACITY: usize = 8;
+const PREAUTH_FIRST_CAPACITY: usize = 4;
+const PREAUTH_LAST_CAPACITY: usize = 4;
+const PREAUTH_INFO_ALLOWLIST: &[&str] = &["[net-console]", "[cohsh-net]", "[console]", "[event]"];
 
 /// Outcome of processing newly received bytes from the TCP stream.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -42,6 +44,12 @@ enum SessionState {
     Inactive,
 }
 
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+struct PreauthFlushStats {
+    flushed: u64,
+    dropped: u64,
+}
+
 /// State machine that validates authentication tokens and buffers console lines.
 ///
 /// Flow:
@@ -56,14 +64,16 @@ pub struct TcpConsoleServer {
     inbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
     priority_outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, { CONSOLE_QUEUE_DEPTH * 4 }>,
     outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
-    // Retains the newest console lines while no authenticated client is attached to
-    // avoid saturating the live outbound queue with boot-time bursts.
-    preauth_buffer: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, PREAUTH_BUFFER_CAPACITY>,
+    // Retains the oldest and newest console lines while no authenticated client is
+    // attached to avoid saturating the live outbound queue with boot-time bursts.
+    preauth_first: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, PREAUTH_FIRST_CAPACITY>,
+    preauth_last: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, PREAUTH_LAST_CAPACITY>,
     last_activity_ms: u64,
     auth_deadline_ms: Option<u64>,
     conn_id: Option<u64>,
     outbound_drops: u64,
-    preauth_drops: u64,
+    preauth_drop_count: u64,
+    preauth_drop_warned: bool,
 }
 
 impl TcpConsoleServer {
@@ -165,12 +175,14 @@ impl TcpConsoleServer {
             inbound: Deque::new(),
             priority_outbound: Deque::new(),
             outbound: Deque::new(),
-            preauth_buffer: Deque::new(),
+            preauth_first: Deque::new(),
+            preauth_last: Deque::new(),
             last_activity_ms: 0,
             auth_deadline_ms: None,
             conn_id: None,
             outbound_drops: 0,
-            preauth_drops: 0,
+            preauth_drop_count: 0,
+            preauth_drop_warned: false,
         }
     }
 
@@ -181,6 +193,7 @@ impl TcpConsoleServer {
         self.inbound.clear();
         self.priority_outbound.clear();
         self.outbound.clear();
+        self.reset_preauth_buffers();
         self.last_activity_ms = now_ms;
         self.auth_deadline_ms = None;
         self.conn_id = conn_id;
@@ -206,14 +219,38 @@ impl TcpConsoleServer {
 
     /// Tear down any per-connection state.
     pub fn end_session(&mut self) {
+        let preauth_stats = self.snapshot_preauth_for_teardown();
+        self.enqueue_preauth_summary(preauth_stats, "session-end");
         self.set_state(SessionState::Inactive);
         self.line_buffer.clear();
         self.inbound.clear();
         self.outbound.clear();
+        self.reset_preauth_buffers();
         self.last_activity_ms = 0;
         self.auth_deadline_ms = None;
         self.conn_id = None;
         self.outbound_drops = 0;
+    }
+
+    fn reset_preauth_buffers(&mut self) {
+        self.preauth_first.clear();
+        self.preauth_last.clear();
+        self.clear_preauth_epoch();
+    }
+
+    fn clear_preauth_epoch(&mut self) {
+        self.preauth_drop_count = 0;
+        self.preauth_drop_warned = false;
+    }
+
+    fn snapshot_preauth_for_teardown(&mut self) -> PreauthFlushStats {
+        let flushed =
+            (self.preauth_first.len() as u64).saturating_add(self.preauth_last.len() as u64);
+        let dropped = self.preauth_drop_count;
+        self.preauth_first.clear();
+        self.preauth_last.clear();
+        self.clear_preauth_epoch();
+        PreauthFlushStats { flushed, dropped }
     }
 
     /// Consume bytes received from the client, returning any resulting session event.
@@ -389,7 +426,8 @@ impl TcpConsoleServer {
         self.set_state(SessionState::Authenticated);
         self.auth_deadline_ms = None;
         let _ = self.enqueue_auth_ack(AckStatus::Ok, None);
-        self.flush_preauth_buffer();
+        let preauth_stats = self.flush_preauth_buffer();
+        self.enqueue_preauth_summary(preauth_stats, "auth-flush");
         info!(
             "[cohsh-net][auth] accepted client: conn_id={} role={:?}, version={:?}",
             self.conn_label(),
@@ -439,9 +477,16 @@ impl TcpConsoleServer {
             return Err(());
         }
         let is_priority = Self::is_priority_line(buf.as_str());
-        if !self.is_authenticated() && !is_priority {
+        let is_sideband = Self::is_preauth_sideband(buf.as_str());
+        if !self.is_authenticated() && !is_priority && !is_sideband {
+            if !Self::is_preauth_allowed(buf.as_str()) {
+                return Ok(());
+            }
             self.enqueue_preauth(buf);
             return Ok(());
+        }
+        if is_sideband && !self.is_authenticated() {
+            return self.enqueue_live(buf, true);
         }
         self.enqueue_live(buf, is_priority)
     }
@@ -524,21 +569,23 @@ impl TcpConsoleServer {
         })
     }
 
-    /// Buffer a console line while no authenticated client is attached, dropping
-    /// the oldest entries first and aggregating drops to prevent log spam.
+    /// Buffer a console line while no authenticated client is attached, preserving
+    /// the first observed messages and the most recent tail while aggregating
+    /// drops to prevent log spam.
     fn enqueue_preauth(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) {
-        if self.preauth_buffer.is_full() {
-            let _ = self.preauth_buffer.pop_front();
-            self.preauth_drops = self.preauth_drops.saturating_add(1);
-            if self.preauth_drops == 1 || self.preauth_drops.is_power_of_two() {
-                warn!(
-                    "[cohsh-net] pre-auth buffer saturated (drops={})",
-                    self.preauth_drops
-                );
+        if self.preauth_first.len() < PREAUTH_FIRST_CAPACITY {
+            if self.preauth_first.push_back(line).is_err() {
+                self.note_preauth_drop();
             }
+            return;
         }
-        if self.preauth_buffer.push_back(line).is_err() {
-            self.preauth_drops = self.preauth_drops.saturating_add(1);
+
+        if self.preauth_last.is_full() {
+            self.note_preauth_drop();
+            let _ = self.preauth_last.pop_front();
+        }
+        if self.preauth_last.push_back(line).is_err() {
+            self.note_preauth_drop();
         }
     }
 
@@ -588,30 +635,100 @@ impl TcpConsoleServer {
 
     /// Move any pre-auth lines into the live queues and emit a single summary when
     /// earlier lines were dropped.
-    fn flush_preauth_buffer(&mut self) {
-        if self.preauth_drops > 0 {
-            let mut summary: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
-            if write!(
-                summary,
-                "[net-console] dropped {} lines before authentication",
-                self.preauth_drops
-            )
-            .is_err()
-            {
-                let _ = summary.push_str("[net-console] dropped pre-auth lines");
-            }
-            let _ = self.enqueue_live(summary, true);
-            self.preauth_drops = 0;
-        }
-        while let Some(line) = self.preauth_buffer.pop_front() {
+    fn flush_preauth_buffer(&mut self) -> PreauthFlushStats {
+        let mut stats = PreauthFlushStats {
+            flushed: 0,
+            dropped: self.preauth_drop_count,
+        };
+
+        while let Some(line) = self.preauth_first.pop_front() {
             let is_priority = Self::is_priority_line(line.as_str());
             let _ = self.enqueue_live(line, is_priority);
+            stats.flushed = stats.flushed.saturating_add(1);
+        }
+
+        while let Some(line) = self.preauth_last.pop_front() {
+            let is_priority = Self::is_priority_line(line.as_str());
+            let _ = self.enqueue_live(line, is_priority);
+            stats.flushed = stats.flushed.saturating_add(1);
+        }
+
+        self.clear_preauth_epoch();
+        stats
+    }
+
+    fn enqueue_preauth_summary(&mut self, stats: PreauthFlushStats, reason: &'static str) {
+        if stats.dropped == 0 && stats.flushed == 0 {
+            return;
+        }
+        let mut summary: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+        if write!(
+            summary,
+            "[net-console] pre-auth summary reason={} flushed={} dropped={}",
+            reason, stats.flushed, stats.dropped
+        )
+        .is_err()
+        {
+            let _ = summary.push_str("[net-console] pre-auth summary");
+        }
+        info!(
+            "[cohsh-net] pre-auth summary: reason={} flushed={} dropped={}",
+            reason, stats.flushed, stats.dropped
+        );
+        if self.is_authenticated() {
+            let _ = self.enqueue_live(summary, true);
+        }
+    }
+
+    fn note_preauth_drop(&mut self) {
+        self.preauth_drop_count = self.preauth_drop_count.saturating_add(1);
+        if !self.preauth_drop_warned {
+            warn!(
+                "[cohsh-net] pre-auth buffer saturated (drops={})",
+                self.preauth_drop_count
+            );
+            self.preauth_drop_warned = true;
         }
     }
 
     pub(crate) fn is_priority_line(line: &str) -> bool {
         let trimmed = line.trim_end_matches(['\r', '\n']);
         trimmed.starts_with("OK ") || trimmed.starts_with("ERR ") || trimmed == "END"
+    }
+
+    fn is_preauth_allowed(line: &str) -> bool {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        if Self::is_priority_line(trimmed)
+            || trimmed.starts_with("WARN")
+            || trimmed.starts_with("ERR")
+            || trimmed.starts_with("ERROR")
+        {
+            return true;
+        }
+        if trimmed.starts_with("INFO") {
+            return PREAUTH_INFO_ALLOWLIST
+                .iter()
+                .any(|prefix| trimmed.contains(prefix) || trimmed.starts_with(prefix));
+        }
+        PREAUTH_INFO_ALLOWLIST
+            .iter()
+            .any(|prefix| trimmed.starts_with(prefix))
+    }
+
+    pub(crate) fn is_preauth_sideband(line: &str) -> bool {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("[net-console] pre-auth")
+            || trimmed.starts_with("[net-console] authenticate")
+            || trimmed.starts_with("[net-console] preauth")
+    }
+
+    pub(crate) fn is_preauth_transmit_allowed(line: &str) -> bool {
+        line.starts_with("OK AUTH")
+            || line.starts_with("ERR AUTH")
+            || Self::is_preauth_sideband(line)
     }
 
     fn evict_oldest_non_priority(&mut self) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
@@ -753,7 +870,7 @@ mod tests {
     #[test]
     fn buffers_preauth_lines_and_flushes_on_auth() {
         let mut server = TcpConsoleServer::new(TOKEN, 10_000);
-        for idx in 0..(PREAUTH_BUFFER_CAPACITY + 2) {
+        for idx in 0..(PREAUTH_FIRST_CAPACITY + PREAUTH_LAST_CAPACITY + 2) {
             let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
             write!(&mut line, "line-{idx}").unwrap();
             assert!(server.enqueue_outbound(line.as_str()).is_ok());
@@ -774,7 +891,7 @@ mod tests {
 
         let mut drained: HeaplessVec<
             HeaplessString<DEFAULT_LINE_CAPACITY>,
-            { PREAUTH_BUFFER_CAPACITY + 4 },
+            { PREAUTH_FIRST_CAPACITY + PREAUTH_LAST_CAPACITY + 4 },
         > = HeaplessVec::new();
         while let Some(line) = server.pop_outbound() {
             drained.push(line).unwrap();
@@ -786,9 +903,9 @@ mod tests {
             drained
         );
         assert!(
-            drained
-                .iter()
-                .any(|line| line.starts_with("[net-console] dropped 2 lines before authentication")),
+            drained.iter().any(|line| line.starts_with(
+                "[net-console] pre-auth summary reason=auth-flush flushed=8 dropped=2"
+            )),
             "pre-auth drop summary missing: {:?}",
             drained
         );
@@ -796,13 +913,20 @@ mod tests {
             .iter()
             .filter(|line| line.as_str().starts_with("line-"))
             .map(|line| line.as_str())
-            .collect::<HeaplessVec<&str, { PREAUTH_BUFFER_CAPACITY + 2 }>>();
+            .collect::<HeaplessVec<&str, { PREAUTH_FIRST_CAPACITY + PREAUTH_LAST_CAPACITY + 2 }>>();
         payloads.sort_unstable();
         let mut expected: HeaplessVec<
             HeaplessString<DEFAULT_LINE_CAPACITY>,
-            PREAUTH_BUFFER_CAPACITY,
+            { PREAUTH_FIRST_CAPACITY + PREAUTH_LAST_CAPACITY },
         > = HeaplessVec::new();
-        for idx in 2..(PREAUTH_BUFFER_CAPACITY + 2) {
+        for idx in 0..PREAUTH_FIRST_CAPACITY {
+            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            write!(&mut line, "line-{idx}").unwrap();
+            expected.push(line).unwrap();
+        }
+        for idx in
+            (PREAUTH_FIRST_CAPACITY + 2)..(PREAUTH_FIRST_CAPACITY + PREAUTH_LAST_CAPACITY + 2)
+        {
             let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
             write!(&mut line, "line-{idx}").unwrap();
             expected.push(line).unwrap();
@@ -815,5 +939,47 @@ mod tests {
                 payloads
             );
         }
+    }
+
+    #[test]
+    fn drop_warning_edges_and_resets_after_flush() {
+        let mut server = TcpConsoleServer::new(TOKEN, 10_000);
+        server.begin_session(0, Some(7));
+        for idx in 0..(PREAUTH_FIRST_CAPACITY + PREAUTH_LAST_CAPACITY + 4) {
+            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            write!(&mut line, "line-{idx}").unwrap();
+            server.enqueue_outbound(line.as_str()).unwrap();
+        }
+        assert!(server.preauth_drop_warned);
+        let stats = server.flush_preauth_buffer();
+        assert_eq!(
+            stats.dropped, 4,
+            "unexpected drop count with two-tier buffer"
+        );
+        assert!(!server.preauth_drop_warned, "drop warning did not reset");
+    }
+
+    #[test]
+    fn preauth_clamping_filters_unwanted_noise() {
+        let mut server = TcpConsoleServer::new(TOKEN, 10_000);
+        server.begin_session(0, Some(8));
+        server.enqueue_outbound("INFO noisy").unwrap();
+        server.enqueue_outbound("DEBUG skip").unwrap();
+        server
+            .enqueue_outbound("[net-console] allowed info")
+            .unwrap();
+        server.enqueue_outbound("WARN keep").unwrap();
+
+        assert_eq!(server.preauth_first.len(), 2);
+        let mut lines: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, 4> = HeaplessVec::new();
+        while let Some(line) = server.preauth_first.pop_front() {
+            lines.push(line).unwrap();
+        }
+        let contents: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, 4> =
+            lines.iter().cloned().collect();
+        assert!(contents
+            .iter()
+            .any(|l| l.as_str() == "[net-console] allowed info"));
+        assert!(contents.iter().any(|l| l.as_str() == "WARN keep"));
     }
 }
