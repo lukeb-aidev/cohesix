@@ -48,9 +48,7 @@ use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
 use crate::sel4;
 #[cfg(feature = "kernel")]
 use crate::sel4::{BootInfoExt, BootInfoView};
-use crate::serial::{
-    serial_write_guard, SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPACITY,
-};
+use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPACITY};
 #[cfg(feature = "kernel")]
 use sel4_sys::seL4_CPtr;
 
@@ -744,7 +742,9 @@ where
                 uart = context.uart_slot.unwrap_or(crate::sel4::seL4_CapNull),
             );
         }
-        self.emit_startup_banner();
+        self.emit_serial_line(CONSOLE_BANNER);
+        self.emit_serial_line("Cohesix console ready");
+        self.emit_help_serial_only();
         #[cfg(feature = "net-console")]
         if let Some(net) = self.net.as_mut() {
             net.send_console_line(
@@ -752,6 +752,7 @@ where
             );
         }
         debug_uart_str("[dbg] console: writing 'cohesix>' prompt\n");
+        self.emit_prompt();
         self.serial.poll_io();
         if !self.banner_emitted {
             log::info!(target: "event", "[event] root console banner emitted");
@@ -834,16 +835,6 @@ where
     }
 
     fn emit_prompt(&mut self) {
-        let _guard = serial_write_guard();
-        self.serial.enqueue_tx(CONSOLE_PROMPT.as_bytes());
-    }
-
-    fn emit_startup_banner(&mut self) {
-        let _guard = serial_write_guard();
-        self.serial.enqueue_tx(CONSOLE_BANNER.as_bytes());
-        self.serial.enqueue_tx(b"\r\n");
-        self.serial.enqueue_tx(b"Cohesix console ready\r\n");
-        self.emit_help_serial_only();
         self.serial.enqueue_tx(CONSOLE_PROMPT.as_bytes());
     }
 
