@@ -11,7 +11,7 @@ This document enumerates concrete, high‑value **use cases** for Cohesix across
 - **Queen/Worker orchestration:** one Queen coordinating many Workers via explicit tickets, role budgets, and bounded resources; no hidden daemons.
 - **Tiny TCB + deterministic envelope:** upstream seL4 with pure Rust userspace, no POSIX/libc stacks, no in-VM GPU stacks; memory and I/O are bounded and deterministic.
 - **Coexists with existing ecosystems:** host-side sidecars mirror namespaces (Kubernetes, CUDA/NVML, OT protocols, storage, model registries) over 9P so Cohesix stays the boundary orchestrator, not a general OS.
-- **LoRA/PEFT ready:** model lifecycle pointers (`/gpu/models/active`) and schema-tagged telemetry (`/gpu/telemetry/schema.json`) make feedback loops ingestible by external training farms without expanding the VM’s TCB.
+- **LoRA / PEFT feedback loops without in-VM ML:** model lifecycle pointers (e.g. `/gpu/models/active`) and schema-tagged, bounded telemetry make edge feedback ingestible by external training farms without expanding the VM’s TCB.
 - **Cohesix is not:**
   - a Linux replacement
   - an in-VM container runtime
@@ -32,11 +32,10 @@ This document enumerates concrete, high‑value **use cases** for Cohesix across
 **Needs:** DNP3/IEC‑104 adapters; signed config updates; GPS/PTP time beacons.  
 **Constraints:** NERC/CIP, IEC 61850 contexts.
 
-### 3) Retail / Computer‑vision hub (store analytics)
-**Why:** private LAN for cameras/Jetsons; secure UEFI worker as the only WAN node.
-**Needs:** content‑addressed model updates; CBOR telemetry; local summarization.
+### 3) Retail / Computer-vision hub (store analytics)
+**Why:** private LAN for cameras/Jetsons; secure UEFI worker as the only WAN node; continuous improvement without shipping raw video upstream.  
+**Needs:** content-addressed model updates; CBOR telemetry; local summarization; LoRA-ready feedback telemetry.  
 **Constraints:** Privacy/PII handling at edge.
-Each store deployment is a hive with one Queen coordinating many workers via `cohsh` or a GUI client that speaks the same protocol, running on physical ARM64 hardware booted via UEFI; QEMU remains the development/QA harness.
 
 ### 4) Logistics & ports (ALPR, container ID, crane safety)
 **Why:** harsh networks, need resilient telemetry & updates.
@@ -56,10 +55,9 @@ Each MEC node is a hive (one Queen, many workers and GPU workers) steered throug
 **Constraints:** HIPAA/ISO 27001, locality of data.
 
 ### 7) Autonomous depots (AV/AGV fleets)
-**Why:** bandwidth‑aware model deltas; offline autonomy.
-**Needs:** CAS manifests, delta packs; multicast to many vehicles.
+**Why:** bandwidth-aware model deltas; offline autonomy; fleet-wide learning from local conditions.  
+**Needs:** CAS manifests; delta packs; multicast to many vehicles; schema-bounded telemetry suitable for PEFT aggregation.  
 **Constraints:** Safety, predictable update windows.
-Depot controllers run as hives, with the Queen coordinating many workers and GPU workers via `cohsh`-driven flows on physical ARM64 hardware; the QEMU harness mirrors these deployments during development.
 
 ### 8) Defense ISR kits / forward ops
 **Why:** seL4 assurance, LoRa for low‑bandwidth control.  
@@ -142,8 +140,8 @@ Each signage hub is a hive with one Queen orchestrating multiple workers, all co
 **Constraints:** fair sharing, noisy neighbors, operator clarity.
 
 ### 21) Model governance + provenance at the edge (attested models)
-**Why:** models are content‑addressed artifacts; deployments are file references with attestations; rollback is a pointer swap.
-**Needs:** model registry sidecar, CAS + signatures, `/proc/boot` provenance exposure, policy gating (“only signed by X”).
+**Why:** models are content-addressed artifacts; deployments are file references with attestations; rollback is a pointer swap; learning loops remain auditable.  
+**Needs:** model registry sidecar; CAS + signatures; `/proc/boot` provenance exposure; policy gating (“only signed by X”); LoRA adapter lineage tracking.  
 **Constraints:** regulated AI, audit, privacy boundaries.
 
 ### 22) Ransomware‑resistant “control‑plane safe mode” for edge fleets
@@ -165,6 +163,11 @@ Each signage hub is a hive with one Queen orchestrating multiple workers, all co
 **Why:** Kubernetes stays the workload plane while Cohesix is the control‑plane boundary exposing file APIs for lifecycle, telemetry, GPU leasing, and updates.
 **Needs:** Kubernetes sidecar bridge on the host mapping K8s operations into `/queen/...` and `/worker/...`, identity mapping, RBAC→tickets.
 **Constraints:** avoid duplicating K8s; clear separation of responsibilities.
+
+### 26) Edge learning feedback loop (LoRA / PEFT, control-plane only)
+**Why:** edge fleets generate valuable performance signals, but training must remain off-device and out of the TCB. Cohesix enables safe feedback without becoming an ML runtime.  
+**Needs:** schema-tagged, bounded telemetry; model lifecycle pointers (`/gpu/models/active`); export namespaces for external training farms.  
+**Constraints:** no gradients or raw data in the VM; deterministic bandwidth and storage envelopes; clear separation between control plane and training plane.
 
 ---
 
