@@ -270,20 +270,20 @@ fn render_record_line(record: &CacheOpRecord) -> heapless::String<192> {
     let aligned_end = record.aligned_start.saturating_add(record.aligned_len);
     let _ = write!(
         line,
-        "[cache] seq={} ts_ms={} op={} vspace=0x{vspace:04x} vaddr=0x{vaddr:016x}..0x{vend:016x} aligned=0x{astart:016x}..0x{aend:016x} len={} aligned_len={} err={} caller={}:{}",
-        record.seq,
-        record.timestamp_ms,
-        record.op.as_str(),
+        "[cache] seq={seq} ts_ms={ts_ms} op={op} vspace=0x{vspace:04x} vaddr=0x{vaddr:016x}..0x{vend:016x} aligned=0x{astart:016x}..0x{aend:016x} len={len} aligned_len={aligned_len} err={err} caller={caller_file}:{caller_line}",
+        seq = record.seq,
+        ts_ms = record.timestamp_ms,
+        op = record.op.as_str(),
         vspace = record.vspace,
         vaddr = record.vaddr,
         vend = record.vaddr.saturating_add(record.len),
         astart = record.aligned_start,
         aend = aligned_end,
-        record.len,
-        record.aligned_len,
-        record.err,
-        record.caller_file,
-        record.caller_line,
+        len = record.len,
+        aligned_len = record.aligned_len,
+        err = record.err,
+        caller_file = record.caller_file,
+        caller_line = record.caller_line,
     );
     line
 }

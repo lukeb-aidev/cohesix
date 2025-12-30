@@ -1440,7 +1440,7 @@ impl<D: NetDevice> NetStack<D> {
 
     fn guarded_connect(
         socket: &mut TcpSocket,
-        cx: smoltcp::iface::Context,
+        cx: &mut smoltcp::iface::Context,
         dest: IpEndpoint,
         local_endpoint: IpListenEndpoint,
         role: &'static str,
@@ -2397,9 +2397,9 @@ impl<D: NetDevice> NetStack<D> {
             drop(socket);
             self.log_probe_hint_once(dest.port);
             let connect_result = {
-                let cx = self.interface.context();
+                let mut cx = self.interface.context();
                 let socket = self.sockets.get_mut::<TcpSocket>(handle);
-                Self::guarded_connect(socket, cx, dest, local_endpoint, "outbound-probe")
+                Self::guarded_connect(socket, &mut cx, dest, local_endpoint, "outbound-probe")
             };
             match connect_result {
                 Ok(()) => {
@@ -2740,8 +2740,14 @@ impl<D: NetDevice> NetStack<D> {
                     addr: Some(self.ip.into()),
                     port: TCP_CONSOLE_SELFTEST_LOCAL_PORT,
                 };
-                let cx = self.interface.context();
-                match Self::guarded_connect(socket, cx, dest, local_endpoint, "console-selftest") {
+                let mut cx = self.interface.context();
+                match Self::guarded_connect(
+                    socket,
+                    &mut cx,
+                    dest,
+                    local_endpoint,
+                    "console-selftest",
+                ) {
                     Ok(()) => {
                         info!(
                             "[net-selftest] console listener selftest connect -> {}:{} (now_ms={})",
@@ -2866,9 +2872,14 @@ impl<D: NetDevice> NetStack<D> {
                     addr: Some(self.ip.into()),
                     port: TCP_SMOKE_OUT_LOCAL_PORT,
                 };
-                let cx = self.interface.context();
-                match Self::guarded_connect(socket, cx, dest, local_endpoint, "tcp-smoke-outbound")
-                {
+                let mut cx = self.interface.context();
+                match Self::guarded_connect(
+                    socket,
+                    &mut cx,
+                    dest,
+                    local_endpoint,
+                    "tcp-smoke-outbound",
+                ) {
                     Ok(()) => {
                         info!(
                             "[net-selftest] tcp-smoke outbound connect -> {}:{} (now_ms={})",
@@ -2944,7 +2955,7 @@ impl<D: NetDevice> NetStack<D> {
         let mut last_tcp_state = TcpState::Closed;
         let mut allow_flush = true;
 
-        {
+        let (snapshot, tcp_state) = {
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
             Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
 
@@ -3556,9 +3567,11 @@ impl<D: NetDevice> NetStack<D> {
                 can_send: socket.can_send(),
                 staged_events: self.events.len(),
             };
-            self.log_poll_snapshot(snapshot);
-            last_tcp_state = socket.state();
-        }
+            (snapshot, socket.state())
+        };
+
+        self.log_poll_snapshot(snapshot);
+        last_tcp_state = tcp_state;
 
         if reset_session {
             let state = reset_tcp_state.or(Some(last_tcp_state));
