@@ -4322,51 +4322,50 @@ impl KernelIpc {
         let source = lookup_fault_source(badge);
 
         match summary {
-            Some(detail) => {
-                match source {
-                    Some(src) => log::warn!(
-                        target: "root_task::kernel::fault",
-                        "[fault] stray message on fault EP: badge=0x{badge:04x} label=0x{label:08x} len={len} payload={detail}{overflow} src={name} tcb=0x{tcb:04x}",
-                        badge = badge,
-                        label = label,
-                        len = length,
-                        detail = detail,
-                        overflow = if overflow { " (tracker overflow)" } else { "" },
-                        name = src.name,
-                        tcb = src.tcb_cap,
-                    ),
-                    None => log::warn!(
+            Some(detail) => match source {
+                Some(src) => log::warn!(
+                    target: "root_task::kernel::fault",
+                    "[fault] stray message on fault EP: badge=0x{badge:04x} label=0x{label:08x} len={len} payload={detail}{overflow} src={name} tcb=0x{tcb:04x}",
+                    badge = badge,
+                    label = label,
+                    len = length,
+                    detail = detail,
+                    overflow = if overflow { " (tracker overflow)" } else { "" },
+                    name = src.name,
+                    tcb = src.tcb_cap,
+                ),
+                None => {
+                    log::warn!(
                         target: "root_task::kernel::fault",
                         "[fault] stray message on fault EP: badge=0x{badge:04x} label=0x{label:08x} len={len} payload={detail}{overflow}",
                         badge = badge,
                         label = label,
                         len = length,
+                        detail = detail,
                         overflow = if overflow { " (tracker overflow)" } else { "" },
                     );
                 }
-            }
-            None => {
-                match source {
-                    Some(src) => log::warn!(
-                        target: "root_task::kernel::fault",
-                        "[fault] stray message on fault EP: badge=0x{badge:04x} label=0x{label:08x} len={len}{overflow} src={name} tcb=0x{tcb:04x}",
-                        badge = badge,
-                        label = label,
-                        len = length,
-                        overflow = if overflow { " (tracker overflow)" } else { "" },
-                        name = src.name,
-                        tcb = src.tcb_cap,
-                    ),
-                    None => log::warn!(
-                        target: "root_task::kernel::fault",
-                        "[fault] stray message on fault EP: badge=0x{badge:04x} label=0x{label:08x} len={len}{overflow}",
-                        badge = badge,
-                        label = label,
-                        len = length,
-                        overflow = if overflow { " (tracker overflow)" } else { "" },
-                    ),
-                }
-            }
+            },
+            None => match source {
+                Some(src) => log::warn!(
+                    target: "root_task::kernel::fault",
+                    "[fault] stray message on fault EP: badge=0x{badge:04x} label=0x{label:08x} len={len}{overflow} src={name} tcb=0x{tcb:04x}",
+                    badge = badge,
+                    label = label,
+                    len = length,
+                    overflow = if overflow { " (tracker overflow)" } else { "" },
+                    name = src.name,
+                    tcb = src.tcb_cap,
+                ),
+                None => log::warn!(
+                    target: "root_task::kernel::fault",
+                    "[fault] stray message on fault EP: badge=0x{badge:04x} label=0x{label:08x} len={len}{overflow}",
+                    badge = badge,
+                    label = label,
+                    len = length,
+                    overflow = if overflow { " (tracker overflow)" } else { "" },
+                ),
+            },
         }
     }
 
