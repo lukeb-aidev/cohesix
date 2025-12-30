@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Kernel-mediated cache maintenance helpers for DMA buffers.
 //! Kernel-mediated cache maintenance helpers for DMA buffers.
 
 #![cfg(all(feature = "kernel", target_os = "none"))]
@@ -6,7 +7,7 @@
 
 use core::convert::TryFrom;
 
-use log::info;
+use log::{debug, trace};
 use sel4_sys::{
     invocation_label_nInvocationLabels, seL4_CPtr, seL4_CallWithMRs, seL4_Error,
     seL4_MessageInfo_get_label, seL4_MessageInfo_new, seL4_NoError, seL4_RangeError, seL4_SetMR,
@@ -53,7 +54,7 @@ fn call_cache_op(
     let start_word = seL4_Word::try_from(aligned_start).map_err(|_| seL4_RangeError)?;
     let end_word = seL4_Word::try_from(aligned_end).map_err(|_| seL4_RangeError)?;
 
-    info!(
+    debug!(
         target: "hal-cache",
         "[cache] CACHE_OP enter op={op} vspace=0x{vspace:04x} vaddr=0x{vaddr:016x}..0x{vend:016x} aligned=0x{astart:016x}..0x{aend:016x} len={len} aligned_len={aligned_len}",
         op = op,
@@ -67,7 +68,7 @@ fn call_cache_op(
     );
 
     let err = unsafe { call_arm_vspace_op(label, vspace, start_word, end_word) };
-    info!(
+    trace!(
         target: "hal-cache",
         "[cache] CACHE_OP exit op={} err={}",
         op,

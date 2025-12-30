@@ -526,6 +526,12 @@ impl TcpConsoleServer {
         }
     }
 
+    /// Drop any pending outbound frames, preserving pre-auth buffers.
+    pub fn clear_outbound(&mut self) {
+        self.priority_outbound.clear();
+        self.outbound.clear();
+    }
+
     /// Returns `true` when a client is authenticated and actively connected.
     pub fn is_authenticated(&self) -> bool {
         matches!(self.state, SessionState::Authenticated)
@@ -981,5 +987,22 @@ mod tests {
             .iter()
             .any(|l| l.as_str() == "[net-console] allowed info"));
         assert!(contents.iter().any(|l| l.as_str() == "WARN keep"));
+    }
+
+    #[test]
+    fn end_session_clears_outbound_queues() {
+        let mut server = TcpConsoleServer::new(TOKEN, 10_000);
+        server.begin_session(0, Some(11));
+        server.enqueue_outbound("INFO preshutdown").unwrap();
+        server.enqueue_outbound("OK AUTH hint").unwrap();
+        assert!(server.has_outbound(), "outbound queue should not be empty");
+
+        server.end_session();
+
+        assert!(
+            !server.has_outbound(),
+            "outbound queue must be cleared on end_session"
+        );
+        assert!(server.peek_outbound().is_none());
     }
 }

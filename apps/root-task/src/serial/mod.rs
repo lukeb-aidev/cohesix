@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Core serial console primitives and synchronisation helpers used by the root task.
 
 //! Minimal, no-std friendly serial console primitives used by the root task.
 //!
@@ -19,13 +20,39 @@ use core::fmt;
 use embedded_io::{Error as EmbeddedError, ErrorKind, ErrorType};
 use heapless::{spsc::Queue, String as HeaplessString};
 use nb::Error as NbError;
-use portable_atomic::AtomicU32;
+use portable_atomic::{AtomicBool, AtomicU32, Ordering as AtomicOrdering};
 #[cfg(feature = "kernel")]
-use portable_atomic::{AtomicU64, Ordering as AtomicOrdering};
+use portable_atomic::AtomicU64;
 
 #[cfg(feature = "kernel")]
 pub mod pl011;
 pub mod virtio;
+
+/// Serialise access to low-level UART writes so banner/prompt output cannot interleave with
+/// background diagnostics.
+pub struct SerialWriteGuard;
+
+static SERIAL_WRITE_LOCK: AtomicBool = AtomicBool::new(false);
+
+impl SerialWriteGuard {
+    fn new() -> Self {
+        while SERIAL_WRITE_LOCK.swap(true, AtomicOrdering::Acquire) {
+            core::hint::spin_loop();
+        }
+        Self
+    }
+}
+
+impl Drop for SerialWriteGuard {
+    fn drop(&mut self) {
+        SERIAL_WRITE_LOCK.store(false, AtomicOrdering::Release);
+    }
+}
+
+/// Obtain a guard that serialises UART writes across threads.
+pub fn serial_write_guard() -> SerialWriteGuard {
+    SerialWriteGuard::new()
+}
 
 #[cfg(feature = "kernel")]
 /// Emit a string to the seL4 debug console using [`crate::sel4::debug_put_char`].
@@ -196,6 +223,7 @@ where
 
     fn flush_tx(&mut self) {
         // Flush staged TX bytes to the device until it reports back-pressure.
+        let _guard = serial_write_guard();
         if let Some(byte) = self.pending_tx.take() {
             match self.driver.write_byte(byte) {
                 Ok(()) => {}
