@@ -1035,6 +1035,7 @@ pub fn debug_put_char(ch: i32) {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn debug_put_char_raw(byte: u8) {
+    let _guard = crate::serial::serial_write_guard();
     unsafe { seL4_DebugPutChar(byte) }
 }
 

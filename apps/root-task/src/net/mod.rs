@@ -11,8 +11,6 @@ pub mod diag;
 #[cfg(feature = "net")]
 pub use diag::{NetDiagSnapshot, NET_DIAG, NET_DIAG_FEATURED};
 
-use core::ops::Range;
-
 use crate::serial::DEFAULT_LINE_CAPACITY;
 #[cfg(all(feature = "net", feature = "kernel"))]
 pub mod outbound;

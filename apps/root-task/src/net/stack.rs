@@ -95,6 +95,7 @@ const SELF_TEST_TX_WRAP_BURST: u32 = 72;
 const NET_INIT_TAG: &str = "net-console:init";
 static STORAGE_ADDRESS_LOGGED: AtomicBool = AtomicBool::new(false);
 static NET_WATCH_LOGGED: AtomicBool = AtomicBool::new(false);
+static HOSTFWD_HINT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "net-backend-virtio")]
 type DefaultNetDevice = VirtioNetStatic;
@@ -770,6 +771,8 @@ struct SessionState {
     connect_reported: bool,
     logged_first_send: bool,
     not_ready_logged: bool,
+    close_wait_seen: bool,
+    close_wait_drained: bool,
     last_flush_state: Option<TcpState>,
     last_flush_auth_state: Option<AuthState>,
     last_flush_log_ms: u64,
@@ -1669,9 +1672,9 @@ impl<D: NetDevice> NetStack<D> {
             && matches!(current, TcpState::CloseWait | TcpState::Closed)
             && !matches!(previous_state, TcpState::Established)
         {
-            warn!(
+            info!(
                 target: "root_task::net",
-                "[tcp] connect.err addr={peer} port={port} iface_ip={iface_ip} err={:?}",
+                "[tcp] connect.end addr={peer} port={port} iface_ip={iface_ip} state={:?} (early close)",
                 current
             );
             session_state.connect_reported = true;
@@ -1679,6 +1682,9 @@ impl<D: NetDevice> NetStack<D> {
         session_state.last_state = Some(current);
         if !session_state.logged_accept && current == TcpState::Established {
             session_state.logged_accept = true;
+        }
+        if current == TcpState::CloseWait {
+            session_state.close_wait_seen = true;
         }
     }
 
@@ -3365,14 +3371,31 @@ impl<D: NetDevice> NetStack<D> {
         auth_state: AuthState,
         session_state: &mut SessionState,
     ) -> bool {
+        let tcp_state = socket.state();
+        let in_close_wait = matches!(tcp_state, TcpState::CloseWait);
         if !socket.can_send() {
+            if in_close_wait {
+                server.clear_outbound();
+                session_state.close_wait_drained = true;
+                session_state.last_flush_state = Some(tcp_state);
+                session_state.last_flush_auth_state = Some(auth_state);
+            }
             return false;
         }
         let pre_auth = !server.is_authenticated();
         let mut activity = false;
-        let state_changed = session_state.last_flush_state != Some(socket.state());
+        let state_changed = session_state.last_flush_state != Some(tcp_state);
         let auth_changed = session_state.last_flush_auth_state != Some(auth_state);
         let queued = server.has_outbound() || outbound.has_pending();
+        if in_close_wait {
+            session_state.close_wait_seen = true;
+            if session_state.close_wait_drained {
+                server.clear_outbound();
+                session_state.last_flush_state = Some(tcp_state);
+                session_state.last_flush_auth_state = Some(auth_state);
+                return false;
+            }
+        }
         let blocked_by_auth = pre_auth
             && server
                 .peek_outbound()
@@ -3384,7 +3407,7 @@ impl<D: NetDevice> NetStack<D> {
 
         if blocked_by_auth {
             let blocked_snapshot = CohshBlockedSnapshot {
-                tcp_state: socket.state(),
+                tcp_state,
                 auth_state,
                 queued,
             };
@@ -3392,7 +3415,7 @@ impl<D: NetDevice> NetStack<D> {
                 info!(
                     target: "cohsh-net",
                     "[cohsh-net] flush_outbound blocked state={:?} auth_state={:?} queued={}",
-                    socket.state(),
+                    tcp_state,
                     auth_state,
                     queued,
                 );
@@ -3400,7 +3423,7 @@ impl<D: NetDevice> NetStack<D> {
             }
             session_state.flush_blocked_since.get_or_insert(now_ms);
             session_state.last_blocked_snapshot = Some(blocked_snapshot);
-            session_state.last_flush_state = Some(socket.state());
+            session_state.last_flush_state = Some(tcp_state);
             session_state.last_flush_auth_state = Some(auth_state);
             return false;
         }
@@ -3410,7 +3433,7 @@ impl<D: NetDevice> NetStack<D> {
             info!(
                 target: "cohsh-net",
                 "[cohsh-net] flush_outbound state={:?} auth_state={:?} queued={} can_send={}",
-                socket.state(),
+                tcp_state,
                 auth_state,
                 queued,
                 socket.can_send(),
@@ -3418,7 +3441,12 @@ impl<D: NetDevice> NetStack<D> {
             session_state.last_flush_log_ms = now_ms;
         }
         session_state.flush_blocked_since = None;
+        let mut close_wait_sent = 0usize;
         while let Some(line) = server.pop_outbound() {
+            if in_close_wait && close_wait_sent > 0 {
+                server.push_outbound_front(line);
+                break;
+            }
             if pre_auth && !(line.starts_with("OK AUTH") || line.starts_with("ERR AUTH")) {
                 server.push_outbound_front(line);
                 break;
@@ -3436,6 +3464,9 @@ impl<D: NetDevice> NetStack<D> {
                     }
                 }
                 OutboundLane::Log => outbound.enqueue_log(line.as_bytes()),
+            }
+            if in_close_wait {
+                close_wait_sent = close_wait_sent.saturating_add(1);
             }
         }
 
@@ -3531,7 +3562,10 @@ impl<D: NetDevice> NetStack<D> {
             stats.bytes_sent,
             stats.would_block,
         );
-        session_state.last_flush_state = Some(socket.state());
+        if in_close_wait && close_wait_sent > 0 {
+            session_state.close_wait_drained = true;
+        }
+        session_state.last_flush_state = Some(tcp_state);
         session_state.last_flush_auth_state = Some(auth_state);
         activity
     }
@@ -3626,7 +3660,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     }
 
     fn send_console_line(&mut self, line: &str) {
-        if !self.stage_policy.allow_console_io {
+        if !self.stage_policy.allow_console_io || self.session_state.close_wait_seen {
             return;
         }
         if self.server.enqueue_outbound(line).is_err() {
@@ -3710,7 +3744,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     "[net-selftest] direct guest access requires bridge/tap networking; guest addr {}",
                     udp_target.direct
                 );
-            } else {
+            } else if HOSTFWD_HINT_LOGGED
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
                 info!(
                     "[net-selftest] qemu user-net without hostfwd → add hostfwd=tcp::31338-:31338,hostfwd=tcp::31339-:31339 and use localhost",
                 );
@@ -3724,6 +3761,12 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                 );
                 info!(
                     "[net-selftest] direct guest address {} requires bridge/tap networking; skip on slirp",
+                    udp_target.direct
+                );
+            } else {
+                debug!(
+                    "[net-selftest] hostfwd hint suppressed (loopback={}, direct={})",
+                    udp_target.loopback,
                     udp_target.direct
                 );
             }
