@@ -1,39 +1,95 @@
 <!-- Author: Lukas Bower -->
 # AGENTS — Cohesix Build Charter (Pure Rust Userspace, ARM64)
-You are a world-class Operating System designer with deep expertise in seL4 and Rust on aarch64. You are building Cohesix, a new operating system providing a control plane for highly secure management of edge GPU nodes, using a Queen/Worker paradigm for one-to-many orchestration and telemetry.
+
+You are an OS designer expert in seL4 and Rust on aarch64.  
+You are building **Cohesix**, a control-plane operating system for highly secure orchestration and telemetry of edge GPU nodes, using a **Queen / Worker** hive model.
+
+This document is **normative**. It is a binding contract for design, implementation, and documentation.  
+Violations block merge. Warn of violations BEFORE completing tasks.
+
+---
 
 ## Scope & Targets
-- **Host**: macOS 26 on Apple Silicon (M4).
+- **Host**: macOS 26 (Apple Silicon, M-series).
 - **Target VM**: QEMU `aarch64/virt` with GICv3.
-- **Target Hardware**: UEFI `aarch64/virt` , details TBC.
+- **Target Hardware**: UEFI `aarch64/virt` (details TBC).
 - **Kernel**: Upstream seL4 (external; never vendored).
-- **Userspace**: Pure Rust root task, NineDoor 9P server, worker suites, and host-side client and GPU bridge tools.
+- **Userspace**: Pure Rust root task, NineDoor 9P server, worker roles, host-side client and GPU bridge tools.
 
-## Kernel Build Artefacts
-- Reference kernel build outputs (headers, slot layouts, generated metadata) reside in `seL4/build/`.
+## Kernel Build Artifacts
+Kernel reference outputs (headers, slot layouts, generated metadata) live in:
+```
+seL4/build/
+```
 
-## Operating Rules
-1. **Single Source of Truth** — This `AGENTS.md`, plus `README.md` and `/docs/*.md` constitute canonical guidance. Update them alongside code.
-1a. **Compiler Alignment** — All manifests and generated artefacts (`root_task.toml`, `coh-rtc` outputs) define the system state. Code or docs that diverge from compiler output are invalid; regenerate manifests instead of editing generated code.
-2. **No Scope Creep** — Implement only items sanctioned by the active milestone in `BUILD_PLAN.md`.
-3. **Atomic Work** — Each task must land with compiling code (`cargo check`) and updated tests/docs. Keep commits focused.
-4. **Tiny TCB** — No POSIX emulation layers. GPU integration stays outside the VM. The code footprint must be self-contained and secure.
-5. **Capability Discipline** — Interactions occur through 9P namespaces using role-scoped capability tickets.
-6. **Keep it Simple and Elegant** — Do not over engineer. Follow Rust best practice. Follow seL4 on aarch64 best practice. Always consider compatibility with docs/BUILD_PLAN.md.
-7. **Tooling Alignment** — Use the macOS ARM64 toolchain in `TOOLCHAIN_MAC_ARM64.md`. Do not assume Linux-specific tooling in VM code.
+These artifacts define kernel-level truth. Code must align with them exactly.
 
-### Worker Bring-up
-- Root-task spawns **queen**, **worker-heart**, and **worker-gpu** per the sequencing in `docs/BUILD_PLAN.md`, handing out scheduling contexts that follow `docs/ROLES_AND_SCHEDULING.md` budgets.
-- Workers run solely via their mounted namespaces (e.g., `/worker/<id>`), exchanging tickets and telemetry through Secure9P; no host-initiated ad-hoc RPC exists, and all coordination is file and event driven.
+---
 
-### GPU Worker Boundaries
-- Worker-gpu handles ticket/lease files and telemetry only; GPU hardware access stays on the host-side `gpu-bridge-host`, keeping CUDA/NVML outside the VM and TCB.
+## Operating Rules (Normative — Violations Block Merge)
 
-## Task Template (use verbatim in planning docs)
+1. **Canonical Sources**
+   - `AGENTS.md`, `README.md`, and `/docs/*.md` are canonical.
+   - Code that diverges from these documents is invalid unless the documents are updated **in the same change**.
+
+2. **Compiler-Defined Reality**
+   - Manifests and compiler-generated artifacts (`root_task.toml`, `coh-rtc` outputs) are the **sole authority** on system behavior.
+   - Code or documentation that disagrees with generated output is **invalid by definition**.
+   - The correct fix for disagreement is to update IR, regenerate artifacts, and update docs/tests — never to hand-edit generated code.
+
+3. **No Scope Creep**
+   - Only work explicitly sanctioned by the active milestone in `BUILD_PLAN.md` may be implemented.
+   - “Preparation”, “cleanup”, or “future-proofing” outside the milestone is prohibited.
+
+4. **Atomic Work**
+   - Every change must:
+     - compile (`cargo check`);
+     - include required tests;
+     - update documentation where behavior or interfaces change.
+   - Partial or speculative changes are not permitted.
+
+5. **Tiny TCB**
+   - No POSIX emulation layers.
+   - No libc-style abstractions.
+   - No in-VM GPU stacks.
+   - All heavy ecosystems (CUDA, NVML, networking sidecars) remain host-side.
+
+6. **Capability Discipline**
+   - All interactions occur via Secure9P namespaces and role-scoped capability tickets.
+   - No ad-hoc RPC, shared memory shortcuts, or implicit authority.
+
+7. **Simplicity & Correctness**
+   - Implementations **MUST** prefer the simplest design that preserves:
+     - seL4 semantics,
+     - deterministic bounds,
+     - manifest fidelity.
+   - Convenience abstractions, refactors, or “cleanups” not required by the milestone are prohibited.
+
+8. **Tooling Alignment**
+   - Use the macOS ARM64 toolchain defined in `TOOLCHAIN_MAC_ARM64.md`.
+   - Do not assume Linux tooling or POSIX facilities for VM code.
+
+---
+
+## Worker Bring-up
+- The root task spawns **queen**, **worker-heart**, and **worker-gpu** per sequencing in `docs/BUILD_PLAN.md`.
+- Scheduling contexts and budgets **must** follow `docs/ROLES_AND_SCHEDULING.md`.
+- Workers operate exclusively via their mounted namespaces (e.g. `/worker/<id>`).
+- All coordination is file- and event-driven via Secure9P.
+- Host-initiated ad-hoc RPC does not exist.
+
+## GPU Worker Boundaries
+- **worker-gpu** handles only ticket/lease files and telemetry.
+- All GPU hardware access lives in `gpu-bridge-host`.
+- CUDA/NVML never enter the VM or the trusted computing base.
+
+---
+
+## Task Template (Use Verbatim)
 ```
 Title/ID: <slug>
 Goal: <one sentence>
-Inputs: <artefacts, versions, paths>
+Inputs: <artifacts, versions, paths>
 Changes:
   - <file> — <summary>
 Commands: <exact shell commands (macOS ARM64)>
@@ -41,102 +97,134 @@ Checks: <deterministic success criteria>
 Deliverables: <files, logs, doc updates>
 ```
 
-## Roles
-- **Planner** — Breaks milestones into atomic tasks using the template above and ensures each new capability or provider field is represented in the compiler IR.
-- **Builder** — Implements code/tests, runs commands, documents results.
-- **Auditor** — Reviews diffs for scope compliance, verifies generated artefacts match manifest fingerprints, and updates docs.
-- **Queen / Workers** — Queen orchestrates control-plane actions; worker-heart emits heartbeat telemetry; worker-gpu mirrors GPU lease/ticket state. No other agent roles exist beyond those sanctioned in `docs/BUILD_PLAN.md`.
+---
 
-## Guardrails
-- Console Networking Exception — The only permitted in-VM TCP listener is the authenticated root-task console implemented with smoltcp. All other TCP transports (e.g., 9P-over-TCP, GPU control channels) remain host-only. This exception does not relax the prohibition on general-purpose networking services inside the VM.
-- Keep rootfs CPIO under 4 MiB (see `ci/size_guard.sh`).
-- 9P server runs in userspace; transports abstracted.
-- GPU workers run on host/edge nodes; VM only sees mirrored files.
-- Document new file types/paths before committing code that depends on them.
-- Changes to `/docs/*.md` must reflect the as-built state produced by the compiler (snippets, schemas, `/proc` layouts).
+## Roles
+- **Planner** — Breaks milestones into atomic tasks and ensures all new behavior is represented in compiler IR.
+- **Builder** — Implements code/tests, runs commands, and documents results.
+- **Auditor** — Verifies scope compliance, manifest hashes, generated artifacts, and docs-as-built alignment.
+- **Queen / Workers** — Queen orchestrates control-plane actions; worker-heart emits telemetry; worker-gpu mirrors GPU lease state.
+
+No other agent roles exist unless explicitly introduced in `BUILD_PLAN.md`.
 
 ---
-### Docs-as-Built Alignment (MUST apply to Milestone 8 onward)
 
-To prevent drift, you MUST follow these rules:
+## Guardrails
 
-1. **Docs → IR → Code**
-   - Any new behaviour MUST land as IR fields with validation and codegen.
-   - Build fails if IR references disabled gates, violates Secure9P bounds, or forces `std` where the runtime is `no_std`.
+- **Console Networking Exception**
+  - The only permitted in-VM TCP listener is the authenticated root-task console (smoltcp).
+  - All other TCP services (9P-over-TCP, GPU control channels, etc.) are host-only.
+  - This exception does not relax the general prohibition on networking services inside the VM.
 
-2. **Autogenerated Snippets**
-   - `coh-rtc` refreshes embedded snippets in `SECURE9P.md`, `INTERFACES.md`, and `ARCHITECTURE.md` (CBOR schema, `/proc` tree, concurrency knobs, hardware tables) during release prep.
+- Rootfs CPIO **must remain < 4 MiB** (`ci/size_guard.sh`).
+- The 9P server runs in userspace; transports are abstracted.
+- GPU workers never expose raw device access inside the VM.
+- New file types or paths **must be documented before code depends on them**.
+- Documentation must describe the **as-built** system, not intent.
 
-3. **As-Built Guard**
-   - Script compares generated file hashes, manifest fingerprints, and doc excerpts against committed versions. Drift fails CI and blocks release notes.
-   - Rule: **Documentation must describe the system “as built”** (post-codegen), not only “as intended”.
+---
 
-4. **Red Lines**
-   - Enforced in the compiler and restated here: 9P2000.L, `msize ≤ 8192`, walk depth ≤ 8, no `..`, no fid reuse after clunk, no TCP listeners inside VM unless feature-gated and documented, CPIO < 4 MiB, no POSIX façade, maintain `no_std` for VM artefacts.
+## Docs-as-Built Alignment (Mandatory from Milestone 8)
 
-5. **Regression Pack (post–Milestone 7c)**
-   - From Milestone 8 onward, any change that lands **MUST** re-run the shared regression pack from earlier milestones, not just new tests.
-   - The regression pack includes at minimum:
-     - `tests/integration/qemu_tcp_console.rs` (Milestone 7 TCP console flow).
-     - `tests/cli/boot_v0.cohsh` (baseline help/attach/log/quit script from the manifest compiler).
-     - `tests/cli/tracefs_script.sh` (TraceFS JSONL flows).
-     - `tests/cli/9p_batch.cohsh` (Secure9P batching).
-     - `tests/cli/telemetry_ring.cohsh` (telemetry rings & cursor resumption).
-     - `tests/cli/observe_watch.cohsh` (observability `/proc` grammar).
-     - `tests/cli/cas_roundtrip.cohsh` (CAS update round-trip).
-   - CI for each Milestone ≥ 8 must:
-     - Run the full regression pack unchanged and fail on any output drift (including ACK/ERR/END lines, `/proc` grammars, and telemetry formats).
-     - Only permit intentional behaviour changes when the relevant CLI scripts, doc snippets, and manifest fields are updated **in the same change**.
-   - The regression pack is treated as the canonical “no-regression” harness; new tests are **additive**, not substitutes.
+### 1. Docs → IR → Code
+- Any new behavior **MUST** land as IR fields with validation and codegen.
+- Builds fail if IR:
+  - references disabled gates,
+  - violates Secure9P bounds,
+  - forces `std` where the runtime is `no_std`.
 
-6. **Cross-Milestone Stability Rules**
-   - Changes to console ACK/ERR/END grammar, NineDoor error codes, or `/proc` node formats MUST be treated as breaking changes and require:
-     - (a) matching updates to all CLI fixtures under `tests/cli/*`,
-     - (b) regeneration of manifest-derived snippets,
-     - (c) explicit doc updates in `INTERFACES.md`, and
-     - (d) a version bump of the manifest schema.
-   - Milestones ≥ 9 MUST NOT introduce new 9P verbs or extend grammars unless routed through the manifest compiler and validated by IR red lines.
-   - Networking cadence and event-pump tick pacing MUST NOT shift across milestones unless the change is documented in `SECURITY.md` with updated bounds.
+### 2. Autogenerated Snippets
+- `coh-rtc` refreshes embedded snippets in:
+  - `SECURE9P.md`
+  - `INTERFACES.md`
+  - `ARCHITECTURE.md`
+- These snippets are authoritative and must not be edited by hand.
 
-### HAL - MUST FOLLOW
+### 3. As-Built Guard
+- CI compares:
+  - generated file hashes,
+  - manifest fingerprints,
+  - committed doc excerpts.
+- Drift fails CI and blocks merge.
 
-- **All device access goes through HAL.**  
-  No direct MMIO mapping, no raw physical addresses, no ad-hoc `unsafe` outside the HAL.
+**Any drift is a defect, even if CI does not yet catch it.**
 
-- **Drivers depend on HAL; subsystems depend on driver traits.**  
-  - Drivers (UART, NIC, future devices) use `KernelHal` / `Hardware` for mapping, DMA, IRQ.  
-  - Subsystems (console, NetStack, event pump) depend only on device traits (`UartPort`, `NetDevice`), never concrete chips.
+### 4. Red Lines (Enforced)
+- 9P2000.L only
+- `msize ≤ 8192`
+- walk depth ≤ 8
+- no `..`
+- no fid reuse after clunk
+- no TCP listeners inside VM except the console
+- rootfs CPIO < 4 MiB
+- no POSIX façade
+- VM artifacts remain `no_std`
 
-- **No hard-coding of device addresses or layouts anywhere outside HAL.**  
-  If a feature “needs a register,” it must be exposed via a HAL descriptor.
+### 5. Regression Pack (Milestone ≥ 8)
+- All changes **MUST** re-run the shared regression pack unchanged.
+- Output drift (ACK/ERR/END grammar, `/proc` layouts, telemetry formats) fails CI.
+- New tests are additive; existing fixtures remain canonical.
 
-- **Device roles, not device models.**  
-  HAL selects devices by role (e.g. `PrimaryConsole`, `PrimaryNic`).  
-  Higher layers never care whether the device is PL011, RTL8139, virtio, or future hardware.
+### 6. Cross-Milestone Stability
+- Changes to console grammar, NineDoor error codes, or `/proc` formats are breaking.
+- Breaking changes require:
+  - updated CLI fixtures,
+  - regenerated manifest artifacts,
+  - updated docs,
+  - a manifest schema version bump.
 
-- **Multiple devices are future-proof by design.**  
-  HAL supports multiple UARTs/NICs; higher layers remain unchanged.
+---
 
-- **No control-plane shortcuts around HAL.**  
-  CLI, workers, and tests must never bypass HAL for device access.
+## Host Tools (cohsh, gpu-bridge-host) — Applicability
+All charter rules apply to host tools **except** VM-only constraints.
+
+Host tools MAY use `std` and host OS facilities, but MUST NOT:
+- introduce new control-plane semantics outside Secure9P / documented console grammar,
+- bypass manifest/IR-defined schemas, error codes, or namespace layouts,
+- change ACK/ERR/END or NineDoor error semantics without the full breaking-change process,
+- rely on undocumented RPC channels into the VM.
+
+Host tools MUST remain protocol-faithful: they consume the as-built interfaces and fixtures.
+
+---
+
+## HAL — Mandatory
+
+- **All device access goes through HAL.**
+- No direct MMIO, physical addresses, or ad-hoc `unsafe` outside HAL.
+- Drivers depend on HAL; subsystems depend only on driver traits.
+- Devices are selected by **role**, not model.
+- Multiple devices are supported by design.
+- Any HAL bypass — even “temporary” — is a hard violation.
+
+---
 
 ## Canonical Documents
-- README.md
-- docs/*.md
-- seL4/seL4-manual-latest.md
-- seL4/elfloader.md
+- `README.md`
+- `docs/*.md`
+- `seL4/seL4-manual-latest.md`
+- `seL4/elfloader.md`
 
-## seL4
-A full seL4 build tree can be found in:
-- seL4
+---
 
-## Security & Testing Expectations
-- Validate all user-controlled input (9P frames, JSON commands).
-- No hardcoded secrets; use config or tickets.
-- Update or add tests whenever behaviour changes; list executed commands in PR summaries.
-- Run `cargo run -p coh-rtc` and verify regenerated artefacts hash-match committed versions before merge.
+## Security & Testing
+- Validate all user-controlled input (9P frames, JSON).
+- No hard-coded secrets; use config or tickets.
+- Behavior changes require updated tests and documented commands.
+- Before merge, run:
+  ```
+  cargo run -p coh-rtc
+  ```
+  and verify regenerated artifacts hash-match committed versions.
+
+---
+
+## Codex Instruction
+Web Codex must treat this document as a **binding contract**, not advisory guidance.  
+When in doubt, it **MUST** choose the option that preserves determinism, minimal surface area, and manifest fidelity — even if that is less convenient.
+
+---
 
 ## Future Notes
-- Automated worker lifecycle and `/queen/ctl` bindings for worker-create/worker-kill remain scheduled per `BUILD_PLAN.md` milestones.
-- Secure9P surfaces will grow explicit worker-create/worker-kill verbs and GPU lease renewal flows as milestones advance; keep namespace semantics aligned when they land.
-
+- Automated worker lifecycle and `/queen/ctl` bindings proceed per `BUILD_PLAN.md`.
+- Secure9P will grow explicit worker-create/worker-kill and GPU lease renewal verbs; namespace semantics must remain aligned when they land.
