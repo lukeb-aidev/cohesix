@@ -181,17 +181,17 @@ Each signage hub is a hive with one Queen orchestrating multiple workers, all co
 flowchart LR
   subgraph SITE["Edge Site (Factory / Store / MEC)"]
     subgraph HIVE["Cohesix Hive (one Queen, many Workers)"]
-      Q["Queen\n(root-task + NineDoor)\n/queen /proc /log"]:::queen
+      Q["Queen<br/>(root-task + NineDoor)<br/>/queen /proc /log"]:::queen
       W1["Worker: sensors/PLC"]:::worker
       W2["Worker: CV camera ingest"]:::worker
       W3["Worker: app control loop"]:::worker
-      WG["Worker: gpu stub\n(in-VM, no CUDA)"]:::worker
+      WG["Worker: gpu stub<br/>(in-VM, no CUDA)"]:::worker
     end
 
     subgraph HOST["Host ecosystems (sidecars)"]
-      OT["OT protocol bridge\n(MODBUS/CAN/DNP3/IEC-104)"]:::sidecar
-      GPU["gpu-bridge-host\nCUDA/NVML stays here"]:::sidecar
-      STORE["Local storage / spool\n(ring buffers, batch upload)"]:::sidecar
+      OT["OT protocol bridge<br/>(MODBUS/CAN/DNP3/IEC-104)"]:::sidecar
+      GPU["gpu-bridge-host<br/>CUDA/NVML stays here"]:::sidecar
+      STORE["Local storage / spool<br/>(ring buffers, batch upload)"]:::sidecar
     end
 
     CAM["Cameras / Sensors"]:::ext
@@ -199,29 +199,29 @@ flowchart LR
     JET["Jetson / Edge GPU nodes"]:::ext
   end
 
-  CLOUD["Cloud / HQ\n(Ops + Registry + Analytics)"]:::cloud
-  OPS["Operator / NOC\ncohsh or GUI client"]:::ext
+  CLOUD["Cloud / HQ<br/>(Ops + Registry + Analytics)"]:::cloud
+  OPS["Operator / NOC<br/>cohsh or GUI client"]:::ext
 
   %% flows
-  OPS -->|"cohsh attach\n(console or Secure9P)"| Q
+  OPS -->|"cohsh attach<br/>(console or Secure9P)"| Q
   CAM -->|"telemetry/video"| W2
   PLC -->|"fieldbus"| OT
-  OT -->|"mirrored files\ninto namespace"| Q
-  W1 -->|"append telemetry\n/worker/<id>/telemetry"| Q
-  W2 -->|"append summaries\n/worker/<id>/telemetry"| Q
+  OT -->|"mirrored files<br/>into namespace"| Q
+  W1 -->|"append telemetry<br/>/worker/<id>/telemetry"| Q
+  W2 -->|"append summaries<br/>/worker/<id>/telemetry"| Q
   W3 -->|"control + status"| Q
 
-  Q -->|"ticketed orchestration\n/queen/ctl"| W1
-  Q -->|"ticketed orchestration\n/queen/ctl"| W2
-  Q -->|"ticketed orchestration\n/queen/ctl"| W3
+  Q -->|"ticketed orchestration<br/>/queen/ctl"| W1
+  Q -->|"ticketed orchestration<br/>/queen/ctl"| W2
+  Q -->|"ticketed orchestration<br/>/queen/ctl"| W3
   Q -->|"lease + job via /gpu/*"| WG
-  WG -->|"append job descriptors\n/gpu/<id>/job"| Q
+  WG -->|"append job descriptors<br/>/gpu/<id>/job"| Q
 
-  GPU -->|"publishes provider nodes\n/gpu/<id>/{info,ctl,job,status}"| Q
-  JET -->|"CUDA workloads\nhost-side"| GPU
+  GPU -->|"publishes provider nodes<br/>/gpu/<id>/{info,ctl,job,status}"| Q
+  JET -->|"CUDA workloads<br/>host-side"| GPU
 
-  Q -->|"append-only logs\n/log/*"| Q
-  Q -->|"batch export / uplink\n(QUIC/HTTP outside TCB)"| STORE
+  Q -->|"append-only logs<br/>/log/*"| Q
+  Q -->|"batch export / uplink<br/>(QUIC/HTTP outside TCB)"| STORE
   STORE -->|"durable batch upload"| CLOUD
 
   classDef queen fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
@@ -286,24 +286,24 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-  USB["Portable media\n(CAS bundles)"]:::ext
+  USB["Portable media<br/>(CAS bundles)"]:::ext
   subgraph HIVE["Air-gapped site: Cohesix Hive"]
-    Q["Queen\n(root-task + NineDoor)"]:::queen
-    QUAR["/quarantine/*\n(import + verify)"]:::path
-    CAS["/cas/*\n(content-addressed store)"]:::path
-    STAGE["/staging/*\n(staged apply)"]:::path
-    APPLY["/queen/ctl\napply/rollback verbs"]:::path
-    LOG["/log/*\nappend-only audit"]:::path
+    Q["Queen<br/>(root-task + NineDoor)"]:::queen
+    QUAR["/quarantine/*<br/>(import + verify)"]:::path
+    CAS["/cas/*<br/>(content-addressed store)"]:::path
+    STAGE["/staging/*<br/>(staged apply)"]:::path
+    APPLY["/queen/ctl<br/>apply/rollback verbs"]:::path
+    LOG["/log/*<br/>append-only audit"]:::path
     W["Workers"]:::worker
   end
-  OPS["Operator\ncohsh"]:::ext
+  OPS["Operator<br/>cohsh"]:::ext
 
   USB -->|"import bundle"| QUAR
   OPS -->|"cohsh attach"| Q
-  OPS -->|"verify manifest\nhash + signature"| QUAR
+  OPS -->|"verify manifest<br/>hash + signature"| QUAR
   QUAR -->|"accepted -> promote"| CAS
   OPS -->|"stage pointer swap"| STAGE
-  OPS -->|"apply staged state\nvia /queen/ctl"| APPLY
+  OPS -->|"apply staged state<br/>via /queen/ctl"| APPLY
   APPLY -->|"validated internal actions"| Q
   Q -->|"restart/notify workers"| W
   Q -->|"write audit trail"| LOG
@@ -357,26 +357,26 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-  REG["Model registry bridge (host sidecar)\nCAS + signatures"]:::sidecar
+  REG["Model registry bridge (host sidecar)<br/>CAS + signatures"]:::sidecar
   subgraph HIVE["Cohesix Hive"]
-    Q["Queen\n(root-task + NineDoor)"]:::queen
-    POL["/policy/*\n(only signed by X)\nallowlist/denylist"]:::path
-    CAS["/cas/models/*\n(content addressed)"]:::path
-    DEP["/deploy/model\n(pointer to CAS hash)"]:::path
-    BOOT["/proc/boot\n(provenance, measurements)"]:::path
-    LOG["/log/*\nappend-only audit"]:::path
-    W["Workers consume model ref\n(no unsigned blobs)"]:::worker
+    Q["Queen<br/>(root-task + NineDoor)"]:::queen
+    POL["/policy/*<br/>(only signed by X)<br/>allowlist/denylist"]:::path
+    CAS["/cas/models/*<br/>(content addressed)"]:::path
+    DEP["/deploy/model<br/>(pointer to CAS hash)"]:::path
+    BOOT["/proc/boot<br/>(provenance, measurements)"]:::path
+    LOG["/log/*<br/>append-only audit"]:::path
+    W["Workers consume model ref<br/>(no unsigned blobs)"]:::worker
   end
 
-  OPS["Operator / CI\ncohsh"]:::ext
+  OPS["Operator / CI<br/>cohsh"]:::ext
 
-  REG -->|"publish signed model\ninto CAS"| CAS
+  REG -->|"publish signed model<br/>into CAS"| CAS
   OPS -->|"update policy bundle"| POL
-  OPS -->|"set deployment pointer\n(hash reference)"| DEP
-  DEP -->|"validated by policy\nthen applied"| Q
+  OPS -->|"set deployment pointer<br/>(hash reference)"| DEP
+  DEP -->|"validated by policy<br/>then applied"| Q
   Q -->|"audit writes"| LOG
   Q -->|"expose boot + model provenance"| BOOT
-  W -->|"fetch by hash\nverify via policy"| CAS
+  W -->|"fetch by hash<br/>verify via policy"| CAS
 
   classDef queen fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
   classDef worker fill:#f0fdf4,stroke:#15803d,stroke-width:1px;
