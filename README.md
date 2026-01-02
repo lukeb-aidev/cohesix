@@ -33,59 +33,56 @@ Cohesix is not a general-purpose operating system and is not intended to replace
 
 In short, Cohesix is an experiment in treating orchestration itself as an operating system problem, with security and determinism as first-class concerns.
 
-<!-- ========================================================= -->
 <!-- Concept Architecture — Cohesix (for README.md)             -->
-<!-- GitHub-compatible Mermaid                                  -->
-<!-- ========================================================= -->
-
 **Figure 1:** Cohesix concept architecture (Queen/Worker hive over Secure9P, host-only GPU bridge, dual consoles)
 
 ```mermaid
 flowchart LR
+
   %% =========================
   %% HOST (outside VM/TCB)
   %% =========================
-  subgraph HOST["Host (Linux/macOS) — outside Cohesix VM/TCB"]
-    OP["Operator / Automation"]:::ext
-    COHSH["cohsh (host-only)\nCanonical shell\n--transport tcp\nrole + ticket attach"]:::hosttool
-    GUI["Future GUI / Dashboard (host-only)\nSpeaks cohsh protocol"]:::hosttool
-    WIRE["secure9p-wire\nbounded framing + TCP adapter\n(host-only transport)"]:::hostlib
-    GPUB["gpu-bridge-host\nCUDA/NVML here\nlease enforcement\nmirrors /gpu/<id>/*"]:::hosttool
+  subgraph HOST["Host (outside Cohesix VM/TCB)"]
+    OP["Operator or Automation"]:::ext
+    COHSH["cohsh (host-only)\nCanonical shell\ntransport tcp\nrole and ticket attach"]:::hosttool
+    GUI["Future GUI or Dashboard (host-only)\nSpeaks cohsh protocol"]:::hosttool
+    WIRE["secure9p-wire (host)\nbounded framing\nTCP transport adapter"]:::hostlib
+    GPUB["gpu-bridge-host (host)\nCUDA and NVML here\nlease enforcement\nmirrors gpu namespace"]:::hosttool
   end
 
   %% =========================
   %% TARGET (VM today / UEFI later)
   %% =========================
-  subgraph TARGET["Target (QEMU aarch64/virt today; UEFI ARM64 hardware later)"]
+  subgraph TARGET["Target (QEMU aarch64 virt today; UEFI ARM64 later)"]
     subgraph K["Upstream seL4 kernel"]
-      SEL4["seL4\ncaps + IPC + scheduling\nformal foundation"]:::kernel
+      SEL4["seL4\ncaps, IPC, scheduling\nformal foundation"]:::kernel
     end
 
     subgraph USER["Pure Rust userspace (static CPIO rootfs)"]
-      RT["root-task\nbootstrap caps/timers\ncooperative event pump\nspawns NineDoor + roles\nowns side effects"]:::vm
-      ND["NineDoor (Secure9P server)\nexports synthetic namespace\nrole-aware mounts + policy"]:::vm
+      RT["root-task\nbootstrap caps and timers\ncooperative event pump\nspawns NineDoor and roles\nowns side effects"]:::vm
+      ND["NineDoor (Secure9P server)\nexports synthetic namespace\nrole-aware mounts and policy"]:::vm
 
-      Q["Queen role\norchestrates workers\nvia /queen/ctl"]:::role
-      WH["worker-heart\nheartbeat telemetry\n/worker/<id>/telemetry"]:::role
-      WG["worker-gpu (VM stub)\nno CUDA/NVML\nconsumes /gpu/* files"]:::role
+      Q["Queen role\norchestrates via queen ctl"]:::role
+      WH["worker-heart\nheartbeat telemetry"]:::role
+      WG["worker-gpu (VM stub)\nno CUDA or NVML\nuses gpu files"]:::role
     end
   end
 
   %% =========================
-  %% CONTROL SURFACES
+  %% CONSOLES (root-task)
   %% =========================
-  UART["PL011 console\nbring-up + recovery"]:::console
-  TCP["TCP NineDoor console\nremote operator surface\nconsumed by cohsh"]:::console
+  UART["PL011 UART console\nbring-up and recovery"]:::console
+  TCP["TCP console\nremote operator surface"]:::console
 
   %% =========================
-  %% HIVE NAMESPACE (the “OS control plane”)
+  %% HIVE NAMESPACE (Secure9P)
   %% =========================
-  subgraph NS["Hive namespace (Secure9P) — everything is a file"]
-    PROC["/proc (boot + status views)"]:::path
-    QUEEN["/queen/ctl (append-only)\nspawn/kill/bind/mount\nspawn:gpu lease requests"]:::path
-    WORK["/worker/<id>/telemetry (append-only)"]:::path
-    LOG["/log/* (append-only streams)"]:::path
-    GPU["/gpu/<id>/{info,ctl,job,status}\n(host-mirrored providers)"]:::path
+  subgraph NS["Hive namespace (Secure9P)"]
+    PROC["Path: /proc\nboot and status views"]:::path
+    QUEENCTL["Path: /queen/ctl\nappend-only control\nspawn kill bind mount\nspawn gpu lease requests"]:::path
+    WORKTEL["Path: /worker/ID/telemetry\nappend-only telemetry"]:::path
+    LOGS["Path: /log/*\nappend-only streams"]:::path
+    GPUFS["Path: /gpu/ID\ninfo ctl job status\nhost-mirrored providers"]:::path
   end
 
   %% =========================
@@ -96,31 +93,31 @@ flowchart LR
   RT --- UART
   RT --- TCP
 
-  %% Host operator paths
+  %% operator path
   OP --> COHSH
   OP --> GUI
-  COHSH -->|TCP console attach| TCP
-  GUI -->|same protocol as cohsh| TCP
+  COHSH -->|tcp attach| TCP
+  GUI -->|same protocol| TCP
 
-  %% Secure9P control/data plane
+  %% Secure9P surface
   ND --> PROC
-  ND --> QUEEN
-  ND --> WORK
-  ND --> LOG
-  ND --> GPU
+  ND --> QUEENCTL
+  ND --> WORKTEL
+  ND --> LOGS
+  ND --> GPUFS
 
-  %% Roles operate via namespace (no ad-hoc RPC)
+  %% in-VM roles
   Q -->|Secure9P ops| ND
   WH -->|Secure9P ops| ND
   WG -->|Secure9P ops| ND
 
-  %% Queen actions are file-driven
-  QUEEN -->|validated -> internal actions| RT
+  %% queen control triggers validated internal actions
+  QUEENCTL -->|validated then internal action| RT
 
-  %% GPU boundary: bridge is host-only, publishes provider nodes via bounded 9P transport
+  %% GPU boundary: host-only bridge publishes provider nodes via host transport
   GPUB --> WIRE
   WIRE -->|Secure9P transport (host-only)| ND
-  GPUB --> GPU
+  GPUB --> GPUFS
 
   %% =========================
   %% STYLING
