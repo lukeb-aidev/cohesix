@@ -396,14 +396,17 @@ impl TxSlotTracker {
             return Err(TxSlotError::OutOfRange);
         }
         match self.states.get_mut(id as usize) {
-            Some(state @ TxSlotState::Reserved { gen }) => {
-                let gen_val = *gen;
-                *state = TxSlotState::InFlight { gen: gen_val };
-                self.in_flight = self.in_flight.saturating_add(1);
-                Ok(gen_val)
-            }
-            Some(TxSlotState::InFlight { .. }) => Err(TxSlotError::NotReserved),
-            _ => Err(TxSlotError::NotReserved),
+            Some(state) => match state {
+                TxSlotState::Reserved { gen } => {
+                    let gen_val = *gen;
+                    *state = TxSlotState::InFlight { gen: gen_val };
+                    self.in_flight = self.in_flight.saturating_add(1);
+                    Ok(gen_val)
+                }
+                TxSlotState::InFlight { .. } => Err(TxSlotError::NotReserved),
+                _ => Err(TxSlotError::NotReserved),
+            },
+            None => Err(TxSlotError::NotReserved),
         }
     }
 
@@ -412,15 +415,18 @@ impl TxSlotTracker {
             return Err(TxSlotError::OutOfRange);
         }
         match self.states.get_mut(id as usize) {
-            Some(state @ TxSlotState::InFlight { gen }) => {
-                let gen_val = *gen;
-                *state = TxSlotState::Free { gen: gen_val };
-                self.in_flight = self.in_flight.saturating_sub(1);
-                self.free_count = self.free_count.saturating_add(1);
-                Ok(gen_val)
-            }
-            Some(TxSlotState::Reserved { .. }) => Err(TxSlotError::NotInFlight),
-            _ => Err(TxSlotError::NotInFlight),
+            Some(state) => match state {
+                TxSlotState::InFlight { gen } => {
+                    let gen_val = *gen;
+                    *state = TxSlotState::Free { gen: gen_val };
+                    self.in_flight = self.in_flight.saturating_sub(1);
+                    self.free_count = self.free_count.saturating_add(1);
+                    Ok(gen_val)
+                }
+                TxSlotState::Reserved { .. } => Err(TxSlotError::NotInFlight),
+                _ => Err(TxSlotError::NotInFlight),
+            },
+            None => Err(TxSlotError::NotInFlight),
         }
     }
 
@@ -4274,12 +4280,15 @@ impl VirtioNet {
         //   `reclaim_posted_head` to correlate used.id with the slot and clear the reservation.
         // - Descriptors stay populated until reclaim; clearing only happens after ownership
         //   returns to avoid exposing {addr=0,len=0} to the device.
+        let free_entries = self.tx_free_count();
+        let tx_size = self.tx_queue.size;
+        let tx_buffer_count = self.tx_buffers.len();
         log::info!(
             target: "net-console",
             "[virtio-net] TX queue initialised: size={} buffers={} free_entries={}",
-            self.tx_queue.size,
-            self.tx_buffers.len(),
-            self.tx_free_count(),
+            tx_size,
+            tx_buffer_count,
+            free_entries,
         );
     }
 
