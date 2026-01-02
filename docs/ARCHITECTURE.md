@@ -3,24 +3,7 @@
 Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
 
 **Figure 1.** Cohesix architecture overview.
-<!-- ========================================================= -->
-<!-- Cohesix Architecture Diagram (COMPLETE + white background) -->
-<!-- ========================================================= -->
 ```mermaid
-%%{
-  init: {
-    "theme": "base",
-    "themeVariables": {
-      "background": "#ffffff",
-      "primaryColor": "#ffffff",
-      "secondaryColor": "#ffffff",
-      "tertiaryColor": "#ffffff",
-      "lineColor": "#333333",
-      "textColor": "#111111"
-    },
-    "flowchart": { "curve": "linear" }
-  }
-}%%
 flowchart LR
 
   %% =========================
@@ -99,7 +82,7 @@ flowchart LR
   GPUB --> GPU
 
   %% =========================
-  %% Styles
+  %% Styles (supported on GitHub Mermaid)
   %% =========================
   classDef kernel fill:#eeeeee,stroke:#555555,stroke-width:1px;
   classDef vm fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
