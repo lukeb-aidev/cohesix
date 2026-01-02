@@ -169,6 +169,211 @@ Each signage hub is a hive with one Queen orchestrating multiple workers, all co
 **Needs:** schema-tagged, bounded telemetry; model lifecycle pointers (`/gpu/models/active`); export namespaces for external training farms.  
 **Constraints:** no gradients or raw data in the VM; deterministic bandwidth and storage envelopes; clear separation between control plane and training plane.
 
+<!-- ========================================================= -->
+<!-- USE_CASES.md — Visuals (GitHub-compatible Mermaid)         -->
+<!-- These diagrams illustrate typical Cohesix use cases.        -->
+<!-- ========================================================= -->
+
+## Diagrams
+**Figure 1** Edge “Hive” deployment (Smart factory / Retail CV hub / MEC node)
+
+```mermaid
+flowchart LR
+  subgraph SITE["Edge Site (Factory / Store / MEC)"]
+    subgraph HIVE["Cohesix Hive (one Queen, many Workers)"]
+      Q["Queen\n(root-task + NineDoor)\n/queen /proc /log"]:::queen
+      W1["Worker: sensors/PLC"]:::worker
+      W2["Worker: CV camera ingest"]:::worker
+      W3["Worker: app control loop"]:::worker
+      WG["Worker: gpu stub\n(in-VM, no CUDA)"]:::worker
+    end
+
+    subgraph HOST["Host ecosystems (sidecars)"]
+      OT["OT protocol bridge\n(MODBUS/CAN/DNP3/IEC-104)"]:::sidecar
+      GPU["gpu-bridge-host\nCUDA/NVML stays here"]:::sidecar
+      STORE["Local storage / spool\n(ring buffers, batch upload)"]:::sidecar
+    end
+
+    CAM["Cameras / Sensors"]:::ext
+    PLC["PLCs / Robots"]:::ext
+    JET["Jetson / Edge GPU nodes"]:::ext
+  end
+
+  CLOUD["Cloud / HQ\n(Ops + Registry + Analytics)"]:::cloud
+  OPS["Operator / NOC\ncohsh or GUI client"]:::ext
+
+  %% flows
+  OPS -->|"cohsh attach\n(console or Secure9P)"| Q
+  CAM -->|"telemetry/video"| W2
+  PLC -->|"fieldbus"| OT
+  OT -->|"mirrored files\ninto namespace"| Q
+  W1 -->|"append telemetry\n/worker/<id>/telemetry"| Q
+  W2 -->|"append summaries\n/worker/<id>/telemetry"| Q
+  W3 -->|"control + status"| Q
+
+  Q -->|"ticketed orchestration\n/queen/ctl"| W1
+  Q -->|"ticketed orchestration\n/queen/ctl"| W2
+  Q -->|"ticketed orchestration\n/queen/ctl"| W3
+  Q -->|"lease + job via /gpu/*"| WG
+  WG -->|"append job descriptors\n/gpu/<id>/job"| Q
+
+  GPU -->|"publishes provider nodes\n/gpu/<id>/{info,ctl,job,status}"| Q
+  JET -->|"CUDA workloads\nhost-side"| GPU
+
+  Q -->|"append-only logs\n/log/*"| Q
+  Q -->|"batch export / uplink\n(QUIC/HTTP outside TCB)"| STORE
+  STORE -->|"durable batch upload"| CLOUD
+
+  classDef queen fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
+  classDef worker fill:#f0fdf4,stroke:#15803d,stroke-width:1px;
+  classDef sidecar fill:#fff7ed,stroke:#c2410c,stroke-width:1px;
+  classDef cloud fill:#eef2ff,stroke:#4338ca,stroke-width:1px;
+  classDef ext fill:#ffffff,stroke:#334155,stroke-width:1px;
+```
+
+**Figure 2:** Vendor remote maintenance without VPN sprawl (tickets + leases + append logs)
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Vendor as Vendor Engineer
+  participant Cohsh as cohsh
+  participant ND as NineDoor
+  participant RT as root-task
+  participant POL as AccessPolicy (pre-check)
+  participant LOG as /log/session.log
+  participant MW as /maintenance/window (lease)
+  participant DEV as /worker/<id>/ctl
+
+  Note over ND: All actions are file ops; policy runs before provider logic; logs are append-only.
+
+  Vendor->>Cohsh: obtain scoped ticket (vendor, path, ttl)
+  Vendor->>Cohsh: attach role=vendor ticket
+  Cohsh->>ND: TATTACH with ticket
+  ND->>POL: evaluate ticket scope + TTL + rate limits
+  POL-->>ND: allow or deny
+
+  alt maintenance window active
+    Cohsh->>ND: TOPEN /maintenance/window (read)
+    ND-->>Cohsh: ROPEN
+    Cohsh->>ND: TREAD (confirm lease active)
+    ND-->>Cohsh: RREAD active
+
+    Cohsh->>ND: TOPEN /worker/<id>/ctl (append)
+    ND-->>Cohsh: ROPEN
+    Cohsh->>ND: TWRITE "cmd=diagnose level=basic"
+    ND->>POL: check path + verb allowed
+    POL-->>ND: allow
+    ND->>RT: perform validated internal action
+    RT-->>ND: ok
+    ND-->>Cohsh: RWRITE
+
+    Cohsh->>ND: TOPEN /log/session.log (append)
+    ND-->>Cohsh: ROPEN
+    Cohsh->>ND: TWRITE "audit vendor action cmd=diagnose target=worker/<id>"
+    ND-->>Cohsh: RWRITE
+  else window inactive or expired
+    Cohsh->>ND: TOPEN /maintenance/window (read)
+    ND-->>Cohsh: ROPEN
+    Cohsh->>ND: TREAD
+    ND-->>Cohsh: RREAD inactive
+    Cohsh->>ND: TWRITE "cmd=diagnose"
+    ND-->>Cohsh: Rerror Permission
+  end
+```
+**Figure 3:** Air-gapped update ferry (CAS bundles + staged apply + audit)
+```mermaid
+flowchart LR
+  USB["Portable media\n(CAS bundles)"]:::ext
+  subgraph HIVE["Air-gapped site: Cohesix Hive"]
+    Q["Queen\n(root-task + NineDoor)"]:::queen
+    QUAR["/quarantine/*\n(import + verify)"]:::path
+    CAS["/cas/*\n(content-addressed store)"]:::path
+    STAGE["/staging/*\n(staged apply)"]:::path
+    APPLY["/queen/ctl\napply/rollback verbs"]:::path
+    LOG["/log/*\nappend-only audit"]:::path
+    W["Workers"]:::worker
+  end
+  OPS["Operator\ncohsh"]:::ext
+
+  USB -->|"import bundle"| QUAR
+  OPS -->|"cohsh attach"| Q
+  OPS -->|"verify manifest\nhash + signature"| QUAR
+  QUAR -->|"accepted -> promote"| CAS
+  OPS -->|"stage pointer swap"| STAGE
+  OPS -->|"apply staged state\nvia /queen/ctl"| APPLY
+  APPLY -->|"validated internal actions"| Q
+  Q -->|"restart/notify workers"| W
+  Q -->|"write audit trail"| LOG
+  STAGE -->|"rollback is pointer swap"| CAS
+
+  classDef queen fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
+  classDef worker fill:#f0fdf4,stroke:#15803d,stroke-width:1px;
+  classDef path fill:#f8fafc,stroke:#334155,stroke-dasharray: 4 3;
+  classDef ext fill:#ffffff,stroke:#334155,stroke-width:1px;
+```
+**Figure 4:** GPU lease broker for multi-tenant edge (CUDA stays on host)
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Tenant as Tenant App (cohsh/GUI)
+  participant ND as NineDoor
+  participant RT as root-task
+  participant GPU as /gpu/<id>/*
+  participant GPUB as gpu-bridge-host
+
+  Note over GPUB: CUDA/NVML never enters the VM; enforcement happens here.
+
+  Tenant->>ND: TATTACH with tenant ticket
+  Tenant->>ND: TWALK /queen/ctl
+  Tenant->>ND: TOPEN /queen/ctl append
+  Tenant->>ND: TWRITE "spawn=gpu lease gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120"
+  ND->>RT: validate ticket scope + quotas
+  alt capacity available
+    RT-->>ND: ok queued
+    ND-->>Tenant: RWRITE
+    RT->>GPU: append ctl "LEASE tenant=... ttl=..."
+    GPUB->>GPU: append status QUEUED
+    GPUB->>GPU: append status RUNNING
+  else no capacity
+    RT-->>ND: Err Busy
+    ND-->>Tenant: Rerror Busy
+  end
+
+  Tenant->>ND: TOPEN /gpu/<id>/job append
+  Tenant->>ND: TWRITE "job descriptor (model ref, args, limits)"
+  ND-->>Tenant: RWRITE
+  GPUB->>GPU: append status OK or ERR
+```
+**Figure 5:** Model governance + provenance at the edge (attested models)
+```mermaid
+flowchart LR
+  REG["Model registry bridge (host sidecar)\nCAS + signatures"]:::sidecar
+  subgraph HIVE["Cohesix Hive"]
+    Q["Queen\n(root-task + NineDoor)"]:::queen
+    POL["/policy/*\n(only signed by X)\nallowlist/denylist"]:::path
+    CAS["/cas/models/*\n(content addressed)"]:::path
+    DEP["/deploy/model\n(pointer to CAS hash)"]:::path
+    BOOT["/proc/boot\n(provenance, measurements)"]:::path
+    LOG["/log/*\nappend-only audit"]:::path
+    W["Workers consume model ref\n(no unsigned blobs)"]:::worker
+  end
+
+  OPS["Operator / CI\ncohsh"]:::ext
+
+  REG -->|"publish signed model\ninto CAS"| CAS
+  OPS -->|"update policy bundle"| POL
+  OPS -->|"set deployment pointer\n(hash reference)"| DEP
+  DEP -->|"validated by policy\nthen applied"| Q
+  Q -->|"audit writes"| LOG
+  Q -->|"expose boot + model provenance"| BOOT
+  W -->|"fetch by hash\nverify via policy"| CAS
+
+  classDef queen fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
+  classDef worker fill:#f0fdf4,stroke:#15803d,stroke-width:1px;
+  classDef sidecar fill:#fff7ed,stroke:#c2410c,stroke-width:1px;
+  classDef path fill:#f8fafc,stroke:#334155,stroke-dasharray: 4 3;
+  classDef ext fill:#ffffff,stroke:#334155,stroke-width:1px;
+```
 ---
 
 ## Cross‑cutting capabilities that unlock many use cases
