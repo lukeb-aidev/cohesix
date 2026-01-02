@@ -41,36 +41,36 @@ flowchart LR
 
   subgraph HOST["Host (outside Cohesix VM/TCB)"]
     OP["Operator or Automation"]:::ext
-    COHSH["cohsh (host-only)<br/>Canonical shell\ntransport tcp\nrole and ticket attach"]:::hosttool
-    GUI["Future GUI or Dashboard (host-only)\nSpeaks cohsh protocol"]:::hosttool
-    WIRE["secure9p-wire (host)\nbounded framing\nTCP transport adapter"]:::hostlib
-    GPUB["gpu-bridge-host (host)\nCUDA and NVML here\nlease enforcement\nmirrors gpu namespace"]:::hosttool
+    COHSH["cohsh (host-only)<br/>Canonical shell<br/>transport tcp<br/>role and ticket attach"]:::hosttool
+    GUI["Future GUI or Dashboard (host-only)<br/>Speaks cohsh protocol"]:::hosttool
+    WIRE["secure9p-wire (host)<br/>bounded framing<br/>TCP transport adapter"]:::hostlib
+    GPUB["gpu-bridge-host (host)<br/>CUDA and NVML here<br/>lease enforcement<br/>mirrors gpu namespace"]:::hosttool
   end
 
   subgraph TARGET["Target (QEMU aarch64 virt today; UEFI ARM64 later)"]
     subgraph K["Upstream seL4 kernel"]
-      SEL4["seL4\ncaps, IPC, scheduling\nformal foundation"]:::kernel
+      SEL4["seL4<br/>caps, IPC, scheduling<br/>formal foundation"]:::kernel
     end
 
     subgraph USER["Pure Rust userspace (static CPIO rootfs)"]
-      RT["root-task\nbootstrap caps and timers\ncooperative event pump\nspawns NineDoor and roles\nowns side effects"]:::vm
-      ND["NineDoor (Secure9P server)\nexports synthetic namespace\nrole-aware mounts and policy"]:::vm
+      RT["root-task<br/>bootstrap caps and timers<br/>cooperative event pump<br/>spawns NineDoor and roles<br/>owns side effects"]:::vm
+      ND["NineDoor (Secure9P server)<br/>exports synthetic namespace<br/>role-aware mounts and policy"]:::vm
 
-      Q["Queen role\norchestrates via queen ctl"]:::role
-      WH["worker-heart\nheartbeat telemetry"]:::role
-      WG["worker-gpu (VM stub)\nno CUDA or NVML\nuses gpu files"]:::role
+      Q["Queen role<br/>orchestrates via queen ctl"]:::role
+      WH["worker-heart<br/>heartbeat telemetry"]:::role
+      WG["worker-gpu (VM stub)<br/>no CUDA or NVML<br/>uses gpu files"]:::role
     end
   end
 
-  UART["PL011 UART console\nbring-up and recovery"]:::console
-  TCP["TCP console\nremote operator surface"]:::console
+  UART["PL011 UART console<br/>bring-up and recovery"]:::console
+  TCP["TCP console<br/>remote operator surface"]:::console
 
   subgraph NS["Hive namespace (Secure9P)"]
     PROC["Path: /proc<br/>boot and status views"]:::path
     QUEENCTL["Path: /queen/ctl<br/>append-only control<br/>spawn kill bind mount<br/>spawn gpu lease requests"]:::path
-    WORKTEL["Path: /worker/ID/telemetry\nappend-only telemetry"]:::path
-    LOGS["Path: /log/*\nappend-only streams"]:::path
-    GPUFS["Path: /gpu/ID\ninfo ctl job status\nhost-mirrored providers"]:::path
+    WORKTEL["Path: /worker/ID/telemetry<br/>append-only telemetry"]:::path
+    LOGS["Path: /log/*<br/>append-only streams"]:::path
+    GPUFS["Path: /gpu/ID<br/>info ctl job status<br/>host-mirrored providers"]:::path
   end
 
   SEL4 --> RT
