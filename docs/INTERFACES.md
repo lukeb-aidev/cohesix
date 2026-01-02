@@ -6,19 +6,6 @@ The queen/worker verbs and `/queen/ctl` schema form the hive control API: one Qu
 
 **Figure 1.** Sequence diagram.
 ```mermaid
-%%{
-  init: {
-    "theme": "base",
-    "themeVariables": {
-      "background": "#ffffff",
-      "primaryColor": "#ffffff",
-      "secondaryColor": "#ffffff",
-      "tertiaryColor": "#ffffff",
-      "lineColor": "#333333",
-      "textColor": "#111111"
-    }
-  }
-}%%
 sequenceDiagram
   autonumber
   actor Operator
@@ -31,12 +18,12 @@ sequenceDiagram
   participant GPUB as gpu-bridge-host (provider)
   participant GPUFS as /gpu/{id}/*
 
-  Note over ND: 9P2000.L only; remove disabled; msize max 8192; append-only enforced; path UTF-8/no NUL; fid per-session.
+  Note over ND: 9P2000.L only; remove disabled; msize max 8192.
+  Note over ND: Paths are UTF-8; no NUL; each component max 255 bytes.
+  Note over ND: Fids are per-session; clunk invalidates immediately; append-only enforced.
 
-  %% ---------------------------------------------------------
   %% A) TCP console: ATTACH + keepalive + TAIL
-  %% ---------------------------------------------------------
-  Operator->>Cohsh: run cohsh --transport tcp ...
+  Operator->>Cohsh: run cohsh --transport tcp
   Cohsh->>Console: ATTACH role=<role> ticket=<ticket?>
   alt valid ticket and role
     Console-->>Cohsh: OK ATTACH role=<role>
@@ -56,82 +43,71 @@ sequenceDiagram
   end
   Console-->>Cohsh: END
 
-  Note over Console: Console is authenticated; line length max 128 bytes; auth failures rate-limited; ACK is emitted before side effects.
+  Note over Console: Authenticated; line length max 128 bytes; auth failures rate-limited; ACK before side effects.
 
-  %% ---------------------------------------------------------
   %% B) Secure9P session (preferred machine interface)
-  %% ---------------------------------------------------------
   Operator->>Cohsh: run cohsh (9P mode)
   Cohsh->>ND: TVERSION msize=8192
   ND-->>Cohsh: RVERSION msize=8192
-  Cohsh->>ND: TATTACH (ticket out-of-band)
+  Cohsh->>ND: TATTACH ticket=<ticket>
   alt ticket ok
     ND-->>Cohsh: RATTACH
   else bad ticket
-    ND-->>Cohsh: Rerror(Permission or Closed)
+    ND-->>Cohsh: Rerror Permission or Closed
   end
 
-  %% ---------------------------------------------------------
-  %% C) Queen control via /queen/ctl (append-only JSON lines)
-  %% ---------------------------------------------------------
+  %% C) Queen control via /queen/ctl (append-only line records)
   Cohsh->>ND: TWALK /queen/ctl
   ND-->>Cohsh: RWALK
   Cohsh->>ND: TOPEN /queen/ctl (append)
   ND-->>Cohsh: ROPEN
-  Cohsh->>ND: TWRITE "JSON spawn=heartbeat ticks=100 budget.ttl_s=120 budget.ops=500"
-  ND->>RT: validate JSON + ticket perms; RootTaskControl.spawn(heartbeat)
+  Cohsh->>ND: TWRITE spawn=heartbeat ticks=100 ttl_s=120 ops=500
+  ND->>RT: validate + RootTaskControl.spawn heartbeat
   alt spawn ok
-    RT-->>ND: Ok(worker_id)
+    RT-->>ND: Ok worker_id
     ND-->>Cohsh: RWRITE
   else invalid or busy
-    RT-->>ND: Err(Invalid or Busy or Permission)
-    ND-->>Cohsh: Rerror(Invalid or Busy or Permission)
+    RT-->>ND: Err Invalid or Busy or Permission
+    ND-->>Cohsh: Rerror Invalid or Busy or Permission
   end
 
-  %% ---------------------------------------------------------
   %% D) Worker telemetry (append-only)
-  %% ---------------------------------------------------------
-  RT->>WT: append "telemetry tick=42 ts_ms=..."
-  RT->>WT: append "telemetry tick=43 ts_ms=..."
+  RT->>WT: append telemetry tick=42 ts_ms=...
+  RT->>WT: append telemetry tick=43 ts_ms=...
 
-  %% ---------------------------------------------------------
   %% E) GPU provider publishes /gpu/{id}/* (host-mirrored)
-  %% ---------------------------------------------------------
-  Note over GPUB,GPUFS: GPU nodes are provider-backed: info RO JSON; ctl append; job append; status RO stream.
-
+  Note over GPUB,GPUFS: Provider-backed nodes: info RO; ctl append; job append; status RO stream.
   GPUB->>ND: Secure9P provider connect (host-only)
   ND-->>GPUB: session established
-  GPUB->>GPUFS: publish /gpu/{id}/info
-  GPUB->>GPUFS: publish /gpu/{id}/ctl
-  GPUB->>GPUFS: publish /gpu/{id}/job
-  GPUB->>GPUFS: publish /gpu/{id}/status
+  GPUB->>GPUFS: publish info
+  GPUB->>GPUFS: publish ctl
+  GPUB->>GPUFS: publish job
+  GPUB->>GPUFS: publish status
 
   %% Lease request via /queen/ctl; mirrored into /gpu/{id}/ctl and /log/queen.log
-  Cohsh->>ND: TWRITE "JSON spawn=gpu lease.gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120"
+  Cohsh->>ND: TWRITE spawn=gpu lease gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120
   ND->>RT: validate + enqueue lease request
   alt provider available
-    RT-->>ND: Ok(queued)
+    RT-->>ND: Ok queued
     ND-->>Cohsh: RWRITE
-    RT->>GPUFS: append "LEASE ..." to /gpu/{id}/ctl
-    RT->>LOG: append "lease issued ..." to /log/queen.log
-    GPUB->>GPUFS: enforce lease; append status "QUEUED"
-    GPUB->>GPUFS: append status "RUNNING"
+    RT->>GPUFS: append ctl LEASE issued
+    RT->>LOG: append lease issued
+    GPUB->>GPUFS: append status QUEUED
+    GPUB->>GPUFS: append status RUNNING
   else provider unavailable
-    RT-->>ND: Err(Busy)
-    ND-->>Cohsh: Rerror(Busy)
+    RT-->>ND: Err Busy
+    ND-->>Cohsh: Rerror Busy
   end
 
   %% Job submission + status/telemetry
-  Cohsh->>ND: TWRITE "append job descriptor to /gpu/{id}/job"
+  Cohsh->>ND: TWRITE append job to /gpu/{id}/job
   ND-->>Cohsh: RWRITE
-  GPUB->>GPUFS: append status "OK" or "ERR"
-  RT->>WT: append "gpu job state=OK/ERR ..."
+  GPUB->>GPUFS: append status OK or ERR
+  RT->>WT: append gpu job state OK or ERR
 
-  %% ---------------------------------------------------------
-  %% F) Tail logs via 9P read (append-only enforced)
-  %% ---------------------------------------------------------
+  %% F) Tail logs via 9P read
   Cohsh->>ND: TREAD /log/queen.log offset=<n>
-  ND-->>Cohsh: RREAD (append-only policy; server may ignore client offsets)
+  ND-->>Cohsh: RREAD append-only enforced
 ```
 
 ## 1. NineDoor 9P Operations
