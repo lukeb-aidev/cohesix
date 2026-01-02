@@ -66,8 +66,8 @@ flowchart LR
   TCP["TCP console\nremote operator surface"]:::console
 
   subgraph NS["Hive namespace (Secure9P)"]
-    PROC["Path: /proc\nboot and status views"]:::path
-    QUEENCTL["Path: /queen/ctl\nappend-only control\nspawn kill bind mount\nspawn gpu lease requests"]:::path
+    PROC["Path: /proc<br/>boot and status views"]:::path
+    QUEENCTL["Path: /queen/ctl<br/>append-only control<br/>spawn kill bind mount<br/>spawn gpu lease requests"]:::path
     WORKTEL["Path: /worker/ID/telemetry\nappend-only telemetry"]:::path
     LOGS["Path: /log/*\nappend-only streams"]:::path
     GPUFS["Path: /gpu/ID\ninfo ctl job status\nhost-mirrored providers"]:::path
