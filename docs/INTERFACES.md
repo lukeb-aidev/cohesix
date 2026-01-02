@@ -17,43 +17,43 @@ sequenceDiagram
   participant ND as "NineDoor (Secure9P)"
   participant RT as "root-task (RootTaskControl)"
   participant QCTL as "/queen/ctl (append-only)"
-  participant WT as "/worker/<id>/telemetry"
+  participant WT as "/worker/&lt;id&gt;/telemetry"
   participant GPUB as "gpu-bridge-host (host)"
-  participant GPUFS as "/gpu/<id>/*"
+  participant GPUFS as "/gpu/&lt;id&gt;/*"
 
-  Note over ND: 9P2000.L only<br/>ops: version/attach/walk/open/read/write/clunk/stat<br/>remove disabled<br/>msize<=8192 (TooBig if exceeded)<br/>path components <=255B, UTF-8, no NUL<br/>fid tables per-session; clunk invalidates handles immediately
+  Note over ND: 9P2000.L only<br/>ops: version/attach/walk/open/read/write/clunk/stat<br/>remove disabled<br/>msize&lt;=8192 (TooBig if exceeded)<br/>path components &lt;=255B, UTF-8, no NUL<br/>fid tables per-session; clunk invalidates handles immediately
 
   %% ---------------------------------------------------------
   %% A) TCP console attach + tail (line protocol)
   %% ---------------------------------------------------------
   Operator->>Cohsh: cohsh --transport tcp ...
-  Cohsh->>Console: ATTACH <role> <ticket?>
+  Cohsh->>Console: ATTACH &lt;role&gt; &lt;ticket?&gt;
   alt valid ticket/role
-    Console-->>Cohsh: OK ATTACH role=<role>
+    Console-->>Cohsh: OK ATTACH role=&lt;role&gt;
   else invalid / locked out
-    Console-->>Cohsh: ERR ATTACH reason=<cause>
+    Console-->>Cohsh: ERR ATTACH reason=&lt;cause&gt;
   end
 
-  par Idle keepalive
+  opt Idle keepalive
     Cohsh->>Console: PING (every 15s idle)
     Console-->>Cohsh: PONG (immediate, even mid-stream)
   end
 
-  Cohsh->>Console: TAIL <path>
-  Console-->>Cohsh: OK TAIL path=<path>
+  Cohsh->>Console: TAIL &lt;path&gt;
+  Console-->>Cohsh: OK TAIL path=&lt;path&gt;
   loop newline-delimited entries
-    Console-->>Cohsh: <entry>\n
+    Console-->>Cohsh: &lt;entry&gt;\n
   end
   Console-->>Cohsh: END
 
-  Note over Console: Max line length 128B<br/>Rate-limit auth failures: 3 strikes/60s => 90s cooldown<br/>ACKs are sent before side effects
+  Note over Console: Max line length 128B<br/>Rate-limit auth failures: 3 strikes/60s =&gt; 90s cooldown<br/>ACKs are sent before side effects
 
   %% ---------------------------------------------------------
   %% B) Secure9P session (preferred machine interface)
   %% ---------------------------------------------------------
   Operator->>Cohsh: cohsh (9P mode)
-  Cohsh->>ND: TVERSION msize<=8192
-  ND-->>Cohsh: RVERSION msize<=8192
+  Cohsh->>ND: TVERSION msize&lt;=8192
+  ND-->>Cohsh: RVERSION msize&lt;=8192
   Cohsh->>ND: TATTACH (ticket out-of-band)
   alt ticket ok
     ND-->>Cohsh: RATTACH
@@ -87,11 +87,11 @@ sequenceDiagram
   %% ---------------------------------------------------------
   %% E) GPU bridge files (host-mirrored providers)
   %% ---------------------------------------------------------
-  Note over GPUB,GPUFS: GPU bridge publishes provider-backed nodes:<br/>/gpu/<id>/info (RO JSON)<br/>/gpu/<id>/ctl (append LEASE/RELEASE/PRIORITY)<br/>/gpu/<id>/job (append JSON descriptors)<br/>/gpu/<id>/status [...]
+  Note over GPUB,GPUFS: GPU bridge publishes provider-backed nodes:<br/>/gpu/&lt;id&gt;/info (RO JSON)<br/>/gpu/&lt;id&gt;/ctl (append LEASE/RELEASE/PRIORITY)<br/>/gpu/&lt;id&gt;/job (append JSON descriptors)<br/>/gpu/&lt;id&gt;/status [...]
 
   GPUB->>ND: Secure9P provider connect (host-only)
   ND-->>GPUB: session established
-  GPUB->>GPUFS: publish /gpu/<id>/{info,ctl,job,status}
+  GPUB->>GPUFS: publish /gpu/&lt;id&gt;/{info,ctl,job,status}
 
   %% Queen requests GPU lease via /queen/ctl
   Cohsh->>ND: TWRITE {"spawn":"gpu","lease":{"gpu_id":"GPU-0","mem_mb":4096,"streams":2,"ttl_s":120}}
@@ -99,8 +99,8 @@ sequenceDiagram
   alt bridge available
     RT-->>ND: OK (queued)
     ND-->>Cohsh: RWRITE
-    RT->>GPUFS: mirror lease issuance to /gpu/<id>/ctl<br/>and /log/queen.log
-    GPUB->>GPUFS: enforce lease; update /gpu/<id>/status<br/>QUEUED->RUNNING->OK/ERR
+    RT->>GPUFS: mirror lease issuance to /gpu/&lt;id&gt;/ctl<br/>and /log/queen.log
+    GPUB->>GPUFS: enforce lease; update /gpu/&lt;id&gt;/status<br/>QUEUED-&gt;RUNNING-&gt;OK/ERR
   else bridge unavailable
     RT-->>ND: Err(Busy)
     ND-->>Cohsh: Rerror(Busy)
