@@ -4,94 +4,154 @@
 
 The queen/worker verbs and `/queen/ctl` schema form the hive control API: one Queen instance uses these interfaces to control many workers over the shared Secure9P namespace.
 
-**Figure 1.** Sequence diagram.
-<!-- ========================================================= -->
+**Figure 1.** Sequence diagram
 <!-- INTERFACES.md Sequence Diagram (COMPLETE + white background) -->
-<!-- ========================================================= -->
 ```mermaid
 sequenceDiagram
   autonumber
   actor Operator
-  participant Cohsh as "cohsh (client)"
-  participant Console as "root-task TCP console (:31337)"
-  participant ND as "NineDoor (Secure9P)"
-  participant RT as "root-task (RootTaskControl)"
-  participant QCTL as "/queen/ctl (append-only)"
-  participant WT as "/worker/{id}/telemetry"
-  participant GPUB as "gpu-bridge-host (host)"
-  participant GPUFS as "/gpu/{id}/ (namespace)"
+  participant Cohsh as cohsh
+  participant Console as root-task TCP console (:31337)
+  participant ND as NineDoor (Secure9P server)
+  participant RT as root-task (RootTaskControl)
+  participant QCTL as /queen/ctl (append-only)
+  participant WT as /worker/<id>/telemetry
+  participant LOG as /log/queen.log (append-only)
+  participant GPUB as gpu-bridge-host (provider)
+  participant GPU as /gpu/<id>/{info,ctl,job,status}
 
-  Note over ND: 9P2000.L only<br/>ops: version/attach/walk/open/read/write/clunk/stat<br/>remove disabled<br/>msize<=8192 (TooBig if exceeded)<br/>path components <=255B, UTF-8, no NUL<br/>fid tables per-session; clunk invalidates handles immediately
+  %% -------------------------------
+  %% Invariants (from docs)
+  %% -------------------------------
+  Note over ND: 9P2000.L only; remove disabled; msize <= 8192; fid per-session; clunk invalidates; UTF-8 paths; no NUL; component <= 255B.
+  Note over QCTL: Append-only UTF-8 JSON lines; unknown fields logged+ignored; spawn:gpu returns Busy if bridge unavailable.
+  Note over Console: Line protocol; max line length 128B; auth failures rate-limited; ACK before side effects; PING/PONG keepalive (PONG immediate).
+  Note over GPU: Provider-backed nodes; info RO; ctl append-only; job append-only; status RO append stream.
 
-  Operator->>Cohsh: cohsh --transport tcp ...
-  Cohsh->>Console: ATTACH {role} {ticket?}
-  alt valid ticket/role
-    Console-->>Cohsh: OK ATTACH role={role}
-  else invalid / locked out
-    Console-->>Cohsh: ERR ATTACH reason={cause}
+  %% =========================================================
+  %% A) TCP console transport (--transport tcp)
+  %% =========================================================
+  rect rgba(245,245,245,0.35)
+    Operator->>Cohsh: cohsh --transport tcp ...
+    Cohsh->>Console: ATTACH <role> <ticket?>
+    alt valid ticket and role
+      Console-->>Cohsh: OK ATTACH role=<role>
+    else invalid or RateLimited
+      Console-->>Cohsh: ERR ATTACH reason=<cause>
+    end
+
+    par keepalive during idle or streams
+      Cohsh->>Console: PING (every 15s idle)
+      Console-->>Cohsh: PONG (immediate)
+    end
+
+    Cohsh->>Console: TAIL <path>
+    Console-->>Cohsh: OK TAIL path=<path>
+    loop newline-delimited entries
+      Console-->>Cohsh: <entry line>
+      Note over Console: PONG may interleave while mid-stream.
+    end
+    Console-->>Cohsh: END
   end
 
-  opt Idle keepalive
-    Cohsh->>Console: PING (every 15s idle)
-    Console-->>Cohsh: PONG (immediate, even mid-stream)
+  %% =========================================================
+  %% B) Secure9P session (preferred machine interface)
+  %% =========================================================
+  rect rgba(235,245,255,0.35)
+    Operator->>Cohsh: cohsh (9P mode)
+    Cohsh->>ND: TVERSION msize=8192
+    ND-->>Cohsh: RVERSION msize=8192
+    Cohsh->>ND: TATTACH ticket=<ticket>
+    alt ticket ok
+      ND-->>Cohsh: RATTACH
+    else bad ticket
+      ND-->>Cohsh: Rerror Permission or Closed
+    end
   end
 
-  Cohsh->>Console: TAIL {path}
-  Console-->>Cohsh: OK TAIL path={path}
-  loop newline-delimited entries
-    Console-->>Cohsh: {entry}\n
-  end
-  Console-->>Cohsh: END
+  %% =========================================================
+  %% C) Queen control surface: /queen/ctl (append-only JSON)
+  %% =========================================================
+  rect rgba(240,255,240,0.35)
+    Cohsh->>ND: TWALK /queen/ctl
+    ND-->>Cohsh: RWALK
+    Cohsh->>ND: TOPEN /queen/ctl (append)
+    ND-->>Cohsh: ROPEN
 
-  Note over Console: Max line length 128B<br/>Rate-limit auth failures: 3 strikes/60s => 90s cooldown<br/>ACKs are sent before side effects
-
-  Operator->>Cohsh: cohsh (9P mode)
-  Cohsh->>ND: TVERSION msize<=8192
-  ND-->>Cohsh: RVERSION msize<=8192
-  Cohsh->>ND: TATTACH (ticket out-of-band)
-  alt ticket ok
-    ND-->>Cohsh: RATTACH
-  else bad ticket
-    ND-->>Cohsh: Rerror(Permission/Closed)
-  end
-
-  Cohsh->>ND: TWALK /queen/ctl
-  ND-->>Cohsh: RWALK
-  Cohsh->>ND: TOPEN /queen/ctl (append)
-  ND-->>Cohsh: ROPEN
-  Cohsh->>ND: TWRITE {"spawn":"heartbeat","ticks":100,"budget":{"ttl_s":120,"ops":500}}
-  ND->>RT: validate JSON + ticket perms<br/>then RootTaskControl.spawn(...)
-  alt spawn ok
-    RT-->>ND: Ok(worker_id)
+    Cohsh->>ND: TWRITE spawn=heartbeat ticks=100 budget.ttl_s=120 budget.ops=500
+    activate ND
+    ND->>RT: validate JSON + ticket perms
+    activate RT
+    RT-->>ND: spawn OK worker_id=worker-7
+    deactivate RT
     ND-->>Cohsh: RWRITE
-  else invalid/busy
-    RT-->>ND: Err(Invalid/Busy/Permission)
-    ND-->>Cohsh: Rerror(Invalid/Busy/Permission)
+    deactivate ND
+
+    %% bind/mount are no-ops for non-queen roles (enforced via Permission)
+    Cohsh->>ND: TWRITE bind from=/worker to=/shadow
+    ND->>RT: validate role=queen required
+    alt role is queen
+      RT-->>ND: bind OK
+      ND-->>Cohsh: RWRITE
+    else not queen
+      RT-->>ND: Err Permission
+      ND-->>Cohsh: Rerror Permission
+    end
   end
 
-  RT->>WT: append {"tick":42,"ts_ms":123456789}\n...
-  RT->>WT: append {"tick":43,"ts_ms":123456999}\n...
+  %% =========================================================
+  %% D) Worker telemetry (append-only records)
+  %% =========================================================
+  rect rgba(250,245,255,0.30)
+    RT->>WT: append heartbeat tick=42 ts_ms=...
+    RT->>WT: append heartbeat tick=43 ts_ms=...
+  end
 
-  Note over GPUB,GPUFS: GPU bridge publishes provider-backed nodes:<br/>/gpu/{id}/info (RO JSON)<br/>/gpu/{id}/ctl (append LEASE/RELEASE/PRIORITY)<br/>/gpu/{id}/job (append JSON descriptors)<br/>/gpu/{id}/status [...]<br/>(represents original /gpu/<id>/*)
+  %% =========================================================
+  %% E) GPU provider publishes /gpu/* and handles leases/jobs
+  %% =========================================================
+  rect rgba(255,245,235,0.35)
+    GPUB->>ND: Secure9P provider connect (host-only)
+    ND-->>GPUB: session established
+    GPUB->>GPU: publish nodes for /gpu/<id>/info,ctl,job,status
 
-  GPUB->>ND: Secure9P provider connect (host-only)
-  ND-->>GPUB: session established
-  GPUB->>GPUFS: publish /gpu/{id}/{info,ctl,job,status}
+    Cohsh->>ND: TWRITE spawn=gpu lease.gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120
+    ND->>RT: validate + enqueue lease request
+    alt bridge available
+      RT-->>ND: OK queued
+      ND-->>Cohsh: RWRITE
+      RT->>LOG: append lease issued for GPU-0
+      RT->>GPU: append ctl LEASE GPU-0 ...
+      opt priority provided
+        RT->>GPU: append ctl PRIORITY <n>
+      end
+      GPUB->>GPU: append status QUEUED
+      GPUB->>GPU: append status RUNNING
+    else bridge unavailable
+      RT-->>ND: Err Busy
+      ND-->>Cohsh: Rerror Busy
+    end
 
-  Cohsh->>ND: TWRITE {"spawn":"gpu","lease":{"gpu_id":"GPU-0","mem_mb":4096,"streams":2,"ttl_s":120}}
-  ND->>RT: validate + enqueue lease request
-  alt bridge available
-    RT-->>ND: OK (queued)
+    Cohsh->>ND: TWRITE append job descriptor to /gpu/<id>/job
     ND-->>Cohsh: RWRITE
-    RT->>GPUFS: mirror lease issuance to /gpu/{id}/ctl<br/>and /log/queen.log
-    GPUB->>GPUFS: enforce lease; update /gpu/{id}/status<br/>QUEUED->RUNNING->OK/ERR
-  else bridge unavailable
-    RT-->>ND: Err(Busy)
-    ND-->>Cohsh: Rerror(Busy)
+    GPUB->>GPU: append status OK or ERR
+    RT->>WT: append gpu job state=OK or ERR detail=...
   end
 
-  Cohsh->>ND: TREAD /log/queen.log (offset=n)
-  ND-->>Cohsh: RREAD (append-only; offsets ignored by server policy)
+  %% =========================================================
+  %% F) tail via 9P read (offset tracked by client; server enforces append-only)
+  %% =========================================================
+  rect rgba(245,245,245,0.35)
+    Cohsh->>ND: TWALK /log/queen.log
+    ND-->>Cohsh: RWALK
+    Cohsh->>ND: TOPEN /log/queen.log (read)
+    ND-->>Cohsh: ROPEN
+
+    loop client tail poll
+      Cohsh->>ND: TREAD /log/queen.log offset=<n>
+      ND-->>Cohsh: RREAD (append-only policy; offsets may be ignored)
+    end
+  end
 ```
 
 ## 1. NineDoor 9P Operations
