@@ -2854,10 +2854,14 @@ impl<D: NetDevice> NetStack<D> {
         let Some(handle) = self.tcp_smoke_out_handle else {
             return false;
         };
-        let socket = self.sockets.get_mut::<TcpSocket>(handle);
         if !self.self_test.console_probe_done {
-            return self.poll_console_listener_selftest(socket, now_ms);
+            let activity = {
+                let socket = self.sockets.get_mut::<TcpSocket>(handle);
+                self.poll_console_listener_selftest(socket, now_ms)
+            };
+            return activity;
         }
+        let socket = self.sockets.get_mut::<TcpSocket>(handle);
         let mut activity = false;
         let dest_ip = self
             .gateway
@@ -2952,7 +2956,7 @@ impl<D: NetDevice> NetStack<D> {
         let mut outbound_pending = self.server.has_outbound();
         let mut reset_session = false;
         let mut reset_tcp_state: Option<TcpState> = None;
-        let mut last_tcp_state = TcpState::Closed;
+        let last_tcp_state;
         let mut allow_flush = true;
 
         let (snapshot, tcp_state) = {
