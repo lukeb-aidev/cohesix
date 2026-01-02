@@ -9,9 +9,133 @@ The queen/worker verbs and `/queen/ctl` schema form the hive control API: one Qu
 ```mermaid
 sequenceDiagram
   autonumber
-  actor Operator
-  participant A
-  Operator->>A: hello
+
+  participant Operator
+  participant Cohsh as cohsh
+  participant Console as root-task TCP console
+  participant ND as NineDoor
+  participant RT as root-task
+  participant QCTL as /queen/ctl
+  participant WT as /worker/<id>/telemetry
+  participant LOG as /log/queen.log
+  participant GPUB as gpu-bridge-host
+  participant GPU as /gpu/<id>/*
+
+  %% =========================
+  %% Protocol invariants
+  %% =========================
+  Note over ND: Secure9P only. Version 9P2000.L. Remove disabled. Msize max 8192.
+  Note over ND: Paths are UTF-8. No NUL. Max component length 255 bytes.
+  Note over QCTL: Append-only control file. One command per line.
+  Note over Console: Line protocol. Max line length 128 bytes. ACK before side effects.
+  Note over GPU: Provider-backed nodes. info read-only. ctl and job append-only.
+
+  %% =========================
+  %% A) TCP console attachment
+  %% =========================
+  Operator->>Cohsh: run cohsh with TCP transport
+  Cohsh->>Console: ATTACH role ticket
+  alt ticket and role valid
+    Console-->>Cohsh: OK ATTACH
+  else invalid or rate-limited
+    Console-->>Cohsh: ERR ATTACH
+  end
+
+  %% Keepalive
+  Cohsh->>Console: PING
+  Console-->>Cohsh: PONG
+
+  %% Tail logs over console
+  Cohsh->>Console: TAIL path
+  Console-->>Cohsh: OK TAIL
+  loop log streaming
+    Console-->>Cohsh: log line
+  end
+  Console-->>Cohsh: END
+
+  %% =========================
+  %% B) Secure9P session setup
+  %% =========================
+  Operator->>Cohsh: run cohsh in 9P mode
+  Cohsh->>ND: TVERSION msize 8192
+  ND-->>Cohsh: RVERSION
+  Cohsh->>ND: TATTACH with ticket
+  alt ticket valid
+    ND-->>Cohsh: RATTACH
+  else invalid
+    ND-->>Cohsh: Rerror Permission
+  end
+
+  %% =========================
+  %% C) Queen control via /queen/ctl
+  %% =========================
+  Cohsh->>ND: TWALK /queen/ctl
+  ND-->>Cohsh: RWALK
+  Cohsh->>ND: TOPEN /queen/ctl append
+  ND-->>Cohsh: ROPEN
+
+  Cohsh->>ND: TWRITE spawn heartbeat worker
+  ND->>RT: validate command and permissions
+  alt spawn allowed
+    RT-->>ND: spawn OK
+    ND-->>Cohsh: RWRITE
+  else invalid or busy
+    RT-->>ND: error
+    ND-->>Cohsh: Rerror
+  end
+
+  %% =========================
+  %% D) Worker telemetry
+  %% =========================
+  RT->>WT: append heartbeat record
+  RT->>WT: append heartbeat record
+
+  %% =========================
+  %% E) GPU provider registration
+  %% =========================
+  GPUB->>ND: connect as Secure9P provider
+  ND-->>GPUB: provider session ready
+  GPUB->>GPU: publish info
+  GPUB->>GPU: publish ctl
+  GPUB->>GPU: publish job
+  GPUB->>GPU: publish status
+
+  %% =========================
+  %% F) GPU lease request
+  %% =========================
+  Cohsh->>ND: TWRITE spawn gpu lease request
+  ND->>RT: validate lease request
+  alt provider available
+    RT-->>ND: lease queued
+    ND-->>Cohsh: RWRITE
+    RT->>GPU: append lease to ctl
+    RT->>LOG: append lease issued
+    GPUB->>GPU: update status QUEUED
+    GPUB->>GPU: update status RUNNING
+  else provider unavailable
+    RT-->>ND: error Busy
+    ND-->>Cohsh: Rerror Busy
+  end
+
+  %% =========================
+  %% G) GPU job execution
+  %% =========================
+  Cohsh->>ND: TWRITE append job
+  ND-->>Cohsh: RWRITE
+  GPUB->>GPU: update status OK or ERR
+  RT->>WT: append job result
+
+  %% =========================
+  %% H) Tail logs via 9P
+  %% =========================
+  Cohsh->>ND: TWALK /log/queen.log
+  ND-->>Cohsh: RWALK
+  Cohsh->>ND: TOPEN read
+  ND-->>Cohsh: ROPEN
+  loop tail polling
+    Cohsh->>ND: TREAD offset
+    ND-->>Cohsh: RREAD
+  end
 ```
 
 ## 1. NineDoor 9P Operations
