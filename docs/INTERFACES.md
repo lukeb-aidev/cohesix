@@ -19,7 +19,9 @@ sequenceDiagram
   participant QCTL as "/queen/ctl (append-only)"
   participant WT as "/worker/⟨id⟩/telemetry"
   participant GPUB as "gpu-bridge-host (host)"
-  participant GPUFS as "/gpu/⟨id⟩/*"
+  participant GPUFS as "/gpu/⟨id⟩/"
+
+  Note over GPUFS: Represents /gpu/⟨id⟩/* (all nodes under the GPU namespace)
 
   Note over ND
     9P2000.L only
@@ -30,9 +32,6 @@ sequenceDiagram
     fid tables per-session; clunk invalidates handles immediately
   end note
 
-  %% ---------------------------------------------------------
-  %% A) TCP console attach + tail (line protocol)
-  %% ---------------------------------------------------------
   Operator->>Cohsh: cohsh --transport tcp ...
   Cohsh->>Console: ATTACH ⟨role⟩ ⟨ticket?⟩
   alt valid ticket/role
@@ -59,9 +58,6 @@ sequenceDiagram
     ACKs are sent before side effects
   end note
 
-  %% ---------------------------------------------------------
-  %% B) Secure9P session (preferred machine interface)
-  %% ---------------------------------------------------------
   Operator->>Cohsh: cohsh (9P mode)
   Cohsh->>ND: TVERSION msize<=8192
   ND-->>Cohsh: RVERSION msize<=8192
@@ -72,9 +68,6 @@ sequenceDiagram
     ND-->>Cohsh: Rerror(Permission/Closed)
   end
 
-  %% ---------------------------------------------------------
-  %% C) Queen control surface: /queen/ctl append-only JSON
-  %% ---------------------------------------------------------
   Cohsh->>ND: TWALK /queen/ctl
   ND-->>Cohsh: RWALK
   Cohsh->>ND: TOPEN /queen/ctl (append)
@@ -89,15 +82,9 @@ sequenceDiagram
     ND-->>Cohsh: Rerror(Invalid/Busy/Permission)
   end
 
-  %% ---------------------------------------------------------
-  %% D) Worker telemetry (append-only)
-  %% ---------------------------------------------------------
   RT->>WT: append {"tick":42,"ts_ms":123456789}\\n...
   RT->>WT: append {"tick":43,"ts_ms":123456999}\\n...
 
-  %% ---------------------------------------------------------
-  %% E) GPU bridge files (host-mirrored providers)
-  %% ---------------------------------------------------------
   Note over GPUB,GPUFS
     GPU bridge publishes provider-backed nodes:
     /gpu/⟨id⟩/info (RO JSON)
@@ -110,7 +97,6 @@ sequenceDiagram
   ND-->>GPUB: session established
   GPUB->>GPUFS: publish /gpu/⟨id⟩/{info,ctl,job,status}
 
-  %% Queen requests GPU lease via /queen/ctl
   Cohsh->>ND: TWRITE {"spawn":"gpu","lease":{"gpu_id":"GPU-0","mem_mb":4096,"streams":2,"ttl_s":120}}
   ND->>RT: validate + enqueue lease request
   alt bridge available
@@ -123,7 +109,6 @@ sequenceDiagram
     ND-->>Cohsh: Rerror(Busy)
   end
 
-  %% Tail over 9P (append-only enforced)
   Cohsh->>ND: TREAD /log/queen.log (offset=n)
   ND-->>Cohsh: RREAD (append-only; offsets ignored by server policy)
 ```
