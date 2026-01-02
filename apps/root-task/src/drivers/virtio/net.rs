@@ -268,6 +268,7 @@ struct TxHeadEntry {
 /// Manages virtio TX descriptor heads and prevents reuse while in-flight.
 struct TxHeadManager {
     free: HeaplessVec<u16, TX_QUEUE_SIZE>,
+    free_mask: u32,
     entries: [TxHeadEntry; TX_QUEUE_SIZE],
     published_slots: [Option<(u16, u32)>; TX_QUEUE_SIZE],
     in_avail: [bool; TX_QUEUE_SIZE],
@@ -293,8 +294,19 @@ impl TxHeadManager {
         for idx in 0..size {
             let _ = free.push(idx);
         }
+        // Analysis: Reusing a TX head before the device returns ownership lets QEMU read a later
+        // generation's zeroed descriptors, tripping the "zero sized buffers" abort. The free_mask
+        // acts as the allocator's source of truth so we never hand out a head twice without a used
+        // entry, and the publish guards below ensure we will not place a zero-length descriptor
+        // into the avail ring even if bookkeeping is corrupted.
+        let free_mask = if size == 0 {
+            0
+        } else {
+            1u32.checked_shl(size as u32).unwrap_or(0).wrapping_sub(1)
+        };
         Self {
             free,
+            free_mask,
             entries: [TxHeadEntry::default(); TX_QUEUE_SIZE],
             published_slots: [None; TX_QUEUE_SIZE],
             in_avail: [false; TX_QUEUE_SIZE],
@@ -368,15 +380,61 @@ impl TxHeadManager {
         Ok(())
     }
 
+    fn free_mask_for(&self, id: u16) -> Result<u32, TxHeadError> {
+        let mask = 1u32.checked_shl(id as u32).ok_or(TxHeadError::OutOfRange)?;
+        if mask == 0 {
+            return Err(TxHeadError::OutOfRange);
+        }
+        Ok(mask)
+    }
+
+    fn mark_free_entry(&mut self, id: u16) -> Result<(), TxHeadError> {
+        if id >= self.size {
+            return Err(TxHeadError::OutOfRange);
+        }
+        let mask = self.free_mask_for(id)?;
+        if (self.free_mask & mask) != 0 {
+            if mark_forensics_frozen() {
+                error!(
+                    target: "net-console",
+                    "[virtio-net][tx-free] duplicate free detected id={} state={:?} in_avail={} free_mask=0x{mask:08x}",
+                    id,
+                    self.state(id),
+                    self.in_avail(id),
+                    mask = self.free_mask,
+                );
+            }
+            return Err(TxHeadError::InvalidState);
+        }
+        self.free_mask |= mask;
+        self.free.push(id).map_err(|_| {
+            self.free_mask &= !mask;
+            TxHeadError::FreeListFull
+        })
+    }
+
     fn alloc_head(&mut self) -> Option<u16> {
         let id = self.free.pop()?;
         if id >= self.size {
             return None;
         }
+        let mask = self.free_mask_for(id).ok()?;
+        if (self.free_mask & mask) == 0 {
+            mark_forensics_frozen();
+            panic!(
+                "tx head allocation invariant violated: id={} state={:?} advertised={} free_mask=0x{mask:08x}",
+                id,
+                self.state(id),
+                self.is_advertised(id),
+                mask = self.free_mask,
+            );
+        }
+        self.free_mask &= !mask;
         let state = self.state(id);
         if !matches!(state, Some(TxHeadState::Free)) || self.is_advertised(id) {
             mark_forensics_frozen();
             let _ = self.free.push(id);
+            self.free_mask |= mask;
             panic!(
                 "tx head allocation invariant violated: id={} state={:?} advertised={}",
                 id,
@@ -714,7 +772,7 @@ impl TxHeadManager {
         if let Some(present) = self.publish_present.get_mut(id as usize) {
             *present = false;
         }
-        self.free.push(id).map_err(|_| TxHeadError::FreeListFull)
+        self.mark_free_entry(id)
     }
 
     fn cancel_publish(&mut self, id: u16) -> Result<(), TxHeadError> {
@@ -773,7 +831,7 @@ impl TxHeadManager {
         if let Some(present) = self.publish_present.get_mut(id as usize) {
             *present = false;
         }
-        self.free.push(id).map_err(|_| TxHeadError::FreeListFull)
+        self.mark_free_entry(id)
     }
 
     fn is_in_flight(&self, id: u16) -> bool {
@@ -781,7 +839,7 @@ impl TxHeadManager {
     }
 
     fn free_len(&self) -> u16 {
-        self.free.len() as u16
+        self.free_mask.count_ones() as u16
     }
 
     fn in_flight_count(&self) -> u16 {
@@ -2312,6 +2370,21 @@ impl VirtioNet {
         if desc.len == 0 || total_len == 0 {
             self.dropped_zero_len_tx = self.dropped_zero_len_tx.saturating_add(1);
             self.log_zero_len_publish(head_id, publish_slot, desc.len, total_len);
+            return Err(TxPublishError::InvalidDescriptor);
+        }
+        if desc.addr == 0 {
+            self.dropped_zero_len_tx = self.dropped_zero_len_tx.saturating_add(1);
+            error!(
+                target: "net-console",
+                "[virtio-net][tx-guard] zero address publish blocked: head={} slot={} avail_idx={} used_idx={} free={} in_flight={}",
+                head_id,
+                publish_slot,
+                avail_idx,
+                used_idx,
+                self.tx_head_mgr.free_len(),
+                self.tx_head_mgr.in_flight_count(),
+            );
+            self.last_error.get_or_insert("tx_desc_addr_zero");
             return Err(TxPublishError::InvalidDescriptor);
         }
         if desc.len != total_len {
