@@ -4056,7 +4056,7 @@ impl VirtioNet {
                     self.tx_audit_log_ms = now_ms;
                     info!(
                         target: "net-console",
-                        "[virtio-net][tx-audit] context={} free={} prepared={} in_flight={} completed={} posted={} free_mask=0x{mask:08x} qsize={}",
+                        "[virtio-net][tx-audit] context={} free={} prepared={} in_flight={} completed={} posted={} free_mask=0x{mask:08x} qsize={qsize}",
                         context,
                         free,
                         prepared,
