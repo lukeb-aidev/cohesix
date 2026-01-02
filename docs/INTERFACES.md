@@ -17,25 +17,18 @@ sequenceDiagram
   participant ND as "NineDoor (Secure9P)"
   participant RT as "root-task (RootTaskControl)"
   participant QCTL as "/queen/ctl (append-only)"
-  participant WT as "/worker/⟨id⟩/telemetry"
+  participant WT as "/worker/{id}/telemetry"
   participant GPUB as "gpu-bridge-host (host)"
-  participant GPUFS as "/gpu/⟨id⟩/"
+  participant GPUFS as "/gpu/{id}/ (namespace)"
 
-  Note over ND
-    9P2000.L only
-    ops: version/attach/walk/open/read/write/clunk/stat
-    remove disabled
-    msize<=8192 (TooBig if exceeded)
-    path components <=255B, UTF-8, no NUL
-    fid tables per-session; clunk invalidates handles immediately
-  end note
+  Note over ND: 9P2000.L only<br/>ops: version/attach/walk/open/read/write/clunk/stat<br/>remove disabled<br/>msize<=8192 (TooBig if exceeded)<br/>path components <=255B, UTF-8, no NUL<br/>fid tables per-session; clunk invalidates handles immediately
 
   Operator->>Cohsh: cohsh --transport tcp ...
-  Cohsh->>Console: ATTACH ⟨role⟩ ⟨ticket?⟩
+  Cohsh->>Console: ATTACH {role} {ticket?}
   alt valid ticket/role
-    Console-->>Cohsh: OK ATTACH role=⟨role⟩
+    Console-->>Cohsh: OK ATTACH role={role}
   else invalid / locked out
-    Console-->>Cohsh: ERR ATTACH reason=⟨cause⟩
+    Console-->>Cohsh: ERR ATTACH reason={cause}
   end
 
   opt Idle keepalive
@@ -43,18 +36,14 @@ sequenceDiagram
     Console-->>Cohsh: PONG (immediate, even mid-stream)
   end
 
-  Cohsh->>Console: TAIL ⟨path⟩
-  Console-->>Cohsh: OK TAIL path=⟨path⟩
+  Cohsh->>Console: TAIL {path}
+  Console-->>Cohsh: OK TAIL path={path}
   loop newline-delimited entries
-    Console-->>Cohsh: ⟨entry⟩\\n
+    Console-->>Cohsh: {entry}\n
   end
   Console-->>Cohsh: END
 
-  Note over Console
-    Max line length 128B
-    Rate-limit auth failures: 3 strikes/60s => 90s cooldown
-    ACKs are sent before side effects
-  end note
+  Note over Console: Max line length 128B<br/>Rate-limit auth failures: 3 strikes/60s => 90s cooldown<br/>ACKs are sent before side effects
 
   Operator->>Cohsh: cohsh (9P mode)
   Cohsh->>ND: TVERSION msize<=8192
@@ -71,7 +60,7 @@ sequenceDiagram
   Cohsh->>ND: TOPEN /queen/ctl (append)
   ND-->>Cohsh: ROPEN
   Cohsh->>ND: TWRITE {"spawn":"heartbeat","ticks":100,"budget":{"ttl_s":120,"ops":500}}
-  ND->>RT: validate JSON + ticket perms; then RootTaskControl.spawn(...)
+  ND->>RT: validate JSON + ticket perms<br/>then RootTaskControl.spawn(...)
   alt spawn ok
     RT-->>ND: Ok(worker_id)
     ND-->>Cohsh: RWRITE
@@ -80,28 +69,22 @@ sequenceDiagram
     ND-->>Cohsh: Rerror(Invalid/Busy/Permission)
   end
 
-  RT->>WT: append {"tick":42,"ts_ms":123456789}\\n...
-  RT->>WT: append {"tick":43,"ts_ms":123456999}\\n...
+  RT->>WT: append {"tick":42,"ts_ms":123456789}\n...
+  RT->>WT: append {"tick":43,"ts_ms":123456999}\n...
 
-  Note over GPUB,GPUFS
-    GPU bridge publishes provider-backed nodes:
-    /gpu/⟨id⟩/info (RO JSON)
-    /gpu/⟨id⟩/ctl (append LEASE/RELEASE/PRIORITY)
-    /gpu/⟨id⟩/job (append JSON descriptors)
-    /gpu/⟨id⟩/status [...]
-  end note
+  Note over GPUB,GPUFS: GPU bridge publishes provider-backed nodes:<br/>/gpu/{id}/info (RO JSON)<br/>/gpu/{id}/ctl (append LEASE/RELEASE/PRIORITY)<br/>/gpu/{id}/job (append JSON descriptors)<br/>/gpu/{id}/status [...]<br/>(represents original /gpu/<id>/*)
 
   GPUB->>ND: Secure9P provider connect (host-only)
   ND-->>GPUB: session established
-  GPUB->>GPUFS: publish /gpu/⟨id⟩/{info,ctl,job,status}
+  GPUB->>GPUFS: publish /gpu/{id}/{info,ctl,job,status}
 
   Cohsh->>ND: TWRITE {"spawn":"gpu","lease":{"gpu_id":"GPU-0","mem_mb":4096,"streams":2,"ttl_s":120}}
   ND->>RT: validate + enqueue lease request
   alt bridge available
     RT-->>ND: OK (queued)
     ND-->>Cohsh: RWRITE
-    RT->>GPUFS: mirror lease issuance to /gpu/⟨id⟩/ctl and /log/queen.log
-    GPUB->>GPUFS: enforce lease; update /gpu/⟨id⟩/status QUEUED->RUNNING->OK/ERR
+    RT->>GPUFS: mirror lease issuance to /gpu/{id}/ctl<br/>and /log/queen.log
+    GPUB->>GPUFS: enforce lease; update /gpu/{id}/status<br/>QUEUED->RUNNING->OK/ERR
   else bridge unavailable
     RT-->>ND: Err(Busy)
     ND-->>Cohsh: Rerror(Busy)
