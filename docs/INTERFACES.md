@@ -21,11 +21,10 @@ sequenceDiagram
   participant GPUB as "gpu-bridge-host (host)"
   participant GPUFS as "/gpu/{id}/*"
 
-  Note over ND: 9P2000.L only<br/>ops: version/attach/walk/open/read/write/clunk/stat<br/>remove disabled<br/>msize<=8192 (TooBig if exceeded)<br/>path components <=255B, UTF-8, no NUL<br/>fid tables per-session; clunk invalidates handles immediately
+  Note over ND: 9P2000.L only; ops: version/attach/walk/open/read/write/clunk/stat; remove disabled
+  Note over ND: msize <= 8192 (TooBig if exceeded); path components <= 255B, UTF-8, no NUL
+  Note over ND: fid tables per-session; clunk invalidates handles immediately
 
-  %% ---------------------------------------------------------
-  %% A) TCP console attach + tail (line protocol)
-  %% ---------------------------------------------------------
   Operator->>Cohsh: cohsh --transport tcp ...
   Cohsh->>Console: ATTACH {role} {ticket?}
   alt valid ticket/role
@@ -46,11 +45,8 @@ sequenceDiagram
   end
   Console-->>Cohsh: END
 
-  Note over Console: Max line length 128B<br/>Rate-limit auth failures: 3 strikes/60s -> 90s cooldown<br/>ACKs are sent before side effects
+  Note over Console: Max line length 128B; rate-limit auth failures: 3 strikes/60s -> 90s cooldown; ACKs before side effects
 
-  %% ---------------------------------------------------------
-  %% B) Secure9P session (preferred machine interface)
-  %% ---------------------------------------------------------
   Operator->>Cohsh: cohsh (9P mode)
   Cohsh->>ND: TVERSION msize<=8192
   ND-->>Cohsh: RVERSION msize<=8192
@@ -61,15 +57,12 @@ sequenceDiagram
     ND-->>Cohsh: Rerror(Permission/Closed)
   end
 
-  %% ---------------------------------------------------------
-  %% C) Queen control surface: /queen/ctl append-only JSON
-  %% ---------------------------------------------------------
   Cohsh->>ND: TWALK /queen/ctl
   ND-->>Cohsh: RWALK
   Cohsh->>ND: TOPEN /queen/ctl (append)
   ND-->>Cohsh: ROPEN
   Cohsh->>ND: TWRITE {"spawn":"heartbeat","ticks":100,"budget":{"ttl_s":120,"ops":500}}
-  ND->>RT: validate JSON + ticket perms<br/>then RootTaskControl.spawn(...)
+  ND->>RT: validate JSON + ticket perms; then RootTaskControl.spawn(...)
   alt spawn ok
     RT-->>ND: Ok(worker_id)
     ND-->>Cohsh: RWRITE
@@ -78,35 +71,27 @@ sequenceDiagram
     ND-->>Cohsh: Rerror(Invalid/Busy/Permission)
   end
 
-  %% ---------------------------------------------------------
-  %% D) Worker telemetry (append-only)
-  %% ---------------------------------------------------------
   RT->>WT: append {"tick":42,"ts_ms":123456789}\n...
   RT->>WT: append {"tick":43,"ts_ms":123456999}\n...
 
-  %% ---------------------------------------------------------
-  %% E) GPU bridge files (host-mirrored providers)
-  %% ---------------------------------------------------------
-  Note over GPUB,GPUFS: GPU bridge publishes provider-backed nodes:<br/>/gpu/{id}/info (RO JSON)<br/>/gpu/{id}/ctl (append LEASE/RELEASE/PRIORITY)<br/>/gpu/{id}/job (append JSON descriptors)<br/>/gpu/{id}/status [...]
+  Note over GPUB,GPUFS: Publishes /gpu/{id}/info (RO JSON), /gpu/{id}/ctl (append), /gpu/{id}/job (append), /gpu/{id}/status
 
   GPUB->>ND: Secure9P provider connect (host-only)
   ND-->>GPUB: session established
   GPUB->>GPUFS: publish /gpu/{id}/{info,ctl,job,status}
 
-  %% Queen requests GPU lease via /queen/ctl
   Cohsh->>ND: TWRITE {"spawn":"gpu","lease":{"gpu_id":"GPU-0","mem_mb":4096,"streams":2,"ttl_s":120}}
   ND->>RT: validate + enqueue lease request
   alt bridge available
     RT-->>ND: OK (queued)
     ND-->>Cohsh: RWRITE
-    RT->>GPUFS: mirror lease issuance to /gpu/{id}/ctl<br/>and /log/queen.log
-    GPUB->>GPUFS: enforce lease; update /gpu/{id}/status<br/>QUEUED->RUNNING->OK/ERR
+    RT->>GPUFS: mirror lease issuance to /gpu/{id}/ctl and /log/queen.log
+    GPUB->>GPUFS: enforce lease; update /gpu/{id}/status QUEUED->RUNNING->OK/ERR
   else bridge unavailable
     RT-->>ND: Err(Busy)
     ND-->>Cohsh: Rerror(Busy)
   end
 
-  %% Tail over 9P (append-only enforced)
   Cohsh->>ND: TREAD /log/queen.log (offset=n)
   ND-->>Cohsh: RREAD (append-only; offsets ignored by server policy)
 ```
