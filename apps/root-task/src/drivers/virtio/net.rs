@@ -16,7 +16,7 @@ use core::mem::MaybeUninit;
 use core::ops::Range;
 use core::ptr::read_unaligned;
 use core::ptr::{read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{compiler_fence, fence, AtomicBool, Ordering as AtomicOrdering};
+use core::sync::atomic::{compiler_fence, AtomicBool, Ordering as AtomicOrdering};
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, trace, warn};
@@ -2316,7 +2316,7 @@ impl VirtioNet {
         }
         if desc.len != total_len {
             self.device_faulted = true;
-            self.tx_state_violation("tx_desc_len_mismatch", head_id, Some(publish_slot))?;
+            let _ = self.tx_state_violation("tx_desc_len_mismatch", head_id, Some(publish_slot));
             self.freeze_tx_publishes("tx_desc_len_mismatch");
             self.last_error.get_or_insert("tx_desc_len_mismatch");
             return Err(TxPublishError::InvalidDescriptor);
@@ -2668,14 +2668,14 @@ impl VirtioNet {
                 self.tx_publish_readback_logged = true;
                 warn!(
                     target: "net-console",
-                    "[virtio-net][tx-readback] publish mismatch: slot={} expected_head={} observed_head={} desc_addr=0x{desc_addr:016x} expected_addr=0x{expected_addr:016x} desc_len={} expected_len={}",
+                    "[virtio-net][tx-readback] publish mismatch: slot={} expected_head={} observed_head={} desc_addr=0x{desc_addr:016x} expected_addr=0x{expected_addr:016x} desc_len={desc_len} expected_len={expected_len}",
                     slot,
                     head_id,
                     observed_head,
                     desc_addr = desc.addr,
                     expected_addr = expected.addr,
-                    desc.len,
-                    expected.len,
+                    desc_len = desc.len,
+                    expected_len = expected.len,
                 );
             }
             self.freeze_tx_publishes("tx_publish_readback_mismatch");
@@ -4675,14 +4675,14 @@ impl VirtioNet {
                     self.tx_wrap_logged = true;
                     info!(
                         target: "virtio-net",
-                        "[virtio-net][tx-wrap] v2 avail_idx {}->{} slot={} head={} wrap_detected={} qsize={} desc_len={} desc_addr=0x{desc_addr:016x} avail_head={}",
+                        "[virtio-net][tx-wrap] v2 avail_idx {}->{} slot={} head={} wrap_detected={} qsize={} desc_len={desc_len} desc_addr=0x{desc_addr:016x} avail_head={avail_head}",
                         old_idx,
                         avail_idx,
                         slot,
                         id,
                         wrap_boundary,
                         qsize,
-                        desc.len,
+                        desc_len = desc.len,
                         desc_addr = desc.addr,
                         avail_head = self.tx_queue.read_avail_slot(slot as usize),
                     );
