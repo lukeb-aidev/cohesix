@@ -2,10 +2,10 @@
 # Cohesix Architecture Overview
 Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
 
+**Figure 1.** Cohesix architecture overview.
 <!-- ========================================================= -->
 <!-- Cohesix Architecture Diagram (COMPLETE + white background) -->
 <!-- ========================================================= -->
-
 ```mermaid
 %%{
   init: {
