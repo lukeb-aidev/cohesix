@@ -33,6 +33,107 @@ Cohesix is not a general-purpose operating system and is not intended to replace
 
 In short, Cohesix is an experiment in treating orchestration itself as an operating system problem, with security and determinism as first-class concerns.
 
+<!-- ========================================================= -->
+<!-- Concept Architecture — Cohesix (for README.md)             -->
+<!-- GitHub-compatible Mermaid                                  -->
+<!-- ========================================================= -->
+
+**Figure 1:** Cohesix concept architecture (Queen/Worker hive over Secure9P, host-only GPU bridge, dual consoles)
+
+```mermaid
+flowchart LR
+  %% =========================
+  %% HOST (outside VM/TCB)
+  %% =========================
+  subgraph HOST["Host (Linux/macOS) — outside Cohesix VM/TCB"]
+    OP["Operator / Automation"]:::ext
+    COHSH["cohsh (host-only)\nCanonical shell\n--transport tcp\nrole + ticket attach"]:::hosttool
+    GUI["Future GUI / Dashboard (host-only)\nSpeaks cohsh protocol"]:::hosttool
+    WIRE["secure9p-wire\nbounded framing + TCP adapter\n(host-only transport)"]:::hostlib
+    GPUB["gpu-bridge-host\nCUDA/NVML here\nlease enforcement\nmirrors /gpu/<id>/*"]:::hosttool
+  end
+
+  %% =========================
+  %% TARGET (VM today / UEFI later)
+  %% =========================
+  subgraph TARGET["Target (QEMU aarch64/virt today; UEFI ARM64 hardware later)"]
+    subgraph K["Upstream seL4 kernel"]
+      SEL4["seL4\ncaps + IPC + scheduling\nformal foundation"]:::kernel
+    end
+
+    subgraph USER["Pure Rust userspace (static CPIO rootfs)"]
+      RT["root-task\nbootstrap caps/timers\ncooperative event pump\nspawns NineDoor + roles\nowns side effects"]:::vm
+      ND["NineDoor (Secure9P server)\nexports synthetic namespace\nrole-aware mounts + policy"]:::vm
+
+      Q["Queen role\norchestrates workers\nvia /queen/ctl"]:::role
+      WH["worker-heart\nheartbeat telemetry\n/worker/<id>/telemetry"]:::role
+      WG["worker-gpu (VM stub)\nno CUDA/NVML\nconsumes /gpu/* files"]:::role
+    end
+  end
+
+  %% =========================
+  %% CONTROL SURFACES
+  %% =========================
+  UART["PL011 console\nbring-up + recovery"]:::console
+  TCP["TCP NineDoor console\nremote operator surface\nconsumed by cohsh"]:::console
+
+  %% =========================
+  %% HIVE NAMESPACE (the “OS control plane”)
+  %% =========================
+  subgraph NS["Hive namespace (Secure9P) — everything is a file"]
+    PROC["/proc (boot + status views)"]:::path
+    QUEEN["/queen/ctl (append-only)\nspawn/kill/bind/mount\nspawn:gpu lease requests"]:::path
+    WORK["/worker/<id>/telemetry (append-only)"]:::path
+    LOG["/log/* (append-only streams)"]:::path
+    GPU["/gpu/<id>/{info,ctl,job,status}\n(host-mirrored providers)"]:::path
+  end
+
+  %% =========================
+  %% WIRES
+  %% =========================
+  SEL4 --> RT
+  RT --> ND
+  RT --- UART
+  RT --- TCP
+
+  %% Host operator paths
+  OP --> COHSH
+  OP --> GUI
+  COHSH -->|TCP console attach| TCP
+  GUI -->|same protocol as cohsh| TCP
+
+  %% Secure9P control/data plane
+  ND --> PROC
+  ND --> QUEEN
+  ND --> WORK
+  ND --> LOG
+  ND --> GPU
+
+  %% Roles operate via namespace (no ad-hoc RPC)
+  Q -->|Secure9P ops| ND
+  WH -->|Secure9P ops| ND
+  WG -->|Secure9P ops| ND
+
+  %% Queen actions are file-driven
+  QUEEN -->|validated -> internal actions| RT
+
+  %% GPU boundary: bridge is host-only, publishes provider nodes via bounded 9P transport
+  GPUB --> WIRE
+  WIRE -->|Secure9P transport (host-only)| ND
+  GPUB --> GPU
+
+  %% =========================
+  %% STYLING
+  %% =========================
+  classDef kernel fill:#eeeeee,stroke:#555555,stroke-width:1px;
+  classDef vm fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
+  classDef role fill:#f0fdf4,stroke:#15803d,stroke-width:1px;
+  classDef console fill:#faf5ff,stroke:#7c3aed,stroke-width:1px;
+  classDef path fill:#f8fafc,stroke:#334155,stroke-dasharray: 4 3;
+  classDef hosttool fill:#fff7ed,stroke:#c2410c,stroke-width:1px;
+  classDef hostlib fill:#fffbeb,stroke:#b45309,stroke-width:1px;
+  classDef ext fill:#ffffff,stroke:#334155,stroke-width:1px;
+```
 ## Getting Started
 - Build and launch via `scripts/cohesix-build-run.sh`, pointing at your seL4 build and desired output directory; the script stages host tools alongside the VM image and enables the TCP console when `--transport tcp` is passed.
 - Terminal 1: run the build script to start QEMU with `-serial mon:stdio` for the PL011 root console and TCP forwarding for the NineDoor console.
