@@ -176,6 +176,7 @@ Each signage hub is a hive with one Queen orchestrating multiple workers, all co
 
 ## Diagrams
 **Figure 1** Edge “Hive” deployment (Smart factory / Retail CV hub / MEC node)
+
 ```mermaid
 flowchart LR
   subgraph SITE["Edge Site (Factory / Store / MEC)"]
@@ -231,42 +232,44 @@ flowchart LR
 ```
 
 **Figure 2:** Vendor remote maintenance without VPN sprawl (tickets + leases + append logs)
+
 ```mermaid
 sequenceDiagram
   autonumber
+
   participant Vendor as Vendor Engineer
   participant Cohsh as cohsh
   participant ND as NineDoor
-  participant RT as root-task
   participant POL as AccessPolicy
-  participant LOG as log session
+  participant RT as root-task
   participant MW as maintenance window
   participant DEV as worker ctl
+  participant SLOG as session log
 
-  Note over ND: File-ops only; policy runs before provider logic; logs append-only.
+  Note over ND: File ops only. Policy runs before provider logic. Logs are append-only.
 
   Vendor->>Cohsh: obtain scoped ticket
-  Vendor->>Cohsh: attach role vendor with ticket
+  Vendor->>Cohsh: attach vendor role with ticket
   Cohsh->>ND: TATTACH ticket
-  ND->>POL: evaluate scope TTL rate limits
+  ND->>POL: evaluate ticket scope TTL and rate limits
   POL-->>ND: allow or deny
 
   alt maintenance window active
     Cohsh->>ND: TOPEN MW read
     ND-->>Cohsh: ROPEN
-    Cohsh->>ND: TREAD MW
+    Cohsh->>ND: TREAD MW confirm active
     ND-->>Cohsh: RREAD active
 
     Cohsh->>ND: TOPEN DEV append
     ND-->>Cohsh: ROPEN
     Cohsh->>ND: TWRITE cmd diagnose level basic
-    ND->>POL: check path and verb
+    ND->>POL: check path and verb allowed
     POL-->>ND: allow
     ND->>RT: perform validated internal action
     RT-->>ND: ok
     ND-->>Cohsh: RWRITE
 
-    Cohsh->>ND: TOPEN LOG append
+    Cohsh->>ND: TOPEN SLOG append
     ND-->>Cohsh: ROPEN
     Cohsh->>ND: TWRITE audit vendor action diagnose target worker
     ND-->>Cohsh: RWRITE
@@ -280,6 +283,7 @@ sequenceDiagram
   end
 ```
 **Figure 3:** Air-gapped update ferry (CAS bundles + staged apply + audit)
+
 ```mermaid
 flowchart LR
   USB["Portable media\n(CAS bundles)"]:::ext
@@ -311,16 +315,18 @@ flowchart LR
   classDef ext fill:#ffffff,stroke:#334155,stroke-width:1px;
 ```
 **Figure 4:** GPU lease broker for multi-tenant edge (CUDA stays on host)
+
 ```mermaid
 sequenceDiagram
   autonumber
+
   participant Tenant as Tenant App
   participant ND as NineDoor
   participant RT as root-task
   participant GPU as gpu files
-  participant GPUB as gpu bridge host
+  participant GPUB as gpu-bridge-host
 
-  Note over GPUB: CUDA and NVML stay on host; enforcement happens here.
+  Note over GPUB: CUDA and NVML stay on host. Enforcement happens here.
 
   Tenant->>ND: TATTACH tenant ticket
   Tenant->>ND: TWALK queen ctl
@@ -348,6 +354,7 @@ sequenceDiagram
   GPUB->>GPU: append status OK or ERR
 ```
 **Figure 5:** Model governance + provenance at the edge (attested models)
+
 ```mermaid
 flowchart LR
   REG["Model registry bridge (host sidecar)\nCAS + signatures"]:::sidecar
