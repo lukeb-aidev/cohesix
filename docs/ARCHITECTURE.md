@@ -2,6 +2,102 @@
 # Cohesix Architecture Overview
 Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
 
+flowchart LR
+  %% =========================
+  %% Host side (out of VM/TCB)
+  %% =========================
+  subgraph HOST["Host (outside Cohesix VM/TCB)"]
+    COHSH["cohsh (host CLI)\n- AUTH -> ATTACH (per CLI)\n- runs scripts/CI\n- can speak:\n  (a) console line-protocol\n  (b) Secure9P (when transport exists)"]:::host
+    GPUW["gpu-bridge-host (external client)\n- owns CUDA/NVML\n- enforces leases/tickets\n- mirrors /gpu/* into NineDoor\n- host-only networking"]:::host
+  end
+
+  %% =========================
+  %% Cohesix target (VM)
+  %% =========================
+  subgraph VM["Cohesix target (seL4 VM today; UEFI ARM64 later)"]
+    subgraph K["Upstream seL4 kernel"]
+      SEL4["seL4\n(caps, IPC, scheduling)"]:::kernel
+    end
+
+    subgraph U["Pure Rust userspace (CPIO rootfs)"]
+      RT["root-task\n- bootstraps caps/sched\n- deterministic event pump\n- serial + TCP console\n- spawns NineDoor + workers"]:::vm
+      ND["NineDoor (Secure9P server)\n- secure9p codec/core\n- AccessPolicy first\n- role-scoped mount tables\n- serves /proc /queen /worker /log /gpu"]:::vm
+
+      Q["Queen role session\n(orchestrates)"]:::role
+      WH["worker-heart\n(telemetry/heartbeat)"]:::role
+      WG["worker-gpu (VM stub)\n(ticket/lease + file ops only)\n(NO CUDA/NVML)"]:::role
+    end
+  end
+
+  %% =========================
+  %% Control surfaces
+  %% =========================
+  SERIAL["PL011 UART console\n(always-on fallback)"]:::console
+  TCP["Authenticated TCP console\n(line protocol)\nACK-before-side-effects"]:::console
+
+  %% =========================
+  %% Secure9P namespace (logical)
+  %% =========================
+  subgraph NS["Secure9P namespace (role-scoped views)"]
+    QUEENCTL["/queen/ctl (append-only)\nJSON spawn/kill/bind/mount\n+ gpu lease/ticket ops"]:::path
+    WORKTEL["/worker/<id>/telemetry (append-only)"]:::path
+    LOGS["/log/* (append-only)"]:::path
+    GPUFS["/gpu/<id>/{info,ctl,job,status}\n(host-mirrored GPU nodes)"]:::path
+  end
+
+  %% =========================
+  %% Boot wiring
+  %% =========================
+  SEL4 --> RT
+  RT --> ND
+  RT --- SERIAL
+  RT --- TCP
+
+  %% =========================
+  %% cohsh paths (both)
+  %% =========================
+  COHSH -->|TCP console:\nAUTH <token>\nATTACH <role> <ticket>\nverbs -> OK/ERR/END| TCP
+
+  COHSH -->|Secure9P (when available):\nTVERSION/TATTACH/TWALK/TOPEN/\nTREAD/TWRITE/TCLUNK| ND
+
+  %% =========================
+  %% In-VM roles use Secure9P
+  %% =========================
+  Q -->|Secure9P session| ND
+  WH -->|Secure9P session| ND
+  WG -->|Secure9P session| ND
+
+  %% Namespace served by NineDoor
+  ND --> QUEENCTL
+  ND --> WORKTEL
+  ND --> LOGS
+  ND --> GPUFS
+
+  %% Queen orchestration -> root-task side-effects (ACK-first via console semantics; 9P ops are deterministic/bounded)
+  Q -->|append JSON| QUEENCTL
+  QUEENCTL -->|validated -> internal actions| RT
+
+  %% Workers
+  WH -->|append| WORKTEL
+  WG -->|append jobs + state| WORKTEL
+  WG -->|append JSON job| GPUFS
+
+  %% =========================
+  %% GPU bridge (host-only, direct to NineDoor)
+  %% =========================
+  GPUW -->|Secure9P client over TCP (host-only)\nmirrors /gpu/* providers\nupdates status/telemetry| ND
+  GPUW -->|exec + lease enforce\nwrite status| GPUFS
+
+  %% =========================
+  %% Styles
+  %% =========================
+  classDef kernel fill:#eee,stroke:#555,stroke-width:1px;
+  classDef vm fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
+  classDef host fill:#fff7ed,stroke:#c2410c,stroke-width:1px;
+  classDef role fill:#f0fdf4,stroke:#15803d,stroke-width:1px;
+  classDef console fill:#faf5ff,stroke:#7c3aed,stroke-width:1px;
+  classDef path fill:#f8fafc,stroke:#334155,stroke-dasharray: 4 3;
+
 ## 1. System Boundaries
 - **Kernel**: Upstream seL4 for `aarch64/virt (GICv3)`; treated as an external dependency that provides the capability system, scheduling primitives, and IRQ/timer services.
 - **Userspace**: Entirely Rust, delivered as a CPIO rootfs containing the root task and all services.
