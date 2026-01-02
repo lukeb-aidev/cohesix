@@ -41,7 +41,7 @@ flowchart LR
 
   subgraph HOST["Host (outside Cohesix VM/TCB)"]
     OP["Operator or Automation"]:::ext
-    COHSH["cohsh (host-only)\nCanonical shell\ntransport tcp\nrole and ticket attach"]:::hosttool
+    COHSH["cohsh (host-only)<br/>Canonical shell\ntransport tcp\nrole and ticket attach"]:::hosttool
     GUI["Future GUI or Dashboard (host-only)\nSpeaks cohsh protocol"]:::hosttool
     WIRE["secure9p-wire (host)\nbounded framing\nTCP transport adapter"]:::hostlib
     GPUB["gpu-bridge-host (host)\nCUDA and NVML here\nlease enforcement\nmirrors gpu namespace"]:::hosttool
