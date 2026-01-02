@@ -45,6 +45,7 @@ const NET_VIRTIO_TX_V2: bool = cfg!(feature = "net-virtio-tx-v2");
 const VIRTIO_GUARD_QUEUE: bool = cfg!(feature = "virtio_guard_queue");
 const VIRTIO_DMA_TRACE: bool = cfg!(feature = "net-diag") || cfg!(feature = "trace-heavy-init");
 const DMA_NONCOHERENT: bool = cfg!(target_arch = "aarch64");
+const VIRTIO_TX_CLEAR_DESC_ON_FREE: bool = false;
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -205,7 +206,7 @@ fn virtq_publish_barrier() {
     compiler_fence(AtomicOrdering::Release);
     #[cfg(target_arch = "aarch64")]
     unsafe {
-        asm!("dmb ishst", options(nostack, preserves_flags));
+        asm!("dmb oshst", options(nostack, preserves_flags));
     }
     #[cfg(not(target_arch = "aarch64"))]
     fence(AtomicOrdering::Release);
@@ -216,7 +217,7 @@ fn virtq_notify_barrier() {
     compiler_fence(AtomicOrdering::Release);
     #[cfg(target_arch = "aarch64")]
     unsafe {
-        asm!("dmb ish", options(nostack, preserves_flags));
+        asm!("dmb oshst", options(nostack, preserves_flags));
     }
     #[cfg(not(target_arch = "aarch64"))]
     fence(AtomicOrdering::Release);
@@ -227,7 +228,7 @@ fn virtq_used_load_barrier() {
     compiler_fence(AtomicOrdering::Acquire);
     #[cfg(target_arch = "aarch64")]
     unsafe {
-        asm!("dmb ishld", options(nostack, preserves_flags));
+        asm!("dmb oshld", options(nostack, preserves_flags));
     }
     #[cfg(not(target_arch = "aarch64"))]
     fence(AtomicOrdering::Acquire);
@@ -1174,6 +1175,8 @@ pub struct VirtioNet {
     tx_dup_used_logged: bool,
     tx_used_gen_mismatch_logged: bool,
     tx_invalid_publish_logged: bool,
+    tx_publish_readback_logged: bool,
+    tx_reclaim_state_violation_logged: bool,
     #[cfg(debug_assertions)]
     tx_avail_duplicate_logged: bool,
     #[cfg(debug_assertions)]
@@ -1636,6 +1639,8 @@ impl VirtioNet {
             tx_dup_used_logged: false,
             tx_used_gen_mismatch_logged: false,
             tx_invalid_publish_logged: false,
+            tx_publish_readback_logged: false,
+            tx_reclaim_state_violation_logged: false,
             #[cfg(debug_assertions)]
             tx_avail_duplicate_logged: false,
             #[cfg(debug_assertions)]
@@ -1806,7 +1811,13 @@ impl VirtioNet {
         }
     }
 
-    fn log_zero_len_publish(&mut self, head_id: u16, publish_slot: u16, desc_len: u32, total_len: u32) {
+    fn log_zero_len_publish(
+        &mut self,
+        head_id: u16,
+        publish_slot: u16,
+        desc_len: u32,
+        total_len: u32,
+    ) {
         if self.tx_zero_len_publish_logged {
             return;
         }
@@ -2303,6 +2314,13 @@ impl VirtioNet {
             self.log_zero_len_publish(head_id, publish_slot, desc.len, total_len);
             return Err(TxPublishError::InvalidDescriptor);
         }
+        if desc.len != total_len {
+            self.device_faulted = true;
+            self.tx_state_violation("tx_desc_len_mismatch", head_id, Some(publish_slot))?;
+            self.freeze_tx_publishes("tx_desc_len_mismatch");
+            self.last_error.get_or_insert("tx_desc_len_mismatch");
+            return Err(TxPublishError::InvalidDescriptor);
+        }
         debug_assert!(
             desc.len != 0 && desc.addr != 0,
             "tx publish descriptor must be non-zero: head={} len={} addr=0x{:016x}",
@@ -2328,7 +2346,10 @@ impl VirtioNet {
             self.last_error.get_or_insert("tx_invalid_descriptor");
             return Err(TxPublishError::InvalidDescriptor);
         }
-        debug_assert!(desc.len != 0, "tx publish descriptor len zero before avail push");
+        debug_assert!(
+            desc.len != 0,
+            "tx publish descriptor len zero before avail push"
+        );
         self.tx_queue
             .push_avail(head_id)
             .map_err(TxPublishError::Queue)
@@ -2353,6 +2374,9 @@ impl VirtioNet {
         }
         let qsize = usize::from(self.tx_queue.size);
         if qsize == 0 {
+            return;
+        }
+        if !VIRTIO_TX_CLEAR_DESC_ON_FREE {
             return;
         }
         let mut idx = head;
@@ -2602,13 +2626,65 @@ impl VirtioNet {
         self.tx_head_mgr
             .mark_completed(id, Some(expected_gen))
             .and_then(|_| self.tx_head_mgr.reclaim_head(id))
+            .and_then(|_| {
+                if matches!(self.tx_head_mgr.state(id), Some(TxHeadState::Free)) {
+                    Ok(())
+                } else {
+                    Err(TxHeadError::InvalidState)
+                }
+            })
             .map(|_| {
                 self.clear_tx_desc_chain(id);
                 true
             })
             .map_err(|_| {
+                if !self.tx_reclaim_state_violation_logged {
+                    self.tx_reclaim_state_violation_logged = true;
+                    warn!(
+                        target: "net-console",
+                        "[virtio-net][tx] reclaim invariant violated: head={} state={:?}",
+                        id,
+                        self.tx_head_mgr.state(id),
+                    );
+                }
                 self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
             })
+    }
+
+    fn guard_tx_publish_readback(
+        &mut self,
+        slot: u16,
+        head_id: u16,
+        expected: &DescSpec,
+    ) -> Result<(), ()> {
+        let observed_head = self.tx_queue.read_avail_slot(slot as usize);
+        let desc = self.tx_queue.read_descriptor(head_id);
+        if observed_head != head_id
+            || desc.addr != expected.addr
+            || desc.len != expected.len
+            || desc.len == 0
+        {
+            if !self.tx_publish_readback_logged {
+                self.tx_publish_readback_logged = true;
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][tx-readback] publish mismatch: slot={} expected_head={} observed_head={} desc_addr=0x{desc_addr:016x} expected_addr=0x{expected_addr:016x} desc_len={} expected_len={}",
+                    slot,
+                    head_id,
+                    observed_head,
+                    desc_addr = desc.addr,
+                    expected_addr = expected.addr,
+                    desc.len,
+                    expected.len,
+                );
+            }
+            self.freeze_tx_publishes("tx_publish_readback_mismatch");
+            self.last_error
+                .get_or_insert("tx_publish_readback_mismatch");
+            self.device_faulted = true;
+            return Err(());
+        }
+        Ok(())
     }
 
     fn verify_tx_publish(
@@ -3107,9 +3183,16 @@ impl VirtioNet {
 
         virtq_publish_barrier();
         self.verify_descriptor_write("TX", QueueKind::Tx, head_id, &resolved_descs)?;
-        if self.tx_queue.sync_descriptor_table_for_device().is_err() {
-            self.freeze_and_capture("tx_desc_sync_failed");
-            return Err(());
+        for (offset, _) in resolved_descs.iter().enumerate() {
+            let desc_index = head_id.wrapping_add(offset as u16);
+            if self
+                .tx_queue
+                .clean_desc_entry_for_device(desc_index)
+                .is_err()
+            {
+                self.freeze_and_capture("tx_desc_sync_failed");
+                return Err(());
+            }
         }
         self.log_tx_descriptor_readback(head_id, &resolved_descs);
         self.log_pre_publish_if_suspicious("TX", QueueKind::Tx, head_id, &resolved_descs)?;
@@ -3214,7 +3297,7 @@ impl VirtioNet {
         }
         #[cfg(debug_assertions)]
         self.debug_trace_tx_publish_state(head_id, publish_slot, "pre_push_avail");
-        fence(AtomicOrdering::Release);
+        virtq_publish_barrier();
         let (slot, avail_idx, old_idx) = match self.publish_tx_avail(head_id, publish_slot) {
             Ok(result) => result,
             Err(TxPublishError::InvalidDescriptor) => {
@@ -3256,23 +3339,23 @@ impl VirtioNet {
         }
         #[cfg(debug_assertions)]
         self.debug_trace_tx_publish_state(head_id, slot, "post_mark_in_flight");
+        self.guard_tx_publish_readback(slot, head_id, &resolved_descs[0])?;
         let wrap_boundary = (old_idx as usize % qsize) > (avail_idx as usize % qsize);
         if wrap_boundary && !self.tx_wrap_logged {
             self.tx_wrap_logged = true;
             info!(
                 target: "virtio-net",
-                "[virtio-net][tx-wrap] avail_idx {old_idx}->{avail_idx} slot={slot} head={head_id} free={free} in_flight={in_flight} wrap_detected={wrap_detected} qsize={qsize}",
+                "[virtio-net][tx-wrap] avail_idx {old_idx}->{avail_idx} slot={slot} head={head_id} free={free} in_flight={in_flight} wrap_detected={wrap_detected} qsize={qsize} desc_len={desc_len} desc_addr=0x{desc_addr:016x} avail_head={avail_head}",
                 free = self.tx_head_mgr.free_len(),
                 in_flight = self.tx_head_mgr.in_flight_count(),
                 wrap_detected = wrap_boundary,
                 qsize = qsize,
+                desc_len = resolved_descs.get(0).map(|d| d.len).unwrap_or_default(),
+                desc_addr = resolved_descs.get(0).map(|d| d.addr).unwrap_or(0),
+                avail_head = self.tx_queue.read_avail_slot(slot as usize),
             );
         }
         self.verify_tx_publish(slot, head_id, &resolved_descs[0])?;
-        if self.tx_queue.sync_avail_ring_for_device().is_err() {
-            self.freeze_and_capture("tx_avail_sync_failed");
-            return Err(());
-        }
         self.debug_check_tx_avail_uniqueness(self.tx_queue.last_used, avail_idx);
         if log_breadcrumb {
             debug!(
@@ -4364,7 +4447,7 @@ impl VirtioNet {
             self.release_tx_head(id, "tx_v2_desc_cache_clean_failed");
             return;
         }
-        if self.tx_queue.sync_descriptor_table_for_device().is_err() {
+        if self.tx_queue.clean_desc_entry_for_device(id).is_err() {
             self.freeze_and_capture("tx_v2_desc_sync_failed");
             self.release_tx_head(id, "tx_v2_desc_sync_failed");
             return;
@@ -4505,7 +4588,7 @@ impl VirtioNet {
         {
             return;
         }
-        fence(AtomicOrdering::Release);
+        virtq_publish_barrier();
         match self.publish_tx_avail(id, publish_slot) {
             Ok((slot, avail_idx, old_idx)) => {
                 if slot != publish_slot {
@@ -4542,6 +4625,22 @@ impl VirtioNet {
                         return;
                     }
                 }
+                if self
+                    .guard_tx_publish_readback(
+                        slot,
+                        id,
+                        &DescSpec {
+                            addr: desc.addr,
+                            len: desc.len,
+                            flags: desc.flags,
+                            next: None,
+                        },
+                    )
+                    .is_err()
+                {
+                    self.release_tx_head(id, "tx_v2_publish_readback_mismatch");
+                    return;
+                }
                 let desc_snapshot = self.tx_queue.read_descriptor(id);
                 debug!(
                     target: "virtio-net",
@@ -4567,11 +4666,6 @@ impl VirtioNet {
                 );
                 #[cfg(debug_assertions)]
                 self.debug_assert_tx_chain_ready(id);
-                if self.tx_queue.sync_avail_ring_for_device().is_err() {
-                    self.freeze_and_capture("tx_v2_avail_sync_failed");
-                    self.release_tx_head(id, "tx_v2_avail_sync_failed");
-                    return;
-                }
                 self.tx_submit = self.tx_submit.wrapping_add(1);
                 NET_DIAG.record_tx_submit();
                 let qsize = usize::from(self.tx_queue.size);
@@ -4581,13 +4675,16 @@ impl VirtioNet {
                     self.tx_wrap_logged = true;
                     info!(
                         target: "virtio-net",
-                        "[virtio-net][tx-wrap] v2 avail_idx {}->{} slot={} head={} wrap_detected={} qsize={}",
+                        "[virtio-net][tx-wrap] v2 avail_idx {}->{} slot={} head={} wrap_detected={} qsize={} desc_len={} desc_addr=0x{desc_addr:016x} avail_head={}",
                         old_idx,
                         avail_idx,
                         slot,
                         id,
                         wrap_boundary,
                         qsize,
+                        desc.len,
+                        desc_addr = desc.addr,
+                        avail_head = self.tx_queue.read_avail_slot(slot as usize),
                     );
                 }
                 if VIRTIO_DMA_TRACE {
@@ -6495,15 +6592,20 @@ impl VirtQueue {
     }
 
     /// Publish an available descriptor after descriptors have been written and cleaned.
-    /// Ordering is enforced with release fences so the device never observes a partially
-    /// initialised (zeroed) descriptor:
-    /// 1) descriptor writes + cache maintenance (caller)
-    /// 2) release fence
-    /// 3) avail.ring slot
-    /// 4) release fence
-    /// 5) avail.idx
-    /// 6) release fence
+    /// Ordering is enforced with device-scope store barriers so the device never observes a
+    /// partially initialised (zeroed) descriptor even when the queue is mapped cacheable:
+    /// 1) descriptor writes + cache maintenance (caller, per-entry clean)
+    /// 2) release/device fence
+    /// 3) avail.ring slot write + per-slot clean
+    /// 4) release/device fence
+    /// 5) avail.idx write + per-field clean
+    /// 6) release/device fence
     /// 7) notify (performed by the caller)
+    ///
+    /// Why this fixes the wrap abort: QEMU aborted on `len=0` when a stale avail entry raced with
+    /// a freshly cleared descriptor. Cleaning the touched bytes and forcing `dmb oshst` between
+    /// desc → avail → idx → notify guarantees the device sees the fully populated descriptor chain
+    /// before it reuses a wrapped slot.
     fn push_avail(&self, index: u16) -> Result<(u16, u16, u16), DmaError> {
         self.assert_index_in_range(index, "avail");
         let avail = self.avail.as_ptr();
@@ -6561,9 +6663,7 @@ impl VirtQueue {
     }
 
     fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) -> Result<(), DmaError> {
-        // Ensure descriptors and avail ring updates are visible to the device before the kick.
-        self.sync_descriptor_table_for_device()?;
-        self.sync_avail_ring_for_device()?;
+        // Ensure descriptor and avail writes are visible before the MMIO notify.
         dma_barrier();
         virtq_notify_barrier();
         if queue == TX_QUEUE_INDEX {
@@ -6657,7 +6757,7 @@ impl VirtQueue {
             self.cacheable,
             "invalidate used ring header",
         )?;
-        fence(AtomicOrdering::SeqCst);
+        virtq_used_load_barrier();
         Ok(())
     }
 
@@ -6677,7 +6777,7 @@ impl VirtQueue {
             self.cacheable,
             "invalidate used ring entry",
         )?;
-        fence(AtomicOrdering::SeqCst);
+        virtq_used_load_barrier();
         Ok(())
     }
 
@@ -6853,7 +6953,7 @@ impl VirtQueue {
             self.freeze_and_capture("used_element_invalidate_failed");
             return Ok(None);
         }
-        dma_barrier();
+        dma_load_barrier();
         let elem = unsafe { read_volatile(elem_ptr) };
         assert!(
             elem.id < u32::from(self.size),
@@ -7207,7 +7307,16 @@ fn dma_invalidate(
 fn dma_barrier() {
     compiler_fence(AtomicOrdering::Release);
     unsafe {
-        asm!("dsb ishst", "isb", options(nostack, preserves_flags));
+        asm!("dmb oshst", options(nostack, preserves_flags));
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn dma_load_barrier() {
+    compiler_fence(AtomicOrdering::Acquire);
+    unsafe {
+        asm!("dmb oshld", options(nostack, preserves_flags));
     }
 }
 
@@ -7237,6 +7346,12 @@ fn dma_invalidate(
 #[inline(always)]
 fn dma_barrier() {
     compiler_fence(AtomicOrdering::Release);
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline(always)]
+fn dma_load_barrier() {
+    compiler_fence(AtomicOrdering::Acquire);
 }
 
 fn validate_tx_publish_descriptor(
