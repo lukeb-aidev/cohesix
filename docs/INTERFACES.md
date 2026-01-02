@@ -7,7 +7,6 @@ The queen/worker verbs and `/queen/ctl` schema form the hive control API: one Qu
 **Figure 1.** Sequence diagram
 <!-- INTERFACES.md Sequence Diagram (COMPLETE + white background) -->
 ```mermaid
-```mermaid
 sequenceDiagram
   autonumber
   actor Operator
