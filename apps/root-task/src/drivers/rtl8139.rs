@@ -429,6 +429,7 @@ impl NetDevice for Rtl8139Device {
             tx_in_flight: 0,
             tx_double_submit: 0,
             tx_zero_len_attempt: 0,
+            dropped_zero_len_tx: 0,
             tx_dup_publish_blocked: 0,
             tx_dup_used_ignored: 0,
             tx_invalid_used_state: 0,

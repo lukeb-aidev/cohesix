@@ -174,6 +174,8 @@ pub struct NetDeviceCounters {
     pub tx_double_submit: u64,
     /// TX zero-length submit attempts detected.
     pub tx_zero_len_attempt: u64,
+    /// TX publish attempts blocked because the descriptor length was zero.
+    pub dropped_zero_len_tx: u64,
     /// TX publishes rejected due to duplicate or busy slot state.
     pub tx_dup_publish_blocked: u64,
     /// TX used entries ignored due to duplicate completions.
@@ -223,6 +225,8 @@ pub struct NetCounters {
     pub tx_double_submit: u64,
     /// TX zero-length submit attempts detected.
     pub tx_zero_len_attempt: u64,
+    /// TX publish attempts blocked because the descriptor length was zero.
+    pub dropped_zero_len_tx: u64,
 }
 
 /// Outcome of the latest network self-test pass.
