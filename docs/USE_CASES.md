@@ -176,7 +176,6 @@ Each signage hub is a hive with one Queen orchestrating multiple workers, all co
 
 ## Diagrams
 **Figure 1** Edge “Hive” deployment (Smart factory / Retail CV hub / MEC node)
-
 ```mermaid
 flowchart LR
   subgraph SITE["Edge Site (Factory / Store / MEC)"]
@@ -239,44 +238,44 @@ sequenceDiagram
   participant Cohsh as cohsh
   participant ND as NineDoor
   participant RT as root-task
-  participant POL as AccessPolicy (pre-check)
-  participant LOG as /log/session.log
-  participant MW as /maintenance/window (lease)
-  participant DEV as /worker/<id>/ctl
+  participant POL as AccessPolicy
+  participant LOG as log session
+  participant MW as maintenance window
+  participant DEV as worker ctl
 
-  Note over ND: All actions are file ops; policy runs before provider logic; logs are append-only.
+  Note over ND: File-ops only; policy runs before provider logic; logs append-only.
 
-  Vendor->>Cohsh: obtain scoped ticket (vendor, path, ttl)
-  Vendor->>Cohsh: attach role=vendor ticket
-  Cohsh->>ND: TATTACH with ticket
-  ND->>POL: evaluate ticket scope + TTL + rate limits
+  Vendor->>Cohsh: obtain scoped ticket
+  Vendor->>Cohsh: attach role vendor with ticket
+  Cohsh->>ND: TATTACH ticket
+  ND->>POL: evaluate scope TTL rate limits
   POL-->>ND: allow or deny
 
   alt maintenance window active
-    Cohsh->>ND: TOPEN /maintenance/window (read)
+    Cohsh->>ND: TOPEN MW read
     ND-->>Cohsh: ROPEN
-    Cohsh->>ND: TREAD (confirm lease active)
+    Cohsh->>ND: TREAD MW
     ND-->>Cohsh: RREAD active
 
-    Cohsh->>ND: TOPEN /worker/<id>/ctl (append)
+    Cohsh->>ND: TOPEN DEV append
     ND-->>Cohsh: ROPEN
-    Cohsh->>ND: TWRITE "cmd=diagnose level=basic"
-    ND->>POL: check path + verb allowed
+    Cohsh->>ND: TWRITE cmd diagnose level basic
+    ND->>POL: check path and verb
     POL-->>ND: allow
     ND->>RT: perform validated internal action
     RT-->>ND: ok
     ND-->>Cohsh: RWRITE
 
-    Cohsh->>ND: TOPEN /log/session.log (append)
+    Cohsh->>ND: TOPEN LOG append
     ND-->>Cohsh: ROPEN
-    Cohsh->>ND: TWRITE "audit vendor action cmd=diagnose target=worker/<id>"
+    Cohsh->>ND: TWRITE audit vendor action diagnose target worker
     ND-->>Cohsh: RWRITE
   else window inactive or expired
-    Cohsh->>ND: TOPEN /maintenance/window (read)
+    Cohsh->>ND: TOPEN MW read
     ND-->>Cohsh: ROPEN
-    Cohsh->>ND: TREAD
+    Cohsh->>ND: TREAD MW
     ND-->>Cohsh: RREAD inactive
-    Cohsh->>ND: TWRITE "cmd=diagnose"
+    Cohsh->>ND: TWRITE cmd diagnose
     ND-->>Cohsh: Rerror Permission
   end
 ```
@@ -315,23 +314,26 @@ flowchart LR
 ```mermaid
 sequenceDiagram
   autonumber
-  participant Tenant as Tenant App (cohsh/GUI)
+  participant Tenant as Tenant App
   participant ND as NineDoor
   participant RT as root-task
-  participant GPU as /gpu/<id>/*
-  participant GPUB as gpu-bridge-host
+  participant GPU as gpu files
+  participant GPUB as gpu bridge host
 
-  Note over GPUB: CUDA/NVML never enters the VM; enforcement happens here.
+  Note over GPUB: CUDA and NVML stay on host; enforcement happens here.
 
-  Tenant->>ND: TATTACH with tenant ticket
-  Tenant->>ND: TWALK /queen/ctl
-  Tenant->>ND: TOPEN /queen/ctl append
-  Tenant->>ND: TWRITE "spawn=gpu lease gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120"
-  ND->>RT: validate ticket scope + quotas
+  Tenant->>ND: TATTACH tenant ticket
+  Tenant->>ND: TWALK queen ctl
+  ND-->>Tenant: RWALK
+  Tenant->>ND: TOPEN queen ctl append
+  ND-->>Tenant: ROPEN
+  Tenant->>ND: TWRITE spawn gpu lease request
+  ND->>RT: validate ticket scope and quotas
+
   alt capacity available
     RT-->>ND: ok queued
     ND-->>Tenant: RWRITE
-    RT->>GPU: append ctl "LEASE tenant=... ttl=..."
+    RT->>GPU: append ctl LEASE issued
     GPUB->>GPU: append status QUEUED
     GPUB->>GPU: append status RUNNING
   else no capacity
@@ -339,8 +341,9 @@ sequenceDiagram
     ND-->>Tenant: Rerror Busy
   end
 
-  Tenant->>ND: TOPEN /gpu/<id>/job append
-  Tenant->>ND: TWRITE "job descriptor (model ref, args, limits)"
+  Tenant->>ND: TOPEN gpu job append
+  ND-->>Tenant: ROPEN
+  Tenant->>ND: TWRITE append job descriptor
   ND-->>Tenant: RWRITE
   GPUB->>GPU: append status OK or ERR
 ```
