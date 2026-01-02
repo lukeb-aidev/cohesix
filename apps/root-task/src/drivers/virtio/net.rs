@@ -267,7 +267,6 @@ struct TxHeadEntry {
 #[derive(Clone, Debug)]
 /// Manages virtio TX descriptor heads and prevents reuse while in-flight.
 struct TxHeadManager {
-    free: HeaplessVec<u16, TX_QUEUE_SIZE>,
     free_mask: u32,
     entries: [TxHeadEntry; TX_QUEUE_SIZE],
     published_slots: [Option<(u16, u32)>; TX_QUEUE_SIZE],
@@ -279,6 +278,7 @@ struct TxHeadManager {
     publish_avail_idx: [u16; TX_QUEUE_SIZE],
     next_gen: u32,
     size: u16,
+    allocation_violation_logged: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -290,10 +290,6 @@ struct TxPublishRecord {
 
 impl TxHeadManager {
     fn new(size: u16) -> Self {
-        let mut free = HeaplessVec::<u16, TX_QUEUE_SIZE>::new();
-        for idx in 0..size {
-            let _ = free.push(idx);
-        }
         // Analysis: Reusing a TX head before the device returns ownership lets QEMU read a later
         // generation's zeroed descriptors, tripping the "zero sized buffers" abort. The free_mask
         // acts as the allocator's source of truth so we never hand out a head twice without a used
@@ -305,7 +301,6 @@ impl TxHeadManager {
             1u32.checked_shl(size as u32).unwrap_or(0).wrapping_sub(1)
         };
         Self {
-            free,
             free_mask,
             entries: [TxHeadEntry::default(); TX_QUEUE_SIZE],
             published_slots: [None; TX_QUEUE_SIZE],
@@ -317,6 +312,17 @@ impl TxHeadManager {
             publish_avail_idx: [0; TX_QUEUE_SIZE],
             next_gen: 1,
             size,
+            allocation_violation_logged: false,
+        }
+    }
+
+    fn active_mask(&self) -> u32 {
+        if self.size == 0 {
+            0
+        } else {
+            1u32.checked_shl(self.size as u32)
+                .unwrap_or(0)
+                .wrapping_sub(1)
         }
     }
 
@@ -407,14 +413,16 @@ impl TxHeadManager {
             return Err(TxHeadError::InvalidState);
         }
         self.free_mask |= mask;
-        self.free.push(id).map_err(|_| {
-            self.free_mask &= !mask;
-            TxHeadError::FreeListFull
-        })
+        Ok(())
     }
 
     fn alloc_head(&mut self) -> Option<u16> {
-        let id = self.free.pop()?;
+        let active = self.active_mask();
+        let free = self.free_mask & active;
+        if free == 0 {
+            return None;
+        }
+        let id = free.trailing_zeros() as u16;
         if id >= self.size {
             return None;
         }
@@ -432,15 +440,20 @@ impl TxHeadManager {
         self.free_mask &= !mask;
         let state = self.state(id);
         if !matches!(state, Some(TxHeadState::Free)) || self.is_advertised(id) {
-            mark_forensics_frozen();
-            let _ = self.free.push(id);
-            self.free_mask |= mask;
-            panic!(
-                "tx head allocation invariant violated: id={} state={:?} advertised={}",
-                id,
-                state,
-                self.is_advertised(id)
-            );
+            self.free_mask &= !mask;
+            if mark_forensics_frozen() && !self.allocation_violation_logged {
+                self.allocation_violation_logged = true;
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][tx-guard] allocation refused: id={} state={:?} advertised={} in_avail={} free_mask=0x{mask:08x}",
+                    id,
+                    state,
+                    self.is_advertised(id),
+                    self.in_avail(id),
+                    mask = self.free_mask,
+                );
+            }
+            return None;
         }
         let gen = self.next_gen;
         self.next_gen = self.next_gen.wrapping_add(1);
@@ -839,7 +852,7 @@ impl TxHeadManager {
     }
 
     fn free_len(&self) -> u16 {
-        self.free_mask.count_ones() as u16
+        (self.free_mask & self.active_mask()).count_ones() as u16
     }
 
     fn in_flight_count(&self) -> u16 {
@@ -903,6 +916,57 @@ impl TxHeadManager {
             .get(id as usize)
             .copied()
             .unwrap_or(false)
+    }
+
+    fn posted_count(&self) -> u16 {
+        self.published_slots
+            .iter()
+            .take(self.size as usize)
+            .filter(|entry| entry.is_some())
+            .count() as u16
+    }
+
+    fn audit(&self) -> Result<(u16, u16, u16, u16, u16), TxHeadError> {
+        let active_mask = self.active_mask();
+        if self.free_mask & !active_mask != 0 {
+            return Err(TxHeadError::InvalidState);
+        }
+        let mut free = 0u16;
+        let mut prepared = 0u16;
+        let mut in_flight = 0u16;
+        let mut completed = 0u16;
+        for idx in 0..self.size {
+            let mask = self.free_mask_for(idx)?;
+            let state = self.state(idx).ok_or(TxHeadError::OutOfRange)?;
+            match state {
+                TxHeadState::Free => {
+                    free = free.saturating_add(1);
+                    if (self.free_mask & mask) == 0 || self.in_avail(idx) || self.is_advertised(idx)
+                    {
+                        return Err(TxHeadError::InvalidState);
+                    }
+                }
+                TxHeadState::Prepared { .. } => {
+                    prepared = prepared.saturating_add(1);
+                    if (self.free_mask & mask) != 0 {
+                        return Err(TxHeadError::InvalidState);
+                    }
+                }
+                TxHeadState::Published { .. } | TxHeadState::InFlight { .. } => {
+                    in_flight = in_flight.saturating_add(1);
+                    if (self.free_mask & mask) != 0 || !self.in_avail(idx) {
+                        return Err(TxHeadError::InvalidState);
+                    }
+                }
+                TxHeadState::Completed { .. } => {
+                    completed = completed.saturating_add(1);
+                    if (self.free_mask & mask) != 0 {
+                        return Err(TxHeadError::InvalidState);
+                    }
+                }
+            }
+        }
+        Ok((free, prepared, in_flight, completed, self.posted_count()))
     }
 }
 
@@ -1252,6 +1316,8 @@ pub struct VirtioNet {
     tx_complete: u64,
     tx_zero_len_log_ms: u64,
     tx_v2_log_ms: u64,
+    tx_audit_log_ms: u64,
+    tx_audit_violation_logged: bool,
     forensic_dump_captured: bool,
 }
 
@@ -1716,6 +1782,8 @@ impl VirtioNet {
             tx_complete: 0,
             tx_zero_len_log_ms: now_ms,
             tx_v2_log_ms: now_ms,
+            tx_audit_log_ms: now_ms,
+            tx_audit_violation_logged: false,
             forensic_dump_captured: false,
         };
         driver.initialise_queues();
@@ -2370,6 +2438,19 @@ impl VirtioNet {
         if desc.len == 0 || total_len == 0 {
             self.dropped_zero_len_tx = self.dropped_zero_len_tx.saturating_add(1);
             self.log_zero_len_publish(head_id, publish_slot, desc.len, total_len);
+            return Err(TxPublishError::InvalidDescriptor);
+        }
+        if total_len < VIRTIO_NET_HEADER_LEN_BASIC as u32 {
+            self.dropped_zero_len_tx = self.dropped_zero_len_tx.saturating_add(1);
+            warn!(
+                target: "net-console",
+                "[virtio-net][tx-guard] descriptor shorter than header: head={} slot={} len={} required={}",
+                head_id,
+                publish_slot,
+                total_len,
+                VIRTIO_NET_HEADER_LEN_BASIC
+            );
+            self.last_error.get_or_insert("tx_desc_len_short");
             return Err(TxPublishError::InvalidDescriptor);
         }
         if desc.addr == 0 {
@@ -3937,11 +4018,68 @@ impl VirtioNet {
         }
         self.tx_queue.last_used = self.tx_v2_last_used;
 
+        self.audit_tx_accounting("reclaim_tx_v2");
         self.log_tx_v2_invariants();
     }
 
     fn tx_v2_in_flight_count(&self) -> u16 {
         self.tx_head_mgr.in_flight_count()
+    }
+
+    fn audit_tx_accounting(&mut self, context: &'static str) {
+        match self.tx_head_mgr.audit() {
+            Ok((free, prepared, in_flight, completed, posted)) => {
+                let qsize = self.tx_queue.size;
+                let total = free
+                    .saturating_add(prepared)
+                    .saturating_add(in_flight)
+                    .saturating_add(completed);
+                if total != qsize || posted != in_flight {
+                    if !self.tx_audit_violation_logged {
+                        self.tx_audit_violation_logged = true;
+                        warn!(
+                            target: "net-console",
+                            "[virtio-net][tx-audit] invariant mismatch context={} total={} free={} prepared={} in_flight={} completed={} posted={} qsize={}",
+                            context,
+                            total,
+                            free,
+                            prepared,
+                            in_flight,
+                            completed,
+                            posted,
+                            qsize,
+                        );
+                    }
+                }
+                let now_ms = crate::hal::timebase().now_ms();
+                if now_ms.saturating_sub(self.tx_audit_log_ms) >= 1_000 {
+                    self.tx_audit_log_ms = now_ms;
+                    info!(
+                        target: "net-console",
+                        "[virtio-net][tx-audit] context={} free={} prepared={} in_flight={} completed={} posted={} free_mask=0x{mask:08x} qsize={}",
+                        context,
+                        free,
+                        prepared,
+                        in_flight,
+                        completed,
+                        posted,
+                        mask = self.tx_head_mgr.free_mask & self.tx_head_mgr.active_mask(),
+                        qsize = qsize,
+                    );
+                }
+            }
+            Err(_) => {
+                if !self.tx_audit_violation_logged {
+                    self.tx_audit_violation_logged = true;
+                    warn!(
+                        target: "net-console",
+                        "[virtio-net][tx-audit] accounting failed context={} free_mask=0x{mask:08x}",
+                        context,
+                        mask = self.tx_head_mgr.free_mask,
+                    );
+                }
+            }
+        }
     }
 
     fn log_tx_v2_invariants(&mut self) {
@@ -7580,15 +7718,18 @@ mod tx_tests {
     }
 
     #[test]
-    #[should_panic(expected = "tx head allocation invariant violated")]
-    fn tx_allocator_reuse_without_reclaim_panics() {
+    fn tx_allocator_reuse_without_reclaim_guarded() {
         let mut mgr = TxHeadManager::new(2);
         let head = mgr.alloc_head().expect("head available");
         mgr.mark_published(head, 0, 64, 0x4000).expect("publish");
         mgr.note_avail_publish(head, 0, 0).expect("advertise");
         mgr.mark_in_flight(head).expect("in-flight");
-        mgr.free.push(head).expect("forced duplicate free entry");
-        let _ = mgr.alloc_head();
+        let mask = mgr.free_mask_for(head).expect("mask");
+        mgr.free_mask |= mask;
+        assert!(
+            mgr.alloc_head().is_none(),
+            "allocator must refuse reuse while head remains in-flight"
+        );
     }
 
     #[test]
