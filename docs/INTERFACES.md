@@ -10,15 +10,15 @@ The queen/worker verbs and `/queen/ctl` schema form the hive control API: one Qu
 sequenceDiagram
   autonumber
   actor Operator
-  participant Cohsh as cohsh
-  participant Console as root-task TCP console (:31337)
-  participant ND as NineDoor (Secure9P server)
-  participant RT as root-task (RootTaskControl)
-  participant QCTL as /queen/ctl (append-only)
-  participant WT as /worker/<id>/telemetry
-  participant LOG as /log/queen.log (append-only)
-  participant GPUB as gpu-bridge-host (provider)
-  participant GPU as /gpu/<id>/{info,ctl,job,status}
+  participant Cohsh as "cohsh"
+  participant Console as "root-task TCP console (:31337)"
+  participant ND as "NineDoor (Secure9P server)"
+  participant RT as "root-task (RootTaskControl)"
+  participant QCTL as "/queen/ctl (append-only)"
+  participant WT as "/worker/<id>/telemetry"
+  participant LOG as "/log/queen.log (append-only)"
+  participant GPUB as "gpu-bridge-host (provider)"
+  participant GPU as "/gpu/<id>/{info,ctl,job,status}"
 
   %% -------------------------------
   %% Invariants (from docs)
