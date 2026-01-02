@@ -10,8 +10,8 @@ flowchart LR
   %% Host side (outside VM/TCB)
   %% =========================
   subgraph HOST["Host (outside Cohesix VM/TCB)"]
-    COHSH["cohsh (host-only CLI)\n- 9P client (preferred)\n- TCP console client (--transport tcp)\n- local ticket hygiene"]:::host
-    GPUB["gpu-bridge-host (host GPU bridge)\n- owns CUDA/NVML\n- publishes /gpu/*\n- enforces leases/priorities\n- host-only networking"]:::host
+    COHSH["cohsh (host-only CLI)<br/>- 9P client (preferred)<br/>- TCP console client (--transport tcp)<br/>- local ticket hygiene"]:::host
+    GPUB["gpu-bridge-host (host GPU bridge)<br/>- owns CUDA/NVML<br/>- publishes /gpu/*<br/>- enforces leases/priorities<br/>- host-only networking"]:::host
   end
 
   %% =========================
@@ -19,17 +19,17 @@ flowchart LR
   %% =========================
   subgraph VM["Cohesix target (seL4 VM today; UEFI ARM64 later)"]
     subgraph K["Upstream seL4 kernel"]
-      SEL4["seL4\n(caps, IPC, scheduling, IRQ/timer)"]:::kernel
+      SEL4["seL4<br/>(caps, IPC, scheduling, IRQ/timer)"]:::kernel
     end
 
     subgraph U["Pure Rust userspace (CPIO rootfs)"]
-      RT["root-task\n- bootstraps caps/sched\n- deterministic event pump\n- TCP console :31337 + UART console\n- spawns NineDoor + workers\n- sole side-effect authority"]:::vm
+      RT["root-task<br/>- bootstraps caps/sched<br/>- deterministic event pump<br/>- TCP console :31337 + UART console<br/>- spawns NineDoor + workers<br/>- sole side-effect authority"]:::vm
 
-      ND["NineDoor (Secure9P server)\n9P2000.L only\nops: version/attach/walk/open/read/write/clunk/stat\nremove: DISABLED\nmsize<=8192\nper-session fid tables\nappend-only semantics enforced"]:::vm
+      ND["NineDoor (Secure9P server)<br/>9P2000.L only<br/>ops: version/attach/walk/open/read/write/clunk/stat<br/>remove: DISABLED<br/>msize<=8192<br/>per-session fid tables<br/>append-only semantics enforced"]:::vm
 
-      Q["Queen role session\n(orchestrates via /queen/ctl)"]:::role
-      WH["worker-heart\n(writes /worker/<id>/telemetry)"]:::role
-      WG["worker-gpu (VM stub)\n(file ops only; no CUDA/NVML)"]:::role
+      Q["Queen role session<br/>(orchestrates via /queen/ctl)"]:::role
+      WH["worker-heart<br/>(writes /worker/<id>/telemetry)"]:::role
+      WG["worker-gpu (VM stub)<br/>(file ops only; no CUDA/NVML)"]:::role
     end
   end
 
@@ -38,17 +38,17 @@ flowchart LR
   %% =========================
   subgraph NS["Secure9P namespace (role-scoped mounts)"]
     PROC["/proc (synthetic)"]:::path
-    QUEEN["/queen/ctl (append-only JSON lines)\nspawn/kill/bind/mount/spawn:gpu(lease)"]:::path
-    WORK["/worker/<id>/telemetry (append-only)\nnewline-delimited records"]:::path
+    QUEEN["/queen/ctl (append-only JSON lines)<br/>spawn/kill/bind/mount/spawn:gpu(lease)"]:::path
+    WORK["/worker/<id>/telemetry (append-only)<br/>newline-delimited records"]:::path
     LOG["/log/* (append-only streams)"]:::path
-    GPU["/gpu/<id>/{info,ctl,job,status}\n(host-mirrored provider nodes)"]:::path
+    GPU["/gpu/<id>/{info,ctl,job,status}<br/>(host-mirrored provider nodes)"]:::path
   end
 
   %% =========================
   %% Console surface (root-task)
   %% =========================
-  TCP["root-task TCP console\n--transport tcp\ndefault 127.0.0.1:31337\nline<=128B\nPING/PONG\nACK-before-side-effects\nrate-limit auth failures"]:::console
-  UART["PL011 UART console\nalways-on fallback"]:::console
+  TCP["root-task TCP console<br/>--transport tcp<br/>default 127.0.0.1:31337<br/>line<=128B<br/>PING/PONG<br/>ACK-before-side-effects<br/>rate-limit auth failures"]:::console
+  UART["PL011 UART console<br/>always-on fallback"]:::console
 
   %% =========================
   %% Wiring
@@ -59,8 +59,8 @@ flowchart LR
   RT --- UART
 
   %% cohsh can use both transports
-  COHSH -->|"Secure9P client\nTVERSION(msize<=8192)\nTATTACH(ticket)\nTWALK/TOPEN/TREAD/TWRITE"| ND
-  COHSH -->|"Line protocol\nATTACH <role> <ticket?>\nTAIL <path>\nPING/PONG"| TCP
+  COHSH -->|"Secure9P client<br/>TVERSION(msize<=8192)<br/>TATTACH(ticket)<br/>TWALK/TOPEN/TREAD/TWRITE"| ND
+  COHSH -->|"Line protocol<br/>ATTACH <role> <ticket?><br/>TAIL <path><br/>PING/PONG"| TCP
 
   %% In-VM roles use NineDoor only
   Q -->|"Secure9P session"| ND
@@ -75,10 +75,10 @@ flowchart LR
   ND --> GPU
 
   %% Queen control surface triggers validated internal actions
-  QUEEN -->|"validated JSON + ticket perms\nthen internal RootTaskControl"| RT
+  QUEEN -->|"validated JSON + ticket perms<br/>then internal RootTaskControl"| RT
 
   %% GPU bridge publishes /gpu providers into NineDoor
-  GPUB -->|"Secure9P provider (host)\npublishes GPU nodes\nupdates status"| ND
+  GPUB -->|"Secure9P provider (host)<br/>publishes GPU nodes<br/>updates status"| ND
   GPUB --> GPU
 
   %% =========================
