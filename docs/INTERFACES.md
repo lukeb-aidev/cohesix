@@ -10,105 +10,122 @@ The queen/worker verbs and `/queen/ctl` schema form the hive control API: one Qu
 <!-- ========================================================= -->
 ```mermaid
 sequenceDiagram
-autonumber
-actor Operator
-participant Cohsh as "cohsh (client)"
-participant Console as "root-task TCP console (:31337)"
-participant ND as "NineDoor (Secure9P)"
-participant RT as "root-task (RootTaskControl)"
-participant QCTL as "/queen/ctl (append-only)"
-participant WT as "/worker/⟨id⟩/telemetry"
-participant GPUB as "gpu-bridge-host (host)"
-participant GPUFS as "/gpu/⟨id⟩/*"
+  autonumber
+  actor Operator
+  participant Cohsh as "cohsh (client)"
+  participant Console as "root-task TCP console (:31337)"
+  participant ND as "NineDoor (Secure9P)"
+  participant RT as "root-task (RootTaskControl)"
+  participant QCTL as "/queen/ctl (append-only)"
+  participant WT as "/worker/⟨id⟩/telemetry"
+  participant GPUB as "gpu-bridge-host (host)"
+  participant GPUFS as "/gpu/⟨id⟩/*"
 
-Note over ND
-9P2000.L only
-ops: version/attach/walk/open/read/write/clunk/stat
-remove disabled
-msize<=8192 (TooBig if exceeded)
-path components <=255B, UTF-8, no NUL
-fid tables per-session; clunk invalidates handles immediately
-end note
+  Note over ND
+    9P2000.L only
+    ops: version/attach/walk/open/read/write/clunk/stat
+    remove disabled
+    msize<=8192 (TooBig if exceeded)
+    path components <=255B, UTF-8, no NUL
+    fid tables per-session; clunk invalidates handles immediately
+  end note
 
-Operator->>Cohsh: cohsh --transport tcp ...
-Cohsh->>Console: ATTACH ⟨role⟩ ⟨ticket?⟩
-alt valid ticket/role
-Console-->>Cohsh: OK ATTACH role=⟨role⟩
-else invalid / locked out
-Console-->>Cohsh: ERR ATTACH reason=⟨cause⟩
-end
+  %% ---------------------------------------------------------
+  %% A) TCP console attach + tail (line protocol)
+  %% ---------------------------------------------------------
+  Operator->>Cohsh: cohsh --transport tcp ...
+  Cohsh->>Console: ATTACH ⟨role⟩ ⟨ticket?⟩
+  alt valid ticket/role
+    Console-->>Cohsh: OK ATTACH role=⟨role⟩
+  else invalid / locked out
+    Console-->>Cohsh: ERR ATTACH reason=⟨cause⟩
+  end
 
-opt Idle keepalive
-Cohsh->>Console: PING (every 15s idle)
-Console-->>Cohsh: PONG (immediate, even mid-stream)
-end
+  opt Idle keepalive
+    Cohsh->>Console: PING (every 15s idle)
+    Console-->>Cohsh: PONG (immediate, even mid-stream)
+  end
 
-Cohsh->>Console: TAIL ⟨path⟩
-Console-->>Cohsh: OK TAIL path=⟨path⟩
-loop newline-delimited entries
-Console-->>Cohsh: ⟨entry⟩\n
-end
-Console-->>Cohsh: END
+  Cohsh->>Console: TAIL ⟨path⟩
+  Console-->>Cohsh: OK TAIL path=⟨path⟩
+  loop newline-delimited entries
+    Console-->>Cohsh: ⟨entry⟩\\n
+  end
+  Console-->>Cohsh: END
 
-Note over Console
-Max line length 128B
-Rate-limit auth failures: 3 strikes/60s => 90s cooldown
-ACKs are sent before side effects
-end note
+  Note over Console
+    Max line length 128B
+    Rate-limit auth failures: 3 strikes/60s => 90s cooldown
+    ACKs are sent before side effects
+  end note
 
-Operator->>Cohsh: cohsh (9P mode)
-Cohsh->>ND: TVERSION msize<=8192
-ND-->>Cohsh: RVERSION msize<=8192
-Cohsh->>ND: TATTACH (ticket out-of-band)
-alt ticket ok
-ND-->>Cohsh: RATTACH
-else bad ticket
-ND-->>Cohsh: Rerror(Permission/Closed)
-end
+  %% ---------------------------------------------------------
+  %% B) Secure9P session (preferred machine interface)
+  %% ---------------------------------------------------------
+  Operator->>Cohsh: cohsh (9P mode)
+  Cohsh->>ND: TVERSION msize<=8192
+  ND-->>Cohsh: RVERSION msize<=8192
+  Cohsh->>ND: TATTACH (ticket out-of-band)
+  alt ticket ok
+    ND-->>Cohsh: RATTACH
+  else bad ticket
+    ND-->>Cohsh: Rerror(Permission/Closed)
+  end
 
-Cohsh->>ND: TWALK /queen/ctl
-ND-->>Cohsh: RWALK
-Cohsh->>ND: TOPEN /queen/ctl (append)
-ND-->>Cohsh: ROPEN
-Cohsh->>ND: TWRITE {"spawn":"heartbeat","ticks":100,"budget":{"ttl_s":120,"ops":500}}
-ND->>RT: validate JSON + ticket perms\nthen RootTaskControl.spawn(...)
-alt spawn ok
-RT-->>ND: Ok(worker_id)
-ND-->>Cohsh: RWRITE
-else invalid/busy
-RT-->>ND: Err(Invalid/Busy/Permission)
-ND-->>Cohsh: Rerror(Invalid/Busy/Permission)
-end
+  %% ---------------------------------------------------------
+  %% C) Queen control surface: /queen/ctl append-only JSON
+  %% ---------------------------------------------------------
+  Cohsh->>ND: TWALK /queen/ctl
+  ND-->>Cohsh: RWALK
+  Cohsh->>ND: TOPEN /queen/ctl (append)
+  ND-->>Cohsh: ROPEN
+  Cohsh->>ND: TWRITE {"spawn":"heartbeat","ticks":100,"budget":{"ttl_s":120,"ops":500}}
+  ND->>RT: validate JSON + ticket perms; then RootTaskControl.spawn(...)
+  alt spawn ok
+    RT-->>ND: Ok(worker_id)
+    ND-->>Cohsh: RWRITE
+  else invalid/busy
+    RT-->>ND: Err(Invalid/Busy/Permission)
+    ND-->>Cohsh: Rerror(Invalid/Busy/Permission)
+  end
 
-RT->>WT: append {"tick":42,"ts_ms":123456789}\n...
-RT->>WT: append {"tick":43,"ts_ms":123456999}\n...
+  %% ---------------------------------------------------------
+  %% D) Worker telemetry (append-only)
+  %% ---------------------------------------------------------
+  RT->>WT: append {"tick":42,"ts_ms":123456789}\\n...
+  RT->>WT: append {"tick":43,"ts_ms":123456999}\\n...
 
-Note over GPUB,GPUFS
-GPU bridge publishes provider-backed nodes:
-/gpu/⟨id⟩/info (RO JSON)
-/gpu/⟨id⟩/ctl (append LEASE/RELEASE/PRIORITY)
-/gpu/⟨id⟩/job (append JSON descriptors)
-/gpu/⟨id⟩/status [...]
-end note
+  %% ---------------------------------------------------------
+  %% E) GPU bridge files (host-mirrored providers)
+  %% ---------------------------------------------------------
+  Note over GPUB,GPUFS
+    GPU bridge publishes provider-backed nodes:
+    /gpu/⟨id⟩/info (RO JSON)
+    /gpu/⟨id⟩/ctl (append LEASE/RELEASE/PRIORITY)
+    /gpu/⟨id⟩/job (append JSON descriptors)
+    /gpu/⟨id⟩/status [...]
+  end note
 
-GPUB->>ND: Secure9P provider connect (host-only)
-ND-->>GPUB: session established
-GPUB->>GPUFS: publish /gpu/⟨id⟩/{info,ctl,job,status}
+  GPUB->>ND: Secure9P provider connect (host-only)
+  ND-->>GPUB: session established
+  GPUB->>GPUFS: publish /gpu/⟨id⟩/{info,ctl,job,status}
 
-Cohsh->>ND: TWRITE {"spawn":"gpu","lease":{"gpu_id":"GPU-0","mem_mb":4096,"streams":2,"ttl_s":120}}
-ND->>RT: validate + enqueue lease request
-alt bridge available
-RT-->>ND: OK (queued)
-ND-->>Cohsh: RWRITE
-RT->>GPUFS: mirror lease issuance to /gpu/⟨id⟩/ctl\nand /log/queen.log
-GPUB->>GPUFS: enforce lease; update /gpu/⟨id⟩/status\nQUEUED->RUNNING->OK/ERR
-else bridge unavailable
-RT-->>ND: Err(Busy)
-ND-->>Cohsh: Rerror(Busy)
-end
+  %% Queen requests GPU lease via /queen/ctl
+  Cohsh->>ND: TWRITE {"spawn":"gpu","lease":{"gpu_id":"GPU-0","mem_mb":4096,"streams":2,"ttl_s":120}}
+  ND->>RT: validate + enqueue lease request
+  alt bridge available
+    RT-->>ND: OK (queued)
+    ND-->>Cohsh: RWRITE
+    RT->>GPUFS: mirror lease issuance to /gpu/⟨id⟩/ctl and /log/queen.log
+    GPUB->>GPUFS: enforce lease; update /gpu/⟨id⟩/status QUEUED->RUNNING->OK/ERR
+  else bridge unavailable
+    RT-->>ND: Err(Busy)
+    ND-->>Cohsh: Rerror(Busy)
+  end
 
-Cohsh->>ND: TREAD /log/queen.log (offset=n)
-ND-->>Cohsh: RREAD (append-only; offsets ignored by server policy)
+  %% Tail over 9P (append-only enforced)
+  Cohsh->>ND: TREAD /log/queen.log (offset=n)
+  ND-->>Cohsh: RREAD (append-only; offsets ignored by server policy)
 ```
 
 ## 1. NineDoor 9P Operations
