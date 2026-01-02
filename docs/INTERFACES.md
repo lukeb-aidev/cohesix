@@ -9,32 +9,19 @@ The queen/worker verbs and `/queen/ctl` schema form the hive control API: one Qu
 <!-- INTERFACES.md Sequence Diagram (COMPLETE + white background) -->
 <!-- ========================================================= -->
 ```mermaid
-%%{
-  init: {
-    "theme": "base",
-    "themeVariables": {
-      "background": "#ffffff",
-      "primaryColor": "#ffffff",
-      "secondaryColor": "#ffffff",
-      "tertiaryColor": "#ffffff",
-      "lineColor": "#333333",
-      "textColor": "#111111"
-    }
-  }
-}%%
 sequenceDiagram
   autonumber
   actor Operator
-  participant Cohsh as cohsh (client)
-  participant Console as root-task TCP console (:31337)
-  participant ND as NineDoor (Secure9P)
-  participant RT as root-task (RootTaskControl)
-  participant QCTL as /queen/ctl (append-only)
-  participant WT as /worker/<id>/telemetry
-  participant GPUB as gpu-bridge-host (host)
-  participant GPUFS as /gpu/<id>/*
+  participant Cohsh as "cohsh (client)"
+  participant Console as "root-task TCP console (:31337)"
+  participant ND as "NineDoor (Secure9P)"
+  participant RT as "root-task (RootTaskControl)"
+  participant QCTL as "/queen/ctl (append-only)"
+  participant WT as "/worker/<id>/telemetry"
+  participant GPUB as "gpu-bridge-host (host)"
+  participant GPUFS as "/gpu/<id>/*"
 
-  Note over ND: 9P2000.L only\nops: version/attach/walk/open/read/write/clunk/stat\nremove disabled\nmsize<=8192 (TooBig if exceeded)\npath components <=255B, UTF-8, no NUL\nfid tables per-session; clunk invalidates immediately
+  Note over ND: 9P2000.L only<br/>ops: version/attach/walk/open/read/write/clunk/stat<br/>remove disabled<br/>msize<=8192 (TooBig if exceeded)<br/>path components <=255B, UTF-8, no NUL<br/>fid tables per-session; clunk invalidates handles immediately
 
   %% ---------------------------------------------------------
   %% A) TCP console attach + tail (line protocol)
@@ -59,7 +46,7 @@ sequenceDiagram
   end
   Console-->>Cohsh: END
 
-  Note over Console: Max line length 128B\nRate-limit auth failures: 3 strikes/60s => 90s cooldown\nACKs are sent before side effects
+  Note over Console: Max line length 128B<br/>Rate-limit auth failures: 3 strikes/60s => 90s cooldown<br/>ACKs are sent before side effects
 
   %% ---------------------------------------------------------
   %% B) Secure9P session (preferred machine interface)
@@ -82,7 +69,7 @@ sequenceDiagram
   Cohsh->>ND: TOPEN /queen/ctl (append)
   ND-->>Cohsh: ROPEN
   Cohsh->>ND: TWRITE {"spawn":"heartbeat","ticks":100,"budget":{"ttl_s":120,"ops":500}}
-  ND->>RT: validate JSON + ticket perms\nthen RootTaskControl.spawn(...)
+  ND->>RT: validate JSON + ticket perms<br/>then RootTaskControl.spawn(...)
   alt spawn ok
     RT-->>ND: Ok(worker_id)
     ND-->>Cohsh: RWRITE
@@ -100,7 +87,7 @@ sequenceDiagram
   %% ---------------------------------------------------------
   %% E) GPU bridge files (host-mirrored providers)
   %% ---------------------------------------------------------
-  Note over GPUB,GPUFS: GPU bridge publishes provider-backed nodes:\n/gpu/<id>/info (RO JSON)\n/gpu/<id>/ctl (append LEASE/RELEASE/PRIORITY)\n/gpu/<id>/job (append JSON descriptors)\n/gpu/<id>/status (RO append stream)
+  Note over GPUB,GPUFS: GPU bridge publishes provider-backed nodes:<br/>/gpu/<id>/info (RO JSON)<br/>/gpu/<id>/ctl (append LEASE/RELEASE/PRIORITY)<br/>/gpu/<id>/job (append JSON descriptors)<br/>/gpu/<id>/status [...]
 
   GPUB->>ND: Secure9P provider connect (host-only)
   ND-->>GPUB: session established
@@ -112,8 +99,8 @@ sequenceDiagram
   alt bridge available
     RT-->>ND: OK (queued)
     ND-->>Cohsh: RWRITE
-    RT->>GPUFS: mirror lease issuance to /gpu/<id>/ctl\nand /log/queen.log
-    GPUB->>GPUFS: enforce lease; update /gpu/<id>/status\nQUEUED->RUNNING->OK/ERR
+    RT->>GPUFS: mirror lease issuance to /gpu/<id>/ctl<br/>and /log/queen.log
+    GPUB->>GPUFS: enforce lease; update /gpu/<id>/status<br/>QUEUED->RUNNING->OK/ERR
   else bridge unavailable
     RT-->>ND: Err(Busy)
     ND-->>Cohsh: Rerror(Busy)
