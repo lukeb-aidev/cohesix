@@ -16,7 +16,9 @@ use core::mem::MaybeUninit;
 use core::ops::Range;
 use core::ptr::read_unaligned;
 use core::ptr::{read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{compiler_fence, AtomicBool, AtomicU32, Ordering as AtomicOrdering};
+use core::sync::atomic::{
+    compiler_fence, AtomicBool, AtomicU32, AtomicU64, Ordering as AtomicOrdering,
+};
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, trace, warn};
@@ -92,6 +94,13 @@ const MAX_QUEUE_SIZE: usize = if RX_QUEUE_SIZE > TX_QUEUE_SIZE {
 } else {
     TX_QUEUE_SIZE
 };
+const TX_NOTIFY_BATCH_PACKETS: u16 = 4;
+const TX_NOTIFY_BATCH_BYTES: usize = 4096;
+const TX_RECLAIM_IRQ_BUDGET: u16 = 8;
+const TX_RECLAIM_POLL_BUDGET: u16 = 2;
+const TX_STATS_LOG_MS: u64 = 1_000;
+const TX_WARN_COOLDOWN_MS: u64 = 2_000;
+const TX_CANARY_VALUE: u32 = 0xC0DE_DDCC;
 #[cfg(debug_assertions)]
 const TRACK_TX_HEAD: Option<u16> = Some(4);
 #[cfg(not(debug_assertions))]
@@ -298,6 +307,105 @@ struct TxPublishRecord {
     slot: u16,
     gen: u32,
     avail_idx: u16,
+}
+
+#[derive(Default)]
+struct VirtioNetTxStats {
+    enqueue_ok: AtomicU64,
+    enqueue_would_block: AtomicU64,
+    kick_count: AtomicU64,
+    reclaim_calls_irq: AtomicU64,
+    reclaim_calls_poll: AtomicU64,
+    used_reaped: AtomicU64,
+    inflight_highwater: AtomicU32,
+    ring_full_events: AtomicU64,
+    irq_count: AtomicU64,
+}
+
+impl VirtioNetTxStats {
+    fn record_enqueue_ok(&self, inflight: u16) {
+        self.enqueue_ok.fetch_add(1, AtomicOrdering::Relaxed);
+        self.update_highwater(inflight);
+    }
+
+    fn record_would_block(&self, inflight: u16, free: u16, qsize: u16) {
+        self.enqueue_would_block
+            .fetch_add(1, AtomicOrdering::Relaxed);
+        if inflight >= qsize || free == 0 {
+            self.ring_full_events
+                .fetch_add(1, AtomicOrdering::Relaxed);
+        }
+    }
+
+    fn record_kick(&self) {
+        self.kick_count.fetch_add(1, AtomicOrdering::Relaxed);
+    }
+
+    fn record_irq_reclaim(&self) {
+        self.reclaim_calls_irq
+            .fetch_add(1, AtomicOrdering::Relaxed);
+    }
+
+    fn record_poll_reclaim(&self) {
+        self.reclaim_calls_poll
+            .fetch_add(1, AtomicOrdering::Relaxed);
+    }
+
+    fn record_used_reaped(&self) {
+        self.used_reaped.fetch_add(1, AtomicOrdering::Relaxed);
+    }
+
+    fn record_irq(&self) {
+        self.irq_count.fetch_add(1, AtomicOrdering::Relaxed);
+    }
+
+    fn update_highwater(&self, inflight: u16) {
+        let mut current = self
+            .inflight_highwater
+            .load(AtomicOrdering::Relaxed);
+        while inflight as u32 > current {
+            match self.inflight_highwater.compare_exchange(
+                current,
+                inflight as u32,
+                AtomicOrdering::AcqRel,
+                AtomicOrdering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct TxDiagState {
+    last_avail_idx: u16,
+    last_used_idx: u16,
+    last_inflight: u16,
+    last_irq_count: u64,
+    last_would_block: u64,
+    last_kick_count: u64,
+    last_enqueue_ok: u64,
+    last_warn_ms: u64,
+}
+
+#[derive(Default, Clone, Copy)]
+struct TxStatsSnapshot {
+    enqueue_ok: u64,
+    enqueue_would_block: u64,
+    kick_count: u64,
+    reclaim_calls_irq: u64,
+    reclaim_calls_poll: u64,
+    used_reaped: u64,
+    inflight_highwater: u32,
+    ring_full_events: u64,
+    irq_count: u64,
+}
+
+#[derive(Clone, Copy)]
+enum TxReclaimSource {
+    Irq,
+    Poll,
 }
 
 impl TxHeadManager {
@@ -1365,6 +1473,8 @@ pub struct VirtioNet {
     tx_buffers: HeaplessVec<RamFrame, TX_QUEUE_SIZE>,
     tx_v2_last_used: u16,
     tx_head_mgr: TxHeadManager,
+    tx_stats: VirtioNetTxStats,
+    tx_diag: TxDiagState,
     dma_cacheable: bool,
     tx_last_used_seen: u16,
     tx_progress_log_gate: u32,
@@ -1412,6 +1522,7 @@ pub struct VirtioNet {
     rx_payload_zero_logged: bool,
     tx_used_recent: HeaplessVec<(u16, u32), TX_QUEUE_SIZE>,
     tx_wrap_logged: bool,
+    tx_stats_log_ms: u64,
     rx_underflow_logged_ids: HeaplessVec<u16, RX_QUEUE_SIZE>,
     last_error: Option<&'static str>,
     rx_requeue_logged_ids: HeaplessVec<u16, RX_QUEUE_SIZE>,
@@ -1437,6 +1548,11 @@ pub struct VirtioNet {
     dropped_zero_len_tx: u64,
     tx_submit: u64,
     tx_complete: u64,
+    tx_pending_since_kick: u16,
+    tx_bytes_since_kick: usize,
+    tx_canary_front: u32,
+    tx_canary_back: u32,
+    tx_canary_fault_logged: bool,
     tx_zero_len_log_ms: u64,
     tx_v2_log_ms: u64,
     tx_audit_log_ms: u64,
@@ -1832,6 +1948,8 @@ impl VirtioNet {
             tx_buffers,
             tx_v2_last_used: 0,
             tx_head_mgr: TxHeadManager::new(tx_size as u16),
+            tx_stats: VirtioNetTxStats::default(),
+            tx_diag: TxDiagState::default(),
             tx_last_used_seen: 0,
             tx_progress_log_gate: 0,
             negotiated_features,
@@ -1879,6 +1997,7 @@ impl VirtioNet {
             rx_payload_zero_logged: false,
             tx_used_recent: HeaplessVec::new(),
             tx_wrap_logged: false,
+            tx_stats_log_ms: now_ms,
             rx_underflow_logged_ids: HeaplessVec::new(),
             last_error: None,
             rx_requeue_logged_ids: HeaplessVec::new(),
@@ -1904,6 +2023,11 @@ impl VirtioNet {
             dropped_zero_len_tx: 0,
             tx_submit: 0,
             tx_complete: 0,
+            tx_pending_since_kick: 0,
+            tx_bytes_since_kick: 0,
+            tx_canary_front: TX_CANARY_VALUE,
+            tx_canary_back: TX_CANARY_VALUE,
+            tx_canary_fault_logged: false,
             tx_zero_len_log_ms: now_ms,
             tx_v2_log_ms: now_ms,
             tx_audit_log_ms: now_ms,
@@ -4074,6 +4198,7 @@ impl VirtioNet {
     }
 
     fn poll_interrupts(&mut self) {
+        self.verify_tx_canary("irq");
         let (status, isr_ack) = self.regs.acknowledge_interrupts();
         log::debug!(
             target: "virtio-net",
@@ -4083,12 +4208,19 @@ impl VirtioNet {
         );
         if status != 0 {
             NET_DIAG.record_rx_irq();
+            self.tx_stats.record_irq();
         }
         self.check_device_health();
         if self.device_faulted {
             return;
         }
+        if NET_VIRTIO_TX_V2 {
+            self.tx_reclaim_used(TX_RECLAIM_IRQ_BUDGET, TxReclaimSource::Irq);
+            self.log_tx_stats_snapshot();
+            return;
+        }
         self.reclaim_tx();
+        self.log_tx_stats_snapshot();
     }
 
     fn check_device_health(&mut self) {
@@ -4127,8 +4259,9 @@ impl VirtioNet {
         if forensics_frozen() {
             return;
         }
+        self.verify_tx_canary("tx_reclaim_v1");
         if NET_VIRTIO_TX_V2 {
-            self.reclaim_tx_v2();
+            self.tx_reclaim_used(TX_RECLAIM_POLL_BUDGET, TxReclaimSource::Poll);
             return;
         }
         self.used_poll_calls = self.used_poll_calls.wrapping_add(1);
@@ -4178,7 +4311,11 @@ impl VirtioNet {
         }
     }
 
-    fn reclaim_tx_v2(&mut self) {
+    fn tx_reclaim_used(&mut self, budget: u16, source: TxReclaimSource) {
+        if budget == 0 || forensics_frozen() {
+            return;
+        }
+        self.verify_tx_canary("tx_reclaim");
         self.used_poll_calls = self.used_poll_calls.wrapping_add(1);
         let used = self.tx_queue.used.as_ptr();
         if self.tx_queue.invalidate_used_header_for_cpu().is_err() {
@@ -4191,7 +4328,8 @@ impl VirtioNet {
 
         assert!(qsize != 0, "virtqueue size must be non-zero");
 
-        while self.tx_v2_last_used != used_idx {
+        let mut processed: u16 = 0;
+        while self.tx_v2_last_used != used_idx && processed < budget {
             self.tx_queue.last_used = self.tx_v2_last_used;
             let ring_slot = (self.tx_v2_last_used as usize) % qsize;
             if self
@@ -4235,6 +4373,7 @@ impl VirtioNet {
                 NET_DIAG.record_tx_used_seen();
                 self.tx_v2_last_used = next_used;
                 self.note_progress();
+                processed = processed.saturating_add(1);
                 continue;
             }
             self.tx_complete = self.tx_complete.wrapping_add(1);
@@ -4242,7 +4381,9 @@ impl VirtioNet {
             NET_DIAG.record_tx_completion();
             NET_DIAG.record_tx_used_seen();
             self.tx_v2_last_used = next_used;
+            self.tx_stats.record_used_reaped();
             self.note_progress();
+            processed = processed.saturating_add(1);
         }
         self.tx_queue.last_used = self.tx_v2_last_used;
 
@@ -4251,6 +4392,10 @@ impl VirtioNet {
 
         self.audit_tx_accounting("reclaim_tx_v2");
         self.log_tx_v2_invariants();
+        match source {
+            TxReclaimSource::Irq => self.tx_stats.record_irq_reclaim(),
+            TxReclaimSource::Poll => self.tx_stats.record_poll_reclaim(),
+        }
     }
 
     fn tx_v2_in_flight_count(&self) -> u16 {
@@ -4678,13 +4823,21 @@ impl VirtioNet {
 
     fn prepare_tx_token(&mut self) -> VirtioTxToken {
         let driver_ptr = self as *mut _;
+        self.verify_tx_canary("tx_prepare");
         if NET_VIRTIO_TX_V2 {
             if self.tx_publish_blocked() {
                 return VirtioTxToken::new(driver_ptr, None);
             }
+            if self.tx_head_mgr.free_len() == 0 {
+                self.tx_reclaim_used(TX_RECLAIM_POLL_BUDGET, TxReclaimSource::Poll);
+            }
             if let Some(id) = self.tx_head_mgr.alloc_head() {
                 return VirtioTxToken::new(driver_ptr, Some(id));
             }
+            let inflight = self.tx_head_mgr.in_flight_count();
+            let free = self.tx_head_mgr.free_len();
+            self.tx_stats
+                .record_would_block(inflight, free, self.tx_queue.size);
             if self.tx_head_mgr.in_flight_count() > 0 {
                 self.tx_alloc_blocked_inflight = self.tx_alloc_blocked_inflight.saturating_add(1);
             }
@@ -4696,6 +4849,10 @@ impl VirtioNet {
         if let Some(id) = self.tx_head_mgr.alloc_head() {
             return VirtioTxToken::new(driver_ptr, Some(id));
         }
+        let inflight = self.tx_head_mgr.in_flight_count();
+        let free = self.tx_head_mgr.free_len();
+        self.tx_stats
+            .record_would_block(inflight, free, self.tx_queue.size);
         if self.tx_head_mgr.in_flight_count() > 0 {
             self.tx_alloc_blocked_inflight = self.tx_alloc_blocked_inflight.saturating_add(1);
         }
@@ -4850,11 +5007,176 @@ impl VirtioNet {
             .filter(|&len| len > 0 && written_len > 0)
     }
 
+    fn verify_tx_canary(&mut self, context: &'static str) {
+        if self.tx_canary_front == TX_CANARY_VALUE && self.tx_canary_back == TX_CANARY_VALUE {
+            return;
+        }
+        if self.tx_canary_fault_logged {
+            return;
+        }
+        self.tx_canary_fault_logged = true;
+        error!(
+            target: "net-console",
+            "[virtio-net][tx-canary] violation context={} front=0x{:08x} back=0x{:08x}",
+            context,
+            self.tx_canary_front,
+            self.tx_canary_back
+        );
+    }
+
+    fn snapshot_tx_stats(&self) -> TxStatsSnapshot {
+        TxStatsSnapshot {
+            enqueue_ok: self.tx_stats.enqueue_ok.load(AtomicOrdering::Relaxed),
+            enqueue_would_block: self
+                .tx_stats
+                .enqueue_would_block
+                .load(AtomicOrdering::Relaxed),
+            kick_count: self.tx_stats.kick_count.load(AtomicOrdering::Relaxed),
+            reclaim_calls_irq: self
+                .tx_stats
+                .reclaim_calls_irq
+                .load(AtomicOrdering::Relaxed),
+            reclaim_calls_poll: self
+                .tx_stats
+                .reclaim_calls_poll
+                .load(AtomicOrdering::Relaxed),
+            used_reaped: self.tx_stats.used_reaped.load(AtomicOrdering::Relaxed),
+            inflight_highwater: self
+                .tx_stats
+                .inflight_highwater
+                .load(AtomicOrdering::Relaxed),
+            ring_full_events: self
+                .tx_stats
+                .ring_full_events
+                .load(AtomicOrdering::Relaxed),
+            irq_count: self.tx_stats.irq_count.load(AtomicOrdering::Relaxed),
+        }
+    }
+
+    fn check_tx_contradictions(
+        &mut self,
+        now_ms: u64,
+        avail_idx: u16,
+        used_idx: u16,
+        snapshot: &TxStatsSnapshot,
+        inflight: u16,
+    ) {
+        if now_ms.saturating_sub(self.tx_diag.last_warn_ms) < TX_WARN_COOLDOWN_MS {
+            self.tx_diag.last_avail_idx = avail_idx;
+            self.tx_diag.last_used_idx = used_idx;
+            self.tx_diag.last_inflight = inflight;
+            self.tx_diag.last_irq_count = snapshot.irq_count;
+            self.tx_diag.last_would_block = snapshot.enqueue_would_block;
+            self.tx_diag.last_kick_count = snapshot.kick_count;
+            self.tx_diag.last_enqueue_ok = snapshot.enqueue_ok;
+            return;
+        }
+        let would_block_delta = snapshot
+            .enqueue_would_block
+            .saturating_sub(self.tx_diag.last_would_block);
+        let irq_delta = snapshot
+            .irq_count
+            .saturating_sub(self.tx_diag.last_irq_count);
+        if would_block_delta > 0 && used_idx == self.tx_diag.last_used_idx && irq_delta > 0 {
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-warn] IRQs rising but used.idx stalled: avail_idx={} used_idx={} inflight={} kicks={} would_block={} irq_delta={}",
+                avail_idx,
+                used_idx,
+                inflight,
+                snapshot.kick_count,
+                snapshot.enqueue_would_block,
+                irq_delta
+            );
+            self.tx_diag.last_warn_ms = now_ms;
+        }
+        if used_idx != self.tx_diag.last_used_idx && inflight >= self.tx_diag.last_inflight {
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-warn] used advanced without inflight drop: used_idx_prev={} used_idx_now={} inflight_prev={} inflight_now={}",
+                self.tx_diag.last_used_idx,
+                used_idx,
+                self.tx_diag.last_inflight,
+                inflight
+            );
+            self.tx_diag.last_warn_ms = now_ms;
+        }
+        let kick_delta = snapshot.kick_count.saturating_sub(self.tx_diag.last_kick_count);
+        let enqueue_delta = snapshot.enqueue_ok.saturating_sub(self.tx_diag.last_enqueue_ok);
+        if enqueue_delta > 0 && kick_delta >= enqueue_delta {
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-warn] excessive kicks: kicks_delta={} enqueue_delta={} avail_idx={} used_idx={}",
+                kick_delta,
+                enqueue_delta,
+                avail_idx,
+                used_idx
+            );
+            self.tx_diag.last_warn_ms = now_ms;
+        }
+        self.tx_diag.last_avail_idx = avail_idx;
+        self.tx_diag.last_used_idx = used_idx;
+        self.tx_diag.last_inflight = inflight;
+        self.tx_diag.last_irq_count = snapshot.irq_count;
+        self.tx_diag.last_would_block = snapshot.enqueue_would_block;
+        self.tx_diag.last_kick_count = snapshot.kick_count;
+        self.tx_diag.last_enqueue_ok = snapshot.enqueue_ok;
+    }
+
+    fn log_tx_stats_snapshot(&mut self) {
+        let now_ms = crate::hal::timebase().now_ms();
+        if now_ms.saturating_sub(self.tx_stats_log_ms) < TX_STATS_LOG_MS {
+            return;
+        }
+        self.tx_stats_log_ms = now_ms;
+        let snapshot = self.snapshot_tx_stats();
+        let inflight = self.tx_head_mgr.in_flight_count();
+        let free = self.tx_head_mgr.free_len();
+        let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
+        info!(
+            target: "virtio-net",
+            "[virtio-net][tx-stats] inflight={} free={} highwater={} enqueue_ok={} would_block={} kicks={} used_reaped={} reclaim_irq={} reclaim_poll={} ring_full={} irq={} avail_idx={} used_idx={}",
+            inflight,
+            free,
+            snapshot.inflight_highwater,
+            snapshot.enqueue_ok,
+            snapshot.enqueue_would_block,
+            snapshot.kick_count,
+            snapshot.used_reaped,
+            snapshot.reclaim_calls_irq,
+            snapshot.reclaim_calls_poll,
+            snapshot.ring_full_events,
+            snapshot.irq_count,
+            avail_idx,
+            used_idx
+        );
+        self.check_tx_contradictions(now_ms, avail_idx, used_idx, &snapshot, inflight);
+    }
+
+    fn should_kick_after_publish(&mut self, packet_bytes: usize) -> bool {
+        let prev_pending = self.tx_pending_since_kick;
+        let prev_bytes = self.tx_bytes_since_kick;
+        let new_pending = prev_pending.saturating_add(1);
+        let new_bytes = prev_bytes.saturating_add(packet_bytes);
+        self.tx_pending_since_kick = new_pending;
+        self.tx_bytes_since_kick = new_bytes;
+        prev_pending == 0
+            || new_pending >= TX_NOTIFY_BATCH_PACKETS
+            || new_bytes >= TX_NOTIFY_BATCH_BYTES
+    }
+
+    fn note_tx_kick(&mut self) {
+        self.tx_pending_since_kick = 0;
+        self.tx_bytes_since_kick = 0;
+        self.tx_stats.record_kick();
+    }
+
     fn submit_tx(&mut self, id: u16, len: usize) {
         if NET_VIRTIO_TX_V2 {
             self.submit_tx_v2(id, len);
             return;
         }
+        self.verify_tx_canary("tx_submit_v1");
         if self.tx_publish_blocked() {
             self.release_tx_head(id, "tx_publish_blocked");
             return;
@@ -4913,6 +5235,7 @@ impl VirtioNet {
     }
 
     fn submit_tx_v2(&mut self, id: u16, len: usize) {
+        self.verify_tx_canary("tx_submit");
         self.check_device_health();
         if self.device_faulted {
             self.release_tx_head(id, "tx_v2_device_faulted");
@@ -5189,6 +5512,8 @@ impl VirtioNet {
                         return;
                     }
                 }
+                let inflight_now = self.tx_head_mgr.in_flight_count();
+                self.tx_stats.record_enqueue_ok(inflight_now);
                 if self
                     .guard_tx_publish_readback(
                         slot,
@@ -5274,14 +5599,17 @@ impl VirtioNet {
                         "tx-trace: v2 descriptor must be initialised before kick"
                     );
                 }
-                if self
-                    .tx_queue
-                    .notify(&mut self.regs, TX_QUEUE_INDEX)
-                    .is_err()
-                {
-                    self.freeze_and_capture("tx_v2_notify_failed");
-                    self.release_tx_head(id, "tx_v2_notify_failed");
-                    return;
+                if self.should_kick_after_publish(total_len) {
+                    if self
+                        .tx_queue
+                        .notify(&mut self.regs, TX_QUEUE_INDEX)
+                        .is_err()
+                    {
+                        self.freeze_and_capture("tx_v2_notify_failed");
+                        self.release_tx_head(id, "tx_v2_notify_failed");
+                        return;
+                    }
+                    self.note_tx_kick();
                 }
             }
             Err(TxPublishError::InvalidDescriptor) => {
