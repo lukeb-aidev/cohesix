@@ -5,19 +5,9 @@ OUTPUT_FORMAT(elf64-littleaarch64)
 OUTPUT_ARCH(aarch64)
 ENTRY(_start)
 
-__ipcbuf_vaddr = 0x00106000; /* Kernel-advertised init thread IPC buffer mapping. */
-__stack_guard = 0x00002000;  /* Guard page below IPC buffer to catch stack overruns. */
+HEAP_SIZE = 0x00040000;      /* 256 KiB bootstrap heap. */
+__stack_guard = 0x00002000;  /* Guard page to catch stack overruns. */
 __stack_size = 0x00020000;   /* 128 KiB stack for early boot logging/tracing. */
-
-__stack_top = __ipcbuf_vaddr - __stack_guard;
-__stack_bottom_unaligned = __stack_top - __stack_size;
-__stack_bottom = __stack_bottom_unaligned & ~0xFFF;
-
-/* Derived ranges (page-aligned):
- *   stack=[0x000e4000..0x00104000) size=128 KiB
- *   guard=[0x00104000..0x00106000)
- *   heap  grows up to stack_bottom with no backward '.' adjustments.
- */
 
 PHDRS {
   text PT_LOAD FLAGS(5); /* R+X */
@@ -65,16 +55,19 @@ SECTIONS
 
   /* Dedicated bootstrap heap carved after .bss to avoid overlap with the stack. */
   . = ALIGN(0x1000);
-  __heap_start = .;
-  .heap (NOLOAD) : {
-    . = __stack_bottom;
+  .heap (NOLOAD) : ALIGN(16) {
+    __heap_start = .;
+    . += HEAP_SIZE;
+    __heap_end = .;
   } :data
-  __heap_end = __stack_bottom;
 
   /* Statically reserved stack region; the runtime uses __stack_top as the initial SP. */
-  .stack __stack_bottom (NOLOAD) : ALIGN(0x1000) {
+  . = ALIGN(0x1000);
+  .stack (NOLOAD) : ALIGN(16) {
+    __stack_bottom = .;
     __stack_start = .;
-    . = __stack_top;
+    . += __stack_size;
+    __stack_top = .;
     __stack_end = .;
   } :data
 
@@ -84,13 +77,18 @@ SECTIONS
   * it). The init thread stack must never run right up against the IPC buffer
   * mapping.
   */
-  .stack_guard __stack_top (NOLOAD) : ALIGN(0x1000) {
+  . = ALIGN(0x1000);
+  .stack_guard (NOLOAD) : ALIGN(16) {
     __stack_guard_start = .;
-    . = __ipcbuf_vaddr;
+    . += __stack_guard;
     __stack_guard_end = .;
+    __ipcbuf_vaddr = .;
   } :data
 
   PROVIDE(_end = .);
+
+  ASSERT(__heap_end <= __stack_bottom, "heap overlaps stack")
+  ASSERT(__stack_top <= __stack_guard_start, "stack guard misplaced")
 
   /* Do NOT advance '.' to device/MMIO addresses here. Keep segments tight. */
 }
