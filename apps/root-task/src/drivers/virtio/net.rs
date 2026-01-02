@@ -16,7 +16,7 @@ use core::mem::MaybeUninit;
 use core::ops::Range;
 use core::ptr::read_unaligned;
 use core::ptr::{read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{compiler_fence, AtomicBool, Ordering as AtomicOrdering};
+use core::sync::atomic::{compiler_fence, AtomicBool, AtomicU32, Ordering as AtomicOrdering};
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, trace, warn};
@@ -50,6 +50,7 @@ const VIRTIO_TX_CLEAR_DESC_ON_FREE: bool = false;
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
 const VIRTIO_MMIO_SLOTS: usize = 8;
+const TX_WRAP_TRIPWIRE_LIMIT: u32 = 4;
 
 const VIRTIO_MMIO_MAGIC: u32 = 0x7472_6976;
 const VIRTIO_MMIO_VERSION_LEGACY: u32 = 1;
@@ -117,6 +118,7 @@ static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
 static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
+static TX_WRAP_TRIPWIRE: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "net-backend-virtio")]
 static mut VIRTIO_NET_STORAGE: MaybeUninit<VirtioNet> = MaybeUninit::uninit();
 #[cfg(debug_assertions)]
@@ -2662,6 +2664,49 @@ impl VirtioNet {
         Ok(())
     }
 
+    fn tx_wrap_tripwire(&mut self, old_idx: u16, avail_idx: u16, slot: u16, head_id: u16) {
+        let qsize = usize::from(self.tx_queue.size);
+        if qsize == 0 {
+            return;
+        }
+        let wrap_boundary = (old_idx as usize % qsize) > (avail_idx as usize % qsize);
+        let at_slot_zero = slot == 0;
+        if !wrap_boundary && !at_slot_zero {
+            return;
+        }
+        let count = TX_WRAP_TRIPWIRE.fetch_add(1, AtomicOrdering::AcqRel);
+        if count >= TX_WRAP_TRIPWIRE_LIMIT {
+            return;
+        }
+        let avail_slot_val = self.tx_queue.read_avail_slot(slot as usize);
+        let desc = self.tx_queue.read_descriptor(head_id);
+        let next_candidate = if (desc.flags & VIRTQ_DESC_F_NEXT) != 0 {
+            desc.next
+        } else {
+            head_id.wrapping_add(1)
+        };
+        let bounded_next = next_candidate % self.tx_queue.size;
+        let next_desc = self.tx_queue.read_descriptor(bounded_next);
+        let avail_idx_readback = self.tx_queue.read_avail_idx();
+        info!(
+            target: "virtio-net",
+            "[virtio-net][tx-wrap-tripwire] old_idx={} avail_idx={} slot={} head={} wrap={} ring_slot_head={} desc_len={} desc_addr=0x{desc_addr:016x} desc_flags=0x{desc_flags:04x} desc_next={} next_desc_len={} next_desc_addr=0x{next_desc_addr:016x} avail_idx_readback={}",
+            old_idx,
+            avail_idx,
+            slot,
+            head_id,
+            wrap_boundary,
+            avail_slot_val,
+            desc_len = desc.len,
+            desc_addr = desc.addr,
+            desc_flags = desc.flags,
+            desc_next = desc.next,
+            next_desc_len = next_desc.len,
+            next_desc_addr = next_desc.addr,
+            avail_idx_readback = avail_idx_readback,
+        );
+    }
+
     fn validate_tx_publish_guard(
         &mut self,
         head_id: u16,
@@ -3523,6 +3568,7 @@ impl VirtioNet {
             self.tx_state_violation("tx_slot_mismatch", head_id, Some(slot))?;
             return Err(());
         }
+        self.tx_wrap_tripwire(old_idx, avail_idx, slot, head_id);
         if let Err(_) = self
             .tx_head_mgr
             .note_avail_publish(head_id, slot, avail_idx)
@@ -4861,6 +4907,7 @@ impl VirtioNet {
                         .ok();
                     return;
                 }
+                self.tx_wrap_tripwire(old_idx, avail_idx, slot, id);
                 if self.tx_head_mgr.submit_ready(id, slot).is_err() {
                     self.device_faulted = true;
                     self.last_error.get_or_insert("tx_double_advertise");
@@ -6727,8 +6774,8 @@ impl VirtQueue {
             NonNull::new_unchecked(base_ptr.as_ptr().add(layout.used_offset) as *mut VirtqUsed)
         };
 
-        let avail_idx = unsafe { read_volatile(&(*avail_ptr.as_ptr()).idx) };
-        let used_idx = unsafe { read_volatile(&(*used_ptr.as_ptr()).idx) };
+        let avail_idx = u16::from_le(unsafe { read_volatile(&(*avail_ptr.as_ptr()).idx) });
+        let used_idx = u16::from_le(unsafe { read_volatile(&(*used_ptr.as_ptr()).idx) });
 
         if avail_idx != 0 || used_idx != 0 {
             error!(
@@ -6857,7 +6904,9 @@ impl VirtQueue {
 
     /// Publish an available descriptor after descriptors have been written and cleaned.
     /// Ordering is enforced with device-scope store barriers so the device never observes a
-    /// partially initialised (zeroed) descriptor even when the queue is mapped cacheable:
+    /// partially initialised (zeroed) descriptor even when the queue is mapped cacheable.
+    /// Per the VirtIO 1.1 spec (§2.6.9), the device may consume descriptors as soon as `avail.idx`
+    /// is updated, so the writes must be visible in this exact order:
     /// 1) descriptor writes + cache maintenance (caller, per-entry clean)
     /// 2) release/device fence
     /// 3) avail.ring slot write + per-slot clean
@@ -6875,7 +6924,7 @@ impl VirtQueue {
         let avail = self.avail.as_ptr();
         let qsize = usize::from(self.size);
 
-        let old_avail = unsafe { read_volatile(&(*avail).idx) };
+        let old_avail = u16::from_le(unsafe { read_volatile(&(*avail).idx) });
         let ring_slot = (old_avail as usize) % qsize;
         self.assert_ring_slot(old_avail, ring_slot, "avail");
         unsafe {
@@ -6897,7 +6946,7 @@ impl VirtQueue {
             let ring_offset = ring_addr - self.base_vaddr;
             self.assert_offset_in_range(ring_offset, core::mem::size_of::<u16>(), "avail.ring");
             virtq_publish_barrier();
-            write_volatile(ring_ptr, index);
+            write_volatile(ring_ptr, index.to_le());
             debug_assert_eq!(
                 ring_slot,
                 (old_avail as usize) % qsize,
@@ -6906,7 +6955,7 @@ impl VirtQueue {
                 ring_slot,
                 qsize
             );
-            let ring_written = read_volatile(ring_ptr);
+            let ring_written = u16::from_le(read_volatile(ring_ptr));
             debug_assert_eq!(
                 ring_written, index,
                 "tx publish ring write mismatch: slot={} expected_head={} observed_head={} old_avail={}",
@@ -6917,7 +6966,7 @@ impl VirtQueue {
             }
             virtq_publish_barrier();
             let new_idx = old_avail.wrapping_add(1);
-            write_volatile(&mut (*avail).idx, new_idx);
+            write_volatile(&mut (*avail).idx, new_idx.to_le());
             if DMA_NONCOHERENT {
                 self.clean_avail_idx_for_device()?;
             }
@@ -7073,12 +7122,12 @@ impl VirtQueue {
             core::mem::size_of::<u16>(),
             "avail.ring.read",
         );
-        unsafe { read_volatile((*avail).ring.as_ptr().add(slot)) }
+        unsafe { u16::from_le(read_volatile((*avail).ring.as_ptr().add(slot))) }
     }
 
     fn read_avail_idx(&self) -> u16 {
         let avail = self.avail.as_ptr();
-        unsafe { read_volatile(&(*avail).idx) }
+        unsafe { u16::from_le(read_volatile(&(*avail).idx)) }
     }
 
     fn indices(&self) -> (u16, u16) {
@@ -7095,8 +7144,8 @@ impl VirtQueue {
             mark_forensics_frozen();
             return (self.last_used, self.last_used);
         }
-        let used_idx = unsafe { read_volatile(&(*used).idx) };
-        let avail_idx = unsafe { read_volatile(&(*avail).idx) };
+        let used_idx = u16::from_le(unsafe { read_volatile(&(*used).idx) });
+        let avail_idx = u16::from_le(unsafe { read_volatile(&(*avail).idx) });
 
         (used_idx, avail_idx)
     }
@@ -7105,8 +7154,8 @@ impl VirtQueue {
         let used = self.used.as_ptr();
         let avail = self.avail.as_ptr();
 
-        let used_idx = unsafe { read_volatile(&(*used).idx) };
-        let avail_idx = unsafe { read_volatile(&(*avail).idx) };
+        let used_idx = u16::from_le(unsafe { read_volatile(&(*used).idx) });
+        let avail_idx = u16::from_le(unsafe { read_volatile(&(*avail).idx) });
 
         (used_idx, avail_idx)
     }
@@ -7132,8 +7181,8 @@ impl VirtQueue {
             );
             return;
         }
-        let used_idx = unsafe { read_volatile(&(*used).idx) };
-        let avail_idx = unsafe { read_volatile(&(*avail).idx) };
+        let used_idx = u16::from_le(unsafe { read_volatile(&(*used).idx) });
+        let avail_idx = u16::from_le(unsafe { read_volatile(&(*avail).idx) });
 
         log::info!(
             target: "net-console",
@@ -7163,7 +7212,7 @@ impl VirtQueue {
             self.freeze_and_capture("used_header_invalidate_failed");
             return Ok(None);
         }
-        let idx = unsafe { read_volatile(&(*used).idx) };
+        let idx = u16::from_le(unsafe { read_volatile(&(*used).idx) });
         virtq_used_load_barrier();
         if self.last_used == idx {
             return Ok(None);
@@ -7219,16 +7268,18 @@ impl VirtQueue {
         }
         dma_load_barrier();
         let elem = unsafe { read_volatile(elem_ptr) };
+        let elem_id = u32::from_le(elem.id);
+        let elem_len = u32::from_le(elem.len);
         assert!(
-            elem.id < u32::from(self.size),
+            elem_id < u32::from(self.size),
             "virtqueue used.id out of range: id={} size={} ring_slot={} base_vaddr=0x{base:016x}",
-            elem.id,
+            elem_id,
             self.size,
             ring_slot,
             base = self.base_vaddr,
         );
-        if elem.len == 0 {
-            let head_id = elem.id as u16;
+        if elem_len == 0 {
+            let head_id = elem_id as u16;
             let desc = unsafe { read_volatile(self.desc.as_ptr().add(head_id as usize)) };
             if allow_zero_len {
                 self.used_zero_len_head = None;
@@ -7240,7 +7291,7 @@ impl VirtQueue {
                         head: head_id,
                         idx: self.last_used,
                         addr: desc.addr,
-                        len: elem.len,
+                        len: elem_len,
                         flags: desc.flags,
                         next: desc.next,
                         reason: ForensicFaultReason::UsedLenZeroRepeat,
@@ -7254,7 +7305,7 @@ impl VirtQueue {
                     head_id,
                     self.last_used,
                     ring_slot,
-                    elem.len,
+                    elem_len,
                     addr = desc.addr,
                     len = desc.len,
                     flags = desc.flags,
@@ -7263,29 +7314,29 @@ impl VirtQueue {
                 return Ok(None);
             }
         }
-        if elem.len != 0 {
+        if elem_len != 0 {
             self.used_zero_len_head = None;
         }
-        if elem.id >= u32::from(self.size) {
+        if elem_id >= u32::from(self.size) {
             return Err(ForensicFault {
                 queue_name: queue_label,
                 qsize: self.size,
-                head: elem.id as u16,
+                head: elem_id as u16,
                 idx: self.last_used,
                 addr: 0,
-                len: elem.len,
+                len: elem_len,
                 flags: 0,
                 next: 0,
                 reason: ForensicFaultReason::UsedIdOutOfRange,
             });
         }
-        let desc_idx = elem.id as usize;
+        let desc_idx = elem_id as usize;
         let desc = unsafe { read_volatile(self.desc.as_ptr().add(desc_idx)) };
         if desc.addr == 0 || desc.len == 0 {
             return Err(ForensicFault {
                 queue_name: queue_label,
                 qsize: self.size,
-                head: elem.id as u16,
+                head: elem_id as u16,
                 idx: self.last_used,
                 addr: desc.addr,
                 len: desc.len,
@@ -7300,11 +7351,11 @@ impl VirtQueue {
             self.last_used,
             idx,
             ring_slot,
-            elem.id,
-            elem.len,
+            elem_id,
+            elem_len,
         );
         self.last_used = self.last_used.wrapping_add(1);
-        Ok(Some((elem.id as u16, elem.len, ring_slot as u16)))
+        Ok(Some((elem_id as u16, elem_len, ring_slot as u16)))
     }
 }
 
