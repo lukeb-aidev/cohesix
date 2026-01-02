@@ -107,6 +107,7 @@ flowchart LR
   class Q,WH,WG role
   class SERIAL,TCP console
   class QUEENCTL,WORKTEL,LOGS,GPUFS path
+```
 
 ## 1. System Boundaries
 - **Kernel**: Upstream seL4 for `aarch64/virt (GICv3)`; treated as an external dependency that provides the capability system, scheduling primitives, and IRQ/timer services.
