@@ -2690,7 +2690,7 @@ impl VirtioNet {
         let avail_idx_readback = self.tx_queue.read_avail_idx();
         info!(
             target: "virtio-net",
-            "[virtio-net][tx-wrap-tripwire] old_idx={} avail_idx={} slot={} head={} wrap={} ring_slot_head={} desc_len={} desc_addr=0x{desc_addr:016x} desc_flags=0x{desc_flags:04x} desc_next={} next_desc_len={} next_desc_addr=0x{next_desc_addr:016x} avail_idx_readback={}",
+            "[virtio-net][tx-wrap-tripwire] old_idx={} avail_idx={} slot={} head={} wrap={} ring_slot_head={} desc_len={desc_len} desc_addr=0x{desc_addr:016x} desc_flags=0x{desc_flags:04x} desc_next={desc_next} next_desc_len={next_desc_len} next_desc_addr=0x{next_desc_addr:016x} avail_idx_readback={avail_idx_readback}",
             old_idx,
             avail_idx,
             slot,
