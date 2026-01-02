@@ -5,23 +5,7 @@
 The queen/worker verbs and `/queen/ctl` schema form the hive control API: one Queen instance uses these interfaces to control many workers over the shared Secure9P namespace.
 
 **Figure 1.** Sequence diagram.
-<!-- ========================================================= -->
-<!-- INTERFACES.md Sequence Diagram (COMPLETE + white background) -->
-<!-- ========================================================= -->
 ```mermaid
-%%{
-  init: {
-    "theme": "base",
-    "themeVariables": {
-      "background": "#ffffff",
-      "primaryColor": "#ffffff",
-      "secondaryColor": "#ffffff",
-      "tertiaryColor": "#ffffff",
-      "lineColor": "#333333",
-      "textColor": "#111111"
-    }
-  }
-}%%
 sequenceDiagram
   autonumber
   actor Operator
@@ -29,16 +13,15 @@ sequenceDiagram
   participant Console as root-task TCP console (:31337)
   participant ND as NineDoor (Secure9P)
   participant RT as root-task (RootTaskControl)
-  participant QCTL as /queen/ctl (append-only)
   participant WT as /worker/<id>/telemetry
   participant GPUB as gpu-bridge-host (host)
   participant GPUFS as /gpu/<id>/*
 
-  Note over ND: 9P2000.L only\nops: version/attach/walk/open/read/write/clunk/stat\nremove disabled\nmsize<=8192 (TooBig if exceeded)\npath components <=255B, UTF-8, no NUL\nfid tables per-session; clunk invalidates immediately
+  Note over ND: 9P2000.L only; remove disabled; msize max 8192.
+  Note over ND: Path components: UTF-8, no NUL, max 255 bytes.
+  Note over ND: Fids are per-session; clunk invalidates immediately.
 
-  %% ---------------------------------------------------------
-  %% A) TCP console attach + tail (line protocol)
-  %% ---------------------------------------------------------
+  %% A) TCP console attach + tail
   Operator->>Cohsh: cohsh --transport tcp ...
   Cohsh->>Console: ATTACH <role> <ticket?>
   alt valid ticket/role
@@ -49,40 +32,36 @@ sequenceDiagram
 
   par Idle keepalive
     Cohsh->>Console: PING (every 15s idle)
-    Console-->>Cohsh: PONG (immediate, even mid-stream)
+    Console-->>Cohsh: PONG (immediate; can interleave with output)
   end
 
   Cohsh->>Console: TAIL <path>
   Console-->>Cohsh: OK TAIL path=<path>
   loop newline-delimited entries
-    Console-->>Cohsh: <entry>\n
+    Console-->>Cohsh: <entry>
   end
   Console-->>Cohsh: END
 
-  Note over Console: Max line length 128B\nRate-limit auth failures: 3 strikes/60s => 90s cooldown\nACKs are sent before side effects
+  Note over Console: Max line length 128 bytes; auth failures rate-limited; ACK before side effects.
 
-  %% ---------------------------------------------------------
-  %% B) Secure9P session (preferred machine interface)
-  %% ---------------------------------------------------------
+  %% B) Secure9P session (preferred)
   Operator->>Cohsh: cohsh (9P mode)
-  Cohsh->>ND: TVERSION msize<=8192
-  ND-->>Cohsh: RVERSION msize<=8192
+  Cohsh->>ND: TVERSION msize=8192
+  ND-->>Cohsh: RVERSION msize=8192
   Cohsh->>ND: TATTACH (ticket out-of-band)
   alt ticket ok
     ND-->>Cohsh: RATTACH
   else bad ticket
-    ND-->>Cohsh: Rerror(Permission/Closed)
+    ND-->>Cohsh: Rerror(Permission or Closed)
   end
 
-  %% ---------------------------------------------------------
-  %% C) Queen control surface: /queen/ctl append-only JSON
-  %% ---------------------------------------------------------
+  %% C) Queen control via append-only JSON (represented as RootTaskControl)
   Cohsh->>ND: TWALK /queen/ctl
   ND-->>Cohsh: RWALK
   Cohsh->>ND: TOPEN /queen/ctl (append)
   ND-->>Cohsh: ROPEN
   Cohsh->>ND: TWRITE {"spawn":"heartbeat","ticks":100,"budget":{"ttl_s":120,"ops":500}}
-  ND->>RT: validate JSON + ticket perms\nthen RootTaskControl.spawn(...)
+  ND->>RT: validate JSON and ticket perms; then spawn()
   alt spawn ok
     RT-->>ND: Ok(worker_id)
     ND-->>Cohsh: RWRITE
@@ -91,29 +70,24 @@ sequenceDiagram
     ND-->>Cohsh: Rerror(Invalid/Busy/Permission)
   end
 
-  %% ---------------------------------------------------------
   %% D) Worker telemetry (append-only)
-  %% ---------------------------------------------------------
-  RT->>WT: append {"tick":42,"ts_ms":123456789}\n...
-  RT->>WT: append {"tick":43,"ts_ms":123456999}\n...
+  RT->>WT: append {"tick":42,"ts_ms":...}
+  RT->>WT: append {"tick":43,"ts_ms":...}
 
-  %% ---------------------------------------------------------
-  %% E) GPU bridge files (host-mirrored providers)
-  %% ---------------------------------------------------------
-  Note over GPUB,GPUFS: GPU bridge publishes provider-backed nodes:\n/gpu/<id>/info (RO JSON)\n/gpu/<id>/ctl (append LEASE/RELEASE/PRIORITY)\n/gpu/<id>/job (append JSON descriptors)\n/gpu/<id>/status (RO append stream)
-
+  %% E) GPU bridge publishes provider-backed nodes
+  Note over GPUB,GPUFS: Publishes /gpu/<id>/info (RO), /ctl (append), /job (append), /status (RO stream).
   GPUB->>ND: Secure9P provider connect (host-only)
   ND-->>GPUB: session established
   GPUB->>GPUFS: publish /gpu/<id>/{info,ctl,job,status}
 
-  %% Queen requests GPU lease via /queen/ctl
+  %% Queen requests GPU lease via /queen/ctl (represented as RootTaskControl)
   Cohsh->>ND: TWRITE {"spawn":"gpu","lease":{"gpu_id":"GPU-0","mem_mb":4096,"streams":2,"ttl_s":120}}
-  ND->>RT: validate + enqueue lease request
+  ND->>RT: validate and enqueue lease request
   alt bridge available
     RT-->>ND: OK (queued)
     ND-->>Cohsh: RWRITE
-    RT->>GPUFS: mirror lease issuance to /gpu/<id>/ctl\nand /log/queen.log
-    GPUB->>GPUFS: enforce lease; update /gpu/<id>/status\nQUEUED->RUNNING->OK/ERR
+    RT->>GPUFS: mirror lease issuance to /gpu/<id>/ctl and /log/queen.log
+    GPUB->>GPUFS: enforce lease; update /gpu/<id>/status QUEUED->RUNNING->OK/ERR
   else bridge unavailable
     RT-->>ND: Err(Busy)
     ND-->>Cohsh: Rerror(Busy)
@@ -121,7 +95,7 @@ sequenceDiagram
 
   %% Tail over 9P (append-only enforced)
   Cohsh->>ND: TREAD /log/queen.log (offset=n)
-  ND-->>Cohsh: RREAD (append-only; offsets ignored by server policy)
+  ND-->>Cohsh: RREAD (server enforces append-only; offsets may be ignored)
 ```
 
 ## 1. NineDoor 9P Operations
