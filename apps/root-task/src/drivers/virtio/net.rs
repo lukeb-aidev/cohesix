@@ -1160,6 +1160,7 @@ pub struct VirtioNet {
     tx_publish_guard_logged: bool,
     rx_zero_len_logged: bool,
     tx_zero_len_logged: bool,
+    tx_zero_len_publish_logged: bool,
     rx_header_zero_logged: bool,
     rx_payload_zero_logged: bool,
     tx_used_recent: HeaplessVec<(u16, u32), TX_QUEUE_SIZE>,
@@ -1185,6 +1186,7 @@ pub struct VirtioNet {
     tx_invalid_publish: u64,
     tx_drop_zero_len: u64,
     tx_zero_len_attempt: u64,
+    dropped_zero_len_tx: u64,
     tx_submit: u64,
     tx_complete: u64,
     tx_zero_len_log_ms: u64,
@@ -1620,6 +1622,7 @@ impl VirtioNet {
             tx_publish_guard_logged: false,
             rx_zero_len_logged: false,
             tx_zero_len_logged: false,
+            tx_zero_len_publish_logged: false,
             rx_header_zero_logged: false,
             rx_payload_zero_logged: false,
             tx_used_recent: HeaplessVec::new(),
@@ -1645,6 +1648,7 @@ impl VirtioNet {
             tx_invalid_publish: 0,
             tx_drop_zero_len: 0,
             tx_zero_len_attempt: 0,
+            dropped_zero_len_tx: 0,
             tx_submit: 0,
             tx_complete: 0,
             tx_zero_len_log_ms: now_ms,
@@ -1726,7 +1730,7 @@ impl VirtioNet {
 
         log::info!(
             target: "net-console",
-            "[virtio-net] debug_snapshot: stalled_ms={} status=0x{:02x} isr=0x{:02x} tx_avail_idx={} tx_used_idx={} rx_avail_idx={} rx_used_idx={} last_error={} rx_used_count={} rx_poll_count={} used_poll_calls={} tx_publish_calls={} rx_publish_calls={} tx_dup_publish_blocked={} tx_dup_used_ignored={} tx_invalid_used_state={} tx_alloc_blocked_inflight={}",
+            "[virtio-net] debug_snapshot: stalled_ms={} status=0x{:02x} isr=0x{:02x} tx_avail_idx={} tx_used_idx={} rx_avail_idx={} rx_used_idx={} last_error={} rx_used_count={} rx_poll_count={} used_poll_calls={} tx_publish_calls={} rx_publish_calls={} tx_dup_publish_blocked={} tx_dup_used_ignored={} tx_invalid_used_state={} tx_alloc_blocked_inflight={} dropped_zero_len_tx={}",
             now_ms.saturating_sub(self.last_progress_ms),
             status,
             isr,
@@ -1744,6 +1748,7 @@ impl VirtioNet {
             self.tx_dup_used_ignored,
             self.tx_invalid_used_state,
             self.tx_alloc_blocked_inflight,
+            self.dropped_zero_len_tx,
         );
     }
 
@@ -1799,6 +1804,34 @@ impl VirtioNet {
                 next = spec.next,
             );
         }
+    }
+
+    fn log_zero_len_publish(&mut self, head_id: u16, publish_slot: u16, desc_len: u32, total_len: u32) {
+        if self.tx_zero_len_publish_logged {
+            return;
+        }
+        self.tx_zero_len_publish_logged = true;
+        let header_len = self.rx_header_len as u32;
+        let payload_len = total_len.saturating_sub(header_len);
+        let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
+        let reason = if desc_len == 0 {
+            "desc_len_zero"
+        } else {
+            "total_len_zero"
+        };
+        error!(
+            target: "net-console",
+            "[virtio-net][tx-guard] zero-len publish blocked: head={} slot={} header_len={} payload_len={} total_len={} desc_len={} avail_idx={} used_idx={} reason={}",
+            head_id,
+            publish_slot,
+            header_len,
+            payload_len,
+            total_len,
+            desc_len,
+            avail_idx,
+            used_idx,
+            reason,
+        );
     }
 
     fn validate_chain_nonzero(
@@ -2034,11 +2067,12 @@ impl VirtioNet {
         );
         info!(
             target: "net-console",
-            "[virtio-net][forensics] tx counters: dup_publish_blocked={} dup_used_ignored={} invalid_used_state={} alloc_blocked_inflight={}",
+            "[virtio-net][forensics] tx counters: dup_publish_blocked={} dup_used_ignored={} invalid_used_state={} alloc_blocked_inflight={} dropped_zero_len_tx={}",
             self.tx_dup_publish_blocked,
             self.tx_dup_used_ignored,
             self.tx_invalid_used_state,
             self.tx_alloc_blocked_inflight,
+            self.dropped_zero_len_tx,
         );
         for (idx, len, addr, gen, slot, state) in posted {
             info!(
@@ -2259,6 +2293,16 @@ impl VirtioNet {
         }
         let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
         let desc = self.tx_queue.read_descriptor(head_id);
+        let total_len = self
+            .tx_head_mgr
+            .entry(head_id)
+            .map(|entry| entry.last_len)
+            .unwrap_or(0);
+        if desc.len == 0 || total_len == 0 {
+            self.dropped_zero_len_tx = self.dropped_zero_len_tx.saturating_add(1);
+            self.log_zero_len_publish(head_id, publish_slot, desc.len, total_len);
+            return Err(TxPublishError::InvalidDescriptor);
+        }
         debug_assert!(
             desc.len != 0 && desc.addr != 0,
             "tx publish descriptor must be non-zero: head={} len={} addr=0x{:016x}",
@@ -2266,11 +2310,7 @@ impl VirtioNet {
             desc.len,
             desc.addr
         );
-        let total_len = self
-            .tx_head_mgr
-            .entry(head_id)
-            .map(|entry| entry.last_len)
-            .unwrap_or(0);
+        debug_assert!(total_len != 0, "tx publish total_len must be non-zero");
         if validate_tx_publish_descriptor(
             head_id,
             publish_slot,
@@ -2288,6 +2328,7 @@ impl VirtioNet {
             self.last_error.get_or_insert("tx_invalid_descriptor");
             return Err(TxPublishError::InvalidDescriptor);
         }
+        debug_assert!(desc.len != 0, "tx publish descriptor len zero before avail push");
         self.tx_queue
             .push_avail(head_id)
             .map_err(TxPublishError::Queue)
@@ -3173,9 +3214,11 @@ impl VirtioNet {
         }
         #[cfg(debug_assertions)]
         self.debug_trace_tx_publish_state(head_id, publish_slot, "pre_push_avail");
+        fence(AtomicOrdering::Release);
         let (slot, avail_idx, old_idx) = match self.publish_tx_avail(head_id, publish_slot) {
             Ok(result) => result,
             Err(TxPublishError::InvalidDescriptor) => {
+                let _ = self.tx_head_mgr.cancel_publish(head_id);
                 self.tx_drops = self.tx_drops.saturating_add(1);
                 return Err(());
             }
@@ -4462,6 +4505,7 @@ impl VirtioNet {
         {
             return;
         }
+        fence(AtomicOrdering::Release);
         match self.publish_tx_avail(id, publish_slot) {
             Ok((slot, avail_idx, old_idx)) => {
                 if slot != publish_slot {
@@ -4580,6 +4624,7 @@ impl VirtioNet {
             }
             Err(TxPublishError::InvalidDescriptor) => {
                 self.tx_drops = self.tx_drops.saturating_add(1);
+                let _ = self.tx_head_mgr.cancel_publish(id);
                 return;
             }
             Err(TxPublishError::Queue(_)) => {
@@ -5211,6 +5256,7 @@ impl NetDevice for VirtioNet {
             tx_in_flight,
             tx_double_submit,
             tx_zero_len_attempt,
+            dropped_zero_len_tx: self.dropped_zero_len_tx,
             tx_dup_publish_blocked: self.tx_dup_publish_blocked as u64,
             tx_dup_used_ignored: self.tx_dup_used_ignored as u64,
             tx_invalid_used_state: self.tx_invalid_used_state as u64,

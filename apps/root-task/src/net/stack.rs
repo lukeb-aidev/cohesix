@@ -2240,6 +2240,7 @@ impl<D: NetDevice> NetStack<D> {
         self.counters.tx_in_flight = device_counters.tx_in_flight;
         self.counters.tx_double_submit = device_counters.tx_double_submit;
         self.counters.tx_zero_len_attempt = device_counters.tx_zero_len_attempt;
+        self.counters.dropped_zero_len_tx = device_counters.dropped_zero_len_tx;
     }
 
     fn log_self_test_result(&self, result: NetSelfTestResult) {
