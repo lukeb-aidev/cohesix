@@ -39,9 +39,6 @@ In short, Cohesix is an experiment in treating orchestration itself as an operat
 ```mermaid
 flowchart LR
 
-  %% =========================
-  %% HOST (outside VM/TCB)
-  %% =========================
   subgraph HOST["Host (outside Cohesix VM/TCB)"]
     OP["Operator or Automation"]:::ext
     COHSH["cohsh (host-only)\nCanonical shell\ntransport tcp\nrole and ticket attach"]:::hosttool
@@ -50,9 +47,6 @@ flowchart LR
     GPUB["gpu-bridge-host (host)\nCUDA and NVML here\nlease enforcement\nmirrors gpu namespace"]:::hosttool
   end
 
-  %% =========================
-  %% TARGET (VM today / UEFI later)
-  %% =========================
   subgraph TARGET["Target (QEMU aarch64 virt today; UEFI ARM64 later)"]
     subgraph K["Upstream seL4 kernel"]
       SEL4["seL4\ncaps, IPC, scheduling\nformal foundation"]:::kernel
@@ -68,15 +62,9 @@ flowchart LR
     end
   end
 
-  %% =========================
-  %% CONSOLES (root-task)
-  %% =========================
   UART["PL011 UART console\nbring-up and recovery"]:::console
   TCP["TCP console\nremote operator surface"]:::console
 
-  %% =========================
-  %% HIVE NAMESPACE (Secure9P)
-  %% =========================
   subgraph NS["Hive namespace (Secure9P)"]
     PROC["Path: /proc\nboot and status views"]:::path
     QUEENCTL["Path: /queen/ctl\nappend-only control\nspawn kill bind mount\nspawn gpu lease requests"]:::path
@@ -85,43 +73,32 @@ flowchart LR
     GPUFS["Path: /gpu/ID\ninfo ctl job status\nhost-mirrored providers"]:::path
   end
 
-  %% =========================
-  %% WIRES
-  %% =========================
   SEL4 --> RT
   RT --> ND
   RT --- UART
   RT --- TCP
 
-  %% operator path
   OP --> COHSH
   OP --> GUI
   COHSH -->|tcp attach| TCP
   GUI -->|same protocol| TCP
 
-  %% Secure9P surface
   ND --> PROC
   ND --> QUEENCTL
   ND --> WORKTEL
   ND --> LOGS
   ND --> GPUFS
 
-  %% in-VM roles
   Q -->|Secure9P ops| ND
   WH -->|Secure9P ops| ND
   WG -->|Secure9P ops| ND
 
-  %% queen control triggers validated internal actions
   QUEENCTL -->|validated then internal action| RT
 
-  %% GPU boundary: host-only bridge publishes provider nodes via host transport
   GPUB --> WIRE
-  WIRE -->|Secure9P transport (host-only)| ND
+  WIRE -->|Secure9P transport host-only| ND
   GPUB --> GPUFS
 
-  %% =========================
-  %% STYLING
-  %% =========================
   classDef kernel fill:#eeeeee,stroke:#555555,stroke-width:1px;
   classDef vm fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
   classDef role fill:#f0fdf4,stroke:#15803d,stroke-width:1px;
