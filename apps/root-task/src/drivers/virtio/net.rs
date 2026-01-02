@@ -976,6 +976,7 @@ enum TxAnomalyReason {
     ClosureWroteZero,
     DescLenZero,
     DescAddrZero,
+    MultiDescriptor,
     UsedRingLenZeroBurst,
     FreeListCorrupt,
     RingIndexUnexpected,
@@ -1246,6 +1247,7 @@ pub struct VirtioNet {
     tx_last_used_seen: u16,
     tx_progress_log_gate: u32,
     negotiated_features: u64,
+    tx_header_len: usize,
     rx_header_len: usize,
     rx_payload_capacity: usize,
     rx_frame_capacity: usize,
@@ -1711,6 +1713,7 @@ impl VirtioNet {
             tx_last_used_seen: 0,
             tx_progress_log_gate: 0,
             negotiated_features,
+            tx_header_len: net_header_len,
             dma_cacheable,
             rx_header_len: net_header_len,
             rx_payload_capacity,
@@ -2675,29 +2678,40 @@ impl VirtioNet {
             }
             total_len = total_len.saturating_add(desc.len);
         }
+        let qsize = usize::from(self.tx_queue.size);
+        let slot = if qsize == 0 {
+            0
+        } else {
+            (avail_idx as usize % qsize) as u16
+        };
+        let (used_idx, _) = self.tx_queue.indices_no_sync();
         let head_state = self.tx_head_mgr.state(head_id);
         let in_flight = self.tx_head_mgr.is_in_flight(head_id);
         let first_len = descs.first().map(|d| d.len).unwrap_or(0);
+        let first_addr = descs.first().map(|d| d.addr).unwrap_or(0);
+        let payload_len = first_len.saturating_sub(required_header);
+        let chain_len = descs.len();
         let sum_mismatch = first_len != total_len;
         let guard_failed = zero_len || total_len < required_header || in_flight || sum_mismatch;
         if guard_failed {
             if !self.tx_publish_guard_logged {
                 self.tx_publish_guard_logged = true;
-                let qsize = core::cmp::max(usize::from(self.tx_queue.size), 1);
-                let slot = (avail_idx as usize % qsize) as u16;
                 let next_idx = avail_idx.wrapping_add(1);
                 error!(
                     target: "net-console",
-                    "[virtio-net][tx-guard] blocked publish: head={} state={:?} slot={} avail_idx={}->{} descs={} first_len={} total_len={} required_header={} in_flight={} zero_len_desc={} sum_mismatch={}",
+                    "[virtio-net][tx-guard] blocked publish: head={} state={:?} slot={} avail_idx={}->{} used_idx={} chain_len={} first_addr=0x{first_addr:016x} first_len={} payload_len={} required_header={} total_len={} in_flight={} zero_len_desc={} sum_mismatch={}",
                     head_id,
                     head_state,
                     slot,
                     avail_idx,
                     next_idx,
-                    descs.len(),
+                    used_idx,
+                    chain_len,
+                    first_addr,
                     first_len,
-                    total_len,
+                    payload_len,
                     required_header,
+                    total_len,
                     in_flight,
                     zero_len,
                     sum_mismatch,
@@ -3263,6 +3277,8 @@ impl VirtioNet {
         if self.device_faulted || forensics_frozen() {
             return Err(());
         }
+        let (used_idx_before, avail_idx_before) = self.tx_queue.indices_no_sync();
+        let qsize = usize::from(self.tx_queue.size);
         assert!(
             descs.len() <= usize::from(self.tx_queue.size),
             "virtqueue tx chain too long: len={} qsize={} head_id={} base_vaddr=0x{base:016x}",
@@ -3280,6 +3296,32 @@ impl VirtioNet {
         if descs.iter().any(|desc| desc.addr == 0) {
             self.tx_anomaly(TxAnomalyReason::DescAddrZero, "enqueue_tx_chain_zero_addr");
             self.device_faulted = true;
+            return Err(());
+        }
+        if descs.len() != 1 {
+            let slot = if qsize == 0 {
+                0
+            } else {
+                (avail_idx_before as usize % qsize) as u16
+            };
+            error!(
+                target: "net-console",
+                "[virtio-net][tx-guard] multi-descriptor tx chain blocked head={} chain_len={} slot={} avail_idx_before={} used_idx_before={} first_addr=0x{addr:016x} first_len={} header_len={} payload_len={}",
+                head_id,
+                descs.len(),
+                slot,
+                avail_idx_before,
+                used_idx_before,
+                addr = descs.get(0).map(|d| d.addr).unwrap_or(0),
+                len = descs.get(0).map(|d| d.len).unwrap_or(0),
+                header_len = self.tx_header_len,
+                payload_len = descs
+                    .get(0)
+                    .map(|d| d.len.saturating_sub(self.tx_header_len as u32))
+                    .unwrap_or(0),
+            );
+            self.tx_anomaly(TxAnomalyReason::MultiDescriptor, "tx_multi_desc_blocked");
+            self.tx_drops = self.tx_drops.saturating_add(1);
             return Err(());
         }
         self.validate_chain_nonzero("TX", head_id, descs, None, None, None, used_len)?;
@@ -3315,7 +3357,7 @@ impl VirtioNet {
             });
         }
 
-        let header_len = self.rx_header_len;
+        let header_len = self.tx_header_len;
         let total_len = resolved_descs
             .get(0)
             .map(|desc| desc.len as usize)
@@ -4714,7 +4756,7 @@ impl VirtioNet {
                     flags: desc.flags,
                     next: None,
                 }],
-                self.rx_header_len,
+                self.tx_header_len,
                 avail_idx_before,
             )
             .is_err()
@@ -4728,7 +4770,7 @@ impl VirtioNet {
             return;
         }
         let publish_slot = (avail_idx_before as usize % qsize) as u16;
-        let payload_len = total_len.saturating_sub(self.rx_header_len);
+        let payload_len = total_len.saturating_sub(self.tx_header_len);
         if self
             .tx_publish_preflight(
                 id,
@@ -4785,7 +4827,7 @@ impl VirtioNet {
                     flags: desc.flags,
                     next: None,
                 },
-                self.rx_header_len,
+                self.tx_header_len,
                 payload_len,
             )
             .is_err()
@@ -4982,16 +5024,16 @@ impl VirtioNet {
             return None;
         }
 
-        let payload_start = start.saturating_add(self.rx_header_len);
+        let payload_start = start.saturating_add(self.tx_header_len);
         let payload_end =
-            payload_start.saturating_add(capped_len.saturating_sub(self.rx_header_len));
+            payload_start.saturating_add(capped_len.saturating_sub(self.tx_header_len));
         if force_log || !self.tx_dma_log_once {
             self.tx_dma_log_once = true;
             info!(
                 target: "virtio-net",
                 "[virtio-net][dma] tx buffer clean head={} header=0x{start:016x}..0x{hdr_end:016x} payload=0x{payload_start:016x}..0x{payload_end:016x}",
                 head_id,
-                hdr_end = start.saturating_add(self.rx_header_len),
+                hdr_end = start.saturating_add(self.tx_header_len),
                 payload_start = payload_start,
                 payload_end = payload_end,
             );
@@ -5763,7 +5805,7 @@ impl TxToken for VirtioTxToken {
                 .tx_buffers
                 .get_mut(id as usize)
                 .expect("tx descriptor out of range");
-            let header_len = driver.rx_header_len;
+            let header_len = driver.tx_header_len;
             let max_len = buffer.as_mut_slice().len();
             if max_len <= header_len {
                 driver.tx_drops = driver.tx_drops.saturating_add(1);
