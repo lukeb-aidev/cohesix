@@ -2723,7 +2723,7 @@ impl<D: NetDevice> NetStack<D> {
         activity
     }
 
-    fn poll_console_listener_selftest(&mut self, socket: &mut TcpSocket, now_ms: u64) -> bool {
+    fn poll_console_listener_selftest(&mut self, handle: SocketHandle, now_ms: u64) -> bool {
         if self.self_test.console_probe_done {
             return false;
         }
@@ -2731,6 +2731,7 @@ impl<D: NetDevice> NetStack<D> {
             self.self_test.console_probe_started_ms = now_ms;
         }
 
+        let socket = self.sockets.get_mut::<TcpSocket>(handle);
         let mut activity = false;
         let dest = IpEndpoint::new(self.ip.into(), self.listen_port);
         if matches!(socket.state(), TcpState::Closed) && !self.self_test.console_probe_banner_seen {
@@ -2855,11 +2856,7 @@ impl<D: NetDevice> NetStack<D> {
             return false;
         };
         if !self.self_test.console_probe_done {
-            let activity = {
-                let socket = self.sockets.get_mut::<TcpSocket>(handle);
-                self.poll_console_listener_selftest(socket, now_ms)
-            };
-            return activity;
+            return self.poll_console_listener_selftest(handle, now_ms);
         }
         let socket = self.sockets.get_mut::<TcpSocket>(handle);
         let mut activity = false;
