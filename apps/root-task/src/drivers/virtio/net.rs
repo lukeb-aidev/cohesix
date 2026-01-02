@@ -798,7 +798,7 @@ impl TxHeadManager {
         let slot = {
             let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
             match entry.state {
-                TxHeadState::Published { slot, .. } => slot,
+                TxHeadState::Published { slot, .. } | TxHeadState::InFlight { slot, .. } => slot,
                 _ => return Err(TxHeadError::InvalidState),
             }
         };
@@ -2419,6 +2419,10 @@ impl VirtioNet {
         head_id: u16,
         publish_slot: u16,
     ) -> Result<(u16, u16, u16), TxPublishError> {
+        if self.tx_head_mgr.publish_present(head_id) {
+            self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
+            return Err(TxPublishError::InvalidDescriptor);
+        }
         if !matches!(
             self.tx_head_mgr.state(head_id),
             Some(TxHeadState::Published { slot, .. } | TxHeadState::InFlight { slot, .. })
@@ -3428,6 +3432,13 @@ impl VirtioNet {
             self.last_error.get_or_insert("tx_double_advertise");
             self.freeze_tx_publishes("tx_double_advertise");
             self.tx_state_violation("tx_double_advertise", head_id, Some(publish_slot))?;
+            return Err(());
+        }
+        if let Err(_) = self.tx_head_mgr.promote_published_to_inflight(head_id) {
+            self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
+            #[cfg(debug_assertions)]
+            self.freeze_tx_publishes("tx_inflight_prep_failed");
+            self.tx_state_violation("tx_inflight_prep_failed", head_id, Some(publish_slot))?;
             return Err(());
         }
         #[cfg(debug_assertions)]
@@ -7753,6 +7764,41 @@ mod tx_tests {
                 .expect("idempotent in-flight transition"),
             (0, gen),
             "re-entering in-flight must be idempotent for the same slot/gen"
+        );
+    }
+
+    #[test]
+    fn tx_promote_to_inflight_before_avail_record() {
+        let mut mgr = TxHeadManager::new(2);
+        let head = mgr.alloc_head().expect("head available");
+        let gen = mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
+        assert!(
+            mgr.in_avail(head),
+            "publish must track head presence before promotion"
+        );
+        assert!(
+            !mgr.is_advertised(head),
+            "advertise is deferred to avail record"
+        );
+        let (slot, promoted_gen) = mgr
+            .promote_published_to_inflight(head)
+            .expect("promotion to inflight should succeed pre-avail");
+        assert_eq!(slot, 0, "slot recorded during promotion");
+        assert_eq!(
+            promoted_gen, gen,
+            "generation must not change during promotion"
+        );
+        assert!(
+            matches!(mgr.state(head), Some(TxHeadState::InFlight { slot: s, gen: g }) if s == 0 && g == gen),
+            "state must flip to InFlight before avail write"
+        );
+        assert!(
+            !mgr.publish_present(head),
+            "publish record stays clear until avail write"
+        );
+        assert!(
+            !mgr.is_advertised(head),
+            "advertise flag remains unset pre-avail"
         );
     }
 
