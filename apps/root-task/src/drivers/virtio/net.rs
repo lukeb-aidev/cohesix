@@ -302,6 +302,137 @@ struct TxHeadManager {
     zero_len_publish_blocked: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TxSlotState {
+    Free { gen: u32 },
+    Reserved { gen: u32 },
+    InFlight { gen: u32 },
+}
+
+impl Default for TxSlotState {
+    fn default() -> Self {
+        TxSlotState::Free { gen: 0 }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TxSlotError {
+    OutOfRange,
+    NotReserved,
+    NotInFlight,
+}
+
+#[derive(Clone, Debug)]
+struct TxSlotTracker {
+    states: [TxSlotState; TX_QUEUE_SIZE],
+    free_count: u16,
+    in_flight: u16,
+    next_alloc: u16,
+    last_alloc: Option<u16>,
+    next_gen: u32,
+    size: u16,
+}
+
+impl TxSlotTracker {
+    fn new(size: u16) -> Self {
+        let mut tracker = Self {
+            states: [TxSlotState::default(); TX_QUEUE_SIZE],
+            free_count: size,
+            in_flight: 0,
+            next_alloc: 0,
+            last_alloc: None,
+            next_gen: 1,
+            size,
+        };
+        // Ensure entries outside the configured queue size stay marked free with a generation of 0.
+        for idx in usize::from(size)..TX_QUEUE_SIZE {
+            tracker.states[idx] = TxSlotState::Free { gen: 0 };
+        }
+        tracker
+    }
+
+    fn reserve_next(&mut self) -> Option<(u16, bool, u32)> {
+        if self.free_count == 0 || self.size == 0 {
+            return None;
+        }
+        let size = usize::from(self.size);
+        for _ in 0..size {
+            let slot = self.next_alloc;
+            self.next_alloc = self.next_alloc.wrapping_add(1) % self.size;
+            match self.states.get_mut(slot as usize) {
+                Some(state @ TxSlotState::Free { .. }) => {
+                    let gen = self.next_gen;
+                    self.next_gen = self.next_gen.wrapping_add(1);
+                    let wrap = self.last_alloc.map(|last| slot < last).unwrap_or(false);
+                    *state = TxSlotState::Reserved { gen };
+                    self.last_alloc = Some(slot);
+                    self.free_count = self.free_count.saturating_sub(1);
+                    return Some((slot, wrap, gen));
+                }
+                _ => continue,
+            }
+        }
+        None
+    }
+
+    fn cancel(&mut self, id: u16) -> Result<(), TxSlotError> {
+        if id >= self.size {
+            return Err(TxSlotError::OutOfRange);
+        }
+        match self.states.get_mut(id as usize) {
+            Some(state @ TxSlotState::Reserved { .. }) => {
+                *state = TxSlotState::Free { gen: self.next_gen };
+                self.next_gen = self.next_gen.wrapping_add(1);
+                self.free_count = self.free_count.saturating_add(1);
+                Ok(())
+            }
+            Some(TxSlotState::InFlight { .. }) => Err(TxSlotError::NotReserved),
+            _ => Err(TxSlotError::NotReserved),
+        }
+    }
+
+    fn mark_in_flight(&mut self, id: u16) -> Result<u32, TxSlotError> {
+        if id >= self.size {
+            return Err(TxSlotError::OutOfRange);
+        }
+        match self.states.get_mut(id as usize) {
+            Some(state @ TxSlotState::Reserved { gen }) => {
+                let gen_val = *gen;
+                *state = TxSlotState::InFlight { gen: gen_val };
+                self.in_flight = self.in_flight.saturating_add(1);
+                Ok(gen_val)
+            }
+            Some(TxSlotState::InFlight { .. }) => Err(TxSlotError::NotReserved),
+            _ => Err(TxSlotError::NotReserved),
+        }
+    }
+
+    fn complete(&mut self, id: u16) -> Result<u32, TxSlotError> {
+        if id >= self.size {
+            return Err(TxSlotError::OutOfRange);
+        }
+        match self.states.get_mut(id as usize) {
+            Some(state @ TxSlotState::InFlight { gen }) => {
+                let gen_val = *gen;
+                *state = TxSlotState::Free { gen: gen_val };
+                self.in_flight = self.in_flight.saturating_sub(1);
+                self.free_count = self.free_count.saturating_add(1);
+                Ok(gen_val)
+            }
+            Some(TxSlotState::Reserved { .. }) => Err(TxSlotError::NotInFlight),
+            _ => Err(TxSlotError::NotInFlight),
+        }
+    }
+
+    fn free_count(&self) -> u16 {
+        self.free_count
+    }
+
+    fn in_flight(&self) -> u16 {
+        self.in_flight
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct TxPublishRecord {
     slot: u16,
@@ -332,8 +463,7 @@ impl VirtioNetTxStats {
         self.enqueue_would_block
             .fetch_add(1, AtomicOrdering::Relaxed);
         if inflight >= qsize || free == 0 {
-            self.ring_full_events
-                .fetch_add(1, AtomicOrdering::Relaxed);
+            self.ring_full_events.fetch_add(1, AtomicOrdering::Relaxed);
         }
     }
 
@@ -342,8 +472,7 @@ impl VirtioNetTxStats {
     }
 
     fn record_irq_reclaim(&self) {
-        self.reclaim_calls_irq
-            .fetch_add(1, AtomicOrdering::Relaxed);
+        self.reclaim_calls_irq.fetch_add(1, AtomicOrdering::Relaxed);
     }
 
     fn record_poll_reclaim(&self) {
@@ -360,9 +489,7 @@ impl VirtioNetTxStats {
     }
 
     fn update_highwater(&self, inflight: u16) {
-        let mut current = self
-            .inflight_highwater
-            .load(AtomicOrdering::Relaxed);
+        let mut current = self.inflight_highwater.load(AtomicOrdering::Relaxed);
         while inflight as u32 > current {
             match self.inflight_highwater.compare_exchange(
                 current,
@@ -576,27 +703,14 @@ impl TxHeadManager {
         self.zero_len_publish_blocked = self.zero_len_publish_blocked.saturating_add(1);
     }
 
-    fn alloc_head(&mut self) -> Option<u16> {
-        let active = self.active_mask();
-        let free = self.free_mask & active;
-        if free == 0 {
-            return None;
-        }
-        let id = free.trailing_zeros() as u16;
+    fn alloc_specific(&mut self, id: u16) -> Option<u16> {
         if id >= self.size {
             return None;
         }
         let mask = self.free_mask_for(id).ok()?;
-        let free_mask_snapshot = self.free_mask;
         if (self.free_mask & mask) == 0 {
-            mark_forensics_frozen();
-            panic!(
-                "tx head allocation invariant violated: id={} state={:?} advertised={} free_mask=0x{mask:08x}",
-                id,
-                self.state(id),
-                self.is_advertised(id),
-                mask = self.free_mask,
-            );
+            self.record_dup_alloc();
+            return None;
         }
         let state = self.state(id);
         if !matches!(state, Some(TxHeadState::Free)) || self.is_advertised(id) || self.in_avail(id)
@@ -610,7 +724,7 @@ impl TxHeadManager {
                     state,
                     self.is_advertised(id),
                     self.in_avail(id),
-                    mask = free_mask_snapshot,
+                    mask = self.free_mask,
                 );
             }
             self.record_dup_alloc();
@@ -633,6 +747,16 @@ impl TxHeadManager {
             *flag = false;
         }
         Some(id)
+    }
+
+    fn alloc_head(&mut self) -> Option<u16> {
+        let active = self.active_mask();
+        let free = self.free_mask & active;
+        if free == 0 {
+            return None;
+        }
+        let id = free.trailing_zeros() as u16;
+        self.alloc_specific(id)
     }
 
     fn submit_ready(&self, id: u16, slot: u16) -> Result<(), TxHeadError> {
@@ -971,7 +1095,10 @@ impl TxHeadManager {
             .entry_mut(id)
             .map(|entry| {
                 let prev_state = entry.state;
-                (prev_state, matches!(entry.state, TxHeadState::Completed { .. }))
+                (
+                    prev_state,
+                    matches!(entry.state, TxHeadState::Completed { .. }),
+                )
             })
             .ok_or(TxHeadError::OutOfRange)?;
         if !prev_state.1 {
@@ -1043,7 +1170,10 @@ impl TxHeadManager {
             .entry_mut(id)
             .map(|entry| {
                 let prev_state = entry.state;
-                (prev_state, matches!(entry.state, TxHeadState::Prepared { .. }))
+                (
+                    prev_state,
+                    matches!(entry.state, TxHeadState::Prepared { .. }),
+                )
             })
             .ok_or(TxHeadError::OutOfRange)?;
         if !was_prepared {
@@ -1473,8 +1603,10 @@ pub struct VirtioNet {
     tx_buffers: HeaplessVec<RamFrame, TX_QUEUE_SIZE>,
     tx_v2_last_used: u16,
     tx_head_mgr: TxHeadManager,
+    tx_slots: TxSlotTracker,
     tx_stats: VirtioNetTxStats,
     tx_diag: TxDiagState,
+    tx_slot_divergence_logged: bool,
     dma_cacheable: bool,
     tx_last_used_seen: u16,
     tx_progress_log_gate: u32,
@@ -1948,8 +2080,10 @@ impl VirtioNet {
             tx_buffers,
             tx_v2_last_used: 0,
             tx_head_mgr: TxHeadManager::new(tx_size as u16),
+            tx_slots: TxSlotTracker::new(tx_size as u16),
             tx_stats: VirtioNetTxStats::default(),
             tx_diag: TxDiagState::default(),
+            tx_slot_divergence_logged: false,
             tx_last_used_seen: 0,
             tx_progress_log_gate: 0,
             negotiated_features,
@@ -3111,6 +3245,7 @@ impl VirtioNet {
             self.log_invalid_used_state(id, self.tx_head_mgr.state(id), ring_slot, used_idx);
             return Ok(false);
         }
+        self.complete_tx_slot(id, "tx_reclaim");
         self.clear_tx_desc_chain(id);
         Ok(true)
     }
@@ -4129,12 +4264,22 @@ impl VirtioNet {
             last = last_paddr,
         );
 
+        // TX ownership audit (virtio-net):
+        // - TX buffers come from `tx_buffers`: one pinned DMA frame per queue slot (size==queue).
+        // - Free tracking pairs the round-robin `TxSlotTracker` (Free/Reserved/InFlight) with
+        //   `TxHeadManager` so a slot cannot be reallocated until a used entry returns ownership.
+        // - Packet → descriptor mapping is 1:1: the slot id is the descriptor index and buffer.
+        //   Generations are tracked in both managers to detect reuse without reclaim.
+        // - Used ring reaping happens in `tx_reclaim_used` (IRQ and poll), which calls
+        //   `reclaim_posted_head` to correlate used.id with the slot and clear the reservation.
+        // - Descriptors stay populated until reclaim; clearing only happens after ownership
+        //   returns to avoid exposing {addr=0,len=0} to the device.
         log::info!(
             target: "net-console",
             "[virtio-net] TX queue initialised: size={} buffers={} free_entries={}",
             self.tx_queue.size,
             self.tx_buffers.len(),
-            self.tx_head_mgr.free_len(),
+            self.tx_free_count(),
         );
     }
 
@@ -4396,10 +4541,6 @@ impl VirtioNet {
             TxReclaimSource::Irq => self.tx_stats.record_irq_reclaim(),
             TxReclaimSource::Poll => self.tx_stats.record_poll_reclaim(),
         }
-    }
-
-    fn tx_v2_in_flight_count(&self) -> u16 {
-        self.tx_head_mgr.in_flight_count()
     }
 
     fn audit_tx_accounting(&mut self, context: &'static str) {
@@ -4828,17 +4969,17 @@ impl VirtioNet {
             if self.tx_publish_blocked() {
                 return VirtioTxToken::new(driver_ptr, None);
             }
-            if self.tx_head_mgr.free_len() == 0 {
+            if self.tx_free_count() == 0 {
                 self.tx_reclaim_used(TX_RECLAIM_POLL_BUDGET, TxReclaimSource::Poll);
             }
-            if let Some(id) = self.tx_head_mgr.alloc_head() {
+            if let Some((id, _wrap)) = self.reserve_tx_slot() {
                 return VirtioTxToken::new(driver_ptr, Some(id));
             }
-            let inflight = self.tx_head_mgr.in_flight_count();
-            let free = self.tx_head_mgr.free_len();
+            let inflight = self.tx_inflight_count();
+            let free = self.tx_free_count();
             self.tx_stats
                 .record_would_block(inflight, free, self.tx_queue.size);
-            if self.tx_head_mgr.in_flight_count() > 0 {
+            if inflight > 0 {
                 self.tx_alloc_blocked_inflight = self.tx_alloc_blocked_inflight.saturating_add(1);
             }
             return VirtioTxToken::new(driver_ptr, None);
@@ -4846,14 +4987,14 @@ impl VirtioNet {
         if self.tx_publish_blocked() {
             return VirtioTxToken::new(driver_ptr, None);
         }
-        if let Some(id) = self.tx_head_mgr.alloc_head() {
+        if let Some((id, _wrap)) = self.reserve_tx_slot() {
             return VirtioTxToken::new(driver_ptr, Some(id));
         }
-        let inflight = self.tx_head_mgr.in_flight_count();
-        let free = self.tx_head_mgr.free_len();
+        let inflight = self.tx_inflight_count();
+        let free = self.tx_free_count();
         self.tx_stats
             .record_would_block(inflight, free, self.tx_queue.size);
-        if self.tx_head_mgr.in_flight_count() > 0 {
+        if inflight > 0 {
             self.tx_alloc_blocked_inflight = self.tx_alloc_blocked_inflight.saturating_add(1);
         }
         VirtioTxToken::new(driver_ptr, None)
@@ -4970,6 +5111,7 @@ impl VirtioNet {
             self.tx_drops = self.tx_drops.saturating_add(1);
             self.last_error.get_or_insert(label);
         }
+        self.cancel_tx_slot(id, label);
     }
 
     fn drop_zero_len_tx(&mut self, id: u16, payload_len: usize, written_len: usize) {
@@ -5024,6 +5166,133 @@ impl VirtioNet {
         );
     }
 
+    fn tx_slot_counts(&mut self) -> (u16, u16) {
+        if !NET_VIRTIO_TX_V2 {
+            return (
+                self.tx_head_mgr.free_len(),
+                self.tx_head_mgr.in_flight_count(),
+            );
+        }
+        let free_slots = self.tx_slots.free_count();
+        let inflight_slots = self.tx_slots.in_flight();
+        let mgr_free = self.tx_head_mgr.free_len();
+        let mgr_inflight = self.tx_head_mgr.in_flight_count();
+        if (free_slots != mgr_free || inflight_slots != mgr_inflight)
+            && !self.tx_slot_divergence_logged
+        {
+            self.tx_slot_divergence_logged = true;
+            warn!(
+                target: "net-console",
+                "[virtio-net][tx-slot] divergence: tracker_free={} mgr_free={} tracker_inflight={} mgr_inflight={} qsize={}",
+                free_slots,
+                mgr_free,
+                inflight_slots,
+                mgr_inflight,
+                self.tx_queue.size,
+            );
+        }
+        (free_slots, inflight_slots)
+    }
+
+    fn tx_free_count(&mut self) -> u16 {
+        let (free, _) = self.tx_slot_counts();
+        free
+    }
+
+    fn tx_inflight_count(&mut self) -> u16 {
+        let (_, inflight) = self.tx_slot_counts();
+        inflight
+    }
+
+    fn reserve_tx_slot(&mut self) -> Option<(u16, bool)> {
+        if !NET_VIRTIO_TX_V2 {
+            return self.tx_head_mgr.alloc_head().map(|id| (id, false));
+        }
+        let (slot, wrap, _) = self.tx_slots.reserve_next()?;
+        match self.tx_head_mgr.alloc_specific(slot) {
+            Some(id) => {
+                if wrap {
+                    let avail_idx = self.tx_queue.indices_no_sync().1;
+                    let (free, inflight) = self.tx_slot_counts();
+                    info!(
+                        target: "virtio-net",
+                        "[virtio-net][tx-wrap-reserve] avail_idx={} slot={} free={} inflight={} qsize={}",
+                        avail_idx,
+                        slot,
+                        free,
+                        inflight,
+                        self.tx_queue.size,
+                    );
+                }
+                Some((id, wrap))
+            }
+            None => {
+                let _ = self.tx_slots.cancel(slot);
+                None
+            }
+        }
+    }
+
+    fn cancel_tx_slot(&mut self, id: u16, context: &'static str) {
+        if !NET_VIRTIO_TX_V2 {
+            return;
+        }
+        if let Err(err) = self.tx_slots.cancel(id) {
+            if !self.tx_slot_divergence_logged {
+                self.tx_slot_divergence_logged = true;
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][tx-slot] cancel failed: id={} err={:?} context={} state_inflight={} free={}",
+                    id,
+                    err,
+                    context,
+                    self.tx_slots.in_flight(),
+                    self.tx_slots.free_count(),
+                );
+            }
+        }
+    }
+
+    fn mark_slot_inflight(&mut self, id: u16, context: &'static str) {
+        if !NET_VIRTIO_TX_V2 {
+            return;
+        }
+        if let Err(err) = self.tx_slots.mark_in_flight(id) {
+            if !self.tx_slot_divergence_logged {
+                self.tx_slot_divergence_logged = true;
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][tx-slot] inflight mark failed: id={} err={:?} context={} free={} inflight={}",
+                    id,
+                    err,
+                    context,
+                    self.tx_slots.free_count(),
+                    self.tx_slots.in_flight(),
+                );
+            }
+        }
+    }
+
+    fn complete_tx_slot(&mut self, id: u16, context: &'static str) {
+        if !NET_VIRTIO_TX_V2 {
+            return;
+        }
+        if let Err(err) = self.tx_slots.complete(id) {
+            if !self.tx_slot_divergence_logged {
+                self.tx_slot_divergence_logged = true;
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][tx-slot] complete failed: id={} err={:?} context={} free={} inflight={}",
+                    id,
+                    err,
+                    context,
+                    self.tx_slots.free_count(),
+                    self.tx_slots.in_flight(),
+                );
+            }
+        }
+    }
+
     fn snapshot_tx_stats(&self) -> TxStatsSnapshot {
         TxStatsSnapshot {
             enqueue_ok: self.tx_stats.enqueue_ok.load(AtomicOrdering::Relaxed),
@@ -5045,10 +5314,7 @@ impl VirtioNet {
                 .tx_stats
                 .inflight_highwater
                 .load(AtomicOrdering::Relaxed),
-            ring_full_events: self
-                .tx_stats
-                .ring_full_events
-                .load(AtomicOrdering::Relaxed),
+            ring_full_events: self.tx_stats.ring_full_events.load(AtomicOrdering::Relaxed),
             irq_count: self.tx_stats.irq_count.load(AtomicOrdering::Relaxed),
         }
     }
@@ -5101,8 +5367,12 @@ impl VirtioNet {
             );
             self.tx_diag.last_warn_ms = now_ms;
         }
-        let kick_delta = snapshot.kick_count.saturating_sub(self.tx_diag.last_kick_count);
-        let enqueue_delta = snapshot.enqueue_ok.saturating_sub(self.tx_diag.last_enqueue_ok);
+        let kick_delta = snapshot
+            .kick_count
+            .saturating_sub(self.tx_diag.last_kick_count);
+        let enqueue_delta = snapshot
+            .enqueue_ok
+            .saturating_sub(self.tx_diag.last_enqueue_ok);
         if enqueue_delta > 0 && kick_delta >= enqueue_delta {
             warn!(
                 target: "virtio-net",
@@ -5130,8 +5400,8 @@ impl VirtioNet {
         }
         self.tx_stats_log_ms = now_ms;
         let snapshot = self.snapshot_tx_stats();
-        let inflight = self.tx_head_mgr.in_flight_count();
-        let free = self.tx_head_mgr.free_len();
+        let inflight = self.tx_inflight_count();
+        let free = self.tx_free_count();
         let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
         info!(
             target: "virtio-net",
@@ -5512,7 +5782,8 @@ impl VirtioNet {
                         return;
                     }
                 }
-                let inflight_now = self.tx_head_mgr.in_flight_count();
+                self.mark_slot_inflight(id, "tx_v2_publish");
+                let inflight_now = self.tx_inflight_count();
                 self.tx_stats.record_enqueue_ok(inflight_now);
                 if self
                     .guard_tx_publish_readback(
