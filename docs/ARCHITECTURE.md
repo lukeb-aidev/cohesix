@@ -2,17 +2,21 @@
 # Cohesix Architecture Overview
 Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
 
-<!-- Cohesix Architecture (Cohesix + cohsh + gpu-bridge-host) -->
+<!-- ========================================================= -->
+<!-- Cohesix Architecture Diagram (doc-grounded)               -->
+<!-- Sources: ARCHITECTURE.md, INTERFACES.md, GPU_NODES.md     -->
+<!-- ========================================================= -->
+
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}, "theme": "default"} }%%
 flowchart LR
 
   %% =========================
-  %% Host side (out of VM/TCB)
+  %% Host side (outside VM/TCB)
   %% =========================
   subgraph HOST["Host (outside Cohesix VM/TCB)"]
-    COHSH["cohsh (host CLI)\n- AUTH -> ATTACH (per CLI)\n- scripts/CI\n- speaks:\n  (a) console line-protocol\n  (b) Secure9P (when transport exists)"]
-    GPUW["gpu-bridge-host (external client)\n- owns CUDA/NVML\n- enforces leases/tickets\n- mirrors /gpu/* into NineDoor\n- host-only networking"]
+    COHSH["cohsh (host-only CLI)\n- 9P client (preferred)\n- TCP console client (--transport tcp)\n- local ticket hygiene"]:::host
+    GPUB["gpu-bridge-host (host GPU bridge)\n- owns CUDA/NVML\n- publishes /gpu/*\n- enforces leases/priorities\n- host-only networking"]:::host
   end
 
   %% =========================
@@ -20,79 +24,70 @@ flowchart LR
   %% =========================
   subgraph VM["Cohesix target (seL4 VM today; UEFI ARM64 later)"]
     subgraph K["Upstream seL4 kernel"]
-      SEL4["seL4\n(caps, IPC, scheduling)"]
+      SEL4["seL4\n(caps, IPC, scheduling, IRQ/timer)"]:::kernel
     end
 
     subgraph U["Pure Rust userspace (CPIO rootfs)"]
-      RT["root-task\n- bootstraps caps/sched\n- deterministic event pump\n- serial + TCP console\n- spawns NineDoor + workers"]
-      ND["NineDoor (Secure9P server)\n- secure9p codec/core\n- AccessPolicy first\n- role-scoped mounts\n- serves /proc /queen /worker /log /gpu"]
+      RT["root-task\n- bootstraps caps/sched\n- deterministic event pump\n- TCP console :31337 + UART console\n- spawns NineDoor + workers\n- sole side-effect authority"]:::vm
 
-      Q["Queen role session\n(orchestrates)"]
-      WH["worker-heart\n(telemetry/heartbeat)"]
-      WG["worker-gpu (VM stub)\n(ticket/lease + file ops only)\n(NO CUDA/NVML)"]
+      ND["NineDoor (Secure9P server)\n9P2000.L only\nops: version/attach/walk/open/read/write/clunk/stat\nremove: DISABLED\nmsize<=8192\nper-session fid tables\nappend-only semantics enforced"]:::vm
+
+      Q["Queen role session\n(orchestrates via /queen/ctl)"]:::role
+      WH["worker-heart\n(writes /worker/<id>/telemetry)"]:::role
+      WG["worker-gpu (VM stub)\n(file ops only; no CUDA/NVML)"]:::role
     end
   end
 
   %% =========================
-  %% Control surfaces
+  %% Logical namespace (NineDoor)
   %% =========================
-  SERIAL["PL011 UART console\n(always-on fallback)"]
-  TCP["Authenticated TCP console\n(line protocol)\nACK-before-side-effects"]
-
-  %% =========================
-  %% Secure9P namespace (logical)
-  %% =========================
-  subgraph NS["Secure9P namespace (role-scoped views)"]
-    QUEENCTL["/queen/ctl (append-only)\nJSON spawn/kill/bind/mount\n+ gpu lease/ticket ops"]
-    WORKTEL["/worker/<id>/telemetry (append-only)"]
-    LOGS["/log/* (append-only)"]
-    GPUFS["/gpu/<id>/{info,ctl,job,status}\n(host-mirrored GPU nodes)"]
+  subgraph NS["Secure9P namespace (role-scoped mounts)"]
+    PROC["/proc (synthetic)"]:::path
+    QUEEN["/queen/ctl (append-only JSON lines)\nspawn/kill/bind/mount/spawn:gpu(lease)"]:::path
+    WORK["/worker/<id>/telemetry (append-only)\nnewline-delimited records"]:::path
+    LOG["/log/* (append-only streams)"]:::path
+    GPU["/gpu/<id>/{info,ctl,job,status}\n(host-mirrored provider nodes)"]:::path
   end
 
   %% =========================
-  %% Boot wiring
+  %% Console surface (root-task)
+  %% =========================
+  TCP["root-task TCP console\n--transport tcp\ndefault 127.0.0.1:31337\nline<=128B\nPING/PONG\nACK-before-side-effects\nrate-limit auth failures"]:::console
+  UART["PL011 UART console\nalways-on fallback"]:::console
+
+  %% =========================
+  %% Wiring
   %% =========================
   SEL4 --> RT
   RT --> ND
-  RT --- SERIAL
   RT --- TCP
+  RT --- UART
 
-  %% =========================
-  %% cohsh paths (both)
-  %% =========================
-  COHSH -->|"TCP console:\nAUTH <token>\nATTACH <role> <ticket>\nverbs -> OK/ERR/END"| TCP
-  COHSH -->|"Secure9P (when available):\nTVERSION/TATTACH/TWALK/TOPEN/\nTREAD/TWRITE/TCLUNK"| ND
+  %% cohsh can use both transports
+  COHSH -->|"Secure9P client\nTVERSION(msize<=8192)\nTATTACH(ticket)\nTWALK/TOPEN/TREAD/TWRITE"| ND
+  COHSH -->|"Line protocol\nATTACH <role> <ticket?>\nTAIL <path>\nPING/PONG"| TCP
 
-  %% =========================
-  %% In-VM roles use Secure9P
-  %% =========================
+  %% In-VM roles use NineDoor only
   Q -->|"Secure9P session"| ND
   WH -->|"Secure9P session"| ND
   WG -->|"Secure9P session"| ND
 
-  %% Namespace served by NineDoor
-  ND --> QUEENCTL
-  ND --> WORKTEL
-  ND --> LOGS
-  ND --> GPUFS
+  %% NineDoor publishes namespace
+  ND --> PROC
+  ND --> QUEEN
+  ND --> WORK
+  ND --> LOG
+  ND --> GPU
 
-  %% Queen orchestration -> root-task side-effects
-  Q -->|"append JSON"| QUEENCTL
-  QUEENCTL -->|"validated -> internal actions"| RT
+  %% Queen control surface triggers validated internal actions
+  QUEEN -->|"validated JSON + ticket perms\nthen internal RootTaskControl"| RT
 
-  %% Workers
-  WH -->|"append"| WORKTEL
-  WG -->|"append jobs + state"| WORKTEL
-  WG -->|"append JSON job"| GPUFS
-
-  %% =========================
-  %% GPU bridge (host-only, direct to NineDoor)
-  %% =========================
-  GPUW -->|"Secure9P client over TCP (host-only)\nmirrors /gpu/* providers\nupdates status/telemetry"| ND
-  GPUW -->|"exec + lease enforce\nwrite status"| GPUFS
+  %% GPU bridge publishes /gpu providers into NineDoor
+  GPUB -->|"Secure9P provider (host)\npublishes GPU nodes\nupdates status"| ND
+  GPUB --> GPU
 
   %% =========================
-  %% Styling (avoid advanced CSS to maximize compatibility)
+  %% Styles
   %% =========================
   classDef kernel fill:#eee,stroke:#555,stroke-width:1px;
   classDef vm fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
@@ -100,13 +95,6 @@ flowchart LR
   classDef role fill:#f0fdf4,stroke:#15803d,stroke-width:1px;
   classDef console fill:#faf5ff,stroke:#7c3aed,stroke-width:1px;
   classDef path fill:#f8fafc,stroke:#334155,stroke-dasharray: 4 3;
-
-  class SEL4 kernel
-  class RT,ND vm
-  class COHSH,GPUW host
-  class Q,WH,WG role
-  class SERIAL,TCP console
-  class QUEENCTL,WORKTEL,LOGS,GPUFS path
 ```
 
 ## 1. System Boundaries
