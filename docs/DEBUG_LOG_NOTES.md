@@ -36,3 +36,8 @@
 ## Net Bring-up Staging
 - `net.stage=<stage>` is emitted once during network init to confirm the compile-time ladder selection.
 - When `virtio_guard_queue` is enabled, virtio-net logs `virtio.guard_queue=1 base=<va> len=<bytes> guard=<va>` to identify the guarded queue region and the unmapped tripwire page.
+
+## Virtio-net TX Backpressure Stats
+- Periodic `virtio-net][tx-stats]` lines show bounded TX health: `inflight`, `free`, `highwater`, `enqueue_ok`, `would_block`, `kicks`, `used_reaped`, `reclaim_irq`, `reclaim_poll`, and `ring_full`.
+- Healthy bursts show `kicks` well below `enqueue_ok` (batching) and `would_block` rising only temporarily before `used_reaped` and `free` recover.
+- Warning lines highlight contradictions (e.g., IRQs arriving while `used.idx` stalls, or kicks roughly matching enqueue count). Investigate reclaim paths or QEMU backend stalls when these appear.
