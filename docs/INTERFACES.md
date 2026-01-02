@@ -21,8 +21,6 @@ sequenceDiagram
   participant GPUB as "gpu-bridge-host (host)"
   participant GPUFS as "/gpu/⟨id⟩/"
 
-  Note over GPUFS: Represents /gpu/⟨id⟩/* (all nodes under the GPU namespace)
-
   Note over ND
     9P2000.L only
     ops: version/attach/walk/open/read/write/clunk/stat
