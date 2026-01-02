@@ -511,11 +511,15 @@ impl TxHeadManager {
         self.free_mask &= !mask;
         let gen = self.next_gen;
         self.next_gen = self.next_gen.wrapping_add(1);
-        if let Some(entry) = self.entry_mut(id) {
-            self.trace_transition(id, entry.state, TxHeadState::Prepared { gen }, "alloc");
-            entry.state = TxHeadState::Prepared { gen };
+        let next_state = TxHeadState::Prepared { gen };
+        if let Some(prev_state) = self.entry_mut(id).map(|entry| {
+            let prev_state = entry.state;
+            entry.state = next_state;
             entry.last_len = 0;
             entry.last_addr = 0;
+            prev_state
+        }) {
+            self.trace_transition(id, prev_state, next_state, "alloc");
         }
         if let Some(flag) = self.publish_present.get_mut(id as usize) {
             *flag = false;
@@ -601,28 +605,26 @@ impl TxHeadManager {
             );
             return Err(TxHeadError::InvalidState);
         }
-        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        let gen = match entry.state {
+        let prev_state = self.state(id).ok_or(TxHeadError::OutOfRange)?;
+        let gen = match prev_state {
             TxHeadState::Prepared { gen } => gen,
             _ => {
                 self.record_dup_publish();
                 debug_assert!(
                     false,
                     "tx head already published or in-flight: id={} state={:?}",
-                    id, entry.state
+                    id, prev_state
                 );
                 return Err(TxHeadError::InvalidState);
             }
         };
-        self.trace_transition(
-            id,
-            entry.state,
-            TxHeadState::Published { slot, gen },
-            "publish",
-        );
-        entry.state = TxHeadState::Published { slot, gen };
-        entry.last_len = len;
-        entry.last_addr = addr;
+        let next_state = TxHeadState::Published { slot, gen };
+        if let Some(entry) = self.entry_mut(id) {
+            entry.state = next_state;
+            entry.last_len = len;
+            entry.last_addr = addr;
+        }
+        self.trace_transition(id, prev_state, next_state, "publish");
         self.published_slots[slot as usize] = Some((id, gen));
         if let Some(flag) = self.in_avail.get_mut(id as usize) {
             *flag = true;
@@ -664,14 +666,16 @@ impl TxHeadManager {
         if already_in_flight {
             return Ok((slot, gen));
         }
-        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        self.trace_transition(
-            id,
-            entry.state,
-            TxHeadState::InFlight { slot, gen },
-            "inflight",
-        );
-        entry.state = TxHeadState::InFlight { slot, gen };
+        let next_state = TxHeadState::InFlight { slot, gen };
+        let prev_state = self
+            .entry_mut(id)
+            .map(|entry| {
+                let prev_state = entry.state;
+                entry.state = next_state;
+                prev_state
+            })
+            .ok_or(TxHeadError::OutOfRange)?;
+        self.trace_transition(id, prev_state, next_state, "inflight");
         Ok((slot, gen))
     }
 
@@ -814,9 +818,16 @@ impl TxHeadManager {
             );
             return Err(TxHeadError::InvalidState);
         }
-        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        self.trace_transition(id, entry.state, TxHeadState::Completed { gen }, "complete");
-        entry.state = TxHeadState::Completed { gen };
+        let next_state = TxHeadState::Completed { gen };
+        let prev_state = self
+            .entry_mut(id)
+            .map(|entry| {
+                let prev_state = entry.state;
+                entry.state = next_state;
+                prev_state
+            })
+            .ok_or(TxHeadError::OutOfRange)?;
+        self.trace_transition(id, prev_state, next_state, "complete");
         if let Some(slot_entry) = self.published_slots.get_mut(slot as usize) {
             if matches!(slot_entry, Some((head, g)) if *head == id && *g == gen) {
                 *slot_entry = None;
@@ -848,12 +859,22 @@ impl TxHeadManager {
             );
             return Err(TxHeadError::InvalidState);
         }
-        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        if !matches!(entry.state, TxHeadState::Completed { .. }) {
+        let prev_state = self
+            .entry_mut(id)
+            .map(|entry| {
+                let prev_state = entry.state;
+                (prev_state, matches!(entry.state, TxHeadState::Completed { .. }))
+            })
+            .ok_or(TxHeadError::OutOfRange)?;
+        if !prev_state.1 {
             return Err(TxHeadError::InvalidState);
         }
-        self.trace_transition(id, entry.state, TxHeadState::Free, "reclaim");
-        entry.state = TxHeadState::Free;
+        let recorded_state = prev_state.0;
+        let next_state = TxHeadState::Free;
+        if let Some(entry) = self.entry_mut(id) {
+            entry.state = next_state;
+        }
+        self.trace_transition(id, recorded_state, next_state, "reclaim");
         self.clear_advertised(id)?;
         if let Some(present) = self.publish_present.get_mut(id as usize) {
             *present = false;
@@ -878,14 +899,16 @@ impl TxHeadManager {
         let next = self.next_gen;
         self.next_gen = self.next_gen.wrapping_add(1);
         self.clear_slot(slot);
-        let entry = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        self.trace_transition(
-            id,
-            entry.state,
-            TxHeadState::Prepared { gen: next },
-            "cancel",
-        );
-        entry.state = TxHeadState::Prepared { gen: next };
+        let next_state = TxHeadState::Prepared { gen: next };
+        let prev_state = self
+            .entry_mut(id)
+            .map(|entry| {
+                let prev_state = entry.state;
+                entry.state = next_state;
+                prev_state
+            })
+            .ok_or(TxHeadError::OutOfRange)?;
+        self.trace_transition(id, prev_state, next_state, "cancel");
         if let Some(flag) = self.in_avail.get_mut(id as usize) {
             *flag = false;
         }
@@ -908,19 +931,28 @@ impl TxHeadManager {
             );
             return Err(TxHeadError::InvalidState);
         }
-        let state = self.entry_mut(id).ok_or(TxHeadError::OutOfRange)?;
-        if !matches!(state.state, TxHeadState::Prepared { .. }) {
+        let (prev_state, was_prepared) = self
+            .entry_mut(id)
+            .map(|entry| {
+                let prev_state = entry.state;
+                (prev_state, matches!(entry.state, TxHeadState::Prepared { .. }))
+            })
+            .ok_or(TxHeadError::OutOfRange)?;
+        if !was_prepared {
             debug_assert!(
                 false,
                 "tx head release violation: id={} state={:?}",
-                id, state.state
+                id, prev_state
             );
             return Err(TxHeadError::InvalidState);
         }
-        self.trace_transition(id, state.state, TxHeadState::Free, "release");
-        state.state = TxHeadState::Free;
-        state.last_len = 0;
-        state.last_addr = 0;
+        let next_state = TxHeadState::Free;
+        if let Some(state) = self.entry_mut(id) {
+            state.state = next_state;
+            state.last_len = 0;
+            state.last_addr = 0;
+        }
+        self.trace_transition(id, prev_state, next_state, "release");
         if let Some(present) = self.publish_present.get_mut(id as usize) {
             *present = false;
         }
