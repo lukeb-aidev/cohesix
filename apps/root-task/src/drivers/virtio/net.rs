@@ -2816,7 +2816,10 @@ impl VirtioNet {
             || now_ms.saturating_sub(self.tx_zero_desc_warn_ms) >= 1_000
         {
             self.tx_zero_desc_warn_ms = now_ms;
+            let guard_hits = self.tx_zero_desc_guard;
             let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
+            let free = self.tx_free_count();
+            let inflight = self.tx_inflight_count();
             warn!(
                 target: "net-console",
                 "[virtio-net][tx-guard] zero descriptor refused: head={head} slot={slot} addr=0x{addr:016x} len={len} used_idx={used_idx} avail_idx={avail_idx} guard_hits={guard_hits} free={free} inflight={inflight}",
@@ -2826,9 +2829,9 @@ impl VirtioNet {
                 len = desc.len,
                 used_idx = used_idx,
                 avail_idx = avail_idx,
-                guard_hits = self.tx_zero_desc_guard,
-                free = self.tx_free_count(),
-                inflight = self.tx_inflight_count(),
+                guard_hits = guard_hits,
+                free = free,
+                inflight = inflight,
             );
         }
     }
