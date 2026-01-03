@@ -2819,16 +2819,16 @@ impl VirtioNet {
             let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
             warn!(
                 target: "net-console",
-                "[virtio-net][tx-guard] zero descriptor refused: head={} slot={} addr=0x{addr:016x} len={} used_idx={} avail_idx={} guard_hits={} free={} inflight={}",
-                head_id,
-                publish_slot,
+                "[virtio-net][tx-guard] zero descriptor refused: head={head} slot={slot} addr=0x{addr:016x} len={len} used_idx={used_idx} avail_idx={avail_idx} guard_hits={guard_hits} free={free} inflight={inflight}",
+                head = head_id,
+                slot = publish_slot,
                 addr = desc.addr,
                 len = desc.len,
-                used_idx,
-                avail_idx,
-                self.tx_zero_desc_guard,
-                self.tx_free_count(),
-                self.tx_inflight_count(),
+                used_idx = used_idx,
+                avail_idx = avail_idx,
+                guard_hits = self.tx_zero_desc_guard,
+                free = self.tx_free_count(),
+                inflight = self.tx_inflight_count(),
             );
         }
     }
@@ -5682,12 +5682,12 @@ impl VirtioNet {
                 self.tx_invariant_violations = self.tx_invariant_violations.saturating_add(1);
                 warn!(
                     target: "net-console",
-                    "[virtio-net][tx-guard] descriptor addr mismatch: head={} slot={} desc_addr=0x{addr:016x} expected=0x{expected:016x} len={}",
-                    id,
-                    publish_slot,
+                    "[virtio-net][tx-guard] descriptor addr mismatch: head={head} slot={slot} desc_addr=0x{addr:016x} expected=0x{expected:016x} len={len}",
+                    head = id,
+                    slot = publish_slot,
                     addr = desc.addr,
                     expected = buffer.paddr(),
-                    desc.len,
+                    len = desc.len,
                 );
                 #[cfg(debug_assertions)]
                 self.freeze_tx_publishes("tx_desc_addr_mismatch");
@@ -5898,16 +5898,16 @@ impl VirtioNet {
                 self.debug_check_tx_outstanding_window(self.tx_queue.last_used, avail_idx);
                 log::debug!(
                     target: "virtio-net",
-                    "[virtio-net][tx-submit] head={head} paddr=0x{addr:016x} len={len} avail_idx={old_idx}→{avail_idx} slot={slot} used_idx={} free={} inflight={}",
+                    "[virtio-net][tx-submit] head={head} paddr=0x{addr:016x} len={len} avail_idx={old_idx}→{avail_idx} slot={slot} used_idx={used_idx_now} free={free_now} inflight={inflight_now}",
                     head = id,
                     addr = desc.addr,
                     len = desc.len,
                     old_idx = old_idx,
                     avail_idx = avail_idx,
                     slot = slot,
-                    used_idx_now,
-                    free_now,
-                    inflight_now
+                    used_idx_now = used_idx_now,
+                    free_now = free_now,
+                    inflight_now = inflight_now
                 );
                 #[cfg(debug_assertions)]
                 self.debug_assert_tx_chain_ready(id);
