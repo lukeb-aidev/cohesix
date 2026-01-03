@@ -1683,6 +1683,9 @@ pub struct VirtioNet {
     tx_invalid_publish: u64,
     tx_drop_zero_len: u64,
     tx_zero_len_attempt: u64,
+    tx_zero_desc_guard: u64,
+    tx_zero_desc_warn_ms: u64,
+    tx_invariant_violations: u64,
     dropped_zero_len_tx: u64,
     tx_submit: u64,
     tx_complete: u64,
@@ -2160,6 +2163,9 @@ impl VirtioNet {
             tx_invalid_publish: 0,
             tx_drop_zero_len: 0,
             tx_zero_len_attempt: 0,
+            tx_zero_desc_guard: 0,
+            tx_zero_desc_warn_ms: 0,
+            tx_invariant_violations: 0,
             dropped_zero_len_tx: 0,
             tx_submit: 0,
             tx_complete: 0,
@@ -2803,6 +2809,30 @@ impl VirtioNet {
         Ok(())
     }
 
+    fn note_zero_desc_guard(&mut self, head_id: u16, publish_slot: u16, desc: &VirtqDesc) {
+        self.tx_zero_desc_guard = self.tx_zero_desc_guard.saturating_add(1);
+        let now_ms = crate::hal::timebase().now_ms();
+        if self.tx_zero_desc_warn_ms == 0
+            || now_ms.saturating_sub(self.tx_zero_desc_warn_ms) >= 1_000
+        {
+            self.tx_zero_desc_warn_ms = now_ms;
+            let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
+            warn!(
+                target: "net-console",
+                "[virtio-net][tx-guard] zero descriptor refused: head={} slot={} addr=0x{addr:016x} len={} used_idx={} avail_idx={} guard_hits={} free={} inflight={}",
+                head_id,
+                publish_slot,
+                addr = desc.addr,
+                len = desc.len,
+                used_idx,
+                avail_idx,
+                self.tx_zero_desc_guard,
+                self.tx_free_count(),
+                self.tx_inflight_count(),
+            );
+        }
+    }
+
     fn publish_tx_avail(
         &mut self,
         head_id: u16,
@@ -3097,6 +3127,8 @@ impl VirtioNet {
             next_desc_addr = next_desc.addr,
             avail_idx_readback = avail_idx_readback,
         );
+        #[cfg(debug_assertions)]
+        self.tx_assert_invariants("wrap_tripwire");
     }
 
     fn validate_tx_publish_guard(
@@ -4271,6 +4303,10 @@ impl VirtioNet {
         );
 
         // TX ownership audit (virtio-net):
+        // - Call chain: smoltcp `Device::transmit` → `prepare_tx_token`/`VirtioTxToken::consume`
+        //   → `submit_tx_v2` → `tx_queue.setup_descriptor` + buffer clean → `publish_tx_avail`
+        //   (writes avail slot/index and optional kick) → `tx_reclaim_used`/`reclaim_posted_head`
+        //   (IRQ or poll) → `TxSlotTracker::complete` + `TxHeadManager::reclaim_head`.
         // - TX buffers come from `tx_buffers`: one pinned DMA frame per queue slot (size==queue).
         // - Free tracking pairs the round-robin `TxSlotTracker` (Free/Reserved/InFlight) with
         //   `TxHeadManager` so a slot cannot be reallocated until a used entry returns ownership.
@@ -4546,6 +4582,8 @@ impl VirtioNet {
 
         self.audit_tx_accounting("reclaim_tx_v2");
         self.log_tx_v2_invariants();
+        #[cfg(debug_assertions)]
+        self.tx_assert_invariants("reclaim");
         match source {
             TxReclaimSource::Irq => self.tx_stats.record_irq_reclaim(),
             TxReclaimSource::Poll => self.tx_stats.record_poll_reclaim(),
@@ -4630,7 +4668,7 @@ impl VirtioNet {
             self.tx_head_mgr.counters();
         info!(
             target: "net-console",
-            "[virtio-net][tx-v2] stats free={} in_flight={} submit={} complete={} zero_len={} double_submit={} dup_alloc_refused={} dup_publish_blocked={} invalid_used_id={} invalid_used_state={} zero_len_publish_blocked={}",
+            "[virtio-net][tx-v2] stats free={} in_flight={} submit={} complete={} zero_len={} double_submit={} dup_alloc_refused={} dup_publish_blocked={} invalid_used_id={} invalid_used_state={} zero_len_publish_blocked={} zero_guard={} invariant_violations={}",
             free,
             in_flight,
             self.tx_submit,
@@ -4642,6 +4680,8 @@ impl VirtioNet {
             invalid_id,
             invalid_state,
             zero_len_publish,
+            self.tx_zero_desc_guard,
+            self.tx_invariant_violations,
         );
     }
 
@@ -5186,19 +5226,21 @@ impl VirtioNet {
         let inflight_slots = self.tx_slots.in_flight();
         let mgr_free = self.tx_head_mgr.free_len();
         let mgr_inflight = self.tx_head_mgr.in_flight_count();
-        if (free_slots != mgr_free || inflight_slots != mgr_inflight)
-            && !self.tx_slot_divergence_logged
-        {
-            self.tx_slot_divergence_logged = true;
-            warn!(
-                target: "net-console",
-                "[virtio-net][tx-slot] divergence: tracker_free={} mgr_free={} tracker_inflight={} mgr_inflight={} qsize={}",
-                free_slots,
-                mgr_free,
-                inflight_slots,
-                mgr_inflight,
-                self.tx_queue.size,
-            );
+        if free_slots != mgr_free || inflight_slots != mgr_inflight {
+            if !self.tx_slot_divergence_logged {
+                self.tx_slot_divergence_logged = true;
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][tx-slot] divergence: tracker_free={} mgr_free={} tracker_inflight={} mgr_inflight={} qsize={}",
+                    free_slots,
+                    mgr_free,
+                    inflight_slots,
+                    mgr_inflight,
+                    self.tx_queue.size,
+                );
+            }
+            #[cfg(debug_assertions)]
+            self.freeze_tx_publishes("tx_slot_divergence");
         }
         (free_slots, inflight_slots)
     }
@@ -5614,11 +5656,46 @@ impl VirtioNet {
             return;
         }
 
+        let (_, avail_idx_before) = self.tx_queue.indices_no_sync();
+        let qsize = usize::from(self.tx_queue.size);
+        if qsize == 0 {
+            self.release_tx_head(id, "tx_v2_qsize_zero");
+            return;
+        }
+        let publish_slot = (avail_idx_before as usize % qsize) as u16;
+
+        // Root cause (forensics): after wrap the avail ring reused a slot whose descriptor entry
+        // had been zeroed, letting the device observe {addr=0,len=0} and wedge the queue. The
+        // guard below validates the descriptor against the slot-owned DMA buffer before the avail
+        // write so a stale entry is rejected and released instead of being exposed to the device.
         let desc = self.tx_queue.read_descriptor(id);
         let total_len = desc.len as usize;
         debug_assert_ne!(total_len, 0, "tx-v2 descriptor length must be non-zero");
         debug_assert_ne!(desc.addr, 0, "tx-v2 descriptor address must be non-zero");
-        if desc.addr == 0 || desc.len == 0 || total_len != capped_len {
+        if desc.addr == 0 || desc.len == 0 {
+            self.note_zero_desc_guard(id, publish_slot, &desc);
+            self.release_tx_head(id, "tx_v2_desc_guard_zero");
+            return;
+        }
+        if let Some(buffer) = self.tx_buffers.get(id as usize) {
+            if desc.addr != buffer.paddr() as u64 {
+                self.tx_invariant_violations = self.tx_invariant_violations.saturating_add(1);
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][tx-guard] descriptor addr mismatch: head={} slot={} desc_addr=0x{addr:016x} expected=0x{expected:016x} len={}",
+                    id,
+                    publish_slot,
+                    addr = desc.addr,
+                    expected = buffer.paddr(),
+                    desc.len,
+                );
+                #[cfg(debug_assertions)]
+                self.freeze_tx_publishes("tx_desc_addr_mismatch");
+                self.release_tx_head(id, "tx_v2_desc_addr_mismatch");
+                return;
+            }
+        }
+        if total_len != capped_len {
             self.device_faulted = true;
             self.last_error.get_or_insert("tx_v2_desc_guard");
             self.freeze_and_capture("tx_v2_desc_guard");
@@ -5643,7 +5720,6 @@ impl VirtioNet {
             return;
         }
         self.tx_publish_calls = self.tx_publish_calls.wrapping_add(1);
-        let (_, avail_idx_before) = self.tx_queue.indices_no_sync();
         if self
             .validate_tx_publish_guard(
                 id,
@@ -5661,12 +5737,6 @@ impl VirtioNet {
             self.release_tx_head(id, "tx_v2_guard_reject");
             return;
         }
-        let qsize = usize::from(self.tx_queue.size);
-        if qsize == 0 {
-            self.release_tx_head(id, "tx_v2_qsize_zero");
-            return;
-        }
-        let publish_slot = (avail_idx_before as usize % qsize) as u16;
         let payload_len = total_len.saturating_sub(self.tx_header_len);
         if self
             .tx_publish_preflight(
@@ -5794,6 +5864,8 @@ impl VirtioNet {
                 self.mark_slot_inflight(id, "tx_v2_publish");
                 let inflight_now = self.tx_inflight_count();
                 self.tx_stats.record_enqueue_ok(inflight_now);
+                let free_now = self.tx_free_count();
+                let used_idx_now = self.tx_queue.indices_no_sync().0;
                 if self
                     .guard_tx_publish_readback(
                         slot,
@@ -5826,17 +5898,22 @@ impl VirtioNet {
                 self.debug_check_tx_outstanding_window(self.tx_queue.last_used, avail_idx);
                 log::debug!(
                     target: "virtio-net",
-                    "[virtio-net][tx-submit] head={head} paddr=0x{addr:016x} len={len} avail_idx={old_idx}→{avail_idx} slot={slot}",
+                    "[virtio-net][tx-submit] head={head} paddr=0x{addr:016x} len={len} avail_idx={old_idx}→{avail_idx} slot={slot} used_idx={} free={} inflight={}",
                     head = id,
                     addr = desc.addr,
                     len = desc.len,
                     old_idx = old_idx,
                     avail_idx = avail_idx,
-                    slot = slot
+                    slot = slot,
+                    used_idx_now,
+                    free_now,
+                    inflight_now
                 );
                 #[cfg(debug_assertions)]
                 self.debug_assert_tx_chain_ready(id);
                 self.tx_submit = self.tx_submit.wrapping_add(1);
+                #[cfg(debug_assertions)]
+                self.tx_assert_invariants("publish");
                 NET_DIAG.record_tx_submit();
                 let qsize = usize::from(self.tx_queue.size);
                 let wrap_boundary =
@@ -5895,6 +5972,7 @@ impl VirtioNet {
             Err(TxPublishError::InvalidDescriptor) => {
                 self.tx_drops = self.tx_drops.saturating_add(1);
                 let _ = self.tx_head_mgr.cancel_publish(id);
+                self.cancel_tx_slot(id, "tx_publish_invalid_descriptor");
                 return;
             }
             Err(TxPublishError::Queue(_)) => {
@@ -6103,6 +6181,104 @@ impl VirtioNet {
             idx = desc.next;
         }
     }
+
+    #[cfg(debug_assertions)]
+    fn tx_assert_invariants(&mut self, context: &'static str) {
+        let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
+        let pending = avail_idx.wrapping_sub(used_idx);
+        let window = core::cmp::min(pending, self.tx_queue.size);
+        let qsize = usize::from(self.tx_queue.size);
+        let mut seen: [bool; TX_QUEUE_SIZE] = [false; TX_QUEUE_SIZE];
+        for offset in 0..usize::from(window) {
+            let ring_slot = (used_idx.wrapping_add(offset as u16) as usize) % qsize;
+            let head = self.tx_queue.read_avail_slot(ring_slot);
+            debug_assert!(
+                (head as usize) < TX_QUEUE_SIZE && head < self.tx_queue.size,
+                "tx invariant: head out of range context={} head={} ring_slot={} used_idx={} avail_idx={}",
+                context,
+                head,
+                ring_slot,
+                used_idx,
+                avail_idx
+            );
+            if (head as usize) < seen.len() {
+                debug_assert!(
+                    !seen[head as usize],
+                    "tx invariant: duplicate head context={} head={} ring_slot={} used_idx={} avail_idx={}",
+                    context,
+                    head,
+                    ring_slot,
+                    used_idx,
+                    avail_idx
+                );
+                seen[head as usize] = true;
+            }
+            let desc = self.tx_queue.read_descriptor(head);
+            debug_assert!(
+                desc.len != 0 && desc.addr != 0,
+                "tx invariant: zero descriptor context={} head={} ring_slot={} desc_len={} desc_addr=0x{addr:016x} used_idx={} avail_idx={}",
+                context,
+                head,
+                ring_slot,
+                desc.len,
+                addr = desc.addr,
+                used_idx,
+                avail_idx
+            );
+            if let Some(buffer) = self.tx_buffers.get(head as usize) {
+                debug_assert!(
+                    desc.addr == buffer.paddr() as u64,
+                    "tx invariant: descriptor addr mismatch context={} head={} ring_slot={} desc_addr=0x{addr:016x} expected=0x{expected:016x} used_idx={} avail_idx={}",
+                    context,
+                    head,
+                    ring_slot,
+                    addr = desc.addr,
+                    expected = buffer.paddr(),
+                    used_idx,
+                    avail_idx
+                );
+            }
+        }
+        if NET_VIRTIO_TX_V2 {
+            let tracker_sum = self
+                .tx_slots
+                .free_count()
+                .saturating_add(self.tx_slots.in_flight());
+            let mgr_sum = self
+                .tx_head_mgr
+                .free_len()
+                .saturating_add(self.tx_head_mgr.in_flight_count());
+            debug_assert!(
+                tracker_sum == self.tx_queue.size,
+                "tx invariant: tracker accounting mismatch context={} free={} inflight={} qsize={}",
+                context,
+                self.tx_slots.free_count(),
+                self.tx_slots.in_flight(),
+                self.tx_queue.size
+            );
+            debug_assert!(
+                mgr_sum == self.tx_queue.size,
+                "tx invariant: head manager accounting mismatch context={} free={} inflight={} qsize={}",
+                context,
+                self.tx_head_mgr.free_len(),
+                self.tx_head_mgr.in_flight_count(),
+                self.tx_queue.size
+            );
+            debug_assert!(
+                self.tx_slots.free_count() == self.tx_head_mgr.free_len()
+                    && self.tx_slots.in_flight() == self.tx_head_mgr.in_flight_count(),
+                "tx invariant: tracker/head divergence context={} tracker_free={} tracker_inflight={} mgr_free={} mgr_inflight={}",
+                context,
+                self.tx_slots.free_count(),
+                self.tx_slots.in_flight(),
+                self.tx_head_mgr.free_len(),
+                self.tx_head_mgr.in_flight_count(),
+            );
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn tx_assert_invariants(&mut self, _context: &'static str) {}
 
     fn inspect_tx_header(&self, head_id: u16, header_len: usize) -> Option<TxHeaderInspect> {
         self.tx_buffers.get(head_id as usize).and_then(|buffer| {
