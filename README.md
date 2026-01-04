@@ -124,7 +124,7 @@ Cohesix is structured as a hive: one Queen process orchestrates multiple worker 
 - **cohsh** — Host-only CLI that connects to the TCP NineDoor console, attaches with role/ticket pairs, and mirrors root console commands for operators; it is the canonical shell for the hive, and planned GUI clients are expected to speak the same protocol.
 - **gpu-bridge-host** — Host-side process that discovers or mocks GPUs, enforces leases, and mirrors `/gpu/<id>/` nodes into the VM via Secure9P transport adapters.
 - **secure9p-wire** — Codec/transport crate providing bounded 9P framing for NineDoor and host tools, including the TCP adapter (host-only).
-- **Future tooling** — Planned host-side WASM “hive dashboard” that reuses the cohsh protocol and adds no in-VM services.
+- **Future tooling** — Planned host-side WASM “hive dashboard” and 9P client that reuses the cohsh protocol and adds no in-VM services.
 
 ## Status
 - Milestones 0–4: repository scaffolding, seL4 boot/timer/IPC bring-up, Secure9P namespace, and bind/mount semantics are implemented per `docs/BUILD_PLAN.md`.
