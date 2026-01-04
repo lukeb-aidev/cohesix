@@ -444,6 +444,97 @@ impl TxSlotTracker {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum TxReclaimResult {
+    Reclaimed,
+    InvalidId,
+    HeadNotInFlight(Option<TxHeadState>),
+    SlotStateInvalid(Option<TxSlotState>),
+    SlotMismatch,
+    PublishRecordMismatch,
+    HeadTransitionFailed,
+    SlotCompletionFailed(TxSlotError),
+}
+
+fn reclaim_used_entry_common(
+    head_mgr: &mut TxHeadManager,
+    slots: Option<&mut TxSlotTracker>,
+    id: u16,
+    ring_slot: u16,
+) -> TxReclaimResult {
+    if id >= head_mgr.size {
+        return TxReclaimResult::InvalidId;
+    }
+    let entry = match head_mgr.entry(id) {
+        Some(entry) => entry,
+        None => return TxReclaimResult::HeadNotInFlight(None),
+    };
+    let (expected_slot, expected_gen) = match entry.state {
+        TxHeadState::InFlight { slot, gen } => (slot, gen),
+        state => return TxReclaimResult::HeadNotInFlight(Some(state)),
+    };
+    let slot_state = slots.as_ref().and_then(|tracker| tracker.state(id));
+    if let Some(state) = slot_state {
+        if !matches!(state, TxSlotState::InFlight { .. }) {
+            return TxReclaimResult::SlotStateInvalid(Some(state));
+        }
+    }
+    if expected_slot != ring_slot {
+        return TxReclaimResult::SlotMismatch;
+    }
+    if head_mgr.published_for_slot(ring_slot) != Some((id, expected_gen)) {
+        return TxReclaimResult::PublishRecordMismatch;
+    }
+    if head_mgr
+        .take_publish_record(id, ring_slot, expected_gen)
+        .is_err()
+    {
+        return TxReclaimResult::PublishRecordMismatch;
+    }
+    if head_mgr
+        .mark_completed(id, Some(expected_gen))
+        .and_then(|_| head_mgr.reclaim_head(id))
+        .is_err()
+    {
+        return TxReclaimResult::HeadTransitionFailed;
+    }
+    if let Some(mut tracker) = slots {
+        if let Err(err) = tracker.complete(id) {
+            return TxReclaimResult::SlotCompletionFailed(err);
+        }
+    }
+    TxReclaimResult::Reclaimed
+}
+
+fn record_zero_len_used(
+    counter: &mut u64,
+    log_ms: &mut u64,
+    id: u16,
+    ring_slot: u16,
+    used_idx: u16,
+    avail_idx: u16,
+    last_used: u16,
+    head_state: Option<TxHeadState>,
+    slot_state: Option<TxSlotState>,
+) {
+    *counter = counter.saturating_add(1);
+    let now_ms = crate::hal::timebase().now_ms();
+    if *log_ms == 0 || now_ms.saturating_sub(*log_ms) >= 1_000 {
+        *log_ms = now_ms;
+        warn!(
+            target: "net-console",
+            "[virtio-net][tx] used.len zero: head={} ring_slot={} used_idx={} last_used={} avail_idx={} head_state={:?} slot_state={:?}",
+            id,
+            ring_slot,
+            used_idx,
+            last_used,
+            avail_idx,
+            head_state,
+            slot_state,
+        );
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct TxPublishRecord {
     slot: u16,
@@ -1715,6 +1806,7 @@ pub struct VirtioNet {
     tx_dup_publish_blocked: u64,
     tx_dup_used_ignored: u64,
     tx_invalid_used_state: u64,
+    tx_used_zero_len_seen: u64,
     tx_alloc_blocked_inflight: u64,
     tx_invalid_publish: u64,
     tx_drop_zero_len: u64,
@@ -1738,6 +1830,7 @@ pub struct VirtioNet {
     tx_v2_log_ms: u64,
     tx_audit_log_ms: u64,
     tx_invalid_used_log_ms: u64,
+    tx_used_zero_len_log_ms: u64,
     tx_audit_violation_logged: bool,
     forensic_dump_captured: bool,
 }
@@ -2199,6 +2292,7 @@ impl VirtioNet {
             tx_dup_publish_blocked: 0,
             tx_dup_used_ignored: 0,
             tx_invalid_used_state: 0,
+            tx_used_zero_len_seen: 0,
             tx_alloc_blocked_inflight: 0,
             tx_invalid_publish: 0,
             tx_drop_zero_len: 0,
@@ -2222,6 +2316,7 @@ impl VirtioNet {
             tx_v2_log_ms: now_ms,
             tx_audit_log_ms: now_ms,
             tx_invalid_used_log_ms: 0,
+            tx_used_zero_len_log_ms: 0,
             tx_audit_violation_logged: false,
             forensic_dump_captured: false,
         };
@@ -3305,77 +3400,107 @@ impl VirtioNet {
         Ok(())
     }
 
-    fn reclaim_posted_head(&mut self, id: u16, ring_slot: u16) -> Result<bool, ()> {
-        let used_idx = self.tx_queue.last_used;
-        let Some(entry) = self.tx_head_mgr.entry(id).copied() else {
-            self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
-            self.tx_head_mgr.record_invalid_used_state();
-            self.log_invalid_used_state(id, None, ring_slot, used_idx);
-            return Ok(false);
+    fn reclaim_posted_head(
+        &mut self,
+        id: u16,
+        ring_slot: u16,
+        used_len: u32,
+        used_idx: u16,
+    ) -> Result<TxReclaimResult, ()> {
+        let head_state = self.tx_head_mgr.state(id);
+        let slot_state = if NET_VIRTIO_TX_V2 {
+            self.tx_slots.state(id)
+        } else {
+            None
         };
-        let (expected_slot, expected_gen) = match entry.state {
-            TxHeadState::InFlight { slot, gen } => (slot, gen),
-            state => {
+        if used_len == 0 {
+            record_zero_len_used(
+                &mut self.tx_used_zero_len_seen,
+                &mut self.tx_used_zero_len_log_ms,
+                id,
+                ring_slot,
+                used_idx,
+                self.tx_queue.indices_no_sync().1,
+                self.tx_queue.last_used,
+                head_state,
+                slot_state,
+            );
+        }
+        let slot_tracker = if NET_VIRTIO_TX_V2 {
+            Some(&mut self.tx_slots)
+        } else {
+            None
+        };
+        match reclaim_used_entry_common(&mut self.tx_head_mgr, slot_tracker, id, ring_slot) {
+            TxReclaimResult::Reclaimed => Ok(TxReclaimResult::Reclaimed),
+            TxReclaimResult::InvalidId => {
+                self.last_error.get_or_insert("tx_used_id_oob");
+                self.device_faulted = true;
+                self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
+                self.tx_head_mgr.record_invalid_used_id();
+                self.log_invalid_used_state(id, None, ring_slot, used_idx);
+                Ok(TxReclaimResult::InvalidId)
+            }
+            TxReclaimResult::HeadNotInFlight(state) => {
                 self.tx_dup_used_ignored = self.tx_dup_used_ignored.saturating_add(1);
                 self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
                 self.tx_head_mgr.record_invalid_used_state();
-                self.log_invalid_used_state(id, Some(state), ring_slot, used_idx);
-                return Ok(false);
+                self.log_invalid_used_state(id, state, ring_slot, used_idx);
+                Ok(TxReclaimResult::HeadNotInFlight(state))
             }
-        };
-        if expected_slot != ring_slot {
-            self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
-            self.tx_head_mgr.record_invalid_used_state();
-            self.log_invalid_used_state(id, Some(entry.state), ring_slot, used_idx);
-            return Ok(false);
-        }
-        if self.tx_head_mgr.published_for_slot(ring_slot) != Some((id, expected_gen)) {
-            self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
-            self.tx_head_mgr.record_invalid_used_state();
-            self.log_invalid_used_state(id, Some(entry.state), ring_slot, used_idx);
-            return Ok(false);
-        }
-        if self
-            .tx_head_mgr
-            .take_publish_record(id, ring_slot, expected_gen)
-            .is_err()
-        {
-            self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
-            self.log_invalid_used_state(id, Some(entry.state), ring_slot, used_idx);
-            return Ok(false);
-        }
-        // Completion only flips state; descriptor contents are preserved until the next prepare to
-        // avoid exposing zeroed entries to an in-flight device read. Clearing is deferred until
-        // reclaim time to ensure the device no longer owns the descriptors.
-        if self
-            .tx_head_mgr
-            .mark_completed(id, Some(expected_gen))
-            .and_then(|_| self.tx_head_mgr.reclaim_head(id))
-            .and_then(|_| {
-                if matches!(self.tx_head_mgr.state(id), Some(TxHeadState::Free)) {
-                    Ok(())
-                } else {
-                    Err(TxHeadError::InvalidState)
-                }
-            })
-            .is_err()
-        {
-            if !self.tx_reclaim_state_violation_logged {
-                self.tx_reclaim_state_violation_logged = true;
+            TxReclaimResult::SlotStateInvalid(slot_state) => {
+                self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
+                self.tx_head_mgr.record_invalid_used_state();
                 warn!(
                     target: "net-console",
-                    "[virtio-net][tx] reclaim invariant violated: head={} state={:?}",
+                    "[virtio-net][tx] used entry saw invalid slot state: head={} slot_state={:?} ring_slot={} used_idx={}",
                     id,
-                    self.tx_head_mgr.state(id),
+                    slot_state,
+                    ring_slot,
+                    used_idx,
                 );
+                Ok(TxReclaimResult::SlotStateInvalid(slot_state))
             }
-            self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
-            self.log_invalid_used_state(id, self.tx_head_mgr.state(id), ring_slot, used_idx);
-            return Ok(false);
+            TxReclaimResult::SlotMismatch => {
+                self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
+                self.tx_head_mgr.record_invalid_used_state();
+                self.log_invalid_used_state(id, head_state, ring_slot, used_idx);
+                Ok(TxReclaimResult::SlotMismatch)
+            }
+            TxReclaimResult::PublishRecordMismatch => {
+                self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
+                self.tx_head_mgr.record_invalid_used_state();
+                self.log_invalid_used_state(id, head_state, ring_slot, used_idx);
+                Ok(TxReclaimResult::PublishRecordMismatch)
+            }
+            TxReclaimResult::HeadTransitionFailed => {
+                if !self.tx_reclaim_state_violation_logged {
+                    self.tx_reclaim_state_violation_logged = true;
+                    warn!(
+                        target: "net-console",
+                        "[virtio-net][tx] reclaim invariant violated: head={} state={:?}",
+                        id,
+                        self.tx_head_mgr.state(id),
+                    );
+                }
+                self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
+                self.log_invalid_used_state(id, self.tx_head_mgr.state(id), ring_slot, used_idx);
+                Ok(TxReclaimResult::HeadTransitionFailed)
+            }
+            TxReclaimResult::SlotCompletionFailed(err) => {
+                self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][tx-slot] completion failed: id={} err={:?} ring_slot={} used_idx={}",
+                    id,
+                    err,
+                    ring_slot,
+                    used_idx,
+                );
+                self.log_invalid_used_state(id, self.tx_head_mgr.state(id), ring_slot, used_idx);
+                Ok(TxReclaimResult::SlotCompletionFailed(err))
+            }
         }
-        self.complete_tx_slot(id, "tx_reclaim");
-        self.clear_tx_desc_chain(id);
-        Ok(true)
     }
 
     fn guard_tx_publish_readback(
@@ -4523,17 +4648,20 @@ impl VirtioNet {
                 Ok(Some((id, len, ring_slot))) => {
                     self.record_tx_used_entry(id, len);
                     // used.len is ignored for TX; ownership returns solely via used.id and tracked state.
-                    let reclaimed = match self.reclaim_posted_head(id, ring_slot) {
-                        Ok(reclaimed) => reclaimed,
-                        Err(()) => break,
-                    };
-                    if reclaimed {
+                    let reclaim_result =
+                        match self.reclaim_posted_head(id, ring_slot, len, self.tx_queue.last_used)
+                        {
+                            Ok(result) => result,
+                            Err(()) => break,
+                        };
+                    if matches!(reclaim_result, TxReclaimResult::Reclaimed) {
+                        self.clear_tx_desc_chain(id);
                         NET_DIAG.record_tx_completion();
                     }
                     self.tx_used_count = self.tx_used_count.wrapping_add(1);
                     NET_DIAG.record_tx_used_seen();
                     self.note_progress();
-                    if !reclaimed {
+                    if !matches!(reclaim_result, TxReclaimResult::Reclaimed) {
                         // Duplicate completions are ignored after state validation.
                         continue;
                     }
@@ -4589,37 +4717,35 @@ impl VirtioNet {
                 id,
                 elem.len
             );
-            if id >= self.tx_queue.size {
-                self.last_error.get_or_insert("tx_v2_used_id_oob");
-                self.device_faulted = true;
-                self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
-                self.tx_head_mgr.record_invalid_used_id();
-                self.log_invalid_used_state(id, None, ring_slot as u16, self.tx_queue.last_used);
-                self.tx_v2_last_used = next_used;
-                self.tx_queue.last_used = next_used;
-                break;
-            }
             // used.len is advisory; the head lifecycle is guarded by state, not the device-provided length.
-            let reclaimed = match self.reclaim_posted_head(id, ring_slot as u16) {
-                Ok(reclaimed) => reclaimed,
+            let reclaim_result = match self.reclaim_posted_head(
+                id,
+                ring_slot as u16,
+                elem.len,
+                self.tx_v2_last_used,
+            ) {
+                Ok(result) => result,
                 Err(()) => break,
             };
-            if !reclaimed {
-                self.tx_used_count = self.tx_used_count.wrapping_add(1);
+            if matches!(reclaim_result, TxReclaimResult::Reclaimed) {
+                self.clear_tx_desc_chain(id);
+                self.tx_complete = self.tx_complete.wrapping_add(1);
+                NET_DIAG.record_tx_completion();
                 NET_DIAG.record_tx_used_seen();
-                self.tx_v2_last_used = next_used;
-                self.note_progress();
-                processed = processed.saturating_add(1);
-                continue;
+                self.tx_stats.record_used_reaped();
+            } else {
+                NET_DIAG.record_tx_used_seen();
             }
-            self.tx_complete = self.tx_complete.wrapping_add(1);
             self.tx_used_count = self.tx_used_count.wrapping_add(1);
-            NET_DIAG.record_tx_completion();
-            NET_DIAG.record_tx_used_seen();
             self.tx_v2_last_used = next_used;
-            self.tx_stats.record_used_reaped();
             self.note_progress();
             processed = processed.saturating_add(1);
+            if !matches!(reclaim_result, TxReclaimResult::Reclaimed) {
+                if matches!(reclaim_result, TxReclaimResult::InvalidId) {
+                    break;
+                }
+                continue;
+            }
         }
         self.tx_queue.last_used = self.tx_v2_last_used;
 
@@ -5371,6 +5497,7 @@ impl VirtioNet {
         }
     }
 
+    #[allow(dead_code)]
     fn complete_tx_slot(&mut self, id: u16, context: &'static str) {
         if !NET_VIRTIO_TX_V2 {
             return;
@@ -9244,6 +9371,89 @@ mod tx_tests {
     }
 
     #[test]
+    fn tx_reclaim_requires_used_entry_for_free_with_slots() {
+        let mut heads = TxHeadManager::new(1);
+        let mut slots = TxSlotTracker::new(1);
+        let head = heads.alloc_head().expect("head available");
+        let (slot, _, _) = slots.reserve_next().expect("slot reserved");
+        assert_eq!(
+            slot, head,
+            "slot should align with head id for single entry"
+        );
+        let gen = heads
+            .mark_published(head, slot, 64, 0x9999)
+            .expect("publish");
+        heads.note_avail_publish(head, slot, 0).expect("advertise");
+        heads.mark_in_flight(head).expect("inflight");
+        slots.mark_in_flight(slot).expect("slot inflight");
+        assert!(
+            heads.release_unused(head).is_err(),
+            "cannot release once published"
+        );
+        assert!(
+            slots.cancel(slot).is_err(),
+            "slot cannot be cancelled while inflight"
+        );
+        assert!(
+            matches!(heads.state(head), Some(TxHeadState::InFlight { .. })),
+            "head remains inflight after publish"
+        );
+        assert!(
+            matches!(slots.state(slot), Some(TxSlotState::InFlight { .. })),
+            "slot tracker tracks inflight state"
+        );
+        assert_eq!(
+            reclaim_used_entry_common(&mut heads, Some(&mut slots), head, slot),
+            TxReclaimResult::Reclaimed,
+            "reclaim path returns ownership"
+        );
+        assert!(
+            matches!(heads.state(head), Some(TxHeadState::Free)),
+            "head returns to free only after reclaim"
+        );
+        assert!(
+            matches!(slots.state(slot), Some(TxSlotState::Free { .. })),
+            "slot tracker also frees after reclaim"
+        );
+        assert_eq!(heads.free_len(), 1, "all heads free after reclaim");
+        assert_eq!(slots.free_count(), 1, "slot tracker free count restored");
+        let reused = heads.alloc_head().expect("head reusable after reclaim");
+        assert_eq!(reused, head, "reclaimed head can be reused");
+        let (slot_reuse, _, _) = slots.reserve_next().expect("slot reusable");
+        assert_eq!(slot_reuse, slot, "slot reused after completion");
+        let _ = heads.generation(head).expect("generation still tracked");
+        // Consume the publish lifecycle to ensure reclaim path remains required.
+        let gen_reuse = heads
+            .mark_published(head, slot_reuse, 64, 0x8888)
+            .expect("publish after reclaim");
+        heads
+            .note_avail_publish(head, slot_reuse, 1)
+            .expect("advertise after reclaim");
+        heads.mark_in_flight(head).expect("inflight after reclaim");
+        slots
+            .mark_in_flight(slot_reuse)
+            .expect("slot inflight after reclaim");
+        assert_eq!(
+            gen_reuse,
+            gen.wrapping_add(1),
+            "generation advances on reuse"
+        );
+        assert_eq!(
+            reclaim_used_entry_common(&mut heads, Some(&mut slots), head, slot_reuse),
+            TxReclaimResult::Reclaimed,
+            "reclaim frees reused head"
+        );
+        assert!(
+            matches!(heads.state(head), Some(TxHeadState::Free)),
+            "head returns to free after second reclaim"
+        );
+        assert!(
+            matches!(slots.state(slot_reuse), Some(TxSlotState::Free { .. })),
+            "slot tracker returns to free after second reclaim"
+        );
+    }
+
+    #[test]
     fn tx_alloc_specific_refuses_non_free() {
         let mut mgr = TxHeadManager::new(1);
         let head = mgr.alloc_specific(0).expect("alloc id 0");
@@ -9349,5 +9559,103 @@ mod tx_tests {
         let result = validate_tx_publish_descriptor(2, 1, &desc, 64, 5, 3, 0, 4, &mut logged);
         assert!(result.is_err(), "zero-address descriptor must be blocked");
         assert!(logged, "invalid descriptor must log once");
+    }
+
+    #[test]
+    fn tx_zero_len_used_requires_inflight_state() {
+        let mut heads = TxHeadManager::new(1);
+        let mut slots = TxSlotTracker::new(1);
+        let mut zero_seen = 0;
+        let mut zero_log_ms = 0;
+        let head = heads.alloc_head().expect("head available");
+        let (slot, _, _) = slots.reserve_next().expect("slot reserved");
+        record_zero_len_used(
+            &mut zero_seen,
+            &mut zero_log_ms,
+            head,
+            slot,
+            0,
+            0,
+            0,
+            heads.state(head),
+            slots.state(slot),
+        );
+        let initial_state = heads.state(head);
+        let initial_slot_state = slots.state(slot);
+        assert_eq!(
+            reclaim_used_entry_common(&mut heads, Some(&mut slots), head, slot),
+            TxReclaimResult::HeadNotInFlight(initial_state),
+            "invalid state rejects reclaim without mutation"
+        );
+        assert_eq!(zero_seen, 1, "zero-length used increments counter");
+        assert_eq!(heads.state(head), initial_state, "head state unchanged");
+        assert_eq!(
+            slots.state(slot),
+            initial_slot_state,
+            "slot state unchanged when reclaim blocked"
+        );
+    }
+
+    #[test]
+    fn tx_zero_len_used_reclaims_when_states_match() {
+        let mut heads = TxHeadManager::new(1);
+        let mut slots = TxSlotTracker::new(1);
+        let mut zero_seen = 0;
+        let mut zero_log_ms = 0;
+        let head = heads.alloc_head().expect("head available");
+        let (slot, _, _) = slots.reserve_next().expect("slot reserved");
+        let gen = heads
+            .mark_published(head, slot, 64, 0x7000)
+            .expect("publish");
+        heads.note_avail_publish(head, slot, 0).expect("advertise");
+        heads.mark_in_flight(head).expect("inflight");
+        slots.mark_in_flight(slot).expect("slot inflight");
+        record_zero_len_used(
+            &mut zero_seen,
+            &mut zero_log_ms,
+            head,
+            slot,
+            0,
+            0,
+            0,
+            heads.state(head),
+            slots.state(slot),
+        );
+        assert_eq!(zero_seen, 1, "zero-length used counter increments");
+        assert_eq!(
+            reclaim_used_entry_common(&mut heads, Some(&mut slots), head, slot),
+            TxReclaimResult::Reclaimed,
+            "reclaim succeeds when states are inflight"
+        );
+        assert!(
+            matches!(heads.state(head), Some(TxHeadState::Free)),
+            "head freed after reclaim"
+        );
+        assert!(
+            matches!(slots.state(slot), Some(TxSlotState::Free { .. })),
+            "slot freed after reclaim"
+        );
+        assert_eq!(
+            heads.generation(head),
+            Some(gen),
+            "generation preserved through completion"
+        );
+    }
+
+    #[test]
+    fn tx_invalid_used_id_does_not_mutate_state() {
+        let mut heads = TxHeadManager::new(1);
+        let mut slots = TxSlotTracker::new(1);
+        assert_eq!(
+            reclaim_used_entry_common(&mut heads, Some(&mut slots), 1, 0),
+            TxReclaimResult::InvalidId,
+            "invalid id is rejected"
+        );
+        assert_eq!(heads.free_len(), 1, "head table unchanged on invalid id");
+        assert_eq!(
+            slots.free_count(),
+            1,
+            "slot tracker unchanged on invalid id"
+        );
     }
 }
