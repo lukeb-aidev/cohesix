@@ -113,78 +113,74 @@ flowchart LR
 
 ## Plan 9 heritage and departures
 
-Cohesix is deliberately influenced by **[Plan 9 from Bell Labs](https://en.wikipedia.org/wiki/Plan_9_from_Bell_Labs)**, but it is **not a revival, clone, or generalisation of Plan 9**. This section clarifies what Cohesix inherits, what it adapts, and what it explicitly rejects—so the architecture remains stable as the project evolves.
+Cohesix is deliberately influenced by **[Plan 9 from Bell Labs](https://en.wikipedia.org/wiki/Plan_9_from_Bell_Labs)**, but it is **not** a revival, clone, or generalisation of Plan 9. The influence is philosophical rather than literal, and the departures are explicit.
 
-### What Cohesix inherits from Plan 9
+### What Cohesix inherits
 
-**Everything is a file — for control, not convenience**  
-Like Plan 9, Cohesix exposes system control and observation as file operations. Orchestration happens by reading and appending to files such as:
-
-- `/queen/ctl`
-- `/worker/<id>/telemetry`
-- `/log/*`
-- `/gpu/<id>/*`
-
-This yields diffable state, append-only audit logs, offline operation, and a uniform operator surface.
+**File-shaped control surfaces**  
+Cohesix exposes control and observation as file operations. Paths such as `/queen/ctl`, `/worker/<id>/telemetry`, `/log/*`, and `/gpu/<id>/*` are interfaces, not storage. This yields diffable state, append-only audit logs, and a uniform operator surface.
 
 **Namespaces as authority boundaries**  
-Following Plan 9’s per-process namespaces, Cohesix uses **per-session, role-scoped namespaces**. A namespace is not global truth; it is a *capability-filtered view* of the system. Authority is granted by what paths are visible and writable, not by ambient identity.
+Like Plan 9’s per-process namespaces, Cohesix uses **per-session, role-scoped namespaces**. A namespace is not global truth; it is a capability-filtered view of the system. Authority is defined by which paths are visible and writable.
 
 **Late binding of services**  
-Services are not assumed to exist. GPU providers, workers, and auxiliary capabilities are bound into the namespace only when required. This late binding supports air-gapped operation, fault isolation, and minimal steady-state complexity.
+Services are not assumed to exist. Workers, GPU providers, and auxiliary capabilities are bound into the namespace only when required, supporting air-gapped operation, fault isolation, and minimal steady-state complexity.
 
-### Where Cohesix deliberately departs from Plan 9
+### Where Cohesix departs
 
 **Hostile networks by default**  
-Plan 9 assumed relatively cooperative networks. Cohesix assumes unreliable, adversarial, and partitioned networks. Every operation is bounded, authenticated, auditable, and revocable.
+Cohesix assumes unreliable, adversarial, and partitioned networks. Every operation is bounded, authenticated, auditable, and revocable.
 
 **No single-system illusion**  
-Plan 9 aimed for a “single system image.” Cohesix explicitly rejects this. Partial visibility, degraded operation, and asymmetric knowledge are normal and expected. The system must remain usable when parts are offline or compromised.
+Partial visibility and degraded operation are normal. Cohesix explicitly rejects the idea of a seamless single-system image.
 
-**Control plane only — not a universal OS**  
-Secure9P in Cohesix is a **control-plane protocol**, not a universal IPC or data plane. Cohesix does not attempt to host applications, GUIs, or general user environments. Heavy ecosystems (CUDA, NVML, storage stacks, networking services) remain outside the trusted computing base.
+**Control plane only**  
+Secure9P is a control-plane protocol, not a universal IPC or data plane. Cohesix does not host applications, GUIs, or general user environments, and keeps heavy ecosystems outside the trusted computing base.
 
-**Explicit authority, revocation, and budgets**  
-Unlike Plan 9’s softer trust model, Cohesix enforces explicit capability tickets, time- and operation-bounded leases, and revocation-first semantics. Failure is handled by withdrawing authority, not by retries or self-healing loops.
+**Explicit authority and revocation**  
+Cohesix enforces capability tickets, time- and operation-bounded leases, and revocation-first semantics. Failure is handled by withdrawing authority, not by retries or self-healing loops.
 
 **Determinism over flexibility**  
-Cohesix prioritises bounded memory, bounded work, and deterministic behaviour. Convenience features that obscure control flow, hide failure, or expand the trusted computing base are intentionally excluded.
-
-### Summary
-
-Cohesix adopts Plan 9’s **clarity of control via files and namespaces**, but reworks the philosophy for modern edge environments:
-
-- hostile networks  
-- regulated industries  
-- hardware isolation via microkernels  
-- minimal, auditable control planes  
-
-In short: **Cohesix is Plan 9–inspired, seL4-grounded, and unapologetically strict about authority, determinism, and scope.**
+Bounded memory, bounded work, and deterministic behaviour are prioritised over convenience and dynamism.
 
 ---
 
 ## Getting Started
-- Build and launch via `scripts/cohesix-build-run.sh`, pointing at your seL4 build and desired output directory; the script stages host tools alongside the VM image and enables the TCP console when `--transport tcp` is passed.
-- Terminal 1: run the build script to start QEMU with `-serial mon:stdio` for the PL011 root console and TCP forwarding for the NineDoor console.
-- Terminal 2: from `out/cohesix/host-tools/`, connect with `./cohsh --transport tcp --tcp-port <port>` to reach the TCP console; `cohsh` runs on the host only and mirrors the root console verbs.
 
-## Architecture
-Cohesix is structured as a hive: one Queen process orchestrates multiple worker roles (worker-heart, worker-gpu, and future variants) over a shared Secure9P namespace. Cohsh is the command surface for this hive, used by human operators and automation alike. Cohesix exposes a minimal control plane over Secure9P: the root task owns initial capabilities and schedulers, NineDoor presents the synthetic namespace, and all role-specific actions are file-driven under `/queen`, `/worker/<id>`, `/log`, and `/gpu/<id>`. Local operators rely on the PL011 console for bring-up, while remote operators attach through the TCP NineDoor console without entering the VM. The stack keeps CUDA/NVML and other heavy dependencies outside the TCB and host VM.
+- Build and launch via `scripts/cohesix-build-run.sh`, pointing at your seL4 build and output directory. The script stages host tools alongside the VM image and enables the TCP console when `--transport tcp` is passed.
+- Terminal 1: run the script to start QEMU with `-serial mon:stdio` for the PL011 root console and TCP forwarding.
+- Terminal 2: from `out/cohesix/host-tools/`, connect using `./cohsh --transport tcp --tcp-port <port>`.
+
+---
+
+## Architecture (high level)
+
+A single Cohesix deployment is a **hive**: one Queen role orchestrating multiple workers over a shared Secure9P namespace. The root task owns initial authority and scheduling, NineDoor presents the synthetic namespace, and all lifecycle actions are file-driven under `/queen`, `/worker/<id>`, `/log`, and `/gpu/<id>`.
+
+CUDA, NVML, and other heavy stacks remain host-side. The VM never touches GPU hardware directly.
+
+---
 
 ## Components
-- **root-task** — seL4 bootstrapper configuring capabilities, timers, and the cooperative event pump; publishes the root console and hands initial caps to NineDoor to underpin the hive-wide namespace shared by the Queen and its workers.
-- **nine-door** — Secure9P server exposing `/proc`, `/queen`, `/worker`, `/log`, and (host-fed) `/gpu` namespaces with role-aware mount tables, forming the shared hive namespace.
-- **worker-heart** — Minimal worker emitting heartbeat telemetry into `/worker/<id>/telemetry` and reading boot/log views per its ticket; a worker role scheduled and managed by the Queen.
-- **worker-gpu** — VM-resident stub consuming GPU lease/ticket files and telemetry hooks; it never touches hardware, deferring to host bridge nodes; another worker role under Queen control.
-- **cohsh** — Host-only CLI that connects to the TCP NineDoor console, attaches with role/ticket pairs, and mirrors root console commands for operators; it is the canonical shell for the hive, and planned GUI clients are expected to speak the same protocol.
-- **gpu-bridge-host** — Host-side process that discovers or mocks GPUs, enforces leases, and mirrors `/gpu/<id>/` nodes into the VM via Secure9P transport adapters.
-- **secure9p-wire** — Codec/transport crate providing bounded 9P framing for NineDoor and host tools, including the TCP adapter (host-only).
-- **Future tooling** — Planned host-side WASM “hive dashboard” and 9P client that reuses the cohsh protocol and adds no in-VM services.
+
+- **root-task** — seL4 bootstrapper configuring capabilities, timers, and the cooperative event pump; hosts the serial and TCP consoles and owns all side effects.
+- **nine-door** — Secure9P server exporting `/proc`, `/queen`, `/worker`, `/log`, and host-mirrored `/gpu` namespaces with role-aware policy.
+- **worker-heart** — Minimal worker emitting heartbeat telemetry into `/worker/<id>/telemetry`.
+- **worker-gpu** — VM-resident stub handling GPU lease state and telemetry hooks; never touches hardware.
+- **cohsh** — Host-only CLI and canonical shell for the hive; GUI tooling is expected to speak the same protocol.
+- **gpu-bridge-host** — Host-side process that discovers or mocks GPUs, enforces leases, and mirrors `/gpu/<id>/` into the VM.
+- **secure9p-wire** — Bounded Secure9P framing and transport adapters for host tools.
+
+---
 
 ## Status
-- Milestones 0–4: repository scaffolding, seL4 boot/timer/IPC bring-up, Secure9P namespace, and bind/mount semantics are implemented per `docs/BUILD_PLAN.md`.
-- Milestones 5–6: hardening, fuzz/integration coverage, and GPU role/bridge scaffolding are in place; worker-gpu remains namespace-only pending host bridge wiring.
-- Milestone 7a–7c: cooperative event pump, authenticated dual consoles (PL011 + TCP), and namespace-aligned docs are live; future milestones extend worker lifecycle automation and GPU lease renewals.
+
+- **Milestones 0–4**: seL4 bring-up, Secure9P namespace, and bind/mount semantics complete.
+- **Milestones 5–6**: hardening, fuzz/integration tests, and GPU role scaffolding complete.
+- **Milestones 7a–7c**: cooperative event pump and authenticated dual consoles live.
+- Future milestones extend worker lifecycle automation and GPU lease management.
+
+---
 
 ## References
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/USERLAND_AND_CLI.md](docs/USERLAND_AND_CLI.md), [docs/INTERFACES.md](docs/INTERFACES.md), [docs/SECURE9P.md](docs/SECURE9P.md), [docs/ROLES_AND_SCHEDULING.md](docs/ROLES_AND_SCHEDULING.md), [docs/GPU_NODES.md](docs/GPU_NODES.md), and [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) for detailed design, interfaces, and milestone tracking.
