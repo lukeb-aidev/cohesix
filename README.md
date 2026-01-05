@@ -108,6 +108,58 @@ flowchart LR
   classDef hostlib fill:#fffbeb,stroke:#b45309,stroke-width:1px;
   classDef ext fill:#ffffff,stroke:#334155,stroke-width:1px;
 ```
+## Plan 9 heritage and departures
+
+Cohesix is deliberately influenced by **[Plan 9 from Bell Labs](https://en.wikipedia.org/wiki/Plan_9_from_Bell_Labs)**, but it is **not a revival, clone, or generalisation of Plan 9**. This section clarifies what Cohesix inherits, what it adapts, and what it explicitly rejects—so the architecture remains stable as the project evolves.
+
+### What Cohesix inherits from Plan 9
+
+**Everything is a file — for control, not convenience**  
+Like Plan 9, Cohesix exposes system control and observation as file operations. Orchestration happens by reading and appending to files such as:
+
+- `/queen/ctl`
+- `/worker/<id>/telemetry`
+- `/log/*`
+- `/gpu/<id>/*`
+
+This yields diffable state, append-only audit logs, offline operation, and a uniform operator surface.
+
+**Namespaces as authority boundaries**  
+Following Plan 9’s per-process namespaces, Cohesix uses **per-session, role-scoped namespaces**. A namespace is not global truth; it is a *capability-filtered view* of the system. Authority is granted by what paths are visible and writable, not by ambient identity.
+
+**Late binding of services**  
+Services are not assumed to exist. GPU providers, workers, and auxiliary capabilities are bound into the namespace only when required. This late binding supports air-gapped operation, fault isolation, and minimal steady-state complexity.
+
+### Where Cohesix deliberately departs from Plan 9
+
+**Hostile networks by default**  
+Plan 9 assumed relatively cooperative networks. Cohesix assumes unreliable, adversarial, and partitioned networks. Every operation is bounded, authenticated, auditable, and revocable.
+
+**No single-system illusion**  
+Plan 9 aimed for a “single system image.” Cohesix explicitly rejects this. Partial visibility, degraded operation, and asymmetric knowledge are normal and expected. The system must remain usable when parts are offline or compromised.
+
+**Control plane only — not a universal OS**  
+Secure9P in Cohesix is a **control-plane protocol**, not a universal IPC or data plane. Cohesix does not attempt to host applications, GUIs, or general user environments. Heavy ecosystems (CUDA, NVML, storage stacks, networking services) remain outside the trusted computing base.
+
+**Explicit authority, revocation, and budgets**  
+Unlike Plan 9’s softer trust model, Cohesix enforces explicit capability tickets, time- and operation-bounded leases, and revocation-first semantics. Failure is handled by withdrawing authority, not by retries or self-healing loops.
+
+**Determinism over flexibility**  
+Cohesix prioritises bounded memory, bounded work, and deterministic behaviour. Convenience features that obscure control flow, hide failure, or expand the trusted computing base are intentionally excluded.
+
+### Summary
+
+Cohesix adopts Plan 9’s **clarity of control via files and namespaces**, but reworks the philosophy for modern edge environments:
+
+- hostile networks  
+- regulated industries  
+- hardware isolation via microkernels  
+- minimal, auditable control planes  
+
+In short: **Cohesix is Plan 9–inspired, seL4-grounded, and unapologetically strict about authority, determinism, and scope.**
+
+---
+
 ## Getting Started
 - Build and launch via `scripts/cohesix-build-run.sh`, pointing at your seL4 build and desired output directory; the script stages host tools alongside the VM image and enables the TCP console when `--transport tcp` is passed.
 - Terminal 1: run the build script to start QEMU with `-serial mon:stdio` for the PL011 root console and TCP forwarding for the NineDoor console.
