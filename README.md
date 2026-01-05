@@ -1,39 +1,41 @@
 <!-- Author: Lukas Bower -->
 # Cohesix
+
 ## Why Cohesix?
-Cohesix exists to explore a specific problem space: how to build a small, auditable, and secure control plane for orchestrating distributed edge GPU systems, without inheriting the complexity and attack surface of general-purpose operating systems.
 
-Earlier in my career, working in film and broadcast technology, I was exposed to environments where hardware and software stacks were routinely pushed beyond their intended limits. Some of that work involved custom operating systems and tightly constrained runtime environments. That experience left a lasting interest in systems where correctness, timing, and control matter more than convenience.
+Cohesix explores a specific and deliberately narrow problem space: **how to build a small, auditable, and secure control plane for orchestrating distributed edge GPU systems**, without inheriting the complexity, opacity, and attack surface of general-purpose operating systems.
 
-Cohesix is a research OS project that revisits those ideas with modern tools. Writing an operating system is deliberately difficult, but the motivation is practical rather than academic: to test whether a formally grounded microkernel, a file-oriented control plane, and a strictly bounded userspace can support real-world edge orchestration workloads.
+The project is informed by earlier work in film and broadcast technology, where hardware and software stacks were often pushed beyond their intended limits and reliability, timing, and control mattered more than convenience. Some of that work involved custom operating systems and tightly constrained runtime environments. Cohesix revisits those ideas with modern tools and a stronger formal foundation.
 
-In practical terms, this project would not be feasible without the extensive use of AI agents. They are used throughout development for design iteration, architecture review, code synthesis, debugging assistance, and documentation refinement. This has made it possible to pursue a project of this scope and depth in limited free time, without compromising on technical ambition or rigor.
+Cohesix is a **research operating system**, but its motivation is practical rather than academic. Writing an OS is intentionally difficult; the point here is to test whether a **formally grounded microkernel**, a **file-shaped control plane**, and a **strictly bounded userspace** can support real edge-orchestration workloads in hostile and unreliable environments.
 
-The concrete research goals are to:
--	Validate the feasibility of a centralised, highly secure control plane for orchestrating fleets of edge GPU nodes.
-- Explore a Queen / Worker model for one-to-many orchestration, lifecycle control, and telemetry.
--	Design a hive protocol inspired by Plan 9’s 9P, where the entire system is managed as a single, coherent namespace.
--	Prove that a single, uniform operator interface (cohsh) can scale from local bring-up to hive-wide automation.
--	Integrate cleanly with existing edge GPU ecosystems (e.g. NVIDIA CUDA on Linux/Jetson) while keeping heavy dependencies outside the trusted computing base.
+In practical terms, the project would not be feasible without extensive use of AI agents. They are used throughout development for architecture review, design iteration, code synthesis, debugging assistance, and documentation refinement, enabling work of this scope without compromising technical rigor.
 
-Cohesix is intentionally opinionated. It prioritises determinism, auditability, and security over breadth, and treats those constraints as design inputs rather than limitations.
+Cohesix is intentionally opinionated. It treats **determinism, auditability, and security** as design inputs rather than constraints, and is willing to exclude large classes of features to preserve those properties.
+
+---
 
 ## What is Cohesix?
-Cohesix is a minimal orchestration operating system for secure edge management, targeting a defined set of [use cases](docs/USE_CASES.md) around AI hives and distributed GPU workloads.
 
-Technically, Cohesix is a pure Rust userspace stack running on upstream seL4 on aarch64/virt (GICv3). Userspace is shipped as a static CPIO root filesystem containing the root task, the NineDoor Secure9P server, worker roles, and host-facing tools. All control and telemetry flows through Secure9P; there are no ad-hoc RPC channels or in-VM network services.
+Cohesix is a **minimal orchestration operating system** for secure edge management, targeting a defined set of [use cases](docs/USE_CASES.md) around AI hives and distributed GPU workloads.
+
+Technically, Cohesix is a **pure Rust userspace** running on upstream **seL4** on `aarch64/virt` (GICv3). Userspace is shipped as a static CPIO boot payload containing the root task, the NineDoor Secure9P server, worker roles, and host-facing tools. Cohesix does **not** include a traditional filesystem; instead it exposes a **synthetic Secure9P namespace** where paths represent capability-scoped control and telemetry interfaces rather than persistent storage.
+
+All control and telemetry flows through Secure9P. There are **no ad-hoc RPC channels**, no background daemons, and no general in-VM networking services.
 
 Operators interact with Cohesix through two consoles:
--	a local PL011 console for early bring-up and recovery, and
--	a remote TCP NineDoor console, consumed by the "cohsh" remote shell, which provides the primary operational interface from Linux/Unix hosts.
+- a local **PL011 UART console** for early bring-up and recovery, and  
+- a **remote TCP console** consumed by the `cohsh` shell, which mirrors serial semantics and provides the primary operational interface from Unix-like hosts.
 
-The intended deployment target is physical ARM64 hardware booted via UEFI. QEMU aarch64/virt is used today for bring-up, CI, and testing, with the expectation that QEMU behaviour mirrors the eventual UEFI board profiles closely enough to surface real integration issues early.
+The intended deployment target is **physical ARM64 hardware booted via UEFI**. Today, QEMU `aarch64/virt` is used for bring-up, CI, and testing, with the expectation that QEMU behaviour closely mirrors the eventual hardware profiles.
 
-Cohesix is not a general-purpose operating system and is not intended to replace Linux or POSIX environments. It deliberately avoids POSIX semantics, libc, and dynamic linking in order to keep the system small, analyzable, and resistant to accidental complexity. Developers working on Cohesix are expected to embrace these constraints and design within them.
+Cohesix is **not** a general-purpose operating system and is not intended to replace Linux or POSIX environments. It deliberately avoids POSIX semantics, libc, dynamic linking, and in-VM hardware stacks in order to keep the system small, analyzable, and resistant to accidental complexity.
 
-In short, Cohesix is an experiment in treating orchestration itself as an operating system problem, with security and determinism as first-class concerns.
+In short, Cohesix treats **orchestration itself as an operating-system problem**, with authority, lifecycle, and failure handling as first-class concerns.
 
-<!-- Concept Architecture — Cohesix (for README.md)             -->
+---
+
+<!-- Concept Architecture — Cohesix (for README.md) -->
 **Figure 1:** Cohesix concept architecture (Queen/Worker hive over Secure9P, host-only GPU bridge, dual consoles)
 
 ```mermaid
@@ -108,6 +110,7 @@ flowchart LR
   classDef hostlib fill:#fffbeb,stroke:#b45309,stroke-width:1px;
   classDef ext fill:#ffffff,stroke:#334155,stroke-width:1px;
 ```
+
 ## Plan 9 heritage and departures
 
 Cohesix is deliberately influenced by **[Plan 9 from Bell Labs](https://en.wikipedia.org/wiki/Plan_9_from_Bell_Labs)**, but it is **not a revival, clone, or generalisation of Plan 9**. This section clarifies what Cohesix inherits, what it adapts, and what it explicitly rejects—so the architecture remains stable as the project evolves.
