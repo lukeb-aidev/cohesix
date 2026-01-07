@@ -1483,7 +1483,7 @@ Deliverables:
 **Why now (compiler):** UI and automation consumers need a shared grammar without duplicating console logic. Extracting a core library keeps ACK/ERR stability while enabling multiple frontends.
 
 **Goal**
-Publish a reusable `cohsh-core` crate with shared verb grammar and transports that mirror console semantics.
+Publish a reusable `cohsh-core` crate with shared verb grammar and transports that mirror console semantics. cohsh-core is a grammar + transport library only; it adds no new verbs or semantics.
 
 **Deliverables**
 - New crate `crates/cohsh-core/` encapsulating verb grammar (`attach`, `tail`, `spawn`, `kill`, `quit`), ACK/ERR/END model, login throttling, and ticket checks. Supports `no_std + alloc` with optional smoltcp TCP transport feature.
@@ -1556,7 +1556,7 @@ Refactor `cohsh` into a reusable 9P client library with helpers for control verb
 
 **Checks (DoD)**
 - `tail()` stream over 9P matches console stream identically; diff harness reports zero variance.
-- `spawn/kill` via file writes produce identical ACK/ERR semantics; retries remain idempotent.
+- `spawn/kill` via file writes produce identical ACK/ERR semantics; clients may retry explicitly; operations are designed to be idempotent where applicable.
 - Abuse case: attempt to walk `..` or access disabled namespace returns deterministic ERR without affecting state.
 - UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
 
@@ -1613,7 +1613,7 @@ Expose UI-friendly read-only providers under NineDoor with cursor-resume semanti
 - `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/cas_roundtrip.cohsh`
 
 **Checks (DoD)**
-- Each provider ≤ 32 KiB per read; deterministic EOF; fuzzed frames don’t panic or allocate unboundedly.
+- Each provider ≤ 8192 bytes per 9P read; larger outputs must be cursor-resumed over multiple reads with deterministic EOF; fuzzed frames don’t panic or allocate unboundedly.
 - Abuse case: request for disabled provider or oversized read returns deterministic ERR and audit line.
 - UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
 
@@ -1678,7 +1678,7 @@ Deliver a SwarmUI desktop (Tauri) that speaks 9P via `cohsh-core`, renders names
 - Build proves no HTTP/REST dependencies (static link audit or cargo deny).
 - Abuse case: expired or unauthorized ticket returns `ERR` surfaced verbatim in UI and logs audit; offline mode uses cached CBOR without network or retries.
 - UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences remain byte-stable relative to the 7c baseline.
-- SwarmUI performs no background polling and introduces no retries or batching.
+- SwarmUI performs no background polling outside an active user view/session; no hidden watchers when idle.
 
 **Compiler touchpoints**
 - UI defaults (paths, cache size, ticket scope) emitted by `coh-rtc` for SwarmUI config; `docs/USERLAND_AND_CLI.md` references the same sources of truth.
@@ -1693,7 +1693,7 @@ Changes:
 - apps/swarmui/Cargo.toml — ensure no HTTP/REST deps; enable bounded offline cache feature.
 Commands:
 - cargo test -p swarmui
-- cargo run -p cohsh –features tcp – –transport tcp –script tests/cli/telemetry_ring.cohsh
+- cargo run -p cohsh –-features tcp – –transport tcp –script tests/cli/telemetry_ring.cohsh
 Checks:
 - Unauthorized ticket returns ERR surfaced verbatim in UI; offline mode reads CBOR snapshot only.
 Deliverables:
@@ -1721,7 +1721,7 @@ Deliverables:
 **Why now (compiler):** Field techs need offline status on edge devices using the same 9P grammar. Tool must respect UEFI profile and attestation outputs.
 
 **Goal**
-Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection of boot/attest data over localhost 9P/TCP.
+Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection of boot/attest data over local (same-host) 9P/TCP where available.
 
 **Deliverables**
 - `coh-status` binary reading `/proc/boot`, `/proc/attest/*`, `/worker/*/telemetry` via localhost 9P/TCP; offline-friendly.
@@ -1784,7 +1784,7 @@ Establish a convergence harness comparing console, `cohsh`, `cohsh-core`, SwarmU
 
 **Deliverables**
 - Golden transcript harness comparing console, `cohsh`, `cohsh-core`, SwarmUI, and coh-status for `help → attach → log → spawn → tail → quit`.
-- CI job that fails on any byte-level drift in ACK/ERR/END and records timing deltas (< 50 ms tolerance) in artifacts.
+- CI job that fails on any byte-level drift in ACK/ERR/END and records timing deltas (< 50 ms tolerance: test harness tolerance; not a protocol contract) in artifacts.
 - Shared transcript fixtures stored in `tests/fixtures/transcripts/` consumed by all frontends.
 
 **Commands**
