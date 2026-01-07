@@ -1812,6 +1812,97 @@ Checks:
 - Replay produces stable visual state; expired snapshots rejected cleanly.
 Deliverables:
 - Golden demo snapshots committed for CI and demos.
+
+Title/ID: m20d2-design-fonts
+Goal: Establish a cross-platform, UI-safe font system aligned with Tauri and PixiJS best practices.
+Inputs: apps/swarmui/, design guidelines, Tauri asset bundling.
+Changes:
+- apps/swarmui/assets/fonts/ — bundle Inter and JetBrains Mono font files (limited weights only).
+- apps/swarmui/frontend/styles/fonts.css — define canonical font stacks and defaults.
+- apps/swarmui/frontend/styles/tokens.css — expose font tokens (`--font-ui`, `--font-mono`, sizes, line-heights).
+- Disable ligatures by default for monospace; expose opt-in toggle.
+Commands:
+- cargo test -p swarmui
+Checks:
+- Fonts load from local assets only (no system or network dependency).
+- Text renders consistently across macOS, Windows, and Linux.
+Deliverables:
+- Documented font policy and usage rules in docs/INTERFACES.md.
+
+Title/ID: m20d2-design-colors
+Goal: Define a minimal, dark-first color system shared by HTML UI and PixiJS hive renderer.
+Inputs: SwarmUI frontend, PixiJS renderer.
+Changes:
+- apps/swarmui/frontend/styles/colors.css — base palette, semantic colors, opacity rules.
+- apps/swarmui/frontend/styles/tokens.css — color tokens shared by UI and canvas overlays.
+- apps/swarmui/frontend/hive/palette.ts — PixiJS color constants derived from tokens.
+Commands:
+- cargo test -p swarmui
+Checks:
+- No hard-coded colors outside token files.
+- Semantic colors (ACK/ERR/flow/load) map consistently between UI and hive.
+Deliverables:
+- Color token table and usage notes added to docs/INTERFACES.md.
+
+Title/ID: m20d2-design-layout
+Goal: Lock down layout, spacing, and panel rules for a dense operator UI.
+Inputs: SwarmUI frontend panels.
+Changes:
+- apps/swarmui/frontend/styles/layout.css — spacing scale (4/8/12/16/24/32), panel rules.
+- Remove shadows; enforce separation via tone and spacing only.
+- Standardise panel chrome (headers, dividers, empty states).
+Commands:
+- cargo test -p swarmui
+Checks:
+- No arbitrary spacing values outside the defined scale.
+- Panels render consistently across platforms and DPI settings.
+Deliverables:
+- Layout and spacing rules documented for contributors.
+
+Title/ID: m20d2-design-icons
+Goal: Standardise iconography for SwarmUI controls and panels.
+Inputs: SwarmUI frontend.
+Changes:
+- apps/swarmui/assets/icons/ — bundle Phosphor Icons SVG subset.
+- apps/swarmui/frontend/components/Icon.tsx — single icon wrapper enforcing size/weight.
+- Replace mixed or ad-hoc icons with Phosphor set.
+Commands:
+- cargo test -p swarmui
+Checks:
+- Single icon set used everywhere.
+- Icon weights consistent for default vs active states.
+Deliverables:
+- Icon usage guidelines added to docs/INTERFACES.md.
+
+Title/ID: m20d2-hive-visual-language
+Goal: Define and enforce the visual language for the Live Hive renderer.
+Inputs: PixiJS hive renderer.
+Changes:
+- apps/swarmui/frontend/hive/style.ts — shape, motion, glow, and blending constants.
+- Enforce circle/soft-blob primitives only; no sharp geometry.
+- Define motion easing and pulse rules for normal vs error states.
+Commands:
+- cargo test -p swarmui
+Checks:
+- Hive visuals conform to documented motion and shape rules.
+- Error pulses are single-shot and bounded.
+Deliverables:
+- Live Hive visual language documented as non-authoritative rendering rules.
+
+Title/ID: m20d2-design-tokens
+Goal: Centralise all design constants into a single token system.
+Inputs: SwarmUI frontend, PixiJS renderer.
+Changes:
+- apps/swarmui/frontend/styles/tokens.css — fonts, colors, spacing, motion.
+- apps/swarmui/frontend/hive/tokens.ts — generated or mirrored constants for PixiJS.
+- Remove duplicated constants across UI and renderer.
+Commands:
+- cargo test -p swarmui
+Checks:
+- No duplicated magic numbers in UI or hive renderer.
+- Token changes propagate consistently.
+Deliverables:
+- Single source-of-truth design tokens referenced in docs/INTERFACES.md.
 ```
 ---
 
