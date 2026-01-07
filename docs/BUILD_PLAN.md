@@ -1715,7 +1715,104 @@ Checks:
 Deliverables:
 - Updated docs/INTERFACES.md with SwarmUI consumption guidance and non-goals.
 ```
+---
+## Milestone 20d(2) — SwarmUI Live Hive Rendering (PixiJS, GPU-First)
 
+**Why now (SwarmUI):**  
+Milestone 20d proves SwarmUI can act as a strict, ticket-scoped presentation layer over the 9P namespace with byte-stable CLI parity. The remaining risk is visual overload or architectural drift (SVG/D3 DOM graphs, UI-invented state, per-event rendering). This extension locks in a **single, elegant, GPU-first “Live Hive” renderer** that is visually compelling while remaining protocol-faithful, deterministic, and bounded.
+
+**Goal**  
+Extend SwarmUI with a PixiJS-backed “Live Hive” view that renders agents, work, and flow as a continuous simulation derived solely from existing telemetry and event streams. The renderer introduces **no new verbs**, **no new transports**, and **no UI-owned control logic**. All authority, parsing, and semantics remain in Rust (`cohsh-core`).
+
+SwarmUI remains a thin presentation layer: frontend code renders only. All protocol behavior, retries, caching policy, and state machines live in Rust. Any frontend logic must be strictly lossy, bounded, and discardable.
+
+### Deliverables
+- **Live Hive Canvas**
+  - PixiJS (WebGL) scene embedded in SwarmUI.
+  - Visual primitives:
+    - **Agents (“bees”)** — sprites with subtle motion and state-based glow.
+    - **Work/messages (“pollen”)** — short-lived particles flowing between agents.
+    - **Load/health** — aura intensity or soft heat field derived from telemetry.
+    - **Errors** — transient pulse/shockwave effects surfaced from `ERR` events.
+    - **Namespaces/groups** — faint, collapsible cluster hulls mapped from namespace paths.
+  - SVG permitted **only** for labels and selection overlays; never for core rendering.
+
+- **Simulation Model (Frontend)**
+  - Lightweight, ephemeral world model decoupled from the render loop:
+    - agent positions/velocities/state flags
+    - ephemeral flows/messages
+    - optional low-resolution heat grid
+  - Fixed or semi-fixed update step; render capped (30–60fps).
+  - Explicit level-of-detail rules:
+    - Zoomed out → clusters + aggregate flow intensity.
+    - Zoomed in → individual agents + per-message particles.
+    - Under load → degrade to edge intensity; never drop frames.
+
+- **Event Ingestion Contract**
+  - Consume the same event streams used by telemetry panels (`tail` over namespace paths).
+  - Event → simulation diff mapping only; no per-event draw guarantees.
+  - No UI-specific protocol extensions.
+
+- **Replay & Demo Mode**
+  - Live Hive can be driven entirely from:
+    - recorded transcripts
+    - cached CBOR snapshots
+  - Deterministic playback for demos, regression tests, and offline inspection.
+
+### Non-Goals
+- No SVG/D3 graph as the primary renderer.
+- No Web-only (WASM-only) SwarmUI target yet.
+- No UI-invented orchestration, scheduling, or heuristics.
+- No attempt to visualise every raw event individually.
+
+### Commands
+- `cargo test -p cohsh-core`
+- `cargo test -p swarmui`
+- `cargo run -p swarmui -- --replay $DATA_DIR/snapshots/demo.cbor`
+
+### Checks (DoD)
+- Live Hive renders identically when driven by:
+  1) a live Cohesix node
+  2) a recorded transcript
+- UI actions emit byte-identical `ACK/ERR/END` sequences to CLI for equivalent verbs.
+- Sustained high event rates do not reduce UI responsiveness or violate frame caps.
+- No HTTP/REST dependencies introduced; no background polling outside active views.
+- Renderer remains discardable: restarting the UI reconstructs state solely from streams/snapshots.
+
+### Compiler Touchpoints
+- UI defaults (hive LOD thresholds, frame caps, snapshot limits) emitted by `coh-rtc`.
+- `docs/INTERFACES.md` updated to describe Live Hive as a **rendering view only**, not a control surface.
+
+### Task Breakdown
+```
+Title/ID: m20d2-hive-renderer
+Goal: Add GPU-first Live Hive renderer without altering protocol semantics.
+Inputs: apps/swarmui/, crates/cohsh-core, telemetry streams, CBOR snapshots.
+Changes:
+- apps/swarmui/frontend/hive/ — PixiJS scene, simulation model, LOD rules.
+- apps/swarmui/frontend/events.ts — event → simulation diff mapping.
+- apps/swarmui/src-tauri/ — replay mode wiring (no new verbs).
+Commands:
+- cargo test -p swarmui
+- cargo run -p swarmui – –replay demo.cbor
+Checks:
+- Frame rate bounded; transcript parity preserved; no new deps.
+Deliverables:
+- Live Hive view documented as non-authoritative renderer in docs/INTERFACES.md.
+
+Title/ID: m20d2-hive-fixtures
+Goal: Prove deterministic rendering and replay stability.
+Inputs: golden transcripts, CBOR snapshots.
+Changes:
+- apps/swarmui/tests/replay.rs — snapshot-driven render smoke tests.
+- docs/INTERFACES.md — Live Hive non-goals and degradation rules.
+Commands:
+- cargo test -p swarmui –test replay
+Checks:
+- Replay produces stable visual state; expired snapshots rejected cleanly.
+Deliverables:
+- Golden demo snapshots committed for CI and demos.
+```
 ---
 
 ## Milestone 20e — Edge Local Status (UEFI Host Tool)
