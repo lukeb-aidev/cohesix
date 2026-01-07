@@ -2136,7 +2136,129 @@ Checks:
 Deliverables:
   - Offline replay documentation and fixtures stored in tests/fixtures/transcripts/.
 ```
+---
 
+## Milestone 21 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)
+
+**Why now (platform):**  
+Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is a single signed EFI binary.
+
+**Goal**  
+Boot Cohesix directly from UEFI on AWS EC2 using an in-tree ENA NIC driver, deterministically bring up TCP, and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**.
+
+**Deliverables**
+- Signed `BOOTX64.EFI` / `BOOTAA64.EFI` containing:
+  - Cohesix runtime
+  - ENA driver (adminq + single TX/RX queue)
+  - Minimal DHCP/TCP stack
+  - TLS + 9P client
+- EFI System Partition layout and AMI registration tooling (`uefi` / `uefi-preferred`).
+- Diskless bootstrap path: ENA → DHCP → TCP → TLS → 9door mount.
+- Embedded, signed fabric bootstrap manifest (≥2 endpoints, root trust anchors).
+- Documentation in `docs/AWS_AMI.md` covering boot path, failure modes, and recovery.
+
+**Commands**
+- `cargo build -p cohesix-efi --target x86_64-unknown-uefi`
+- `cargo build -p cohesix-efi --target aarch64-unknown-uefi`
+- `scripts/aws/build-esp.sh`
+- `scripts/aws/register-ami.sh`
+- `scripts/aws/launch-smoke.sh`
+
+**Checks (DoD)**
+- EC2 instance boots directly into Cohesix with no intermediate OS.
+- ENA link comes up deterministically; DHCP lease acquired within bounded time.
+- 9door namespace mounts successfully and control plane is reachable.
+- Power cycle returns to identical clean state (no persistence).
+- Failure cases (no fabric, auth failure, link down) halt safely with explicit console diagnostics.
+
+**Compiler touchpoints**
+- `coh-rtc` emits:
+  - ENA queue bounds and bootstrap retry limits.
+  - Fabric bootstrap manifest schema and signature requirements.
+- Regeneration guard verifies EFI binary hash against recorded compiler output.
+
+**Task Breakdown**
+```
+Title/ID: m21-efi-entry
+Goal: Establish UEFI entry path and EFI binary layout.
+Inputs: crates/cohesix-efi/, linker scripts.
+Changes:
+- crates/cohesix-efi/src/efi.rs — UEFI init, memory map, ExitBootServices.
+- crates/cohesix-efi/linker.ld — single-binary layout.
+Commands:
+- cargo build -p cohesix-efi –target *-unknown-uefi
+Checks:
+- Binary loads via UEFI shell and transfers control to Cohesix main loop.
+Deliverables:
+- Documented ESP layout and build recipe.
+
+Title/ID: m21-ena-adminq
+Goal: Implement ENA PCIe discovery and admin queue.
+Inputs: crates/net-ena/.
+Changes:
+- crates/net-ena/src/pci.rs — PCIe enumeration, BAR mapping.
+- crates/net-ena/src/adminq.rs — admin queue + completion queue.
+Commands:
+- cargo test -p net-ena –test adminq
+Checks:
+- Feature negotiation succeeds with minimal feature set.
+Deliverables:
+- AdminQ protocol notes in docs/AWS_AMI.md.
+
+Title/ID: m21-ena-io
+Goal: Bring up minimal ENA dataplane.
+Inputs: crates/net-ena/, net stack abstractions.
+Changes:
+- crates/net-ena/src/ioq.rs — single TX/RX SQ + CQ.
+- crates/net-ena/src/poll.rs — polling dataplane (no interrupts).
+Commands:
+- cargo test -p net-ena –test ioq
+Checks:
+- TX reclaim and RX refill invariants hold under sustained traffic.
+Deliverables:
+- Deterministic dataplane invariants documented.
+
+Title/ID: m21-net-bootstrap
+Goal: Network bootstrap to fabric.
+Inputs: crates/net/, crates/crypto/.
+Changes:
+- crates/net/src/dhcp.rs — bounded DHCP client.
+- crates/net/src/tcp.rs — TCP bring-up for long-lived sessions.
+- crates/crypto/src/tls.rs — fabric-auth TLS handshake.
+Commands:
+- cargo test -p net –tests
+Checks:
+- Network reaches “fabric-ready” state within defined bounds.
+Deliverables:
+- Bootstrap timing guarantees recorded.
+
+Title/ID: m21-fabric-mount
+Goal: Mount 9door namespace and enter steady state.
+Inputs: crates/door9p/, crates/fabric/.
+Changes:
+- crates/door9p/src/client.rs — mount and session management.
+- crates/fabric/src/bootstrap.rs — signed manifest verification.
+Commands:
+- cargo test -p door9p
+Checks:
+- Namespace mount is read/write correct; auth failures are terminal and explicit.
+Deliverables:
+- Fabric bootstrap flow documented.
+
+Title/ID: m21-ami-pipeline
+Goal: Produce and validate AWS AMI.
+Inputs: scripts/aws/, docs/AWS_AMI.md.
+Changes:
+- scripts/aws/build-esp.sh — ESP image creation.
+- scripts/aws/register-ami.sh — snapshot + AMI registration.
+- scripts/aws/launch-smoke.sh — EC2 smoke test.
+Commands:
+- scripts/aws/register-ami.sh
+Checks:
+- AMI launches on supported Nitro instance family and passes smoke test.
+Deliverables:
+- Reproducible AMI build pipeline.
+```
 ---
 ### Docs-as-Built Alignment (applies to Milestone 8 onward)
 
