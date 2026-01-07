@@ -1654,15 +1654,19 @@ Deliverables:
 
 ## Milestone 20d — SwarmUI Desktop (Tauri, Pure 9P/TCP)
 
-**Why now (compiler):** Desktop operators need a UI that reuses the 9P grammar without new transports. SwarmUI must prove parity with CLI and respect ticket scopes.
+**Why now (compiler):** Desktop operators need a UI that *reflects the namespace* and reuses the existing 9P grammar without introducing new transports or control semantics. SwarmUI must prove strict parity with CLI behavior and respect ticket-scoped authority.
 
-**Goal**
-Deliver SwarmUI desktop (Tauri) that speaks 9P via `cohsh-core`, renders telemetry/fleet views, and works offline with cached CBOR snapshots.
+**Goal**  
+Deliver a SwarmUI desktop (Tauri) that speaks 9P via `cohsh-core`, renders namespace-derived telemetry and fleet views, and supports deterministic offline inspection via cached CBOR snapshots. SwarmUI adds **no new verbs** and **no in-VM services**.
 
 **Deliverables**
-- `apps/swarmui/` Tauri app with Rust backend linked to `cohsh-core`; no HTTP/REST dependencies.
-- Panels: Telemetry Rings (tail `/worker/*/telemetry`), Fleet Map (read `/proc/ingest/*` + worker directories), using offline cache under `$DATA_DIR/snapshots/`.
-- Ticket/lease auth identical to CLI; role-scoped interactions enforced client-side.
+- `apps/swarmui/` Tauri app with Rust backend linked to `cohsh-core`; **host-only**, no HTTP/REST dependencies.
+- Namespace-driven panels:
+  - **Telemetry Rings** (tail `/worker/*/telemetry`).
+  - **Fleet Map** (read `/proc/ingest/*` + worker directories).
+  - Optional **Namespace Browser** (read-only tree over `/proc`, `/queen`, `/worker`, `/log`, `/gpu`, indicating read/append-only paths).
+- Offline inspection via bounded CBOR cache under `$DATA_DIR/snapshots/` (opt-in; read-only when offline).
+- Ticket/lease auth identical to CLI; **per-ticket session views** supported; role-scoped interactions enforced client-side.
 
 **Commands**
 - `cargo test -p cohsh-core`
@@ -1670,43 +1674,44 @@ Deliver SwarmUI desktop (Tauri) that speaks 9P via `cohsh-core`, renders telemet
 - `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/telemetry_ring.cohsh`
 
 **Checks (DoD)**
-- UI renders telemetry with exact `OK …` then stream and terminates with `END`; transcript matches CLI.
+- UI renders telemetry with exact `OK …` then stream and terminates with `END`; transcript matches CLI byte-for-byte.
 - Build proves no HTTP/REST dependencies (static link audit or cargo deny).
-- Abuse case: expired ticket or unauthorized tail returns ERR in UI and logs audit; offline mode uses cached CBOR without network.
-- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
+- Abuse case: expired or unauthorized ticket returns `ERR` surfaced verbatim in UI and logs audit; offline mode uses cached CBOR without network or retries.
+- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences remain byte-stable relative to the 7c baseline.
+- SwarmUI performs no background polling and introduces no retries or batching.
 
 **Compiler touchpoints**
-- UI defaults (paths, cache size, ticket scope) emitted by `coh-rtc` for SwarmUI config; docs/USERLAND_AND_CLI.md references same.
+- UI defaults (paths, cache size, ticket scope) emitted by `coh-rtc` for SwarmUI config; `docs/USERLAND_AND_CLI.md` references the same sources of truth.
 
 **Task Breakdown**
 ```
 Title/ID: m20d-ui-backend
-Goal: Wire SwarmUI backend to cohsh-core with 9P-only transport.
+Goal: Wire SwarmUI backend to cohsh-core with 9P-only transport and per-ticket sessions.
 Inputs: apps/swarmui/src-tauri/, crates/cohsh-core, tests/cli/telemetry_ring.cohsh.
 Changes:
-  - apps/swarmui/src-tauri/main.rs — session management, ticket auth, telemetry tail via cohsh-core.
-  - apps/swarmui/Cargo.toml — ensure no HTTP/REST deps; enable offline cache feature.
+- apps/swarmui/src-tauri/main.rs — session management (per ticket), ticket auth, telemetry tail via cohsh-core.
+- apps/swarmui/Cargo.toml — ensure no HTTP/REST deps; enable bounded offline cache feature.
 Commands:
-  - cargo test -p swarmui
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/telemetry_ring.cohsh
+- cargo test -p swarmui
+- cargo run -p cohsh –features tcp – –transport tcp –script tests/cli/telemetry_ring.cohsh
 Checks:
-  - Unauthorized ticket returns ERR surfaced in UI; cache uses CBOR snapshot without network.
+- Unauthorized ticket returns ERR surfaced verbatim in UI; offline mode reads CBOR snapshot only.
 Deliverables:
-  - UI backend docs and cache path noted in docs/USERLAND_AND_CLI.md.
+- UI backend notes and cache path documented in docs/USERLAND_AND_CLI.md.
 
 Title/ID: m20d-ui-fixtures
-Goal: Capture UI/CLI transcript parity and fleet map rendering.
+Goal: Capture UI/CLI transcript parity and namespace-derived fleet rendering.
 Inputs: UI snapshot fixtures, /proc/ingest providers.
 Changes:
-  - apps/swarmui/tests/transcript.rs — compare UI-captured ACK/ERR to CLI golden.
-  - apps/swarmui/src/cache.rs — snapshot write/read with size bounds.
+- apps/swarmui/tests/transcript.rs — compare UI-captured ACK/ERR/END to CLI golden.
+- apps/swarmui/src/cache.rs — snapshot write/read with strict size bounds and expiry handling.
 Commands:
-  - cargo test -p swarmui --test transcript
-  - cargo test -p cohsh-core
+- cargo test -p swarmui –test transcript
+- cargo test -p cohsh-core
 Checks:
-  - Transcript diff zero; cache bounded to documented size; abuse case with expired cache rejected gracefully.
+- Transcript diff zero; cache bounded to documented size; expired cache rejected gracefully.
 Deliverables:
-  - Updated docs/INTERFACES.md with UI consumption guidance.
+- Updated docs/INTERFACES.md with SwarmUI consumption guidance and non-goals.
 ```
 
 ---
