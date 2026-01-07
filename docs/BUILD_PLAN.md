@@ -1659,6 +1659,8 @@ Deliverables:
 **Goal**  
 Deliver a SwarmUI desktop (Tauri) that speaks 9P via `cohsh-core`, renders namespace-derived telemetry and fleet views, and supports deterministic offline inspection via cached CBOR snapshots. SwarmUI adds **no new verbs** and **no in-VM services**.
 
+SwarmUI is a thin presentation layer only: all protocol semantics, state machines, parsing, and policy live in Rust (cohsh-core); any WASM or frontend code is rendering-only and must not implement verbs, retries, background polling, caching policy, or independent state.
+
 **Deliverables**
 - `apps/swarmui/` Tauri app with Rust backend linked to `cohsh-core`; **host-only**, no HTTP/REST dependencies.
 - Namespace-driven panels:
