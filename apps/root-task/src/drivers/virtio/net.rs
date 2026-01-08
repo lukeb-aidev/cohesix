@@ -55,6 +55,7 @@ const DMA_NONCOHERENT: bool = cfg!(target_arch = "aarch64");
 const VIRTQ_FORCE_CACHEABLE: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
 const VIRTQ_DIAG: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
 const VIRTIO_TX_CLEAR_DESC_ON_FREE: bool = false;
+const DMA_CACHE_LINE_BYTES: usize = 64;
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -154,6 +155,8 @@ static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_ID_SEM_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_TRIPWIRE: AtomicU32 = AtomicU32::new(0);
+static TX_WRAP_SNAPSHOT_LOGGED: AtomicBool = AtomicBool::new(false);
+static TX_HEAD_REUSE_LOGGED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "net-backend-virtio")]
 static mut VIRTIO_NET_STORAGE: MaybeUninit<VirtioNet> = MaybeUninit::uninit();
 #[cfg(debug_assertions)]
@@ -3254,6 +3257,32 @@ impl VirtioNet {
             other => {
                 self.publish_blocked_bad_head_state =
                     self.publish_blocked_bad_head_state.saturating_add(1);
+                if VIRTQ_DIAG && !TX_HEAD_REUSE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+                    let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
+                    let head_gen = match other {
+                        Some(TxHeadState::Prepared { gen })
+                        | Some(TxHeadState::Published { gen, .. })
+                        | Some(TxHeadState::InFlight { gen, .. })
+                        | Some(TxHeadState::Completed { gen }) => Some(gen),
+                        _ => None,
+                    };
+                    warn!(
+                        target: "net-console",
+                        "[virtio-net][tx-guard] publish blocked (head state): head={} slot={} head_state={:?} head_gen={:?} avail_idx={} used_idx={} last_used={} slot_state={:?}",
+                        head_id,
+                        publish_slot,
+                        other,
+                        head_gen,
+                        avail_idx,
+                        used_idx,
+                        self.tx_queue.last_used,
+                        if NET_VIRTIO_TX_V2 {
+                            self.tx_slots.state(head_id)
+                        } else {
+                            None
+                        },
+                    );
+                }
                 self.note_publish_blocked(head_id, other);
                 let _ = self.tx_head_mgr.release_unused(head_id);
                 self.cancel_tx_slot(head_id, "tx_publish_head_state");
@@ -3471,7 +3500,12 @@ impl VirtioNet {
                 return Err(TxPublishError::InvalidDescriptor);
             }
         }
-        // Ensure the descriptor clean completes before we expose the head via avail.
+        // Ensure descriptor cache maintenance completes before we expose the head via avail.
+        if DMA_NONCOHERENT {
+            if let Err(err) = self.tx_queue.sync_descriptor_table_for_device() {
+                return Err(TxPublishError::Queue(err));
+            }
+        }
         dma_barrier();
         virtq_publish_barrier();
         self.tx_queue
@@ -3479,12 +3513,6 @@ impl VirtioNet {
             .map_err(TxPublishError::Queue)
             .and_then(|(slot, new_idx, old_idx)| {
                 if DMA_NONCOHERENT {
-                    if let Err(err) = self.tx_queue.sync_descriptor_table_for_device() {
-                        return Err(TxPublishError::Queue(err));
-                    }
-                    if let Err(err) = self.tx_queue.sync_avail_ring_for_device() {
-                        return Err(TxPublishError::Queue(err));
-                    }
                     dma_barrier();
                 }
                 if self
@@ -3826,6 +3854,27 @@ impl VirtioNet {
                 ring_slot_usize,
                 used_elem.id,
                 used_elem.len,
+            );
+            let expected_slot = (self.tx_queue.last_used as usize) % qsize;
+            if let Err(err) = self.tx_queue.invalidate_avail_entry_for_cpu(expected_slot) {
+                warn!(
+                    target: "virtio-net",
+                    "[virtio-net][tx-tripwire] invalidate expected avail slot failed: slot={} err={err:?}",
+                    expected_slot,
+                );
+            }
+            dma_load_barrier();
+            let expected_head = self.tx_queue.read_avail_slot(expected_slot);
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-tripwire] used-slot correlation used_slot={} used.id={} expected_slot={} expected_head={} avail.idx={} used.idx={} last_used={}",
+                ring_slot_usize,
+                used_elem.id,
+                expected_slot,
+                expected_head,
+                avail_idx,
+                used_idx,
+                self.tx_queue.last_used,
             );
             let expected_a = self.tx_queue.read_avail_slot(ring_slot_usize);
             let expected_b = self.tx_head_mgr.published_for_slot(ring_slot);
@@ -4273,6 +4322,56 @@ impl VirtioNet {
             return Err(());
         }
         Ok(())
+    }
+
+    fn tx_wrap_publish_snapshot(&mut self, head_id: u16, slot: u16, old_idx: u16, avail_idx: u16) {
+        if !VIRTQ_DIAG {
+            return;
+        }
+        let qsize = usize::from(self.tx_queue.size);
+        if qsize == 0 || slot != 0 || (old_idx as usize) < qsize {
+            return;
+        }
+        if TX_WRAP_SNAPSHOT_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            return;
+        }
+        if let Err(err) = self.tx_queue.invalidate_desc_entry_for_cpu(head_id) {
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-wrap-snapshot] invalidate desc failed: head={} err={err:?}",
+                head_id,
+            );
+        }
+        if let Err(err) = self.tx_queue.invalidate_avail_entry_for_cpu(0) {
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-wrap-snapshot] invalidate avail slot failed: slot=0 err={err:?}",
+            );
+        }
+        if let Err(err) = self.tx_queue.invalidate_avail_idx_for_cpu() {
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-wrap-snapshot] invalidate avail idx failed: err={err:?}",
+            );
+        }
+        dma_load_barrier();
+        let avail_slot = self.tx_queue.read_avail_slot(0);
+        let avail_idx_read = self.tx_queue.read_avail_idx();
+        let desc = self.tx_queue.read_descriptor(head_id);
+        info!(
+            target: "virtio-net",
+            "[virtio-net][tx-wrap-snapshot] old_idx={} avail_idx={} slot={} head={} avail.ring[0]={} avail.idx={} desc=0x{addr:016x}/{len} flags=0x{flags:04x} next={next}",
+            old_idx,
+            avail_idx,
+            slot,
+            head_id,
+            avail_slot,
+            avail_idx_read,
+            addr = desc.addr,
+            len = desc.len,
+            flags = desc.flags,
+            next = desc.next,
+        );
     }
 
     fn tx_publish_readback_probe(&mut self, head_id: u16, slot: u16, old_idx: u16, avail_idx: u16) {
@@ -5029,6 +5128,7 @@ impl VirtioNet {
                 avail_head, written_desc_index
             );
         }
+        self.tx_wrap_publish_snapshot(head_id, slot, old_idx, avail_idx);
         self.tx_wrap_tripwire(old_idx, avail_idx, slot, head_id);
         self.guard_tx_publish_readback(slot, head_id, &resolved_descs[0])?;
         self.tx_publish_readback_probe(head_id, slot, old_idx, avail_idx);
@@ -9212,9 +9312,9 @@ impl VirtQueue {
     /// is updated, so the writes must be visible in this exact order:
     /// 1) descriptor writes + cache maintenance (caller, per-entry clean)
     /// 2) release/device fence
-    /// 3) avail.ring slot write + per-slot clean
-    /// 4) release/device fence
-    /// 5) avail.idx write + per-field clean
+    /// 3) avail.ring slot write
+    /// 4) avail.idx write
+    /// 5) combined cache clean (slot + idx cacheline window)
     /// 6) release/device fence
     /// 7) notify (performed by the caller)
     ///
@@ -9248,7 +9348,6 @@ impl VirtQueue {
             );
             let ring_offset = ring_addr - self.base_vaddr;
             self.assert_offset_in_range(ring_offset, core::mem::size_of::<u16>(), "avail.ring");
-            virtq_publish_barrier();
             write_volatile(ring_ptr, index.to_le());
             debug_assert_eq!(
                 ring_slot,
@@ -9264,17 +9363,26 @@ impl VirtQueue {
                 "tx publish ring write mismatch: slot={} expected_head={} observed_head={} old_avail={}",
                 ring_slot, index, ring_written, old_avail
             );
-            if DMA_NONCOHERENT {
-                self.clean_avail_entry_for_device(ring_slot)?;
-                dma_barrier();
-            }
-            virtq_publish_barrier();
+            compiler_fence(AtomicOrdering::Release);
             let new_idx = old_avail.wrapping_add(1);
             write_volatile(&mut (*avail).idx, new_idx.to_le());
             if DMA_NONCOHERENT {
-                self.clean_avail_idx_for_device()?;
-                dma_barrier();
-                self.sync_avail_ring_for_device()?;
+                let ring_addr = ring_ptr as usize;
+                let idx_addr = idx_ptr;
+                let range_start = core::cmp::min(ring_addr, idx_addr);
+                let range_end = core::cmp::max(
+                    ring_addr + core::mem::size_of::<u16>(),
+                    idx_addr + core::mem::size_of::<u16>(),
+                );
+                let aligned_start = align_down(range_start, DMA_CACHE_LINE_BYTES);
+                let aligned_end = align_up(range_end, DMA_CACHE_LINE_BYTES);
+                let clean_len = aligned_end.saturating_sub(aligned_start);
+                dma_clean(
+                    aligned_start as *const u8,
+                    clean_len,
+                    self.cacheable,
+                    "clean avail slot+idx",
+                )?;
                 dma_barrier();
             }
             virtq_publish_barrier();
@@ -9819,6 +9927,11 @@ impl VirtqLayout {
 fn align_up(value: usize, align: usize) -> usize {
     debug_assert!(align.is_power_of_two());
     (value + align - 1) & !(align - 1)
+}
+
+fn align_down(value: usize, align: usize) -> usize {
+    debug_assert!(align.is_power_of_two());
+    value & !(align - 1)
 }
 
 const DMA_FORCE_CACHE_MAINTENANCE: bool = DMA_NONCOHERENT;
