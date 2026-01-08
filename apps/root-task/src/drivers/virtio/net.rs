@@ -26,7 +26,8 @@ use core::sync::atomic::fence;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, trace, warn};
 use sel4_sys::{
-    seL4_ARM_Page_Default, seL4_ARM_Page_Uncached, seL4_Error, seL4_NotEnoughMemory, seL4_PageBits,
+    seL4_ARM_Page_Default, seL4_ARM_Page_Uncached, seL4_ARM_VMAttributes, seL4_Error,
+    seL4_NotEnoughMemory, seL4_PageBits,
 };
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
@@ -44,7 +45,10 @@ use crate::net::{
     NetDevice, NetDeviceCounters, NetDriverError, NetStage, CONSOLE_TCP_PORT, NET_DIAG, NET_STAGE,
 };
 use crate::net_consts::MAX_FRAME_LEN;
-use crate::sel4::{seL4_CapInitThreadVSpace, DeviceFrame, RamFrame, BOOTINFO_WINDOW_GUARD};
+use crate::sel4::{
+    seL4_CapInitThreadVSpace, DeviceFrame, RamFrame, BOOTINFO_WINDOW_GUARD,
+    DEVICE_VM_ATTRIBUTES,
+};
 
 const FORENSICS: bool = true;
 const FORENSICS_PUBLISH_LOG_LIMIT: u32 = 64;
@@ -67,8 +71,44 @@ const VIRTQ_FORCE_CACHEABLE: bool = cfg!(feature = "dev-virt") || cfg!(feature =
 const VIRTQ_DIAG: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
 const VIRTQ_METADATA_UNCACHED: bool =
     VIRTQ_DIAG && env_flag(option_env!("VIRTQ_METADATA_UNCACHED"));
+const VIRTQ_METADATA_DEVICE: bool =
+    VIRTQ_DIAG && env_flag(option_env!("VIRTQ_METADATA_DEVICE"));
 const VIRTIO_TX_CLEAR_DESC_ON_FREE: bool = false;
 const DMA_CACHE_LINE_BYTES: usize = 64;
+
+#[derive(Clone, Copy)]
+struct VirtqMetadataAttr {
+    attr: seL4_ARM_VMAttributes,
+    policy: &'static str,
+}
+
+fn vm_attr_raw(attr: seL4_ARM_VMAttributes) -> usize {
+    unsafe { core::mem::transmute(attr) }
+}
+
+fn virtq_metadata_attr() -> VirtqMetadataAttr {
+    if VIRTQ_METADATA_DEVICE {
+        VirtqMetadataAttr {
+            attr: DEVICE_VM_ATTRIBUTES,
+            policy: "device",
+        }
+    } else if VIRTQ_METADATA_UNCACHED {
+        VirtqMetadataAttr {
+            attr: DEVICE_VM_ATTRIBUTES,
+            policy: "device-preferred",
+        }
+    } else if VIRTQ_FORCE_CACHEABLE {
+        VirtqMetadataAttr {
+            attr: seL4_ARM_Page_Default,
+            policy: "default",
+        }
+    } else {
+        VirtqMetadataAttr {
+            attr: seL4_ARM_Page_Uncached,
+            policy: "uncached",
+        }
+    }
+}
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -159,7 +199,7 @@ static RX_CACHE_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_ERROR_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_QMEM_LOGGED: AtomicBool = AtomicBool::new(false);
-static VIRTQ_METADATA_UNCACHED_LOGGED: AtomicBool = AtomicBool::new(false);
+static VIRTQ_METADATA_ATTR_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_RING_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_LEN_ZERO_VISIBILITY_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_POP_INVARIANT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -2438,24 +2478,32 @@ impl VirtioNet {
         }
 
         info!("[net-console] allocating virtqueue backing memory");
-        let queue_map_attr = if VIRTQ_METADATA_UNCACHED {
-            seL4_ARM_Page_Uncached
-        } else if VIRTQ_FORCE_CACHEABLE {
-            seL4_ARM_Page_Default
-        } else {
-            seL4_ARM_Page_Uncached
-        };
+        let metadata_attr = virtq_metadata_attr();
+        let queue_map_attr = metadata_attr.attr;
         let buffer_map_attr = if VIRTQ_FORCE_CACHEABLE {
             seL4_ARM_Page_Default
         } else {
             seL4_ARM_Page_Uncached
         };
-        // Keep virtqueue rings fully visible to the device; dev-virt/cache-trace forces cacheable
-        // unless the metadata-uncached debug switch is active.
-        if VIRTQ_METADATA_UNCACHED && !VIRTQ_METADATA_UNCACHED_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+        // Keep virtqueue rings fully visible to the device; dev-virt/cache-trace defaults to
+        // cacheable unless a metadata override is active.
+        let queue_attr_raw = vm_attr_raw(queue_map_attr);
+        if VIRTQ_METADATA_UNCACHED {
+            debug_assert!(
+                queue_attr_raw != 0,
+                "VIRTQ_METADATA_UNCACHED requires non-default VMAttributes for virtqueue metadata"
+            );
+        }
+        if !VIRTQ_METADATA_ATTR_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            let default_raw = vm_attr_raw(seL4_ARM_Page_Default);
+            let uncached_raw = vm_attr_raw(seL4_ARM_Page_Uncached);
+            let device_raw = vm_attr_raw(DEVICE_VM_ATTRIBUTES);
             info!(
                 target: "virtio-net",
-                "[virtio-net][virtq] metadata uncached enabled (VIRTQ_METADATA_UNCACHED=1); queue page mapped uncached (desc/avail/used share a page)"
+                "[virtio-net][virtq] metadata attr policy={} uncached_flag={} device_flag={} attr=0x{queue_attr_raw:08x} default=0x{default_raw:08x} uncached=0x{uncached_raw:08x} device=0x{device_raw:08x}",
+                metadata_attr.policy,
+                VIRTQ_METADATA_UNCACHED,
+                VIRTQ_METADATA_DEVICE
             );
         }
 
@@ -2497,9 +2545,10 @@ impl VirtioNet {
         } else {
             None
         };
-        let queue_cacheable = match queue_map_attr {
-            seL4_ARM_Page_Uncached => false,
-            seL4_ARM_Page_Default => true,
+        let queue_cacheable = match queue_attr_raw {
+            raw if raw == vm_attr_raw(seL4_ARM_Page_Uncached) => false,
+            raw if raw == vm_attr_raw(seL4_ARM_Page_Default) => true,
+            raw if raw == vm_attr_raw(DEVICE_VM_ATTRIBUTES) => false,
             other => {
                 error!(
                     target: "net-console",
