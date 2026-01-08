@@ -13,7 +13,7 @@ use anyhow::Result;
 
 #[cfg(not(target_os = "none"))]
 fn main() -> Result<()> {
-    use secure9p_wire::SessionId;
+    use secure9p_codec::SessionId;
     use worker_gpu::{GpuLease, GpuWorker};
 
     let lease = GpuLease::new("GPU-0", 256, 1, 60, 5, "worker-gpu-demo")?;

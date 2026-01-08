@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Define Secure9P wire types and constants shared across components.
 #![allow(clippy::module_name_repetitions)]
 
 //! Secure9P data model definitions shared across codec backends.

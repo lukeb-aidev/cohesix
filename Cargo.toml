@@ -1,4 +1,5 @@
 # Author: Lukas Bower
+# Purpose: Define the Cohesix workspace members and shared dependencies.
 [workspace]
 members = [
     "apps/cohesix-proto",
@@ -10,7 +11,9 @@ members = [
     "apps/worker-gpu",
     "apps/gpu-bridge-host",
     "crates/cohesix-ticket",
-    "crates/secure9p-wire",
+    "crates/secure9p-codec",
+    "crates/secure9p-core",
+    "crates/secure9p-transport",
     "crates/domain-intents",
     "crates/boot/uefi-elfloader-shim",
     "crates/trace-model",
@@ -38,7 +41,9 @@ license = "MIT"
 
 [workspace.dependencies]
 cohesix-ticket = { path = "crates/cohesix-ticket" }
-secure9p-wire = { path = "crates/secure9p-wire" }
+secure9p-codec = { path = "crates/secure9p-codec" }
+secure9p-core = { path = "crates/secure9p-core" }
+secure9p-transport = { path = "crates/secure9p-transport" }
 anyhow = "1.0"
 thiserror = "2.0"
 clap = { version = "4.5", features = ["derive"] }

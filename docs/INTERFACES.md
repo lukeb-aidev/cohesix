@@ -1,4 +1,5 @@
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Document Cohesix control-plane interfaces, ticket claims, and console flows. -->
 <!-- Purpose: Canonical interface definitions for NineDoor, queen/worker verbs, GPU bridge files, and telemetry schemas. -->
 # Cohesix Interfaces (Queen/Worker, NineDoor, GPU Bridge)
 
@@ -151,6 +152,7 @@ pub struct Ticket(pub [u8; 32]);
 pub struct TicketClaims {
     pub role: Role,
     pub budget: Budget,
+    pub subject: Option<String>,
     pub mounts: MountSpec,
     pub issued_at_ms: u64,
 }
@@ -214,7 +216,8 @@ pub trait RootTaskControl {
 - Client attaches using the queen or worker ticket, negotiates `msize`, then issues 9P ops corresponding to shell commands.
 - `tail` uses repeated `read` calls with offset tracking; NineDoor enforces append-only by ignoring provided offsets.
 - `bind` and `mount` commands are no-ops for non-queen roles.
-- `--transport tcp` connects to the root-task console listener (default `127.0.0.1:31337`) and speaks a line-oriented protocol:
+- `--transport tcp` connects to the root-task console listener (default `127.0.0.1:31337`) and speaks a Secure9P-style framed protocol:
+  - Each console line is encoded as a length-prefixed frame (4-byte little-endian length including the header, followed by the UTF-8 payload).
   - `ATTACH <role> <ticket?>` → `OK ATTACH role=<role>` on success or `ERR ATTACH reason=<cause>` on failure.
   - `TAIL <path>` emits `OK TAIL path=<path>` before newline-delimited log entries; the stream still terminates with `END`.
   - All other verbs mirror serial behaviour and return a single acknowledgement (`OK LOG`, `ERR SPAWN reason=unauthenticated`, …)

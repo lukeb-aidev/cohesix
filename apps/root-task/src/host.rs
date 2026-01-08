@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Provide host-mode root-task simulation with authenticated ticket flows.
 #![cfg(all(not(feature = "kernel"), not(target_os = "none")))]
 #![allow(clippy::module_name_repetitions)]
 
@@ -7,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result as AnyhowResult};
-use cohesix_ticket::Role;
+use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
 use heapless::Vec as HeaplessVec;
 
 use crate::event::{
@@ -30,7 +31,14 @@ pub fn main() -> Result<()> {
 /// Runs the host simulation while emitting audit records to the supplied writer.
 pub fn run_with_writer<W: Write>(mut writer: W) -> Result<()> {
     let (driver, injector) = HostSerial::new();
-    seed_console_script(&injector);
+    let queen_token = mint_token(QUEEN_SECRET, Role::Queen, BudgetSpec::unbounded())?;
+    let worker_token = mint_token(
+        WORKER_SECRET,
+        Role::WorkerHeartbeat,
+        BudgetSpec::default_heartbeat(),
+    )?;
+    let script = build_script(&queen_token, &worker_token);
+    seed_console_script(&injector, &script);
 
     let serial: SerialPort<
         _,
@@ -42,10 +50,10 @@ pub fn run_with_writer<W: Write>(mut writer: W) -> Result<()> {
     let ipc = HostIpc;
     let mut tickets: TicketTable<8> = TicketTable::new();
     tickets
-        .register(Role::Queen, QUEEN_TICKET)
+        .register(Role::Queen, QUEEN_SECRET)
         .map_err(|err| anyhow!("failed to register queen ticket: {err:?}"))?;
     tickets
-        .register(Role::WorkerHeartbeat, WORKER_TICKET)
+        .register(Role::WorkerHeartbeat, WORKER_SECRET)
         .map_err(|err| anyhow!("failed to register worker ticket: {err:?}"))?;
 
     let mut audit = WriterAudit::new(&mut writer);
@@ -55,7 +63,7 @@ pub fn run_with_writer<W: Write>(mut writer: W) -> Result<()> {
     for _ in 0..MAX_CYCLES {
         pump.poll();
         metrics = pump.metrics();
-        if metrics.timer_ticks >= TICK_LIMIT && metrics.console_lines >= SCRIPT.len() as u64 {
+        if metrics.timer_ticks >= TICK_LIMIT && metrics.console_lines >= script.len() as u64 {
             break;
         }
         thread::sleep(Duration::from_millis(2));
@@ -69,11 +77,11 @@ pub fn run_with_writer<W: Write>(mut writer: W) -> Result<()> {
         ));
     }
 
-    if metrics.console_lines < SCRIPT.len() as u64 {
+    if metrics.console_lines < script.len() as u64 {
         return Err(anyhow!(
             "not all scripted console lines were processed ({} < {})",
             metrics.console_lines,
-            SCRIPT.len()
+            script.len()
         ));
     }
 
@@ -87,22 +95,35 @@ const TICK_LIMIT: u64 = 3;
 /// Maximum pump iterations permitted for the scripted simulation.
 const MAX_CYCLES: usize = 512;
 
-const QUEEN_TICKET: &str = "queen-bootstrap";
-const WORKER_TICKET: &str = "worker-ticket";
+const QUEEN_SECRET: &str = "queen-bootstrap";
+const WORKER_SECRET: &str = "worker-ticket";
+
+fn mint_token(secret: &str, role: Role, budget: BudgetSpec) -> Result<String> {
+    let issuer = TicketIssuer::new(secret);
+    let claims = TicketClaims::new(role, budget, None, MountSpec::empty(), 0);
+    let token = issuer
+        .issue(claims)
+        .map_err(|err| anyhow!("failed to issue ticket: {err:?}"))?;
+    token
+        .encode()
+        .map_err(|err| anyhow!("failed to encode ticket: {err:?}"))
+}
 
 /// Scripted console commands used to exercise the event pump.
-const SCRIPT: &[&str] = &[
-    "help",
-    "attach queen queen-bootstrap",
-    "log",
-    "spawn {\"spawn\":\"heartbeat\",\"ticks\":5}",
-    "attach worker worker-ticket",
-    "tail /worker/self/telemetry",
-    "quit",
-];
+fn build_script(queen_token: &str, worker_token: &str) -> Vec<String> {
+    vec![
+        "help".to_string(),
+        format!("attach queen {queen_token}"),
+        "log".to_string(),
+        "spawn {\"spawn\":\"heartbeat\",\"ticks\":5}".to_string(),
+        format!("attach worker {worker_token}"),
+        "tail /worker/self/telemetry".to_string(),
+        "quit".to_string(),
+    ]
+}
 
-fn seed_console_script(injector: &SerialInjector) {
-    for line in SCRIPT {
+fn seed_console_script(injector: &SerialInjector, script: &[String]) {
+    for line in script {
         injector.push_rx(line.as_bytes());
         injector.push_rx(b"\n");
     }

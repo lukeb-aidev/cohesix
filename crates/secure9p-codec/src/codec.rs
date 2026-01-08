@@ -1,10 +1,13 @@
 // Author: Lukas Bower
+// Purpose: Encode and decode Secure9P wire messages without std dependencies.
 
 //! Encode/decode helpers for Secure9P wire messages.
 
-use alloc::string::String;
+use alloc::borrow::ToOwned;
+use alloc::string::{String, ToString};
+use alloc::vec;
 use alloc::vec::Vec;
-use std::io::{Cursor, Read};
+use core::str;
 
 use crate::types::*;
 
@@ -374,7 +377,7 @@ fn decode_message(bytes: &[u8]) -> Result<(MessageType, &[u8]), CodecError> {
     Ok((ty, &bytes[5..]))
 }
 
-fn read_u8(cursor: &mut Cursor<&[u8]>) -> Result<u8, CodecError> {
+fn read_u8(cursor: &mut Cursor<'_>) -> Result<u8, CodecError> {
     let mut buf = [0u8; 1];
     cursor
         .read_exact(&mut buf)
@@ -382,7 +385,7 @@ fn read_u8(cursor: &mut Cursor<&[u8]>) -> Result<u8, CodecError> {
     Ok(buf[0])
 }
 
-fn read_u16(cursor: &mut Cursor<&[u8]>) -> Result<u16, CodecError> {
+fn read_u16(cursor: &mut Cursor<'_>) -> Result<u16, CodecError> {
     let mut buf = [0u8; 2];
     cursor
         .read_exact(&mut buf)
@@ -390,7 +393,7 @@ fn read_u16(cursor: &mut Cursor<&[u8]>) -> Result<u16, CodecError> {
     Ok(u16::from_le_bytes(buf))
 }
 
-fn read_u32(cursor: &mut Cursor<&[u8]>) -> Result<u32, CodecError> {
+fn read_u32(cursor: &mut Cursor<'_>) -> Result<u32, CodecError> {
     let mut buf = [0u8; 4];
     cursor
         .read_exact(&mut buf)
@@ -398,7 +401,7 @@ fn read_u32(cursor: &mut Cursor<&[u8]>) -> Result<u32, CodecError> {
     Ok(u32::from_le_bytes(buf))
 }
 
-fn read_u64(cursor: &mut Cursor<&[u8]>) -> Result<u64, CodecError> {
+fn read_u64(cursor: &mut Cursor<'_>) -> Result<u64, CodecError> {
     let mut buf = [0u8; 8];
     cursor
         .read_exact(&mut buf)
@@ -406,16 +409,17 @@ fn read_u64(cursor: &mut Cursor<&[u8]>) -> Result<u64, CodecError> {
     Ok(u64::from_le_bytes(buf))
 }
 
-fn read_string(cursor: &mut Cursor<&[u8]>) -> Result<String, CodecError> {
-    let len = read_u16(cursor)?;
-    let mut buf = vec![0u8; len as usize];
+fn read_string(cursor: &mut Cursor<'_>) -> Result<String, CodecError> {
+    let len = read_u16(cursor)? as usize;
+    let mut buf = vec![0u8; len];
     cursor
         .read_exact(&mut buf)
         .map_err(|_| CodecError::Truncated)?;
-    String::from_utf8(buf).map_err(|_| CodecError::InvalidUtf8)
+    let text = str::from_utf8(&buf).map_err(|_| CodecError::InvalidUtf8)?;
+    Ok(text.to_owned())
 }
 
-fn read_qid(cursor: &mut Cursor<&[u8]>) -> Result<Qid, CodecError> {
+fn read_qid(cursor: &mut Cursor<'_>) -> Result<Qid, CodecError> {
     let ty = QidType::from_raw(read_u8(cursor)?);
     let version = read_u32(cursor)?;
     let path = read_u64(cursor)?;
@@ -442,6 +446,27 @@ fn put_string(buffer: &mut Vec<u8>, value: &str) {
         .expect("string length exceeds protocol limit");
     buffer.extend_from_slice(&len.to_le_bytes());
     buffer.extend_from_slice(value.as_bytes());
+}
+
+struct Cursor<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn new(buf: &'a [u8]) -> Self {
+        Self { buf, pos: 0 }
+    }
+
+    fn read_exact(&mut self, out: &mut [u8]) -> Result<(), ()> {
+        let end = self.pos.saturating_add(out.len());
+        if end > self.buf.len() {
+            return Err(());
+        }
+        out.copy_from_slice(&self.buf[self.pos..end]);
+        self.pos = end;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

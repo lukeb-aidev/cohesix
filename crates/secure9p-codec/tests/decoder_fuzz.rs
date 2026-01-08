@@ -1,11 +1,12 @@
 // Author: Lukas Bower
+// Purpose: Fuzz-style regression tests for Secure9P codec framing.
 #![forbid(unsafe_code)]
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use secure9p_wire::{Codec, OpenMode, Qid, QidType, Request, RequestBody, Response, ResponseBody};
+use secure9p_codec::{Codec, OpenMode, Qid, QidType, Request, RequestBody, Response, ResponseBody};
 
 #[test]
 fn fuzz_decode_round_trips() {
@@ -70,7 +71,7 @@ fn random_request<R: Rng>(rng: &mut R) -> Request {
         0 => Request {
             tag,
             body: RequestBody::Version {
-                msize: rng.random_range(256..=secure9p_wire::MAX_MSIZE),
+                msize: rng.random_range(256..=secure9p_codec::MAX_MSIZE),
                 version: "9P2000.L".to_owned(),
             },
         },
@@ -134,7 +135,7 @@ fn random_response<R: Rng>(rng: &mut R) -> Response {
         0 => Response {
             tag,
             body: ResponseBody::Version {
-                msize: rng.random_range(256..=secure9p_wire::MAX_MSIZE),
+                msize: rng.random_range(256..=secure9p_codec::MAX_MSIZE),
                 version: "9P2000.L".to_owned(),
             },
         },
@@ -156,7 +157,7 @@ fn random_response<R: Rng>(rng: &mut R) -> Response {
             tag,
             body: ResponseBody::Open {
                 qid: random_qid(rng),
-                iounit: rng.random_range(1..=secure9p_wire::MAX_MSIZE),
+                iounit: rng.random_range(1..=secure9p_codec::MAX_MSIZE),
             },
         },
         4 => Response {
@@ -172,7 +173,7 @@ fn random_response<R: Rng>(rng: &mut R) -> Response {
         _ => Response {
             tag,
             body: ResponseBody::Error {
-                code: secure9p_wire::ErrorCode::Permission,
+                code: secure9p_codec::ErrorCode::Permission,
                 message: random_atom(rng, 12),
             },
         },

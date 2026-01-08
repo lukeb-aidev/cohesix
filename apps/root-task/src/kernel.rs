@@ -2838,7 +2838,7 @@ fn bootstrap<P: Platform>(
 
         let mut tickets: TicketTable<4> = TicketTable::new();
         for spec in manifest::ticket_inventory() {
-            let _ = tickets.register(spec.role, spec.token);
+            let _ = tickets.register(spec.role, spec.secret);
         }
 
         crate::bp!("spawn.worker.begin");

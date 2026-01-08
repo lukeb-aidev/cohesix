@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
 use gpu_bridge_host::{GpuModelCatalog, TelemetrySchema};
-use secure9p_wire::{ErrorCode, Qid, QidType};
+use secure9p_codec::{ErrorCode, Qid, QidType};
 
 use super::tracefs::TraceFs;
 use crate::NineDoorError;

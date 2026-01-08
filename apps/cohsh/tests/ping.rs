@@ -4,7 +4,7 @@ use std::io::Cursor;
 
 use cohesix_ticket::Role;
 use cohsh::{Session, Shell, Transport};
-use secure9p_wire::SessionId;
+use secure9p_codec::SessionId;
 
 #[derive(Default)]
 struct StubTransport;

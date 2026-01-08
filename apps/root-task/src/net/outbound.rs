@@ -487,18 +487,16 @@ impl OutboundCoalescer {
                 consumed = consumed.saturating_add(1);
                 continue;
             }
-            let required = if payload.is_empty() {
-                line_len
-            } else {
-                line_len.saturating_add(1)
-            };
+            let required = line_len.saturating_add(4);
             if payload.len().saturating_add(required) > MAX_PAYLOAD {
                 break;
             }
-            if !payload.is_empty() {
-                if payload.push(b'\n').is_err() {
-                    break;
-                }
+            let total_len: u32 = line_len
+                .saturating_add(4)
+                .try_into()
+                .unwrap_or(u32::MAX);
+            if payload.extend_from_slice(&total_len.to_le_bytes()).is_err() {
+                break;
             }
             if payload.extend_from_slice(line_slice).is_err() {
                 break;
@@ -611,7 +609,10 @@ mod tests {
         });
         assert_eq!(outcome.sent_frames, 1);
         assert_eq!(payload_seen.len(), 1);
-        assert_eq!(payload_seen[0].as_slice(), b"line\nline");
+        let expected = [
+            8u8, 0, 0, 0, b'l', b'i', b'n', b'e', 8u8, 0, 0, 0, b'l', b'i', b'n', b'e',
+        ];
+        assert_eq!(payload_seen[0].as_slice(), expected);
     }
 
     #[test]

@@ -1,9 +1,10 @@
 // Author: Lukas Bower
+// Purpose: Validate event pump behavior for serial and timer flows.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use cohesix_ticket::Role;
+use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
 use embedded_io::ErrorType;
 use nb::Error as NbError;
 use root_task::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
@@ -127,6 +128,13 @@ impl SerialDriver for SharedSerial {
     }
 }
 
+fn issue_queen_token(secret: &str) -> String {
+    let issuer = TicketIssuer::new(secret);
+    let claims =
+        TicketClaims::new(Role::Queen, BudgetSpec::unbounded(), None, MountSpec::empty(), 0);
+    issuer.issue(claims).unwrap().encode().unwrap()
+}
+
 #[test]
 fn event_pump_services_serial_and_timer() {
     let driver = SharedSerial::new();
@@ -144,7 +152,9 @@ fn event_pump_services_serial_and_timer() {
     tickets.register(Role::Queen, "token").unwrap();
     let mut audit = AuditCapture::new();
     let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
-    handle.push_rx(b"attach queen token\nlog\n");
+    let token = issue_queen_token("token");
+    let line = format!("attach queen {token}\nlog\n");
+    handle.push_rx(line.as_bytes());
     pump.poll();
     let metrics = pump.metrics();
     drop(pump);

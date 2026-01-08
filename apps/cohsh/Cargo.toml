@@ -1,4 +1,5 @@
 # Author: Lukas Bower
+# Purpose: Configure the Cohesix shell crate dependencies and metadata.
 [package]
 name = "cohsh"
 version = "0.1.0"
@@ -19,7 +20,7 @@ cohesix-ticket = { workspace = true }
 cohesix-net-constants = { workspace = true }
 cohesix-proto = { workspace = true }
 console-ack-wire = { workspace = true }
-secure9p-wire = { workspace = true }
+secure9p-codec = { workspace = true }
 nine-door = { path = "../nine-door" }
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }

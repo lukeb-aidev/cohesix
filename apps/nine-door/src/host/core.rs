@@ -6,10 +6,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
-use cohesix_ticket::{BudgetSpec, Role};
+use cohesix_ticket::{BudgetSpec, Role, TicketKey, TicketToken};
 use gpu_bridge_host::{status_entry, GpuNamespaceSnapshot};
 use log::{debug, info, trace};
-use secure9p_wire::{
+use secure9p_codec::{
     Codec, ErrorCode, OpenMode, Qid, Request, RequestBody, Response, ResponseBody, SessionId,
     MAX_MSIZE, VERSION,
 };
@@ -28,6 +28,7 @@ pub(crate) struct ServerCore {
     control: ControlPlane,
     next_session: u64,
     sessions: HashMap<SessionId, SessionState>,
+    ticket_keys: HashMap<Role, TicketKey>,
     clock: Arc<dyn Clock>,
 }
 
@@ -48,6 +49,7 @@ impl ServerCore {
             control: ControlPlane::new(),
             next_session: 1,
             sessions: HashMap::new(),
+            ticket_keys: HashMap::new(),
             clock,
         }
     }
@@ -77,6 +79,11 @@ impl ServerCore {
         topology: &GpuNamespaceSnapshot,
     ) -> Result<(), NineDoorError> {
         self.control.install_gpu_nodes(topology)
+    }
+
+    pub(crate) fn register_ticket_secret(&mut self, role: Role, secret: &str) {
+        self.ticket_keys
+            .insert(role, TicketKey::from_secret(secret));
     }
 
     pub(crate) fn handle_frame(
@@ -163,7 +170,12 @@ impl ServerCore {
                 }
                 outcome
             }
-            RequestBody::Attach { fid, uname, .. } => {
+            RequestBody::Attach {
+                fid,
+                uname,
+                aname,
+                ..
+            } => {
                 info!(
                     target: "nine-door",
                     "session {}: attach role={} fid={}",
@@ -185,7 +197,7 @@ impl ServerCore {
                     uname
                 );
                 state.auth_state = AuthState::AttachRequested;
-                let outcome = self.handle_attach(&mut state, *fid, uname.as_str());
+                let outcome = self.handle_attach(&mut state, *fid, uname.as_str(), aname.as_str());
                 if outcome.is_ok() {
                     state.auth_state = AuthState::Attached;
                     info!(
@@ -334,6 +346,7 @@ impl ServerCore {
         state: &mut SessionState,
         fid: u32,
         uname: &str,
+        ticket: &str,
     ) -> Result<ResponseBody, NineDoorError> {
         if state.msize().is_none() {
             return Err(NineDoorError::protocol(
@@ -348,10 +361,48 @@ impl ServerCore {
             ));
         }
         let (role, identity) = parse_role_from_uname(uname)?;
+        let ticket = ticket.trim();
+        let mut identity = identity;
+        let mut budget_override = None;
+        if !ticket.is_empty() {
+            let key = self.ticket_keys.get(&role).ok_or_else(|| {
+                NineDoorError::protocol(ErrorCode::Permission, "ticket rejected")
+            })?;
+            let claims = TicketToken::decode(ticket, key).map_err(|err| {
+                NineDoorError::protocol(ErrorCode::Permission, format!("ticket invalid: {err}"))
+            })?;
+            if claims.claims().role != role {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Permission,
+                    "ticket role mismatch",
+                ));
+            }
+            if let Some(subject) = claims.claims().subject.as_deref() {
+                match &identity {
+                    Some(value) if value != subject => {
+                        return Err(NineDoorError::protocol(
+                            ErrorCode::Permission,
+                            "ticket subject mismatch",
+                        ));
+                    }
+                    None => {
+                        identity = Some(subject.to_owned());
+                    }
+                    _ => {}
+                }
+            }
+            budget_override = Some(claims.claims().budget);
+        } else if role != Role::Queen {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                "ticket required for worker attach",
+            ));
+        }
         let now = self.clock.now();
         match role {
             Role::Queen => {
-                state.configure_role(role, identity, None, BudgetSpec::unbounded(), now);
+                let budget = budget_override.unwrap_or_else(BudgetSpec::unbounded);
+                state.configure_role(role, identity, None, budget, now);
             }
             Role::WorkerHeartbeat => {
                 let worker_id = identity.clone().ok_or_else(|| {
@@ -368,7 +419,8 @@ impl ServerCore {
                 };
                 match record.kind() {
                     WorkerKind::Heartbeat => {
-                        state.configure_role(role, Some(worker_id), None, record.budget(), now);
+                        let budget = budget_override.unwrap_or_else(|| record.budget());
+                        state.configure_role(role, Some(worker_id), None, budget, now);
                     }
                     WorkerKind::Gpu(_) => {
                         return Err(NineDoorError::protocol(
@@ -393,11 +445,12 @@ impl ServerCore {
                 };
                 match record.kind() {
                     WorkerKind::Gpu(gpu) => {
+                        let budget = budget_override.unwrap_or_else(|| record.budget());
                         state.configure_role(
                             role,
                             Some(worker_id),
                             Some(gpu.lease.gpu_id.clone()),
-                            record.budget(),
+                            budget,
                             now,
                         );
                     }
@@ -1664,7 +1717,8 @@ pub(crate) fn role_to_uname(role: Role, identity: Option<&str>) -> Result<String
 mod tests {
     use super::*;
     use crate::{InProcessConnection, NineDoor};
-    use secure9p_wire::OpenMode;
+    use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
+    use secure9p_codec::OpenMode;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -1876,10 +1930,20 @@ mod tests {
     }
 
     fn attach_worker(server: &NineDoor, id: &str) -> InProcessConnection {
+        server.register_ticket_secret(Role::WorkerHeartbeat, "worker-secret");
+        let issuer = TicketIssuer::new("worker-secret");
+        let claims = TicketClaims::new(
+            Role::WorkerHeartbeat,
+            BudgetSpec::default_heartbeat(),
+            Some(id.to_owned()),
+            MountSpec::empty(),
+            0,
+        );
+        let token = issuer.issue(claims).unwrap().encode().unwrap();
         let mut client = server.connect().unwrap();
         client.version(MAX_MSIZE).unwrap();
         client
-            .attach_with_identity(1, Role::WorkerHeartbeat, Some(id))
+            .attach_with_identity(1, Role::WorkerHeartbeat, Some(id), Some(token.as_str()))
             .unwrap();
         client
     }

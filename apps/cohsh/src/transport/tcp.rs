@@ -1,18 +1,19 @@
 // Author: Lukas Bower
+// Purpose: Implement the TCP transport backend for the Cohesix shell console.
 //! TCP transport backend for the Cohesix shell console.
 
 use std::collections::VecDeque;
 use std::env;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
-use cohesix_ticket::Role;
+use cohesix_ticket::{Role, TicketToken};
 use log::{debug, error, info, trace, warn};
-use secure9p_wire::SessionId;
+use secure9p_codec::SessionId;
 
 use crate::proto::{parse_ack, AckStatus};
 use crate::{Session, Transport};
@@ -548,12 +549,15 @@ impl TcpTransport {
         let stream = self.stream.as_mut().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotConnected, "TCP transport not connected")
         })?;
-        let bytes = line.as_bytes().len().saturating_add(1);
+        let total_len = line.as_bytes().len().saturating_add(4);
+        let len: u32 = total_len
+            .try_into()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "frame too large"))?;
+        stream.write_all(&len.to_le_bytes())?;
         stream.write_all(line.as_bytes())?;
-        stream.write_all(b"\n")?;
         trace!(
             "[cohsh][tcp] wrote {} bytes in state {:?}",
-            bytes,
+            total_len,
             self.auth_state
         );
         stream.flush()
@@ -588,24 +592,9 @@ impl TcpTransport {
             .reader
             .as_mut()
             .context("attach to the TCP transport before reading")?;
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => {
-                self.telemetry.log_disconnect(&io::Error::new(
-                    io::ErrorKind::ConnectionReset,
-                    "connection closed by peer",
-                ));
-                Ok(ReadStatus::Closed)
-            }
-            Ok(_) => {
-                self.last_activity = Instant::now();
-                trace!(
-                    "[cohsh][tcp] read {} bytes in state {:?}",
-                    line.len(),
-                    self.auth_state
-                );
-                Ok(ReadStatus::Line(line))
-            }
+        let mut len_buf = [0u8; 4];
+        match reader.read_exact(&mut len_buf) {
+            Ok(()) => {}
             Err(err)
                 if matches!(
                     err.kind(),
@@ -613,10 +602,51 @@ impl TcpTransport {
                 ) =>
             {
                 trace!("[cohsh][tcp] read timeout in state {:?}", self.auth_state);
-                Ok(ReadStatus::Timeout)
+                return Ok(ReadStatus::Timeout);
             }
-            Err(err) => Err(err.into()),
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
+                self.telemetry.log_disconnect(&io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "connection closed by peer",
+                ));
+                return Ok(ReadStatus::Closed);
+            }
+            Err(err) => return Err(err.into()),
         }
+        let total_len = u32::from_le_bytes(len_buf) as usize;
+        if total_len < 4 || total_len > secure9p_codec::MAX_MSIZE as usize {
+            return Err(anyhow!("invalid frame length {total_len}"));
+        }
+        let payload_len = total_len.saturating_sub(4);
+        let mut payload = vec![0u8; payload_len];
+        match reader.read_exact(&mut payload) {
+            Ok(()) => {}
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                trace!("[cohsh][tcp] read timeout in state {:?}", self.auth_state);
+                return Ok(ReadStatus::Timeout);
+            }
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
+                self.telemetry.log_disconnect(&io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "connection closed by peer",
+                ));
+                return Ok(ReadStatus::Closed);
+            }
+            Err(err) => return Err(err.into()),
+        }
+        let line = String::from_utf8(payload).context("frame payload must be UTF-8")?;
+        self.last_activity = Instant::now();
+        trace!(
+            "[cohsh][tcp] read {} bytes in state {:?}",
+            line.len(),
+            self.auth_state
+        );
+        Ok(ReadStatus::Line(line))
     }
 
     fn issue_heartbeat(&mut self) -> Result<HeartbeatOutcome> {
@@ -764,28 +794,35 @@ impl TcpTransport {
             }
         });
         match role {
-            Role::Queen => Ok(trimmed),
+            Role::Queen => {
+                if let Some(value) = trimmed.as_deref() {
+                    TicketToken::decode_unverified(value)
+                        .map_err(|err| anyhow!("ticket is not a valid claims token: {err}"))?;
+                }
+                Ok(trimmed)
+            }
             Role::WorkerHeartbeat | Role::WorkerGpu => {
                 let value = trimmed.ok_or_else(|| {
                     anyhow!("role {:?} requires a non-empty ticket payload", role)
                 })?;
-                if !Self::is_ticket_well_formed(&value) {
+                let claims = TicketToken::decode_unverified(&value)
+                    .map_err(|err| anyhow!("ticket is not a valid claims token: {err}"))?;
+                if claims.role != role {
                     return Err(anyhow!(
-                        "ticket must be 64 hexadecimal characters or base64 encoded"
+                        "ticket role {:?} does not match requested role {:?}",
+                        claims.role,
+                        role
+                    ));
+                }
+                if claims.subject.as_deref().is_none() {
+                    return Err(anyhow!(
+                        "ticket for role {:?} must include a subject identity",
+                        role
                     ));
                 }
                 Ok(Some(value))
             }
         }
-    }
-
-    fn is_ticket_well_formed(value: &str) -> bool {
-        let hex = value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit());
-        let base64_len_ok = matches!(value.len(), 43 | 44 | 86 | 87 | 88);
-        let base64_chars_ok = value
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '-' | '_'));
-        hex || (base64_len_ok && base64_chars_ok)
     }
 
     fn proto_role_from_ticket(role: Role) -> ProtoRole {
@@ -1035,13 +1072,47 @@ impl Transport for TcpTransport {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+    use std::io::Read;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use cohesix_proto::REASON_INVALID_TOKEN;
+    use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
+
+    fn write_frame(stream: &mut TcpStream, line: &str) {
+        let total_len = line.len().saturating_add(4) as u32;
+        stream.write_all(&total_len.to_le_bytes()).unwrap();
+        stream.write_all(line.as_bytes()).unwrap();
+    }
+
+    fn read_frame(reader: &mut BufReader<TcpStream>) -> Option<String> {
+        let mut len_buf = [0u8; 4];
+        if reader.read_exact(&mut len_buf).is_err() {
+            return None;
+        }
+        let total_len = u32::from_le_bytes(len_buf) as usize;
+        if total_len < 4 {
+            return None;
+        }
+        let payload_len = total_len - 4;
+        let mut payload = vec![0u8; payload_len];
+        if reader.read_exact(&mut payload).is_err() {
+            return None;
+        }
+        String::from_utf8(payload).ok()
+    }
 
     #[test]
     fn ticket_validation_enforces_worker_requirements() {
+        let issuer = TicketIssuer::new("worker-secret");
+        let claims = TicketClaims::new(
+            Role::WorkerHeartbeat,
+            BudgetSpec::default_heartbeat(),
+            Some("worker-1".to_string()),
+            MountSpec::empty(),
+            0,
+        );
+        let valid_token = issuer.issue(claims).unwrap().encode().unwrap();
         assert!(TcpTransport::normalise_ticket(Role::Queen, None)
             .unwrap()
             .is_none());
@@ -1052,12 +1123,7 @@ mod tests {
         assert!(TcpTransport::normalise_ticket(Role::WorkerGpu, Some("  ")).is_err());
         assert!(TcpTransport::normalise_ticket(
             Role::WorkerHeartbeat,
-            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
-        )
-        .is_ok());
-        assert!(TcpTransport::normalise_ticket(
-            Role::WorkerHeartbeat,
-            Some("MDEyMzQ1Njc4OUFCQ0RFRjAxMjM0NTY3ODlBQkNERUY="),
+            Some(valid_token.as_str()),
         )
         .is_ok());
     }
@@ -1072,35 +1138,36 @@ mod tests {
             for stream in listener.incoming() {
                 let mut stream = stream.unwrap();
                 connection_barrier.fetch_add(1, Ordering::SeqCst);
-                writeln!(stream, "OK AUTH detail=present-token").unwrap();
+                write_frame(&mut stream, "OK AUTH detail=present-token");
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut line = String::new();
-                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                while let Some(line) = read_frame(&mut reader) {
                     let trimmed = line.trim();
                     if trimmed.starts_with("AUTH ") {
                         if trimmed == "AUTH changeme" {
-                            writeln!(stream, "OK AUTH").unwrap();
+                            write_frame(&mut stream, "OK AUTH");
                         } else {
-                            writeln!(stream, "ERR AUTH reason={}", REASON_INVALID_TOKEN).unwrap();
+                            write_frame(
+                                &mut stream,
+                                format!("ERR AUTH reason={REASON_INVALID_TOKEN}").as_str(),
+                            );
                             break;
                         }
                     } else if trimmed.starts_with("ATTACH") {
-                        writeln!(stream, "OK ATTACH role=queen").unwrap();
+                        write_frame(&mut stream, "OK ATTACH role=queen");
                     } else if trimmed.starts_with("TAIL") {
-                        writeln!(stream, "OK TAIL path=/log/queen.log").unwrap();
+                        write_frame(&mut stream, "OK TAIL path=/log/queen.log");
                         if connection_barrier.load(Ordering::SeqCst) == 1 {
-                            writeln!(stream, "line one").unwrap();
+                            write_frame(&mut stream, "line one");
                             stream.flush().unwrap();
                             break;
                         } else {
-                            writeln!(stream, "line two").unwrap();
-                            writeln!(stream, "END").unwrap();
+                            write_frame(&mut stream, "line two");
+                            write_frame(&mut stream, "END");
                         }
                     } else if trimmed == "PING" {
-                        writeln!(stream, "PONG").unwrap();
-                        writeln!(stream, "OK PING reply=pong").unwrap();
+                        write_frame(&mut stream, "PONG");
+                        write_frame(&mut stream, "OK PING reply=pong");
                     }
-                    line.clear();
                 }
             }
         });
@@ -1156,15 +1223,16 @@ mod tests {
         thread::spawn(move || {
             for stream in listener.incoming().take(1) {
                 let mut stream = stream.unwrap();
-                writeln!(stream, "OK AUTH detail=present-token").unwrap();
+                write_frame(&mut stream, "OK AUTH detail=present-token");
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut line = String::new();
-                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                while let Some(line) = read_frame(&mut reader) {
                     if line.trim().starts_with("AUTH ") {
-                        writeln!(stream, "ERR AUTH reason={}", REASON_INVALID_TOKEN).unwrap();
+                        write_frame(
+                            &mut stream,
+                            format!("ERR AUTH reason={REASON_INVALID_TOKEN}").as_str(),
+                        );
                         break;
                     }
-                    line.clear();
                 }
             }
         });

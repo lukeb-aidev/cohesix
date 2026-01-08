@@ -10,8 +10,8 @@ use cohesix_ticket::Role;
 pub struct TicketSpec {
     /// Role granted by the ticket.
     pub role: Role,
-    /// Ticket string presented by the caller.
-    pub token: &'static str,
+    /// Shared secret used to validate ticket claims.
+    pub secret: &'static str,
 }
 
 /// Service mount entry describing a canonical target to bind.
@@ -38,15 +38,15 @@ pub const fn namespace_mounts() -> &'static [NamespaceMount] {
 const TICKET_INVENTORY: [TicketSpec; 3] = [
     TicketSpec {
         role: Role::Queen,
-        token: "bootstrap",
+        secret: "bootstrap",
     },
     TicketSpec {
         role: Role::WorkerHeartbeat,
-        token: "worker",
+        secret: "worker",
     },
     TicketSpec {
         role: Role::WorkerGpu,
-        token: "worker-gpu",
+        secret: "worker-gpu",
     },
 ];
 
