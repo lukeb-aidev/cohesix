@@ -4927,6 +4927,11 @@ impl VirtioNet {
                 next = desc.next,
                 avail_eq_desc = avail_head == written_desc_index,
             );
+            assert_eq!(
+                avail_head, written_desc_index,
+                "tx publish avail ring mismatch: avail_ring_val={} desc_index_written={}",
+                avail_head, written_desc_index
+            );
         }
         self.tx_wrap_tripwire(old_idx, avail_idx, slot, head_id);
         self.guard_tx_publish_readback(slot, head_id, &resolved_descs[0])?;
