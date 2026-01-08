@@ -182,4 +182,11 @@ flowchart LR
 ---
 
 ## References
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/USERLAND_AND_CLI.md](docs/USERLAND_AND_CLI.md), [docs/INTERFACES.md](docs/INTERFACES.md), [docs/SECURE9P.md](docs/SECURE9P.md), [docs/ROLES_AND_SCHEDULING.md](docs/ROLES_AND_SCHEDULING.md), [docs/GPU_NODES.md](docs/GPU_NODES.md), and [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) for detailed design, interfaces, and milestone tracking.
+See below for detailed design, interfaces, and milestone tracking:
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [docs/USERLAND_AND_CLI.md](docs/USERLAND_AND_CLI.md)
+- [docs/INTERFACES.md](docs/INTERFACES.md)
+- [docs/SECURE9P.md](docs/SECURE9P.md)
+- [docs/ROLES_AND_SCHEDULING.md](docs/ROLES_AND_SCHEDULING.md)
+- [docs/GPU_NODES.md](docs/GPU_NODES.md)
+- [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) 
