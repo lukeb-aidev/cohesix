@@ -327,18 +327,22 @@ impl Codec {
     }
 }
 
+/// Encode a request into a Secure9P wire frame using the default codec.
 pub fn encode_request(req: &Request) -> Result<Vec<u8>, CodecError> {
     Codec.encode_request(req)
 }
 
+/// Encode a response into a Secure9P wire frame using the default codec.
 pub fn encode_response(res: &Response) -> Result<Vec<u8>, CodecError> {
     Codec.encode_response(res)
 }
 
+/// Decode a request from a Secure9P wire frame using the default codec.
 pub fn decode_request(bytes: &[u8]) -> Result<Request, CodecError> {
     Codec.decode_request(bytes)
 }
 
+/// Decode a response from a Secure9P wire frame using the default codec.
 pub fn decode_response(bytes: &[u8]) -> Result<Response, CodecError> {
     Codec.decode_response(bytes)
 }

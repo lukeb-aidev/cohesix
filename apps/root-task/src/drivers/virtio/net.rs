@@ -705,7 +705,7 @@ fn reclaim_used_entry_common(
     {
         return TxReclaimResult::HeadTransitionFailed;
     }
-    if let Some(mut tracker) = slots {
+    if let Some(tracker) = slots {
         if let Err(err) = tracker.complete(id) {
             return TxReclaimResult::SlotCompletionFailed(err);
         }
@@ -4925,7 +4925,7 @@ impl VirtioNet {
                 len = desc.len,
                 flags = desc.flags,
                 next = desc.next,
-                avail_head == written_desc_index,
+                avail_eq_desc = avail_head == written_desc_index,
             );
         }
         self.tx_wrap_tripwire(old_idx, avail_idx, slot, head_id);
