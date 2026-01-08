@@ -144,6 +144,7 @@ static DMA_ERROR_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_QMEM_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_RING_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_LEN_ZERO_VISIBILITY_LOGGED: AtomicBool = AtomicBool::new(false);
+static USED_POP_INVARIANT_LOGGED: AtomicBool = AtomicBool::new(false);
 static VQ_LAYOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_FORCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static VQ_ADDRESS_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
@@ -3801,6 +3802,7 @@ impl VirtioNet {
         id: u16,
         ring_slot: u16,
         used_idx: u16,
+        last_used_before: u16,
         head_state: Option<TxHeadState>,
         slot_state: Option<TxSlotState>,
     ) -> bool {
@@ -3809,6 +3811,7 @@ impl VirtioNet {
         }
         self.tx_tripwire_b_logged = true;
         let avail_idx = self.tx_queue.indices_no_sync().1;
+        let last_used_after = self.tx_queue.last_used;
         let desc = if id < self.tx_queue.size {
             self.tx_queue.read_descriptor(id)
         } else {
@@ -3821,13 +3824,14 @@ impl VirtioNet {
         };
         warn!(
             target: "net-console",
-            "[virtio-net][tx-tripwire] used mismatch reason={reason} head={head} ring_slot={ring_slot} used_idx={used_idx} avail_idx={avail_idx} last_used={last_used} head_state={head_state:?} slot_state={slot_state:?} desc=0x{addr:016x}/{len} flags=0x{flags:04x} next={next}",
+            "[virtio-net][tx-tripwire] used mismatch reason={reason} head={head} ring_slot={ring_slot} used_idx={used_idx} avail_idx={avail_idx} last_used_before={last_used_before} last_used_after={last_used_after} head_state={head_state:?} slot_state={slot_state:?} desc=0x{addr:016x}/{len} flags=0x{flags:04x} next={next}",
             reason = reason,
             head = id,
             ring_slot = ring_slot,
             used_idx = used_idx,
             avail_idx = avail_idx,
-            last_used = self.tx_queue.last_used,
+            last_used_before = last_used_before,
+            last_used_after = last_used_after,
             head_state = head_state,
             slot_state = slot_state,
             addr = desc.addr,
@@ -3838,6 +3842,79 @@ impl VirtioNet {
         let qsize = usize::from(self.tx_queue.size);
         if qsize != 0 {
             let ring_slot_usize = (ring_slot as usize) % qsize;
+            if VIRTQ_DIAG {
+                let truth_slot = (last_used_before as usize) % qsize;
+                if let Err(err) = self.tx_queue.invalidate_used_header_for_cpu() {
+                    warn!(
+                        target: "virtio-net",
+                        "[virtio-net][tx-tripwire] truth-table used header invalidate failed: err={err:?}",
+                    );
+                }
+                if let Err(err) = self.tx_queue.invalidate_avail_idx_for_cpu() {
+                    warn!(
+                        target: "virtio-net",
+                        "[virtio-net][tx-tripwire] truth-table avail header invalidate failed: err={err:?}",
+                    );
+                }
+                if let Err(err) = self.tx_queue.invalidate_avail_entry_for_cpu(truth_slot) {
+                    warn!(
+                        target: "virtio-net",
+                        "[virtio-net][tx-tripwire] truth-table avail slot invalidate failed: slot={} err={err:?}",
+                        truth_slot,
+                    );
+                }
+                if let Err(err) = self.tx_queue.invalidate_used_elem_for_cpu(truth_slot) {
+                    warn!(
+                        target: "virtio-net",
+                        "[virtio-net][tx-tripwire] truth-table used elem invalidate failed: slot={} err={err:?}",
+                        truth_slot,
+                    );
+                }
+                dma_load_barrier();
+                let used_hdr = self.tx_queue.used.as_ptr();
+                let avail_hdr = self.tx_queue.avail.as_ptr();
+                let used_idx = u16::from_le(unsafe { read_volatile(&(*used_hdr).idx) });
+                let avail_idx = u16::from_le(unsafe { read_volatile(&(*avail_hdr).idx) });
+                let avail_ptr =
+                    unsafe { (*avail_hdr).ring.as_ptr().add(truth_slot) as *const u16 };
+                let avail_ring_slot = unsafe { u16::from_le(read_volatile(avail_ptr)) };
+                let used_ptr = unsafe {
+                    (*used_hdr).ring.as_ptr().add(truth_slot) as *const VirtqUsedElem
+                };
+                let used_elem = unsafe { read_volatile(used_ptr) };
+                let used_id = u32::from_le(used_elem.id);
+                let used_len = u32::from_le(used_elem.len);
+                warn!(
+                    target: "virtio-net",
+                    "[virtio-net][tx-tripwire] truth-table used_idx={} last_used_before={} slot={} avail_idx={} used.id={} used.len={} avail.ring[slot]={}",
+                    used_idx,
+                    last_used_before,
+                    truth_slot,
+                    avail_idx,
+                    used_id,
+                    used_len,
+                    avail_ring_slot,
+                );
+                let avail_desc = if avail_ring_slot < self.tx_queue.size {
+                    Some(self.tx_queue.read_descriptor(avail_ring_slot))
+                } else {
+                    None
+                };
+                let used_head = u16::try_from(used_id).ok();
+                let used_desc = used_head
+                    .filter(|head| *head < self.tx_queue.size)
+                    .map(|head| (head, self.tx_queue.read_descriptor(head)));
+                warn!(
+                    target: "virtio-net",
+                    "[virtio-net][tx-tripwire] truth-desc avail_head={} state={:?} desc={:?} used_head={:?} state={:?} desc={:?}",
+                    avail_ring_slot,
+                    self.tx_head_mgr.state(avail_ring_slot),
+                    avail_desc,
+                    used_head,
+                    used_head.and_then(|head| self.tx_head_mgr.state(head)),
+                    used_desc.map(|(_, desc)| desc),
+                );
+            }
             if let Err(err) = self.tx_queue.invalidate_used_elem_for_cpu(ring_slot_usize) {
                 warn!(
                     target: "virtio-net",
@@ -3855,7 +3932,7 @@ impl VirtioNet {
                 used_elem.id,
                 used_elem.len,
             );
-            let expected_slot = (self.tx_queue.last_used as usize) % qsize;
+            let expected_slot = (last_used_before as usize) % qsize;
             if let Err(err) = self.tx_queue.invalidate_avail_entry_for_cpu(expected_slot) {
                 warn!(
                     target: "virtio-net",
@@ -3867,14 +3944,15 @@ impl VirtioNet {
             let expected_head = self.tx_queue.read_avail_slot(expected_slot);
             warn!(
                 target: "virtio-net",
-                "[virtio-net][tx-tripwire] used-slot correlation used_slot={} used.id={} expected_slot={} expected_head={} avail.idx={} used.idx={} last_used={}",
+                "[virtio-net][tx-tripwire] used-slot correlation used_slot={} used.id={} expected_slot={} expected_head={} avail.idx={} used.idx={} last_used_before={} last_used_after={}",
                 ring_slot_usize,
                 used_elem.id,
                 expected_slot,
                 expected_head,
                 avail_idx,
                 used_idx,
-                self.tx_queue.last_used,
+                last_used_before,
+                last_used_after,
             );
             let expected_a = self.tx_queue.read_avail_slot(ring_slot_usize);
             let expected_b = self.tx_head_mgr.published_for_slot(ring_slot);
@@ -4134,6 +4212,7 @@ impl VirtioNet {
         ring_slot: u16,
         used_len: u32,
         used_idx: u16,
+        last_used_before: u16,
     ) -> Result<TxReclaimResult, ()> {
         let head_state = self.tx_head_mgr.state(id);
         let slot_state = if NET_VIRTIO_TX_V2 {
@@ -4148,6 +4227,7 @@ impl VirtioNet {
                 id,
                 ring_slot,
                 used_idx,
+                last_used_before,
                 head_state,
                 slot_state,
             ) {
@@ -4162,7 +4242,7 @@ impl VirtioNet {
                 ring_slot,
                 used_idx,
                 self.tx_queue.indices_no_sync().1,
-                self.tx_queue.last_used,
+                last_used_before,
                 head_state,
                 slot_state,
             );
@@ -4189,6 +4269,7 @@ impl VirtioNet {
                     id,
                     ring_slot,
                     used_idx,
+                    last_used_before,
                     state,
                     slot_state,
                 ) {
@@ -4207,6 +4288,7 @@ impl VirtioNet {
                     id,
                     ring_slot,
                     used_idx,
+                    last_used_before,
                     head_state,
                     slot_state,
                 ) {
@@ -4231,6 +4313,7 @@ impl VirtioNet {
                     id,
                     ring_slot,
                     used_idx,
+                    last_used_before,
                     head_state,
                     slot_state,
                 ) {
@@ -4248,6 +4331,7 @@ impl VirtioNet {
                     id,
                     ring_slot,
                     used_idx,
+                    last_used_before,
                     head_state,
                     slot_state,
                 ) {
@@ -5603,16 +5687,20 @@ impl VirtioNet {
         let mut progressed = false;
         loop {
             match self.tx_queue.pop_used("TX", true) {
-                Ok(Some((id, len, ring_slot))) => {
+                Ok(Some((id, len, ring_slot, used_idx, last_used_before))) => {
                     progressed = true;
                     self.record_tx_used_entry(id, len);
                     // used.len is ignored for TX; ownership returns solely via used.id and tracked state.
-                    let reclaim_result =
-                        match self.reclaim_posted_head(id, ring_slot, len, self.tx_queue.last_used)
-                        {
-                            Ok(result) => result,
-                            Err(()) => break,
-                        };
+                    let reclaim_result = match self.reclaim_posted_head(
+                        id,
+                        ring_slot,
+                        len,
+                        used_idx,
+                        last_used_before,
+                    ) {
+                        Ok(result) => result,
+                        Err(()) => break,
+                    };
                     if matches!(reclaim_result, TxReclaimResult::Reclaimed) {
                         self.clear_tx_desc_chain(id);
                         NET_DIAG.record_tx_completion();
@@ -5734,6 +5822,7 @@ impl VirtioNet {
                 id,
                 ring_slot as u16,
                 elem_len,
+                used_idx,
                 self.tx_v2_last_used,
             ) {
                 Ok(result) => result,
@@ -6007,7 +6096,7 @@ impl VirtioNet {
         }
         self.used_poll_calls = self.used_poll_calls.wrapping_add(1);
         match self.rx_queue.pop_used("RX", false) {
-            Ok(Some((id, len, _slot))) => {
+            Ok(Some((id, len, _slot, _used_idx, _last_used_before))) => {
                 let len = len as usize;
                 let header_len = self.rx_header_len;
                 if len < header_len {
@@ -8786,7 +8875,8 @@ mod tests {
             result = queue.pop_used("TX", false).expect("pop used ok");
         });
 
-        let (id, len, ring_slot) = result.expect("used elem visible after retry");
+        let (id, len, ring_slot, _used_idx, _last_used_before) =
+            result.expect("used elem visible after retry");
         assert_eq!(id, 0);
         assert_eq!(len, 64);
         assert_eq!(ring_slot, 0);
@@ -9646,7 +9736,7 @@ impl VirtQueue {
         &mut self,
         queue_label: &'static str,
         allow_zero_len: bool,
-    ) -> Result<Option<(u16, u32, u16)>, ForensicFault> {
+    ) -> Result<Option<(u16, u32, u16, u16, u16)>, ForensicFault> {
         let used = self.used.as_ptr();
         if let Err(err) = self.invalidate_used_header_for_cpu() {
             warn!(
@@ -9659,27 +9749,42 @@ impl VirtQueue {
             self.freeze_and_capture("used_header_invalidate_failed");
             return Ok(None);
         }
-        let idx = u16::from_le(unsafe { read_volatile(&(*used).idx) });
-        virtq_used_load_barrier();
-        if self.last_used == idx {
+        let used_idx = u16::from_le(unsafe { read_volatile(&(*used).idx) });
+        let last_used = self.last_used;
+        if last_used == used_idx {
             return Ok(None);
         }
-        let distance = idx.wrapping_sub(self.last_used);
+        virtq_used_load_barrier();
+        let distance = used_idx.wrapping_sub(last_used);
         if distance > self.size {
             error!(
                 target: "net-console",
                 "[virtio-net] used ring advanced beyond queue size: last_used={} idx={} size={} distance={}",
-                self.last_used,
-                idx,
+                last_used,
+                used_idx,
                 self.size,
                 distance,
             );
             return Ok(None);
         }
         let qsize = usize::from(self.size);
-
+        let expected_slot = (last_used as usize) % qsize;
         let ring_slot = (self.last_used as usize) % qsize;
-        self.assert_ring_slot(self.last_used, ring_slot, "used");
+        if VIRTQ_DIAG && ring_slot != expected_slot {
+            if !USED_POP_INVARIANT_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][tx] pop_used invariant violation: last_used={} used_idx={} qsize={} expected_slot={} actual_slot={}",
+                    last_used,
+                    used_idx,
+                    qsize,
+                    expected_slot,
+                    ring_slot,
+                );
+            }
+            return Ok(None);
+        }
+        self.assert_ring_slot(last_used, ring_slot, "used");
         let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
         let idx_ptr = unsafe { &(*used).idx as *const u16 as usize };
         assert!(
@@ -9740,7 +9845,7 @@ impl VirtQueue {
                         "[virtio-net] used len zero after re-read: queue={} head={} idx={} ring_slot={}",
                         queue_label,
                         retry_id,
-                        self.last_used,
+                        last_used,
                         ring_slot,
                     );
                 }
@@ -9828,14 +9933,20 @@ impl VirtQueue {
         debug!(
             target: "net-console",
             "[virtio-net] pop_used: last_used={} idx={} ring_slot={} id={} len={}",
-            self.last_used,
-            idx,
+            last_used,
+            used_idx,
             ring_slot,
             elem_id,
             elem_len,
         );
-        self.last_used = self.last_used.wrapping_add(1);
-        Ok(Some((elem_id as u16, elem_len, ring_slot as u16)))
+        self.last_used = last_used.wrapping_add(1);
+        Ok(Some((
+            elem_id as u16,
+            elem_len,
+            ring_slot as u16,
+            used_idx,
+            last_used,
+        )))
     }
 }
 
