@@ -4911,7 +4911,7 @@ impl VirtioNet {
             };
             warn!(
                 target: "net-console",
-                "[virtio-net][tx-id] qsize={} avail_idx_before={} avail_idx_after={} ring_slot={} avail_ring_val={} head_id={} written_desc_index={} head_gen={:?} head_state={:?} desc{{addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}}} avail_eq_desc={}",
+                "[virtio-net][tx-id] qsize={} avail_idx_before={} avail_idx_after={} ring_slot={} avail_ring_val={} head_id={} written_desc_index={} head_gen={:?} head_state={:?} desc{{addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}}} avail_eq_desc={avail_eq_desc}",
                 qsize,
                 old_idx,
                 avail_idx,
