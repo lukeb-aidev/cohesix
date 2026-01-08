@@ -442,6 +442,9 @@ fn virtq_alias_audit_once(
         log_virtq_alias_range(label, "desc", desc_vaddr, desc_paddr, layout.desc_len);
         log_virtq_alias_range(label, "avail", avail_vaddr, avail_paddr, layout.avail_len);
         log_virtq_alias_range(label, "used", used_vaddr, used_paddr, layout.used_len);
+        crate::sel4::dump_dma_mappings_for_range(desc_paddr, layout.desc_len, "virtq.desc");
+        crate::sel4::dump_dma_mappings_for_range(avail_paddr, layout.avail_len, "virtq.avail");
+        crate::sel4::dump_dma_mappings_for_range(used_paddr, layout.used_len, "virtq.used");
     }
 
     let slot = slot.unwrap_or(0);

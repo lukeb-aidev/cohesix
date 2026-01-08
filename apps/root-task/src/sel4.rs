@@ -77,6 +77,79 @@ static CANONICAL_ROOT_SLOT: AtomicUsize = AtomicUsize::new(CANONICAL_ROOT_SENTIN
 static EP_VALIDATED: AtomicBool = AtomicBool::new(false);
 static IPC_SEND_UNLOCKED: AtomicBool = AtomicBool::new(false);
 static BOOTINFO_WINDOW_DUMPED: AtomicBool = AtomicBool::new(false);
+const DMA_MAP_DIAG: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
+const DMA_MAP_LOG_CAPACITY: usize = 128;
+
+#[derive(Clone, Copy)]
+struct DmaMapRecord {
+    paddr: usize,
+    vaddr: usize,
+    len: usize,
+    attr: usize,
+}
+
+static DMA_MAP_LOG: SpinMutex<Vec<DmaMapRecord, DMA_MAP_LOG_CAPACITY>> = SpinMutex::new(Vec::new());
+static DMA_MAP_DROPS_LOGGED: AtomicBool = AtomicBool::new(false);
+
+pub fn record_dma_mapping(paddr: usize, vaddr: usize, len: usize, attr: usize) {
+    if !DMA_MAP_DIAG || len == 0 {
+        return;
+    }
+    let mut log = DMA_MAP_LOG.lock();
+    if log.len() == log.capacity() {
+        if !DMA_MAP_DROPS_LOGGED.swap(true, Ordering::AcqRel) {
+            log::warn!(
+                target: "hal",
+                "[hal][dma-map] mapping log full; dropping additional entries",
+            );
+        }
+        return;
+    }
+    let _ = log.push(DmaMapRecord {
+        paddr,
+        vaddr,
+        len,
+        attr,
+    });
+}
+
+pub fn dump_dma_mappings_for_range(paddr: usize, len: usize, label: &str) {
+    if !DMA_MAP_DIAG || len == 0 {
+        return;
+    }
+    let end = paddr.saturating_add(len);
+    let log = DMA_MAP_LOG.lock();
+    let mut hits = 0usize;
+    for (idx, record) in log.iter().enumerate() {
+        let rec_end = record.paddr.saturating_add(record.len);
+        if paddr < rec_end && record.paddr < end {
+            hits = hits.saturating_add(1);
+            log::info!(
+                target: "hal",
+                "[hal][dma-map] {label} hit={hits} idx={idx} paddr=0x{paddr:016x}..0x{pend:016x} vaddr=0x{vaddr:016x}..0x{vend:016x} len=0x{len:x} attr=0x{attr:08x}",
+                paddr = record.paddr,
+                pend = rec_end,
+                vaddr = record.vaddr,
+                vend = record.vaddr.saturating_add(record.len),
+                len = record.len,
+                attr = record.attr,
+            );
+        }
+    }
+    if hits == 0 {
+        log::warn!(
+            target: "hal",
+            "[hal][dma-map] {label} no mapping record for paddr=0x{paddr:016x} len=0x{len:x}",
+            paddr = paddr,
+            len = len,
+        );
+    } else if hits > 1 {
+        log::warn!(
+            target: "hal",
+            "[hal][dma-map] {label} multiple mappings detected (hits={hits})",
+        );
+    }
+}
 
 /// Logs ABI sanity for key seL4 types to validate the Rust FFI surface.
 pub fn log_sel4_type_sanity() {
@@ -3383,6 +3456,7 @@ impl<'a> KernelEnv<'a> {
         self.dma_cursor = range.end;
         self.map_frame(frame_slot, range.start, attr, false)?;
         let attr_raw: usize = unsafe { core::mem::transmute(attr) };
+        record_dma_mapping(reserved.paddr(), range.start, PAGE_SIZE, attr_raw);
         ::log::info!(
             target: "hal",
             "[hal] dma frame mapped vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=0x{attr:08x}",
