@@ -2022,6 +2022,8 @@ pub struct VirtioNet {
     tx_invalid_publish_logged: bool,
     tx_publish_readback_logged: bool,
     tx_publish_readback_once: bool,
+    tx_publish_desc_check_once: bool,
+    tx_publish_index_invariant_logged: bool,
     tx_reclaim_state_violation_logged: bool,
     tx_reclaim_stall_logged: bool,
     #[cfg(debug_assertions)]
@@ -2530,6 +2532,8 @@ impl VirtioNet {
             tx_invalid_publish_logged: false,
             tx_publish_readback_logged: false,
             tx_publish_readback_once: false,
+            tx_publish_desc_check_once: false,
+            tx_publish_index_invariant_logged: false,
             tx_reclaim_state_violation_logged: false,
             tx_reclaim_stall_logged: false,
             #[cfg(debug_assertions)]
@@ -3391,15 +3395,81 @@ impl VirtioNet {
             desc.len != 0,
             "tx publish descriptor len zero before avail push"
         );
+        let written_desc_index = head_id;
         if self
             .tx_queue
-            .setup_descriptor(head_id, entry.last_addr, total_len, desc.flags, None)
+            .setup_descriptor(
+                written_desc_index,
+                entry.last_addr,
+                total_len,
+                desc.flags,
+                None,
+            )
             .is_err()
         {
             self.device_faulted = true;
             self.last_error.get_or_insert("tx_desc_rewrite_failed");
             self.freeze_and_capture("tx_desc_rewrite_failed");
             return Err(TxPublishError::InvalidDescriptor);
+        }
+        if VIRTQ_DIAG
+            && !self.tx_publish_desc_check_once
+            && avail_idx == 16
+            && publish_slot == 0
+        {
+            self.tx_publish_desc_check_once = true;
+            let desc_written = self.tx_queue.read_descriptor(written_desc_index);
+            let desc0 = self.tx_queue.read_descriptor(0);
+            let avail_idx_after = avail_idx.wrapping_add(1);
+            info!(
+                target: "virtio-net",
+                "[virtio-net][tx-desc-check] head={} written_idx={} ring_slot={} avail_idx={}→{} desc_written=0x{addr:016x}/{len}/0x{flags:04x}/{next} desc0=0x{addr0:016x}/{len0}/0x{flags0:04x}/{next0}",
+                head_id,
+                written_desc_index,
+                publish_slot,
+                avail_idx,
+                avail_idx_after,
+                addr = desc_written.addr,
+                len = desc_written.len,
+                flags = desc_written.flags,
+                next = desc_written.next,
+                addr0 = desc0.addr,
+                len0 = desc0.len,
+                flags0 = desc0.flags,
+                next0 = desc0.next,
+            );
+            let index_ok = written_desc_index == head_id;
+            let desc_ok = desc_written.addr == entry.last_addr
+                && desc_written.len == total_len
+                && desc_written.addr != 0
+                && desc_written.len != 0;
+            let flags_ok = (desc_written.flags & VIRTQ_DESC_F_NEXT) == 0 && desc_written.next == 0;
+            if !(index_ok && desc_ok && flags_ok) {
+                self.tx_invariant_violations = self.tx_invariant_violations.saturating_add(1);
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][tx-desc-check] mismatch: head={} written_idx={} ring_slot={} avail_idx={}→{} expected=0x{exp_addr:016x}/{exp_len}/flags_no_next desc_written=0x{addr:016x}/{len}/0x{flags:04x}/{next} desc0=0x{addr0:016x}/{len0}/0x{flags0:04x}/{next0}",
+                    head_id,
+                    written_desc_index,
+                    publish_slot,
+                    avail_idx,
+                    avail_idx_after,
+                    exp_addr = entry.last_addr,
+                    exp_len = total_len,
+                    addr = desc_written.addr,
+                    len = desc_written.len,
+                    flags = desc_written.flags,
+                    next = desc_written.next,
+                    addr0 = desc0.addr,
+                    len0 = desc0.len,
+                    flags0 = desc0.flags,
+                    next0 = desc0.next,
+                );
+                let _ = self.tx_head_mgr.cancel_publish(head_id);
+                self.cancel_tx_slot(head_id, "tx_publish_desc_check_failed");
+                self.last_error.get_or_insert("tx_publish_desc_check_failed");
+                return Err(TxPublishError::InvalidDescriptor);
+            }
         }
         // Ensure the descriptor clean completes before we expose the head via avail.
         dma_barrier();
@@ -3432,6 +3502,32 @@ impl VirtioNet {
                     let _ = self.tx_head_mgr.cancel_publish(head_id);
                     self.cancel_tx_slot(head_id, "tx_publish_inflight_failed");
                     return Err(TxPublishError::InvalidDescriptor);
+                }
+                if VIRTQ_DIAG && !self.tx_publish_index_invariant_logged {
+                    self.tx_publish_index_invariant_logged = true;
+                    let avail_head = self.tx_queue.read_avail_slot(slot as usize);
+                    let desc_written = self.tx_queue.read_descriptor(written_desc_index);
+                    let index_ok = avail_head == written_desc_index && written_desc_index == head_id;
+                    let desc_ok = desc_written.addr != 0 && desc_written.len != 0;
+                    if !(index_ok && desc_ok) {
+                        self.tx_invariant_violations =
+                            self.tx_invariant_violations.saturating_add(1);
+                        warn!(
+                            target: "net-console",
+                            "[virtio-net][tx-index-invariant] mismatch: head={} ring_slot={} avail_head={} written_idx={} desc=0x{addr:016x}/{len} flags=0x{flags:04x} next={next}",
+                            head_id,
+                            slot,
+                            avail_head,
+                            written_desc_index,
+                            addr = desc_written.addr,
+                            len = desc_written.len,
+                            flags = desc_written.flags,
+                            next = desc_written.next,
+                        );
+                        self.last_error.get_or_insert("tx_publish_index_invariant");
+                        self.freeze_tx_publishes("tx_publish_index_invariant");
+                        return Err(TxPublishError::InvalidDescriptor);
+                    }
                 }
                 if NET_VIRTIO_TX_V2 {
                     if self.tx_slots.mark_in_flight(head_id).is_err() {
@@ -7397,9 +7493,10 @@ impl VirtioNet {
             );
         }
         for (idx, desc) in descs.iter().enumerate() {
+            let desc_index = head_id.wrapping_add(idx as u16);
             info!(
                 target: "virtio-net",
-                "[virtio-net][tx-publish] desc[{idx}] addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next:?}",
+                "[virtio-net][tx-publish] desc[{desc_index}] addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next:?}",
                 addr = desc.addr,
                 len = desc.len,
                 flags = desc.flags,
