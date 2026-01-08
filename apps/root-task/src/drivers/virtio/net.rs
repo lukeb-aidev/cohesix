@@ -17,13 +17,17 @@ use core::ops::Range;
 use core::ptr::read_unaligned;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 use core::sync::atomic::{
-    compiler_fence, AtomicBool, AtomicU32, AtomicU64, Ordering as AtomicOrdering,
+    compiler_fence, AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering as AtomicOrdering,
 };
-use core::{cell::Cell, sync::atomic::fence};
+use core::cell::Cell;
+#[cfg(not(target_arch = "aarch64"))]
+use core::sync::atomic::fence;
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, trace, warn};
-use sel4_sys::{seL4_ARM_Page_Uncached, seL4_Error, seL4_NotEnoughMemory, seL4_PageBits};
+use sel4_sys::{
+    seL4_ARM_Page_Default, seL4_ARM_Page_Uncached, seL4_Error, seL4_NotEnoughMemory, seL4_PageBits,
+};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
@@ -48,12 +52,17 @@ const NET_VIRTIO_TX_V2: bool = cfg!(feature = "net-virtio-tx-v2");
 const VIRTIO_GUARD_QUEUE: bool = cfg!(feature = "virtio_guard_queue");
 const VIRTIO_DMA_TRACE: bool = cfg!(feature = "net-diag") || cfg!(feature = "trace-heavy-init");
 const DMA_NONCOHERENT: bool = cfg!(target_arch = "aarch64");
+const VIRTQ_FORCE_CACHEABLE: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
+const VIRTQ_DIAG: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
 const VIRTIO_TX_CLEAR_DESC_ON_FREE: bool = false;
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
 const VIRTIO_MMIO_SLOTS: usize = 8;
 const TX_WRAP_TRIPWIRE_LIMIT: u32 = 4;
+const VIRTQ_DIAG_QUEUE_MAX: usize = 2;
+const VIRTQ_DIAG_ENTRY_COUNT: usize = 8;
+const VIRTQ_DIAG_TOTAL: usize = VIRTQ_DIAG_QUEUE_MAX * VIRTQ_DIAG_ENTRY_COUNT;
 
 const VIRTIO_MMIO_MAGIC: u32 = 0x7472_6976;
 const VIRTIO_MMIO_VERSION_LEGACY: u32 = 1;
@@ -118,6 +127,14 @@ static RX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static RX_ARM_START_LOGGED: AtomicBool = AtomicBool::new(false);
 static RX_ARM_END_LOGGED: AtomicBool = AtomicBool::new(false);
+static VIRTQ_DIAG_START: [AtomicUsize; VIRTQ_DIAG_TOTAL] =
+    [const { AtomicUsize::new(0) }; VIRTQ_DIAG_TOTAL];
+static VIRTQ_DIAG_END: [AtomicUsize; VIRTQ_DIAG_TOTAL] =
+    [const { AtomicUsize::new(0) }; VIRTQ_DIAG_TOTAL];
+static VIRTQ_DIAG_IDENTITY_LOGGED: [AtomicBool; VIRTQ_DIAG_QUEUE_MAX] =
+    [const { AtomicBool::new(false) }; VIRTQ_DIAG_QUEUE_MAX];
+static VIRTQ_DIAG_CACHE_LOGGED: [AtomicBool; VIRTQ_DIAG_TOTAL * 2] =
+    [const { AtomicBool::new(false) }; VIRTQ_DIAG_TOTAL * 2];
 static DMA_CLEAN_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static RX_CACHE_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -135,6 +152,7 @@ static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
 static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
+static TX_ID_SEM_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_TRIPWIRE: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "net-backend-virtio")]
 static mut VIRTIO_NET_STORAGE: MaybeUninit<VirtioNet> = MaybeUninit::uninit();
@@ -196,6 +214,170 @@ fn log_dma_programming(label: &str, vaddr: usize, paddr: usize, len: usize) {
         paddr = paddr,
         len = len,
     );
+}
+
+const VIRTQ_DIAG_QUEUE_LABELS: [&str; VIRTQ_DIAG_QUEUE_MAX] = ["rx", "tx"];
+const VIRTQ_DIAG_ENTRY_LABELS: [&str; VIRTQ_DIAG_ENTRY_COUNT] = [
+    "desc",
+    "avail",
+    "used",
+    "desc[0]",
+    "avail.ring[0]",
+    "avail.idx",
+    "used.ring[0]",
+    "used.idx",
+];
+
+#[derive(Clone, Copy)]
+enum CacheDiagOp {
+    Clean = 0,
+    Invalidate = 1,
+}
+
+fn virtq_diag_entry_index(queue_index: u32, entry: usize) -> Option<usize> {
+    if queue_index as usize >= VIRTQ_DIAG_QUEUE_MAX || entry >= VIRTQ_DIAG_ENTRY_COUNT {
+        return None;
+    }
+    Some((queue_index as usize) * VIRTQ_DIAG_ENTRY_COUNT + entry)
+}
+
+fn virtq_diag_register(queue_index: u32, base_vaddr: usize, base_paddr: usize, layout: &VirtqLayout) {
+    if !VIRTQ_DIAG {
+        return;
+    }
+    let Some(base_idx) = virtq_diag_entry_index(queue_index, 0) else {
+        return;
+    };
+    let desc_start = base_vaddr.saturating_add(layout.desc_offset);
+    let desc_end = desc_start.saturating_add(layout.desc_len);
+    let avail_start = base_vaddr.saturating_add(layout.avail_offset);
+    let avail_end = avail_start.saturating_add(layout.avail_len);
+    let used_start = base_vaddr.saturating_add(layout.used_offset);
+    let used_end = used_start.saturating_add(layout.used_len);
+    let desc0_start = desc_start;
+    let desc0_end = desc0_start.saturating_add(core::mem::size_of::<VirtqDesc>());
+    let avail_ring0_start = avail_start.saturating_add(4);
+    let avail_ring0_end = avail_ring0_start.saturating_add(core::mem::size_of::<u16>());
+    let avail_idx_start = avail_start.saturating_add(2);
+    let avail_idx_end = avail_idx_start.saturating_add(core::mem::size_of::<u16>());
+    let used_ring0_start = used_start.saturating_add(4);
+    let used_ring0_end = used_ring0_start.saturating_add(core::mem::size_of::<VirtqUsedElem>());
+    let used_idx_start = used_start.saturating_add(2);
+    let used_idx_end = used_idx_start.saturating_add(core::mem::size_of::<u16>());
+
+    let ranges = [
+        (desc_start, desc_end),
+        (avail_start, avail_end),
+        (used_start, used_end),
+        (desc0_start, desc0_end),
+        (avail_ring0_start, avail_ring0_end),
+        (avail_idx_start, avail_idx_end),
+        (used_ring0_start, used_ring0_end),
+        (used_idx_start, used_idx_end),
+    ];
+    for (offset, (start, end)) in ranges.iter().enumerate() {
+        let idx = base_idx + offset;
+        VIRTQ_DIAG_START[idx].store(*start, AtomicOrdering::Release);
+        VIRTQ_DIAG_END[idx].store(*end, AtomicOrdering::Release);
+    }
+
+    let queue_idx = queue_index as usize;
+    if queue_idx < VIRTQ_DIAG_QUEUE_MAX
+        && !VIRTQ_DIAG_IDENTITY_LOGGED[queue_idx].swap(true, AtomicOrdering::AcqRel)
+    {
+        let desc_paddr = base_paddr.saturating_add(layout.desc_offset);
+        let avail_paddr = base_paddr.saturating_add(layout.avail_offset);
+        let used_paddr = base_paddr.saturating_add(layout.used_offset);
+        let desc0_paddr = desc_paddr;
+        let avail_ring0_paddr = avail_paddr.saturating_add(4);
+        let avail_idx_paddr = avail_paddr.saturating_add(2);
+        let used_ring0_paddr = used_paddr.saturating_add(4);
+        let used_idx_paddr = used_paddr.saturating_add(2);
+        let label = VIRTQ_DIAG_QUEUE_LABELS[queue_idx];
+        info!(
+            target: "virtio-net",
+            "[virtio-net][virtq-id] {label} desc vaddr=0x{desc_start:016x} paddr=0x{desc_paddr:016x} len=0x{desc_len:x} avail vaddr=0x{avail_start:016x} paddr=0x{avail_paddr:016x} len=0x{avail_len:x} used vaddr=0x{used_start:016x} paddr=0x{used_paddr:016x} len=0x{used_len:x}",
+            desc_start = desc_start,
+            desc_paddr = desc_paddr,
+            desc_len = layout.desc_len,
+            avail_start = avail_start,
+            avail_paddr = avail_paddr,
+            avail_len = layout.avail_len,
+            used_start = used_start,
+            used_paddr = used_paddr,
+            used_len = layout.used_len,
+        );
+        info!(
+            target: "virtio-net",
+            "[virtio-net][virtq-id] {label} desc[0] vaddr=0x{desc0_start:016x} paddr=0x{desc0_paddr:016x} len=0x{desc0_len:x} avail.ring[0] vaddr=0x{avail_ring0_start:016x} paddr=0x{avail_ring0_paddr:016x} len=0x{avail_ring0_len:x} avail.idx vaddr=0x{avail_idx_start:016x} paddr=0x{avail_idx_paddr:016x} len=0x{avail_idx_len:x}",
+            desc0_start = desc0_start,
+            desc0_paddr = desc0_paddr,
+            desc0_len = core::mem::size_of::<VirtqDesc>(),
+            avail_ring0_start = avail_ring0_start,
+            avail_ring0_paddr = avail_ring0_paddr,
+            avail_ring0_len = core::mem::size_of::<u16>(),
+            avail_idx_start = avail_idx_start,
+            avail_idx_paddr = avail_idx_paddr,
+            avail_idx_len = core::mem::size_of::<u16>(),
+        );
+        info!(
+            target: "virtio-net",
+            "[virtio-net][virtq-id] {label} used.ring[0] vaddr=0x{used_ring0_start:016x} paddr=0x{used_ring0_paddr:016x} len=0x{used_ring0_len:x} used.idx vaddr=0x{used_idx_start:016x} paddr=0x{used_idx_paddr:016x} len=0x{used_idx_len:x}",
+            used_ring0_start = used_ring0_start,
+            used_ring0_paddr = used_ring0_paddr,
+            used_ring0_len = core::mem::size_of::<VirtqUsedElem>(),
+            used_idx_start = used_idx_start,
+            used_idx_paddr = used_idx_paddr,
+            used_idx_len = core::mem::size_of::<u16>(),
+        );
+    }
+}
+
+fn virtq_diag_cache_overlap(op: CacheDiagOp, ptr: usize, len: usize, performed: bool) {
+    if !VIRTQ_DIAG || len == 0 {
+        return;
+    }
+    let end = ptr.saturating_add(len);
+    if end <= ptr {
+        return;
+    }
+    for entry_idx in 0..VIRTQ_DIAG_TOTAL {
+        let start = VIRTQ_DIAG_START[entry_idx].load(AtomicOrdering::Acquire);
+        let entry_end = VIRTQ_DIAG_END[entry_idx].load(AtomicOrdering::Acquire);
+        if start == 0 || entry_end <= start {
+            continue;
+        }
+        if ptr < entry_end && start < end {
+            let op_offset = (op as usize) * VIRTQ_DIAG_TOTAL;
+            let logged_idx = op_offset + entry_idx;
+            if logged_idx < VIRTQ_DIAG_CACHE_LOGGED.len()
+                && !VIRTQ_DIAG_CACHE_LOGGED[logged_idx].swap(true, AtomicOrdering::AcqRel)
+            {
+                let queue_idx = entry_idx / VIRTQ_DIAG_ENTRY_COUNT;
+                let entry = entry_idx % VIRTQ_DIAG_ENTRY_COUNT;
+                let label = if queue_idx < VIRTQ_DIAG_QUEUE_LABELS.len() {
+                    VIRTQ_DIAG_QUEUE_LABELS[queue_idx]
+                } else {
+                    "virtq"
+                };
+                let entry_label = VIRTQ_DIAG_ENTRY_LABELS
+                    .get(entry)
+                    .copied()
+                    .unwrap_or("range");
+                let op_label = match op {
+                    CacheDiagOp::Clean => "clean",
+                    CacheDiagOp::Invalidate => "invalidate",
+                };
+                info!(
+                    target: "virtio-net",
+                    "[virtio-net][virtq-cache] op={op_label} addr=0x{ptr:016x} len=0x{len:x} label={label}.{entry_label} suppressed={suppressed}",
+                    ptr = ptr,
+                    len = len,
+                    suppressed = !performed,
+                );
+            }
+        }
+    }
 }
 
 fn assert_dma_region(label: &'static str, vaddr: usize, paddr: usize, len: usize) {
@@ -457,6 +639,28 @@ enum TxReclaimResult {
     PublishRecordMismatch,
     HeadTransitionFailed,
     SlotCompletionFailed(TxSlotError),
+}
+
+#[cfg(feature = "cache-trace")]
+#[derive(Clone, Copy, Debug)]
+enum TxTripwireKind {
+    Publish,
+    UsedMismatch,
+}
+
+#[cfg(feature = "cache-trace")]
+#[derive(Clone, Copy, Debug)]
+struct TxTripwireRecord {
+    kind: TxTripwireKind,
+    head: u16,
+    slot: u16,
+    used_idx: u16,
+    avail_idx: u16,
+    last_used: u16,
+    desc_addr: u64,
+    desc_len: u32,
+    desc_flags: u16,
+    desc_next: u16,
 }
 
 fn reclaim_used_entry_common(
@@ -1792,6 +1996,14 @@ pub struct VirtioNet {
     tx_publish_guard_logged: bool,
     tx_publish_guard_detail_logged: bool,
     tx_publish_guard_failure_logged: bool,
+    #[cfg(feature = "cache-trace")]
+    tx_tripwire_a_logged: bool,
+    #[cfg(feature = "cache-trace")]
+    tx_tripwire_b_logged: bool,
+    #[cfg(feature = "cache-trace")]
+    tx_tripwire_record: Option<TxTripwireRecord>,
+    #[cfg(feature = "cache-trace")]
+    tx_tripwire_record_dumped: bool,
     rx_zero_len_logged: bool,
     tx_zero_len_logged: bool,
     tx_zero_len_publish_logged: bool,
@@ -1809,6 +2021,7 @@ pub struct VirtioNet {
     tx_used_gen_mismatch_logged: bool,
     tx_invalid_publish_logged: bool,
     tx_publish_readback_logged: bool,
+    tx_publish_readback_once: bool,
     tx_reclaim_state_violation_logged: bool,
     tx_reclaim_stall_logged: bool,
     #[cfg(debug_assertions)]
@@ -2039,8 +2252,12 @@ impl VirtioNet {
         }
 
         info!("[net-console] allocating virtqueue backing memory");
-        let queue_map_attr = seL4_ARM_Page_Uncached;
-        // Keep virtqueue rings fully visible to the device by mapping the backing pages uncached.
+        let queue_map_attr = if VIRTQ_FORCE_CACHEABLE {
+            seL4_ARM_Page_Default
+        } else {
+            seL4_ARM_Page_Uncached
+        };
+        // Keep virtqueue rings fully visible to the device; dev-virt/cache-trace forces cacheable.
 
         let queue_mem_rx = hal.alloc_dma_frame_attr(queue_map_attr).map_err(|err| {
             regs.set_status(STATUS_FAILED);
@@ -2082,6 +2299,7 @@ impl VirtioNet {
         };
         let dma_cacheable = match queue_map_attr {
             seL4_ARM_Page_Uncached => false,
+            seL4_ARM_Page_Default => true,
             other => {
                 error!(
                     target: "net-console",
@@ -2286,6 +2504,14 @@ impl VirtioNet {
             tx_publish_guard_logged: false,
             tx_publish_guard_detail_logged: false,
             tx_publish_guard_failure_logged: false,
+            #[cfg(feature = "cache-trace")]
+            tx_tripwire_a_logged: false,
+            #[cfg(feature = "cache-trace")]
+            tx_tripwire_b_logged: false,
+            #[cfg(feature = "cache-trace")]
+            tx_tripwire_record: None,
+            #[cfg(feature = "cache-trace")]
+            tx_tripwire_record_dumped: false,
             rx_zero_len_logged: false,
             tx_zero_len_logged: false,
             tx_zero_len_publish_logged: false,
@@ -2303,6 +2529,7 @@ impl VirtioNet {
             tx_used_gen_mismatch_logged: false,
             tx_invalid_publish_logged: false,
             tx_publish_readback_logged: false,
+            tx_publish_readback_once: false,
             tx_reclaim_state_violation_logged: false,
             tx_reclaim_stall_logged: false,
             #[cfg(debug_assertions)]
@@ -3174,11 +3401,22 @@ impl VirtioNet {
             self.freeze_and_capture("tx_desc_rewrite_failed");
             return Err(TxPublishError::InvalidDescriptor);
         }
+        // Ensure the descriptor clean completes before we expose the head via avail.
+        dma_barrier();
         virtq_publish_barrier();
         self.tx_queue
             .push_avail(head_id)
             .map_err(TxPublishError::Queue)
             .and_then(|(slot, new_idx, old_idx)| {
+                if DMA_NONCOHERENT {
+                    if let Err(err) = self.tx_queue.sync_descriptor_table_for_device() {
+                        return Err(TxPublishError::Queue(err));
+                    }
+                    if let Err(err) = self.tx_queue.sync_avail_ring_for_device() {
+                        return Err(TxPublishError::Queue(err));
+                    }
+                    dma_barrier();
+                }
                 if self
                     .tx_head_mgr
                     .note_avail_publish(head_id, slot, new_idx)
@@ -3307,6 +3545,58 @@ impl VirtioNet {
         }
     }
 
+    #[cfg(feature = "cache-trace")]
+    fn record_tx_tripwire(
+        &mut self,
+        kind: TxTripwireKind,
+        head_id: u16,
+        slot: u16,
+        used_idx: u16,
+        avail_idx: u16,
+        desc: VirtqDesc,
+    ) {
+        if self.tx_tripwire_record.is_some() {
+            return;
+        }
+        self.tx_tripwire_record = Some(TxTripwireRecord {
+            kind,
+            head: head_id,
+            slot,
+            used_idx,
+            avail_idx,
+            last_used: self.tx_queue.last_used,
+            desc_addr: desc.addr,
+            desc_len: desc.len,
+            desc_flags: desc.flags,
+            desc_next: desc.next,
+        });
+    }
+
+    #[cfg(feature = "cache-trace")]
+    fn dump_tx_tripwire_record(&mut self) {
+        if self.tx_tripwire_record_dumped {
+            return;
+        }
+        if let Some(record) = self.tx_tripwire_record {
+            self.tx_tripwire_record_dumped = true;
+            warn!(
+                target: "net-console",
+                "[virtio-net][tx-tripwire] first={:?} head={} slot={} used_idx={} avail_idx={} last_used={} desc=0x{addr:016x}/{len} flags=0x{flags:04x} next={next}",
+                record.kind,
+                record.head,
+                record.slot,
+                record.used_idx,
+                record.avail_idx,
+                record.last_used,
+                addr = record.desc_addr,
+                len = record.desc_len,
+                flags = record.desc_flags,
+                next = record.desc_next,
+            );
+        }
+    }
+
+    #[cfg(feature = "cache-trace")]
     fn tx_pre_publish_tripwire(
         &mut self,
         head_id: u16,
@@ -3334,28 +3624,234 @@ impl VirtioNet {
             || !next_ok
             || !flags_ok
         {
-            error!(
-                target: "net-console",
-                "[virtio-net][tx-tripwire] publish aborted head={head} slot={slot} addr=0x{addr:016x} len={len} expected_addr=0x{expected_addr:016x} expected_len={expected_len} header_len={header_len} payload_len={payload_len} next_ok={next_ok} flags=0x{flags:04x} next={next} expected_next={expected_next}",
-                head = head_id,
-                slot = slot,
-                addr = desc.addr,
-                len = desc.len,
-                expected_addr = expected.addr,
-                expected_len = expected.len,
-                header_len = header_len,
-                payload_len = payload_len,
-                next_ok = next_ok,
-                flags = desc.flags,
-                next = desc.next,
-                expected_next = next_expected,
-            );
-            self.tx_state_violation("tx_tripwire", head_id, Some(slot))?;
-            self.device_faulted = true;
-            self.last_error.get_or_insert("tx_tripwire");
+            let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
+            if !self.tx_tripwire_a_logged {
+                self.tx_tripwire_a_logged = true;
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][tx-tripwire] publish aborted head={head} slot={slot} addr=0x{addr:016x} len={len} expected_addr=0x{expected_addr:016x} expected_len={expected_len} header_len={header_len} payload_len={payload_len} next_ok={next_ok} flags=0x{flags:04x} next={next} expected_next={expected_next} used_idx={used_idx} avail_idx={avail_idx} head_state={head_state:?} slot_state={slot_state:?}",
+                    head = head_id,
+                    slot = slot,
+                    addr = desc.addr,
+                    len = desc.len,
+                    expected_addr = expected.addr,
+                    expected_len = expected.len,
+                    header_len = header_len,
+                    payload_len = payload_len,
+                    next_ok = next_ok,
+                    flags = desc.flags,
+                    next = desc.next,
+                    expected_next = next_expected,
+                    used_idx = used_idx,
+                    avail_idx = avail_idx,
+                    head_state = self.tx_head_mgr.state(head_id),
+                    slot_state = if NET_VIRTIO_TX_V2 {
+                        self.tx_slots.state(head_id)
+                    } else {
+                        None
+                    },
+                );
+                self.record_tx_tripwire(TxTripwireKind::Publish, head_id, slot, used_idx, avail_idx, desc);
+            }
             return Err(());
         }
         Ok(())
+    }
+
+    #[cfg(not(feature = "cache-trace"))]
+    fn tx_pre_publish_tripwire(
+        &mut self,
+        _head_id: u16,
+        _slot: u16,
+        _expected: &DescSpec,
+        _header_len: usize,
+        _payload_len: usize,
+    ) -> Result<(), ()> {
+        Ok(())
+    }
+
+    #[cfg(feature = "cache-trace")]
+    fn tx_used_tripwire(
+        &mut self,
+        reason: &'static str,
+        id: u16,
+        ring_slot: u16,
+        used_idx: u16,
+        head_state: Option<TxHeadState>,
+        slot_state: Option<TxSlotState>,
+    ) -> bool {
+        if self.tx_tripwire_b_logged {
+            return true;
+        }
+        self.tx_tripwire_b_logged = true;
+        let avail_idx = self.tx_queue.indices_no_sync().1;
+        let desc = if id < self.tx_queue.size {
+            self.tx_queue.read_descriptor(id)
+        } else {
+            VirtqDesc {
+                addr: 0,
+                len: 0,
+                flags: 0,
+                next: 0,
+            }
+        };
+        warn!(
+            target: "net-console",
+            "[virtio-net][tx-tripwire] used mismatch reason={reason} head={head} ring_slot={ring_slot} used_idx={used_idx} avail_idx={avail_idx} last_used={last_used} head_state={head_state:?} slot_state={slot_state:?} desc=0x{addr:016x}/{len} flags=0x{flags:04x} next={next}",
+            reason = reason,
+            head = id,
+            ring_slot = ring_slot,
+            used_idx = used_idx,
+            avail_idx = avail_idx,
+            last_used = self.tx_queue.last_used,
+            head_state = head_state,
+            slot_state = slot_state,
+            addr = desc.addr,
+            len = desc.len,
+            flags = desc.flags,
+            next = desc.next,
+        );
+        let qsize = usize::from(self.tx_queue.size);
+        if qsize != 0 {
+            let ring_slot_usize = (ring_slot as usize) % qsize;
+            if let Err(err) = self.tx_queue.invalidate_used_elem_for_cpu(ring_slot_usize) {
+                warn!(
+                    target: "virtio-net",
+                    "[virtio-net][tx-tripwire] used elem invalidate failed slot={} err={err:?}",
+                    ring_slot_usize,
+                );
+            }
+            let used_ptr =
+                unsafe { (*self.tx_queue.used.as_ptr()).ring.as_ptr().add(ring_slot_usize) };
+            let used_elem = unsafe { read_volatile(used_ptr) };
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-tripwire] used elem slot={} id={} len={}",
+                ring_slot_usize,
+                used_elem.id,
+                used_elem.len,
+            );
+            let expected_a = self.tx_queue.read_avail_slot(ring_slot_usize);
+            let expected_b = self.tx_head_mgr.published_for_slot(ring_slot);
+            let matches_a = used_elem.id == u32::from(expected_a);
+            let matches_b = expected_b.map(|(id, _)| used_elem.id == u32::from(id));
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-tripwire] used.id={} expected_a(avail[slot]={}) expected_b(head_mgr_slot={:?}) match_a={} match_b={}",
+                used_elem.id,
+                expected_a,
+                expected_b,
+                matches_a,
+                matches_b.unwrap_or(false),
+            );
+            if expected_a < self.tx_queue.size {
+                let expected_desc = self.tx_queue.read_descriptor(expected_a);
+                warn!(
+                    target: "virtio-net",
+                    "[virtio-net][tx-tripwire] desc[expected_a={id}]: addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}",
+                    id = expected_a,
+                    addr = expected_desc.addr,
+                    len = expected_desc.len,
+                    flags = expected_desc.flags,
+                    next = expected_desc.next,
+                );
+            } else {
+                warn!(
+                    target: "virtio-net",
+                    "[virtio-net][tx-tripwire] desc[expected_a={id}] out of range size={size}",
+                    id = expected_a,
+                    size = self.tx_queue.size,
+                );
+            }
+            if let Some((expected_b_id, _)) = expected_b {
+                if expected_b_id != expected_a {
+                    if expected_b_id < self.tx_queue.size {
+                        let expected_desc = self.tx_queue.read_descriptor(expected_b_id);
+                        warn!(
+                            target: "virtio-net",
+                            "[virtio-net][tx-tripwire] desc[expected_b={id}]: addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}",
+                            id = expected_b_id,
+                            addr = expected_desc.addr,
+                            len = expected_desc.len,
+                            flags = expected_desc.flags,
+                            next = expected_desc.next,
+                        );
+                    } else {
+                        warn!(
+                            target: "virtio-net",
+                            "[virtio-net][tx-tripwire] desc[expected_b={id}] out of range size={size}",
+                            id = expected_b_id,
+                            size = self.tx_queue.size,
+                        );
+                    }
+                }
+            }
+            let prev_slot = (ring_slot_usize + qsize - 1) % qsize;
+            let next_slot = (ring_slot_usize + 1) % qsize;
+            let head_prev = self.tx_queue.read_avail_slot(prev_slot);
+            let head_curr = self.tx_queue.read_avail_slot(ring_slot_usize);
+            let head_next = self.tx_queue.read_avail_slot(next_slot);
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-tripwire] avail window slot-1={} head={} slot={} head={} slot+1={} head={}",
+                prev_slot,
+                head_prev,
+                ring_slot_usize,
+                head_curr,
+                next_slot,
+                head_next,
+            );
+            let desc0 = self.tx_queue.read_descriptor(0);
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-tripwire] desc[0]: addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}",
+                addr = desc0.addr,
+                len = desc0.len,
+                flags = desc0.flags,
+                next = desc0.next,
+            );
+            if id < self.tx_queue.size {
+                let used_desc = self.tx_queue.read_descriptor(id);
+                warn!(
+                    target: "virtio-net",
+                    "[virtio-net][tx-tripwire] desc[used.id={id}]: addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}",
+                    id = id,
+                    addr = used_desc.addr,
+                    len = used_desc.len,
+                    flags = used_desc.flags,
+                    next = used_desc.next,
+                );
+            } else {
+                warn!(
+                    target: "virtio-net",
+                    "[virtio-net][tx-tripwire] desc[used.id={id}] out of range size={size}",
+                    id = id,
+                    size = self.tx_queue.size,
+                );
+            }
+            if head_curr < self.tx_queue.size {
+                let avail_desc = self.tx_queue.read_descriptor(head_curr);
+                warn!(
+                    target: "virtio-net",
+                    "[virtio-net][tx-tripwire] desc[avail_head={head}]: addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}",
+                    head = head_curr,
+                    addr = avail_desc.addr,
+                    len = avail_desc.len,
+                    flags = avail_desc.flags,
+                    next = avail_desc.next,
+                );
+            } else {
+                warn!(
+                    target: "virtio-net",
+                    "[virtio-net][tx-tripwire] desc[avail_head={head}] out of range size={size}",
+                    head = head_curr,
+                    size = self.tx_queue.size,
+                );
+            }
+        }
+        self.record_tx_tripwire(TxTripwireKind::UsedMismatch, id, ring_slot, used_idx, avail_idx, desc);
+        self.log_tx_avail_window(self.tx_queue.last_used, 4);
+        true
     }
 
     fn tx_wrap_tripwire(&mut self, old_idx: u16, avail_idx: u16, slot: u16, head_id: u16) {
@@ -3500,6 +3996,19 @@ impl VirtioNet {
         } else {
             None
         };
+        #[cfg(feature = "cache-trace")]
+        if id < self.tx_queue.size && !matches!(head_state, Some(TxHeadState::InFlight { .. })) {
+            if self.tx_used_tripwire(
+                "not_inflight",
+                id,
+                ring_slot,
+                used_idx,
+                head_state,
+                slot_state,
+            ) {
+                return Err(());
+            }
+        }
         if used_len == 0 {
             record_zero_len_used(
                 &mut self.tx_used_zero_len_seen,
@@ -3529,6 +4038,17 @@ impl VirtioNet {
                 Ok(TxReclaimResult::InvalidId)
             }
             TxReclaimResult::HeadNotInFlight(state) => {
+                #[cfg(feature = "cache-trace")]
+                if self.tx_used_tripwire(
+                    "head_state",
+                    id,
+                    ring_slot,
+                    used_idx,
+                    state,
+                    slot_state,
+                ) {
+                    return Err(());
+                }
                 self.tx_dup_used_ignored = self.tx_dup_used_ignored.saturating_add(1);
                 self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
                 self.tx_head_mgr.record_invalid_used_state();
@@ -3536,6 +4056,17 @@ impl VirtioNet {
                 Ok(TxReclaimResult::HeadNotInFlight(state))
             }
             TxReclaimResult::SlotStateInvalid(slot_state) => {
+                #[cfg(feature = "cache-trace")]
+                if self.tx_used_tripwire(
+                    "slot_state",
+                    id,
+                    ring_slot,
+                    used_idx,
+                    head_state,
+                    slot_state,
+                ) {
+                    return Err(());
+                }
                 self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
                 self.tx_head_mgr.record_invalid_used_state();
                 warn!(
@@ -3549,12 +4080,34 @@ impl VirtioNet {
                 Ok(TxReclaimResult::SlotStateInvalid(slot_state))
             }
             TxReclaimResult::SlotMismatch => {
+                #[cfg(feature = "cache-trace")]
+                if self.tx_used_tripwire(
+                    "slot_mismatch",
+                    id,
+                    ring_slot,
+                    used_idx,
+                    head_state,
+                    slot_state,
+                ) {
+                    return Err(());
+                }
                 self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
                 self.tx_head_mgr.record_invalid_used_state();
                 self.log_invalid_used_state(id, head_state, ring_slot, used_idx);
                 Ok(TxReclaimResult::SlotMismatch)
             }
             TxReclaimResult::PublishRecordMismatch => {
+                #[cfg(feature = "cache-trace")]
+                if self.tx_used_tripwire(
+                    "publish_record",
+                    id,
+                    ring_slot,
+                    used_idx,
+                    head_state,
+                    slot_state,
+                ) {
+                    return Err(());
+                }
                 self.tx_invalid_used_state = self.tx_invalid_used_state.saturating_add(1);
                 self.tx_head_mgr.record_invalid_used_state();
                 self.log_invalid_used_state(id, head_state, ring_slot, used_idx);
@@ -3624,6 +4177,73 @@ impl VirtioNet {
             return Err(());
         }
         Ok(())
+    }
+
+    fn tx_publish_readback_probe(&mut self, head_id: u16, slot: u16, old_idx: u16, avail_idx: u16) {
+        if !VIRTQ_DIAG || self.tx_publish_readback_once {
+            return;
+        }
+        if !(old_idx == 16 && avail_idx == 17) && !(head_id == 1 && slot == 0) {
+            return;
+        }
+        self.tx_publish_readback_once = true;
+        let pre_desc = self.tx_queue.read_descriptor(head_id);
+        let pre_avail_slot = self.tx_queue.read_avail_slot(slot as usize);
+        let pre_avail_idx = self.tx_queue.read_avail_idx();
+        info!(
+            target: "virtio-net",
+            "[virtio-net][tx-readback] pre-invalidate head={} slot={} avail.idx={} avail.ring={} desc=0x{addr:016x}/{len} flags=0x{flags:04x} next={next}",
+            head_id,
+            slot,
+            pre_avail_idx,
+            pre_avail_slot,
+            addr = pre_desc.addr,
+            len = pre_desc.len,
+            flags = pre_desc.flags,
+            next = pre_desc.next,
+        );
+        if let Err(err) = self.tx_queue.invalidate_desc_entry_for_cpu(head_id) {
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-readback] invalidate desc failed: head={} err={err:?}",
+                head_id,
+            );
+        }
+        if let Err(err) = self.tx_queue.invalidate_avail_entry_for_cpu(slot as usize) {
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-readback] invalidate avail slot failed: slot={} err={err:?}",
+                slot,
+            );
+        }
+        if let Err(err) = self.tx_queue.invalidate_avail_idx_for_cpu() {
+            warn!(
+                target: "virtio-net",
+                "[virtio-net][tx-readback] invalidate avail idx failed: err={err:?}",
+            );
+        }
+        dma_load_barrier();
+        let post_desc = self.tx_queue.read_descriptor(head_id);
+        let post_avail_slot = self.tx_queue.read_avail_slot(slot as usize);
+        let post_avail_idx = self.tx_queue.read_avail_idx();
+        info!(
+            target: "virtio-net",
+            "[virtio-net][tx-readback] post-invalidate head={} slot={} avail.idx={} avail.ring={} desc=0x{addr:016x}/{len} flags=0x{flags:04x} next={next} changed={changed}",
+            head_id,
+            slot,
+            post_avail_idx,
+            post_avail_slot,
+            addr = post_desc.addr,
+            len = post_desc.len,
+            flags = post_desc.flags,
+            next = post_desc.next,
+            changed = pre_desc.addr != post_desc.addr
+                || pre_desc.len != post_desc.len
+                || pre_desc.flags != post_desc.flags
+                || pre_desc.next != post_desc.next
+                || pre_avail_slot != post_avail_slot
+                || pre_avail_idx != post_avail_idx,
+        );
     }
 
     fn verify_tx_publish(
@@ -4268,8 +4888,49 @@ impl VirtioNet {
             self.tx_state_violation("tx_slot_mismatch", head_id, Some(slot))?;
             return Err(());
         }
+        if avail_idx == 17 && slot == 0 && !TX_ID_SEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            let written_desc_index = head_id;
+            let avail_head = self.tx_queue.read_avail_slot(slot as usize);
+            let head_state = self.tx_head_mgr.state(head_id);
+            let head_gen = match head_state {
+                Some(TxHeadState::Prepared { gen })
+                | Some(TxHeadState::Published { gen, .. })
+                | Some(TxHeadState::InFlight { gen, .. })
+                | Some(TxHeadState::Completed { gen }) => Some(gen),
+                _ => None,
+            };
+            let desc = if written_desc_index < self.tx_queue.size {
+                self.tx_queue.read_descriptor(written_desc_index)
+            } else {
+                VirtqDesc {
+                    addr: 0,
+                    len: 0,
+                    flags: 0,
+                    next: 0,
+                }
+            };
+            warn!(
+                target: "net-console",
+                "[virtio-net][tx-id] qsize={} avail_idx_before={} avail_idx_after={} ring_slot={} avail_ring_val={} head_id={} written_desc_index={} head_gen={:?} head_state={:?} desc{{addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}}} avail_eq_desc={}",
+                qsize,
+                old_idx,
+                avail_idx,
+                slot,
+                avail_head,
+                head_id,
+                written_desc_index,
+                head_gen,
+                head_state,
+                addr = desc.addr,
+                len = desc.len,
+                flags = desc.flags,
+                next = desc.next,
+                avail_head == written_desc_index,
+            );
+        }
         self.tx_wrap_tripwire(old_idx, avail_idx, slot, head_id);
         self.guard_tx_publish_readback(slot, head_id, &resolved_descs[0])?;
+        self.tx_publish_readback_probe(head_id, slot, old_idx, avail_idx);
         let wrap_boundary = (old_idx as usize % qsize) > (avail_idx as usize % qsize);
         if wrap_boundary && !self.tx_wrap_logged {
             self.tx_wrap_logged = true;
@@ -4688,6 +5349,8 @@ impl VirtioNet {
                 );
                 self.bad_status_logged = true;
                 self.freeze_and_capture("device_bad_status");
+                #[cfg(feature = "cache-trace")]
+                self.dump_tx_tripwire_record();
             } else if !self.device_faulted {
                 self.device_faulted = true;
                 self.last_error.get_or_insert("device_faulted");
@@ -8351,6 +9014,7 @@ impl VirtQueue {
             used_len = layout.used_len,
             total = layout.total_len,
         );
+        virtq_diag_register(index, base_vaddr, base_paddr, &layout);
 
         regs.select_queue(index);
         regs.set_queue_size(queue_size);
@@ -8500,12 +9164,16 @@ impl VirtQueue {
             );
             if DMA_NONCOHERENT {
                 self.clean_avail_entry_for_device(ring_slot)?;
+                dma_barrier();
             }
             virtq_publish_barrier();
             let new_idx = old_avail.wrapping_add(1);
             write_volatile(&mut (*avail).idx, new_idx.to_le());
             if DMA_NONCOHERENT {
                 self.clean_avail_idx_for_device()?;
+                dma_barrier();
+                self.sync_avail_ring_for_device()?;
+                dma_barrier();
             }
             virtq_publish_barrier();
             Ok((ring_slot as u16, new_idx, old_avail))
@@ -8595,6 +9263,38 @@ impl VirtQueue {
             core::mem::size_of::<u16>(),
             self.cacheable,
             "clean avail idx",
+        )
+    }
+
+    fn invalidate_desc_entry_for_cpu(&self, index: u16) -> Result<(), DmaError> {
+        let desc_ptr = unsafe { self.desc.as_ptr().add(index as usize) } as *const u8;
+        dma_invalidate(
+            desc_ptr,
+            core::mem::size_of::<VirtqDesc>(),
+            self.cacheable,
+            "invalidate desc entry",
+        )
+    }
+
+    fn invalidate_avail_entry_for_cpu(&self, ring_slot: usize) -> Result<(), DmaError> {
+        let avail = self.avail.as_ptr();
+        let ring_ptr = unsafe { (*avail).ring.as_ptr().add(ring_slot) as *const u8 };
+        dma_invalidate(
+            ring_ptr,
+            core::mem::size_of::<u16>(),
+            self.cacheable,
+            "invalidate avail ring slot",
+        )
+    }
+
+    fn invalidate_avail_idx_for_cpu(&self) -> Result<(), DmaError> {
+        let avail = self.avail.as_ptr();
+        let idx_ptr = unsafe { &(*avail).idx as *const u16 as *const u8 };
+        dma_invalidate(
+            idx_ptr,
+            core::mem::size_of::<u16>(),
+            self.cacheable,
+            "invalidate avail idx",
         )
     }
 
@@ -9069,6 +9769,7 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) -> Resul
                 "[virtio-net][dma] cache ops skipped (mapping non-cacheable)",
             );
         }
+        virtq_diag_cache_overlap(CacheDiagOp::Clean, ptr as usize, len, false);
         return Ok(());
     }
     if !cacheable && !DMA_FORCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
@@ -9092,6 +9793,7 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) -> Resul
             len = len,
         );
     }
+    virtq_diag_cache_overlap(CacheDiagOp::Clean, ptr as usize, len, true);
     compiler_fence(AtomicOrdering::Release);
     if let Err(err) = cache_clean(seL4_CapInitThreadVSpace, ptr as usize, len) {
         if !DMA_ERROR_LOGGED.swap(true, AtomicOrdering::AcqRel) {
@@ -9140,6 +9842,7 @@ fn dma_invalidate(
                 "[virtio-net][dma] cache ops skipped (mapping non-cacheable)",
             );
         }
+        virtq_diag_cache_overlap(CacheDiagOp::Invalidate, ptr as usize, len, false);
         return Ok(());
     }
     if !cacheable && !DMA_FORCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
@@ -9163,6 +9866,7 @@ fn dma_invalidate(
             len = len,
         );
     }
+    virtq_diag_cache_overlap(CacheDiagOp::Invalidate, ptr as usize, len, true);
     compiler_fence(AtomicOrdering::SeqCst);
     if let Err(err) = cache_invalidate(seL4_CapInitThreadVSpace, ptr as usize, len) {
         if !DMA_ERROR_LOGGED.swap(true, AtomicOrdering::AcqRel) {

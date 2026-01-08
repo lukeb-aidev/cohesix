@@ -617,6 +617,11 @@ the feature gate) while keeping console output stable.
 - Workspace `cargo check` succeeds with the kernel and net-console features enabled.
 - Run the Regression Pack (see “Docs-as-Built Alignment”) to confirm console behaviour, networking event pump cadence, and NineDoor flows are unchanged despite the new HAL. Any change in ACK/ERR or `/proc/boot` output must be documented and justified.
 - HAL introduction MUST NOT alter device MMIO layout, IRQ numbering, or virtio feature-negotiation visible in QEMU logs. Any change requires a manifest schema bump and doc update.
+- **Milestone 8a scope exception (authorized):** A narrow TCP/virtio-net stability effort is permitted to unblock console bring-up, limited to:
+  - Minimal, feature-gated debug instrumentation in `apps/root-task/src/drivers/virtio/net.rs` and queue helpers.
+  - TX/RX publish ordering + cache visibility fixes, without protocol or console grammar changes.
+  - A host repro harness script (e.g. `scripts/tcp_repro.sh`) that drives the existing QEMU TCP console and cohsh smoke flow.
+  - No refactors, no new in-VM services, and no manifest/schema changes.
 
 ---
 ## Milestone 8b — Root-Task Compiler & Deterministic Profiles
