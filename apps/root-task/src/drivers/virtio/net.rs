@@ -73,6 +73,9 @@ const VIRTQ_METADATA_UNCACHED: bool =
     VIRTQ_DIAG && env_flag(option_env!("VIRTQ_METADATA_UNCACHED"));
 const VIRTQ_METADATA_DEVICE: bool =
     VIRTQ_DIAG && env_flag(option_env!("VIRTQ_METADATA_DEVICE"));
+const VIRTQ_PROOF: bool = VIRTQ_DIAG && env_flag(option_env!("VIRTQ_PROOF"));
+const VIRTIO_MIN_TX_SELFTEST: bool =
+    VIRTQ_DIAG && env_flag(option_env!("VIRTIO_MIN_TX_SELFTEST"));
 const VIRTIO_TX_CLEAR_DESC_ON_FREE: bool = false;
 const DMA_CACHE_LINE_BYTES: usize = 64;
 
@@ -197,6 +200,7 @@ static VIRTQ_PROGRAM_LOGGED: [AtomicBool; VIRTQ_DIAG_QUEUE_MAX] =
     [const { AtomicBool::new(false) }; VIRTQ_DIAG_QUEUE_MAX];
 static VIRTQ_WIRING_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_NOTIFY_DIAG_LOGGED: AtomicBool = AtomicBool::new(false);
+static VIRTQ_PROOF_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_CLEAN_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static RX_CACHE_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -2210,6 +2214,7 @@ pub struct VirtioNet {
     last_snapshot_ms: u64,
     stalled_snapshot_logged: bool,
     tx_post_logged: bool,
+    tx_selftest_done: bool,
     device_faulted: bool,
     bad_status_seen: bool,
     bad_status_logged: bool,
@@ -2476,6 +2481,8 @@ impl VirtioNet {
             );
             return Err(DriverError::NoQueue);
         }
+
+        regs.virtio_mmio_proof_once();
 
         if stage == NetStage::ProbeOnly {
             return Err(DriverError::Staged(stage));
@@ -2803,6 +2810,7 @@ impl VirtioNet {
             last_snapshot_ms: now_ms,
             stalled_snapshot_logged: false,
             tx_post_logged: false,
+            tx_selftest_done: false,
             device_faulted: false,
             bad_status_seen: false,
             bad_status_logged: false,
@@ -2915,6 +2923,7 @@ impl VirtioNet {
             "[net-console] driver status set to DRIVER_OK (status=0x{:02x})",
             driver.regs.read32(Registers::Status)
         );
+        let _ = driver.tx_selftest_one_shot(crate::hal::timebase().now_ms());
         Ok(driver)
     }
 
@@ -2984,6 +2993,147 @@ impl VirtioNet {
             self.tx_alloc_blocked_inflight,
             self.dropped_zero_len_tx,
         );
+    }
+
+    fn tx_selftest_one_shot(&mut self, now_ms: u64) -> bool {
+        if !VIRTIO_MIN_TX_SELFTEST {
+            return false;
+        }
+        if self.tx_selftest_done {
+            return false;
+        }
+        self.tx_selftest_done = true;
+        let _ = now_ms;
+
+        const MIN_ETH_FRAME_LEN: usize = 14 + 46;
+        let (used_idx_before, _avail_idx_before) = self.tx_queue.indices();
+        let last_used_before = self.tx_queue.last_used;
+        let isr_before = self.regs.isr_status();
+        let max_payload = self
+            .tx_buffers
+            .first()
+            .map(|buffer| buffer.as_slice().len().saturating_sub(self.tx_header_len))
+            .unwrap_or(0);
+        if max_payload < MIN_ETH_FRAME_LEN || self.device_faulted {
+            let isr_after = self.regs.isr_status();
+            let (used_idx_after, avail_idx_after) = self.tx_queue.indices();
+            info!(
+                target: "net-console",
+                "SELFTEST_TX_FAIL used_before={} used_after={} isr_before=0x{:02x} isr_after=0x{:02x} avail_idx={} last_used={}",
+                used_idx_before,
+                used_idx_after,
+                isr_before,
+                isr_after,
+                avail_idx_after,
+                last_used_before,
+            );
+            return false;
+        }
+
+        let token = self.prepare_tx_token();
+        if !token.has_id() {
+            let isr_after = self.regs.isr_status();
+            let (used_idx_after, avail_idx_after) = self.tx_queue.indices();
+            info!(
+                target: "net-console",
+                "SELFTEST_TX_FAIL used_before={} used_after={} isr_before=0x{:02x} isr_after=0x{:02x} avail_idx={} last_used={}",
+                used_idx_before,
+                used_idx_after,
+                isr_before,
+                isr_after,
+                avail_idx_after,
+                last_used_before,
+            );
+            return false;
+        }
+
+        let src_mac = self.mac;
+        let frame_len = MIN_ETH_FRAME_LEN;
+        let _written = token.consume(frame_len, |payload| {
+            let write_len = core::cmp::min(frame_len, payload.len());
+            if write_len == 0 {
+                return 0usize;
+            }
+            let last_before = payload[write_len - 1];
+            payload[..write_len].fill(0);
+            payload[..6].fill(0xff);
+            payload[6..12].copy_from_slice(src_mac.as_bytes());
+            payload[12] = 0x08;
+            payload[13] = 0x00;
+            if write_len > 14 {
+                for byte in payload[14..write_len].iter_mut() {
+                    *byte = 0x42;
+                }
+            }
+            payload[write_len - 1] = last_before ^ 0xff;
+            write_len
+        });
+
+        let mut used_idx_after = used_idx_before;
+        let mut success = false;
+        for _ in 0..200 {
+            self.reclaim_tx();
+            let (used_idx_now, _avail_idx_now) = self.tx_queue.indices();
+            used_idx_after = used_idx_now;
+            if used_idx_now != used_idx_before {
+                success = true;
+                break;
+            }
+        }
+
+        let isr_after = self.regs.isr_status();
+        if VIRTQ_PROOF {
+            info!(
+                target: "net-console",
+                "[virtio-net][virtq-proof] isr1=0x{isr_after:02x}",
+            );
+        }
+
+        if success {
+            let qsize = usize::from(self.tx_queue.size);
+            let ring_slot = if qsize == 0 {
+                0
+            } else {
+                (last_used_before as usize) % qsize
+            };
+            let mut used_id = 0u32;
+            let mut used_len = 0u32;
+            if qsize != 0 && self.tx_queue.invalidate_used_elem_for_cpu(ring_slot).is_ok() {
+                virtq_used_load_barrier();
+                dma_load_barrier();
+                let used = self.tx_queue.used.as_ptr();
+                let elem_ptr =
+                    unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
+                let elem = unsafe { read_volatile(elem_ptr) };
+                used_id = u32::from_le(elem.id);
+                used_len = u32::from_le(elem.len);
+            }
+            info!(
+                target: "net-console",
+                "SELFTEST_TX_OK used_before={} used_after={} isr_before=0x{:02x} isr_after=0x{:02x} used_slot={} used_id={} used_len={}",
+                used_idx_before,
+                used_idx_after,
+                isr_before,
+                isr_after,
+                ring_slot,
+                used_id,
+                used_len,
+            );
+            true
+        } else {
+            let (used_idx_after, avail_idx_after) = self.tx_queue.indices();
+            info!(
+                target: "net-console",
+                "SELFTEST_TX_FAIL used_before={} used_after={} isr_before=0x{:02x} isr_after=0x{:02x} avail_idx={} last_used={}",
+                used_idx_before,
+                used_idx_after,
+                isr_before,
+                isr_after,
+                avail_idx_after,
+                last_used_before,
+            );
+            false
+        }
     }
 
     fn log_zero_len_enqueue(
@@ -8812,6 +8962,59 @@ impl VirtioRegs {
         if matches!(self.mode, VirtioMmioMode::Modern) {
             self.write32(Registers::GuestFeaturesSel, 1);
             self.write32(Registers::GuestFeatures, hi);
+        }
+    }
+
+    fn virtio_mmio_proof_once(&mut self) {
+        if !VIRTQ_PROOF {
+            return;
+        }
+        if VIRTQ_PROOF_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            return;
+        }
+
+        let mmio_version = self.read32(Registers::Version);
+        let mut guest_features = 0u64;
+        self.write32(Registers::GuestFeaturesSel, 0);
+        let lo = self.read32(Registers::GuestFeatures) as u64;
+        guest_features |= lo;
+        if matches!(self.mode, VirtioMmioMode::Modern) {
+            self.write32(Registers::GuestFeaturesSel, 1);
+            let hi = self.read32(Registers::GuestFeatures) as u64;
+            guest_features |= hi << 32;
+            self.write32(Registers::GuestFeaturesSel, 0);
+        }
+        let features_version1 = (guest_features & VIRTIO_F_VERSION_1) != 0;
+        let isr0 = self.isr_status();
+        info!(
+            target: "net-console",
+            "[virtio-net][virtq-proof] isr0=0x{isr0:02x}",
+        );
+
+        for &queue in [RX_QUEUE_INDEX, TX_QUEUE_INDEX].iter() {
+            self.select_queue(queue);
+            let num_max = self.queue_num_max();
+            if matches!(self.mode, VirtioMmioMode::Modern) {
+                let queue_ready = self.read32(Registers::QueueReady);
+                info!(
+                    target: "net-console",
+                    "[virtio-net][virtq-proof] mmio.version=0x{mmio_version:08x} mode={:?} features_version1={} queue={} num_max={} queue_ready={}",
+                    self.mode,
+                    features_version1,
+                    queue,
+                    num_max,
+                    queue_ready,
+                );
+            } else {
+                info!(
+                    target: "net-console",
+                    "[virtio-net][virtq-proof] mmio.version=0x{mmio_version:08x} mode={:?} features_version1={} queue={} num_max={} queue_ready=n/a",
+                    self.mode,
+                    features_version1,
+                    queue,
+                    num_max,
+                );
+            }
         }
     }
 
