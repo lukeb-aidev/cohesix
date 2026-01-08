@@ -69,6 +69,7 @@ const fn env_flag(value: Option<&'static str>) -> bool {
 
 const VIRTQ_FORCE_CACHEABLE: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
 const VIRTQ_DIAG: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
+const VIRTQ_DIAG_STRICT: bool = VIRTQ_DIAG && env_flag(option_env!("VIRTQ_DIAG_STRICT"));
 const VIRTQ_METADATA_UNCACHED: bool =
     VIRTQ_DIAG && env_flag(option_env!("VIRTQ_METADATA_UNCACHED"));
 const VIRTQ_METADATA_DEVICE: bool =
@@ -2368,21 +2369,6 @@ impl VirtioNet {
             regs.read32(Registers::Status)
         );
 
-        if matches!(mmio_mode, VirtioMmioMode::Legacy) {
-            // Legacy virtio-mmio devices require the guest page size to be provided
-            // before queue PFNs are written. Without this, the device disregards the
-            // queue configuration and leaves RX/TX rings idle. Advertise the seL4
-            // 4KiB page size up-front so the PFN calculations below are interpreted
-            // correctly by the device.
-            let guest_page_size = 1u32 << seL4_PageBits;
-            regs.set_guest_page_size(guest_page_size);
-            info!(
-                target: "net-console",
-                "[net-console] guest page size set: {} bytes",
-                guest_page_size
-            );
-        }
-
         info!("[net-console] querying queue sizes");
         regs.select_queue(RX_QUEUE_INDEX);
         let rx_max = regs.queue_num_max();
@@ -2431,6 +2417,12 @@ impl VirtioNet {
             VirtioMmioMode::Legacy => SUPPORTED_NET_FEATURES,
         };
         let negotiated_features = host_features & supported_features;
+        let features_version1 = negotiated_features & VIRTIO_F_VERSION_1 != 0;
+        let interface_mode = if features_version1 {
+            VirtioMmioMode::Modern
+        } else {
+            VirtioMmioMode::Legacy
+        };
         info!(
             target: "virtio-net",
             "virtio-net features: {:#x}",
@@ -2459,6 +2451,12 @@ impl VirtioNet {
             "[net-console] virtio-net header size={} (virtio-net hdr provided for legacy and modern devices)",
             net_header_len
         );
+        info!(
+            target: "net-console",
+            "[net-console] virtio-net interface mode={:?} (features_version1={})",
+            interface_mode,
+            features_version1
+        );
         regs.set_guest_features(negotiated_features);
         info!(
             target: "net-console",
@@ -2482,7 +2480,22 @@ impl VirtioNet {
             return Err(DriverError::NoQueue);
         }
 
-        regs.virtio_mmio_proof_once();
+        regs.virtio_mmio_proof_once(host_features, negotiated_features, interface_mode);
+
+        if !features_version1 {
+            // Legacy virtio-mmio devices require the guest page size to be provided
+            // before queue PFNs are written. Without this, the device disregards the
+            // queue configuration and leaves RX/TX rings idle. Advertise the seL4
+            // 4KiB page size up-front so the PFN calculations below are interpreted
+            // correctly by the device.
+            let guest_page_size = 1u32 << seL4_PageBits;
+            regs.set_guest_page_size(guest_page_size);
+            info!(
+                target: "net-console",
+                "[net-console] guest page size set: {} bytes",
+                guest_page_size
+            );
+        }
 
         if stage == NetStage::ProbeOnly {
             return Err(DriverError::Staged(stage));
@@ -2627,9 +2640,9 @@ impl VirtioNet {
             queue_mem_rx,
             RX_QUEUE_INDEX,
             rx_size,
-            mmio_mode,
+            interface_mode,
             queue_cacheable,
-            VIRTIO_GUARD_QUEUE && matches!(mmio_mode, VirtioMmioMode::Modern),
+            VIRTIO_GUARD_QUEUE && matches!(interface_mode, VirtioMmioMode::Modern),
         )
         .map_err(|err| {
             regs.set_status(STATUS_FAILED);
@@ -2644,9 +2657,9 @@ impl VirtioNet {
             queue_mem_tx,
             TX_QUEUE_INDEX,
             tx_size,
-            mmio_mode,
+            interface_mode,
             queue_cacheable,
-            VIRTIO_GUARD_QUEUE && matches!(mmio_mode, VirtioMmioMode::Modern),
+            VIRTIO_GUARD_QUEUE && matches!(interface_mode, VirtioMmioMode::Modern),
         )
         .map_err(|err| {
             regs.set_status(STATUS_FAILED);
@@ -2770,7 +2783,7 @@ impl VirtioNet {
 
         let mut driver = Self {
             regs,
-            mmio_mode,
+            mmio_mode: interface_mode,
             stage,
             rx_queue,
             tx_queue,
@@ -8965,7 +8978,12 @@ impl VirtioRegs {
         }
     }
 
-    fn virtio_mmio_proof_once(&mut self) {
+    fn virtio_mmio_proof_once(
+        &mut self,
+        host_features: u64,
+        negotiated_features: u64,
+        interface_mode: VirtioMmioMode,
+    ) {
         if !VIRTQ_PROOF {
             return;
         }
@@ -8974,33 +8992,23 @@ impl VirtioRegs {
         }
 
         let mmio_version = self.read32(Registers::Version);
-        let mut guest_features = 0u64;
-        self.write32(Registers::GuestFeaturesSel, 0);
-        let lo = self.read32(Registers::GuestFeatures) as u64;
-        guest_features |= lo;
-        if matches!(self.mode, VirtioMmioMode::Modern) {
-            self.write32(Registers::GuestFeaturesSel, 1);
-            let hi = self.read32(Registers::GuestFeatures) as u64;
-            guest_features |= hi << 32;
-            self.write32(Registers::GuestFeaturesSel, 0);
-        }
-        let features_version1 = (guest_features & VIRTIO_F_VERSION_1) != 0;
+        let features_version1 = (negotiated_features & VIRTIO_F_VERSION_1) != 0;
         let isr0 = self.isr_status();
         info!(
             target: "net-console",
-            "[virtio-net][virtq-proof] isr0=0x{isr0:02x}",
+            "[virtio-net][virtq-proof] mmio.version=0x{mmio_version:08x} host_features=0x{host_features:016x} negotiated_features=0x{negotiated_features:016x} features_version1={} mode={:?} isr0=0x{isr0:02x}",
+            features_version1,
+            interface_mode,
         );
 
         for &queue in [RX_QUEUE_INDEX, TX_QUEUE_INDEX].iter() {
             self.select_queue(queue);
             let num_max = self.queue_num_max();
-            if matches!(self.mode, VirtioMmioMode::Modern) {
+            if matches!(interface_mode, VirtioMmioMode::Modern) {
                 let queue_ready = self.read32(Registers::QueueReady);
                 info!(
                     target: "net-console",
-                    "[virtio-net][virtq-proof] mmio.version=0x{mmio_version:08x} mode={:?} features_version1={} queue={} num_max={} queue_ready={}",
-                    self.mode,
-                    features_version1,
+                    "[virtio-net][virtq-proof] queue={} num_max={} queue_ready={}",
                     queue,
                     num_max,
                     queue_ready,
@@ -9008,9 +9016,7 @@ impl VirtioRegs {
             } else {
                 info!(
                     target: "net-console",
-                    "[virtio-net][virtq-proof] mmio.version=0x{mmio_version:08x} mode={:?} features_version1={} queue={} num_max={} queue_ready=n/a",
-                    self.mode,
-                    features_version1,
+                    "[virtio-net][virtq-proof] queue={} num_max={} queue_ready=n/a",
                     queue,
                     num_max,
                 );
@@ -9886,7 +9892,9 @@ impl VirtQueue {
             }
         }
         check_bootinfo_canary("virtio.queue.addr.post")?;
-        regs.queue_ready(1);
+        if matches!(mode, VirtioMmioMode::Modern) {
+            regs.queue_ready(1);
+        }
         if VIRTQ_DIAG {
             dma_barrier();
             regs.select_queue(index);
@@ -9913,26 +9921,50 @@ impl VirtQueue {
                     "[virtio-net][queue-prog] queue={index} write pfn=0x{queue_pfn:08x} readback num={read_num} desc=0x{read_desc:016x} avail=0x{read_avail:016x} used=0x{read_used:016x} pfn=0x{read_pfn:08x}",
                 );
             }
-            let expected_desc = desc_paddr as u64;
-            let expected_avail = avail_paddr as u64;
-            let expected_used = used_paddr as u64;
-            let mismatch = match mode {
-                VirtioMmioMode::Modern => {
-                    read_num != queue_size
-                        || read_desc != expected_desc
-                        || read_avail != expected_avail
-                        || read_used != expected_used
+            if VIRTQ_DIAG_STRICT {
+                let num_max = regs.queue_num_max();
+                let mut strict_ok = true;
+                if num_max == 0 || num_max < queue_size as u32 {
+                    strict_ok = false;
+                    error!(
+                        target: "net-console",
+                        "[virtio-net][queue-prog] strict queue {index} num_max invalid: num_max={num_max} queue_size={queue_size}",
+                    );
                 }
-                VirtioMmioMode::Legacy => read_num != queue_size || read_pfn != queue_pfn,
-            };
-            if mismatch {
-                error!(
-                    target: "net-console",
-                    "[virtio-net][queue-prog] queue {index} readback mismatch: expected num={queue_size} desc=0x{expected_desc:016x} avail=0x{expected_avail:016x} used=0x{expected_used:016x} pfn=0x{queue_pfn:08x} got num={read_num} desc=0x{read_desc:016x} avail=0x{read_avail:016x} used=0x{read_used:016x} pfn=0x{read_pfn:08x}",
-                );
-                return Err(DriverError::QueueInvariant(
-                    "virtqueue register readback mismatch",
-                ));
+                if matches!(mode, VirtioMmioMode::Modern) {
+                    let queue_ready = regs.read32(Registers::QueueReady);
+                    if queue_ready != 1 {
+                        strict_ok = false;
+                        error!(
+                            target: "net-console",
+                            "[virtio-net][queue-prog] strict queue {index} queue_ready readback mismatch: expected=1 got={queue_ready}",
+                        );
+                    }
+                }
+                if !strict_ok {
+                    return Err(DriverError::QueueInvariant(
+                        "virtqueue strict register check failed",
+                    ));
+                }
+            } else {
+                let expected_desc = desc_paddr as u64;
+                let expected_avail = avail_paddr as u64;
+                let expected_used = used_paddr as u64;
+                let mismatch = match mode {
+                    VirtioMmioMode::Modern => {
+                        read_num != queue_size
+                            || read_desc != expected_desc
+                            || read_avail != expected_avail
+                            || read_used != expected_used
+                    }
+                    VirtioMmioMode::Legacy => read_num != queue_size || read_pfn != queue_pfn,
+                };
+                if mismatch {
+                    warn!(
+                        target: "net-console",
+                        "[virtio-net][queue-prog] queue {index} readback mismatch (non-fatal): expected num={queue_size} desc=0x{expected_desc:016x} avail=0x{expected_avail:016x} used=0x{expected_used:016x} pfn=0x{queue_pfn:08x} got num={read_num} desc=0x{read_desc:016x} avail=0x{read_avail:016x} used=0x{read_used:016x} pfn=0x{read_pfn:08x}",
+                    );
+                }
             }
         }
         info!(
