@@ -1790,6 +1790,8 @@ pub struct VirtioNet {
     tx_dma_log_once: bool,
     tx_publish_verify_count: u32,
     tx_publish_guard_logged: bool,
+    tx_publish_guard_detail_logged: bool,
+    tx_publish_guard_failure_logged: bool,
     rx_zero_len_logged: bool,
     tx_zero_len_logged: bool,
     tx_zero_len_publish_logged: bool,
@@ -2282,6 +2284,8 @@ impl VirtioNet {
             tx_dma_log_once: false,
             tx_publish_verify_count: 0,
             tx_publish_guard_logged: false,
+            tx_publish_guard_detail_logged: false,
+            tx_publish_guard_failure_logged: false,
             rx_zero_len_logged: false,
             tx_zero_len_logged: false,
             tx_zero_len_publish_logged: false,
@@ -3066,6 +3070,55 @@ impl VirtioNet {
             self.last_error.get_or_insert("tx_desc_addr_zero");
             return Err(TxPublishError::InvalidDescriptor);
         }
+        let guard_flags_next_ok = (desc.flags & VIRTQ_DESC_F_NEXT) == 0 && desc.next == 0;
+        #[cfg(debug_assertions)]
+        {
+            if !self.tx_publish_guard_detail_logged {
+                self.tx_publish_guard_detail_logged = true;
+                info!(
+                    target: "net-console",
+                    "[virtio-net][tx-guard] publish-check head={} gen={} ring_slot={} avail_idx={} used_idx={} last_used={} addr=0x{addr:016x} total_len={total_len}",
+                    head_id,
+                    self.tx_head_mgr.generation(head_id).unwrap_or(0),
+                    publish_slot,
+                    avail_idx,
+                    used_idx,
+                    self.tx_queue.last_used,
+                    addr = entry.last_addr,
+                    total_len = total_len,
+                );
+            }
+            debug_assert!(total_len > 0, "tx publish guard: total_len must be non-zero");
+            debug_assert!(entry.last_addr != 0, "tx publish guard: addr must be non-zero");
+            debug_assert!(
+                guard_flags_next_ok,
+                "tx publish guard: NEXT must be clear and next==0"
+            );
+        }
+        if !guard_flags_next_ok {
+            self.tx_invariant_violations = self.tx_invariant_violations.saturating_add(1);
+            if !self.tx_publish_guard_failure_logged {
+                self.tx_publish_guard_failure_logged = true;
+                warn!(
+                    target: "net-console",
+                    "[virtio-net][tx-guard] publish rejected (flags/next): head={} gen={} ring_slot={} avail_idx={} used_idx={} last_used={} addr=0x{addr:016x} total_len={total_len} flags=0x{flags:04x} next={next}",
+                    head_id,
+                    self.tx_head_mgr.generation(head_id).unwrap_or(0),
+                    publish_slot,
+                    avail_idx,
+                    used_idx,
+                    self.tx_queue.last_used,
+                    addr = entry.last_addr,
+                    total_len = total_len,
+                    flags = desc.flags,
+                    next = desc.next,
+                );
+            }
+            #[cfg(debug_assertions)]
+            panic!("tx publish guard rejected descriptor (flags/next)");
+            self.cancel_tx_slot(head_id, "tx_publish_guard_flags");
+            return Err(TxPublishError::InvalidDescriptor);
+        }
         if desc.len != total_len || desc.addr != entry.last_addr {
             self.device_faulted = true;
             let _ = self.tx_state_violation("tx_desc_len_mismatch", head_id, Some(publish_slot));
@@ -3111,6 +3164,17 @@ impl VirtioNet {
             desc.len != 0,
             "tx publish descriptor len zero before avail push"
         );
+        if self
+            .tx_queue
+            .setup_descriptor(head_id, entry.last_addr, total_len, desc.flags, None)
+            .is_err()
+        {
+            self.device_faulted = true;
+            self.last_error.get_or_insert("tx_desc_rewrite_failed");
+            self.freeze_and_capture("tx_desc_rewrite_failed");
+            return Err(TxPublishError::InvalidDescriptor);
+        }
+        virtq_publish_barrier();
         self.tx_queue
             .push_avail(head_id)
             .map_err(TxPublishError::Queue)
