@@ -99,6 +99,8 @@ const TX_NOTIFY_BATCH_PACKETS: u16 = 4;
 const TX_NOTIFY_BATCH_BYTES: usize = 4096;
 const TX_RECLAIM_IRQ_BUDGET: u16 = 8;
 const TX_RECLAIM_POLL_BUDGET: u16 = 2;
+#[cfg(debug_assertions)]
+const TX_RECLAIM_STALL_POLL_LIMIT: u16 = 32;
 const TX_STATS_LOG_MS: u64 = 1_000;
 const TX_WARN_COOLDOWN_MS: u64 = 2_000;
 const TX_CANARY_VALUE: u32 = 0xC0DE_DDCC;
@@ -1806,6 +1808,7 @@ pub struct VirtioNet {
     tx_invalid_publish_logged: bool,
     tx_publish_readback_logged: bool,
     tx_reclaim_state_violation_logged: bool,
+    tx_reclaim_stall_logged: bool,
     #[cfg(debug_assertions)]
     tx_avail_duplicate_logged: bool,
     #[cfg(debug_assertions)]
@@ -1840,6 +1843,10 @@ pub struct VirtioNet {
     tx_audit_log_ms: u64,
     tx_invalid_used_log_ms: u64,
     tx_used_zero_len_log_ms: u64,
+    #[cfg(debug_assertions)]
+    tx_reclaim_stall_polls: u16,
+    #[cfg(debug_assertions)]
+    tx_reclaim_stall_latched: bool,
     tx_audit_violation_logged: bool,
     forensic_dump_captured: bool,
 }
@@ -2293,6 +2300,7 @@ impl VirtioNet {
             tx_invalid_publish_logged: false,
             tx_publish_readback_logged: false,
             tx_reclaim_state_violation_logged: false,
+            tx_reclaim_stall_logged: false,
             #[cfg(debug_assertions)]
             tx_avail_duplicate_logged: false,
             #[cfg(debug_assertions)]
@@ -2327,6 +2335,10 @@ impl VirtioNet {
             tx_audit_log_ms: now_ms,
             tx_invalid_used_log_ms: 0,
             tx_used_zero_len_log_ms: 0,
+            #[cfg(debug_assertions)]
+            tx_reclaim_stall_polls: 0,
+            #[cfg(debug_assertions)]
+            tx_reclaim_stall_latched: false,
             tx_audit_violation_logged: false,
             forensic_dump_captured: false,
         };
@@ -4654,9 +4666,17 @@ impl VirtioNet {
             self.tx_last_used_seen = used_idx;
         }
         self.tx_progress_log_gate = self.tx_progress_log_gate.wrapping_add(1);
+        // used.idx can advance while last_used stays put if the used element is not yet visible
+        // (or the device leaves used.len at zero); last_used only advances after a decoded entry.
+        // This path reads tx_queue.used.idx via cache invalidate + volatile reads and validates
+        // used.elem.id against TX head state before reclaiming.
+        // used.len is advisory for TX; accept zero-length after the visibility retry so we do
+        // not stall reclaim when the device advances used.idx but leaves len as zero.
+        let mut progressed = false;
         loop {
-            match self.tx_queue.pop_used("TX", false) {
+            match self.tx_queue.pop_used("TX", true) {
                 Ok(Some((id, len, ring_slot))) => {
+                    progressed = true;
                     self.record_tx_used_entry(id, len);
                     // used.len is ignored for TX; ownership returns solely via used.id and tracked state.
                     let reclaim_result =
@@ -4682,6 +4702,28 @@ impl VirtioNet {
                     let _ = self.handle_forensic_fault(fault);
                     break;
                 }
+            }
+        }
+        let (used_idx_after, avail_idx_after) = self.tx_queue.indices();
+        if !progressed && used_idx_after != self.tx_queue.last_used {
+            self.log_tx_reclaim_stall(
+                used_idx_after,
+                avail_idx_after,
+                self.tx_queue.last_used,
+            );
+        }
+        #[cfg(debug_assertions)]
+        {
+            if !progressed && used_idx_after != self.tx_queue.last_used {
+                self.tx_reclaim_stall_polls = self.tx_reclaim_stall_polls.saturating_add(1);
+                if self.tx_reclaim_stall_polls >= TX_RECLAIM_STALL_POLL_LIMIT
+                    && !self.tx_reclaim_stall_latched
+                {
+                    self.tx_reclaim_stall_latched = true;
+                    self.dump_tx_used_window_once();
+                }
+            } else {
+                self.tx_reclaim_stall_polls = 0;
             }
         }
     }
@@ -5415,6 +5457,56 @@ impl VirtioNet {
                 self.tx_head_mgr.in_flight_count(),
             );
         }
+    }
+
+    fn log_tx_reclaim_stall(&mut self, used_idx: u16, avail_idx: u16, last_used: u16) {
+        if self.tx_reclaim_stall_logged {
+            return;
+        }
+        self.tx_reclaim_stall_logged = true;
+        let in_flight = self.tx_head_mgr.in_flight_count();
+        let tx_free = self.tx_head_mgr.free_len();
+        let tx_gen = self.tx_head_mgr.next_gen();
+        let qsize = usize::from(self.tx_queue.size);
+        let ring_slot = if qsize == 0 {
+            0
+        } else {
+            (last_used as usize) % qsize
+        };
+        let used = self.tx_queue.used.as_ptr();
+        let mut elem_id = 0u32;
+        let mut elem_len = 0u32;
+        let mut retry = false;
+        if self.tx_queue.invalidate_used_elem_for_cpu(ring_slot).is_ok() {
+            virtq_used_load_barrier();
+            dma_load_barrier();
+            let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
+            let elem = unsafe { read_volatile(elem_ptr) };
+            elem_id = u32::from_le(elem.id);
+            elem_len = u32::from_le(elem.len);
+            if elem_len == 0 && self.tx_queue.invalidate_used_elem_for_cpu(ring_slot).is_ok() {
+                retry = true;
+                virtq_used_load_barrier();
+                dma_load_barrier();
+                let retry_elem = unsafe { read_volatile(elem_ptr) };
+                elem_id = u32::from_le(retry_elem.id);
+                elem_len = u32::from_le(retry_elem.len);
+            }
+        }
+        warn!(
+            target: "net-console",
+            "[virtio-net][tx] reclaim stalled: avail.idx={} used.idx={} last_used={} in_flight={} tx_free={} tx_gen={} head={} used.id={} used.len={} retry={}",
+            avail_idx,
+            used_idx,
+            last_used,
+            in_flight,
+            tx_free,
+            tx_gen,
+            elem_id as u16,
+            elem_id,
+            elem_len,
+            retry,
+        );
     }
 
     fn release_tx_head(&mut self, id: u16, label: &'static str) {
@@ -6845,6 +6937,11 @@ impl Device for VirtioNet {
                 len,
             };
             let tx = self.prepare_tx_token();
+            if !tx.has_id() {
+                // Smoltcp expects a writable TX buffer when an RxToken is returned.
+                self.requeue_rx(id, Some(len));
+                return None;
+            }
             NET_DIAG.record_rx_frame_to_stack();
             Some((rx, tx))
         } else {
