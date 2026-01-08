@@ -123,6 +123,7 @@ static DMA_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_ERROR_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_QMEM_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_RING_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
+static USED_LEN_ZERO_VISIBILITY_LOGGED: AtomicBool = AtomicBool::new(false);
 static VQ_LAYOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_FORCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static VQ_ADDRESS_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
@@ -4654,7 +4655,7 @@ impl VirtioNet {
         }
         self.tx_progress_log_gate = self.tx_progress_log_gate.wrapping_add(1);
         loop {
-            match self.tx_queue.pop_used("TX", true) {
+            match self.tx_queue.pop_used("TX", false) {
                 Ok(Some((id, len, ring_slot))) => {
                     self.record_tx_used_entry(id, len);
                     // used.len is ignored for TX; ownership returns solely via used.id and tracked state.
@@ -4715,9 +4716,40 @@ impl VirtioNet {
                 return;
             }
             virtq_used_load_barrier();
+            dma_load_barrier();
             let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
-            let elem = unsafe { read_volatile(elem_ptr) };
-            let id = elem.id as u16;
+            let mut elem = unsafe { read_volatile(elem_ptr) };
+            let mut elem_len = u32::from_le(elem.len);
+            if elem_len == 0 {
+                if self
+                    .tx_queue
+                    .invalidate_used_elem_for_cpu(ring_slot)
+                    .is_err()
+                {
+                    self.freeze_and_capture("tx_v2_used_elem_retry_invalidate_failed");
+                    return;
+                }
+                virtq_used_load_barrier();
+                dma_load_barrier();
+                let retry = unsafe { read_volatile(elem_ptr) };
+                let retry_len = u32::from_le(retry.len);
+                if retry_len == 0 {
+                    let retry_id = u32::from_le(retry.id);
+                    if !USED_LEN_ZERO_VISIBILITY_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+                        warn!(
+                            target: "net-console",
+                            "[virtio-net] tx used len zero after re-read: head={} idx={} ring_slot={}",
+                            retry_id,
+                            self.tx_v2_last_used,
+                            ring_slot,
+                        );
+                    }
+                    return;
+                }
+                elem = retry;
+                elem_len = retry_len;
+            }
+            let id = u32::from_le(elem.id) as u16;
             let next_used = self.tx_v2_last_used.wrapping_add(1);
             log::debug!(
                 target: "virtio-net",
@@ -4725,13 +4757,13 @@ impl VirtioNet {
                 self.tx_v2_last_used,
                 next_used,
                 id,
-                elem.len
+                elem_len
             );
             // used.len is advisory; the head lifecycle is guarded by state, not the device-provided length.
             let reclaim_result = match self.reclaim_posted_head(
                 id,
                 ring_slot as u16,
-                elem.len,
+                elem_len,
                 self.tx_v2_last_used,
             ) {
                 Ok(result) => result,
@@ -7463,6 +7495,7 @@ impl VirtioMmioId {
 mod tests {
     use super::*;
     use core::fmt::Write as FmtWrite;
+    use core::sync::atomic::{AtomicUsize, Ordering};
     use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
     fn make_fake_mmio(magic: u32, version: u32, device_id: u32) -> (NonNull<u8>, Box<[u32; 4]>) {
@@ -7647,6 +7680,97 @@ mod tests {
             head_mgr.mark_in_flight(head).expect("mark inflight");
             in_flight.push(head).unwrap();
         }
+    }
+
+    static USED_ELEM_PTR: Mutex<Option<*mut VirtqUsedElem>> = Mutex::new(None);
+    static USED_ELEM_INVALIDATES: AtomicUsize = AtomicUsize::new(0);
+
+    fn used_elem_visibility_hook(op: CacheOp, ptr: usize, len: usize) {
+        if op != CacheOp::Invalidate || len != core::mem::size_of::<VirtqUsedElem>() {
+            return;
+        }
+        let Some(elem_ptr) = *USED_ELEM_PTR.lock() else {
+            return;
+        };
+        if ptr != elem_ptr as usize {
+            return;
+        }
+        let count = USED_ELEM_INVALIDATES.fetch_add(1, Ordering::SeqCst);
+        if count == 1 {
+            unsafe {
+                (*elem_ptr).len = 64u32.to_le();
+            }
+        }
+    }
+
+    #[test]
+    fn used_elem_visibility_retry_reads_len() {
+        const QSIZE: u16 = 4;
+        let layout = VirtqLayout::compute_vq_layout(QSIZE, false).expect("layout");
+        let mut backing = vec![0u8; layout.total_len];
+        let base_ptr = backing.as_mut_ptr();
+        let desc_ptr = NonNull::new(base_ptr as *mut VirtqDesc).expect("desc ptr");
+        let avail_ptr =
+            NonNull::new(unsafe { base_ptr.add(layout.avail_offset) } as *mut VirtqAvail)
+                .expect("avail ptr");
+        let used_ptr = NonNull::new(unsafe { base_ptr.add(layout.used_offset) } as *mut VirtqUsed)
+            .expect("used ptr");
+        unsafe {
+            write_volatile(
+                desc_ptr.as_ptr(),
+                VirtqDesc {
+                    addr: 0x2000,
+                    len: 64,
+                    flags: 0,
+                    next: 0,
+                },
+            );
+            write_volatile(&mut (*used_ptr.as_ptr()).idx, 1u16.to_le());
+            let elem_ptr = (*used_ptr.as_ptr()).ring.as_ptr() as *mut VirtqUsedElem;
+            write_volatile(
+                elem_ptr,
+                VirtqUsedElem {
+                    id: 0u32.to_le(),
+                    len: 0u32.to_le(),
+                },
+            );
+            *USED_ELEM_PTR.lock() = Some(elem_ptr);
+        }
+        USED_ELEM_INVALIDATES.store(0, Ordering::SeqCst);
+        let mut queue = VirtQueue {
+            _frame: unsafe { core::mem::zeroed() },
+            layout,
+            size: QSIZE,
+            desc: desc_ptr,
+            avail: avail_ptr,
+            used: used_ptr,
+            last_used: 0,
+            pfn: 0,
+            base_paddr: base_ptr as usize,
+            base_vaddr: base_ptr as usize,
+            base_len: layout.total_len,
+            _dma: None,
+            cacheable: true,
+            used_zero_len_head: None,
+            last_error: None,
+        };
+
+        let mut result = None;
+        with_dma_test_hook(Some(used_elem_visibility_hook), || {
+            result = queue.pop_used("TX", false).expect("pop used ok");
+        });
+
+        let (id, len, ring_slot) = result.expect("used elem visible after retry");
+        assert_eq!(id, 0);
+        assert_eq!(len, 64);
+        assert_eq!(ring_slot, 0);
+        assert_eq!(queue.last_used, 1);
+        assert_eq!(
+            USED_ELEM_INVALIDATES.load(Ordering::SeqCst),
+            2,
+            "visibility retry should re-invalidate used element"
+        );
+        *USED_ELEM_PTR.lock() = None;
     }
 }
 
@@ -8519,9 +8643,42 @@ impl VirtQueue {
             return Ok(None);
         }
         dma_load_barrier();
-        let elem = unsafe { read_volatile(elem_ptr) };
+        let mut elem = unsafe { read_volatile(elem_ptr) };
+        let mut elem_len = u32::from_le(elem.len);
+        if elem_len == 0 {
+            if let Err(err) = self.invalidate_used_elem_for_cpu(ring_slot) {
+                warn!(
+                    target: "net-console",
+                    "[virtio-net] used element retry invalidate failed queue={} slot={} err={err:?}; freezing",
+                    queue_label,
+                    ring_slot
+                );
+                self.last_error
+                    .get_or_insert("used_element_invalidate_retry_failed");
+                self.freeze_and_capture("used_element_invalidate_retry_failed");
+                return Ok(None);
+            }
+            dma_load_barrier();
+            let retry = unsafe { read_volatile(elem_ptr) };
+            let retry_len = u32::from_le(retry.len);
+            if retry_len == 0 && !allow_zero_len {
+                let retry_id = u32::from_le(retry.id);
+                if !USED_LEN_ZERO_VISIBILITY_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+                    warn!(
+                        target: "net-console",
+                        "[virtio-net] used len zero after re-read: queue={} head={} idx={} ring_slot={}",
+                        queue_label,
+                        retry_id,
+                        self.last_used,
+                        ring_slot,
+                    );
+                }
+                return Ok(None);
+            }
+            elem = retry;
+            elem_len = retry_len;
+        }
         let elem_id = u32::from_le(elem.id);
-        let elem_len = u32::from_le(elem.len);
         assert!(
             elem_id < u32::from(self.size),
             "virtqueue used.id out of range: id={} size={} ring_slot={} base_vaddr=0x{base:016x}",
@@ -8890,22 +9047,30 @@ fn dma_load_barrier() {
 #[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
 fn dma_clean(
-    _ptr: *const u8,
-    _len: usize,
+    ptr: *const u8,
+    len: usize,
     _cacheable: bool,
     _reason: &str,
 ) -> Result<(), DmaError> {
+    #[cfg(test)]
+    if let Some(hook) = *DMA_TEST_HOOK.lock() {
+        hook(CacheOp::Clean, ptr as usize, len);
+    }
     Ok(())
 }
 
 #[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
 fn dma_invalidate(
-    _ptr: *const u8,
-    _len: usize,
+    ptr: *const u8,
+    len: usize,
     _cacheable: bool,
     _reason: &str,
 ) -> Result<(), DmaError> {
+    #[cfg(test)]
+    if let Some(hook) = *DMA_TEST_HOOK.lock() {
+        hook(CacheOp::Invalidate, ptr as usize, len);
+    }
     Ok(())
 }
 
@@ -9730,6 +9895,20 @@ mod tx_tests {
         let mut logged = false;
         let result = validate_tx_publish_descriptor(2, 1, &desc, 64, 5, 3, 0, 4, &mut logged);
         assert!(result.is_err(), "zero-address descriptor must be blocked");
+        assert!(logged, "invalid descriptor must log once");
+    }
+
+    #[test]
+    fn publish_guard_rejects_zero_total_len() {
+        let desc = VirtqDesc {
+            addr: 0x1000,
+            len: 64,
+            flags: 0,
+            next: 0,
+        };
+        let mut logged = false;
+        let result = validate_tx_publish_descriptor(1, 0, &desc, 0, 2, 1, 0, 4, &mut logged);
+        assert!(result.is_err(), "zero total length must be blocked");
         assert!(logged, "invalid descriptor must log once");
     }
 
