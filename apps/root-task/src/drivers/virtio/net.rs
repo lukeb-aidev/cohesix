@@ -542,6 +542,13 @@ struct TxPublishRecord {
     avail_idx: u16,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TxReservation {
+    head_id: u16,
+    head_gen: u32,
+    slot_gen: Option<u32>,
+}
+
 #[derive(Default)]
 struct VirtioNetTxStats {
     enqueue_ok: AtomicU64,
@@ -1804,6 +1811,7 @@ pub struct VirtioNet {
     tx_publish_frozen: bool,
     tx_double_submit: u64,
     tx_dup_publish_blocked: u64,
+    tx_bad_id_mapping: u64,
     tx_dup_used_ignored: u64,
     tx_invalid_used_state: u64,
     tx_used_zero_len_seen: u64,
@@ -2290,6 +2298,7 @@ impl VirtioNet {
             tx_publish_frozen: false,
             tx_double_submit: 0,
             tx_dup_publish_blocked: 0,
+            tx_bad_id_mapping: 0,
             tx_dup_used_ignored: 0,
             tx_invalid_used_state: 0,
             tx_used_zero_len_seen: 0,
@@ -2395,7 +2404,7 @@ impl VirtioNet {
 
         log::info!(
             target: "net-console",
-            "[virtio-net] debug_snapshot: stalled_ms={} status=0x{:02x} isr=0x{:02x} tx_avail_idx={} tx_used_idx={} rx_avail_idx={} rx_used_idx={} last_error={} rx_used_count={} rx_poll_count={} used_poll_calls={} tx_publish_calls={} rx_publish_calls={} tx_dup_publish_blocked={} tx_dup_used_ignored={} tx_invalid_used_state={} tx_alloc_blocked_inflight={} dropped_zero_len_tx={}",
+            "[virtio-net] debug_snapshot: stalled_ms={} status=0x{:02x} isr=0x{:02x} tx_avail_idx={} tx_used_idx={} rx_avail_idx={} rx_used_idx={} last_error={} rx_used_count={} rx_poll_count={} used_poll_calls={} tx_publish_calls={} rx_publish_calls={} tx_dup_publish_blocked={} tx_bad_id_mapping={} tx_dup_used_ignored={} tx_invalid_used_state={} tx_alloc_blocked_inflight={} dropped_zero_len_tx={}",
             now_ms.saturating_sub(self.last_progress_ms),
             status,
             isr,
@@ -2410,6 +2419,7 @@ impl VirtioNet {
             self.tx_publish_calls,
             self.rx_publish_calls,
             self.tx_dup_publish_blocked,
+            self.tx_bad_id_mapping,
             self.tx_dup_used_ignored,
             self.tx_invalid_used_state,
             self.tx_alloc_blocked_inflight,
@@ -5193,8 +5203,8 @@ impl VirtioNet {
             if self.tx_free_count() == 0 {
                 self.tx_reclaim_used(TX_RECLAIM_POLL_BUDGET, TxReclaimSource::Poll);
             }
-            if let Some((id, _wrap)) = self.reserve_tx_slot() {
-                return VirtioTxToken::new(driver_ptr, Some(id));
+            if let Some(reservation) = self.reserve_tx_slot() {
+                return VirtioTxToken::new(driver_ptr, Some(reservation));
             }
             let inflight = self.tx_inflight_count();
             let free = self.tx_free_count();
@@ -5208,8 +5218,8 @@ impl VirtioNet {
         if self.tx_publish_blocked() {
             return VirtioTxToken::new(driver_ptr, None);
         }
-        if let Some((id, _wrap)) = self.reserve_tx_slot() {
-            return VirtioTxToken::new(driver_ptr, Some(id));
+        if let Some(reservation) = self.reserve_tx_slot() {
+            return VirtioTxToken::new(driver_ptr, Some(reservation));
         }
         let inflight = self.tx_inflight_count();
         let free = self.tx_free_count();
@@ -5298,6 +5308,54 @@ impl VirtioNet {
                 Err(())
             }
         }
+    }
+
+    fn validate_tx_reservation(
+        &mut self,
+        reservation: TxReservation,
+        context: &'static str,
+    ) -> Result<u16, ()> {
+        let head_id = reservation.head_id;
+        let head_state = self.tx_head_mgr.state(head_id);
+        let head_ok = matches!(
+            head_state,
+            Some(TxHeadState::Prepared { gen }) if gen == reservation.head_gen
+        );
+        let mut slot_ok = true;
+        let slot_state = if NET_VIRTIO_TX_V2 {
+            slot_ok = match (self.tx_slots.state(head_id), reservation.slot_gen) {
+                (Some(TxSlotState::Reserved { gen }), Some(expected)) if gen == expected => true,
+                _ => false,
+            };
+            self.tx_slots.state(head_id)
+        } else {
+            None
+        };
+        if head_ok && slot_ok {
+            return Ok(head_id);
+        }
+        self.tx_bad_id_mapping = self.tx_bad_id_mapping.saturating_add(1);
+        self.tx_dup_publish_blocked = self.tx_dup_publish_blocked.saturating_add(1);
+        if !head_ok {
+            self.publish_blocked_bad_head_state =
+                self.publish_blocked_bad_head_state.saturating_add(1);
+        }
+        if NET_VIRTIO_TX_V2 && !slot_ok {
+            self.publish_blocked_bad_slot_state =
+                self.publish_blocked_bad_slot_state.saturating_add(1);
+        }
+        warn!(
+            target: "net-console",
+            "[virtio-net][tx-reservation] invalid reservation: head={} head_gen={} slot_gen={:?} head_state={:?} slot_state={:?} context={}",
+            head_id,
+            reservation.head_gen,
+            reservation.slot_gen,
+            head_state,
+            slot_state,
+            context,
+        );
+        self.last_error.get_or_insert("tx_reservation_invalid");
+        Err(())
     }
 
     fn log_invalid_used_state(
@@ -5427,11 +5485,18 @@ impl VirtioNet {
         inflight
     }
 
-    fn reserve_tx_slot(&mut self) -> Option<(u16, bool)> {
+    fn reserve_tx_slot(&mut self) -> Option<TxReservation> {
         if !NET_VIRTIO_TX_V2 {
-            return self.tx_head_mgr.alloc_head().map(|id| (id, false));
+            return self.tx_head_mgr.alloc_head().and_then(|id| {
+                let head_gen = self.tx_head_mgr.generation(id)?;
+                Some(TxReservation {
+                    head_id: id,
+                    head_gen,
+                    slot_gen: None,
+                })
+            });
         }
-        let (slot, wrap, _) = self.tx_slots.reserve_next()?;
+        let (slot, wrap, slot_gen) = self.tx_slots.reserve_next()?;
         match self.tx_head_mgr.alloc_specific(slot) {
             Some(id) => {
                 if wrap {
@@ -5447,7 +5512,12 @@ impl VirtioNet {
                         self.tx_queue.size,
                     );
                 }
-                Some((id, wrap))
+                let head_gen = self.tx_head_mgr.generation(id)?;
+                Some(TxReservation {
+                    head_id: id,
+                    head_gen,
+                    slot_gen: Some(slot_gen),
+                })
             }
             None => {
                 let _ = self.tx_slots.cancel(slot);
@@ -6989,23 +7059,23 @@ impl RxToken for VirtioRxToken {
 /// Transmit token that queues frames onto the virtio TX ring.
 pub struct VirtioTxToken {
     driver: *mut VirtioNet,
-    id: Cell<Option<u16>>,
+    reservation: Cell<Option<TxReservation>>,
 }
 
 impl VirtioTxToken {
-    fn new(driver: *mut VirtioNet, desc: Option<u16>) -> Self {
+    fn new(driver: *mut VirtioNet, reservation: Option<TxReservation>) -> Self {
         Self {
             driver,
-            id: Cell::new(desc),
+            reservation: Cell::new(reservation),
         }
     }
 
-    fn take_id(&self) -> Option<u16> {
-        self.id.take()
+    fn take_reservation(&self) -> Option<TxReservation> {
+        self.reservation.take()
     }
 
     fn has_id(&self) -> bool {
-        self.id.get().is_some()
+        self.reservation.get().is_some()
     }
 }
 
@@ -7015,14 +7085,21 @@ impl TxToken for VirtioTxToken {
         F: FnOnce(&mut [u8]) -> R,
     {
         let driver = unsafe { &mut *self.driver };
-        let id = match self.take_id() {
-            Some(id) => id,
+        let reservation = match self.take_reservation() {
+            Some(reservation) => reservation,
             None => {
                 driver.token_double_consume = driver.token_double_consume.saturating_add(1);
                 debug_assert!(
                     false,
                     "VirtioTxToken consumed more than once without reservation"
                 );
+                driver.tx_drops = driver.tx_drops.saturating_add(1);
+                return f(&mut []);
+            }
+        };
+        let id = match driver.validate_tx_reservation(reservation, "tx_token_consume") {
+            Ok(id) => id,
+            Err(()) => {
                 driver.tx_drops = driver.tx_drops.saturating_add(1);
                 return f(&mut []);
             }
@@ -8877,6 +8954,28 @@ fn validate_tx_publish_descriptor(
     Ok(())
 }
 
+fn reservation_matches(
+    head_mgr: &TxHeadManager,
+    slots: Option<&TxSlotTracker>,
+    reservation: TxReservation,
+) -> bool {
+    let head_ok = matches!(
+        head_mgr.state(reservation.head_id),
+        Some(TxHeadState::Prepared { gen }) if gen == reservation.head_gen
+    );
+    if !head_ok {
+        return false;
+    }
+    if let Some(tracker) = slots {
+        match (tracker.state(reservation.head_id), reservation.slot_gen) {
+            (Some(TxSlotState::Reserved { gen }), Some(expected)) if gen == expected => true,
+            _ => false,
+        }
+    } else {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tx_tests {
     use super::*;
@@ -9480,9 +9579,82 @@ mod tx_tests {
 
     #[test]
     fn tx_token_single_use_take() {
-        let token = VirtioTxToken::new(core::ptr::null_mut(), Some(3));
-        assert_eq!(token.take_id(), Some(3), "first take yields id");
-        assert_eq!(token.take_id(), None, "second take returns none");
+        let reservation = TxReservation {
+            head_id: 3,
+            head_gen: 7,
+            slot_gen: Some(9),
+        };
+        let token = VirtioTxToken::new(core::ptr::null_mut(), Some(reservation));
+        assert_eq!(
+            token.take_reservation(),
+            Some(reservation),
+            "first take yields reservation"
+        );
+        assert_eq!(
+            token.take_reservation(),
+            None,
+            "second take returns none"
+        );
+    }
+
+    #[test]
+    fn tx_reservation_matches_current_state() {
+        let mut heads = TxHeadManager::new(1);
+        let mut slots = TxSlotTracker::new(1);
+        let (slot, _, slot_gen) = slots.reserve_next().expect("slot reserved");
+        let head = heads.alloc_specific(slot).expect("head allocated");
+        let head_gen = heads.generation(head).expect("head gen");
+        let reservation = TxReservation {
+            head_id: head,
+            head_gen,
+            slot_gen: Some(slot_gen),
+        };
+        assert!(
+            reservation_matches(&heads, Some(&slots), reservation),
+            "reservation should match prepared state"
+        );
+    }
+
+    #[test]
+    fn tx_reservation_rejects_stale_generation() {
+        let mut heads = TxHeadManager::new(1);
+        let mut slots = TxSlotTracker::new(1);
+        let (slot, _, slot_gen) = slots.reserve_next().expect("slot reserved");
+        let head = heads.alloc_specific(slot).expect("head allocated");
+        let head_gen = heads.generation(head).expect("head gen");
+        let stale = TxReservation {
+            head_id: head,
+            head_gen,
+            slot_gen: Some(slot_gen),
+        };
+        let gen = heads
+            .mark_published(head, slot, 64, 0x1000)
+            .expect("publish");
+        heads.note_avail_publish(head, slot, 0).expect("advertise");
+        heads.mark_in_flight(head).expect("inflight");
+        slots.mark_in_flight(slot).expect("slot inflight");
+        heads.mark_completed(head, Some(gen)).expect("complete");
+        heads.reclaim_head(head).expect("reclaim");
+        slots.complete(slot).expect("slot complete");
+
+        let (slot_reuse, _, slot_gen_reuse) = slots.reserve_next().expect("slot reuse");
+        let head_reuse = heads
+            .alloc_specific(slot_reuse)
+            .expect("head reuse");
+        let head_gen_reuse = heads.generation(head_reuse).expect("head gen");
+        let fresh = TxReservation {
+            head_id: head_reuse,
+            head_gen: head_gen_reuse,
+            slot_gen: Some(slot_gen_reuse),
+        };
+        assert!(
+            !reservation_matches(&heads, Some(&slots), stale),
+            "stale reservation must not match new generation"
+        );
+        assert!(
+            reservation_matches(&heads, Some(&slots), fresh),
+            "fresh reservation should match current state"
+        );
     }
 
     static OP_LOG: Mutex<HeaplessVec<(CacheOp, usize, usize), 192>> =
