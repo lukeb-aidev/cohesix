@@ -1,4 +1,5 @@
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Define Cohesix roles, ticket lifecycle, and scheduling constraints. -->
 # Roles & Scheduling Policy
 
 ## 1. Roles
@@ -13,7 +14,7 @@ Exactly one Queen exists per hive, but many worker instances (across worker-hear
 
 ## 2. Ticket Lifecycle
 1. Queen requests spawn with desired role/budget.
-2. Root task allocates capability space, minting a `Ticket` bound to the role, worker ID, and mount table.
+2. Root task allocates capability space, minting a `Ticket` bound to the role, worker identity (`subject`), and mount table.
 3. Ticket is delivered during 9P `attach`; NineDoor verifies MAC and initialises session state.
 4. On kill or budget expiry, root task revokes ticket and notifies NineDoor to clunk all active fids.
 

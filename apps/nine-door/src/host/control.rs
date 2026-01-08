@@ -28,7 +28,7 @@ impl QueenCommand {
     pub fn parse(line: &str) -> Result<Self, NineDoorError> {
         serde_json::from_str(line).map_err(|err| {
             NineDoorError::protocol(
-                secure9p_wire::ErrorCode::Invalid,
+                secure9p_codec::ErrorCode::Invalid,
                 format!("invalid queen command: {err}"),
             )
         })
@@ -69,7 +69,7 @@ impl SpawnCommand {
             SpawnTarget::Heartbeat => {
                 let ticks = self.ticks.ok_or_else(|| {
                     NineDoorError::protocol(
-                        secure9p_wire::ErrorCode::Invalid,
+                        secure9p_codec::ErrorCode::Invalid,
                         "heartbeat spawn requires ticks",
                     )
                 })?;
@@ -83,7 +83,7 @@ impl SpawnCommand {
             SpawnTarget::Gpu => {
                 let lease = self.lease.as_ref().ok_or_else(|| {
                     NineDoorError::protocol(
-                        secure9p_wire::ErrorCode::Invalid,
+                        secure9p_codec::ErrorCode::Invalid,
                         "gpu spawn requires lease",
                     )
                 })?;
@@ -220,7 +220,7 @@ pub struct MountSpec {
 fn parse_absolute_path(input: &str) -> Result<Vec<String>, NineDoorError> {
     if !input.starts_with('/') {
         return Err(NineDoorError::protocol(
-            secure9p_wire::ErrorCode::Invalid,
+            secure9p_codec::ErrorCode::Invalid,
             format!("path '{input}' must be absolute"),
         ));
     }
@@ -228,7 +228,7 @@ fn parse_absolute_path(input: &str) -> Result<Vec<String>, NineDoorError> {
     for component in input.split('/').filter(|segment| !segment.is_empty()) {
         if component == "." || component == ".." {
             return Err(NineDoorError::protocol(
-                secure9p_wire::ErrorCode::Invalid,
+                secure9p_codec::ErrorCode::Invalid,
                 format!("path '{input}' contains traversal component"),
             ));
         }

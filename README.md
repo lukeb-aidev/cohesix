@@ -1,4 +1,5 @@
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Provide a high-level overview of Cohesix architecture and workspace layout. -->
 # Cohesix
 
 ## Why Cohesix?
@@ -85,7 +86,7 @@ flowchart LR
     OP["Operator or Automation"]:::ext
     COHSH["cohsh (host-only)<br/>Canonical shell<br/>transport tcp<br/>role and ticket attach"]:::hosttool
     GUI["Future GUI or Dashboard (host-only)<br/>Speaks cohsh protocol"]:::hosttool
-    WIRE["secure9p-wire (host)<br/>bounded framing<br/>TCP transport adapter"]:::hostlib
+    WIRE["secure9p-codec/core/transport (host)<br/>bounded framing<br/>TCP transport adapter"]:::hostlib
     GPUB["gpu-bridge-host (host)<br/>CUDA and NVML here<br/>lease enforcement<br/>mirrors gpu namespace"]:::hosttool
   end
 
@@ -160,7 +161,7 @@ flowchart LR
 - **worker-gpu** — VM-resident stub handling GPU lease state and telemetry hooks; never touches hardware.
 - **cohsh** — Host-only CLI and canonical shell for the hive; GUI tooling is expected to speak the same protocol.
 - **gpu-bridge-host** — Host-side process that discovers or mocks GPUs, enforces leases, and mirrors `/gpu/<id>/` into the VM.
-- **secure9p-wire** — Bounded Secure9P framing and transport adapters for host tools.
+- **secure9p-codec / secure9p-core / secure9p-transport** — Secure9P codec, core policy hooks, and transport adapters for host tools.
 
 ---
 

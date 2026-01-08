@@ -1,4 +1,5 @@
 # Author: Lukas Bower
+# Purpose: Configure the worker-heart crate dependencies and metadata.
 [package]
 name = "worker-heart"
 version = "0.1.0"
@@ -10,4 +11,4 @@ publish = false
 [target.'cfg(not(target_os = "none"))'.dependencies]
 anyhow = { workspace = true }
 cohesix-ticket = { workspace = true }
-secure9p-wire = { workspace = true }
+secure9p-codec = { workspace = true }

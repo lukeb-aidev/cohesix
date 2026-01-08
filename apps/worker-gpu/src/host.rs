@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Provide host-side GPU worker descriptors and ticket claims.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -11,9 +12,9 @@ use std::fmt;
 
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use cohesix_ticket::{BudgetSpec, Role, TicketTemplate};
+use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims};
 use rand::{rngs::OsRng, TryRngCore};
-use secure9p_wire::SessionId;
+use secure9p_codec::SessionId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -115,7 +116,7 @@ impl JobDescriptor {
 /// GPU worker representation capturing the assigned lease.
 #[derive(Debug, Clone)]
 pub struct GpuWorker {
-    ticket: TicketTemplate,
+    ticket: TicketClaims,
     session: SessionId,
     lease: GpuLease,
 }
@@ -123,7 +124,13 @@ pub struct GpuWorker {
 impl GpuWorker {
     /// Construct a GPU worker with the provided lease specification.
     pub fn new(session: SessionId, lease: GpuLease) -> Self {
-        let ticket = TicketTemplate::new(Role::WorkerGpu, BudgetSpec::default_gpu());
+        let ticket = TicketClaims::new(
+            Role::WorkerGpu,
+            BudgetSpec::default_gpu(),
+            None,
+            MountSpec::empty(),
+            0,
+        );
         Self {
             ticket,
             session,
@@ -139,7 +146,7 @@ impl GpuWorker {
 
     /// Retrieve the associated capability ticket template.
     #[must_use]
-    pub fn ticket(&self) -> &TicketTemplate {
+    pub fn ticket(&self) -> &TicketClaims {
         &self.ticket
     }
 

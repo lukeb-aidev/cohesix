@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Provide the Cohesix shell CLI core and transport implementations.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -34,9 +35,9 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
-use cohesix_ticket::Role;
+use cohesix_ticket::{Role, TicketToken};
 use nine_door::{InProcessConnection, NineDoor};
-use secure9p_wire::{OpenMode, SessionId, MAX_MSIZE};
+use secure9p_codec::{OpenMode, SessionId, MAX_MSIZE};
 
 /// Result of executing a single shell command.
 #[derive(Debug, PartialEq, Eq)]
@@ -79,7 +80,7 @@ const ROOT_FID: u32 = 1;
 pub trait Transport {
     /// Attach to the transport using the specified role and optional ticket payload.
     ///
-    /// Worker roles must supply a non-empty identity string via `ticket` so the
+    /// Worker roles must supply a ticket containing a subject identity so the
     /// session can bind to the correct worker namespace.
     fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session>;
 
@@ -175,25 +176,35 @@ impl Transport for NineDoorTransport {
         connection
             .version(MAX_MSIZE)
             .context("version negotiation failed")?;
-        let identity = match role {
-            Role::Queen => None,
+        let mut subject = None;
+        let mut ticket_payload = ticket.map(str::trim).filter(|value| !value.is_empty());
+        match role {
+            Role::Queen => {}
             Role::WorkerHeartbeat | Role::WorkerGpu => {
-                let provided = ticket
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "role {:?} requires an identity provided via the ticket argument",
-                            role
-                        )
-                    })?;
-                Some(provided)
+                let provided = ticket_payload.ok_or_else(|| {
+                    anyhow!(
+                        "role {:?} requires a capability ticket containing an identity",
+                        role
+                    )
+                })?;
+                let claims = TicketToken::decode_unverified(provided)
+                    .map_err(|err| anyhow!("invalid ticket: {err}"))?;
+                if claims.role != role {
+                    return Err(anyhow!(
+                        "ticket role {:?} does not match requested role {:?}",
+                        claims.role,
+                        role
+                    ));
+                }
+                let subject_value = claims.subject.as_deref().ok_or_else(|| {
+                    anyhow!("ticket is missing required subject identity for role {:?}", role)
+                })?;
+                subject = Some(subject_value.to_string());
+                ticket_payload = Some(provided);
             }
         };
-        let attach_result = match identity {
-            Some(id) => connection.attach_with_identity(ROOT_FID, role, Some(id)),
-            None => connection.attach(ROOT_FID, role),
-        };
+        let attach_result =
+            connection.attach_with_identity(ROOT_FID, role, subject.as_deref(), ticket_payload);
         attach_result.context("attach request failed")?;
         self.next_fid = ROOT_FID + 1;
         let session = Session::new(connection.session_id(), role);
@@ -586,7 +597,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
     }
 
     /// Attach to the transport using the supplied role and optional ticket payload.
-    /// Worker roles must provide their identity via `ticket`.
+    /// Worker roles must provide a ticket containing a subject identity.
     pub fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<()> {
         if self.session.is_some() {
             return Err(anyhow!(
@@ -998,7 +1009,7 @@ mod tests {
         let transport = NineDoorTransport::new(NineDoor::new());
         let buffer = Vec::new();
         let mut shell = Shell::new(transport, Cursor::new(buffer));
-        shell.attach(Role::Queen, Some("ticket-1")).unwrap();
+        shell.attach(Role::Queen, None).unwrap();
         shell.execute("tail /log/queen.log").unwrap();
         let (_transport, cursor) = shell.into_parts();
         let output = cursor.into_inner();
@@ -1030,10 +1041,10 @@ mod tests {
         let mut transport = NineDoorTransport::new(NineDoor::new());
         let err = transport
             .attach(Role::WorkerHeartbeat, None)
-            .expect_err("worker attach without identity should fail");
+            .expect_err("worker attach without ticket should fail");
         assert!(err
             .to_string()
-            .contains("requires an identity provided via the ticket argument"));
+            .contains("requires a capability ticket containing an identity"));
     }
 
     #[test]

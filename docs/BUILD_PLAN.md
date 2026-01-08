@@ -761,7 +761,7 @@ Following the .coh script format as documented in docs/USERLAND_AND_CLI.md "## c
 Refactor Secure9P into codec/core crates with bounded pipelining and manifest-controlled batching.
 
 **Deliverables**
-- Split `crates/secure9p-wire` into:
+- Split `crates/secure9p-codec` / `secure9p-core` / `secure9p-transport` into:
   - `crates/secure9p-codec` — frame encode/decode, batch iterators, fuzz corpus harnesses (still `std` for now).
   - `crates/secure9p-core` — session manager, fid table, tag window enforcement, and `no_std + alloc` compatibility.
   Existing consumers (`apps/nine-door`, `apps/cohsh`) migrate to the new crates.
@@ -795,7 +795,7 @@ Refactor Secure9P into codec/core crates with bounded pipelining and manifest-co
 ```
 Title/ID: m09-codec-core-split
 Goal: Extract codec/core crates with bounded tag windows and batch iterators.
-Inputs: crates/secure9p-wire, configs/root_task.toml (new IR fields), docs/SECURE9P.md excerpts.
+Inputs: crates/secure9p-codec, crates/secure9p-core, crates/secure9p-transport, configs/root_task.toml (new IR fields), docs/SECURE9P.md excerpts.
 Changes:
   - crates/secure9p-codec/lib.rs — move frame encode/decode + batch iterators; add fuzz corpus harness.
   - crates/secure9p-core/lib.rs — session manager with tag window enforcement and queue depth accounting.

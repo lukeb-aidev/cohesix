@@ -412,21 +412,30 @@ impl NetStack {
     pub fn enqueue_console_line(&mut self, line: &str) {
         if !self.session_active {
             self.server.begin_session(0, None);
-            let mut auth_payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 8 }> =
+            let mut auth_payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 12 }> =
                 HeaplessVec::new();
-            let _ = auth_payload.extend_from_slice(b"AUTH ");
-            let _ = auth_payload.extend_from_slice(AUTH_TOKEN.as_bytes());
-            let _ = auth_payload.push(b'\n');
+            let mut auth_line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            let _ = auth_line.push_str("AUTH ");
+            let _ = auth_line.push_str(AUTH_TOKEN);
+            let _ = encode_frame(auth_line.as_str(), &mut auth_payload);
             let _ = self.server.ingest(auth_payload.as_slice(), 0);
             self.session_active = true;
         }
 
         let trimmed = line.trim_end_matches(['\r', '\n']);
-        let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 2 }> = HeaplessVec::new();
-        if payload.extend_from_slice(trimmed.as_bytes()).is_err() || payload.push(b'\n').is_err() {
+        let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 8 }> = HeaplessVec::new();
+        if encode_frame(trimmed, &mut payload).is_err() {
             return;
         }
         let _ = self.server.ingest(payload.as_slice(), 1);
+    }
+
+    fn encode_frame<const N: usize>(line: &str, payload: &mut HeaplessVec<u8, N>) -> Result<(), ()> {
+        let total_len = line.len().saturating_add(4);
+        let len: u32 = total_len.try_into().map_err(|_| ())?;
+        payload.extend_from_slice(&len.to_le_bytes()).map_err(|_| ())?;
+        payload.extend_from_slice(line.as_bytes()).map_err(|_| ())?;
+        Ok(())
     }
 
     /// Reset the queue-backed PHY and clear console session state.
@@ -473,6 +482,36 @@ impl NetPoller for NetStack {
 mod tests {
     use super::*;
     use smoltcp::wire::Ipv4Address;
+
+    fn frame_line<const N: usize>(line: &str) -> HeaplessVec<u8, N> {
+        let mut buf = HeaplessVec::new();
+        let total_len = line.len().saturating_add(4);
+        let len: u32 = total_len.try_into().unwrap_or(u32::MAX);
+        let _ = buf.extend_from_slice(&len.to_le_bytes());
+        let _ = buf.extend_from_slice(line.as_bytes());
+        buf
+    }
+
+    fn decode_frames(frame: &[u8]) -> heapless::Vec<heapless::String<96>, 4> {
+        let mut lines = heapless::Vec::new();
+        let mut offset = 0usize;
+        while offset + 4 <= frame.len() {
+            let mut len_buf = [0u8; 4];
+            len_buf.copy_from_slice(&frame[offset..offset + 4]);
+            let total_len = u32::from_le_bytes(len_buf) as usize;
+            if total_len < 4 || offset + total_len > frame.len() {
+                break;
+            }
+            let payload = &frame[offset + 4..offset + total_len];
+            if let Ok(text) = core::str::from_utf8(payload) {
+                let mut line = heapless::String::new();
+                let _ = line.push_str(text);
+                let _ = lines.push(line);
+            }
+            offset = offset.saturating_add(total_len);
+        }
+        lines
+    }
 
     #[test]
     fn queue_overflow_increments_drop_counter() {
@@ -540,22 +579,21 @@ mod tests {
             "lines must not transmit before authentication"
         );
 
-        let mut auth_payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 8 }> = HeaplessVec::new();
-        auth_payload.extend_from_slice(b"AUTH ").unwrap();
-        auth_payload
-            .extend_from_slice(AUTH_TOKEN.as_bytes())
-            .unwrap();
-        auth_payload.push(b'\n').unwrap();
+        let auth_payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!(
+            "AUTH {AUTH_TOKEN}"
+        ));
         let event = stack.server.ingest(auth_payload.as_slice(), 1);
         assert_eq!(event, SessionEvent::Authenticated);
 
         assert!(stack.poll_with_time(2));
 
         let frame = handle.pop_tx().expect("frame not enqueued");
-        assert_eq!(frame.as_slice(), b"OK TEST detail=42\r\n");
+        let lines = decode_frames(frame.as_slice());
+        assert!(lines.iter().any(|line| line.as_str() == "OK TEST detail=42"));
 
         let ack = handle.pop_tx().expect("auth acknowledgement missing");
-        assert_eq!(ack.as_slice(), b"OK AUTH\r\n");
+        let lines = decode_frames(ack.as_slice());
+        assert!(lines.iter().any(|line| line.as_str() == "OK AUTH"));
     }
 
     #[test]
@@ -565,12 +603,14 @@ mod tests {
         let (mut stack, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 150));
         stack.server.begin_session(0, None);
         stack.session_active = true;
-        let event = stack.server.ingest(b"AUTH wrong\n", 1);
+        let auth_payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>("AUTH wrong");
+        let event = stack.server.ingest(auth_payload.as_slice(), 1);
         assert!(matches!(event, SessionEvent::AuthFailed(_)));
 
         assert!(stack.poll_with_time(1));
 
         let frame = handle.pop_tx().expect("auth failure frame missing");
-        assert!(frame.as_slice().starts_with(b"ERR AUTH"));
+        let lines = decode_frames(frame.as_slice());
+        assert!(lines.iter().any(|line| line.as_str().starts_with("ERR AUTH")));
     }
 }

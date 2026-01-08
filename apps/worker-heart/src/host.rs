@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Provide host-side worker heartbeat descriptors and ticket claims.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -10,13 +11,13 @@
 //! brought online.
 
 use anyhow::Result;
-use cohesix_ticket::{BudgetSpec, Role, TicketTemplate};
-use secure9p_wire::SessionId;
+use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims};
+use secure9p_codec::SessionId;
 
 /// Builder for configuring heartbeat workers before seL4 integration lands.
 #[derive(Debug, Clone)]
 pub struct HeartbeatWorker {
-    ticket: TicketTemplate,
+    ticket: TicketClaims,
     session: SessionId,
 }
 
@@ -25,14 +26,20 @@ impl HeartbeatWorker {
     #[must_use]
     pub fn new(session: SessionId) -> Self {
         Self {
-            ticket: TicketTemplate::new(Role::WorkerHeartbeat, BudgetSpec::default_heartbeat()),
+            ticket: TicketClaims::new(
+                Role::WorkerHeartbeat,
+                BudgetSpec::default_heartbeat(),
+                None,
+                MountSpec::empty(),
+                0,
+            ),
             session,
         }
     }
 
     /// Return the associated capability ticket.
     #[must_use]
-    pub fn ticket(&self) -> &TicketTemplate {
+    pub fn ticket(&self) -> &TicketClaims {
         &self.ticket
     }
 

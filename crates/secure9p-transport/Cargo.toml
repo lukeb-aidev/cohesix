@@ -1,0 +1,12 @@
+# Author: Lukas Bower
+# Purpose: Define the Secure9P transport adapter crate boundaries.
+[package]
+name = "secure9p-transport"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+secure9p-core = { path = "../secure9p-core" }
+secure9p-codec = { path = "../secure9p-codec" }

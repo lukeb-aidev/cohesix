@@ -1,4 +1,5 @@
 # Author: Lukas Bower
+# Purpose: Configure the NineDoor Secure9P server crate dependencies and metadata.
 [package]
 name = "nine-door"
 version = "0.1.0"
@@ -11,7 +12,8 @@ publish = false
 anyhow = { workspace = true }
 cohesix-ticket = { workspace = true }
 cohesix-proto = { workspace = true }
-secure9p-wire = { workspace = true }
+secure9p-codec = { workspace = true }
+secure9p-core = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

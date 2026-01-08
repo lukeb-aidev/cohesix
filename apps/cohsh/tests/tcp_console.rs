@@ -1,7 +1,8 @@
 // Author: Lukas Bower
+// Purpose: Validate TCP console transport framing and attach flows.
 #![cfg(feature = "tcp")]
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::TcpListener;
 use std::thread;
 use std::time::Duration;
@@ -10,6 +11,22 @@ use cohesix_ticket::Role;
 use cohsh::proto::{parse_ack, AckStatus};
 use cohsh::{TcpTransport, Transport};
 
+fn write_frame(stream: &mut std::net::TcpStream, line: &str) {
+    let total_len = line.len().saturating_add(4) as u32;
+    stream.write_all(&total_len.to_le_bytes()).expect("write len");
+    stream.write_all(line.as_bytes()).expect("write payload");
+}
+
+fn read_frame(reader: &mut BufReader<std::net::TcpStream>) -> String {
+    let mut len_buf = [0u8; 4];
+    reader.read_exact(&mut len_buf).expect("read len");
+    let total_len = u32::from_le_bytes(len_buf) as usize;
+    let payload_len = total_len.saturating_sub(4);
+    let mut payload = vec![0u8; payload_len];
+    reader.read_exact(&mut payload).expect("read payload");
+    String::from_utf8(payload).expect("payload utf8")
+}
+
 #[test]
 fn tcp_transport_handles_attach_and_tail() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
@@ -17,20 +34,17 @@ fn tcp_transport_handles_attach_and_tail() {
     thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept client");
         let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
-        let mut line = String::new();
-        reader.read_line(&mut line).expect("read auth");
+        let line = read_frame(&mut reader);
         assert!(line.starts_with("AUTH changeme"));
-        writeln!(stream, "OK AUTH").expect("write auth ok");
-        line.clear();
-        reader.read_line(&mut line).expect("read attach");
+        write_frame(&mut stream, "OK AUTH");
+        let line = read_frame(&mut reader);
         assert!(line.starts_with("ATTACH queen"));
-        writeln!(stream, "OK ATTACH role=queen").expect("write ok");
-        line.clear();
-        reader.read_line(&mut line).expect("read tail");
+        write_frame(&mut stream, "OK ATTACH role=queen");
+        let line = read_frame(&mut reader);
         assert!(line.starts_with("TAIL /log/queen.log"));
-        writeln!(stream, "OK TAIL path=/log/queen.log").expect("ack tail");
-        writeln!(stream, "boot line").expect("write line");
-        writeln!(stream, "END").expect("write end");
+        write_frame(&mut stream, "OK TAIL path=/log/queen.log");
+        write_frame(&mut stream, "boot line");
+        write_frame(&mut stream, "END");
     });
 
     let mut transport = TcpTransport::new("127.0.0.1", port);
@@ -61,8 +75,7 @@ fn tcp_transport_times_out_when_server_is_silent() {
     thread::spawn(move || {
         let (stream, _) = listener.accept().expect("accept client");
         let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
-        let mut line = String::new();
-        reader.read_line(&mut line).expect("read auth");
+        let line = read_frame(&mut reader);
         assert!(line.starts_with("AUTH changeme"));
         // Deliberately remain silent to trigger the client's auth timeout.
         std::thread::sleep(std::time::Duration::from_millis(250));

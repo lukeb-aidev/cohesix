@@ -11,7 +11,7 @@ use serde::Deserialize;
 use trace_model::{TraceEvent, TraceLevel};
 
 use crate::NineDoorError;
-use secure9p_wire::ErrorCode;
+use secure9p_codec::ErrorCode;
 
 const DEFAULT_RING_CAPACITY: usize = 256;
 

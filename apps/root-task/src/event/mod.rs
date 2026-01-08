@@ -218,17 +218,17 @@ pub trait CapabilityValidator {
 
 /// Error raised when registering capability tickets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TicketError {
+pub enum TicketRegistryError {
     /// The ticket table reached its capacity.
     Capacity,
-    /// Provided ticket exceeded the allowed size.
-    TicketTooLong,
+    /// Provided secret exceeded the allowed size.
+    SecretTooLong,
 }
 
 #[derive(Debug)]
 struct TicketRecord {
     role: Role,
-    token: HeaplessString<{ MAX_TICKET_LEN }>,
+    key: cohesix_ticket::TicketKey,
 }
 
 /// Deterministic capability table used by the authenticated console.
@@ -245,21 +245,20 @@ impl<const N: usize> TicketTable<N> {
         }
     }
 
-    /// Register a new ticket.
-    pub fn register(&mut self, role: Role, ticket: &str) -> Result<(), TicketError> {
-        if ticket.len() > MAX_TICKET_LEN {
-            return Err(TicketError::TicketTooLong);
+    /// Register a new ticket secret.
+    pub fn register(&mut self, role: Role, secret: &str) -> Result<(), TicketRegistryError> {
+        if secret.len() > MAX_TICKET_LEN {
+            return Err(TicketRegistryError::SecretTooLong);
         }
         if self.entries.is_full() {
-            return Err(TicketError::Capacity);
+            return Err(TicketRegistryError::Capacity);
         }
-        let mut token: HeaplessString<{ MAX_TICKET_LEN }> = HeaplessString::new();
-        token
-            .push_str(ticket)
-            .map_err(|_| TicketError::TicketTooLong)?;
         self.entries
-            .push(TicketRecord { role, token })
-            .map_err(|_| TicketError::Capacity)
+            .push(TicketRecord {
+                role,
+                key: cohesix_ticket::TicketKey::from_secret(secret),
+            })
+            .map_err(|_| TicketRegistryError::Capacity)
     }
 }
 
@@ -283,9 +282,14 @@ impl<const N: usize> CapabilityValidator for TicketTable<N> {
             return true;
         }
         let Some(ticket) = ticket else { return false };
-        self.entries
-            .iter()
-            .any(|record| record.role == role && record.token.as_str() == ticket)
+        let key = self.entries.iter().find_map(|record| {
+            (record.role == role).then_some(&record.key)
+        });
+        let Some(key) = key else { return false };
+        let Ok(decoded) = cohesix_ticket::TicketToken::decode(ticket, key) else {
+            return false;
+        };
+        decoded.claims().role == role
     }
 }
 
@@ -1667,6 +1671,7 @@ extern "C" fn vtable_sentinel() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
     #[cfg(feature = "net-console")]
     use crate::net::NetTelemetry;
     #[cfg(feature = "kernel")]
@@ -1816,6 +1821,17 @@ mod tests {
         }
     }
 
+    fn issue_token(secret: &str, role: Role) -> String {
+        let budget = match role {
+            Role::Queen => BudgetSpec::unbounded(),
+            Role::WorkerHeartbeat => BudgetSpec::default_heartbeat(),
+            Role::WorkerGpu => BudgetSpec::default_gpu(),
+        };
+        let issuer = TicketIssuer::new(secret);
+        let claims = TicketClaims::new(role, budget, None, MountSpec::empty(), 0);
+        issuer.issue(claims).unwrap().encode().unwrap()
+    }
+
     impl AuditSink for AuditLog {
         fn info(&mut self, message: &str) {
             let mut buf = HeaplessString::new();
@@ -1904,7 +1920,8 @@ mod tests {
             .unwrap();
         assert!(!store.validate(Role::WorkerHeartbeat, None));
         assert!(!store.validate(Role::WorkerHeartbeat, Some("  ")));
-        assert!(store.validate(Role::WorkerHeartbeat, Some("worker-ticket")));
+        let token = issue_token("worker-ticket", Role::WorkerHeartbeat);
+        assert!(store.validate(Role::WorkerHeartbeat, Some(token.as_str())));
     }
 
     #[cfg(feature = "kernel")]
@@ -2011,7 +2028,9 @@ mod tests {
         let mut audit = AuditLog::new();
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
         let driver = pump.serial_mut().driver_mut();
-        driver.push_rx(b"attach queen ok\nlog\n");
+        let token = issue_token("ok", Role::Queen);
+        let line = format!("attach queen {token}\nlog\n");
+        driver.push_rx(line.as_bytes());
         pump.poll();
         drop(pump);
         assert!(audit
@@ -2078,7 +2097,9 @@ mod tests {
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
         let mut line = HeaplessString::new();
-        line.push_str("attach queen net").unwrap();
+        let token = issue_token("net", Role::Queen);
+        line.push_str(format!("attach queen {token}").as_str())
+            .unwrap();
         net.lines.push(line).unwrap();
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.poll();
@@ -2105,7 +2126,9 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
         {
             let driver = pump.serial_mut().driver_mut();
-            driver.push_rx(b"log\nattach queen ticket\nlog\n");
+            let token = issue_token("ticket", Role::Queen);
+            let line = format!("log\nattach queen {token}\nlog\n");
+            driver.push_rx(line.as_bytes());
         }
         pump.poll();
         pump.poll();
@@ -2139,7 +2162,9 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
         {
             let driver = pump.serial_mut().driver_mut();
-            driver.push_rx(b"attach worker worker-ticket\n");
+            let worker_token = issue_token("worker-ticket", Role::WorkerHeartbeat);
+            let line = format!("attach worker {worker_token}\n");
+            driver.push_rx(line.as_bytes());
             driver.push_rx(b"tail /log/queen.log\n");
         }
         pump.poll();
@@ -2173,7 +2198,9 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
         {
             let driver = pump.serial_mut().driver_mut();
-            driver.push_rx(b"attach queen ticket\n");
+            let token = issue_token("ticket", Role::Queen);
+            let line = format!("attach queen {token}\n");
+            driver.push_rx(line.as_bytes());
             driver.push_rx(b"log\n");
             driver.push_rx(b"quit\n");
             driver.push_rx(b"log\n");

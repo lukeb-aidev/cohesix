@@ -1,4 +1,5 @@
 # Author: Lukas Bower
+# Purpose: Configure the worker-gpu crate dependencies and metadata.
 [package]
 name = "worker-gpu"
 version = "0.1.0"
@@ -16,4 +17,4 @@ rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-secure9p-wire = { workspace = true }
+secure9p-codec = { workspace = true }

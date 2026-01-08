@@ -13,9 +13,9 @@ use std::str;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use cohesix_ticket::{BudgetSpec, Role, TicketTemplate};
+use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims};
 use gpu_bridge_host::GpuNamespaceSnapshot;
-use secure9p_wire::{
+use secure9p_codec::{
     Codec, CodecError, ErrorCode, FrameHeader, OpenMode, Qid, Request, RequestBody, ResponseBody,
     SessionId, MAX_MSIZE, VERSION,
 };
@@ -76,7 +76,7 @@ impl Clock for SystemClock {
 #[derive(Clone)]
 pub struct NineDoor {
     inner: Arc<Mutex<ServerCore>>,
-    bootstrap_ticket: TicketTemplate,
+    bootstrap_ticket: TicketClaims,
 }
 
 impl fmt::Debug for NineDoor {
@@ -99,7 +99,13 @@ impl NineDoor {
     pub fn new_with_clock(clock: Arc<dyn Clock>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ServerCore::new(clock))),
-            bootstrap_ticket: TicketTemplate::new(Role::Queen, BudgetSpec::unbounded()),
+            bootstrap_ticket: TicketClaims::new(
+                Role::Queen,
+                BudgetSpec::unbounded(),
+                None,
+                MountSpec::empty(),
+                0,
+            ),
         }
     }
 
@@ -119,7 +125,7 @@ impl NineDoor {
 
     /// Borrow the bootstrap ticket template used for queen sessions.
     #[must_use]
-    pub fn bootstrap_ticket(&self) -> &TicketTemplate {
+    pub fn bootstrap_ticket(&self) -> &TicketClaims {
         &self.bootstrap_ticket
     }
 
@@ -127,6 +133,12 @@ impl NineDoor {
     pub fn register_service(&self, service: &str, target: &[&str]) -> Result<(), NineDoorError> {
         let mut core = self.inner.lock().expect("poisoned nine-door lock");
         core.register_service(service, target)
+    }
+
+    /// Register a shared secret used to validate attach tickets for the role.
+    pub fn register_ticket_secret(&self, role: Role, secret: &str) {
+        let mut core = self.inner.lock().expect("poisoned nine-door lock");
+        core.register_ticket_secret(role, secret);
     }
 
     /// Install GPU namespace nodes discovered by the host bridge.
@@ -215,7 +227,7 @@ impl InProcessConnection {
 
     /// Attach to the namespace using the supplied fid and role.
     pub fn attach(&mut self, fid: u32, role: Role) -> Result<Qid, NineDoorError> {
-        self.attach_with_identity(fid, role, None)
+        self.attach_with_identity(fid, role, None, None)
     }
 
     /// Attach to the namespace providing an explicit identity string.
@@ -224,12 +236,13 @@ impl InProcessConnection {
         fid: u32,
         role: Role,
         identity: Option<&str>,
+        ticket: Option<&str>,
     ) -> Result<Qid, NineDoorError> {
         let response = self.transact(RequestBody::Attach {
             fid,
             afid: u32::MAX,
             uname: role_to_uname(role, identity)?,
-            aname: "".to_owned(),
+            aname: ticket.unwrap_or("").to_owned(),
             n_uname: 0,
         })?;
         let ResponseBody::Attach { qid } = response else {

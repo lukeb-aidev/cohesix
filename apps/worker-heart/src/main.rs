@@ -13,7 +13,7 @@ use anyhow::Result;
 
 #[cfg(not(target_os = "none"))]
 fn main() -> Result<()> {
-    use secure9p_wire::SessionId;
+    use secure9p_codec::SessionId;
     use worker_heart::HeartbeatWorker;
 
     let worker = HeartbeatWorker::new(SessionId::from_raw(0));

@@ -1,9 +1,10 @@
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Describe Secure9P crate layout, transport rules, and access policy hooks. -->
 # Secure9P Policy & Implementation Guide
 
 ## 1. Scope
 Secure9P provides the 9P2000.L codec, core request dispatcher, and transport adapters used by NineDoor. It must remain usable in `no_std + alloc` environments and cannot depend on POSIX APIs.
-It is the sole control-plane IPC surface; the TCP console path reuses the same NineDoor framing with a minimal 9P-style `attach`/auth handshake (role, optional ticket, idle/auth timeouts, reconnect-friendly) layered alongside the always-on PL011 root console rather than replacing it.
+It is the sole control-plane IPC surface; the TCP console path reuses the same NineDoor framing with a minimal 9P-style `attach`/auth handshake (role, optional ticket, idle/auth timeouts, reconnect-friendly) layered alongside the always-on PL011 root console rather than replacing it. The TCP console uses Secure9P-style length-prefixed frames (4-byte little-endian length including the header) to carry each console line.
 Secure9P sessions present the per-hive and per-role view into the namespace so queen and worker mounts expose different slices of the hive.
 
 ## 2. Layering

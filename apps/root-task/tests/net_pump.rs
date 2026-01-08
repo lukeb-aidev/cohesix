@@ -2,9 +2,7 @@
 // Purpose: Integration-oriented tests for net console event pump interactions.
 #![cfg(feature = "net-console")]
 
-use std::str;
-
-use cohesix_ticket::Role;
+use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
 use root_task::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 use root_task::net::{NetStack, CONSOLE_QUEUE_DEPTH, CONSOLE_TCP_PORT};
 use root_task::serial::{
@@ -68,6 +66,25 @@ impl AuditSink for AuditCapture {
     }
 }
 
+fn decode_frame_lines(frame: &[u8]) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut offset = 0usize;
+    while offset + 4 <= frame.len() {
+        let mut len_buf = [0u8; 4];
+        len_buf.copy_from_slice(&frame[offset..offset + 4]);
+        let total_len = u32::from_le_bytes(len_buf) as usize;
+        if total_len < 4 || offset + total_len > frame.len() {
+            break;
+        }
+        let payload = &frame[offset + 4..offset + total_len];
+        if let Ok(text) = std::str::from_utf8(payload) {
+            lines.push(text.to_string());
+        }
+        offset += total_len;
+    }
+    lines
+}
+
 type TestPump<'a> = EventPump<
     'a,
     LoopbackSerial<{ DEFAULT_RX_CAPACITY }>,
@@ -89,6 +106,13 @@ fn build_pump<'a>(
     let mut tickets: TicketTable<4> = TicketTable::new();
     tickets.register(Role::Queen, "token").unwrap();
     EventPump::new(port, timer, ipc, tickets, audit)
+}
+
+fn issue_queen_token(secret: &str) -> String {
+    let issuer = TicketIssuer::new(secret);
+    let claims =
+        TicketClaims::new(Role::Queen, BudgetSpec::unbounded(), None, MountSpec::empty(), 0);
+    issuer.issue(claims).unwrap().encode().unwrap()
 }
 
 #[test]
@@ -117,7 +141,8 @@ fn network_lines_round_trip_acknowledgements() {
 
     {
         let net_iface = pump.network_mut().expect("network not attached");
-        net_iface.inject_console_line("attach queen token\n");
+        let token = issue_queen_token("token");
+        net_iface.inject_console_line(format!("attach queen {token}\n").as_str());
         net_iface.inject_console_line("log\n");
     }
 
@@ -126,13 +151,14 @@ fn network_lines_round_trip_acknowledgements() {
     }
 
     let auth = handle.pop_tx().expect("auth acknowledgement missing");
-    assert_eq!(str::from_utf8(auth.as_slice()).unwrap(), "OK AUTH\r\n");
+    let auth_lines = decode_frame_lines(auth.as_slice());
+    assert_eq!(auth_lines, vec!["OK AUTH".to_string()]);
     let attach = handle.pop_tx().expect("attach acknowledgement missing");
-    assert!(str::from_utf8(attach.as_slice())
-        .unwrap()
-        .starts_with("OK ATTACH"));
+    let attach_lines = decode_frame_lines(attach.as_slice());
+    assert!(attach_lines.iter().any(|line| line.starts_with("OK ATTACH")));
     let log = handle.pop_tx().expect("log acknowledgement missing");
-    assert_eq!(str::from_utf8(log.as_slice()).unwrap(), "OK LOG\r\n");
+    let log_lines = decode_frame_lines(log.as_slice());
+    assert_eq!(log_lines, vec!["OK LOG".to_string()]);
     assert!(pump.metrics().accepted_commands >= 2);
     assert!(audit.info.iter().any(|line| line.contains("console: log")));
 }
@@ -150,7 +176,8 @@ fn auth_and_attach_survive_saturated_queue() {
         for _ in 0..(CONSOLE_QUEUE_DEPTH * 6) {
             net_iface.send_console_line("NOISE");
         }
-        net_iface.inject_console_line("attach queen token\n");
+        let token = issue_queen_token("token");
+        net_iface.inject_console_line(format!("attach queen {token}\n").as_str());
     }
 
     for _ in 0..6 {
@@ -159,13 +186,11 @@ fn auth_and_attach_survive_saturated_queue() {
 
     let mut frames = heapless::Vec::<heapless::String<96>, 16>::new();
     while let Some(frame) = handle.pop_tx() {
-        let as_str = str::from_utf8(frame.as_slice())
-            .unwrap()
-            .trim_end()
-            .to_owned();
-        let mut line = heapless::String::new();
-        line.push_str(as_str.as_str()).unwrap();
-        let _ = frames.push(line);
+        for line in decode_frame_lines(frame.as_slice()) {
+            let mut entry = heapless::String::new();
+            entry.push_str(line.as_str()).unwrap();
+            let _ = frames.push(entry);
+        }
     }
 
     assert!(
@@ -195,11 +220,11 @@ fn attach_with_bad_ticket_is_rejected() {
     pump.poll();
 
     let auth = handle.pop_tx().expect("auth acknowledgement missing");
-    assert_eq!(str::from_utf8(auth.as_slice()).unwrap(), "OK AUTH\r\n");
+    let auth_lines = decode_frame_lines(auth.as_slice());
+    assert_eq!(auth_lines, vec!["OK AUTH".to_string()]);
     let attach = handle.pop_tx().expect("attach acknowledgement missing");
-    assert!(str::from_utf8(attach.as_slice())
-        .unwrap()
-        .starts_with("ERR ATTACH"));
+    let attach_lines = decode_frame_lines(attach.as_slice());
+    assert!(attach_lines.iter().any(|line| line.starts_with("ERR ATTACH")));
     assert!(pump.metrics().denied_commands >= 1 || !audit.denials.is_empty());
 }
 
@@ -218,13 +243,11 @@ fn preauth_clients_receive_hint_instead_of_banner() {
 
     let mut frames: heapless::Vec<heapless::String<96>, 16> = heapless::Vec::new();
     while let Some(frame) = handle.pop_tx() {
-        let as_str = str::from_utf8(frame.as_slice())
-            .unwrap()
-            .trim_end()
-            .to_owned();
-        let mut line = heapless::String::new();
-        line.push_str(as_str.as_str()).unwrap();
-        let _ = frames.push(line);
+        for line in decode_frame_lines(frame.as_slice()) {
+            let mut entry = heapless::String::new();
+            entry.push_str(line.as_str()).unwrap();
+            let _ = frames.push(entry);
+        }
     }
 
     assert!(
@@ -255,7 +278,8 @@ fn tx_queue_saturation_updates_telemetry() {
 
     {
         let net_iface = pump.network_mut().expect("network not attached");
-        net_iface.inject_console_line("attach queen token\n");
+        let token = issue_queen_token("token");
+        net_iface.inject_console_line(format!("attach queen {token}\n").as_str());
     }
 
     pump.poll();
@@ -297,13 +321,11 @@ fn ping_requires_session_before_ack() {
 
     let mut frames = heapless::Vec::<heapless::String<96>, 8>::new();
     while let Some(frame) = handle.pop_tx() {
-        let as_str = str::from_utf8(frame.as_slice())
-            .unwrap()
-            .trim_end()
-            .to_owned();
-        let mut line = heapless::String::new();
-        line.push_str(as_str.as_str()).unwrap();
-        frames.push(line).unwrap();
+        for line in decode_frame_lines(frame.as_slice()) {
+            let mut entry = heapless::String::new();
+            entry.push_str(line.as_str()).unwrap();
+            frames.push(entry).unwrap();
+        }
     }
 
     assert!(
@@ -329,7 +351,8 @@ fn ping_round_trips_after_attach() {
 
     {
         let net_iface = pump.network_mut().expect("network not attached");
-        net_iface.inject_console_line("attach queen token\n");
+        let token = issue_queen_token("token");
+        net_iface.inject_console_line(format!("attach queen {token}\n").as_str());
         net_iface.inject_console_line("ping\n");
     }
 
@@ -339,13 +362,11 @@ fn ping_round_trips_after_attach() {
 
     let mut frames = heapless::Vec::<heapless::String<96>, 12>::new();
     while let Some(frame) = handle.pop_tx() {
-        let as_str = str::from_utf8(frame.as_slice())
-            .unwrap()
-            .trim_end()
-            .to_owned();
-        let mut line = heapless::String::new();
-        line.push_str(as_str.as_str()).unwrap();
-        frames.push(line).unwrap();
+        for line in decode_frame_lines(frame.as_slice()) {
+            let mut entry = heapless::String::new();
+            entry.push_str(line.as_str()).unwrap();
+            frames.push(entry).unwrap();
+        }
     }
 
     let auth_seen = frames.iter().position(|line| line.starts_with("OK AUTH"));
@@ -388,7 +409,8 @@ fn pump_survives_force_reset() {
 
     {
         let net_iface = pump.network_mut().expect("network not attached");
-        net_iface.inject_console_line("attach queen token\n");
+        let token = issue_queen_token("token");
+        net_iface.inject_console_line(format!("attach queen {token}\n").as_str());
         net_iface.inject_console_line("log\n");
     }
 
@@ -401,7 +423,8 @@ fn pump_survives_force_reset() {
     {
         let net_iface = pump.network_mut().expect("network not attached");
         net_iface.reset();
-        net_iface.inject_console_line("attach queen token\n");
+        let token = issue_queen_token("token");
+        net_iface.inject_console_line(format!("attach queen {token}\n").as_str());
         net_iface.inject_console_line("tail /log/queen.log\n");
     }
 
@@ -411,17 +434,16 @@ fn pump_survives_force_reset() {
     let auth = handle
         .pop_tx()
         .expect("auth acknowledgement missing after reset");
-    assert_eq!(str::from_utf8(auth.as_slice()).unwrap(), "OK AUTH\r\n");
+    let auth_lines = decode_frame_lines(auth.as_slice());
+    assert_eq!(auth_lines, vec!["OK AUTH".to_string()]);
     let attach = handle
         .pop_tx()
         .expect("attach acknowledgement missing after reset");
-    assert!(str::from_utf8(attach.as_slice())
-        .unwrap()
-        .starts_with("OK ATTACH"));
+    let attach_lines = decode_frame_lines(attach.as_slice());
+    assert!(attach_lines.iter().any(|line| line.starts_with("OK ATTACH")));
     let tail = handle
         .pop_tx()
         .expect("tail acknowledgement missing after reset");
-    assert!(str::from_utf8(tail.as_slice())
-        .unwrap()
-        .starts_with("OK TAIL"));
+    let tail_lines = decode_frame_lines(tail.as_slice());
+    assert!(tail_lines.iter().any(|line| line.starts_with("OK TAIL")));
 }

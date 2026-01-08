@@ -2,12 +2,29 @@
 // Purpose: Integration tests for NineDoor host namespace and GPU workflow.
 #![forbid(unsafe_code)]
 
-use cohesix_ticket::Role;
+use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
 use nine_door::{Clock, InProcessConnection, NineDoor, NineDoorError};
-use secure9p_wire::{ErrorCode, OpenMode, MAX_MSIZE};
+use secure9p_codec::{ErrorCode, OpenMode, MAX_MSIZE};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use worker_gpu::{GpuLease, GpuWorker};
+
+fn issue_ticket(secret: &str, role: Role, subject: &str) -> String {
+    let budget = match role {
+        Role::Queen => BudgetSpec::unbounded(),
+        Role::WorkerHeartbeat => BudgetSpec::default_heartbeat(),
+        Role::WorkerGpu => BudgetSpec::default_gpu(),
+    };
+    let issuer = TicketIssuer::new(secret);
+    let claims = TicketClaims::new(
+        role,
+        budget,
+        Some(subject.to_owned()),
+        MountSpec::empty(),
+        0,
+    );
+    issuer.issue(claims).unwrap().encode().unwrap()
+}
 
 #[test]
 fn attach_walk_read_and_write() {
@@ -81,6 +98,7 @@ fn queen_bind_is_session_scoped() {
 #[test]
 fn worker_bind_command_rejected() {
     let server = NineDoor::new();
+    server.register_ticket_secret(Role::WorkerHeartbeat, "worker-secret");
     let mut queen = server.connect().expect("create queen session");
     queen.version(MAX_MSIZE).expect("version handshake");
     queen.attach(1, Role::Queen).expect("queen attach");
@@ -98,7 +116,12 @@ fn worker_bind_command_rejected() {
     let mut worker = server.connect().expect("create worker session");
     worker.version(MAX_MSIZE).expect("version handshake");
     worker
-        .attach_with_identity(1, Role::WorkerHeartbeat, Some("worker-1"))
+        .attach_with_identity(
+            1,
+            Role::WorkerHeartbeat,
+            Some("worker-1"),
+            Some(issue_ticket("worker-secret", Role::WorkerHeartbeat, "worker-1").as_str()),
+        )
         .expect("worker attach");
 
     let queen_path = vec!["queen".to_owned(), "ctl".to_owned()];
@@ -154,6 +177,7 @@ fn queen_mounts_registered_service() {
 #[test]
 fn spawn_emit_kill_logs_revocation() {
     let server = NineDoor::new();
+    server.register_ticket_secret(Role::WorkerHeartbeat, "worker-secret");
     let mut queen = server.connect().expect("create queen session");
     queen.version(MAX_MSIZE).expect("version handshake");
     queen.attach(1, Role::Queen).expect("queen attach");
@@ -171,7 +195,12 @@ fn spawn_emit_kill_logs_revocation() {
     let mut worker = server.connect().expect("create worker session");
     worker.version(MAX_MSIZE).expect("version handshake");
     worker
-        .attach_with_identity(1, Role::WorkerHeartbeat, Some("worker-1"))
+        .attach_with_identity(
+            1,
+            Role::WorkerHeartbeat,
+            Some("worker-1"),
+            Some(issue_ticket("worker-secret", Role::WorkerHeartbeat, "worker-1").as_str()),
+        )
         .expect("worker attach");
     let telemetry = vec![
         "worker".to_owned(),
@@ -213,6 +242,7 @@ fn spawn_emit_kill_logs_revocation() {
 #[test]
 fn queen_spawns_gpu_worker_and_runs_job() {
     let server = NineDoor::new();
+    server.register_ticket_secret(Role::WorkerGpu, "gpu-secret");
     let bridge = gpu_bridge_host::GpuBridge::mock();
     let topology = bridge.serialise_namespace().expect("serialise namespace");
     server
@@ -236,7 +266,12 @@ fn queen_spawns_gpu_worker_and_runs_job() {
     let mut worker = server.connect().expect("create gpu worker session");
     worker.version(MAX_MSIZE).expect("version handshake");
     worker
-        .attach_with_identity(1, Role::WorkerGpu, Some("worker-1"))
+        .attach_with_identity(
+            1,
+            Role::WorkerGpu,
+            Some("worker-1"),
+            Some(issue_ticket("gpu-secret", Role::WorkerGpu, "worker-1").as_str()),
+        )
         .expect("gpu worker attach");
     let job_path = vec!["gpu".to_owned(), "GPU-0".to_owned(), "job".to_owned()];
     worker.walk(1, 2, &job_path).expect("walk job path");
@@ -280,6 +315,7 @@ fn queen_spawns_gpu_worker_and_runs_job() {
 #[test]
 fn gpu_job_write_requires_utf8() {
     let server = NineDoor::new();
+    server.register_ticket_secret(Role::WorkerGpu, "gpu-secret");
     let bridge = gpu_bridge_host::GpuBridge::mock();
     server
         .install_gpu_nodes(&bridge.serialise_namespace().unwrap())
@@ -304,6 +340,7 @@ fn gpu_job_write_requires_utf8() {
 #[test]
 fn gpu_job_descriptor_must_validate_payload() {
     let server = NineDoor::new();
+    server.register_ticket_secret(Role::WorkerGpu, "gpu-secret");
     let bridge = gpu_bridge_host::GpuBridge::mock();
     server
         .install_gpu_nodes(&bridge.serialise_namespace().unwrap())
@@ -337,6 +374,7 @@ fn gpu_job_descriptor_must_validate_payload() {
 fn gpu_lease_expiry_revokes_job_access() {
     let clock = Arc::new(TestClock::new());
     let server = NineDoor::new_with_clock(clock.clone());
+    server.register_ticket_secret(Role::WorkerGpu, "gpu-secret");
     let bridge = gpu_bridge_host::GpuBridge::mock();
     server
         .install_gpu_nodes(&bridge.serialise_namespace().unwrap())
@@ -349,7 +387,12 @@ fn gpu_lease_expiry_revokes_job_access() {
     let mut worker = server.connect().expect("create gpu worker session");
     worker.version(MAX_MSIZE).expect("version handshake");
     worker
-        .attach_with_identity(1, Role::WorkerGpu, Some("worker-1"))
+        .attach_with_identity(
+            1,
+            Role::WorkerGpu,
+            Some("worker-1"),
+            Some(issue_ticket("gpu-secret", Role::WorkerGpu, "worker-1").as_str()),
+        )
         .expect("gpu worker attach");
     let job_path = vec!["gpu".to_owned(), "GPU-0".to_owned(), "job".to_owned()];
     worker.walk(1, 2, &job_path).expect("walk job path");
@@ -436,7 +479,12 @@ fn attach_gpu_worker(server: &NineDoor, id: &str) -> InProcessConnection {
     let mut client = server.connect().expect("create gpu worker session");
     client.version(MAX_MSIZE).expect("version handshake");
     client
-        .attach_with_identity(1, Role::WorkerGpu, Some(id))
+        .attach_with_identity(
+            1,
+            Role::WorkerGpu,
+            Some(id),
+            Some(issue_ticket("gpu-secret", Role::WorkerGpu, id).as_str()),
+        )
         .expect("gpu worker attach");
     client
 }

@@ -7,6 +7,7 @@ use core::{fmt::Write, ops::Range};
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, info, warn};
 use portable_atomic::{AtomicBool, Ordering};
+use secure9p_codec::MAX_MSIZE;
 
 use super::{AUTH_TIMEOUT_MS, CONSOLE_QUEUE_DEPTH};
 use crate::console::proto::{render_ack, AckStatus, LineFormatError};
@@ -61,6 +62,10 @@ pub struct TcpConsoleServer {
     idle_timeout_ms: u64,
     state: SessionState,
     line_buffer: HeaplessString<DEFAULT_LINE_CAPACITY>,
+    frame_buffer: HeaplessVec<u8, DEFAULT_LINE_CAPACITY>,
+    frame_len_buf: [u8; 4],
+    frame_len_pos: usize,
+    frame_payload_len: Option<usize>,
     inbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
     priority_outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, { CONSOLE_QUEUE_DEPTH * 4 }>,
     outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
@@ -159,10 +164,7 @@ impl TcpConsoleServer {
     }
 
     fn expected_frame_len(&self) -> usize {
-        AUTH_PREFIX
-            .len()
-            .saturating_add(self.auth_token.len())
-            .saturating_add(1)
+        AUTH_PREFIX.len().saturating_add(self.auth_token.len())
     }
 
     /// Construct a new server that validates the provided authentication token.
@@ -172,6 +174,10 @@ impl TcpConsoleServer {
             idle_timeout_ms,
             state: SessionState::Inactive,
             line_buffer: HeaplessString::new(),
+            frame_buffer: HeaplessVec::new(),
+            frame_len_buf: [0u8; 4],
+            frame_len_pos: 0,
+            frame_payload_len: None,
             inbound: Deque::new(),
             priority_outbound: Deque::new(),
             outbound: Deque::new(),
@@ -190,6 +196,9 @@ impl TcpConsoleServer {
     pub fn begin_session(&mut self, now_ms: u64, conn_id: Option<u64>) {
         self.set_state(SessionState::WaitingAuth);
         self.line_buffer.clear();
+        self.frame_buffer.clear();
+        self.frame_len_pos = 0;
+        self.frame_payload_len = None;
         self.inbound.clear();
         self.priority_outbound.clear();
         self.outbound.clear();
@@ -223,6 +232,9 @@ impl TcpConsoleServer {
         self.enqueue_preauth_summary(preauth_stats, "session-end");
         self.set_state(SessionState::Inactive);
         self.line_buffer.clear();
+        self.frame_buffer.clear();
+        self.frame_len_pos = 0;
+        self.frame_payload_len = None;
         self.inbound.clear();
         self.outbound.clear();
         self.reset_preauth_buffers();
@@ -262,21 +274,34 @@ impl TcpConsoleServer {
 
         let mut event = SessionEvent::None;
         for &byte in payload {
-            match byte {
-                b'\r' => {}
-                b'\n' => {
-                    if self.line_buffer.is_empty() {
-                        continue;
-                    }
+            if let Some(expected_len) = self.frame_payload_len {
+                if self.frame_buffer.push(byte).is_err() {
+                    self.log_reject(REASON_INVALID_LENGTH, "<frame overflow>");
+                    return SessionEvent::AuthFailed(REASON_INVALID_LENGTH);
+                }
+                if self.frame_buffer.len() == expected_len {
+                    let line = match core::str::from_utf8(self.frame_buffer.as_slice()) {
+                        Ok(line) => line,
+                        Err(_) => {
+                            self.log_reject(REASON_INVALID_LENGTH, "<frame utf8>");
+                            return SessionEvent::AuthFailed(REASON_INVALID_LENGTH);
+                        }
+                    };
                     #[cfg(feature = "net-trace-31337")]
                     info!(
                         "[cohsh-net] conn id={} auth: received len={} bytes={:02x?}",
                         self.conn_label(),
-                        self.line_buffer.len().saturating_add(1),
-                        self.line_buffer.as_bytes()
+                        line.len(),
+                        line.as_bytes()
                     );
-                    let line = self.line_buffer.clone();
                     self.line_buffer.clear();
+                    if self.line_buffer.push_str(line).is_err() {
+                        self.log_reject(REASON_INVALID_LENGTH, "<frame copy>");
+                        return SessionEvent::AuthFailed(REASON_INVALID_LENGTH);
+                    }
+                    let line = self.line_buffer.clone();
+                    self.frame_payload_len = None;
+                    self.frame_buffer.clear();
                     self.last_activity_ms = now_ms;
                     log::debug!(
                         target: "net-console",
@@ -289,13 +314,32 @@ impl TcpConsoleServer {
                         break;
                     }
                 }
-                0x08 | 0x7f => {
-                    let _ = self.line_buffer.pop();
+            } else {
+                self.frame_len_buf[self.frame_len_pos] = byte;
+                self.frame_len_pos = self.frame_len_pos.saturating_add(1);
+                if self.frame_len_pos == self.frame_len_buf.len() {
+                    self.frame_len_pos = 0;
+                    let declared = u32::from_le_bytes(self.frame_len_buf) as usize;
+                    if declared < 4 || declared > MAX_MSIZE as usize {
+                        self.log_reject(REASON_INVALID_LENGTH, "<frame length>");
+                        return SessionEvent::AuthFailed(REASON_INVALID_LENGTH);
+                    }
+                    let payload_len = declared.saturating_sub(4);
+                    if payload_len > DEFAULT_LINE_CAPACITY {
+                        self.log_reject(REASON_INVALID_LENGTH, "<frame payload>");
+                        return SessionEvent::AuthFailed(REASON_INVALID_LENGTH);
+                    }
+                    self.frame_payload_len = Some(payload_len);
+                    self.frame_buffer.clear();
+                    if payload_len == 0 {
+                        let line = HeaplessString::new();
+                        event = self.handle_line(line);
+                        self.frame_payload_len = None;
+                        if matches!(event, SessionEvent::Close) {
+                            break;
+                        }
+                    }
                 }
-                byte if byte.is_ascii() && !byte.is_ascii_control() => {
-                    let _ = self.line_buffer.push(byte as char);
-                }
-                _ => {}
             }
         }
 
@@ -319,8 +363,7 @@ impl TcpConsoleServer {
     }
 
     fn process_auth(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) -> SessionEvent {
-        // Expected client hello: ASCII "AUTH " prefix, role/token payload, trailing '\n'.
-        // The TCP layer strips the newline before passing the line here.
+        // Expected client hello: ASCII "AUTH " prefix and token payload.
         let raw_bytes = line.as_bytes();
         log::info!(
             "[cohsh-net][auth] parsing auth frame ({} bytes): {:02x?}",
@@ -328,7 +371,7 @@ impl TcpConsoleServer {
             &raw_bytes[..core::cmp::min(raw_bytes.len(), 32)]
         );
         let expected_len = self.expected_frame_len();
-        let observed_len = raw_bytes.len().saturating_add(1);
+        let observed_len = raw_bytes.len();
         info!("[cohsh-net] auth: hello received (len={})", observed_len);
         #[cfg(feature = "net-trace-31337")]
         log::info!(
@@ -783,13 +826,22 @@ mod tests {
 
     const TOKEN: &str = "changeme";
 
+    fn frame_line<const N: usize>(line: &str) -> HeaplessVec<u8, N> {
+        let mut buf = HeaplessVec::new();
+        let total_len = line.len().saturating_add(4);
+        let len: u32 = total_len.try_into().unwrap_or(u32::MAX);
+        let _ = buf.extend_from_slice(&len.to_le_bytes());
+        let _ = buf.extend_from_slice(line.as_bytes());
+        buf
+    }
+
     #[test]
     fn auth_success_emits_ack() {
         let mut server = TcpConsoleServer::new(TOKEN, 10_000);
         server.begin_session(0, Some(1));
 
-        let payload = b"AUTH changeme\n";
-        let event = server.ingest(payload, 1);
+        let payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>("AUTH changeme");
+        let event = server.ingest(payload.as_slice(), 1);
 
         assert_eq!(event, SessionEvent::Authenticated);
         assert!(server.is_authenticated());
@@ -805,8 +857,8 @@ mod tests {
         let mut server = TcpConsoleServer::new(TOKEN, 10_000);
         server.begin_session(0, Some(2));
 
-        let payload = b"AUTH wrongtok\n";
-        let event = server.ingest(payload, 1);
+        let payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>("AUTH wrongtok");
+        let event = server.ingest(payload.as_slice(), 1);
 
         assert_eq!(event, SessionEvent::AuthFailed("invalid-token"));
         assert!(!server.is_authenticated());
@@ -819,7 +871,8 @@ mod tests {
         let mut server = TcpConsoleServer::new("token", 1000);
         server.begin_session(10, Some(1));
 
-        let event = server.ingest(b"AUTH token\n", 11);
+        let payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>("AUTH token");
+        let event = server.ingest(payload.as_slice(), 11);
         assert_eq!(event, SessionEvent::Authenticated);
         assert!(server.is_authenticated());
 
@@ -847,7 +900,8 @@ mod tests {
         let mut server = TcpConsoleServer::new("token", 1000);
         server.begin_session(0, Some(1));
 
-        let event = server.ingest(b"AUTH wrong\n", 1);
+        let payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>("AUTH wrong");
+        let event = server.ingest(payload.as_slice(), 1);
         assert_eq!(event, SessionEvent::AuthFailed("invalid-token"));
         assert!(!server.is_authenticated());
 
@@ -882,10 +936,7 @@ mod tests {
         );
 
         server.begin_session(0, Some(4));
-        let mut auth_payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 8 }> = HeaplessVec::new();
-        auth_payload.extend_from_slice(b"AUTH ").unwrap();
-        auth_payload.extend_from_slice(TOKEN.as_bytes()).unwrap();
-        auth_payload.push(b'\n').unwrap();
+        let auth_payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>("AUTH changeme");
         let event = server.ingest(auth_payload.as_slice(), 1);
         assert_eq!(event, SessionEvent::Authenticated);
 
