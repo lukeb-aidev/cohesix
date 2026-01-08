@@ -45,13 +45,13 @@ secure9p-codec = { path = "crates/secure9p-codec" }
 secure9p-core = { path = "crates/secure9p-core" }
 secure9p-transport = { path = "crates/secure9p-transport" }
 anyhow = "1.0"
-thiserror = "2.0"
+thiserror = { version = "2.0", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 base64 = "0.22"
-hex = "0.4"
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
 rand = "0.9"
 cohesix-net-constants = { path = "crates/net-constants" }
 cohesix-proto = { path = "apps/cohesix-proto" }
