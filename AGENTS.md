@@ -69,6 +69,10 @@ These artifacts define kernel-level truth. Code must align with them exactly.
    - Use the macOS ARM64 toolchain defined in `TOOLCHAIN_MAC_ARM64.md`.
    - Do not assume Linux tooling or POSIX facilities for VM code.
 
+9. **Stack Overflow and Scribbles**
+   - AVOID stack overflow.
+   - AVOID memory scribbles.
+   - BIAS RE-USE of existing instrumentation, add new instrumentation WITH CARE.
 ---
 
 ## Worker Bring-up
@@ -199,14 +203,6 @@ Host tools MUST remain protocol-faithful: they consume the as-built interfaces a
 
 ---
 
-## Canonical Documents
-- `README.md`
-- `docs/*.md`
-- `seL4/seL4-manual-latest.md`
-- `seL4/elfloader.md`
-
----
-
 ## Security & Testing
 - Validate all user-controlled input (9P frames, JSON).
 - No hard-coded secrets; use config or tickets.
@@ -216,12 +212,6 @@ Host tools MUST remain protocol-faithful: they consume the as-built interfaces a
   cargo run -p coh-rtc
   ```
   and verify regenerated artifacts hash-match committed versions.
-
----
-
-## Codex Instruction
-Web Codex must treat this document as a **binding contract**, not advisory guidance.  
-When in doubt, it **MUST** choose the option that preserves determinism, minimal surface area, and manifest fidelity — even if that is less convenient.
 
 ---
 

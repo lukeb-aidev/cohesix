@@ -24,6 +24,7 @@ dev-virt = [
     "net-trace-31337",
     "net-backend-virtio",
     "net-selftest",
+    "panic-backtrace",
 ]
 bypass-timers = []
 bypass-timers-ipc = []
@@ -73,6 +74,7 @@ bootstrap-trace = [
     "dep:spin",
 ]
 test-support = []
+panic-backtrace = []
 ffi_shim = [
     "dep:spin",
 ]

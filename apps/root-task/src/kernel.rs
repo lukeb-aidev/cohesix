@@ -3139,8 +3139,64 @@ pub fn panic_handler(info: &PanicInfo) -> ! {
         prefix = DebugConsole::<SeL4Platform>::PREFIX,
         info = info
     );
+    #[cfg(feature = "panic-backtrace")]
+    write_panic_backtrace(&mut console);
     loop {
         core::hint::spin_loop();
+    }
+}
+
+#[cfg(feature = "panic-backtrace")]
+fn write_panic_backtrace(console: &mut DebugConsole<SeL4Platform>) {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        let mut fp: usize;
+        let mut lr: usize;
+        core::arch::asm!(
+            "mov {fp}, x29",
+            "mov {lr}, x30",
+            fp = out(reg) fp,
+            lr = out(reg) lr,
+            options(nomem, nostack, preserves_flags),
+        );
+        let _ = write!(
+            console,
+            "{prefix}panic backtrace (fp chain)\r\n",
+            prefix = DebugConsole::<SeL4Platform>::PREFIX,
+        );
+        let mut depth = 0usize;
+        while fp != 0 && depth < 32 {
+            if fp & 0x7 != 0 {
+                let _ = write!(
+                    console,
+                    "{prefix}bt[{depth}] invalid fp alignment: 0x{fp:016x}\r\n",
+                    prefix = DebugConsole::<SeL4Platform>::PREFIX,
+                );
+                break;
+            }
+            let fp_ptr = fp as *const usize;
+            let next_fp = fp_ptr.read_volatile();
+            let ret = fp_ptr.add(1).read_volatile();
+            let _ = write!(
+                console,
+                "{prefix}bt[{depth}] fp=0x{fp:016x} lr=0x{lr:016x} ret=0x{ret:016x}\r\n",
+                prefix = DebugConsole::<SeL4Platform>::PREFIX,
+            );
+            if next_fp <= fp {
+                break;
+            }
+            fp = next_fp;
+            lr = ret;
+            depth = depth.saturating_add(1);
+        }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let _ = write!(
+            console,
+            "{prefix}panic backtrace unavailable (unsupported arch)\r\n",
+            prefix = DebugConsole::<SeL4Platform>::PREFIX,
+        );
     }
 }
 
