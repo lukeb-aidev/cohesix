@@ -52,8 +52,21 @@ const NET_VIRTIO_TX_V2: bool = cfg!(feature = "net-virtio-tx-v2");
 const VIRTIO_GUARD_QUEUE: bool = cfg!(feature = "virtio_guard_queue");
 const VIRTIO_DMA_TRACE: bool = cfg!(feature = "net-diag") || cfg!(feature = "trace-heavy-init");
 const DMA_NONCOHERENT: bool = cfg!(target_arch = "aarch64");
+
+const fn env_flag(value: Option<&'static str>) -> bool {
+    match value {
+        Some(val) => {
+            let bytes = val.as_bytes();
+            bytes.len() == 1 && bytes[0] == b'1'
+        }
+        None => false,
+    }
+}
+
 const VIRTQ_FORCE_CACHEABLE: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
 const VIRTQ_DIAG: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
+const VIRTQ_METADATA_UNCACHED: bool =
+    VIRTQ_DIAG && env_flag(option_env!("VIRTQ_METADATA_UNCACHED"));
 const VIRTIO_TX_CLEAR_DESC_ON_FREE: bool = false;
 const DMA_CACHE_LINE_BYTES: usize = 64;
 
@@ -136,12 +149,17 @@ static VIRTQ_DIAG_IDENTITY_LOGGED: [AtomicBool; VIRTQ_DIAG_QUEUE_MAX] =
     [const { AtomicBool::new(false) }; VIRTQ_DIAG_QUEUE_MAX];
 static VIRTQ_DIAG_CACHE_LOGGED: [AtomicBool; VIRTQ_DIAG_TOTAL * 2] =
     [const { AtomicBool::new(false) }; VIRTQ_DIAG_TOTAL * 2];
+static VIRTQ_ALIAS_BASE_LOGGED: [AtomicBool; VIRTQ_DIAG_QUEUE_MAX] =
+    [const { AtomicBool::new(false) }; VIRTQ_DIAG_QUEUE_MAX];
+static VIRTQ_ALIAS_OP_LOGGED: [AtomicBool; VIRTQ_DIAG_QUEUE_MAX] =
+    [const { AtomicBool::new(false) }; VIRTQ_DIAG_QUEUE_MAX];
 static DMA_CLEAN_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static RX_CACHE_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_ERROR_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_QMEM_LOGGED: AtomicBool = AtomicBool::new(false);
+static VIRTQ_METADATA_UNCACHED_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_RING_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_LEN_ZERO_VISIBILITY_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_POP_INVARIANT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -382,6 +400,165 @@ fn virtq_diag_cache_overlap(op: CacheDiagOp, ptr: usize, len: usize, performed: 
             }
         }
     }
+}
+
+fn virtq_alias_audit_once(
+    queue_index: u32,
+    base_vaddr: usize,
+    base_paddr: usize,
+    queue_size: u16,
+    layout: &VirtqLayout,
+    cacheable: bool,
+    slot: Option<u16>,
+    head: Option<u16>,
+    reason: &'static str,
+) {
+    if !VIRTQ_DIAG {
+        return;
+    }
+    let queue_idx = queue_index as usize;
+    if queue_idx >= VIRTQ_DIAG_QUEUE_MAX {
+        return;
+    }
+    let label = VIRTQ_DIAG_QUEUE_LABELS[queue_idx];
+
+    if !VIRTQ_ALIAS_BASE_LOGGED[queue_idx].swap(true, AtomicOrdering::AcqRel) {
+        let qmem_len = layout.total_len;
+        let qmem_vend = base_vaddr.saturating_add(qmem_len);
+        let qmem_pend = base_paddr.saturating_add(qmem_len);
+        let (qmem_vpage_start, qmem_vpage_end) = page_bounds(base_vaddr, qmem_len);
+        let (qmem_ppage_start, qmem_ppage_end) = page_bounds(base_paddr, qmem_len);
+        info!(
+            target: "virtio-net",
+            "[virtio-net][virtq-alias] {label} reason={reason} qmem vaddr=0x{base_vaddr:016x}..0x{qmem_vend:016x} paddr=0x{base_paddr:016x}..0x{qmem_pend:016x} len=0x{qmem_len:x} cacheable={cacheable} vpage=0x{qmem_vpage_start:016x}..0x{qmem_vpage_end:016x} ppage=0x{qmem_ppage_start:016x}..0x{qmem_ppage_end:016x}",
+        );
+
+        let desc_vaddr = base_vaddr.saturating_add(layout.desc_offset);
+        let avail_vaddr = base_vaddr.saturating_add(layout.avail_offset);
+        let used_vaddr = base_vaddr.saturating_add(layout.used_offset);
+        let desc_paddr = base_paddr.saturating_add(layout.desc_offset);
+        let avail_paddr = base_paddr.saturating_add(layout.avail_offset);
+        let used_paddr = base_paddr.saturating_add(layout.used_offset);
+        log_virtq_alias_range(label, "desc", desc_vaddr, desc_paddr, layout.desc_len);
+        log_virtq_alias_range(label, "avail", avail_vaddr, avail_paddr, layout.avail_len);
+        log_virtq_alias_range(label, "used", used_vaddr, used_paddr, layout.used_len);
+    }
+
+    let slot = slot.unwrap_or(0);
+    let head = head.unwrap_or(0);
+    if VIRTQ_ALIAS_OP_LOGGED[queue_idx].swap(true, AtomicOrdering::AcqRel) {
+        return;
+    }
+    let qsize = usize::from(queue_size);
+    if qsize == 0 {
+        warn!(
+            target: "virtio-net",
+            "[virtio-net][virtq-alias] {label} reason={reason} slot/head audit skipped: qsize=0"
+        );
+        return;
+    }
+    let slot_idx = if (slot as usize) < qsize {
+        slot as usize
+    } else {
+        warn!(
+            target: "virtio-net",
+            "[virtio-net][virtq-alias] {label} reason={reason} slot out of range: slot={} qsize={qsize}",
+            slot
+        );
+        (slot as usize) % qsize
+    };
+    let head_idx = if (head as usize) < qsize {
+        Some(head as usize)
+    } else {
+        warn!(
+            target: "virtio-net",
+            "[virtio-net][virtq-alias] {label} reason={reason} head out of range: head={} qsize={qsize}",
+            head
+        );
+        None
+    };
+
+    let avail_ring_vaddr =
+        base_vaddr.saturating_add(layout.avail_offset).saturating_add(4 + slot_idx * 2);
+    let avail_ring_paddr =
+        base_paddr.saturating_add(layout.avail_offset).saturating_add(4 + slot_idx * 2);
+    let avail_idx_vaddr = base_vaddr.saturating_add(layout.avail_offset).saturating_add(2);
+    let avail_idx_paddr = base_paddr.saturating_add(layout.avail_offset).saturating_add(2);
+    let range_start = core::cmp::min(avail_ring_vaddr, avail_idx_vaddr);
+    let range_end = core::cmp::max(
+        avail_ring_vaddr.saturating_add(core::mem::size_of::<u16>()),
+        avail_idx_vaddr.saturating_add(core::mem::size_of::<u16>()),
+    );
+    let aligned_start = align_down(range_start, DMA_CACHE_LINE_BYTES);
+    let aligned_end = align_up(range_end, DMA_CACHE_LINE_BYTES);
+    let clean_len = aligned_end.saturating_sub(aligned_start);
+    let aligned_paddr_start = {
+        let raw_start = core::cmp::min(avail_ring_paddr, avail_idx_paddr);
+        align_down(raw_start, DMA_CACHE_LINE_BYTES)
+    };
+    let aligned_paddr_end = aligned_paddr_start.saturating_add(clean_len);
+    info!(
+        target: "virtio-net",
+        "[virtio-net][virtq-alias] {label} reason={reason} cache-op clean avail.slot+idx slot={slot} vaddr=0x{aligned_start:016x}..0x{aligned_end:016x} paddr=0x{aligned_paddr_start:016x}..0x{aligned_paddr_end:016x} len=0x{clean_len:x}",
+    );
+
+    let used_hdr_vaddr = base_vaddr.saturating_add(layout.used_offset);
+    let used_hdr_paddr = base_paddr.saturating_add(layout.used_offset);
+    info!(
+        target: "virtio-net",
+        "[virtio-net][virtq-alias] {label} reason={reason} cache-op invalidate used.header(idx) vaddr=0x{used_hdr_vaddr:016x}..0x{used_hdr_vend:016x} paddr=0x{used_hdr_paddr:016x}..0x{used_hdr_pend:016x} len=0x{used_hdr_len:x}",
+        used_hdr_vend = used_hdr_vaddr.saturating_add(core::mem::size_of::<u16>() * 2),
+        used_hdr_pend = used_hdr_paddr.saturating_add(core::mem::size_of::<u16>() * 2),
+        used_hdr_len = core::mem::size_of::<u16>() * 2,
+    );
+
+    let used_ring_vaddr = base_vaddr
+        .saturating_add(layout.used_offset)
+        .saturating_add(4 + slot_idx * core::mem::size_of::<VirtqUsedElem>());
+    let used_ring_paddr = base_paddr
+        .saturating_add(layout.used_offset)
+        .saturating_add(4 + slot_idx * core::mem::size_of::<VirtqUsedElem>());
+    let used_ring_len = core::mem::size_of::<VirtqUsedElem>();
+    info!(
+        target: "virtio-net",
+        "[virtio-net][virtq-alias] {label} reason={reason} cache-op invalidate used.ring[{slot_idx}] vaddr=0x{used_ring_vaddr:016x}..0x{used_ring_vend:016x} paddr=0x{used_ring_paddr:016x}..0x{used_ring_pend:016x} len=0x{used_ring_len:x}",
+        used_ring_vend = used_ring_vaddr.saturating_add(used_ring_len),
+        used_ring_pend = used_ring_paddr.saturating_add(used_ring_len),
+    );
+
+    if let Some(head_idx) = head_idx {
+        let desc_vaddr = base_vaddr
+            .saturating_add(layout.desc_offset)
+            .saturating_add(head_idx * core::mem::size_of::<VirtqDesc>());
+        let desc_paddr = base_paddr
+            .saturating_add(layout.desc_offset)
+            .saturating_add(head_idx * core::mem::size_of::<VirtqDesc>());
+        let desc_len = core::mem::size_of::<VirtqDesc>();
+        info!(
+            target: "virtio-net",
+            "[virtio-net][virtq-alias] {label} reason={reason} cache-op clean desc[{head_idx}] vaddr=0x{desc_vaddr:016x}..0x{desc_vend:016x} paddr=0x{desc_paddr:016x}..0x{desc_pend:016x} len=0x{desc_len:x}",
+            desc_vend = desc_vaddr.saturating_add(desc_len),
+            desc_pend = desc_paddr.saturating_add(desc_len),
+        );
+    }
+}
+
+fn page_bounds(start: usize, len: usize) -> (usize, usize) {
+    let end = start.saturating_add(len);
+    let page_start = align_down(start, PAGE_BYTES);
+    let page_end = align_up(end, PAGE_BYTES);
+    (page_start, page_end)
+}
+
+fn log_virtq_alias_range(label: &str, name: &str, vaddr: usize, paddr: usize, len: usize) {
+    let vend = vaddr.saturating_add(len);
+    let pend = paddr.saturating_add(len);
+    let (vpage_start, vpage_end) = page_bounds(vaddr, len);
+    let (ppage_start, ppage_end) = page_bounds(paddr, len);
+    info!(
+        target: "virtio-net",
+        "[virtio-net][virtq-alias] {label} {name} vaddr=0x{vaddr:016x}..0x{vend:016x} paddr=0x{paddr:016x}..0x{pend:016x} len=0x{len:x} vpage=0x{vpage_start:016x}..0x{vpage_end:016x} ppage=0x{ppage_start:016x}..0x{ppage_end:016x}",
+    );
 }
 
 fn assert_dma_region(label: &'static str, vaddr: usize, paddr: usize, len: usize) {
@@ -2258,12 +2435,26 @@ impl VirtioNet {
         }
 
         info!("[net-console] allocating virtqueue backing memory");
-        let queue_map_attr = if VIRTQ_FORCE_CACHEABLE {
+        let queue_map_attr = if VIRTQ_METADATA_UNCACHED {
+            seL4_ARM_Page_Uncached
+        } else if VIRTQ_FORCE_CACHEABLE {
             seL4_ARM_Page_Default
         } else {
             seL4_ARM_Page_Uncached
         };
-        // Keep virtqueue rings fully visible to the device; dev-virt/cache-trace forces cacheable.
+        let buffer_map_attr = if VIRTQ_FORCE_CACHEABLE {
+            seL4_ARM_Page_Default
+        } else {
+            seL4_ARM_Page_Uncached
+        };
+        // Keep virtqueue rings fully visible to the device; dev-virt/cache-trace forces cacheable
+        // unless the metadata-uncached debug switch is active.
+        if VIRTQ_METADATA_UNCACHED && !VIRTQ_METADATA_UNCACHED_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            info!(
+                target: "virtio-net",
+                "[virtio-net][virtq] metadata uncached enabled (VIRTQ_METADATA_UNCACHED=1); queue page mapped uncached (desc/avail/used share a page)"
+            );
+        }
 
         let queue_mem_rx = hal.alloc_dma_frame_attr(queue_map_attr).map_err(|err| {
             regs.set_status(STATUS_FAILED);
@@ -2303,13 +2494,25 @@ impl VirtioNet {
         } else {
             None
         };
-        let dma_cacheable = match queue_map_attr {
+        let queue_cacheable = match queue_map_attr {
             seL4_ARM_Page_Uncached => false,
             seL4_ARM_Page_Default => true,
             other => {
                 error!(
                     target: "net-console",
                     "[virtio-net] unsupported queue map attribute: attr=0x{other:08x}; virtio-net disabled",
+                );
+                regs.set_status(STATUS_FAILED);
+                return Err(DriverError::NoQueue);
+            }
+        };
+        let dma_cacheable = match buffer_map_attr {
+            seL4_ARM_Page_Uncached => false,
+            seL4_ARM_Page_Default => true,
+            other => {
+                error!(
+                    target: "net-console",
+                    "[virtio-net] unsupported buffer map attribute: attr=0x{other:08x}; virtio-net disabled",
                 );
                 regs.set_status(STATUS_FAILED);
                 return Err(DriverError::NoQueue);
@@ -2326,7 +2529,7 @@ impl VirtioNet {
             info!(
                 target: "virtio-net",
                 "[virtio-net][dma] qmem mapping cacheable={} map_attr=0x{map_attr_raw:08x} rx_vaddr=0x{rx_vaddr:016x}..0x{rx_vend:016x} rx_paddr=0x{rx_paddr:016x}..0x{rx_pend:016x} tx_vaddr=0x{tx_vaddr:016x}..0x{tx_vend:016x} tx_paddr=0x{tx_paddr:016x}..0x{tx_pend:016x}",
-                dma_cacheable,
+                queue_cacheable,
                 rx_vaddr = rx_vaddr,
                 rx_vend = rx_vaddr.saturating_add(rx_len),
                 rx_paddr = rx_paddr,
@@ -2362,7 +2565,7 @@ impl VirtioNet {
             RX_QUEUE_INDEX,
             rx_size,
             mmio_mode,
-            dma_cacheable,
+            queue_cacheable,
             VIRTIO_GUARD_QUEUE && matches!(mmio_mode, VirtioMmioMode::Modern),
         )
         .map_err(|err| {
@@ -2379,7 +2582,7 @@ impl VirtioNet {
             TX_QUEUE_INDEX,
             tx_size,
             mmio_mode,
-            dma_cacheable,
+            queue_cacheable,
             VIRTIO_GUARD_QUEUE && matches!(mmio_mode, VirtioMmioMode::Modern),
         )
         .map_err(|err| {
@@ -2393,7 +2596,7 @@ impl VirtioNet {
 
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
         for _ in 0..rx_size {
-            let frame = hal.alloc_dma_frame_attr(queue_map_attr).map_err(|err| {
+            let frame = hal.alloc_dma_frame_attr(buffer_map_attr).map_err(|err| {
                 regs.set_status(STATUS_FAILED);
                 DriverError::from(err)
             })?;
@@ -2405,7 +2608,7 @@ impl VirtioNet {
 
         let mut tx_buffers = HeaplessVec::<RamFrame, TX_QUEUE_SIZE>::new();
         for _ in 0..tx_size {
-            let frame = hal.alloc_dma_frame_attr(queue_map_attr).map_err(|err| {
+            let frame = hal.alloc_dma_frame_attr(buffer_map_attr).map_err(|err| {
                 regs.set_status(STATUS_FAILED);
                 DriverError::from(err)
             })?;
@@ -3812,6 +4015,17 @@ impl VirtioNet {
         self.tx_tripwire_b_logged = true;
         let avail_idx = self.tx_queue.indices_no_sync().1;
         let last_used_after = self.tx_queue.last_used;
+        virtq_alias_audit_once(
+            TX_QUEUE_INDEX,
+            self.tx_queue.base_vaddr,
+            self.tx_queue.base_paddr,
+            self.tx_queue.size,
+            &self.tx_queue.layout,
+            self.tx_queue.cacheable,
+            Some(ring_slot),
+            Some(id),
+            "tripwire_b",
+        );
         let desc = if id < self.tx_queue.size {
             self.tx_queue.read_descriptor(id)
         } else {
@@ -9332,6 +9546,17 @@ impl VirtQueue {
             queue_size,
             queue_pfn,
             mode,
+        );
+        virtq_alias_audit_once(
+            index,
+            base_vaddr,
+            base_paddr,
+            queue_size,
+            &layout,
+            cacheable,
+            None,
+            None,
+            "setup",
         );
 
         Ok(Self {
