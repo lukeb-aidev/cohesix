@@ -193,6 +193,10 @@ static VIRTQ_ALIAS_BASE_LOGGED: [AtomicBool; VIRTQ_DIAG_QUEUE_MAX] =
     [const { AtomicBool::new(false) }; VIRTQ_DIAG_QUEUE_MAX];
 static VIRTQ_ALIAS_OP_LOGGED: [AtomicBool; VIRTQ_DIAG_QUEUE_MAX] =
     [const { AtomicBool::new(false) }; VIRTQ_DIAG_QUEUE_MAX];
+static VIRTQ_PROGRAM_LOGGED: [AtomicBool; VIRTQ_DIAG_QUEUE_MAX] =
+    [const { AtomicBool::new(false) }; VIRTQ_DIAG_QUEUE_MAX];
+static VIRTQ_WIRING_LOGGED: AtomicBool = AtomicBool::new(false);
+static TX_NOTIFY_DIAG_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_CLEAN_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static RX_CACHE_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -2641,6 +2645,54 @@ impl VirtioNet {
             regs.set_status(STATUS_FAILED);
             err
         })?;
+        if VIRTQ_DIAG && !VIRTQ_WIRING_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            let rx_desc_vaddr = rx_queue.base_vaddr.saturating_add(rx_queue.layout.desc_offset);
+            let rx_avail_vaddr = rx_queue.base_vaddr.saturating_add(rx_queue.layout.avail_offset);
+            let rx_used_vaddr = rx_queue.base_vaddr.saturating_add(rx_queue.layout.used_offset);
+            let tx_desc_vaddr = tx_queue.base_vaddr.saturating_add(tx_queue.layout.desc_offset);
+            let tx_avail_vaddr = tx_queue.base_vaddr.saturating_add(tx_queue.layout.avail_offset);
+            let tx_used_vaddr = tx_queue.base_vaddr.saturating_add(tx_queue.layout.used_offset);
+            let rx_desc_paddr = rx_queue.base_paddr.saturating_add(rx_queue.layout.desc_offset);
+            let rx_avail_paddr = rx_queue.base_paddr.saturating_add(rx_queue.layout.avail_offset);
+            let rx_used_paddr = rx_queue.base_paddr.saturating_add(rx_queue.layout.used_offset);
+            let tx_desc_paddr = tx_queue.base_paddr.saturating_add(tx_queue.layout.desc_offset);
+            let tx_avail_paddr = tx_queue.base_paddr.saturating_add(tx_queue.layout.avail_offset);
+            let tx_used_paddr = tx_queue.base_paddr.saturating_add(tx_queue.layout.used_offset);
+            info!(
+                target: "virtio-net",
+                "[virtio-net][queue-wire] rx desc vaddr=0x{rx_desc_vaddr:016x} paddr=0x{rx_desc_paddr:016x} avail vaddr=0x{rx_avail_vaddr:016x} paddr=0x{rx_avail_paddr:016x} used vaddr=0x{rx_used_vaddr:016x} paddr=0x{rx_used_paddr:016x}",
+            );
+            info!(
+                target: "virtio-net",
+                "[virtio-net][queue-wire] tx desc vaddr=0x{tx_desc_vaddr:016x} paddr=0x{tx_desc_paddr:016x} avail vaddr=0x{tx_avail_vaddr:016x} paddr=0x{tx_avail_paddr:016x} used vaddr=0x{tx_used_vaddr:016x} paddr=0x{tx_used_paddr:016x}",
+            );
+            let rx_vend = rx_queue.base_vaddr.saturating_add(rx_queue.base_len);
+            let tx_vend = tx_queue.base_vaddr.saturating_add(tx_queue.base_len);
+            let rx_pend = rx_queue.base_paddr.saturating_add(rx_queue.base_len);
+            let tx_pend = tx_queue.base_paddr.saturating_add(tx_queue.base_len);
+            let vaddr_overlap =
+                rx_queue.base_vaddr < tx_vend && tx_queue.base_vaddr < rx_vend;
+            let paddr_overlap =
+                rx_queue.base_paddr < tx_pend && tx_queue.base_paddr < rx_pend;
+            if vaddr_overlap || paddr_overlap {
+                regs.set_status(STATUS_FAILED);
+                error!(
+                    target: "net-console",
+                    "[virtio-net][queue-wire] RX/TX overlap: rx_vaddr=0x{rx_start:016x}..0x{rx_end:016x} tx_vaddr=0x{tx_start:016x}..0x{tx_end:016x} rx_paddr=0x{rx_pstart:016x}..0x{rx_pend:016x} tx_paddr=0x{tx_pstart:016x}..0x{tx_pend:016x}",
+                    rx_start = rx_queue.base_vaddr,
+                    rx_end = rx_vend,
+                    tx_start = tx_queue.base_vaddr,
+                    tx_end = tx_vend,
+                    rx_pstart = rx_queue.base_paddr,
+                    rx_pend = rx_pend,
+                    tx_pstart = tx_queue.base_paddr,
+                    tx_pend = tx_pend,
+                );
+                return Err(DriverError::QueueInvariant(
+                    "virtqueue RX/TX overlap detected",
+                ));
+            }
+        }
 
         if stage == NetStage::QueueInitOnly {
             return Err(DriverError::Staged(stage));
@@ -5591,6 +5643,7 @@ impl VirtioNet {
             );
         }
         if notify && !self.device_faulted {
+            self.log_tx_notify_contract(TX_QUEUE_INDEX);
             if self
                 .tx_queue
                 .notify(&mut self.regs, TX_QUEUE_INDEX)
@@ -7143,6 +7196,23 @@ impl VirtioNet {
         self.tx_stats.record_kick();
     }
 
+    fn log_tx_notify_contract(&self, queue: u32) {
+        if !VIRTQ_DIAG {
+            return;
+        }
+        debug_assert_eq!(
+            queue, TX_QUEUE_INDEX,
+            "tx notify must target TX queue"
+        );
+        if !TX_NOTIFY_DIAG_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+            let (vaddr, paddr, offset) = self.regs.notify_register_info();
+            info!(
+                target: "virtio-net",
+                "[virtio-net][tx-notify] queue={queue} notify_vaddr=0x{vaddr:016x} notify_paddr=0x{paddr:016x} offset=0x{offset:03x}",
+            );
+        }
+    }
+
     fn submit_tx(&mut self, id: u16, len: usize) {
         if NET_VIRTIO_TX_V2 {
             self.submit_tx_v2(id, len);
@@ -7562,6 +7632,7 @@ impl VirtioNet {
                     );
                 }
                 if self.should_kick_after_publish(total_len) {
+                    self.log_tx_notify_contract(TX_QUEUE_INDEX);
                     if self
                         .tx_queue
                         .notify(&mut self.regs, TX_QUEUE_INDEX)
@@ -8664,6 +8735,21 @@ impl VirtioRegs {
         self.mmio.ptr()
     }
 
+    fn mmio_base_vaddr(&self) -> usize {
+        self.base().as_ptr() as usize
+    }
+
+    fn mmio_base_paddr(&self) -> usize {
+        self.mmio.paddr()
+    }
+
+    fn notify_register_info(&self) -> (usize, usize, usize) {
+        let offset = Registers::QueueNotify as usize;
+        let vaddr = self.mmio_base_vaddr().saturating_add(offset);
+        let paddr = self.mmio_base_paddr().saturating_add(offset);
+        (vaddr, paddr, offset)
+    }
+
     fn read32(&self, offset: Registers) -> u32 {
         unsafe { read_volatile(self.base().as_ptr().add(offset as usize) as *const u32) }
     }
@@ -8693,7 +8779,7 @@ impl VirtioRegs {
     }
 
     fn set_queue_size(&mut self, size: u16) {
-        self.write16(Registers::QueueNum, size);
+        self.write32(Registers::QueueNum, size as u32);
     }
 
     fn set_queue_align(&mut self, align: u32) {
@@ -9574,6 +9660,13 @@ impl VirtQueue {
         );
         virtq_diag_register(index, base_vaddr, base_paddr, &layout);
 
+        let desc_paddr = base_paddr.saturating_add(layout.desc_offset);
+        let avail_paddr = base_paddr.saturating_add(layout.avail_offset);
+        let used_paddr = base_paddr.saturating_add(layout.used_offset);
+        let desc_pend = desc_paddr.saturating_add(layout.desc_len);
+        let avail_pend = avail_paddr.saturating_add(layout.avail_len);
+        let used_pend = used_paddr.saturating_add(layout.used_len);
+
         regs.select_queue(index);
         regs.set_queue_size(queue_size);
 
@@ -9591,6 +9684,54 @@ impl VirtQueue {
         }
         check_bootinfo_canary("virtio.queue.addr.post")?;
         regs.queue_ready(1);
+        if VIRTQ_DIAG {
+            dma_barrier();
+            regs.select_queue(index);
+            let read_num = regs.read32(Registers::QueueNum) as u16;
+            let read_pfn = regs.read32(Registers::QueuePfn);
+            let read_addr = |low: Registers, high: Registers| -> u64 {
+                let lo = regs.read32(low) as u64;
+                let hi = regs.read32(high) as u64;
+                (hi << 32) | lo
+            };
+            let read_desc = read_addr(Registers::QueueDescLow, Registers::QueueDescHigh);
+            let read_avail = read_addr(Registers::QueueDriverLow, Registers::QueueDriverHigh);
+            let read_used = read_addr(Registers::QueueDeviceLow, Registers::QueueDeviceHigh);
+            let queue_idx = index as usize;
+            if queue_idx < VIRTQ_DIAG_QUEUE_MAX
+                && !VIRTQ_PROGRAM_LOGGED[queue_idx].swap(true, AtomicOrdering::AcqRel)
+            {
+                info!(
+                    target: "virtio-net",
+                    "[virtio-net][queue-prog] queue={index} mode={mode:?} select={index} num={queue_size} desc=0x{desc_paddr:016x}..0x{desc_pend:016x} avail=0x{avail_paddr:016x}..0x{avail_pend:016x} used=0x{used_paddr:016x}..0x{used_pend:016x}",
+                );
+                info!(
+                    target: "virtio-net",
+                    "[virtio-net][queue-prog] queue={index} write pfn=0x{queue_pfn:08x} readback num={read_num} desc=0x{read_desc:016x} avail=0x{read_avail:016x} used=0x{read_used:016x} pfn=0x{read_pfn:08x}",
+                );
+            }
+            let expected_desc = desc_paddr as u64;
+            let expected_avail = avail_paddr as u64;
+            let expected_used = used_paddr as u64;
+            let mismatch = match mode {
+                VirtioMmioMode::Modern => {
+                    read_num != queue_size
+                        || read_desc != expected_desc
+                        || read_avail != expected_avail
+                        || read_used != expected_used
+                }
+                VirtioMmioMode::Legacy => read_num != queue_size || read_pfn != queue_pfn,
+            };
+            if mismatch {
+                error!(
+                    target: "net-console",
+                    "[virtio-net][queue-prog] queue {index} readback mismatch: expected num={queue_size} desc=0x{expected_desc:016x} avail=0x{expected_avail:016x} used=0x{expected_used:016x} pfn=0x{queue_pfn:08x} got num={read_num} desc=0x{read_desc:016x} avail=0x{read_avail:016x} used=0x{read_used:016x} pfn=0x{read_pfn:08x}",
+                );
+                return Err(DriverError::QueueInvariant(
+                    "virtqueue register readback mismatch",
+                ));
+            }
+        }
         info!(
             target: "net-console",
             "[virtio-net] queue {} configured: size={} pfn=0x{:x} mode={:?}",
