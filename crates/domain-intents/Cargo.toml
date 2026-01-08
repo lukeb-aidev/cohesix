@@ -1,4 +1,5 @@
 # Author: Lukas Bower
+# Purpose: Configure domain-intents crate metadata and dependencies.
 [package]
 name = "domain-intents"
 version = "0.1.0"
@@ -7,4 +8,4 @@ authors = ["Lukas Bower <lukas@example.com>"]
 
 [dependencies]
 anyhow = { workspace = true }
-thiserror = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }

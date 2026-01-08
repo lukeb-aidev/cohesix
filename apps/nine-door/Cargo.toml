@@ -14,7 +14,7 @@ cohesix-ticket = { workspace = true }
 cohesix-proto = { workspace = true }
 secure9p-codec = { workspace = true }
 secure9p-core = { workspace = true }
-thiserror = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 worker-gpu = { path = "../worker-gpu" }
