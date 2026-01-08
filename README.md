@@ -35,6 +35,46 @@ In short, Cohesix treats **orchestration itself as an operating-system problem**
 
 ---
 
+## Plan 9 heritage and departures
+
+Cohesix is deliberately influenced by **[Plan 9 from Bell Labs](https://en.wikipedia.org/wiki/Plan_9_from_Bell_Labs)**, but it is **not** a revival, clone, or generalisation of Plan 9. The influence is philosophical rather than literal, and the departures are explicit.
+
+### What Cohesix inherits
+
+**File-shaped control surfaces**  
+Cohesix exposes control and observation as file operations. Paths such as `/queen/ctl`, `/worker/<id>/telemetry`, `/log/*`, and `/gpu/<id>/*` are interfaces, not storage. This yields diffable state, append-only audit logs, and a uniform operator surface.
+
+**Namespaces as authority boundaries**  
+Like Plan 9’s per-process namespaces, Cohesix uses **per-session, role-scoped namespaces**. A namespace is not global truth; it is a capability-filtered view of the system. Authority is defined by which paths are visible and writable.
+
+**Late binding of services**  
+Services are not assumed to exist. Workers, GPU providers, and auxiliary capabilities are bound into the namespace only when required, supporting air-gapped operation, fault isolation, and minimal steady-state complexity.
+
+### Where Cohesix departs
+
+**Hostile networks by default**  
+Cohesix assumes unreliable, adversarial, and partitioned networks. Every operation is bounded, authenticated, auditable, and revocable.
+
+**No single-system illusion**  
+Partial visibility and degraded operation are normal. Cohesix explicitly rejects the idea of a seamless single-system image.
+
+**Control plane only**  
+Secure9P is a control-plane protocol, not a universal IPC or data plane. Cohesix does not host applications, GUIs, or general user environments, and keeps heavy ecosystems outside the trusted computing base.
+
+**Explicit authority and revocation**  
+Cohesix enforces capability tickets, time- and operation-bounded leases, and revocation-first semantics. Failure is handled by withdrawing authority, not by retries or self-healing loops.
+
+**Determinism over flexibility**  
+Bounded memory, bounded work, and deterministic behaviour are prioritised over convenience and dynamism.
+
+---
+
+## Architecture (high level)
+
+A single Cohesix deployment is a **hive**: one Queen role orchestrating multiple workers over a shared Secure9P namespace. The root task owns initial authority and scheduling, NineDoor presents the synthetic namespace, and all lifecycle actions are file-driven under `/queen`, `/worker/<id>`, `/log`, and `/gpu/<id>`.
+
+CUDA, NVML, and other heavy stacks remain host-side. The VM never touches GPU hardware directly.
+
 <!-- Concept Architecture — Cohesix (for README.md) -->
 **Figure 1:** Cohesix concept architecture (Queen/Worker hive over Secure9P, host-only GPU bridge, dual consoles)
 
@@ -110,55 +150,6 @@ flowchart LR
   classDef hostlib fill:#fffbeb,stroke:#b45309,stroke-width:1px;
   classDef ext fill:#ffffff,stroke:#334155,stroke-width:1px;
 ```
-
-## Plan 9 heritage and departures
-
-Cohesix is deliberately influenced by **[Plan 9 from Bell Labs](https://en.wikipedia.org/wiki/Plan_9_from_Bell_Labs)**, but it is **not** a revival, clone, or generalisation of Plan 9. The influence is philosophical rather than literal, and the departures are explicit.
-
-### What Cohesix inherits
-
-**File-shaped control surfaces**  
-Cohesix exposes control and observation as file operations. Paths such as `/queen/ctl`, `/worker/<id>/telemetry`, `/log/*`, and `/gpu/<id>/*` are interfaces, not storage. This yields diffable state, append-only audit logs, and a uniform operator surface.
-
-**Namespaces as authority boundaries**  
-Like Plan 9’s per-process namespaces, Cohesix uses **per-session, role-scoped namespaces**. A namespace is not global truth; it is a capability-filtered view of the system. Authority is defined by which paths are visible and writable.
-
-**Late binding of services**  
-Services are not assumed to exist. Workers, GPU providers, and auxiliary capabilities are bound into the namespace only when required, supporting air-gapped operation, fault isolation, and minimal steady-state complexity.
-
-### Where Cohesix departs
-
-**Hostile networks by default**  
-Cohesix assumes unreliable, adversarial, and partitioned networks. Every operation is bounded, authenticated, auditable, and revocable.
-
-**No single-system illusion**  
-Partial visibility and degraded operation are normal. Cohesix explicitly rejects the idea of a seamless single-system image.
-
-**Control plane only**  
-Secure9P is a control-plane protocol, not a universal IPC or data plane. Cohesix does not host applications, GUIs, or general user environments, and keeps heavy ecosystems outside the trusted computing base.
-
-**Explicit authority and revocation**  
-Cohesix enforces capability tickets, time- and operation-bounded leases, and revocation-first semantics. Failure is handled by withdrawing authority, not by retries or self-healing loops.
-
-**Determinism over flexibility**  
-Bounded memory, bounded work, and deterministic behaviour are prioritised over convenience and dynamism.
-
----
-
-## Getting Started
-
-- Build and launch via `scripts/cohesix-build-run.sh`, pointing at your seL4 build and output directory. The script stages host tools alongside the VM image and enables the TCP console when `--transport tcp` is passed.
-- Terminal 1: run the script to start QEMU with `-serial mon:stdio` for the PL011 root console and TCP forwarding.
-- Terminal 2: from `out/cohesix/host-tools/`, connect using `./cohsh --transport tcp --tcp-port <port>`.
-
----
-
-## Architecture (high level)
-
-A single Cohesix deployment is a **hive**: one Queen role orchestrating multiple workers over a shared Secure9P namespace. The root task owns initial authority and scheduling, NineDoor presents the synthetic namespace, and all lifecycle actions are file-driven under `/queen`, `/worker/<id>`, `/log`, and `/gpu/<id>`.
-
-CUDA, NVML, and other heavy stacks remain host-side. The VM never touches GPU hardware directly.
-
 ---
 
 ## Components
@@ -170,6 +161,14 @@ CUDA, NVML, and other heavy stacks remain host-side. The VM never touches GPU ha
 - **cohsh** — Host-only CLI and canonical shell for the hive; GUI tooling is expected to speak the same protocol.
 - **gpu-bridge-host** — Host-side process that discovers or mocks GPUs, enforces leases, and mirrors `/gpu/<id>/` into the VM.
 - **secure9p-wire** — Bounded Secure9P framing and transport adapters for host tools.
+
+---
+
+## Getting Started
+
+- Build and launch via `scripts/cohesix-build-run.sh`, pointing at your seL4 build and output directory. The script stages host tools alongside the VM image and enables the TCP console when `--transport tcp` is passed.
+- Terminal 1: run the script to start QEMU with `-serial mon:stdio` for the PL011 root console and TCP forwarding.
+- Terminal 2: from `out/cohesix/host-tools/`, connect using `./cohsh --transport tcp --tcp-port <port>`.
 
 ---
 
