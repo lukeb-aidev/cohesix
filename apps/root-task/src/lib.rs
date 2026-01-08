@@ -5,6 +5,14 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(deprecated)]
 #![warn(missing_docs)]
+#![allow(
+    dead_code,
+    missing_docs,
+    non_snake_case,
+    non_upper_case_globals,
+    static_mut_refs,
+    unused_must_use
+)]
 
 //! Root-task library surface exposing console and networking modules for tests.
 
