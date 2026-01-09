@@ -36,6 +36,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::{Role, TicketToken};
+use log::info;
 use nine_door::{InProcessConnection, NineDoor};
 use secure9p_codec::{OpenMode, SessionId, MAX_MSIZE};
 
@@ -1007,6 +1008,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
         });
 
         let mut prompt_rendered = false;
+        let mut detach_input = false;
         loop {
             self.run_pending_attach(&mut pending_attach)?;
             if !prompt_rendered {
@@ -1023,7 +1025,11 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     }
                     prompt_rendered = false;
                     match self.execute(trimmed) {
-                        Ok(CommandStatus::Quit) => break,
+                        Ok(CommandStatus::Quit) => {
+                            info!("audit repl.exit reason=quit");
+                            detach_input = true;
+                            break;
+                        }
                         Ok(CommandStatus::Continue) => {}
                         Err(err) => {
                             writeln!(self.writer, "Error: {err}")?;
@@ -1031,14 +1037,20 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     }
                 }
                 Ok(None) => {
+                    info!("audit repl.exit reason=eof");
                     writeln!(self.writer)?;
                     break;
                 }
                 Err(RecvTimeoutError::Timeout) => continue,
-                Err(RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Disconnected) => {
+                    info!("audit repl.exit reason=disconnected");
+                    break;
+                }
             }
         }
-        let _ = input_handle.join();
+        if !detach_input {
+            let _ = input_handle.join();
+        }
         Ok(())
     }
 
@@ -1257,6 +1269,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 Ok(CommandStatus::Continue)
             }
             "quit" => {
+                info!("audit quit.recv");
                 if let Some(session) = self.session.as_ref() {
                     if let Err(err) = self.transport.quit(session) {
                         self.write_line(&format!("quit: {err}"))?;

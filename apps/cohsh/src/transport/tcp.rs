@@ -1086,6 +1086,7 @@ impl Transport for TcpTransport {
     }
 
     fn quit(&mut self, _session: &Session) -> Result<()> {
+        info!("audit quit.transport.begin");
         self.send_line("quit")?;
         let mut timeouts = 0usize;
         loop {
@@ -1096,8 +1097,10 @@ impl Transport for TcpTransport {
                         let _ = self.record_ack(trimmed.as_str());
                         if ack.verb.eq_ignore_ascii_case("QUIT") {
                             if matches!(ack.status, AckStatus::Err) {
+                                info!("audit quit.transport.end reason=err");
                                 return Err(anyhow!("quit rejected: {trimmed}"));
                             }
+                            info!("audit quit.transport.end reason=ack");
                             return Ok(());
                         }
                         continue;
@@ -1107,11 +1110,13 @@ impl Transport for TcpTransport {
                     timeouts += 1;
                     if timeouts > self.max_retries {
                         self.reset_connection();
+                        info!("audit quit.transport.end reason=timeout");
                         return Ok(());
                     }
                 }
                 ReadStatus::Closed => {
                     self.reset_connection();
+                    info!("audit quit.transport.end reason=closed");
                     return Ok(());
                 }
             }
