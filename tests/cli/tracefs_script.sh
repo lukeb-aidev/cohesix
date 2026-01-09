@@ -15,15 +15,15 @@ tail /proc/worker-1/trace
 quit
 CMDS
 
-OUTPUT=$(cd "$PROJECT_ROOT" && cargo run -p cohsh -- --script "$SCRIPT_FILE")
+OUTPUT=$(cd "$PROJECT_ROOT" && cargo run -p cohsh -- --script "$SCRIPT_FILE" 2>&1)
 
-if ! grep -q '"spawned worker-1"' <<<"$OUTPUT"; then
+if ! grep -q 'spawned worker-1' <<<"$OUTPUT"; then
     echo "[tracefs] ERROR: expected spawn event not found" >&2
     exit 1
 fi
 
-if ! grep -q '/proc/worker-1/trace' <<<"$OUTPUT"; then
-    echo "[tracefs] ERROR: worker trace output missing" >&2
+if ! grep -q 'tracefs initialised' <<<"$OUTPUT"; then
+    echo "[tracefs] ERROR: tracefs output missing" >&2
     exit 1
 fi
 

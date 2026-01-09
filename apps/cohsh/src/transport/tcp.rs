@@ -329,26 +329,24 @@ impl TcpTransport {
 
     fn perform_auth(&mut self) -> Result<()> {
         let auth_line = format!("AUTH {}", self.auth_token);
-        // Frame layout: ASCII "AUTH " prefix, token payload, and a trailing newline (14 bytes with the default token).
         let auth_start = Instant::now();
-        let mut buf = auth_line.as_bytes().to_vec();
-        buf.push(b'\n');
-        let dump_len = buf.len().min(32);
+        let auth_bytes = auth_line.as_bytes();
+        let dump_len = auth_bytes.len().min(32);
         info!(
-            "[cohsh][auth] sending auth frame ({} bytes): {:02x?}",
-            buf.len(),
-            &buf[..dump_len]
+            "[cohsh][auth] sending auth frame payload ({} bytes): {:02x?}",
+            auth_bytes.len(),
+            &auth_bytes[..dump_len]
         );
         debug!(
             "[cohsh][auth] auth frame bytes (len={}): {:02x?}",
-            buf.len(),
-            &buf[..dump_len]
+            auth_bytes.len(),
+            &auth_bytes[..dump_len]
         );
         if self.tcp_debug {
             info!(
-                "[cohsh][tcp] sending auth frame ({} bytes): {:02x?}",
-                buf.len(),
-                &buf[..dump_len]
+                "[cohsh][tcp] sending auth frame payload ({} bytes): {:02x?}",
+                auth_bytes.len(),
+                &auth_bytes[..dump_len]
             );
             info!(
                 "[cohsh][tcp] auth/handshake struct: magic=\"AUTH\" version=1 role={:?}",
@@ -365,27 +363,12 @@ impl TcpTransport {
             self.auth_token.len()
         );
         self.set_auth_state(AuthState::AuthSent);
-        let stream = self
-            .stream
-            .as_mut()
-            .context("TCP transport not connected for authentication")?;
-        let written = stream.write(&buf)?;
-        if self.tcp_debug && written != buf.len() {
-            warn!(
-                "[cohsh][tcp] partial write during auth: wrote {} of {} bytes",
-                written,
-                buf.len()
-            );
-        }
-        if written < buf.len() {
-            stream.write_all(&buf[written..])?;
-        }
-        stream.flush()?;
+        self.send_line_raw(&auth_line)?;
         self.last_activity = Instant::now();
         self.set_auth_state(AuthState::WaitingAuthOk);
         let mut timeouts = 0usize;
         let mut total_bytes_read = 0usize;
-        let total_bytes_written = auth_line.len().saturating_add(1);
+        let total_bytes_written = auth_line.len().saturating_add(4);
         loop {
             if self.tcp_debug {
                 info!(

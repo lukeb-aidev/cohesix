@@ -362,10 +362,9 @@ impl NetStack {
                 self.server.push_outbound_front(line);
                 break;
             }
-            let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 2 }> = HeaplessVec::new();
-            if payload.extend_from_slice(line.as_bytes()).is_err()
-                || payload.extend_from_slice(b"\r\n").is_err()
-            {
+            let trimmed = line.trim_end_matches(['\r', '\n']);
+            let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 4 }> = HeaplessVec::new();
+            if encode_frame(trimmed, &mut payload).is_err() {
                 self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
                 continue;
             }

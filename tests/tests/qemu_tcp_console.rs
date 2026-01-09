@@ -1,6 +1,6 @@
 // Author: Lukas Bower
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -10,6 +10,26 @@ use anyhow::Result;
 use cohesix_ticket::Role;
 use cohsh::{Shell, TcpTransport, Transport};
 use tests::TEST_TIMEOUT;
+
+fn write_frame(stream: &mut std::net::TcpStream, line: &str) {
+    let total_len = line.len().saturating_add(4) as u32;
+    stream.write_all(&total_len.to_le_bytes()).unwrap();
+    stream.write_all(line.as_bytes()).unwrap();
+}
+
+fn read_frame(reader: &mut BufReader<std::net::TcpStream>) -> Option<String> {
+    let mut len_buf = [0u8; 4];
+    if reader.read_exact(&mut len_buf).is_err() {
+        return None;
+    }
+    let total_len = u32::from_le_bytes(len_buf) as usize;
+    let payload_len = total_len.saturating_sub(4);
+    let mut payload = vec![0u8; payload_len];
+    if reader.read_exact(&mut payload).is_err() {
+        return None;
+    }
+    String::from_utf8(payload).ok()
+}
 
 #[test]
 fn tcp_console_script_recovers_from_disconnect() -> Result<()> {
@@ -23,34 +43,33 @@ fn tcp_console_script_recovers_from_disconnect() -> Result<()> {
             attempts += 1;
             let mut stream = stream.unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut line = String::new();
-            while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            while let Some(line) = read_frame(&mut reader) {
                 let trimmed = line.trim();
                 if trimmed == "AUTH changeme" {
-                    writeln!(stream, "OK AUTH").unwrap();
+                    write_frame(&mut stream, "OK AUTH");
                 } else if trimmed.starts_with("ATTACH") {
                     server_log
                         .lock()
                         .expect("ticket log poisoned")
                         .push(trimmed.to_owned());
-                    writeln!(stream, "OK ATTACH role=queen session-{attempts}").unwrap();
+                    let response = format!("OK ATTACH role=queen session-{attempts}");
+                    write_frame(&mut stream, response.as_str());
                 } else if trimmed.starts_with("TAIL") {
                     if attempts == 1 {
-                        writeln!(stream, "OK TAIL path=/log/queen.log").unwrap();
-                        writeln!(stream, "queen boot").unwrap();
+                        write_frame(&mut stream, "OK TAIL path=/log/queen.log");
+                        write_frame(&mut stream, "queen boot");
                         stream.flush().unwrap();
                         break;
                     } else {
-                        writeln!(stream, "OK TAIL path=/log/queen.log").unwrap();
-                        writeln!(stream, "queen boot").unwrap();
-                        writeln!(stream, "reconnected line").unwrap();
-                        writeln!(stream, "END").unwrap();
+                        write_frame(&mut stream, "OK TAIL path=/log/queen.log");
+                        write_frame(&mut stream, "queen boot");
+                        write_frame(&mut stream, "reconnected line");
+                        write_frame(&mut stream, "END");
                     }
                 } else if trimmed == "PING" {
-                    writeln!(stream, "PONG").unwrap();
-                    writeln!(stream, "OK PING reply=pong").unwrap();
+                    write_frame(&mut stream, "PONG");
+                    write_frame(&mut stream, "OK PING reply=pong");
                 }
-                line.clear();
             }
             if attempts >= 2 {
                 break;

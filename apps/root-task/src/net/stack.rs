@@ -66,7 +66,6 @@ const TCP_TX_BUFFER: usize = 2048;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
 const SOCKET_CAPACITY: usize = 6;
-const OUTBOUND_FRAME_CAPACITY: usize = super::outbound::MAX_PAYLOAD + 2;
 const FLUSH_BLOCKED_HEARTBEAT_MS: u64 = 2_000;
 const RANDOM_SEED: u64 = 0x5a5a_5a5a_1234_5678;
 const ECHO_MODE: bool = cfg!(feature = "tcp-echo-31337");
@@ -3694,30 +3693,24 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         let outcome = outbound.flush(now_ms, |payload, lane| {
-            let mut frame: HeaplessVec<u8, OUTBOUND_FRAME_CAPACITY> = HeaplessVec::new();
-            if frame.extend_from_slice(payload).is_err()
-                || frame.extend_from_slice(b"\r\n").is_err()
-            {
-                return Err(SendError::Fault);
-            }
             if pre_auth && matches!(lane, OutboundLane::Control) {
                 info!(
                     "[net-console] handshake: sending {}-byte response to client",
-                    frame.len()
+                    payload.len()
                 );
                 info!(
                     "[cohsh-net] send: auth response len={} role='AUTH'",
-                    frame.len()
+                    payload.len()
                 );
             }
-            match socket.send_slice(frame.as_slice()) {
-                Ok(sent) if sent == frame.len() => {
+            match socket.send_slice(payload) {
+                Ok(sent) if sent == payload.len() => {
                     let preview_len = core::cmp::min(sent, 32);
                     log::debug!(
                         target: "net-console",
                         "[tcp] send on console socket: len={} first_bytes={:02x?}",
                         sent,
-                        &frame[..preview_len],
+                        &payload[..preview_len],
                     );
                     *conn_bytes_written = conn_bytes_written.saturating_add(sent as u64);
                     NET_DIAG.add_bytes_written(sent as u64);
@@ -3733,25 +3726,25 @@ impl<D: NetDevice> NetStack<D> {
                         server.mark_activity(now_ms);
                     }
                     let conn_id = conn_id.unwrap_or(0);
-                    Self::trace_conn_send(conn_id, frame.as_slice());
+                    Self::trace_conn_send(conn_id, payload);
                     #[cfg(feature = "net-trace-31337")]
                     {
                         let tcp_state = socket.state();
-                        let dump_len = frame.len().min(32);
+                        let dump_len = payload.len().min(32);
                         info!(
                             "[cohsh-net] send: {} bytes (state={:?}, auth_state={:?}): {:02x?}",
                             sent,
                             tcp_state,
                             auth_state,
-                            &frame[..dump_len]
+                            &payload[..dump_len]
                         );
                     }
                     if pre_auth && matches!(lane, OutboundLane::Control) {
                         info!(
                             "[net-console] conn {}: sent pre-auth payload len={} first_bytes={:02x?}",
                             conn_id,
-                            frame.len(),
-                            &frame[..core::cmp::min(frame.len(), 32)]
+                            payload.len(),
+                            &payload[..core::cmp::min(payload.len(), 32)]
                         );
                         info!(
                             "[net-console] auth response sent; session state = {:?}",
