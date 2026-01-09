@@ -53,6 +53,7 @@ The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; Q
 - All NIC backends remain HAL-bound; smoltcp plus the authenticated TCP console are the only in-VM network entry points regardless
   of whether RTL8139 (default) or virtio-net (feature-gated) is selected.
 - The event pump emits audit records (`event-pump: init <subsystem>`, `net: poll link_up=<bool> tx_drops=<count>`, `attach
-  accepted`, `attach denied`) that flow to the serial log. These records are critical for forensic review because they show which
-  subsystems were live at the time of an intrusion and whether the networking queues are under pressure.
+  accepted`, `attach denied`) that flow to `/log/queen.log` after the console handoff (boot-critical lines still appear on the
+  serial log before the root shell starts). These records are critical for forensic review because they show which subsystems
+  were live at the time of an intrusion and whether the networking queues are under pressure.
 - The only control-plane interfaces are `cohsh` over serial/TCP and the Secure9P namespaces; any host-side WASM GUI is treated as an unprivileged client layered on top of these paths and does not expand the in-VM attack surface. One Queen orchestrating many workers keeps logging and audit scoped per hive (append-only `/log/*.log`).

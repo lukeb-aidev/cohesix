@@ -36,6 +36,8 @@ use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
 #[cfg(feature = "kernel")]
+use crate::bootstrap::log as boot_log;
+#[cfg(feature = "kernel")]
 use crate::debug_uart::debug_uart_str;
 #[cfg(feature = "net-console")]
 use crate::net::{
@@ -44,6 +46,8 @@ use crate::net::{
 };
 #[cfg(feature = "net-console")]
 use crate::trace::{RateLimitKey, RateLimiter};
+#[cfg(feature = "kernel")]
+use crate::log_buffer;
 #[cfg(feature = "kernel")]
 use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
 #[cfg(feature = "kernel")]
@@ -712,6 +716,9 @@ where
     #[cfg(feature = "kernel")]
     /// Emit console audit messages once the UART bridge is connected.
     pub fn announce_console_ready(&mut self) {
+        if self.ninedoor.is_some() {
+            boot_log::switch_logger_to_log_buffer();
+        }
         self.audit.info("console: attach uart");
         if let Some(bridge) = self.ninedoor.as_mut() {
             match bridge.log_stream(&mut *self.audit) {
@@ -878,6 +885,15 @@ where
         self.emit_serial_line("  nettest  - Run network self-test (dev-virt)");
         self.emit_serial_line("  netstats - Show network counters");
         self.emit_serial_line("  quit  - Exit the console session");
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_log_snapshot(&mut self) {
+        let lines =
+            log_buffer::snapshot_lines::<DEFAULT_LINE_CAPACITY, { log_buffer::LOG_SNAPSHOT_LINES }>();
+        for line in lines {
+            self.emit_console_line(line.as_str());
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -1470,6 +1486,17 @@ where
             if let Err(err) = self.forward_to_ninedoor(&command_clone) {
                 self.stream_end_pending = false;
                 return Err(err);
+            }
+        }
+
+        #[cfg(feature = "kernel")]
+        if self.stream_end_pending {
+            match &command_clone {
+                Command::Log => self.emit_log_snapshot(),
+                Command::Tail { path } if path.as_str() == "/log/queen.log" => {
+                    self.emit_log_snapshot();
+                }
+                _ => {}
             }
         }
 

@@ -5,19 +5,18 @@
 
 use crate::bootstrap::{boot_tracer, log as boot_log, BootPhase};
 use crate::event::AuditSink;
+use crate::log_buffer;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 use core::fmt::{self, Write};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
 const LOG_PATH: &str = "/log/queen.log";
-const LOG_BUFFER_CAP: usize = 1024;
-const MAX_STREAM_LINES: usize = 64;
+const MAX_STREAM_LINES: usize = log_buffer::LOG_SNAPSHOT_LINES;
 
 /// Minimal NineDoor bridge used by the seL4 build until the full Secure9P server is ported.
 #[derive(Debug)]
 pub struct NineDoorBridge {
     attached: bool,
-    log_buffer: HeaplessVec<u8, LOG_BUFFER_CAP>,
 }
 
 /// Errors surfaced by [`NineDoorBridge`] operations.
@@ -57,7 +56,6 @@ impl NineDoorBridge {
         }
         Self {
             attached: false,
-            log_buffer: HeaplessVec::new(),
         }
     }
 
@@ -166,38 +164,20 @@ impl NineDoorBridge {
         if payload.contains('\n') || payload.contains('\r') {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
-        self.log_buffer
-            .extend_from_slice(payload.as_bytes())
-            .map_err(|_| NineDoorBridgeError::BufferFull)?;
-        self.log_buffer
-            .push(b'\n')
-            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        log_buffer::append_log_line(payload);
         Ok(())
     }
 
     /// Read file contents as line-oriented output.
     pub fn cat(
         &self,
-        path: &str,
+    path: &str,
     ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
     {
         if path != LOG_PATH {
             return Err(NineDoorBridgeError::InvalidPath);
         }
-        let text = core::str::from_utf8(self.log_buffer.as_slice())
-            .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
-        let mut lines: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
-            HeaplessVec::new();
-        for line in text.lines() {
-            let mut buffer: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
-            buffer
-                .push_str(line)
-                .map_err(|_| NineDoorBridgeError::BufferFull)?;
-            lines
-                .push(buffer)
-                .map_err(|_| NineDoorBridgeError::BufferFull)?;
-        }
-        Ok(lines)
+        Ok(log_buffer::snapshot_lines::<DEFAULT_LINE_CAPACITY, MAX_STREAM_LINES>())
     }
 
     /// List directory entries (not yet supported by the shim bridge).

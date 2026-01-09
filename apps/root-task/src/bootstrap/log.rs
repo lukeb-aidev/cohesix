@@ -12,6 +12,7 @@ use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
 use crate::debug::sink_write_watched;
 use crate::event::{AuditSink, BootstrapOp};
+use crate::log_buffer;
 use crate::sel4;
 
 #[cfg(feature = "kernel")]
@@ -118,6 +119,10 @@ fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
 
 impl BootstrapLogger {
     fn emit(&self, line: &[u8]) {
+        if log_buffer::log_channel_active() {
+            log_buffer::append_log_bytes(line);
+            return;
+        }
         match self.transport() {
             LogTransport::Uninitialised => {}
             LogTransport::UartOnly => emit_uart(line),
@@ -608,6 +613,15 @@ pub fn init_logger_bootstrap_only() {
     EP_ONLY_PERMITTED.store(false, Ordering::Release);
     POST_COMMIT_IPC_UNLOCKED.store(false, Ordering::Release);
     ::log::set_max_level(LevelFilter::Info);
+}
+
+/// Switch the logger to the in-VM log buffer backing `/log/queen.log`.
+pub fn switch_logger_to_log_buffer() -> bool {
+    if !log_buffer::enable_log_channel() {
+        return false;
+    }
+    log_buffer::append_log_line("[INFO audit] log.channel=LOGFILE path=/log/queen.log");
+    true
 }
 
 /// Switches the logger sink to the userland channel once IPC is online.

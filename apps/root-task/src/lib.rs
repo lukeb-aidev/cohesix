@@ -101,6 +101,10 @@ pub mod boot;
 /// Runtime readiness flags shared between transports.
 pub mod readiness;
 
+#[cfg(feature = "kernel")]
+/// Bounded log buffer backing /log/queen.log after console handoff.
+pub mod log_buffer;
+
 /// IPC helpers that guard direct syscalls during early bring-up.
 pub mod ipc;
 
