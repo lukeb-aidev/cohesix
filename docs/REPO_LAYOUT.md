@@ -1,4 +1,5 @@
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Document the canonical Cohesix repository layout and app roster. -->
 # Repository Layout Blueprint
 
 ```
@@ -20,11 +21,14 @@
 /toolchain/
   setup_macos_arm64.sh
 /apps/
+  cohesix-proto/
+  console-ack-wire/
+  cohsh/
   root-task/
     README.md            ← Event pump overview, testing commands, and feature flag notes
   nine-door/
   worker-heart/
-  worker-gpu/            (future)
+  worker-gpu/
   gpu-bridge-host/       (host-only tools)
 /tests/
   integration/
