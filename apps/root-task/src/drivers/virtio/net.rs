@@ -77,6 +77,9 @@ const VIRTQ_METADATA_DEVICE: bool =
 const VIRTQ_PROOF: bool = VIRTQ_DIAG && env_flag(option_env!("VIRTQ_PROOF"));
 const VIRTIO_MIN_TX_SELFTEST: bool =
     VIRTQ_DIAG && env_flag(option_env!("VIRTIO_MIN_TX_SELFTEST"));
+const VIRTIO_MIN_TX_LOOP: bool = VIRTQ_DIAG && env_flag(option_env!("VIRTIO_MIN_TX_LOOP"));
+const VIRTIO_TX_ROLLBACK_STRICT: bool =
+    VIRTQ_DIAG && env_flag(option_env!("VIRTIO_TX_ROLLBACK_STRICT"));
 const VIRTIO_TX_CLEAR_DESC_ON_FREE: bool = false;
 const DMA_CACHE_LINE_BYTES: usize = 64;
 
@@ -775,27 +778,55 @@ impl TxSlotTracker {
     }
 
     fn reserve_next(&mut self) -> Option<(u16, bool, u32)> {
+        self.reserve_next_with_snapshot()
+            .map(|(slot, wrap, gen, _snapshot)| (slot, wrap, gen))
+    }
+
+    fn reserve_next_with_snapshot(&mut self) -> Option<(u16, bool, u32, TxSlotReserveSnapshot)> {
         if self.free_count == 0 || self.size == 0 {
             return None;
         }
+        let snapshot_free_count = self.free_count;
+        let snapshot_next_alloc = self.next_alloc;
+        let snapshot_last_alloc = self.last_alloc;
+        let snapshot_next_gen = self.next_gen;
         let size = usize::from(self.size);
         for _ in 0..size {
             let slot = self.next_alloc;
             self.next_alloc = self.next_alloc.wrapping_add(1) % self.size;
             match self.states.get_mut(slot as usize) {
                 Some(state @ TxSlotState::Free { .. }) => {
+                    let prev_state = *state;
                     let gen = self.next_gen;
                     self.next_gen = self.next_gen.wrapping_add(1);
                     let wrap = self.last_alloc.map(|last| slot < last).unwrap_or(false);
                     *state = TxSlotState::Reserved { gen };
                     self.last_alloc = Some(slot);
                     self.free_count = self.free_count.saturating_sub(1);
-                    return Some((slot, wrap, gen));
+                    let snapshot = TxSlotReserveSnapshot {
+                        slot,
+                        free_count: snapshot_free_count,
+                        next_alloc: snapshot_next_alloc,
+                        last_alloc: snapshot_last_alloc,
+                        next_gen: snapshot_next_gen,
+                        state: prev_state,
+                    };
+                    return Some((slot, wrap, gen, snapshot));
                 }
                 _ => continue,
             }
         }
         None
+    }
+
+    fn restore_snapshot(&mut self, snapshot: TxSlotReserveSnapshot) {
+        if let Some(state) = self.states.get_mut(snapshot.slot as usize) {
+            *state = snapshot.state;
+        }
+        self.free_count = snapshot.free_count;
+        self.next_alloc = snapshot.next_alloc;
+        self.last_alloc = snapshot.last_alloc;
+        self.next_gen = snapshot.next_gen;
     }
 
     fn cancel(&mut self, id: u16) -> Result<(), TxSlotError> {
@@ -982,11 +1013,49 @@ struct TxPublishRecord {
     avail_idx: u16,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct TxRingSnapshot {
+    avail_idx: u16,
+    used_idx: u16,
+    last_used: u16,
+    inflight_count: u16,
+    tx_free_len: u16,
+    head_state: Option<TxHeadState>,
+    slot_state: Option<TxSlotState>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct TxHeadReserveSnapshot {
+    head_id: u16,
+    free_mask: u32,
+    next_gen: u32,
+    entry: TxHeadEntry,
+    publish_present: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct TxSlotReserveSnapshot {
+    slot: u16,
+    free_count: u16,
+    next_alloc: u16,
+    last_alloc: Option<u16>,
+    next_gen: u32,
+    state: TxSlotState,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct TxReserveSnapshot {
+    ring: TxRingSnapshot,
+    head: TxHeadReserveSnapshot,
+    slot: Option<TxSlotReserveSnapshot>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TxReservation {
     head_id: u16,
     head_gen: u32,
     slot_gen: Option<u32>,
+    snapshot: TxReserveSnapshot,
 }
 
 #[derive(Default)]
@@ -1294,6 +1363,11 @@ impl TxHeadManager {
     }
 
     fn alloc_specific(&mut self, id: u16) -> Option<u16> {
+        self.alloc_specific_with_snapshot(id)
+            .map(|(head_id, _snapshot)| head_id)
+    }
+
+    fn alloc_specific_with_snapshot(&mut self, id: u16) -> Option<(u16, TxHeadReserveSnapshot)> {
         if id >= self.size {
             return None;
         }
@@ -1320,6 +1394,13 @@ impl TxHeadManager {
             self.record_dup_alloc();
             return None;
         }
+        let snapshot = TxHeadReserveSnapshot {
+            head_id: id,
+            free_mask: self.free_mask,
+            next_gen: self.next_gen,
+            entry: self.entry(id).copied().unwrap_or_default(),
+            publish_present: self.publish_present(id),
+        };
         self.free_mask &= !mask;
         let gen = self.next_gen;
         self.next_gen = self.next_gen.wrapping_add(1);
@@ -1336,17 +1417,33 @@ impl TxHeadManager {
         if let Some(flag) = self.publish_present.get_mut(id as usize) {
             *flag = false;
         }
-        Some(id)
+        Some((id, snapshot))
     }
 
     fn alloc_head(&mut self) -> Option<u16> {
+        self.alloc_head_with_snapshot()
+            .map(|(head_id, _snapshot)| head_id)
+    }
+
+    fn alloc_head_with_snapshot(&mut self) -> Option<(u16, TxHeadReserveSnapshot)> {
         let active = self.active_mask();
         let free = self.free_mask & active;
         if free == 0 {
             return None;
         }
         let id = free.trailing_zeros() as u16;
-        self.alloc_specific(id)
+        self.alloc_specific_with_snapshot(id)
+    }
+
+    fn restore_snapshot(&mut self, snapshot: TxHeadReserveSnapshot) {
+        self.free_mask = snapshot.free_mask;
+        self.next_gen = snapshot.next_gen;
+        if let Some(entry) = self.entries.get_mut(snapshot.head_id as usize) {
+            *entry = snapshot.entry;
+        }
+        if let Some(flag) = self.publish_present.get_mut(snapshot.head_id as usize) {
+            *flag = snapshot.publish_present;
+        }
     }
 
     fn submit_ready(&self, id: u16, slot: u16) -> Result<(), TxHeadError> {
@@ -2216,6 +2313,7 @@ pub struct VirtioNet {
     stalled_snapshot_logged: bool,
     tx_post_logged: bool,
     tx_selftest_done: bool,
+    tx_selftest_loop_done: bool,
     device_faulted: bool,
     bad_status_seen: bool,
     bad_status_logged: bool,
@@ -2824,6 +2922,7 @@ impl VirtioNet {
             stalled_snapshot_logged: false,
             tx_post_logged: false,
             tx_selftest_done: false,
+            tx_selftest_loop_done: false,
             device_faulted: false,
             bad_status_seen: false,
             bad_status_logged: false,
@@ -2937,6 +3036,7 @@ impl VirtioNet {
             driver.regs.read32(Registers::Status)
         );
         let _ = driver.tx_selftest_one_shot(crate::hal::timebase().now_ms());
+        let _ = driver.tx_selftest_loop(crate::hal::timebase().now_ms());
         Ok(driver)
     }
 
@@ -3147,6 +3247,187 @@ impl VirtioNet {
             );
             false
         }
+    }
+
+    fn tx_selftest_loop(&mut self, now_ms: u64) -> bool {
+        if !VIRTIO_MIN_TX_LOOP {
+            return false;
+        }
+        if self.tx_selftest_loop_done {
+            return false;
+        }
+        self.tx_selftest_loop_done = true;
+        let _ = now_ms;
+
+        const ITERATIONS: usize = 256;
+        const MIN_ETH_FRAME_LEN: usize = 14 + 46;
+        const PAYLOAD_SIZES: [usize; 5] = [42, 58, 86, 59, 87];
+
+        info!(
+            target: "net-console",
+            "SELFTEST_TX_LOOP_BEGIN iterations={}",
+            ITERATIONS
+        );
+
+        let max_payload = self
+            .tx_buffers
+            .first()
+            .map(|buffer| buffer.as_slice().len().saturating_sub(self.tx_header_len))
+            .unwrap_or(0);
+        if max_payload < MIN_ETH_FRAME_LEN || self.device_faulted {
+            let (used_idx, avail_idx) = self.tx_queue.indices();
+            info!(
+                target: "net-console",
+                "SELFTEST_TX_LOOP_FAIL iter=0 reason=unavailable used_idx={} avail_idx={} last_used={} inflight={} free={}",
+                used_idx,
+                avail_idx,
+                self.tx_queue.last_used,
+                self.tx_head_mgr.in_flight_count(),
+                self.tx_head_mgr.free_len(),
+            );
+            return false;
+        }
+
+        let used_idx_start = self.tx_queue.indices().0;
+        let mut ok = 0u32;
+        let mut would_block = 0u32;
+        let mut timeouts = 0u32;
+
+        for iter in 0..ITERATIONS {
+            let (used_idx_before, avail_idx_before) = self.tx_queue.indices();
+            let last_used_before = self.tx_queue.last_used;
+            let token = self.prepare_tx_token();
+            if !token.has_id() {
+                would_block = would_block.saturating_add(1);
+                continue;
+            }
+
+            let zero_len_before = self.tx_zero_len_attempt;
+            let frame_payload = PAYLOAD_SIZES[iter % PAYLOAD_SIZES.len()];
+            let frame_len = core::cmp::max(MIN_ETH_FRAME_LEN, frame_payload + 14);
+            let src_mac = self.mac;
+            let written = token.consume(frame_len, |payload| {
+                let write_len = core::cmp::min(frame_len, payload.len());
+                if write_len == 0 {
+                    return 0usize;
+                }
+                payload[..write_len].fill(0);
+                payload[..6].fill(0xff);
+                payload[6..12].copy_from_slice(src_mac.as_bytes());
+                payload[12] = 0x08;
+                payload[13] = 0x00;
+                if write_len > 14 {
+                    let seed = (iter as u8).wrapping_mul(17);
+                    for (offset, byte) in payload[14..write_len].iter_mut().enumerate() {
+                        *byte = seed ^ (offset as u8);
+                    }
+                }
+                payload[write_len - 1] ^= 0xff;
+                write_len
+            });
+
+            if written == 0 {
+                info!(
+                    target: "net-console",
+                    "SELFTEST_TX_LOOP_FAIL iter={} reason=ClosureReturnedZero used_idx={} avail_idx={} last_used={} inflight={} free={}",
+                    iter,
+                    used_idx_before,
+                    avail_idx_before,
+                    last_used_before,
+                    self.tx_head_mgr.in_flight_count(),
+                    self.tx_head_mgr.free_len(),
+                );
+                return false;
+            }
+            if self.tx_zero_len_attempt != zero_len_before {
+                info!(
+                    target: "net-console",
+                    "SELFTEST_TX_LOOP_FAIL iter={} reason=ClosureWroteZero used_idx={} avail_idx={} last_used={} inflight={} free={}",
+                    iter,
+                    used_idx_before,
+                    avail_idx_before,
+                    last_used_before,
+                    self.tx_head_mgr.in_flight_count(),
+                    self.tx_head_mgr.free_len(),
+                );
+                return false;
+            }
+
+            let mut success = false;
+            for _ in 0..200 {
+                self.reclaim_tx();
+                let (used_idx_now, _avail_idx_now) = self.tx_queue.indices();
+                if used_idx_now != used_idx_before {
+                    success = true;
+                    break;
+                }
+            }
+            if !success {
+                timeouts = timeouts.saturating_add(1);
+                info!(
+                    target: "net-console",
+                    "SELFTEST_TX_LOOP_FAIL iter={} reason=Timeout used_idx={} avail_idx={} last_used={} inflight={} free={} timeouts={}",
+                    iter,
+                    used_idx_before,
+                    avail_idx_before,
+                    last_used_before,
+                    self.tx_head_mgr.in_flight_count(),
+                    self.tx_head_mgr.free_len(),
+                    timeouts,
+                );
+                return false;
+            }
+            ok = ok.saturating_add(1);
+
+            if self.tx_head_mgr.audit().is_err() {
+                let (used_idx_now, avail_idx_now) = self.tx_queue.indices_no_sync();
+                info!(
+                    target: "net-console",
+                    "SELFTEST_TX_LOOP_FAIL iter={} reason=AuditMismatch used_idx={} avail_idx={} last_used={} inflight={} free={}",
+                    iter,
+                    used_idx_now,
+                    avail_idx_now,
+                    self.tx_queue.last_used,
+                    self.tx_head_mgr.in_flight_count(),
+                    self.tx_head_mgr.free_len(),
+                );
+                return false;
+            }
+            if NET_VIRTIO_TX_V2 {
+                let tracker_sum =
+                    self.tx_slots.free_count().saturating_add(self.tx_slots.in_flight());
+                let mgr_sum = self
+                    .tx_head_mgr
+                    .free_len()
+                    .saturating_add(self.tx_head_mgr.in_flight_count());
+                if tracker_sum != self.tx_queue.size || mgr_sum != self.tx_queue.size {
+                    let (used_idx_now, avail_idx_now) = self.tx_queue.indices_no_sync();
+                    info!(
+                        target: "net-console",
+                        "SELFTEST_TX_LOOP_FAIL iter={} reason=SlotMismatch used_idx={} avail_idx={} last_used={} inflight={} free={}",
+                        iter,
+                        used_idx_now,
+                        avail_idx_now,
+                        self.tx_queue.last_used,
+                        self.tx_head_mgr.in_flight_count(),
+                        self.tx_head_mgr.free_len(),
+                    );
+                    return false;
+                }
+            }
+        }
+
+        let used_idx_end = self.tx_queue.indices().0;
+        let used_delta = used_idx_end.wrapping_sub(used_idx_start);
+        info!(
+            target: "net-console",
+            "SELFTEST_TX_LOOP_OK ok={} would_block={} timeouts={} used_delta={}",
+            ok,
+            would_block,
+            timeouts,
+            used_delta
+        );
+        true
     }
 
     fn log_zero_len_enqueue(
@@ -6837,7 +7118,7 @@ impl VirtioNet {
             self.tx_anomaly(TxAnomalyReason::SmoltcpRequestedZeroLen, "smoltcp_len_zero");
         }
         if written_len == 0 {
-            self.tx_anomaly(TxAnomalyReason::ClosureWroteZero, "closure_wrote_zero");
+            self.tx_zero_len_attempt = self.tx_zero_len_attempt.wrapping_add(1);
         }
     }
 
@@ -7034,6 +7315,31 @@ impl VirtioNet {
         self.release_tx_head(id, "tx_v2_zero_len_drop");
     }
 
+    fn tx_ring_snapshot(&self, head_id: u16) -> TxRingSnapshot {
+        let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
+        TxRingSnapshot {
+            avail_idx,
+            used_idx,
+            last_used: self.tx_queue.last_used,
+            inflight_count: self.tx_head_mgr.in_flight_count(),
+            tx_free_len: self.tx_head_mgr.free_len(),
+            head_state: self.tx_head_mgr.state(head_id),
+            slot_state: if NET_VIRTIO_TX_V2 {
+                self.tx_slots.state(head_id)
+            } else {
+                None
+            },
+        }
+    }
+
+    fn rollback_tx_reservation(&mut self, reservation: TxReservation) {
+        let snapshot = reservation.snapshot;
+        self.tx_head_mgr.restore_snapshot(snapshot.head);
+        if let Some(slot_snapshot) = snapshot.slot {
+            self.tx_slots.restore_snapshot(slot_snapshot);
+        }
+    }
+
     fn compute_written_len(payload_len: usize, before: &[u8], after: &[u8]) -> usize {
         let limit = core::cmp::min(payload_len, core::cmp::min(before.len(), after.len()));
         let mut written = 0usize;
@@ -7110,20 +7416,44 @@ impl VirtioNet {
 
     fn reserve_tx_slot(&mut self) -> Option<TxReservation> {
         if !NET_VIRTIO_TX_V2 {
-            return self.tx_head_mgr.alloc_head().and_then(|id| {
-                let head_gen = self.tx_head_mgr.generation(id)?;
-                Some(TxReservation {
-                    head_id: id,
-                    head_gen,
-                    slot_gen: None,
-                })
-            });
+            let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
+            let last_used = self.tx_queue.last_used;
+            let inflight = self.tx_head_mgr.in_flight_count();
+            let tx_free = self.tx_head_mgr.free_len();
+            return self
+                .tx_head_mgr
+                .alloc_head_with_snapshot()
+                .and_then(|(id, head_snapshot)| {
+                    let head_gen = self.tx_head_mgr.generation(id)?;
+                    let ring_snapshot = TxRingSnapshot {
+                        avail_idx,
+                        used_idx,
+                        last_used,
+                        inflight_count: inflight,
+                        tx_free_len: tx_free,
+                        head_state: Some(head_snapshot.entry.state),
+                        slot_state: None,
+                    };
+                    Some(TxReservation {
+                        head_id: id,
+                        head_gen,
+                        slot_gen: None,
+                        snapshot: TxReserveSnapshot {
+                            ring: ring_snapshot,
+                            head: head_snapshot,
+                            slot: None,
+                        },
+                    })
+                });
         }
-        let (slot, wrap, slot_gen) = self.tx_slots.reserve_next()?;
-        match self.tx_head_mgr.alloc_specific(slot) {
-            Some(id) => {
+        let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
+        let last_used = self.tx_queue.last_used;
+        let inflight = self.tx_head_mgr.in_flight_count();
+        let tx_free = self.tx_head_mgr.free_len();
+        let (slot, wrap, slot_gen, slot_snapshot) = self.tx_slots.reserve_next_with_snapshot()?;
+        match self.tx_head_mgr.alloc_specific_with_snapshot(slot) {
+            Some((id, head_snapshot)) => {
                 if wrap {
-                    let avail_idx = self.tx_queue.indices_no_sync().1;
                     let (free, inflight) = self.tx_slot_counts();
                     info!(
                         target: "virtio-net",
@@ -7136,14 +7466,28 @@ impl VirtioNet {
                     );
                 }
                 let head_gen = self.tx_head_mgr.generation(id)?;
+                let ring_snapshot = TxRingSnapshot {
+                    avail_idx,
+                    used_idx,
+                    last_used,
+                    inflight_count: inflight,
+                    tx_free_len: tx_free,
+                    head_state: Some(head_snapshot.entry.state),
+                    slot_state: Some(slot_snapshot.state),
+                };
                 Some(TxReservation {
                     head_id: id,
                     head_gen,
                     slot_gen: Some(slot_gen),
+                    snapshot: TxReserveSnapshot {
+                        ring: ring_snapshot,
+                        head: head_snapshot,
+                        slot: Some(slot_snapshot),
+                    },
                 })
             }
             None => {
-                let _ = self.tx_slots.cancel(slot);
+                self.tx_slots.restore_snapshot(slot_snapshot);
                 None
             }
         }
@@ -8803,6 +9147,25 @@ impl TxToken for VirtioTxToken {
                 log_tcp_trace("TX", &payload[..payload_len]);
             }
             driver.log_tx_attempt(attempt_seq, len, payload_len, written_len);
+            if written_len == 0 {
+                let pre_snapshot = reservation.snapshot.ring;
+                driver.rollback_tx_reservation(reservation);
+                if VIRTIO_TX_ROLLBACK_STRICT {
+                    let post_snapshot = driver.tx_ring_snapshot(id);
+                    if post_snapshot != pre_snapshot {
+                        error!(
+                            target: "net-console",
+                            "[virtio-net][tx-rollback] mismatch head={} before={:?} after={:?}",
+                            id,
+                            pre_snapshot,
+                            post_snapshot,
+                        );
+                        panic!("[virtio-net] tx rollback invariant failed");
+                    }
+                }
+                driver.tx_drops = driver.tx_drops.saturating_add(1);
+                return result;
+            }
             let Some(total_len) = VirtioNet::tx_total_len(header_len, written_len) else {
                 driver.drop_zero_len_tx(id, payload_len, written_len);
                 return result;
@@ -11592,6 +11955,7 @@ mod tx_tests {
             head_id: 3,
             head_gen: 7,
             slot_gen: Some(9),
+            snapshot: TxReserveSnapshot::default(),
         };
         let token = VirtioTxToken::new(core::ptr::null_mut(), Some(reservation));
         assert_eq!(
@@ -11617,6 +11981,7 @@ mod tx_tests {
             head_id: head,
             head_gen,
             slot_gen: Some(slot_gen),
+            snapshot: TxReserveSnapshot::default(),
         };
         assert!(
             reservation_matches(&heads, Some(&slots), reservation),
@@ -11635,6 +12000,7 @@ mod tx_tests {
             head_id: head,
             head_gen,
             slot_gen: Some(slot_gen),
+            snapshot: TxReserveSnapshot::default(),
         };
         let gen = heads
             .mark_published(head, slot, 64, 0x1000)
@@ -11655,6 +12021,7 @@ mod tx_tests {
             head_id: head_reuse,
             head_gen: head_gen_reuse,
             slot_gen: Some(slot_gen_reuse),
+            snapshot: TxReserveSnapshot::default(),
         };
         assert!(
             !reservation_matches(&heads, Some(&slots), stale),
