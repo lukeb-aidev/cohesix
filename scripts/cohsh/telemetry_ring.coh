@@ -1,8 +1,8 @@
+# PLACEHOLDER: not implemented until Milestone 10
 # Author: Lukas Bower
-# Purpose: Placeholder ring-style cadence using bounded waits.
-ping
+# Purpose: Placeholder telemetry ring checks gated by ERR responses.
+attach queen
 EXPECT OK
-WAIT 200
-ping
-EXPECT OK
+cat /worker/worker-0/telemetry
+EXPECT ERR
 quit

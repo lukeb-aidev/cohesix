@@ -109,6 +109,12 @@ pub trait Transport {
     /// Stream a log-like file and return the accumulated contents.
     fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>>;
 
+    /// Read a file and return the accumulated contents.
+    fn read(&mut self, session: &Session, path: &str) -> Result<Vec<String>>;
+
+    /// List directory entries at the supplied path.
+    fn list(&mut self, session: &Session, path: &str) -> Result<Vec<String>>;
+
     /// Append bytes to an append-only file within the NineDoor namespace.
     fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()>;
 
@@ -141,6 +147,14 @@ where
 
     fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
         (**self).tail(session, path)
+    }
+
+    fn read(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
+        (**self).read(session, path)
+    }
+
+    fn list(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
+        (**self).list(session, path)
     }
 
     fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()> {
@@ -178,6 +192,41 @@ impl NineDoorTransport {
         let fid = self.next_fid;
         self.next_fid = self.next_fid.wrapping_add(1);
         fid
+    }
+
+    fn read_lines(&mut self, path: &str) -> Result<Vec<String>> {
+        let components = parse_path(path)?;
+        let fid = self.allocate_fid();
+        let connection = self
+            .connection
+            .as_mut()
+            .context("attach to a session before reading")?;
+        connection
+            .walk(ROOT_FID, fid, &components)
+            .with_context(|| format!("failed to walk to {path}"))?;
+        connection
+            .open(fid, OpenMode::read_only())
+            .with_context(|| format!("failed to open {path}"))?;
+        let mut offset = 0u64;
+        let mut buffer = Vec::new();
+        loop {
+            let chunk = connection
+                .read(fid, offset, connection.negotiated_msize())
+                .with_context(|| format!("failed to read {path}"))?;
+            if chunk.is_empty() {
+                break;
+            }
+            offset = offset
+                .checked_add(chunk.len() as u64)
+                .context("offset overflow during read")?;
+            buffer.extend_from_slice(&chunk);
+            if chunk.len() < connection.negotiated_msize() as usize {
+                break;
+            }
+        }
+        connection.clunk(fid).context("failed to clunk fid")?;
+        let text = String::from_utf8(buffer).context("log is not valid UTF-8")?;
+        Ok(text.lines().map(|line| line.to_owned()).collect())
     }
 }
 
@@ -244,38 +293,15 @@ impl Transport for NineDoorTransport {
     }
 
     fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
-        let components = parse_path(path)?;
-        let fid = self.allocate_fid();
-        let connection = self
-            .connection
-            .as_mut()
-            .context("attach to a session before running tail")?;
-        connection
-            .walk(ROOT_FID, fid, &components)
-            .with_context(|| format!("failed to walk to {path}"))?;
-        connection
-            .open(fid, OpenMode::read_only())
-            .with_context(|| format!("failed to open {path}"))?;
-        let mut offset = 0u64;
-        let mut buffer = Vec::new();
-        loop {
-            let chunk = connection
-                .read(fid, offset, connection.negotiated_msize())
-                .with_context(|| format!("failed to read {path}"))?;
-            if chunk.is_empty() {
-                break;
-            }
-            offset = offset
-                .checked_add(chunk.len() as u64)
-                .context("offset overflow during read")?;
-            buffer.extend_from_slice(&chunk);
-            if chunk.len() < connection.negotiated_msize() as usize {
-                break;
-            }
-        }
-        connection.clunk(fid).context("failed to clunk fid")?;
-        let text = String::from_utf8(buffer).context("log is not valid UTF-8")?;
-        Ok(text.lines().map(|line| line.to_owned()).collect())
+        self.read_lines(path)
+    }
+
+    fn read(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+        self.read_lines(path)
+    }
+
+    fn list(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+        Err(anyhow!("directory listing is not yet supported by the mock transport"))
     }
 
     fn write(&mut self, _session: &Session, path: &str, payload: &[u8]) -> Result<()> {
@@ -546,6 +572,18 @@ impl Transport for QemuTransport {
         let cleaned = Self::filter_root_log(&raw_lines);
         self.stop_child();
         Ok(cleaned)
+    }
+
+    fn read(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+        Err(anyhow!(
+            "reads are not supported when using the QEMU transport"
+        ))
+    }
+
+    fn list(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+        Err(anyhow!(
+            "directory listing is not supported when using the QEMU transport"
+        ))
     }
 
     fn write(&mut self, _session: &Session, _path: &str, _payload: &[u8]) -> Result<()> {
@@ -1010,6 +1048,36 @@ impl<T: Transport, W: Write> Shell<T, W> {
         Ok(())
     }
 
+    fn read_path(&mut self, path: &str) -> Result<()> {
+        let session = self
+            .session
+            .as_ref()
+            .context("attach to a session before running cat")?;
+        let lines = self.transport.read(session, path)?;
+        for ack in self.transport.drain_acknowledgements() {
+            self.write_ack_line(&ack)?;
+        }
+        for line in lines {
+            self.write_line(&line)?;
+        }
+        Ok(())
+    }
+
+    fn list_path(&mut self, path: &str) -> Result<()> {
+        let session = self
+            .session
+            .as_ref()
+            .context("attach to a session before running ls")?;
+        let entries = self.transport.list(session, path)?;
+        for ack in self.transport.drain_acknowledgements() {
+            self.write_ack_line(&ack)?;
+        }
+        for entry in entries {
+            self.write_line(&entry)?;
+        }
+        Ok(())
+    }
+
     fn write_path(&mut self, path: &str, payload: &[u8]) -> Result<()> {
         let session = self
             .session
@@ -1075,10 +1143,8 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line(
                     "  tcp-diag [port]              - Debug TCP connectivity without protocol traffic",
                 )?;
-                self.write_line(
-                    "  ls [path]                    - Enumerate directory entries (planned)",
-                )?;
-                self.write_line("  cat <path>                   - Read file contents (planned)")?;
+                self.write_line("  ls <path>                    - Enumerate directory entries")?;
+                self.write_line("  cat <path>                   - Read file contents")?;
                 self.write_line(
                     "  echo <text> > <path>         - Append to a file (adds newline)",
                 )?;
@@ -1095,7 +1161,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line("  quit                         - Close the session and exit")?;
                 Ok(CommandStatus::Continue)
             }
-            "ls" | "cat" | "spawn" | "kill" | "bind" | "mount" => {
+            "spawn" | "kill" | "bind" | "mount" => {
                 self.write_line(&format!(
                     "Error: '{cmd}' is planned but not implemented yet in this build"
                 ))?;
@@ -1135,12 +1201,12 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         return Err(anyhow!("tcp-diag takes at most one argument: port"));
                     }
                     self.run_tcp_diag(port_arg)?;
+                    return Ok(CommandStatus::Continue);
                 }
                 #[cfg(not(feature = "tcp"))]
                 {
                     return Err(anyhow!("tcp-diag is available only in TCP-enabled builds"));
                 }
-                Ok(CommandStatus::Continue)
             }
             "echo" => {
                 let payload_start = line[4..].trim_start();
@@ -1153,6 +1219,26 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 }
                 let payload = normalise_echo_payload(raw_text);
                 self.write_path(path, payload.as_bytes())?;
+                Ok(CommandStatus::Continue)
+            }
+            "cat" => {
+                let Some(path) = parts.next() else {
+                    return Err(anyhow!("cat requires a path"));
+                };
+                if parts.next().is_some() {
+                    return Err(anyhow!("cat takes exactly one argument: path"));
+                }
+                self.read_path(path)?;
+                Ok(CommandStatus::Continue)
+            }
+            "ls" => {
+                let Some(path) = parts.next() else {
+                    return Err(anyhow!("ls requires a path"));
+                };
+                if parts.next().is_some() {
+                    return Err(anyhow!("ls takes exactly one argument: path"));
+                }
+                self.list_path(path)?;
                 Ok(CommandStatus::Continue)
             }
             "attach" | "login" => {
@@ -1311,7 +1397,7 @@ mod tests {
         let rendered = String::from_utf8(output).unwrap();
         assert!(rendered.contains("Cohesix command surface:"));
         assert!(rendered.contains("tail <path>"));
-        assert!(rendered.contains("ls [path]"));
+        assert!(rendered.contains("ls <path>"));
         assert!(rendered.contains("mount <service> <path>"));
     }
 }

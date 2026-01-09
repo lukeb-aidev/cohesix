@@ -91,21 +91,13 @@ for script in "${scripts[@]}"; do
         exit 1
     fi
 
-    tmp_script=$(mktemp)
-    {
-        printf 'attach queen\nEXPECT OK\n'
-        cat "${script_path}"
-    } >"${tmp_script}"
-
     probe_console
     echo "running ${script}"
-    if ! output=$("${COHSH_BIN}" --transport tcp --tcp-host "${TCP_HOST}" --tcp-port "${TCP_PORT}" --script "${tmp_script}" 2>&1); then
+    if ! output=$("${COHSH_BIN}" --transport tcp --tcp-host "${TCP_HOST}" --tcp-port "${TCP_PORT}" --script "${script_path}" 2>&1); then
         echo "FAILED: ${script_path}" >&2
         echo "${output}" >&2
-        rm -f "${tmp_script}"
         exit 1
     fi
-    rm -f "${tmp_script}"
     echo "ok: ${script}"
     sleep 1
 done

@@ -642,7 +642,7 @@ Introduce the `coh-rtc` compiler that ingests `configs/root_task.toml` and emits
 - Generated artefacts:
   - `apps/root-task/src/generated/bootstrap.rs` — init graph, ticket table, namespace descriptors with compile-time hashes.
   - `out/manifests/root_task_resolved.json` — serialised IR with SHA-256 fingerprint stored alongside.
-  - `tests/cli/boot_v0.cohsh` — baseline CLI script derived from the manifest to exercise attach/log/quit flows.
+  - `scripts/cohsh/boot_v0.coh` — baseline CLI script derived from the manifest to exercise attach/log/quit flows.
 - Manifest IR gains optional `ecosystem.*` section (schema-validated, defaults to noop):
   - `ecosystem.host.enable` (bool)
   - `ecosystem.host.providers[]` (enum: `systemd`, `k8s`, `nvidia`, `jetson`, `net`)
@@ -657,17 +657,17 @@ Introduce the `coh-rtc` compiler that ingests `configs/root_task.toml` and emits
   - `docs/REPO_LAYOUT.md` lists the new `configs/` and `tools/coh-rtc/` trees with regeneration commands.
 
 **Commands**
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script tests/cli/boot_v0.cohsh`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh`
 - `cargo check -p root-task --no-default-features --features kernel,net-console`
 - `cargo test -p root-task`
 - `cargo test -p tools/coh-rtc`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/boot_v0.cohsh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh`
 
 **Checks (DoD)**
 - Regeneration is deterministic: two consecutive runs of `cargo run -p coh-rtc …` produce identical Rust, JSON, and CLI artefacts (verified via hash comparison recorded in `out/manifests/root_task_resolved.json.sha256`).
 - Root task boots under QEMU using generated bootstrap tables; serial log shows manifest fingerprint and ticket registration sourced from generated code.
 - Compiler validation rejects manifests that violate red lines (e.g., invalid walk depth, enabling `gpu` while `profile.kernel` omits the feature gate) and exits with non-zero status.
-- Run the Regression Pack and reject any drift in `tests/cli/boot_v0.cohsh` output or manifest fingerprints unless the docs and schema version are updated in the same change.
+- Run the Regression Pack and reject any drift in `scripts/cohsh/boot_v0.coh` output or manifest fingerprints unless the docs and schema version are updated in the same change.
 - Generated modules MUST NOT introduce new global state or reorder initialisation in a way that changes serial boot ordering or `/proc/boot` output.
 - Compiler rejects manifests that set `ecosystem.host.enable = true` when memory budgets or Secure9P red lines (msize, walk depth, role isolation) would be exceeded; enabling the ecosystem section MUST NOT relax prior limits.
 - Docs-as-built guard extends to the new schema nodes so generated snippets and rendered docs agree on the resolved manifest.
@@ -767,7 +767,8 @@ Refactor Secure9P into codec/core crates with bounded pipelining and manifest-co
   Existing consumers (`apps/nine-door`, `apps/cohsh`) migrate to the new crates.
 - `apps/nine-door/src/host/` updated to process batched frames and expose back-pressure metrics; new module `pipeline.rs` encapsulates short-write handling and queue depth accounting surfaced via `/proc/9p/*` later.
 - `apps/nine-door/tests/pipelining.rs` integration test spinning four concurrent sessions, verifying out-of-order responses and bounded retries when queues fill.
-- CLI regression `tests/cli/9p_batch.cohsh` executing scripted batched writes and verifying acknowledgement ordering.
+- CLI regression `scripts/cohsh/9p_batch.coh` executing scripted batched writes and verifying acknowledgement ordering.
+- TODO: Extend scripts/cohsh/9p_batch.coh with batching/overflow assertions and add it to regression pack DoD.
 - `configs/root_task.toml` gains IR v1.1 fields: `secure9p.tags_per_session`, `secure9p.batch_frames`, `secure9p.short_write.policy`. Validation ensures `tags_per_session >= 1` and total batched payload stays ≤ negotiated `msize`.
 - Docs: `docs/SECURE9P.md` updated to describe the new layering and concurrency knobs; `docs/INTERFACES.md` documents acknowledgement semantics for batched operations.
 - Explicit queue depth limits and retry back-off parameters documented; negative path covers tag overflow and back-pressure refusal.
@@ -777,7 +778,7 @@ Refactor Secure9P into codec/core crates with bounded pipelining and manifest-co
 - `cargo test -p secure9p-core`
 - `cargo test -p nine-door`
 - `cargo test -p tools/coh-rtc` (regenerates manifest snippets with new fields)
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/9p_batch.cohsh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/9p_batch.coh`
 
 **Checks (DoD)**
 - Synthetic load (10k interleaved operations across four sessions) completes without tag reuse violations or starvation; metrics expose queue depth and retry counts.
@@ -810,13 +811,13 @@ Deliverables:
 
 Title/ID: m09-batched-io-regression
 Goal: Prove batched write ordering and back-pressure across CLI + Regression Pack.
-Inputs: tests/cli/9p_batch.cohsh, apps/nine-door/tests/pipelining.rs.
+Inputs: scripts/cohsh/9p_batch.coh, apps/nine-door/tests/pipelining.rs.
 Changes:
   - apps/nine-door/tests/pipelining.rs — four-session interleave with induced short writes.
-  - tests/cli/9p_batch.cohsh — add overflow case asserting ERR on batch > msize.
+  - scripts/cohsh/9p_batch.coh — add overflow case asserting ERR on batch > msize.
 Commands:
   - cargo test -p nine-door --test pipelining
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/9p_batch.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/9p_batch.coh
 Checks:
   - Out-of-order responses preserved; batch larger than msize is rejected with logged ERR.
 Deliverables:
@@ -835,7 +836,8 @@ Implement ring-backed telemetry providers with manifest-governed sizes and CBOR 
 - `apps/nine-door/src/host/telemetry/` (new module) housing ring buffer implementation (`ring.rs`) and cursor state machine (`cursor.rs`), integrated into `namespace.rs` and `control.rs` so workers emit telemetry via append-only files.
 - `crates/secure9p-core` gains append-only helpers enforcing offset semantics and short-write signalling consumed by the ring provider.
 - CBOR Frame v1 schema defined in `tools/coh-rtc/src/codegen/cbor.rs`, exported as Markdown to `docs/INTERFACES.md` and validated by serde-derived tests.
-- CLI regression `tests/cli/telemetry_ring.cohsh` exercising wraparound, cursor resume, and offline replay via `cohsh --features tcp`.
+- CLI regression `scripts/cohsh/telemetry_ring.coh` exercising wraparound, cursor resume, and offline replay via `cohsh --features tcp`.
+- TODO: Implement scripts/cohsh/telemetry_ring.coh and add it to regression pack DoD.
 - Manifest IR v1.2 fields: `telemetry.ring_bytes_per_worker`, `telemetry.frame_schema`, `telemetry.cursor.retain_on_boot`. Validation ensures aggregate ring usage fits within the event-pump budget declared in `docs/ARCHITECTURE.md`.
 - `apps/root-task/src/generated/bootstrap.rs` extended to publish ring quotas and file descriptors consumed by the event pump.
 
@@ -843,7 +845,7 @@ Implement ring-backed telemetry providers with manifest-governed sizes and CBOR 
 - `cargo test -p nine-door`
 - `cargo test -p secure9p-core`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/telemetry_ring.cohsh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh`
 
 **Checks (DoD)**
 - Rings wrap without data loss; on reboot the cursor manifest regenerates identical ring state and CLI replay resumes exactly where it left off.
@@ -881,7 +883,7 @@ Changes:
   - apps/root-task/src/generated/bootstrap.rs — emit ring quotas and cursor retention flags.
 Commands:
   - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/telemetry_ring.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh
 Checks:
   - CLI script proves wraparound and stale cursor rejection; regenerated schema matches docs snippet.
 Deliverables:
@@ -911,7 +913,8 @@ Provide a host-only sidecar bridge that projects external ecosystem controls int
 - CLI harness and commands (documented):
   - `cargo test -p host-sidecar-bridge`
   - `cargo run -p host-sidecar-bridge -- --mock --mount /host`
-  - `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/host_sidecar_mock.cohsh`
+  - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/host_sidecar_mock.coh`
+- TODO: Implement scripts/cohsh/host_sidecar_mock.coh and add it to regression pack DoD.
 - Manifest/IR alignment: `/host` tree appears only when `ecosystem.host.enable = true` with providers declared under `ecosystem.host.providers[]` and mount point defaulting to `/host`.
 - Docs include policy and TCB notes emphasising that the bridge mirrors host controls without expanding the in-VM attack surface.
 
@@ -943,12 +946,12 @@ Deliverables:
 
 Title/ID: m11-policy-roles
 Goal: Enforce role-based append-only controls with audit.
-Inputs: docs/INTERFACES.md control grammar, tests/cli/host_sidecar_mock.cohsh.
+Inputs: docs/INTERFACES.md control grammar, scripts/cohsh/host_sidecar_mock.coh.
 Changes:
   - apps/nine-door/src/host/control.rs — queen-only write enforcement and append-only audit logging.
-  - tests/cli/host_sidecar_mock.cohsh — denied-write then approved-write flow.
+  - scripts/cohsh/host_sidecar_mock.coh — denied-write then approved-write flow.
 Commands:
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/host_sidecar_mock.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/host_sidecar_mock.coh
   - cargo test -p nine-door --test host_sidecar_policy
 Checks:
   - Non-queen write returns ERR EPERM; audit line includes ticket and path; approved write succeeds deterministically.
@@ -974,12 +977,13 @@ Add a PolicyFS surface that captures human-legible approvals for sensitive opera
   - `/actions/<id>/status` (read-only)
 - Enforcement: selected control writes (e.g., `/queen/ctl`, `/host/*/restart`) require a policy gate when enabled; denials/approvals append to the audit log using existing telemetry logging.
 - CLI regression demonstrating a denied action followed by an approved action under policy gating.
+- TODO: Implement scripts/cohsh/policy_gate.coh and add it to regression pack DoD.
 - Manifest flag (e.g., `ecosystem.policy.enable`) toggles the gate and publishes rules; defaults keep policy off to preserve prior behaviour.
 
 **Commands**
 - `cargo test -p nine-door`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/policy_gate.cohsh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/policy_gate.coh`
 
 **Checks (DoD)**
 - Policy gate enablement is manifest-driven; disabling it reverts to prior control semantics without hidden defaults.
@@ -1009,12 +1013,12 @@ Deliverables:
 
 Title/ID: m12-approval-regression
 Goal: Demonstrate denied→approved flow and replay refusal.
-Inputs: tests/cli/policy_gate.cohsh.
+Inputs: scripts/cohsh/policy_gate.coh.
 Changes:
-  - tests/cli/policy_gate.cohsh — stepwise denied action, approval append, approved retry, replay attempt.
+  - scripts/cohsh/policy_gate.coh — stepwise denied action, approval append, approved retry, replay attempt.
   - docs/SECURITY.md appendix note on approval replay limits (snippet refreshed from manifest).
 Commands:
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/policy_gate.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/policy_gate.coh
 Checks:
   - Replay attempt after approval consumption returns ERR and no duplicate action; ACK/ERR sequence deterministic.
 Deliverables:
@@ -1043,12 +1047,13 @@ Provide append-only audit logs and a bounded replay surface that re-applies Cohe
   - Only replays Cohesix-issued control-plane actions (no arbitrary host scans) and respects bounded log windows.
   - Deterministic execution: same inputs → same ACK/ERR + audit lines regardless of transport (serial/TCP).
 - CLI regression exercising record then replay of a scripted sequence with byte-identical acknowledgements.
+- TODO: Implement scripts/cohsh/replay_journal.coh and add it to regression pack DoD.
 - Audit logging integrates with telemetry rings without adding new protocols; storage remains bounded per manifest budget.
 
 **Commands**
 - `cargo test -p nine-door`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/replay_journal.cohsh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/replay_journal.coh`
 
 **Checks (DoD)**
 - Scripted actions can be replayed to yield byte-identical ACK/ERR sequences for Cohesix control operations.
@@ -1077,12 +1082,12 @@ Deliverables:
 
 Title/ID: m13-replayfs-determinism
 Goal: Implement bounded replay control with deterministic ACK/ERR.
-Inputs: apps/nine-door/src/host/replay.rs, tests/cli/replay_journal.cohsh.
+Inputs: apps/nine-door/src/host/replay.rs, scripts/cohsh/replay_journal.coh.
 Changes:
   - apps/nine-door/src/host/replay.rs — /replay/ctl, /replay/status, cursor handling within bounded window.
-  - tests/cli/replay_journal.cohsh — record then replay sequence plus over-window abuse case.
+  - scripts/cohsh/replay_journal.coh — record then replay sequence plus over-window abuse case.
 Commands:
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/replay_journal.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/replay_journal.coh
   - cargo test -p nine-door --test replayfs
 Checks:
   - Replay beyond window or when disabled returns ERR; successful replay reproduces byte-identical ACK/ERR.
@@ -1104,6 +1109,7 @@ Introduce manifest-driven namespace sharding with optional legacy aliases.
 - `crates/secure9p-core` exposes a sharded fid table ensuring per-shard locking and eliminating global mutex contention.
 - Manifest IR v1.2 additions: `sharding.enabled`, `sharding.shard_bits`, `sharding.legacy_worker_alias`. Validation enforces `shard_bits ≤ 8` and forbids aliases when depth would exceed limits.
 - Docs updates in `docs/ROLES_AND_SCHEDULING.md` describing shard hashing (`sha256(worker_id)[0..=shard_bits)`), alias behaviour, and operational guidance.
+- TODO: Implement scripts/cohsh/shard_1k.coh and add it to regression pack DoD.
 
 **Commands**
 - `cargo test -p nine-door`
@@ -1140,12 +1146,12 @@ Deliverables:
 
 Title/ID: m14-shard-regression
 Goal: Validate legacy alias compatibility and sharded CLI flows.
-Inputs: tests/cli/shard_1k.cohsh (new), tests/integration shard_1k harness.
+Inputs: scripts/cohsh/shard_1k.coh (new), tests/integration shard_1k harness.
 Changes:
-  - tests/cli/shard_1k.cohsh — attaches to shard and legacy alias paths; includes disabled-alias negative case.
+  - scripts/cohsh/shard_1k.coh — attaches to shard and legacy alias paths; includes disabled-alias negative case.
   - docs/INTERFACES.md snippet showing shard path grammar generated from manifest.
 Commands:
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/shard_1k.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/shard_1k.coh
 Checks:
   - Legacy path fails deterministically when alias disabled; succeeds when enabled with identical ACK ordering.
 Deliverables:
@@ -1164,12 +1170,13 @@ Add pooled sessions and retry policies to `cohsh`, governed by compiler-exported
 - `apps/cohsh/src/lib.rs` extends `Shell` with a session pool (default manifest value: two control, four telemetry) and batched Twrite helper. `apps/cohsh/src/transport/tcp.rs` gains retry scheduling based on manifest policy.
 - `apps/cohsh/tests/pooling.rs` verifies pooled throughput and idempotent retry behaviour.
 - Manifest IR v1.3: `client_policies.cohsh.pool`, `client_policies.retry`, `client_policies.heartbeat`. Compiler emits `out/cohsh_policy.toml` consumed at runtime (CLI loads it on start, failing if missing/out-of-sync).
-- CLI regression `tests/cli/session_pool.cohsh` demonstrating increased throughput under load and safe recovery from injected failures.
+- CLI regression `scripts/cohsh/session_pool.coh` demonstrating increased throughput under load and safe recovery from injected failures.
+- TODO: Implement scripts/cohsh/session_pool.coh and add it to regression pack DoD.
 - Docs (`docs/USERLAND_AND_CLI.md`) describe new CLI flags/env overrides, referencing manifest-derived defaults.
 
 **Commands**
 - `cargo test -p cohsh`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/session_pool.cohsh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/session_pool.coh`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 
 **Checks (DoD)**
@@ -1194,7 +1201,7 @@ Changes:
   - apps/cohsh/src/transport/tcp.rs — retry scheduling and reconnect handling.
 Commands:
   - cargo test -p cohsh --tests
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/session_pool.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/session_pool.coh
 Checks:
   - Connection drop triggers retries without duplicate telemetry; pool exhaustion returns deterministic ERR and audit.
 Deliverables:
@@ -1202,13 +1209,13 @@ Deliverables:
 
 Title/ID: m15-throughput-benchmark
 Goal: Measure throughput improvements and ensure ordering stability.
-Inputs: apps/cohsh/tests/pooling.rs, tests/cli/session_pool.cohsh outputs.
+Inputs: apps/cohsh/tests/pooling.rs, scripts/cohsh/session_pool.coh outputs.
 Changes:
   - apps/cohsh/tests/pooling.rs — throughput benchmark comparing single vs pooled sessions with injected short writes.
   - docs/SECURITY.md — note on ordering/idempotency with snippet from manifest.
 Commands:
   - cargo test -p cohsh --test pooling
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/session_pool.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/session_pool.coh
 Checks:
   - ACK/ERR ordering unchanged from baseline; retries logged once per failure; benchmark shows expected throughput gain.
 Deliverables:
@@ -1226,7 +1233,8 @@ Expose audit-friendly observability nodes under `/proc` generated from the manif
 **Deliverables**
 - `apps/nine-door/src/host/observe.rs` (new module) providing read-only providers for `/proc/9p/{sessions,outstanding,short_writes}` and `/proc/ingest/{p50_ms,p95_ms,backpressure,dropped,queued}` plus append-only `/proc/ingest/watch` snapshots.
 - Event pump updates (`apps/root-task/src/event/mod.rs`) to update ingest metrics without heap allocation; telemetry forwarded through generated providers.
-- Unit tests covering metric counters and ensuring no allocations on hot paths; CLI regression `tests/cli/observe_watch.cohsh` tails `/proc/ingest/watch` verifying stable grammar.
+- Unit tests covering metric counters and ensuring no allocations on hot paths; CLI regression `scripts/cohsh/observe_watch.coh` tails `/proc/ingest/watch` verifying stable grammar.
+- TODO: Implement scripts/cohsh/observe_watch.coh and add it to regression pack DoD.
 - Manifest IR v1.3 fields: `observability.proc_9p` and `observability.proc_ingest` enabling individual nodes and documenting retention policies. Validation enforces bounded buffer sizes.
 - Docs: `docs/SECURITY.md` gains monitoring appendix sourced from manifest snippets; `docs/INTERFACES.md` documents output grammar.
 
@@ -1234,7 +1242,7 @@ Expose audit-friendly observability nodes under `/proc` generated from the manif
 - `cargo test -p nine-door`
 - `cargo test -p root-task`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/observe_watch.cohsh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/observe_watch.coh`
 
 **Checks (DoD)**
 - Stress harness records accurate counters; metrics exported via `/proc` match expected values within tolerance.
@@ -1266,12 +1274,12 @@ Deliverables:
 
 Title/ID: m16-cli-regressions
 Goal: Validate CLI grammar and negative cases for observability nodes.
-Inputs: tests/cli/observe_watch.cohsh.
+Inputs: scripts/cohsh/observe_watch.coh.
 Changes:
-  - tests/cli/observe_watch.cohsh — tail watch node, induce back-pressure, request unsupported node to assert ERR.
+  - scripts/cohsh/observe_watch.coh — tail watch node, induce back-pressure, request unsupported node to assert ERR.
   - docs/SECURITY.md — capture latency/metric tolerances.
 Commands:
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/observe_watch.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/observe_watch.coh
 Checks:
   - Unsupported node returns deterministic ERR; watch grammar matches golden; back-pressure logs recorded.
 Deliverables:
@@ -1289,9 +1297,11 @@ Provide CAS-backed update distribution via NineDoor with compiler-enforced integ
 **Deliverables**
 - `apps/nine-door/src/host/cas.rs` implementing a CAS provider exposing `/updates/<epoch>/{manifest.cbor,chunks/<hash>}` with optional delta packs. Provider enforces SHA-256 chunk integrity and optional Ed25519 signatures when manifest enables `cas.signing`.
 - Host tooling `apps/cas-tool/` (new crate) packaging update bundles, generating manifests, and uploading via Secure9P.
-- CLI regression `tests/cli/cas_roundtrip.cohsh` verifying download resume, signature enforcement, and delta replay.
+- CLI regression `scripts/cohsh/cas_roundtrip.coh` verifying download resume, signature enforcement, and delta replay.
+- TODO: Implement scripts/cohsh/cas_roundtrip.coh and add it to regression pack DoD.
 - Models as CAS (registry semantics via files, no new service): expose `/models/<sha256>/{weights,schema,signature}` backed by the same CAS provider; include doc example binding a model into a worker namespace via mount/bind.
-- CLI regression `tests/cli/model_cas_bind.cohsh` uploads a dummy model bundle, verifies hash, and binds it into a worker namespace.
+- CLI regression `scripts/cohsh/model_cas_bind.coh` uploads a dummy model bundle, verifies hash, and binds it into a worker namespace.
+- TODO: Implement scripts/cohsh/model_cas_bind.coh and add it to regression pack DoD.
 - Manifest IR v1.4 fields: `cas.enable`, `cas.store.chunk_bytes`, `cas.delta.enable`, `cas.signing.key_path`. Validation ensures chunk size ≤ negotiated `msize` and signing keys present when required.
 - Docs: `docs/INTERFACES.md` describes CAS grammar, delta rules, and operational runbooks sourced from compiler output; `docs/SECURITY.md` records threat model.
 
@@ -1299,8 +1309,8 @@ Provide CAS-backed update distribution via NineDoor with compiler-enforced integ
 - `cargo test -p nine-door`
 - `cargo test -p cas-tool`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/cas_roundtrip.cohsh`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/model_cas_bind.cohsh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/cas_roundtrip.coh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/model_cas_bind.coh`
 
 **Checks (DoD)**
 - Resume logic validated via regression script; delta application is idempotent and verified by hashing installed payloads before/after.
@@ -1334,15 +1344,15 @@ Deliverables:
 
 Title/ID: m17-cas-regressions
 Goal: Validate end-to-end CAS roundtrip and model binding.
-Inputs: tests/cli/cas_roundtrip.cohsh, tests/cli/model_cas_bind.cohsh, apps/cas-tool/.
+Inputs: scripts/cohsh/cas_roundtrip.coh, scripts/cohsh/model_cas_bind.coh, apps/cas-tool/.
 Changes:
   - apps/cas-tool/src/main.rs — bundle creation, manifest generation, upload helper.
-  - tests/cli/cas_roundtrip.cohsh — resume + signature paths including negative signature case.
-  - tests/cli/model_cas_bind.cohsh — bind model into worker namespace and assert read-only.
+  - scripts/cohsh/cas_roundtrip.coh — resume + signature paths including negative signature case.
+  - scripts/cohsh/model_cas_bind.coh — bind model into worker namespace and assert read-only.
 Commands:
   - cargo test -p cas-tool
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/cas_roundtrip.cohsh
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/model_cas_bind.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/cas_roundtrip.coh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/model_cas_bind.coh
 Checks:
   - Replay after interruption resumes without duplication; signature failure returns deterministic ERR and audit.
 Deliverables:
@@ -1409,7 +1419,7 @@ Changes:
   - apps/root-task/src/generated/bootstrap.rs — include attestation descriptors for VM parity.
 Commands:
   - scripts/qemu-run.sh --uefi --console serial --tcp-port 31337
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/boot_v0.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh
 Checks:
   - Attestation failure aborts boot with audit; successful quote hash matches manifest fingerprint; VM vs hardware outputs compared.
 Deliverables:
@@ -1430,6 +1440,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 - Scheduling integration for LoRa duty-cycle management and tamper logging, aligned with `docs/USE_CASES.md` defense and science requirements.
 - Compiler IR v1.5 fields `sidecars.modbus`, `sidecars.dnp3`, `sidecars.lora` describing mounts, baud/link settings, and capability scopes; validation ensures resources stay within event-pump budget.
 - Documentation updates (`docs/ARCHITECTURE.md §12`, `docs/INTERFACES.md`) illustrating the sidecar pattern, security boundaries, and testing strategy.
+- TODO: Implement scripts/cohsh/sidecar_integration.coh and add it to regression pack DoD.
 
 **Use-case alignment**
 - Industrial IoT gateways (Edge §1) gain MODBUS/CAN integration without bloating the VM.
@@ -1439,7 +1450,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 **Commands**
 - `cargo test -p worker-bus -p worker-lora`
 - `cargo test -p sidecar-bus --features modbus,dnp3`
-- `cohsh --script tests/cli/sidecar_integration.coh`
+- `cohsh --script scripts/cohsh/sidecar_integration.coh`
 
 **Checks (DoD)**
 - Sidecars operate within declared capability scopes; attempts to access undeclared mounts are rejected and logged.
@@ -1471,12 +1482,12 @@ Deliverables:
 
 Title/ID: m19-cli-regressions
 Goal: Validate manifest-gated mounts and offline spooling behaviour.
-Inputs: tests/cli/sidecar_integration.coh, Regression Pack.
+Inputs: scripts/cohsh/sidecar_integration.coh, Regression Pack.
 Changes:
-  - tests/cli/sidecar_integration.coh — mount enable/disable checks, offline spool replay, unauthorized write attempt.
+  - scripts/cohsh/sidecar_integration.coh — mount enable/disable checks, offline spool replay, unauthorized write attempt.
   - docs/SECURITY.md — note on namespace collision avoidance via hash-prefix.
 Commands:
-  - cohsh --script tests/cli/sidecar_integration.coh
+  - cohsh --script scripts/cohsh/sidecar_integration.coh
 Checks:
   - Disabled manifest hides mounts; offline spool flushes deterministically; unauthorized write produces ERR and audit.
 Deliverables:
@@ -1498,7 +1509,7 @@ Publish a reusable `cohsh-core` crate with shared verb grammar and transports th
 **Commands**
 - `cargo test -p cohsh-core`
 - `cargo test -p cohsh --tests`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/boot_v0.cohsh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh`
 
 **Checks (DoD)**
 - Console (serial/TCP) ≡ `cohsh` CLI ≡ `cohsh-core` tests (byte-for-byte ACK/ERR/END); regression harness compares transcripts.
@@ -1513,7 +1524,7 @@ Publish a reusable `cohsh-core` crate with shared verb grammar and transports th
 ```
 Title/ID: m20a-core-crate
 Goal: Extract shared verb grammar and transports into cohsh-core.
-Inputs: apps/cohsh/src/lib.rs existing grammar, tests/cli/boot_v0.cohsh fixtures.
+Inputs: apps/cohsh/src/lib.rs existing grammar, scripts/cohsh/boot_v0.coh fixtures.
 Changes:
   - crates/cohsh-core/lib.rs — verb parser, ACK/ERR model, smoltcp TCP transport feature.
   - apps/cohsh/src/lib.rs — refactor to consume cohsh-core.
@@ -1527,12 +1538,12 @@ Deliverables:
 
 Title/ID: m20a-transcript-harness
 Goal: Ensure transcript parity across console/TCP/core transports.
-Inputs: tests/cli/boot_v0.cohsh, new tests in crates/cohsh-core/tests/transcripts.rs.
+Inputs: scripts/cohsh/boot_v0.coh, new tests in crates/cohsh-core/tests/transcripts.rs.
 Changes:
   - crates/cohsh-core/tests/transcripts.rs — compare serial vs TCP vs in-process transcripts.
   - scripts/regression/transcript_diff.sh — automated diff runner (if existing harness, extend).
 Commands:
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/boot_v0.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh
   - cargo test -p cohsh-core --test transcripts
 Checks:
   - Transcript diff produces zero-byte delta; abuse case with throttled login emits ERR and matches across transports.
@@ -1556,8 +1567,8 @@ Refactor `cohsh` into a reusable 9P client library with helpers for control verb
 
 **Commands**
 - `cargo test -p cohsh --test client_lib`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/session_pool.cohsh`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/boot_v0.cohsh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/session_pool.coh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh`
 
 **Checks (DoD)**
 - `tail()` stream over 9P matches console stream identically; diff harness reports zero variance.
@@ -1578,7 +1589,7 @@ Changes:
   - apps/cohsh/src/queen.rs — spawn/kill/budget helpers wrapping JSON writes.
 Commands:
   - cargo test -p cohsh --test client_lib
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/boot_v0.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh
 Checks:
   - Walking `..` or disabled namespace returns ERR; tail stream matches console transcript.
 Deliverables:
@@ -1586,12 +1597,12 @@ Deliverables:
 
 Title/ID: m20b-replay-harness
 Goal: Replay sessions over 9P and compare to console baselines.
-Inputs: tests/cli/session_pool.cohsh, new regression harness for 9P replay.
+Inputs: scripts/cohsh/session_pool.coh, new regression harness for 9P replay.
 Changes:
-  - tests/cli/session_pool.cohsh — add 9P-only replay path and abuse case for forbidden walk.
+  - scripts/cohsh/session_pool.coh — add 9P-only replay path and abuse case for forbidden walk.
   - scripts/regression/client_vs_console.sh — compares ACK/ERR across transports.
 Commands:
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/session_pool.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/session_pool.coh
 Checks:
   - Replay harness shows zero diff between 9P and console outputs; abuse case logs ERR without side effects.
 Deliverables:
@@ -1614,8 +1625,8 @@ Expose UI-friendly read-only providers under NineDoor with cursor-resume semanti
 
 **Commands**
 - `cargo test -p nine-door --test ui_providers`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/observe_watch.cohsh`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/cas_roundtrip.cohsh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/observe_watch.coh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/cas_roundtrip.coh`
 
 **Checks (DoD)**
 - Each provider ≤ 8192 bytes per 9P read; larger outputs must be cursor-resumed over multiple reads with deterministic EOF; fuzzed frames don’t panic or allocate unboundedly.
@@ -1635,7 +1646,7 @@ Changes:
   - apps/nine-door/src/host/policy.rs — /policy/preflight providers with diff output.
 Commands:
   - cargo test -p nine-door --test ui_providers
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/observe_watch.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/observe_watch.coh
 Checks:
   - Disabled provider returns ERR; read beyond 32 KiB rejected; fuzz harness passes without panics.
 Deliverables:
@@ -1643,12 +1654,12 @@ Deliverables:
 
 Title/ID: m20c-updates-status
 Goal: Surface update status for UI consumption via NineDoor.
-Inputs: apps/nine-door/src/host/cas.rs status hooks, tests/cli/cas_roundtrip.cohsh.
+Inputs: apps/nine-door/src/host/cas.rs status hooks, scripts/cohsh/cas_roundtrip.coh.
 Changes:
   - apps/nine-door/src/host/cas.rs — expose /updates/<epoch>/{manifest.cbor,status} read-only nodes.
-  - tests/cli/cas_roundtrip.cohsh — add status fetch and disabled-provider abuse case.
+  - scripts/cohsh/cas_roundtrip.coh — add status fetch and disabled-provider abuse case.
 Commands:
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/cas_roundtrip.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/cas_roundtrip.coh
 Checks:
   - Status node respects cursor resume; disabled updates return ERR without touching CAS store.
 Deliverables:
@@ -1678,7 +1689,7 @@ SwarmUI is a thin presentation layer only: all protocol semantics, state machine
 **Commands**
 - `cargo test -p cohsh-core`
 - `cargo test -p swarmui`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/telemetry_ring.cohsh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh`
 
 **Checks (DoD)**
 - UI renders telemetry with exact `OK …` then stream and terminates with `END`; transcript matches CLI byte-for-byte.
@@ -1694,13 +1705,13 @@ SwarmUI is a thin presentation layer only: all protocol semantics, state machine
 ```
 Title/ID: m20d-ui-backend
 Goal: Wire SwarmUI backend to cohsh-core with 9P-only transport and per-ticket sessions.
-Inputs: apps/swarmui/src-tauri/, crates/cohsh-core, tests/cli/telemetry_ring.cohsh.
+Inputs: apps/swarmui/src-tauri/, crates/cohsh-core, scripts/cohsh/telemetry_ring.coh.
 Changes:
 - apps/swarmui/src-tauri/main.rs — session management (per ticket), ticket auth, telemetry tail via cohsh-core.
 - apps/swarmui/Cargo.toml — ensure no HTTP/REST deps; enable bounded offline cache feature.
 Commands:
 - cargo test -p swarmui
-- cargo run -p cohsh –-features tcp – –transport tcp –script tests/cli/telemetry_ring.cohsh
+- cargo run -p cohsh –-features tcp – –transport tcp –script scripts/cohsh/telemetry_ring.coh
 Checks:
 - Unauthorized ticket returns ERR surfaced verbatim in UI; offline mode reads CBOR snapshot only.
 Deliverables:
@@ -1925,8 +1936,8 @@ Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection 
 
 **Commands**
 - `cargo build -p coh-status`
-- `cargo run -p coh-status -- --script tests/cli/boot_v0.cohsh`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/telemetry_ring.cohsh`
+- `cargo run -p coh-status -- --script scripts/cohsh/boot_v0.coh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh`
 
 **Checks (DoD)**
 - Works offline; wrong/expired ticket → deterministic `ERR reason=Permission` surfaced to user.
@@ -1947,7 +1958,7 @@ Changes:
   - apps/coh-status/tests/offline.rs — simulate offline read and expired ticket.
 Commands:
   - cargo build -p coh-status
-  - cargo run -p coh-status -- --script tests/cli/boot_v0.cohsh
+  - cargo run -p coh-status -- --script scripts/cohsh/boot_v0.coh
 Checks:
   - Expired ticket returns ERR; offline cache used when transport unavailable.
 Deliverables:
@@ -1961,7 +1972,7 @@ Changes:
   - shared CBOR decoder module reused from SwarmUI/cohsh-core.
 Commands:
   - cargo test -p coh-status --test attest
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/telemetry_ring.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh
 Checks:
   - Malformed attestation rejected with ERR; valid attestation matches manifest hash identically to SwarmUI.
 Deliverables:
@@ -2044,7 +2055,7 @@ Add ticket-scoped quotas and audit metrics for UI interactions without altering 
 **Commands**
 - `cargo test -p nine-door --test ui_security`
 - `cargo test -p cohsh-core`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/telemetry_ring.cohsh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh`
 
 **Checks (DoD)**
 - Write with read-only ticket → `ERR EPERM` across all transports; denial audited.
@@ -2072,12 +2083,12 @@ Deliverables:
 
 Title/ID: m20g-cli-ui-regressions
 Goal: Validate quota enforcement across CLI and UI clients.
-Inputs: tests/cli/telemetry_ring.cohsh (extended), SwarmUI/coh-status regression hooks.
+Inputs: scripts/cohsh/telemetry_ring.coh (extended), SwarmUI/coh-status regression hooks.
 Changes:
-  - tests/cli/telemetry_ring.cohsh — add read-only ticket write attempt and quota exhaustion loop.
+  - scripts/cohsh/telemetry_ring.coh — add read-only ticket write attempt and quota exhaustion loop.
   - apps/swarmui/tests/security.rs — mirror quota abuse from UI.
 Commands:
-  - cargo run -p cohsh --features tcp -- --transport tcp --script tests/cli/telemetry_ring.cohsh
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh
   - cargo test -p swarmui --test security
 Checks:
   - ERR EPERM/ELIMIT identical across transports; metrics observed in /proc/ingest/watch.
@@ -2285,14 +2296,15 @@ To prevent drift:
 
 5. **Regression Pack (post–Milestone 7c)**
    - From Milestone 8 onward, any change that lands **MUST** re-run the shared regression pack from earlier milestones, not just new tests.
+   - Note: `.coh` scripts live in `scripts/cohsh/` and follow `docs/USERLAND_AND_CLI.md`.
    - The regression pack includes at minimum:
      - `tests/integration/qemu_tcp_console.rs` (Milestone 7 TCP console flow).
-     - `tests/cli/boot_v0.cohsh` (baseline help/attach/log/quit script from the manifest compiler).
+     - `scripts/cohsh/boot_v0.coh` (baseline help/attach/log/quit script from the manifest compiler).
      - `tests/cli/tracefs_script.sh` (TraceFS JSONL flows).
-     - `tests/cli/9p_batch.cohsh` (Secure9P batching).
-     - `tests/cli/telemetry_ring.cohsh` (telemetry rings & cursor resumption).
-     - `tests/cli/observe_watch.cohsh` (observability `/proc` grammar).
-     - `tests/cli/cas_roundtrip.cohsh` (CAS update round-trip).
+     - `scripts/cohsh/9p_batch.coh` (Secure9P batching).
+     - `scripts/cohsh/telemetry_ring.coh` (telemetry rings & cursor resumption).
+     - `scripts/cohsh/observe_watch.coh` (observability `/proc` grammar).
+     - `scripts/cohsh/cas_roundtrip.coh` (CAS update round-trip).
    - CI for each Milestone ≥ 8 must:
      - Run the full regression pack unchanged and fail on any output drift (including ACK/ERR/END lines, `/proc` grammars, and telemetry formats).
      - Only permit intentional behaviour changes when the relevant CLI scripts, doc snippets, and manifest fields are updated **in the same change**.
@@ -2300,7 +2312,7 @@ To prevent drift:
 
 6. **Cross-Milestone Stability Rules**
    - Changes to console ACK/ERR/END grammar, NineDoor error codes, or `/proc` node formats MUST be treated as breaking changes and require:
-     - (a) matching updates to all CLI fixtures under `tests/cli/*`,
+     - (a) matching updates to all CLI fixtures under `scripts/cohsh/*`,
      - (b) regeneration of manifest-derived snippets,
      - (c) explicit doc updates in `INTERFACES.md`, and
      - (d) a version bump of the manifest schema.

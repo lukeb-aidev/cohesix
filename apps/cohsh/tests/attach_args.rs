@@ -27,6 +27,14 @@ impl Transport for RecordingTransport {
         unimplemented!("tail not expected in attach tests")
     }
 
+    fn read(&mut self, _session: &cohsh::Session, _path: &str) -> anyhow::Result<Vec<String>> {
+        unimplemented!("read not expected in attach tests")
+    }
+
+    fn list(&mut self, _session: &cohsh::Session, _path: &str) -> anyhow::Result<Vec<String>> {
+        unimplemented!("list not expected in attach tests")
+    }
+
     fn write(
         &mut self,
         _session: &cohsh::Session,

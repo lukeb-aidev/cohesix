@@ -1,7 +1,8 @@
 # Author: Lukas Bower
-# Purpose: Boot smoke using basic cohsh commands after attach.
-help
-EXPECT SUBSTR quit
-ping
+# Purpose: Boot smoke using attach/log/quit flows.
+attach queen
 EXPECT OK
+log
+EXPECT OK
+WAIT 250
 quit

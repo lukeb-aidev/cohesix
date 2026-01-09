@@ -62,7 +62,9 @@ fn tcp_script_executes_against_basic_server() {
     let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("tests/cli/tcp_basic.cohsh");
+        .join("scripts")
+        .join("cohsh")
+        .join("tcp_basic.coh");
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cohsh"));
     let assert = cmd
         .arg("--transport")
@@ -93,7 +95,9 @@ fn tcp_script_reports_connection_failure() {
     let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("tests/cli/tcp_basic.cohsh");
+        .join("scripts")
+        .join("cohsh")
+        .join("tcp_basic.coh");
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cohsh"));
     let assert = cmd
         .arg("--transport")

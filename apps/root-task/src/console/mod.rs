@@ -38,6 +38,7 @@ pub const MAX_TICKET_LEN: usize = 128;
 const MAX_PATH_LEN: usize = 96;
 const MAX_JSON_LEN: usize = 192;
 const MAX_ID_LEN: usize = 32;
+const MAX_ECHO_LEN: usize = 96;
 
 const MAX_FAILED_LOGINS: u32 = 3;
 const RATE_LIMIT_WINDOW_MS: u64 = 60_000;
@@ -58,6 +59,16 @@ pub enum Command {
     },
     Tail {
         path: String<MAX_PATH_LEN>,
+    },
+    Cat {
+        path: String<MAX_PATH_LEN>,
+    },
+    Ls {
+        path: String<MAX_PATH_LEN>,
+    },
+    Echo {
+        path: String<MAX_PATH_LEN>,
+        payload: String<MAX_ECHO_LEN>,
     },
     Log,
     Quit,
@@ -324,6 +335,9 @@ impl CohesixConsole {
             }
             Command::Attach { .. }
             | Command::Tail { .. }
+            | Command::Cat { .. }
+            | Command::Ls { .. }
+            | Command::Echo { .. }
             | Command::Spawn(_)
             | Command::Kill(_) => self.emit_line("command not implemented"),
         }
@@ -489,6 +503,51 @@ impl CommandParser {
                     .map_err(|_| ConsoleError::ValueTooLong("path"))?;
                 Ok(Command::Tail { path: owned })
             }
+            v if v.eq_ignore_ascii_case("cat") => {
+                if remainder.is_empty() {
+                    return Err(ConsoleError::MissingArgument("path"));
+                }
+                let path = remainder.split_whitespace().next().unwrap();
+                let mut owned = String::new();
+                owned
+                    .push_str(path)
+                    .map_err(|_| ConsoleError::ValueTooLong("path"))?;
+                Ok(Command::Cat { path: owned })
+            }
+            v if v.eq_ignore_ascii_case("ls") => {
+                if remainder.is_empty() {
+                    return Err(ConsoleError::MissingArgument("path"));
+                }
+                let path = remainder.split_whitespace().next().unwrap();
+                let mut owned = String::new();
+                owned
+                    .push_str(path)
+                    .map_err(|_| ConsoleError::ValueTooLong("path"))?;
+                Ok(Command::Ls { path: owned })
+            }
+            v if v.eq_ignore_ascii_case("echo") => {
+                if remainder.is_empty() {
+                    return Err(ConsoleError::MissingArgument("path"));
+                }
+                let mut echo_parts = remainder.splitn(2, char::is_whitespace);
+                let path = echo_parts.next().unwrap();
+                let payload = echo_parts.next().unwrap_or("").trim_start();
+                if payload.is_empty() {
+                    return Err(ConsoleError::MissingArgument("payload"));
+                }
+                let mut path_buf = String::new();
+                path_buf
+                    .push_str(path)
+                    .map_err(|_| ConsoleError::ValueTooLong("path"))?;
+                let mut payload_buf = String::new();
+                payload_buf
+                    .push_str(payload)
+                    .map_err(|_| ConsoleError::ValueTooLong("payload"))?;
+                Ok(Command::Echo {
+                    path: path_buf,
+                    payload: payload_buf,
+                })
+            }
             v if v.eq_ignore_ascii_case("attach") => {
                 if remainder.is_empty() {
                     return Err(ConsoleError::MissingArgument("role"));
@@ -572,6 +631,36 @@ mod tests {
         let cmd = parse("tail /log/queen.log\n").unwrap();
         match cmd {
             Command::Tail { path } => assert_eq!(path.as_str(), "/log/queen.log"),
+            other => panic!("unexpected command {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cat_accepts_paths() {
+        let cmd = parse("cat /log/queen.log\n").unwrap();
+        match cmd {
+            Command::Cat { path } => assert_eq!(path.as_str(), "/log/queen.log"),
+            other => panic!("unexpected command {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ls_accepts_paths() {
+        let cmd = parse("ls /log\n").unwrap();
+        match cmd {
+            Command::Ls { path } => assert_eq!(path.as_str(), "/log"),
+            other => panic!("unexpected command {other:?}"),
+        }
+    }
+
+    #[test]
+    fn echo_accepts_path_and_payload() {
+        let cmd = parse("echo /log/queen.log hello-world\n").unwrap();
+        match cmd {
+            Command::Echo { path, payload } => {
+                assert_eq!(path.as_str(), "/log/queen.log");
+                assert_eq!(payload.as_str(), "hello-world");
+            }
             other => panic!("unexpected command {other:?}"),
         }
     }

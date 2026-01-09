@@ -824,6 +824,45 @@ impl TcpTransport {
         line.trim_end_matches(['\r', '\n']).to_owned()
     }
 
+    fn stream_command(&mut self, verb: &str, path: &str) -> Result<Vec<String>> {
+        let command = format!("{verb} {path}");
+        let mut attempts = 0usize;
+        let mut lines = Vec::new();
+        loop {
+            self.send_line(&command)?;
+            loop {
+                match self.next_protocol_line()? {
+                    Some(response) => {
+                        if self.record_ack(&response) {
+                            if response.starts_with("ERR") {
+                                lines.clear();
+                                return Ok(lines);
+                            }
+                            continue;
+                        }
+                        if response == "END" {
+                            return Ok(lines);
+                        }
+                        if response.starts_with("ERR") {
+                            return Err(anyhow!("{verb} failed: {response}"));
+                        }
+                        lines.push(response);
+                    }
+                    None => {
+                        attempts += 1;
+                        if attempts > self.max_retries {
+                            return Err(anyhow!(
+                                "connection dropped repeatedly while running {verb} {path}"
+                            ));
+                        }
+                        self.recover_session()?;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     fn record_ack(&mut self, line: &str) -> bool {
         let Some(ack) = parse_ack(line) else {
             return false;
@@ -979,12 +1018,12 @@ impl Transport for TcpTransport {
                             return Ok("pong".to_owned());
                         }
                         if response.starts_with("ERR PING") {
-                            return Err(anyhow!("ping failed: {response}"));
+                            return Ok("err".to_owned());
                         }
                         continue;
                     }
                     if response.eq_ignore_ascii_case("PONG") {
-                        return Ok("pong".to_owned());
+                        continue;
                     }
                 }
                 None => {
@@ -999,48 +1038,51 @@ impl Transport for TcpTransport {
     }
 
     fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
-        let command = format!("TAIL {path}");
-        let mut attempts = 0usize;
-        let mut lines = Vec::new();
-        loop {
-            self.send_line(&command)?;
-            loop {
-                match self.next_protocol_line()? {
-                    Some(response) => {
-                        if self.record_ack(&response) {
-                            if response.starts_with("ERR") {
-                                return Err(anyhow!("tail failed: {response}"));
-                            }
-                            continue;
-                        }
-                        if response == "END" {
-                            return Ok(lines);
-                        }
-                        if response.starts_with("ERR") {
-                            return Err(anyhow!("tail failed: {response}"));
-                        }
-                        lines.push(response);
-                    }
-                    None => {
-                        attempts += 1;
-                        if attempts > self.max_retries {
-                            return Err(anyhow!(
-                                "connection dropped repeatedly while tailing {path}"
-                            ));
-                        }
-                        self.recover_session()?;
-                        break;
-                    }
-                }
-            }
-        }
+        self.stream_command("TAIL", path)
+    }
+
+    fn read(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+        self.stream_command("CAT", path)
+    }
+
+    fn list(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+        self.stream_command("LS", path)
     }
 
     fn write(&mut self, _session: &Session, path: &str, payload: &[u8]) -> Result<()> {
-        let line = String::from_utf8(payload.to_vec()).context("payload must be UTF-8")?;
-        Err(anyhow!(
-            "writes are not yet supported over the TCP transport (path: {path}, payload: {line})"
-        ))
+        let payload_str = std::str::from_utf8(payload).context("payload must be UTF-8")?;
+        let trimmed = payload_str.strip_suffix('\n').unwrap_or(payload_str);
+        if trimmed.contains('\n') || trimmed.contains('\r') {
+            return Err(anyhow!("echo payload must be a single line"));
+        }
+        let command = if trimmed.is_empty() {
+            format!("ECHO {path}")
+        } else {
+            format!("ECHO {path} {trimmed}")
+        };
+        let mut attempts = 0usize;
+        loop {
+            self.send_line(&command)?;
+            match self.next_protocol_line()? {
+                Some(response) => {
+                    if self.record_ack(&response) {
+                        return Ok(());
+                    }
+                    if response.starts_with("ERR") {
+                        return Err(anyhow!("echo failed: {response}"));
+                    }
+                }
+                None => {
+                    attempts += 1;
+                    if attempts > self.max_retries {
+                        return Err(anyhow!(
+                            "connection dropped repeatedly while writing to {path}"
+                        ));
+                    }
+                    self.recover_session()?;
+                }
+            }
+        }
     }
 
     fn drain_acknowledgements(&mut self) -> Vec<String> {

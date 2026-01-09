@@ -40,6 +40,17 @@ impl Transport for ScriptTransport {
         Ok(self.tail_lines.clone())
     }
 
+    fn read(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+        if let Some(ack) = self.tail_ack.as_ref() {
+            self.pending_ack.push_back(ack.clone());
+        }
+        Ok(self.tail_lines.clone())
+    }
+
+    fn list(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
     fn write(&mut self, _session: &Session, _path: &str, _payload: &[u8]) -> Result<()> {
         if let Some(ack) = self.write_ack.as_ref() {
             self.pending_ack.push_back(ack.clone());

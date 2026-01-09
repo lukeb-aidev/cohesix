@@ -11,15 +11,15 @@ fn planned_commands_return_stub_message() {
         let transport = NineDoorTransport::new(nine_door::NineDoor::new());
         let mut shell = Shell::new(transport, &mut output);
         shell
-            .execute("ls /")
+            .execute("mount service /mnt")
             .expect("planned command should not error");
         shell
-            .execute("mount service /mnt")
+            .execute("spawn heartbeat")
             .expect("planned command should not error");
     }
     let rendered = String::from_utf8(output).expect("utf8 output");
-    assert!(rendered.contains("'ls' is planned but not implemented"));
     assert!(rendered.contains("'mount' is planned but not implemented"));
+    assert!(rendered.contains("'spawn' is planned but not implemented"));
 }
 
 #[test]

@@ -1,7 +1,8 @@
+# PLACEHOLDER: not implemented until Milestone 16
 # Author: Lukas Bower
-# Purpose: Placeholder observability checks without streaming payloads.
-mount service /mnt
-EXPECT SUBSTR planned but not implemented
-ping
+# Purpose: Placeholder observability checks gated by ERR responses.
+attach queen
 EXPECT OK
+cat /proc/ingest/watch
+EXPECT ERR
 quit

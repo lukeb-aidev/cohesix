@@ -26,6 +26,14 @@ impl Transport for StubTransport {
         unimplemented!("tail not used in ping tests")
     }
 
+    fn read(&mut self, _session: &Session, _path: &str) -> anyhow::Result<Vec<String>> {
+        unimplemented!("read not used in ping tests")
+    }
+
+    fn list(&mut self, _session: &Session, _path: &str) -> anyhow::Result<Vec<String>> {
+        unimplemented!("list not used in ping tests")
+    }
+
     fn write(&mut self, _session: &Session, _path: &str, _payload: &[u8]) -> anyhow::Result<()> {
         unimplemented!("write not used in ping tests")
     }

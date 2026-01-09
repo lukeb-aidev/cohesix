@@ -1292,6 +1292,78 @@ where
                     self.emit_auth_failure("TAIL");
                 }
             }
+            Command::Cat { path } => {
+                if self.ensure_authenticated(SessionRole::Worker) {
+                    let message = format_message(format_args!("console: cat {}", path.as_str()));
+                    self.audit.info(message.as_str());
+                    self.metrics.accepted_commands += 1;
+                    #[cfg(feature = "kernel")]
+                    {
+                        if let Some(bridge_ref) = self.ninedoor.as_mut() {
+                            match bridge_ref.cat(path.as_str()) {
+                                Ok(lines) => {
+                                    let mut summary: HeaplessString<128> =
+                                        HeaplessString::new();
+                                    for (idx, line) in lines.iter().enumerate() {
+                                        if idx > 0 {
+                                            if summary.push('|').is_err() {
+                                                self.emit_ack_err(
+                                                    "CAT",
+                                                    Some("reason=summary-too-long"),
+                                                );
+                                                return Ok(());
+                                            }
+                                        }
+                                        if summary.push_str(line.as_str()).is_err() {
+                                            self.emit_ack_err(
+                                                "CAT",
+                                                Some("reason=summary-too-long"),
+                                            );
+                                            return Ok(());
+                                        }
+                                    }
+                                    let detail = format_message(format_args!(
+                                        "path={} data={}",
+                                        path.as_str(),
+                                        summary.as_str()
+                                    ));
+                                    self.emit_ack_ok("CAT", Some(detail.as_str()));
+                                    for line in lines {
+                                        self.emit_console_line(line.as_str());
+                                    }
+                                    self.stream_end_pending = true;
+                                }
+                                Err(err) => {
+                                    let detail = format_message(format_args!(
+                                        "reason=ninedoor-error error={err}"
+                                    ));
+                                    self.emit_ack_err("CAT", Some(detail.as_str()));
+                                }
+                            }
+                        } else {
+                            self.emit_ack_err("CAT", Some("reason=ninedoor-unavailable"));
+                        }
+                    }
+                    #[cfg(not(feature = "kernel"))]
+                    {
+                        self.emit_ack_err("CAT", Some("reason=ninedoor-unavailable"));
+                    }
+                } else {
+                    self.emit_auth_failure("CAT");
+                }
+            }
+            Command::Ls { path } => {
+                if self.ensure_authenticated(SessionRole::Worker) {
+                    let message =
+                        format_message(format_args!("console: ls {} unsupported", path.as_str()));
+                    self.audit.denied(message.as_str());
+                    self.metrics.denied_commands += 1;
+                    let detail = format_message(format_args!("reason=unsupported path={}", path));
+                    self.emit_ack_err("LS", Some(detail.as_str()));
+                } else {
+                    self.emit_auth_failure("LS");
+                }
+            }
             Command::Log => {
                 if self.ensure_authenticated(SessionRole::Queen) {
                     self.audit.info("console: log stream start");
@@ -1304,6 +1376,46 @@ where
                     }
                 } else {
                     self.emit_auth_failure("LOG");
+                }
+            }
+            Command::Echo { path, payload } => {
+                if self.ensure_authenticated(SessionRole::Queen) {
+                    let message = format_message(format_args!(
+                        "console: echo {} bytes={}",
+                        path.as_str(),
+                        payload.len()
+                    ));
+                    self.audit.info(message.as_str());
+                    self.metrics.accepted_commands += 1;
+                    #[cfg(feature = "kernel")]
+                    {
+                        if let Some(bridge_ref) = self.ninedoor.as_mut() {
+                            match bridge_ref.echo(path.as_str(), payload.as_str()) {
+                                Ok(()) => {
+                                    let detail = format_message(format_args!(
+                                        "path={} bytes={}",
+                                        path.as_str(),
+                                        payload.len()
+                                    ));
+                                    self.emit_ack_ok("ECHO", Some(detail.as_str()));
+                                }
+                                Err(err) => {
+                                    let detail = format_message(format_args!(
+                                        "reason=ninedoor-error error={err}"
+                                    ));
+                                    self.emit_ack_err("ECHO", Some(detail.as_str()));
+                                }
+                            }
+                        } else {
+                            self.emit_ack_err("ECHO", Some("reason=ninedoor-unavailable"));
+                        }
+                    }
+                    #[cfg(not(feature = "kernel"))]
+                    {
+                        self.emit_ack_err("ECHO", Some("reason=ninedoor-unavailable"));
+                    }
+                } else {
+                    self.emit_auth_failure("ECHO");
                 }
             }
             Command::Spawn(payload) => {
@@ -1371,31 +1483,35 @@ where
         };
 
         let bridge = &mut **bridge_ref;
-        let audit = &mut *self.audit;
 
         match command {
             Command::Attach { role, ticket } => {
                 let ticket_str = ticket.as_ref().map(|value| value.as_str());
+                let audit = &mut *self.audit;
                 bridge
                     .attach(role.as_str(), ticket_str, audit)
                     .map_err(|source| CommandDispatchError::Bridge { verb, source })?;
             }
             Command::Tail { path } => {
+                let audit = &mut *self.audit;
                 bridge
                     .tail(path.as_str(), audit)
                     .map_err(|source| CommandDispatchError::Bridge { verb, source })?;
             }
             Command::Log => {
+                let audit = &mut *self.audit;
                 bridge
                     .log_stream(audit)
                     .map_err(|source| CommandDispatchError::Bridge { verb, source })?;
             }
             Command::Spawn(payload) => {
+                let audit = &mut *self.audit;
                 bridge
                     .spawn(payload.as_str(), audit)
                     .map_err(|source| CommandDispatchError::Bridge { verb, source })?;
             }
             Command::Kill(identifier) => {
+                let audit = &mut *self.audit;
                 bridge
                     .kill(identifier.as_str(), audit)
                     .map_err(|source| CommandDispatchError::Bridge { verb, source })?;
@@ -1408,7 +1524,10 @@ where
             | Command::CacheLog { .. }
             | Command::Ping
             | Command::NetTest
-            | Command::NetStats => {
+            | Command::NetStats
+            | Command::Cat { .. }
+            | Command::Echo { .. }
+            | Command::Ls { .. } => {
                 return Err(CommandDispatchError::UnsupportedForNineDoor { verb });
             }
         }
@@ -1587,6 +1706,9 @@ fn proto_role_from_ticket(role: Role) -> ProtoRole {
 pub(crate) enum CommandVerb {
     Attach,
     Tail,
+    Cat,
+    Ls,
+    Echo,
     Log,
     CacheLog,
     Quit,
@@ -1607,6 +1729,9 @@ impl CommandVerb {
         match self {
             Self::Attach => "ATTACH",
             Self::Tail => "TAIL",
+            Self::Cat => "CAT",
+            Self::Ls => "LS",
+            Self::Echo => "ECHO",
             Self::Log => "LOG",
             Self::CacheLog => "CACHELOG",
             Self::Quit => "QUIT",
@@ -1629,6 +1754,9 @@ impl From<&Command> for CommandVerb {
         match command {
             Command::Attach { .. } => Self::Attach,
             Command::Tail { .. } => Self::Tail,
+            Command::Cat { .. } => Self::Cat,
+            Command::Ls { .. } => Self::Ls,
+            Command::Echo { .. } => Self::Echo,
             Command::Log => Self::Log,
             Command::CacheLog { .. } => Self::CacheLog,
             Command::Quit => Self::Quit,

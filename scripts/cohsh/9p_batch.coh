@@ -1,9 +1,13 @@
 # Author: Lukas Bower
-# Purpose: Sequential ping/ack round-trips.
-ping
+# Purpose: Batched append writes and ordered read-back.
+attach queen
 EXPECT OK
-ping
+echo batch-1 > /log/queen.log
 EXPECT OK
-ping
+echo batch-2 > /log/queen.log
 EXPECT OK
+echo batch-3 > /log/queen.log
+EXPECT OK
+cat /log/queen.log
+EXPECT SUBSTR batch-1|batch-2|batch-3
 quit

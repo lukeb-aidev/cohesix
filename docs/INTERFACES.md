@@ -220,8 +220,9 @@ pub trait RootTaskControl {
   - Each console line is encoded as a length-prefixed frame (4-byte little-endian length including the header, followed by the UTF-8 payload).
   - `ATTACH <role> <ticket?>` → `OK ATTACH role=<role>` on success or `ERR ATTACH reason=<cause>` on failure.
   - `TAIL <path>` emits `OK TAIL path=<path>` before newline-delimited log entries; the stream still terminates with `END`.
-  - All other verbs mirror serial behaviour and return a single acknowledgement (`OK LOG`, `ERR SPAWN reason=unauthenticated`, …)
-    before triggering side effects.
+  - `CAT <path>` emits `OK CAT path=<path> data=<summary>` before newline-delimited contents; the stream still terminates with `END`.
+  - `LS <path>` currently returns `ERR LS reason=unsupported path=<path>` until directory listings are exposed.
+  - Other verbs (e.g., `LOG`, `ECHO`, `SPAWN`) mirror serial behaviour and return a single acknowledgement before triggering side effects.
 - `PING` / `PONG` probes keep sessions alive; the client sends `PING` every 15 seconds of inactivity and expects an immediate
     `PONG` even when the server is mid-stream.
   - The TCP console enforces a maximum line length of 128 bytes and rate-limits failed authentication attempts (3 strikes within

@@ -71,32 +71,34 @@ coh>
 ```
 
 Commands and status:
-- `help` – show the command list.【F:apps/cohsh/src/lib.rs†L663-L699】
-- `attach <role> [ticket]` / `login` – attach to a NineDoor session. Valid roles today: `queen`, `worker-heartbeat`; missing roles, unknown roles, too many args, or re-attaching emit errors via the parser and shell.【F:apps/cohsh/src/lib.rs†L572-L592】【F:apps/cohsh/src/lib.rs†L785-L801】
-- `tail <path>` – stream a file; `log` tails `/log/queen.log`. Requires attachment.【F:apps/cohsh/src/lib.rs†L706-L716】
-- `ping` – reports attachment status; errors when detached or when given arguments.【F:apps/cohsh/src/lib.rs†L717-L730】
-- `echo <text> > <path>` – append a newline-terminated payload to an absolute path via NineDoor.【F:apps/cohsh/src/lib.rs†L732-L740】【F:apps/cohsh/src/lib.rs†L803-L817】
-- Planned (not implemented): `ls`, `cat`, `spawn`, `kill`, `bind`, `mount`; the shell prints explicit “planned” errors today.【F:apps/cohsh/src/lib.rs†L700-L705】
-- `quit` – prints `closing session` and exits the shell loop.【F:apps/cohsh/src/lib.rs†L697-L699】
+- `help` – show the command list.【F:apps/cohsh/src/lib.rs†L1125-L1162】
+- `attach <role> [ticket]` / `login` – attach to a NineDoor session. Valid roles today: `queen`, `worker-heartbeat`; missing roles, unknown roles, too many args, or re-attaching emit errors via the parser and shell.【F:apps/cohsh/src/lib.rs†L711-L729】【F:apps/cohsh/src/lib.rs†L1299-L1317】
+- `tail <path>` – stream a file; `log` tails `/log/queen.log`. Requires attachment.【F:apps/cohsh/src/lib.rs†L1170-L1179】
+- `ping` – reports attachment status; errors when detached or when given arguments.【F:apps/cohsh/src/lib.rs†L1181-L1194】
+- `echo <text> > <path>` – append a newline-terminated payload to an absolute path via NineDoor.【F:apps/cohsh/src/lib.rs†L1211-L1222】【F:apps/cohsh/src/lib.rs†L1319-L1332】
+- `ls <path>` – list directory entries; returns deterministic `ERR` when the server does not yet support listings.
+- `cat <path>` – bounded read of file contents.
+- Planned (not implemented): `spawn`, `kill`, `bind`, `mount`; the shell prints explicit “planned” errors today.【F:apps/cohsh/src/lib.rs†L1164-L1168】
+- `quit` – prints `closing session` and exits the shell loop.【F:apps/cohsh/src/lib.rs†L1250-L1252】
 - Attachments are designed so a single queen session (interactive or scripted) can drive orchestration for many workers without switching tools.
 
 Attachment semantics:
 - No role argument → `attach requires a role`.
 - Unknown role string → `unknown role '<x>'`.
 - More than two args → `attach takes at most two arguments: role and optional ticket`.
-- Attempting a second attach without quitting → `already attached; run 'quit' to close the current session`.【F:apps/cohsh/src/lib.rs†L572-L592】【F:apps/cohsh/src/lib.rs†L785-L801】
+- Attempting a second attach without quitting → `already attached; run 'quit' to close the current session`.【F:apps/cohsh/src/lib.rs†L711-L717】
 
 Connection handling (TCP transport):
-- Successful connect logs `[cohsh][tcp] connected to <host>:<port> (connects=N)` before presenting the prompt.【F:apps/cohsh/src/transport/tcp.rs†L43-L50】
-- Disconnects log `[cohsh][tcp] connection lost: …` and trigger reconnect attempts with incremental back-off, emitting `[cohsh][tcp] reconnect attempt #<n> …`. The shell remains usable in interactive mode; in `--script` mode errors propagate and stop the run.【F:apps/cohsh/src/transport/tcp.rs†L52-L63】
+- Successful connect logs `[cohsh][tcp] connected to <host>:<port> (connects=N)` before presenting the prompt.【F:apps/cohsh/src/transport/tcp.rs†L54-L60】
+- Disconnects log `[cohsh][tcp] connection lost: …` and trigger reconnect attempts with incremental back-off, emitting `[cohsh][tcp] reconnect attempt #<n> …`. The shell remains usable in interactive mode; in `--script` mode errors propagate and stop the run.【F:apps/cohsh/src/transport/tcp.rs†L63-L73】
 
 ### Acknowledgements and heartbeats
-- The root-task event pump emits `OK <VERB> [detail]` or `ERR <VERB> reason=<cause>` for every console command, sharing one dispatcher across serial and TCP so both transports see the same lines before any payload (for example, `OK TAIL path=…` precedes streamed data).【F:apps/root-task/src/event/mod.rs†L743-L769】
-- `PING` always yields `PONG` without affecting state, keeping automation healthy when idle, while TCP adds a 15-second heartbeat cadence on top of the shared grammar so the client can detect stalls without blocking serial progress.【F:apps/root-task/src/event/mod.rs†L790-L799】【F:apps/cohsh/src/transport/tcp.rs†L19-L30】
-- `cohsh` parses acknowledgement lines using a shared helper, surfaces details inline with shell output, and preserves the order produced by the root-task dispatcher so scripted `attach`/`tail`/`log` flows match serial transcripts byte-for-byte.【F:apps/cohsh/src/proto.rs†L5-L44】【F:apps/cohsh/src/lib.rs†L581-L605】
+- The root-task event pump emits `OK <VERB> [detail]` or `ERR <VERB> reason=<cause>` for every console command, sharing one dispatcher across serial and TCP so both transports see the same lines before any payload (for example, `OK TAIL path=…` precedes streamed data).【F:apps/root-task/src/event/mod.rs†L1000-L1018】
+- `PING` always yields `PONG` without affecting state, keeping automation healthy when idle, while TCP adds a 15-second heartbeat cadence on top of the shared grammar so the client can detect stalls without blocking serial progress.【F:apps/root-task/src/event/mod.rs†L1170-L1183】【F:apps/cohsh/src/transport/tcp.rs†L21-L24】
+- `cohsh` parses acknowledgement lines using a shared helper, surfaces details inline with shell output, and preserves the order produced by the root-task dispatcher so scripted `attach`/`tail`/`log` flows match serial transcripts byte-for-byte.【F:apps/cohsh/src/proto.rs†L5-L44】【F:apps/cohsh/src/lib.rs†L1036-L1077】
 
 ### Script mode
-`--script <file>` feeds newline-delimited commands; blank lines and lines starting with `#` are ignored. Errors abort the script and bubble up as a non-zero exit.【F:apps/cohsh/src/lib.rs†L594-L605】
+`--script <file>` feeds newline-delimited commands; blank lines and lines starting with `#` are ignored. Errors abort the script and bubble up as a non-zero exit.【F:apps/cohsh/src/lib.rs†L732-L763】
 
 ## coh scripts (.coh)
 ### Purpose
@@ -204,7 +206,7 @@ coh> attach queen
 attached session SessionId(1) as Queen
 coh>
 ```
-Use `log` to stream `/log/queen.log`, `ping` for health, and `tail <path>` for ad-hoc inspection. If the TCP session resets, `cohsh` reports the error and continues in a detached state; reconnects are attempted automatically with back-off in interactive mode.【F:apps/cohsh/src/transport/tcp.rs†L43-L63】
+Use `log` to stream `/log/queen.log`, `ping` for health, and `tail <path>` for ad-hoc inspection. If the TCP session resets, `cohsh` reports the error and continues in a detached state; reconnects are attempted automatically with back-off in interactive mode.【F:apps/cohsh/src/transport/tcp.rs†L54-L73】
 
 ## Scripted Sessions with `--script`
 Example script (`queen.coh`):
@@ -214,16 +216,16 @@ attach queen
 log
 quit
 ```
-Run via `./cohsh --transport tcp --tcp-port 31337 --script queen.coh`. The runner stops on the first error (including connection failures) and propagates the error code to the host shell.【F:apps/cohsh/src/lib.rs†L594-L605】
+Run via `./cohsh --transport tcp --tcp-port 31337 --script queen.coh`. The runner stops on the first error (including connection failures) and propagates the error code to the host shell.【F:apps/cohsh/src/lib.rs†L732-L763】
 
 ## GUI clients
 - A host-side WASM GUI is planned as a hive dashboard. It will speak the same console/NineDoor protocol as `cohsh` (no new verbs, no new in-VM endpoints) and focuses on presentation and workflow rather than new privileges.
 
 ## Debugging TCP Console Issues
 - **Connection refused / wrong port**: confirm QEMU launched with `--transport tcp` and the `hostfwd` rule; the build script prints the expected port.【F:scripts/cohesix-build-run.sh†L521-L553】
-- **Connection reset by peer**: `cohsh` logs the reset and reconnect attempts. Re-run `attach <role>` once the console listener is reachable.【F:apps/cohsh/src/transport/tcp.rs†L43-L63】
+- **Connection reset by peer**: `cohsh` logs the reset and reconnect attempts. Re-run `attach <role>` once the console listener is reachable.【F:apps/cohsh/src/transport/tcp.rs†L63-L73】
 - **Authentication failures**: ensure the `--auth-token` (or `COHSH_AUTH_TOKEN`) matches the listener requirement; the TCP transport defaults to `changeme`.【F:apps/cohsh/src/main.rs†L78-L115】
-- **Serial vs TCP differences**: the root console is independent of the TCP listener—verify liveness with `ping` on the serial console (`cohesix>`) to isolate network issues.【F:apps/root-task/src/console/mod.rs†L224-L299】
+- **Serial vs TCP differences**: the root console is independent of the TCP listener—verify liveness with `ping` on the serial console (`cohesix>`) to isolate network issues.【F:apps/root-task/src/console/mod.rs†L214-L320】
 
 ## Future Root Console Extensions (ideas)
 Not implemented yet, but likely additions for debugging:

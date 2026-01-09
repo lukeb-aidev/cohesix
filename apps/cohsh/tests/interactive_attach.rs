@@ -29,7 +29,9 @@ fn script_mode_propagates_attach_errors() {
     let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("tests/cli/tcp_basic.cohsh");
+        .join("scripts")
+        .join("cohsh")
+        .join("tcp_basic.coh");
     Command::new(assert_cmd::cargo::cargo_bin!("cohsh"))
         .arg("--transport")
         .arg("mock")

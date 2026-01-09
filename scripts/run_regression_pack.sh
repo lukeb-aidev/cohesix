@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
+# Purpose: Run the Milestone ≤8a regression pack with a fresh QEMU per script.
 
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
-cd "$REPO_ROOT"
+cd "${REPO_ROOT}"
 
 OUT_DIR="${OUT_DIR:-out/cohesix}"
 TCP_PORT="${TCP_PORT:-31337}"
@@ -14,18 +15,18 @@ CARGO_TARGET="${CARGO_TARGET:-aarch64-unknown-none}"
 SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-$HOME/seL4/build}"
 STARTUP_TIMEOUT="${STARTUP_TIMEOUT:-120}"
 COHSH_TIMEOUT="${COHSH_TIMEOUT:-20}"
-RUNS="${RUNS:-1}"
-RUN_ID_BASE="${RUN_ID_BASE:-run}"
-RUN_DIR="${OUT_DIR}/tcp_repro"
+RUN_ID="${RUN_ID:-run1}"
+LOG_DIR="${OUT_DIR}/logs"
 QEMU_PIDFILE="${OUT_DIR}/qemu.pid"
 
-QEMU_PID=""
+RUN_DIR="${OUT_DIR}/regression_pack"
 
 ERROR_PATTERNS="virtio: zero sized buffers|virtio: bogus descriptor|entered bad status"
 LISTEN_LINE="TCP console listening on 0.0.0.0:${TCP_PORT}"
 
 OUT_DIR_ABS=""
 CPIO_PATH=""
+QEMU_PID=""
 
 cleanup() {
     stop_qemu
@@ -33,9 +34,10 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "${OUT_DIR}"
+mkdir -p "${LOG_DIR}"
+mkdir -p "${RUN_DIR}"
 OUT_DIR_ABS="$(cd "${OUT_DIR}" && pwd)"
 CPIO_PATH="${OUT_DIR_ABS}/cohesix-system.cpio"
-mkdir -p "${RUN_DIR}"
 
 kill_stale_qemu() {
     local pid
@@ -51,7 +53,7 @@ kill_stale_qemu() {
     fi
 
     if [[ ${#stale_pids[@]} -gt 0 ]]; then
-        echo "[tcp-repro] killing stale QEMU: ${stale_pids[*]}"
+        echo "[regression-pack] killing stale QEMU: ${stale_pids[*]}"
         kill "${stale_pids[@]}" >/dev/null 2>&1 || true
         sleep 1
         for pid in "${stale_pids[@]}"; do
@@ -98,12 +100,12 @@ with open(log_path, "wb") as log:
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     fd = proc.stdout.fileno() if proc.stdout else None
     if fd is None:
-        print(f"[tcp-repro] error: {label} failed to start", file=sys.stderr)
+        print(f"[regression-pack] error: {label} failed to start", file=sys.stderr)
         sys.exit(1)
     while True:
         if time.time() - start > timeout_s:
             proc.kill()
-            print(f"[tcp-repro] error: {label} timed out after {timeout_s}s", file=sys.stderr)
+            print(f"[regression-pack] error: {label} timed out after {timeout_s}s", file=sys.stderr)
             sys.exit(124)
         rlist, _, _ = select.select([fd], [], [], 0.1)
         if rlist:
@@ -127,20 +129,15 @@ with open(log_path, "wb") as log:
 PY
 }
 
-run_once() {
-    local run_idx="$1"
-    local run_id="${RUN_ID_BASE}_${run_idx}"
-    local run_path="${RUN_DIR}/${run_id}"
-    local run_log="${run_path}/run.tcp.log"
-    local cohsh_log="${run_path}/cohsh.tcp.log"
-    rm -rf "${run_path}"
-    mkdir -p "${run_path}"
-    rm -f "${QEMU_PIDFILE}"
+run_qemu_for_script() {
+    local script_name="$1"
+    local qemu_log="${LOG_DIR}/${script_name}.${RUN_ID}.qemu.log"
+    rm -f "${qemu_log}"
 
     stop_qemu
     kill_stale_qemu
 
-    echo "[tcp-repro] starting run ${run_id}"
+    echo "[regression-pack] starting QEMU for ${script_name}"
     SEL4_BUILD_DIR="${SEL4_BUILD_DIR}" \
         "${SCRIPT_DIR}/cohesix-build-run.sh" \
         --sel4-build "${SEL4_BUILD_DIR}" \
@@ -150,83 +147,77 @@ run_once() {
         --cargo-target "${CARGO_TARGET}" \
         --raw-qemu \
         --transport tcp \
-        > >(tee "${run_log}") 2>&1 &
+        > >(tee "${qemu_log}") 2>&1 &
     QEMU_PID=$!
     echo "${QEMU_PID}" > "${QEMU_PIDFILE}"
 
     local deadline=$((SECONDS + STARTUP_TIMEOUT))
     while [[ $SECONDS -lt $deadline ]]; do
-        if rg -q "${ERROR_PATTERNS}" "${run_log}"; then
-            echo "[tcp-repro] error: QEMU reported virtio failure during startup (${run_id})" >&2
+        if rg -q "${ERROR_PATTERNS}" "${qemu_log}"; then
+            echo "[regression-pack] error: QEMU reported virtio failure during startup (${script_name})" >&2
             break
         fi
-        if rg -q "${LISTEN_LINE}" "${run_log}"; then
-            break
+        if rg -q "${LISTEN_LINE}" "${qemu_log}"; then
+            return 0
         fi
         sleep 1
     done
 
-    if rg -q "${ERROR_PATTERNS}" "${run_log}"; then
-        echo "[tcp-repro] error: QEMU reported virtio failure during startup (${run_id})" >&2
-        stop_qemu
+    if rg -q "${ERROR_PATTERNS}" "${qemu_log}"; then
+        echo "[regression-pack] error: QEMU reported virtio failure during startup (${script_name})" >&2
+    else
+        echo "[regression-pack] error: TCP console did not become ready within ${STARTUP_TIMEOUT}s (${script_name})" >&2
+        tail -n 200 "${qemu_log}" >&2 || true
+    fi
+    return 1
+}
+
+run_cohsh_script() {
+    local script_name="$1"
+    local script_path="${SCRIPT_DIR}/cohsh/${script_name}"
+    local cohsh_log="${LOG_DIR}/${script_name}.${RUN_ID}.log"
+    if [[ ! -f "${script_path}" ]]; then
+        echo "[regression-pack] error: missing script ${script_path}" >&2
         return 1
     fi
 
-    if ! rg -q "${LISTEN_LINE}" "${run_log}"; then
-        echo "[tcp-repro] error: TCP console did not become ready within ${STARTUP_TIMEOUT}s (${run_id})" >&2
-        tail -n 200 "${run_log}" >&2 || true
-        stop_qemu
-        return 1
-    fi
-
-    local cohsh_script
-    cohsh_script=$(mktemp)
-    cat >"${cohsh_script}" <<'COMMANDS'
-attach queen
-ping
-quit
-COMMANDS
-
-    if ! run_with_timeout "cohsh (${run_id})" "${COHSH_TIMEOUT}" "${cohsh_log}" \
+    echo "[regression-pack] running ${script_name}"
+    if ! run_with_timeout "cohsh ${script_name}" "${COHSH_TIMEOUT}" "${cohsh_log}" \
         cargo run -p cohsh --features tcp -- \
         --transport tcp \
         --tcp-host 127.0.0.1 \
         --tcp-port "${TCP_PORT}" \
-        --script "${cohsh_script}"; then
-        echo "[tcp-repro] error: cohsh returned non-zero status (${run_id})" >&2
-        tail -n 200 "${cohsh_log}" >&2 || true
-        rm -f "${cohsh_script}"
-        stop_qemu
+        --script "${script_path}"; then
+        echo "[regression-pack] error: ${script_name} failed (log: ${cohsh_log})" >&2
+        rg -n "script failure at line|ERROR|Error:" "${cohsh_log}" >&2 || true
+        tail -n 40 "${cohsh_log}" >&2 || true
         return 1
     fi
-    rm -f "${cohsh_script}"
-
-    if rg -q "${ERROR_PATTERNS}" "${run_log}"; then
-        echo "[tcp-repro] error: QEMU reported virtio failure (${run_id})" >&2
-        stop_qemu
-        return 1
-    fi
-
-    echo "[tcp-repro] summary (${run_id}):"
-    echo "forwarded host port:"
-    rg -n "hostfwd|forwarded|tcp::|tcp-port" "${run_log}" | head -n 1 || true
-    echo "first virtio error:"
-    rg -n "${ERROR_PATTERNS}" "${run_log}" | head -n 1 || true
-    echo "last net-console/virtio-net lines:"
-    rg -n "net-console|virtio-net|virtio:|TCP console" "${run_log}" | tail -n 50 || true
-
-    stop_qemu
-    echo "[tcp-repro] ok: TCP console and cohsh session completed (${run_id})"
+    return 0
 }
 
-run_failures=0
-for run_idx in $(seq 1 "${RUNS}"); do
-    if ! run_once "${run_idx}"; then
-        run_failures=$((run_failures + 1))
+scripts=(
+    "boot_v0.coh"
+    "9p_batch.coh"
+    "telemetry_ring.coh"
+    "observe_watch.coh"
+    "cas_roundtrip.coh"
+)
+
+echo "[regression-pack] running tcp repro harness"
+./scripts/tcp_repro.sh
+
+for script in "${scripts[@]}"; do
+    if ! run_qemu_for_script "${script}"; then
+        stop_qemu
+        exit 1
     fi
+    if ! run_cohsh_script "${script}"; then
+        stop_qemu
+        exit 1
+    fi
+    stop_qemu
+    echo "[regression-pack] ok: ${script}"
 done
 
-if [[ "${run_failures}" -ne 0 ]]; then
-    echo "[tcp-repro] error: ${run_failures} run(s) failed" >&2
-    exit 1
-fi
+echo "[regression-pack] complete: ${#scripts[@]} scripts passed"
