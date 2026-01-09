@@ -6,7 +6,7 @@ Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary d
 **Host:** macOS 26 on Apple Silicon (M4)
 **Target:** QEMU aarch64 `virt` (GICv3)
 **Kernel:** Upstream seL4 (external build)
-**Userspace:** Pure Rust crates (`root-task`, `nine-door`, `worker-heart`, future `worker-gpu`, `gpu-bridge` host tool)
+**Userspace:** Pure Rust crates (`root-task`, `nine-door`, `worker-heart`, future `worker-gpu`, `gpu-bridge-host` host tool)
 
 Physical ARM64 hardware booted via UEFI is the planned deployment environment; early milestones stabilise against QEMU `aarch64/virt` as the reference development and CI profile while preserving semantics for the eventual hardware bring-up.
 
@@ -36,7 +36,7 @@ cross-checks each milestone against the relevant chapters to ensure we remain wi
 - **Chapter 8 (Hardware I/O)** constrains the virtio-console/net interaction surface and informs how we integrate serial/network drivers
   with the kernel’s interrupt/IO model.
 - **Chapters 9 & 10 (System Bootstrapping and API Reference)** describe bootinfo, CPIO loading, and syscall behaviours, underpinning
-  `scripts/qemu-run.sh`, `ci/size_guard.sh`, and all entrypoint work.
+  `scripts/qemu-run.sh`, `scripts/ci/size_guard.sh`, and all entrypoint work.
 
 We revisit these sections whenever we specify new kernel interactions or manifest changes so that documentation and implementations remain aligned.
 
@@ -46,14 +46,14 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
 - `toolchain/setup_macos_arm64.sh` script checking for Homebrew dependencies, rustup, and QEMU - and installing if absent.
 - `scripts/qemu-run.sh` that boots seL4 with externally built `elfloader`, `kernel.elf`, also creates and uses `rootfs.cpio`.
-- `ci/size_guard.sh` enforcing < 4 MiB CPIO payload.
+- `scripts/ci/size_guard.sh` enforcing < 4 MiB CPIO payload.
 - Repository tree matches `docs/REPO_LAYOUT.md`, and architecture notes from `docs/ARCHITECTURE.md §1-§3` are captured in crate
   READMEs or module docs to prevent drift.
 
 **Checks**
 - `cargo check` succeeds for the workspace.
 - `qemu-system-aarch64 --version` reports the expected binary.
-- `ci/size_guard.sh out/rootfs.cpio` rejects oversized archives.
+- `scripts/ci/size_guard.sh out/rootfs.cpio` rejects oversized archives.
 
 ## Milestone 1 — Boot Banner, Timer, & First IPC
 **Status:** Complete — boot banner, timer tick, and initial IPC appear in current boot logs; retain existing log ordering.
@@ -230,7 +230,7 @@ Optional fields:
 Telemetry continues to flow through existing paths:
 
 /gpu/telemetry/*
-/worker//telemetry
+/worker/<id>/telemetry
 
 Constraints:
 - Size-bounded records
