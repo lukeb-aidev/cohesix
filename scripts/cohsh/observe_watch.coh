@@ -1,0 +1,7 @@
+# Author: Lukas Bower
+# Purpose: Placeholder observability checks without streaming payloads.
+mount service /mnt
+EXPECT SUBSTR planned but not implemented
+ping
+EXPECT OK
+quit

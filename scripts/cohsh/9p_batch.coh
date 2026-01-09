@@ -1,0 +1,9 @@
+# Author: Lukas Bower
+# Purpose: Sequential ping/ack round-trips.
+ping
+EXPECT OK
+ping
+EXPECT OK
+ping
+EXPECT OK
+quit

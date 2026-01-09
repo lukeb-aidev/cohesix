@@ -1,0 +1,7 @@
+# Author: Lukas Bower
+# Purpose: Boot smoke using basic cohsh commands after attach.
+help
+EXPECT SUBSTR quit
+ping
+EXPECT OK
+quit

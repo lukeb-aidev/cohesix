@@ -21,7 +21,7 @@ fn interactive_mode_retains_prompt_after_failed_attach() {
             "detached shell: run 'attach <role>' to connect",
         ))
         .stdout(predicate::str::contains("coh> "))
-        .stderr(predicate::str::contains("requires an identity"));
+        .stderr(predicate::str::contains("containing an identity"));
 }
 
 #[test]
@@ -40,5 +40,5 @@ fn script_mode_propagates_attach_errors() {
         .timeout(Duration::from_secs(5))
         .assert()
         .failure()
-        .stderr(predicate::str::contains("requires an identity"));
+        .stderr(predicate::str::contains("containing an identity"));
 }

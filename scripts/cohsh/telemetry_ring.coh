@@ -1,0 +1,8 @@
+# Author: Lukas Bower
+# Purpose: Placeholder ring-style cadence using bounded waits.
+ping
+EXPECT OK
+WAIT 200
+ping
+EXPECT OK
+quit

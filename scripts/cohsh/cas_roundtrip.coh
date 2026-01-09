@@ -1,0 +1,7 @@
+# Author: Lukas Bower
+# Purpose: Placeholder for CAS flows; ensure planned verbs remain gated.
+cat /proc/boot
+EXPECT SUBSTR planned but not implemented
+ls /
+EXPECT SUBSTR planned but not implemented
+quit

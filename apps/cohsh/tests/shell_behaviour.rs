@@ -46,7 +46,7 @@ fn tail_without_session_fails() {
 
 #[test]
 fn script_runner_ignores_commented_lines() {
-    let script = b"# comment\nhelp\n";
+    let script = b"# comment\n\nhelp # inline\n";
     let transport = NineDoorTransport::new(nine_door::NineDoor::new());
     let mut output = Vec::new();
     {

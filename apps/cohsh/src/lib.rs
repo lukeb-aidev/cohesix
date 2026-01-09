@@ -75,6 +75,20 @@ impl Session {
 }
 
 const ROOT_FID: u32 = 1;
+const MAX_SCRIPT_LINES: usize = 256;
+const MAX_SCRIPT_WAIT_MS: u64 = 2000;
+
+fn format_script_error(
+    line_number: usize,
+    line_text: &str,
+    last_response: Option<&str>,
+    reason: &str,
+) -> anyhow::Error {
+    let last = last_response.unwrap_or("<none>");
+    anyhow!(
+        "script failure at line {line_number}: {line_text}\nreason: {reason}\nlast response: {last}"
+    )
+}
 
 /// Transport abstraction used by the shell to interact with the system.
 pub trait Transport {
@@ -574,6 +588,37 @@ pub struct Shell<T: Transport, W: Write> {
     transport: T,
     session: Option<Session>,
     writer: W,
+    script_state: Option<ScriptState>,
+}
+
+#[derive(Debug, Default)]
+struct ScriptState {
+    last_response_line: Option<String>,
+    response_from_ack: bool,
+}
+
+#[derive(Debug)]
+struct ScriptLine {
+    number: usize,
+    text: String,
+}
+
+impl ScriptState {
+    fn begin_command(&mut self) {
+        self.last_response_line = None;
+        self.response_from_ack = false;
+    }
+
+    fn record_output_line(&mut self, line: &str) {
+        if !self.response_from_ack {
+            self.last_response_line = Some(line.to_owned());
+        }
+    }
+
+    fn record_ack_line(&mut self, line: &str) {
+        self.last_response_line = Some(line.to_owned());
+        self.response_from_ack = true;
+    }
 }
 
 impl<T: Transport, W: Write> Shell<T, W> {
@@ -583,13 +628,42 @@ impl<T: Transport, W: Write> Shell<T, W> {
             transport,
             session: None,
             writer,
+            script_state: None,
         }
     }
 
     /// Write a line directly to the shell output.
     pub fn write_line(&mut self, message: &str) -> Result<()> {
-        writeln!(self.writer, "{message}")?;
+        self.write_output_line(message)?;
         Ok(())
+    }
+
+    fn write_output_line(&mut self, message: &str) -> Result<()> {
+        writeln!(self.writer, "{message}")?;
+        if let Some(state) = self.script_state.as_mut() {
+            state.record_output_line(message);
+        }
+        Ok(())
+    }
+
+    fn write_ack_line(&mut self, ack: &str) -> Result<()> {
+        writeln!(self.writer, "[console] {ack}")?;
+        if let Some(state) = self.script_state.as_mut() {
+            state.record_ack_line(ack);
+        }
+        Ok(())
+    }
+
+    fn begin_script_command(&mut self) {
+        if let Some(state) = self.script_state.as_mut() {
+            state.begin_command();
+        }
+    }
+
+    fn script_last_response(&self) -> Option<&str> {
+        self.script_state
+            .as_ref()
+            .and_then(|state| state.last_response_line.as_deref())
     }
 
     fn prompt(&self) -> String {
@@ -606,27 +680,200 @@ impl<T: Transport, W: Write> Shell<T, W> {
         }
         let session = self.transport.attach(role, ticket)?;
         for ack in self.transport.drain_acknowledgements() {
-            writeln!(self.writer, "[console] {ack}")?;
+            self.write_ack_line(&ack)?;
         }
-        writeln!(
-            self.writer,
+        self.write_line(&format!(
             "attached session {:?} as {:?}",
             session.id(),
             session.role()
-        )?;
+        ))?;
         self.session = Some(session);
         Ok(())
     }
 
     /// Execute commands from a buffered reader until EOF or `quit` is encountered.
     pub fn run_script<R: BufRead>(&mut self, reader: R) -> Result<()> {
-        for line in reader.lines() {
-            let line = line?;
-            if line.trim().is_empty() || line.trim_start().starts_with('#') {
+        let mut lines = Vec::new();
+        for (idx, raw_line) in reader.lines().enumerate() {
+            let raw_line = raw_line?;
+            let trimmed = raw_line.trim_end();
+            let without_comment = trimmed
+                .split_once('#')
+                .map(|(before, _)| before)
+                .unwrap_or(trimmed);
+            let text = without_comment.trim();
+            if text.is_empty() {
                 continue;
             }
-            if self.execute(&line)?.eq(&CommandStatus::Quit) {
-                break;
+            lines.push(ScriptLine {
+                number: idx + 1,
+                text: text.to_owned(),
+            });
+            if lines.len() > MAX_SCRIPT_LINES {
+                return Err(format_script_error(
+                    idx + 1,
+                    text,
+                    None,
+                    &format!("script exceeds max of {MAX_SCRIPT_LINES} lines"),
+                ));
+            }
+        }
+
+        self.script_state = Some(ScriptState::default());
+        let result = self.run_script_lines(&lines);
+        self.script_state = None;
+        result
+    }
+
+    fn run_script_lines(&mut self, lines: &[ScriptLine]) -> Result<()> {
+        for entry in lines {
+            let text = entry.text.as_str();
+            let mut parts = text.split_whitespace();
+            let Some(keyword) = parts.next() else {
+                continue;
+            };
+
+            if keyword == "EXPECT" {
+                let rest = text
+                    .strip_prefix("EXPECT")
+                    .unwrap_or(text)
+                    .trim_start();
+                if rest.is_empty() {
+                    return Err(format_script_error(
+                        entry.number,
+                        text,
+                        self.script_last_response(),
+                        "EXPECT requires a selector",
+                    ));
+                }
+                let last = self.script_last_response().ok_or_else(|| {
+                    format_script_error(
+                        entry.number,
+                        text,
+                        None,
+                        "EXPECT requires a prior command response",
+                    )
+                })?;
+                if rest == "OK" {
+                    if !last.starts_with("OK") {
+                        return Err(format_script_error(
+                            entry.number,
+                            text,
+                            Some(last),
+                            "EXPECT OK failed",
+                        ));
+                    }
+                } else if rest == "ERR" {
+                    if !last.starts_with("ERR") {
+                        return Err(format_script_error(
+                            entry.number,
+                            text,
+                            Some(last),
+                            "EXPECT ERR failed",
+                        ));
+                    }
+                } else if let Some(value) = rest.strip_prefix("SUBSTR") {
+                    let needle = value.trim_start();
+                    if needle.is_empty() {
+                        return Err(format_script_error(
+                            entry.number,
+                            text,
+                            Some(last),
+                            "EXPECT SUBSTR requires text",
+                        ));
+                    }
+                    if !last.contains(needle) {
+                        return Err(format_script_error(
+                            entry.number,
+                            text,
+                            Some(last),
+                            "EXPECT SUBSTR failed",
+                        ));
+                    }
+                } else if let Some(value) = rest.strip_prefix("NOT") {
+                    let needle = value.trim_start();
+                    if needle.is_empty() {
+                        return Err(format_script_error(
+                            entry.number,
+                            text,
+                            Some(last),
+                            "EXPECT NOT requires text",
+                        ));
+                    }
+                    if last.contains(needle) {
+                        return Err(format_script_error(
+                            entry.number,
+                            text,
+                            Some(last),
+                            "EXPECT NOT failed",
+                        ));
+                    }
+                } else {
+                    return Err(format_script_error(
+                        entry.number,
+                        text,
+                        Some(last),
+                        "EXPECT selector is invalid",
+                    ));
+                }
+                continue;
+            }
+
+            if keyword == "WAIT" {
+                let rest = text
+                    .strip_prefix("WAIT")
+                    .unwrap_or(text)
+                    .trim_start();
+                let mut args = rest.split_whitespace();
+                let Some(value) = args.next() else {
+                    return Err(format_script_error(
+                        entry.number,
+                        text,
+                        self.script_last_response(),
+                        "WAIT requires milliseconds",
+                    ));
+                };
+                if args.next().is_some() {
+                    return Err(format_script_error(
+                        entry.number,
+                        text,
+                        self.script_last_response(),
+                        "WAIT accepts a single millisecond value",
+                    ));
+                }
+                let millis: u64 = value.parse().map_err(|_| {
+                    format_script_error(
+                        entry.number,
+                        text,
+                        self.script_last_response(),
+                        "WAIT requires a numeric millisecond value",
+                    )
+                })?;
+                if millis > MAX_SCRIPT_WAIT_MS {
+                    return Err(format_script_error(
+                        entry.number,
+                        text,
+                        self.script_last_response(),
+                        &format!("WAIT exceeds max of {MAX_SCRIPT_WAIT_MS}ms"),
+                    ));
+                }
+                thread::sleep(Duration::from_millis(millis));
+                continue;
+            }
+
+            self.begin_script_command();
+            match self.execute(text) {
+                Ok(CommandStatus::Quit) => break,
+                Ok(CommandStatus::Continue) => {}
+                Err(err) => {
+                    let reason = format!("command failed: {err}");
+                    return Err(format_script_error(
+                        entry.number,
+                        text,
+                        self.script_last_response(),
+                        &reason,
+                    ));
+                }
             }
         }
         Ok(())
@@ -638,7 +885,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 Ok(()) => {
                     if auto.auto_log {
                         if let Err(err) = self.tail_path("/log/queen.log") {
-                            writeln!(self.writer, "auto-log failed: {err}")?;
+                            self.write_line(&format!("auto-log failed: {err}"))?;
                         }
                     }
                     *pending = None;
@@ -755,10 +1002,10 @@ impl<T: Transport, W: Write> Shell<T, W> {
             .context("attach to a session before running tail")?;
         let lines = self.transport.tail(session, path)?;
         for ack in self.transport.drain_acknowledgements() {
-            writeln!(self.writer, "[console] {ack}")?;
+            self.write_ack_line(&ack)?;
         }
         for line in lines {
-            writeln!(self.writer, "{line}")?;
+            self.write_line(&line)?;
         }
         Ok(())
     }
@@ -770,7 +1017,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
             .context("attach to a session before running echo")?;
         self.transport.write(session, path, payload)?;
         for ack in self.transport.drain_acknowledgements() {
-            writeln!(self.writer, "[console] {ack}")?;
+            self.write_ack_line(&ack)?;
         }
         Ok(())
     }
@@ -788,19 +1035,19 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 .context("tcp-diag requires a numeric port")?;
         }
         let host = endpoint.0;
-        writeln!(self.writer, "tcp-diag: connecting to {host}:{port}")?;
+        self.write_line(&format!("tcp-diag: connecting to {host}:{port}"))?;
         match TcpStream::connect((host.as_str(), port)) {
             Ok(stream) => {
-                writeln!(self.writer, "tcp-diag: connect succeeded")?;
+                self.write_line("tcp-diag: connect succeeded")?;
                 if let Ok(local) = stream.local_addr() {
-                    writeln!(self.writer, "tcp-diag: local_addr={local}")?;
+                    self.write_line(&format!("tcp-diag: local_addr={local}"))?;
                 }
                 if let Ok(peer) = stream.peer_addr() {
-                    writeln!(self.writer, "tcp-diag: peer_addr={peer}")?;
+                    self.write_line(&format!("tcp-diag: peer_addr={peer}"))?;
                 }
             }
             Err(err) => {
-                writeln!(self.writer, "tcp-diag: connect failed: {err}")?;
+                self.write_line(&format!("tcp-diag: connect failed: {err}"))?;
                 return Err(anyhow!("tcp-diag failed: {err}"));
             }
         }
@@ -870,14 +1117,14 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     return Err(anyhow!("ping does not take any arguments"));
                 }
                 let Some(session) = self.session.as_ref() else {
-                    writeln!(self.writer, "ping: not attached")?;
+                    self.write_line("ping: not attached")?;
                     return Err(anyhow!("ping: not attached"));
                 };
                 let response = self.transport.ping(session)?;
                 for ack in self.transport.drain_acknowledgements() {
-                    writeln!(self.writer, "[console] {ack}")?;
+                    self.write_ack_line(&ack)?;
                 }
-                writeln!(self.writer, "ping: {response}")?;
+                self.write_line(&format!("ping: {response}"))?;
                 Ok(CommandStatus::Continue)
             }
             "tcp-diag" => {
@@ -915,7 +1162,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 Ok(CommandStatus::Continue)
             }
             "quit" => {
-                writeln!(self.writer, "closing session")?;
+                self.write_line("closing session")?;
                 Ok(CommandStatus::Quit)
             }
             unknown => Err(anyhow!("unknown command '{unknown}'")),
