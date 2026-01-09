@@ -26,7 +26,7 @@ commands when switching modes:
 cargo test -p root-task
 
 # Kernel-mode release build for QEMU / aarch64-unknown-none (serial + TCP console)
-cargo build -p root-task --no-default-features --features kernel,bootstrap-trace,serial-console,net,net-console --target aarch64-unknown-none --release
+cargo build -p root-task --no-default-features --features cohesix-dev --target aarch64-unknown-none --release
 
 # Guard to ensure sel4_start is present and milestone modules remain
 scripts/check-root-task.sh <path-to-rootserver-elf>
@@ -63,12 +63,11 @@ production bring-up path expects the following combinations when using
     --release \
     -p root-task \
     --no-default-features \
-    --features kernel,bootstrap-trace,serial-console,net,net-console
+    --features cohesix-dev
   ```
 
-The `net-console` feature already pulls in `net` plus TCP console glue,
-so omitting it disables the virtio network stack and TCP listener even if
-`net` is listed independently.
+`cohesix-dev` pulls in the net-console stack (including `net`) plus the
+QEMU dev profile; omitting it disables the TCP listener and self-tests.
 
 ## Event Pump Overview
 
@@ -205,8 +204,8 @@ stay aligned with the seL4 entry path.
   worker heartbeat/GPU placeholders, allowing authenticated attaches for
   all three roles during QEMU sessions. 【F:apps/root-task/src/kernel.rs†L333-L339】
 - **Networking** — When built with `--no-default-features` and
-  `--features kernel,bootstrap-trace,serial-console,net,net-console` the
-  event pump initialises the virtio-net backed `NetStack`, binds to the
+  `--features cohesix-dev` the event pump initialises the virtio-net
+  backed `NetStack`, binds to the
   static `10.0.0.2/24` address, and listens for TCP console input on
   port `31337`. User-space clients reach the listener via
   `scripts/qemu-run.sh --tcp-port <host-port>`, which wires QEMU user

@@ -178,7 +178,7 @@ SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
   --sel4-build "$HOME/seL4/build" \
   --out-dir out/cohesix \
   --profile release \
-  --root-task-features kernel,bootstrap-trace,serial-console,net,net-console \
+  --root-task-features cohesix-dev \
   --cargo-target aarch64-unknown-none \
   --transport tcp
 ```

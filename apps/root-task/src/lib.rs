@@ -28,6 +28,8 @@ pub mod console;
 pub mod event;
 /// Compile-time profile surface exposed to kernels and tests.
 pub mod profile;
+/// Compile-time feature manifest and guard rails.
+pub mod features;
 pub mod serial;
 
 #[cfg(feature = "net-console")]

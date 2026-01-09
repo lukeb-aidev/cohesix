@@ -1517,6 +1517,7 @@ fn bootstrap<P: Platform>(
     boot_log::force_uart_line(build_line.as_str());
     log::info!("{}", build_line.as_str());
     debug_uart_str("[breadcrumb] after BUILD log\r\n");
+    crate::features::emit_dev_umbrella_audit();
 
     boot_guard.record_phase("start");
     debug_assert_eq!(state::state(), BootState::Running, "bootstrap state drift",);

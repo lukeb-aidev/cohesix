@@ -26,8 +26,8 @@ Options:
   --cargo-target <triple>  Target triple used for seL4 component builds (required)
   --root-task-features <list>
                         Comma-separated feature set used for the root-task seL4 build
-                        (default: kernel,bootstrap-trace)
-  --features <name>      Enable additional root-task feature (bootstrap-trace|serial-console).
+                        (default: cohesix-dev for tcp, kernel,bootstrap-trace,serial-console for qemu)
+  --features <name>      Enable additional root-task feature (bootstrap-trace|serial-console|cohesix-dev).
                          May be specified multiple times.
   --qemu <path>         QEMU binary to execute (default: qemu-system-aarch64)
   --transport <kind>    Console transport to launch (tcp|qemu, default: tcp)
@@ -304,7 +304,9 @@ main() {
     UDP_ECHO_PORT="$HOST_UDP_ECHO_PORT"
     TCP_SMOKE_PORT="$HOST_SMOKE_PORT"
     VIRTIO_MMIO_FORCE_LEGACY=${VIRTIO_MMIO_FORCE_LEGACY:-0}
-    ROOT_TASK_FEATURES="kernel,bootstrap-trace"
+    ROOT_TASK_FEATURES=""
+    ROOT_TASK_FEATURES_OVERRIDE=0
+    ROOT_TASK_FEATURE_EXTRAS=()
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -331,13 +333,14 @@ main() {
             --root-task-features)
                 [[ $# -ge 2 ]] || fail "--root-task-features requires a list"
                 ROOT_TASK_FEATURES="$2"
+                ROOT_TASK_FEATURES_OVERRIDE=1
                 shift 2
                 ;;
             --features)
                 [[ $# -ge 2 ]] || fail "--features requires a value"
                 case "$2" in
-                    bootstrap-trace|serial-console)
-                        append_root_task_feature "$2"
+                    bootstrap-trace|serial-console|cohesix-dev)
+                        ROOT_TASK_FEATURE_EXTRAS+=("$2")
                         ;;
                     *)
                         fail "Unsupported feature requested via --features: $2"
@@ -406,12 +409,25 @@ main() {
         ROOT_TASK_FEATURES=""
     fi
 
-    append_root_task_feature "serial-console"
-
-    if [[ "$TRANSPORT" == "tcp" ]]; then
-        append_root_task_feature "net"
-        append_root_task_feature "net-console"
+    if [[ "$ROOT_TASK_FEATURES_OVERRIDE" -eq 0 ]]; then
+        if [[ "$TRANSPORT" == "tcp" ]]; then
+            ROOT_TASK_FEATURES="cohesix-dev"
+        else
+            ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console"
+        fi
+    else
+        if [[ "$ROOT_TASK_FEATURES" != *"cohesix-dev"* ]]; then
+            append_root_task_feature "serial-console"
+            if [[ "$TRANSPORT" == "tcp" ]]; then
+                append_root_task_feature "net"
+                append_root_task_feature "net-console"
+            fi
+        fi
     fi
+
+    for feature in "${ROOT_TASK_FEATURE_EXTRAS[@]-}"; do
+        append_root_task_feature "$feature"
+    done
 
     remove_root_task_feature "untyped-debug"
     remove_root_task_feature "trace-heavy-init"

@@ -146,7 +146,7 @@ run_once() {
         --sel4-build "${SEL4_BUILD_DIR}" \
         --out-dir "${OUT_DIR}" \
         --profile "${PROFILE}" \
-        --root-task-features dev-virt,cache-trace \
+        --root-task-features cohesix-dev \
         --cargo-target "${CARGO_TARGET}" \
         --raw-qemu \
         --transport tcp \
