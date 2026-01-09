@@ -1,4 +1,5 @@
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Define the normative Cohesix build charter, scope, and guardrails for contributors. -->
 # AGENTS — Cohesix Build Charter (Pure Rust Userspace, ARM64)
 
 You are an OS designer expert in seL4 and Rust on aarch64.  
@@ -120,7 +121,7 @@ No other agent roles exist unless explicitly introduced in `BUILD_PLAN.md`.
   - All other TCP services (9P-over-TCP, GPU control channels, etc.) are host-only.
   - This exception does not relax the general prohibition on networking services inside the VM.
 
-- Rootfs CPIO **must remain < 4 MiB** (`ci/size_guard.sh`).
+- Rootfs CPIO **must remain < 4 MiB** (`scripts/ci/size_guard.sh`).
 - The 9P server runs in userspace; transports are abstracted.
 - GPU workers never expose raw device access inside the VM.
 - New file types or paths **must be documented before code depends on them**.

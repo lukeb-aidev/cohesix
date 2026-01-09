@@ -1,4 +1,5 @@
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Describe the Cohesix system architecture, component responsibilities, and boundary constraints. -->
 # Cohesix Architecture Overview
 Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
 
@@ -186,7 +187,7 @@ The logical architecture—root-task, NineDoor, workers, Secure9P transports, GP
 - TCP console traffic flows NIC driver → `NetStack` (smoltcp) → TCP console server → shared console runtime. Backend choice is a
   HAL concern; console authentication and verb parsing stay identical regardless of NIC.
 
-### Host GPU Bridge (future, crate: `gpu-bridge`)
+### Host GPU Bridge (future, crate: `gpu-bridge-host`)
 - Runs **outside** the VM, using NVML/CUDA to manage real hardware.
 - Mirrors GPU control surfaces into the Cohesix instance (QEMU during development, physical hardware in deployment) via a 9P transport adapter (`secure9p-transport::Tcp` on the host side only).
 - Maintains lease agreements and enforces memory/stream quotas independent of the VM profile.
