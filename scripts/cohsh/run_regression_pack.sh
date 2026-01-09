@@ -51,21 +51,30 @@ if [[ ! -x "${COHSH_BIN}" ]]; then
     exit 1
 fi
 
-wait_for_console() {
-    if ! command -v nc >/dev/null 2>&1; then
-        return 0
-    fi
+probe_console() {
     local deadline=$((SECONDS + 30))
-    while ! nc -z "${TCP_HOST}" "${TCP_PORT}" >/dev/null 2>&1; do
-        if (( SECONDS >= deadline )); then
-            echo "QEMU TCP console not reachable at ${TCP_HOST}:${TCP_PORT}" >&2
-            return 1
+    local probe_script
+    probe_script=$(mktemp)
+    cat >"${probe_script}" <<'COMMANDS'
+attach queen
+ping
+quit
+COMMANDS
+
+    while (( SECONDS < deadline )); do
+        if "${COHSH_BIN}" --transport tcp --tcp-host "${TCP_HOST}" --tcp-port "${TCP_PORT}" --script "${probe_script}" >/dev/null 2>&1; then
+            rm -f "${probe_script}"
+            return 0
         fi
         sleep 1
     done
+
+    rm -f "${probe_script}"
+    echo "QEMU TCP console not reachable at ${TCP_HOST}:${TCP_PORT}" >&2
+    return 1
 }
 
-wait_for_console
+probe_console
 
 scripts=(
     "boot_v0.coh"
@@ -88,7 +97,7 @@ for script in "${scripts[@]}"; do
         cat "${script_path}"
     } >"${tmp_script}"
 
-    wait_for_console
+    probe_console
     echo "running ${script}"
     if ! output=$("${COHSH_BIN}" --transport tcp --tcp-host "${TCP_HOST}" --tcp-port "${TCP_PORT}" --script "${tmp_script}" 2>&1); then
         echo "FAILED: ${script_path}" >&2
