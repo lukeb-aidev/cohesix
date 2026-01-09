@@ -926,6 +926,10 @@ static BOOTSTRAP_SEND_INSTRUMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(feature = "kernel")]
 fn emit_illegal_send_line(line: &str) {
+    if crate::log_buffer::log_channel_active() {
+        crate::bootstrap::log::force_uart_line(line);
+        return;
+    }
     for &byte in line.as_bytes() {
         debug_put_char_raw(byte);
     }

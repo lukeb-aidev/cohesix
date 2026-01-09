@@ -400,9 +400,6 @@ where
     V: CapabilityValidator,
 {
     if let Some(net_stack) = net_stack_handle {
-        if cfg!(feature = "dev-virt") {
-            let _ = net_stack.start_self_test(0);
-        }
         pump = pump.with_network(net_stack);
     }
 

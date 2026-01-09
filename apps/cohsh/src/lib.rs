@@ -118,6 +118,11 @@ pub trait Transport {
     /// Append bytes to an append-only file within the NineDoor namespace.
     fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()>;
 
+    /// Request the remote console session to close.
+    fn quit(&mut self, _session: &Session) -> Result<()> {
+        Ok(())
+    }
+
     /// Drain acknowledgement lines accumulated since the previous call.
     fn drain_acknowledgements(&mut self) -> Vec<String> {
         Vec::new()
@@ -159,6 +164,10 @@ where
 
     fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()> {
         (**self).write(session, path, payload)
+    }
+
+    fn quit(&mut self, session: &Session) -> Result<()> {
+        (**self).quit(session)
     }
 
     fn drain_acknowledgements(&mut self) -> Vec<String> {
@@ -1248,6 +1257,11 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 Ok(CommandStatus::Continue)
             }
             "quit" => {
+                if let Some(session) = self.session.as_ref() {
+                    if let Err(err) = self.transport.quit(session) {
+                        self.write_line(&format!("quit: {err}"))?;
+                    }
+                }
                 self.write_line("closing session")?;
                 Ok(CommandStatus::Quit)
             }

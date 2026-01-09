@@ -393,6 +393,12 @@ impl RateLimitKey for NetDiagRateKind {
 
 /// Networking integration exposed to the pump when the `net` feature is enabled.
 /// Event pump orchestrating serial, timer, IPC, and optional networking work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConsoleInputSource {
+    Serial,
+    Net,
+}
+
 pub struct EventPump<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>
 where
     D: SerialDriver,
@@ -409,6 +415,7 @@ where
     metrics: PumpMetrics,
     now_ms: u64,
     session: Option<SessionRole>,
+    last_input_source: ConsoleInputSource,
     stream_end_pending: bool,
     throttle: AuthThrottle,
     #[cfg(feature = "net-console")]
@@ -469,6 +476,7 @@ where
             metrics: PumpMetrics::default(),
             now_ms: 0,
             session: None,
+            last_input_source: ConsoleInputSource::Serial,
             stream_end_pending: false,
             throttle: AuthThrottle::default(),
             #[cfg(feature = "net-console")]
@@ -1069,6 +1077,7 @@ where
 
     fn consume_serial(&mut self) {
         while let Some(line) = self.serial.next_line() {
+            self.last_input_source = ConsoleInputSource::Serial;
             self.process_console_line(&line);
         }
     }
@@ -1107,6 +1116,7 @@ where
                 .denied("net console line exceeded maximum length");
             return;
         }
+        self.last_input_source = ConsoleInputSource::Net;
         self.process_console_line(&converted);
     }
 

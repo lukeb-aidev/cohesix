@@ -88,6 +88,18 @@ remove_root_task_feature() {
     ROOT_TASK_FEATURES="$padded"
 }
 
+has_root_task_feature() {
+    local feature="$1"
+    if [[ -z "${ROOT_TASK_FEATURES:-}" ]]; then
+        return 1
+    fi
+
+    case ",${ROOT_TASK_FEATURES}," in
+        *,"$feature",*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 describe_file() {
     local label="$1"
     local path="$2"
@@ -174,8 +186,17 @@ build_network_args() {
 
     NETWORK_ARGS=(
         -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-:${TCP_PORT},hostfwd=udp:127.0.0.1:${UDP_ECHO_PORT}-:${UDP_ECHO_PORT},hostfwd=tcp:127.0.0.1:${smoke_port}-:31339"
-        -device "virtio-net-device,netdev=net0,mac=52:55:00:d1:55:01,bus=virtio-mmio-bus.0"
     )
+
+    if [[ "${NET_BACKEND}" == "virtio" ]]; then
+        NETWORK_ARGS+=(
+            -device "virtio-net-device,netdev=net0,mac=52:55:00:d1:55:01,bus=virtio-mmio-bus.0"
+        )
+    else
+        NETWORK_ARGS+=(
+            -device "rtl8139,netdev=net0,mac=52:55:00:d1:55:01"
+        )
+    fi
 }
 
 log_tcp_hostfwd() {
@@ -433,10 +454,21 @@ main() {
     remove_root_task_feature "trace-heavy-init"
     remove_root_task_feature "dtb-dump"
 
+    NET_BACKEND="rtl8139"
+    if has_root_task_feature "net-backend-virtio" \
+        || has_root_task_feature "dev-virt" \
+        || has_root_task_feature "cohesix-dev"; then
+        NET_BACKEND="virtio"
+    fi
+
     if [[ -n "$ROOT_TASK_FEATURES" ]]; then
         log "Final root-task feature set: $ROOT_TASK_FEATURES"
     else
         log "Final root-task feature set: <none>"
+    fi
+
+    if [[ "$TRANSPORT" == "tcp" ]]; then
+        log "TCP console NIC backend: ${NET_BACKEND}"
     fi
 
     if matches=$(rg -n "\\[untyped:" apps/root-task/src 2>/dev/null); then
@@ -707,9 +739,12 @@ PY
     BASE_QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
-        log "Wiring virtio-net MMIO NIC for TCP console"
-     
-        BASE_QEMU_ARGS+=(-global virtio-mmio.force-legacy=off)
+        if [[ "$NET_BACKEND" == "virtio" ]]; then
+            log "Wiring virtio-net MMIO NIC for TCP console"
+            BASE_QEMU_ARGS+=(-global virtio-mmio.force-legacy=off)
+        else
+            log "Wiring RTL8139 NIC for TCP console"
+        fi
     fi
 
     if [[ "$RUN_QEMU" -eq 0 ]]; then

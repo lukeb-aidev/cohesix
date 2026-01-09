@@ -8,6 +8,10 @@
 pub fn debug_uart_str(s: &str) {
     #[cfg(feature = "kernel")]
     {
+        if crate::log_buffer::log_channel_active() {
+            crate::log_buffer::append_log_bytes(s.as_bytes());
+            return;
+        }
         for byte in s.bytes() {
             crate::sel4::debug_put_char(i32::from(byte));
         }

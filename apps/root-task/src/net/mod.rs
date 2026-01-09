@@ -371,6 +371,9 @@ pub trait NetPoller {
     /// Queue a console line for transmission to remote clients.
     fn send_console_line(&mut self, line: &str);
 
+    /// Request the active TCP console connection to close after flushing responses.
+    fn request_disconnect(&mut self) {}
+
     /// Drain pending net-console connection events (optional).
     fn drain_console_events(&mut self, _visitor: &mut dyn FnMut(NetConsoleEvent)) {}
 

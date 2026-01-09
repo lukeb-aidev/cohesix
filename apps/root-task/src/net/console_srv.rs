@@ -192,6 +192,10 @@ impl TcpConsoleServer {
         }
     }
 
+    pub(crate) fn auth_token(&self) -> &'static str {
+        self.auth_token
+    }
+
     /// Reset the session state in preparation for a new client connection.
     pub fn begin_session(&mut self, now_ms: u64, conn_id: Option<u64>) {
         self.set_state(SessionState::WaitingAuth);
@@ -595,20 +599,28 @@ impl TcpConsoleServer {
             ack.verb,
             ack.detail,
         );
-        match render_ack(&mut line, &ack) {
-            Ok(()) => self.enqueue_outbound(line.as_str()),
+        let result = match render_ack(&mut line, &ack) {
+            Ok(()) => {
+                let len = line.len();
+                if len > 0 {
+                    self.push_outbound_front(line);
+                }
+                Ok(len)
+            }
             Err(LineFormatError::Truncated) => {
                 // Transport-level guard; fall back to a simple error string to avoid panics.
-                self.enqueue_outbound("ERR AUTH")
+                let mut fallback: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+                let _ = fallback.push_str("ERR AUTH");
+                let len = fallback.len();
+                self.push_outbound_front(fallback);
+                Ok(len)
             }
-        }
-        .map(|result| {
+        };
+        result.map(|len| {
             info!(
                 "[cohsh-net] send: auth response len={} status={:?}",
-                line.len(),
-                status
+                len, status
             );
-            result
         })
     }
 

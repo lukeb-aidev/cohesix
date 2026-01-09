@@ -80,6 +80,8 @@ const TCP_SMOKE_OUT_LOCAL_PORT: u16 = 31_340;
 const TCP_CONSOLE_SELFTEST_LOCAL_PORT: u16 = 31_341;
 const CONSOLE_SELFTEST_RECOVERY_DEADLINE_MS: u64 = 3_000;
 const CONSOLE_SELFTEST_RETRY_MS: u64 = 250;
+const DISCONNECT_GRACE_MS: u64 = 250;
+const DISCONNECT_GRACE_POLLS: u8 = 64;
 #[cfg(feature = "net-outbound-probe")]
 const TCP_PROBE_PORT: u16 = TCP_SMOKE_PORT;
 #[cfg(feature = "net-outbound-probe")]
@@ -898,6 +900,9 @@ pub struct NetStack<D: NetDevice> {
     prefix_len: u8,
     listen_port: u16,
     session_active: bool,
+    disconnect_requested: bool,
+    disconnect_requested_at_ms: Option<u64>,
+    disconnect_requested_polls: u8,
     listener_announced: bool,
     active_client_id: Option<u64>,
     client_counter: u64,
@@ -964,6 +969,7 @@ struct SelfTestState {
     tx_invariant_failed: bool,
     console_probe_started_ms: u64,
     console_probe_established: bool,
+    console_probe_auth_sent: bool,
     console_probe_banner_seen: bool,
     console_probe_done: bool,
     console_ok: bool,
@@ -1008,6 +1014,7 @@ impl SelfTestState {
         self.tx_invariant_failed = false;
         self.console_probe_started_ms = 0;
         self.console_probe_established = false;
+        self.console_probe_auth_sent = false;
         self.console_probe_banner_seen = false;
         self.console_probe_done = false;
         self.console_ok = false;
@@ -1428,12 +1435,33 @@ impl<D: NetDevice> NetStack<D> {
         self.session_state = SessionState::default();
         self.conn_bytes_read = 0;
         self.conn_bytes_written = 0;
+        self.disconnect_requested = false;
+        self.disconnect_requested_at_ms = None;
+        self.disconnect_requested_polls = 0;
     }
 
     fn reset_session_state_with(&mut self, tcp_state: Option<TcpState>) {
         self.reset_session_state();
         if let Some(state) = tcp_state {
             self.session_state.last_state = Some(state);
+        }
+    }
+
+    fn force_relisten(socket: &mut TcpSocket, listen_port: u16) {
+        if socket.state() != TcpState::Closed {
+            socket.abort();
+        }
+        if socket.state() == TcpState::Closed {
+            match socket.listen(IpListenEndpoint::from(listen_port)) {
+                Ok(()) => {
+                    NET_DIAG.record_listener_bound();
+                }
+                Err(err) => {
+                    warn!(
+                        "[net-console] failed to re-listen after close: {err}"
+                    );
+                }
+            }
         }
     }
 
@@ -1507,12 +1535,11 @@ impl<D: NetDevice> NetStack<D> {
     fn record_peer_endpoint(
         peer_endpoint: &mut Option<(IpAddress, u16)>,
         endpoint: Option<IpEndpoint>,
-    ) {
-        if peer_endpoint.is_none() {
-            if let Some(endpoint) = endpoint {
-                *peer_endpoint = Some((endpoint.addr, endpoint.port));
-            }
-        }
+    ) -> bool {
+        let updated = endpoint.map(|endpoint| (endpoint.addr, endpoint.port));
+        let changed = *peer_endpoint != updated;
+        *peer_endpoint = updated;
+        changed
     }
 
     fn host_forward_override(&self) -> Option<&'static str> {
@@ -1930,6 +1957,9 @@ impl<D: NetDevice> NetStack<D> {
             prefix_len: prefix,
             listen_port: console_config.listen_port,
             session_active: false,
+            disconnect_requested: false,
+            disconnect_requested_at_ms: None,
+            disconnect_requested_polls: 0,
             listener_announced: false,
             active_client_id: None,
             client_counter: 0,
@@ -2777,6 +2807,31 @@ impl<D: NetDevice> NetStack<D> {
                 self.self_test.console_probe_established = true;
                 info!("[net-selftest] console listener selftest established");
             }
+            if !self.self_test.console_probe_auth_sent && socket.can_send() {
+                let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+                if write!(line, "AUTH {}", self.server.auth_token()).is_ok() {
+                    let total_len = line.len().saturating_add(4);
+                    let mut frame: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 4 }> =
+                        HeaplessVec::new();
+                    if frame
+                        .extend_from_slice(&(total_len as u32).to_le_bytes())
+                        .is_ok()
+                        && frame.extend_from_slice(line.as_bytes()).is_ok()
+                    {
+                        match socket.send_slice(frame.as_slice()) {
+                            Ok(sent) if sent == frame.len() => {
+                                self.self_test.console_probe_auth_sent = true;
+                                self.counters.tcp_tx_bytes =
+                                    self.counters.tcp_tx_bytes.saturating_add(sent as u64);
+                                NET_DIAG.add_bytes_written(sent as u64);
+                                activity = true;
+                            }
+                            Ok(_) => {}
+                            Err(_) => {}
+                        }
+                    }
+                }
+            }
             if socket.can_recv() {
                 let mut copied = 0usize;
                 let mut temp = [0u8; 64];
@@ -2796,6 +2851,21 @@ impl<D: NetDevice> NetStack<D> {
                 match recv_result {
                     Ok(()) if copied > 0 => {
                         self.self_test.console_probe_banner_seen = true;
+                        if copied >= 4 {
+                            let mut len_buf = [0u8; 4];
+                            len_buf.copy_from_slice(&temp[..4]);
+                            let frame_len = u32::from_le_bytes(len_buf) as usize;
+                            if frame_len >= 4 && frame_len <= copied {
+                                let payload = &temp[4..frame_len];
+                                if payload.starts_with(b"OK AUTH") {
+                                    info!("[net-selftest] console listener selftest auth OK");
+                                } else if payload.starts_with(b"ERR AUTH") {
+                                    warn!(
+                                        "[net-selftest] console listener selftest auth rejected"
+                                    );
+                                }
+                            }
+                        }
                         let preview_len = core::cmp::min(copied, 16);
                         info!(
                             "[net-selftest] console listener banner bytes={} first={:02x?}",
@@ -2847,6 +2917,9 @@ impl<D: NetDevice> NetStack<D> {
                 self.self_test.console_probe_established,
                 socket.state()
             );
+            if !matches!(socket.state(), TcpState::Closed) {
+                socket.abort();
+            }
             self.self_test.console_probe_done = true;
         }
 
@@ -2961,10 +3034,12 @@ impl<D: NetDevice> NetStack<D> {
         let mut reset_tcp_state: Option<TcpState> = None;
         let last_tcp_state;
         let mut allow_flush = true;
+        let listen_port = self.listen_port;
 
         let (snapshot, tcp_state) = {
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
-            Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
+            let peer_changed =
+                Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
 
             if !socket.is_open() {
                 self.peer_endpoint = None;
@@ -3008,6 +3083,7 @@ impl<D: NetDevice> NetStack<D> {
                 reset_tcp_state = Some(socket.state());
             }
 
+            let previous_state = self.session_state.last_state;
             Self::log_tcp_state_change(
                 &mut self.session_state,
                 socket,
@@ -3015,12 +3091,45 @@ impl<D: NetDevice> NetStack<D> {
                 self.ip,
             );
 
+            if self.session_active && socket.state() == TcpState::Listen {
+                Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
+                self.outbound.reset();
+                self.server.end_session();
+                self.session_active = false;
+                outbound_pending = false;
+                let conn_id = self.active_client_id.unwrap_or(0);
+                log_closed_conn = Some(conn_id);
+                record_closed_conn = Some(conn_id);
+                self.active_client_id = None;
+                self.peer_endpoint = None;
+                Self::set_auth_state(
+                    &mut self.auth_state,
+                    self.active_client_id,
+                    AuthState::Start,
+                );
+                reset_session = true;
+                reset_tcp_state = Some(socket.state());
+            }
+
             if !self.stage_policy.allow_console_io && socket.state() == TcpState::Established {
                 socket.close();
                 return true;
             }
 
-            if socket.state() == TcpState::Established && !self.session_active {
+            let new_established = socket.state() == TcpState::Established
+                && (previous_state != Some(TcpState::Established)
+                    || !self.session_active
+                    || peer_changed);
+            if new_established {
+                if self.session_active {
+                    self.outbound.reset();
+                    self.server.end_session();
+                    self.session_active = false;
+                    self.active_client_id = None;
+                }
+                self.disconnect_requested = false;
+                self.disconnect_requested_at_ms = None;
+                self.disconnect_requested_polls = 0;
                 NET_DIAG.record_accept_attempt();
                 let client_id = self.client_counter.wrapping_add(1);
                 self.client_counter = client_id;
@@ -3029,7 +3138,8 @@ impl<D: NetDevice> NetStack<D> {
                 self.conn_bytes_written = 0;
                 reset_session = true;
                 reset_tcp_state = Some(socket.state());
-                Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
+                let _ =
+                    Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
                 let (peer_label, peer_port) = Self::peer_parts(self.peer_endpoint, socket);
                 let local_port = socket
                     .local_endpoint()
@@ -3261,6 +3371,18 @@ impl<D: NetDevice> NetStack<D> {
                                         "[cohsh-net][auth] auth OK, session established (conn_id={})",
                                         conn_id
                                     );
+                                    activity |= Self::flush_outbound(
+                                        &mut self.server,
+                                        &mut self.outbound,
+                                        &mut self.telemetry,
+                                        &mut self.conn_bytes_written,
+                                        &mut self.counters,
+                                        socket,
+                                        now_ms,
+                                        self.active_client_id,
+                                        self.auth_state,
+                                        &mut self.session_state,
+                                    );
                                     activity = true;
                                 }
                                 SessionEvent::AuthFailed(reason) => {
@@ -3377,6 +3499,30 @@ impl<D: NetDevice> NetStack<D> {
                         }
                     }
                 }
+            }
+            if self.session_active
+                && socket.state() == TcpState::Established
+                && !socket.may_recv()
+            {
+                Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
+                self.outbound.reset();
+                socket.close();
+                self.server.end_session();
+                self.session_active = false;
+                outbound_pending = false;
+                let conn_id = self.active_client_id.unwrap_or(0);
+                log_closed_conn = Some(conn_id);
+                record_closed_conn = Some(conn_id);
+                self.active_client_id = None;
+                self.peer_endpoint = None;
+                Self::set_auth_state(
+                    &mut self.auth_state,
+                    self.active_client_id,
+                    AuthState::Start,
+                );
+                reset_session = true;
+                reset_tcp_state = Some(socket.state());
+                allow_flush = false;
             }
             if self.session_active
                 && !self.server.is_authenticated()
@@ -3556,6 +3702,49 @@ impl<D: NetDevice> NetStack<D> {
                     &mut self.session_state,
                 );
                 outbound_pending |= self.server.has_outbound();
+            }
+
+            if self.disconnect_requested {
+                self.disconnect_requested_polls = self.disconnect_requested_polls.saturating_add(1);
+                let outbound_clear = !self.server.has_outbound() && !self.outbound.has_pending();
+                let grace_elapsed = self
+                    .disconnect_requested_at_ms
+                    .map(|start| now_ms.saturating_sub(start) >= DISCONNECT_GRACE_MS)
+                    .unwrap_or(false)
+                    || self.disconnect_requested_polls >= DISCONNECT_GRACE_POLLS;
+                if outbound_clear || grace_elapsed {
+                    Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
+                    if outbound_clear {
+                        if socket.state() != TcpState::Closed {
+                            socket.close();
+                        }
+                    } else if socket.state() != TcpState::Closed {
+                        socket.abort();
+                    }
+                    self.server.end_session();
+                    if !outbound_clear {
+                        self.outbound.reset();
+                    }
+                    self.session_active = false;
+                    self.disconnect_requested = false;
+                    self.disconnect_requested_at_ms = None;
+                    self.disconnect_requested_polls = 0;
+                    outbound_pending = false;
+                    let conn_id = self.active_client_id.unwrap_or(0);
+                    log_closed_conn = Some(conn_id);
+                    record_closed_conn = Some(conn_id);
+                    self.active_client_id = None;
+                    self.peer_endpoint = None;
+                    Self::set_auth_state(
+                        &mut self.auth_state,
+                        self.active_client_id,
+                        AuthState::Start,
+                    );
+                    Self::force_relisten(socket, listen_port);
+                    reset_session = true;
+                    reset_tcp_state = Some(socket.state());
+                    allow_flush = false;
+                }
             }
 
             let snapshot = PollSnapshot {
@@ -3880,6 +4069,12 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         }
     }
 
+    fn request_disconnect(&mut self) {
+        self.disconnect_requested = true;
+        self.disconnect_requested_at_ms = self.last_now_ms;
+        self.disconnect_requested_polls = 0;
+    }
+
     fn drain_console_events(&mut self, visitor: &mut dyn FnMut(NetConsoleEvent)) {
         let mut drained = HeaplessVec::<NetConsoleEvent, SOCKET_CAPACITY>::new();
         while let Some(event) = self.events.pop() {
@@ -3895,6 +4090,9 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     fn reset(&mut self) {
         self.server.end_session();
         self.session_active = false;
+        self.disconnect_requested = false;
+        self.disconnect_requested_at_ms = None;
+        self.disconnect_requested_polls = 0;
         self.telemetry = NetTelemetry::default();
         self.outbound.reset();
         self.tcp_smoke_outbound_sent = false;
@@ -3904,6 +4102,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.self_test.console_probe_banner_seen = false;
         self.self_test.console_probe_established = false;
         self.self_test.console_probe_started_ms = 0;
+        self.self_test.console_probe_auth_sent = false;
         self.self_test.console_ok = false;
         self.last_now_ms = None;
         self.time_stall_warned = false;

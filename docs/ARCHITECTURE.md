@@ -144,9 +144,9 @@ The logical architecture—root-task, NineDoor, workers, Secure9P transports, GP
 - Exposes a deterministic event pump (`event::EventPump`) that coordinates serial, timer, networking, and IPC tasks. The pump
   emits structured audit lines whenever subsystems are initialised and ensures each poll cycle services every source without
   revisiting the legacy spin loop.
-- Hosts the deterministic networking stack (`net::NetStack`) which wraps smoltcp behind a HAL-provided NIC abstraction. RTL8139
-  (the default `dev-virt` backend) and the feature-gated virtio-net driver both rely on `KernelHal` for device mappings, DMA
-  frames, and diagnostics; `NetworkClock` advances in timer-driven increments.
+- Hosts the deterministic networking stack (`net::NetStack`) which wraps smoltcp behind a HAL-provided NIC abstraction. Virtio-net
+  (the default `dev-virt` backend) and the optional RTL8139 fallback both rely on `KernelHal` for device mappings, DMA frames, and
+  diagnostics; `NetworkClock` advances in timer-driven increments.
 - Provides the PL011-backed serial façade (`serial::pl011` + `console::Console`) that powers the always-on root shell
   when `serial-console` is enabled. Input/output is line-buffered with bounded heapless queues and UTF-8
   normalisation shared with the TCP transport.
@@ -181,7 +181,7 @@ The logical architecture—root-task, NineDoor, workers, Secure9P transports, GP
 - The HAL (`KernelHal` implementing the `Hardware` trait) is the sole entry point for device mappings, DMA frame allocation, and
   device coverage bookkeeping. NIC drivers invoke these helpers instead of touching physical addresses directly so snapshot and
   diagnostics paths remain coherent.
-- Both NICs in tree (RTL8139 for `dev-virt`, virtio-net as an experimental alternate) implement a small `NetDevice` trait and plug
+- Both NICs in tree (virtio-net for `dev-virt`, RTL8139 as an optional alternate) implement a small `NetDevice` trait and plug
   into the smoltcp-backed `NetStack`. The stack remains NIC-agnostic: it consumes MAC address, link telemetry, and RX/TX tokens but
   never inspects device registers.
 - TCP console traffic flows NIC driver → `NetStack` (smoltcp) → TCP console server → shared console runtime. Backend choice is a

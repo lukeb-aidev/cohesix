@@ -1085,6 +1085,39 @@ impl Transport for TcpTransport {
         }
     }
 
+    fn quit(&mut self, _session: &Session) -> Result<()> {
+        self.send_line("quit")?;
+        let mut timeouts = 0usize;
+        loop {
+            match self.read_line_internal()? {
+                ReadStatus::Line(line) => {
+                    let trimmed = Self::trim_line(&line);
+                    if let Some(ack) = parse_ack(trimmed.as_str()) {
+                        let _ = self.record_ack(trimmed.as_str());
+                        if ack.verb.eq_ignore_ascii_case("QUIT") {
+                            if matches!(ack.status, AckStatus::Err) {
+                                return Err(anyhow!("quit rejected: {trimmed}"));
+                            }
+                            return Ok(());
+                        }
+                        continue;
+                    }
+                }
+                ReadStatus::Timeout => {
+                    timeouts += 1;
+                    if timeouts > self.max_retries {
+                        self.reset_connection();
+                        return Ok(());
+                    }
+                }
+                ReadStatus::Closed => {
+                    self.reset_connection();
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     fn drain_acknowledgements(&mut self) -> Vec<String> {
         self.pending_ack
             .drain(..)

@@ -275,6 +275,11 @@ pub fn force_uart_line(line: &str) {
         }
     }
 
+    if log_buffer::log_channel_active() {
+        log_buffer::append_log_line(line);
+        return;
+    }
+
     emit_uart(line.as_bytes());
     emit_uart(b"\r\n");
 }
