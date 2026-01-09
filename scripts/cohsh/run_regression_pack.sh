@@ -54,7 +54,7 @@ fi
 probe_console() {
     local deadline=$((SECONDS + 30))
     local probe_script
-    probe_script=$(mktemp)
+    probe_script=$(mktemp -t cohsh_probe)
     cat >"${probe_script}" <<'COMMANDS'
 attach queen
 ping
