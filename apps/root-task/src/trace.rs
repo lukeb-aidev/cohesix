@@ -19,6 +19,42 @@ use crate::{
 
 pub use trace_model::TraceLevel;
 
+pub(crate) trait RateLimitKey: Copy {
+    const COUNT: usize;
+    fn index(self) -> usize;
+}
+
+pub(crate) struct RateLimiter<const N: usize> {
+    interval_ticks: u64,
+    next_allowed: [u64; N],
+    suppressed: [u32; N],
+}
+
+impl<const N: usize> RateLimiter<N> {
+    pub const fn new(interval_ticks: u64) -> Self {
+        Self {
+            interval_ticks,
+            next_allowed: [0; N],
+            suppressed: [0; N],
+        }
+    }
+
+    pub fn check<K: RateLimitKey>(&mut self, key: K, now_tick: u64) -> Option<u32> {
+        debug_assert_eq!(K::COUNT, N, "rate limiter length mismatch");
+        let idx = key.index();
+        debug_assert!(idx < N, "rate limiter key out of range");
+        if now_tick >= self.next_allowed[idx] {
+            let suppressed = self.suppressed[idx];
+            self.suppressed[idx] = 0;
+            self.next_allowed[idx] = now_tick.saturating_add(self.interval_ticks);
+            Some(suppressed)
+        } else {
+            self.suppressed[idx] = self.suppressed[idx].saturating_add(1);
+            None
+        }
+    }
+}
+
 /// Trace sinks supported by the root task.
 #[cfg(feature = "kernel")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,11 +362,57 @@ macro_rules! trace {
 
 #[cfg(test)]
 mod tests {
-    use super::hex_dump_slice;
+    use super::{hex_dump_slice, RateLimitKey, RateLimiter};
 
     #[test]
     fn hex_dump_slice_signature_accepts_slice() {
         fn assert_signature(_func: fn(&str, &[u8], usize)) {}
         assert_signature(hex_dump_slice);
+    }
+
+    #[repr(u8)]
+    #[derive(Clone, Copy, Debug)]
+    enum TestKind {
+        Alpha = 0,
+        Beta = 1,
+    }
+
+    const TEST_KINDS: usize = 2;
+
+    impl RateLimitKey for TestKind {
+        const COUNT: usize = TEST_KINDS;
+
+        fn index(self) -> usize {
+            self as usize
+        }
+    }
+
+    #[test]
+    fn rate_limiter_is_deterministic_for_ticks() {
+        let mut limiter = RateLimiter::<TEST_KINDS>::new(3);
+        let ticks = [0u64, 1, 2, 3, 4, 6, 7];
+        let mut outputs = [None; 7];
+        for (idx, tick) in ticks.iter().enumerate() {
+            outputs[idx] = limiter.check(TestKind::Alpha, *tick);
+        }
+        assert_eq!(
+            outputs,
+            [
+                Some(0),
+                None,
+                None,
+                Some(2),
+                None,
+                Some(1),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn rate_limiter_is_fixed_size() {
+        let expected = core::mem::size_of::<u64>() * (1 + TEST_KINDS)
+            + core::mem::size_of::<u32>() * TEST_KINDS;
+        assert_eq!(core::mem::size_of::<RateLimiter<TEST_KINDS>>(), expected);
     }
 }

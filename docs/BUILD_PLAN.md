@@ -623,6 +623,7 @@ the feature gate) while keeping console output stable.
   - A host repro harness script (e.g. `scripts/tcp_repro.sh`) that drives the existing QEMU TCP console and cohsh smoke flow.
   - No refactors, no new in-VM services, and no manifest/schema changes.
   - **Scope note (authorized):** Feature-flag consolidation for root-task bring-up (`cleanup-1-feature-flags-consolidation`) is permitted, limited to adding a single public `cohesix-dev` umbrella, removing dead flags, and updating scripts/docs without changing default behavior or console grammar.
+  - **Scope note (authorized):** Instrumentation noise reduction (`cleanup-2-instrumentation-noise-reduction`) is permitted, limited to heapless rate-limited counters and demoting/rate-limiting net/event pump spam without changing console protocol lines, ordering, or CLI/ACK semantics.
 
 ---
 ## Milestone 8b — Root-Task Compiler & Deterministic Profiles

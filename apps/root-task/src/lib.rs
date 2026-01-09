@@ -58,7 +58,7 @@ pub mod built_info {
 #[cfg(feature = "kernel")]
 mod panic;
 
-#[cfg(any(feature = "kernel", feature = "bootstrap-trace"))]
+#[cfg(any(feature = "kernel", feature = "bootstrap-trace", feature = "net-console", test))]
 /// seL4 bootstrap tracing primitives for debug logging.
 pub mod trace;
 

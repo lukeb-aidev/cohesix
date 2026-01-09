@@ -42,6 +42,8 @@ use crate::net::{
     NetConsoleEvent, NetDiagSnapshot, NetPoller, NetTelemetry, CONSOLE_QUEUE_DEPTH, NET_DIAG,
     NET_DIAG_FEATURED,
 };
+#[cfg(feature = "net-console")]
+use crate::trace::{RateLimitKey, RateLimiter};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
 #[cfg(feature = "kernel")]
@@ -91,6 +93,10 @@ const CONSOLE_BANNER: &str = "[Cohesix] Root console ready (type 'help' for comm
 const CONSOLE_PROMPT: &str = "cohesix> ";
 #[cfg(feature = "net-console")]
 const NET_DIAG_HEARTBEAT_MS: u64 = 5_000;
+#[cfg(feature = "net-console")]
+const NET_DIAG_RATE_LIMIT_MS: u64 = 1_000;
+#[cfg(feature = "net-console")]
+const NET_DIAG_RATE_KINDS: usize = 1;
 #[cfg(feature = "net-console")]
 const NET_DIAG_HEARTBEAT_POLLS: u64 = 1_024;
 #[cfg(feature = "net-console")]
@@ -365,6 +371,22 @@ struct NetDiagLogSnapshot {
     tx_drops: u32,
 }
 
+#[cfg(feature = "net-console")]
+#[repr(u8)]
+#[derive(Clone, Copy, Debug)]
+enum NetDiagRateKind {
+    Summary = 0,
+}
+
+#[cfg(feature = "net-console")]
+impl RateLimitKey for NetDiagRateKind {
+    const COUNT: usize = NET_DIAG_RATE_KINDS;
+
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
 /// Networking integration exposed to the pump when the `net` feature is enabled.
 /// Event pump orchestrating serial, timer, IPC, and optional networking work.
 pub struct EventPump<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>
@@ -393,6 +415,8 @@ where
     last_net_diag_emitted: Option<NetDiagLogSnapshot>,
     #[cfg(feature = "net-console")]
     last_net_diag_snapshot: Option<NetDiagSnapshot>,
+    #[cfg(feature = "net-console")]
+    net_diag_limiter: RateLimiter<NET_DIAG_RATE_KINDS>,
     #[cfg(feature = "net-console")]
     net_diag_stuck_logged: bool,
     #[cfg(feature = "kernel")]
@@ -451,6 +475,8 @@ where
             last_net_diag_emitted: None,
             #[cfg(feature = "net-console")]
             last_net_diag_snapshot: None,
+            #[cfg(feature = "net-console")]
+            net_diag_limiter: RateLimiter::<NET_DIAG_RATE_KINDS>::new(NET_DIAG_RATE_LIMIT_MS),
             #[cfg(feature = "net-console")]
             net_diag_stuck_logged: false,
             #[cfg(feature = "kernel")]
@@ -600,42 +626,30 @@ where
         }
         let snapshot = NET_DIAG.snapshot();
         if self.should_log_net_diag(snapshot, telemetry) {
-            let line = format_message(format_args!(
-                "NETDIAG poll={} rx_irq={} rx_kick={} rx_post={} rx_used={} rx_stack={} sm_rx={} tx_sub={} tx_kick={} tx_used={} tx_comp={} sm_tx={} accept={}/{} rw={}/{} cache={}/{} txq={}/{} txdrop={} txframes={} txbytes={} txwblk={} link={} drops={}",
-                snapshot.poll_calls,
-                snapshot.rx_irq_count,
-                snapshot.rx_kicks,
-                snapshot.rx_desc_posted,
-                snapshot.rx_used_seen,
-                snapshot.rx_frames_to_stack,
-                snapshot.rx_frames_into_smoltcp,
-                snapshot.tx_submits,
-                snapshot.tx_kicks,
-                snapshot.tx_used_seen,
-                snapshot.tx_completions,
-                snapshot.tx_frames_from_smoltcp,
-                snapshot.accept_success,
-                snapshot.accept_attempts,
-                snapshot.bytes_read,
-                snapshot.bytes_written,
-                snapshot.rx_cache_clean,
-                snapshot.rx_cache_invalidate,
-                snapshot.outbound_queued_lines,
-                snapshot.outbound_queued_bytes,
-                snapshot.outbound_drops,
-                snapshot.outbound_frames,
-                snapshot.outbound_bytes,
-                snapshot.outbound_would_block,
-                telemetry.link_up,
-                telemetry.tx_drops,
-            ));
-            self.audit.info(line.as_str());
-            self.last_net_diag_log_ms = Some(self.now_ms);
-            self.last_net_diag_emitted = Some(NetDiagLogSnapshot {
-                snapshot,
-                link_up: telemetry.link_up,
-                tx_drops: telemetry.tx_drops,
-            });
+            if let Some(suppressed) =
+                self.net_diag_limiter
+                    .check(NetDiagRateKind::Summary, self.now_ms)
+            {
+                let line = format_message(format_args!(
+                    "NETDIAG in_bytes={} out_bytes={} tx_drops={} link={} q_lines={} q_bytes={} q_drops={} q_wblk={} suppressed={}",
+                    snapshot.bytes_read,
+                    snapshot.bytes_written,
+                    telemetry.tx_drops,
+                    telemetry.link_up,
+                    snapshot.outbound_queued_lines,
+                    snapshot.outbound_queued_bytes,
+                    snapshot.outbound_drops,
+                    snapshot.outbound_would_block,
+                    suppressed,
+                ));
+                self.audit.info(line.as_str());
+                self.last_net_diag_log_ms = Some(self.now_ms);
+                self.last_net_diag_emitted = Some(NetDiagLogSnapshot {
+                    snapshot,
+                    link_up: telemetry.link_up,
+                    tx_drops: telemetry.tx_drops,
+                });
+            }
         }
         self.check_net_diag_progress(snapshot);
         self.last_net_diag_snapshot = Some(snapshot);

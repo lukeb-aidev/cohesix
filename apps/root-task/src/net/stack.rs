@@ -1594,8 +1594,11 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     fn trace_conn_recv(conn_id: u64, payload: &[u8]) {
+        if !log::log_enabled!(log::Level::Debug) {
+            return;
+        }
         let (prefix, prefix_len) = Self::trace_conn_prefix(payload);
-        log::info!(
+        log::debug!(
             "[cohsh-net] conn id={} recv bytes={} first16={:02x?}",
             conn_id,
             payload.len(),
@@ -1604,8 +1607,11 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     fn trace_conn_send(conn_id: u64, payload: &[u8]) {
+        if !log::log_enabled!(log::Level::Debug) {
+            return;
+        }
         let (prefix, prefix_len) = Self::trace_conn_prefix(payload);
-        log::info!(
+        log::debug!(
             "[cohsh-net] conn id={} send bytes={} first16={:02x?}",
             conn_id,
             payload.len(),
@@ -2160,7 +2166,7 @@ impl<D: NetDevice> NetStack<D> {
                     self.interface
                         .poll(timestamp, &mut self.device, &mut self.sockets);
                 if poll_result != PollResult::None {
-                    log::info!("[net] smoltcp: tx-only poll now_ms={}", now_ms);
+                    log::debug!("[net] smoltcp: tx-only poll now_ms={}", now_ms);
                 }
             }
             self.tx_only_sent = true;
@@ -2177,7 +2183,7 @@ impl<D: NetDevice> NetStack<D> {
             .interface
             .poll(timestamp, &mut self.device, &mut self.sockets);
         if poll_result != PollResult::None {
-            log::info!("[net] smoltcp: events processed at now_ms={}", now_ms);
+            log::debug!("[net] smoltcp: events processed at now_ms={}", now_ms);
         }
         let mut activity = poll_result != PollResult::None;
         let tcp_activity = if self.stage_policy.allow_tcp {
@@ -2198,7 +2204,7 @@ impl<D: NetDevice> NetStack<D> {
                 .interface
                 .poll(timestamp, &mut self.device, &mut self.sockets);
             if poll_result != PollResult::None {
-                log::info!("[net] smoltcp: post-tcp poll now_ms={}", now_ms);
+                log::debug!("[net] smoltcp: post-tcp poll now_ms={}", now_ms);
                 activity = true;
             }
         }
@@ -3130,14 +3136,14 @@ impl<D: NetDevice> NetStack<D> {
             if socket.can_recv() {
                 let mut temp = [0u8; 64];
                 let conn_id = self.active_client_id.unwrap_or(0);
-                info!(
+                debug!(
                     "[cohsh-net] conn id={} recv-ready state={:?} may_recv={} can_recv={}",
                     conn_id,
                     socket.state(),
                     socket.may_recv(),
                     socket.can_recv()
                 );
-                log::info!(
+                log::debug!(
                     target: "cohsh-net",
                     "[tcp] socket can_recv={} may_recv={} state={:?}",
                     socket.can_recv(),
@@ -3175,20 +3181,11 @@ impl<D: NetDevice> NetStack<D> {
                             NET_DIAG.add_bytes_read(copied as u64);
                             self.counters.tcp_rx_bytes =
                                 self.counters.tcp_rx_bytes.saturating_add(copied as u64);
-                            let dump_len = core::cmp::min(copied, 32);
-                            let (peer_label, peer_port) =
-                                Self::peer_parts(self.peer_endpoint, socket);
-                            log::info!(
-                                target: "cohsh-net",
-                                "[tcp] recv bytes={} first={:02x?} peer={}:{} state={:?}",
-                                copied,
-                                &temp[..dump_len],
-                                peer_label,
-                                peer_port,
-                                socket.state()
-                            );
                             #[cfg(feature = "net-trace-31337")]
                             {
+                                let (peer_label, peer_port) =
+                                    Self::peer_parts(self.peer_endpoint, socket);
+                                let dump_len = core::cmp::min(copied, 32);
                                 trace!(
                                     "[cohsh-net][tcp] recv: nbytes={} from {}:{} state={:?}",
                                     copied,
@@ -3223,6 +3220,8 @@ impl<D: NetDevice> NetStack<D> {
                             if self.auth_state == AuthState::AuthRequested
                                 && !self.session_state.logged_first_recv
                             {
+                                let (peer_label, peer_port) =
+                                    Self::peer_parts(self.peer_endpoint, socket);
                                 info!(
                                     "[cohsh-net][auth] received candidate auth frame len={} from {}:{}",
                                     copied,
