@@ -3076,6 +3076,7 @@ impl<D: NetDevice> NetStack<D> {
                     self.listener_announced = true;
                 }
                 if self.session_active {
+                    self.outbound.reset();
                     self.server.end_session();
                     self.session_active = false;
                     self.active_client_id = None;
@@ -3413,6 +3414,7 @@ impl<D: NetDevice> NetStack<D> {
                                         socket,
                                     );
                                     socket.close();
+                                    self.outbound.reset();
                                     self.server.end_session();
                                     self.session_active = false;
                                     reset_session = true;
@@ -3439,6 +3441,7 @@ impl<D: NetDevice> NetStack<D> {
                                         socket,
                                     );
                                     socket.close();
+                                    self.outbound.reset();
                                     self.server.end_session();
                                     self.session_active = false;
                                     self.peer_endpoint = None;
@@ -3484,6 +3487,7 @@ impl<D: NetDevice> NetStack<D> {
                                 socket,
                             );
                             socket.close();
+                            self.outbound.reset();
                             self.server.end_session();
                             self.session_active = false;
                             self.peer_endpoint = None;
@@ -3561,6 +3565,7 @@ impl<D: NetDevice> NetStack<D> {
                 );
                 Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 socket.close();
+                self.outbound.reset();
                 self.server.end_session();
                 self.session_active = false;
                 let conn_id = self.active_client_id.unwrap_or(0);
@@ -3608,6 +3613,7 @@ impl<D: NetDevice> NetStack<D> {
                 );
                 Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 socket.close();
+                self.outbound.reset();
                 self.server.end_session();
                 self.session_active = false;
                 let conn_id = self.active_client_id.unwrap_or(0);

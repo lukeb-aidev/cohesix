@@ -1307,6 +1307,12 @@ where
                 self.audit.info("console: quit");
                 self.metrics.accepted_commands += 1;
                 self.emit_ack_ok("QUIT", None);
+                #[cfg(feature = "net-console")]
+                if self.last_input_source == ConsoleInputSource::Net {
+                    if let Some(net) = self.net.as_mut() {
+                        net.request_disconnect();
+                    }
+                }
                 self.session = None;
             }
             Command::Attach { role, ticket } => {
