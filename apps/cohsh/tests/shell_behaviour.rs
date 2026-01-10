@@ -1,25 +1,35 @@
 // Author: Lukas Bower
+// Purpose: Validate Cohsh shell UX behaviors and command error handling.
 
 use std::io::Cursor;
 
 use cohsh::{NineDoorTransport, Shell};
+use cohesix_ticket::Role;
 
 #[test]
-fn planned_commands_return_stub_message() {
+fn queen_commands_require_session() {
+    let transport = NineDoorTransport::new(nine_door::NineDoor::new());
+    let mut shell = Shell::new(transport, Cursor::new(Vec::new()));
+    let err = shell
+        .execute("spawn heartbeat ticks=10")
+        .expect_err("spawn should require attachment");
+    assert!(err.to_string().contains("attach to a session"));
+}
+
+#[test]
+fn queen_commands_succeed_when_attached() {
     let mut output = Vec::new();
     {
         let transport = NineDoorTransport::new(nine_door::NineDoor::new());
         let mut shell = Shell::new(transport, &mut output);
+        shell.attach(Role::Queen, None).unwrap();
         shell
-            .execute("mount service /mnt")
-            .expect("planned command should not error");
+            .execute("spawn heartbeat ticks=10")
+            .expect("spawn should succeed");
         shell
-            .execute("spawn heartbeat")
-            .expect("planned command should not error");
+            .execute("bind /log /shadow")
+            .expect("bind should succeed");
     }
-    let rendered = String::from_utf8(output).expect("utf8 output");
-    assert!(rendered.contains("'mount' is planned but not implemented"));
-    assert!(rendered.contains("'spawn' is planned but not implemented"));
 }
 
 #[test]

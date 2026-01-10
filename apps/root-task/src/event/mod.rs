@@ -1521,13 +1521,51 @@ where
             }
             Command::Ls { path } => {
                 if self.ensure_authenticated(SessionRole::Worker) {
-                    let message =
-                        format_message(format_args!("console: ls {} unsupported", path.as_str()));
-                    self.audit.denied(message.as_str());
-                    self.metrics.denied_commands += 1;
-                    cmd_status = "err";
-                    let detail = format_message(format_args!("reason=unsupported path={}", path));
-                    self.emit_ack_err("LS", Some(detail.as_str()));
+                    let message = format_message(format_args!("console: ls {}", path.as_str()));
+                    self.audit.info(message.as_str());
+                    self.metrics.accepted_commands += 1;
+                    #[cfg(feature = "kernel")]
+                    {
+                        if let Some(bridge_ref) = self.ninedoor.as_mut() {
+                            match bridge_ref.list(path.as_str()) {
+                                Ok(entries) => {
+                                    let detail = format_message(format_args!(
+                                        "path={} entries={}",
+                                        path.as_str(),
+                                        entries.len()
+                                    ));
+                                    self.emit_ack_ok("LS", Some(detail.as_str()));
+                                    for entry in entries {
+                                        self.emit_console_line(entry.as_str());
+                                    }
+                                    self.stream_end_pending = true;
+                                }
+                                Err(err) => {
+                                    let detail = format_message(format_args!(
+                                        "reason=ninedoor-error error={err}"
+                                    ));
+                                    cmd_status = "err";
+                                    let sid = self.session_id.unwrap_or(0);
+                                    let err_msg = format_message(format_args!("{err}"));
+                                    self.audit_ninedoor_err(
+                                        sid,
+                                        "LS",
+                                        path.as_str(),
+                                        err_msg.as_str(),
+                                    );
+                                    self.emit_ack_err("LS", Some(detail.as_str()));
+                                }
+                            }
+                        } else {
+                            cmd_status = "err";
+                            self.emit_ack_err("LS", Some("reason=ninedoor-unavailable"));
+                        }
+                    }
+                    #[cfg(not(feature = "kernel"))]
+                    {
+                        cmd_status = "err";
+                        self.emit_ack_err("LS", Some("reason=ninedoor-unavailable"));
+                    }
                 } else {
                     cmd_status = "err";
                     self.emit_auth_failure("LS");
@@ -2928,6 +2966,33 @@ mod tests {
             .entries
             .iter()
             .any(|entry| entry.contains("nine-door: log stream requested")));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn ls_command_emits_directory_entries() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "secret").unwrap();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_ninedoor(&mut bridge);
+
+        pump.session = Some(SessionRole::Queen);
+        let mut path = HeaplessString::new();
+        path.push_str("/log").unwrap();
+        pump.handle_command(Command::Ls { path })
+            .expect("ls command should succeed");
+
+        pump.serial_mut().poll_io();
+        let transcript: Vec<u8> = pump.serial_mut().driver_mut().drain_tx().into_iter().collect();
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(rendered.contains("OK LS"), "{rendered}");
+        assert!(rendered.contains("queen.log"), "{rendered}");
     }
 
     #[cfg(feature = "kernel")]

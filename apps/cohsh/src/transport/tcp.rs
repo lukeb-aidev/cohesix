@@ -833,10 +833,12 @@ impl TcpTransport {
             loop {
                 match self.next_protocol_line()? {
                     Some(response) => {
-                        if self.record_ack(&response) {
-                            if response.starts_with("ERR") {
-                                lines.clear();
-                                return Ok(lines);
+                        if let Some(ack) = parse_ack(&response) {
+                            let _ = self.record_ack(&response);
+                            if ack.verb.eq_ignore_ascii_case(verb)
+                                && matches!(ack.status, AckStatus::Err)
+                            {
+                                return Err(anyhow!("{verb} failed: {response}"));
                             }
                             continue;
                         }
@@ -1065,8 +1067,15 @@ impl Transport for TcpTransport {
             self.send_line(&command)?;
             match self.next_protocol_line()? {
                 Some(response) => {
-                    if self.record_ack(&response) {
-                        return Ok(());
+                    if let Some(ack) = parse_ack(&response) {
+                        let _ = self.record_ack(&response);
+                        if ack.verb.eq_ignore_ascii_case("ECHO") {
+                            if matches!(ack.status, AckStatus::Ok) {
+                                return Ok(());
+                            }
+                            return Err(anyhow!("echo failed: {response}"));
+                        }
+                        continue;
                     }
                     if response.starts_with("ERR") {
                         return Err(anyhow!("echo failed: {response}"));

@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Minimal in-kernel NineDoor bridge for console-driven control and log access.
 
 #![cfg(feature = "kernel")]
 #![allow(dead_code)]
@@ -176,7 +177,7 @@ impl NineDoorBridge {
     /// Read file contents as line-oriented output.
     pub fn cat(
         &self,
-    path: &str,
+        path: &str,
     ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
     {
         if path != LOG_PATH {
@@ -188,10 +189,36 @@ impl NineDoorBridge {
     /// List directory entries (not yet supported by the shim bridge).
     pub fn list(
         &self,
-        _path: &str,
+        path: &str,
     ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
     {
-        Err(NineDoorBridgeError::Unsupported("ls"))
+        let entries = match path {
+            "/" => &[
+                "gpu",
+                "kmesg",
+                "log",
+                "proc",
+                "queen",
+                "trace",
+                "worker",
+            ][..],
+            "/log" => &["queen.log"][..],
+            "/proc" => &["boot"][..],
+            "/queen" => &["ctl"][..],
+            "/trace" => &["ctl", "events"][..],
+            "/worker" | "/gpu" => &[][..],
+            _ => return Err(NineDoorBridgeError::InvalidPath),
+        };
+        let mut output = HeaplessVec::new();
+        for entry in entries {
+            let mut line = HeaplessString::new();
+            line.push_str(entry)
+                .map_err(|_| NineDoorBridgeError::BufferFull)?;
+            output
+                .push(line)
+                .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        }
+        Ok(output)
     }
 }
 
