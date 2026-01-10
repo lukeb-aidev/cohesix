@@ -700,6 +700,51 @@ impl TcpTransport {
         }
     }
 
+    fn next_protocol_line_with_deadline(&mut self, deadline: Instant) -> Result<Option<String>> {
+        if self.reader.is_none() {
+            self.ensure_authenticated()?;
+        }
+        loop {
+            if Instant::now() >= deadline {
+                return Err(anyhow!("timeout waiting for console response"));
+            }
+            match self.read_line_internal()? {
+                ReadStatus::Line(line) => {
+                    let trimmed = Self::trim_line(&line);
+                    if trimmed == "PONG" {
+                        let latency = self
+                            .last_probe
+                            .take()
+                            .map(|probe| probe.elapsed())
+                            .unwrap_or_default();
+                        self.telemetry.log_heartbeat(latency);
+                        self.last_activity = Instant::now();
+                        continue;
+                    }
+                    trace!(
+                        "[cohsh][auth] state={:?} recv line {}",
+                        self.auth_state,
+                        trimmed
+                    );
+                    return Ok(Some(trimmed));
+                }
+                ReadStatus::Timeout => {
+                    if Instant::now() >= deadline {
+                        return Err(anyhow!("timeout waiting for console response"));
+                    }
+                    if self.last_activity.elapsed() >= self.heartbeat_interval {
+                        match self.issue_heartbeat()? {
+                            HeartbeatOutcome::Ack => continue,
+                            HeartbeatOutcome::Line(line) => return Ok(Some(line)),
+                            HeartbeatOutcome::Closed => return Ok(None),
+                        }
+                    }
+                }
+                ReadStatus::Closed => return Ok(None),
+            }
+        }
+    }
+
     fn recover_session(&mut self) -> Result<()> {
         let Some(cache) = self.session_cache.clone() else {
             return Err(anyhow!("TCP session dropped before any attach succeeded"));
@@ -1011,9 +1056,16 @@ impl Transport for TcpTransport {
 
     fn ping(&mut self, _session: &Session) -> Result<String> {
         let mut attempts = 0usize;
+        let wait = self
+            .timeout
+            .checked_mul(u32::try_from(self.max_retries + 1).unwrap_or(u32::MAX))
+            .unwrap_or(self.timeout)
+            .saturating_add(self.heartbeat_interval);
+        let now = Instant::now();
+        let deadline = now.checked_add(wait).unwrap_or(now);
         loop {
             self.send_line("PING")?;
-            match self.next_protocol_line()? {
+            match self.next_protocol_line_with_deadline(deadline)? {
                 Some(response) => {
                     if self.record_ack(&response) {
                         if response.starts_with("OK PING") {

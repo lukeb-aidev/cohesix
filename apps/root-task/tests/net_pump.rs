@@ -343,7 +343,7 @@ fn tx_queue_saturation_updates_telemetry() {
 }
 
 #[test]
-fn ping_requires_session_before_ack() {
+fn ping_acknowledges_without_attach() {
     let serial = LoopbackSerial::<{ DEFAULT_RX_CAPACITY }>::new();
     let mut audit = AuditCapture::new();
     let mut pump = build_pump(serial, &mut audit);
@@ -372,12 +372,16 @@ fn ping_requires_session_before_ack() {
         "auth acknowledgement missing ({frames:?})"
     );
     assert!(
+        frames.iter().any(|line| line == "PONG"),
+        "PONG console line missing ({frames:?})"
+    );
+    assert!(
         frames
             .iter()
-            .any(|line| line.starts_with("ERR PING reason=unauthenticated")),
+            .any(|line| line.starts_with("OK PING reply=pong")),
         "frames captured: {frames:?}"
     );
-    assert!(pump.metrics().denied_commands >= 1 || !audit.denials.is_empty());
+    assert!(pump.metrics().accepted_commands >= 1);
 }
 
 #[test]
