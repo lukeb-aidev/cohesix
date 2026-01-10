@@ -1266,15 +1266,10 @@ where
                 }
             }
             Command::Ping => {
-                if self.ensure_authenticated(SessionRole::Worker) {
-                    self.audit.info("console: ping");
-                    self.metrics.accepted_commands += 1;
-                    self.emit_console_line("PONG");
-                    self.emit_ack_ok("PING", Some("reply=pong"));
-                } else {
-                    cmd_status = "err";
-                    self.emit_ack_err("PING", Some("reason=unauthenticated"));
-                }
+                self.audit.info("console: ping");
+                self.metrics.accepted_commands += 1;
+                self.emit_console_line("PONG");
+                self.emit_ack_ok("PING", Some("reply=pong"));
             }
             Command::NetTest => {
                 #[cfg(feature = "net-console")]
