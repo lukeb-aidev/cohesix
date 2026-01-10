@@ -791,6 +791,13 @@ impl<T: Transport, W: Write> Shell<T, W> {
         Ok(())
     }
 
+    fn drain_ack_lines(&mut self) -> Result<()> {
+        for ack in self.transport.drain_acknowledgements() {
+            self.write_ack_line(&ack)?;
+        }
+        Ok(())
+    }
+
     fn begin_script_command(&mut self, line: &str) {
         if let Some(state) = self.script_state.as_mut() {
             state.begin_command(line);
@@ -857,10 +864,13 @@ impl<T: Transport, W: Write> Shell<T, W> {
     }
 
     fn run_script_lines(&mut self, lines: &[ScriptLine]) -> Result<()> {
-        for entry in lines {
+        let mut index = 0usize;
+        while index < lines.len() {
+            let entry = &lines[index];
             let text = entry.text.as_str();
             let mut parts = text.split_whitespace();
             let Some(keyword) = parts.next() else {
+                index = index.saturating_add(1);
                 continue;
             };
 
@@ -964,6 +974,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         "EXPECT selector is invalid",
                     ));
                 }
+                index = index.saturating_add(1);
                 continue;
             }
 
@@ -1006,6 +1017,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     ));
                 }
                 thread::sleep(Duration::from_millis(millis));
+                index = index.saturating_add(1);
                 continue;
             }
 
@@ -1014,6 +1026,10 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 Ok(CommandStatus::Quit) => break,
                 Ok(CommandStatus::Continue) => {}
                 Err(err) => {
+                    if self.should_defer_script_error(index, lines) {
+                        index = index.saturating_add(1);
+                        continue;
+                    }
                     let reason = format!("command failed: {err}");
                     return Err(format_script_error(
                         entry.number,
@@ -1023,8 +1039,25 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     ));
                 }
             }
+            index = index.saturating_add(1);
         }
         Ok(())
+    }
+
+    fn should_defer_script_error(&self, index: usize, lines: &[ScriptLine]) -> bool {
+        let Some(state) = self.script_state.as_ref() else {
+            return false;
+        };
+        let Some(last) = state.last_response_line.as_deref() else {
+            return false;
+        };
+        if !last.starts_with("ERR") {
+            return false;
+        }
+        let Some(next) = lines.get(index + 1) else {
+            return false;
+        };
+        next.text.trim_start().starts_with("EXPECT")
     }
 
     fn run_pending_attach(&mut self, pending: &mut Option<AutoAttach>) -> Result<()> {
@@ -1160,14 +1193,21 @@ impl<T: Transport, W: Write> Shell<T, W> {
             .session
             .as_ref()
             .context("attach to a session before running tail")?;
-        let lines = self.transport.tail(session, path)?;
-        for ack in self.transport.drain_acknowledgements() {
-            self.write_ack_line(&ack)?;
+        let result = self.transport.tail(session, path);
+        let drain_result = self.drain_ack_lines();
+        match result {
+            Ok(lines) => {
+                drain_result?;
+                for line in lines {
+                    self.write_line(&line)?;
+                }
+                Ok(())
+            }
+            Err(err) => {
+                let _ = drain_result;
+                Err(err)
+            }
         }
-        for line in lines {
-            self.write_line(&line)?;
-        }
-        Ok(())
     }
 
     fn read_path(&mut self, path: &str) -> Result<()> {
@@ -1176,14 +1216,21 @@ impl<T: Transport, W: Write> Shell<T, W> {
             .session
             .as_ref()
             .context("attach to a session before running cat")?;
-        let lines = self.transport.read(session, path)?;
-        for ack in self.transport.drain_acknowledgements() {
-            self.write_ack_line(&ack)?;
+        let result = self.transport.read(session, path);
+        let drain_result = self.drain_ack_lines();
+        match result {
+            Ok(lines) => {
+                drain_result?;
+                for line in lines {
+                    self.write_line(&line)?;
+                }
+                Ok(())
+            }
+            Err(err) => {
+                let _ = drain_result;
+                Err(err)
+            }
         }
-        for line in lines {
-            self.write_line(&line)?;
-        }
-        Ok(())
     }
 
     fn list_path(&mut self, path: &str) -> Result<()> {
@@ -1192,14 +1239,21 @@ impl<T: Transport, W: Write> Shell<T, W> {
             .session
             .as_ref()
             .context("attach to a session before running ls")?;
-        let entries = self.transport.list(session, path)?;
-        for ack in self.transport.drain_acknowledgements() {
-            self.write_ack_line(&ack)?;
+        let result = self.transport.list(session, path);
+        let drain_result = self.drain_ack_lines();
+        match result {
+            Ok(entries) => {
+                drain_result?;
+                for entry in entries {
+                    self.write_line(&entry)?;
+                }
+                Ok(())
+            }
+            Err(err) => {
+                let _ = drain_result;
+                Err(err)
+            }
         }
-        for entry in entries {
-            self.write_line(&entry)?;
-        }
-        Ok(())
     }
 
     fn write_path(&mut self, path: &str, payload: &[u8]) -> Result<()> {
@@ -1208,11 +1262,18 @@ impl<T: Transport, W: Write> Shell<T, W> {
             .session
             .as_ref()
             .context("attach to a session before running echo")?;
-        self.transport.write(session, path, payload)?;
-        for ack in self.transport.drain_acknowledgements() {
-            self.write_ack_line(&ack)?;
+        let result = self.transport.write(session, path, payload);
+        let drain_result = self.drain_ack_lines();
+        match result {
+            Ok(()) => {
+                drain_result?;
+                Ok(())
+            }
+            Err(err) => {
+                let _ = drain_result;
+                Err(err)
+            }
         }
-        Ok(())
     }
 
     fn queen_session(&self, command: &str) -> Result<&Session> {

@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::io::Cursor;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use cohsh::{Session, Shell, Transport};
 use cohesix_ticket::Role;
 use secure9p_codec::SessionId;
@@ -55,6 +55,49 @@ impl Transport for ScriptTransport {
         if let Some(ack) = self.write_ack.as_ref() {
             self.pending_ack.push_back(ack.clone());
         }
+        Ok(())
+    }
+
+    fn drain_acknowledgements(&mut self) -> Vec<String> {
+        self.pending_ack.drain(..).collect()
+    }
+}
+
+#[derive(Default)]
+struct ErrReadTransport {
+    pending_ack: VecDeque<String>,
+    attach_ack: Option<String>,
+    read_ack: Option<String>,
+}
+
+impl Transport for ErrReadTransport {
+    fn attach(&mut self, role: Role, _ticket: Option<&str>) -> Result<Session> {
+        if let Some(ack) = self.attach_ack.as_ref() {
+            self.pending_ack.push_back(ack.clone());
+        }
+        Ok(Session::new(SessionId::from_raw(1), role))
+    }
+
+    fn ping(&mut self, _session: &Session) -> Result<String> {
+        Ok("pong".to_owned())
+    }
+
+    fn tail(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    fn read(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+        if let Some(ack) = self.read_ack.as_ref() {
+            self.pending_ack.push_back(ack.clone());
+        }
+        Err(anyhow!("read failed"))
+    }
+
+    fn list(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    fn write(&mut self, _session: &Session, _path: &str, _payload: &[u8]) -> Result<()> {
         Ok(())
     }
 
@@ -155,4 +198,23 @@ EXPECT SUBSTR payload-one
     assert!(message.contains("line 3"));
     assert!(message.contains("EXPECT SUBSTR payload-one"));
     assert!(message.contains("last response: OK TAIL path=/log/queen.log"));
+}
+
+#[test]
+fn script_allows_expect_after_err_ack() {
+    let transport = ErrReadTransport {
+        attach_ack: Some("OK ATTACH role=Queen".to_owned()),
+        read_ack: Some("ERR CAT reason=ninedoor-error error=invalid path".to_owned()),
+        ..Default::default()
+    };
+    let mut shell = Shell::new(transport, Cursor::new(Vec::new()));
+    let script = "\
+attach queen
+EXPECT OK
+cat /worker/worker-0/telemetry
+EXPECT ERR
+";
+    shell
+        .run_script(Cursor::new(script.as_bytes()))
+        .expect("script should allow EXPECT after ERR ack");
 }

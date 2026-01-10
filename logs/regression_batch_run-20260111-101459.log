@@ -1,0 +1,6 @@
+=== Running boot_v0.coh ===
+PASS: boot_v0.coh
+=== Running 9p_batch.coh ===
+PASS: 9p_batch.coh
+=== Running telemetry_ring.coh ===
+FAIL: cohsh script telemetry_ring.coh
