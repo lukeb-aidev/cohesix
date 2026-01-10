@@ -12,11 +12,17 @@ TCP_HOST="${COHSH_TCP_HOST:-127.0.0.1}"
 TCP_PORT="${COHSH_TCP_PORT:-31337}"
 SCRIPTS_DIR="${SCRIPT_DIR}"
 AUTH_TOKEN="${AUTH_TOKEN:-${COHSH_AUTH_TOKEN:-}}"
-COHSH_TIMEOUT="${COHSH_TIMEOUT:-20}"
+SCRIPT_TIMEOUT="${SCRIPT_TIMEOUT:-${COHSH_TIMEOUT:-20}}"
+PROBE_TIMEOUT="${PROBE_TIMEOUT:-6}"
+PROBE_DEADLINE="${PROBE_DEADLINE:-60}"
+PROBE_COOLDOWN="${PROBE_COOLDOWN:-2}"
+RETRY_LIMIT="${RETRY_LIMIT:-2}"
+RETRY_DELAY="${RETRY_DELAY:-2}"
+TRANSIENT_PATTERNS="${TRANSIENT_PATTERNS:-authentication timed out|auth timeout|timeout waiting for server response|command timed out}"
 
 usage() {
     cat <<'USAGE'
-Usage: scripts/cohsh/run_regression_pack.sh [--cohsh <path>] [--tcp-host <host>] [--tcp-port <port>] [--auth-token <token>] [--timeout <seconds>]
+Usage: scripts/cohsh/run_regression_pack.sh [--cohsh <path>] [--tcp-host <host>] [--tcp-port <port>] [--auth-token <token>] [--timeout <seconds>] [--probe-timeout <seconds>] [--probe-deadline <seconds>] [--probe-cooldown <seconds>] [--retries <count>] [--retry-delay <seconds>]
 
 Runs the .coh regression scripts against an already-running QEMU TCP console.
 USAGE
@@ -41,7 +47,27 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --timeout)
-            COHSH_TIMEOUT="$2"
+            SCRIPT_TIMEOUT="$2"
+            shift 2
+            ;;
+        --probe-timeout)
+            PROBE_TIMEOUT="$2"
+            shift 2
+            ;;
+        --probe-deadline)
+            PROBE_DEADLINE="$2"
+            shift 2
+            ;;
+        --probe-cooldown)
+            PROBE_COOLDOWN="$2"
+            shift 2
+            ;;
+        --retries)
+            RETRY_LIMIT="$2"
+            shift 2
+            ;;
+        --retry-delay)
+            RETRY_DELAY="$2"
             shift 2
             ;;
         -h|--help)
@@ -100,8 +126,37 @@ run_cohsh_script() {
     run_with_timeout "${timeout}" "${cmd[@]}"
 }
 
+run_cohsh_script_with_retry() {
+    local script_path="$1"
+    local timeout="$2"
+    local attempt=0
+    local output=""
+    local max_attempts=$((RETRY_LIMIT + 1))
+
+    while (( attempt < max_attempts )); do
+        if output=$(run_cohsh_script "${script_path}" "${timeout}" 2>&1); then
+            printf '%s\n' "${output}"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        if (( attempt >= max_attempts )); then
+            printf '%s\n' "${output}"
+            return 1
+        fi
+        if ! printf '%s\n' "${output}" | grep -Eq "${TRANSIENT_PATTERNS}"; then
+            printf '%s\n' "${output}"
+            return 1
+        fi
+        echo "[regression-pack] transient auth timeout; retrying (${attempt}/${RETRY_LIMIT})" >&2
+        sleep "${RETRY_DELAY}"
+    done
+
+    printf '%s\n' "${output}"
+    return 1
+}
+
 probe_console() {
-    local deadline=$((SECONDS + 30))
+    local deadline=$((SECONDS + PROBE_DEADLINE))
     local probe_script
     local last_error=""
     probe_script=$(mktemp -t cohsh_probe)
@@ -113,7 +168,7 @@ COMMANDS
 
     while (( SECONDS < deadline )); do
         local output=""
-        if output=$(run_cohsh_script "${probe_script}" "${COHSH_TIMEOUT}" 2>&1); then
+        if output=$(run_cohsh_script "${probe_script}" "${PROBE_TIMEOUT}" 2>&1); then
             rm -f "${probe_script}"
             return 0
         fi
@@ -123,6 +178,7 @@ COMMANDS
 
     rm -f "${probe_script}"
     echo "QEMU TCP console not reachable at ${TCP_HOST}:${TCP_PORT}" >&2
+    echo "[regression-pack] probe timeout=${PROBE_TIMEOUT}s deadline=${PROBE_DEADLINE}s" >&2
     if [[ -n "${last_error}" ]]; then
         echo "[regression-pack] last cohsh output:" >&2
         echo "${last_error}" >&2
@@ -148,8 +204,9 @@ for script in "${scripts[@]}"; do
     fi
 
     probe_console
+    sleep "${PROBE_COOLDOWN}"
     echo "running ${script}"
-    if ! output=$(run_cohsh_script "${script_path}" "${COHSH_TIMEOUT}" 2>&1); then
+    if ! output=$(run_cohsh_script_with_retry "${script_path}" "${SCRIPT_TIMEOUT}"); then
         echo "FAILED: ${script_path}" >&2
         echo "${output}" >&2
         exit 1

@@ -1344,22 +1344,52 @@ where
                                 Ok(lines) => {
                                     let mut summary: HeaplessString<128> =
                                         HeaplessString::new();
-                                    for (idx, line) in lines.iter().enumerate() {
-                                        if idx > 0 {
-                                            if summary.push('|').is_err() {
-                                                self.emit_ack_err(
-                                                    "CAT",
-                                                    Some("reason=summary-too-long"),
-                                                );
-                                                return Ok(());
+                                    let mut selected: HeaplessVec<
+                                        usize,
+                                        { log_buffer::LOG_SNAPSHOT_LINES },
+                                    > = HeaplessVec::new();
+                                    let mut total_len = 0usize;
+                                    let max_line_len = summary.capacity() / 2;
+                                    for (idx, line) in lines.iter().enumerate().rev() {
+                                        let line_len = line.len();
+                                        if line_len > max_line_len {
+                                            continue;
+                                        }
+                                        let sep = if total_len == 0 { 0 } else { 1 };
+                                        if line_len
+                                            .saturating_add(sep)
+                                            .saturating_add(total_len)
+                                            > summary.capacity()
+                                        {
+                                            continue;
+                                        }
+                                        total_len = total_len
+                                            .saturating_add(line_len)
+                                            .saturating_add(sep);
+                                        if selected.push(idx).is_err() {
+                                            break;
+                                        }
+                                    }
+                                    if selected.is_empty() && !lines.is_empty() {
+                                        if let Some(line) = lines.last() {
+                                            for ch in line.as_str().chars() {
+                                                if summary.push(ch).is_err() {
+                                                    break;
+                                                }
                                             }
                                         }
-                                        if summary.push_str(line.as_str()).is_err() {
-                                            self.emit_ack_err(
-                                                "CAT",
-                                                Some("reason=summary-too-long"),
-                                            );
-                                            return Ok(());
+                                    } else {
+                                        for (pos, idx) in selected.iter().rev().enumerate() {
+                                            if pos > 0 {
+                                                if summary.push('|').is_err() {
+                                                    break;
+                                                }
+                                            }
+                                            if let Some(line) = lines.get(*idx) {
+                                                if summary.push_str(line.as_str()).is_err() {
+                                                    break;
+                                                }
+                                            }
                                         }
                                     }
                                     let detail = format_message(format_args!(

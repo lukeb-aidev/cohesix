@@ -74,6 +74,10 @@ These artifacts define kernel-level truth. Code must align with them exactly.
    - AVOID stack overflow.
    - AVOID memory scribbles.
    - BIAS RE-USE of existing instrumentation, add new instrumentation WITH CARE.
+
+ 10. **.coh Scrip Grammar**
+   - All .coh scripts MUST FOLLOW the syntax and grammar defiined in docs/USERLAND_AND_CLI.md.
+   - If grammaer must be modified to support new functionmality, you MUST UPDATE docs/USERLAND_AND_CLI.md accordingly.
 ---
 
 ## Worker Bring-up

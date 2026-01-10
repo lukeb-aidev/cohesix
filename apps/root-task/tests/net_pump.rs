@@ -163,6 +163,45 @@ fn network_lines_round_trip_acknowledgements() {
     assert!(audit.info.iter().any(|line| line.contains("console: log")));
 }
 
+#[cfg(feature = "kernel")]
+#[test]
+fn cat_summary_includes_recent_lines() {
+    let serial = LoopbackSerial::<{ DEFAULT_RX_CAPACITY }>::new();
+    let mut audit = AuditCapture::new();
+    let mut pump = build_pump(serial, &mut audit);
+    let (mut net, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 88));
+    pump = pump.with_network(&mut net);
+
+    {
+        let net_iface = pump.network_mut().expect("network not attached");
+        let token = issue_queen_token("token");
+        net_iface.inject_console_line(format!("attach queen {token}\n").as_str());
+        net_iface.inject_console_line("echo /log/queen.log cat-summary-1\n");
+        net_iface.inject_console_line("echo /log/queen.log cat-summary-2\n");
+        net_iface.inject_console_line("echo /log/queen.log cat-summary-3\n");
+        net_iface.inject_console_line("cat /log/queen.log\n");
+    }
+
+    for _ in 0..10 {
+        pump.poll();
+    }
+
+    let mut lines = Vec::new();
+    while let Some(frame) = handle.pop_tx() {
+        lines.extend(decode_frame_lines(frame.as_slice()));
+    }
+
+    let ok_cat = lines
+        .iter()
+        .find(|line| line.starts_with("OK CAT path=/log/queen.log data="))
+        .cloned();
+    let ok_cat = ok_cat.expect("missing OK CAT acknowledgement");
+    assert!(
+        ok_cat.contains("cat-summary-1|cat-summary-2|cat-summary-3"),
+        "summary missing recent lines: {ok_cat}"
+    );
+}
+
 #[test]
 fn auth_and_attach_survive_saturated_queue() {
     let serial = LoopbackSerial::<{ DEFAULT_RX_CAPACITY }>::new();
