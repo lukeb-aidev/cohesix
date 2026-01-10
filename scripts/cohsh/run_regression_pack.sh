@@ -1,194 +1,10 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
-# Purpose: Run the cohsh .coh regression pack against a live QEMU TCP console.
+# Purpose: Run the cohsh .coh regression pack with kill/clean/rebuild between scripts.
 
 set -euo pipefail
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
-
-COHSH_BIN="${COHSH_BIN:-${REPO_ROOT}/out/cohesix/host-tools/cohsh}"
-TCP_HOST="${COHSH_TCP_HOST:-127.0.0.1}"
-TCP_PORT="${COHSH_TCP_PORT:-31337}"
-SCRIPTS_DIR="${SCRIPT_DIR}"
-AUTH_TOKEN="${AUTH_TOKEN:-${COHSH_AUTH_TOKEN:-}}"
-SCRIPT_TIMEOUT="${SCRIPT_TIMEOUT:-${COHSH_TIMEOUT:-20}}"
-PROBE_TIMEOUT="${PROBE_TIMEOUT:-6}"
-PROBE_DEADLINE="${PROBE_DEADLINE:-60}"
-PROBE_COOLDOWN="${PROBE_COOLDOWN:-2}"
-RETRY_LIMIT="${RETRY_LIMIT:-2}"
-RETRY_DELAY="${RETRY_DELAY:-2}"
-TRANSIENT_PATTERNS="${TRANSIENT_PATTERNS:-authentication timed out|auth timeout|timeout waiting for server response|command timed out}"
-
-usage() {
-    cat <<'USAGE'
-Usage: scripts/cohsh/run_regression_pack.sh [--cohsh <path>] [--tcp-host <host>] [--tcp-port <port>] [--auth-token <token>] [--timeout <seconds>] [--probe-timeout <seconds>] [--probe-deadline <seconds>] [--probe-cooldown <seconds>] [--retries <count>] [--retry-delay <seconds>]
-
-Runs the .coh regression scripts against an already-running QEMU TCP console.
-USAGE
-}
-
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --cohsh)
-            COHSH_BIN="$2"
-            shift 2
-            ;;
-        --tcp-host)
-            TCP_HOST="$2"
-            shift 2
-            ;;
-        --tcp-port)
-            TCP_PORT="$2"
-            shift 2
-            ;;
-        --auth-token)
-            AUTH_TOKEN="$2"
-            shift 2
-            ;;
-        --timeout)
-            SCRIPT_TIMEOUT="$2"
-            shift 2
-            ;;
-        --probe-timeout)
-            PROBE_TIMEOUT="$2"
-            shift 2
-            ;;
-        --probe-deadline)
-            PROBE_DEADLINE="$2"
-            shift 2
-            ;;
-        --probe-cooldown)
-            PROBE_COOLDOWN="$2"
-            shift 2
-            ;;
-        --retries)
-            RETRY_LIMIT="$2"
-            shift 2
-            ;;
-        --retry-delay)
-            RETRY_DELAY="$2"
-            shift 2
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        *)
-            echo "Unknown argument: $1" >&2
-            usage
-            exit 1
-            ;;
-    esac
-done
-
-if [[ ! -x "${COHSH_BIN}" ]]; then
-    echo "cohsh binary not found or not executable: ${COHSH_BIN}" >&2
-    exit 1
-fi
-
-run_with_timeout() {
-    local timeout="$1"
-    shift
-    python3 - "$timeout" "$@" <<'PY'
-import subprocess
-import sys
-
-timeout = float(sys.argv[1])
-cmd = sys.argv[2:]
-try:
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
-    sys.stdout.buffer.write(proc.stdout)
-    sys.stdout.buffer.flush()
-    sys.exit(proc.returncode)
-except subprocess.TimeoutExpired as err:
-    if err.stdout:
-        sys.stdout.buffer.write(err.stdout)
-        sys.stdout.buffer.flush()
-    print(f"[regression-pack] error: command timed out after {timeout}s", file=sys.stderr)
-    sys.exit(124)
-PY
-}
-
-run_cohsh_script() {
-    local script_path="$1"
-    local timeout="$2"
-    local -a cmd=(
-        "${COHSH_BIN}"
-        --transport tcp
-        --tcp-host "${TCP_HOST}"
-        --tcp-port "${TCP_PORT}"
-        --script "${script_path}"
-    )
-    if [[ -n "${AUTH_TOKEN}" ]]; then
-        cmd+=(--auth-token "${AUTH_TOKEN}")
-    fi
-    run_with_timeout "${timeout}" "${cmd[@]}"
-}
-
-run_cohsh_script_with_retry() {
-    local script_path="$1"
-    local timeout="$2"
-    local attempt=0
-    local output=""
-    local max_attempts=$((RETRY_LIMIT + 1))
-
-    while (( attempt < max_attempts )); do
-        if output=$(run_cohsh_script "${script_path}" "${timeout}" 2>&1); then
-            printf '%s\n' "${output}"
-            return 0
-        fi
-        attempt=$((attempt + 1))
-        if (( attempt >= max_attempts )); then
-            printf '%s\n' "${output}"
-            return 1
-        fi
-        if ! printf '%s\n' "${output}" | grep -Eq "${TRANSIENT_PATTERNS}"; then
-            printf '%s\n' "${output}"
-            return 1
-        fi
-        echo "[regression-pack] transient auth timeout; retrying (${attempt}/${RETRY_LIMIT})" >&2
-        sleep "${RETRY_DELAY}"
-    done
-
-    printf '%s\n' "${output}"
-    return 1
-}
-
-probe_console() {
-    local deadline=$((SECONDS + PROBE_DEADLINE))
-    local probe_script
-    local last_error=""
-    probe_script=$(mktemp -t cohsh_probe)
-    cat >"${probe_script}" <<'COMMANDS'
-attach queen
-ping
-quit
-COMMANDS
-
-    while (( SECONDS < deadline )); do
-        local output=""
-        if output=$(run_cohsh_script "${probe_script}" "${PROBE_TIMEOUT}" 2>&1); then
-            rm -f "${probe_script}"
-            return 0
-        fi
-        last_error="${output}"
-        sleep 1
-    done
-
-    rm -f "${probe_script}"
-    echo "QEMU TCP console not reachable at ${TCP_HOST}:${TCP_PORT}" >&2
-    echo "[regression-pack] probe timeout=${PROBE_TIMEOUT}s deadline=${PROBE_DEADLINE}s" >&2
-    if [[ -n "${last_error}" ]]; then
-        echo "[regression-pack] last cohsh output:" >&2
-        echo "${last_error}" >&2
-    fi
-    return 1
-}
-
-probe_console
-
-scripts=(
+SCRIPTS=(
     "boot_v0.coh"
     "9p_batch.coh"
     "telemetry_ring.coh"
@@ -197,23 +13,174 @@ scripts=(
     "tcp_basic.coh"
 )
 
-for script in "${scripts[@]}"; do
-    script_path="${SCRIPTS_DIR}/${script}"
-    if [[ ! -f "${script_path}" ]]; then
-        echo "Missing script: ${script_path}" >&2
+LOG_ROOT="out/cohesix/logs"
+ARCHIVE_ROOT="out/regression-logs"
+
+check_port_open() {
+    local host="$1"
+    local port="$2"
+    python3 - "$host" "$port" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+try:
+    with socket.create_connection((host, port), timeout=0.5):
+        sys.exit(0)
+except OSError:
+    sys.exit(1)
+PY
+}
+
+wait_port_free() {
+    local host="$1"
+    local port="$2"
+    local timeout="$3"
+    local deadline=$((SECONDS + timeout))
+    while (( SECONDS < deadline )); do
+        if ! check_port_open "$host" "$port"; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    return 1
+}
+
+log_has() {
+    local file="$1"
+    local pattern="$2"
+    if [[ ! -f "$file" ]]; then
+        return 1
+    fi
+    if command -v rg >/dev/null 2>&1; then
+        rg -q "$pattern" "$file"
+    else
+        grep -q "$pattern" "$file"
+    fi
+}
+
+wait_log_marker() {
+    local file="$1"
+    local pattern="$2"
+    local timeout="$3"
+    local pid="$4"
+    local deadline=$((SECONDS + timeout))
+    while (( SECONDS < deadline )); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            return 1
+        fi
+        if log_has "$file" "$pattern"; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    return 2
+}
+
+wait_port_ready() {
+    local host="$1"
+    local port="$2"
+    local timeout="$3"
+    local pid="$4"
+    local deadline=$((SECONDS + timeout))
+    while (( SECONDS < deadline )); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            return 1
+        fi
+        if check_port_open "$host" "$port"; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    return 2
+}
+
+run_cohsh() {
+    local script="$1"
+    case "$script" in
+        boot_v0.coh)
+            ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/boot_v0.coh
+            ;;
+        9p_batch.coh)
+            ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/9p_batch.coh
+            ;;
+        telemetry_ring.coh)
+            ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/telemetry_ring.coh
+            ;;
+        observe_watch.coh)
+            ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/observe_watch.coh
+            ;;
+        cas_roundtrip.coh)
+            ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/cas_roundtrip.coh
+            ;;
+        tcp_basic.coh)
+            ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/tcp_basic.coh
+            ;;
+        *)
+            echo "Unknown script: $script" >&2
+            return 2
+            ;;
+    esac
+}
+
+mkdir -p "${ARCHIVE_ROOT}"
+
+for script in "${SCRIPTS[@]}"; do
+    name="${script%.coh}"
+    echo "=== Running ${script} ==="
+
+    pkill -f "qemu-system-aarch64" || true
+    pkill -f "/host-tools/cohsh" || true
+
+    if ! wait_port_free 127.0.0.1 31337 5; then
+        echo "FAIL: port 31337 still busy before ${script}" >&2
         exit 1
     fi
 
-    probe_console
-    sleep "${PROBE_COOLDOWN}"
-    echo "running ${script}"
-    if ! output=$(run_cohsh_script_with_retry "${script_path}" "${SCRIPT_TIMEOUT}"); then
-        echo "FAILED: ${script_path}" >&2
-        echo "${output}" >&2
+    rm -rf target out/cohesix
+    mkdir -p "${LOG_ROOT}"
+
+    qemu_log="${LOG_ROOT}/${name}.qemu.log"
+    coh_log="${LOG_ROOT}/${name}.out.log"
+
+    SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
+        --sel4-build "$HOME/seL4/build" \
+        --out-dir out/cohesix \
+        --profile release \
+        --root-task-features cohesix-dev \
+        --cargo-target aarch64-unknown-none \
+        --raw-qemu \
+        --transport tcp \
+        > "$qemu_log" 2>&1 &
+    qemu_pid=$!
+
+    if ! wait_log_marker "$qemu_log" "Cohesix console ready" 180 "$qemu_pid"; then
+        echo "FAIL: console ready marker not seen for ${script}" >&2
+        cp "$qemu_log" "${ARCHIVE_ROOT}/${name}.qemu.log" || true
         exit 1
     fi
-    echo "ok: ${script}"
-    sleep 1
+
+    if ! wait_port_ready 127.0.0.1 31337 30 "$qemu_pid"; then
+        echo "FAIL: TCP console not ready for ${script}" >&2
+        cp "$qemu_log" "${ARCHIVE_ROOT}/${name}.qemu.log" || true
+        exit 1
+    fi
+
+    if ! run_cohsh "$script" > "$coh_log" 2>&1; then
+        echo "FAIL: cohsh script ${script}" >&2
+        cp "$qemu_log" "${ARCHIVE_ROOT}/${name}.qemu.log" || true
+        cp "$coh_log" "${ARCHIVE_ROOT}/${name}.out.log" || true
+        exit 1
+    fi
+
+    cp "$qemu_log" "${ARCHIVE_ROOT}/${name}.qemu.log"
+    cp "$coh_log" "${ARCHIVE_ROOT}/${name}.out.log"
+    echo "PASS: ${script}"
+
 done
 
-echo "regression pack complete: ${#scripts[@]} scripts passed"
+pkill -f "qemu-system-aarch64" || true
+pkill -f "/host-tools/cohsh" || true
+
+echo "regression pack complete: ${#SCRIPTS[@]} scripts passed"
