@@ -377,6 +377,11 @@ pub trait NetPoller {
     /// Drain pending net-console connection events (optional).
     fn drain_console_events(&mut self, _visitor: &mut dyn FnMut(NetConsoleEvent)) {}
 
+    /// Return the active TCP console connection identifier, if any.
+    fn active_console_conn_id(&self) -> Option<u64> {
+        None
+    }
+
     /// Inject a console line into the network transport (testing hook).
     fn inject_console_line(&mut self, _line: &str) {}
 
@@ -413,11 +418,34 @@ pub enum NetConsoleEvent {
     Disconnected {
         /// Unique connection identifier assigned by the stack.
         conn_id: u64,
+        /// Reason for the disconnect.
+        reason: NetConsoleDisconnectReason,
         /// Total bytes read from the client during the session.
         bytes_read: u64,
         /// Total bytes written to the client during the session.
         bytes_written: u64,
     },
+}
+
+/// Reason for terminating a TCP console session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetConsoleDisconnectReason {
+    Quit,
+    Eof,
+    Reset,
+    Error,
+}
+
+impl NetConsoleDisconnectReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Quit => "quit",
+            Self::Eof => "eof",
+            Self::Reset => "reset",
+            Self::Error => "error",
+        }
+    }
 }
 
 mod console_srv;

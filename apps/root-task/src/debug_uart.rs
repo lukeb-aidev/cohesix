@@ -22,3 +22,20 @@ pub fn debug_uart_str(s: &str) {
         let _ = s;
     }
 }
+
+/// Emit a single line to the debug UART, bypassing the log buffer.
+pub fn debug_uart_line(line: &str) {
+    #[cfg(feature = "kernel")]
+    {
+        for byte in line.bytes() {
+            crate::sel4::debug_put_char_raw(byte);
+        }
+        crate::sel4::debug_put_char_raw(b'\r');
+        crate::sel4::debug_put_char_raw(b'\n');
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    {
+        let _ = line;
+    }
+}

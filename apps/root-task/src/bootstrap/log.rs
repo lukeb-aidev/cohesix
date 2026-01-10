@@ -82,10 +82,22 @@ impl Log for BootstrapLogger {
         }
 
         let line = format_record_line(record);
-        self.emit(line.as_slice());
+        let use_log_buffer =
+            log_buffer::log_channel_active() && !skip_log_buffer_target(record.target());
+        self.emit(line.as_slice(), use_log_buffer);
     }
 
     fn flush(&self) {}
+}
+
+#[cfg(feature = "cohesix-dev")]
+fn skip_log_buffer_target(target: &str) -> bool {
+    matches!(target, "virtio-net" | "net-console" | "net-trace")
+}
+
+#[cfg(not(feature = "cohesix-dev"))]
+fn skip_log_buffer_target(_target: &str) -> bool {
+    false
 }
 
 fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
@@ -118,8 +130,8 @@ fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
 }
 
 impl BootstrapLogger {
-    fn emit(&self, line: &[u8]) {
-        if log_buffer::log_channel_active() {
+    fn emit(&self, line: &[u8], use_log_buffer: bool) {
+        if use_log_buffer {
             log_buffer::append_log_bytes(line);
             return;
         }

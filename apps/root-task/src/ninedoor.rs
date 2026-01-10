@@ -59,6 +59,11 @@ impl NineDoorBridge {
         }
     }
 
+    /// Reset per-session state after a console disconnect.
+    pub fn reset_session(&mut self) {
+        self.attached = false;
+    }
+
     /// Returns `true` when the bridge has successfully attached to the host.
     #[must_use]
     pub fn attached(&self) -> bool {

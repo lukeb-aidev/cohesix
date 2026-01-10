@@ -194,6 +194,7 @@ scripts=(
     "telemetry_ring.coh"
     "observe_watch.coh"
     "cas_roundtrip.coh"
+    "tcp_basic.coh"
 )
 
 for script in "${scripts[@]}"; do

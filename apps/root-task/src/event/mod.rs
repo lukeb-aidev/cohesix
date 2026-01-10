@@ -41,8 +41,8 @@ use crate::bootstrap::log as boot_log;
 use crate::debug_uart::debug_uart_str;
 #[cfg(feature = "net-console")]
 use crate::net::{
-    NetConsoleEvent, NetDiagSnapshot, NetPoller, NetTelemetry, CONSOLE_QUEUE_DEPTH, NET_DIAG,
-    NET_DIAG_FEATURED,
+    NetConsoleDisconnectReason, NetConsoleEvent, NetDiagSnapshot, NetPoller, NetTelemetry,
+    CONSOLE_QUEUE_DEPTH, NET_DIAG, NET_DIAG_FEATURED,
 };
 #[cfg(feature = "net-console")]
 use crate::trace::{RateLimitKey, RateLimiter};
@@ -415,11 +415,17 @@ where
     metrics: PumpMetrics,
     now_ms: u64,
     session: Option<SessionRole>,
+    session_id: Option<u64>,
+    session_origin: Option<ConsoleInputSource>,
+    next_session_id: u64,
     last_input_source: ConsoleInputSource,
     stream_end_pending: bool,
+    tail_active: bool,
     throttle: AuthThrottle,
     #[cfg(feature = "net-console")]
     net: Option<&'a mut dyn NetPoller>,
+    #[cfg(feature = "net-console")]
+    net_conn_id: Option<u64>,
     #[cfg(feature = "net-console")]
     last_net_diag_log_ms: Option<u64>,
     #[cfg(feature = "net-console")]
@@ -476,11 +482,17 @@ where
             metrics: PumpMetrics::default(),
             now_ms: 0,
             session: None,
+            session_id: None,
+            session_origin: None,
+            next_session_id: 1,
             last_input_source: ConsoleInputSource::Serial,
             stream_end_pending: false,
+            tail_active: false,
             throttle: AuthThrottle::default(),
             #[cfg(feature = "net-console")]
             net: None,
+            #[cfg(feature = "net-console")]
+            net_conn_id: None,
             #[cfg(feature = "net-console")]
             last_net_diag_log_ms: None,
             #[cfg(feature = "net-console")]
@@ -570,6 +582,7 @@ where
         let net_poll = if let Some(net) = self.net.as_mut() {
             let activity = net.poll(self.now_ms);
             let telemetry = net.telemetry();
+            let conn_id = net.active_console_conn_id();
             let mut buffered: HeaplessVec<
                 HeaplessString<DEFAULT_LINE_CAPACITY>,
                 { CONSOLE_QUEUE_DEPTH },
@@ -577,13 +590,14 @@ where
             net.drain_console_lines(&mut |line| {
                 let _ = buffered.push(line);
             });
-            Some((activity, telemetry, buffered))
+            Some((activity, telemetry, buffered, conn_id))
         } else {
             None
         };
 
         #[cfg(feature = "net-console")]
-        if let Some((activity, telemetry, buffered)) = net_poll {
+        if let Some((activity, telemetry, buffered, conn_id)) = net_poll {
+            self.net_conn_id = conn_id;
             if NET_DIAG_FEATURED {
                 self.log_net_diag(telemetry);
             } else if activity {
@@ -1122,6 +1136,8 @@ where
 
     #[cfg(feature = "net-console")]
     fn drain_net_console_events(&mut self) {
+        let session_is_net = matches!(self.session_origin, Some(ConsoleInputSource::Net));
+        let mut end_reason: Option<NetConsoleDisconnectReason> = None;
         if let Some(net) = self.net.as_mut() {
             net.drain_console_events(&mut |event| match event {
                 NetConsoleEvent::Connected { conn_id, peer } => match peer {
@@ -1143,18 +1159,29 @@ where
                 },
                 NetConsoleEvent::Disconnected {
                     conn_id,
+                    reason,
                     bytes_read,
                     bytes_written,
                 } => {
                     log::info!(
                         target: "net-console",
-                        "[net-console] conn {}: closed (bytes_read={}, bytes_written={})",
+                        "[net-console] conn {}: closed reason={} (bytes_read={}, bytes_written={})",
                         conn_id,
+                        reason.as_str(),
                         bytes_read,
                         bytes_written,
                     );
+                    if session_is_net && end_reason.is_none() {
+                        end_reason = Some(reason);
+                    }
                 }
             });
+        }
+        if session_is_net {
+            if let Some(reason) = end_reason {
+                let reason_label = Self::disconnect_reason_label(reason);
+                self.end_session(reason_label);
+            }
         }
     }
 
@@ -1164,6 +1191,23 @@ where
         let command_clone = command.clone();
         #[cfg(feature = "kernel")]
         let mut forwarded = false;
+        let verb_label = Self::command_label(&command);
+        let audit_net = matches!(self.last_input_source, ConsoleInputSource::Net);
+        let conn_id = if audit_net { self.active_tcp_conn_id() } else { 0 };
+        let start_sid = self.session_id.unwrap_or(0);
+        let mut cmd_status = "ok";
+        let term = if matches!(command, Command::Quit) {
+            "EOF"
+        } else {
+            "END"
+        };
+        if audit_net {
+            self.audit_tcp_cmd_begin(conn_id, start_sid, verb_label);
+        }
+        #[cfg(feature = "kernel")]
+        let mut result: Result<(), CommandDispatchError> = Ok(());
+        #[cfg(not(feature = "kernel"))]
+        let result: Result<(), CommandDispatchError> = Ok(());
         match command {
             Command::Help => {
                 self.audit.info("console: help");
@@ -1177,6 +1221,7 @@ where
                     self.emit_ack_ok("BOOTINFO", None);
                 } else {
                     self.metrics.denied_commands += 1;
+                    cmd_status = "err";
                     self.emit_ack_err("BOOTINFO", Some("reason=unavailable"));
                 }
             }
@@ -1186,6 +1231,7 @@ where
                     self.emit_ack_ok("CAPS", None);
                 } else {
                     self.metrics.denied_commands += 1;
+                    cmd_status = "err";
                     self.emit_ack_err("CAPS", Some("reason=unavailable"));
                 }
             }
@@ -1195,6 +1241,7 @@ where
                     self.emit_ack_ok("MEM", None);
                 } else {
                     self.metrics.denied_commands += 1;
+                    cmd_status = "err";
                     self.emit_ack_err("MEM", Some("reason=unavailable"));
                 }
             }
@@ -1210,6 +1257,7 @@ where
                 {
                     let _ = count;
                     self.metrics.denied_commands += 1;
+                    cmd_status = "err";
                     self.emit_ack_err("CACHELOG", Some("reason=unsupported"));
                 }
             }
@@ -1220,6 +1268,7 @@ where
                     self.emit_console_line("PONG");
                     self.emit_ack_ok("PING", Some("reply=pong"));
                 } else {
+                    cmd_status = "err";
                     self.emit_ack_err("PING", Some("reason=unauthenticated"));
                 }
             }
@@ -1233,16 +1282,19 @@ where
                             self.emit_ack_ok("NETTEST", None);
                         } else {
                             self.metrics.denied_commands += 1;
+                            cmd_status = "err";
                             self.emit_ack_err("NETTEST", Some("reason=unsupported"));
                         }
                     } else {
                         self.metrics.denied_commands += 1;
+                        cmd_status = "err";
                         self.emit_ack_err("NETTEST", Some("reason=net-disabled"));
                     }
                 }
                 #[cfg(not(feature = "net-console"))]
                 {
                     self.metrics.denied_commands += 1;
+                    cmd_status = "err";
                     self.emit_ack_err("NETTEST", Some("reason=net-disabled"));
                 }
             }
@@ -1294,12 +1346,14 @@ where
                         self.emit_ack_ok("NETSTATS", None);
                     } else {
                         self.metrics.denied_commands += 1;
+                        cmd_status = "err";
                         self.emit_ack_err("NETSTATS", Some("reason=net-disabled"));
                     }
                 }
                 #[cfg(not(feature = "net-console"))]
                 {
                     self.metrics.denied_commands += 1;
+                    cmd_status = "err";
                     self.emit_ack_err("NETSTATS", Some("reason=net-disabled"));
                 }
             }
@@ -1313,10 +1367,13 @@ where
                         net.request_disconnect();
                     }
                 }
-                self.session = None;
+                self.end_session("quit");
             }
             Command::Attach { role, ticket } => {
-                self.handle_attach(role, ticket);
+                let attached = self.handle_attach(role, ticket);
+                if !attached {
+                    cmd_status = "err";
+                }
                 #[cfg(feature = "kernel")]
                 {
                     forwarded = matches!(self.session, Some(_));
@@ -1330,11 +1387,15 @@ where
                     let detail = format_message(format_args!("path={}", path.as_str()));
                     self.emit_ack_ok("TAIL", Some(detail.as_str()));
                     self.stream_end_pending = true;
+                    self.tail_active = true;
+                    let sid = self.session_id.unwrap_or(0);
+                    self.audit_tail_start(sid, path.as_str());
                     #[cfg(feature = "kernel")]
                     {
                         forwarded = true;
                     }
                 } else {
+                    cmd_status = "err";
                     self.emit_auth_failure("TAIL");
                 }
             }
@@ -1356,25 +1417,39 @@ where
                                     > = HeaplessVec::new();
                                     let mut total_len = 0usize;
                                     let max_line_len = summary.capacity() / 2;
-                                    for (idx, line) in lines.iter().enumerate().rev() {
-                                        let line_len = line.len();
-                                        if line_len > max_line_len {
-                                            continue;
+                                    let mut prefer_user_lines = true;
+                                    for _pass in 0..2 {
+                                        for (idx, line) in lines.iter().enumerate().rev() {
+                                            if prefer_user_lines
+                                                && line.as_str().starts_with('[')
+                                            {
+                                                continue;
+                                            }
+                                            let line_len = line.len();
+                                            if line_len > max_line_len {
+                                                continue;
+                                            }
+                                            let sep = if total_len == 0 { 0 } else { 1 };
+                                            if line_len
+                                                .saturating_add(sep)
+                                                .saturating_add(total_len)
+                                                > summary.capacity()
+                                            {
+                                                continue;
+                                            }
+                                            total_len = total_len
+                                                .saturating_add(line_len)
+                                                .saturating_add(sep);
+                                            if selected.push(idx).is_err() {
+                                                break;
+                                            }
                                         }
-                                        let sep = if total_len == 0 { 0 } else { 1 };
-                                        if line_len
-                                            .saturating_add(sep)
-                                            .saturating_add(total_len)
-                                            > summary.capacity()
-                                        {
-                                            continue;
-                                        }
-                                        total_len = total_len
-                                            .saturating_add(line_len)
-                                            .saturating_add(sep);
-                                        if selected.push(idx).is_err() {
+                                        if !selected.is_empty() || !prefer_user_lines {
                                             break;
                                         }
+                                        selected.clear();
+                                        total_len = 0;
+                                        prefer_user_lines = false;
                                     }
                                     if selected.is_empty() && !lines.is_empty() {
                                         if let Some(line) = lines.last() {
@@ -1413,18 +1488,30 @@ where
                                     let detail = format_message(format_args!(
                                         "reason=ninedoor-error error={err}"
                                     ));
+                                    cmd_status = "err";
+                                    let sid = self.session_id.unwrap_or(0);
+                                    let err_msg = format_message(format_args!("{err}"));
+                                    self.audit_ninedoor_err(
+                                        sid,
+                                        "CAT",
+                                        path.as_str(),
+                                        err_msg.as_str(),
+                                    );
                                     self.emit_ack_err("CAT", Some(detail.as_str()));
                                 }
                             }
                         } else {
+                            cmd_status = "err";
                             self.emit_ack_err("CAT", Some("reason=ninedoor-unavailable"));
                         }
                     }
                     #[cfg(not(feature = "kernel"))]
                     {
+                        cmd_status = "err";
                         self.emit_ack_err("CAT", Some("reason=ninedoor-unavailable"));
                     }
                 } else {
+                    cmd_status = "err";
                     self.emit_auth_failure("CAT");
                 }
             }
@@ -1434,9 +1521,11 @@ where
                         format_message(format_args!("console: ls {} unsupported", path.as_str()));
                     self.audit.denied(message.as_str());
                     self.metrics.denied_commands += 1;
+                    cmd_status = "err";
                     let detail = format_message(format_args!("reason=unsupported path={}", path));
                     self.emit_ack_err("LS", Some(detail.as_str()));
                 } else {
+                    cmd_status = "err";
                     self.emit_auth_failure("LS");
                 }
             }
@@ -1446,11 +1535,15 @@ where
                     self.metrics.accepted_commands += 1;
                     self.emit_ack_ok("LOG", None);
                     self.stream_end_pending = true;
+                    self.tail_active = true;
+                    let sid = self.session_id.unwrap_or(0);
+                    self.audit_tail_start(sid, "/log/queen.log");
                     #[cfg(feature = "kernel")]
                     {
                         forwarded = true;
                     }
                 } else {
+                    cmd_status = "err";
                     self.emit_auth_failure("LOG");
                 }
             }
@@ -1479,18 +1572,30 @@ where
                                     let detail = format_message(format_args!(
                                         "reason=ninedoor-error error={err}"
                                     ));
+                                    cmd_status = "err";
+                                    let sid = self.session_id.unwrap_or(0);
+                                    let err_msg = format_message(format_args!("{err}"));
+                                    self.audit_ninedoor_err(
+                                        sid,
+                                        "ECHO",
+                                        path.as_str(),
+                                        err_msg.as_str(),
+                                    );
                                     self.emit_ack_err("ECHO", Some(detail.as_str()));
                                 }
                             }
                         } else {
+                            cmd_status = "err";
                             self.emit_ack_err("ECHO", Some("reason=ninedoor-unavailable"));
                         }
                     }
                     #[cfg(not(feature = "kernel"))]
                     {
+                        cmd_status = "err";
                         self.emit_ack_err("ECHO", Some("reason=ninedoor-unavailable"));
                     }
                 } else {
+                    cmd_status = "err";
                     self.emit_auth_failure("ECHO");
                 }
             }
@@ -1507,6 +1612,7 @@ where
                         forwarded = true;
                     }
                 } else {
+                    cmd_status = "err";
                     self.emit_auth_failure("SPAWN");
                 }
             }
@@ -1522,6 +1628,7 @@ where
                         forwarded = true;
                     }
                 } else {
+                    cmd_status = "err";
                     self.emit_auth_failure("KILL");
                 }
             }
@@ -1531,12 +1638,46 @@ where
         if forwarded {
             if let Err(err) = self.forward_to_ninedoor(&command_clone) {
                 self.stream_end_pending = false;
-                return Err(err);
+                cmd_status = "err";
+                #[cfg(feature = "cohesix-dev")]
+                if let CommandDispatchError::Bridge { source, .. } = &err {
+                    let sid = self.session_id.unwrap_or(0);
+                    let err_msg = format_message(format_args!("{source}"));
+                    match &command_clone {
+                        Command::Tail { path } => {
+                            self.audit_ninedoor_err(sid, "TAIL", path.as_str(), err_msg.as_str());
+                        }
+                        Command::Log => {
+                            self.audit_ninedoor_err(
+                                sid,
+                                "LOG",
+                                "/log/queen.log",
+                                err_msg.as_str(),
+                            );
+                        }
+                        Command::Attach { .. } => {
+                            self.audit_ninedoor_err(sid, "ATTACH", "-", err_msg.as_str());
+                        }
+                        Command::Spawn(_) => {
+                            self.audit_ninedoor_err(sid, "SPAWN", "-", err_msg.as_str());
+                        }
+                        Command::Kill(_) => {
+                            self.audit_ninedoor_err(sid, "KILL", "-", err_msg.as_str());
+                        }
+                        _ => {}
+                    }
+                }
+                if self.tail_active {
+                    let sid = self.session_id.unwrap_or(0);
+                    self.audit_tail_stop(sid, "error");
+                    self.tail_active = false;
+                }
+                result = Err(err);
             }
         }
 
         #[cfg(feature = "kernel")]
-        if self.stream_end_pending {
+        if result.is_ok() && self.stream_end_pending {
             match &command_clone {
                 Command::Log => self.emit_log_snapshot(),
                 Command::Tail { path } if path.as_str() == "/log/queen.log" => {
@@ -1546,9 +1687,24 @@ where
             }
         }
 
-        self.emit_stream_end_if_pending();
+        if result.is_ok() {
+            self.emit_stream_end_if_pending();
+        } else if self.tail_active {
+            let sid = self.session_id.unwrap_or(0);
+            self.audit_tail_stop(sid, "error");
+            self.tail_active = false;
+        }
 
-        Ok(())
+        if audit_net {
+            let end_sid = if term == "EOF" {
+                start_sid
+            } else {
+                self.session_id.unwrap_or(start_sid)
+            };
+            self.audit_tcp_cmd_end(conn_id, end_sid, verb_label, cmd_status, term);
+        }
+
+        result
     }
 
     #[cfg(feature = "kernel")]
@@ -1648,6 +1804,205 @@ where
         if self.stream_end_pending {
             self.stream_end_pending = false;
             self.emit_console_line("END");
+            if self.tail_active {
+                let sid = self.session_id.unwrap_or(0);
+                self.audit_tail_stop(sid, "eof");
+                self.tail_active = false;
+            }
+        }
+    }
+
+    fn command_label(command: &Command) -> &'static str {
+        match command {
+            Command::Help => "HELP",
+            Command::BootInfo => "BOOTINFO",
+            Command::Caps => "CAPS",
+            Command::Mem => "MEM",
+            Command::Ping => "PING",
+            Command::Attach { .. } => "ATTACH",
+            Command::Tail { .. } => "TAIL",
+            Command::Cat { .. } => "CAT",
+            Command::Ls { .. } => "LS",
+            Command::Echo { .. } => "ECHO",
+            Command::Log => "LOG",
+            Command::Quit => "QUIT",
+            Command::NetTest => "NETTEST",
+            Command::NetStats => "NETSTATS",
+            Command::Spawn(_) => "SPAWN",
+            Command::Kill(_) => "KILL",
+            Command::CacheLog { .. } => "CACHELOG",
+        }
+    }
+
+    fn active_tcp_conn_id(&self) -> u64 {
+        #[cfg(feature = "net-console")]
+        {
+            self.net_conn_id.unwrap_or(0)
+        }
+        #[cfg(not(feature = "net-console"))]
+        {
+            0
+        }
+    }
+
+    fn end_session(&mut self, reason: &'static str) {
+        if self.session.is_none() && !self.tail_active {
+            return;
+        }
+        let sid = self.session_id.unwrap_or(0);
+        if self.tail_active {
+            self.audit_tail_stop(sid, reason);
+            self.tail_active = false;
+        }
+        if matches!(self.session_origin, Some(ConsoleInputSource::Net)) && self.session_id.is_some()
+        {
+            let conn_id = self.active_tcp_conn_id();
+            self.audit_tcp_session_detach(conn_id, sid, reason);
+        }
+        self.session = None;
+        self.session_id = None;
+        self.session_origin = None;
+        self.stream_end_pending = false;
+        #[cfg(feature = "kernel")]
+        if let Some(bridge) = self.ninedoor.as_mut() {
+            bridge.reset_session();
+        }
+    }
+
+    #[cfg(feature = "net-console")]
+    fn disconnect_reason_label(reason: NetConsoleDisconnectReason) -> &'static str {
+        match reason {
+            NetConsoleDisconnectReason::Quit => "quit",
+            NetConsoleDisconnectReason::Eof => "eof",
+            NetConsoleDisconnectReason::Reset => "error",
+            NetConsoleDisconnectReason::Error => "error",
+        }
+    }
+
+    fn audit_tcp_cmd_begin(&mut self, conn_id: u64, sid: u64, verb: &str) {
+        #[cfg(feature = "cohesix-dev")]
+        {
+            let message = format_message(format_args!(
+                "audit tcp.cmd.begin conn_id={} sid={} verb={}",
+                conn_id, sid, verb
+            ));
+            crate::debug_uart::debug_uart_line(message.as_str());
+        }
+        #[cfg(not(feature = "cohesix-dev"))]
+        {
+            let _ = conn_id;
+            let _ = sid;
+            let _ = verb;
+        }
+    }
+
+    fn audit_tcp_cmd_end(
+        &mut self,
+        conn_id: u64,
+        sid: u64,
+        verb: &str,
+        status: &str,
+        term: &str,
+    ) {
+        #[cfg(feature = "cohesix-dev")]
+        {
+            let message = format_message(format_args!(
+                "audit tcp.cmd.end conn_id={} sid={} verb={} status={} term={}",
+                conn_id, sid, verb, status, term
+            ));
+            crate::debug_uart::debug_uart_line(message.as_str());
+        }
+        #[cfg(not(feature = "cohesix-dev"))]
+        {
+            let _ = conn_id;
+            let _ = sid;
+            let _ = verb;
+            let _ = status;
+            let _ = term;
+        }
+    }
+
+    fn audit_tcp_session_attach(&mut self, conn_id: u64, sid: u64, role: &str) {
+        #[cfg(feature = "cohesix-dev")]
+        {
+            let message = format_message(format_args!(
+                "audit tcp.session.attach conn_id={} sid={} role={}",
+                conn_id, sid, role
+            ));
+            crate::debug_uart::debug_uart_line(message.as_str());
+        }
+        #[cfg(not(feature = "cohesix-dev"))]
+        {
+            let _ = conn_id;
+            let _ = sid;
+            let _ = role;
+        }
+    }
+
+    fn audit_tcp_session_detach(&mut self, conn_id: u64, sid: u64, reason: &str) {
+        #[cfg(feature = "cohesix-dev")]
+        {
+            let message = format_message(format_args!(
+                "audit tcp.session.detach conn_id={} sid={} reason={}",
+                conn_id, sid, reason
+            ));
+            crate::debug_uart::debug_uart_line(message.as_str());
+        }
+        #[cfg(not(feature = "cohesix-dev"))]
+        {
+            let _ = conn_id;
+            let _ = sid;
+            let _ = reason;
+        }
+    }
+
+    fn audit_tail_start(&mut self, sid: u64, path: &str) {
+        #[cfg(feature = "cohesix-dev")]
+        {
+            let message = format_message(format_args!(
+                "audit tail.start sid={} path={}",
+                sid, path
+            ));
+            crate::debug_uart::debug_uart_line(message.as_str());
+        }
+        #[cfg(not(feature = "cohesix-dev"))]
+        {
+            let _ = sid;
+            let _ = path;
+        }
+    }
+
+    fn audit_tail_stop(&mut self, sid: u64, reason: &str) {
+        #[cfg(feature = "cohesix-dev")]
+        {
+            let message = format_message(format_args!(
+                "audit tail.stop sid={} reason={}",
+                sid, reason
+            ));
+            crate::debug_uart::debug_uart_line(message.as_str());
+        }
+        #[cfg(not(feature = "cohesix-dev"))]
+        {
+            let _ = sid;
+            let _ = reason;
+        }
+    }
+
+    fn audit_ninedoor_err(&mut self, sid: u64, op: &str, path: &str, err: &str) {
+        #[cfg(feature = "cohesix-dev")]
+        {
+            let message = format_message(format_args!(
+                "audit ninedoor.err sid={} op={} path={} err={}",
+                sid, op, path, err
+            ));
+            crate::debug_uart::debug_uart_line(message.as_str());
+        }
+        #[cfg(not(feature = "cohesix-dev"))]
+        {
+            let _ = sid;
+            let _ = op;
+            let _ = path;
+            let _ = err;
         }
     }
 
@@ -1668,21 +2023,21 @@ where
         &mut self,
         role: HeaplessString<{ MAX_ROLE_LEN }>,
         ticket: Option<HeaplessString<{ MAX_TICKET_LEN }>>,
-    ) {
+    ) -> bool {
         if let Err(delay) = self.throttle.check(self.now_ms) {
             let message = format_message(format_args!("attach throttled ({} ms)", delay));
             self.audit.denied(message.as_str());
             self.metrics.denied_commands += 1;
             let detail = format_message(format_args!("reason=throttled delay_ms={delay}"));
             self.emit_ack_err("ATTACH", Some(detail.as_str()));
-            return;
+            return false;
         }
 
         let Some(requested_role) = parse_role(&role) else {
             self.audit.denied("attach: invalid role");
             self.metrics.denied_commands += 1;
             self.emit_ack_err("ATTACH", Some("reason=invalid-role"));
-            return;
+            return false;
         };
 
         let ticket_str = ticket.as_ref().map(|t| t.as_str());
@@ -1704,11 +2059,15 @@ where
                 other => format_message(format_args!("reason={}", other)),
             };
             self.emit_ack_err("ATTACH", Some(detail.as_str()));
-            return;
+            return false;
         }
 
         if validated {
             self.session = SessionRole::from_role(requested_role);
+            self.session_origin = Some(self.last_input_source);
+            let sid = self.next_session_id;
+            self.next_session_id = self.next_session_id.wrapping_add(1);
+            self.session_id = Some(sid);
             self.metrics.accepted_commands += 1;
             self.throttle.register_success();
             let message = format_message(format_args!("attach accepted role={:?}", requested_role));
@@ -1720,6 +2079,11 @@ where
                 target: "net-console",
                 "[net-console] auth: success; attaching session role={role_label}"
             );
+            if matches!(self.session_origin, Some(ConsoleInputSource::Net)) {
+                let conn_id = self.active_tcp_conn_id();
+                self.audit_tcp_session_attach(conn_id, sid, role_label);
+            }
+            return true;
         } else {
             self.throttle.register_failure(self.now_ms);
             self.metrics.denied_commands += 1;
@@ -1732,6 +2096,7 @@ where
             );
             self.emit_ack_err("ATTACH", Some("reason=denied"));
         }
+        false
     }
 }
 

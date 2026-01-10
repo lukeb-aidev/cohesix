@@ -44,9 +44,10 @@ use smoltcp::wire::{
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
     outbound::{OutboundCoalescer, OutboundLane, SendError},
-    ConsoleNetConfig, NetBackend, NetConsoleEvent, NetCounters, NetDevice, NetDriverError,
-    NetPoller, NetSelfTestReport, NetSelfTestResult, NetStage, NetTelemetry, DEFAULT_NET_BACKEND,
-    DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG, NET_STAGE,
+    ConsoleNetConfig, NetBackend, NetConsoleDisconnectReason, NetConsoleEvent, NetCounters,
+    NetDevice, NetDriverError, NetPoller, NetSelfTestReport, NetSelfTestResult, NetStage,
+    NetTelemetry, DEFAULT_NET_BACKEND, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG,
+    NET_STAGE,
 };
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 use crate::debug::maybe_report_str_write;
@@ -1601,6 +1602,67 @@ impl<D: NetDevice> NetStack<D> {
         );
     }
 
+    fn note_close_reason(
+        target: &mut Option<(u64, NetConsoleDisconnectReason)>,
+        conn_id: u64,
+        reason: NetConsoleDisconnectReason,
+    ) {
+        match target {
+            None => {
+                *target = Some((conn_id, reason));
+            }
+            Some((_existing_id, existing_reason)) => {
+                if *existing_reason != NetConsoleDisconnectReason::Quit
+                    && reason == NetConsoleDisconnectReason::Quit
+                {
+                    *target = Some((conn_id, reason));
+                }
+            }
+        }
+    }
+
+    fn audit_conn_open(conn_id: u64, peer: &str, port: u16) {
+        #[cfg(feature = "cohesix-dev")]
+        {
+            let mut message = heapless::String::<128>::new();
+            let _ = core::fmt::write(
+                &mut message,
+                format_args!(
+                    "audit tcp.conn.open conn_id={} peer={}:{}",
+                    conn_id, peer, port
+                ),
+            );
+            crate::debug_uart::debug_uart_line(message.as_str());
+        }
+        #[cfg(not(feature = "cohesix-dev"))]
+        {
+            let _ = conn_id;
+            let _ = peer;
+            let _ = port;
+        }
+    }
+
+    fn audit_conn_close(conn_id: u64, reason: NetConsoleDisconnectReason) {
+        #[cfg(feature = "cohesix-dev")]
+        {
+            let mut message = heapless::String::<96>::new();
+            let _ = core::fmt::write(
+                &mut message,
+                format_args!(
+                    "audit tcp.conn.close conn_id={} reason={}",
+                    conn_id,
+                    reason.as_str()
+                ),
+            );
+            crate::debug_uart::debug_uart_line(message.as_str());
+        }
+        #[cfg(not(feature = "cohesix-dev"))]
+        {
+            let _ = conn_id;
+            let _ = reason;
+        }
+    }
+
     #[inline]
     fn trace_conn_prefix(payload: &[u8]) -> ([u8; 16], usize) {
         const PREFIX_CAP: usize = 16;
@@ -3027,8 +3089,8 @@ impl<D: NetDevice> NetStack<D> {
 
     fn process_tcp(&mut self, now_ms: u64) -> bool {
         let mut activity = false;
-        let mut log_closed_conn: Option<u64> = None;
-        let mut record_closed_conn: Option<u64> = None;
+        let mut log_closed_conn: Option<(u64, NetConsoleDisconnectReason)> = None;
+        let mut record_closed_conn: Option<(u64, NetConsoleDisconnectReason)> = None;
         let mut outbound_pending = self.server.has_outbound();
         let mut reset_session = false;
         let mut reset_tcp_state: Option<TcpState> = None;
@@ -3079,6 +3141,18 @@ impl<D: NetDevice> NetStack<D> {
                     self.outbound.reset();
                     self.server.end_session();
                     self.session_active = false;
+                    if let Some(conn_id) = self.active_client_id {
+                        Self::note_close_reason(
+                            &mut log_closed_conn,
+                            conn_id,
+                            NetConsoleDisconnectReason::Reset,
+                        );
+                        Self::note_close_reason(
+                            &mut record_closed_conn,
+                            conn_id,
+                            NetConsoleDisconnectReason::Reset,
+                        );
+                    }
                     self.active_client_id = None;
                 }
                 reset_tcp_state = Some(socket.state());
@@ -3098,9 +3172,18 @@ impl<D: NetDevice> NetStack<D> {
                 self.server.end_session();
                 self.session_active = false;
                 outbound_pending = false;
-                let conn_id = self.active_client_id.unwrap_or(0);
-                log_closed_conn = Some(conn_id);
-                record_closed_conn = Some(conn_id);
+                if let Some(conn_id) = self.active_client_id {
+                    Self::note_close_reason(
+                        &mut log_closed_conn,
+                        conn_id,
+                        NetConsoleDisconnectReason::Eof,
+                    );
+                    Self::note_close_reason(
+                        &mut record_closed_conn,
+                        conn_id,
+                        NetConsoleDisconnectReason::Eof,
+                    );
+                }
                 self.active_client_id = None;
                 self.peer_endpoint = None;
                 Self::set_auth_state(
@@ -3122,6 +3205,20 @@ impl<D: NetDevice> NetStack<D> {
                     || !self.session_active
                     || peer_changed);
             if new_established {
+                if self.session_active {
+                    if let Some(conn_id) = self.active_client_id {
+                        Self::note_close_reason(
+                            &mut log_closed_conn,
+                            conn_id,
+                            NetConsoleDisconnectReason::Reset,
+                        );
+                        Self::note_close_reason(
+                            &mut record_closed_conn,
+                            conn_id,
+                            NetConsoleDisconnectReason::Reset,
+                        );
+                    }
+                }
                 self.outbound.reset();
                 self.server.end_session();
                 self.session_active = false;
@@ -3140,6 +3237,7 @@ impl<D: NetDevice> NetStack<D> {
                 let _ =
                     Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
                 let (peer_label, peer_port) = Self::peer_parts(self.peer_endpoint, socket);
+                Self::audit_conn_open(client_id, peer_label.as_str(), peer_port);
                 let local_port = socket
                     .local_endpoint()
                     .map(|endpoint| endpoint.port)
@@ -3415,6 +3513,18 @@ impl<D: NetDevice> NetStack<D> {
                                     self.outbound.reset();
                                     self.server.end_session();
                                     self.session_active = false;
+                                    if let Some(conn_id) = self.active_client_id {
+                                        Self::note_close_reason(
+                                            &mut log_closed_conn,
+                                            conn_id,
+                                            NetConsoleDisconnectReason::Error,
+                                        );
+                                        Self::note_close_reason(
+                                            &mut record_closed_conn,
+                                            conn_id,
+                                            NetConsoleDisconnectReason::Error,
+                                        );
+                                    }
                                     reset_session = true;
                                     self.peer_endpoint = None;
                                     self.active_client_id = None;
@@ -3443,6 +3553,18 @@ impl<D: NetDevice> NetStack<D> {
                                     self.server.end_session();
                                     self.session_active = false;
                                     self.peer_endpoint = None;
+                                    if let Some(conn_id) = self.active_client_id {
+                                        Self::note_close_reason(
+                                            &mut log_closed_conn,
+                                            conn_id,
+                                            NetConsoleDisconnectReason::Eof,
+                                        );
+                                        Self::note_close_reason(
+                                            &mut record_closed_conn,
+                                            conn_id,
+                                            NetConsoleDisconnectReason::Eof,
+                                        );
+                                    }
                                     reset_session = true;
                                     self.active_client_id = None;
                                     activity = true;
@@ -3451,12 +3573,13 @@ impl<D: NetDevice> NetStack<D> {
                             }
                         }
                         Err(err) => {
-                            match err {
+                            let reason = match err {
                                 TcpRecvError::Finished => {
                                     info!(
                                         "[net-console] TCP client #{} closed (clean shutdown)",
                                         self.active_client_id.unwrap_or(0)
                                     );
+                                    NetConsoleDisconnectReason::Eof
                                 }
                                 other => {
                                     warn!(
@@ -3467,8 +3590,9 @@ impl<D: NetDevice> NetStack<D> {
                                         "[net-console] closing connection: reason={} state={:?}",
                                         REASON_RECV_ERROR, self.auth_state
                                     );
+                                    NetConsoleDisconnectReason::Error
                                 }
-                            }
+                            };
                             Self::set_auth_state(
                                 &mut self.auth_state,
                                 self.active_client_id,
@@ -3490,6 +3614,10 @@ impl<D: NetDevice> NetStack<D> {
                             self.session_active = false;
                             self.peer_endpoint = None;
                             reset_session = true;
+                            if let Some(conn_id) = self.active_client_id {
+                                Self::note_close_reason(&mut log_closed_conn, conn_id, reason);
+                                Self::note_close_reason(&mut record_closed_conn, conn_id, reason);
+                            }
                             info!(
                                 "[net-console] conn {}: bytes read={}, bytes written={}",
                                 self.active_client_id.unwrap_or(0),
@@ -3512,9 +3640,18 @@ impl<D: NetDevice> NetStack<D> {
                 self.server.end_session();
                 self.session_active = false;
                 outbound_pending = false;
-                let conn_id = self.active_client_id.unwrap_or(0);
-                log_closed_conn = Some(conn_id);
-                record_closed_conn = Some(conn_id);
+                if let Some(conn_id) = self.active_client_id {
+                    Self::note_close_reason(
+                        &mut log_closed_conn,
+                        conn_id,
+                        NetConsoleDisconnectReason::Eof,
+                    );
+                    Self::note_close_reason(
+                        &mut record_closed_conn,
+                        conn_id,
+                        NetConsoleDisconnectReason::Eof,
+                    );
+                }
                 self.active_client_id = None;
                 self.peer_endpoint = None;
                 Self::set_auth_state(
@@ -3566,15 +3703,24 @@ impl<D: NetDevice> NetStack<D> {
                 self.outbound.reset();
                 self.server.end_session();
                 self.session_active = false;
-                let conn_id = self.active_client_id.unwrap_or(0);
                 self.peer_endpoint = None;
                 Self::set_auth_state(
                     &mut self.auth_state,
                     self.active_client_id,
                     AuthState::Failed,
                 );
-                log_closed_conn = Some(conn_id);
-                record_closed_conn = Some(conn_id);
+                if let Some(conn_id) = self.active_client_id {
+                    Self::note_close_reason(
+                        &mut log_closed_conn,
+                        conn_id,
+                        NetConsoleDisconnectReason::Error,
+                    );
+                    Self::note_close_reason(
+                        &mut record_closed_conn,
+                        conn_id,
+                        NetConsoleDisconnectReason::Error,
+                    );
+                }
                 self.active_client_id = None;
                 reset_session = true;
                 reset_tcp_state = Some(socket.state());
@@ -3614,15 +3760,24 @@ impl<D: NetDevice> NetStack<D> {
                 self.outbound.reset();
                 self.server.end_session();
                 self.session_active = false;
-                let conn_id = self.active_client_id.unwrap_or(0);
                 self.peer_endpoint = None;
                 Self::set_auth_state(
                     &mut self.auth_state,
                     self.active_client_id,
                     AuthState::Failed,
                 );
-                log_closed_conn = Some(conn_id);
-                record_closed_conn = Some(conn_id);
+                if let Some(conn_id) = self.active_client_id {
+                    Self::note_close_reason(
+                        &mut log_closed_conn,
+                        conn_id,
+                        NetConsoleDisconnectReason::Error,
+                    );
+                    Self::note_close_reason(
+                        &mut record_closed_conn,
+                        conn_id,
+                        NetConsoleDisconnectReason::Error,
+                    );
+                }
                 self.active_client_id = None;
                 reset_session = true;
                 reset_tcp_state = Some(socket.state());
@@ -3654,9 +3809,18 @@ impl<D: NetDevice> NetStack<D> {
                 self.server.end_session();
                 self.session_active = false;
                 outbound_pending = false;
-                let conn_id = self.active_client_id.unwrap_or(0);
-                log_closed_conn = Some(conn_id);
-                record_closed_conn = Some(conn_id);
+                if let Some(conn_id) = self.active_client_id {
+                    Self::note_close_reason(
+                        &mut log_closed_conn,
+                        conn_id,
+                        NetConsoleDisconnectReason::Eof,
+                    );
+                    Self::note_close_reason(
+                        &mut record_closed_conn,
+                        conn_id,
+                        NetConsoleDisconnectReason::Eof,
+                    );
+                }
                 self.active_client_id = None;
                 self.peer_endpoint = None;
                 Self::set_auth_state(
@@ -3677,9 +3841,18 @@ impl<D: NetDevice> NetStack<D> {
                 self.outbound.reset();
                 self.server.end_session();
                 self.session_active = false;
-                let conn_id = self.active_client_id.unwrap_or(0);
-                log_closed_conn = Some(conn_id);
-                record_closed_conn = Some(conn_id);
+                if let Some(conn_id) = self.active_client_id {
+                    Self::note_close_reason(
+                        &mut log_closed_conn,
+                        conn_id,
+                        NetConsoleDisconnectReason::Reset,
+                    );
+                    Self::note_close_reason(
+                        &mut record_closed_conn,
+                        conn_id,
+                        NetConsoleDisconnectReason::Reset,
+                    );
+                }
                 self.active_client_id = None;
                 self.peer_endpoint = None;
                 Self::set_auth_state(
@@ -3732,9 +3905,18 @@ impl<D: NetDevice> NetStack<D> {
                     self.disconnect_requested_at_ms = None;
                     self.disconnect_requested_polls = 0;
                     outbound_pending = false;
-                    let conn_id = self.active_client_id.unwrap_or(0);
-                    log_closed_conn = Some(conn_id);
-                    record_closed_conn = Some(conn_id);
+                    if let Some(conn_id) = self.active_client_id {
+                        Self::note_close_reason(
+                            &mut log_closed_conn,
+                            conn_id,
+                            NetConsoleDisconnectReason::Quit,
+                        );
+                        Self::note_close_reason(
+                            &mut record_closed_conn,
+                            conn_id,
+                            NetConsoleDisconnectReason::Quit,
+                        );
+                    }
                     self.active_client_id = None;
                     self.peer_endpoint = None;
                     Self::set_auth_state(
@@ -3771,11 +3953,12 @@ impl<D: NetDevice> NetStack<D> {
             self.session_state.last_state = Some(last_tcp_state);
         }
 
-        if let Some(conn_id) = log_closed_conn {
+        if let Some((conn_id, reason)) = log_closed_conn {
             self.log_conn_summary(conn_id);
+            Self::audit_conn_close(conn_id, reason);
         }
-        if let Some(conn_id) = record_closed_conn {
-            self.record_conn_closed(conn_id);
+        if let Some((conn_id, reason)) = record_closed_conn {
+            self.record_conn_closed(conn_id, reason);
         }
 
         activity || outbound_pending
@@ -3980,15 +4163,16 @@ impl<D: NetDevice> NetStack<D> {
         );
     }
 
-    fn record_conn_closed(&mut self, conn_id: u64) {
+    fn record_conn_closed(&mut self, conn_id: u64, reason: NetConsoleDisconnectReason) {
         Self::trace_conn_closed(
             conn_id,
-            "disconnect",
+            reason.as_str(),
             self.conn_bytes_read,
             self.conn_bytes_written,
         );
         let _ = self.events.push(NetConsoleEvent::Disconnected {
             conn_id,
+            reason,
             bytes_read: self.conn_bytes_read,
             bytes_written: self.conn_bytes_written,
         });
@@ -4085,6 +4269,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         for event in drained {
             visitor(event);
         }
+    }
+
+    fn active_console_conn_id(&self) -> Option<u64> {
+        self.active_client_id
     }
 
     fn inject_console_line(&mut self, _line: &str) {}
