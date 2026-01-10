@@ -39,10 +39,10 @@ impl Namespace {
     pub fn read(&self, path: &[String], offset: u64, count: u32) -> Result<Vec<u8>, NineDoorError> {
         let node = self.lookup(path)?;
         match node.node.kind() {
-            NodeKind::Directory { .. } => Err(NineDoorError::protocol(
-                ErrorCode::Invalid,
-                format!("cannot read directory /{}", join_path(path)),
-            )),
+            NodeKind::Directory { .. } => {
+                let listing = render_directory_listing(node.list_children());
+                Ok(read_slice(&listing, offset, count))
+            }
             NodeKind::File(FileNode::ReadOnly(data))
             | NodeKind::File(FileNode::AppendOnly(data)) => Ok(read_slice(data, offset, count)),
             NodeKind::File(FileNode::TraceControl) => Ok(self.trace.read_ctl(offset, count)),
@@ -453,6 +453,13 @@ impl<'a> NodeView<'a> {
     pub fn is_directory(&self) -> bool {
         self.node.is_directory()
     }
+
+    fn list_children(&self) -> Vec<String> {
+        match &self.node.kind {
+            NodeKind::Directory { children } => children.keys().cloned().collect(),
+            NodeKind::File(_) => Vec::new(),
+        }
+    }
 }
 
 struct NodeViewMut<'a> {
@@ -500,4 +507,19 @@ fn read_slice(data: &[u8], offset: u64, count: u32) -> Vec<u8> {
     }
     let end = start.saturating_add(count as usize).min(data.len());
     data[start..end].to_vec()
+}
+
+fn render_directory_listing(entries: Vec<String>) -> Vec<u8> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let mut output = String::new();
+    for (idx, entry) in entries.iter().enumerate() {
+        if idx > 0 {
+            output.push('\n');
+        }
+        output.push_str(entry);
+    }
+    output.push('\n');
+    output.into_bytes()
 }

@@ -1,4 +1,5 @@
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Describe Cohesix userland command surfaces, CLI usage, and console workflows. -->
 # Cohesix Userland & CLI
 
 ## Philosophy
@@ -72,13 +73,16 @@ coh>
 
 Commands and status:
 - `help` – show the command list.【F:apps/cohsh/src/lib.rs†L1125-L1162】
-- `attach <role> [ticket]` / `login` – attach to a NineDoor session. Valid roles today: `queen`, `worker-heartbeat`; missing roles, unknown roles, too many args, or re-attaching emit errors via the parser and shell.【F:apps/cohsh/src/lib.rs†L711-L729】【F:apps/cohsh/src/lib.rs†L1299-L1317】
+- `attach <role> [ticket]` / `login` – attach to a NineDoor session. Valid roles: `queen`, `worker-heartbeat`, `worker-gpu`; missing roles, unknown roles, too many args, or re-attaching emit errors via the parser and shell.【F:apps/cohsh/src/lib.rs†L711-L729】【F:apps/cohsh/src/lib.rs†L1299-L1317】
 - `tail <path>` – stream a file; `log` tails `/log/queen.log`. Requires attachment.【F:apps/cohsh/src/lib.rs†L1170-L1179】
 - `ping` – reports attachment status; errors when detached or when given arguments.【F:apps/cohsh/src/lib.rs†L1181-L1194】
 - `echo <text> > <path>` – append a newline-terminated payload to an absolute path via NineDoor.【F:apps/cohsh/src/lib.rs†L1211-L1222】【F:apps/cohsh/src/lib.rs†L1319-L1332】
-- `ls <path>` – list directory entries; returns deterministic `ERR` when the server does not yet support listings.
+- `ls <path>` – list directory entries; entries are newline-delimited and returned in lexicographic order.
 - `cat <path>` – bounded read of file contents.
-- Planned (not implemented): `spawn`, `kill`, `bind`, `mount`; the shell prints explicit “planned” errors today.【F:apps/cohsh/src/lib.rs†L1164-L1168】
+- `spawn <role> [opts]` – queue a worker spawn via `/queen/ctl` (e.g. `spawn heartbeat ticks=100`, `spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120`).
+- `kill <worker_id>` – queue a worker termination via `/queen/ctl`.
+- `bind <src> <dst>` – bind a canonical namespace path to a session-scoped mount point via `/queen/ctl`.
+- `mount <service> <path>` – mount a named service namespace via `/queen/ctl`.
 - `quit` – prints `closing session` and exits the shell loop.【F:apps/cohsh/src/lib.rs†L1250-L1252】
 - Attachments are designed so a single queen session (interactive or scripted) can drive orchestration for many workers without switching tools.
 
@@ -158,13 +162,15 @@ EXPECT ERR
 
 Disposable worker lifecycle with ID assertion:
 ```
-spawn gpu ttl_s=60 streams=1
+spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=1 ttl_s=60
+EXPECT OK
+ls /worker
 EXPECT OK
 EXPECT SUBSTR worker-
-tail /worker/last/telemetry
+tail /worker/worker-123/telemetry
 EXPECT OK
 WAIT 500
-kill last
+kill worker-123
 EXPECT OK
 EXPECT NOT ERR
 ```

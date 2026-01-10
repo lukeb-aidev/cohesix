@@ -20,7 +20,7 @@ pub use transport::tcp::{tcp_debug_enabled, TcpTransport};
 #[cfg(feature = "tcp")]
 pub use transport::COHSH_TCP_PORT;
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 #[cfg(feature = "tcp")]
@@ -80,6 +80,7 @@ const ROOT_FID: u32 = 1;
 const MAX_SCRIPT_LINES: usize = 256;
 const MAX_SCRIPT_WAIT_MS: u64 = 2000;
 const MAX_SCRIPT_RESPONSES: usize = 8;
+const QUEEN_CTL_PATH: &str = "/queen/ctl";
 
 fn format_script_error(
     line_number: usize,
@@ -329,8 +330,8 @@ impl Transport for NineDoorTransport {
         self.read_lines(path)
     }
 
-    fn list(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
-        Err(anyhow!("directory listing is not yet supported by the mock transport"))
+    fn list(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+        self.read_lines(path)
     }
 
     fn write(&mut self, _session: &Session, path: &str, payload: &[u8]) -> Result<()> {
@@ -629,6 +630,8 @@ pub enum RoleArg {
     Queen,
     /// Worker heartbeat role.
     WorkerHeartbeat,
+    /// Worker GPU role.
+    WorkerGpu,
 }
 
 impl fmt::Display for RoleArg {
@@ -636,6 +639,7 @@ impl fmt::Display for RoleArg {
         let label = match self {
             Self::Queen => ProtoRole::Queen,
             Self::WorkerHeartbeat => ProtoRole::Worker,
+            Self::WorkerGpu => ProtoRole::GpuWorker,
         };
         write!(f, "{}", proto_role_label(label))
     }
@@ -646,6 +650,7 @@ impl From<RoleArg> for Role {
         match value {
             RoleArg::Queen => Role::Queen,
             RoleArg::WorkerHeartbeat => Role::WorkerHeartbeat,
+            RoleArg::WorkerGpu => Role::WorkerGpu,
         }
     }
 }
@@ -1150,6 +1155,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
     }
 
     fn tail_path(&mut self, path: &str) -> Result<()> {
+        ensure_valid_path(path)?;
         let session = self
             .session
             .as_ref()
@@ -1165,6 +1171,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
     }
 
     fn read_path(&mut self, path: &str) -> Result<()> {
+        ensure_valid_path(path)?;
         let session = self
             .session
             .as_ref()
@@ -1180,6 +1187,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
     }
 
     fn list_path(&mut self, path: &str) -> Result<()> {
+        ensure_valid_path(path)?;
         let session = self
             .session
             .as_ref()
@@ -1195,6 +1203,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
     }
 
     fn write_path(&mut self, path: &str, payload: &[u8]) -> Result<()> {
+        ensure_valid_path(path)?;
         let session = self
             .session
             .as_ref()
@@ -1204,6 +1213,26 @@ impl<T: Transport, W: Write> Shell<T, W> {
             self.write_ack_line(&ack)?;
         }
         Ok(())
+    }
+
+    fn queen_session(&self, command: &str) -> Result<&Session> {
+        let session = self
+            .session
+            .as_ref()
+            .context("attach to a session before issuing queen commands")?;
+        if session.role() != Role::Queen {
+            return Err(anyhow!(
+                "{command} requires a queen session; attached as {:?}",
+                session.role()
+            ));
+        }
+        Ok(session)
+    }
+
+    fn send_queen_ctl(&mut self, payload: &str) -> Result<()> {
+        let _session = self.queen_session("queen control")?;
+        let payload = normalise_payload(payload)?;
+        self.write_path(QUEEN_CTL_PATH, payload.as_bytes())
     }
 
     #[cfg(feature = "tcp")]
@@ -1246,6 +1275,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
         };
         match cmd {
             "help" => {
+                if parts.next().is_some() {
+                    return Err(anyhow!("help does not take any arguments"));
+                }
                 self.write_line("Cohesix command surface:")?;
                 self.write_line("  help                         - Show this help message")?;
                 self.write_line("  attach <role> [ticket]       - Attach to a NineDoor session")?;
@@ -1265,32 +1297,32 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     "  echo <text> > <path>         - Append to a file (adds newline)",
                 )?;
                 self.write_line(
-                    "  spawn <role> [opts]          - Queue worker spawn command (planned)",
+                    "  spawn <role> [opts]          - Queue worker spawn command",
                 )?;
                 self.write_line(
-                    "  kill <worker_id>             - Queue worker termination (planned)",
+                    "  kill <worker_id>             - Queue worker termination",
                 )?;
-                self.write_line("  bind <src> <dst>             - Bind namespace path (planned)")?;
+                self.write_line("  bind <src> <dst>             - Bind namespace path")?;
                 self.write_line(
-                    "  mount <service> <path>       - Mount service namespace (planned)",
+                    "  mount <service> <path>       - Mount service namespace",
                 )?;
                 self.write_line("  quit                         - Close the session and exit")?;
-                Ok(CommandStatus::Continue)
-            }
-            "spawn" | "kill" | "bind" | "mount" => {
-                self.write_line(&format!(
-                    "Error: '{cmd}' is planned but not implemented yet in this build"
-                ))?;
                 Ok(CommandStatus::Continue)
             }
             "tail" => {
                 let Some(path) = parts.next() else {
                     return Err(anyhow!("tail requires a path"));
                 };
+                if parts.next().is_some() {
+                    return Err(anyhow!("tail takes exactly one argument: path"));
+                }
                 self.tail_path(path)?;
                 Ok(CommandStatus::Continue)
             }
             "log" => {
+                if parts.next().is_some() {
+                    return Err(anyhow!("log does not take any arguments"));
+                }
                 self.tail_path("/log/queen.log")?;
                 Ok(CommandStatus::Continue)
             }
@@ -1330,11 +1362,63 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     .split_once('>')
                     .ok_or_else(|| anyhow!("echo requires syntax: echo <text> > <path>"))?;
                 let path = path_part.trim();
-                if !path.starts_with('/') {
-                    return Err(anyhow!("echo target must be an absolute path"));
-                }
-                let payload = normalise_echo_payload(raw_text);
+                let payload = normalise_payload(raw_text)?;
                 self.write_path(path, payload.as_bytes())?;
+                Ok(CommandStatus::Continue)
+            }
+            "spawn" => {
+                let Some(role) = parts.next() else {
+                    return Err(anyhow!("spawn requires a role"));
+                };
+                let payload = build_spawn_payload(role, parts)?;
+                self.send_queen_ctl(&payload)?;
+                Ok(CommandStatus::Continue)
+            }
+            "kill" => {
+                let Some(worker_id) = parts.next() else {
+                    return Err(anyhow!("kill requires a worker id"));
+                };
+                if parts.next().is_some() {
+                    return Err(anyhow!("kill takes exactly one argument: worker id"));
+                }
+                let worker_id = ensure_json_string(worker_id, "worker id")?;
+                let payload = format!("{{\"kill\":\"{worker_id}\"}}");
+                self.send_queen_ctl(&payload)?;
+                Ok(CommandStatus::Continue)
+            }
+            "bind" => {
+                let Some(source) = parts.next() else {
+                    return Err(anyhow!("bind requires a source path"));
+                };
+                let Some(target) = parts.next() else {
+                    return Err(anyhow!("bind requires a destination path"));
+                };
+                if parts.next().is_some() {
+                    return Err(anyhow!("bind takes exactly two arguments: src dst"));
+                }
+                ensure_valid_path(source)?;
+                ensure_valid_path(target)?;
+                let source = ensure_json_string(source, "bind source")?;
+                let target = ensure_json_string(target, "bind target")?;
+                let payload = format!("{{\"bind\":{{\"from\":\"{source}\",\"to\":\"{target}\"}}}}");
+                self.send_queen_ctl(&payload)?;
+                Ok(CommandStatus::Continue)
+            }
+            "mount" => {
+                let Some(service) = parts.next() else {
+                    return Err(anyhow!("mount requires a service name"));
+                };
+                let Some(target) = parts.next() else {
+                    return Err(anyhow!("mount requires a destination path"));
+                };
+                if parts.next().is_some() {
+                    return Err(anyhow!("mount takes exactly two arguments: service path"));
+                }
+                ensure_valid_path(target)?;
+                let service = ensure_json_string(service, "service name")?;
+                let target = ensure_json_string(target, "mount path")?;
+                let payload = format!("{{\"mount\":{{\"service\":\"{service}\",\"at\":\"{target}\"}}}}");
+                self.send_queen_ctl(&payload)?;
                 Ok(CommandStatus::Continue)
             }
             "cat" => {
@@ -1364,6 +1448,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 Ok(CommandStatus::Continue)
             }
             "quit" => {
+                if parts.next().is_some() {
+                    return Err(anyhow!("quit does not take any arguments"));
+                }
                 info!("audit quit.recv");
                 if let Some(session) = self.session.as_ref() {
                     if let Err(err) = self.transport.quit(session) {
@@ -1398,6 +1485,186 @@ pub struct AutoAttach {
     pub auto_log: bool,
 }
 
+fn ensure_valid_path(path: &str) -> Result<()> {
+    parse_path(path)?;
+    Ok(())
+}
+
+fn ensure_json_string<'a>(value: &'a str, label: &str) -> Result<&'a str> {
+    if value.is_empty() {
+        return Err(anyhow!("{label} must not be empty"));
+    }
+    for ch in value.chars() {
+        if ch == '"' || ch == '\\' || ch.is_control() {
+            return Err(anyhow!("{label} contains unsupported character"));
+        }
+    }
+    Ok(value)
+}
+
+fn normalise_payload(input: &str) -> Result<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("payload must not be empty"));
+    }
+    let content = if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
+        &trimmed[1..trimmed.len() - 1]
+    } else if trimmed.len() >= 2 && trimmed.starts_with('\'') && trimmed.ends_with('\'') {
+        &trimmed[1..trimmed.len() - 1]
+    } else {
+        trimmed
+    };
+    if content.chars().any(|ch| ch == '\n' || ch == '\r' || ch == '\0') {
+        return Err(anyhow!("payload must be a single line of text"));
+    }
+    let mut payload = content.to_owned();
+    if !payload.ends_with('\n') {
+        payload.push('\n');
+    }
+    Ok(payload)
+}
+
+fn parse_kv_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<BTreeMap<String, String>> {
+    let mut values = BTreeMap::new();
+    for arg in args {
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| anyhow!("invalid option '{arg}': expected key=value"))?;
+        if key.is_empty() || value.is_empty() {
+            return Err(anyhow!("invalid option '{arg}': expected key=value"));
+        }
+        let key = key.to_ascii_lowercase();
+        if values.insert(key, value.to_owned()).is_some() {
+            return Err(anyhow!("duplicate option '{arg}'"));
+        }
+    }
+    Ok(values)
+}
+
+fn take_required<T>(
+    values: &mut BTreeMap<String, String>,
+    key: &str,
+    parser: impl FnOnce(&str) -> Result<T>,
+) -> Result<T> {
+    let value = values
+        .remove(key)
+        .ok_or_else(|| anyhow!("missing required option '{key}'"))?;
+    parser(value.as_str())
+}
+
+fn take_optional<T>(
+    values: &mut BTreeMap<String, String>,
+    key: &str,
+    parser: impl FnOnce(&str) -> Result<T>,
+) -> Result<Option<T>> {
+    let value = values.remove(key);
+    match value {
+        Some(value) => Ok(Some(parser(value.as_str())?)),
+        None => Ok(None),
+    }
+}
+
+fn parse_number<T>(value: &str, label: &str) -> Result<T>
+where
+    T: std::str::FromStr,
+    T::Err: fmt::Display,
+{
+    value
+        .parse::<T>()
+        .map_err(|err| anyhow!("invalid {label} '{value}': {err}"))
+}
+
+fn build_spawn_payload<'a>(role: &str, args: impl Iterator<Item = &'a str>) -> Result<String> {
+    let mut values = parse_kv_args(args)?;
+    match role.to_ascii_lowercase().as_str() {
+        "heartbeat" | "worker" | "worker-heartbeat" => {
+            let ticks: u64 = take_required(&mut values, "ticks", |value| {
+                parse_number(value, "ticks")
+            })?;
+            let ttl_s: Option<u64> = take_optional(&mut values, "ttl_s", |value| {
+                parse_number(value, "ttl_s")
+            })?;
+            let ops: Option<u64> = take_optional(&mut values, "ops", |value| {
+                parse_number(value, "ops")
+            })?;
+            if !values.is_empty() {
+                let extras = values.keys().cloned().collect::<Vec<_>>().join(", ");
+                return Err(anyhow!("unknown spawn options: {extras}"));
+            }
+            let mut payload = format!("{{\"spawn\":\"heartbeat\",\"ticks\":{ticks}");
+            if ttl_s.is_some() || ops.is_some() {
+                payload.push_str(",\"budget\":{");
+                let mut wrote = false;
+                if let Some(ttl_s) = ttl_s {
+                    payload.push_str(&format!("\"ttl_s\":{ttl_s}"));
+                    wrote = true;
+                }
+                if let Some(ops) = ops {
+                    if wrote {
+                        payload.push(',');
+                    }
+                    payload.push_str(&format!("\"ops\":{ops}"));
+                }
+                payload.push('}');
+            }
+            payload.push('}');
+            Ok(payload)
+        }
+        "gpu" | "worker-gpu" => {
+            let gpu_id = take_required(&mut values, "gpu_id", |value| {
+                ensure_json_string(value, "gpu_id").map(str::to_owned)
+            })?;
+            let mem_mb: u32 = take_required(&mut values, "mem_mb", |value| {
+                parse_number(value, "mem_mb")
+            })?;
+            let streams: u8 = take_required(&mut values, "streams", |value| {
+                parse_number(value, "streams")
+            })?;
+            let ttl_s: u32 = take_required(&mut values, "ttl_s", |value| {
+                parse_number(value, "ttl_s")
+            })?;
+            let priority: Option<u8> = take_optional(&mut values, "priority", |value| {
+                parse_number(value, "priority")
+            })?;
+            let budget_ttl_s: Option<u64> = take_optional(&mut values, "budget_ttl_s", |value| {
+                parse_number(value, "budget_ttl_s")
+            })?;
+            let budget_ops: Option<u64> = take_optional(&mut values, "budget_ops", |value| {
+                parse_number(value, "budget_ops")
+            })?;
+            if !values.is_empty() {
+                let extras = values.keys().cloned().collect::<Vec<_>>().join(", ");
+                return Err(anyhow!("unknown spawn options: {extras}"));
+            }
+            let mut payload = format!(
+                "{{\"spawn\":\"gpu\",\"lease\":{{\"gpu_id\":\"{gpu_id}\",\"mem_mb\":{mem_mb},\"streams\":{streams},\"ttl_s\":{ttl_s}"
+            );
+            if let Some(priority) = priority {
+                payload.push_str(&format!(",\"priority\":{priority}"));
+            }
+            payload.push('}');
+            if budget_ttl_s.is_some() || budget_ops.is_some() {
+                payload.push_str(",\"budget\":{");
+                let mut wrote = false;
+                if let Some(budget_ttl_s) = budget_ttl_s {
+                    payload.push_str(&format!("\"ttl_s\":{budget_ttl_s}"));
+                    wrote = true;
+                }
+                if let Some(budget_ops) = budget_ops {
+                    if wrote {
+                        payload.push(',');
+                    }
+                    payload.push_str(&format!("\"ops\":{budget_ops}"));
+                }
+                payload.push('}');
+            }
+            payload.push('}');
+            Ok(payload)
+        }
+        _ => Err(anyhow!("unknown spawn role '{role}'")),
+    }
+}
+
 fn parse_path(path: &str) -> Result<Vec<String>> {
     if !path.starts_with('/') {
         return Err(anyhow!("paths must be absolute"));
@@ -1423,6 +1690,8 @@ fn parse_role(input: &str) -> Result<Role> {
         Ok(Role::Queen)
     } else if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::Worker)) {
         Ok(Role::WorkerHeartbeat)
+    } else if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::GpuWorker)) {
+        Ok(Role::WorkerGpu)
     } else {
         Err(anyhow!("unknown role '{input}'"))
     }
@@ -1437,21 +1706,6 @@ fn parse_attach_args<'a>(cmd: &str, args: &'a [&'a str]) -> Result<(Role, Option
             "{cmd} takes at most two arguments: role and optional ticket"
         )),
     }
-}
-fn normalise_echo_payload(input: &str) -> String {
-    let trimmed = input.trim();
-    let content = if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
-        &trimmed[1..trimmed.len() - 1]
-    } else if trimmed.len() >= 2 && trimmed.starts_with('\'') && trimmed.ends_with('\'') {
-        &trimmed[1..trimmed.len() - 1]
-    } else {
-        trimmed
-    };
-    let mut payload = content.to_owned();
-    if !payload.ends_with('\n') {
-        payload.push('\n');
-    }
-    payload
 }
 
 #[cfg(test)]
@@ -1503,9 +1757,9 @@ mod tests {
     }
 
     #[test]
-    fn normalise_echo_payload_appends_newline() {
-        assert_eq!(normalise_echo_payload("'trace'"), "trace\n");
-        assert_eq!(normalise_echo_payload("plain"), "plain\n");
+    fn normalise_payload_appends_newline() {
+        assert_eq!(normalise_payload("'trace'").unwrap(), "trace\n");
+        assert_eq!(normalise_payload("plain").unwrap(), "plain\n");
     }
 
     #[test]
@@ -1521,5 +1775,54 @@ mod tests {
         assert!(rendered.contains("tail <path>"));
         assert!(rendered.contains("ls <path>"));
         assert!(rendered.contains("mount <service> <path>"));
+    }
+
+    #[test]
+    fn parse_role_accepts_gpu_worker() {
+        assert_eq!(parse_role("worker-gpu").unwrap(), Role::WorkerGpu);
+    }
+
+    #[test]
+    fn spawn_payload_requires_options() {
+        assert!(build_spawn_payload("heartbeat", [].into_iter()).is_err());
+        assert!(build_spawn_payload("gpu", [].into_iter()).is_err());
+    }
+
+    #[test]
+    fn spawn_payload_formats_heartbeat() {
+        let payload =
+            build_spawn_payload("heartbeat", ["ticks=10", "ttl_s=60"].into_iter()).unwrap();
+        assert_eq!(
+            payload,
+            "{\"spawn\":\"heartbeat\",\"ticks\":10,\"budget\":{\"ttl_s\":60}}"
+        );
+    }
+
+    #[test]
+    fn spawn_payload_formats_gpu() {
+        let payload = build_spawn_payload(
+            "gpu",
+            [
+                "gpu_id=GPU-0",
+                "mem_mb=4096",
+                "streams=2",
+                "ttl_s=120",
+                "priority=1",
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        assert_eq!(
+            payload,
+            "{\"spawn\":\"gpu\",\"lease\":{\"gpu_id\":\"GPU-0\",\"mem_mb\":4096,\"streams\":2,\"ttl_s\":120,\"priority\":1}}"
+        );
+    }
+
+    #[test]
+    fn list_reads_directory_entries() {
+        let mut transport = NineDoorTransport::new(NineDoor::new());
+        let session = transport.attach(Role::Queen, None).unwrap();
+        let entries = transport.list(&session, "/log").unwrap();
+        assert!(entries.iter().any(|entry| entry == "queen.log"));
     }
 }

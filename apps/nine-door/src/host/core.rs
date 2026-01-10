@@ -419,7 +419,9 @@ impl ServerCore {
                 };
                 match record.kind() {
                     WorkerKind::Heartbeat => {
-                        let budget = budget_override.unwrap_or_else(|| record.budget());
+                        let budget = budget_override
+                            .map(|override_budget| clamp_budget(record.budget(), override_budget))
+                            .unwrap_or_else(|| record.budget());
                         state.configure_role(role, Some(worker_id), None, budget, now);
                     }
                     WorkerKind::Gpu(_) => {
@@ -445,7 +447,9 @@ impl ServerCore {
                 };
                 match record.kind() {
                     WorkerKind::Gpu(gpu) => {
-                        let budget = budget_override.unwrap_or_else(|| record.budget());
+                        let budget = budget_override
+                            .map(|override_budget| clamp_budget(record.budget(), override_budget))
+                            .unwrap_or_else(|| record.budget());
                         state.configure_role(
                             role,
                             Some(worker_id),
@@ -1620,6 +1624,22 @@ fn gpu_allowed_write(gpu_scope: Option<&str>, path: &[String]) -> bool {
 
 fn format_budget_value(value: Option<u64>) -> String {
     value.map_or_else(|| "∞".to_owned(), |v| v.to_string())
+}
+
+fn clamp_budget(record: BudgetSpec, override_budget: BudgetSpec) -> BudgetSpec {
+    BudgetSpec::unbounded()
+        .with_ticks(min_budget_field(record.ticks(), override_budget.ticks()))
+        .with_ops(min_budget_field(record.ops(), override_budget.ops()))
+        .with_ttl(min_budget_field(record.ttl_s(), override_budget.ttl_s()))
+}
+
+fn min_budget_field(record: Option<u64>, override_budget: Option<u64>) -> Option<u64> {
+    match (record, override_budget) {
+        (Some(record), Some(override_budget)) => Some(record.min(override_budget)),
+        (Some(record), None) => Some(record),
+        (None, Some(override_budget)) => Some(override_budget),
+        (None, None) => None,
+    }
 }
 
 fn is_worker_telemetry_path(path: &[String], worker_id: &str) -> bool {
