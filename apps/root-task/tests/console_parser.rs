@@ -1,11 +1,12 @@
 // Author: Lukas Bower
+// Purpose: Validate console parser command and length handling.
 
 use root_task::console::{Command, CommandParser, ConsoleError, MAX_LINE_LEN};
 
 #[test]
 fn rejects_overlong_lines() {
     let mut parser = CommandParser::new();
-    for _ in 0..(MAX_LINE_LEN - 1) {
+    for _ in 0..MAX_LINE_LEN {
         parser.push_byte(b'a').unwrap();
     }
     assert!(matches!(

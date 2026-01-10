@@ -1087,6 +1087,10 @@ where
             other => format_message(format_args!("reason={}", other)),
         };
         self.emit_ack_err("PARSE", Some(detail.as_str()));
+        if self.parser.clear_buffer() {
+            self.audit
+                .info("console: cleared partial input after parse error");
+        }
     }
 
     fn consume_serial(&mut self) {
@@ -1846,6 +1850,12 @@ where
     }
 
     fn end_session(&mut self, reason: &'static str) {
+        if self.parser.clear_buffer() {
+            let message = format_message(format_args!(
+                "console: cleared partial input on session end reason={reason}"
+            ));
+            self.audit.info(message.as_str());
+        }
         if self.session.is_none() && !self.tail_active {
             return;
         }
@@ -2599,8 +2609,8 @@ mod tests {
 
     #[test]
     fn successful_attach_allows_privileged_commands() {
-        let driver = LoopbackSerial::<64>::new();
-        let serial = SerialPort::<_, 64, 64, 64>::new(driver);
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 256, 192>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -2697,7 +2707,7 @@ mod tests {
     #[test]
     fn console_acknowledgements_emit_expected_lines() {
         let driver = LoopbackSerial::<256>::new();
-        let serial = SerialPort::<_, 128, 128, 64>::new(driver);
+        let serial = SerialPort::<_, 256, 256, 192>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -2728,9 +2738,64 @@ mod tests {
     }
 
     #[test]
-    fn tail_command_emits_end_sentinel() {
+    fn parser_recovers_after_invalid_command() {
         let driver = LoopbackSerial::<256>::new();
-        let serial = SerialPort::<_, 128, 128, 64>::new(driver);
+        let serial = SerialPort::<_, 256, 256, 192>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        {
+            let driver = pump.serial_mut().driver_mut();
+            driver.push_rx(b"bogus\nhelp\n");
+        }
+        pump.poll();
+        pump.poll();
+        let tx = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let transcript: Vec<u8> = tx.into_iter().collect();
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(rendered.contains("ERR PARSE"), "{rendered}");
+        assert!(rendered.contains("Commands:"), "{rendered}");
+    }
+
+    #[test]
+    fn session_end_clears_partial_input() {
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 256, 192>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump
+            .parser
+            .push_byte(b'x')
+            .expect("partial byte should be accepted");
+        pump.end_session("test");
+        {
+            let driver = pump.serial_mut().driver_mut();
+            driver.push_rx(b"help\n");
+        }
+        pump.poll();
+        let tx = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let transcript: Vec<u8> = tx.into_iter().collect();
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(rendered.contains("Commands:"), "{rendered}");
+    }
+
+    #[test]
+    fn tail_command_emits_end_sentinel() {
+        let driver = LoopbackSerial::<512>::new();
+        let serial = SerialPort::<_, 512, 512, 192>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -2768,8 +2833,8 @@ mod tests {
 
     #[test]
     fn log_command_emits_end_sentinel_and_quit_clears_session() {
-        let driver = LoopbackSerial::<128>::new();
-        let serial = SerialPort::<_, 128, 128, 64>::new(driver);
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 256, 192>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
