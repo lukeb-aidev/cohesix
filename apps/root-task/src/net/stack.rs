@@ -3122,12 +3122,10 @@ impl<D: NetDevice> NetStack<D> {
                     || !self.session_active
                     || peer_changed);
             if new_established {
-                if self.session_active {
-                    self.outbound.reset();
-                    self.server.end_session();
-                    self.session_active = false;
-                    self.active_client_id = None;
-                }
+                self.outbound.reset();
+                self.server.end_session();
+                self.session_active = false;
+                self.active_client_id = None;
                 self.disconnect_requested = false;
                 self.disconnect_requested_at_ms = None;
                 self.disconnect_requested_polls = 0;
@@ -3728,9 +3726,7 @@ impl<D: NetDevice> NetStack<D> {
                         socket.abort();
                     }
                     self.server.end_session();
-                    if !outbound_clear {
-                        self.outbound.reset();
-                    }
+                    self.outbound.reset();
                     self.session_active = false;
                     self.disconnect_requested = false;
                     self.disconnect_requested_at_ms = None;
