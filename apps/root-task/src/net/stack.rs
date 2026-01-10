@@ -4057,8 +4057,15 @@ impl<D: NetDevice> NetStack<D> {
             match lane {
                 OutboundLane::Control => {
                     if outbound.enqueue_control(line.as_bytes()).is_err() {
-                        server.push_outbound_front(line);
-                        break;
+                        warn!(
+                            target: "net-console",
+                            "[net-console] outbound control enqueue failed; dropping queued outbound to recover"
+                        );
+                        outbound.reset();
+                        if outbound.enqueue_control(line.as_bytes()).is_err() {
+                            server.push_outbound_front(line);
+                            break;
+                        }
                     }
                 }
                 OutboundLane::Log => outbound.enqueue_log(line.as_bytes()),
@@ -4250,8 +4257,31 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         if !self.stage_policy.allow_console_io {
             return;
         }
-        if self.server.enqueue_outbound(line).is_err() {
+        let enqueue_result = self.server.enqueue_outbound(line);
+        if enqueue_result.is_err() {
             self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+            return;
+        }
+        if TcpConsoleServer::is_priority_line(line)
+            && self.active_client_id.is_some()
+            && self.session_active
+        {
+            let Some(now_ms) = self.last_now_ms else {
+                return;
+            };
+            let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
+            let _ = Self::flush_outbound(
+                &mut self.server,
+                &mut self.outbound,
+                &mut self.telemetry,
+                &mut self.conn_bytes_written,
+                &mut self.counters,
+                socket,
+                now_ms,
+                self.active_client_id,
+                self.auth_state,
+                &mut self.session_state,
+            );
         }
     }
 
