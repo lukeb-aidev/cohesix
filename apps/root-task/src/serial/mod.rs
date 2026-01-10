@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: Provide bounded serial console primitives for the root task and host simulations.
 
 //! Minimal, no-std friendly serial console primitives used by the root task.
 //!
@@ -60,7 +61,7 @@ pub fn puts_once(message: &'static str) {
 pub fn puts_once(_message: &'static str) {}
 
 /// Capacity of the RX staging queue used by [`SerialPort`].
-pub const DEFAULT_RX_CAPACITY: usize = 256;
+pub const DEFAULT_RX_CAPACITY: usize = 512;
 
 /// Capacity of the TX staging queue used by [`SerialPort`].
 pub const DEFAULT_TX_CAPACITY: usize = 256;

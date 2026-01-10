@@ -29,12 +29,12 @@ use core::fmt::Write as FmtWrite;
 use sel4_sys::seL4_CPtr;
 
 /// Maximum length accepted for a single console line.
-pub const MAX_LINE_LEN: usize = 128;
+pub const MAX_LINE_LEN: usize = 192;
 
 /// Maximum number of characters permitted in a role identifier when parsing `attach`.
 pub const MAX_ROLE_LEN: usize = 16;
 /// Maximum number of characters accepted for ticket material presented to `attach`.
-pub const MAX_TICKET_LEN: usize = 128;
+pub const MAX_TICKET_LEN: usize = 192;
 const MAX_PATH_LEN: usize = 96;
 const MAX_JSON_LEN: usize = 192;
 const MAX_ID_LEN: usize = 32;
@@ -423,6 +423,13 @@ impl CommandParser {
         Self::default()
     }
 
+    /// Clear any partially buffered command bytes.
+    pub fn clear_buffer(&mut self) -> bool {
+        let had_data = !self.buffer.is_empty();
+        self.buffer.clear();
+        had_data
+    }
+
     /// Consume a single input byte, returning a command when a full line is available.
     pub fn push_byte(&mut self, byte: u8) -> Result<Option<Command>, ConsoleError> {
         match byte {
@@ -441,7 +448,7 @@ impl CommandParser {
                 Ok(None)
             }
             _ => {
-                if self.buffer.len() >= MAX_LINE_LEN - 1 {
+                if self.buffer.len() >= MAX_LINE_LEN {
                     self.buffer.clear();
                     return Err(ConsoleError::LineTooLong);
                 }
