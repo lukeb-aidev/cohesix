@@ -9070,6 +9070,20 @@ impl VirtioTxToken {
     }
 }
 
+impl Drop for VirtioTxToken {
+    fn drop(&mut self) {
+        let Some(reservation) = self.reservation.take() else {
+            return;
+        };
+        if self.driver.is_null() {
+            return;
+        }
+        // SAFETY: the token is only created by the driver while it is alive.
+        let driver = unsafe { &mut *self.driver };
+        driver.rollback_tx_reservation(reservation);
+    }
+}
+
 impl TxToken for VirtioTxToken {
     fn consume<R, F>(self, len: usize, f: F) -> R
     where
