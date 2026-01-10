@@ -45,15 +45,25 @@ impl LogRing {
         }
     }
 
-    fn snapshot<const LINE: usize, const LIMIT: usize>(&self) -> HeaplessVec<HeaplessString<LINE>, LIMIT> {
+    fn snapshot<const LINE: usize, const LIMIT: usize>(
+        &self,
+    ) -> HeaplessVec<HeaplessString<LINE>, LIMIT> {
         let mut out = HeaplessVec::new();
-        for line in self.lines.iter() {
+        for line in self.lines.iter().rev() {
             if out.is_full() {
                 break;
             }
             let mut entry: HeaplessString<LINE> = HeaplessString::new();
             let _ = entry.push_str(line.as_str());
             let _ = out.push(entry);
+        }
+        let slice = out.as_mut_slice();
+        let mut head = 0usize;
+        let mut tail = slice.len().saturating_sub(1);
+        while head < tail {
+            slice.swap(head, tail);
+            head = head.saturating_add(1);
+            tail = tail.saturating_sub(1);
         }
         out
     }

@@ -20,6 +20,7 @@ pub use transport::tcp::{tcp_debug_enabled, TcpTransport};
 #[cfg(feature = "tcp")]
 pub use transport::COHSH_TCP_PORT;
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 #[cfg(feature = "tcp")]
@@ -78,16 +79,34 @@ impl Session {
 const ROOT_FID: u32 = 1;
 const MAX_SCRIPT_LINES: usize = 256;
 const MAX_SCRIPT_WAIT_MS: u64 = 2000;
+const MAX_SCRIPT_RESPONSES: usize = 8;
 
 fn format_script_error(
     line_number: usize,
     line_text: &str,
-    last_response: Option<&str>,
+    state: Option<&ScriptState>,
     reason: &str,
 ) -> anyhow::Error {
-    let last = last_response.unwrap_or("<none>");
+    let last = state
+        .and_then(|state| state.last_response_line.as_deref())
+        .unwrap_or("<none>");
+    let last_command = state
+        .and_then(|state| state.last_command_line.as_deref())
+        .unwrap_or("<none>");
+    let last_source = state
+        .and_then(|state| state.last_response_source)
+        .map(ScriptResponseSource::label)
+        .unwrap_or("none");
+    let history = state
+        .map(ScriptState::format_response_history)
+        .unwrap_or_else(|| "<none>".to_owned());
+    let recent = if history == "<none>" {
+        format!("recent responses: {history}")
+    } else {
+        format!("recent responses:\n{history}")
+    };
     anyhow!(
-        "script failure at line {line_number}: {line_text}\nreason: {reason}\nlast response: {last}"
+        "script failure at line {line_number}: {line_text}\nreason: {reason}\nlast command: {last_command}\nlast response: {last}\nlast response source: {last_source}\n{recent}"
     )
 }
 
@@ -641,8 +660,11 @@ pub struct Shell<T: Transport, W: Write> {
 
 #[derive(Debug, Default)]
 struct ScriptState {
+    last_command_line: Option<String>,
     last_response_line: Option<String>,
+    last_response_source: Option<ScriptResponseSource>,
     response_from_ack: bool,
+    responses: VecDeque<ScriptResponseLine>,
 }
 
 #[derive(Debug)]
@@ -651,21 +673,83 @@ struct ScriptLine {
     text: String,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ScriptResponseSource {
+    Ack,
+    Output,
+}
+
+impl ScriptResponseSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ack => "ack",
+            Self::Output => "out",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ScriptResponseLine {
+    source: ScriptResponseSource,
+    line: String,
+}
+
 impl ScriptState {
-    fn begin_command(&mut self) {
+    fn begin_command(&mut self, line: &str) {
+        self.last_command_line = Some(line.to_owned());
         self.last_response_line = None;
+        self.last_response_source = None;
         self.response_from_ack = false;
+        self.responses.clear();
     }
 
-    fn record_output_line(&mut self, line: &str) {
-        if !self.response_from_ack {
-            self.last_response_line = Some(line.to_owned());
+    fn record_response_line(&mut self, source: ScriptResponseSource, line: &str) {
+        if self.responses.len() >= MAX_SCRIPT_RESPONSES {
+            self.responses.pop_front();
+        }
+        self.responses.push_back(ScriptResponseLine {
+            source,
+            line: line.to_owned(),
+        });
+        match source {
+            ScriptResponseSource::Ack => {
+                self.last_response_line = Some(line.to_owned());
+                self.last_response_source = Some(source);
+                self.response_from_ack = true;
+            }
+            ScriptResponseSource::Output => {
+                if !self.response_from_ack {
+                    self.last_response_line = Some(line.to_owned());
+                    self.last_response_source = Some(source);
+                }
+            }
         }
     }
 
+    fn record_output_line(&mut self, line: &str) {
+        self.record_response_line(ScriptResponseSource::Output, line);
+    }
+
     fn record_ack_line(&mut self, line: &str) {
-        self.last_response_line = Some(line.to_owned());
-        self.response_from_ack = true;
+        self.record_response_line(ScriptResponseSource::Ack, line);
+    }
+
+    fn format_response_history(&self) -> String {
+        if self.responses.is_empty() {
+            return "<none>".to_owned();
+        }
+        let mut out = String::new();
+        for entry in &self.responses {
+            out.push_str("  - [");
+            out.push_str(entry.source.label());
+            out.push_str("] ");
+            out.push_str(entry.line.as_str());
+            out.push('\n');
+        }
+        if out.ends_with('\n') {
+            out.pop();
+        }
+        out
     }
 }
 
@@ -702,16 +786,10 @@ impl<T: Transport, W: Write> Shell<T, W> {
         Ok(())
     }
 
-    fn begin_script_command(&mut self) {
+    fn begin_script_command(&mut self, line: &str) {
         if let Some(state) = self.script_state.as_mut() {
-            state.begin_command();
+            state.begin_command(line);
         }
-    }
-
-    fn script_last_response(&self) -> Option<&str> {
-        self.script_state
-            .as_ref()
-            .and_then(|state| state.last_response_line.as_deref())
     }
 
     fn prompt(&self) -> String {
@@ -790,24 +868,41 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     return Err(format_script_error(
                         entry.number,
                         text,
-                        self.script_last_response(),
+                        self.script_state.as_ref(),
                         "EXPECT requires a selector",
                     ));
                 }
-                let last = self.script_last_response().ok_or_else(|| {
-                    format_script_error(
-                        entry.number,
-                        text,
-                        None,
-                        "EXPECT requires a prior command response",
-                    )
-                })?;
+                let last = match self
+                    .script_state
+                    .as_ref()
+                    .and_then(|state| state.last_response_line.as_deref())
+                {
+                    Some(last) => last,
+                    None => {
+                        let reason = match self
+                            .script_state
+                            .as_ref()
+                            .and_then(|state| state.last_command_line.as_deref())
+                        {
+                            Some(cmd) => format!(
+                                "EXPECT requires a prior command response (last command: {cmd})"
+                            ),
+                            None => "EXPECT requires a prior command response".to_owned(),
+                        };
+                        return Err(format_script_error(
+                            entry.number,
+                            text,
+                            self.script_state.as_ref(),
+                            &reason,
+                        ));
+                    }
+                };
                 if rest == "OK" {
                     if !last.starts_with("OK") {
                         return Err(format_script_error(
                             entry.number,
                             text,
-                            Some(last),
+                            self.script_state.as_ref(),
                             "EXPECT OK failed",
                         ));
                     }
@@ -816,7 +911,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         return Err(format_script_error(
                             entry.number,
                             text,
-                            Some(last),
+                            self.script_state.as_ref(),
                             "EXPECT ERR failed",
                         ));
                     }
@@ -826,7 +921,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         return Err(format_script_error(
                             entry.number,
                             text,
-                            Some(last),
+                            self.script_state.as_ref(),
                             "EXPECT SUBSTR requires text",
                         ));
                     }
@@ -834,7 +929,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         return Err(format_script_error(
                             entry.number,
                             text,
-                            Some(last),
+                            self.script_state.as_ref(),
                             "EXPECT SUBSTR failed",
                         ));
                     }
@@ -844,7 +939,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         return Err(format_script_error(
                             entry.number,
                             text,
-                            Some(last),
+                            self.script_state.as_ref(),
                             "EXPECT NOT requires text",
                         ));
                     }
@@ -852,7 +947,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         return Err(format_script_error(
                             entry.number,
                             text,
-                            Some(last),
+                            self.script_state.as_ref(),
                             "EXPECT NOT failed",
                         ));
                     }
@@ -860,7 +955,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     return Err(format_script_error(
                         entry.number,
                         text,
-                        Some(last),
+                        self.script_state.as_ref(),
                         "EXPECT selector is invalid",
                     ));
                 }
@@ -877,7 +972,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     return Err(format_script_error(
                         entry.number,
                         text,
-                        self.script_last_response(),
+                        self.script_state.as_ref(),
                         "WAIT requires milliseconds",
                     ));
                 };
@@ -885,7 +980,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     return Err(format_script_error(
                         entry.number,
                         text,
-                        self.script_last_response(),
+                        self.script_state.as_ref(),
                         "WAIT accepts a single millisecond value",
                     ));
                 }
@@ -893,7 +988,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     format_script_error(
                         entry.number,
                         text,
-                        self.script_last_response(),
+                        self.script_state.as_ref(),
                         "WAIT requires a numeric millisecond value",
                     )
                 })?;
@@ -901,7 +996,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     return Err(format_script_error(
                         entry.number,
                         text,
-                        self.script_last_response(),
+                        self.script_state.as_ref(),
                         &format!("WAIT exceeds max of {MAX_SCRIPT_WAIT_MS}ms"),
                     ));
                 }
@@ -909,7 +1004,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 continue;
             }
 
-            self.begin_script_command();
+            self.begin_script_command(text);
             match self.execute(text) {
                 Ok(CommandStatus::Quit) => break,
                 Ok(CommandStatus::Continue) => {}
@@ -918,7 +1013,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     return Err(format_script_error(
                         entry.number,
                         text,
-                        self.script_last_response(),
+                        self.script_state.as_ref(),
                         &reason,
                     ));
                 }
