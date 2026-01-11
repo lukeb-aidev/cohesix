@@ -644,6 +644,7 @@ impl TcpTransport {
         let start = Instant::now();
         self.last_probe = Some(start);
         self.send_line("PING")?;
+        let mut timeouts = 0usize;
         loop {
             match self.read_line_internal()? {
                 ReadStatus::Line(line) => {
@@ -660,7 +661,13 @@ impl TcpTransport {
                     }
                     return Ok(HeartbeatOutcome::Line(trimmed));
                 }
-                ReadStatus::Timeout => continue,
+                ReadStatus::Timeout => {
+                    timeouts = timeouts.saturating_add(1);
+                    if timeouts > self.max_retries {
+                        self.last_probe = None;
+                        return Ok(HeartbeatOutcome::Closed);
+                    }
+                }
                 ReadStatus::Closed => {
                     self.last_probe = None;
                     return Ok(HeartbeatOutcome::Closed);
