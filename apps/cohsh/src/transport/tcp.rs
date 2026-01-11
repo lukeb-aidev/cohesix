@@ -891,9 +891,7 @@ impl TcpTransport {
                             if is_frame_error(&ack) {
                                 return Err(anyhow!("console frame rejected: {response}"));
                             }
-                            if ack.verb.eq_ignore_ascii_case(verb)
-                                && matches!(ack.status, AckStatus::Err)
-                            {
+                            if matches!(ack.status, AckStatus::Err) {
                                 return Err(anyhow!("{verb} failed: {response}"));
                             }
                             continue;

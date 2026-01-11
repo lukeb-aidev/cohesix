@@ -82,8 +82,13 @@ impl Log for BootstrapLogger {
         }
 
         let line = format_record_line(record);
-        let use_log_buffer =
-            log_buffer::log_channel_active() && !skip_log_buffer_target(record.target());
+        let log_buffer_active = log_buffer::log_channel_active();
+        let skip_buffer = skip_log_buffer_target(record.target());
+        if log_buffer_active && skip_buffer {
+            // Avoid clobbering console prompts once the log buffer is active.
+            return;
+        }
+        let use_log_buffer = log_buffer_active && !skip_buffer;
         self.emit(line.as_slice(), use_log_buffer);
     }
 
