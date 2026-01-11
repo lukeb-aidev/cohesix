@@ -11135,14 +11135,28 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) -> Resul
         );
     }
     let log_once = !DMA_CLEAN_LOGGED.swap(true, AtomicOrdering::AcqRel);
-    if VIRTIO_DMA_TRACE || log_once {
+    let trace_enabled =
+        VIRTIO_DMA_TRACE && log::log_enabled!(target: "virtio-net", log::Level::Trace);
+    if log_once {
         info!(
             target: "virtio-net",
             "[virtio-net][dma] cache op reason={reason}",
         );
+    } else if trace_enabled {
+        trace!(
+            target: "virtio-net",
+            "[virtio-net][dma] cache op reason={reason}",
+        );
     }
-    if VIRTIO_DMA_TRACE || log_once {
+    if log_once {
         info!(
+            target: "virtio-net",
+            "[virtio-net][dma] clean enter ptr=0x{ptr:016x} len={len}",
+            ptr = ptr as usize,
+            len = len,
+        );
+    } else if trace_enabled {
+        trace!(
             target: "virtio-net",
             "[virtio-net][dma] clean enter ptr=0x{ptr:016x} len={len}",
             ptr = ptr as usize,
@@ -11164,8 +11178,15 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) -> Resul
         mark_forensics_frozen();
         return Err(DmaError::CacheOperationFailed);
     }
-    if VIRTIO_DMA_TRACE || log_once {
+    if log_once {
         info!(
+            target: "virtio-net",
+            "[virtio-net][dma] clean exit ptr=0x{ptr:016x} len={len}",
+            ptr = ptr as usize,
+            len = len,
+        );
+    } else if trace_enabled {
+        trace!(
             target: "virtio-net",
             "[virtio-net][dma] clean exit ptr=0x{ptr:016x} len={len}",
             ptr = ptr as usize,
@@ -11209,14 +11230,28 @@ fn dma_invalidate(
         );
     }
     let log_once = !DMA_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel);
-    if VIRTIO_DMA_TRACE || log_once {
+    let trace_enabled =
+        VIRTIO_DMA_TRACE && log::log_enabled!(target: "virtio-net", log::Level::Trace);
+    if log_once {
         info!(
             target: "virtio-net",
             "[virtio-net][dma] cache op reason={reason}",
         );
+    } else if trace_enabled {
+        trace!(
+            target: "virtio-net",
+            "[virtio-net][dma] cache op reason={reason}",
+        );
     }
-    if VIRTIO_DMA_TRACE || log_once {
+    if log_once {
         info!(
+            target: "virtio-net",
+            "[virtio-net][dma] invalidate enter ptr=0x{ptr:016x} len={len}",
+            ptr = ptr as usize,
+            len = len,
+        );
+    } else if trace_enabled {
+        trace!(
             target: "virtio-net",
             "[virtio-net][dma] invalidate enter ptr=0x{ptr:016x} len={len}",
             ptr = ptr as usize,
@@ -11238,8 +11273,15 @@ fn dma_invalidate(
         mark_forensics_frozen();
         return Err(DmaError::CacheOperationFailed);
     }
-    if VIRTIO_DMA_TRACE || log_once {
+    if log_once {
         info!(
+            target: "virtio-net",
+            "[virtio-net][dma] invalidate exit ptr=0x{ptr:016x} len={len}",
+            ptr = ptr as usize,
+            len = len,
+        );
+    } else if trace_enabled {
+        trace!(
             target: "virtio-net",
             "[virtio-net][dma] invalidate exit ptr=0x{ptr:016x} len={len}",
             ptr = ptr as usize,
