@@ -10,13 +10,17 @@
 - `event_pump.tick_ms`: `5`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
+- `cache.kernel_ops`: `true`
+- `cache.dma_clean`: `true`
+- `cache.dma_invalidate`: `true`
+- `cache.unify_instructions`: `false`
 - `features.net_console`: `true`
 - `features.serial_console`: `true`
 - `features.std_console`: `false`
 - `features.std_host_tools`: `false`
 - `namespaces.role_isolation`: `true`
 - `tickets`: 3 entries
-- `manifest.sha256`: `43986a8fc288378a58a2c52bd15bab41e99de9e484709d7f37b0570731195d1d`
+- `manifest.sha256`: `c1cc99e516188e61f9e2bd266b99143f10ffa80e47724746911288d30ee4dfce`
 
 ### Namespace mounts (generated)
 - (none)
@@ -30,4 +34,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `43986a8fc288378a58a2c52bd15bab41e99de9e484709d7f37b0570731195d1d`)._
+_Generated from `configs/root_task.toml` (sha256: `c1cc99e516188e61f9e2bd266b99143f10ffa80e47724746911288d30ee4dfce`)._

@@ -318,13 +318,17 @@ CLI scripts, or bootstrap tables change.
 - `event_pump.tick_ms`: `5`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
+- `cache.kernel_ops`: `true`
+- `cache.dma_clean`: `true`
+- `cache.dma_invalidate`: `true`
+- `cache.unify_instructions`: `false`
 - `features.net_console`: `true`
 - `features.serial_console`: `true`
 - `features.std_console`: `false`
 - `features.std_host_tools`: `false`
 - `namespaces.role_isolation`: `true`
 - `tickets`: 3 entries
-- `manifest.sha256`: `43986a8fc288378a58a2c52bd15bab41e99de9e484709d7f37b0570731195d1d`
+- `manifest.sha256`: `c1cc99e516188e61f9e2bd266b99143f10ffa80e47724746911288d30ee4dfce`
 
 ### Namespace mounts (generated)
 - (none)
@@ -338,7 +342,15 @@ CLI scripts, or bootstrap tables change.
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `43986a8fc288378a58a2c52bd15bab41e99de9e484709d7f37b0570731195d1d`)._
+_Generated from `configs/root_task.toml` (sha256: `c1cc99e516188e61f9e2bd266b99143f10ffa80e47724746911288d30ee4dfce`)._
+
+### 11.2 Cache-safe DMA contracts
+Shared DMA buffers (telemetry rings, GPU windows, and future sidecar regions) cross the HAL and NineDoor boundary and therefore must not depend on implicit cache behavior. On AArch64 the seL4 kernel exposes VSpace cache operations (`seL4_ARM_VSpace_Clean_Data`, `seL4_ARM_VSpace_CleanInvalidate_Data`, `seL4_ARM_VSpace_Invalidate_Data`, `seL4_ARM_VSpace_Unify_Instruction`) that the root task must invoke to guarantee deterministic coherence. The manifest’s cache section records which maintenance operations are required:
+- `cache.kernel_ops` enables the kernel capability required to submit VSpace cache ops.
+- `cache.dma_clean` and `cache.dma_invalidate` define whether buffers are cleaned before sharing and invalidated after reclaim.
+- `cache.unify_instructions` gates instruction cache unification for shared executable buffers.
+
+`coh-rtc` refuses to generate bootstrap tables when any DMA cache maintenance flag is set while `cache.kernel_ops` is false, ensuring docs, manifest, and runtime behavior remain aligned. Root-task audit logs bracket each DMA hand-off with cache-maintenance entries so operators can verify flush/invalidate ordering in serial logs.
 
 ## 12. Hardware Trajectory & Host/Worker Sidecar Pattern
 - **UEFI readiness**: Later milestones introduce an aarch64 UEFI loader

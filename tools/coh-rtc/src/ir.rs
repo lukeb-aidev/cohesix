@@ -21,6 +21,8 @@ pub struct Manifest {
     pub event_pump: EventPump,
     pub secure9p: Secure9pLimits,
     pub features: FeatureToggles,
+    #[serde(default)]
+    pub cache: CacheConfig,
     pub tickets: Vec<TicketSpec>,
     #[serde(default)]
     pub namespaces: Namespaces,
@@ -59,6 +61,7 @@ impl Manifest {
                 bail!("std_host_tools requires profile.kernel = false");
             }
         }
+        self.validate_cache()?;
         self.validate_namespace_mounts()?;
         self.validate_tickets()?;
         self.validate_ecosystem()?;
@@ -109,6 +112,16 @@ impl Manifest {
         }
         if !self.namespaces.role_isolation {
             bail!("ecosystem.host.enable requires namespaces.role_isolation = true");
+        }
+        Ok(())
+    }
+
+    fn validate_cache(&self) -> Result<()> {
+        let requested = self.cache.dma_clean
+            || self.cache.dma_invalidate
+            || self.cache.unify_instructions;
+        if requested && !self.cache.kernel_ops {
+            bail!("cache.kernel_ops must be true when cache maintenance is requested");
         }
         Ok(())
     }
@@ -166,6 +179,26 @@ pub struct FeatureToggles {
     pub std_console: bool,
     #[serde(default)]
     pub std_host_tools: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct CacheConfig {
+    pub kernel_ops: bool,
+    pub dma_clean: bool,
+    pub dma_invalidate: bool,
+    pub unify_instructions: bool,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            kernel_ops: false,
+            dma_clean: false,
+            dma_invalidate: false,
+            unify_instructions: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

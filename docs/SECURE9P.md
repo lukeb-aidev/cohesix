@@ -73,7 +73,10 @@ pub trait AccessPolicy {
 - Transport adapters must expose counters for frames sent/received and error counts for CI dashboards.
 - Namespaces honour Secure9P invariants: `/queen/ctl` is append-only; `/log/*.log` entries are append-only files; `/proc` hosts `boot` plus per-worker trace files without write or traversal backdoors; `/worker/<id>` directories expose append-only telemetry for the matching worker; `/gpu/<id>/` nodes are published by the host bridge per `docs/GPU_NODES.md` and remain read/write only to authorised GPU roles. Walks never permit `..`, no implicit wildcards exist, and depth stays bounded by the codec guard.
 
-## 8. Future Enhancements
+## 8. Cache-Safe DMA for NineDoor Surfaces
+NineDoor exposes telemetry and GPU file surfaces that ultimately map onto shared DMA buffers. On AArch64, cache coherence for these shared regions must be enforced explicitly using the kernel VSpace cache operations (`Clean`, `Invalidate`, `CleanInvalidate`, `Unify Instruction`) so the host and VM observe deterministic data. The manifest cache fields (`cache.kernel_ops`, `cache.dma_clean`, `cache.dma_invalidate`, `cache.unify_instructions`) define the contract, and `coh-rtc` rejects configurations that request DMA cache maintenance without kernel cache ops enabled. Root-task emits audit lines around each DMA hand-off so cache flush/invalidate ordering is provable in serial logs without adding new protocols.
+
+## 9. Future Enhancements
 - Opportunistic support for 9P lock extensions once namespace bind/mount stabilises.
 - Optional TLS termination in host tools prior to entering the development VM transport adapter; the same boundary applies when the transport targets physical hardware.
 - Status (Build Plan ≤7c): root and TCP consoles run concurrently; Secure9P namespaces and role-aware mounts are live; upcoming milestones will extend worker-side bind/mount, flesh out worker/GPU namespace detail, and wire GPU lease paths from host bridge into `/gpu/<id>`.

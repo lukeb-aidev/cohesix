@@ -36,6 +36,20 @@ impl DocFragments {
         writeln!(schema_md, "- `event_pump.tick_ms`: `{}`", manifest.event_pump.tick_ms).ok();
         writeln!(schema_md, "- `secure9p.msize`: `{}`", manifest.secure9p.msize).ok();
         writeln!(schema_md, "- `secure9p.walk_depth`: `{}`", manifest.secure9p.walk_depth).ok();
+        writeln!(schema_md, "- `cache.kernel_ops`: `{}`", manifest.cache.kernel_ops).ok();
+        writeln!(schema_md, "- `cache.dma_clean`: `{}`", manifest.cache.dma_clean).ok();
+        writeln!(
+            schema_md,
+            "- `cache.dma_invalidate`: `{}`",
+            manifest.cache.dma_invalidate
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `cache.unify_instructions`: `{}`",
+            manifest.cache.unify_instructions
+        )
+        .ok();
         writeln!(schema_md, "- `features.net_console`: `{}`", manifest.features.net_console).ok();
         writeln!(schema_md, "- `features.serial_console`: `{}`", manifest.features.serial_console).ok();
         writeln!(schema_md, "- `features.std_console`: `{}`", manifest.features.std_console).ok();

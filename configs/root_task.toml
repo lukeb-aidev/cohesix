@@ -18,6 +18,12 @@ tick_ms = 5
 msize = 8192
 walk_depth = 8
 
+[cache]
+kernel_ops = true
+dma_clean = true
+dma_invalidate = true
+unify_instructions = false
+
 [features]
 net_console = true
 serial_console = true
