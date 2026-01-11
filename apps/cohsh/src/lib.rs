@@ -93,6 +93,7 @@ const TEST_TRANSCRIPT_MAX_BYTES: usize = 512;
 const TEST_CHECK_NAME_MAX_CHARS: usize = 120;
 const TEST_DETAIL_MAX_CHARS: usize = 200;
 const TEST_MSIZE_SENTINEL: &str = "{{msize_overflow}}";
+const MAX_PATH_COMPONENTS: usize = 8;
 
 fn format_script_error(
     line_number: usize,
@@ -1022,6 +1023,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
 
     fn write_output_line(&mut self, message: &str) -> Result<()> {
         writeln!(self.writer, "{message}")?;
+        self.writer.flush()?;
         if let Some(state) = self.script_state.as_mut() {
             state.record_output_line(message);
         }
@@ -1030,6 +1032,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
 
     fn write_ack_line(&mut self, ack: &str) -> Result<()> {
         writeln!(self.writer, "[console] {ack}")?;
+        self.writer.flush()?;
         if let Some(state) = self.script_state.as_mut() {
             state.record_ack_line(ack);
         }
@@ -1929,6 +1932,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 Ok(Some(line)) => {
                     let trimmed = line.trim();
                     if trimmed.is_empty() {
+                        prompt_rendered = false;
                         continue;
                     }
                     prompt_rendered = false;
@@ -2651,6 +2655,11 @@ fn parse_path(path: &str) -> Result<Vec<String>> {
         }
         if component.as_bytes().contains(&0) {
             return Err(anyhow!("path component contains NUL byte"));
+        }
+        if components.len() >= MAX_PATH_COMPONENTS {
+            return Err(anyhow!(
+                "path exceeds maximum depth of {MAX_PATH_COMPONENTS} components"
+            ));
         }
         components.push(component.to_owned());
     }

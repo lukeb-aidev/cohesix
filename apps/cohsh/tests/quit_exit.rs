@@ -44,3 +44,19 @@ fn quit_exits_cleanly() {
         "unexpected stderr output: {stderr:?}"
     );
 }
+
+#[test]
+fn blank_lines_reprint_prompt() {
+    let mut cmd = assert_cmd::cargo_bin_cmd!("cohsh");
+    cmd.arg("--transport")
+        .arg("mock")
+        .write_stdin("\nquit\n")
+        .timeout(Duration::from_secs(1));
+    let assert = cmd.assert().success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let prompt_count = stdout.matches("coh> ").count();
+    assert!(
+        prompt_count >= 2,
+        "expected prompt to reprint after blank line, saw {prompt_count} prompts in {stdout:?}"
+    );
+}

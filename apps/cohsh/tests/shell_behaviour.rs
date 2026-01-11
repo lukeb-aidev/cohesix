@@ -55,6 +55,16 @@ fn tail_without_session_fails() {
 }
 
 #[test]
+fn path_depth_is_capped() {
+    let transport = NineDoorTransport::new(nine_door::NineDoor::new());
+    let mut shell = Shell::new(transport, Cursor::new(Vec::new()));
+    let err = shell
+        .execute("ls /a/b/c/d/e/f/g/h/i")
+        .expect_err("deep paths should be rejected");
+    assert!(err.to_string().contains("maximum depth"));
+}
+
+#[test]
 fn script_runner_ignores_commented_lines() {
     let script = b"# comment\n\nhelp # inline\n";
     let transport = NineDoorTransport::new(nine_door::NineDoor::new());
