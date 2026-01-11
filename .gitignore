@@ -1,7 +1,8 @@
 # Author: Lukas Bower
 /target
 /.target_check
-/out
+/out/cohesix
+/out/regression-logs
 !/out/manifests/
 !/out/manifests/**
 Cargo.lock
