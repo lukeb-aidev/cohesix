@@ -11155,8 +11155,9 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) -> Resul
         if !DMA_ERROR_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             error!(
                 target: "virtio-net",
-                "[virtio-net][dma] clean syscall failed err={} ptr=0x{ptr:016x} len={len} reason={reason}",
-                err,
+                "[virtio-net][dma] clean syscall failed err={} kind={:?} ptr=0x{ptr:016x} len={len} reason={reason}",
+                err.code(),
+                err.kind(),
                 ptr = ptr as usize,
             );
         }
@@ -11228,8 +11229,9 @@ fn dma_invalidate(
         if !DMA_ERROR_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             error!(
                 target: "virtio-net",
-                "[virtio-net][dma] invalidate syscall failed err={} ptr=0x{ptr:016x} len={len} reason={reason}",
-                err,
+                "[virtio-net][dma] invalidate syscall failed err={} kind={:?} ptr=0x{ptr:016x} len={len} reason={reason}",
+                err.code(),
+                err.kind(),
                 ptr = ptr as usize,
             );
         }
