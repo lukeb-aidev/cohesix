@@ -1423,6 +1423,32 @@ where
                         if let Some(bridge_ref) = self.ninedoor.as_mut() {
                             match bridge_ref.cat(path.as_str()) {
                                 Ok(lines) => {
+                                    let mut user_summary: Option<
+                                        HeaplessVec<
+                                            HeaplessString<DEFAULT_LINE_CAPACITY>,
+                                            { log_buffer::LOG_USER_SNAPSHOT_LINES },
+                                        >,
+                                    > = None;
+                                    // Prefer recent user echo lines so log noise doesn't mask
+                                    // script-visible summaries.
+                                    let summary_lines: &[HeaplessString<DEFAULT_LINE_CAPACITY>] =
+                                        if path.as_str() == "/log/queen.log" {
+                                            let user_lines = log_buffer::snapshot_user_lines::<
+                                                DEFAULT_LINE_CAPACITY,
+                                                { log_buffer::LOG_USER_SNAPSHOT_LINES },
+                                            >();
+                                            if !user_lines.is_empty() {
+                                                user_summary = Some(user_lines);
+                                                user_summary
+                                                    .as_ref()
+                                                    .map(|lines| lines.as_slice())
+                                                    .unwrap_or(lines.as_slice())
+                                            } else {
+                                                lines.as_slice()
+                                            }
+                                        } else {
+                                            lines.as_slice()
+                                        };
                                     let mut summary: HeaplessString<128> = HeaplessString::new();
                                     let mut selected: HeaplessVec<
                                         usize,
@@ -1432,7 +1458,7 @@ where
                                     let max_line_len = summary.capacity() / 2;
                                     let mut prefer_user_lines = true;
                                     for _pass in 0..2 {
-                                        for (idx, line) in lines.iter().enumerate().rev() {
+                                        for (idx, line) in summary_lines.iter().enumerate().rev() {
                                             if prefer_user_lines && line.as_str().starts_with('[') {
                                                 continue;
                                             }
@@ -1462,8 +1488,8 @@ where
                                         total_len = 0;
                                         prefer_user_lines = false;
                                     }
-                                    if selected.is_empty() && !lines.is_empty() {
-                                        if let Some(line) = lines.last() {
+                                    if selected.is_empty() && !summary_lines.is_empty() {
+                                        if let Some(line) = summary_lines.last() {
                                             for ch in line.as_str().chars() {
                                                 if summary.push(ch).is_err() {
                                                     break;
@@ -1477,7 +1503,7 @@ where
                                                     break;
                                                 }
                                             }
-                                            if let Some(line) = lines.get(*idx) {
+                                            if let Some(line) = summary_lines.get(*idx) {
                                                 if summary.push_str(line.as_str()).is_err() {
                                                     break;
                                                 }

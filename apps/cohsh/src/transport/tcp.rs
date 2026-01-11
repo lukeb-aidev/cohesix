@@ -78,8 +78,11 @@ impl ConnectionTelemetry {
         eprintln!("[cohsh][tcp] connection lost: {error}");
     }
 
-    fn log_heartbeat(&mut self, latency: Duration) {
+    fn log_heartbeat(&mut self, latency: Duration, verbose: bool) {
         self.heartbeats += 1;
+        if !verbose {
+            return;
+        }
         eprintln!(
             "[cohsh][tcp] heartbeat acknowledged in {:?} (count={})",
             latency, self.heartbeats
@@ -651,7 +654,7 @@ impl TcpTransport {
                             .take()
                             .map(|probe| probe.elapsed())
                             .unwrap_or_else(|| start.elapsed());
-                        self.telemetry.log_heartbeat(latency);
+                        self.telemetry.log_heartbeat(latency, self.tcp_debug);
                         self.last_activity = Instant::now();
                         return Ok(HeartbeatOutcome::Ack);
                     }
@@ -680,7 +683,7 @@ impl TcpTransport {
                             .take()
                             .map(|probe| probe.elapsed())
                             .unwrap_or_default();
-                        self.telemetry.log_heartbeat(latency);
+                        self.telemetry.log_heartbeat(latency, self.tcp_debug);
                         self.last_activity = Instant::now();
                         continue;
                     }
@@ -722,7 +725,7 @@ impl TcpTransport {
                             .take()
                             .map(|probe| probe.elapsed())
                             .unwrap_or_default();
-                        self.telemetry.log_heartbeat(latency);
+                        self.telemetry.log_heartbeat(latency, self.tcp_debug);
                         self.last_activity = Instant::now();
                         continue;
                     }
@@ -1073,8 +1076,8 @@ impl Transport for TcpTransport {
         let deadline = now.checked_add(wait).unwrap_or(now);
         loop {
             self.send_line("PING")?;
-            match self.next_protocol_line_with_deadline(deadline)? {
-                Some(response) => {
+            match self.next_protocol_line_with_deadline(deadline) {
+                Ok(Some(response)) => {
                     if self.record_ack(&response) {
                         if response.starts_with("OK PING") {
                             return Ok("pong".to_owned());
@@ -1088,10 +1091,17 @@ impl Transport for TcpTransport {
                         continue;
                     }
                 }
-                None => {
+                Ok(None) => {
                     attempts += 1;
                     if attempts > self.max_retries {
                         return Err(anyhow!("connection dropped repeatedly while awaiting PING"));
+                    }
+                    self.recover_session()?;
+                }
+                Err(err) => {
+                    attempts += 1;
+                    if attempts > self.max_retries {
+                        return Err(anyhow!("ping timed out: {err}"));
                     }
                     self.recover_session()?;
                 }

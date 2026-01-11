@@ -188,6 +188,7 @@ impl NineDoorBridge {
         if payload.contains('\n') || payload.contains('\r') {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
+        log_buffer::append_user_line(payload);
         log_buffer::append_log_line(payload);
         Ok(())
     }

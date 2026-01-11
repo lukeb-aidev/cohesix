@@ -4,6 +4,8 @@
 
 set -euo pipefail
 
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
 SCRIPTS=(
     "boot_v0.coh"
     "9p_batch.coh"
@@ -164,6 +166,13 @@ rm -rf target out/cohesix
 mkdir -p "${LOG_ROOT}" "${ARCHIVE_ROOT}"
 
 qemu_log="${LOG_ROOT}/regression_batch.qemu.log"
+
+cargo run -p coh-rtc -- \
+    "$PROJECT_ROOT/configs/root_task.toml" \
+    --out "$PROJECT_ROOT/apps/root-task/src/generated" \
+    --manifest "$PROJECT_ROOT/out/manifests/root_task_resolved.json" \
+    --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \
+    --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md"
 
 SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
     --sel4-build "$HOME/seL4/build" \
