@@ -6,12 +6,15 @@
 
 use crate::bootstrap::{boot_tracer, log as boot_log, BootPhase};
 use crate::event::AuditSink;
+use crate::generated;
 use crate::log_buffer;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 use core::fmt::{self, Write};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
 const LOG_PATH: &str = "/log/queen.log";
+const PROC_BOOT_PATH: &str = "/proc/boot";
+const BOOT_HEADER: &str = "Cohesix boot: root-task online";
 const MAX_STREAM_LINES: usize = log_buffer::LOG_SNAPSHOT_LINES;
 
 /// Minimal NineDoor bridge used by the seL4 build until the full Secure9P server is ported.
@@ -180,10 +183,13 @@ impl NineDoorBridge {
         path: &str,
     ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
     {
-        if path != LOG_PATH {
-            return Err(NineDoorBridgeError::InvalidPath);
+        if path == LOG_PATH {
+            return Ok(log_buffer::snapshot_lines::<DEFAULT_LINE_CAPACITY, MAX_STREAM_LINES>());
         }
-        Ok(log_buffer::snapshot_lines::<DEFAULT_LINE_CAPACITY, MAX_STREAM_LINES>())
+        if path == PROC_BOOT_PATH {
+            return boot_lines();
+        }
+        Err(NineDoorBridgeError::InvalidPath)
     }
 
     /// List directory entries (not yet supported by the shim bridge).
@@ -220,6 +226,36 @@ impl NineDoorBridge {
         }
         Ok(output)
     }
+}
+
+fn boot_lines(
+) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+{
+    let mut output = HeaplessVec::new();
+    push_boot_line(&mut output, BOOT_HEADER)?;
+    // Keep the shim output concise so console ack summaries remain within bounds.
+    for line in generated::initial_audit_lines() {
+        if line.starts_with("manifest.schema=")
+            || line.starts_with("manifest.profile=")
+            || line.starts_with("manifest.sha256=")
+        {
+            push_boot_line(&mut output, line)?;
+        }
+    }
+    Ok(output)
+}
+
+fn push_boot_line(
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    line: &str,
+) -> Result<(), NineDoorBridgeError> {
+    let mut entry: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+    entry
+        .push_str(line)
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    output
+        .push(entry)
+        .map_err(|_| NineDoorBridgeError::BufferFull)
 }
 
 fn truncate(input: &str, limit: usize) -> &str {
