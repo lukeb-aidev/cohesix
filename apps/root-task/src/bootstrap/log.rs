@@ -92,7 +92,7 @@ impl Log for BootstrapLogger {
 
 #[cfg(feature = "cohesix-dev")]
 fn skip_log_buffer_target(target: &str) -> bool {
-    matches!(target, "virtio-net" | "net-console" | "net-trace")
+    matches!(target, "net-trace")
 }
 
 #[cfg(not(feature = "cohesix-dev"))]

@@ -6425,8 +6425,9 @@ impl VirtioNet {
         }
         self.used_poll_calls = self.used_poll_calls.wrapping_add(1);
         let (used_idx, avail_idx) = self.tx_queue.indices();
-        let should_log =
-            used_idx != self.tx_last_used_seen || (self.tx_progress_log_gate & 0x3f) == 0;
+        let in_flight = self.tx_head_mgr.in_flight_count();
+        let should_log = used_idx != self.tx_last_used_seen
+            || (in_flight > 0 && (self.tx_progress_log_gate & 0x3f) == 0);
         if should_log {
             info!(
                 target: "net-console",
@@ -6434,7 +6435,7 @@ impl VirtioNet {
                 avail_idx,
                 used_idx,
                 self.tx_queue.last_used,
-                self.tx_head_mgr.in_flight_count(),
+                in_flight,
                 self.tx_head_mgr.free_len(),
                 self.tx_head_mgr.next_gen(),
             );
@@ -7665,6 +7666,16 @@ impl VirtioNet {
         let inflight = self.tx_inflight_count();
         let free = self.tx_free_count();
         let (used_idx, avail_idx) = self.tx_queue.indices_no_sync();
+        let changed = inflight != self.tx_diag.last_inflight
+            || used_idx != self.tx_diag.last_used_idx
+            || avail_idx != self.tx_diag.last_avail_idx
+            || snapshot.enqueue_ok != self.tx_diag.last_enqueue_ok
+            || snapshot.enqueue_would_block != self.tx_diag.last_would_block
+            || snapshot.kick_count != self.tx_diag.last_kick_count
+            || snapshot.irq_count != self.tx_diag.last_irq_count;
+        if !changed && inflight == 0 {
+            return;
+        }
         info!(
             target: "virtio-net",
             "[virtio-net][tx-stats] inflight={} free={} highwater={} enqueue_ok={} would_block={} kicks={} used_reaped={} reclaim_irq={} reclaim_poll={} ring_full={} irq={} avail_idx={} used_idx={}",
