@@ -697,10 +697,12 @@ Wrap the AArch64-specific VSpace cache operations in the HAL, wire them into man
 - `tools/coh-rtc` schema additions (`cache.dma_clean`, `cache.dma_invalidate`, `cache.unify_instructions`) plus generated bootstrap tables and docs (`docs/ARCHITECTURE.md §11`, `docs/SECURE9P.md`) describing why AArch64 cache ops are necessary for deterministic DMA. The manifest rejects configurations that omit `cache.kernel_ops = true` while requesting DMA cache maintenance, preventing bizarreness.
 - `apps/root-task/tests/cache_maintenance.rs` (QEMU/host shim) covering success/error paths of the helpers and asserting audit logs for flushed ranges before the shared region becomes available to NineDoor clients.
 
+**Status:** Complete — cache maintenance helpers and DMA audit traces verified; coh-rtc rejects missing `cache.kernel_ops`; tests pass.
+
 **Commands**
 - `cd apps/root-task && cargo test cache_maintenance --features cache-maintenance`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `cargo test -p tools/coh-rtc`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh`
+- `cargo test -p coh-rtc`
 
 **Checks (DoD)**
 - Cache helpers succeed for valid, aligned ranges and surface `seL4_RangeError`/`seL4_InvalidArgument` in logs when misaligned.
