@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
+# Purpose: Package a minimal rootfs and launch Cohesix under QEMU.
 
 set -euo pipefail
 
@@ -169,6 +170,15 @@ fi
 
 mkdir -p "$OUT_DIR/rootfs/bin"
 cp "$ROOT_TASK" "$OUT_DIR/rootfs/bin/root-task"
+mkdir -p "$OUT_DIR/rootfs/proc/tests"
+for script in selftest_quick.coh selftest_full.coh selftest_negative.coh; do
+    SRC="$SCRIPT_DIR/../resources/proc_tests/$script"
+    if [[ ! -f "$SRC" ]]; then
+        log "Selftest script missing: $SRC"
+        exit 1
+    fi
+    cp "$SRC" "$OUT_DIR/rootfs/proc/tests/$script"
+done
 
 pushd "$OUT_DIR/rootfs" >/dev/null
 find . -print | cpio -o -H newc > ../rootfs.cpio

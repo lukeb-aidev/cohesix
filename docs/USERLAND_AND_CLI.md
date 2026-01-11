@@ -76,6 +76,8 @@ Commands and status:
 - `attach <role> [ticket]` / `login` – attach to a NineDoor session. Valid roles: `queen`, `worker-heartbeat`, `worker-gpu`; missing roles, unknown roles, too many args, or re-attaching emit errors via the parser and shell.【F:apps/cohsh/src/lib.rs†L711-L729】【F:apps/cohsh/src/lib.rs†L1299-L1317】
 - `tail <path>` – stream a file; `log` tails `/log/queen.log`. Requires attachment.【F:apps/cohsh/src/lib.rs†L1170-L1179】
 - `ping` – reports attachment status; errors when detached or when given arguments.【F:apps/cohsh/src/lib.rs†L1181-L1194】
+- `test [--mode <quick|full>] [--json] [--timeout <s>] [--no-mutate]` – run the in-session self-tests sourced from `/proc/tests/` (default mode `quick`, default timeout 30s, hard cap 120s). `--no-mutate` skips spawn/kill steps. When `--json` is supplied, emit the stable schema described below.【F:apps/cohsh/src/lib.rs†L1512-L1763】
+  - Note: the bundled self-test scripts end with `quit`, so a successful run leaves the shell detached and requires a fresh `attach`.
 - `echo <text> > <path>` – append a newline-terminated payload to an absolute path via NineDoor.【F:apps/cohsh/src/lib.rs†L1211-L1222】【F:apps/cohsh/src/lib.rs†L1319-L1332】
 - `ls <path>` – list directory entries; entries are newline-delimited and returned in lexicographic order.
 - `cat <path>` – bounded read of file contents.
@@ -144,6 +146,27 @@ For streaming commands, the “response line” is the initial acknowledgement l
 - Max script lines: 256; longer scripts are rejected.
 - Max execution time: bounded by `test --timeout`; scripts must not block indefinitely.
 - Explicit waiting is allowed via `WAIT <ms>` (line statement), capped at 2000 ms; longer waits are rejected.
+
+### Preinstalled self-test scripts
+`coh> test` reads `.coh` scripts from `/proc/tests/`:
+- `/proc/tests/selftest_quick.coh`
+- `/proc/tests/selftest_full.coh`
+- `/proc/tests/selftest_negative.coh`
+
+### `coh> test` JSON schema
+When invoked with `--json`, `coh> test` emits:
+```
+{
+  "ok": true,
+  "mode": "quick",
+  "elapsed_ms": 123,
+  "checks": [
+    {"name": "preflight/ping", "ok": true, "detail": "OK ping"},
+    {"name": "line 4: cat /proc/boot", "ok": true, "detail": "OK"}
+  ],
+  "version": "1"
+}
+```
 
 ### Security posture
 - Scripts do not grant privileges: all actions remain subject to the session’s attached role/ticket and server-side access policy; scripts only automate what an operator could type interactively.
@@ -223,6 +246,7 @@ log
 quit
 ```
 Run via `./cohsh --transport tcp --tcp-port 31337 --script queen.coh`. The runner stops on the first error (including connection failures) and propagates the error code to the host shell.【F:apps/cohsh/src/lib.rs†L732-L763】
+Use `./cohsh --check <script.coh>` to validate `.coh` syntax without executing commands.【F:apps/cohsh/src/main.rs†L28-L138】
 
 ## GUI clients
 - A host-side WASM GUI is planned as a hive dashboard. It will speak the same console/NineDoor protocol as `cohsh` (no new verbs, no new in-VM endpoints) and focuses on presentation and workflow rather than new privileges.

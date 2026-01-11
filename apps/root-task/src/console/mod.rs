@@ -53,6 +53,7 @@ pub enum Command {
     Caps,
     Mem,
     Ping,
+    Test,
     Attach {
         role: String<MAX_ROLE_LEN>,
         ticket: Option<String<MAX_TICKET_LEN>>,
@@ -254,6 +255,7 @@ impl CohesixConsole {
         self.emit_line("  caps  - Show capability slots");
         self.emit_line("  mem   - Show untyped summary");
         self.emit_line("  ping  - Respond with pong");
+        self.emit_line("  test  - Self-test (host-only; use cohsh)");
         self.emit_line("  cachelog [n] - Dump recent cache operations");
         self.emit_line("  quit  - Exit the console session");
     }
@@ -316,6 +318,7 @@ impl CohesixConsole {
             Command::Caps => self.print_caps(),
             Command::Mem => self.print_mem(),
             Command::Ping => self.emit_line("pong"),
+            Command::Test => self.emit_line("test not supported on root console"),
             Command::Quit => self.emit_line("quit not supported on root console"),
             Command::Log => self.emit_line("log streaming unavailable"),
             Command::NetTest | Command::NetStats => {
@@ -483,6 +486,12 @@ impl CommandParser {
             v if v.eq_ignore_ascii_case("caps") => Ok(Command::Caps),
             v if v.eq_ignore_ascii_case("mem") => Ok(Command::Mem),
             v if v.eq_ignore_ascii_case("ping") => Ok(Command::Ping),
+            v if v.eq_ignore_ascii_case("test") => {
+                if !remainder.is_empty() {
+                    return Err(ConsoleError::InvalidValue("test"));
+                }
+                Ok(Command::Test)
+            }
             v if v.eq_ignore_ascii_case("nettest") => Ok(Command::NetTest),
             v if v.eq_ignore_ascii_case("netstats") => Ok(Command::NetStats),
             v if v.eq_ignore_ascii_case("log") => Ok(Command::Log),
@@ -697,6 +706,11 @@ mod tests {
     #[test]
     fn netstats_command_parses() {
         assert_eq!(parse("netstats\n").unwrap(), Command::NetStats);
+    }
+
+    #[test]
+    fn test_command_parses() {
+        assert_eq!(parse("test\n").unwrap(), Command::Test);
     }
 
     #[test]

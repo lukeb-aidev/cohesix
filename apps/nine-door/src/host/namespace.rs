@@ -12,6 +12,19 @@ use secure9p_codec::{ErrorCode, Qid, QidType};
 use super::tracefs::TraceFs;
 use crate::NineDoorError;
 
+const SELFTEST_QUICK_SCRIPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../resources/proc_tests/selftest_quick.coh"
+));
+const SELFTEST_FULL_SCRIPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../resources/proc_tests/selftest_full.coh"
+));
+const SELFTEST_NEGATIVE_SCRIPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../resources/proc_tests/selftest_negative.coh"
+));
+
 /// Synthetic namespace backing the NineDoor Secure9P server.
 #[derive(Debug)]
 pub struct Namespace {
@@ -161,6 +174,27 @@ impl Namespace {
         let boot_text = b"Cohesix boot: root-task online\nspawned user-component endpoint 1\ntick 1\nPING 1\nPONG 1\ntick 2\ntick 3\nroot-task shutdown\n".to_vec();
         self.ensure_read_only_file(&proc_path, "boot", &boot_text)
             .expect("create /proc/boot");
+        self.ensure_dir(&proc_path, "tests")
+            .expect("create /proc/tests");
+        let tests_path = vec!["proc".to_owned(), "tests".to_owned()];
+        self.ensure_read_only_file(
+            &tests_path,
+            "selftest_quick.coh",
+            SELFTEST_QUICK_SCRIPT.as_bytes(),
+        )
+        .expect("create /proc/tests/selftest_quick.coh");
+        self.ensure_read_only_file(
+            &tests_path,
+            "selftest_full.coh",
+            SELFTEST_FULL_SCRIPT.as_bytes(),
+        )
+        .expect("create /proc/tests/selftest_full.coh");
+        self.ensure_read_only_file(
+            &tests_path,
+            "selftest_negative.coh",
+            SELFTEST_NEGATIVE_SCRIPT.as_bytes(),
+        )
+        .expect("create /proc/tests/selftest_negative.coh");
 
         self.ensure_dir(&[], "log").expect("create /log");
         let log_path = vec!["log".to_owned()];

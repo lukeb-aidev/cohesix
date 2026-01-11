@@ -33,21 +33,19 @@ use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::Role;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
+#[cfg(feature = "kernel")]
+use crate::bootstrap::log as boot_log;
 use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
 #[cfg(feature = "kernel")]
-use crate::bootstrap::log as boot_log;
-#[cfg(feature = "kernel")]
 use crate::debug_uart::debug_uart_str;
+#[cfg(feature = "kernel")]
+use crate::log_buffer;
 #[cfg(feature = "net-console")]
 use crate::net::{
     NetConsoleDisconnectReason, NetConsoleEvent, NetDiagSnapshot, NetPoller, NetTelemetry,
     CONSOLE_QUEUE_DEPTH, NET_DIAG, NET_DIAG_FEATURED,
 };
-#[cfg(feature = "net-console")]
-use crate::trace::{RateLimitKey, RateLimiter};
-#[cfg(feature = "kernel")]
-use crate::log_buffer;
 #[cfg(feature = "kernel")]
 use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
 #[cfg(feature = "kernel")]
@@ -55,6 +53,8 @@ use crate::sel4;
 #[cfg(feature = "kernel")]
 use crate::sel4::{BootInfoExt, BootInfoView};
 use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPACITY};
+#[cfg(feature = "net-console")]
+use crate::trace::{RateLimitKey, RateLimiter};
 #[cfg(feature = "kernel")]
 use sel4_sys::seL4_CPtr;
 
@@ -292,9 +292,10 @@ impl<const N: usize> CapabilityValidator for TicketTable<N> {
             return true;
         }
         let Some(ticket) = ticket else { return false };
-        let key = self.entries.iter().find_map(|record| {
-            (record.role == role).then_some(&record.key)
-        });
+        let key = self
+            .entries
+            .iter()
+            .find_map(|record| (record.role == role).then_some(&record.key));
         let Some(key) = key else { return false };
         let Ok(decoded) = cohesix_ticket::TicketToken::decode(ticket, key) else {
             return false;
@@ -652,9 +653,9 @@ where
         }
         let snapshot = NET_DIAG.snapshot();
         if self.should_log_net_diag(snapshot, telemetry) {
-            if let Some(suppressed) =
-                self.net_diag_limiter
-                    .check(NetDiagRateKind::Summary, self.now_ms)
+            if let Some(suppressed) = self
+                .net_diag_limiter
+                .check(NetDiagRateKind::Summary, self.now_ms)
             {
                 let line = format_message(format_args!(
                     "NETDIAG in_bytes={} out_bytes={} tx_drops={} link={} q_lines={} q_bytes={} q_drops={} q_wblk={} suppressed={}",
@@ -892,6 +893,7 @@ where
         self.emit_console_line("  caps  - Show capability slots");
         self.emit_console_line("  mem   - Show untyped summary");
         self.emit_console_line("  ping  - Respond with pong");
+        self.emit_console_line("  test  - Self-test (host-only; use cohsh)");
         self.emit_console_line("  nettest  - Run network self-test (dev-virt)");
         self.emit_console_line("  netstats - Show network counters");
         self.emit_console_line("  quit  - Exit the console session");
@@ -904,6 +906,7 @@ where
         self.emit_serial_line("  caps  - Show capability slots");
         self.emit_serial_line("  mem   - Show untyped summary");
         self.emit_serial_line("  ping  - Respond with pong");
+        self.emit_serial_line("  test  - Self-test (host-only; use cohsh)");
         self.emit_serial_line("  nettest  - Run network self-test (dev-virt)");
         self.emit_serial_line("  netstats - Show network counters");
         self.emit_serial_line("  quit  - Exit the console session");
@@ -911,8 +914,10 @@ where
 
     #[cfg(feature = "kernel")]
     fn emit_log_snapshot(&mut self) {
-        let lines =
-            log_buffer::snapshot_lines::<DEFAULT_LINE_CAPACITY, { log_buffer::LOG_SNAPSHOT_LINES }>();
+        let lines = log_buffer::snapshot_lines::<
+            DEFAULT_LINE_CAPACITY,
+            { log_buffer::LOG_SNAPSHOT_LINES },
+        >();
         for line in lines {
             self.emit_console_line(line.as_str());
         }
@@ -1197,7 +1202,11 @@ where
         let mut forwarded = false;
         let verb_label = Self::command_label(&command);
         let audit_net = matches!(self.last_input_source, ConsoleInputSource::Net);
-        let conn_id = if audit_net { self.active_tcp_conn_id() } else { 0 };
+        let conn_id = if audit_net {
+            self.active_tcp_conn_id()
+        } else {
+            0
+        };
         let start_sid = self.session_id.unwrap_or(0);
         let mut cmd_status = "ok";
         let term = if matches!(command, Command::Quit) {
@@ -1270,6 +1279,12 @@ where
                 self.metrics.accepted_commands += 1;
                 self.emit_console_line("PONG");
                 self.emit_ack_ok("PING", Some("reply=pong"));
+            }
+            Command::Test => {
+                self.audit.info("console: test rejected (host-only)");
+                self.metrics.denied_commands += 1;
+                cmd_status = "err";
+                self.emit_ack_err("TEST", Some("reason=host-only"));
             }
             Command::NetTest => {
                 #[cfg(feature = "net-console")]
@@ -1408,8 +1423,7 @@ where
                         if let Some(bridge_ref) = self.ninedoor.as_mut() {
                             match bridge_ref.cat(path.as_str()) {
                                 Ok(lines) => {
-                                    let mut summary: HeaplessString<128> =
-                                        HeaplessString::new();
+                                    let mut summary: HeaplessString<128> = HeaplessString::new();
                                     let mut selected: HeaplessVec<
                                         usize,
                                         { log_buffer::LOG_SNAPSHOT_LINES },
@@ -1419,9 +1433,7 @@ where
                                     let mut prefer_user_lines = true;
                                     for _pass in 0..2 {
                                         for (idx, line) in lines.iter().enumerate().rev() {
-                                            if prefer_user_lines
-                                                && line.as_str().starts_with('[')
-                                            {
+                                            if prefer_user_lines && line.as_str().starts_with('[') {
                                                 continue;
                                             }
                                             let line_len = line.len();
@@ -1685,12 +1697,7 @@ where
                             self.audit_ninedoor_err(sid, "TAIL", path.as_str(), err_msg.as_str());
                         }
                         Command::Log => {
-                            self.audit_ninedoor_err(
-                                sid,
-                                "LOG",
-                                "/log/queen.log",
-                                err_msg.as_str(),
-                            );
+                            self.audit_ninedoor_err(sid, "LOG", "/log/queen.log", err_msg.as_str());
                         }
                         Command::Attach { .. } => {
                             self.audit_ninedoor_err(sid, "ATTACH", "-", err_msg.as_str());
@@ -1939,14 +1946,7 @@ where
         }
     }
 
-    fn audit_tcp_cmd_end(
-        &mut self,
-        conn_id: u64,
-        sid: u64,
-        verb: &str,
-        status: &str,
-        term: &str,
-    ) {
+    fn audit_tcp_cmd_end(&mut self, conn_id: u64, sid: u64, verb: &str, status: &str, term: &str) {
         #[cfg(feature = "cohesix-dev")]
         {
             let message = format_message(format_args!(
@@ -2002,10 +2002,8 @@ where
     fn audit_tail_start(&mut self, sid: u64, path: &str) {
         #[cfg(feature = "cohesix-dev")]
         {
-            let message = format_message(format_args!(
-                "audit tail.start sid={} path={}",
-                sid, path
-            ));
+            let message =
+                format_message(format_args!("audit tail.start sid={} path={}", sid, path));
             crate::debug_uart::debug_uart_line(message.as_str());
         }
         #[cfg(not(feature = "cohesix-dev"))]
@@ -2214,6 +2212,7 @@ pub(crate) enum CommandVerb {
     Caps,
     Mem,
     Ping,
+    Test,
     NetTest,
     NetStats,
 }
@@ -2237,6 +2236,7 @@ impl CommandVerb {
             Self::Caps => "CAPS",
             Self::Mem => "MEM",
             Self::Ping => "PING",
+            Self::Test => "TEST",
             Self::NetTest => "NETTEST",
             Self::NetStats => "NETSTATS",
         }
@@ -2262,6 +2262,7 @@ impl From<&Command> for CommandVerb {
             Command::Caps => Self::Caps,
             Command::Mem => Self::Mem,
             Command::Ping => Self::Ping,
+            Command::Test => Self::Test,
             Command::NetTest => Self::NetTest,
             Command::NetStats => Self::NetStats,
         }
@@ -2294,13 +2295,13 @@ extern "C" fn vtable_sentinel() {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
     #[cfg(feature = "net-console")]
     use crate::net::NetTelemetry;
     #[cfg(feature = "kernel")]
     use crate::ninedoor::NineDoorBridge;
     use crate::serial::test_support::LoopbackSerial;
     use crate::serial::SerialPort;
+    use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
 
     struct TestTimer {
         ticks: HeaplessVec<TickEvent, 8>,
@@ -2806,8 +2807,7 @@ mod tests {
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
-        pump
-            .parser
+        pump.parser
             .push_byte(b'x')
             .expect("partial byte should be accepted");
         pump.end_session("test");
@@ -2984,7 +2984,12 @@ mod tests {
             .expect("ls command should succeed");
 
         pump.serial_mut().poll_io();
-        let transcript: Vec<u8> = pump.serial_mut().driver_mut().drain_tx().into_iter().collect();
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(rendered.contains("OK LS"), "{rendered}");
         assert!(rendered.contains("queen.log"), "{rendered}");

@@ -1,11 +1,12 @@
 // Author: Lukas Bower
+// Purpose: Validate cohsh .coh script interpreter behavior.
 
 use std::collections::VecDeque;
 use std::io::Cursor;
 
 use anyhow::{anyhow, Result};
-use cohsh::{Session, Shell, Transport};
 use cohesix_ticket::Role;
+use cohsh::{Session, Shell, Transport};
 use secure9p_codec::SessionId;
 
 #[derive(Default)]
