@@ -659,6 +659,8 @@ Introduce the `coh-rtc` compiler that ingests `configs/root_task.toml` and emits
   - `docs/BUILD_PLAN.md` (this file) references the manifest in earlier milestones.
   - `docs/REPO_LAYOUT.md` lists the new `configs/` and `tools/coh-rtc/` trees with regeneration commands.
 
+**Status:** Complete — local aarch64/QEMU validation and regression pack confirm the DoD checks.
+
 **Commands**
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh`
 - `cargo check -p root-task --no-default-features --features kernel,net-console`
@@ -674,8 +676,6 @@ Introduce the `coh-rtc` compiler that ingests `configs/root_task.toml` and emits
 - Generated modules MUST NOT introduce new global state or reorder initialisation in a way that changes serial boot ordering or `/proc/boot` output.
 - Compiler rejects manifests that set `ecosystem.host.enable = true` when memory budgets or Secure9P red lines (msize, walk depth, role isolation) would be exceeded; enabling the ecosystem section MUST NOT relax prior limits.
 - Docs-as-built guard extends to the new schema nodes so generated snippets and rendered docs agree on the resolved manifest.
-
-**TODO:** Milestone 8b remains incomplete until a local aarch64/QEMU run validates the DoD checks above.
 
 **Compiler touchpoints**
 - Introduces `root_task.schema = "1.0"`; schema mismatches abort generation and instruct operators to upgrade docs.

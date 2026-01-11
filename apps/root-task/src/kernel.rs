@@ -111,7 +111,7 @@ fn debug_identify_boot_caps() {
     }
 }
 
-fn emit_manifest_boot_lines(console: &mut Console) {
+fn emit_manifest_boot_lines<P: Platform>(console: &mut DebugConsole<'_, P>) {
     for line in generated::initial_audit_lines() {
         console.writeln_prefixed(line);
     }
@@ -521,7 +521,7 @@ fn log_text_span() {
         Pl011,
         KernelTimer,
         KernelIpc,
-        TicketTable<4>,
+        TicketTable<{ generated::TICKET_COUNT }>,
         { DEFAULT_RX_CAPACITY },
         { DEFAULT_TX_CAPACITY },
         { DEFAULT_LINE_CAPACITY },
@@ -1065,7 +1065,7 @@ pub struct BootContext {
     >,
     pub(crate) timer: RefCell<Option<KernelTimer>>,
     pub(crate) ipc: RefCell<Option<KernelIpc>>,
-    pub(crate) tickets: RefCell<Option<TicketTable<4>>>,
+    pub(crate) tickets: RefCell<Option<TicketTable<{ generated::TICKET_COUNT }>>>,
     #[cfg(feature = "net-console")]
     pub(crate) net_stack: RefCell<Option<NetStack>>,
     #[cfg(feature = "kernel")]

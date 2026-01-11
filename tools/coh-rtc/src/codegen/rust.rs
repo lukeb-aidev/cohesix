@@ -162,11 +162,7 @@ fn build_audit_lines(manifest: &Manifest, manifest_hash: &str) -> Vec<String> {
 }
 
 fn write_if_changed(path: &Path, contents: &str) -> Result<()> {
-    if let Ok(existing) = fs::read_to_string(path) {
-        if existing == contents {
-            return Ok(());
-        }
-    }
+    // Always rewrite so mtimes advance when the manifest changes; build.rs enforces freshness by time.
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
 }
