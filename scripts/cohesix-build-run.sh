@@ -1,6 +1,7 @@
 
 #!/usr/bin/env bash
 # Author: Lukas Bower
+# Purpose: Build and stage Cohesix artefacts, including rootfs payloads, for QEMU runs.
 
 set -euo pipefail
 SEL4_LD="${SEL4_LD:-}"
@@ -644,6 +645,15 @@ main() {
         else
             log "Host tool not built for target $HOST_ARTIFACT_DIR: $bin (skipping)"
         fi
+    done
+
+    PROC_TESTS_DIR="$STAGING_DIR/cohesix/proc/tests"
+    mkdir -p "$PROC_TESTS_DIR"
+    for script in selftest_quick.coh selftest_full.coh selftest_negative.coh; do
+        SRC="$PROJECT_ROOT/resources/proc_tests/$script"
+        [[ -f "$SRC" ]] || fail "Missing selftest script: $SRC"
+        install -m 0644 "$SRC" "$PROC_TESTS_DIR/$script"
+        log "Packaged selftest script: $PROC_TESTS_DIR/$script"
     done
 
     KERNEL_STAGE_PATH="$STAGING_DIR/kernel.elf"

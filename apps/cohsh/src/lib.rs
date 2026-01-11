@@ -40,6 +40,7 @@ use cohesix_ticket::{Role, TicketToken};
 use log::info;
 use nine_door::{InProcessConnection, NineDoor};
 use secure9p_codec::{OpenMode, SessionId, MAX_MSIZE};
+use serde::Serialize;
 
 /// Result of executing a single shell command.
 #[derive(Debug, PartialEq, Eq)]
@@ -81,6 +82,16 @@ const MAX_SCRIPT_LINES: usize = 256;
 const MAX_SCRIPT_WAIT_MS: u64 = 2000;
 const MAX_SCRIPT_RESPONSES: usize = 8;
 const QUEEN_CTL_PATH: &str = "/queen/ctl";
+const TEST_SCRIPT_QUICK_PATH: &str = "/proc/tests/selftest_quick.coh";
+const TEST_SCRIPT_FULL_PATH: &str = "/proc/tests/selftest_full.coh";
+const TEST_SCRIPT_NEGATIVE_PATH: &str = "/proc/tests/selftest_negative.coh";
+const DEFAULT_TEST_TIMEOUT_SECS: u64 = 30;
+const MAX_TEST_TIMEOUT_SECS: u64 = 120;
+const TEST_REPORT_VERSION: &str = "1";
+const TEST_TRANSCRIPT_MAX_BYTES: usize = 512;
+const TEST_CHECK_NAME_MAX_CHARS: usize = 120;
+const TEST_DETAIL_MAX_CHARS: usize = 200;
+const TEST_MSIZE_SENTINEL: &str = "{{msize_overflow}}";
 
 fn format_script_error(
     line_number: usize,
@@ -109,6 +120,164 @@ fn format_script_error(
     anyhow!(
         "script failure at line {line_number}: {line_text}\nreason: {reason}\nlast command: {last_command}\nlast response: {last}\nlast response source: {last_source}\n{recent}"
     )
+}
+
+#[derive(Debug)]
+enum ExpectSelector<'a> {
+    Ok,
+    Err,
+    Substr(&'a str),
+    Not(&'a str),
+}
+
+fn parse_expect_selector<'a>(
+    entry: &ScriptLine,
+    rest: &'a str,
+    state: Option<&ScriptState>,
+) -> Result<ExpectSelector<'a>> {
+    if rest.is_empty() {
+        return Err(format_script_error(
+            entry.number,
+            entry.text.as_str(),
+            state,
+            "EXPECT requires a selector",
+        ));
+    }
+    if rest == "OK" {
+        return Ok(ExpectSelector::Ok);
+    }
+    if rest == "ERR" {
+        return Ok(ExpectSelector::Err);
+    }
+    if let Some(value) = rest.strip_prefix("SUBSTR") {
+        let needle = value.trim_start();
+        if needle.is_empty() {
+            return Err(format_script_error(
+                entry.number,
+                entry.text.as_str(),
+                state,
+                "EXPECT SUBSTR requires text",
+            ));
+        }
+        return Ok(ExpectSelector::Substr(needle));
+    }
+    if let Some(value) = rest.strip_prefix("NOT") {
+        let needle = value.trim_start();
+        if needle.is_empty() {
+            return Err(format_script_error(
+                entry.number,
+                entry.text.as_str(),
+                state,
+                "EXPECT NOT requires text",
+            ));
+        }
+        return Ok(ExpectSelector::Not(needle));
+    }
+    Err(format_script_error(
+        entry.number,
+        entry.text.as_str(),
+        state,
+        "EXPECT selector is invalid",
+    ))
+}
+
+fn parse_wait_ms(entry: &ScriptLine, text: &str, state: Option<&ScriptState>) -> Result<u64> {
+    let rest = text.strip_prefix("WAIT").unwrap_or(text).trim_start();
+    let mut args = rest.split_whitespace();
+    let Some(value) = args.next() else {
+        return Err(format_script_error(
+            entry.number,
+            text,
+            state,
+            "WAIT requires milliseconds",
+        ));
+    };
+    if args.next().is_some() {
+        return Err(format_script_error(
+            entry.number,
+            text,
+            state,
+            "WAIT accepts a single millisecond value",
+        ));
+    }
+    let millis: u64 = value.parse().map_err(|_| {
+        format_script_error(
+            entry.number,
+            text,
+            state,
+            "WAIT requires a numeric millisecond value",
+        )
+    })?;
+    if millis > MAX_SCRIPT_WAIT_MS {
+        return Err(format_script_error(
+            entry.number,
+            text,
+            state,
+            &format!("WAIT exceeds max of {MAX_SCRIPT_WAIT_MS}ms"),
+        ));
+    }
+    Ok(millis)
+}
+
+fn parse_script_lines<R: BufRead>(reader: R) -> Result<Vec<ScriptLine>> {
+    let mut lines = Vec::new();
+    for (idx, raw_line) in reader.lines().enumerate() {
+        let raw_line = raw_line?;
+        let trimmed = raw_line.trim_end();
+        let without_comment = trimmed
+            .split_once('#')
+            .map(|(before, _)| before)
+            .unwrap_or(trimmed);
+        let text = without_comment.trim();
+        if text.is_empty() {
+            continue;
+        }
+        lines.push(ScriptLine {
+            number: idx + 1,
+            text: text.to_owned(),
+        });
+        if lines.len() > MAX_SCRIPT_LINES {
+            return Err(format_script_error(
+                idx + 1,
+                text,
+                None,
+                &format!("script exceeds max of {MAX_SCRIPT_LINES} lines"),
+            ));
+        }
+    }
+    Ok(lines)
+}
+
+/// Validate `.coh` script syntax without executing commands.
+pub fn validate_script<R: BufRead>(reader: R) -> Result<()> {
+    let lines = parse_script_lines(reader)?;
+    let mut last_command_seen = false;
+    for entry in &lines {
+        let text = entry.text.as_str();
+        let mut parts = text.split_whitespace();
+        let Some(keyword) = parts.next() else {
+            continue;
+        };
+        if keyword == "EXPECT" {
+            if !last_command_seen {
+                return Err(format_script_error(
+                    entry.number,
+                    text,
+                    None,
+                    "EXPECT requires a prior command response",
+                ));
+            }
+            let rest = text.strip_prefix("EXPECT").unwrap_or(text).trim_start();
+            let _ = parse_expect_selector(entry, rest, None)?;
+            continue;
+        }
+        if keyword == "WAIT" {
+            let _ = parse_wait_ms(entry, text, None)?;
+            continue;
+        }
+        last_command_seen = true;
+    }
+    Ok(())
 }
 
 /// Transport abstraction used by the shell to interact with the system.
@@ -290,7 +459,10 @@ impl Transport for NineDoorTransport {
                     ));
                 }
                 let subject_value = claims.subject.as_deref().ok_or_else(|| {
-                    anyhow!("ticket is missing required subject identity for role {:?}", role)
+                    anyhow!(
+                        "ticket is missing required subject identity for role {:?}",
+                        role
+                    )
                 })?;
                 subject = Some(subject_value.to_string());
                 ticket_payload = Some(provided);
@@ -699,6 +871,78 @@ struct ScriptResponseLine {
     line: String,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum TestMode {
+    Quick,
+    Full,
+}
+
+impl TestMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Quick => "quick",
+            Self::Full => "full",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TestOptions {
+    mode: TestMode,
+    json: bool,
+    timeout: Duration,
+    no_mutate: bool,
+}
+
+#[derive(Debug, Default)]
+struct CommandTranscript {
+    ack_lines: Vec<String>,
+    output_lines: Vec<String>,
+}
+
+#[derive(Debug)]
+struct CommandExecution {
+    status: CommandStatus,
+    transcript: CommandTranscript,
+    error: Option<anyhow::Error>,
+}
+
+impl CommandExecution {
+    fn ok(status: CommandStatus, transcript: CommandTranscript) -> Self {
+        Self {
+            status,
+            transcript,
+            error: None,
+        }
+    }
+
+    fn err(error: anyhow::Error, transcript: CommandTranscript) -> Self {
+        Self {
+            status: CommandStatus::Continue,
+            transcript,
+            error: Some(error),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct TestReport {
+    ok: bool,
+    mode: String,
+    elapsed_ms: u64,
+    checks: Vec<TestCheck>,
+    version: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TestCheck {
+    name: String,
+    ok: bool,
+    detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transcript_excerpt: Option<String>,
+}
+
 impl ScriptState {
     fn begin_command(&mut self, line: &str) {
         self.last_command_line = Some(line.to_owned());
@@ -831,32 +1075,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
 
     /// Execute commands from a buffered reader until EOF or `quit` is encountered.
     pub fn run_script<R: BufRead>(&mut self, reader: R) -> Result<()> {
-        let mut lines = Vec::new();
-        for (idx, raw_line) in reader.lines().enumerate() {
-            let raw_line = raw_line?;
-            let trimmed = raw_line.trim_end();
-            let without_comment = trimmed
-                .split_once('#')
-                .map(|(before, _)| before)
-                .unwrap_or(trimmed);
-            let text = without_comment.trim();
-            if text.is_empty() {
-                continue;
-            }
-            lines.push(ScriptLine {
-                number: idx + 1,
-                text: text.to_owned(),
-            });
-            if lines.len() > MAX_SCRIPT_LINES {
-                return Err(format_script_error(
-                    idx + 1,
-                    text,
-                    None,
-                    &format!("script exceeds max of {MAX_SCRIPT_LINES} lines"),
-                ));
-            }
-        }
-
+        let lines = parse_script_lines(reader)?;
         self.script_state = Some(ScriptState::default());
         let result = self.run_script_lines(&lines);
         self.script_state = None;
@@ -875,18 +1094,8 @@ impl<T: Transport, W: Write> Shell<T, W> {
             };
 
             if keyword == "EXPECT" {
-                let rest = text
-                    .strip_prefix("EXPECT")
-                    .unwrap_or(text)
-                    .trim_start();
-                if rest.is_empty() {
-                    return Err(format_script_error(
-                        entry.number,
-                        text,
-                        self.script_state.as_ref(),
-                        "EXPECT requires a selector",
-                    ));
-                }
+                let rest = text.strip_prefix("EXPECT").unwrap_or(text).trim_start();
+                let selector = parse_expect_selector(entry, rest, self.script_state.as_ref())?;
                 let last = match self
                     .script_state
                     .as_ref()
@@ -912,110 +1121,54 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         ));
                     }
                 };
-                if rest == "OK" {
-                    if !last.starts_with("OK") {
-                        return Err(format_script_error(
-                            entry.number,
-                            text,
-                            self.script_state.as_ref(),
-                            "EXPECT OK failed",
-                        ));
+                match selector {
+                    ExpectSelector::Ok => {
+                        if !last.starts_with("OK") {
+                            return Err(format_script_error(
+                                entry.number,
+                                text,
+                                self.script_state.as_ref(),
+                                "EXPECT OK failed",
+                            ));
+                        }
                     }
-                } else if rest == "ERR" {
-                    if !last.starts_with("ERR") {
-                        return Err(format_script_error(
-                            entry.number,
-                            text,
-                            self.script_state.as_ref(),
-                            "EXPECT ERR failed",
-                        ));
+                    ExpectSelector::Err => {
+                        if !last.starts_with("ERR") {
+                            return Err(format_script_error(
+                                entry.number,
+                                text,
+                                self.script_state.as_ref(),
+                                "EXPECT ERR failed",
+                            ));
+                        }
                     }
-                } else if let Some(value) = rest.strip_prefix("SUBSTR") {
-                    let needle = value.trim_start();
-                    if needle.is_empty() {
-                        return Err(format_script_error(
-                            entry.number,
-                            text,
-                            self.script_state.as_ref(),
-                            "EXPECT SUBSTR requires text",
-                        ));
+                    ExpectSelector::Substr(needle) => {
+                        if !last.contains(needle) {
+                            return Err(format_script_error(
+                                entry.number,
+                                text,
+                                self.script_state.as_ref(),
+                                "EXPECT SUBSTR failed",
+                            ));
+                        }
                     }
-                    if !last.contains(needle) {
-                        return Err(format_script_error(
-                            entry.number,
-                            text,
-                            self.script_state.as_ref(),
-                            "EXPECT SUBSTR failed",
-                        ));
+                    ExpectSelector::Not(needle) => {
+                        if last.contains(needle) {
+                            return Err(format_script_error(
+                                entry.number,
+                                text,
+                                self.script_state.as_ref(),
+                                "EXPECT NOT failed",
+                            ));
+                        }
                     }
-                } else if let Some(value) = rest.strip_prefix("NOT") {
-                    let needle = value.trim_start();
-                    if needle.is_empty() {
-                        return Err(format_script_error(
-                            entry.number,
-                            text,
-                            self.script_state.as_ref(),
-                            "EXPECT NOT requires text",
-                        ));
-                    }
-                    if last.contains(needle) {
-                        return Err(format_script_error(
-                            entry.number,
-                            text,
-                            self.script_state.as_ref(),
-                            "EXPECT NOT failed",
-                        ));
-                    }
-                } else {
-                    return Err(format_script_error(
-                        entry.number,
-                        text,
-                        self.script_state.as_ref(),
-                        "EXPECT selector is invalid",
-                    ));
                 }
                 index = index.saturating_add(1);
                 continue;
             }
 
             if keyword == "WAIT" {
-                let rest = text
-                    .strip_prefix("WAIT")
-                    .unwrap_or(text)
-                    .trim_start();
-                let mut args = rest.split_whitespace();
-                let Some(value) = args.next() else {
-                    return Err(format_script_error(
-                        entry.number,
-                        text,
-                        self.script_state.as_ref(),
-                        "WAIT requires milliseconds",
-                    ));
-                };
-                if args.next().is_some() {
-                    return Err(format_script_error(
-                        entry.number,
-                        text,
-                        self.script_state.as_ref(),
-                        "WAIT accepts a single millisecond value",
-                    ));
-                }
-                let millis: u64 = value.parse().map_err(|_| {
-                    format_script_error(
-                        entry.number,
-                        text,
-                        self.script_state.as_ref(),
-                        "WAIT requires a numeric millisecond value",
-                    )
-                })?;
-                if millis > MAX_SCRIPT_WAIT_MS {
-                    return Err(format_script_error(
-                        entry.number,
-                        text,
-                        self.script_state.as_ref(),
-                        &format!("WAIT exceeds max of {MAX_SCRIPT_WAIT_MS}ms"),
-                    ));
-                }
+                let millis = parse_wait_ms(entry, text, self.script_state.as_ref())?;
                 thread::sleep(Duration::from_millis(millis));
                 index = index.saturating_add(1);
                 continue;
@@ -1042,6 +1195,606 @@ impl<T: Transport, W: Write> Shell<T, W> {
             index = index.saturating_add(1);
         }
         Ok(())
+    }
+
+    fn run_selftest(&mut self, options: TestOptions) -> Result<TestReport> {
+        let start = Instant::now();
+        let mut checks = Vec::new();
+        let mut overall_ok = true;
+
+        let Some(session) = self.session.clone() else {
+            checks.push(TestCheck {
+                name: truncate_text("preflight/attach", TEST_CHECK_NAME_MAX_CHARS),
+                ok: false,
+                detail: truncate_text("ERR not attached", TEST_DETAIL_MAX_CHARS),
+                transcript_excerpt: None,
+            });
+            let report = TestReport {
+                ok: false,
+                mode: options.mode.label().to_owned(),
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                checks,
+                version: TEST_REPORT_VERSION.to_owned(),
+            };
+            self.emit_test_report(&report, options.json)?;
+            return Ok(report);
+        };
+
+        let ping_execution = self.execute_test_command("ping");
+        let ping_ok = ping_execution.error.is_none();
+        checks.push(TestCheck {
+            name: truncate_text("preflight/ping", TEST_CHECK_NAME_MAX_CHARS),
+            ok: ping_ok,
+            detail: truncate_text(
+                if ping_ok {
+                    "OK ping"
+                } else {
+                    "ERR ping failed"
+                },
+                TEST_DETAIL_MAX_CHARS,
+            ),
+            transcript_excerpt: format_transcript_excerpt(&ping_execution.transcript),
+        });
+        if !ping_ok {
+            let report = TestReport {
+                ok: false,
+                mode: options.mode.label().to_owned(),
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                checks,
+                version: TEST_REPORT_VERSION.to_owned(),
+            };
+            self.emit_test_report(&report, options.json)?;
+            return Ok(report);
+        }
+
+        let script_paths = match options.mode {
+            TestMode::Quick => [TEST_SCRIPT_NEGATIVE_PATH, TEST_SCRIPT_QUICK_PATH],
+            TestMode::Full => [TEST_SCRIPT_NEGATIVE_PATH, TEST_SCRIPT_FULL_PATH],
+        };
+
+        for path in script_paths {
+            if start.elapsed() > options.timeout {
+                checks.push(TestCheck {
+                    name: truncate_text("timeout", TEST_CHECK_NAME_MAX_CHARS),
+                    ok: false,
+                    detail: truncate_text("ERR timeout exceeded", TEST_DETAIL_MAX_CHARS),
+                    transcript_excerpt: None,
+                });
+                overall_ok = false;
+                break;
+            }
+            match self.load_test_script(&session, path) {
+                Ok(lines) => {
+                    if !self.run_selftest_lines(&lines, &options, start, &mut checks) {
+                        overall_ok = false;
+                        break;
+                    }
+                }
+                Err(err) => {
+                    checks.push(TestCheck {
+                        name: truncate_text(&format!("load {path}"), TEST_CHECK_NAME_MAX_CHARS),
+                        ok: false,
+                        detail: truncate_text(&format!("ERR {err}"), TEST_DETAIL_MAX_CHARS),
+                        transcript_excerpt: None,
+                    });
+                    overall_ok = false;
+                    break;
+                }
+            }
+        }
+
+        let report = TestReport {
+            ok: overall_ok,
+            mode: options.mode.label().to_owned(),
+            elapsed_ms: start.elapsed().as_millis() as u64,
+            checks,
+            version: TEST_REPORT_VERSION.to_owned(),
+        };
+        self.emit_test_report(&report, options.json)?;
+        Ok(report)
+    }
+
+    fn emit_test_report(&mut self, report: &TestReport, json: bool) -> Result<()> {
+        if json {
+            let payload = serde_json::to_string(report)?;
+            writeln!(self.writer, "{payload}")?;
+            return Ok(());
+        }
+
+        let status = if report.ok { "PASS" } else { "FAIL" };
+        self.write_line(&format!(
+            "selftest {} mode={} elapsed_ms={}",
+            status, report.mode, report.elapsed_ms
+        ))?;
+        let mut first_failure = None;
+        for check in &report.checks {
+            let mark = if check.ok { "PASS" } else { "FAIL" };
+            if first_failure.is_none() && !check.ok {
+                first_failure = Some(check);
+            }
+            self.write_line(&format!("{mark} - {} ({})", check.name, check.detail))?;
+        }
+        if let Some(failure) = first_failure {
+            self.write_line(&format!(
+                "first failure: {} ({})",
+                failure.name, failure.detail
+            ))?;
+        }
+        Ok(())
+    }
+
+    fn load_test_script(&mut self, session: &Session, path: &str) -> Result<Vec<ScriptLine>> {
+        let lines = self
+            .transport
+            .read(session, path)
+            .with_context(|| format!("failed to read {path}"))?;
+        for ack in self.transport.drain_acknowledgements() {
+            let _ = ack;
+        }
+        let text = if lines.is_empty() {
+            String::new()
+        } else {
+            lines.join("\n")
+        };
+        parse_script_lines(io::Cursor::new(text.into_bytes()))
+            .with_context(|| format!("failed to parse {path}"))
+    }
+
+    fn run_selftest_lines(
+        &mut self,
+        lines: &[ScriptLine],
+        options: &TestOptions,
+        start: Instant,
+        checks: &mut Vec<TestCheck>,
+    ) -> bool {
+        let mut index = 0usize;
+        let mut state = ScriptState::default();
+        let mut skip_expect = false;
+        while index < lines.len() {
+            if start.elapsed() > options.timeout {
+                checks.push(TestCheck {
+                    name: truncate_text("timeout", TEST_CHECK_NAME_MAX_CHARS),
+                    ok: false,
+                    detail: truncate_text("ERR timeout exceeded", TEST_DETAIL_MAX_CHARS),
+                    transcript_excerpt: None,
+                });
+                return false;
+            }
+
+            let entry = &lines[index];
+            let text = entry.text.as_str();
+            let mut parts = text.split_whitespace();
+            let Some(keyword) = parts.next() else {
+                index = index.saturating_add(1);
+                continue;
+            };
+
+            if skip_expect && keyword == "EXPECT" {
+                checks.push(TestCheck {
+                    name: truncate_text(
+                        &format!("line {}: {text}", entry.number),
+                        TEST_CHECK_NAME_MAX_CHARS,
+                    ),
+                    ok: true,
+                    detail: truncate_text("skipped --no-mutate", TEST_DETAIL_MAX_CHARS),
+                    transcript_excerpt: None,
+                });
+                index = index.saturating_add(1);
+                continue;
+            }
+            skip_expect = false;
+
+            if keyword == "EXPECT" {
+                let rest = text.strip_prefix("EXPECT").unwrap_or(text).trim_start();
+                let selector = match parse_expect_selector(entry, rest, Some(&state)) {
+                    Ok(selector) => selector,
+                    Err(err) => {
+                        checks.push(TestCheck {
+                            name: truncate_text(
+                                &format!("line {}: {text}", entry.number),
+                                TEST_CHECK_NAME_MAX_CHARS,
+                            ),
+                            ok: false,
+                            detail: truncate_text(&format!("ERR {err}"), TEST_DETAIL_MAX_CHARS),
+                            transcript_excerpt: None,
+                        });
+                        return false;
+                    }
+                };
+                let last = match state.last_response_line.as_deref() {
+                    Some(value) => value,
+                    None => {
+                        checks.push(TestCheck {
+                            name: truncate_text(
+                                &format!("line {}: {text}", entry.number),
+                                TEST_CHECK_NAME_MAX_CHARS,
+                            ),
+                            ok: false,
+                            detail: truncate_text(
+                                "ERR EXPECT requires a prior command response",
+                                TEST_DETAIL_MAX_CHARS,
+                            ),
+                            transcript_excerpt: None,
+                        });
+                        return false;
+                    }
+                };
+                let passed = match selector {
+                    ExpectSelector::Ok => last.starts_with("OK"),
+                    ExpectSelector::Err => last.starts_with("ERR"),
+                    ExpectSelector::Substr(needle) => last.contains(needle),
+                    ExpectSelector::Not(needle) => !last.contains(needle),
+                };
+                if !passed {
+                    checks.push(TestCheck {
+                        name: truncate_text(
+                            &format!("line {}: {text}", entry.number),
+                            TEST_CHECK_NAME_MAX_CHARS,
+                        ),
+                        ok: false,
+                        detail: truncate_text("ERR expectation failed", TEST_DETAIL_MAX_CHARS),
+                        transcript_excerpt: format_state_excerpt(&state),
+                    });
+                    return false;
+                }
+                checks.push(TestCheck {
+                    name: truncate_text(
+                        &format!("line {}: {text}", entry.number),
+                        TEST_CHECK_NAME_MAX_CHARS,
+                    ),
+                    ok: true,
+                    detail: truncate_text("OK expectation met", TEST_DETAIL_MAX_CHARS),
+                    transcript_excerpt: None,
+                });
+                index = index.saturating_add(1);
+                continue;
+            }
+
+            if keyword == "WAIT" {
+                let wait_ms = match parse_wait_ms(entry, text, Some(&state)) {
+                    Ok(ms) => ms,
+                    Err(err) => {
+                        checks.push(TestCheck {
+                            name: truncate_text(
+                                &format!("line {}: {text}", entry.number),
+                                TEST_CHECK_NAME_MAX_CHARS,
+                            ),
+                            ok: false,
+                            detail: truncate_text(&format!("ERR {err}"), TEST_DETAIL_MAX_CHARS),
+                            transcript_excerpt: None,
+                        });
+                        return false;
+                    }
+                };
+                thread::sleep(Duration::from_millis(wait_ms));
+                checks.push(TestCheck {
+                    name: truncate_text(
+                        &format!("line {}: {text}", entry.number),
+                        TEST_CHECK_NAME_MAX_CHARS,
+                    ),
+                    ok: true,
+                    detail: truncate_text(&format!("OK waited {wait_ms}ms"), TEST_DETAIL_MAX_CHARS),
+                    transcript_excerpt: None,
+                });
+                index = index.saturating_add(1);
+                continue;
+            }
+
+            if options.no_mutate && should_skip_no_mutate(keyword, text) {
+                skip_expect = true;
+                checks.push(TestCheck {
+                    name: truncate_text(
+                        &format!("line {}: {text}", entry.number),
+                        TEST_CHECK_NAME_MAX_CHARS,
+                    ),
+                    ok: true,
+                    detail: truncate_text("skipped --no-mutate", TEST_DETAIL_MAX_CHARS),
+                    transcript_excerpt: None,
+                });
+                index = index.saturating_add(1);
+                continue;
+            }
+
+            state.begin_command(text);
+            let execution = self.execute_test_command(text);
+            record_transcript(&mut state, &execution.transcript);
+            if let Some(err) = execution.error.as_ref() {
+                if should_defer_test_error(index, lines, &state) {
+                    checks.push(TestCheck {
+                        name: truncate_text(
+                            &format!("line {}: {text}", entry.number),
+                            TEST_CHECK_NAME_MAX_CHARS,
+                        ),
+                        ok: true,
+                        detail: truncate_text("ERR deferred to EXPECT", TEST_DETAIL_MAX_CHARS),
+                        transcript_excerpt: None,
+                    });
+                    index = index.saturating_add(1);
+                    continue;
+                }
+                checks.push(TestCheck {
+                    name: truncate_text(
+                        &format!("line {}: {text}", entry.number),
+                        TEST_CHECK_NAME_MAX_CHARS,
+                    ),
+                    ok: false,
+                    detail: truncate_text(&format!("ERR {err}"), TEST_DETAIL_MAX_CHARS),
+                    transcript_excerpt: format_state_excerpt(&state),
+                });
+                return false;
+            }
+            checks.push(TestCheck {
+                name: truncate_text(
+                    &format!("line {}: {text}", entry.number),
+                    TEST_CHECK_NAME_MAX_CHARS,
+                ),
+                ok: true,
+                detail: truncate_text("OK", TEST_DETAIL_MAX_CHARS),
+                transcript_excerpt: None,
+            });
+            if matches!(execution.status, CommandStatus::Quit) {
+                break;
+            }
+            index = index.saturating_add(1);
+        }
+        true
+    }
+
+    fn execute_test_command(&mut self, line: &str) -> CommandExecution {
+        let mut parts = line.split_whitespace();
+        let Some(cmd) = parts.next() else {
+            return CommandExecution::ok(CommandStatus::Continue, CommandTranscript::default());
+        };
+        let mut transcript = CommandTranscript::default();
+        let result = match cmd {
+            "ping" => {
+                let session = match self.session.as_ref() {
+                    Some(session) => session,
+                    None => {
+                        return CommandExecution::err(anyhow!("ping: not attached"), transcript)
+                    }
+                };
+                match self.transport.ping(session) {
+                    Ok(response) => {
+                        transcript.ack_lines = self.transport.drain_acknowledgements();
+                        transcript.output_lines.push(format!("ping: {response}"));
+                        Ok(CommandStatus::Continue)
+                    }
+                    Err(err) => {
+                        transcript.ack_lines = self.transport.drain_acknowledgements();
+                        Err(err)
+                    }
+                }
+            }
+            "tail" => {
+                let Some(path) = parts.next() else {
+                    return CommandExecution::err(anyhow!("tail requires a path"), transcript);
+                };
+                if parts.next().is_some() {
+                    return CommandExecution::err(
+                        anyhow!("tail takes exactly one argument: path"),
+                        transcript,
+                    );
+                }
+                let session = match self.session.as_ref() {
+                    Some(session) => session,
+                    None => {
+                        return CommandExecution::err(anyhow!("tail: not attached"), transcript)
+                    }
+                };
+                if let Err(err) = ensure_valid_path(path) {
+                    return CommandExecution::err(err, transcript);
+                }
+                match self.transport.tail(session, path) {
+                    Ok(lines) => {
+                        transcript.ack_lines = self.transport.drain_acknowledgements();
+                        transcript.output_lines = lines;
+                        Ok(CommandStatus::Continue)
+                    }
+                    Err(err) => {
+                        transcript.ack_lines = self.transport.drain_acknowledgements();
+                        Err(err)
+                    }
+                }
+            }
+            "log" => {
+                if parts.next().is_some() {
+                    return CommandExecution::err(
+                        anyhow!("log does not take any arguments"),
+                        transcript,
+                    );
+                }
+                return self.execute_test_command("tail /log/queen.log");
+            }
+            "cat" => {
+                let Some(path) = parts.next() else {
+                    return CommandExecution::err(anyhow!("cat requires a path"), transcript);
+                };
+                if parts.next().is_some() {
+                    return CommandExecution::err(
+                        anyhow!("cat takes exactly one argument: path"),
+                        transcript,
+                    );
+                }
+                let session = match self.session.as_ref() {
+                    Some(session) => session,
+                    None => return CommandExecution::err(anyhow!("cat: not attached"), transcript),
+                };
+                if let Err(err) = ensure_valid_path(path) {
+                    return CommandExecution::err(err, transcript);
+                }
+                match self.transport.read(session, path) {
+                    Ok(lines) => {
+                        transcript.ack_lines = self.transport.drain_acknowledgements();
+                        transcript.output_lines = lines;
+                        Ok(CommandStatus::Continue)
+                    }
+                    Err(err) => {
+                        transcript.ack_lines = self.transport.drain_acknowledgements();
+                        Err(err)
+                    }
+                }
+            }
+            "ls" => {
+                let Some(path) = parts.next() else {
+                    return CommandExecution::err(anyhow!("ls requires a path"), transcript);
+                };
+                if parts.next().is_some() {
+                    return CommandExecution::err(
+                        anyhow!("ls takes exactly one argument: path"),
+                        transcript,
+                    );
+                }
+                let session = match self.session.as_ref() {
+                    Some(session) => session,
+                    None => return CommandExecution::err(anyhow!("ls: not attached"), transcript),
+                };
+                if let Err(err) = ensure_valid_path(path) {
+                    return CommandExecution::err(err, transcript);
+                }
+                match self.transport.list(session, path) {
+                    Ok(lines) => {
+                        transcript.ack_lines = self.transport.drain_acknowledgements();
+                        transcript.output_lines = lines;
+                        Ok(CommandStatus::Continue)
+                    }
+                    Err(err) => {
+                        transcript.ack_lines = self.transport.drain_acknowledgements();
+                        Err(err)
+                    }
+                }
+            }
+            "echo" => {
+                let payload_start = line[4..].trim_start();
+                let (raw_text, path_part) = match payload_start.split_once('>') {
+                    Some(parts) => parts,
+                    None => {
+                        return CommandExecution::err(
+                            anyhow!("echo requires syntax: echo <text> > <path>"),
+                            transcript,
+                        )
+                    }
+                };
+                let path = path_part.trim();
+                let payload = if raw_text.trim() == TEST_MSIZE_SENTINEL {
+                    build_msize_overflow_payload()
+                } else {
+                    match normalise_payload(raw_text) {
+                        Ok(payload) => payload,
+                        Err(err) => return CommandExecution::err(err, transcript),
+                    }
+                };
+                let session = match self.session.as_ref() {
+                    Some(session) => session,
+                    None => {
+                        return CommandExecution::err(anyhow!("echo: not attached"), transcript)
+                    }
+                };
+                if let Err(err) = ensure_valid_path(path) {
+                    return CommandExecution::err(err, transcript);
+                }
+                match self.transport.write(session, path, payload.as_bytes()) {
+                    Ok(()) => {
+                        transcript.ack_lines = self.transport.drain_acknowledgements();
+                        Ok(CommandStatus::Continue)
+                    }
+                    Err(err) => {
+                        transcript.ack_lines = self.transport.drain_acknowledgements();
+                        Err(err)
+                    }
+                }
+            }
+            "spawn" => {
+                let Some(role) = parts.next() else {
+                    return CommandExecution::err(anyhow!("spawn requires a role"), transcript);
+                };
+                let payload = match build_spawn_payload(role, parts) {
+                    Ok(payload) => payload,
+                    Err(err) => return CommandExecution::err(err, transcript),
+                };
+                return self.send_queen_ctl_for_test(&payload);
+            }
+            "kill" => {
+                let Some(worker_id) = parts.next() else {
+                    return CommandExecution::err(anyhow!("kill requires a worker id"), transcript);
+                };
+                if parts.next().is_some() {
+                    return CommandExecution::err(
+                        anyhow!("kill takes exactly one argument: worker id"),
+                        transcript,
+                    );
+                }
+                let worker_id = match ensure_json_string(worker_id, "worker id") {
+                    Ok(worker_id) => worker_id,
+                    Err(err) => return CommandExecution::err(err, transcript),
+                };
+                let payload = format!("{{\"kill\":\"{worker_id}\"}}");
+                return self.send_queen_ctl_for_test(&payload);
+            }
+            "quit" => {
+                if parts.next().is_some() {
+                    return CommandExecution::err(
+                        anyhow!("quit does not take any arguments"),
+                        transcript,
+                    );
+                }
+                if let Some(session) = self.session.as_ref() {
+                    let _ = self.transport.quit(session);
+                }
+                self.session = None;
+                transcript.output_lines.push("closing session".to_owned());
+                Ok(CommandStatus::Quit)
+            }
+            unknown => Err(anyhow!("unknown command '{unknown}'")),
+        };
+
+        match result {
+            Ok(status) => CommandExecution::ok(status, transcript),
+            Err(err) => {
+                if transcript.ack_lines.is_empty() && transcript.output_lines.is_empty() {
+                    transcript
+                        .output_lines
+                        .push(format!("ERR LOCAL reason={err}"));
+                }
+                CommandExecution::err(err, transcript)
+            }
+        }
+    }
+
+    fn send_queen_ctl_for_test(&mut self, payload: &str) -> CommandExecution {
+        let mut transcript = CommandTranscript::default();
+        let session = match self.session.as_ref() {
+            Some(session) => {
+                if session.role() != Role::Queen {
+                    return CommandExecution::err(
+                        anyhow!(
+                            "queen control requires a queen session; attached as {:?}",
+                            session.role()
+                        ),
+                        transcript,
+                    );
+                }
+                session.clone()
+            }
+            None => {
+                return CommandExecution::err(
+                    anyhow!("queen control requires an attached session"),
+                    transcript,
+                )
+            }
+        };
+        let payload = match normalise_payload(payload) {
+            Ok(payload) => payload,
+            Err(err) => return CommandExecution::err(err, transcript),
+        };
+        let result = self
+            .transport
+            .write(&session, QUEEN_CTL_PATH, payload.as_bytes());
+        transcript.ack_lines = self.transport.drain_acknowledgements();
+        match result {
+            Ok(()) => CommandExecution::ok(CommandStatus::Continue, transcript),
+            Err(err) => CommandExecution::err(err, transcript),
+        }
     }
 
     fn should_defer_script_error(&self, index: usize, lines: &[ScriptLine]) -> bool {
@@ -1348,6 +2101,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line(
                     "  ping                         - Report attachment status for health checks",
                 )?;
+                self.write_line(
+                    "  test [--mode <quick|full>] [--json] [--timeout <s>] [--no-mutate] - Run self-tests",
+                )?;
                 #[cfg(feature = "tcp")]
                 self.write_line(
                     "  tcp-diag [port]              - Debug TCP connectivity without protocol traffic",
@@ -1357,16 +2113,10 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line(
                     "  echo <text> > <path>         - Append to a file (adds newline)",
                 )?;
-                self.write_line(
-                    "  spawn <role> [opts]          - Queue worker spawn command",
-                )?;
-                self.write_line(
-                    "  kill <worker_id>             - Queue worker termination",
-                )?;
+                self.write_line("  spawn <role> [opts]          - Queue worker spawn command")?;
+                self.write_line("  kill <worker_id>             - Queue worker termination")?;
                 self.write_line("  bind <src> <dst>             - Bind namespace path")?;
-                self.write_line(
-                    "  mount <service> <path>       - Mount service namespace",
-                )?;
+                self.write_line("  mount <service> <path>       - Mount service namespace")?;
                 self.write_line("  quit                         - Close the session and exit")?;
                 Ok(CommandStatus::Continue)
             }
@@ -1400,6 +2150,14 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     self.write_ack_line(&ack)?;
                 }
                 self.write_line(&format!("ping: {response}"))?;
+                Ok(CommandStatus::Continue)
+            }
+            "test" => {
+                let options = parse_test_args(parts)?;
+                let report = self.run_selftest(options)?;
+                if !report.ok && self.script_state.is_some() {
+                    return Err(anyhow!("selftest failed"));
+                }
                 Ok(CommandStatus::Continue)
             }
             "tcp-diag" => {
@@ -1478,7 +2236,8 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 ensure_valid_path(target)?;
                 let service = ensure_json_string(service, "service name")?;
                 let target = ensure_json_string(target, "mount path")?;
-                let payload = format!("{{\"mount\":{{\"service\":\"{service}\",\"at\":\"{target}\"}}}}");
+                let payload =
+                    format!("{{\"mount\":{{\"service\":\"{service}\",\"at\":\"{target}\"}}}}");
                 self.send_queen_ctl(&payload)?;
                 Ok(CommandStatus::Continue)
             }
@@ -1531,6 +2290,134 @@ impl<T: Transport, W: Write> Shell<T, W> {
     }
 }
 
+fn truncate_text(input: &str, limit: usize) -> String {
+    if input.len() <= limit {
+        return input.to_owned();
+    }
+    let mut end = limit;
+    while end > 0 && !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    input[..end].to_owned()
+}
+
+fn format_transcript_excerpt(transcript: &CommandTranscript) -> Option<String> {
+    let mut lines = Vec::new();
+    for line in &transcript.ack_lines {
+        lines.push(format!("[ack] {line}"));
+    }
+    for line in &transcript.output_lines {
+        lines.push(format!("[out] {line}"));
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(truncate_text(&lines.join("\n"), TEST_TRANSCRIPT_MAX_BYTES))
+}
+
+fn format_state_excerpt(state: &ScriptState) -> Option<String> {
+    let history = state.format_response_history();
+    if history == "<none>" {
+        None
+    } else {
+        Some(truncate_text(&history, TEST_TRANSCRIPT_MAX_BYTES))
+    }
+}
+
+fn record_transcript(state: &mut ScriptState, transcript: &CommandTranscript) {
+    for line in &transcript.ack_lines {
+        state.record_ack_line(line);
+    }
+    for line in &transcript.output_lines {
+        state.record_output_line(line);
+    }
+}
+
+fn should_skip_no_mutate(keyword: &str, line: &str) -> bool {
+    match keyword {
+        "spawn" | "kill" => true,
+        "tail" => line
+            .split_whitespace()
+            .nth(1)
+            .map(|path| path.starts_with("/worker/"))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+fn should_defer_test_error(index: usize, lines: &[ScriptLine], state: &ScriptState) -> bool {
+    let Some(last) = state.last_response_line.as_deref() else {
+        return false;
+    };
+    if !last.starts_with("ERR") {
+        return false;
+    }
+    let Some(next) = lines.get(index + 1) else {
+        return false;
+    };
+    next.text.trim_start().starts_with("EXPECT")
+}
+
+fn build_msize_overflow_payload() -> String {
+    let base = "{\"spawn\":\"gpu\",\"lease\":{\"gpu_id\":\"";
+    let suffix = "\",\"mem_mb\":1,\"streams\":1,\"ttl_s\":1,\"priority\":1}}\n";
+    let target_len = MAX_MSIZE as usize + 64;
+    let filler_len = target_len.saturating_sub(base.len() + suffix.len()).max(1);
+    let filler = "X".repeat(filler_len);
+    format!("{base}{filler}{suffix}")
+}
+
+fn parse_test_args<'a>(mut args: impl Iterator<Item = &'a str>) -> Result<TestOptions> {
+    let mut mode = TestMode::Quick;
+    let mut json = false;
+    let mut no_mutate = false;
+    let mut timeout_secs = DEFAULT_TEST_TIMEOUT_SECS;
+    while let Some(arg) = args.next() {
+        match arg {
+            "--json" => json = true,
+            "--no-mutate" => no_mutate = true,
+            _ if arg.starts_with("--mode") => {
+                let value = if let Some(value) = arg.strip_prefix("--mode=") {
+                    value
+                } else {
+                    args.next()
+                        .ok_or_else(|| anyhow!("--mode requires quick or full"))?
+                };
+                mode = match value {
+                    "quick" => TestMode::Quick,
+                    "full" => TestMode::Full,
+                    _ => return Err(anyhow!("unsupported mode '{value}' (expected quick|full)")),
+                };
+            }
+            _ if arg.starts_with("--timeout") => {
+                let value = if let Some(value) = arg.strip_prefix("--timeout=") {
+                    value
+                } else {
+                    args.next()
+                        .ok_or_else(|| anyhow!("--timeout requires a value in seconds"))?
+                };
+                let parsed: u64 = value
+                    .parse()
+                    .map_err(|_| anyhow!("--timeout requires a numeric value in seconds"))?;
+                if parsed == 0 {
+                    return Err(anyhow!("--timeout must be at least 1s"));
+                }
+                if parsed > MAX_TEST_TIMEOUT_SECS {
+                    return Err(anyhow!("--timeout exceeds max of {MAX_TEST_TIMEOUT_SECS}s"));
+                }
+                timeout_secs = parsed;
+            }
+            unknown => return Err(anyhow!("unknown test option '{unknown}'")),
+        }
+    }
+    Ok(TestOptions {
+        mode,
+        json,
+        timeout: Duration::from_secs(timeout_secs),
+        no_mutate,
+    })
+}
+
 /// Bounded auto-attach configuration used when starting the interactive shell.
 #[derive(Debug, Clone)]
 pub struct AutoAttach {
@@ -1575,7 +2462,10 @@ fn normalise_payload(input: &str) -> Result<String> {
     } else {
         trimmed
     };
-    if content.chars().any(|ch| ch == '\n' || ch == '\r' || ch == '\0') {
+    if content
+        .chars()
+        .any(|ch| ch == '\n' || ch == '\r' || ch == '\0')
+    {
         return Err(anyhow!("payload must be a single line of text"));
     }
     let mut payload = content.to_owned();
@@ -1639,15 +2529,12 @@ fn build_spawn_payload<'a>(role: &str, args: impl Iterator<Item = &'a str>) -> R
     let mut values = parse_kv_args(args)?;
     match role.to_ascii_lowercase().as_str() {
         "heartbeat" | "worker" | "worker-heartbeat" => {
-            let ticks: u64 = take_required(&mut values, "ticks", |value| {
-                parse_number(value, "ticks")
-            })?;
-            let ttl_s: Option<u64> = take_optional(&mut values, "ttl_s", |value| {
-                parse_number(value, "ttl_s")
-            })?;
-            let ops: Option<u64> = take_optional(&mut values, "ops", |value| {
-                parse_number(value, "ops")
-            })?;
+            let ticks: u64 =
+                take_required(&mut values, "ticks", |value| parse_number(value, "ticks"))?;
+            let ttl_s: Option<u64> =
+                take_optional(&mut values, "ttl_s", |value| parse_number(value, "ttl_s"))?;
+            let ops: Option<u64> =
+                take_optional(&mut values, "ops", |value| parse_number(value, "ops"))?;
             if !values.is_empty() {
                 let extras = values.keys().cloned().collect::<Vec<_>>().join(", ");
                 return Err(anyhow!("unknown spawn options: {extras}"));
@@ -1675,15 +2562,13 @@ fn build_spawn_payload<'a>(role: &str, args: impl Iterator<Item = &'a str>) -> R
             let gpu_id = take_required(&mut values, "gpu_id", |value| {
                 ensure_json_string(value, "gpu_id").map(str::to_owned)
             })?;
-            let mem_mb: u32 = take_required(&mut values, "mem_mb", |value| {
-                parse_number(value, "mem_mb")
-            })?;
+            let mem_mb: u32 =
+                take_required(&mut values, "mem_mb", |value| parse_number(value, "mem_mb"))?;
             let streams: u8 = take_required(&mut values, "streams", |value| {
                 parse_number(value, "streams")
             })?;
-            let ttl_s: u32 = take_required(&mut values, "ttl_s", |value| {
-                parse_number(value, "ttl_s")
-            })?;
+            let ttl_s: u32 =
+                take_required(&mut values, "ttl_s", |value| parse_number(value, "ttl_s"))?;
             let priority: Option<u8> = take_optional(&mut values, "priority", |value| {
                 parse_number(value, "priority")
             })?;

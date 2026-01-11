@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+// Purpose: CLI entry point for the Cohesix shell prototype.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -17,10 +18,13 @@ use log::LevelFilter;
 
 #[cfg(feature = "tcp")]
 use cohsh::{
-    tcp_debug_enabled, AutoAttach, NineDoorTransport, QemuTransport, RoleArg, Shell, Transport,
+    tcp_debug_enabled, validate_script, AutoAttach, NineDoorTransport, QemuTransport, RoleArg,
+    Shell, Transport,
 };
 #[cfg(not(feature = "tcp"))]
-use cohsh::{AutoAttach, NineDoorTransport, QemuTransport, RoleArg, Shell, Transport};
+use cohsh::{
+    validate_script, AutoAttach, NineDoorTransport, QemuTransport, RoleArg, Shell, Transport,
+};
 #[cfg(feature = "tcp")]
 use cohsh::{TcpTransport, COHSH_TCP_PORT};
 
@@ -47,6 +51,10 @@ struct Cli {
     /// Execute commands from a script file instead of starting an interactive shell.
     #[arg(long)]
     script: Option<PathBuf>,
+
+    /// Validate a script file without executing it.
+    #[arg(long, value_name = "FILE", conflicts_with = "script")]
+    check: Option<PathBuf>,
 
     /// Select the transport backing the shell session.
     #[cfg_attr(feature = "tcp", arg(long, value_enum, default_value_t = TransportKind::Tcp))]
@@ -143,6 +151,14 @@ fn main() -> Result<()> {
         let tcp_debug = cli.tcp_debug || tcp_debug_enabled() || cli.verbose;
         (host, port, token, tcp_debug)
     };
+
+    if let Some(script_path) = cli.check {
+        let file = File::open(&script_path)
+            .with_context(|| format!("failed to open script {script_path:?}"))?;
+        validate_script(BufReader::new(file))?;
+        println!("check ok: {}", script_path.display());
+        return Ok(());
+    }
 
     let transport: Box<dyn Transport> = match cli.transport {
         TransportKind::Mock => Box::new(NineDoorTransport::new(nine_door::NineDoor::new())),

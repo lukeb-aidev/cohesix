@@ -14,8 +14,25 @@ use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
 const LOG_PATH: &str = "/log/queen.log";
 const PROC_BOOT_PATH: &str = "/proc/boot";
+const PROC_TESTS_PATH: &str = "/proc/tests";
+const PROC_TESTS_QUICK_PATH: &str = "/proc/tests/selftest_quick.coh";
+const PROC_TESTS_FULL_PATH: &str = "/proc/tests/selftest_full.coh";
+const PROC_TESTS_NEGATIVE_PATH: &str = "/proc/tests/selftest_negative.coh";
 const BOOT_HEADER: &str = "Cohesix boot: root-task online";
 const MAX_STREAM_LINES: usize = log_buffer::LOG_SNAPSHOT_LINES;
+
+const SELFTEST_QUICK_SCRIPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../resources/proc_tests/selftest_quick.coh"
+));
+const SELFTEST_FULL_SCRIPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../resources/proc_tests/selftest_full.coh"
+));
+const SELFTEST_NEGATIVE_SCRIPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../resources/proc_tests/selftest_negative.coh"
+));
 
 /// Minimal NineDoor bridge used by the seL4 build until the full Secure9P server is ported.
 #[derive(Debug)]
@@ -58,9 +75,7 @@ impl NineDoorBridge {
         {
             boot_log::notify_bridge_created();
         }
-        Self {
-            attached: false,
-        }
+        Self { attached: false }
     }
 
     /// Reset per-session state after a console disconnect.
@@ -181,13 +196,27 @@ impl NineDoorBridge {
     pub fn cat(
         &self,
         path: &str,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
         if path == LOG_PATH {
-            return Ok(log_buffer::snapshot_lines::<DEFAULT_LINE_CAPACITY, MAX_STREAM_LINES>());
+            return Ok(log_buffer::snapshot_lines::<
+                DEFAULT_LINE_CAPACITY,
+                MAX_STREAM_LINES,
+            >());
         }
         if path == PROC_BOOT_PATH {
             return boot_lines();
+        }
+        if path == PROC_TESTS_QUICK_PATH {
+            return script_lines(SELFTEST_QUICK_SCRIPT);
+        }
+        if path == PROC_TESTS_FULL_PATH {
+            return script_lines(SELFTEST_FULL_SCRIPT);
+        }
+        if path == PROC_TESTS_NEGATIVE_PATH {
+            return script_lines(SELFTEST_NEGATIVE_SCRIPT);
         }
         Err(NineDoorBridgeError::InvalidPath)
     }
@@ -196,20 +225,19 @@ impl NineDoorBridge {
     pub fn list(
         &self,
         path: &str,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
         let entries = match path {
-            "/" => &[
-                "gpu",
-                "kmesg",
-                "log",
-                "proc",
-                "queen",
-                "trace",
-                "worker",
-            ][..],
+            "/" => &["gpu", "kmesg", "log", "proc", "queen", "trace", "worker"][..],
             "/log" => &["queen.log"][..],
-            "/proc" => &["boot"][..],
+            "/proc" => &["boot", "tests"][..],
+            "/proc/tests" => &[
+                "selftest_quick.coh",
+                "selftest_full.coh",
+                "selftest_negative.coh",
+            ][..],
             "/queen" => &["ctl"][..],
             "/trace" => &["ctl", "events"][..],
             "/worker" | "/gpu" => &[][..],
@@ -241,6 +269,17 @@ fn boot_lines(
         {
             push_boot_line(&mut output, line)?;
         }
+    }
+    Ok(output)
+}
+
+fn script_lines(
+    script: &str,
+) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+{
+    let mut output = HeaplessVec::new();
+    for line in script.lines() {
+        push_boot_line(&mut output, line)?;
     }
     Ok(output)
 }
