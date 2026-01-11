@@ -9,12 +9,14 @@
 //! eventual seL4 runtime is constructed.
 
 use std::fmt;
+use std::io;
 use std::str;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims};
 use gpu_bridge_host::GpuNamespaceSnapshot;
+use secure9p_core::SessionLimits;
 use secure9p_codec::{
     Codec, CodecError, ErrorCode, FrameHeader, OpenMode, Qid, Request, RequestBody, ResponseBody,
     SessionId, MAX_MSIZE, VERSION,
@@ -24,12 +26,14 @@ use thiserror::Error;
 mod control;
 mod core;
 mod namespace;
+mod pipeline;
 mod tracefs;
 
 use self::core::{role_to_uname, ServerCore};
+pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 
 /// Errors surfaced by NineDoor operations.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error)]
 pub enum NineDoorError {
     /// Indicates that no session state exists for the supplied identifier.
     #[error("unknown session {0:?}")]
@@ -45,6 +49,9 @@ pub enum NineDoorError {
         /// Human-readable message accompanying the error.
         message: String,
     },
+    /// Pipeline write failure or retry exhaustion.
+    #[error("pipeline error: {0}")]
+    Pipeline(#[from] io::Error),
 }
 
 impl NineDoorError {
@@ -91,14 +98,20 @@ impl NineDoor {
     /// Construct a new NineDoor server populated with the synthetic namespace.
     #[must_use]
     pub fn new() -> Self {
-        Self::new_with_clock(Arc::new(SystemClock))
+        Self::new_with_limits(Arc::new(SystemClock), SessionLimits::default())
     }
 
     /// Construct a server using the supplied clock (primarily for tests).
     #[must_use]
     pub fn new_with_clock(clock: Arc<dyn Clock>) -> Self {
+        Self::new_with_limits(clock, SessionLimits::default())
+    }
+
+    /// Construct a server using the supplied clock and session limits.
+    #[must_use]
+    pub fn new_with_limits(clock: Arc<dyn Clock>, limits: SessionLimits) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(ServerCore::new(clock))),
+            inner: Arc::new(Mutex::new(ServerCore::new(clock, limits))),
             bootstrap_ticket: TicketClaims::new(
                 Role::Queen,
                 BudgetSpec::unbounded(),
@@ -145,6 +158,13 @@ impl NineDoor {
     pub fn install_gpu_nodes(&self, topology: &GpuNamespaceSnapshot) -> Result<(), NineDoorError> {
         let mut core = self.inner.lock().expect("poisoned nine-door lock");
         core.install_gpu_nodes(topology)
+    }
+
+    /// Fetch current Secure9P pipeline metrics.
+    #[must_use]
+    pub fn pipeline_metrics(&self) -> PipelineMetrics {
+        let core = self.inner.lock().expect("poisoned nine-door lock");
+        core.pipeline_metrics()
     }
 }
 
@@ -194,16 +214,44 @@ impl InProcessConnection {
         let tag = self.next_tag();
         let request = Request { tag, body };
         let encoded = self.codec.encode_request(&request)?;
-        let response_bytes = {
-            let mut core = self.server.lock().expect("poisoned nine-door lock");
-            core.handle_frame(self.session, &encoded)?
-        };
+        let response_bytes = self.exchange_batch(&encoded)?;
         let response = self.codec.decode_response(&response_bytes)?;
         debug_assert_eq!(response.tag, tag);
         match response.body {
             ResponseBody::Error { code, message } => Err(NineDoorError::Protocol { code, message }),
             other => Ok(other),
         }
+    }
+
+    /// Exchange a raw batch of Secure9P frames with the server.
+    pub fn exchange_batch(&mut self, batch: &[u8]) -> Result<Vec<u8>, NineDoorError> {
+        let mut core = self.server.lock().expect("poisoned nine-door lock");
+        core.handle_batch(self.session, batch)
+    }
+
+    /// Send a batch of request bodies and return decoded responses.
+    pub fn transact_batch(
+        &mut self,
+        bodies: &[RequestBody],
+    ) -> Result<Vec<ResponseBody>, NineDoorError> {
+        let mut batch = Vec::new();
+        for body in bodies {
+            let tag = self.next_tag();
+            let request = Request {
+                tag,
+                body: body.clone(),
+            };
+            let frame = self.codec.encode_request(&request)?;
+            batch.extend_from_slice(&frame);
+        }
+        let response_bytes = self.exchange_batch(&batch)?;
+        let mut responses = Vec::new();
+        for frame in secure9p_codec::BatchIter::new(&response_bytes) {
+            let frame = frame?;
+            let response = self.codec.decode_response(frame.bytes())?;
+            responses.push(response.body);
+        }
+        Ok(responses)
     }
 
     /// Negotiate Secure9P version and maximum message size.

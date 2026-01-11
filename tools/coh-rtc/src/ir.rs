@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-const SCHEMA_VERSION: &str = "1.0";
+const SCHEMA_VERSION: &str = "1.1";
 const MAX_WALK_DEPTH: usize = 8;
 const MAX_MSIZE: u32 = 8192;
 
@@ -52,6 +52,12 @@ impl Manifest {
                 self.secure9p.walk_depth,
                 MAX_WALK_DEPTH
             );
+        }
+        if self.secure9p.tags_per_session < 1 {
+            bail!("secure9p.tags_per_session must be >= 1");
+        }
+        if self.secure9p.batch_frames < 1 {
+            bail!("secure9p.batch_frames must be >= 1");
         }
         if self.profile.kernel {
             if self.features.std_console {
@@ -167,6 +173,22 @@ pub struct EventPump {
 pub struct Secure9pLimits {
     pub msize: u32,
     pub walk_depth: u8,
+    pub tags_per_session: u16,
+    pub batch_frames: u16,
+    pub short_write: ShortWriteConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShortWriteConfig {
+    pub policy: ShortWritePolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShortWritePolicy {
+    Reject,
+    Retry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
