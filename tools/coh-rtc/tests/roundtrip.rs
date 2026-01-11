@@ -58,7 +58,7 @@ fn invalid_manifest_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.0"
+schema = "1.1"
 
 [profile]
 name = "virt-aarch64"
@@ -70,6 +70,11 @@ tick_ms = 5
 [secure9p]
 msize = 9000
 walk_depth = 8
+tags_per_session = 4
+batch_frames = 1
+
+[secure9p.short_write]
+policy = "reject"
 
 [features]
 net_console = false
@@ -118,7 +123,7 @@ fn cache_kernel_ops_required_for_dma() {
 # Author: Lukas Bower
 # Purpose: Invalid cache manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.0"
+schema = "1.1"
 
 [profile]
 name = "virt-aarch64"
@@ -130,6 +135,11 @@ tick_ms = 5
 [secure9p]
 msize = 8192
 walk_depth = 8
+tags_per_session = 4
+batch_frames = 1
+
+[secure9p.short_write]
+policy = "reject"
 
 [cache]
 kernel_ops = false

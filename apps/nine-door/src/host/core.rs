@@ -2,6 +2,7 @@
 // Purpose: Core NineDoor Secure9P server state machine and namespace plumbing.
 
 use std::collections::{HashMap, HashSet};
+use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,6 +10,7 @@ use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::{BudgetSpec, Role, TicketKey, TicketToken};
 use gpu_bridge_host::{status_entry, GpuNamespaceSnapshot};
 use log::{debug, info, trace};
+use secure9p_core::{FidTable, QueueDepth, QueueError, SessionLimits, TagError, TagWindow};
 use secure9p_codec::{
     Codec, ErrorCode, OpenMode, Qid, Request, RequestBody, Response, ResponseBody, SessionId,
     MAX_MSIZE, VERSION,
@@ -18,6 +20,7 @@ use worker_gpu::{GpuLease as WorkerGpuLease, JobDescriptor};
 
 use super::control::{BudgetCommand, KillCommand, QueenCommand, SpawnCommand, SpawnTarget};
 use super::namespace::Namespace;
+use super::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 use super::{Clock, NineDoorError};
 
 // New server core implementation and access policy are defined below.
@@ -30,6 +33,8 @@ pub(crate) struct ServerCore {
     sessions: HashMap<SessionId, SessionState>,
     ticket_keys: HashMap<Role, TicketKey>,
     clock: Arc<dyn Clock>,
+    limits: SessionLimits,
+    pipeline: Pipeline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,7 +48,8 @@ enum AuthState {
 }
 
 impl ServerCore {
-    pub(crate) fn new(clock: Arc<dyn Clock>) -> Self {
+    pub(crate) fn new(clock: Arc<dyn Clock>, limits: SessionLimits) -> Self {
+        let pipeline = Pipeline::new(PipelineConfig::from_limits(limits));
         Self {
             codec: Codec,
             control: ControlPlane::new(),
@@ -51,6 +57,8 @@ impl ServerCore {
             sessions: HashMap::new(),
             ticket_keys: HashMap::new(),
             clock,
+            limits,
+            pipeline,
         }
     }
 
@@ -58,7 +66,8 @@ impl ServerCore {
         let id = SessionId::from_raw(self.next_session);
         self.next_session += 1;
         let now = self.clock.now();
-        self.sessions.insert(id, SessionState::new(now));
+        self.sessions
+            .insert(id, SessionState::new(now, self.limits));
         id
     }
 
@@ -91,30 +100,156 @@ impl ServerCore {
         session: SessionId,
         request_bytes: &[u8],
     ) -> Result<Vec<u8>, NineDoorError> {
-        let request = self.codec.decode_request(request_bytes).map_err(|err| {
-            let state = self
-                .sessions
-                .get(&session)
-                .map(|entry| entry.auth_state)
-                .unwrap_or(AuthState::Failed);
-            debug!(
-                "[net-console][auth] session={} state={:?} decode error: {}",
-                session.session(),
-                state,
+        self.handle_batch(session, request_bytes)
+    }
+
+    pub(crate) fn handle_batch(
+        &mut self,
+        session: SessionId,
+        batch: &[u8],
+    ) -> Result<Vec<u8>, NineDoorError> {
+        let mut state = match self.sessions.remove(&session) {
+            Some(state) => state,
+            None => {
+                debug!(
+                    "[net-console][auth] unknown session {} while handling batch",
+                    session.session()
+                );
+                return Err(NineDoorError::UnknownSession(session));
+            }
+        };
+        let negotiated_msize = state.negotiated_msize();
+        let mut entries = Vec::new();
+        for frame in secure9p_codec::BatchIter::new(batch) {
+            let frame = frame.map_err(NineDoorError::Codec)?;
+            let raw = frame.bytes().to_vec();
+            let request = self.codec.decode_request(&raw).map_err(|err| {
+                debug!(
+                    "[net-console][auth] session={} state={:?} decode error: {}",
+                    session.session(),
+                    state.auth_state,
+                    err
+                );
                 err
-            );
-            err
-        })?;
-        let response_body = match self.dispatch(session, &request) {
-            Ok(body) => body,
-            Err(NineDoorError::Protocol { code, message }) => ResponseBody::Error { code, message },
-            Err(other) => return Err(other),
-        };
-        let response = Response {
-            tag: request.tag,
-            body: response_body,
-        };
-        Ok(self.codec.encode_response(&response)?)
+            })?;
+            entries.push((request, raw.len()));
+        }
+        if entries.is_empty() {
+            self.sessions.insert(session, state);
+            return Ok(Vec::new());
+        }
+
+        let batch_overflow = batch.len() > negotiated_msize as usize;
+        let frame_overflow = entries.len() > self.limits.batch_frames;
+        let mut responses = vec![None; entries.len()];
+        let mut reserved = vec![false; entries.len()];
+
+        for (idx, (request, frame_len)) in entries.iter().enumerate() {
+            if batch_overflow {
+                responses[idx] = Some(ResponseBody::Error {
+                    code: ErrorCode::TooBig,
+                    message: "batch exceeds negotiated msize".to_owned(),
+                });
+                continue;
+            }
+            if frame_overflow {
+                info!(
+                    "[secure9p][session={}] backpressure: batch frame limit exceeded",
+                    session.session()
+                );
+                self.pipeline.record_backpressure();
+                responses[idx] = Some(ResponseBody::Error {
+                    code: ErrorCode::Busy,
+                    message: "queue depth exceeded".to_owned(),
+                });
+                continue;
+            }
+            if *frame_len > negotiated_msize as usize {
+                responses[idx] = Some(ResponseBody::Error {
+                    code: ErrorCode::TooBig,
+                    message: "frame exceeds negotiated msize".to_owned(),
+                });
+                continue;
+            }
+            match state.tag_window.reserve(request.tag) {
+                Ok(()) => match state.queue_depth.reserve(1) {
+                    Ok(()) => {
+                        reserved[idx] = true;
+                    }
+                    Err(QueueError::Full) => {
+                        state.tag_window.release(request.tag);
+                        info!(
+                            "[secure9p][session={}] backpressure: queue depth exceeded (tag={})",
+                            session.session(),
+                            request.tag
+                        );
+                        self.pipeline.record_backpressure();
+                        responses[idx] = Some(ResponseBody::Error {
+                            code: ErrorCode::Busy,
+                            message: "queue depth exceeded".to_owned(),
+                        });
+                    }
+                },
+                Err(TagError::InUse) => {
+                    responses[idx] = Some(ResponseBody::Error {
+                        code: ErrorCode::Invalid,
+                        message: "tag already in use".to_owned(),
+                    });
+                }
+                Err(TagError::WindowFull) => {
+                    info!(
+                        "[secure9p][session={}] backpressure: tag window exceeded (tag={})",
+                        session.session(),
+                        request.tag
+                    );
+                    responses[idx] = Some(ResponseBody::Error {
+                        code: ErrorCode::Busy,
+                        message: "tag window exceeded".to_owned(),
+                    });
+                }
+            }
+            self.pipeline.record_queue_depth(state.queue_depth.current());
+        }
+
+        for (idx, (request, _)) in entries.iter().enumerate() {
+            if reserved[idx] {
+                let outcome = match self.dispatch_with_state(session, &mut state, request) {
+                    Ok(body) => body,
+                    Err(NineDoorError::Protocol { code, message }) => {
+                        ResponseBody::Error { code, message }
+                    }
+                    Err(other) => {
+                        state.tag_window.release(request.tag);
+                        state.queue_depth.release(1);
+                        self.sessions.insert(session, state);
+                        return Err(other);
+                    }
+                };
+                responses[idx] = Some(outcome);
+                state.tag_window.release(request.tag);
+                state.queue_depth.release(1);
+            }
+        }
+        self.pipeline.record_queue_depth(state.queue_depth.current());
+
+        self.sessions.insert(session, state);
+        let mut buffer = Vec::new();
+        let mut writer = io::Cursor::new(&mut buffer);
+        let mut encoded = Vec::with_capacity(responses.len());
+        for (idx, (request, _)) in entries.iter().enumerate() {
+            let body = responses[idx].take().expect("response populated");
+            let response = Response {
+                tag: request.tag,
+                body,
+            };
+            encoded.push(self.codec.encode_response(&response)?);
+        }
+        self.pipeline.write_batch(&mut writer, &encoded)?;
+        Ok(buffer)
+    }
+
+    pub(crate) fn pipeline_metrics(&self) -> PipelineMetrics {
+        self.pipeline.metrics()
     }
 
     fn dispatch(
@@ -133,6 +268,17 @@ impl ServerCore {
                 return Err(NineDoorError::UnknownSession(session));
             }
         };
+        let result = self.dispatch_with_state(session, &mut state, request);
+        self.sessions.insert(session, state);
+        result
+    }
+
+    fn dispatch_with_state(
+        &mut self,
+        session: SessionId,
+        state: &mut SessionState,
+        request: &Request,
+    ) -> Result<ResponseBody, NineDoorError> {
         let result = match &request.body {
             RequestBody::Version { msize, version } => {
                 info!(
@@ -156,7 +302,7 @@ impl ServerCore {
                     version
                 );
                 state.auth_state = AuthState::WaitingVersion;
-                let outcome = Self::handle_version(&mut state, *msize, version);
+                let outcome = Self::handle_version(state, *msize, version);
                 if outcome.is_ok() {
                     state.auth_state = AuthState::VersionNegotiated;
                     info!(
@@ -197,7 +343,7 @@ impl ServerCore {
                     uname
                 );
                 state.auth_state = AuthState::AttachRequested;
-                let outcome = self.handle_attach(&mut state, *fid, uname.as_str(), aname.as_str());
+                let outcome = self.handle_attach(state, *fid, uname.as_str(), aname.as_str());
                 if outcome.is_ok() {
                     state.auth_state = AuthState::Attached;
                     info!(
@@ -225,11 +371,11 @@ impl ServerCore {
                 );
                 state.ensure_attached()?;
                 if let Err(reason) = state.pre_operation(self.clock.now()) {
-                    Err(self.handle_budget_failure(session, &mut state, reason))
+                    Err(self.handle_budget_failure(session, state, reason))
                 } else if let Err(reason) = state.consume_operation() {
-                    Err(self.handle_budget_failure(session, &mut state, reason))
+                    Err(self.handle_budget_failure(session, state, reason))
                 } else {
-                    self.handle_walk(&mut state, *fid, *newfid, wnames)
+                    self.handle_walk(state, *fid, *newfid, wnames)
                 }
             }
             RequestBody::Open { fid, mode } => {
@@ -242,11 +388,11 @@ impl ServerCore {
                 );
                 state.ensure_attached()?;
                 if let Err(reason) = state.pre_operation(self.clock.now()) {
-                    Err(self.handle_budget_failure(session, &mut state, reason))
+                    Err(self.handle_budget_failure(session, state, reason))
                 } else if let Err(reason) = state.consume_operation() {
-                    Err(self.handle_budget_failure(session, &mut state, reason))
+                    Err(self.handle_budget_failure(session, state, reason))
                 } else {
-                    self.handle_open(&mut state, *fid, *mode)
+                    self.handle_open(state, *fid, *mode)
                 }
             }
             RequestBody::Read { fid, offset, count } => {
@@ -260,11 +406,11 @@ impl ServerCore {
                 );
                 state.ensure_attached()?;
                 if let Err(reason) = state.pre_operation(self.clock.now()) {
-                    Err(self.handle_budget_failure(session, &mut state, reason))
+                    Err(self.handle_budget_failure(session, state, reason))
                 } else if let Err(reason) = state.consume_operation() {
-                    Err(self.handle_budget_failure(session, &mut state, reason))
+                    Err(self.handle_budget_failure(session, state, reason))
                 } else {
-                    self.handle_read(&mut state, *fid, *offset, *count)
+                    self.handle_read(state, *fid, *offset, *count)
                 }
             }
             RequestBody::Write { fid, data, .. } => {
@@ -277,11 +423,11 @@ impl ServerCore {
                 );
                 state.ensure_attached()?;
                 if let Err(reason) = state.pre_operation(self.clock.now()) {
-                    Err(self.handle_budget_failure(session, &mut state, reason))
+                    Err(self.handle_budget_failure(session, state, reason))
                 } else if let Err(reason) = state.consume_operation() {
-                    Err(self.handle_budget_failure(session, &mut state, reason))
+                    Err(self.handle_budget_failure(session, state, reason))
                 } else {
-                    self.handle_write(session, &mut state, *fid, data)
+                    self.handle_write(session, state, *fid, data)
                 }
             }
             RequestBody::Clunk { fid } => {
@@ -292,7 +438,7 @@ impl ServerCore {
                     fid
                 );
                 state.ensure_attached()?;
-                Self::handle_clunk(&mut state, *fid)
+                Self::handle_clunk(state, *fid)
             }
         };
         if let Err(ref err) = result {
@@ -318,7 +464,6 @@ impl ServerCore {
             );
             state.first_request_logged = true;
         }
-        self.sessions.insert(session, state);
         result
     }
 
@@ -1161,7 +1306,7 @@ enum QueenEvent {
 struct SessionState {
     msize: Option<u32>,
     attached: bool,
-    fids: HashMap<u32, FidState>,
+    fids: FidTable<FidState>,
     role: Option<Role>,
     worker_id: Option<String>,
     gpu_scope: Option<String>,
@@ -1169,14 +1314,16 @@ struct SessionState {
     mounts: MountTable,
     auth_state: AuthState,
     first_request_logged: bool,
+    tag_window: TagWindow,
+    queue_depth: QueueDepth,
 }
 
 impl SessionState {
-    fn new(now: Instant) -> Self {
+    fn new(now: Instant, limits: SessionLimits) -> Self {
         Self {
             msize: None,
             attached: false,
-            fids: HashMap::new(),
+            fids: FidTable::new(),
             role: None,
             worker_id: None,
             gpu_scope: None,
@@ -1184,6 +1331,8 @@ impl SessionState {
             mounts: MountTable::default(),
             auth_state: AuthState::Start,
             first_request_logged: false,
+            tag_window: TagWindow::new(limits.tags_per_session),
+            queue_depth: QueueDepth::new(limits.queue_depth_limit()),
         }
     }
 
@@ -1215,7 +1364,7 @@ impl SessionState {
     }
 
     fn has_fid(&self, fid: u32) -> bool {
-        self.fids.contains_key(&fid)
+        self.fids.contains(&fid)
     }
 
     fn insert_fid(

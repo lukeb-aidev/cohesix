@@ -104,6 +104,14 @@ pub enum CodecError {
     /// Invalid open mode flags were provided.
     #[error("invalid open mode {0}")]
     InvalidOpenMode(u8),
+    /// Declared frame length exceeded the configured maximum.
+    #[error("frame length {declared} exceeds maximum {max}")]
+    FrameTooLarge {
+        /// Frame length declared in the header.
+        declared: u32,
+        /// Maximum allowed frame size.
+        max: u32,
+    },
 }
 
 /// Qid type bitflags per the 9P2000.L specification.

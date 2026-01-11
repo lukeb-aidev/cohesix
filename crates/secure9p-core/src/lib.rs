@@ -14,6 +14,13 @@ use cohesix_ticket::TicketClaims;
 use secure9p_codec::OpenMode;
 use thiserror::Error;
 
+mod session;
+
+pub use session::{
+    FidTable, QueueDepth, QueueError, SessionLimits, ShortWritePolicy, TagError, TagWindow,
+    DEFAULT_SHORT_WRITE_BACKOFF_MS, DEFAULT_SHORT_WRITE_RETRIES,
+};
+
 /// Errors surfaced by Secure9P access policy checks.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AccessError {

@@ -5,7 +5,7 @@ author = "Lukas Bower"
 purpose = "Root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.0"
+schema = "1.1"
 
 [profile]
 name = "virt-aarch64"
@@ -17,6 +17,11 @@ tick_ms = 5
 [secure9p]
 msize = 8192
 walk_depth = 8
+tags_per_session = 16
+batch_frames = 1
+
+[secure9p.short_write]
+policy = "reject"
 
 [cache]
 kernel_ops = true

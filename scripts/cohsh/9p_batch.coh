@@ -10,4 +10,6 @@ echo batch-3 > /log/queen.log
 EXPECT OK
 cat /log/queen.log
 EXPECT SUBSTR batch-1|batch-2|batch-3
+echo {{msize_overflow}} > /log/queen.log
+EXPECT ERR
 quit

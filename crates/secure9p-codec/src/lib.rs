@@ -13,8 +13,12 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+mod batch;
 mod codec;
+mod fuzz;
 mod types;
 
+pub use batch::{BatchFrame, BatchIter};
 pub use codec::{decode_request, decode_response, encode_request, encode_response, Codec};
+pub use fuzz::fuzz_decode;
 pub use types::*;

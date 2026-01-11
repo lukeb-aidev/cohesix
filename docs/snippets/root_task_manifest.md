@@ -4,12 +4,15 @@
 ### Root-task manifest schema (generated)
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.0`
+- `root_task.schema`: `1.1`
 - `profile.name`: `virt-aarch64`
 - `profile.kernel`: `true`
 - `event_pump.tick_ms`: `5`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
+- `secure9p.tags_per_session`: `16`
+- `secure9p.batch_frames`: `1`
+- `secure9p.short_write.policy`: `reject`
 - `cache.kernel_ops`: `true`
 - `cache.dma_clean`: `true`
 - `cache.dma_invalidate`: `true`
@@ -20,7 +23,7 @@
 - `features.std_host_tools`: `false`
 - `namespaces.role_isolation`: `true`
 - `tickets`: 3 entries
-- `manifest.sha256`: `c1cc99e516188e61f9e2bd266b99143f10ffa80e47724746911288d30ee4dfce`
+- `manifest.sha256`: `f48dfa104daf3b832d793508f285802ae0e1aff3688b94c54ec98e6178af18c9`
 
 ### Namespace mounts (generated)
 - (none)
@@ -34,4 +37,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `c1cc99e516188e61f9e2bd266b99143f10ffa80e47724746911288d30ee4dfce`)._
+_Generated from `configs/root_task.toml` (sha256: `f48dfa104daf3b832d793508f285802ae0e1aff3688b94c54ec98e6178af18c9`)._

@@ -36,6 +36,24 @@ impl DocFragments {
         writeln!(schema_md, "- `event_pump.tick_ms`: `{}`", manifest.event_pump.tick_ms).ok();
         writeln!(schema_md, "- `secure9p.msize`: `{}`", manifest.secure9p.msize).ok();
         writeln!(schema_md, "- `secure9p.walk_depth`: `{}`", manifest.secure9p.walk_depth).ok();
+        writeln!(
+            schema_md,
+            "- `secure9p.tags_per_session`: `{}`",
+            manifest.secure9p.tags_per_session
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `secure9p.batch_frames`: `{}`",
+            manifest.secure9p.batch_frames
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `secure9p.short_write.policy`: `{}`",
+            format_short_write_policy(&manifest.secure9p.short_write.policy)
+        )
+        .ok();
         writeln!(schema_md, "- `cache.kernel_ops`: `{}`", manifest.cache.kernel_ops).ok();
         writeln!(schema_md, "- `cache.dma_clean`: `{}`", manifest.cache.dma_clean).ok();
         writeln!(
@@ -169,5 +187,12 @@ fn format_provider(provider: &crate::ir::HostProvider) -> &'static str {
         crate::ir::HostProvider::Nvidia => "nvidia",
         crate::ir::HostProvider::Jetson => "jetson",
         crate::ir::HostProvider::Net => "net",
+    }
+}
+
+fn format_short_write_policy(policy: &crate::ir::ShortWritePolicy) -> &'static str {
+    match policy {
+        crate::ir::ShortWritePolicy::Reject => "reject",
+        crate::ir::ShortWritePolicy::Retry => "retry",
     }
 }

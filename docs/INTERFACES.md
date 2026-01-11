@@ -144,6 +144,8 @@ sequenceDiagram
 - `msize` negotiated ≤ 8192 bytes; larger requests rejected with `Rerror(TooBig)`.
 - Fid tables are per-session; `clunk` invalidates handles immediately.
 - Path components limited to 255 bytes and must be valid UTF-8 without NULs.
+- Batched request frames are permitted when enabled by the manifest (`secure9p.batch_frames`); each response is keyed by its tag and may arrive out-of-order, so clients must match replies by tag instead of FIFO ordering.
+- Tag overflow (`secure9p.tags_per_session`) and batch back-pressure return deterministic `Rerror(Invalid)` or `Rerror(Busy)` with stable ordering, preserving prior single-request semantics when batching is disabled.
 
 ## 2. Capability Ticket
 ```rust

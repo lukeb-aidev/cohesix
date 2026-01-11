@@ -39,6 +39,7 @@ nine-door           // Filesystem providers, role enforcement, logging
 - Disallow `..` traversal and empty path elements.
 - Prevent fid reuse after `clunk`; double clunk returns `Rerror(Closed)`.
 - Deny writes to read-only nodes and enforce append-only semantics by ignoring offsets.
+- Enforce manifest-driven tag windows and batch sizing: `secure9p.tags_per_session` caps in-flight tags, `secure9p.batch_frames` caps frames per batch, and the total bytes in a batch must not exceed the negotiated `msize`.
 - Attack surface constraints: fixed `msize` (≤ 8192) with no wildcard traversal; heap allocations are bounded by negotiated message sizes with no dynamic growth in the validator/dispatcher; walks validate every component (length, UTF-8, no `/` or `..`) and cap depth at 8; codec paths are deterministic and bounded; root-task event pump keeps dispatch non-blocking.
 
 ## 4. Access Policy Hooks
@@ -71,12 +72,22 @@ pub trait AccessPolicy {
 ## 7. Logging & Observability
 - Core emits debug hooks (`on_attach`, `on_clunk`, `on_error`) that NineDoor subscribes to for logging into `/log/queen.log`.
 - Transport adapters must expose counters for frames sent/received and error counts for CI dashboards.
+- Pipelining metrics track queue depth, back-pressure refusals, and short-write retries; NineDoor surfaces these counters for `/proc/9p/*` providers in Milestone 10+.
 - Namespaces honour Secure9P invariants: `/queen/ctl` is append-only; `/log/*.log` entries are append-only files; `/proc` hosts `boot` plus per-worker trace files without write or traversal backdoors; `/worker/<id>` directories expose append-only telemetry for the matching worker; `/gpu/<id>/` nodes are published by the host bridge per `docs/GPU_NODES.md` and remain read/write only to authorised GPU roles. Walks never permit `..`, no implicit wildcards exist, and depth stays bounded by the codec guard.
 
 ## 8. Cache-Safe DMA for NineDoor Surfaces
 NineDoor exposes telemetry and GPU file surfaces that ultimately map onto shared DMA buffers. On AArch64, cache coherence for these shared regions must be enforced explicitly using the kernel VSpace cache operations (`Clean`, `Invalidate`, `CleanInvalidate`, `Unify Instruction`) so the host and VM observe deterministic data. The manifest cache fields (`cache.kernel_ops`, `cache.dma_clean`, `cache.dma_invalidate`, `cache.unify_instructions`) define the contract, and `coh-rtc` rejects configurations that request DMA cache maintenance without kernel cache ops enabled. Root-task emits audit lines around each DMA hand-off so cache flush/invalidate ordering is provable in serial logs without adding new protocols.
 
-## 9. Future Enhancements
+## 9. Pipelining & Batching Controls
+- `secure9p.tags_per_session` bounds in-flight tags per session. Tag reuse before a response yields deterministic `Rerror(Invalid)` or `Rerror(Busy)` depending on the refusal class.
+- `secure9p.batch_frames` bounds the number of frames accepted per batch; batches above this limit return deterministic back-pressure `Rerror(Busy)` with an audit line.
+- Total batch bytes must stay ≤ negotiated `msize`; violations return `Rerror(TooBig)` without affecting single-request semantics.
+- `secure9p.short_write.policy` selects short-write handling for transport adapters:
+  - `reject` — fail fast on short writes.
+  - `retry` — bounded exponential back-off using a fixed retry budget (currently 3 attempts with a 5ms base delay).
+- Queue depth limits are the minimum of `tags_per_session` and `batch_frames`, ensuring batching never exceeds manifest-controlled concurrency.
+
+## 10. Future Enhancements
 - Opportunistic support for 9P lock extensions once namespace bind/mount stabilises.
 - Optional TLS termination in host tools prior to entering the development VM transport adapter; the same boundary applies when the transport targets physical hardware.
 - Status (Build Plan ≤7c): root and TCP consoles run concurrently; Secure9P namespaces and role-aware mounts are live; upcoming milestones will extend worker-side bind/mount, flesh out worker/GPU namespace detail, and wire GPU lease paths from host bridge into `/gpu/<id>`.

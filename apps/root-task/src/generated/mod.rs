@@ -29,12 +29,28 @@ pub struct CachePolicy {
     pub unify_instructions: bool,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.0";
-pub const MANIFEST_SHA256: &str = "c1cc99e516188e61f9e2bd266b99143f10ffa80e47724746911288d30ee4dfce";
+#[derive(Clone, Copy, Debug)]
+pub enum ShortWritePolicy {
+    Reject,
+    Retry,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Secure9pLimits {
+    pub msize: u32,
+    pub walk_depth: u8,
+    pub tags_per_session: u16,
+    pub batch_frames: u16,
+    pub short_write_policy: ShortWritePolicy,
+}
+
+pub const MANIFEST_SCHEMA: &str = "1.1";
+pub const MANIFEST_SHA256: &str = "f48dfa104daf3b832d793508f285802ae0e1aff3688b94c54ec98e6178af18c9";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
 pub const CACHE_POLICY: CachePolicy = bootstrap::CACHE_POLICY;
+pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;
 
 pub const fn ticket_inventory() -> &'static [TicketSpec] {
     &bootstrap::TICKET_INVENTORY
@@ -50,6 +66,10 @@ pub const fn initial_audit_lines() -> &'static [&'static str] {
 
 pub const fn cache_policy() -> CachePolicy {
     bootstrap::CACHE_POLICY
+}
+
+pub const fn secure9p_limits() -> Secure9pLimits {
+    bootstrap::SECURE9P_LIMITS
 }
 
 pub const TICKET_COUNT: usize = bootstrap::TICKET_INVENTORY.len();
