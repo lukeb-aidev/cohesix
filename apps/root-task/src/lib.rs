@@ -115,8 +115,9 @@ pub mod sel4;
 pub mod sel4_view;
 
 #[cfg(feature = "kernel")]
-/// Static manifest entry points for tickets and namespace mounts.
-pub mod manifest;
+/// Generated manifest tables and bootstrap helpers (do not edit).
+#[path = "generated/mod.rs"]
+pub mod generated;
 
 #[cfg(feature = "kernel")]
 /// NineDoor 9P bridge exposed inside the VM environment.

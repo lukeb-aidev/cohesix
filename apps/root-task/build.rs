@@ -8,6 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 
 use chrono::Utc;
 use regex::Regex;
@@ -93,6 +94,9 @@ fn main() {
     if let Err(err) = emit_built_info() {
         panic!("failed to emit built_info.rs: {err}");
     }
+    if let Err(err) = validate_generated_manifest() {
+        panic!("generated manifest check failed: {err}");
+    }
 
     println!("cargo:rerun-if-env-changed=SEL4_LD");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
@@ -166,6 +170,63 @@ fn emit_built_info() -> io::Result<()> {
     );
     fs::write(out_dir.join("built_info.rs"), contents)?;
     println!("cargo:rerun-if-changed=build.rs");
+    Ok(())
+}
+
+fn validate_generated_manifest() -> io::Result<()> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(io::Error::other)?);
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(|parent| parent.parent())
+        .ok_or_else(|| io::Error::other("unable to locate repo root"))?;
+    let manifest_path = repo_root.join("configs/root_task.toml");
+    let generated_dir = manifest_dir.join("src").join("generated");
+    let generated_mod = generated_dir.join("mod.rs");
+    let generated_bootstrap = generated_dir.join("bootstrap.rs");
+    let manifest_out = repo_root.join("out/manifests/root_task_resolved.json");
+    let manifest_hash = repo_root.join("out/manifests/root_task_resolved.json.sha256");
+    let cli_script = repo_root.join("scripts/cohsh/boot_v0.coh");
+    let doc_snippet = repo_root.join("docs/snippets/root_task_manifest.md");
+
+    println!("cargo:rerun-if-changed={}", manifest_path.display());
+    println!("cargo:rerun-if-changed={}", generated_mod.display());
+    println!("cargo:rerun-if-changed={}", generated_bootstrap.display());
+    println!("cargo:rerun-if-changed={}", manifest_out.display());
+    println!("cargo:rerun-if-changed={}", manifest_hash.display());
+    println!("cargo:rerun-if-changed={}", cli_script.display());
+    println!("cargo:rerun-if-changed={}", doc_snippet.display());
+
+    let manifest_meta = manifest_path.metadata().map_err(|err| {
+        io::Error::other(format!(
+            "missing configs/root_task.toml (run coh-rtc): {err}"
+        ))
+    })?;
+    let manifest_mtime = manifest_meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+
+    let required = [
+        generated_mod,
+        generated_bootstrap,
+        manifest_out,
+        manifest_hash,
+        cli_script,
+        doc_snippet,
+    ];
+
+    for path in required {
+        let meta = path.metadata().map_err(|err| {
+            io::Error::other(format!(
+                "missing generated artefact {} (run coh-rtc): {err}",
+                path.display()
+            ))
+        })?;
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        if modified < manifest_mtime {
+            return Err(io::Error::other(format!(
+                "generated artefact {} is stale relative to configs/root_task.toml; rerun coh-rtc",
+                path.display()
+            )));
+        }
+    }
     Ok(())
 }
 

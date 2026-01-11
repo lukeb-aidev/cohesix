@@ -2,6 +2,9 @@
 /target
 /.target_check
 /out
+!/out/
+!/out/manifests/
+!/out/manifests/**
 Cargo.lock
 .DS_Store
 /.vscode
