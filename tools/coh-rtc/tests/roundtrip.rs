@@ -110,3 +110,55 @@ fn snapshot_dir(path: &std::path::Path) -> Vec<(String, Vec<u8>)> {
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries
 }
+
+#[test]
+fn cache_kernel_ops_required_for_dma() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let manifest = r#"
+# Author: Lukas Bower
+# Purpose: Invalid cache manifest sample for coh-rtc tests.
+[root_task]
+schema = "1.0"
+
+[profile]
+name = "virt-aarch64"
+kernel = true
+
+[event_pump]
+tick_ms = 5
+
+[secure9p]
+msize = 8192
+walk_depth = 8
+
+[cache]
+kernel_ops = false
+dma_clean = true
+dma_invalidate = false
+unify_instructions = false
+
+[features]
+net_console = false
+serial_console = true
+std_console = false
+std_host_tools = false
+
+[[tickets]]
+role = "queen"
+secret = "bootstrap"
+"#;
+
+    let manifest_path = temp_dir.path().join("bad-cache.toml");
+    fs::write(&manifest_path, manifest).expect("write manifest");
+
+    let options = CompileOptions {
+        manifest_path,
+        out_dir: temp_dir.path().join("out"),
+        manifest_out: temp_dir.path().join("resolved.json"),
+        cli_script_out: temp_dir.path().join("boot_v0.coh"),
+        doc_snippet_out: temp_dir.path().join("snippet.md"),
+    };
+
+    let err = compile(&options).expect_err("manifest should be rejected");
+    assert!(err.to_string().contains("cache.kernel_ops"));
+}

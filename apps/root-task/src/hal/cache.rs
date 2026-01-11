@@ -2,30 +2,39 @@
 // Purpose: Kernel-mediated cache maintenance helpers for DMA buffers with structured logging.
 //! Kernel-mediated cache maintenance helpers for DMA buffers.
 
-#![cfg(all(feature = "kernel", target_os = "none"))]
 #![allow(unsafe_code)]
 
 use core::cmp::min;
 use core::convert::TryFrom;
+use core::fmt;
 use core::fmt::Write;
 use core::panic::Location;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use heapless::{Deque, Vec};
 use log::{info, trace, warn, Level};
-use sel4_sys::{
-    invocation_label_nInvocationLabels, seL4_CPtr, seL4_CallWithMRs, seL4_Error,
-    seL4_MessageInfo_get_label, seL4_MessageInfo_new, seL4_NoError, seL4_RangeError, seL4_SetMR,
-    seL4_Word,
-};
+use sel4_sys::{seL4_CPtr, seL4_Error, seL4_InvalidArgument, seL4_NoError, seL4_RangeError, seL4_Word};
 use spin::Mutex;
 
 use crate::hal;
 
+#[cfg(all(feature = "kernel", target_os = "none"))]
+use sel4_sys::{
+    invocation_label_nInvocationLabels, seL4_CallWithMRs, seL4_MessageInfo_get_label,
+    seL4_MessageInfo_new, seL4_SetMR,
+};
+
+#[cfg(all(feature = "kernel", target_os = "none"))]
+const INVOCATION_LABEL_BASE: seL4_Word = invocation_label_nInvocationLabels as seL4_Word;
+
+#[cfg(not(all(feature = "kernel", target_os = "none")))]
+const INVOCATION_LABEL_BASE: seL4_Word = 0;
+
 const CACHE_LINE_BYTES: usize = 64;
-const ARMVSPACE_CLEAN_LABEL: seL4_Word = invocation_label_nInvocationLabels as seL4_Word;
+const ARMVSPACE_CLEAN_LABEL: seL4_Word = INVOCATION_LABEL_BASE;
 const ARMVSPACE_INVALIDATE_LABEL: seL4_Word = ARMVSPACE_CLEAN_LABEL + 1;
 const ARMVSPACE_CLEAN_INVALIDATE_LABEL: seL4_Word = ARMVSPACE_CLEAN_LABEL + 2;
+const ARMVSPACE_UNIFY_LABEL: seL4_Word = ARMVSPACE_CLEAN_LABEL + 3;
 
 // Logging policy: per-op traces are gated to TRACE (or the `cache-trace` feature).
 // INFO emits rate-limited summaries with suppression counts; WARN dumps recent ops on errors.
@@ -45,6 +54,7 @@ enum CacheOpKind {
     Clean,
     Invalidate,
     CleanInvalidate,
+    UnifyInstruction,
 }
 
 impl CacheOpKind {
@@ -53,7 +63,52 @@ impl CacheOpKind {
             Self::Clean => "clean",
             Self::Invalidate => "invalidate",
             Self::CleanInvalidate => "clean+invalidate",
+            Self::UnifyInstruction => "unify-instruction",
         }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum CacheErrorKind {
+    /// The supplied range overflowed or was otherwise out-of-bounds.
+    Range,
+    /// The supplied arguments were not valid for the kernel operation.
+    InvalidArgument,
+    /// The kernel returned a non-zero error code not classified above.
+    Kernel,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct CacheError {
+    code: seL4_Error,
+    kind: CacheErrorKind,
+}
+
+impl CacheError {
+    #[must_use]
+    pub const fn new(code: seL4_Error) -> Self {
+        let kind = match code {
+            seL4_RangeError => CacheErrorKind::Range,
+            seL4_InvalidArgument => CacheErrorKind::InvalidArgument,
+            _ => CacheErrorKind::Kernel,
+        };
+        Self { code, kind }
+    }
+
+    #[must_use]
+    pub const fn code(self) -> seL4_Error {
+        self.code
+    }
+
+    #[must_use]
+    pub const fn kind(self) -> CacheErrorKind {
+        self.kind
+    }
+}
+
+impl fmt::Display for CacheError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "cache op error={} kind={:?}", self.code, self.kind)
     }
 }
 
@@ -103,6 +158,7 @@ struct SummarySnapshot {
     clean: u64,
     invalidate: u64,
     clean_invalidate: u64,
+    unify_instruction: u64,
     requested_bytes: u64,
     aligned_bytes: u64,
     max_aligned_len: usize,
@@ -116,6 +172,7 @@ struct SummaryCounters {
     clean: u64,
     invalidate: u64,
     clean_invalidate: u64,
+    unify_instruction: u64,
     requested_bytes: u64,
     aligned_bytes: u64,
     max_aligned_len: usize,
@@ -132,6 +189,7 @@ impl SummaryCounters {
             clean: 0,
             invalidate: 0,
             clean_invalidate: 0,
+            unify_instruction: 0,
             requested_bytes: 0,
             aligned_bytes: 0,
             max_aligned_len: 0,
@@ -165,6 +223,9 @@ impl SummaryCounters {
             CacheOpKind::CleanInvalidate => {
                 self.clean_invalidate = self.clean_invalidate.saturating_add(1)
             }
+            CacheOpKind::UnifyInstruction => {
+                self.unify_instruction = self.unify_instruction.saturating_add(1)
+            }
         }
         self.requested_bytes = self.requested_bytes.saturating_add(len as u64);
         self.aligned_bytes = self.aligned_bytes.saturating_add(aligned_len as u64);
@@ -186,6 +247,7 @@ impl SummaryCounters {
                 clean: self.clean,
                 invalidate: self.invalidate,
                 clean_invalidate: self.clean_invalidate,
+                unify_instruction: self.unify_instruction,
                 requested_bytes: self.requested_bytes,
                 aligned_bytes: self.aligned_bytes,
                 max_aligned_len: self.max_aligned_len,
@@ -196,6 +258,7 @@ impl SummaryCounters {
             self.clean = 0;
             self.invalidate = 0;
             self.clean_invalidate = 0;
+            self.unify_instruction = 0;
             self.requested_bytes = 0;
             self.aligned_bytes = 0;
             self.max_aligned_len = 0;
@@ -261,6 +324,74 @@ impl CacheLogState {
 static CACHE_LOG: Mutex<CacheLogState> = Mutex::new(CacheLogState::new());
 static CACHE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(any(test, feature = "cache-maintenance"))]
+static CACHE_TEST_ERROR: Mutex<Option<seL4_Error>> = Mutex::new(None);
+
+/// Cache maintenance wrapper binding operations to a VSpace capability.
+#[derive(Copy, Clone, Debug)]
+pub struct CacheMaintenance {
+    vspace: seL4_CPtr,
+}
+
+impl CacheMaintenance {
+    /// Construct a cache maintenance helper bound to the supplied VSpace capability.
+    #[must_use]
+    pub const fn new(vspace: seL4_CPtr) -> Self {
+        Self { vspace }
+    }
+
+    /// Construct a helper bound to the init thread VSpace.
+    #[must_use]
+    pub const fn init_thread() -> Self {
+        Self::new(sel4_sys::seL4_CapInitThreadVSpace)
+    }
+
+    /// Clean the data cache for the supplied range.
+    pub fn clean(&self, vaddr: usize, len: usize) -> Result<(), CacheError> {
+        call_cache_op(CacheOpKind::Clean, self.vspace, vaddr, len, ARMVSPACE_CLEAN_LABEL)
+    }
+
+    /// Invalidate the data cache for the supplied range.
+    pub fn invalidate(&self, vaddr: usize, len: usize) -> Result<(), CacheError> {
+        call_cache_op(
+            CacheOpKind::Invalidate,
+            self.vspace,
+            vaddr,
+            len,
+            ARMVSPACE_INVALIDATE_LABEL,
+        )
+    }
+
+    /// Clean and invalidate the data cache for the supplied range.
+    pub fn clean_invalidate(&self, vaddr: usize, len: usize) -> Result<(), CacheError> {
+        call_cache_op(
+            CacheOpKind::CleanInvalidate,
+            self.vspace,
+            vaddr,
+            len,
+            ARMVSPACE_CLEAN_INVALIDATE_LABEL,
+        )
+    }
+
+    /// Unify instruction cache lines for the supplied range.
+    pub fn unify_instruction(&self, vaddr: usize, len: usize) -> Result<(), CacheError> {
+        call_cache_op(
+            CacheOpKind::UnifyInstruction,
+            self.vspace,
+            vaddr,
+            len,
+            ARMVSPACE_UNIFY_LABEL,
+        )
+    }
+}
+
+/// Inject a deterministic error for the next cache operation (test support).
+#[cfg(any(test, feature = "cache-maintenance"))]
+pub fn set_test_error(error: Option<seL4_Error>) {
+    let mut guard = CACHE_TEST_ERROR.lock();
+    *guard = error;
+}
+
 fn bucket_len(len: usize) -> usize {
     len.checked_next_power_of_two().unwrap_or(len)
 }
@@ -290,15 +421,17 @@ fn render_record_line(record: &CacheOpRecord) -> heapless::String<192> {
 
 fn render_summary_line(snapshot: &SummarySnapshot, ring_len: usize) -> heapless::String<256> {
     let mut line = heapless::String::<256>::new();
-    let total_ops = snapshot.clean + snapshot.invalidate + snapshot.clean_invalidate;
+    let total_ops =
+        snapshot.clean + snapshot.invalidate + snapshot.clean_invalidate + snapshot.unify_instruction;
     let _ = write!(
         line,
-        "[cache] summary window_ms={} ops={} clean={} invalidate={} clean_invalidate={} requested_bytes={} aligned_bytes={} max_aligned_len={} errors={} suppressed={} ring_size={}",
+        "[cache] summary window_ms={} ops={} clean={} invalidate={} clean_invalidate={} unify_instruction={} requested_bytes={} aligned_bytes={} max_aligned_len={} errors={} suppressed={} ring_size={}",
         snapshot.window_ms,
         total_ops,
         snapshot.clean,
         snapshot.invalidate,
         snapshot.clean_invalidate,
+        snapshot.unify_instruction,
         snapshot.requested_bytes,
         snapshot.aligned_bytes,
         snapshot.max_aligned_len,
@@ -365,11 +498,13 @@ fn align_up(value: usize, align: usize) -> usize {
     value.saturating_add(align - 1) & !(align - 1)
 }
 
-fn range_for_cache(vaddr: usize, len: usize) -> Result<(usize, usize), seL4_Error> {
+fn range_for_cache(vaddr: usize, len: usize) -> Result<(usize, usize), CacheError> {
     if len == 0 {
         return Ok((vaddr, vaddr));
     }
-    let end = vaddr.checked_add(len).ok_or(seL4_RangeError)?;
+    let end = vaddr
+        .checked_add(len)
+        .ok_or_else(|| CacheError::new(seL4_RangeError))?;
     let aligned_start = align_down(vaddr, CACHE_LINE_BYTES);
     let aligned_end = align_up(end, CACHE_LINE_BYTES);
     Ok((aligned_start, aligned_end))
@@ -382,14 +517,16 @@ fn call_cache_op(
     vaddr: usize,
     len: usize,
     label: seL4_Word,
-) -> Result<(), seL4_Error> {
+) -> Result<(), CacheError> {
     if len == 0 {
         return Ok(());
     }
     let (aligned_start, aligned_end) = range_for_cache(vaddr, len)?;
     let aligned_len = aligned_end.saturating_sub(aligned_start);
-    let start_word = seL4_Word::try_from(aligned_start).map_err(|_| seL4_RangeError)?;
-    let end_word = seL4_Word::try_from(aligned_end).map_err(|_| seL4_RangeError)?;
+    let start_word = seL4_Word::try_from(aligned_start)
+        .map_err(|_| CacheError::new(seL4_RangeError))?;
+    let end_word =
+        seL4_Word::try_from(aligned_end).map_err(|_| CacheError::new(seL4_RangeError))?;
 
     let err = unsafe { call_arm_vspace_op(label, vspace, start_word, end_word) };
 
@@ -430,16 +567,17 @@ fn call_cache_op(
     }
 
     if err != 0 {
+        let cache_err = CacheError::new(err);
         let line = render_record_line(&record);
         warn!(target: "hal-cache", "{line}");
         dump_recent_logs(ERROR_DUMP_RECENT);
-        Err(err)
+        Err(cache_err)
     } else {
         Ok(())
     }
 }
 
-pub fn cache_clean(vspace: seL4_CPtr, vaddr: usize, len: usize) -> Result<(), seL4_Error> {
+pub fn cache_clean(vspace: seL4_CPtr, vaddr: usize, len: usize) -> Result<(), CacheError> {
     call_cache_op(
         CacheOpKind::Clean,
         vspace,
@@ -449,7 +587,7 @@ pub fn cache_clean(vspace: seL4_CPtr, vaddr: usize, len: usize) -> Result<(), se
     )
 }
 
-pub fn cache_invalidate(vspace: seL4_CPtr, vaddr: usize, len: usize) -> Result<(), seL4_Error> {
+pub fn cache_invalidate(vspace: seL4_CPtr, vaddr: usize, len: usize) -> Result<(), CacheError> {
     call_cache_op(
         CacheOpKind::Invalidate,
         vspace,
@@ -463,13 +601,27 @@ pub fn cache_clean_invalidate(
     vspace: seL4_CPtr,
     vaddr: usize,
     len: usize,
-) -> Result<(), seL4_Error> {
+) -> Result<(), CacheError> {
     call_cache_op(
         CacheOpKind::CleanInvalidate,
         vspace,
         vaddr,
         len,
         ARMVSPACE_CLEAN_INVALIDATE_LABEL,
+    )
+}
+
+pub fn cache_unify_instruction(
+    vspace: seL4_CPtr,
+    vaddr: usize,
+    len: usize,
+) -> Result<(), CacheError> {
+    call_cache_op(
+        CacheOpKind::UnifyInstruction,
+        vspace,
+        vaddr,
+        len,
+        ARMVSPACE_UNIFY_LABEL,
     )
 }
 
@@ -483,6 +635,7 @@ pub fn write_recent_ops(writer: &mut impl Write, count: usize) {
     });
 }
 
+#[cfg(all(feature = "kernel", target_os = "none"))]
 unsafe fn call_arm_vspace_op(
     label: seL4_Word,
     vspace: seL4_CPtr,
@@ -508,4 +661,21 @@ unsafe fn call_arm_vspace_op(
     }
 
     result_word as seL4_Error
+}
+
+#[cfg(not(all(feature = "kernel", target_os = "none")))]
+unsafe fn call_arm_vspace_op(
+    _label: seL4_Word,
+    _vspace: seL4_CPtr,
+    _start: seL4_Word,
+    _end: seL4_Word,
+) -> seL4_Error {
+    #[cfg(any(test, feature = "cache-maintenance"))]
+    {
+        let mut guard = CACHE_TEST_ERROR.lock();
+        if let Some(err) = guard.take() {
+            return err;
+        }
+    }
+    seL4_NoError
 }

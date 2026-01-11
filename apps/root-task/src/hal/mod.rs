@@ -12,10 +12,10 @@ use core::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "kernel")]
 use core::{fmt, ptr::NonNull};
 
-#[cfg(all(feature = "kernel", target_os = "none"))]
+#[cfg(any(all(feature = "kernel", target_os = "none"), feature = "cache-maintenance"))]
 pub mod cache;
 
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 pub mod dma;
 
 #[cfg(feature = "kernel")]

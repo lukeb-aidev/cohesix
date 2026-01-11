@@ -21,11 +21,20 @@ pub struct NamespaceMount {
     pub target: &'static [&'static str],
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct CachePolicy {
+    pub kernel_ops: bool,
+    pub dma_clean: bool,
+    pub dma_invalidate: bool,
+    pub unify_instructions: bool,
+}
+
 pub const MANIFEST_SCHEMA: &str = "1.0";
-pub const MANIFEST_SHA256: &str = "43986a8fc288378a58a2c52bd15bab41e99de9e484709d7f37b0570731195d1d";
+pub const MANIFEST_SHA256: &str = "c1cc99e516188e61f9e2bd266b99143f10ffa80e47724746911288d30ee4dfce";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
+pub const CACHE_POLICY: CachePolicy = bootstrap::CACHE_POLICY;
 
 pub const fn ticket_inventory() -> &'static [TicketSpec] {
     &bootstrap::TICKET_INVENTORY
@@ -37,6 +46,10 @@ pub const fn namespace_mounts() -> &'static [NamespaceMount] {
 
 pub const fn initial_audit_lines() -> &'static [&'static str] {
     &bootstrap::INITIAL_AUDIT_LINES
+}
+
+pub const fn cache_policy() -> CachePolicy {
+    bootstrap::CACHE_POLICY
 }
 
 pub const TICKET_COUNT: usize = bootstrap::TICKET_INVENTORY.len();

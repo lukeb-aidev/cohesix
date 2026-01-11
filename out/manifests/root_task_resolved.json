@@ -23,6 +23,12 @@
     "std_console": false,
     "std_host_tools": false
   },
+  "cache": {
+    "kernel_ops": true,
+    "dma_clean": true,
+    "dma_invalidate": true,
+    "unify_instructions": false
+  },
   "tickets": [
     {
       "role": "queen",
