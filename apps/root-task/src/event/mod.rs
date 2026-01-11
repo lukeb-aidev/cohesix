@@ -870,10 +870,14 @@ where
 
     /// Emit a console line to the serial console and any attached TCP clients.
     pub fn emit_console_line(&mut self, line: &str) {
-        self.emit_serial_line(line);
+        if self.last_input_source == ConsoleInputSource::Serial {
+            self.emit_serial_line(line);
+        }
         #[cfg(feature = "net-console")]
-        if let Some(net) = self.net.as_mut() {
-            net.send_console_line(line);
+        if self.last_input_source == ConsoleInputSource::Net {
+            if let Some(net) = self.net.as_mut() {
+                net.send_console_line(line);
+            }
         }
     }
 
@@ -1110,7 +1114,9 @@ where
         if let Err(err) = self.feed_parser(line) {
             self.handle_console_error(err);
         }
-        self.emit_prompt();
+        if self.last_input_source == ConsoleInputSource::Serial {
+            self.emit_prompt();
+        }
     }
 
     fn feed_parser(&mut self, line: &HeaplessString<LINE>) -> Result<(), ConsoleError> {
