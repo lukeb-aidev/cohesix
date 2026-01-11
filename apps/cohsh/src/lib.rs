@@ -88,6 +88,7 @@ const TEST_SCRIPT_NEGATIVE_PATH: &str = "/proc/tests/selftest_negative.coh";
 const DEFAULT_TEST_TIMEOUT_SECS: u64 = 30;
 const MAX_TEST_TIMEOUT_SECS: u64 = 120;
 const TEST_REPORT_VERSION: &str = "1";
+const REPL_KEEPALIVE_SECS: u64 = 15;
 const TEST_TRANSCRIPT_MAX_BYTES: usize = 512;
 const TEST_CHECK_NAME_MAX_CHARS: usize = 120;
 const TEST_DETAIL_MAX_CHARS: usize = 200;
@@ -1042,6 +1043,18 @@ impl<T: Transport, W: Write> Shell<T, W> {
         Ok(())
     }
 
+    fn maybe_keepalive(&mut self, last_keepalive: &mut Instant) {
+        if last_keepalive.elapsed() < Duration::from_secs(REPL_KEEPALIVE_SECS) {
+            return;
+        }
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        *last_keepalive = Instant::now();
+        let _ = self.transport.ping(session);
+        let _ = self.transport.drain_acknowledgements();
+    }
+
     fn begin_script_command(&mut self, line: &str) {
         if let Some(state) = self.script_state.as_mut() {
             state.begin_command(line);
@@ -1222,17 +1235,20 @@ impl<T: Transport, W: Write> Shell<T, W> {
 
         let ping_execution = self.execute_test_command("ping");
         let ping_ok = ping_execution.error.is_none();
+        let ping_detail = if ping_ok {
+            "OK ping".to_owned()
+        } else {
+            let detail = ping_execution
+                .error
+                .as_ref()
+                .map(|err| err.to_string())
+                .unwrap_or_else(|| "ping failed".to_owned());
+            format!("ERR ping failed: {detail}")
+        };
         checks.push(TestCheck {
             name: truncate_text("preflight/ping", TEST_CHECK_NAME_MAX_CHARS),
             ok: ping_ok,
-            detail: truncate_text(
-                if ping_ok {
-                    "OK ping"
-                } else {
-                    "ERR ping failed"
-                },
-                TEST_DETAIL_MAX_CHARS,
-            ),
+            detail: truncate_text(&ping_detail, TEST_DETAIL_MAX_CHARS),
             transcript_excerpt: format_transcript_excerpt(&ping_execution.transcript),
         });
         if !ping_ok {
@@ -1895,8 +1911,14 @@ impl<T: Transport, W: Write> Shell<T, W> {
 
         let mut prompt_rendered = false;
         let mut detach_input = false;
+        let mut last_keepalive = Instant::now();
+        let mut had_session = self.session.is_some();
         loop {
             self.run_pending_attach(&mut pending_attach)?;
+            if !had_session && self.session.is_some() {
+                last_keepalive = Instant::now();
+            }
+            had_session = self.session.is_some();
             if !prompt_rendered {
                 write!(self.writer, "{}", self.prompt())?;
                 self.writer.flush()?;
@@ -1921,13 +1943,17 @@ impl<T: Transport, W: Write> Shell<T, W> {
                             writeln!(self.writer, "Error: {err}")?;
                         }
                     }
+                    last_keepalive = Instant::now();
                 }
                 Ok(None) => {
                     info!("audit repl.exit reason=eof");
                     writeln!(self.writer)?;
                     break;
                 }
-                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Timeout) => {
+                    self.maybe_keepalive(&mut last_keepalive);
+                    continue;
+                }
                 Err(RecvTimeoutError::Disconnected) => {
                     info!("audit repl.exit reason=disconnected");
                     break;
