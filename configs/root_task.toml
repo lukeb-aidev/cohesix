@@ -1,0 +1,54 @@
+# Author: Lukas Bower
+# Purpose: Define the root-task manifest consumed by coh-rtc.
+[meta]
+author = "Lukas Bower"
+purpose = "Root-task manifest input for coh-rtc."
+
+[root_task]
+schema = "1.0"
+
+[profile]
+name = "virt-aarch64"
+kernel = true
+
+[event_pump]
+tick_ms = 5
+
+[secure9p]
+msize = 8192
+walk_depth = 8
+
+[features]
+net_console = true
+serial_console = true
+std_console = false
+std_host_tools = false
+
+[namespaces]
+role_isolation = true
+
+[[tickets]]
+role = "queen"
+secret = "bootstrap"
+
+[[tickets]]
+role = "worker-heartbeat"
+secret = "worker"
+
+[[tickets]]
+role = "worker-gpu"
+secret = "worker-gpu"
+
+[ecosystem.host]
+enable = false
+providers = []
+mount_at = "/host"
+
+[ecosystem.audit]
+enable = false
+
+[ecosystem.policy]
+enable = false
+
+[ecosystem.models]
+enable = false

@@ -21,6 +21,7 @@ members = [
     "crates/sel4-runtime",
     "crates/sel4-sys",
     "crates/net-constants",
+    "tools/coh-rtc",
     "tests",
 ]
 resolver = "2"

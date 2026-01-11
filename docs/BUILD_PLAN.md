@@ -469,6 +469,7 @@ Deliverables: Hardened console loop with comprehensive parser tests integrated i
   - Update `docs/ARCHITECTURE.md`, `docs/INTERFACES.md`, and `docs/SECURITY.md` with the networking/console design, threat model, and TCB impact including memory budgeting tables for serial/net buffers.
   - Provide QEMU integration instructions (`docs/USERLAND_AND_CLI.md`) showing serial console usage, remote `cohsh` attachment, and recommended port-forwarding commands for macOS host tooling.
   - Add unit tests for the command parser (invalid verbs, overlong lines), virtio queue wrappers, and integration tests that boot QEMU, connect via TCP, run scripted sessions, and verify audit log outputs.
+  - Record the TCP console toggle in `configs/root_task.toml` once the manifest compiler lands (Milestone 8b) so docs and fixtures remain in sync.
 ### Task Breakdown
 ```
 Title/ID: m7c-cohsh-tcp
@@ -673,6 +674,8 @@ Introduce the `coh-rtc` compiler that ingests `configs/root_task.toml` and emits
 - Generated modules MUST NOT introduce new global state or reorder initialisation in a way that changes serial boot ordering or `/proc/boot` output.
 - Compiler rejects manifests that set `ecosystem.host.enable = true` when memory budgets or Secure9P red lines (msize, walk depth, role isolation) would be exceeded; enabling the ecosystem section MUST NOT relax prior limits.
 - Docs-as-built guard extends to the new schema nodes so generated snippets and rendered docs agree on the resolved manifest.
+
+**TODO:** Milestone 8b remains incomplete until a local aarch64/QEMU run validates the DoD checks above.
 
 **Compiler touchpoints**
 - Introduces `root_task.schema = "1.0"`; schema mismatches abort generation and instruct operators to upgrade docs.

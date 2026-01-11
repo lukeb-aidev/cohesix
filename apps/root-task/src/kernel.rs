@@ -55,7 +55,7 @@ use crate::event::{
 };
 use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
-use crate::manifest;
+use crate::generated;
 #[cfg(all(feature = "net-console", feature = "kernel"))]
 use crate::net::{DefaultNetStack as NetStack, NetPoller, CONSOLE_TCP_PORT, DEFAULT_NET_BACKEND};
 #[cfg(all(feature = "net-console", not(feature = "kernel")))]
@@ -108,6 +108,33 @@ fn debug_identify_boot_caps() {
             "[identify] slot=0x{slot:04x} ty=0x{ty:08x}",
             slot = guarded_cap
         );
+    }
+}
+
+fn emit_manifest_boot_lines(console: &mut Console) {
+    for line in generated::initial_audit_lines() {
+        console.writeln_prefixed(line);
+    }
+
+    let mut summary = HeaplessString::<160>::new();
+    let _ = write!(
+        summary,
+        "[manifest] namespaces={} hash={}",
+        generated::namespace_mounts().len(),
+        generated::NAMESPACE_TABLE_SHA256
+    );
+    console.writeln_prefixed(summary.as_str());
+
+    for mount in generated::namespace_mounts() {
+        let mut line = HeaplessString::<196>::new();
+        let _ = write!(line, "[manifest] mount service={} target=/", mount.service);
+        for (index, segment) in mount.target.iter().enumerate() {
+            if index > 0 {
+                let _ = write!(line, "/");
+            }
+            let _ = write!(line, "{segment}");
+        }
+        console.writeln_prefixed(line.as_str());
     }
 }
 
@@ -1733,6 +1760,7 @@ fn bootstrap<P: Platform>(
     console.writeln_prefixed(cs_line.as_str());
 
     audit_boot::emit_version_banner(|line| console.writeln_prefixed(line));
+    emit_manifest_boot_lines(&mut console);
 
     bootinfo_debug_dump(&bootinfo_view);
 
@@ -2837,9 +2865,12 @@ fn bootstrap<P: Platform>(
             }
         };
 
-        let mut tickets: TicketTable<4> = TicketTable::new();
-        for spec in manifest::ticket_inventory() {
+        let mut tickets: TicketTable<{ generated::TICKET_COUNT }> = TicketTable::new();
+        for spec in generated::ticket_inventory() {
             let _ = tickets.register(spec.role, spec.secret);
+            let mut line = heapless::String::<96>::new();
+            let _ = write!(line, "[manifest] ticket role={:?} source=generated", spec.role);
+            console.writeln_prefixed(line.as_str());
         }
 
         crate::bp!("spawn.worker.begin");

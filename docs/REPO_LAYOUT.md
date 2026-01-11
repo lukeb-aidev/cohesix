@@ -14,12 +14,21 @@
   SECURE9P.md
   TOOLCHAIN_MAC_ARM64.md
   USERLAND_AND_CLI.md
+  snippets/
+    root_task_manifest.md
+/configs/
+  root_task.toml
+/out/
+  manifests/
+    root_task_resolved.json
 /scripts/
   qemu-run.sh
   ci/
     size_guard.sh
 /toolchain/
   setup_macos_arm64.sh
+/tools/
+  coh-rtc/
 /apps/
   cohesix-proto/
   console-ack-wire/
