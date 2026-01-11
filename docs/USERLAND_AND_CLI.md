@@ -152,6 +152,7 @@ For streaming commands, the “response line” is the initial acknowledgement l
 - `/proc/tests/selftest_quick.coh`
 - `/proc/tests/selftest_full.coh`
 - `/proc/tests/selftest_negative.coh`
+- Operators must rerun this suite whenever console handling, Secure9P transport, namespace structure, or access policies change.
 
 ### `coh> test` JSON schema
 When invoked with `--json`, `coh> test` emits:

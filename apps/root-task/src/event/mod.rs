@@ -1810,6 +1810,7 @@ where
             | Command::Mem
             | Command::CacheLog { .. }
             | Command::Ping
+            | Command::Test
             | Command::NetTest
             | Command::NetStats
             | Command::Cat { .. }
@@ -1863,6 +1864,7 @@ where
             Command::Caps => "CAPS",
             Command::Mem => "MEM",
             Command::Ping => "PING",
+            Command::Test => "TEST",
             Command::Attach { .. } => "ATTACH",
             Command::Tail { .. } => "TAIL",
             Command::Cat { .. } => "CAT",

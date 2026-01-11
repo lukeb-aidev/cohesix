@@ -30,12 +30,17 @@ const DEFAULT_RETRY_CEILING: Duration = Duration::from_secs(2);
 const DEFAULT_MAX_RETRIES: usize = 3;
 /// Maximum number of acknowledgement lines retained between drains.
 const MAX_PENDING_ACK: usize = 32;
+const FRAME_ERROR_VERB: &str = "FRAME";
 
 /// Return true when verbose TCP debugging is enabled via the environment.
 pub fn tcp_debug_enabled() -> bool {
     env::var("COHSH_TCP_DEBUG")
         .map(|v| !v.is_empty() && v != "0")
         .unwrap_or(false)
+}
+
+fn is_frame_error(ack: &crate::proto::Ack<'_>) -> bool {
+    matches!(ack.status, AckStatus::Err) && ack.verb.eq_ignore_ascii_case(FRAME_ERROR_VERB)
 }
 
 #[derive(Debug, Clone)]
@@ -880,6 +885,9 @@ impl TcpTransport {
                     Some(response) => {
                         if let Some(ack) = parse_ack(&response) {
                             let _ = self.record_ack(&response);
+                            if is_frame_error(&ack) {
+                                return Err(anyhow!("console frame rejected: {response}"));
+                            }
                             if ack.verb.eq_ignore_ascii_case(verb)
                                 && matches!(ack.status, AckStatus::Err)
                             {
@@ -1117,15 +1125,18 @@ impl Transport for TcpTransport {
         let mut attempts = 0usize;
         loop {
             self.send_line(&command)?;
-            match self.next_protocol_line()? {
-                Some(response) => {
-                    if let Some(ack) = parse_ack(&response) {
-                        let _ = self.record_ack(&response);
-                        if ack.verb.eq_ignore_ascii_case("ECHO") {
-                            if matches!(ack.status, AckStatus::Ok) {
-                                return Ok(());
+                match self.next_protocol_line()? {
+                    Some(response) => {
+                        if let Some(ack) = parse_ack(&response) {
+                            let _ = self.record_ack(&response);
+                            if is_frame_error(&ack) {
+                                return Err(anyhow!("echo failed: {response}"));
                             }
-                            return Err(anyhow!("echo failed: {response}"));
+                            if ack.verb.eq_ignore_ascii_case("ECHO") {
+                                if matches!(ack.status, AckStatus::Ok) {
+                                    return Ok(());
+                                }
+                                return Err(anyhow!("echo failed: {response}"));
                         }
                         continue;
                     }

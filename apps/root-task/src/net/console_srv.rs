@@ -21,6 +21,7 @@ const AUTH_PREFIX: &str = "AUTH ";
 const DETAIL_REASON_EXPECTED_TOKEN: &str = "reason=expected-token";
 const DETAIL_REASON_INVALID_LENGTH: &str = "reason=invalid-length";
 const DETAIL_REASON_INVALID_TOKEN: &str = "reason=invalid-token";
+const FRAME_ERROR_VERB: &str = "FRAME";
 const PREAUTH_FIRST_CAPACITY: usize = 4;
 const PREAUTH_LAST_CAPACITY: usize = 4;
 const PREAUTH_INFO_ALLOWLIST: &[&str] = &["[net-console]", "[cohsh-net]", "[console]", "[event]"];
@@ -66,6 +67,7 @@ pub struct TcpConsoleServer {
     frame_len_buf: [u8; 4],
     frame_len_pos: usize,
     frame_payload_len: Option<usize>,
+    drop_remaining: usize,
     inbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
     priority_outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, { CONSOLE_QUEUE_DEPTH * 4 }>,
     outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
@@ -178,6 +180,7 @@ impl TcpConsoleServer {
             frame_len_buf: [0u8; 4],
             frame_len_pos: 0,
             frame_payload_len: None,
+            drop_remaining: 0,
             inbound: Deque::new(),
             priority_outbound: Deque::new(),
             outbound: Deque::new(),
@@ -203,6 +206,7 @@ impl TcpConsoleServer {
         self.frame_buffer.clear();
         self.frame_len_pos = 0;
         self.frame_payload_len = None;
+        self.drop_remaining = 0;
         self.inbound.clear();
         self.priority_outbound.clear();
         self.outbound.clear();
@@ -239,6 +243,7 @@ impl TcpConsoleServer {
         self.frame_buffer.clear();
         self.frame_len_pos = 0;
         self.frame_payload_len = None;
+        self.drop_remaining = 0;
         self.inbound.clear();
         self.outbound.clear();
         self.reset_preauth_buffers();
@@ -278,6 +283,15 @@ impl TcpConsoleServer {
 
         let mut event = SessionEvent::None;
         for &byte in payload {
+            if self.drop_remaining > 0 {
+                self.drop_remaining = self.drop_remaining.saturating_sub(1);
+                if self.drop_remaining == 0 {
+                    self.frame_len_pos = 0;
+                    self.frame_payload_len = None;
+                    self.frame_buffer.clear();
+                }
+                continue;
+            }
             if let Some(expected_len) = self.frame_payload_len {
                 if self.frame_buffer.push(byte).is_err() {
                     self.log_reject(REASON_INVALID_LENGTH, "<frame overflow>");
@@ -326,11 +340,21 @@ impl TcpConsoleServer {
                     let declared = u32::from_le_bytes(self.frame_len_buf) as usize;
                     if declared < 4 || declared > MAX_MSIZE as usize {
                         self.log_reject(REASON_INVALID_LENGTH, "<frame length>");
+                        if matches!(self.state, SessionState::Authenticated) && declared >= 4 {
+                            self.enqueue_frame_length_error();
+                            self.begin_frame_drop(declared.saturating_sub(4));
+                            continue;
+                        }
                         return SessionEvent::AuthFailed(REASON_INVALID_LENGTH);
                     }
                     let payload_len = declared.saturating_sub(4);
                     if payload_len > DEFAULT_LINE_CAPACITY {
                         self.log_reject(REASON_INVALID_LENGTH, "<frame payload>");
+                        if matches!(self.state, SessionState::Authenticated) {
+                            self.enqueue_frame_length_error();
+                            self.begin_frame_drop(payload_len);
+                            continue;
+                        }
                         return SessionEvent::AuthFailed(REASON_INVALID_LENGTH);
                     }
                     self.frame_payload_len = Some(payload_len);
@@ -348,6 +372,26 @@ impl TcpConsoleServer {
         }
 
         event
+    }
+
+    fn enqueue_frame_length_error(&mut self) {
+        let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+        let ack = AckLine {
+            status: AckStatus::Err,
+            verb: FRAME_ERROR_VERB,
+            detail: Some(DETAIL_REASON_INVALID_LENGTH),
+        };
+        if render_ack(&mut line, &ack).is_ok() {
+            let _ = self.enqueue_outbound(line.as_str());
+        }
+    }
+
+    fn begin_frame_drop(&mut self, payload_len: usize) {
+        self.drop_remaining = payload_len;
+        self.frame_len_pos = 0;
+        self.frame_payload_len = None;
+        self.frame_buffer.clear();
+        self.line_buffer.clear();
     }
 
     fn handle_line(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) -> SessionEvent {
@@ -877,6 +921,29 @@ mod tests {
 
         let ack = server.pop_outbound().expect("error ack missing");
         assert!(ack.starts_with("ERR AUTH"));
+    }
+
+    #[test]
+    fn oversized_frame_after_auth_emits_err_frame() {
+        let mut server = TcpConsoleServer::new(TOKEN, 10_000);
+        server.begin_session(0, Some(4));
+
+        let auth_payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>("AUTH changeme");
+        let event = server.ingest(auth_payload.as_slice(), 1);
+        assert_eq!(event, SessionEvent::Authenticated);
+        let _ = server.pop_outbound();
+
+        let declared = (MAX_MSIZE as usize + 1) as u32;
+        let mut payload: HeaplessVec<u8, 8> = HeaplessVec::new();
+        payload.extend_from_slice(&declared.to_le_bytes()).unwrap();
+        payload.push(0).unwrap();
+
+        let event = server.ingest(payload.as_slice(), 2);
+        assert_eq!(event, SessionEvent::None);
+        assert!(server.is_authenticated());
+
+        let ack = server.pop_outbound().expect("frame error ack missing");
+        assert_eq!(ack.as_str(), "ERR FRAME reason=invalid-length");
     }
     #[test]
     fn authenticates_and_tracks_activity() {

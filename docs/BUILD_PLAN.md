@@ -735,6 +735,8 @@ Following the .coh script format as documented in docs/USERLAND_AND_CLI.md "## c
   - Human output: checklist-style PASS/FAIL with the first failing step and a concise reason.
   - JSON (`--json`): `{ ok, mode, elapsed_ms, checks:[{name, ok, detail, transcript_excerpt?}], version }` (versioned for compatibility).
 
+**Status:** Complete — `coh> test` runs against preinstalled `/proc/tests` scripts, emits PASS/FAIL plus JSON, and rerun guidance is documented for operators.
+
 **Test coverage (what “full” must prove)**
 - AUTH/ATTACH validation with deterministic failure when missing.
 - Protocol grammar: deterministic OK/ERR acknowledgements, bounded retries, no silent failures.

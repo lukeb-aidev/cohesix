@@ -28,7 +28,7 @@ sequenceDiagram
   Note over ND: Secure9P only. Version 9P2000.L. Remove disabled. Msize max 8192.
   Note over ND: Paths are UTF-8. No NUL. Max component length 255 bytes.
   Note over QCTL: Append-only control file. One command per line.
-  Note over Console: Line protocol. Max line length 128 bytes. ACK before side effects.
+  Note over Console: Line protocol. Max line length 192 bytes. ACK before side effects.
   Note over GPU: Provider-backed nodes. info read-only. ctl and job append-only.
 
   %% =========================
@@ -225,9 +225,10 @@ pub trait RootTaskControl {
   - Other verbs (e.g., `LOG`, `ECHO`, `SPAWN`) mirror serial behaviour and return a single acknowledgement before triggering side effects.
 - `PING` / `PONG` probes keep sessions alive; the client sends `PING` every 15 seconds of inactivity and expects an immediate
     `PONG` even when the server is mid-stream.
-  - The TCP console enforces a maximum line length of 128 bytes and rate-limits failed authentication attempts (3 strikes within
-    60 seconds triggers a 90-second cooldown). `cohsh` additionally validates worker tickets locally, rejecting whitespace or
-    malformed values so automation does not leak failed attempts over the wire.
+  - The TCP console enforces a maximum line length of 192 bytes and rate-limits failed authentication attempts (3 strikes within
+    60 seconds triggers a 90-second cooldown). Oversized frames on authenticated sessions yield
+    `ERR FRAME reason=invalid-length` and the session remains open. `cohsh` additionally validates worker tickets locally,
+    rejecting whitespace or malformed values so automation does not leak failed attempts over the wire.
 - Cohesix ships regression scripts in `.coh` format consumed by `coh> test`; see the canonical spec in [USERLAND_AND_CLI.md](./USERLAND_AND_CLI.md#coh-scripts-coh) for syntax and assertion rules.
 - For `dev-virt`, QEMU forwards `127.0.0.1:{31337/tcp,31338/udp,31339/tcp}` to `10.0.2.15` for the console and self-test ports; the virtio-net backend is the default (`net-backend-virtio`), with RTL8139 available as a fallback by removing that feature. Operators generally do not need to care which NIC is active, but the backend label appears in boot logs for diagnostics.
 - `cohsh` is the authoritative implementation of this protocol, and the planned WASM GUI is conceptually another client that wraps the same verbs without introducing a new control surface.

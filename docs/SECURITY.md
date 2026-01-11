@@ -12,7 +12,7 @@ The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; Q
   queues never rely on wall-clock drift.
 - smoltcp is compiled without default features; only the IPv4/TCP stack is enabled. Random seeds and MAC addresses are
   deterministic to ensure reproducible boots inside QEMU and when mirrored on hardware.
-- Console buffers (`heapless::String`) cap line length at 128 bytes and reject control characters beyond backspace/delete to
+- Console buffers (`heapless::String`) cap line length at 192 bytes and reject control characters beyond backspace/delete to
   prevent uncontrolled allocations. The serial façade uses `heapless::spsc::Queue` staging buffers sized at 256 bytes for RX and
   TX, and exposes atomic back-pressure counters so `/proc/boot` can surface saturation data without dynamic allocation.
 - The virtio-console driver mirrors device descriptor rings with bounded `heapless::spsc::Queue` structures (mirroring the RX/TX
@@ -43,7 +43,8 @@ The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; Q
 - User networking in QEMU is only enabled when `scripts/qemu-run.sh --tcp-port <port>` is provided, limiting the window in which
   the guest exposes a TCP listener. The helper script prints the forwarded port to encourage operator audit.
 - TCP handshake commands are human-readable (`ATTACH <role> <ticket?>` / `TAIL <path>`) to ease inspection. The transport
-  validates line length before passing payloads to root-task components, and unexpected responses result in immediate disconnects.
+  validates line length before passing payloads to root-task components; invalid-length frames on authenticated sessions yield
+  `ERR FRAME reason=invalid-length` and are dropped, while pre-auth violations still terminate the connection.
 - Tickets are still required for worker roles even over TCP; empty ticket submissions for worker roles fail with a transport-level
   error before touching NineDoor state. Successful `attach` calls commit the session role into the event pump so subsequent verbs
   cannot escalate privileges without minting a fresh ticket.
