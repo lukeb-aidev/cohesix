@@ -4,7 +4,7 @@
     "purpose": "Root-task manifest input for coh-rtc."
   },
   "root_task": {
-    "schema": "1.1"
+    "schema": "1.2"
   },
   "profile": {
     "name": "virt-aarch64",
@@ -66,6 +66,13 @@
     },
     "models": {
       "enable": false
+    }
+  },
+  "telemetry": {
+    "ring_bytes_per_worker": 1024,
+    "frame_schema": "legacy-plaintext",
+    "cursor": {
+      "retain_on_boot": false
     }
   }
 }

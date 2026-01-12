@@ -8,7 +8,9 @@ use std::hash::{Hash, Hasher};
 
 use gpu_bridge_host::{GpuModelCatalog, TelemetrySchema};
 use secure9p_codec::{ErrorCode, Qid, QidType};
+use trace_model::TraceLevel;
 
+use super::telemetry::{TelemetryAudit, TelemetryAuditLevel, TelemetryConfig, TelemetryFile};
 use super::tracefs::TraceFs;
 use crate::NineDoorError;
 
@@ -30,14 +32,22 @@ const SELFTEST_NEGATIVE_SCRIPT: &str = include_str!(concat!(
 pub struct Namespace {
     root: Node,
     trace: TraceFs,
+    telemetry: TelemetryConfig,
 }
 
 impl Namespace {
     /// Construct the namespace with the predefined synthetic tree.
+    #[allow(dead_code)]
     pub fn new() -> Self {
+        Self::new_with_telemetry(TelemetryConfig::default())
+    }
+
+    /// Construct the namespace with explicit telemetry configuration.
+    pub fn new_with_telemetry(telemetry: TelemetryConfig) -> Self {
         let mut namespace = Self {
             root: Node::directory(Vec::new()),
             trace: TraceFs::new(),
+            telemetry,
         };
         namespace.bootstrap();
         namespace
@@ -49,48 +59,122 @@ impl Namespace {
     }
 
     /// Read bytes from the supplied path.
-    pub fn read(&self, path: &[String], offset: u64, count: u32) -> Result<Vec<u8>, NineDoorError> {
-        let node = self.lookup(path)?;
-        match node.node.kind() {
-            NodeKind::Directory { .. } => {
-                let listing = render_directory_listing(node.list_children());
-                Ok(read_slice(&listing, offset, count))
-            }
-            NodeKind::File(FileNode::ReadOnly(data))
-            | NodeKind::File(FileNode::AppendOnly(data)) => Ok(read_slice(data, offset, count)),
-            NodeKind::File(FileNode::TraceControl) => Ok(self.trace.read_ctl(offset, count)),
-            NodeKind::File(FileNode::TraceEvents) => Ok(self.trace.read_events(offset, count)),
-            NodeKind::File(FileNode::KernelMessages) => Ok(self.trace.read_kmesg(offset, count)),
-            NodeKind::File(FileNode::TaskTrace(task)) => {
-                Ok(self.trace.read_task(task, offset, count))
-            }
+    pub fn read(
+        &mut self,
+        path: &[String],
+        offset: u64,
+        count: u32,
+    ) -> Result<Vec<u8>, NineDoorError> {
+        enum ReadAction {
+            Data(Vec<u8>, Option<TelemetryAudit>),
+            TraceControl,
+            TraceEvents,
+            KernelMessages,
+            TaskTrace(String),
         }
+
+        let mut audit = None;
+        let action = {
+            let node = self.lookup_mut(path)?;
+            match node.node.kind_mut() {
+                NodeKind::Directory { .. } => {
+                    let listing = render_directory_listing(node.list_children());
+                    ReadAction::Data(read_slice(&listing, offset, count), None)
+                }
+                NodeKind::File(FileNode::ReadOnly(data))
+                | NodeKind::File(FileNode::AppendOnly(data)) => {
+                    ReadAction::Data(read_slice(data, offset, count), None)
+                }
+                NodeKind::File(FileNode::Telemetry(file)) => match file.read(offset, count) {
+                    Ok(outcome) => ReadAction::Data(outcome.data, outcome.audit),
+                    Err(err) => {
+                        if let Some(audit) = err.audit {
+                            self.record_telemetry_audit(audit)?;
+                        }
+                        return Err(NineDoorError::protocol(
+                            ErrorCode::Invalid,
+                            err.message,
+                        ));
+                    }
+                },
+                NodeKind::File(FileNode::TraceControl) => ReadAction::TraceControl,
+                NodeKind::File(FileNode::TraceEvents) => ReadAction::TraceEvents,
+                NodeKind::File(FileNode::KernelMessages) => ReadAction::KernelMessages,
+                NodeKind::File(FileNode::TaskTrace(task)) => {
+                    ReadAction::TaskTrace(task.clone())
+                }
+            }
+        };
+        let data = match action {
+            ReadAction::Data(data, read_audit) => {
+                audit = read_audit;
+                data
+            }
+            ReadAction::TraceControl => self.trace.read_ctl(offset, count),
+            ReadAction::TraceEvents => self.trace.read_events(offset, count),
+            ReadAction::KernelMessages => self.trace.read_kmesg(offset, count),
+            ReadAction::TaskTrace(task) => self.trace.read_task(&task, offset, count),
+        };
+        if let Some(audit) = audit {
+            self.record_telemetry_audit(audit)?;
+        }
+        Ok(data)
     }
 
     /// Append bytes to the supplied path.
-    pub fn write_append(&mut self, path: &[String], data: &[u8]) -> Result<u32, NineDoorError> {
-        let node = self.lookup_mut(path)?;
-        match node.node.kind_mut() {
-            NodeKind::File(FileNode::AppendOnly(buffer)) => {
-                buffer.extend_from_slice(data);
-                Ok(data.len() as u32)
+    pub fn write_append(
+        &mut self,
+        path: &[String],
+        offset: u64,
+        data: &[u8],
+    ) -> Result<u32, NineDoorError> {
+        let mut audit = None;
+        let result = {
+            let node = self.lookup_mut(path)?;
+            match node.node.kind_mut() {
+                NodeKind::File(FileNode::AppendOnly(buffer)) => {
+                    buffer.extend_from_slice(data);
+                    Ok(data.len() as u32)
+                }
+                NodeKind::File(FileNode::Telemetry(file)) => match file.append(offset, data) {
+                    Ok(outcome) => {
+                        audit = outcome.audit;
+                        Ok(outcome.count)
+                    }
+                    Err(err) => {
+                        audit = err.audit;
+                        let code = match err.kind {
+                            super::telemetry::TelemetryErrorKind::QuotaExceeded => {
+                                ErrorCode::TooBig
+                            }
+                            super::telemetry::TelemetryErrorKind::InvalidOffset
+                            | super::telemetry::TelemetryErrorKind::InvalidFrame
+                            | super::telemetry::TelemetryErrorKind::CursorStale => ErrorCode::Invalid,
+                        };
+                        Err(NineDoorError::protocol(code, err.message))
+                    }
+                },
+                NodeKind::File(FileNode::ReadOnly(_)) => Err(NineDoorError::protocol(
+                    ErrorCode::Permission,
+                    format!("cannot write read-only file /{}", join_path(path)),
+                )),
+                NodeKind::File(FileNode::TraceControl) => self.trace.write_ctl(data),
+                NodeKind::File(FileNode::TraceEvents)
+                | NodeKind::File(FileNode::KernelMessages)
+                | NodeKind::File(FileNode::TaskTrace(_)) => Err(NineDoorError::protocol(
+                    ErrorCode::Permission,
+                    format!("cannot write read-only file /{}", join_path(path)),
+                )),
+                NodeKind::Directory { .. } => Err(NineDoorError::protocol(
+                    ErrorCode::Permission,
+                    format!("cannot write directory /{}", join_path(path)),
+                )),
             }
-            NodeKind::File(FileNode::ReadOnly(_)) => Err(NineDoorError::protocol(
-                ErrorCode::Permission,
-                format!("cannot write read-only file /{}", join_path(path)),
-            )),
-            NodeKind::File(FileNode::TraceControl) => self.trace.write_ctl(data),
-            NodeKind::File(FileNode::TraceEvents)
-            | NodeKind::File(FileNode::KernelMessages)
-            | NodeKind::File(FileNode::TaskTrace(_)) => Err(NineDoorError::protocol(
-                ErrorCode::Permission,
-                format!("cannot write read-only file /{}", join_path(path)),
-            )),
-            NodeKind::Directory { .. } => Err(NineDoorError::protocol(
-                ErrorCode::Permission,
-                format!("cannot write directory /{}", join_path(path)),
-            )),
+        };
+        if let Some(audit) = audit {
+            self.record_telemetry_audit(audit)?;
         }
+        result
     }
 
     /// Create namespace entries for a spawned worker.
@@ -101,6 +185,7 @@ impl Namespace {
                 format!("invalid worker id '{worker_id}'"),
             ));
         }
+        let telemetry_config = self.telemetry;
         let worker_root = vec!["worker".to_owned()];
         let mut node = self.lookup_mut(&worker_root)?;
         if node.has_child(worker_id) {
@@ -110,7 +195,8 @@ impl Namespace {
             ));
         }
         let worker_dir = node.ensure_directory(worker_id);
-        worker_dir.ensure_file("telemetry", FileNode::AppendOnly(Vec::new()));
+        let telemetry_file = TelemetryFile::new(telemetry_config);
+        worker_dir.ensure_file("telemetry", FileNode::Telemetry(telemetry_file));
         let proc_root = vec!["proc".to_owned()];
         self.ensure_dir(&proc_root, worker_id)?;
         let proc_path = vec!["proc".to_owned(), worker_id.to_owned()];
@@ -139,6 +225,28 @@ impl Namespace {
     /// Borrow the trace filesystem for mutation.
     pub fn tracefs_mut(&mut self) -> &mut TraceFs {
         &mut self.trace
+    }
+
+    fn record_telemetry_audit(&mut self, audit: TelemetryAudit) -> Result<(), NineDoorError> {
+        let level = match audit.level {
+            TelemetryAuditLevel::Info => TraceLevel::Info,
+            TelemetryAuditLevel::Warn => TraceLevel::Warn,
+        };
+        self.trace
+            .record(level, "telemetry", None, &audit.message);
+        let log_path = vec!["log".to_owned(), "queen.log".to_owned()];
+        let log_node = self.lookup_mut(&log_path)?;
+        let line = format!("[audit] {}\n", audit.message);
+        match log_node.node.kind_mut() {
+            NodeKind::File(FileNode::AppendOnly(buffer)) => {
+                buffer.extend_from_slice(line.as_bytes());
+                Ok(())
+            }
+            _ => Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                "cannot append telemetry audit line",
+            )),
+        }
     }
 
     /// Lookup a node by path.
@@ -331,7 +439,7 @@ impl Namespace {
 
     pub fn append_gpu_status(&mut self, gpu_id: &str, payload: &[u8]) -> Result<(), NineDoorError> {
         let path = vec!["gpu".to_owned(), gpu_id.to_owned(), "status".to_owned()];
-        self.write_append(&path, payload)?;
+        self.write_append(&path, u64::MAX, payload)?;
         Ok(())
     }
 
@@ -382,6 +490,7 @@ impl Node {
         let ty = match file {
             FileNode::ReadOnly(_) => QidType::FILE,
             FileNode::AppendOnly(_) => QidType::APPEND_ONLY,
+            FileNode::Telemetry(_) => QidType::APPEND_ONLY,
             FileNode::TraceControl => QidType::APPEND_ONLY,
             FileNode::TraceEvents | FileNode::KernelMessages | FileNode::TaskTrace(_) => {
                 QidType::FILE
@@ -449,10 +558,6 @@ impl Node {
         matches!(self.kind, NodeKind::Directory { .. })
     }
 
-    fn kind(&self) -> &NodeKind {
-        &self.kind
-    }
-
     fn kind_mut(&mut self) -> &mut NodeKind {
         &mut self.kind
     }
@@ -468,6 +573,7 @@ enum NodeKind {
 enum FileNode {
     ReadOnly(Vec<u8>),
     AppendOnly(Vec<u8>),
+    Telemetry(TelemetryFile),
     TraceControl,
     TraceEvents,
     KernelMessages,
@@ -486,13 +592,6 @@ impl<'a> NodeView<'a> {
 
     pub fn is_directory(&self) -> bool {
         self.node.is_directory()
-    }
-
-    fn list_children(&self) -> Vec<String> {
-        match &self.node.kind {
-            NodeKind::Directory { children } => children.keys().cloned().collect(),
-            NodeKind::File(_) => Vec::new(),
-        }
     }
 }
 
@@ -515,6 +614,13 @@ impl<'a> NodeViewMut<'a> {
 
     fn remove_child(&mut self, name: &str) -> Option<Node> {
         self.node.remove_child(name)
+    }
+
+    fn list_children(&self) -> Vec<String> {
+        match &self.node.kind {
+            NodeKind::Directory { children } => children.keys().cloned().collect(),
+            NodeKind::File(_) => Vec::new(),
+        }
     }
 }
 

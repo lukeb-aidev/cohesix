@@ -20,6 +20,7 @@ use worker_gpu::{GpuLease as WorkerGpuLease, JobDescriptor};
 
 use super::control::{BudgetCommand, KillCommand, QueenCommand, SpawnCommand, SpawnTarget};
 use super::namespace::Namespace;
+use super::telemetry::TelemetryConfig;
 use super::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 use super::{Clock, NineDoorError};
 
@@ -48,11 +49,15 @@ enum AuthState {
 }
 
 impl ServerCore {
-    pub(crate) fn new(clock: Arc<dyn Clock>, limits: SessionLimits) -> Self {
+    pub(crate) fn new(
+        clock: Arc<dyn Clock>,
+        limits: SessionLimits,
+        telemetry: TelemetryConfig,
+    ) -> Self {
         let pipeline = Pipeline::new(PipelineConfig::from_limits(limits));
         Self {
             codec: Codec,
-            control: ControlPlane::new(),
+            control: ControlPlane::new(telemetry),
             next_session: 1,
             sessions: HashMap::new(),
             ticket_keys: HashMap::new(),
@@ -413,7 +418,7 @@ impl ServerCore {
                     self.handle_read(state, *fid, *offset, *count)
                 }
             }
-            RequestBody::Write { fid, data, .. } => {
+            RequestBody::Write { fid, offset, data } => {
                 trace!(
                     "[net-console][auth] session={} state={:?} recv Twrite fid={} payload_len={}",
                     session.session(),
@@ -427,7 +432,7 @@ impl ServerCore {
                 } else if let Err(reason) = state.consume_operation() {
                     Err(self.handle_budget_failure(session, state, reason))
                 } else {
-                    self.handle_write(session, state, *fid, data)
+                    self.handle_write(session, state, *fid, *offset, data)
                 }
             }
             RequestBody::Clunk { fid } => {
@@ -724,7 +729,7 @@ impl ServerCore {
         )?;
         let data = self
             .control
-            .namespace()
+            .namespace_mut()
             .read(&entry.canonical_path, offset, count)?;
         Ok(ResponseBody::Read { data })
     }
@@ -734,6 +739,7 @@ impl ServerCore {
         session: SessionId,
         state: &mut SessionState,
         fid: u32,
+        offset: u64,
         data: &[u8],
     ) -> Result<ResponseBody, NineDoorError> {
         let role = state.role();
@@ -791,7 +797,10 @@ impl ServerCore {
                 count: data.len() as u32,
             })
         } else {
-            let count = self.control.namespace_mut().write_append(&path, data)?;
+            let count = self
+                .control
+                .namespace_mut()
+                .write_append(&path, offset, data)?;
             Ok(ResponseBody::Write { count })
         }
     }
@@ -879,9 +888,9 @@ struct ControlPlane {
 }
 
 impl ControlPlane {
-    fn new() -> Self {
+    fn new(telemetry: TelemetryConfig) -> Self {
         Self {
-            namespace: Namespace::new(),
+            namespace: Namespace::new_with_telemetry(telemetry),
             workers: HashMap::new(),
             next_worker_id: 1,
             default_budget: BudgetSpec::default_heartbeat(),
@@ -935,7 +944,7 @@ impl ControlPlane {
 
     fn process_queen_write(&mut self, data: &[u8]) -> Result<Vec<QueenEvent>, NineDoorError> {
         let ctl_path = vec!["queen".to_owned(), "ctl".to_owned()];
-        self.namespace.write_append(&ctl_path, data)?;
+        self.namespace.write_append(&ctl_path, u64::MAX, data)?;
         let text = str::from_utf8(data).map_err(|err| {
             NineDoorError::protocol(
                 ErrorCode::Invalid,
@@ -1042,7 +1051,7 @@ impl ControlPlane {
             descriptors.push(descriptor);
         }
         let job_path = vec!["gpu".to_owned(), gpu_id.to_owned(), "job".to_owned()];
-        let count = self.namespace.write_append(&job_path, data)?;
+        let count = self.namespace.write_append(&job_path, u64::MAX, data)?;
         let telemetry_path = vec![
             "worker".to_owned(),
             worker_id.to_owned(),
@@ -1063,13 +1072,13 @@ impl ControlPlane {
                 job_id
             );
             self.namespace
-                .write_append(&telemetry_path, telemetry.as_bytes())?;
+                .write_append(&telemetry_path, u64::MAX, telemetry.as_bytes())?;
             let telemetry_done = format!(
                 "{{\"job\":\"{}\",\"state\":\"OK\",\"detail\":\"completed\"}}\n",
                 job_id
             );
             self.namespace
-                .write_append(&telemetry_path, telemetry_done.as_bytes())?;
+                .write_append(&telemetry_path, u64::MAX, telemetry_done.as_bytes())?;
         }
         Ok(count)
     }
@@ -1131,7 +1140,7 @@ impl ControlPlane {
                     worker_id, lease.mem_mb, lease.streams, lease.priority
                 )
                 .into_bytes();
-                self.namespace.write_append(&ctl_path, &message)?;
+                self.namespace.write_append(&ctl_path, u64::MAX, &message)?;
                 self.log_event(
                     "worker",
                     TraceLevel::Info,
@@ -1221,7 +1230,7 @@ impl ControlPlane {
         let log_path = vec!["log".to_owned(), "queen.log".to_owned()];
         let mut line = message.as_bytes().to_vec();
         line.push(b'\n');
-        self.namespace.write_append(&log_path, &line)?;
+        self.namespace.write_append(&log_path, u64::MAX, &line)?;
         Ok(())
     }
 
@@ -1236,7 +1245,7 @@ impl ControlPlane {
             let ctl_path = vec!["gpu".to_owned(), gpu.lease.gpu_id.clone(), "ctl".to_owned()];
             let ctl_line = format!("RELEASE {worker_id} {reason}\n");
             self.namespace
-                .write_append(&ctl_path, ctl_line.as_bytes())?;
+                .write_append(&ctl_path, u64::MAX, ctl_line.as_bytes())?;
             let status = status_entry(worker_id, "LEASE-ENDED", reason);
             let mut status_bytes = status.into_bytes();
             status_bytes.push(b'\n');

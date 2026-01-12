@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use coh_rtc::{compile, default_doc_snippet_path, CompileOptions};
+use coh_rtc::{compile, default_cbor_snippet_path, default_doc_snippet_path, CompileOptions};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -23,6 +23,9 @@ struct Args {
     /// Output path for the manifest schema snippet.
     #[arg(long, default_value_os_t = default_doc_snippet_path())]
     doc_snippet: PathBuf,
+    /// Output path for the CBOR telemetry schema snippet.
+    #[arg(long, default_value_os_t = default_cbor_snippet_path())]
+    cbor_snippet: PathBuf,
 }
 
 fn main() -> Result<()> {
@@ -33,6 +36,7 @@ fn main() -> Result<()> {
         manifest_out: args.manifest_out,
         cli_script_out: args.cli_script,
         doc_snippet_out: args.doc_snippet,
+        cbor_snippet_out: args.cbor_snippet,
     };
     let output = compile(&options)?;
     println!("coh-rtc: wrote {}", output.summary());

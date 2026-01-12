@@ -286,6 +286,11 @@ matching the build instructions in `docs/USERLAND_AND_CLI.md`. 【F:apps/cohsh/s
   unimplemented transports. Generated Rust modules remain `no_std`
   compatible (no `std` usage) and are formatted deterministically to
   support reproducible builds and compliance audits.
+- **Telemetry ring budget**: The event pump reserves a 32 KiB telemetry
+  ring budget sized for up to eight workers. `coh-rtc` rejects manifests
+  where `telemetry.ring_bytes_per_worker × 8` exceeds 32768 bytes,
+  ensuring telemetry rings do not exceed deterministic event-pump
+  allocations.
 - **Docs-as-built**: Architecture, interfaces, and security documents
   ingest compiler snippets (CBOR schemas, `/proc` layouts, concurrency
   knobs, hardware tables). CI compares manifest fingerprints and embedded
@@ -312,12 +317,18 @@ CLI scripts, or bootstrap tables change.
 ### Root-task manifest schema (generated)
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.0`
+- `root_task.schema`: `1.2`
 - `profile.name`: `virt-aarch64`
 - `profile.kernel`: `true`
 - `event_pump.tick_ms`: `5`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
+- `secure9p.tags_per_session`: `16`
+- `secure9p.batch_frames`: `1`
+- `secure9p.short_write.policy`: `reject`
+- `telemetry.ring_bytes_per_worker`: `1024`
+- `telemetry.frame_schema`: `legacy-plaintext`
+- `telemetry.cursor.retain_on_boot`: `false`
 - `cache.kernel_ops`: `true`
 - `cache.dma_clean`: `true`
 - `cache.dma_invalidate`: `true`
@@ -328,7 +339,7 @@ CLI scripts, or bootstrap tables change.
 - `features.std_host_tools`: `false`
 - `namespaces.role_isolation`: `true`
 - `tickets`: 3 entries
-- `manifest.sha256`: `c1cc99e516188e61f9e2bd266b99143f10ffa80e47724746911288d30ee4dfce`
+- `manifest.sha256`: `4d97e292f06d2311493fd09b6e1442edef3b03c544148ffad4f00559a8529111`
 
 ### Namespace mounts (generated)
 - (none)
@@ -342,7 +353,7 @@ CLI scripts, or bootstrap tables change.
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `c1cc99e516188e61f9e2bd266b99143f10ffa80e47724746911288d30ee4dfce`)._
+_Generated from `configs/root_task.toml` (sha256: `4d97e292f06d2311493fd09b6e1442edef3b03c544148ffad4f00559a8529111`)._
 
 ### 11.2 Cache-safe DMA contracts
 Shared DMA buffers (telemetry rings, GPU windows, and future sidecar regions) cross the HAL and NineDoor boundary and therefore must not depend on implicit cache behavior. On AArch64 the seL4 kernel exposes VSpace cache operations (`seL4_ARM_VSpace_Clean_Data`, `seL4_ARM_VSpace_CleanInvalidate_Data`, `seL4_ARM_VSpace_Invalidate_Data`, `seL4_ARM_VSpace_Unify_Instruction`) that the root task must invoke to guarantee deterministic coherence. The manifest’s cache section records which maintenance operations are required:

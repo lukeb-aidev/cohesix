@@ -2,6 +2,7 @@
 // Purpose: Emit deterministic artefacts from the root-task manifest.
 
 mod cli;
+pub mod cbor;
 mod docs;
 mod rust;
 
@@ -20,16 +21,18 @@ pub struct GeneratedArtifacts {
     pub manifest_hash: PathBuf,
     pub cli_script: PathBuf,
     pub doc_snippet: PathBuf,
+    pub cbor_snippet: PathBuf,
 }
 
 impl GeneratedArtifacts {
     pub fn summary(&self) -> String {
         format!(
-            "rust={}, manifest={}, cli={}, docs={}",
+            "rust={}, manifest={}, cli={}, docs={}, cbor={}",
             self.rust_dir.display(),
             self.manifest_json.display(),
             self.cli_script.display(),
-            self.doc_snippet.display()
+            self.doc_snippet.display(),
+            self.cbor_snippet.display()
         )
     }
 }
@@ -55,10 +58,15 @@ pub fn emit_all(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    if let Some(parent) = options.cbor_snippet_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
 
     rust::emit_rust(manifest, manifest_hash, &options.out_dir)?;
     cli::emit_cli_script(manifest, &options.cli_script_out)?;
     docs::emit_doc_snippet(manifest_hash, docs, &options.doc_snippet_out)?;
+    cbor::emit_cbor_snippet(&options.cbor_snippet_out)?;
 
     fs::write(&options.manifest_out, resolved_json).with_context(|| {
         format!(
@@ -89,6 +97,7 @@ pub fn emit_all(
         manifest_hash: hash_path,
         cli_script: options.cli_script_out.clone(),
         doc_snippet: options.doc_snippet_out.clone(),
+        cbor_snippet: options.cbor_snippet_out.clone(),
     })
 }
 

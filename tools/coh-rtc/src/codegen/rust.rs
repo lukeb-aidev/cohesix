@@ -59,6 +59,24 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "    pub short_write_policy: ShortWritePolicy,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub enum TelemetryFrameSchema {{")?;
+    writeln!(mod_contents, "    LegacyPlaintext,")?;
+    writeln!(mod_contents, "    CborV1,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct TelemetryCursorConfig {{")?;
+    writeln!(mod_contents, "    pub retain_on_boot: bool,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct TelemetryConfig {{")?;
+    writeln!(mod_contents, "    pub ring_bytes_per_worker: u32,")?;
+    writeln!(mod_contents, "    pub frame_schema: TelemetryFrameSchema,")?;
+    writeln!(mod_contents, "    pub cursor: TelemetryCursorConfig,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const MANIFEST_SCHEMA: &str = \"{}\";", manifest.root_task.schema)?;
     writeln!(mod_contents, "pub const MANIFEST_SHA256: &str = \"{}\";", manifest_hash)?;
     writeln!(mod_contents, "pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;")?;
@@ -66,6 +84,8 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;")?;
     writeln!(mod_contents, "pub const CACHE_POLICY: CachePolicy = bootstrap::CACHE_POLICY;")?;
     writeln!(mod_contents, "pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;")?;
+    writeln!(mod_contents, "pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;")?;
+    writeln!(mod_contents, "pub const EVENT_PUMP_FDS: &[&str] = &bootstrap::EVENT_PUMP_FDS;")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn ticket_inventory() -> &'static [TicketSpec] {{")?;
     writeln!(mod_contents, "    &bootstrap::TICKET_INVENTORY")?;
@@ -87,6 +107,14 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "    bootstrap::SECURE9P_LIMITS")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn telemetry_config() -> TelemetryConfig {{")?;
+    writeln!(mod_contents, "    bootstrap::TELEMETRY_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn event_pump_fds() -> &'static [&'static str] {{")?;
+    writeln!(mod_contents, "    &bootstrap::EVENT_PUMP_FDS")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const TICKET_COUNT: usize = bootstrap::TICKET_INVENTORY.len();")?;
 
     let ticket_hash = hash_bytes(
@@ -98,7 +126,8 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
             .as_slice(),
     );
 
-    let audit_lines = build_audit_lines(manifest, manifest_hash);
+    let event_pump_fds = build_event_pump_fds(manifest);
+    let audit_lines = build_audit_lines(manifest, manifest_hash, &event_pump_fds);
     let audit_hash = hash_bytes(
         serde_json::to_vec(&audit_lines)
             .context("serialize audit lines")?
@@ -112,7 +141,7 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{CachePolicy, NamespaceMount, Secure9pLimits, ShortWritePolicy, TicketSpec}};"
+        "use super::{{CachePolicy, NamespaceMount, Secure9pLimits, ShortWritePolicy, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -170,6 +199,22 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
         manifest.secure9p.batch_frames,
         short_write_policy_to_rust(&manifest.secure9p.short_write.policy)
     )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const TELEMETRY_CONFIG: TelemetryConfig = TelemetryConfig {{ ring_bytes_per_worker: {}, frame_schema: {}, cursor: TelemetryCursorConfig {{ retain_on_boot: {} }} }};\n",
+        manifest.telemetry.ring_bytes_per_worker,
+        telemetry_schema_to_rust(&manifest.telemetry.frame_schema),
+        manifest.telemetry.cursor.retain_on_boot
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const EVENT_PUMP_FDS: [&str; {}] = [",
+        event_pump_fds.len()
+    )?;
+    for fd in &event_pump_fds {
+        writeln!(bootstrap_contents, "    \"{}\",", escape_literal(fd))?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
 
     writeln!(
         bootstrap_contents,
@@ -209,7 +254,39 @@ fn short_write_policy_label(policy: &crate::ir::ShortWritePolicy) -> &'static st
     }
 }
 
-fn build_audit_lines(manifest: &Manifest, manifest_hash: &str) -> Vec<String> {
+fn telemetry_schema_to_rust(schema: &crate::ir::TelemetryFrameSchema) -> &'static str {
+    match schema {
+        crate::ir::TelemetryFrameSchema::LegacyPlaintext => "TelemetryFrameSchema::LegacyPlaintext",
+        crate::ir::TelemetryFrameSchema::CborV1 => "TelemetryFrameSchema::CborV1",
+    }
+}
+
+fn telemetry_schema_label(schema: &crate::ir::TelemetryFrameSchema) -> &'static str {
+    match schema {
+        crate::ir::TelemetryFrameSchema::LegacyPlaintext => "legacy-plaintext",
+        crate::ir::TelemetryFrameSchema::CborV1 => "cbor-v1",
+    }
+}
+
+fn build_event_pump_fds(manifest: &Manifest) -> Vec<&'static str> {
+    let mut fds = Vec::new();
+    if manifest.features.serial_console {
+        fds.push("serial");
+    }
+    fds.push("timer");
+    fds.push("ipc");
+    if manifest.features.net_console {
+        fds.push("net-console");
+    }
+    fds.push("ninedoor");
+    fds
+}
+
+fn build_audit_lines(
+    manifest: &Manifest,
+    manifest_hash: &str,
+    event_pump_fds: &[&'static str],
+) -> Vec<String> {
     vec![
         format!("manifest.schema={}", manifest.root_task.schema),
         format!("manifest.profile={}", manifest.profile.name),
@@ -237,6 +314,18 @@ fn build_audit_lines(manifest: &Manifest, manifest_hash: &str) -> Vec<String> {
             "manifest.secure9p.short_write.policy={}",
             short_write_policy_label(&manifest.secure9p.short_write.policy)
         ),
+        format!(
+            "telemetry.ring_bytes_per_worker={}",
+            manifest.telemetry.ring_bytes_per_worker
+        ),
+        format!(
+            "telemetry.frame_schema={}",
+            telemetry_schema_label(&manifest.telemetry.frame_schema)
+        ),
+        format!(
+            "telemetry.cursor.retain_on_boot={}",
+            manifest.telemetry.cursor.retain_on_boot
+        ),
         format!("manifest.cache.kernel_ops={}", manifest.cache.kernel_ops),
         format!("manifest.cache.dma_clean={}", manifest.cache.dma_clean),
         format!(
@@ -248,6 +337,7 @@ fn build_audit_lines(manifest: &Manifest, manifest_hash: &str) -> Vec<String> {
             manifest.cache.unify_instructions
         ),
         format!("manifest.features.net_console={}", manifest.features.net_console),
+        format!("event_pump.fds={}", event_pump_fds.join(",")),
     ]
 }
 

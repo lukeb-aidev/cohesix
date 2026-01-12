@@ -54,6 +54,24 @@ impl DocFragments {
             format_short_write_policy(&manifest.secure9p.short_write.policy)
         )
         .ok();
+        writeln!(
+            schema_md,
+            "- `telemetry.ring_bytes_per_worker`: `{}`",
+            manifest.telemetry.ring_bytes_per_worker
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `telemetry.frame_schema`: `{}`",
+            format_telemetry_schema(&manifest.telemetry.frame_schema)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `telemetry.cursor.retain_on_boot`: `{}`",
+            manifest.telemetry.cursor.retain_on_boot
+        )
+        .ok();
         writeln!(schema_md, "- `cache.kernel_ops`: `{}`", manifest.cache.kernel_ops).ok();
         writeln!(schema_md, "- `cache.dma_clean`: `{}`", manifest.cache.dma_clean).ok();
         writeln!(
@@ -194,5 +212,12 @@ fn format_short_write_policy(policy: &crate::ir::ShortWritePolicy) -> &'static s
     match policy {
         crate::ir::ShortWritePolicy::Reject => "reject",
         crate::ir::ShortWritePolicy::Retry => "retry",
+    }
+}
+
+fn format_telemetry_schema(schema: &crate::ir::TelemetryFrameSchema) -> &'static str {
+    match schema {
+        crate::ir::TelemetryFrameSchema::LegacyPlaintext => "legacy-plaintext",
+        crate::ir::TelemetryFrameSchema::CborV1 => "cbor-v1",
     }
 }

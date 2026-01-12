@@ -27,10 +27,12 @@ mod control;
 mod core;
 mod namespace;
 mod pipeline;
+mod telemetry;
 mod tracefs;
 
 use self::core::{role_to_uname, ServerCore};
 pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
+pub use self::telemetry::{TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema};
 
 /// Errors surfaced by NineDoor operations.
 #[derive(Debug, Error)]
@@ -98,20 +100,38 @@ impl NineDoor {
     /// Construct a new NineDoor server populated with the synthetic namespace.
     #[must_use]
     pub fn new() -> Self {
-        Self::new_with_limits(Arc::new(SystemClock), SessionLimits::default())
+        Self::new_with_limits_and_telemetry(
+            Arc::new(SystemClock),
+            SessionLimits::default(),
+            TelemetryConfig::default(),
+        )
     }
 
     /// Construct a server using the supplied clock (primarily for tests).
     #[must_use]
     pub fn new_with_clock(clock: Arc<dyn Clock>) -> Self {
-        Self::new_with_limits(clock, SessionLimits::default())
+        Self::new_with_limits_and_telemetry(
+            clock,
+            SessionLimits::default(),
+            TelemetryConfig::default(),
+        )
     }
 
     /// Construct a server using the supplied clock and session limits.
     #[must_use]
     pub fn new_with_limits(clock: Arc<dyn Clock>, limits: SessionLimits) -> Self {
+        Self::new_with_limits_and_telemetry(clock, limits, TelemetryConfig::default())
+    }
+
+    /// Construct a server using explicit telemetry configuration.
+    #[must_use]
+    pub fn new_with_limits_and_telemetry(
+        clock: Arc<dyn Clock>,
+        limits: SessionLimits,
+        telemetry: TelemetryConfig,
+    ) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(ServerCore::new(clock, limits))),
+            inner: Arc::new(Mutex::new(ServerCore::new(clock, limits, telemetry))),
             bootstrap_ticket: TicketClaims::new(
                 Role::Queen,
                 BudgetSpec::unbounded(),

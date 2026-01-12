@@ -23,6 +23,7 @@ fn manifest_codegen_is_deterministic() {
     let manifest_out = temp_dir.path().join("root_task_resolved.json");
     let cli_script = temp_dir.path().join("boot_v0.coh");
     let doc_snippet = temp_dir.path().join("snippet.md");
+    let cbor_snippet = temp_dir.path().join("telemetry_cbor.md");
 
     let options = CompileOptions {
         manifest_path,
@@ -30,6 +31,7 @@ fn manifest_codegen_is_deterministic() {
         manifest_out: manifest_out.clone(),
         cli_script_out: cli_script.clone(),
         doc_snippet_out: doc_snippet.clone(),
+        cbor_snippet_out: cbor_snippet.clone(),
     };
 
     let first = compile(&options).expect("compile manifest");
@@ -37,17 +39,20 @@ fn manifest_codegen_is_deterministic() {
     let baseline_manifest = fs::read(&manifest_out).expect("manifest json");
     let baseline_cli = fs::read(&cli_script).expect("cli script");
     let baseline_docs = fs::read(&doc_snippet).expect("docs snippet");
+    let baseline_cbor = fs::read(&cbor_snippet).expect("cbor snippet");
 
     let second = compile(&options).expect("compile manifest again");
     let second_snapshot = snapshot_dir(&out_dir);
     let second_manifest = fs::read(&manifest_out).expect("manifest json");
     let second_cli = fs::read(&cli_script).expect("cli script");
     let second_docs = fs::read(&doc_snippet).expect("docs snippet");
+    let second_cbor = fs::read(&cbor_snippet).expect("cbor snippet");
 
     assert_eq!(baseline, second_snapshot);
     assert_eq!(baseline_manifest, second_manifest);
     assert_eq!(baseline_cli, second_cli);
     assert_eq!(baseline_docs, second_docs);
+    assert_eq!(baseline_cbor, second_cbor);
     assert_eq!(first.summary(), second.summary());
 }
 
@@ -58,7 +63,7 @@ fn invalid_manifest_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.1"
+schema = "1.2"
 
 [profile]
 name = "virt-aarch64"
@@ -96,6 +101,7 @@ secret = "bootstrap"
         manifest_out: temp_dir.path().join("resolved.json"),
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
+        cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
     };
 
     let err = compile(&options).expect_err("manifest should be rejected");
@@ -123,7 +129,7 @@ fn cache_kernel_ops_required_for_dma() {
 # Author: Lukas Bower
 # Purpose: Invalid cache manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.1"
+schema = "1.2"
 
 [profile]
 name = "virt-aarch64"
@@ -167,6 +173,7 @@ secret = "bootstrap"
         manifest_out: temp_dir.path().join("resolved.json"),
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
+        cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
     };
 
     let err = compile(&options).expect_err("manifest should be rejected");
