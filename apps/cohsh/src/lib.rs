@@ -1695,13 +1695,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     }
                 };
                 let path = path_part.trim();
-                let payload = if raw_text.trim() == TEST_MSIZE_SENTINEL {
-                    build_msize_overflow_payload()
-                } else {
-                    match normalise_payload(raw_text) {
-                        Ok(payload) => payload,
-                        Err(err) => return CommandExecution::err(err, transcript),
-                    }
+                let payload = match build_echo_payload(raw_text) {
+                    Ok(payload) => payload,
+                    Err(err) => return CommandExecution::err(err, transcript),
                 };
                 let session = match self.session.as_ref() {
                     Some(session) => session,
@@ -2211,7 +2207,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     .split_once('>')
                     .ok_or_else(|| anyhow!("echo requires syntax: echo <text> > <path>"))?;
                 let path = path_part.trim();
-                let payload = normalise_payload(raw_text)?;
+                let payload = build_echo_payload(raw_text)?;
                 self.write_path(path, payload.as_bytes())?;
                 Ok(CommandStatus::Continue)
             }
@@ -2505,6 +2501,13 @@ fn normalise_payload(input: &str) -> Result<String> {
     Ok(payload)
 }
 
+fn build_echo_payload(raw_text: &str) -> Result<String> {
+    if raw_text.contains(TEST_MSIZE_SENTINEL) {
+        return Ok(build_msize_overflow_payload());
+    }
+    normalise_payload(raw_text)
+}
+
 fn parse_kv_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<BTreeMap<String, String>> {
     let mut values = BTreeMap::new();
     for arg in args {
@@ -2741,6 +2744,12 @@ mod tests {
     fn normalise_payload_appends_newline() {
         assert_eq!(normalise_payload("'trace'").unwrap(), "trace\n");
         assert_eq!(normalise_payload("plain").unwrap(), "plain\n");
+    }
+
+    #[test]
+    fn echo_payload_expands_msize_sentinel() {
+        let payload = build_echo_payload(TEST_MSIZE_SENTINEL).unwrap();
+        assert!(payload.len() > MAX_MSIZE as usize);
     }
 
     #[test]

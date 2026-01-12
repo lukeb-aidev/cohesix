@@ -777,16 +777,17 @@ Refactor Secure9P into codec/core crates with bounded pipelining and manifest-co
 - `apps/nine-door/src/host/` updated to process batched frames and expose back-pressure metrics; new module `pipeline.rs` encapsulates short-write handling and queue depth accounting surfaced via `/proc/9p/*` later.
 - `apps/nine-door/tests/pipelining.rs` integration test spinning four concurrent sessions, verifying out-of-order responses and bounded retries when queues fill.
 - CLI regression `scripts/cohsh/9p_batch.coh` executing scripted batched writes and verifying acknowledgement ordering.
-- TODO: Extend scripts/cohsh/9p_batch.coh with batching/overflow assertions and add it to regression pack DoD.
 - `configs/root_task.toml` gains IR v1.1 fields: `secure9p.tags_per_session`, `secure9p.batch_frames`, `secure9p.short_write.policy`. Validation ensures `tags_per_session >= 1` and total batched payload stays ≤ negotiated `msize`.
 - Docs: `docs/SECURE9P.md` updated to describe the new layering and concurrency knobs; `docs/INTERFACES.md` documents acknowledgement semantics for batched operations.
 - Explicit queue depth limits and retry back-off parameters documented; negative path covers tag overflow and back-pressure refusal.
+
+**Status:** Complete — pipelining tests cover synthetic load, batching toggles, and back-pressure; `9p_batch.coh` regression (including overflow) passes with the full regression pack.
 
 **Commands**
 - `cargo test -p secure9p-codec`
 - `cargo test -p secure9p-core`
 - `cargo test -p nine-door`
-- `cargo test -p tools/coh-rtc` (regenerates manifest snippets with new fields)
+- `cargo test -p coh-rtc` (regenerates manifest snippets with new fields)
 - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/9p_batch.coh`
 
 **Checks (DoD)**

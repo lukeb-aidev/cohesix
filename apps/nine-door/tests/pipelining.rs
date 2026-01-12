@@ -64,6 +64,20 @@ fn build_write_batch(
     (batch, tags)
 }
 
+fn decode_responses(codec: &Codec, response_bytes: &[u8]) -> Vec<(u16, ResponseBody)> {
+    BatchIter::new(response_bytes)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("batch decode")
+        .into_iter()
+        .map(|frame| {
+            let response = codec
+                .decode_response(frame.bytes())
+                .expect("decode response");
+            (response.tag, response.body)
+        })
+        .collect()
+}
+
 #[test]
 fn batched_sessions_handle_out_of_order_responses() {
     let limits = SessionLimits {
@@ -101,6 +115,77 @@ fn batched_sessions_handle_out_of_order_responses() {
         seen.sort_by_key(|(tag, _)| *tag);
         assert_eq!(seen, expected);
     }
+}
+
+#[test]
+fn synthetic_load_interleaves_sessions() {
+    let limits = SessionLimits {
+        tags_per_session: 8,
+        batch_frames: 4,
+        short_write_policy: ShortWritePolicy::Reject,
+    };
+    let server = NineDoor::new_with_limits(Arc::new(FixedClock::new()), limits);
+    let mut sessions = (0..4).map(|_| setup_session(&server)).collect::<Vec<_>>();
+    let codec = Codec;
+    let mut tag_seed: u16 = 1000;
+    let mut ops = 0usize;
+    let mut batch_idx = 0usize;
+
+    while ops < 10_000 {
+        let remaining = 10_000 - ops;
+        let batch_size = if remaining >= 2 { 2 } else { 1 };
+        let payloads = (0..batch_size)
+            .map(|offset| format!("load-{ops}-{offset}").into_bytes())
+            .collect::<Vec<_>>();
+        let payload_refs = payloads.iter().map(|p| p.as_slice()).collect::<Vec<_>>();
+        let (batch, expected) = build_write_batch(&codec, 2, tag_seed, &payload_refs);
+        let session_idx = batch_idx % sessions.len();
+        let response_bytes = sessions[session_idx]
+            .exchange_batch(&batch)
+            .expect("batch exchange");
+        let mut seen = Vec::new();
+        for (tag, body) in decode_responses(&codec, &response_bytes) {
+            let ResponseBody::Write { count } = body else {
+                panic!("unexpected response body: {body:?}");
+            };
+            seen.push((tag, count as usize));
+        }
+        seen.sort_by_key(|(tag, _)| *tag);
+        assert_eq!(seen, expected);
+
+        ops = ops.saturating_add(batch_size);
+        tag_seed = tag_seed.wrapping_add(batch_size as u16);
+        batch_idx = batch_idx.saturating_add(1);
+    }
+
+    let metrics = server.pipeline_metrics();
+    assert_eq!(metrics.queue_limit, limits.queue_depth_limit());
+    assert_eq!(metrics.queue_depth, 0);
+}
+
+#[test]
+fn single_frame_round_trip_with_batching_disabled() {
+    let limits = SessionLimits {
+        tags_per_session: 4,
+        batch_frames: 1,
+        short_write_policy: ShortWritePolicy::Reject,
+    };
+    let server = NineDoor::new_with_limits(Arc::new(FixedClock::new()), limits);
+    let mut client = setup_session(&server);
+    let codec = Codec;
+
+    let payloads = [b"single-frame".as_slice()];
+    let (batch, expected) = build_write_batch(&codec, 2, 300, &payloads);
+    let response_bytes = client.exchange_batch(&batch).expect("batch exchange");
+    let mut seen = Vec::new();
+    for (tag, body) in decode_responses(&codec, &response_bytes) {
+        let ResponseBody::Write { count } = body else {
+            panic!("unexpected response body: {body:?}");
+        };
+        seen.push((tag, count as usize));
+    }
+    seen.sort_by_key(|(tag, _)| *tag);
+    assert_eq!(seen, expected);
 }
 
 struct FlakyWriter {
@@ -173,4 +258,44 @@ fn backpressure_and_short_write_retries_are_bounded() {
     let metrics = pipeline.metrics();
     assert_eq!(metrics.short_write_retries, 3);
     assert!(metrics.short_writes >= 3);
+}
+
+#[test]
+fn tag_window_overflow_is_deterministic() {
+    let limits = SessionLimits {
+        tags_per_session: 1,
+        batch_frames: 2,
+        short_write_policy: ShortWritePolicy::Reject,
+    };
+    let server = NineDoor::new_with_limits(Arc::new(FixedClock::new()), limits);
+    let mut client = setup_session(&server);
+    let codec = Codec;
+
+    let payloads = [b"tag-a".as_slice(), b"tag-b".as_slice()];
+    let (batch, expected) = build_write_batch(&codec, 2, 400, &payloads);
+    let response_bytes = client.exchange_batch(&batch).expect("batch exchange");
+    let mut seen = Vec::new();
+    for (tag, body) in decode_responses(&codec, &response_bytes) {
+        seen.push((tag, body));
+    }
+    seen.sort_by_key(|(tag, _)| *tag);
+
+    let mut expected_sorted = expected;
+    expected_sorted.sort_by_key(|(tag, _)| *tag);
+    assert_eq!(seen.len(), expected_sorted.len());
+
+    for (idx, (tag, body)) in seen.into_iter().enumerate() {
+        if idx == 0 {
+            let ResponseBody::Write { count } = body else {
+                panic!("expected write response for tag={tag}");
+            };
+            assert_eq!(count as usize, payloads[0].len());
+        } else {
+            let ResponseBody::Error { code, message } = body else {
+                panic!("expected error response for tag={tag}");
+            };
+            assert_eq!(code, secure9p_codec::ErrorCode::Busy);
+            assert_eq!(message, "tag window exceeded");
+        }
+    }
 }

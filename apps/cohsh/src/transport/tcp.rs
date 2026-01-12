@@ -169,6 +169,9 @@ pub struct TcpTransport {
     requested_role: Option<Role>,
     telemetry: ConnectionTelemetry,
     pending_ack: VecDeque<AckOwned>,
+    rx_buf: Vec<u8>,
+    pending_frame_len: Option<usize>,
+    pending_timeouts: usize,
     authenticated: bool,
     auth_state: AuthState,
 }
@@ -203,6 +206,9 @@ impl TcpTransport {
             requested_role: None,
             telemetry: ConnectionTelemetry::default(),
             pending_ack: VecDeque::new(),
+            rx_buf: Vec::new(),
+            pending_frame_len: None,
+            pending_timeouts: 0,
             authenticated: false,
             auth_state: AuthState::Start,
         }
@@ -309,6 +315,7 @@ impl TcpTransport {
                     self.reader = Some(BufReader::new(reader_stream));
                     self.stream = Some(stream);
                     self.authenticated = false;
+                    self.reset_read_state();
                     self.last_activity = Instant::now();
                     self.set_auth_state(AuthState::Connected);
                     debug!(
@@ -533,7 +540,18 @@ impl TcpTransport {
         self.reader = None;
         self.last_probe = None;
         self.authenticated = false;
+        self.reset_read_state();
         self.set_auth_state(AuthState::Start);
+    }
+
+    fn reset_read_state(&mut self) {
+        self.rx_buf.clear();
+        self.pending_frame_len = None;
+        self.pending_timeouts = 0;
+    }
+
+    fn has_partial_frame(&self) -> bool {
+        self.pending_frame_len.is_some() || !self.rx_buf.is_empty()
     }
 
     fn send_line_raw(&mut self, line: &str) -> Result<(), io::Error> {
@@ -583,61 +601,131 @@ impl TcpTransport {
             .reader
             .as_mut()
             .context("attach to the TCP transport before reading")?;
-        let mut len_buf = [0u8; 4];
-        match reader.read_exact(&mut len_buf) {
-            Ok(()) => {}
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) =>
-            {
-                trace!("[cohsh][tcp] read timeout in state {:?}", self.auth_state);
-                return Ok(ReadStatus::Timeout);
+        let mut saw_data = false;
+        let mut temp = [0u8; 512];
+        loop {
+            if self.pending_frame_len.is_none() {
+                if self.rx_buf.len() < 4 {
+                    match reader.read(&mut temp) {
+                        Ok(0) => {
+                            self.telemetry.log_disconnect(&io::Error::new(
+                                io::ErrorKind::ConnectionReset,
+                                "connection closed by peer",
+                            ));
+                            return Ok(ReadStatus::Closed);
+                        }
+                        Ok(read) => {
+                            self.rx_buf.extend_from_slice(&temp[..read]);
+                            saw_data = true;
+                            continue;
+                        }
+                        Err(err)
+                            if matches!(
+                                err.kind(),
+                                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                            ) =>
+                        {
+                            break;
+                        }
+                        Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
+                            self.telemetry.log_disconnect(&io::Error::new(
+                                io::ErrorKind::ConnectionReset,
+                                "connection closed by peer",
+                            ));
+                            return Ok(ReadStatus::Closed);
+                        }
+                        Err(err) => return Err(err.into()),
+                    }
+                }
+                if self.rx_buf.len() >= 4 {
+                    let total_len = u32::from_le_bytes([
+                        self.rx_buf[0],
+                        self.rx_buf[1],
+                        self.rx_buf[2],
+                        self.rx_buf[3],
+                    ]) as usize;
+                    if total_len < 4 || total_len > secure9p_codec::MAX_MSIZE as usize {
+                        return Err(anyhow!("invalid frame length {total_len}"));
+                    }
+                    self.pending_frame_len = Some(total_len.saturating_sub(4));
+                    self.rx_buf.drain(..4);
+                    if total_len == 4 {
+                        self.pending_frame_len = None;
+                        self.pending_timeouts = 0;
+                        self.last_activity = Instant::now();
+                        return Ok(ReadStatus::Line(String::new()));
+                    }
+                }
             }
-            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
+
+            if let Some(payload_len) = self.pending_frame_len {
+                if self.rx_buf.len() < payload_len {
+                    match reader.read(&mut temp) {
+                        Ok(0) => {
+                            self.telemetry.log_disconnect(&io::Error::new(
+                                io::ErrorKind::ConnectionReset,
+                                "connection closed by peer",
+                            ));
+                            return Ok(ReadStatus::Closed);
+                        }
+                        Ok(read) => {
+                            self.rx_buf.extend_from_slice(&temp[..read]);
+                            saw_data = true;
+                            continue;
+                        }
+                        Err(err)
+                            if matches!(
+                                err.kind(),
+                                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                            ) =>
+                        {
+                            break;
+                        }
+                        Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
+                            self.telemetry.log_disconnect(&io::Error::new(
+                                io::ErrorKind::ConnectionReset,
+                                "connection closed by peer",
+                            ));
+                            return Ok(ReadStatus::Closed);
+                        }
+                        Err(err) => return Err(err.into()),
+                    }
+                }
+                if self.rx_buf.len() >= payload_len {
+                    let payload: Vec<u8> = self.rx_buf.drain(..payload_len).collect();
+                    self.pending_frame_len = None;
+                    self.pending_timeouts = 0;
+                    self.last_activity = Instant::now();
+                    let line = String::from_utf8(payload).context("frame payload must be UTF-8")?;
+                    trace!(
+                        "[cohsh][tcp] read {} bytes in state {:?}",
+                        line.len(),
+                        self.auth_state
+                    );
+                    return Ok(ReadStatus::Line(line));
+                }
+            }
+        }
+
+        if saw_data {
+            self.pending_timeouts = 0;
+            self.last_activity = Instant::now();
+        } else if self.has_partial_frame() {
+            self.pending_timeouts = self.pending_timeouts.saturating_add(1);
+            if self.pending_timeouts > self.max_retries {
                 self.telemetry.log_disconnect(&io::Error::new(
-                    io::ErrorKind::ConnectionReset,
-                    "connection closed by peer",
+                    io::ErrorKind::TimedOut,
+                    "timeout while reading console frame",
                 ));
+                self.reset_read_state();
                 return Ok(ReadStatus::Closed);
             }
-            Err(err) => return Err(err.into()),
+        } else {
+            self.pending_timeouts = 0;
         }
-        let total_len = u32::from_le_bytes(len_buf) as usize;
-        if total_len < 4 || total_len > secure9p_codec::MAX_MSIZE as usize {
-            return Err(anyhow!("invalid frame length {total_len}"));
-        }
-        let payload_len = total_len.saturating_sub(4);
-        let mut payload = vec![0u8; payload_len];
-        match reader.read_exact(&mut payload) {
-            Ok(()) => {}
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) =>
-            {
-                trace!("[cohsh][tcp] read timeout in state {:?}", self.auth_state);
-                return Ok(ReadStatus::Timeout);
-            }
-            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
-                self.telemetry.log_disconnect(&io::Error::new(
-                    io::ErrorKind::ConnectionReset,
-                    "connection closed by peer",
-                ));
-                return Ok(ReadStatus::Closed);
-            }
-            Err(err) => return Err(err.into()),
-        }
-        let line = String::from_utf8(payload).context("frame payload must be UTF-8")?;
-        self.last_activity = Instant::now();
-        trace!(
-            "[cohsh][tcp] read {} bytes in state {:?}",
-            line.len(),
-            self.auth_state
-        );
-        Ok(ReadStatus::Line(line))
+
+        trace!("[cohsh][tcp] read timeout in state {:?}", self.auth_state);
+        Ok(ReadStatus::Timeout)
     }
 
     fn issue_heartbeat(&mut self) -> Result<HeartbeatOutcome> {
@@ -702,6 +790,9 @@ impl TcpTransport {
                     return Ok(Some(trimmed));
                 }
                 ReadStatus::Timeout => {
+                    if self.has_partial_frame() {
+                        continue;
+                    }
                     if self.last_activity.elapsed() >= self.heartbeat_interval {
                         match self.issue_heartbeat()? {
                             HeartbeatOutcome::Ack => continue,
@@ -746,6 +837,9 @@ impl TcpTransport {
                 ReadStatus::Timeout => {
                     if Instant::now() >= deadline {
                         return Err(anyhow!("timeout waiting for console response"));
+                    }
+                    if self.has_partial_frame() {
+                        continue;
                     }
                     if self.last_activity.elapsed() >= self.heartbeat_interval {
                         match self.issue_heartbeat()? {
@@ -1225,6 +1319,7 @@ mod tests {
     use std::io::Read;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::time::Duration;
 
     use cohesix_proto::REASON_INVALID_TOKEN;
     use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
@@ -1250,6 +1345,15 @@ mod tests {
             return None;
         }
         String::from_utf8(payload).ok()
+    }
+
+    fn write_frame_split(stream: &mut TcpStream, line: &str, delay: Duration) {
+        let total_len = line.len().saturating_add(4) as u32;
+        stream.write_all(&total_len.to_le_bytes()).unwrap();
+        stream.flush().unwrap();
+        thread::sleep(delay);
+        stream.write_all(line.as_bytes()).unwrap();
+        stream.flush().unwrap();
     }
 
     #[test]
@@ -1395,5 +1499,46 @@ mod tests {
             .attach(Role::Queen, None)
             .expect_err("attach should fail on bad auth");
         assert!(err.to_string().contains("authentication failed"));
+    }
+
+    #[test]
+    fn partial_frames_survive_timeouts() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for stream in listener.incoming().take(1) {
+                let mut stream = stream.unwrap();
+                write_frame(&mut stream, "OK AUTH detail=present-token");
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                while let Some(line) = read_frame(&mut reader) {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("AUTH ") {
+                        write_frame(&mut stream, "OK AUTH");
+                    } else if trimmed.starts_with("ATTACH") {
+                        write_frame(&mut stream, "OK ATTACH role=queen");
+                    } else if trimmed.starts_with("LS ") {
+                        write_frame_split(
+                            &mut stream,
+                            "OK LS path=/proc/tests entries=1",
+                            Duration::from_millis(150),
+                        );
+                        write_frame(&mut stream, "selftest_quick.coh");
+                        write_frame(&mut stream, "END");
+                        break;
+                    } else if trimmed == "PING" {
+                        write_frame(&mut stream, "PONG");
+                        write_frame(&mut stream, "OK PING reply=pong");
+                    }
+                }
+            }
+        });
+
+        let mut transport = TcpTransport::new("127.0.0.1", port)
+            .with_timeout(Duration::from_millis(50))
+            .with_max_retries(3)
+            .with_auth_token("changeme");
+        let session = transport.attach(Role::Queen, None).unwrap();
+        let entries = transport.list(&session, "/proc/tests").unwrap();
+        assert_eq!(entries, vec!["selftest_quick.coh".to_owned()]);
     }
 }

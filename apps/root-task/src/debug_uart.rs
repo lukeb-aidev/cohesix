@@ -32,6 +32,11 @@ pub fn debug_uart_line(line: &str) {
         }
         crate::sel4::debug_put_char_raw(b'\r');
         crate::sel4::debug_put_char_raw(b'\n');
+        if line.starts_with("audit ") {
+            for byte in b"cohesix> " {
+                crate::sel4::debug_put_char_raw(*byte);
+            }
+        }
     }
 
     #[cfg(not(feature = "kernel"))]
