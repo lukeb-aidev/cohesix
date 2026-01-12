@@ -551,7 +551,7 @@ main() {
         --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md"
 
     SEL4_COMPONENT_PACKAGES=(nine-door worker-heart worker-gpu)
-    HOST_TOOL_PACKAGES=(gpu-bridge-host)
+    HOST_TOOL_PACKAGES=(gpu-bridge-host host-sidecar-bridge)
 
     HOST_BUILD_ARGS=(build)
     if (( ${#PROFILE_ARGS[@]} > 0 )); then
@@ -614,7 +614,7 @@ main() {
     describe_file "Built root-task" "$SEL4_ARTIFACT_DIR/root-task"
 
     COMPONENT_BINS=(root-task nine-door worker-heart worker-gpu)
-    HOST_ONLY_BINS=(cohsh gpu-bridge-host)
+    HOST_ONLY_BINS=(cohsh gpu-bridge-host host-sidecar-bridge)
 
     mkdir -p "$OUT_DIR"
     OUT_DIR_ABS="$(cd "$OUT_DIR" && pwd)"

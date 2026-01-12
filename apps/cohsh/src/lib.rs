@@ -2122,6 +2122,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line("  help                         - Show this help message")?;
                 self.write_line("  attach <role> [ticket]       - Attach to a NineDoor session")?;
                 self.write_line("  login <role> [ticket]        - Alias for attach")?;
+                self.write_line("  detach                       - Close the current session")?;
                 self.write_line("  tail <path>                  - Stream a file via NineDoor")?;
                 self.write_line("  log                          - Tail /log/queen.log")?;
                 self.write_line(
@@ -2291,6 +2292,17 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 let args: Vec<&str> = parts.collect();
                 let (role, ticket) = parse_attach_args(cmd, &args)?;
                 self.attach(role, ticket)?;
+                Ok(CommandStatus::Continue)
+            }
+            "detach" => {
+                if parts.next().is_some() {
+                    return Err(anyhow!("detach does not take any arguments"));
+                }
+                if let Some(session) = self.session.as_ref() {
+                    let _ = self.transport.quit(session);
+                }
+                self.session = None;
+                self.write_line("OK DETACH")?;
                 Ok(CommandStatus::Continue)
             }
             "quit" => {
@@ -2730,6 +2742,20 @@ mod tests {
     }
 
     #[test]
+    fn execute_detach_command() {
+        let transport = NineDoorTransport::new(NineDoor::new());
+        let mut output = Vec::new();
+        {
+            let mut shell = Shell::new(transport, &mut output);
+            shell.attach(Role::Queen, None).unwrap();
+            assert_eq!(shell.execute("detach").unwrap(), CommandStatus::Continue);
+            assert!(shell.execute("ping").is_err());
+        }
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(rendered.contains("OK DETACH"));
+    }
+
+    #[test]
     fn worker_attach_requires_identity() {
         let mut transport = NineDoorTransport::new(NineDoor::new());
         let err = transport
@@ -2765,6 +2791,7 @@ mod tests {
         assert!(rendered.contains("tail <path>"));
         assert!(rendered.contains("ls <path>"));
         assert!(rendered.contains("mount <service> <path>"));
+        assert!(rendered.contains("detach"));
     }
 
     #[test]

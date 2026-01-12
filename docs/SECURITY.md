@@ -1,4 +1,5 @@
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Summarize Cohesix security posture and audit expectations. -->
 # Cohesix Security Addendum — Networking & Console
 
 The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; QEMU `aarch64/virt` serves as the development/CI harness and is expected to mirror the same attack surface rather than being the deployment end-state.
@@ -33,6 +34,8 @@ The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; Q
   backspace/delete set.
 - Tickets presented during `attach` are verified against a deterministic `TicketTable` seeded during boot. Audit lines are
   emitted for every denial and for each successful role assertion so operators can review access attempts in `/log/queen.log`.
+- Host sidecar controls (`/host/*`) are append-only and queen-only; every write attempt (allowed or denied) emits a deterministic
+  audit line that records the ticket and path, ensuring sensitive host actions leave an immutable trace in `/log/queen.log`.
 - Host tooling mirrors these controls: `cohsh` validates worker tickets locally (64 hex or base64url) and emits connection
   telemetry (`[cohsh][tcp] reconnect attempt …`, heartbeat latency) to stderr so operators can correlate client-side failures
   with root-task audit trails.

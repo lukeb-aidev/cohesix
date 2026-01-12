@@ -74,6 +74,7 @@ coh>
 Commands and status:
 - `help` – show the command list.【F:apps/cohsh/src/lib.rs†L1125-L1162】
 - `attach <role> [ticket]` / `login` – attach to a NineDoor session. Valid roles: `queen`, `worker-heartbeat`, `worker-gpu`; missing roles, unknown roles, too many args, or re-attaching emit errors via the parser and shell.【F:apps/cohsh/src/lib.rs†L711-L729】【F:apps/cohsh/src/lib.rs†L1299-L1317】
+- `detach` – close the current session without exiting the shell (required for multi-role scripts).【F:apps/cohsh/src/lib.rs†L1244-L1255】
 - `tail <path>` – stream a file; `log` tails `/log/queen.log`. Requires attachment.【F:apps/cohsh/src/lib.rs†L1170-L1179】
 - `ping` – reports attachment status; errors when detached or when given arguments.【F:apps/cohsh/src/lib.rs†L1181-L1194】
 - `test [--mode <quick|full>] [--json] [--timeout <s>] [--no-mutate]` – run the in-session self-tests sourced from `/proc/tests/` (default mode `quick`, default timeout 30s, hard cap 120s). `--no-mutate` skips spawn/kill steps. When `--json` is supplied, emit the stable schema described below.【F:apps/cohsh/src/lib.rs†L1512-L1763】
@@ -213,7 +214,7 @@ SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
   --cargo-target aarch64-unknown-none \
   --transport tcp
 ```
-The script builds `root-task` with the serial and TCP console features, compiles NineDoor and workers, copies host tools (`cohsh`, `gpu-bridge-host`) into `out/cohesix/host-tools/`, and assembles the CPIO payload.【F:scripts/cohesix-build-run.sh†L369-L454】【F:scripts/cohesix-build-run.sh†L402-L442】
+The script builds `root-task` with the serial and TCP console features, compiles NineDoor and workers, copies host tools (`cohsh`, `gpu-bridge-host`, `host-sidecar-bridge`) into `out/cohesix/host-tools/`, and assembles the CPIO payload.【F:scripts/cohesix-build-run.sh†L369-L454】【F:scripts/cohesix-build-run.sh†L402-L442】
 QEMU runs with `-serial mon:stdio` and a user-net device that forwards TCP/UDP ports 31337–31339 into the guest so the TCP console and self-tests are reachable from the host.【F:scripts/cohesix-build-run.sh†L518-L553】 The wrapper selects the NIC backend from the root-task features: `dev-virt` (via `cohesix-dev`) uses virtio-net by default, which adds `-global virtio-mmio.force-legacy=false` for the modern header; removing `net-backend-virtio` switches the wrapper to RTL8139 instead.【F:scripts/cohesix-build-run.sh†L518-L553】 The script prints the ready command for `cohsh` once QEMU is live.【F:scripts/cohesix-build-run.sh†L546-L553】 In deployment, the same console and `cohsh` flows apply to UEFI-booted ARM64 hardware without the VM wrapper.
 
 ### Virtio-MMIO modes (when `net-backend-virtio` is enabled)

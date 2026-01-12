@@ -10,6 +10,7 @@ members = [
     "apps/worker-heart",
     "apps/worker-gpu",
     "apps/gpu-bridge-host",
+    "apps/host-sidecar-bridge",
     "crates/cohesix-ticket",
     "crates/secure9p-codec",
     "crates/secure9p-core",

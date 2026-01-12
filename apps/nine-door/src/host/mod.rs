@@ -16,11 +16,11 @@ use std::time::Instant;
 
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims};
 use gpu_bridge_host::GpuNamespaceSnapshot;
-use secure9p_core::SessionLimits;
 use secure9p_codec::{
     Codec, CodecError, ErrorCode, FrameHeader, OpenMode, Qid, Request, RequestBody, ResponseBody,
     SessionId, MAX_MSIZE, VERSION,
 };
+use secure9p_core::SessionLimits;
 use thiserror::Error;
 
 mod control;
@@ -31,6 +31,7 @@ mod telemetry;
 mod tracefs;
 
 use self::core::{role_to_uname, ServerCore};
+pub use self::namespace::{HostNamespaceConfig, HostProvider};
 pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 pub use self::telemetry::{
     TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryManifestStore,
@@ -110,6 +111,18 @@ impl NineDoor {
         )
     }
 
+    /// Construct a new NineDoor server with host namespace configuration.
+    #[must_use]
+    pub fn new_with_host_config(host: HostNamespaceConfig) -> Self {
+        Self::new_with_limits_telemetry_and_host(
+            Arc::new(SystemClock),
+            SessionLimits::default(),
+            TelemetryConfig::default(),
+            TelemetryManifestStore::default(),
+            host,
+        )
+    }
+
     /// Construct a server using the supplied clock (primarily for tests).
     #[must_use]
     pub fn new_with_clock(clock: Arc<dyn Clock>) -> Self {
@@ -149,12 +162,29 @@ impl NineDoor {
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
     ) -> Self {
+        Self::new_with_limits_telemetry_and_host(
+            clock,
+            limits,
+            telemetry,
+            telemetry_manifest,
+            HostNamespaceConfig::disabled(),
+        )
+    }
+
+    fn new_with_limits_telemetry_and_host(
+        clock: Arc<dyn Clock>,
+        limits: SessionLimits,
+        telemetry: TelemetryConfig,
+        telemetry_manifest: TelemetryManifestStore,
+        host: HostNamespaceConfig,
+    ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ServerCore::new(
                 clock,
                 limits,
                 telemetry,
                 telemetry_manifest.clone(),
+                host,
             ))),
             bootstrap_ticket: TicketClaims::new(
                 Role::Queen,

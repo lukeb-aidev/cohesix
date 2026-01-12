@@ -1,11 +1,118 @@
 // Author: Lukas Bower
+// Purpose: Parse queen control payloads and host control audit metadata.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 use cohesix_ticket::BudgetSpec;
+use cohesix_ticket::Role;
 use serde::Deserialize;
 
 use crate::NineDoorError;
+
+/// Outcome of a host write attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostWriteOutcome {
+    /// Write was accepted.
+    Allowed,
+    /// Write was denied.
+    Denied,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostControlKind {
+    SystemdRestart,
+    K8sCordon,
+    K8sDrain,
+    NvidiaPowerCap,
+}
+
+impl HostControlKind {
+    fn label(self) -> &'static str {
+        match self {
+            HostControlKind::SystemdRestart => "systemd.restart",
+            HostControlKind::K8sCordon => "k8s.cordon",
+            HostControlKind::K8sDrain => "k8s.drain",
+            HostControlKind::NvidiaPowerCap => "nvidia.power_cap",
+        }
+    }
+}
+
+/// Identifies a host path targeted by a write attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostWriteTarget<'a> {
+    /// Canonical namespace path.
+    pub path: &'a [String],
+    /// Optional control kind when the path maps to a control file.
+    pub control: Option<&'static str>,
+}
+
+/// Return a host write target if the path lives beneath the configured host mount.
+pub fn host_write_target<'a>(
+    path: &'a [String],
+    host_mount: Option<&[String]>,
+) -> Option<HostWriteTarget<'a>> {
+    let mount = host_mount?;
+    let relative = path.strip_prefix(mount)?;
+    if relative.is_empty() {
+        return None;
+    }
+    let control = match relative {
+        [first, _, last] if first == "systemd" && last == "restart" => {
+            Some(HostControlKind::SystemdRestart.label())
+        }
+        [first, second, _, last] if first == "k8s" && second == "node" && last == "cordon" => {
+            Some(HostControlKind::K8sCordon.label())
+        }
+        [first, second, _, last] if first == "k8s" && second == "node" && last == "drain" => {
+            Some(HostControlKind::K8sDrain.label())
+        }
+        [first, second, _, last]
+            if first == "nvidia" && second == "gpu" && last == "power_cap" =>
+        {
+            Some(HostControlKind::NvidiaPowerCap.label())
+        }
+        _ => None,
+    };
+    Some(HostWriteTarget { path, control })
+}
+
+/// Format an audit line for host write activity.
+pub fn format_host_write_audit(
+    target: &HostWriteTarget<'_>,
+    outcome: HostWriteOutcome,
+    role: Option<Role>,
+    ticket: Option<&str>,
+    bytes: Option<u32>,
+) -> String {
+    let role_label = match role {
+        Some(Role::Queen) => "queen",
+        Some(Role::WorkerHeartbeat) => "worker-heartbeat",
+        Some(Role::WorkerGpu) => "worker-gpu",
+        None => "unauthenticated",
+    };
+    let path = if target.path.is_empty() {
+        "/".to_owned()
+    } else {
+        format!("/{}", target.path.join("/"))
+    };
+    let mut line = format!(
+        "host-write outcome={} role={} ticket={} path={}",
+        match outcome {
+            HostWriteOutcome::Allowed => "allow",
+            HostWriteOutcome::Denied => "deny",
+        },
+        role_label,
+        ticket.unwrap_or("none"),
+        path
+    );
+    if let Some(control) = target.control {
+        line.push_str(&format!(" control={control}"));
+    }
+    if let Some(bytes) = bytes {
+        line.push_str(&format!(" bytes={bytes}"));
+    }
+    line
+}
 
 /// Commands accepted by `/queen/ctl`.
 #[derive(Debug, Deserialize)]
