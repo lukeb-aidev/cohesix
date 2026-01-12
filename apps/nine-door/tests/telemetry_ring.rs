@@ -122,6 +122,8 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
     assert!(combined_text.contains("one"));
     assert!(combined_text.contains("two"));
     assert!(combined_text.find("one").unwrap() < combined_text.find("two").unwrap());
+    let rewind = queen.read(3, 0, MAX_MSIZE).expect("rewind read");
+    assert!(!rewind.is_empty());
 
     let wrap_payload = vec![b'W'; 48];
     for _ in 0..4 {
@@ -145,6 +147,8 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
         .expect("log utf8");
     assert!(log_text.contains("telemetry quota reject"));
     assert!(log_text.contains("telemetry ring wrap"));
+    assert!(log_text.contains("telemetry cursor rewind"));
+    assert!(log_text.contains("telemetry cursor stale"));
 
     if let Ok(path) = std::env::var(METRICS_ENV) {
         if !latencies_ms.is_empty() {

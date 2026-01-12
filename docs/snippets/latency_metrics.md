@@ -4,7 +4,7 @@
 ### Telemetry Ring Latency (generated)
 - Suite: `nine-door/telemetry_ring`
 - Samples: `6`
-- P50: `0.028 ms`
-- P95: `0.046 ms`
+- P50: `0.023 ms`
+- P95: `0.024 ms`
 - Unit: `ms`
-_Generated from `out/metrics/telemetry_ring_latency.json`._
+_Generated from `apps/nine-door/out/metrics/telemetry_ring_latency.json`._

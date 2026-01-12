@@ -1241,6 +1241,11 @@ impl Transport for TcpTransport {
                             if is_frame_error(&ack) {
                                 return Err(anyhow!("echo failed: {response}"));
                             }
+                            if matches!(ack.status, AckStatus::Err)
+                                && ack.verb.eq_ignore_ascii_case("PARSE")
+                            {
+                                return Err(anyhow!("echo failed: {response}"));
+                            }
                             if ack.verb.eq_ignore_ascii_case("ECHO") {
                                 if matches!(ack.status, AckStatus::Ok) {
                                     return Ok(());
