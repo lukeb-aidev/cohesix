@@ -44,13 +44,33 @@ pub struct Secure9pLimits {
     pub short_write_policy: ShortWritePolicy,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.1";
-pub const MANIFEST_SHA256: &str = "f48dfa104daf3b832d793508f285802ae0e1aff3688b94c54ec98e6178af18c9";
+#[derive(Clone, Copy, Debug)]
+pub enum TelemetryFrameSchema {
+    LegacyPlaintext,
+    CborV1,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TelemetryCursorConfig {
+    pub retain_on_boot: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TelemetryConfig {
+    pub ring_bytes_per_worker: u32,
+    pub frame_schema: TelemetryFrameSchema,
+    pub cursor: TelemetryCursorConfig,
+}
+
+pub const MANIFEST_SCHEMA: &str = "1.2";
+pub const MANIFEST_SHA256: &str = "4d97e292f06d2311493fd09b6e1442edef3b03c544148ffad4f00559a8529111";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
 pub const CACHE_POLICY: CachePolicy = bootstrap::CACHE_POLICY;
 pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;
+pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;
+pub const EVENT_PUMP_FDS: &[&str] = &bootstrap::EVENT_PUMP_FDS;
 
 pub const fn ticket_inventory() -> &'static [TicketSpec] {
     &bootstrap::TICKET_INVENTORY
@@ -70,6 +90,14 @@ pub const fn cache_policy() -> CachePolicy {
 
 pub const fn secure9p_limits() -> Secure9pLimits {
     bootstrap::SECURE9P_LIMITS
+}
+
+pub const fn telemetry_config() -> TelemetryConfig {
+    bootstrap::TELEMETRY_CONFIG
+}
+
+pub const fn event_pump_fds() -> &'static [&'static str] {
+    &bootstrap::EVENT_PUMP_FDS
 }
 
 pub const TICKET_COUNT: usize = bootstrap::TICKET_INVENTORY.len();

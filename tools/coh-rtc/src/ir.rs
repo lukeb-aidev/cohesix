@@ -7,9 +7,11 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-const SCHEMA_VERSION: &str = "1.1";
+const SCHEMA_VERSION: &str = "1.2";
 const MAX_WALK_DEPTH: usize = 8;
 const MAX_MSIZE: u32 = 8192;
+const EVENT_PUMP_TELEMETRY_BUDGET_BYTES: u32 = 32 * 1024;
+const EVENT_PUMP_MAX_TELEMETRY_WORKERS: u32 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,6 +30,8 @@ pub struct Manifest {
     pub namespaces: Namespaces,
     #[serde(default)]
     pub ecosystem: Ecosystem,
+    #[serde(default)]
+    pub telemetry: Telemetry,
 }
 
 impl Manifest {
@@ -71,6 +75,7 @@ impl Manifest {
         self.validate_namespace_mounts()?;
         self.validate_tickets()?;
         self.validate_ecosystem()?;
+        self.validate_telemetry()?;
         Ok(())
     }
 
@@ -128,6 +133,24 @@ impl Manifest {
             || self.cache.unify_instructions;
         if requested && !self.cache.kernel_ops {
             bail!("cache.kernel_ops must be true when cache maintenance is requested");
+        }
+        Ok(())
+    }
+
+    fn validate_telemetry(&self) -> Result<()> {
+        if self.telemetry.ring_bytes_per_worker == 0 {
+            bail!("telemetry.ring_bytes_per_worker must be > 0");
+        }
+        let aggregate = self
+            .telemetry
+            .ring_bytes_per_worker
+            .saturating_mul(EVENT_PUMP_MAX_TELEMETRY_WORKERS);
+        if aggregate > EVENT_PUMP_TELEMETRY_BUDGET_BYTES {
+            bail!(
+                "telemetry rings {} bytes exceed event-pump budget {} bytes",
+                aggregate,
+                EVENT_PUMP_TELEMETRY_BUDGET_BYTES
+            );
         }
         Ok(())
     }
@@ -260,6 +283,45 @@ pub struct Ecosystem {
     pub audit: FeatureFlag,
     pub policy: FeatureFlag,
     pub models: FeatureFlag,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Telemetry {
+    pub ring_bytes_per_worker: u32,
+    pub frame_schema: TelemetryFrameSchema,
+    pub cursor: TelemetryCursor,
+}
+
+impl Default for Telemetry {
+    fn default() -> Self {
+        Self {
+            ring_bytes_per_worker: 1024,
+            frame_schema: TelemetryFrameSchema::LegacyPlaintext,
+            cursor: TelemetryCursor::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct TelemetryCursor {
+    pub retain_on_boot: bool,
+}
+
+impl Default for TelemetryCursor {
+    fn default() -> Self {
+        Self {
+            retain_on_boot: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TelemetryFrameSchema {
+    LegacyPlaintext,
+    CborV1,
 }
 
 impl Default for Ecosystem {

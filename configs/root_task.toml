@@ -5,7 +5,7 @@ author = "Lukas Bower"
 purpose = "Root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.1"
+schema = "1.2"
 
 [profile]
 name = "virt-aarch64"
@@ -37,6 +37,13 @@ std_host_tools = false
 
 [namespaces]
 role_isolation = true
+
+[telemetry]
+ring_bytes_per_worker = 1024
+frame_schema = "legacy-plaintext"
+
+[telemetry.cursor]
+retain_on_boot = false
 
 [[tickets]]
 role = "queen"

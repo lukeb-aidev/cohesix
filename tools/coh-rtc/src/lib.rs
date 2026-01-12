@@ -14,6 +14,7 @@ pub struct CompileOptions {
     pub manifest_out: PathBuf,
     pub cli_script_out: PathBuf,
     pub doc_snippet_out: PathBuf,
+    pub cbor_snippet_out: PathBuf,
 }
 
 pub fn compile(options: &CompileOptions) -> Result<codegen::GeneratedArtifacts> {
@@ -43,4 +44,10 @@ pub fn compile(options: &CompileOptions) -> Result<codegen::GeneratedArtifacts> 
 
 pub fn default_doc_snippet_path() -> PathBuf {
     Path::new("docs").join("snippets").join("root_task_manifest.md")
+}
+
+pub fn default_cbor_snippet_path() -> PathBuf {
+    Path::new("docs")
+        .join("snippets")
+        .join("telemetry_cbor_schema.md")
 }

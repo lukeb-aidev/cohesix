@@ -267,6 +267,8 @@ fn boot_lines(
         if line.starts_with("manifest.schema=")
             || line.starts_with("manifest.profile=")
             || line.starts_with("manifest.sha256=")
+            || line.starts_with("telemetry.")
+            || line.starts_with("event_pump.")
         {
             push_boot_line(&mut output, line)?;
         }

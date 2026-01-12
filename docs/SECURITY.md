@@ -58,3 +58,14 @@ The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; Q
   serial log before the root shell starts). These records are critical for forensic review because they show which subsystems
   were live at the time of an intrusion and whether the networking queues are under pressure.
 - The only control-plane interfaces are `cohsh` over serial/TCP and the Secure9P namespaces; any host-side WASM GUI is treated as an unprivileged client layered on top of these paths and does not expand the in-VM attack surface. One Queen orchestrating many workers keeps logging and audit scoped per hive (append-only `/log/*.log`).
+
+## 4. Telemetry Ring Latency Metrics (Generated)
+<!-- metrics:latency:start -->
+### Telemetry Ring Latency (generated)
+- Suite: `nine-door/telemetry_ring`
+- Samples: `6`
+- P50: `0.028 ms`
+- P95: `0.046 ms`
+- Unit: `ms`
+_Generated from `out/metrics/telemetry_ring_latency.json`._
+<!-- metrics:latency:end -->
