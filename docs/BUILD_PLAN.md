@@ -782,7 +782,7 @@ Refactor Secure9P into codec/core crates with bounded pipelining and manifest-co
 - Docs: `docs/SECURE9P.md` updated to describe the new layering and concurrency knobs; `docs/INTERFACES.md` documents acknowledgement semantics for batched operations.
 - Explicit queue depth limits and retry back-off parameters documented; negative path covers tag overflow and back-pressure refusal.
 
-**Status:** Complete — Secure9P pipelining, batching, regression coverage, and manifest-driven concurrency knobs are in place with deterministic ACK/ERR ordering preserved.
+**Status:** In progress — Secure9P pipelining, batching, regression coverage, and manifest-driven concurrency knobs are in place with deterministic ACK/ERR ordering preserved.
 
 **Commands**
 - `cargo test -p secure9p-codec`
@@ -835,8 +835,6 @@ Deliverables:
   - Regression outputs archived; docs/INTERFACES.md snippet refreshed from manifest.
 ```
 ---
-
-Milestones 10+ are future, forward-looking initiatives that build on the completed foundations above. They remain planned work until explicitly scheduled in the active build cycle.
 
 ## Milestone 10 — Telemetry Rings & Cursor Resumption
 
