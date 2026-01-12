@@ -17,11 +17,11 @@ preparing and executing tasks.
 
 Cohesix is a hive-style orchestrator: one Queen coordinating many workers via a shared Secure9P namespace and commanded through `cohsh`.
 
-**Current Status Snapshot (through Milestone 8a)**
-- Milestones 0–8a are implemented: the cooperative event pump, PL011 root console, TCP console listener, Secure9P namespace, HAL-backed device mapping, and shared `OK`/`ERR` acknowledgement surface are live and reflected in the updated architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
-- Dual consoles now run concurrently; the TCP listener is non-blocking and mirrors serial semantics while keeping PL011 always-on for recovery.
-- NineDoor attach/namespace semantics follow `SECURE9P.md` and role mounts from `ROLES_AND_SCHEDULING.md`; worker-heart and worker-gpu remain stubs until later milestones integrate them with the live namespaces.
-- Remaining milestones focus on acknowledgement hardening, compiler work, cache-safe DMA plumbing, and future worker/GPU namespace extensions.
+**Current Status Snapshot (through Milestone 9)**
+- Milestones 0–9 are implemented: the cooperative event pump, PL011 root console, TCP console listener, Secure9P namespace, HAL-backed device mapping, manifest-driven `coh-rtc` compiler, cache-safe DMA plumbing, in-session `coh> test` with preinstalled `.coh` scripts, and Secure9P pipelining/batching are live and reflected in the architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
+- Dual consoles run concurrently; the TCP listener is non-blocking and mirrors serial semantics while keeping PL011 always-on for recovery. The `coh> test` command exercises real server-hosted regression scripts for quick/full verification.
+- NineDoor attach/namespace semantics follow `SECURE9P.md` and role mounts from `ROLES_AND_SCHEDULING.md`; worker-heart and worker-gpu are scoped to their documented namespaces, with GPU hardware remaining host-side via `gpu-bridge-host`.
+- Remaining milestones focus on telemetry rings, cursor resumption, and future control-plane extensions described below.
 
 ## seL4 Reference Manual Alignment (v13.0.0)
 
@@ -777,10 +777,12 @@ Refactor Secure9P into codec/core crates with bounded pipelining and manifest-co
 - `apps/nine-door/src/host/` updated to process batched frames and expose back-pressure metrics; new module `pipeline.rs` encapsulates short-write handling and queue depth accounting surfaced via `/proc/9p/*` later.
 - `apps/nine-door/tests/pipelining.rs` integration test spinning four concurrent sessions, verifying out-of-order responses and bounded retries when queues fill.
 - CLI regression `scripts/cohsh/9p_batch.coh` executing scripted batched writes and verifying acknowledgement ordering.
-- TODO: Extend scripts/cohsh/9p_batch.coh with batching/overflow assertions and add it to regression pack DoD.
+- `scripts/cohsh/9p_batch.coh` includes batching/overflow assertions and participates in the regression pack DoD.
 - `configs/root_task.toml` gains IR v1.1 fields: `secure9p.tags_per_session`, `secure9p.batch_frames`, `secure9p.short_write.policy`. Validation ensures `tags_per_session >= 1` and total batched payload stays ≤ negotiated `msize`.
 - Docs: `docs/SECURE9P.md` updated to describe the new layering and concurrency knobs; `docs/INTERFACES.md` documents acknowledgement semantics for batched operations.
 - Explicit queue depth limits and retry back-off parameters documented; negative path covers tag overflow and back-pressure refusal.
+
+**Status:** Complete — Secure9P pipelining, batching, regression coverage, and manifest-driven concurrency knobs are in place with deterministic ACK/ERR ordering preserved.
 
 **Commands**
 - `cargo test -p secure9p-codec`
@@ -833,6 +835,8 @@ Deliverables:
   - Regression outputs archived; docs/INTERFACES.md snippet refreshed from manifest.
 ```
 ---
+
+Milestones 10+ are future, forward-looking initiatives that build on the completed foundations above. They remain planned work until explicitly scheduled in the active build cycle.
 
 ## Milestone 10 — Telemetry Rings & Cursor Resumption
 
