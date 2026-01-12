@@ -173,15 +173,6 @@ flowchart LR
 
 ---
 
-## Status
-
-- **Milestones 0–4**: seL4 bring-up, Secure9P namespace, and bind/mount semantics complete.
-- **Milestones 5–6**: hardening, fuzz/integration tests, and GPU role scaffolding complete.
-- **Milestones 7a–7c**: cooperative event pump and authenticated dual consoles live.
-- Future milestones extend worker lifecycle automation and GPU lease management.
-
----
-
 ## References
 See below for detailed design, interfaces, and milestone tracking:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
@@ -190,4 +181,8 @@ See below for detailed design, interfaces, and milestone tracking:
 - [docs/SECURE9P.md](docs/SECURE9P.md)
 - [docs/ROLES_AND_SCHEDULING.md](docs/ROLES_AND_SCHEDULING.md)
 - [docs/GPU_NODES.md](docs/GPU_NODES.md)
+
+---
+
+## Status
 - [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) 
