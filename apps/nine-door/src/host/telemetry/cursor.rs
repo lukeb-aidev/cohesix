@@ -13,6 +13,12 @@ pub struct TelemetryCursor {
     max_rewind: u64,
 }
 
+/// Snapshot of cursor state for reboot resumption.
+#[derive(Debug, Clone, Copy)]
+pub struct TelemetryCursorSnapshot {
+    pub last_offset: Option<u64>,
+}
+
 /// Cursor resolution result including optional audit metadata.
 #[derive(Debug, Clone)]
 pub struct CursorResolution {
@@ -56,6 +62,29 @@ impl TelemetryCursor {
             last_offset: None,
             max_rewind,
         }
+    }
+
+    /// Snapshot the current cursor state.
+    pub fn snapshot(&self) -> TelemetryCursorSnapshot {
+        TelemetryCursorSnapshot {
+            last_offset: self.last_offset,
+        }
+    }
+
+    /// Restore a persisted last offset when it remains within the ring bounds.
+    pub fn restore_last_offset(
+        &mut self,
+        last_offset: Option<u64>,
+        base_offset: u64,
+        next_offset: u64,
+    ) {
+        let Some(offset) = last_offset else {
+            return;
+        };
+        if offset < base_offset || offset > next_offset {
+            return;
+        }
+        self.last_offset = Some(offset);
     }
 
     /// Validate and normalise a requested offset against ring bounds.

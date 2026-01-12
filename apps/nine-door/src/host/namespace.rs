@@ -10,7 +10,9 @@ use gpu_bridge_host::{GpuModelCatalog, TelemetrySchema};
 use secure9p_codec::{ErrorCode, Qid, QidType};
 use trace_model::TraceLevel;
 
-use super::telemetry::{TelemetryAudit, TelemetryAuditLevel, TelemetryConfig, TelemetryFile};
+use super::telemetry::{
+    TelemetryAudit, TelemetryAuditLevel, TelemetryConfig, TelemetryFile, TelemetryManifestStore,
+};
 use super::tracefs::TraceFs;
 use crate::NineDoorError;
 
@@ -33,6 +35,7 @@ pub struct Namespace {
     root: Node,
     trace: TraceFs,
     telemetry: TelemetryConfig,
+    telemetry_manifest: TelemetryManifestStore,
 }
 
 impl Namespace {
@@ -44,10 +47,19 @@ impl Namespace {
 
     /// Construct the namespace with explicit telemetry configuration.
     pub fn new_with_telemetry(telemetry: TelemetryConfig) -> Self {
+        Self::new_with_telemetry_and_manifest(telemetry, TelemetryManifestStore::default())
+    }
+
+    /// Construct the namespace with explicit telemetry configuration and manifest store.
+    pub fn new_with_telemetry_and_manifest(
+        telemetry: TelemetryConfig,
+        telemetry_manifest: TelemetryManifestStore,
+    ) -> Self {
         let mut namespace = Self {
             root: Node::directory(Vec::new()),
             trace: TraceFs::new(),
             telemetry,
+            telemetry_manifest,
         };
         namespace.bootstrap();
         namespace
@@ -73,7 +85,10 @@ impl Namespace {
             TaskTrace(String),
         }
 
+        let retain_on_boot = self.telemetry.cursor.retain_on_boot;
+        let worker_id = telemetry_worker_id(path).map(str::to_owned);
         let mut audit = None;
+        let mut manifest_snapshot = None;
         let action = {
             let node = self.lookup_mut(path)?;
             match node.node.kind_mut() {
@@ -86,7 +101,12 @@ impl Namespace {
                     ReadAction::Data(read_slice(data, offset, count), None)
                 }
                 NodeKind::File(FileNode::Telemetry(file)) => match file.read(offset, count) {
-                    Ok(outcome) => ReadAction::Data(outcome.data, outcome.audit),
+                    Ok(outcome) => {
+                        if retain_on_boot && worker_id.is_some() {
+                            manifest_snapshot = Some(file.snapshot());
+                        }
+                        ReadAction::Data(outcome.data, outcome.audit)
+                    }
                     Err(err) => {
                         if let Some(audit) = err.audit {
                             self.record_telemetry_audit(audit)?;
@@ -118,6 +138,11 @@ impl Namespace {
         if let Some(audit) = audit {
             self.record_telemetry_audit(audit)?;
         }
+        if retain_on_boot {
+            if let (Some(worker_id), Some(snapshot)) = (worker_id, manifest_snapshot) {
+                self.telemetry_manifest.persist_snapshot(&worker_id, snapshot);
+            }
+        }
         Ok(data)
     }
 
@@ -128,7 +153,10 @@ impl Namespace {
         offset: u64,
         data: &[u8],
     ) -> Result<u32, NineDoorError> {
+        let retain_on_boot = self.telemetry.cursor.retain_on_boot;
+        let worker_id = telemetry_worker_id(path).map(str::to_owned);
         let mut audit = None;
+        let mut manifest_snapshot = None;
         let result = {
             let node = self.lookup_mut(path)?;
             match node.node.kind_mut() {
@@ -139,6 +167,9 @@ impl Namespace {
                 NodeKind::File(FileNode::Telemetry(file)) => match file.append(offset, data) {
                     Ok(outcome) => {
                         audit = outcome.audit;
+                        if retain_on_boot && worker_id.is_some() {
+                            manifest_snapshot = Some(file.snapshot());
+                        }
                         Ok(outcome.count)
                     }
                     Err(err) => {
@@ -174,6 +205,11 @@ impl Namespace {
         if let Some(audit) = audit {
             self.record_telemetry_audit(audit)?;
         }
+        if retain_on_boot {
+            if let (Some(worker_id), Some(snapshot)) = (worker_id, manifest_snapshot) {
+                self.telemetry_manifest.persist_snapshot(&worker_id, snapshot);
+            }
+        }
         result
     }
 
@@ -187,15 +223,25 @@ impl Namespace {
         }
         let telemetry_config = self.telemetry;
         let worker_root = vec!["worker".to_owned()];
-        let mut node = self.lookup_mut(&worker_root)?;
-        if node.has_child(worker_id) {
-            return Err(NineDoorError::protocol(
-                ErrorCode::Busy,
-                format!("worker {worker_id} already exists"),
-            ));
+        {
+            let node = self.lookup_mut(&worker_root)?;
+            if node.has_child(worker_id) {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Busy,
+                    format!("worker {worker_id} already exists"),
+                ));
+            }
         }
+        let telemetry_file = if telemetry_config.cursor.retain_on_boot {
+            self.telemetry_manifest
+                .restore_file(worker_id, telemetry_config)
+                .unwrap_or_else(|| TelemetryFile::new(telemetry_config))
+        } else {
+            self.telemetry_manifest.clear_worker(worker_id);
+            TelemetryFile::new(telemetry_config)
+        };
+        let mut node = self.lookup_mut(&worker_root)?;
         let worker_dir = node.ensure_directory(worker_id);
-        let telemetry_file = TelemetryFile::new(telemetry_config);
         worker_dir.ensure_file("telemetry", FileNode::Telemetry(telemetry_file));
         let proc_root = vec!["proc".to_owned()];
         self.ensure_dir(&proc_root, worker_id)?;
@@ -638,6 +684,16 @@ fn join_path(path: &[String]) -> String {
     } else {
         path.join("/")
     }
+}
+
+fn telemetry_worker_id(path: &[String]) -> Option<&str> {
+    if path.len() != 3 {
+        return None;
+    }
+    if path[0] != "worker" || path[2] != "telemetry" {
+        return None;
+    }
+    Some(path[1].as_str())
 }
 
 fn read_slice(data: &[u8], offset: u64, count: u32) -> Vec<u8> {

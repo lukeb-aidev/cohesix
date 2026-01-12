@@ -32,7 +32,9 @@ mod tracefs;
 
 use self::core::{role_to_uname, ServerCore};
 pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
-pub use self::telemetry::{TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema};
+pub use self::telemetry::{
+    TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryManifestStore,
+};
 
 /// Errors surfaced by NineDoor operations.
 #[derive(Debug, Error)]
@@ -86,6 +88,7 @@ impl Clock for SystemClock {
 pub struct NineDoor {
     inner: Arc<Mutex<ServerCore>>,
     bootstrap_ticket: TicketClaims,
+    telemetry_manifest: TelemetryManifestStore,
 }
 
 impl fmt::Debug for NineDoor {
@@ -130,8 +133,29 @@ impl NineDoor {
         limits: SessionLimits,
         telemetry: TelemetryConfig,
     ) -> Self {
+        Self::new_with_limits_and_telemetry_manifest(
+            clock,
+            limits,
+            telemetry,
+            TelemetryManifestStore::default(),
+        )
+    }
+
+    /// Construct a server using explicit telemetry configuration and manifest store.
+    #[must_use]
+    pub fn new_with_limits_and_telemetry_manifest(
+        clock: Arc<dyn Clock>,
+        limits: SessionLimits,
+        telemetry: TelemetryConfig,
+        telemetry_manifest: TelemetryManifestStore,
+    ) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(ServerCore::new(clock, limits, telemetry))),
+            inner: Arc::new(Mutex::new(ServerCore::new(
+                clock,
+                limits,
+                telemetry,
+                telemetry_manifest.clone(),
+            ))),
             bootstrap_ticket: TicketClaims::new(
                 Role::Queen,
                 BudgetSpec::unbounded(),
@@ -139,6 +163,7 @@ impl NineDoor {
                 MountSpec::empty(),
                 0,
             ),
+            telemetry_manifest,
         }
     }
 
@@ -185,6 +210,12 @@ impl NineDoor {
     pub fn pipeline_metrics(&self) -> PipelineMetrics {
         let core = self.inner.lock().expect("poisoned nine-door lock");
         core.pipeline_metrics()
+    }
+
+    /// Retrieve the telemetry manifest store for reboot resumption.
+    #[must_use]
+    pub fn telemetry_manifest(&self) -> TelemetryManifestStore {
+        self.telemetry_manifest.clone()
     }
 }
 

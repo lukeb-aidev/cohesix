@@ -5,7 +5,10 @@
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
 use secure9p_codec::{ErrorCode, OpenMode, MAX_MSIZE};
 
-use nine_door::{Clock, NineDoor, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema};
+use nine_door::{
+    Clock, NineDoor, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema,
+    TelemetryManifestStore,
+};
 
 const METRICS_ENV: &str = "COHESIX_LATENCY_METRICS_PATH";
 
@@ -41,13 +44,92 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
         ring_bytes_per_worker: 64,
         frame_schema: TelemetryFrameSchema::LegacyPlaintext,
         cursor: TelemetryCursorConfig {
-            retain_on_boot: false,
+            retain_on_boot: true,
         },
     };
-    let server = NineDoor::new_with_limits_and_telemetry(
-        std::sync::Arc::new(TestClock::default()),
+    let manifest = TelemetryManifestStore::new();
+    let clock = std::sync::Arc::new(TestClock::default());
+    let payload_one = b"one\n";
+    let payload_two = b"two\n";
+    let payload_three = b"three\n";
+    let resume_offset = (payload_one.len() + payload_two.len()) as u64;
+    let mut latencies_ms = Vec::new();
+
+    {
+        let server = NineDoor::new_with_limits_and_telemetry_manifest(
+            clock.clone(),
+            Default::default(),
+            telemetry,
+            manifest.clone(),
+        );
+        server.register_ticket_secret(Role::WorkerHeartbeat, "worker-secret");
+
+        let mut queen = server.connect().expect("queen session");
+        queen.version(MAX_MSIZE).expect("version");
+        queen.attach(1, Role::Queen).expect("attach queen");
+
+        let queen_ctl = vec!["queen".to_owned(), "ctl".to_owned()];
+        queen.walk(1, 2, &queen_ctl).expect("walk /queen/ctl");
+        queen.open(2, OpenMode::write_append()).expect("open ctl");
+        queen
+            .write(2, b"{\"spawn\":\"heartbeat\",\"ticks\":100}\n")
+            .expect("spawn worker");
+        queen.clunk(2).expect("clunk ctl");
+
+        let mut worker = server.connect().expect("worker session");
+        worker.version(MAX_MSIZE).expect("version");
+        worker
+            .attach_with_identity(
+                1,
+                Role::WorkerHeartbeat,
+                Some("worker-1"),
+                Some(issue_ticket("worker-secret", Role::WorkerHeartbeat, "worker-1").as_str()),
+            )
+            .expect("attach worker");
+
+        let telemetry_path = vec![
+            "worker".to_owned(),
+            "worker-1".to_owned(),
+            "telemetry".to_owned(),
+        ];
+        worker
+            .walk(1, 2, &telemetry_path)
+            .expect("walk telemetry");
+        worker
+            .open(2, OpenMode::write_append())
+            .expect("open telemetry");
+
+        let start = std::time::Instant::now();
+        worker.write(2, payload_one).expect("write one");
+        latencies_ms.push(start.elapsed().as_secs_f64() * 1_000.0);
+        let start = std::time::Instant::now();
+        worker.write(2, payload_two).expect("write two");
+        latencies_ms.push(start.elapsed().as_secs_f64() * 1_000.0);
+
+        queen
+            .walk(1, 3, &telemetry_path)
+            .expect("queen walk telemetry");
+        queen
+            .open(3, OpenMode::read_only())
+            .expect("open telemetry read");
+        let first = queen.read(3, 0, 4).expect("read first chunk");
+        let second = queen
+            .read(3, first.len() as u64, MAX_MSIZE)
+            .expect("read second chunk");
+        let mut combined = Vec::new();
+        combined.extend_from_slice(&first);
+        combined.extend_from_slice(&second);
+        let combined_text = String::from_utf8(combined).expect("utf8");
+        assert!(combined_text.contains("one"));
+        assert!(combined_text.contains("two"));
+        assert!(combined_text.find("one").unwrap() < combined_text.find("two").unwrap());
+    }
+
+    let server = NineDoor::new_with_limits_and_telemetry_manifest(
+        clock.clone(),
         Default::default(),
         telemetry,
+        manifest,
     );
     server.register_ticket_secret(Role::WorkerHeartbeat, "worker-secret");
 
@@ -86,6 +168,28 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
         .open(2, OpenMode::write_append())
         .expect("open telemetry");
 
+    queen
+        .walk(1, 3, &telemetry_path)
+        .expect("queen walk telemetry");
+    queen
+        .open(3, OpenMode::read_only())
+        .expect("open telemetry read");
+
+    let replay = queen.read(3, 0, MAX_MSIZE).expect("replay read");
+    let replay_text = String::from_utf8(replay).expect("replay utf8");
+    assert!(replay_text.contains("one"));
+    assert!(replay_text.contains("two"));
+
+    let start = std::time::Instant::now();
+    worker.write(2, payload_three).expect("write three");
+    latencies_ms.push(start.elapsed().as_secs_f64() * 1_000.0);
+
+    let resumed = queen
+        .read(3, resume_offset, MAX_MSIZE)
+        .expect("resume read");
+    let resumed_text = String::from_utf8(resumed).expect("resume utf8");
+    assert!(resumed_text.contains("three"));
+
     let oversize = vec![b'X'; 128];
     let err = worker.write(2, &oversize).expect_err("reject oversize");
     match err {
@@ -94,36 +198,6 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
-
-    let payload_one = b"one\n";
-    let payload_two = b"two\n";
-    let mut latencies_ms = Vec::new();
-    let start = std::time::Instant::now();
-    worker.write(2, payload_one).expect("write one");
-    latencies_ms.push(start.elapsed().as_secs_f64() * 1_000.0);
-    let start = std::time::Instant::now();
-    worker.write(2, payload_two).expect("write two");
-    latencies_ms.push(start.elapsed().as_secs_f64() * 1_000.0);
-
-    queen
-        .walk(1, 3, &telemetry_path)
-        .expect("queen walk telemetry");
-    queen
-        .open(3, OpenMode::read_only())
-        .expect("open telemetry read");
-    let first = queen.read(3, 0, 4).expect("read first chunk");
-    let second = queen
-        .read(3, first.len() as u64, MAX_MSIZE)
-        .expect("read second chunk");
-    let mut combined = Vec::new();
-    combined.extend_from_slice(&first);
-    combined.extend_from_slice(&second);
-    let combined_text = String::from_utf8(combined).expect("utf8");
-    assert!(combined_text.contains("one"));
-    assert!(combined_text.contains("two"));
-    assert!(combined_text.find("one").unwrap() < combined_text.find("two").unwrap());
-    let rewind = queen.read(3, 0, MAX_MSIZE).expect("rewind read");
-    assert!(!rewind.is_empty());
 
     let wrap_payload = vec![b'W'; 48];
     for _ in 0..4 {

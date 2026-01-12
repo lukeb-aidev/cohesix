@@ -4,8 +4,11 @@
 pub mod cursor;
 pub mod ring;
 
-use cursor::{CursorError, CursorResolution, TelemetryCursor};
-use ring::{RingReadError, RingReadOutcome, RingWriteError, TelemetryRing};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use cursor::{CursorError, CursorResolution, TelemetryCursor, TelemetryCursorSnapshot};
+use ring::{RingReadError, RingReadOutcome, RingWriteError, TelemetryRing, TelemetryRingSnapshot};
 use secure9p_core::append_only_write_bounds;
 
 /// Severity level for telemetry audit lines.
@@ -40,7 +43,7 @@ pub struct TelemetryCursorConfig {
 }
 
 /// Schema selector for worker telemetry frames.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TelemetryFrameSchema {
     /// Legacy UTF-8 newline-delimited frames.
     LegacyPlaintext,
@@ -68,6 +71,57 @@ impl Default for TelemetryConfig {
                 retain_on_boot: false,
             },
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TelemetryManifestEntry {
+    ring: TelemetryRingSnapshot,
+    cursor: TelemetryCursorSnapshot,
+    frame_schema: TelemetryFrameSchema,
+}
+
+/// Shared manifest store used to retain telemetry ring state across reboots.
+#[derive(Debug, Default, Clone)]
+pub struct TelemetryManifestStore {
+    inner: Arc<Mutex<HashMap<String, TelemetryManifestEntry>>>,
+}
+
+impl TelemetryManifestStore {
+    /// Construct an empty manifest store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn restore_file(
+        &self,
+        worker_id: &str,
+        config: TelemetryConfig,
+    ) -> Option<TelemetryFile> {
+        if !config.cursor.retain_on_boot {
+            return None;
+        }
+        let entry = self
+            .inner
+            .lock()
+            .expect("telemetry manifest lock poisoned")
+            .get(worker_id)
+            .cloned()?;
+        TelemetryFile::restore(config, entry)
+    }
+
+    pub(crate) fn persist_snapshot(&self, worker_id: &str, entry: TelemetryManifestEntry) {
+        self.inner
+            .lock()
+            .expect("telemetry manifest lock poisoned")
+            .insert(worker_id.to_owned(), entry);
+    }
+
+    pub(crate) fn clear_worker(&self, worker_id: &str) {
+        self.inner
+            .lock()
+            .expect("telemetry manifest lock poisoned")
+            .remove(worker_id);
     }
 }
 
@@ -130,6 +184,34 @@ impl TelemetryFile {
             ring,
             cursor,
             frame_schema: config.frame_schema,
+        }
+    }
+
+    fn restore(config: TelemetryConfig, manifest: TelemetryManifestEntry) -> Option<Self> {
+        if manifest.frame_schema != config.frame_schema {
+            return None;
+        }
+        if manifest.ring.capacity != config.ring_bytes_per_worker {
+            return None;
+        }
+        let ring = TelemetryRing::restore(manifest.ring)?;
+        let mut cursor = TelemetryCursor::new(config.cursor.retain_on_boot, ring.capacity());
+        if config.cursor.retain_on_boot {
+            let bounds = ring.bounds();
+            cursor.restore_last_offset(manifest.cursor.last_offset, bounds.base_offset, bounds.next_offset);
+        }
+        Some(Self {
+            ring,
+            cursor,
+            frame_schema: config.frame_schema,
+        })
+    }
+
+    pub(crate) fn snapshot(&self) -> TelemetryManifestEntry {
+        TelemetryManifestEntry {
+            ring: self.ring.snapshot(),
+            cursor: self.cursor.snapshot(),
+            frame_schema: self.frame_schema,
         }
     }
 

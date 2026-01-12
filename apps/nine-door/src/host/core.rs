@@ -20,7 +20,7 @@ use worker_gpu::{GpuLease as WorkerGpuLease, JobDescriptor};
 
 use super::control::{BudgetCommand, KillCommand, QueenCommand, SpawnCommand, SpawnTarget};
 use super::namespace::Namespace;
-use super::telemetry::TelemetryConfig;
+use super::telemetry::{TelemetryConfig, TelemetryManifestStore};
 use super::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 use super::{Clock, NineDoorError};
 
@@ -53,11 +53,12 @@ impl ServerCore {
         clock: Arc<dyn Clock>,
         limits: SessionLimits,
         telemetry: TelemetryConfig,
+        telemetry_manifest: TelemetryManifestStore,
     ) -> Self {
         let pipeline = Pipeline::new(PipelineConfig::from_limits(limits));
         Self {
             codec: Codec,
-            control: ControlPlane::new(telemetry),
+            control: ControlPlane::new(telemetry, telemetry_manifest),
             next_session: 1,
             sessions: HashMap::new(),
             ticket_keys: HashMap::new(),
@@ -888,9 +889,9 @@ struct ControlPlane {
 }
 
 impl ControlPlane {
-    fn new(telemetry: TelemetryConfig) -> Self {
+    fn new(telemetry: TelemetryConfig, telemetry_manifest: TelemetryManifestStore) -> Self {
         Self {
-            namespace: Namespace::new_with_telemetry(telemetry),
+            namespace: Namespace::new_with_telemetry_and_manifest(telemetry, telemetry_manifest),
             workers: HashMap::new(),
             next_worker_id: 1,
             default_budget: BudgetSpec::default_heartbeat(),

@@ -12,6 +12,15 @@ pub struct TelemetryRing {
     next_offset: u64,
 }
 
+/// Persisted snapshot of the ring state.
+#[derive(Debug, Clone)]
+pub struct TelemetryRingSnapshot {
+    pub buffer: Vec<u8>,
+    pub capacity: usize,
+    pub base_offset: u64,
+    pub next_offset: u64,
+}
+
 /// Snapshot of the ring's retained offset window.
 #[derive(Debug, Clone, Copy)]
 pub struct RingBounds {
@@ -76,6 +85,36 @@ impl TelemetryRing {
             base_offset: self.base_offset,
             next_offset: self.next_offset,
         }
+    }
+
+    /// Snapshot the ring state for persistence.
+    pub fn snapshot(&self) -> TelemetryRingSnapshot {
+        TelemetryRingSnapshot {
+            buffer: self.buffer.clone(),
+            capacity: self.capacity,
+            base_offset: self.base_offset,
+            next_offset: self.next_offset,
+        }
+    }
+
+    /// Restore a ring from a persisted snapshot.
+    pub fn restore(snapshot: TelemetryRingSnapshot) -> Option<Self> {
+        if snapshot.capacity == 0 || snapshot.buffer.len() != snapshot.capacity {
+            return None;
+        }
+        if snapshot.base_offset > snapshot.next_offset {
+            return None;
+        }
+        let used = snapshot.next_offset.saturating_sub(snapshot.base_offset);
+        if used > snapshot.capacity as u64 {
+            return None;
+        }
+        Some(Self {
+            buffer: snapshot.buffer,
+            capacity: snapshot.capacity,
+            base_offset: snapshot.base_offset,
+            next_offset: snapshot.next_offset,
+        })
     }
 
     /// Append telemetry bytes, wrapping and dropping old data as needed.

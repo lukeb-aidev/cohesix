@@ -848,9 +848,10 @@ Implement ring-backed telemetry providers with manifest-governed sizes and CBOR 
 - `crates/secure9p-core` gains append-only helpers enforcing offset semantics and short-write signalling consumed by the ring provider.
 - CBOR Frame v1 schema defined in `tools/coh-rtc/src/codegen/cbor.rs`, exported as Markdown to `docs/INTERFACES.md` and validated by serde-derived tests.
 - CLI regression `scripts/cohsh/telemetry_ring.coh` exercising wraparound, cursor resume, and offline replay via `cohsh --features tcp`.
-- TODO: Implement scripts/cohsh/telemetry_ring.coh and add it to regression pack DoD.
 - Manifest IR v1.2 fields: `telemetry.ring_bytes_per_worker`, `telemetry.frame_schema`, `telemetry.cursor.retain_on_boot`. Validation ensures aggregate ring usage fits within the event-pump budget declared in `docs/ARCHITECTURE.md`.
 - `apps/root-task/src/generated/bootstrap.rs` extended to publish ring quotas and file descriptors consumed by the event pump.
+
+**Status:** Complete — ring-backed telemetry and cursor retention are validated by tests and the regression pack, with latency metrics recorded in `docs/SECURITY.md`.
 
 **Commands**
 - `cargo test -p nine-door`

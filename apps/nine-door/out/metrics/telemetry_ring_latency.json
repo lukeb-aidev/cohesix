@@ -1,7 +1,7 @@
 {
-  "p50_ms": 0.022667000000000003,
-  "p95_ms": 0.023667,
-  "samples": 6,
+  "p50_ms": 0.014417,
+  "p95_ms": 0.024958,
+  "samples": 7,
   "suite": "nine-door/telemetry_ring",
   "unit": "ms"
 }
