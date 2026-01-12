@@ -10,18 +10,21 @@ use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::{BudgetSpec, Role, TicketKey, TicketToken};
 use gpu_bridge_host::{status_entry, GpuNamespaceSnapshot};
 use log::{debug, info, trace};
-use secure9p_core::{FidTable, QueueDepth, QueueError, SessionLimits, TagError, TagWindow};
 use secure9p_codec::{
     Codec, ErrorCode, OpenMode, Qid, Request, RequestBody, Response, ResponseBody, SessionId,
     MAX_MSIZE, VERSION,
 };
+use secure9p_core::{FidTable, QueueDepth, QueueError, SessionLimits, TagError, TagWindow};
 use trace_model::TraceLevel;
 use worker_gpu::{GpuLease as WorkerGpuLease, JobDescriptor};
 
-use super::control::{BudgetCommand, KillCommand, QueenCommand, SpawnCommand, SpawnTarget};
-use super::namespace::Namespace;
-use super::telemetry::{TelemetryConfig, TelemetryManifestStore};
+use super::control::{
+    format_host_write_audit, host_write_target, BudgetCommand, HostWriteOutcome, HostWriteTarget,
+    KillCommand, QueenCommand, SpawnCommand, SpawnTarget,
+};
+use super::namespace::{HostNamespaceConfig, Namespace};
 use super::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
+use super::telemetry::{TelemetryConfig, TelemetryManifestStore};
 use super::{Clock, NineDoorError};
 
 // New server core implementation and access policy are defined below.
@@ -54,11 +57,12 @@ impl ServerCore {
         limits: SessionLimits,
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
+        host: HostNamespaceConfig,
     ) -> Self {
         let pipeline = Pipeline::new(PipelineConfig::from_limits(limits));
         Self {
             codec: Codec,
-            control: ControlPlane::new(telemetry, telemetry_manifest),
+            control: ControlPlane::new(telemetry, telemetry_manifest, host),
             next_session: 1,
             sessions: HashMap::new(),
             ticket_keys: HashMap::new(),
@@ -214,7 +218,8 @@ impl ServerCore {
                     });
                 }
             }
-            self.pipeline.record_queue_depth(state.queue_depth.current());
+            self.pipeline
+                .record_queue_depth(state.queue_depth.current());
         }
 
         for (idx, (request, _)) in entries.iter().enumerate() {
@@ -236,7 +241,8 @@ impl ServerCore {
                 state.queue_depth.release(1);
             }
         }
-        self.pipeline.record_queue_depth(state.queue_depth.current());
+        self.pipeline
+            .record_queue_depth(state.queue_depth.current());
 
         self.sessions.insert(session, state);
         let mut buffer = Vec::new();
@@ -323,10 +329,7 @@ impl ServerCore {
                 outcome
             }
             RequestBody::Attach {
-                fid,
-                uname,
-                aname,
-                ..
+                fid, uname, aname, ..
             } => {
                 info!(
                     target: "nine-door",
@@ -513,12 +516,14 @@ impl ServerCore {
         }
         let (role, identity) = parse_role_from_uname(uname)?;
         let ticket = ticket.trim();
+        let mut ticket_payload = None;
         let mut identity = identity;
         let mut budget_override = None;
         if !ticket.is_empty() {
-            let key = self.ticket_keys.get(&role).ok_or_else(|| {
-                NineDoorError::protocol(ErrorCode::Permission, "ticket rejected")
-            })?;
+            let key = self
+                .ticket_keys
+                .get(&role)
+                .ok_or_else(|| NineDoorError::protocol(ErrorCode::Permission, "ticket rejected"))?;
             let claims = TicketToken::decode(ticket, key).map_err(|err| {
                 NineDoorError::protocol(ErrorCode::Permission, format!("ticket invalid: {err}"))
             })?;
@@ -543,6 +548,7 @@ impl ServerCore {
                 }
             }
             budget_override = Some(claims.claims().budget);
+            ticket_payload = Some(ticket.to_owned());
         } else if role != Role::Queen {
             return Err(NineDoorError::protocol(
                 ErrorCode::Permission,
@@ -618,6 +624,7 @@ impl ServerCore {
                 }
             }
         }
+        state.set_ticket(ticket_payload);
         let qid = self.control.namespace().root_qid();
         state.insert_fid(fid, Vec::new(), Vec::new(), qid);
         state.mark_attached();
@@ -639,6 +646,8 @@ impl ServerCore {
         let worker_id = worker_id_owned.as_deref();
         let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
         let gpu_scope = gpu_scope_owned.as_deref();
+        let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
+        let host_mount = host_mount_owned.as_deref();
         if wnames.is_empty() {
             state.insert_fid(
                 newfid,
@@ -655,7 +664,7 @@ impl ServerCore {
         for component in wnames {
             view_path.push(component.clone());
             let resolved = state.resolve_view_path(&view_path);
-            AccessPolicy::ensure_path(role, worker_id, gpu_scope, &resolved)?;
+            AccessPolicy::ensure_path(role, worker_id, gpu_scope, host_mount, &resolved)?;
             let node = self.control.namespace().lookup(&resolved)?;
             current_qid = node.qid();
             qids.push(current_qid);
@@ -676,12 +685,36 @@ impl ServerCore {
         let worker_id = worker_id_owned.as_deref();
         let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
         let gpu_scope = gpu_scope_owned.as_deref();
+        let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
+        let host_mount = host_mount_owned.as_deref();
+        let ticket = state.ticket().map(str::to_owned);
         let iounit = state.negotiated_msize();
         let qid = {
             let entry = state.fid_mut(fid).ok_or_else(|| {
                 NineDoorError::protocol(ErrorCode::NotFound, format!("fid {fid} not found"))
             })?;
-            AccessPolicy::ensure_open(role, worker_id, gpu_scope, &entry.canonical_path, mode)?;
+            if mode.allows_write() {
+                if let Some(target) = host_write_target(&entry.canonical_path, host_mount) {
+                    if role != Some(Role::Queen) {
+                        self.control.record_host_write_audit(
+                            &target,
+                            HostWriteOutcome::Denied,
+                            role,
+                            ticket.as_deref(),
+                            None,
+                        )?;
+                        return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
+                    }
+                }
+            }
+            AccessPolicy::ensure_open(
+                role,
+                worker_id,
+                gpu_scope,
+                host_mount,
+                &entry.canonical_path,
+                mode,
+            )?;
             let node = self.control.namespace().lookup(&entry.canonical_path)?;
             if node.is_directory() && mode.allows_write() {
                 return Err(NineDoorError::protocol(
@@ -722,10 +755,13 @@ impl ServerCore {
         }
         let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
         let gpu_scope = gpu_scope_owned.as_deref();
+        let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
+        let host_mount = host_mount_owned.as_deref();
         AccessPolicy::ensure_read(
             state.role(),
             state.worker_id(),
             gpu_scope,
+            host_mount,
             &entry.canonical_path,
         )?;
         let data = self
@@ -748,6 +784,9 @@ impl ServerCore {
         let worker_id = worker_id_owned.as_deref();
         let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
         let gpu_scope = gpu_scope_owned.as_deref();
+        let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
+        let host_mount = host_mount_owned.as_deref();
+        let ticket = state.ticket().map(str::to_owned);
         let path = {
             let entry = state.fid_mut(fid).ok_or_else(|| {
                 NineDoorError::protocol(ErrorCode::NotFound, format!("fid {fid} not found"))
@@ -763,7 +802,20 @@ impl ServerCore {
             }
             entry.canonical_path.clone()
         };
-        AccessPolicy::ensure_write(role, worker_id, gpu_scope, &path)?;
+        let host_target = host_write_target(&path, host_mount);
+        if let Some(target) = host_target.as_ref() {
+            if role != Some(Role::Queen) {
+                self.control.record_host_write_audit(
+                    target,
+                    HostWriteOutcome::Denied,
+                    role,
+                    ticket.as_deref(),
+                    None,
+                )?;
+                return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
+            }
+        }
+        AccessPolicy::ensure_write(role, worker_id, gpu_scope, host_mount, &path)?;
         let telemetry_write = worker_id
             .map(|id| is_worker_telemetry_path(&path, id))
             .unwrap_or(false);
@@ -788,7 +840,7 @@ impl ServerCore {
             for event in &events {
                 match event {
                     QueenEvent::Bound { target, mount } | QueenEvent::Mounted { target, mount } => {
-                        state.apply_mount(role, worker_id, gpu_scope, target, mount)?;
+                        state.apply_mount(role, worker_id, gpu_scope, host_mount, target, mount)?;
                     }
                     _ => {}
                 }
@@ -797,6 +849,19 @@ impl ServerCore {
             Ok(ResponseBody::Write {
                 count: data.len() as u32,
             })
+        } else if let Some(target) = host_target {
+            let count = self
+                .control
+                .namespace_mut()
+                .write_append(&path, offset, data)?;
+            self.control.record_host_write_audit(
+                &target,
+                HostWriteOutcome::Allowed,
+                role,
+                ticket.as_deref(),
+                Some(count),
+            )?;
+            Ok(ResponseBody::Write { count })
         } else {
             let count = self
                 .control
@@ -889,9 +954,17 @@ struct ControlPlane {
 }
 
 impl ControlPlane {
-    fn new(telemetry: TelemetryConfig, telemetry_manifest: TelemetryManifestStore) -> Self {
+    fn new(
+        telemetry: TelemetryConfig,
+        telemetry_manifest: TelemetryManifestStore,
+        host: HostNamespaceConfig,
+    ) -> Self {
         Self {
-            namespace: Namespace::new_with_telemetry_and_manifest(telemetry, telemetry_manifest),
+            namespace: Namespace::new_with_telemetry_manifest_and_host(
+                telemetry,
+                telemetry_manifest,
+                host,
+            ),
             workers: HashMap::new(),
             next_worker_id: 1,
             default_budget: BudgetSpec::default_heartbeat(),
@@ -907,6 +980,10 @@ impl ControlPlane {
 
     fn namespace_mut(&mut self) -> &mut Namespace {
         &mut self.namespace
+    }
+
+    fn host_mount_path(&self) -> Option<&[String]> {
+        self.namespace.host_mount_path()
     }
 
     fn worker_record(&self, worker_id: &str) -> Option<&WorkerRecord> {
@@ -1227,6 +1304,22 @@ impl ControlPlane {
         self.append_queen_log(message)
     }
 
+    fn record_host_write_audit(
+        &mut self,
+        target: &HostWriteTarget<'_>,
+        outcome: HostWriteOutcome,
+        role: Option<Role>,
+        ticket: Option<&str>,
+        bytes: Option<u32>,
+    ) -> Result<(), NineDoorError> {
+        let message = format_host_write_audit(target, outcome, role, ticket, bytes);
+        let level = match outcome {
+            HostWriteOutcome::Allowed => TraceLevel::Info,
+            HostWriteOutcome::Denied => TraceLevel::Warn,
+        };
+        self.log_event("host", level, None, &message)
+    }
+
     fn append_queen_log(&mut self, message: &str) -> Result<(), NineDoorError> {
         let log_path = vec!["log".to_owned(), "queen.log".to_owned()];
         let mut line = message.as_bytes().to_vec();
@@ -1320,6 +1413,7 @@ struct SessionState {
     role: Option<Role>,
     worker_id: Option<String>,
     gpu_scope: Option<String>,
+    ticket: Option<String>,
     budget: BudgetState,
     mounts: MountTable,
     auth_state: AuthState,
@@ -1337,6 +1431,7 @@ impl SessionState {
             role: None,
             worker_id: None,
             gpu_scope: None,
+            ticket: None,
             budget: BudgetState::new(BudgetSpec::unbounded(), now),
             mounts: MountTable::default(),
             auth_state: AuthState::Start,
@@ -1421,6 +1516,10 @@ impl SessionState {
         self.budget = BudgetState::new(budget, now);
     }
 
+    fn set_ticket(&mut self, ticket: Option<String>) {
+        self.ticket = ticket;
+    }
+
     fn role(&self) -> Option<Role> {
         self.role
     }
@@ -1431,6 +1530,10 @@ impl SessionState {
 
     fn gpu_scope(&self) -> Option<&str> {
         self.gpu_scope.as_deref()
+    }
+
+    fn ticket(&self) -> Option<&str> {
+        self.ticket.as_deref()
     }
 
     fn matches_worker(&self, worker_id: &str) -> bool {
@@ -1461,10 +1564,11 @@ impl SessionState {
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
+        host_mount: Option<&[String]>,
         target: &[String],
         mount: &[String],
     ) -> Result<(), NineDoorError> {
-        AccessPolicy::ensure_path(role, worker_id, gpu_scope, target)?;
+        AccessPolicy::ensure_path(role, worker_id, gpu_scope, host_mount, target)?;
         self.mounts.bind(target.to_vec(), mount.to_vec())
     }
 
@@ -1607,15 +1711,16 @@ impl AccessPolicy {
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
+        host_mount: Option<&[String]>,
         path: &[String],
         mode: OpenMode,
     ) -> Result<(), NineDoorError> {
-        Self::ensure_path(role, worker_id, gpu_scope, path)?;
+        Self::ensure_path(role, worker_id, gpu_scope, host_mount, path)?;
         if mode.allows_write() {
-            Self::ensure_write(role, worker_id, gpu_scope, path)?;
+            Self::ensure_write(role, worker_id, gpu_scope, host_mount, path)?;
         }
         if mode.allows_read() {
-            Self::ensure_read(role, worker_id, gpu_scope, path)?;
+            Self::ensure_read(role, worker_id, gpu_scope, host_mount, path)?;
         }
         Ok(())
     }
@@ -1624,19 +1729,23 @@ impl AccessPolicy {
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
+        host_mount: Option<&[String]>,
         path: &[String],
     ) -> Result<(), NineDoorError> {
         match role {
             Some(Role::Queen) => Ok(()),
             Some(Role::WorkerHeartbeat) => {
-                if worker_allowed_path(worker_id, path) {
+                if host_allowed_path(host_mount, path) || worker_allowed_path(worker_id, path) {
                     Ok(())
                 } else {
                     Err(Self::permission_denied(path))
                 }
             }
             Some(Role::WorkerGpu) => {
-                if worker_allowed_path(worker_id, path) || gpu_allowed_read(gpu_scope, path) {
+                if host_allowed_path(host_mount, path)
+                    || worker_allowed_path(worker_id, path)
+                    || gpu_allowed_read(gpu_scope, path)
+                {
                     Ok(())
                 } else {
                     Err(Self::permission_denied(path))
@@ -1653,19 +1762,26 @@ impl AccessPolicy {
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
+        host_mount: Option<&[String]>,
         path: &[String],
     ) -> Result<(), NineDoorError> {
         match role {
             Some(Role::Queen) => Ok(()),
             Some(Role::WorkerHeartbeat) => {
-                if worker_allowed_write(worker_id, path) {
+                if host_allowed_path(host_mount, path) {
+                    Err(Self::permission_denied(path))
+                } else if worker_allowed_write(worker_id, path) {
                     Ok(())
                 } else {
                     Err(Self::permission_denied(path))
                 }
             }
             Some(Role::WorkerGpu) => {
-                if worker_allowed_write(worker_id, path) || gpu_allowed_write(gpu_scope, path) {
+                if host_allowed_path(host_mount, path) {
+                    Err(Self::permission_denied(path))
+                } else if worker_allowed_write(worker_id, path)
+                    || gpu_allowed_write(gpu_scope, path)
+                {
                     Ok(())
                 } else {
                     Err(Self::permission_denied(path))
@@ -1682,19 +1798,23 @@ impl AccessPolicy {
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
+        host_mount: Option<&[String]>,
         path: &[String],
     ) -> Result<(), NineDoorError> {
         match role {
             Some(Role::Queen) => Ok(()),
             Some(Role::WorkerHeartbeat) => {
-                if worker_allowed_prefix(worker_id, path) {
+                if host_allowed_prefix(host_mount, path) || worker_allowed_prefix(worker_id, path) {
                     Ok(())
                 } else {
                     Err(Self::permission_denied(path))
                 }
             }
             Some(Role::WorkerGpu) => {
-                if worker_allowed_prefix(worker_id, path) || gpu_allowed_prefix(gpu_scope, path) {
+                if host_allowed_prefix(host_mount, path)
+                    || worker_allowed_prefix(worker_id, path)
+                    || gpu_allowed_prefix(gpu_scope, path)
+                {
                     Ok(())
                 } else {
                     Err(Self::permission_denied(path))
@@ -1731,6 +1851,14 @@ fn worker_allowed_prefix(worker_id: Option<&str>, path: &[String]) -> bool {
             _ => false,
         },
     }
+}
+
+fn host_allowed_prefix(host_mount: Option<&[String]>, path: &[String]) -> bool {
+    host_mount.map_or(false, |mount| path.starts_with(mount))
+}
+
+fn host_allowed_path(host_mount: Option<&[String]>, path: &[String]) -> bool {
+    host_allowed_prefix(host_mount, path)
 }
 
 fn worker_allowed_path(worker_id: Option<&str>, path: &[String]) -> bool {

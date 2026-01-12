@@ -1,0 +1,19 @@
+# Author: Lukas Bower
+# Purpose: Configure the host-sidecar-bridge crate for publishing /host providers.
+[package]
+name = "host-sidecar-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "Host sidecar bridge that mirrors ecosystem providers into /host"
+license = "MIT"
+
+[features]
+default = []
+tcp = ["cohsh/tcp"]
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+cohsh = { path = "../cohsh" }
+cohesix-ticket = { workspace = true }
+nine-door = { path = "../nine-door" }

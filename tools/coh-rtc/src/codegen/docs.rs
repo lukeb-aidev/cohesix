@@ -18,24 +18,39 @@ impl DocFragments {
     pub fn from_manifest(manifest: &Manifest, manifest_hash: &str) -> Self {
         let mut schema_md = String::new();
         writeln!(schema_md, "### Root-task manifest schema (generated)").ok();
+        writeln!(schema_md, "- `meta.author`: `{}`", manifest.meta.author).ok();
+        writeln!(schema_md, "- `meta.purpose`: `{}`", manifest.meta.purpose).ok();
         writeln!(
             schema_md,
-            "- `meta.author`: `{}`",
-            manifest.meta.author
+            "- `root_task.schema`: `{}`",
+            manifest.root_task.schema
         )
         .ok();
-        writeln!(
-            schema_md,
-            "- `meta.purpose`: `{}`",
-            manifest.meta.purpose
-        )
-        .ok();
-        writeln!(schema_md, "- `root_task.schema`: `{}`", manifest.root_task.schema).ok();
         writeln!(schema_md, "- `profile.name`: `{}`", manifest.profile.name).ok();
-        writeln!(schema_md, "- `profile.kernel`: `{}`", manifest.profile.kernel).ok();
-        writeln!(schema_md, "- `event_pump.tick_ms`: `{}`", manifest.event_pump.tick_ms).ok();
-        writeln!(schema_md, "- `secure9p.msize`: `{}`", manifest.secure9p.msize).ok();
-        writeln!(schema_md, "- `secure9p.walk_depth`: `{}`", manifest.secure9p.walk_depth).ok();
+        writeln!(
+            schema_md,
+            "- `profile.kernel`: `{}`",
+            manifest.profile.kernel
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `event_pump.tick_ms`: `{}`",
+            manifest.event_pump.tick_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `secure9p.msize`: `{}`",
+            manifest.secure9p.msize
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `secure9p.walk_depth`: `{}`",
+            manifest.secure9p.walk_depth
+        )
+        .ok();
         writeln!(
             schema_md,
             "- `secure9p.tags_per_session`: `{}`",
@@ -72,8 +87,18 @@ impl DocFragments {
             manifest.telemetry.cursor.retain_on_boot
         )
         .ok();
-        writeln!(schema_md, "- `cache.kernel_ops`: `{}`", manifest.cache.kernel_ops).ok();
-        writeln!(schema_md, "- `cache.dma_clean`: `{}`", manifest.cache.dma_clean).ok();
+        writeln!(
+            schema_md,
+            "- `cache.kernel_ops`: `{}`",
+            manifest.cache.kernel_ops
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `cache.dma_clean`: `{}`",
+            manifest.cache.dma_clean
+        )
+        .ok();
         writeln!(
             schema_md,
             "- `cache.dma_invalidate`: `{}`",
@@ -86,11 +111,36 @@ impl DocFragments {
             manifest.cache.unify_instructions
         )
         .ok();
-        writeln!(schema_md, "- `features.net_console`: `{}`", manifest.features.net_console).ok();
-        writeln!(schema_md, "- `features.serial_console`: `{}`", manifest.features.serial_console).ok();
-        writeln!(schema_md, "- `features.std_console`: `{}`", manifest.features.std_console).ok();
-        writeln!(schema_md, "- `features.std_host_tools`: `{}`", manifest.features.std_host_tools).ok();
-        writeln!(schema_md, "- `namespaces.role_isolation`: `{}`", manifest.namespaces.role_isolation).ok();
+        writeln!(
+            schema_md,
+            "- `features.net_console`: `{}`",
+            manifest.features.net_console
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `features.serial_console`: `{}`",
+            manifest.features.serial_console
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `features.std_console`: `{}`",
+            manifest.features.std_console
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `features.std_host_tools`: `{}`",
+            manifest.features.std_host_tools
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `namespaces.role_isolation`: `{}`",
+            manifest.namespaces.role_isolation
+        )
+        .ok();
         writeln!(schema_md, "- `tickets`: {} entries", manifest.tickets.len()).ok();
         writeln!(schema_md, "- `manifest.sha256`: `{}`", manifest_hash).ok();
 
@@ -105,13 +155,7 @@ impl DocFragments {
                 } else {
                     format!("/{}", mount.target.join("/"))
                 };
-                writeln!(
-                    namespace_md,
-                    "- service `{}` → `{}`",
-                    mount.service,
-                    target
-                )
-                .ok();
+                writeln!(namespace_md, "- service `{}` → `{}`", mount.service, target).ok();
             }
         }
 
@@ -142,6 +186,14 @@ impl DocFragments {
                 .join(", ");
             writeln!(ecosystem_md, "- `ecosystem.host.providers`: {providers}").ok();
         }
+        if manifest.ecosystem.host.enable {
+            writeln!(
+                ecosystem_md,
+                "- `/host` namespace mounted at `{}` when enabled.",
+                manifest.ecosystem.host.mount_at
+            )
+            .ok();
+        }
         writeln!(
             ecosystem_md,
             "- `ecosystem.audit.enable`: `{}`",
@@ -170,11 +222,7 @@ impl DocFragments {
     }
 }
 
-pub fn emit_doc_snippet(
-    manifest_hash: &str,
-    docs: &DocFragments,
-    path: &Path,
-) -> Result<()> {
+pub fn emit_doc_snippet(manifest_hash: &str, docs: &DocFragments, path: &Path) -> Result<()> {
     let mut contents = String::new();
     writeln!(contents, "<!-- Author: Lukas Bower -->")?;
     writeln!(

@@ -29,6 +29,63 @@ const SELFTEST_NEGATIVE_SCRIPT: &str = include_str!(concat!(
     "/../../resources/proc_tests/selftest_negative.coh"
 ));
 
+/// Host providers that may be mirrored into `/host`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostProvider {
+    /// systemd provider nodes.
+    Systemd,
+    /// Kubernetes provider nodes.
+    K8s,
+    /// NVIDIA GPU provider nodes.
+    Nvidia,
+    /// Jetson provider nodes.
+    Jetson,
+    /// Network provider nodes.
+    Net,
+}
+
+impl HostProvider {
+    /// Return the canonical provider label.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HostProvider::Systemd => "systemd",
+            HostProvider::K8s => "k8s",
+            HostProvider::Nvidia => "nvidia",
+            HostProvider::Jetson => "jetson",
+            HostProvider::Net => "net",
+        }
+    }
+}
+
+/// Configuration describing whether `/host` should be mounted.
+#[derive(Debug, Clone)]
+pub struct HostNamespaceConfig {
+    enabled: bool,
+    mount_path: Vec<String>,
+    providers: Vec<HostProvider>,
+}
+
+impl HostNamespaceConfig {
+    /// Construct a disabled host configuration.
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            mount_path: vec!["host".to_owned()],
+            providers: Vec::new(),
+        }
+    }
+
+    /// Construct an enabled host configuration.
+    pub fn enabled(mount_at: &str, providers: &[HostProvider]) -> Result<Self, NineDoorError> {
+        let mount_path = parse_host_mount(mount_at)?;
+        Ok(Self {
+            enabled: true,
+            mount_path,
+            providers: providers.to_vec(),
+        })
+    }
+}
+
 /// Synthetic namespace backing the NineDoor Secure9P server.
 #[derive(Debug)]
 pub struct Namespace {
@@ -36,6 +93,7 @@ pub struct Namespace {
     trace: TraceFs,
     telemetry: TelemetryConfig,
     telemetry_manifest: TelemetryManifestStore,
+    host: HostNamespaceConfig,
 }
 
 impl Namespace {
@@ -47,7 +105,11 @@ impl Namespace {
 
     /// Construct the namespace with explicit telemetry configuration.
     pub fn new_with_telemetry(telemetry: TelemetryConfig) -> Self {
-        Self::new_with_telemetry_and_manifest(telemetry, TelemetryManifestStore::default())
+        Self::new_with_telemetry_manifest_and_host(
+            telemetry,
+            TelemetryManifestStore::default(),
+            HostNamespaceConfig::disabled(),
+        )
     }
 
     /// Construct the namespace with explicit telemetry configuration and manifest store.
@@ -55,11 +117,25 @@ impl Namespace {
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
     ) -> Self {
+        Self::new_with_telemetry_manifest_and_host(
+            telemetry,
+            telemetry_manifest,
+            HostNamespaceConfig::disabled(),
+        )
+    }
+
+    /// Construct the namespace with telemetry, manifest storage, and host provider config.
+    pub fn new_with_telemetry_manifest_and_host(
+        telemetry: TelemetryConfig,
+        telemetry_manifest: TelemetryManifestStore,
+        host: HostNamespaceConfig,
+    ) -> Self {
         let mut namespace = Self {
             root: Node::directory(Vec::new()),
             trace: TraceFs::new(),
             telemetry,
             telemetry_manifest,
+            host,
         };
         namespace.bootstrap();
         namespace
@@ -68,6 +144,11 @@ impl Namespace {
     /// Retrieve the root Qid.
     pub fn root_qid(&self) -> Qid {
         self.root.qid
+    }
+
+    /// Return the configured host mount path, if enabled.
+    pub fn host_mount_path(&self) -> Option<&[String]> {
+        self.host.enabled.then_some(self.host.mount_path.as_slice())
     }
 
     /// Read bytes from the supplied path.
@@ -111,18 +192,13 @@ impl Namespace {
                         if let Some(audit) = err.audit {
                             self.record_telemetry_audit(audit)?;
                         }
-                        return Err(NineDoorError::protocol(
-                            ErrorCode::Invalid,
-                            err.message,
-                        ));
+                        return Err(NineDoorError::protocol(ErrorCode::Invalid, err.message));
                     }
                 },
                 NodeKind::File(FileNode::TraceControl) => ReadAction::TraceControl,
                 NodeKind::File(FileNode::TraceEvents) => ReadAction::TraceEvents,
                 NodeKind::File(FileNode::KernelMessages) => ReadAction::KernelMessages,
-                NodeKind::File(FileNode::TaskTrace(task)) => {
-                    ReadAction::TaskTrace(task.clone())
-                }
+                NodeKind::File(FileNode::TaskTrace(task)) => ReadAction::TaskTrace(task.clone()),
             }
         };
         let data = match action {
@@ -140,7 +216,8 @@ impl Namespace {
         }
         if retain_on_boot {
             if let (Some(worker_id), Some(snapshot)) = (worker_id, manifest_snapshot) {
-                self.telemetry_manifest.persist_snapshot(&worker_id, snapshot);
+                self.telemetry_manifest
+                    .persist_snapshot(&worker_id, snapshot);
             }
         }
         Ok(data)
@@ -180,7 +257,9 @@ impl Namespace {
                             }
                             super::telemetry::TelemetryErrorKind::InvalidOffset
                             | super::telemetry::TelemetryErrorKind::InvalidFrame
-                            | super::telemetry::TelemetryErrorKind::CursorStale => ErrorCode::Invalid,
+                            | super::telemetry::TelemetryErrorKind::CursorStale => {
+                                ErrorCode::Invalid
+                            }
                         };
                         Err(NineDoorError::protocol(code, err.message))
                     }
@@ -207,7 +286,8 @@ impl Namespace {
         }
         if retain_on_boot {
             if let (Some(worker_id), Some(snapshot)) = (worker_id, manifest_snapshot) {
-                self.telemetry_manifest.persist_snapshot(&worker_id, snapshot);
+                self.telemetry_manifest
+                    .persist_snapshot(&worker_id, snapshot);
             }
         }
         result
@@ -278,8 +358,7 @@ impl Namespace {
             TelemetryAuditLevel::Info => TraceLevel::Info,
             TelemetryAuditLevel::Warn => TraceLevel::Warn,
         };
-        self.trace
-            .record(level, "telemetry", None, &audit.message);
+        self.trace.record(level, "telemetry", None, &audit.message);
         let log_path = vec!["log".to_owned(), "queen.log".to_owned()];
         let log_node = self.lookup_mut(&log_path)?;
         let line = format!("[audit] {}\n", audit.message);
@@ -369,6 +448,107 @@ impl Namespace {
         self.ensure_trace_events(&trace_path, "events")
             .expect("create /trace/events");
         self.ensure_kernel_messages().expect("create /kmesg");
+        if self.host.enabled {
+            self.bootstrap_host().expect("create /host namespace");
+        }
+    }
+
+    fn bootstrap_host(&mut self) -> Result<(), NineDoorError> {
+        let host_root = self.host.mount_path.clone();
+        self.ensure_dir_path(&host_root)?;
+        let providers = self.host.providers.clone();
+        for provider in providers {
+            match provider {
+                HostProvider::Systemd => self.install_host_systemd(&host_root)?,
+                HostProvider::K8s => self.install_host_k8s(&host_root)?,
+                HostProvider::Nvidia => self.install_host_nvidia(&host_root)?,
+                HostProvider::Jetson => self.ensure_dir(&host_root, "jetson")?,
+                HostProvider::Net => self.ensure_dir(&host_root, "net")?,
+            }
+        }
+        Ok(())
+    }
+
+    fn install_host_systemd(&mut self, host_root: &[String]) -> Result<(), NineDoorError> {
+        self.ensure_dir(host_root, "systemd")?;
+        let systemd_root = {
+            let mut path = host_root.to_vec();
+            path.push("systemd".to_owned());
+            path
+        };
+        for unit in ["cohesix-agent.service", "ssh.service"] {
+            self.ensure_dir(&systemd_root, unit)?;
+            let unit_path = {
+                let mut path = systemd_root.clone();
+                path.push(unit.to_owned());
+                path
+            };
+            self.ensure_append_only_file(&unit_path, "status", b"active")?;
+            self.ensure_append_only_file(&unit_path, "restart", b"")?;
+        }
+        Ok(())
+    }
+
+    fn install_host_k8s(&mut self, host_root: &[String]) -> Result<(), NineDoorError> {
+        self.ensure_dir(host_root, "k8s")?;
+        let k8s_root = {
+            let mut path = host_root.to_vec();
+            path.push("k8s".to_owned());
+            path
+        };
+        self.ensure_dir(&k8s_root, "node")?;
+        let nodes_root = {
+            let mut path = k8s_root.clone();
+            path.push("node".to_owned());
+            path
+        };
+        for node in ["node-1"] {
+            self.ensure_dir(&nodes_root, node)?;
+            let node_path = {
+                let mut path = nodes_root.clone();
+                path.push(node.to_owned());
+                path
+            };
+            self.ensure_append_only_file(&node_path, "cordon", b"")?;
+            self.ensure_append_only_file(&node_path, "drain", b"")?;
+        }
+        Ok(())
+    }
+
+    fn install_host_nvidia(&mut self, host_root: &[String]) -> Result<(), NineDoorError> {
+        self.ensure_dir(host_root, "nvidia")?;
+        let nvidia_root = {
+            let mut path = host_root.to_vec();
+            path.push("nvidia".to_owned());
+            path
+        };
+        self.ensure_dir(&nvidia_root, "gpu")?;
+        let gpu_root = {
+            let mut path = nvidia_root.clone();
+            path.push("gpu".to_owned());
+            path
+        };
+        for gpu in ["0"] {
+            self.ensure_dir(&gpu_root, gpu)?;
+            let gpu_path = {
+                let mut path = gpu_root.clone();
+                path.push(gpu.to_owned());
+                path
+            };
+            self.ensure_append_only_file(&gpu_path, "status", b"ok")?;
+            self.ensure_append_only_file(&gpu_path, "power_cap", b"")?;
+            self.ensure_append_only_file(&gpu_path, "thermal", b"42C")?;
+        }
+        Ok(())
+    }
+
+    fn ensure_dir_path(&mut self, path: &[String]) -> Result<(), NineDoorError> {
+        let mut current = Vec::new();
+        for component in path {
+            self.ensure_dir(&current, component)?;
+            current.push(component.clone());
+        }
+        Ok(())
     }
 
     fn ensure_dir(&mut self, parent: &[String], name: &str) -> Result<(), NineDoorError> {
@@ -684,6 +864,36 @@ fn join_path(path: &[String]) -> String {
     } else {
         path.join("/")
     }
+}
+
+fn parse_host_mount(mount_at: &str) -> Result<Vec<String>, NineDoorError> {
+    let trimmed = mount_at.trim();
+    if trimmed.is_empty() || !trimmed.starts_with('/') {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            "host mount must be an absolute path",
+        ));
+    }
+    let components: Vec<String> = trimmed
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if components.is_empty() {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            "host mount must not be root",
+        ));
+    }
+    for component in &components {
+        if component == ".." {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "host mount contains disallowed '..'",
+            ));
+        }
+    }
+    Ok(components)
 }
 
 fn telemetry_worker_id(path: &[String]) -> Option<&str> {

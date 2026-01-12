@@ -355,6 +355,14 @@ CLI scripts, or bootstrap tables change.
 
 _Generated from `configs/root_task.toml` (sha256: `4d97e292f06d2311493fd09b6e1442edef3b03c544148ffad4f00559a8529111`)._
 
+### 11.1 Host Sidecar Bridge (`/host`)
+When `ecosystem.host.enable = true`, NineDoor publishes a `/host` namespace (mount path defined by `ecosystem.host.mount_at`) containing host-only provider stubs. Providers are listed in `ecosystem.host.providers[]`, and each adds its minimal file-only tree:
+- `systemd`: `/host/systemd/<unit>/{status,restart}`
+- `k8s`: `/host/k8s/node/<name>/{cordon,drain}`
+- `nvidia`: `/host/nvidia/gpu/<id>/{status,power_cap,thermal}`
+
+Control nodes (`restart`, `cordon`, `drain`, `power_cap`) are append-only and queen-only; every write emits a deterministic audit line to `/log/queen.log` via the existing NineDoor logging path. The host sidecar bridge runs outside the VM, connects via the existing Secure9P/console boundary, and mirrors host status into these files without adding new in-VM transports.
+
 ### 11.2 Cache-safe DMA contracts
 Shared DMA buffers (telemetry rings, GPU windows, and future sidecar regions) cross the HAL and NineDoor boundary and therefore must not depend on implicit cache behavior. On AArch64 the seL4 kernel exposes VSpace cache operations (`seL4_ARM_VSpace_Clean_Data`, `seL4_ARM_VSpace_CleanInvalidate_Data`, `seL4_ARM_VSpace_Invalidate_Data`, `seL4_ARM_VSpace_Unify_Instruction`) that the root task must invoke to guarantee deterministic coherence. The manifest’s cache section records which maintenance operations are required:
 - `cache.kernel_ops` enables the kernel capability required to submit VSpace cache ops.

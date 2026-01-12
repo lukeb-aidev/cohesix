@@ -93,7 +93,10 @@ impl Manifest {
                     bail!("namespace mount {} contains disallowed '..'", mount.service);
                 }
                 if component.is_empty() {
-                    bail!("namespace mount {} contains empty path component", mount.service);
+                    bail!(
+                        "namespace mount {} contains empty path component",
+                        mount.service
+                    );
                 }
             }
         }
@@ -115,6 +118,7 @@ impl Manifest {
         if !self.ecosystem.host.enable {
             return Ok(());
         }
+        self.validate_host_mount()?;
         if self.secure9p.msize > MAX_MSIZE {
             bail!("ecosystem.host.enable requires secure9p.msize <= {MAX_MSIZE}");
         }
@@ -127,10 +131,35 @@ impl Manifest {
         Ok(())
     }
 
+    fn validate_host_mount(&self) -> Result<()> {
+        let mount_at = self.ecosystem.host.mount_at.trim();
+        if !mount_at.starts_with('/') {
+            bail!("ecosystem.host.mount_at must be an absolute path");
+        }
+        let components: Vec<&str> = mount_at.split('/').filter(|seg| !seg.is_empty()).collect();
+        if components.is_empty() {
+            bail!("ecosystem.host.mount_at must not be root");
+        }
+        if components.len() > MAX_WALK_DEPTH {
+            bail!(
+                "ecosystem.host.mount_at exceeds walk depth {}",
+                MAX_WALK_DEPTH
+            );
+        }
+        for component in components {
+            if component == ".." {
+                bail!("ecosystem.host.mount_at contains disallowed '..'");
+            }
+            if component.is_empty() {
+                bail!("ecosystem.host.mount_at contains empty path component");
+            }
+        }
+        Ok(())
+    }
+
     fn validate_cache(&self) -> Result<()> {
-        let requested = self.cache.dma_clean
-            || self.cache.dma_invalidate
-            || self.cache.unify_instructions;
+        let requested =
+            self.cache.dma_clean || self.cache.dma_invalidate || self.cache.unify_instructions;
         if requested && !self.cache.kernel_ops {
             bail!("cache.kernel_ops must be true when cache maintenance is requested");
         }
