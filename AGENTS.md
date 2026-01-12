@@ -77,7 +77,7 @@ These artifacts define kernel-level truth. Code must align with them exactly.
 
  10. **.coh Scrip Grammar**
    - All .coh scripts MUST FOLLOW the syntax and grammar defiined in docs/USERLAND_AND_CLI.md.
-   - If grammaer must be modified to support new functionmality, you MUST UPDATE docs/USERLAND_AND_CLI.md accordingly.
+   - If grammar must be modified to support new functionality, you MUST UPDATE docs/USERLAND_AND_CLI.md accordingly.
 ---
 
 ## Worker Bring-up
