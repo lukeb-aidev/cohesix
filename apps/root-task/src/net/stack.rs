@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Smoltcp-backed TCP console stack for the in-VM root task.
+// Author: Lukas Bower
 
 //! Smoltcp-backed TCP console stack for the in-VM root task.
 //!

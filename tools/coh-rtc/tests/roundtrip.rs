@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate coh-rtc determinism and validation behavior.
+// Author: Lukas Bower
 
 use coh_rtc::{compile, CompileOptions};
 use std::fs;

@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: CLI entry point for the Cohesix root-task compiler.
+// Author: Lukas Bower
 
 use anyhow::Result;
 use clap::Parser;

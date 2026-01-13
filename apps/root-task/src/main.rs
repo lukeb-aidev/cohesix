@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the root-task binary entrypoint.
 // Author: Lukas Bower
 #![cfg_attr(feature = "kernel", no_std)]
 #![cfg_attr(feature = "kernel", no_main)]

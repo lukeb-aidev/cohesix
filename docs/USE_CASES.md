@@ -1,5 +1,7 @@
-<!-- Author: Lukas Bower -->
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Catalogue high-value Cohesix use cases and their operational constraints. -->
+<!-- Author: Lukas Bower -->
 # USE_CASES.md
 Author: Lukas Bower — October 15, 2025
 

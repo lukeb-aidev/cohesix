@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Compile-time profile surface exposing feature-derived constants.
+// Author: Lukas Bower
 
 /// Indicates whether the build targets the seL4 kernel environment.
 pub const KERNEL: bool = cfg!(feature = "kernel");

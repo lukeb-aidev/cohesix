@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the boot/flags module for root-task.
 // Author: Lukas Bower
 //! Boot-time diagnostic flags exposed to bootstrap helpers.
 

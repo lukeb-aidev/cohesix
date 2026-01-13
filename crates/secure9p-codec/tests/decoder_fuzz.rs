@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Fuzz-style regression tests for Secure9P codec framing.
+// Author: Lukas Bower
 #![forbid(unsafe_code)]
 
 use std::panic::{catch_unwind, AssertUnwindSafe};

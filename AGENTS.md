@@ -1,5 +1,7 @@
-<!-- Author: Lukas Bower -->
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Define the normative Cohesix build charter, scope, and guardrails for contributors. -->
+<!-- Author: Lukas Bower -->
 # AGENTS — Cohesix Build Charter (Pure Rust Userspace, ARM64)
 
 You are an OS designer expert in seL4 and Rust on aarch64.  

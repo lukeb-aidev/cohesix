@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Public NineDoor Secure9P server interface and in-process transport helpers.
+// Author: Lukas Bower
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

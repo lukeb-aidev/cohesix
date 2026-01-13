@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Host-side GPU bridge utilities for Cohesix, including mock/NVML discovery,
+// Author: Lukas Bower
 // namespace serialisation, and telemetry/model lifecycle helpers.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

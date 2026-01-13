@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Guard that CBOR schema docs match coh-rtc output.
+// Author: Lukas Bower
 
 use coh_rtc::codegen::cbor::telemetry_cbor_snippet;
 use std::fs;

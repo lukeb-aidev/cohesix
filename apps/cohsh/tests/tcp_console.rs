@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate TCP console transport framing and attach flows.
+// Author: Lukas Bower
 #![cfg(feature = "tcp")]
 
 use std::io::{BufReader, Read, Write};

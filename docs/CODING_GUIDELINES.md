@@ -1,3 +1,6 @@
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Documents Cohesix coding guidelines for Rust contributors. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Coding Guidelines (Rust)
 

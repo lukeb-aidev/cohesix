@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Coordinate telemetry ring buffers, cursor state, and audit output.
+// Author: Lukas Bower
 
 pub mod cursor;
 pub mod ring;

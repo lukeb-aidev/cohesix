@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Lightweight networking diagnostics for smoltcp and virtio surfaces.
+// Author: Lukas Bower
 
 //! Minimal, copyable diagnostics for the networking stack.
 //! Counters are intentionally monotonic and safe to snapshot without locks.

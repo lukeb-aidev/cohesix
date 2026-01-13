@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Exercise Secure9P batched pipelining and back-pressure handling.
+// Author: Lukas Bower
 #![forbid(unsafe_code)]
 
 use std::io::{self, Write};

@@ -1,5 +1,7 @@
-<!-- Author: Lukas Bower -->
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Document the canonical Cohesix repository layout and app roster. -->
+<!-- Author: Lukas Bower -->
 # Repository Layout Blueprint
 
 ```

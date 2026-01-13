@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the trace/bootstrap module for root-task.
 // Author: Lukas Bower
 //! Ring buffer recording bootstrap events for post-mortem inspection via UART.
 

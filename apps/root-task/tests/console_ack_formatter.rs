@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines tests for root-task console_ack_formatter.
 // Author: Lukas Bower
 
 use heapless::String;

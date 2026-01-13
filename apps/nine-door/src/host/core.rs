@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Core NineDoor Secure9P server state machine and namespace plumbing.
+// Author: Lukas Bower
 
 use std::collections::{HashMap, HashSet};
 use std::io;

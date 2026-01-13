@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Emit manifest-derived Markdown snippets for documentation.
+// Author: Lukas Bower
 
 use crate::ir::Manifest;
 use anyhow::{Context, Result};

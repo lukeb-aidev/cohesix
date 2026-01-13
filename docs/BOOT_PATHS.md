@@ -1,3 +1,6 @@
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Documents Cohesix boot adapter paths and constraints. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Boot Adapters
 

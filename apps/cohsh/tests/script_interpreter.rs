@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate cohsh .coh script interpreter behavior.
+// Author: Lukas Bower
 
 use std::collections::VecDeque;
 use std::io::Cursor;

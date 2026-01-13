@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Virtio MMIO network device driver for the root task, including TX/RX queue management and invariants.
+// Author: Lukas Bower
 //! Virtio MMIO network device driver used by the root task.
 //!
 //! Virtio MMIO network device driver used by the root task on the ARM `virt`

@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate batch iterator framing and size enforcement.
+// Author: Lukas Bower
 #![forbid(unsafe_code)]
 
 use secure9p_codec::{BatchIter, Codec, CodecError, Request, RequestBody, VERSION, MAX_MSIZE};

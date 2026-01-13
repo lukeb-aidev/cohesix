@@ -1,5 +1,7 @@
-<!-- Author: Lukas Bower -->
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Describe host-side GPU bridge behaviour, namespaces, and telemetry/model lifecycle semantics. -->
+<!-- Author: Lukas Bower -->
 # GPU Nodes — Out-of-VM Acceleration Strategy
 
 ## 1. Rationale

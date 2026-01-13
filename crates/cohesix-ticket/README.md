@@ -1,3 +1,6 @@
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Documents the cohesix-ticket crate scope and usage. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Ticket Crate
 

@@ -1,5 +1,7 @@
-<!-- Author: Lukas Bower -->
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Track Cohesix milestones, deliverables, and completion criteria for ARM64 Pure Rust userspace builds. -->
+<!-- Author: Lukas Bower -->
 # Cohesix Build Plan (ARM64, Pure Rust Userspace)
 Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
 
@@ -1992,6 +1994,26 @@ Checks:
   - Malformed attestation rejected with ERR; valid attestation matches manifest hash identically to SwarmUI.
 Deliverables:
   - Verified attestation workflow documented; regression outputs stored.
+
+Title/ID: m20e-repo-headers
+Goal: Add SPDX/copyright/purpose headers and NOTICE for repository compliance.
+Inputs: AGENTS.md, README.md, docs/*.md, apps/**, crates/**, tools/**, tests/**.
+Changes:
+  - apps/** — add SPDX/copyright/purpose headers to Rust and Markdown files.
+  - crates/** — add SPDX/copyright/purpose headers to Rust and Markdown files.
+  - tools/** — add SPDX/copyright/purpose headers to Rust and Markdown files.
+  - tests/** — add SPDX/copyright/purpose headers to Rust files.
+  - docs/** — add SPDX/copyright/purpose headers to Markdown files.
+  - NOTICE.txt — add repository notice statement.
+Commands:
+  - rg --files -g '*.rs' apps crates tools tests
+  - rg --files -g '*.md' docs apps crates tools
+  - rg --files -g '*.md' .
+Checks:
+  - In-scope Rust and Markdown files contain copyright, SPDX, and Purpose headers.
+  - NOTICE.txt present at repo root.
+Deliverables:
+  - Header updates across Rust and Markdown files; NOTICE.txt added.
 ```
 
 ---

@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Ensure quit exits cleanly without hanging the interactive shell.
+// Author: Lukas Bower
 
 use std::time::Duration;
 

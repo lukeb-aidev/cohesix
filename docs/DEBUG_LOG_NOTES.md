@@ -1,3 +1,6 @@
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Documents Cohesix debug log conventions and troubleshooting notes. -->
 <!-- Author: Lukas Bower -->
 # Root-task Debug Log Notes
 

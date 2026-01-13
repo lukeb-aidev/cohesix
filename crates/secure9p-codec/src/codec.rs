@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Encode and decode Secure9P wire messages without std dependencies.
+// Author: Lukas Bower
 
 //! Encode/decode helpers for Secure9P wire messages.
 

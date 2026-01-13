@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Minimal in-kernel NineDoor bridge for console-driven control and log access.
+// Author: Lukas Bower
 
 #![cfg(feature = "kernel")]
 #![allow(dead_code)]

@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines tests for root-task retype_init_cnode.
 // Author: Lukas Bower
 
 #![cfg(all(feature = "mock-sel4", not(target_os = "none")))]

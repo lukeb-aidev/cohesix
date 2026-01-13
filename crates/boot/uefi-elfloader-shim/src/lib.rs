@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the uefi-elfloader-shim library and public module surface.
 // Author: Lukas Bower
 #![doc = r"Helper crate that anchors documentation for the UEFI elfloader packaging.\n\n\
 This crate intentionally exposes no runtime APIs. It exists so the Cargo\nworkspace can track the shim that documents how the seL4 elfloader is\nrebuilt as a UEFI application and bundled into the Cohesix ESP image."]

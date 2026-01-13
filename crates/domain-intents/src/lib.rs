@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the domain-intents library and public module surface.
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

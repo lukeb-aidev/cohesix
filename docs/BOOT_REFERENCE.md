@@ -1,3 +1,6 @@
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Documents the reference Cohesix boot transcript and expected sequence. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Boot Reference — AArch64/virt + PL011 (2025-11-27)
 

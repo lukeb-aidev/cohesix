@@ -1,5 +1,7 @@
-<!-- Author: Lukas Bower -->
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Document Cohesix control-plane interfaces, ticket claims, and console flows. -->
+<!-- Author: Lukas Bower -->
 <!-- Purpose: Canonical interface definitions for NineDoor, queen/worker verbs, GPU bridge files, and telemetry schemas. -->
 # Cohesix Interfaces (Queen/Worker, NineDoor, GPU Bridge)
 

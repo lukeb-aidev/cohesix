@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: TCP console session management shared between kernel and host stacks, including buffering and drop policy.
+// Author: Lukas Bower
 
 //! TCP console session management shared between kernel and host stacks.
 

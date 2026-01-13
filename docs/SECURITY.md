@@ -1,5 +1,7 @@
-<!-- Author: Lukas Bower -->
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Summarize Cohesix security posture and audit expectations. -->
+<!-- Author: Lukas Bower -->
 # Cohesix Security Addendum — Networking & Console
 
 The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; QEMU `aarch64/virt` serves as the development/CI harness and is expected to mirror the same attack surface rather than being the deployment end-state.

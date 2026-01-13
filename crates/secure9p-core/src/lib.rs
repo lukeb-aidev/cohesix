@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Define Secure9P core session and access policy primitives.
+// Author: Lukas Bower
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![no_std]

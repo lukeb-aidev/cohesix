@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the console/proto module for root-task.
 // Author: Lukas Bower
 
 //! Console acknowledgement formatting utilities shared across the root task.

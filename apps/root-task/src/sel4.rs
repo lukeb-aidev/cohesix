@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: seL4 resource management helpers for the root task.
+// Author: Lukas Bower
 //! seL4 resource management helpers for the root task.
 #![cfg(any(test, feature = "kernel"))]
 #![allow(dead_code)]

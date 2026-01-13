@@ -1,5 +1,7 @@
-<!-- Author: Lukas Bower -->
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Provide a high-level overview of Cohesix architecture and workspace layout. -->
+<!-- Author: Lukas Bower -->
 # Cohesix
 
 ## Why Cohesix?

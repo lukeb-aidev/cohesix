@@ -1,5 +1,7 @@
-<!-- Author: Lukas Bower -->
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Define Cohesix roles, ticket lifecycle, and scheduling constraints. -->
+<!-- Author: Lukas Bower -->
 # Roles & Scheduling Policy
 
 ## 1. Roles

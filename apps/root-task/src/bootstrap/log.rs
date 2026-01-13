@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the bootstrap/log module for root-task.
 // Author: Lukas Bower
 //! Bootstrap logging backend that forwards diagnostics to the seL4 debug console or
 //! the IPC endpoint once the NineDoor bridge is attached.

@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Parse queen control payloads and host control audit metadata.
+// Author: Lukas Bower
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

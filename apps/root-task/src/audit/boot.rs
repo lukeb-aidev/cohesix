@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Centralised boot header emission helper for early kernel logging.
+// Author: Lukas Bower
 
 #![cfg(feature = "kernel")]
 

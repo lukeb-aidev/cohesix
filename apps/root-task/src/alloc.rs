@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the alloc module for root-task.
 // Author: Lukas Bower
 //! Global heap allocator initialised for kernel builds before dynamic memory is required.
 

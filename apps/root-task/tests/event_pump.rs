@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate event pump behavior for serial and timer flows.
+// Author: Lukas Bower
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};

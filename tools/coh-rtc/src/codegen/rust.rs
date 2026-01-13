@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Emit deterministic Rust bootstrap tables for the root task.
+// Author: Lukas Bower
 
 use crate::codegen::hash_bytes;
 use crate::ir::{Manifest, Role};

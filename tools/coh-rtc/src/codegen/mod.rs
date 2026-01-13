@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Emit deterministic artefacts from the root-task manifest.
+// Author: Lukas Bower
 
 mod cli;
 pub mod cbor;

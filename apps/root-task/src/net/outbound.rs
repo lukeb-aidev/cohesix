@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Outbound net-console throttle and coalescer enforcing rate limits and batching.
+// Author: Lukas Bower
 
 use core::{cmp::min, mem};
 

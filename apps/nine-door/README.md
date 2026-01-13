@@ -1,3 +1,6 @@
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Documents the nine-door crate responsibilities and scope. -->
 <!-- Author: Lukas Bower -->
 # NineDoor Crate
 

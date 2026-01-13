@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Define and validate the root-task manifest IR.
+// Author: Lukas Bower
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};

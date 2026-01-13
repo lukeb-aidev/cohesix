@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Networking subsystem abstractions and configuration for console transports.
+// Author: Lukas Bower
 
 //! Networking subsystem abstractions for host and seL4 targets.
 

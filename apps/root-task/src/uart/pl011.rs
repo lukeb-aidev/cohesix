@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the uart/pl011 module for root-task.
 // Author: Lukas Bower
 //! Minimal PL011 UART driver for bootstrap diagnostics and console I/O.
 #![allow(unsafe_code)]

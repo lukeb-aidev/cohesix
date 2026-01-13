@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the bootstrap/cspace_sys module for root-task.
 // Author: Lukas Bower
 //! Thin wrappers around seL4 CSpace syscalls with argument validation helpers.
 #![allow(unsafe_code)]

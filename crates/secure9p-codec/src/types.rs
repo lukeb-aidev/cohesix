@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Define Secure9P wire types and constants shared across components.
+// Author: Lukas Bower
 #![allow(clippy::module_name_repetitions)]
 
 //! Secure9P data model definitions shared across codec backends.

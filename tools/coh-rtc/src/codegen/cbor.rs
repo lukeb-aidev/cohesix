@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Define and export the CBOR telemetry frame schema for docs.
+// Author: Lukas Bower
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};

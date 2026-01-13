@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Root-task library surface exposing console and networking modules for tests.
+// Author: Lukas Bower
 #![cfg_attr(feature = "kernel", no_std)]
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]

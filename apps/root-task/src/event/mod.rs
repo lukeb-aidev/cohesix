@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Event pump coordinating serial, timer, networking, and IPC work for the root task.
+// Author: Lukas Bower
 
 //! Cooperative event pump coordinating serial, timer, networking, and IPC work.
 //!

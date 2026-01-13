@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide Secure9P session tracking primitives for tag windows and queues.
+// Author: Lukas Bower
 
 //! Session tracking primitives for Secure9P servers.
 

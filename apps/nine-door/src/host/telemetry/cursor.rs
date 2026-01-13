@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Track telemetry cursor offsets and bounded rewind behavior.
+// Author: Lukas Bower
 
 use super::{TelemetryAudit, TelemetryAuditLevel};
 

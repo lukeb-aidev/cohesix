@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Implement the TCP transport backend for the Cohesix shell console.
+// Author: Lukas Bower
 //! TCP transport backend for the Cohesix shell console.
 
 use std::collections::VecDeque;

@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide bounded append-only ring storage for worker telemetry.
+// Author: Lukas Bower
 
 use secure9p_core::{append_only_read_bounds, AppendOnlyOffsetError};
 

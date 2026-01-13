@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Userland hand-off and runtime wiring for console and networking surfaces.
+// Author: Lukas Bower
 //! Minimal userland entrypoints exposed by the root task.
 #![allow(unsafe_code)]
 

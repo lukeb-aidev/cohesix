@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate append-only offset helpers for Secure9P providers.
+// Author: Lukas Bower
 
 use secure9p_core::{
     append_only_read_bounds, append_only_write_bounds, AppendOnlyOffsetError,

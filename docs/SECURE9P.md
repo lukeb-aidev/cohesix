@@ -1,5 +1,7 @@
-<!-- Author: Lukas Bower -->
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Describe Secure9P crate layout, transport rules, and access policy hooks. -->
+<!-- Author: Lukas Bower -->
 # Secure9P Policy & Implementation Guide
 
 ## 1. Scope

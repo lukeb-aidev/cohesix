@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: DMA pin/unpin seam capturing shared-memory regions for audit.
+// Author: Lukas Bower
 
 #![cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 

@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the bootstrap/untyped module for root-task.
 // Author: Lukas Bower
 
 //! Debug helpers for inspecting untyped capabilities advertised by the kernel.

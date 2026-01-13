@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate Cohsh shell UX behaviors and command error handling.
+// Author: Lukas Bower
 
 use std::io::Cursor;
 

@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Kernel-mediated cache maintenance helpers for DMA buffers with structured logging.
+// Author: Lukas Bower
 //! Kernel-mediated cache maintenance helpers for DMA buffers.
 
 #![allow(unsafe_code)]

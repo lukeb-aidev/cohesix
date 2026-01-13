@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Lock cohsh .coh grammar coverage for existing regression scripts.
+// Author: Lukas Bower
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};

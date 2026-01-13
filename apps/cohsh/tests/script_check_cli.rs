@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate cohsh --check mode parses regression scripts.
+// Author: Lukas Bower
 
 use std::fs;
 use std::path::{Path, PathBuf};

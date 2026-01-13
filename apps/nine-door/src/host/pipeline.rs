@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Enforce Secure9P batching, queue depth, and short-write retry policy.
+// Author: Lukas Bower
 
 //! Secure9P pipeline helpers for batching and back-pressure accounting.
 

@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Bounded log ring backing /log/queen.log after the console handoff.
+// Author: Lukas Bower
 
 #![cfg(feature = "kernel")]
 

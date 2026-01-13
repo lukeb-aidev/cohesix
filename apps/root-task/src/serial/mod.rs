@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide bounded serial console primitives for the root task and host simulations.
+// Author: Lukas Bower
 
 //! Minimal, no-std friendly serial console primitives used by the root task.
 //!

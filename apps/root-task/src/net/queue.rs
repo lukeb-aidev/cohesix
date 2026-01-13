@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Host-side mock network queue and TCP console stack used in tests.
+// Author: Lukas Bower
 
 #![cfg(not(feature = "kernel"))]
 

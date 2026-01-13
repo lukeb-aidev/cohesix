@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the build script for root-task.
 // Author: Lukas Bower
 //! Build script that wires the seL4 SDK artefacts into the root-task link step.
 

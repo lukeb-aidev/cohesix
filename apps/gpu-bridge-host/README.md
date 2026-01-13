@@ -1,3 +1,6 @@
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Documents the gpu-bridge-host host tool scope and usage. -->
 <!-- Author: Lukas Bower -->
 # GPU Bridge Host Tools
 

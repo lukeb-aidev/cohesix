@@ -1,3 +1,6 @@
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Documents the worker-gpu crate responsibilities and scope. -->
 <!-- Author: Lukas Bower -->
 # Worker GPU
 

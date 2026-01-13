@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate PolicyFS nodes and approval gating in NineDoor.
+// Author: Lukas Bower
 #![forbid(unsafe_code)]
 
 use nine_door::{

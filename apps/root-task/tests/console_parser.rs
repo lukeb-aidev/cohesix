@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate console parser command and length handling.
+// Author: Lukas Bower
 
 use root_task::console::{Command, CommandParser, ConsoleError, MAX_LINE_LEN};
 

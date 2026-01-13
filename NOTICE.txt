@@ -1,0 +1,27 @@
+Cohesix — NOTICE
+
+Copyright © 2025 Lukas Bower.
+
+This product includes software developed by the Cohesix contributors.
+
+License
+-------
+Cohesix is licensed under the Apache License, Version 2.0 (the "License").
+You may obtain a copy of the License in LICENSE.txt or at:
+http://www.apache.org/licenses/LICENSE-2.0
+
+Third-Party Software
+--------------------
+Cohesix is designed to run on the seL4 microkernel as an external dependency.
+The seL4 kernel is licensed under GPL-2.0-only and is NOT distributed as part
+of the Cohesix userspace or source tree. This repository does not include seL4
+kernel code.
+
+Cohesix also depends on third-party Rust crates (as listed in Cargo.lock and
+crate manifests). Those dependencies are licensed by their respective authors
+under their own terms. See each dependency’s license information for details.
+
+Trademarks
+----------
+“seL4” is a trademark of its respective owners. All other trademarks are the
+property of their respective owners.

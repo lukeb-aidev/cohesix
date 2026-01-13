@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the sel4/syscall module for root-task.
 // Author: Lukas Bower
 //! Low-level seL4 syscall wrappers for the root task.
 #![allow(dead_code)]

@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate TCP CLI script execution with framed console protocol.
+// Author: Lukas Bower
 #![cfg(feature = "tcp")]
 
 use std::io::{BufReader, Read, Write};

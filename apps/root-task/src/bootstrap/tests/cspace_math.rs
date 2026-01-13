@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the bootstrap/tests/cspace_math module for root-task.
 // Author: Lukas Bower
 
 use crate::bootstrap::cspace::{slot_advance, slot_in_empty_window};

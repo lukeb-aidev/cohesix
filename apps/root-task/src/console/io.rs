@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the console/io module for root-task.
 // Author: Lukas Bower
 
 //! Blocking console adaptor backed by the PL011 UART.

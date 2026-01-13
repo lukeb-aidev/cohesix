@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide host-mode root-task simulation with authenticated ticket flows.
+// Author: Lukas Bower
 #![cfg(all(not(feature = "kernel"), not(target_os = "none")))]
 #![allow(clippy::module_name_repetitions)]
 

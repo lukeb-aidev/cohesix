@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Emit cohsh CLI scripts derived from the manifest.
+// Author: Lukas Bower
 
 use crate::ir::{Manifest, Role};
 use anyhow::{Context, Result};

@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Hardware abstraction layer façade for drivers and platform helpers.
+// Author: Lukas Bower
 
 //! Lightweight hardware abstraction used by the root task to decouple
 //! low-level seL4 primitives from driver code.

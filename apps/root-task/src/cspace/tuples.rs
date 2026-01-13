@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the cspace/tuples module for root-task.
 // Author: Lukas Bower
 //! Canonical tuple helpers for seL4 CSpace operations during early bootstrap.
 #![allow(unsafe_code)]

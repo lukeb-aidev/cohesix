@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Early linker layout diagnostics and reporting during root-task bootstrap.
+// Author: Lukas Bower
 //! Early memory layout diagnostics to detect linker regressions before endpoint setup.
 #![allow(dead_code)]
 #![allow(unsafe_code)]

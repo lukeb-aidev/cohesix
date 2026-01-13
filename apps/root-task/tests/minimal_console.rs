@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines tests for root-task minimal_console.
 // Author: Lukas Bower
 use root_task::ipc::{ep_is_valid, seL4_CapNull, seL4_MessageInfo, try_send, FAILED_LOOKUP_ERROR};
 

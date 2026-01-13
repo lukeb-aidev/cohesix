@@ -1,5 +1,7 @@
-<!-- Author: Lukas Bower -->
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Describe Cohesix userland command surfaces, CLI usage, and console workflows. -->
+<!-- Author: Lukas Bower -->
 # Cohesix Userland & CLI
 
 ## Philosophy

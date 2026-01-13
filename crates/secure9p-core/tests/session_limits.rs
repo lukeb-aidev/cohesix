@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate Secure9P session window and short-write policy behavior.
+// Author: Lukas Bower
 #![forbid(unsafe_code)]
 
 use secure9p_core::{

@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: seL4 bootstrap, capability setup, and runtime hand-off for root-task.
+// Author: Lukas Bower
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 

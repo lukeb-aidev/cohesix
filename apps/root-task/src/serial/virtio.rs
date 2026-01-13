@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the serial/virtio module for root-task.
 // Author: Lukas Bower
 
 //! Deterministic virtio-console façade used by the root-task event pump.

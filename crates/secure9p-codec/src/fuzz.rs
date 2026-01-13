@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide a fuzz corpus harness for Secure9P frame decoding.
+// Author: Lukas Bower
 
 //! Fuzz corpus harnesses for Secure9P frame decoding.
 

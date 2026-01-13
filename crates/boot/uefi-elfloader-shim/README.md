@@ -1,3 +1,6 @@
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Documents the uefi-elfloader-shim crate scope and usage. -->
 <!-- Author: Lukas Bower -->
 # UEFI Elfloader Shim
 

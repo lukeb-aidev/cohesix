@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the drivers/rtl8139 module for root-task.
 // Author: Lukas Bower
 
 //! Minimal RTL8139 driver used for the dev-virt TCP console path.

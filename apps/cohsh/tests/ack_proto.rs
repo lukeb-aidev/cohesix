@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines tests for cohsh ack_proto.
 // Author: Lukas Bower
 
 use cohsh::proto::{parse_ack, AckStatus};

@@ -1,3 +1,6 @@
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Defines the sel4-sys library and public module surface.
 // Author: Lukas Bower
 #![cfg_attr(target_os = "none", no_std)]
 #![allow(non_camel_case_types)]

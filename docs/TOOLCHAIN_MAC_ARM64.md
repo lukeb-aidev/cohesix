@@ -1,3 +1,6 @@
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Documents macOS ARM64 toolchain requirements and setup steps. -->
 <!-- Author: Lukas Bower -->
 # Toolchain Setup — macOS 26 (Apple Silicon M4)
 

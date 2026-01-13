@@ -1,5 +1,7 @@
-// Author: Lukas Bower
+// Copyright © 2025 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 // Purpose: Console parser and interactive shell for the root task.
+// Author: Lukas Bower
 
 #![allow(unsafe_code)]
 
