@@ -208,6 +208,42 @@ impl DocFragments {
         .ok();
         writeln!(
             ecosystem_md,
+            "- `ecosystem.policy.queue_max_entries`: `{}`",
+            manifest.ecosystem.policy.queue_max_entries
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.policy.queue_max_bytes`: `{}`",
+            manifest.ecosystem.policy.queue_max_bytes
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.policy.ctl_max_bytes`: `{}`",
+            manifest.ecosystem.policy.ctl_max_bytes
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.policy.status_max_bytes`: `{}`",
+            manifest.ecosystem.policy.status_max_bytes
+        )
+        .ok();
+        if manifest.ecosystem.policy.rules.is_empty() {
+            writeln!(ecosystem_md, "- `ecosystem.policy.rules`: `(none)`").ok();
+        } else {
+            for rule in &manifest.ecosystem.policy.rules {
+                writeln!(
+                    ecosystem_md,
+                    "- `ecosystem.policy.rules`: `{}` → `{}`",
+                    rule.id, rule.target
+                )
+                .ok();
+            }
+        }
+        writeln!(
+            ecosystem_md,
             "- `ecosystem.models.enable`: `{}`",
             manifest.ecosystem.models.enable
         )

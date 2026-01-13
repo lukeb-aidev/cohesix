@@ -63,7 +63,7 @@ pub struct TelemetryConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.2";
-pub const MANIFEST_SHA256: &str = "4d97e292f06d2311493fd09b6e1442edef3b03c544148ffad4f00559a8529111";
+pub const MANIFEST_SHA256: &str = "09e9cf4605174cbb41993b5c5035466b81edf24f70c08c89c49d535bfa01e9c3";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

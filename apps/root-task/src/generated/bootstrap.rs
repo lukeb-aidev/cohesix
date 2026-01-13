@@ -7,7 +7,7 @@ use cohesix_ticket::Role;
 
 pub const TICKET_TABLE_SHA256: &str = "4841a3b409199c285eff46bb5dac457f745f5cf6e55216bd45a14d56d91556da";
 pub const NAMESPACE_TABLE_SHA256: &str = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
-pub const AUDIT_TABLE_SHA256: &str = "b27747de1bb52a72024b6cd4061477c44039e83e8cc225914daeef16988ae31a";
+pub const AUDIT_TABLE_SHA256: &str = "c6090d9d096f6d9e501dd76f14c8b621b36b23a3ac137015892d35e707867747";
 
 pub const TICKET_INVENTORY: [TicketSpec; 3] = [
     TicketSpec { role: Role::Queen, secret: "bootstrap" },
@@ -35,7 +35,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = [
 pub const INITIAL_AUDIT_LINES: [&str; 19] = [
     "manifest.schema=1.2",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=4d97e292f06d2311493fd09b6e1442edef3b03c544148ffad4f00559a8529111",
+    "manifest.sha256=09e9cf4605174cbb41993b5c5035466b81edf24f70c08c89c49d535bfa01e9c3",
     "manifest.tickets=3",
     "manifest.namespaces=0 role_isolation=true",
     "manifest.secure9p.msize=8192",

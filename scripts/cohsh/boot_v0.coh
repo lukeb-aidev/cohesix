@@ -2,6 +2,9 @@
 # Purpose: Boot smoke using attach/log/quit flows.
 attach queen
 EXPECT OK
+# /policy gate enabled=false queue_max_entries=32 queue_max_bytes=4096 ctl_max_bytes=2048 status_max_bytes=512
+# policy rule queen-ctl -> /queen/ctl
+# policy rule systemd-restart -> /host/systemd/*/restart
 log
 EXPECT OK
 WAIT 250

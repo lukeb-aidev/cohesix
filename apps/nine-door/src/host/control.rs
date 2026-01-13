@@ -7,6 +7,7 @@ use cohesix_ticket::BudgetSpec;
 use cohesix_ticket::Role;
 use serde::Deserialize;
 
+use super::policy::{PolicyActionAudit, PolicyDecision, PolicyGateAllowance, PolicyGateDenial};
 use crate::NineDoorError;
 
 /// Outcome of a host write attempt.
@@ -112,6 +113,98 @@ pub fn format_host_write_audit(
         line.push_str(&format!(" bytes={bytes}"));
     }
     line
+}
+
+/// Format an audit line for policy queue entries.
+pub fn format_policy_action_audit(
+    action: &PolicyActionAudit,
+    role: Option<Role>,
+    ticket: Option<&str>,
+) -> String {
+    let role_label = match role {
+        Some(Role::Queen) => "queen",
+        Some(Role::WorkerHeartbeat) => "worker-heartbeat",
+        Some(Role::WorkerGpu) => "worker-gpu",
+        None => "unauthenticated",
+    };
+    format!(
+        "policy-action role={} ticket={} id={} decision={} target={}",
+        role_label,
+        ticket.unwrap_or("none"),
+        action.id,
+        match action.decision {
+            PolicyDecision::Approve => "approve",
+            PolicyDecision::Deny => "deny",
+        },
+        action.target
+    )
+}
+
+/// Format an audit line for policy gate decisions.
+pub fn format_policy_gate_allow(
+    path: &[String],
+    allowance: &PolicyGateAllowance,
+    role: Option<Role>,
+    ticket: Option<&str>,
+) -> Option<String> {
+    let role_label = match role {
+        Some(Role::Queen) => "queen",
+        Some(Role::WorkerHeartbeat) => "worker-heartbeat",
+        Some(Role::WorkerGpu) => "worker-gpu",
+        None => "unauthenticated",
+    };
+    let path_label = if path.is_empty() {
+        "/".to_owned()
+    } else {
+        format!("/{}", path.join("/"))
+    };
+    match allowance {
+        PolicyGateAllowance::Action { id, target } => Some(format!(
+            "policy-gate outcome=allow role={} ticket={} id={} target={} path={}",
+            role_label,
+            ticket.unwrap_or("none"),
+            id,
+            target,
+            path_label
+        )),
+        PolicyGateAllowance::Ungated | PolicyGateAllowance::NotRequired => None,
+    }
+}
+
+/// Format an audit line for policy gate denials.
+pub fn format_policy_gate_deny(
+    path: &[String],
+    denial: &PolicyGateDenial,
+    role: Option<Role>,
+    ticket: Option<&str>,
+) -> String {
+    let role_label = match role {
+        Some(Role::Queen) => "queen",
+        Some(Role::WorkerHeartbeat) => "worker-heartbeat",
+        Some(Role::WorkerGpu) => "worker-gpu",
+        None => "unauthenticated",
+    };
+    let path_label = if path.is_empty() {
+        "/".to_owned()
+    } else {
+        format!("/{}", path.join("/"))
+    };
+    match denial {
+        PolicyGateDenial::Missing => format!(
+            "policy-gate outcome=deny role={} ticket={} reason=missing-approval path={}",
+            role_label,
+            ticket.unwrap_or("none"),
+            path_label
+        ),
+        PolicyGateDenial::Action { id, target } => format!(
+            "policy-gate outcome=deny role={} ticket={} id={} target={} path={}",
+            role_label,
+            ticket.unwrap_or("none"),
+            id,
+            target,
+            path_label
+        ),
+    }
 }
 
 /// Commands accepted by `/queen/ctl`.

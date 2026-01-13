@@ -27,11 +27,13 @@ mod control;
 mod core;
 mod namespace;
 mod pipeline;
+mod policy;
 mod telemetry;
 mod tracefs;
 
 use self::core::{role_to_uname, ServerCore};
 pub use self::namespace::{HostNamespaceConfig, HostProvider};
+pub use self::policy::{PolicyConfig, PolicyDecision, PolicyLimits, PolicyRuleSpec};
 pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 pub use self::telemetry::{
     TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryManifestStore,
@@ -114,12 +116,29 @@ impl NineDoor {
     /// Construct a new NineDoor server with host namespace configuration.
     #[must_use]
     pub fn new_with_host_config(host: HostNamespaceConfig) -> Self {
-        Self::new_with_limits_telemetry_and_host(
+        Self::new_with_limits_telemetry_host_policy(
             Arc::new(SystemClock),
             SessionLimits::default(),
             TelemetryConfig::default(),
             TelemetryManifestStore::default(),
             host,
+            PolicyConfig::disabled(),
+        )
+    }
+
+    /// Construct a new NineDoor server with host and policy configuration.
+    #[must_use]
+    pub fn new_with_host_and_policy_config(
+        host: HostNamespaceConfig,
+        policy: PolicyConfig,
+    ) -> Self {
+        Self::new_with_limits_telemetry_host_policy(
+            Arc::new(SystemClock),
+            SessionLimits::default(),
+            TelemetryConfig::default(),
+            TelemetryManifestStore::default(),
+            host,
+            policy,
         )
     }
 
@@ -178,6 +197,24 @@ impl NineDoor {
         telemetry_manifest: TelemetryManifestStore,
         host: HostNamespaceConfig,
     ) -> Self {
+        Self::new_with_limits_telemetry_host_policy(
+            clock,
+            limits,
+            telemetry,
+            telemetry_manifest,
+            host,
+            PolicyConfig::disabled(),
+        )
+    }
+
+    fn new_with_limits_telemetry_host_policy(
+        clock: Arc<dyn Clock>,
+        limits: SessionLimits,
+        telemetry: TelemetryConfig,
+        telemetry_manifest: TelemetryManifestStore,
+        host: HostNamespaceConfig,
+        policy: PolicyConfig,
+    ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ServerCore::new(
                 clock,
@@ -185,6 +222,7 @@ impl NineDoor {
                 telemetry,
                 telemetry_manifest.clone(),
                 host,
+                policy,
             ))),
             bootstrap_ticket: TicketClaims::new(
                 Role::Queen,

@@ -72,3 +72,14 @@ The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; Q
 - Unit: `ms`
 _Generated from `apps/nine-door/out/metrics/telemetry_ring_latency.json`._
 <!-- metrics:latency:end -->
+
+## Appendix A: Policy approval replay limits (manifest snapshot)
+- Policy approvals are single-use: once consumed by a gated write, replaying the same approval yields `ERR EPERM` and emits a `policy-gate` audit line in `/log/queen.log`.
+- Approval queue bounds are manifest-driven (`configs/root_task.toml`):
+  - `ecosystem.policy.queue_max_entries = 32`
+  - `ecosystem.policy.queue_max_bytes = 4096`
+  - `ecosystem.policy.ctl_max_bytes = 2048`
+  - `ecosystem.policy.status_max_bytes = 512`
+- Gated control rules (manifest snapshot):
+  - `queen-ctl` → `/queen/ctl`
+  - `systemd-restart` → `/host/systemd/*/restart`

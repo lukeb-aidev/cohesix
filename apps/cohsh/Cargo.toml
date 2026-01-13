@@ -30,3 +30,5 @@ serde_json = { workspace = true }
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"
+hex = { workspace = true }
+sha2 = { workspace = true }

@@ -86,6 +86,31 @@ impl HostNamespaceConfig {
     }
 }
 
+/// Configuration describing whether `/policy` and `/actions` should be mounted.
+#[derive(Debug, Clone)]
+pub struct PolicyNamespaceConfig {
+    enabled: bool,
+    rules_snapshot: Vec<u8>,
+}
+
+impl PolicyNamespaceConfig {
+    /// Construct a disabled policy configuration.
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            rules_snapshot: Vec::new(),
+        }
+    }
+
+    /// Construct an enabled policy configuration with the rules snapshot payload.
+    pub fn enabled(rules_snapshot: Vec<u8>) -> Self {
+        Self {
+            enabled: true,
+            rules_snapshot,
+        }
+    }
+}
+
 /// Synthetic namespace backing the NineDoor Secure9P server.
 #[derive(Debug)]
 pub struct Namespace {
@@ -94,6 +119,7 @@ pub struct Namespace {
     telemetry: TelemetryConfig,
     telemetry_manifest: TelemetryManifestStore,
     host: HostNamespaceConfig,
+    policy: PolicyNamespaceConfig,
 }
 
 impl Namespace {
@@ -105,10 +131,11 @@ impl Namespace {
 
     /// Construct the namespace with explicit telemetry configuration.
     pub fn new_with_telemetry(telemetry: TelemetryConfig) -> Self {
-        Self::new_with_telemetry_manifest_and_host(
+        Self::new_with_telemetry_manifest_host_policy(
             telemetry,
             TelemetryManifestStore::default(),
             HostNamespaceConfig::disabled(),
+            PolicyNamespaceConfig::disabled(),
         )
     }
 
@@ -117,11 +144,31 @@ impl Namespace {
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
     ) -> Self {
-        Self::new_with_telemetry_manifest_and_host(
+        Self::new_with_telemetry_manifest_host_policy(
             telemetry,
             telemetry_manifest,
             HostNamespaceConfig::disabled(),
+            PolicyNamespaceConfig::disabled(),
         )
+    }
+
+    /// Construct the namespace with telemetry, manifest storage, host provider config, and policy.
+    pub fn new_with_telemetry_manifest_host_policy(
+        telemetry: TelemetryConfig,
+        telemetry_manifest: TelemetryManifestStore,
+        host: HostNamespaceConfig,
+        policy: PolicyNamespaceConfig,
+    ) -> Self {
+        let mut namespace = Self {
+            root: Node::directory(Vec::new()),
+            trace: TraceFs::new(),
+            telemetry,
+            telemetry_manifest,
+            host,
+            policy,
+        };
+        namespace.bootstrap();
+        namespace
     }
 
     /// Construct the namespace with telemetry, manifest storage, and host provider config.
@@ -130,15 +177,12 @@ impl Namespace {
         telemetry_manifest: TelemetryManifestStore,
         host: HostNamespaceConfig,
     ) -> Self {
-        let mut namespace = Self {
-            root: Node::directory(Vec::new()),
-            trace: TraceFs::new(),
+        Self::new_with_telemetry_manifest_host_policy(
             telemetry,
             telemetry_manifest,
             host,
-        };
-        namespace.bootstrap();
-        namespace
+            PolicyNamespaceConfig::disabled(),
+        )
     }
 
     /// Retrieve the root Qid.
@@ -149,6 +193,11 @@ impl Namespace {
     /// Return the configured host mount path, if enabled.
     pub fn host_mount_path(&self) -> Option<&[String]> {
         self.host.enabled.then_some(self.host.mount_path.as_slice())
+    }
+
+    /// Return true when policy namespaces are enabled.
+    pub fn policy_enabled(&self) -> bool {
+        self.policy.enabled
     }
 
     /// Read bytes from the supplied path.
@@ -451,6 +500,10 @@ impl Namespace {
         if self.host.enabled {
             self.bootstrap_host().expect("create /host namespace");
         }
+        if self.policy.enabled {
+            self.bootstrap_policy()
+                .expect("create /policy namespace");
+        }
     }
 
     fn bootstrap_host(&mut self) -> Result<(), NineDoorError> {
@@ -466,6 +519,18 @@ impl Namespace {
                 HostProvider::Net => self.ensure_dir(&host_root, "net")?,
             }
         }
+        Ok(())
+    }
+
+    fn bootstrap_policy(&mut self) -> Result<(), NineDoorError> {
+        self.ensure_dir(&[], "policy")?;
+        let policy_root = vec!["policy".to_owned()];
+        let rules_snapshot = self.policy.rules_snapshot.clone();
+        self.ensure_append_only_file(&policy_root, "ctl", b"")?;
+        self.ensure_read_only_file(&policy_root, "rules", &rules_snapshot)?;
+        self.ensure_dir(&[], "actions")?;
+        let actions_root = vec!["actions".to_owned()];
+        self.ensure_append_only_file(&actions_root, "queue", b"")?;
         Ok(())
     }
 
@@ -691,6 +756,30 @@ impl Namespace {
         node.remove_child(name);
         node.ensure_file(name, FileNode::AppendOnly(data.to_vec()));
         Ok(())
+    }
+
+    /// Replace the `/policy/ctl` contents.
+    pub fn set_policy_ctl_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["policy".to_owned()];
+        self.set_append_only_file(&parent, "ctl", data)
+    }
+
+    /// Replace the `/actions/queue` contents.
+    pub fn set_action_queue_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["actions".to_owned()];
+        self.set_append_only_file(&parent, "queue", data)
+    }
+
+    /// Replace the `/actions/<id>/status` contents.
+    pub fn set_action_status_payload(
+        &mut self,
+        action_id: &str,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        let root = vec!["actions".to_owned()];
+        self.ensure_dir(&root, action_id)?;
+        let status_root = vec!["actions".to_owned(), action_id.to_owned()];
+        self.set_read_only_file(&status_root, "status", data)
     }
 }
 

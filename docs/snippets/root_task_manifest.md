@@ -26,7 +26,7 @@
 - `features.std_host_tools`: `false`
 - `namespaces.role_isolation`: `true`
 - `tickets`: 3 entries
-- `manifest.sha256`: `4d97e292f06d2311493fd09b6e1442edef3b03c544148ffad4f00559a8529111`
+- `manifest.sha256`: `09e9cf4605174cbb41993b5c5035466b81edf24f70c08c89c49d535bfa01e9c3`
 
 ### Namespace mounts (generated)
 - (none)
@@ -37,7 +37,13 @@
 - `ecosystem.host.providers`: `(none)`
 - `ecosystem.audit.enable`: `false`
 - `ecosystem.policy.enable`: `false`
+- `ecosystem.policy.queue_max_entries`: `32`
+- `ecosystem.policy.queue_max_bytes`: `4096`
+- `ecosystem.policy.ctl_max_bytes`: `2048`
+- `ecosystem.policy.status_max_bytes`: `512`
+- `ecosystem.policy.rules`: `queen-ctl` → `/queen/ctl`
+- `ecosystem.policy.rules`: `systemd-restart` → `/host/systemd/*/restart`
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `4d97e292f06d2311493fd09b6e1442edef3b03c544148ffad4f00559a8529111`)._
+_Generated from `configs/root_task.toml` (sha256: `09e9cf4605174cbb41993b5c5035466b81edf24f70c08c89c49d535bfa01e9c3`)._
