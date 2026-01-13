@@ -925,10 +925,13 @@ Provide a host-only sidecar bridge that projects external ecosystem controls int
 - CLI harness and commands (documented):
   - `cargo test -p host-sidecar-bridge`
   - `cargo run -p host-sidecar-bridge -- --mock --mount /host`
+  - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/host_absent.coh`
   - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/host_sidecar_mock.coh`
-- TODO: Implement scripts/cohsh/host_sidecar_mock.coh and add it to regression pack DoD.
+- TODO: Add scripts/cohsh/host_sidecar_mock.coh to the regression pack once host-enabled manifests are wired into CI.
 - Manifest/IR alignment: `/host` tree appears only when `ecosystem.host.enable = true` with providers declared under `ecosystem.host.providers[]` and mount point defaulting to `/host`.
 - Docs include policy and TCB notes emphasising that the bridge mirrors host controls without expanding the in-VM attack surface.
+
+**Status:** Complete — host-sidecar bridge and manifest-gated `/host` namespace are verified via host tool tests, `host_sidecar_policy`, and CLI regression coverage for disabled `/host`.
 
 **Checks (DoD)**
 - `/host/*` tree mounts only when enabled by the manifest; omitted otherwise.

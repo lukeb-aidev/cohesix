@@ -9,6 +9,7 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPTS=(
     "boot_v0.coh"
     "9p_batch.coh"
+    "host_absent.coh"
     "telemetry_ring.coh"
     "observe_watch.coh"
     "cas_roundtrip.coh"
@@ -137,6 +138,9 @@ run_cohsh() {
             ;;
         9p_batch.coh)
             ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/9p_batch.coh
+            ;;
+        host_absent.coh)
+            ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/host_absent.coh
             ;;
         telemetry_ring.coh)
             ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/telemetry_ring.coh
