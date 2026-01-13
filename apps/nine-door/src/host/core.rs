@@ -19,10 +19,15 @@ use trace_model::TraceLevel;
 use worker_gpu::{GpuLease as WorkerGpuLease, JobDescriptor};
 
 use super::control::{
-    format_host_write_audit, host_write_target, BudgetCommand, HostWriteOutcome, HostWriteTarget,
+    format_host_write_audit, format_policy_action_audit, format_policy_gate_allow,
+    format_policy_gate_deny, host_write_target, BudgetCommand, HostWriteOutcome, HostWriteTarget,
     KillCommand, QueenCommand, SpawnCommand, SpawnTarget,
 };
-use super::namespace::{HostNamespaceConfig, Namespace};
+use super::namespace::{HostNamespaceConfig, Namespace, PolicyNamespaceConfig};
+use super::policy::{
+    PolicyActionAudit, PolicyConfig, PolicyGateAllowance, PolicyGateDecision, PolicyGateDenial,
+    PolicyStore,
+};
 use super::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 use super::telemetry::{TelemetryConfig, TelemetryManifestStore};
 use super::{Clock, NineDoorError};
@@ -58,11 +63,24 @@ impl ServerCore {
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
         host: HostNamespaceConfig,
+        policy: PolicyConfig,
     ) -> Self {
         let pipeline = Pipeline::new(PipelineConfig::from_limits(limits));
+        let policy_store = PolicyStore::new(policy).expect("policy config");
+        let policy_namespace = if policy_store.enabled() {
+            PolicyNamespaceConfig::enabled(policy_store.rules_snapshot().to_vec())
+        } else {
+            PolicyNamespaceConfig::disabled()
+        };
         Self {
             codec: Codec,
-            control: ControlPlane::new(telemetry, telemetry_manifest, host),
+            control: ControlPlane::new(
+                telemetry,
+                telemetry_manifest,
+                host,
+                policy_namespace,
+                policy_store,
+            ),
             next_session: 1,
             sessions: HashMap::new(),
             ticket_keys: HashMap::new(),
@@ -802,6 +820,19 @@ impl ServerCore {
             }
             entry.canonical_path.clone()
         };
+        let policy_enabled = self.control.policy_enabled();
+        if policy_enabled && is_policy_ctl_path(&path) {
+            let count = self.control.process_policy_ctl_write(offset, data)?;
+            return Ok(ResponseBody::Write { count });
+        }
+        if policy_enabled && is_actions_queue_path(&path) {
+            let (count, actions) = self.control.process_action_queue_write(offset, data)?;
+            for action in actions {
+                self.control
+                    .record_policy_action_audit(&action, role, ticket.as_deref())?;
+            }
+            return Ok(ResponseBody::Write { count });
+        }
         let host_target = host_write_target(&path, host_mount);
         if let Some(target) = host_target.as_ref() {
             if role != Some(Role::Queen) {
@@ -816,6 +847,26 @@ impl ServerCore {
             }
         }
         AccessPolicy::ensure_write(role, worker_id, gpu_scope, host_mount, &path)?;
+        if policy_enabled {
+            let decision = self.control.consume_policy_gate(&path)?;
+            match decision {
+                PolicyGateDecision::Allowed(allowance) => {
+                    if matches!(allowance, PolicyGateAllowance::Action { .. }) {
+                        self.control
+                            .record_policy_gate_audit(&path, &allowance, role, ticket.as_deref())?;
+                    }
+                }
+                PolicyGateDecision::Denied(denial) => {
+                    self.control.record_policy_gate_denial(
+                        &path,
+                        &denial,
+                        role,
+                        ticket.as_deref(),
+                    )?;
+                    return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
+                }
+            }
+        }
         let telemetry_write = worker_id
             .map(|id| is_worker_telemetry_path(&path, id))
             .unwrap_or(false);
@@ -951,6 +1002,7 @@ struct ControlPlane {
     services: HashMap<String, Vec<String>>,
     gpu_nodes: HashSet<String>,
     active_leases: HashMap<String, String>,
+    policy: PolicyStore,
 }
 
 impl ControlPlane {
@@ -958,12 +1010,15 @@ impl ControlPlane {
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
         host: HostNamespaceConfig,
+        policy_namespace: PolicyNamespaceConfig,
+        policy: PolicyStore,
     ) -> Self {
         Self {
-            namespace: Namespace::new_with_telemetry_manifest_and_host(
+            namespace: Namespace::new_with_telemetry_manifest_host_policy(
                 telemetry,
                 telemetry_manifest,
                 host,
+                policy_namespace,
             ),
             workers: HashMap::new(),
             next_worker_id: 1,
@@ -971,6 +1026,7 @@ impl ControlPlane {
             services: HashMap::new(),
             gpu_nodes: HashSet::new(),
             active_leases: HashMap::new(),
+            policy,
         }
     }
 
@@ -984,6 +1040,10 @@ impl ControlPlane {
 
     fn host_mount_path(&self) -> Option<&[String]> {
         self.namespace.host_mount_path()
+    }
+
+    fn policy_enabled(&self) -> bool {
+        self.policy.enabled()
     }
 
     fn worker_record(&self, worker_id: &str) -> Option<&WorkerRecord> {
@@ -1094,6 +1154,57 @@ impl ControlPlane {
             }
         }
         Ok(events)
+    }
+
+    fn process_policy_ctl_write(
+        &mut self,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<u32, NineDoorError> {
+        let outcome = self.policy.append_policy_ctl(offset, data)?;
+        self.namespace
+            .set_policy_ctl_payload(self.policy.ctl_log())?;
+        Ok(outcome.count)
+    }
+
+    fn process_action_queue_write(
+        &mut self,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<(u32, Vec<PolicyActionAudit>), NineDoorError> {
+        let outcome = self.policy.append_action_queue(offset, data)?;
+        self.namespace
+            .set_action_queue_payload(self.policy.queue_log())?;
+        for action in &outcome.appended {
+            if let Some(payload) = self.policy.action_status_payload(&action.id) {
+                self.namespace
+                    .set_action_status_payload(&action.id, &payload)?;
+            }
+        }
+        Ok((outcome.count, outcome.appended))
+    }
+
+    fn consume_policy_gate(
+        &mut self,
+        path: &[String],
+    ) -> Result<PolicyGateDecision, NineDoorError> {
+        let decision = self.policy.consume_gate(path);
+        match &decision {
+            PolicyGateDecision::Allowed(allowance) => {
+                if let PolicyGateAllowance::Action { id, .. } = allowance {
+                    if let Some(payload) = self.policy.action_status_payload(id) {
+                        self.namespace.set_action_status_payload(id, &payload)?;
+                    }
+                }
+            }
+            PolicyGateDecision::Denied(PolicyGateDenial::Action { id, .. }) => {
+                if let Some(payload) = self.policy.action_status_payload(id) {
+                    self.namespace.set_action_status_payload(id, &payload)?;
+                }
+            }
+            PolicyGateDecision::Denied(PolicyGateDenial::Missing) => {}
+        }
+        Ok(decision)
     }
 
     fn process_gpu_job(
@@ -1318,6 +1429,40 @@ impl ControlPlane {
             HostWriteOutcome::Denied => TraceLevel::Warn,
         };
         self.log_event("host", level, None, &message)
+    }
+
+    fn record_policy_action_audit(
+        &mut self,
+        action: &PolicyActionAudit,
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<(), NineDoorError> {
+        let message = format_policy_action_audit(action, role, ticket);
+        self.log_event("policy", TraceLevel::Info, None, &message)
+    }
+
+    fn record_policy_gate_audit(
+        &mut self,
+        path: &[String],
+        allowance: &PolicyGateAllowance,
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<(), NineDoorError> {
+        if let Some(message) = format_policy_gate_allow(path, allowance, role, ticket) {
+            self.log_event("policy", TraceLevel::Info, None, &message)?;
+        }
+        Ok(())
+    }
+
+    fn record_policy_gate_denial(
+        &mut self,
+        path: &[String],
+        denial: &PolicyGateDenial,
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<(), NineDoorError> {
+        let message = format_policy_gate_deny(path, denial, role, ticket);
+        self.log_event("policy", TraceLevel::Warn, None, &message)
     }
 
     fn append_queen_log(&mut self, message: &str) -> Result<(), NineDoorError> {
@@ -1956,6 +2101,14 @@ fn is_gpu_ctl_path(path: &[String], scope: &str) -> bool {
 
 fn is_queen_ctl_path(path: &[String]) -> bool {
     matches!(path, [first, second] if first == "queen" && second == "ctl")
+}
+
+fn is_policy_ctl_path(path: &[String]) -> bool {
+    matches!(path, [first, second] if first == "policy" && second == "ctl")
+}
+
+fn is_actions_queue_path(path: &[String]) -> bool {
+    matches!(path, [first, second] if first == "actions" && second == "queue")
 }
 
 fn parse_role_from_uname(uname: &str) -> Result<(Role, Option<String>), NineDoorError> {

@@ -12,6 +12,8 @@ const MAX_WALK_DEPTH: usize = 8;
 const MAX_MSIZE: u32 = 8192;
 const EVENT_PUMP_TELEMETRY_BUDGET_BYTES: u32 = 32 * 1024;
 const EVENT_PUMP_MAX_TELEMETRY_WORKERS: u32 = 8;
+const MAX_POLICY_QUEUE_ENTRIES: u16 = 64;
+const MAX_POLICY_RULE_ID_LEN: usize = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -115,6 +117,7 @@ impl Manifest {
     }
 
     fn validate_ecosystem(&self) -> Result<()> {
+        self.validate_policy()?;
         if !self.ecosystem.host.enable {
             return Ok(());
         }
@@ -127,6 +130,55 @@ impl Manifest {
         }
         if !self.namespaces.role_isolation {
             bail!("ecosystem.host.enable requires namespaces.role_isolation = true");
+        }
+        Ok(())
+    }
+
+    fn validate_policy(&self) -> Result<()> {
+        let policy = &self.ecosystem.policy;
+        if policy.queue_max_entries == 0 {
+            bail!("ecosystem.policy.queue_max_entries must be >= 1");
+        }
+        if policy.queue_max_entries > MAX_POLICY_QUEUE_ENTRIES {
+            bail!(
+                "ecosystem.policy.queue_max_entries {} exceeds max {}",
+                policy.queue_max_entries,
+                MAX_POLICY_QUEUE_ENTRIES
+            );
+        }
+        let msize = self.secure9p.msize;
+        if policy.queue_max_bytes == 0 {
+            bail!("ecosystem.policy.queue_max_bytes must be >= 1");
+        }
+        if policy.queue_max_bytes > msize {
+            bail!(
+                "ecosystem.policy.queue_max_bytes {} exceeds secure9p.msize {}",
+                policy.queue_max_bytes,
+                msize
+            );
+        }
+        if policy.ctl_max_bytes == 0 {
+            bail!("ecosystem.policy.ctl_max_bytes must be >= 1");
+        }
+        if policy.ctl_max_bytes > msize {
+            bail!(
+                "ecosystem.policy.ctl_max_bytes {} exceeds secure9p.msize {}",
+                policy.ctl_max_bytes,
+                msize
+            );
+        }
+        if policy.status_max_bytes == 0 {
+            bail!("ecosystem.policy.status_max_bytes must be >= 1");
+        }
+        if policy.status_max_bytes > msize {
+            bail!(
+                "ecosystem.policy.status_max_bytes {} exceeds secure9p.msize {}",
+                policy.status_max_bytes,
+                msize
+            );
+        }
+        for rule in &policy.rules {
+            validate_policy_rule(rule)?;
         }
         Ok(())
     }
@@ -310,7 +362,7 @@ pub struct NamespaceMount {
 pub struct Ecosystem {
     pub host: EcosystemHost,
     pub audit: FeatureFlag,
-    pub policy: FeatureFlag,
+    pub policy: PolicyConfig,
     pub models: FeatureFlag,
 }
 
@@ -358,7 +410,7 @@ impl Default for Ecosystem {
         Self {
             host: EcosystemHost::default(),
             audit: FeatureFlag::default(),
-            policy: FeatureFlag::default(),
+            policy: PolicyConfig::default(),
             models: FeatureFlag::default(),
         }
     }
@@ -406,6 +458,38 @@ impl Default for FeatureFlag {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PolicyConfig {
+    pub enable: bool,
+    pub queue_max_entries: u16,
+    pub queue_max_bytes: u32,
+    pub ctl_max_bytes: u32,
+    pub status_max_bytes: u32,
+    #[serde(default)]
+    pub rules: Vec<PolicyRule>,
+}
+
+impl Default for PolicyConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            queue_max_entries: 32,
+            queue_max_bytes: 4096,
+            ctl_max_bytes: 2048,
+            status_max_bytes: 512,
+            rules: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyRule {
+    pub id: String,
+    pub target: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Role {
@@ -426,6 +510,46 @@ impl Role {
 
 fn default_host_mount() -> String {
     "/host".to_owned()
+}
+
+fn validate_policy_rule(rule: &PolicyRule) -> Result<()> {
+    let id = rule.id.trim();
+    if id.is_empty() {
+        bail!("ecosystem.policy.rules[].id must not be empty");
+    }
+    if id.len() > MAX_POLICY_RULE_ID_LEN {
+        bail!(
+            "ecosystem.policy.rules[].id '{}' exceeds max length {}",
+            id,
+            MAX_POLICY_RULE_ID_LEN
+        );
+    }
+    let target = rule.target.trim();
+    if !target.starts_with('/') {
+        bail!("ecosystem.policy.rules[].target must be absolute");
+    }
+    let components: Vec<&str> = target.split('/').filter(|seg| !seg.is_empty()).collect();
+    if components.is_empty() {
+        bail!("ecosystem.policy.rules[].target must not be root");
+    }
+    if components.len() > MAX_WALK_DEPTH {
+        bail!(
+            "ecosystem.policy.rules[].target exceeds walk depth {}",
+            MAX_WALK_DEPTH
+        );
+    }
+    for component in components {
+        if component == ".." {
+            bail!("ecosystem.policy.rules[].target contains disallowed '..'");
+        }
+        if component.is_empty() {
+            bail!("ecosystem.policy.rules[].target contains empty component");
+        }
+        if component.contains('*') && component != "*" {
+            bail!("ecosystem.policy.rules[].target wildcard must be '*'");
+        }
+    }
+    Ok(())
 }
 
 pub fn load_manifest(path: &Path) -> Result<Manifest> {

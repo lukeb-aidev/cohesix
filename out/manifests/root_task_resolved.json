@@ -62,7 +62,21 @@
       "enable": false
     },
     "policy": {
-      "enable": false
+      "enable": false,
+      "queue_max_entries": 32,
+      "queue_max_bytes": 4096,
+      "ctl_max_bytes": 2048,
+      "status_max_bytes": 512,
+      "rules": [
+        {
+          "id": "queen-ctl",
+          "target": "/queen/ctl"
+        },
+        {
+          "id": "systemd-restart",
+          "target": "/host/systemd/*/restart"
+        }
+      ]
     },
     "models": {
       "enable": false

@@ -36,6 +36,25 @@ pub fn emit_cli_script(manifest: &Manifest, path: &Path) -> Result<()> {
             manifest.ecosystem.host.mount_at, providers
         ));
     }
+    let policy = &manifest.ecosystem.policy;
+    contents.push_str(&format!(
+        "# /policy gate enabled={} queue_max_entries={} queue_max_bytes={} ctl_max_bytes={} status_max_bytes={}\n",
+        policy.enable,
+        policy.queue_max_entries,
+        policy.queue_max_bytes,
+        policy.ctl_max_bytes,
+        policy.status_max_bytes
+    ));
+    if policy.rules.is_empty() {
+        contents.push_str("# policy rules: (none)\n");
+    } else {
+        for rule in &policy.rules {
+            contents.push_str(&format!(
+                "# policy rule {} -> {}\n",
+                rule.id, rule.target
+            ));
+        }
+    }
     contents.push_str("log\nEXPECT OK\nWAIT 250\nquit\n");
     fs::write(path, contents)
         .with_context(|| format!("failed to write cli script {}", path.display()))?;

@@ -282,6 +282,48 @@ pub fn validate_script<R: BufRead>(reader: R) -> Result<()> {
     Ok(())
 }
 
+/// Tokenize `.coh` script contents into a deterministic stream for regression checks.
+pub fn tokenize_script<R: BufRead>(reader: R) -> Result<Vec<String>> {
+    let lines = parse_script_lines(reader)?;
+    let mut tokens = Vec::new();
+    let mut last_command_seen = false;
+    for entry in &lines {
+        let text = entry.text.as_str();
+        let mut parts = text.split_whitespace();
+        let Some(keyword) = parts.next() else {
+            continue;
+        };
+        if keyword == "EXPECT" {
+            if !last_command_seen {
+                return Err(format_script_error(
+                    entry.number,
+                    text,
+                    None,
+                    "EXPECT requires a prior command response",
+                ));
+            }
+            let rest = text.strip_prefix("EXPECT").unwrap_or(text).trim_start();
+            let selector = parse_expect_selector(entry, rest, None)?;
+            let rendered = match selector {
+                ExpectSelector::Ok => "EXPECT OK".to_owned(),
+                ExpectSelector::Err => "EXPECT ERR".to_owned(),
+                ExpectSelector::Substr(value) => format!("EXPECT SUBSTR {value}"),
+                ExpectSelector::Not(value) => format!("EXPECT NOT {value}"),
+            };
+            tokens.push(rendered);
+            continue;
+        }
+        if keyword == "WAIT" {
+            let millis = parse_wait_ms(entry, text, None)?;
+            tokens.push(format!("WAIT {millis}"));
+            continue;
+        }
+        last_command_seen = true;
+        tokens.push(text.to_owned());
+    }
+    Ok(tokens)
+}
+
 /// Transport abstraction used by the shell to interact with the system.
 pub trait Transport {
     /// Attach to the transport using the specified role and optional ticket payload.
