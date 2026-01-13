@@ -113,6 +113,56 @@ impl PolicyNamespaceConfig {
     }
 }
 
+/// Configuration describing whether `/audit` should be mounted.
+#[derive(Debug, Clone)]
+pub struct AuditNamespaceConfig {
+    enabled: bool,
+    export_snapshot: Vec<u8>,
+}
+
+impl AuditNamespaceConfig {
+    /// Construct a disabled audit configuration.
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            export_snapshot: Vec::new(),
+        }
+    }
+
+    /// Construct an enabled audit configuration with the export snapshot payload.
+    pub fn enabled(export_snapshot: Vec<u8>) -> Self {
+        Self {
+            enabled: true,
+            export_snapshot,
+        }
+    }
+}
+
+/// Configuration describing whether `/replay` should be mounted.
+#[derive(Debug, Clone)]
+pub struct ReplayNamespaceConfig {
+    enabled: bool,
+    status_snapshot: Vec<u8>,
+}
+
+impl ReplayNamespaceConfig {
+    /// Construct a disabled replay configuration.
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            status_snapshot: Vec::new(),
+        }
+    }
+
+    /// Construct an enabled replay configuration with the status payload.
+    pub fn enabled(status_snapshot: Vec<u8>) -> Self {
+        Self {
+            enabled: true,
+            status_snapshot,
+        }
+    }
+}
+
 /// Synthetic namespace backing the NineDoor Secure9P server.
 #[derive(Debug)]
 pub struct Namespace {
@@ -122,6 +172,8 @@ pub struct Namespace {
     telemetry_manifest: TelemetryManifestStore,
     host: HostNamespaceConfig,
     policy: PolicyNamespaceConfig,
+    audit: AuditNamespaceConfig,
+    replay: ReplayNamespaceConfig,
 }
 
 impl Namespace {
@@ -138,6 +190,8 @@ impl Namespace {
             TelemetryManifestStore::default(),
             HostNamespaceConfig::disabled(),
             PolicyNamespaceConfig::disabled(),
+            AuditNamespaceConfig::disabled(),
+            ReplayNamespaceConfig::disabled(),
         )
     }
 
@@ -151,6 +205,8 @@ impl Namespace {
             telemetry_manifest,
             HostNamespaceConfig::disabled(),
             PolicyNamespaceConfig::disabled(),
+            AuditNamespaceConfig::disabled(),
+            ReplayNamespaceConfig::disabled(),
         )
     }
 
@@ -160,6 +216,8 @@ impl Namespace {
         telemetry_manifest: TelemetryManifestStore,
         host: HostNamespaceConfig,
         policy: PolicyNamespaceConfig,
+        audit: AuditNamespaceConfig,
+        replay: ReplayNamespaceConfig,
     ) -> Self {
         let mut namespace = Self {
             root: Node::directory(Vec::new()),
@@ -168,6 +226,8 @@ impl Namespace {
             telemetry_manifest,
             host,
             policy,
+            audit,
+            replay,
         };
         namespace.bootstrap();
         namespace
@@ -184,6 +244,8 @@ impl Namespace {
             telemetry_manifest,
             host,
             PolicyNamespaceConfig::disabled(),
+            AuditNamespaceConfig::disabled(),
+            ReplayNamespaceConfig::disabled(),
         )
     }
 
@@ -404,6 +466,15 @@ impl Namespace {
         &mut self.trace
     }
 
+    /// Emit an audit notice through the telemetry audit sink.
+    pub fn emit_audit_notice(
+        &mut self,
+        level: TelemetryAuditLevel,
+        message: impl Into<String>,
+    ) -> Result<(), NineDoorError> {
+        self.record_telemetry_audit(TelemetryAudit::audit_notice(level, message))
+    }
+
     fn record_telemetry_audit(&mut self, audit: TelemetryAudit) -> Result<(), NineDoorError> {
         let level = match audit.level {
             TelemetryAuditLevel::Info => TraceLevel::Info,
@@ -506,6 +577,14 @@ impl Namespace {
             self.bootstrap_policy()
                 .expect("create /policy namespace");
         }
+        if self.audit.enabled {
+            self.bootstrap_audit()
+                .expect("create /audit namespace");
+        }
+        if self.replay.enabled {
+            self.bootstrap_replay()
+                .expect("create /replay namespace");
+        }
     }
 
     fn bootstrap_host(&mut self) -> Result<(), NineDoorError> {
@@ -533,6 +612,25 @@ impl Namespace {
         self.ensure_dir(&[], "actions")?;
         let actions_root = vec!["actions".to_owned()];
         self.ensure_append_only_file(&actions_root, "queue", b"")?;
+        Ok(())
+    }
+
+    fn bootstrap_audit(&mut self) -> Result<(), NineDoorError> {
+        self.ensure_dir(&[], "audit")?;
+        let audit_root = vec!["audit".to_owned()];
+        self.ensure_append_only_file(&audit_root, "journal", b"")?;
+        self.ensure_append_only_file(&audit_root, "decisions", b"")?;
+        let export_snapshot = self.audit.export_snapshot.clone();
+        self.ensure_read_only_file(&audit_root, "export", &export_snapshot)?;
+        Ok(())
+    }
+
+    fn bootstrap_replay(&mut self) -> Result<(), NineDoorError> {
+        self.ensure_dir(&[], "replay")?;
+        let replay_root = vec!["replay".to_owned()];
+        self.ensure_append_only_file(&replay_root, "ctl", b"")?;
+        let status_snapshot = self.replay.status_snapshot.clone();
+        self.ensure_read_only_file(&replay_root, "status", &status_snapshot)?;
         Ok(())
     }
 
@@ -782,6 +880,36 @@ impl Namespace {
         self.ensure_dir(&root, action_id)?;
         let status_root = vec!["actions".to_owned(), action_id.to_owned()];
         self.set_read_only_file(&status_root, "status", data)
+    }
+
+    /// Replace the `/audit/journal` contents.
+    pub fn set_audit_journal_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["audit".to_owned()];
+        self.set_append_only_file(&parent, "journal", data)
+    }
+
+    /// Replace the `/audit/decisions` contents.
+    pub fn set_audit_decisions_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["audit".to_owned()];
+        self.set_append_only_file(&parent, "decisions", data)
+    }
+
+    /// Replace the `/audit/export` contents.
+    pub fn set_audit_export_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["audit".to_owned()];
+        self.set_read_only_file(&parent, "export", data)
+    }
+
+    /// Replace the `/replay/ctl` contents.
+    pub fn set_replay_ctl_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["replay".to_owned()];
+        self.set_append_only_file(&parent, "ctl", data)
+    }
+
+    /// Replace the `/replay/status` contents.
+    pub fn set_replay_status_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["replay".to_owned()];
+        self.set_read_only_file(&parent, "status", data)
     }
 }
 

@@ -25,13 +25,18 @@ use super::control::{
     format_policy_gate_deny, host_write_target, BudgetCommand, HostWriteOutcome, HostWriteTarget,
     KillCommand, QueenCommand, SpawnCommand, SpawnTarget,
 };
-use super::namespace::{HostNamespaceConfig, Namespace, PolicyNamespaceConfig};
+use super::audit::{
+    AuditConfig, AuditStore, ControlOutcome, PolicyActionDecision as AuditPolicyActionDecision,
+    PolicyGateDecision as AuditPolicyGateDecision, ReplayWindowError,
+};
+use super::namespace::{AuditNamespaceConfig, HostNamespaceConfig, Namespace, PolicyNamespaceConfig, ReplayNamespaceConfig};
 use super::policy::{
-    PolicyActionAudit, PolicyConfig, PolicyGateAllowance, PolicyGateDecision, PolicyGateDenial,
-    PolicyStore,
+    PolicyActionAudit, PolicyConfig, PolicyDecision, PolicyGateAllowance, PolicyGateDecision,
+    PolicyGateDenial, PolicyStore,
 };
 use super::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
-use super::telemetry::{TelemetryConfig, TelemetryManifestStore};
+use super::replay::ReplayState;
+use super::telemetry::{TelemetryAuditLevel, TelemetryConfig, TelemetryManifestStore};
 use super::{Clock, NineDoorError};
 
 // New server core implementation and access policy are defined below.
@@ -66,6 +71,7 @@ impl ServerCore {
         telemetry_manifest: TelemetryManifestStore,
         host: HostNamespaceConfig,
         policy: PolicyConfig,
+        audit: AuditConfig,
     ) -> Self {
         let pipeline = Pipeline::new(PipelineConfig::from_limits(limits));
         let policy_store = PolicyStore::new(policy).expect("policy config");
@@ -73,6 +79,18 @@ impl ServerCore {
             PolicyNamespaceConfig::enabled(policy_store.rules_snapshot().to_vec())
         } else {
             PolicyNamespaceConfig::disabled()
+        };
+        let audit_store = AuditStore::new(audit);
+        let audit_namespace = if audit_store.enabled() {
+            AuditNamespaceConfig::enabled(audit_store.export_snapshot().to_vec())
+        } else {
+            AuditNamespaceConfig::disabled()
+        };
+        let replay_state = ReplayState::new(audit_store.replay_config());
+        let replay_namespace = if replay_state.enabled() {
+            ReplayNamespaceConfig::enabled(replay_state.status().to_vec())
+        } else {
+            ReplayNamespaceConfig::disabled()
         };
         Self {
             codec: Codec,
@@ -82,6 +100,10 @@ impl ServerCore {
                 host,
                 policy_namespace,
                 policy_store,
+                audit_namespace,
+                audit_store,
+                replay_namespace,
+                replay_state,
             ),
             next_session: 1,
             sessions: HashMap::new(),
@@ -823,6 +845,32 @@ impl ServerCore {
             entry.canonical_path.clone()
         };
         let policy_enabled = self.control.policy_enabled();
+        let audit_enabled = self.control.audit_enabled();
+        if audit_enabled && is_audit_journal_path(&path) {
+            let count = self
+                .control
+                .process_audit_journal_write(offset, data, role, ticket.as_deref())?;
+            return Ok(ResponseBody::Write { count });
+        }
+        if audit_enabled && is_audit_decisions_path(&path) {
+            self.control.record_audit_denial("audit decisions write denied")?;
+            return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
+        }
+        if audit_enabled && is_audit_export_path(&path) {
+            self.control.record_audit_denial("audit export write denied")?;
+            return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
+        }
+        let replay_enabled = self.control.replay_enabled();
+        if replay_enabled && is_replay_ctl_path(&path) {
+            let count = self
+                .control
+                .process_replay_ctl_write(offset, data)?;
+            return Ok(ResponseBody::Write { count });
+        }
+        if replay_enabled && is_replay_status_path(&path) {
+            self.control.record_audit_denial("replay status write denied")?;
+            return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
+        }
         if policy_enabled && is_policy_ctl_path(&path) {
             let count = self.control.process_policy_ctl_write(offset, data)?;
             return Ok(ResponseBody::Write { count });
@@ -832,6 +880,9 @@ impl ServerCore {
             for action in actions {
                 self.control
                     .record_policy_action_audit(&action, role, ticket.as_deref())?;
+                if audit_enabled {
+                    self.control.record_decision_action(&action, role, ticket.as_deref())?;
+                }
             }
             return Ok(ResponseBody::Write { count });
         }
@@ -845,6 +896,15 @@ impl ServerCore {
                     ticket.as_deref(),
                     None,
                 )?;
+                if audit_enabled {
+                    self.control.record_control_audit(
+                        path.as_slice(),
+                        data,
+                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                        role,
+                        ticket.as_deref(),
+                    )?;
+                }
                 return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
             }
         }
@@ -857,6 +917,10 @@ impl ServerCore {
                         self.control
                             .record_policy_gate_audit(&path, &allowance, role, ticket.as_deref())?;
                     }
+                    if audit_enabled {
+                        self.control
+                            .record_decision_gate(&path, &allowance, role, ticket.as_deref())?;
+                    }
                 }
                 PolicyGateDecision::Denied(denial) => {
                     self.control.record_policy_gate_denial(
@@ -865,6 +929,19 @@ impl ServerCore {
                         role,
                         ticket.as_deref(),
                     )?;
+                    if audit_enabled {
+                        self.control
+                            .record_decision_gate_denial(&path, &denial, role, ticket.as_deref())?;
+                        if is_queen_ctl_path(&path) || host_target.is_some() {
+                            self.control.record_control_audit(
+                                path.as_slice(),
+                                data,
+                                ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                                role,
+                                ticket.as_deref(),
+                            )?;
+                        }
+                    }
                     return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
                 }
             }
@@ -884,7 +961,9 @@ impl ServerCore {
             }
         }
         if is_queen_ctl_path(&path) {
-            let events = self.control.process_queen_write(data)?;
+            let events = self
+                .control
+                .process_queen_write(data, role, ticket.as_deref())?;
             let role = state.role();
             let worker_id_owned = state.worker_id().map(|id| id.to_owned());
             let worker_id = worker_id_owned.as_deref();
@@ -914,6 +993,15 @@ impl ServerCore {
                 ticket.as_deref(),
                 Some(count),
             )?;
+            if audit_enabled {
+                self.control.record_control_audit(
+                    path.as_slice(),
+                    data,
+                    ControlOutcome::ok(),
+                    role,
+                    ticket.as_deref(),
+                )?;
+            }
             Ok(ResponseBody::Write { count })
         } else {
             let count = self
@@ -1005,6 +1093,8 @@ struct ControlPlane {
     gpu_nodes: HashSet<String>,
     active_leases: HashMap<String, String>,
     policy: PolicyStore,
+    audit: AuditStore,
+    replay: ReplayState,
 }
 
 impl ControlPlane {
@@ -1014,6 +1104,10 @@ impl ControlPlane {
         host: HostNamespaceConfig,
         policy_namespace: PolicyNamespaceConfig,
         policy: PolicyStore,
+        audit_namespace: AuditNamespaceConfig,
+        audit: AuditStore,
+        replay_namespace: ReplayNamespaceConfig,
+        replay: ReplayState,
     ) -> Self {
         Self {
             namespace: Namespace::new_with_telemetry_manifest_host_policy(
@@ -1021,6 +1115,8 @@ impl ControlPlane {
                 telemetry_manifest,
                 host,
                 policy_namespace,
+                audit_namespace,
+                replay_namespace,
             ),
             workers: HashMap::new(),
             next_worker_id: 1,
@@ -1029,6 +1125,8 @@ impl ControlPlane {
             gpu_nodes: HashSet::new(),
             active_leases: HashMap::new(),
             policy,
+            audit,
+            replay,
         }
     }
 
@@ -1046,6 +1144,14 @@ impl ControlPlane {
 
     fn policy_enabled(&self) -> bool {
         self.policy.enabled()
+    }
+
+    fn audit_enabled(&self) -> bool {
+        self.audit.enabled()
+    }
+
+    fn replay_enabled(&self) -> bool {
+        self.replay.enabled()
     }
 
     fn worker_record(&self, worker_id: &str) -> Option<&WorkerRecord> {
@@ -1082,7 +1188,12 @@ impl ControlPlane {
         Ok(())
     }
 
-    fn process_queen_write(&mut self, data: &[u8]) -> Result<Vec<QueenEvent>, NineDoorError> {
+    fn process_queen_write(
+        &mut self,
+        data: &[u8],
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<Vec<QueenEvent>, NineDoorError> {
         let ctl_path = vec!["queen".to_owned(), "ctl".to_owned()];
         self.namespace.write_append(&ctl_path, u64::MAX, data)?;
         let text = str::from_utf8(data).map_err(|err| {
@@ -1097,63 +1208,104 @@ impl ControlPlane {
             if trimmed.is_empty() {
                 continue;
             }
-            let command = QueenCommand::parse(trimmed)?;
-            match command {
+            let command = match QueenCommand::parse(trimmed) {
+                Ok(command) => command,
+                Err(err) => {
+                    self.record_control_audit(
+                        ctl_path.as_slice(),
+                        trimmed.as_bytes(),
+                        ControlOutcome::from_error(&err),
+                        role,
+                        ticket,
+                    )?;
+                    return Err(err);
+                }
+            };
+            let outcome = match command {
                 QueenCommand::Spawn(spec) => {
-                    let worker_id = self.spawn_worker(&spec)?;
-                    events.push(QueenEvent::Spawned(worker_id));
+                    let result = self.spawn_worker(&spec).map(|worker_id| {
+                        events.push(QueenEvent::Spawned(worker_id));
+                    });
+                    result
                 }
                 QueenCommand::Kill(KillCommand { kill }) => {
-                    self.kill_worker(&kill)?;
-                    events.push(QueenEvent::Killed(kill));
+                    let result = self.kill_worker(&kill).map(|()| {
+                        events.push(QueenEvent::Killed(kill));
+                    });
+                    result
                 }
                 QueenCommand::Budget(payload) => {
-                    self.update_default_budget(&payload)?;
-                    events.push(QueenEvent::BudgetUpdated);
+                    let result = self.update_default_budget(&payload).map(|()| {
+                        events.push(QueenEvent::BudgetUpdated);
+                    });
+                    result
                 }
                 QueenCommand::Bind(command) => {
-                    let (from_raw, to_raw, source, mount) = command.into_parts()?;
-                    if mount.is_empty() {
-                        return Err(NineDoorError::protocol(
-                            ErrorCode::Invalid,
-                            "bind target must not be root",
-                        ));
-                    }
-                    self.namespace.lookup(&source)?;
-                    self.log_event(
-                        "queen",
-                        TraceLevel::Info,
-                        None,
-                        &format!("bound {from_raw} -> {to_raw}"),
-                    )?;
-                    events.push(QueenEvent::Bound {
-                        target: source,
-                        mount,
+                    let result = command.into_parts().and_then(|(from_raw, to_raw, source, mount)| {
+                        if mount.is_empty() {
+                            return Err(NineDoorError::protocol(
+                                ErrorCode::Invalid,
+                                "bind target must not be root",
+                            ));
+                        }
+                        self.namespace.lookup(&source)?;
+                        self.log_event(
+                            "queen",
+                            TraceLevel::Info,
+                            None,
+                            &format!("bound {from_raw} -> {to_raw}"),
+                        )?;
+                        events.push(QueenEvent::Bound {
+                            target: source,
+                            mount,
+                        });
+                        Ok(())
                     });
+                    result
                 }
                 QueenCommand::Mount(command) => {
-                    let (service, at_raw, mount) = command.into_parts()?;
-                    if mount.is_empty() {
-                        return Err(NineDoorError::protocol(
-                            ErrorCode::Invalid,
-                            "mount point must not be root",
-                        ));
-                    }
-                    let Some(target) = self.resolve_service(&service) else {
-                        return Err(NineDoorError::protocol(
-                            ErrorCode::NotFound,
-                            format!("service {service} not registered"),
-                        ));
-                    };
-                    self.log_event(
-                        "queen",
-                        TraceLevel::Info,
-                        None,
-                        &format!("mounted {service} at {at_raw}"),
-                    )?;
-                    events.push(QueenEvent::Mounted { target, mount });
+                    let result = command.into_parts().and_then(|(service, at_raw, mount)| {
+                        if mount.is_empty() {
+                            return Err(NineDoorError::protocol(
+                                ErrorCode::Invalid,
+                                "mount point must not be root",
+                            ));
+                        }
+                        let Some(target) = self.resolve_service(&service) else {
+                            return Err(NineDoorError::protocol(
+                                ErrorCode::NotFound,
+                                format!("service {service} not registered"),
+                            ));
+                        };
+                        self.log_event(
+                            "queen",
+                            TraceLevel::Info,
+                            None,
+                            &format!("mounted {service} at {at_raw}"),
+                        )?;
+                        events.push(QueenEvent::Mounted { target, mount });
+                        Ok(())
+                    });
+                    result
                 }
+            };
+            if let Err(err) = outcome {
+                self.record_control_audit(
+                    ctl_path.as_slice(),
+                    trimmed.as_bytes(),
+                    ControlOutcome::from_error(&err),
+                    role,
+                    ticket,
+                )?;
+                return Err(err);
             }
+            self.record_control_audit(
+                ctl_path.as_slice(),
+                trimmed.as_bytes(),
+                ControlOutcome::ok(),
+                role,
+                ticket,
+            )?;
         }
         Ok(events)
     }
@@ -1184,6 +1336,269 @@ impl ControlPlane {
             }
         }
         Ok((outcome.count, outcome.appended))
+    }
+
+    fn process_audit_journal_write(
+        &mut self,
+        offset: u64,
+        data: &[u8],
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<u32, NineDoorError> {
+        let outcome = match self.audit.append_manual_journal(offset, data) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                let message = format!("audit journal append rejected: {err}");
+                self.log_event("audit", TraceLevel::Warn, None, &message)?;
+                return Err(err);
+            }
+        };
+        self.namespace
+            .set_audit_journal_payload(&self.audit.journal_payload())?;
+        self.namespace
+            .set_audit_export_payload(self.audit.export_snapshot())?;
+        if outcome.dropped_bytes > 0 {
+            let message = format!(
+                "audit journal truncation dropped_bytes={} new_base={}",
+                outcome.dropped_bytes, outcome.new_base
+            );
+            self.namespace
+                .emit_audit_notice(TelemetryAuditLevel::Warn, message.clone())?;
+            self.log_event("audit", TraceLevel::Warn, None, &message)?;
+        }
+        if let Some(role) = role {
+            let message = format!(
+                "audit journal append role={} ticket={} bytes={}",
+                role_label(role),
+                ticket.unwrap_or("none"),
+                outcome.count
+            );
+            self.log_event("audit", TraceLevel::Info, None, &message)?;
+        }
+        Ok(outcome.count)
+    }
+
+    fn process_replay_ctl_write(&mut self, offset: u64, data: &[u8]) -> Result<u32, NineDoorError> {
+        if !self.replay.enabled() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                "replay disabled",
+            ));
+        }
+        let command = match self.replay.append_ctl(offset, data) {
+            Ok(command) => command,
+            Err(err) => {
+                let message = format!("replay control rejected: {err}");
+                self.log_event("audit", TraceLevel::Warn, None, &message)?;
+                return Err(err);
+            }
+        };
+        self.namespace
+            .set_replay_ctl_payload(self.replay.ctl_log())?;
+        let summary = match self
+            .audit
+            .replay_summary(command.from, self.audit.replay_config().max_entries())
+        {
+            Ok(summary) => summary,
+            Err(err) => {
+                let (code, message) = match err {
+                    ReplayWindowError::Stale {
+                        requested,
+                        available_start,
+                    } => (
+                        ErrorCode::Invalid,
+                        format!(
+                            "replay cursor stale requested={} window_start={}",
+                            requested, available_start
+                        ),
+                    ),
+                    ReplayWindowError::Future {
+                        requested,
+                        available_end,
+                    } => (
+                        ErrorCode::Invalid,
+                        format!(
+                            "replay cursor beyond window requested={} window_end={}",
+                            requested, available_end
+                        ),
+                    ),
+                    ReplayWindowError::TooManyEntries { requested, max } => (
+                        ErrorCode::TooBig,
+                        format!("replay exceeds max entries {} > {}", requested, max),
+                    ),
+                };
+                self.replay.set_status_err(&message)?;
+                self.namespace
+                    .set_replay_status_payload(self.replay.status())?;
+                self.log_event("audit", TraceLevel::Warn, None, &message)?;
+                return Err(NineDoorError::protocol(code, message));
+            }
+        };
+        self.replay.set_status_ok(&summary)?;
+        self.namespace
+            .set_replay_status_payload(self.replay.status())?;
+        let message = format!(
+            "replay ok from={} to={} entries={} match=true",
+            summary.from, summary.to, summary.entries
+        );
+        self.log_event("audit", TraceLevel::Info, None, &message)?;
+        Ok(data.len() as u32)
+    }
+
+    fn record_control_audit(
+        &mut self,
+        path: &[String],
+        data: &[u8],
+        outcome: ControlOutcome,
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<(), NineDoorError> {
+        if !self.audit.enabled() {
+            return Ok(());
+        }
+        let path_label = format!("/{}", path.join("/"));
+        let role_label = role.map(role_label);
+        let outcome = self.audit.record_control(
+            path_label.as_str(),
+            data,
+            outcome,
+            role_label,
+            ticket,
+        )?;
+        self.namespace
+            .set_audit_journal_payload(&self.audit.journal_payload())?;
+        self.namespace
+            .set_audit_export_payload(self.audit.export_snapshot())?;
+        if outcome.dropped_bytes > 0 {
+            let message = format!(
+                "audit journal truncation dropped_bytes={} new_base={}",
+                outcome.dropped_bytes, outcome.new_base
+            );
+            self.namespace
+                .emit_audit_notice(TelemetryAuditLevel::Warn, message.clone())?;
+            self.log_event("audit", TraceLevel::Warn, None, &message)?;
+        }
+        Ok(())
+    }
+
+    fn record_decision_action(
+        &mut self,
+        action: &PolicyActionAudit,
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<(), NineDoorError> {
+        if !self.audit.enabled() {
+            return Ok(());
+        }
+        let decision = AuditPolicyActionDecision {
+            id: action.id.as_str(),
+            decision: policy_decision_label(action.decision),
+            target: action.target.as_str(),
+        };
+        let outcome = self
+            .audit
+            .record_decision_action(&decision, role.map(role_label), ticket)?;
+        self.namespace
+            .set_audit_decisions_payload(&self.audit.decisions_payload())?;
+        self.namespace
+            .set_audit_export_payload(self.audit.export_snapshot())?;
+        if outcome.dropped_bytes > 0 {
+            let message = format!(
+                "audit decisions truncation dropped_bytes={} new_base={}",
+                outcome.dropped_bytes, outcome.new_base
+            );
+            self.namespace
+                .emit_audit_notice(TelemetryAuditLevel::Warn, message.clone())?;
+            self.log_event("audit", TraceLevel::Warn, None, &message)?;
+        }
+        Ok(())
+    }
+
+    fn record_decision_gate(
+        &mut self,
+        path: &[String],
+        allowance: &PolicyGateAllowance,
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<(), NineDoorError> {
+        if !self.audit.enabled() {
+            return Ok(());
+        }
+        let path_label = format!("/{}", path.join("/"));
+        let decision = match allowance {
+            PolicyGateAllowance::Action { id, target } => AuditPolicyGateDecision {
+                outcome: "allow",
+                id: Some(id.as_str()),
+                target: Some(target.as_str()),
+                path: path_label.as_str(),
+            },
+            PolicyGateAllowance::Ungated | PolicyGateAllowance::NotRequired => return Ok(()),
+        };
+        let outcome = self
+            .audit
+            .record_decision_gate(&decision, role.map(role_label), ticket)?;
+        self.namespace
+            .set_audit_decisions_payload(&self.audit.decisions_payload())?;
+        self.namespace
+            .set_audit_export_payload(self.audit.export_snapshot())?;
+        if outcome.dropped_bytes > 0 {
+            let message = format!(
+                "audit decisions truncation dropped_bytes={} new_base={}",
+                outcome.dropped_bytes, outcome.new_base
+            );
+            self.namespace
+                .emit_audit_notice(TelemetryAuditLevel::Warn, message.clone())?;
+            self.log_event("audit", TraceLevel::Warn, None, &message)?;
+        }
+        Ok(())
+    }
+
+    fn record_decision_gate_denial(
+        &mut self,
+        path: &[String],
+        denial: &PolicyGateDenial,
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<(), NineDoorError> {
+        if !self.audit.enabled() {
+            return Ok(());
+        }
+        let path_label = format!("/{}", path.join("/"));
+        let decision = match denial {
+            PolicyGateDenial::Missing => AuditPolicyGateDecision {
+                outcome: "deny",
+                id: None,
+                target: None,
+                path: path_label.as_str(),
+            },
+            PolicyGateDenial::Action { id, target } => AuditPolicyGateDecision {
+                outcome: "deny",
+                id: Some(id.as_str()),
+                target: Some(target.as_str()),
+                path: path_label.as_str(),
+            },
+        };
+        let outcome = self
+            .audit
+            .record_decision_gate(&decision, role.map(role_label), ticket)?;
+        self.namespace
+            .set_audit_decisions_payload(&self.audit.decisions_payload())?;
+        self.namespace
+            .set_audit_export_payload(self.audit.export_snapshot())?;
+        if outcome.dropped_bytes > 0 {
+            let message = format!(
+                "audit decisions truncation dropped_bytes={} new_base={}",
+                outcome.dropped_bytes, outcome.new_base
+            );
+            self.namespace
+                .emit_audit_notice(TelemetryAuditLevel::Warn, message.clone())?;
+            self.log_event("audit", TraceLevel::Warn, None, &message)?;
+        }
+        Ok(())
+    }
+
+    fn record_audit_denial(&mut self, message: &str) -> Result<(), NineDoorError> {
+        self.log_event("audit", TraceLevel::Warn, None, message)
     }
 
     fn consume_policy_gate(
@@ -2111,6 +2526,41 @@ fn is_policy_ctl_path(path: &[String]) -> bool {
 
 fn is_actions_queue_path(path: &[String]) -> bool {
     matches!(path, [first, second] if first == "actions" && second == "queue")
+}
+
+fn is_audit_journal_path(path: &[String]) -> bool {
+    matches!(path, [first, second] if first == "audit" && second == "journal")
+}
+
+fn is_audit_decisions_path(path: &[String]) -> bool {
+    matches!(path, [first, second] if first == "audit" && second == "decisions")
+}
+
+fn is_audit_export_path(path: &[String]) -> bool {
+    matches!(path, [first, second] if first == "audit" && second == "export")
+}
+
+fn is_replay_ctl_path(path: &[String]) -> bool {
+    matches!(path, [first, second] if first == "replay" && second == "ctl")
+}
+
+fn is_replay_status_path(path: &[String]) -> bool {
+    matches!(path, [first, second] if first == "replay" && second == "status")
+}
+
+fn role_label(role: Role) -> &'static str {
+    match role {
+        Role::Queen => "queen",
+        Role::WorkerHeartbeat => "worker-heartbeat",
+        Role::WorkerGpu => "worker-gpu",
+    }
+}
+
+fn policy_decision_label(decision: PolicyDecision) -> &'static str {
+    match decision {
+        PolicyDecision::Approve => "approve",
+        PolicyDecision::Deny => "deny",
+    }
 }
 
 fn parse_role_from_uname(uname: &str) -> Result<(Role, Option<String>), NineDoorError> {

@@ -542,9 +542,10 @@ main() {
         fail "--cargo-target must be provided to build seL4 components"
     fi
 
-    log "Regenerating coh-rtc artefacts via: cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh --doc-snippet docs/snippets/root_task_manifest.md"
+    RTC_MANIFEST="${COH_RTC_MANIFEST:-$PROJECT_ROOT/configs/root_task.toml}"
+    log "Regenerating coh-rtc artefacts via: cargo run -p coh-rtc -- ${RTC_MANIFEST} --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh --doc-snippet docs/snippets/root_task_manifest.md"
     cargo run -p coh-rtc -- \
-        "$PROJECT_ROOT/configs/root_task.toml" \
+        "$RTC_MANIFEST" \
         --out "$PROJECT_ROOT/apps/root-task/src/generated" \
         --manifest "$PROJECT_ROOT/out/manifests/root_task_resolved.json" \
         --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \

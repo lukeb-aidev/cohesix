@@ -35,6 +35,14 @@ impl TelemetryAudit {
     pub fn new(level: TelemetryAuditLevel, message: String) -> Self {
         Self { level, message }
     }
+
+    /// Construct an audit entry suitable for external subsystems.
+    pub fn audit_notice(level: TelemetryAuditLevel, message: impl Into<String>) -> Self {
+        Self {
+            level,
+            message: message.into(),
+        }
+    }
 }
 
 /// Cursor retention configuration for telemetry rings.

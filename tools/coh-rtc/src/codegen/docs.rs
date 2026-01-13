@@ -204,6 +204,42 @@ impl DocFragments {
         .ok();
         writeln!(
             ecosystem_md,
+            "- `ecosystem.audit.journal_max_bytes`: `{}`",
+            manifest.ecosystem.audit.journal_max_bytes
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.audit.decisions_max_bytes`: `{}`",
+            manifest.ecosystem.audit.decisions_max_bytes
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.audit.replay_enable`: `{}`",
+            manifest.ecosystem.audit.replay_enable
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.audit.replay_max_entries`: `{}`",
+            manifest.ecosystem.audit.replay_max_entries
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.audit.replay_ctl_max_bytes`: `{}`",
+            manifest.ecosystem.audit.replay_ctl_max_bytes
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.audit.replay_status_max_bytes`: `{}`",
+            manifest.ecosystem.audit.replay_status_max_bytes
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
             "- `ecosystem.policy.enable`: `{}`",
             manifest.ecosystem.policy.enable
         )

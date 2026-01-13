@@ -1,0 +1,15 @@
+Welcome to Cohesix. Type 'help' for commands.
+detached shell: run 'attach <role>' to connect
+[cohsh][tcp] connected to 127.0.0.1:31337 (connects=1)
+[cohsh][tcp] remote NineDoor ready as role Queen
+[console] OK AUTH
+[console] OK ATTACH role=queen
+attached session SessionId(2) as Queen
+[console] OK CAT path=/replay/status data={"state":"idle"}
+[console] OK ECHO path=/host/k8s/node/node-1/cordon bytes=6
+[console] OK ECHO path=/host/k8s/node/node-1/drain bytes=5
+[console] OK CAT path=/audit/export data=
+[console] OK ECHO path=/replay/ctl bytes=10
+[console] OK CAT path=/replay/status data={"state":"ok","from":0,"to":268,"entries":2,"match":true,"sequence_fnv1a":"6df28b82c98d2471"}
+[console] ERR ECHO reason=ninedoor-error error=invalid payload
+closing session

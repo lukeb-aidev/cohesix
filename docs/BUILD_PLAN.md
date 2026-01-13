@@ -1066,8 +1066,10 @@ Provide append-only audit logs and a bounded replay surface that re-applies Cohe
   - Only replays Cohesix-issued control-plane actions (no arbitrary host scans) and respects bounded log windows.
   - Deterministic execution: same inputs → same ACK/ERR + audit lines regardless of transport (serial/TCP).
 - CLI regression exercising record then replay of a scripted sequence with byte-identical acknowledgements.
-- TODO: Implement scripts/cohsh/replay_journal.coh and add it to regression pack DoD.
+- `scripts/cohsh/replay_journal.coh` is part of the regression pack.
 - Audit logging integrates with telemetry rings without adding new protocols; storage remains bounded per manifest budget.
+
+**Status:** Complete — AuditFS/ReplayFS surfaces, manifest gating, tests, and regression scripts are in place and pass deterministically.
 
 **Commands**
 - `cargo test -p nine-door`

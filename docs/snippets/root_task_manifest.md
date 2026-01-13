@@ -26,7 +26,7 @@
 - `features.std_host_tools`: `false`
 - `namespaces.role_isolation`: `true`
 - `tickets`: 3 entries
-- `manifest.sha256`: `09e9cf4605174cbb41993b5c5035466b81edf24f70c08c89c49d535bfa01e9c3`
+- `manifest.sha256`: `6f58dd705b235b26f0b3524f4a5d632d664015be6338c06e4953257ea0c83413`
 
 ### Namespace mounts (generated)
 - (none)
@@ -36,6 +36,12 @@
 - `ecosystem.host.mount_at`: `/host`
 - `ecosystem.host.providers`: `(none)`
 - `ecosystem.audit.enable`: `false`
+- `ecosystem.audit.journal_max_bytes`: `8192`
+- `ecosystem.audit.decisions_max_bytes`: `4096`
+- `ecosystem.audit.replay_enable`: `false`
+- `ecosystem.audit.replay_max_entries`: `64`
+- `ecosystem.audit.replay_ctl_max_bytes`: `1024`
+- `ecosystem.audit.replay_status_max_bytes`: `1024`
 - `ecosystem.policy.enable`: `false`
 - `ecosystem.policy.queue_max_entries`: `32`
 - `ecosystem.policy.queue_max_bytes`: `4096`
@@ -46,4 +52,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `09e9cf4605174cbb41993b5c5035466b81edf24f70c08c89c49d535bfa01e9c3`)._
+_Generated from `configs/root_task.toml` (sha256: `6f58dd705b235b26f0b3524f4a5d632d664015be6338c06e4953257ea0c83413`)._

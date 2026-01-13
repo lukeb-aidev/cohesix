@@ -59,7 +59,13 @@
       "mount_at": "/host"
     },
     "audit": {
-      "enable": false
+      "enable": false,
+      "journal_max_bytes": 8192,
+      "decisions_max_bytes": 4096,
+      "replay_enable": false,
+      "replay_max_entries": 64,
+      "replay_ctl_max_bytes": 1024,
+      "replay_status_max_bytes": 1024
     },
     "policy": {
       "enable": false,

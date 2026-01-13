@@ -7,7 +7,7 @@
 ## 1. Roles
 | Role | Capabilities | Namespace |
 |------|--------------|-----------|
-| **Queen** | Hive-wide orchestrator driven by `cohsh`: spawn/kill workers, bind/mount namespaces, inspect logs, request GPU leases across many worker instances | Full `/`, `/queen`, `/worker/*`, `/log`, `/gpu/*` (when installed) |
+| **Queen** | Hive-wide orchestrator driven by `cohsh`: spawn/kill workers, bind/mount namespaces, inspect logs, request GPU leases across many worker instances | Full `/`, `/queen`, `/worker/*`, `/log`, `/gpu/*` (when installed), plus `/policy` + `/actions` and `/audit` + `/replay` when enabled |
 | **WorkerHeartbeat** | Minimal worker that emits heartbeat telemetry and confirms console/attach paths; many instances may run concurrently under the Queen | `/proc/boot`, `/worker/self/telemetry`, `/log/queen.log` (RO) |
 | **WorkerGpu** | GPU-centric worker that reads ticket/lease state and reports telemetry for host-provided GPU nodes; treated as another worker type under the Queen | WorkerHeartbeat view + `/gpu/<id>/*` |
 | **Observer** (future) | Read-only status access | `/proc`, `/log` |

@@ -117,6 +117,17 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "    pub rules: &'static [PolicyRule],")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct AuditConfig {{")?;
+    writeln!(mod_contents, "    pub enable: bool,")?;
+    writeln!(mod_contents, "    pub journal_max_bytes: u32,")?;
+    writeln!(mod_contents, "    pub decisions_max_bytes: u32,")?;
+    writeln!(mod_contents, "    pub replay_enable: bool,")?;
+    writeln!(mod_contents, "    pub replay_max_entries: u16,")?;
+    writeln!(mod_contents, "    pub replay_ctl_max_bytes: u32,")?;
+    writeln!(mod_contents, "    pub replay_status_max_bytes: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const MANIFEST_SCHEMA: &str = \"{}\";", manifest.root_task.schema)?;
     writeln!(mod_contents, "pub const MANIFEST_SHA256: &str = \"{}\";", manifest_hash)?;
     writeln!(mod_contents, "pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;")?;
@@ -128,6 +139,7 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "pub const HOST_CONFIG: HostConfig = bootstrap::HOST_CONFIG;")?;
     writeln!(mod_contents, "pub const POLICY_CONFIG: PolicyConfig = bootstrap::POLICY_CONFIG;")?;
     writeln!(mod_contents, "pub const POLICY_RULES_JSON: &str = bootstrap::POLICY_RULES_JSON;")?;
+    writeln!(mod_contents, "pub const AUDIT_CONFIG: AuditConfig = bootstrap::AUDIT_CONFIG;")?;
     writeln!(mod_contents, "pub const EVENT_PUMP_FDS: &[&str] = &bootstrap::EVENT_PUMP_FDS;")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn ticket_inventory() -> &'static [TicketSpec] {{")?;
@@ -166,6 +178,10 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "    bootstrap::POLICY_RULES_JSON")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn audit_config() -> AuditConfig {{")?;
+    writeln!(mod_contents, "    bootstrap::AUDIT_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn event_pump_fds() -> &'static [&'static str] {{")?;
     writeln!(mod_contents, "    &bootstrap::EVENT_PUMP_FDS")?;
     writeln!(mod_contents, "}}")?;
@@ -197,7 +213,7 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{CachePolicy, HostConfig, HostProvider, NamespaceMount, PolicyConfig, PolicyLimits, PolicyRule, Secure9pLimits, ShortWritePolicy, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
+        "use super::{{AuditConfig, CachePolicy, HostConfig, HostProvider, NamespaceMount, PolicyConfig, PolicyLimits, PolicyRule, Secure9pLimits, ShortWritePolicy, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -308,6 +324,17 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
         bootstrap_contents,
         "pub const POLICY_RULES_JSON: &str = \"{}\";\n",
         escape_literal(&policy_rules_json)
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const AUDIT_CONFIG: AuditConfig = AuditConfig {{ enable: {}, journal_max_bytes: {}, decisions_max_bytes: {}, replay_enable: {}, replay_max_entries: {}, replay_ctl_max_bytes: {}, replay_status_max_bytes: {} }};\n",
+        manifest.ecosystem.audit.enable,
+        manifest.ecosystem.audit.journal_max_bytes,
+        manifest.ecosystem.audit.decisions_max_bytes,
+        manifest.ecosystem.audit.replay_enable,
+        manifest.ecosystem.audit.replay_max_entries,
+        manifest.ecosystem.audit.replay_ctl_max_bytes,
+        manifest.ecosystem.audit.replay_status_max_bytes
     )?;
     writeln!(
         bootstrap_contents,

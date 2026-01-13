@@ -99,8 +99,19 @@ pub struct PolicyConfig {
     pub rules: &'static [PolicyRule],
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct AuditConfig {
+    pub enable: bool,
+    pub journal_max_bytes: u32,
+    pub decisions_max_bytes: u32,
+    pub replay_enable: bool,
+    pub replay_max_entries: u16,
+    pub replay_ctl_max_bytes: u32,
+    pub replay_status_max_bytes: u32,
+}
+
 pub const MANIFEST_SCHEMA: &str = "1.2";
-pub const MANIFEST_SHA256: &str = "09e9cf4605174cbb41993b5c5035466b81edf24f70c08c89c49d535bfa01e9c3";
+pub const MANIFEST_SHA256: &str = "6f58dd705b235b26f0b3524f4a5d632d664015be6338c06e4953257ea0c83413";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
@@ -110,6 +121,7 @@ pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;
 pub const HOST_CONFIG: HostConfig = bootstrap::HOST_CONFIG;
 pub const POLICY_CONFIG: PolicyConfig = bootstrap::POLICY_CONFIG;
 pub const POLICY_RULES_JSON: &str = bootstrap::POLICY_RULES_JSON;
+pub const AUDIT_CONFIG: AuditConfig = bootstrap::AUDIT_CONFIG;
 pub const EVENT_PUMP_FDS: &[&str] = &bootstrap::EVENT_PUMP_FDS;
 
 pub const fn ticket_inventory() -> &'static [TicketSpec] {
@@ -146,6 +158,10 @@ pub const fn policy_config() -> PolicyConfig {
 
 pub const fn policy_rules_json() -> &'static str {
     bootstrap::POLICY_RULES_JSON
+}
+
+pub const fn audit_config() -> AuditConfig {
+    bootstrap::AUDIT_CONFIG
 }
 
 pub const fn event_pump_fds() -> &'static [&'static str] {

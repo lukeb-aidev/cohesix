@@ -1,8 +1,8 @@
 # Author: Lukas Bower
-# Purpose: Define the root-task manifest consumed by coh-rtc.
+# Purpose: Regression manifest enabling host/policy/audit/replay surfaces for cohsh scripts.
 [meta]
 author = "Lukas Bower"
-purpose = "Root-task manifest input for coh-rtc."
+purpose = "Regression manifest enabling host/policy/audit/replay surfaces."
 
 [root_task]
 schema = "1.2"
@@ -58,21 +58,21 @@ role = "worker-gpu"
 secret = "worker-gpu"
 
 [ecosystem.host]
-enable = false
-providers = []
+enable = true
+providers = ["systemd", "k8s"]
 mount_at = "/host"
 
 [ecosystem.audit]
-enable = false
+enable = true
 journal_max_bytes = 8192
 decisions_max_bytes = 4096
-replay_enable = false
+replay_enable = true
 replay_max_entries = 64
 replay_ctl_max_bytes = 1024
 replay_status_max_bytes = 1024
 
 [ecosystem.policy]
-enable = false
+enable = true
 queue_max_entries = 32
 queue_max_bytes = 4096
 ctl_max_bytes = 2048

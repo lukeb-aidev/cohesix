@@ -47,6 +47,17 @@ pub fn emit_cli_script(manifest: &Manifest, path: &Path) -> Result<()> {
         policy.ctl_max_bytes,
         policy.status_max_bytes
     ));
+    let audit = &manifest.ecosystem.audit;
+    contents.push_str(&format!(
+        "# /audit enabled={} journal_max_bytes={} decisions_max_bytes={} replay_enable={} replay_max_entries={} replay_ctl_max_bytes={} replay_status_max_bytes={}\n",
+        audit.enable,
+        audit.journal_max_bytes,
+        audit.decisions_max_bytes,
+        audit.replay_enable,
+        audit.replay_max_entries,
+        audit.replay_ctl_max_bytes,
+        audit.replay_status_max_bytes
+    ));
     if policy.rules.is_empty() {
         contents.push_str("# policy rules: (none)\n");
     } else {

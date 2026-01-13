@@ -13,10 +13,11 @@ use crate::event::AuditSink;
 use crate::generated;
 use crate::log_buffer;
 use crate::serial::DEFAULT_LINE_CAPACITY;
-use alloc::{string::String, vec::Vec};
+use alloc::{collections::VecDeque, format, string::String, vec::Vec};
 use core::fmt::{self, Write};
 use core::str;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
+use secure9p_codec::ErrorCode;
 
 const LOG_PATH: &str = "/log/queen.log";
 const QUEEN_CTL_PATH: &str = "/queen/ctl";
@@ -37,6 +38,13 @@ const POLICY_RULES_PATH: &str = "/policy/rules";
 const POLICY_ROOT_PATH: &str = "/policy";
 const ACTIONS_QUEUE_PATH: &str = "/actions/queue";
 const ACTIONS_ROOT_PATH: &str = "/actions";
+const AUDIT_ROOT_PATH: &str = "/audit";
+const AUDIT_JOURNAL_PATH: &str = "/audit/journal";
+const AUDIT_DECISIONS_PATH: &str = "/audit/decisions";
+const AUDIT_EXPORT_PATH: &str = "/audit/export";
+const REPLAY_ROOT_PATH: &str = "/replay";
+const REPLAY_CTL_PATH: &str = "/replay/ctl";
+const REPLAY_STATUS_PATH: &str = "/replay/status";
 const MAX_POLICY_PATH_COMPONENTS: usize = 8;
 const MAX_ACTION_ID_LEN: usize = 64;
 const SYSTEMD_UNITS: [&str; 2] = ["cohesix-agent.service", "ssh.service"];
@@ -67,6 +75,8 @@ pub struct NineDoorBridge {
     workers: HeaplessVec<WorkerTelemetry, MAX_WORKERS>,
     host: HostState,
     policy: PolicyState,
+    audit: AuditState,
+    replay: ReplayState,
 }
 
 /// Errors surfaced by [`NineDoorBridge`] operations.
@@ -116,6 +126,8 @@ impl NineDoorBridge {
             workers: HeaplessVec::new(),
             host: HostState::new(),
             policy: PolicyState::new(),
+            audit: AuditState::new(generated::audit_config()),
+            replay: ReplayState::new(generated::audit_config()),
         }
     }
 
@@ -209,7 +221,20 @@ impl NineDoorBridge {
             // Truncated audit line is acceptable.
         }
         audit.info(message.as_str());
-        self.handle_queen_ctl(payload)
+        let result = self.handle_queen_ctl(payload);
+        if self.audit.enabled {
+            let outcome = ControlOutcome::from_result(&result);
+            let role = self.role_label();
+            let ticket = String::from(self.ticket_label());
+            self.audit.record_control(
+                QUEEN_CTL_PATH,
+                payload,
+                outcome,
+                role,
+                ticket.as_str(),
+            )?;
+        }
+        result
     }
 
     /// Handle a kill request.
@@ -223,7 +248,21 @@ impl NineDoorBridge {
             // Truncated audit line is acceptable.
         }
         audit.info(message.as_str());
-        self.remove_worker(identifier)
+        let payload = format!("{{\"kill\":\"{}\"}}", escape_json_string(identifier));
+        let result = self.remove_worker(identifier);
+        if self.audit.enabled {
+            let outcome = ControlOutcome::from_result(&result);
+            let role = self.role_label();
+            let ticket = String::from(self.ticket_label());
+            self.audit.record_control(
+                QUEEN_CTL_PATH,
+                payload.as_str(),
+                outcome,
+                role,
+                ticket.as_str(),
+            )?;
+        }
+        result
     }
 
     /// Append a payload line to an append-only file.
@@ -236,6 +275,25 @@ impl NineDoorBridge {
             log_buffer::append_log_line(payload);
             return Ok(());
         }
+        if self.audit.enabled {
+            if path == AUDIT_JOURNAL_PATH {
+                self.audit.append_manual_journal(payload)?;
+                return Ok(());
+            }
+            if path == AUDIT_DECISIONS_PATH || path == AUDIT_EXPORT_PATH {
+                return Err(NineDoorBridgeError::Permission);
+            }
+        }
+        if self.replay.enabled {
+            if path == REPLAY_CTL_PATH {
+                self.replay
+                    .handle_ctl(payload, &mut self.audit)?;
+                return Ok(());
+            }
+            if path == REPLAY_STATUS_PATH {
+                return Err(NineDoorBridgeError::Permission);
+            }
+        }
         if self.policy.enabled {
             if path == POLICY_CTL_PATH {
                 self.policy.append_policy_ctl(payload)?;
@@ -244,21 +302,78 @@ impl NineDoorBridge {
             if path == ACTIONS_QUEUE_PATH {
                 let role = self.role_label();
                 let ticket = String::from(self.ticket_label());
+                let before = self.policy.actions.len();
                 self.policy
                     .append_action_queue(payload, role, ticket.as_str())?;
+                if self.audit.enabled {
+                    for action in self.policy.actions.iter().skip(before) {
+                        self.audit.record_decision_action(action, role, ticket.as_str())?;
+                    }
+                }
                 return Ok(());
             }
         }
         if path == QUEEN_CTL_PATH {
-            self.apply_policy_gate(path)?;
-            return self.handle_queen_ctl(payload);
+            let role = self.role_label();
+            let ticket = String::from(self.ticket_label());
+            let decision = self.apply_policy_gate(path)?;
+            match decision {
+                PolicyGateDecision::Denied(_) => {
+                    if self.audit.enabled {
+                        self.audit.record_control(
+                            path,
+                            payload,
+                            ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                            role,
+                            ticket.as_str(),
+                        )?;
+                    }
+                    return Err(NineDoorBridgeError::Permission);
+                }
+                PolicyGateDecision::Allowed(_) => {}
+            }
+            let result = self.handle_queen_ctl(payload);
+            if self.audit.enabled {
+                let outcome = ControlOutcome::from_result(&result);
+                self.audit
+                    .record_control(path, payload, outcome, role, ticket.as_str())?;
+            }
+            return result;
         }
         if let Some(control) = self.host.control_label(path) {
             if !self.is_queen() {
                 self.log_host_write(path, Some(control), HostWriteOutcome::Denied, None);
+                if self.audit.enabled {
+                    let role = self.role_label();
+                    let ticket = String::from(self.ticket_label());
+                    self.audit.record_control(
+                        path,
+                        payload,
+                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                        role,
+                        ticket.as_str(),
+                    )?;
+                }
                 return Err(NineDoorBridgeError::Permission);
             }
-            self.apply_policy_gate(path)?;
+            let role = self.role_label();
+            let ticket = String::from(self.ticket_label());
+            let decision = self.apply_policy_gate(path)?;
+            match decision {
+                PolicyGateDecision::Denied(_) => {
+                    if self.audit.enabled {
+                        self.audit.record_control(
+                            path,
+                            payload,
+                            ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                            role,
+                            ticket.as_str(),
+                        )?;
+                    }
+                    return Err(NineDoorBridgeError::Permission);
+                }
+                PolicyGateDecision::Allowed(_) => {}
+            }
             self.host.update_value(path, payload);
             self.log_host_write(
                 path,
@@ -266,10 +381,30 @@ impl NineDoorBridge {
                 HostWriteOutcome::Allowed,
                 Some(payload.len()),
             );
+            if self.audit.enabled {
+                self.audit.record_control(
+                    path,
+                    payload,
+                    ControlOutcome::ok(),
+                    role,
+                    ticket.as_str(),
+                )?;
+            }
             return Ok(());
         }
         if self.host.entry_value(path).is_some() {
             self.log_host_write(path, None, HostWriteOutcome::Denied, None);
+            if self.audit.enabled {
+                let role = self.role_label();
+                let ticket = String::from(self.ticket_label());
+                self.audit.record_control(
+                    path,
+                    payload,
+                    ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                    role,
+                    ticket.as_str(),
+                )?;
+            }
             return Err(NineDoorBridgeError::Permission);
         }
         if let Some(worker_id) = parse_worker_telemetry_path(path) {
@@ -291,6 +426,25 @@ impl NineDoorBridge {
                 DEFAULT_LINE_CAPACITY,
                 MAX_STREAM_LINES,
             >());
+        }
+        if self.audit.enabled {
+            if path == AUDIT_JOURNAL_PATH {
+                return lines_from_bytes(&self.audit.journal_snapshot());
+            }
+            if path == AUDIT_DECISIONS_PATH {
+                return lines_from_bytes(&self.audit.decisions_snapshot());
+            }
+            if path == AUDIT_EXPORT_PATH {
+                return lines_from_bytes(&self.audit.export_snapshot());
+            }
+        }
+        if self.replay.enabled {
+            if path == REPLAY_CTL_PATH {
+                return lines_from_bytes(self.replay.ctl_log());
+            }
+            if path == REPLAY_STATUS_PATH {
+                return lines_from_bytes(self.replay.status());
+            }
         }
         if self.policy.enabled {
             if path == POLICY_RULES_PATH {
@@ -347,6 +501,12 @@ impl NineDoorBridge {
                 push_list_entry(&mut output, "policy")?;
                 push_list_entry(&mut output, "actions")?;
             }
+            if self.audit.enabled {
+                push_list_entry(&mut output, "audit")?;
+            }
+            if self.replay.enabled {
+                push_list_entry(&mut output, "replay")?;
+            }
             return Ok(output);
         }
         if path == "/log" {
@@ -378,6 +538,12 @@ impl NineDoorBridge {
             if path == ACTIONS_ROOT_PATH {
                 return list_from_slice(&["queue"]);
             }
+        }
+        if self.audit.enabled && path == AUDIT_ROOT_PATH {
+            return list_from_slice(&["journal", "decisions", "export"]);
+        }
+        if self.replay.enabled && path == REPLAY_ROOT_PATH {
+            return list_from_slice(&["ctl", "status"]);
         }
         if let Some(output) = self.host.list(path) {
             return Ok(output);
@@ -488,20 +654,34 @@ impl NineDoorBridge {
         matches!(self.session_role, Some(SessionRoleLabel::Queen))
     }
 
-    fn apply_policy_gate(&mut self, path: &str) -> Result<(), NineDoorBridgeError> {
+    fn apply_policy_gate(
+        &mut self,
+        path: &str,
+    ) -> Result<PolicyGateDecision, NineDoorBridgeError> {
         let decision = self.policy.consume_gate(path);
-        match decision {
+        match &decision {
             PolicyGateDecision::Allowed(allowance) => {
                 if matches!(allowance, PolicyGateAllowance::Action { .. }) {
-                    self.log_policy_gate_allow(path, &allowance);
+                    self.log_policy_gate_allow(path, allowance);
                 }
-                Ok(())
+                if self.audit.enabled {
+                    let role = self.role_label();
+                    let ticket = String::from(self.ticket_label());
+                    self.audit
+                        .record_decision_gate(path, allowance, role, ticket.as_str())?;
+                }
             }
             PolicyGateDecision::Denied(denial) => {
-                self.log_policy_gate_deny(path, &denial);
-                Err(NineDoorBridgeError::Permission)
+                self.log_policy_gate_deny(path, denial);
+                if self.audit.enabled {
+                    let role = self.role_label();
+                    let ticket = String::from(self.ticket_label());
+                    self.audit
+                        .record_decision_gate_denial(path, denial, role, ticket.as_str())?;
+                }
             }
         }
+        Ok(decision)
     }
 
     fn action_status_lines(
@@ -1035,6 +1215,667 @@ enum PolicyGateDenial {
 }
 
 #[derive(Debug)]
+struct AuditState {
+    enabled: bool,
+    limits: AuditLimits,
+    replay_enabled: bool,
+    replay_max_entries: usize,
+    journal: BoundedLog,
+    decisions: BoundedLog,
+    replay_entries: VecDeque<ReplayEntry>,
+    sequence: u64,
+    export_snapshot: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AuditLimits {
+    journal_max_bytes: usize,
+    decisions_max_bytes: usize,
+}
+
+impl AuditState {
+    fn new(config: generated::AuditConfig) -> Self {
+        let limits = AuditLimits {
+            journal_max_bytes: config.journal_max_bytes as usize,
+            decisions_max_bytes: config.decisions_max_bytes as usize,
+        };
+        let journal = BoundedLog::new(limits.journal_max_bytes);
+        let decisions = BoundedLog::new(limits.decisions_max_bytes);
+        let replay_enabled = config.enable && config.replay_enable;
+        let mut state = Self {
+            enabled: config.enable,
+            limits,
+            replay_enabled,
+            replay_max_entries: config.replay_max_entries as usize,
+            journal,
+            decisions,
+            replay_entries: VecDeque::new(),
+            sequence: 0,
+            export_snapshot: Vec::new(),
+        };
+        state.refresh_export_snapshot();
+        state
+    }
+
+    fn append_manual_journal(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
+        validate_json_lines(payload)?;
+        let outcome = self.append_journal(payload.as_bytes(), None)?;
+        if outcome.dropped_bytes > 0 {
+            log_audit_wrap("journal", outcome.dropped_bytes, outcome.new_base);
+        }
+        Ok(())
+    }
+
+    fn record_control(
+        &mut self,
+        path: &str,
+        payload: &str,
+        outcome: ControlOutcome,
+        role: &str,
+        ticket: &str,
+    ) -> Result<(), NineDoorBridgeError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let kind = if path == QUEEN_CTL_PATH {
+            "queen-ctl"
+        } else {
+            "host-control"
+        };
+        let seq = self.next_sequence();
+        let path_label = escape_json_string(normalize_path(path).as_str());
+        let mut line = String::new();
+        let payload = escape_json_string(payload);
+        let role = escape_json_string(role);
+        let ticket = escape_json_string(ticket);
+        write!(
+            line,
+            "{{\"seq\":{},\"kind\":\"{}\",\"path\":\"{}\",\"payload\":\"{}\",\"outcome\":\"{}\"",
+            seq,
+            kind,
+            path_label,
+            payload,
+            outcome.status_label()
+        )
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        if let Some(error) = outcome.error_detail() {
+            let code = escape_json_string(error.code.as_str());
+            let message = escape_json_string(error.message);
+            write!(
+                line,
+                ",\"error\":{{\"code\":\"{}\",\"message\":\"{}\"}}",
+                code, message
+            )
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        }
+        write!(
+            line,
+            ",\"role\":\"{}\",\"ticket\":\"{}\"}}",
+            role, ticket
+        )
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        let bytes = ensure_line_terminated(line.as_bytes());
+        let replay_entry = Some(ReplayEntry::new(bytes.len() as u64, outcome.ack_line()));
+        let outcome = self.append_journal_bytes(bytes, replay_entry)?;
+        if outcome.dropped_bytes > 0 {
+            log_audit_wrap("journal", outcome.dropped_bytes, outcome.new_base);
+        }
+        Ok(())
+    }
+
+    fn record_decision_action(
+        &mut self,
+        action: &PolicyAction,
+        role: &str,
+        ticket: &str,
+    ) -> Result<(), NineDoorBridgeError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let seq = self.next_sequence();
+        let id = escape_json_string(action.id.as_str());
+        let target = escape_json_string(action.target.as_str());
+        let role = escape_json_string(role);
+        let ticket = escape_json_string(ticket);
+        let mut line = String::new();
+        write!(
+            line,
+            "{{\"seq\":{},\"kind\":\"policy-action\",\"outcome\":\"{}\",\"id\":\"{}\",\"target\":\"{}\",\"role\":\"{}\",\"ticket\":\"{}\"}}",
+            seq,
+            action.decision.as_str(),
+            id,
+            target,
+            role,
+            ticket
+        )
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        let outcome = self.append_decisions(line.as_bytes())?;
+        if outcome.dropped_bytes > 0 {
+            log_audit_wrap("decisions", outcome.dropped_bytes, outcome.new_base);
+        }
+        Ok(())
+    }
+
+    fn record_decision_gate(
+        &mut self,
+        path: &str,
+        allowance: &PolicyGateAllowance,
+        role: &str,
+        ticket: &str,
+    ) -> Result<(), NineDoorBridgeError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let (id, target) = match allowance {
+            PolicyGateAllowance::Action { id, target } => (Some(id.as_str()), Some(target.as_str())),
+            PolicyGateAllowance::Ungated | PolicyGateAllowance::NotRequired => return Ok(()),
+        };
+        let seq = self.next_sequence();
+        let path = escape_json_string(normalize_path(path).as_str());
+        let role = escape_json_string(role);
+        let ticket = escape_json_string(ticket);
+        let mut line = String::new();
+        write!(
+            line,
+            "{{\"seq\":{},\"kind\":\"policy-gate\",\"outcome\":\"allow\"",
+            seq
+        )
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        if let (Some(id), Some(target)) = (id, target) {
+            let id = escape_json_string(id);
+            let target = escape_json_string(target);
+            write!(line, ",\"id\":\"{}\",\"target\":\"{}\"", id, target)
+                .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        }
+        write!(
+            line,
+            ",\"path\":\"{}\",\"role\":\"{}\",\"ticket\":\"{}\"}}",
+            path, role, ticket
+        )
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        let outcome = self.append_decisions(line.as_bytes())?;
+        if outcome.dropped_bytes > 0 {
+            log_audit_wrap("decisions", outcome.dropped_bytes, outcome.new_base);
+        }
+        Ok(())
+    }
+
+    fn record_decision_gate_denial(
+        &mut self,
+        path: &str,
+        denial: &PolicyGateDenial,
+        role: &str,
+        ticket: &str,
+    ) -> Result<(), NineDoorBridgeError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let seq = self.next_sequence();
+        let path = escape_json_string(normalize_path(path).as_str());
+        let role = escape_json_string(role);
+        let ticket = escape_json_string(ticket);
+        let mut line = String::new();
+        write!(
+            line,
+            "{{\"seq\":{},\"kind\":\"policy-gate\",\"outcome\":\"deny\"",
+            seq
+        )
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        if let PolicyGateDenial::Action { id, target } = denial {
+            let id = escape_json_string(id.as_str());
+            let target = escape_json_string(target.as_str());
+            write!(line, ",\"id\":\"{}\",\"target\":\"{}\"", id, target)
+                .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        }
+        write!(
+            line,
+            ",\"path\":\"{}\",\"role\":\"{}\",\"ticket\":\"{}\"}}",
+            path, role, ticket
+        )
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        let outcome = self.append_decisions(line.as_bytes())?;
+        if outcome.dropped_bytes > 0 {
+            log_audit_wrap("decisions", outcome.dropped_bytes, outcome.new_base);
+        }
+        Ok(())
+    }
+
+    fn journal_snapshot(&self) -> Vec<u8> {
+        self.journal.snapshot()
+    }
+
+    fn decisions_snapshot(&self) -> Vec<u8> {
+        self.decisions.snapshot()
+    }
+
+    fn export_snapshot(&self) -> Vec<u8> {
+        self.export_snapshot.clone()
+    }
+
+    fn replay_summary(
+        &self,
+        from: u64,
+        max_entries: usize,
+    ) -> Result<ReplaySummary, ReplayWindowError> {
+        let bounds = self.journal.bounds();
+        if from < bounds.base_offset {
+            return Err(ReplayWindowError::Stale {
+                requested: from,
+                available_start: bounds.base_offset,
+            });
+        }
+        if from > bounds.next_offset {
+            return Err(ReplayWindowError::Future {
+                requested: from,
+                available_end: bounds.next_offset,
+            });
+        }
+        let mut sequence = String::new();
+        let mut count = 0usize;
+        for entry in self.replay_entries.iter() {
+            if entry.offset_end <= from {
+                continue;
+            }
+            count = count.saturating_add(1);
+            if count > max_entries {
+                return Err(ReplayWindowError::TooManyEntries {
+                    requested: count,
+                    max: max_entries,
+                });
+            }
+            sequence.push_str(entry.ack_line.as_str());
+            sequence.push('\n');
+        }
+        Ok(ReplaySummary {
+            from,
+            to: bounds.next_offset,
+            entries: count,
+            sequence,
+        })
+    }
+
+    fn append_journal(
+        &mut self,
+        payload: &[u8],
+        replay_entry: Option<ReplayEntry>,
+    ) -> Result<AuditAppendOutcome, NineDoorBridgeError> {
+        let bytes = ensure_line_terminated(payload);
+        self.append_journal_bytes(bytes, replay_entry)
+    }
+
+    fn append_journal_bytes(
+        &mut self,
+        bytes: Vec<u8>,
+        replay_entry: Option<ReplayEntry>,
+    ) -> Result<AuditAppendOutcome, NineDoorBridgeError> {
+        let outcome = self.journal.append(bytes)?;
+        if let Some(mut replay_entry) = replay_entry {
+            replay_entry.offset_start = outcome.offset_start;
+            replay_entry.offset_end = outcome.offset_end;
+            self.replay_entries.push_back(replay_entry);
+        }
+        self.trim_replay_entries();
+        self.refresh_export_snapshot();
+        Ok(outcome)
+    }
+
+    fn append_decisions(&mut self, payload: &[u8]) -> Result<AuditAppendOutcome, NineDoorBridgeError> {
+        let bytes = ensure_line_terminated(payload);
+        let outcome = self.decisions.append(bytes)?;
+        self.refresh_export_snapshot();
+        Ok(outcome)
+    }
+
+    fn trim_replay_entries(&mut self) {
+        let base = self.journal.bounds().base_offset;
+        while let Some(entry) = self.replay_entries.front() {
+            if entry.offset_end <= base {
+                let _ = self.replay_entries.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn refresh_export_snapshot(&mut self) {
+        let journal_bounds = self.journal.bounds();
+        let decisions_bounds = self.decisions.bounds();
+        self.export_snapshot = format!(
+            "{{\"journal_base\":{},\"journal_next\":{},\"decisions_base\":{},\"decisions_next\":{},\"replay_enabled\":{},\"replay_max_entries\":{}}}\n",
+            journal_bounds.base_offset,
+            journal_bounds.next_offset,
+            decisions_bounds.base_offset,
+            decisions_bounds.next_offset,
+            self.replay_enabled,
+            self.replay_max_entries
+        )
+        .into_bytes();
+    }
+
+    fn next_sequence(&mut self) -> u64 {
+        self.sequence = self.sequence.saturating_add(1);
+        self.sequence
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ControlOutcome {
+    status: ControlStatus,
+    error: Option<ControlError>,
+}
+
+impl ControlOutcome {
+    fn ok() -> Self {
+        Self {
+            status: ControlStatus::Ok,
+            error: None,
+        }
+    }
+
+    fn err(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            status: ControlStatus::Err,
+            error: Some(ControlError {
+                code,
+                message: message.into(),
+            }),
+        }
+    }
+
+    fn from_result(result: &Result<(), NineDoorBridgeError>) -> Self {
+        match result {
+            Ok(()) => Self::ok(),
+            Err(err) => Self::from_error(err),
+        }
+    }
+
+    fn from_error(error: &NineDoorBridgeError) -> Self {
+        let code = error_code_for_audit(error);
+        ControlOutcome::err(code, format!("{error}"))
+    }
+
+    fn status_label(&self) -> &'static str {
+        match self.status {
+            ControlStatus::Ok => "ok",
+            ControlStatus::Err => "err",
+        }
+    }
+
+    fn error_detail(&self) -> Option<ControlErrorDetail<'_>> {
+        self.error.as_ref().map(|err| ControlErrorDetail {
+            code: format!("{}", err.code),
+            message: err.message.as_str(),
+        })
+    }
+
+    fn ack_line(&self) -> String {
+        match &self.error {
+            None => String::from("OK"),
+            Some(err) => format!("ERR {} {}", err.code, err.message),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ControlStatus {
+    Ok,
+    Err,
+}
+
+#[derive(Debug, Clone)]
+struct ControlError {
+    code: ErrorCode,
+    message: String,
+}
+
+#[derive(Debug)]
+struct ControlErrorDetail<'a> {
+    code: String,
+    message: &'a str,
+}
+
+#[derive(Debug)]
+struct ReplayState {
+    enabled: bool,
+    max_entries: usize,
+    ctl_max_bytes: u32,
+    status_max_bytes: u32,
+    ctl_log: Vec<u8>,
+    status: Vec<u8>,
+}
+
+impl ReplayState {
+    fn new(config: generated::AuditConfig) -> Self {
+        let enabled = config.enable && config.replay_enable;
+        let status = if enabled {
+            b"{\"state\":\"idle\"}\n".to_vec()
+        } else {
+            Vec::new()
+        };
+        Self {
+            enabled,
+            max_entries: config.replay_max_entries as usize,
+            ctl_max_bytes: config.replay_ctl_max_bytes,
+            status_max_bytes: config.replay_status_max_bytes,
+            ctl_log: Vec::new(),
+            status,
+        }
+    }
+
+    fn handle_ctl(
+        &mut self,
+        payload: &str,
+        audit: &mut AuditState,
+    ) -> Result<(), NineDoorBridgeError> {
+        let command = parse_replay_command(payload)?;
+        self.append_ctl(payload)?;
+        let summary = match audit.replay_summary(command.from, self.max_entries) {
+            Ok(summary) => summary,
+            Err(err) => {
+                let message = err.message();
+                self.set_status_err(message.as_str())?;
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+        };
+        self.set_status_ok(&summary)?;
+        Ok(())
+    }
+
+    fn ctl_log(&self) -> &[u8] {
+        &self.ctl_log
+    }
+
+    fn status(&self) -> &[u8] {
+        &self.status
+    }
+
+    fn append_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
+        append_log_bytes(&mut self.ctl_log, payload, self.ctl_max_bytes)
+    }
+
+    fn set_status_ok(&mut self, summary: &ReplaySummary) -> Result<(), NineDoorBridgeError> {
+        let sequence_hash = format!("{:016x}", fnv1a64(summary.sequence.as_bytes()));
+        let payload = format!(
+            "{{\"state\":\"ok\",\"from\":{},\"to\":{},\"entries\":{},\"match\":true,\"sequence_fnv1a\":\"{}\"}}\n",
+            summary.from,
+            summary.to,
+            summary.entries,
+            sequence_hash
+        );
+        if payload.len() > self.status_max_bytes as usize {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        self.status = payload.into_bytes();
+        Ok(())
+    }
+
+    fn set_status_err(&mut self, message: &str) -> Result<(), NineDoorBridgeError> {
+        let message = escape_json_string(message);
+        let payload = format!("{{\"state\":\"err\",\"error\":\"{}\"}}\n", message);
+        if payload.len() > self.status_max_bytes as usize {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        self.status = payload.into_bytes();
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReplayCommand {
+    from: u64,
+}
+
+#[derive(Debug)]
+struct ReplaySummary {
+    from: u64,
+    to: u64,
+    entries: usize,
+    sequence: String,
+}
+
+#[derive(Debug)]
+enum ReplayWindowError {
+    Stale { requested: u64, available_start: u64 },
+    Future { requested: u64, available_end: u64 },
+    TooManyEntries { requested: usize, max: usize },
+}
+
+impl ReplayWindowError {
+    fn message(&self) -> String {
+        match self {
+            ReplayWindowError::Stale {
+                requested,
+                available_start,
+            } => format!(
+                "replay cursor stale requested={} window_start={}",
+                requested, available_start
+            ),
+            ReplayWindowError::Future {
+                requested,
+                available_end,
+            } => format!(
+                "replay cursor beyond window requested={} window_end={}",
+                requested, available_end
+            ),
+            ReplayWindowError::TooManyEntries { requested, max } => format!(
+                "replay exceeds max entries {} > {}",
+                requested, max
+            ),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AuditAppendOutcome {
+    count: u32,
+    dropped_bytes: u64,
+    new_base: u64,
+    offset_start: u64,
+    offset_end: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LogBounds {
+    base_offset: u64,
+    next_offset: u64,
+}
+
+#[derive(Debug)]
+struct LogEntry {
+    bytes: Vec<u8>,
+    offset_start: u64,
+    offset_end: u64,
+}
+
+#[derive(Debug)]
+struct ReplayEntry {
+    offset_start: u64,
+    offset_end: u64,
+    ack_line: String,
+}
+
+impl ReplayEntry {
+    fn new(length: u64, ack_line: String) -> Self {
+        Self {
+            offset_start: 0,
+            offset_end: length,
+            ack_line,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct BoundedLog {
+    entries: VecDeque<LogEntry>,
+    capacity: usize,
+    total_bytes: usize,
+    base_offset: u64,
+    next_offset: u64,
+}
+
+impl BoundedLog {
+    fn new(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
+        Self {
+            entries: VecDeque::new(),
+            capacity,
+            total_bytes: 0,
+            base_offset: 0,
+            next_offset: 0,
+        }
+    }
+
+    fn bounds(&self) -> LogBounds {
+        LogBounds {
+            base_offset: self.base_offset,
+            next_offset: self.next_offset,
+        }
+    }
+
+    fn snapshot(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.total_bytes);
+        for entry in self.entries.iter() {
+            out.extend_from_slice(entry.bytes.as_slice());
+        }
+        out
+    }
+
+    fn append(&mut self, bytes: Vec<u8>) -> Result<AuditAppendOutcome, NineDoorBridgeError> {
+        if bytes.len() > self.capacity {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        let mut dropped_bytes = 0u64;
+        while self.total_bytes + bytes.len() > self.capacity {
+            if let Some(entry) = self.entries.pop_front() {
+                dropped_bytes = dropped_bytes.saturating_add(entry.bytes.len() as u64);
+                self.total_bytes = self.total_bytes.saturating_sub(entry.bytes.len());
+                self.base_offset = entry.offset_end;
+            } else {
+                break;
+            }
+        }
+        let offset_start = self.next_offset;
+        let offset_end = offset_start.saturating_add(bytes.len() as u64);
+        self.entries.push_back(LogEntry {
+            bytes,
+            offset_start,
+            offset_end,
+        });
+        self.total_bytes = self
+            .total_bytes
+            .saturating_add(self.entries.back().unwrap().bytes.len());
+        self.next_offset = offset_end;
+        Ok(AuditAppendOutcome {
+            count: (offset_end - offset_start) as u32,
+            dropped_bytes,
+            new_base: self.base_offset,
+            offset_start,
+            offset_end,
+        })
+    }
+}
+
+#[derive(Debug)]
 struct WorkerTelemetry {
     id: HeaplessString<MAX_WORKER_ID_LEN>,
     ring: TelemetryRing,
@@ -1366,6 +2207,101 @@ fn append_log_bytes(
     Ok(())
 }
 
+fn ensure_line_terminated(data: &[u8]) -> Vec<u8> {
+    if data.ends_with(b"\n") {
+        return data.to_vec();
+    }
+    let mut out = data.to_vec();
+    out.push(b'\n');
+    out
+}
+
+fn validate_json_lines(payload: &str) -> Result<(), NineDoorBridgeError> {
+    for line in payload.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        validate_json_envelope(trimmed)?;
+    }
+    Ok(())
+}
+
+fn parse_replay_command(payload: &str) -> Result<ReplayCommand, NineDoorBridgeError> {
+    validate_json_envelope(payload)?;
+    let from = parse_json_u64_field(payload, "from").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    Ok(ReplayCommand { from })
+}
+
+fn parse_json_u64_field(input: &str, key: &str) -> Option<u64> {
+    let mut cursor = 0usize;
+    while let Some(found) = input[cursor..].find(key) {
+        let index = cursor + found;
+        let before = index.checked_sub(1)?;
+        let after = index + key.len();
+        let bytes = input.as_bytes();
+        if bytes.get(before) != Some(&b'"') || bytes.get(after) != Some(&b'"') {
+            cursor = after;
+            continue;
+        }
+        let mut rest = &input[after + 1..];
+        let colon = rest.find(':')?;
+        rest = rest[colon + 1..].trim_start();
+        let mut end = 0usize;
+        for ch in rest.chars() {
+            if !ch.is_ascii_digit() {
+                break;
+            }
+            end = end.saturating_add(ch.len_utf8());
+        }
+        if end == 0 {
+            return None;
+        }
+        return rest[..end].parse().ok();
+    }
+    None
+}
+
+fn escape_json_string(input: &str) -> String {
+    let mut out = String::new();
+    for ch in input.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => {
+                let _ = write!(out, "\\u{:04x}", ch as u32);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn error_code_for_audit(error: &NineDoorBridgeError) -> ErrorCode {
+    match error {
+        NineDoorBridgeError::Permission => ErrorCode::Permission,
+        NineDoorBridgeError::InvalidPath => ErrorCode::NotFound,
+        NineDoorBridgeError::BufferFull => ErrorCode::TooBig,
+        NineDoorBridgeError::InvalidPayload
+        | NineDoorBridgeError::Unsupported(_)
+        | NineDoorBridgeError::AttachTimeout => ErrorCode::Invalid,
+    }
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    const OFFSET: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+    let mut hash = OFFSET;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
+}
+
 fn parse_queen_ctl(payload: &str) -> Result<QueenCtlCommand<'_>, NineDoorBridgeError> {
     if let Some(target) = parse_json_string_field(payload, "spawn") {
         let target = match target {
@@ -1403,6 +2339,17 @@ fn parse_json_string_field<'a>(input: &'a str, key: &str) -> Option<&'a str> {
         return Some(&rest[..end]);
     }
     None
+}
+
+fn log_audit_wrap(label: &str, dropped_bytes: u64, new_base: u64) {
+    let mut line = HeaplessString::<TELEMETRY_AUDIT_LINE>::new();
+    let _ = write!(
+        line,
+        "audit {} truncation dropped_bytes={} new_base={}",
+        label, dropped_bytes, new_base
+    );
+    log_buffer::append_log_line(line.as_str());
+    log_buffer::append_user_line(line.as_str());
 }
 
 fn log_telemetry_wrap(dropped_bytes: u64, new_base: u64) {

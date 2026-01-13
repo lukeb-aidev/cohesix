@@ -132,6 +132,8 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "policy_gate.coh:6d7ad6b827641b2578843e3db0bedcd9ffcf911f48520a6e0478d468860f239f"
             .to_owned(),
+        "replay_journal.coh:1ff3cc6ac006c47fe8a6f914fb5b079d352a41691c2b5da34cf6441fba4d5a8f"
+            .to_owned(),
         "tcp_basic.coh:619970b6ff14332bbef80f704c117b4471653bb75f7a6187b27d93fbc16415a7"
             .to_owned(),
         "telemetry_ring.coh:6402e4b80f374648c317da9d35a1ae2c7cda90719f4d7d68e82d0722c5d1bb7f"

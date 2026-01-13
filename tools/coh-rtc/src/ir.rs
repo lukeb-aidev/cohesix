@@ -16,6 +16,7 @@ const EVENT_PUMP_TELEMETRY_BUDGET_BYTES: u32 = 32 * 1024;
 const EVENT_PUMP_MAX_TELEMETRY_WORKERS: u32 = 8;
 const MAX_POLICY_QUEUE_ENTRIES: u16 = 64;
 const MAX_POLICY_RULE_ID_LEN: usize = 64;
+const MAX_REPLAY_ENTRIES: u16 = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -120,6 +121,7 @@ impl Manifest {
 
     fn validate_ecosystem(&self) -> Result<()> {
         self.validate_policy()?;
+        self.validate_audit()?;
         if !self.ecosystem.host.enable {
             return Ok(());
         }
@@ -181,6 +183,65 @@ impl Manifest {
         }
         for rule in &policy.rules {
             validate_policy_rule(rule)?;
+        }
+        Ok(())
+    }
+
+    fn validate_audit(&self) -> Result<()> {
+        let audit = &self.ecosystem.audit;
+        let msize = self.secure9p.msize;
+        if audit.journal_max_bytes == 0 {
+            bail!("ecosystem.audit.journal_max_bytes must be >= 1");
+        }
+        if audit.journal_max_bytes > msize {
+            bail!(
+                "ecosystem.audit.journal_max_bytes {} exceeds secure9p.msize {}",
+                audit.journal_max_bytes,
+                msize
+            );
+        }
+        if audit.decisions_max_bytes == 0 {
+            bail!("ecosystem.audit.decisions_max_bytes must be >= 1");
+        }
+        if audit.decisions_max_bytes > msize {
+            bail!(
+                "ecosystem.audit.decisions_max_bytes {} exceeds secure9p.msize {}",
+                audit.decisions_max_bytes,
+                msize
+            );
+        }
+        if audit.replay_ctl_max_bytes == 0 {
+            bail!("ecosystem.audit.replay_ctl_max_bytes must be >= 1");
+        }
+        if audit.replay_ctl_max_bytes > msize {
+            bail!(
+                "ecosystem.audit.replay_ctl_max_bytes {} exceeds secure9p.msize {}",
+                audit.replay_ctl_max_bytes,
+                msize
+            );
+        }
+        if audit.replay_status_max_bytes == 0 {
+            bail!("ecosystem.audit.replay_status_max_bytes must be >= 1");
+        }
+        if audit.replay_status_max_bytes > msize {
+            bail!(
+                "ecosystem.audit.replay_status_max_bytes {} exceeds secure9p.msize {}",
+                audit.replay_status_max_bytes,
+                msize
+            );
+        }
+        if audit.replay_max_entries == 0 {
+            bail!("ecosystem.audit.replay_max_entries must be >= 1");
+        }
+        if audit.replay_max_entries > MAX_REPLAY_ENTRIES {
+            bail!(
+                "ecosystem.audit.replay_max_entries {} exceeds max {}",
+                audit.replay_max_entries,
+                MAX_REPLAY_ENTRIES
+            );
+        }
+        if audit.replay_enable && !audit.enable {
+            bail!("ecosystem.audit.replay_enable requires ecosystem.audit.enable = true");
         }
         Ok(())
     }
@@ -363,7 +424,7 @@ pub struct NamespaceMount {
 #[serde(deny_unknown_fields, default)]
 pub struct Ecosystem {
     pub host: EcosystemHost,
-    pub audit: FeatureFlag,
+    pub audit: AuditConfig,
     pub policy: PolicyConfig,
     pub models: FeatureFlag,
 }
@@ -411,7 +472,7 @@ impl Default for Ecosystem {
     fn default() -> Self {
         Self {
             host: EcosystemHost::default(),
-            audit: FeatureFlag::default(),
+            audit: AuditConfig::default(),
             policy: PolicyConfig::default(),
             models: FeatureFlag::default(),
         }
@@ -457,6 +518,32 @@ pub struct FeatureFlag {
 impl Default for FeatureFlag {
     fn default() -> Self {
         Self { enable: false }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AuditConfig {
+    pub enable: bool,
+    pub journal_max_bytes: u32,
+    pub decisions_max_bytes: u32,
+    pub replay_enable: bool,
+    pub replay_max_entries: u16,
+    pub replay_ctl_max_bytes: u32,
+    pub replay_status_max_bytes: u32,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            journal_max_bytes: 8192,
+            decisions_max_bytes: 4096,
+            replay_enable: false,
+            replay_max_entries: 64,
+            replay_ctl_max_bytes: 1024,
+            replay_status_max_bytes: 1024,
+        }
     }
 }
 

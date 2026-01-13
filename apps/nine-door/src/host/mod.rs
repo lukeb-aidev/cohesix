@@ -26,15 +26,18 @@ use secure9p_core::SessionLimits;
 use thiserror::Error;
 
 mod control;
+mod audit;
 mod core;
 mod namespace;
 mod pipeline;
 mod policy;
+mod replay;
 mod telemetry;
 mod tracefs;
 
 use self::core::{role_to_uname, ServerCore};
 pub use self::namespace::{HostNamespaceConfig, HostProvider};
+pub use self::audit::{AuditConfig, AuditLimits, ReplayConfig};
 pub use self::policy::{PolicyConfig, PolicyDecision, PolicyLimits, PolicyRuleSpec};
 pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 pub use self::telemetry::{
@@ -125,6 +128,7 @@ impl NineDoor {
             TelemetryManifestStore::default(),
             host,
             PolicyConfig::disabled(),
+            AuditConfig::disabled(),
         )
     }
 
@@ -134,6 +138,16 @@ impl NineDoor {
         host: HostNamespaceConfig,
         policy: PolicyConfig,
     ) -> Self {
+        Self::new_with_host_policy_audit_config(host, policy, AuditConfig::disabled())
+    }
+
+    /// Construct a new NineDoor server with host, policy, and audit configuration.
+    #[must_use]
+    pub fn new_with_host_policy_audit_config(
+        host: HostNamespaceConfig,
+        policy: PolicyConfig,
+        audit: AuditConfig,
+    ) -> Self {
         Self::new_with_limits_telemetry_host_policy(
             Arc::new(SystemClock),
             SessionLimits::default(),
@@ -141,6 +155,7 @@ impl NineDoor {
             TelemetryManifestStore::default(),
             host,
             policy,
+            audit,
         )
     }
 
@@ -206,6 +221,7 @@ impl NineDoor {
             telemetry_manifest,
             host,
             PolicyConfig::disabled(),
+            AuditConfig::disabled(),
         )
     }
 
@@ -216,6 +232,7 @@ impl NineDoor {
         telemetry_manifest: TelemetryManifestStore,
         host: HostNamespaceConfig,
         policy: PolicyConfig,
+        audit: AuditConfig,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ServerCore::new(
@@ -225,6 +242,7 @@ impl NineDoor {
                 telemetry_manifest.clone(),
                 host,
                 policy,
+                audit,
             ))),
             bootstrap_ticket: TicketClaims::new(
                 Role::Queen,

@@ -85,3 +85,16 @@ _Generated from `apps/nine-door/out/metrics/telemetry_ring_latency.json`._
 - Gated control rules (manifest snapshot):
   - `queen-ctl` → `/queen/ctl`
   - `systemd-restart` → `/host/systemd/*/restart`
+
+## Appendix B: AuditFS & ReplayFS bounds (manifest snapshot)
+- Audit/replay surfaces are manifest-gated; when disabled the `/audit` and `/replay` trees are absent and replay attempts return deterministic `ERR` without side effects.
+- Replay only applies Cohesix-issued control-plane actions recorded in `/audit/journal` and never attempts to reconstruct external host state.
+- Replay cursor checks are bounded by the retained window and `replay_max_entries`; over-window requests update `/replay/status` to `err` and emit deterministic errors.
+- Audit/replay bounds are manifest-driven (`configs/root_task.toml`):
+  - `ecosystem.audit.enable = false`
+  - `ecosystem.audit.journal_max_bytes = 8192`
+  - `ecosystem.audit.decisions_max_bytes = 4096`
+  - `ecosystem.audit.replay_enable = false`
+  - `ecosystem.audit.replay_max_entries = 64`
+  - `ecosystem.audit.replay_ctl_max_bytes = 1024`
+  - `ecosystem.audit.replay_status_max_bytes = 1024`
