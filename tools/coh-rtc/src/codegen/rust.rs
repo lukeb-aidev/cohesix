@@ -4,8 +4,9 @@
 // Author: Lukas Bower
 
 use crate::codegen::hash_bytes;
-use crate::ir::{Manifest, Role};
+use crate::ir::{HostProvider, Manifest, Role};
 use anyhow::{Context, Result};
+use serde::Serialize;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
@@ -79,6 +80,43 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "    pub cursor: TelemetryCursorConfig,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum HostProvider {{")?;
+    writeln!(mod_contents, "    Systemd,")?;
+    writeln!(mod_contents, "    K8s,")?;
+    writeln!(mod_contents, "    Nvidia,")?;
+    writeln!(mod_contents, "    Jetson,")?;
+    writeln!(mod_contents, "    Net,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct HostConfig {{")?;
+    writeln!(mod_contents, "    pub enable: bool,")?;
+    writeln!(mod_contents, "    pub mount_at: &'static str,")?;
+    writeln!(mod_contents, "    pub providers: &'static [HostProvider],")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct PolicyRule {{")?;
+    writeln!(mod_contents, "    pub id: &'static str,")?;
+    writeln!(mod_contents, "    pub target: &'static str,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct PolicyLimits {{")?;
+    writeln!(mod_contents, "    pub queue_max_entries: u16,")?;
+    writeln!(mod_contents, "    pub queue_max_bytes: u32,")?;
+    writeln!(mod_contents, "    pub ctl_max_bytes: u32,")?;
+    writeln!(mod_contents, "    pub status_max_bytes: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct PolicyConfig {{")?;
+    writeln!(mod_contents, "    pub enable: bool,")?;
+    writeln!(mod_contents, "    pub limits: PolicyLimits,")?;
+    writeln!(mod_contents, "    pub rules: &'static [PolicyRule],")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const MANIFEST_SCHEMA: &str = \"{}\";", manifest.root_task.schema)?;
     writeln!(mod_contents, "pub const MANIFEST_SHA256: &str = \"{}\";", manifest_hash)?;
     writeln!(mod_contents, "pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;")?;
@@ -87,6 +125,9 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "pub const CACHE_POLICY: CachePolicy = bootstrap::CACHE_POLICY;")?;
     writeln!(mod_contents, "pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;")?;
     writeln!(mod_contents, "pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;")?;
+    writeln!(mod_contents, "pub const HOST_CONFIG: HostConfig = bootstrap::HOST_CONFIG;")?;
+    writeln!(mod_contents, "pub const POLICY_CONFIG: PolicyConfig = bootstrap::POLICY_CONFIG;")?;
+    writeln!(mod_contents, "pub const POLICY_RULES_JSON: &str = bootstrap::POLICY_RULES_JSON;")?;
     writeln!(mod_contents, "pub const EVENT_PUMP_FDS: &[&str] = &bootstrap::EVENT_PUMP_FDS;")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn ticket_inventory() -> &'static [TicketSpec] {{")?;
@@ -113,6 +154,18 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "    bootstrap::TELEMETRY_CONFIG")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn host_config() -> HostConfig {{")?;
+    writeln!(mod_contents, "    bootstrap::HOST_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn policy_config() -> PolicyConfig {{")?;
+    writeln!(mod_contents, "    bootstrap::POLICY_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn policy_rules_json() -> &'static str {{")?;
+    writeln!(mod_contents, "    bootstrap::POLICY_RULES_JSON")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn event_pump_fds() -> &'static [&'static str] {{")?;
     writeln!(mod_contents, "    &bootstrap::EVENT_PUMP_FDS")?;
     writeln!(mod_contents, "}}")?;
@@ -135,6 +188,7 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
             .context("serialize audit lines")?
             .as_slice(),
     );
+    let policy_rules_json = render_policy_rules_json(manifest)?;
 
     let mut bootstrap_contents = String::new();
     writeln!(bootstrap_contents, "// Author: Lukas Bower")?;
@@ -143,7 +197,7 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{CachePolicy, NamespaceMount, Secure9pLimits, ShortWritePolicy, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
+        "use super::{{CachePolicy, HostConfig, HostProvider, NamespaceMount, PolicyConfig, PolicyLimits, PolicyRule, Secure9pLimits, ShortWritePolicy, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -210,6 +264,53 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     )?;
     writeln!(
         bootstrap_contents,
+        "pub const HOST_PROVIDERS: [HostProvider; {}] = [",
+        manifest.ecosystem.host.providers.len()
+    )?;
+    for provider in &manifest.ecosystem.host.providers {
+        writeln!(
+            bootstrap_contents,
+            "    {},",
+            host_provider_to_rust(provider)
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const HOST_CONFIG: HostConfig = HostConfig {{ enable: {}, mount_at: \"{}\", providers: &HOST_PROVIDERS }};\n",
+        manifest.ecosystem.host.enable,
+        escape_literal(&manifest.ecosystem.host.mount_at)
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const POLICY_RULES: [PolicyRule; {}] = [",
+        manifest.ecosystem.policy.rules.len()
+    )?;
+    for rule in &manifest.ecosystem.policy.rules {
+        writeln!(
+            bootstrap_contents,
+            "    PolicyRule {{ id: \"{}\", target: \"{}\" }},",
+            escape_literal(&rule.id),
+            escape_literal(&rule.target)
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const POLICY_CONFIG: PolicyConfig = PolicyConfig {{ enable: {}, limits: PolicyLimits {{ queue_max_entries: {}, queue_max_bytes: {}, ctl_max_bytes: {}, status_max_bytes: {} }}, rules: &POLICY_RULES }};\n",
+        manifest.ecosystem.policy.enable,
+        manifest.ecosystem.policy.queue_max_entries,
+        manifest.ecosystem.policy.queue_max_bytes,
+        manifest.ecosystem.policy.ctl_max_bytes,
+        manifest.ecosystem.policy.status_max_bytes
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const POLICY_RULES_JSON: &str = \"{}\";\n",
+        escape_literal(&policy_rules_json)
+    )?;
+    writeln!(
+        bootstrap_contents,
         "pub const EVENT_PUMP_FDS: [&str; {}] = [",
         event_pump_fds.len()
     )?;
@@ -242,6 +343,16 @@ fn role_to_rust(role: Role) -> &'static str {
     }
 }
 
+fn host_provider_to_rust(provider: &HostProvider) -> &'static str {
+    match provider {
+        HostProvider::Systemd => "HostProvider::Systemd",
+        HostProvider::K8s => "HostProvider::K8s",
+        HostProvider::Nvidia => "HostProvider::Nvidia",
+        HostProvider::Jetson => "HostProvider::Jetson",
+        HostProvider::Net => "HostProvider::Net",
+    }
+}
+
 fn short_write_policy_to_rust(policy: &crate::ir::ShortWritePolicy) -> &'static str {
     match policy {
         crate::ir::ShortWritePolicy::Reject => "ShortWritePolicy::Reject",
@@ -268,6 +379,51 @@ fn telemetry_schema_label(schema: &crate::ir::TelemetryFrameSchema) -> &'static 
         crate::ir::TelemetryFrameSchema::LegacyPlaintext => "legacy-plaintext",
         crate::ir::TelemetryFrameSchema::CborV1 => "cbor-v1",
     }
+}
+
+#[derive(Serialize)]
+struct PolicyRuleSnapshot<'a> {
+    id: &'a str,
+    target: &'a str,
+}
+
+#[derive(Serialize)]
+struct PolicyLimitsSnapshot {
+    queue_max_entries: u16,
+    queue_max_bytes: u32,
+    ctl_max_bytes: u32,
+    status_max_bytes: u32,
+}
+
+#[derive(Serialize)]
+struct PolicyRulesSnapshot<'a> {
+    enabled: bool,
+    limits: PolicyLimitsSnapshot,
+    rules: Vec<PolicyRuleSnapshot<'a>>,
+}
+
+fn render_policy_rules_json(manifest: &Manifest) -> Result<String> {
+    let policy = &manifest.ecosystem.policy;
+    let snapshot = PolicyRulesSnapshot {
+        enabled: policy.enable,
+        limits: PolicyLimitsSnapshot {
+            queue_max_entries: policy.queue_max_entries,
+            queue_max_bytes: policy.queue_max_bytes,
+            ctl_max_bytes: policy.ctl_max_bytes,
+            status_max_bytes: policy.status_max_bytes,
+        },
+        rules: policy
+            .rules
+            .iter()
+            .map(|rule| PolicyRuleSnapshot {
+                id: rule.id.as_str(),
+                target: rule.target.as_str(),
+            })
+            .collect(),
+    };
+    let json = serde_json::to_string_pretty(&snapshot)
+        .context("serialize policy rules snapshot")?;
+    Ok(json)
 }
 
 fn build_event_pump_fds(manifest: &Manifest) -> Vec<&'static str> {

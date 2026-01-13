@@ -1236,6 +1236,7 @@ impl Transport for TcpTransport {
         let mut attempts = 0usize;
         loop {
             self.send_line(&command)?;
+            loop {
                 match self.next_protocol_line()? {
                     Some(response) => {
                         if let Some(ack) = parse_ack(&response) {
@@ -1253,21 +1254,24 @@ impl Transport for TcpTransport {
                                     return Ok(());
                                 }
                                 return Err(anyhow!("echo failed: {response}"));
+                            }
+                            continue;
                         }
-                        continue;
+                        if response.starts_with("ERR") {
+                            return Err(anyhow!("echo failed: {response}"));
+                        }
+                        // Ignore unsolicited lines from prior streaming commands.
                     }
-                    if response.starts_with("ERR") {
-                        return Err(anyhow!("echo failed: {response}"));
+                    None => {
+                        attempts += 1;
+                        if attempts > self.max_retries {
+                            return Err(anyhow!(
+                                "connection dropped repeatedly while writing to {path}"
+                            ));
+                        }
+                        self.recover_session()?;
+                        break;
                     }
-                }
-                None => {
-                    attempts += 1;
-                    if attempts > self.max_retries {
-                        return Err(anyhow!(
-                            "connection dropped repeatedly while writing to {path}"
-                        ));
-                    }
-                    self.recover_session()?;
                 }
             }
         }

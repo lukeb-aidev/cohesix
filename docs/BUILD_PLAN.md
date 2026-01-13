@@ -997,6 +997,8 @@ Add a PolicyFS surface that captures human-legible approvals for sensitive opera
 - TODO: Implement scripts/cohsh/policy_gate.coh and add it to regression pack DoD.
 - Manifest flag (e.g., `ecosystem.policy.enable`) toggles the gate and publishes rules; defaults keep policy off to preserve prior behaviour.
 
+**Status:** Complete — PolicyFS surfaces and gating are manifest-driven, approval consumption is enforced, and the policy gate regression passes deterministically.
+
 **Commands**
 - `cargo test -p nine-door`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`

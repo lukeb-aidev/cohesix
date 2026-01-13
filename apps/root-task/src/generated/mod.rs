@@ -62,6 +62,43 @@ pub struct TelemetryConfig {
     pub cursor: TelemetryCursorConfig,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostProvider {
+    Systemd,
+    K8s,
+    Nvidia,
+    Jetson,
+    Net,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct HostConfig {
+    pub enable: bool,
+    pub mount_at: &'static str,
+    pub providers: &'static [HostProvider],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PolicyRule {
+    pub id: &'static str,
+    pub target: &'static str,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PolicyLimits {
+    pub queue_max_entries: u16,
+    pub queue_max_bytes: u32,
+    pub ctl_max_bytes: u32,
+    pub status_max_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PolicyConfig {
+    pub enable: bool,
+    pub limits: PolicyLimits,
+    pub rules: &'static [PolicyRule],
+}
+
 pub const MANIFEST_SCHEMA: &str = "1.2";
 pub const MANIFEST_SHA256: &str = "09e9cf4605174cbb41993b5c5035466b81edf24f70c08c89c49d535bfa01e9c3";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
@@ -70,6 +107,9 @@ pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
 pub const CACHE_POLICY: CachePolicy = bootstrap::CACHE_POLICY;
 pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;
 pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;
+pub const HOST_CONFIG: HostConfig = bootstrap::HOST_CONFIG;
+pub const POLICY_CONFIG: PolicyConfig = bootstrap::POLICY_CONFIG;
+pub const POLICY_RULES_JSON: &str = bootstrap::POLICY_RULES_JSON;
 pub const EVENT_PUMP_FDS: &[&str] = &bootstrap::EVENT_PUMP_FDS;
 
 pub const fn ticket_inventory() -> &'static [TicketSpec] {
@@ -94,6 +134,18 @@ pub const fn secure9p_limits() -> Secure9pLimits {
 
 pub const fn telemetry_config() -> TelemetryConfig {
     bootstrap::TELEMETRY_CONFIG
+}
+
+pub const fn host_config() -> HostConfig {
+    bootstrap::HOST_CONFIG
+}
+
+pub const fn policy_config() -> PolicyConfig {
+    bootstrap::POLICY_CONFIG
+}
+
+pub const fn policy_rules_json() -> &'static str {
+    bootstrap::POLICY_RULES_JSON
 }
 
 pub const fn event_pump_fds() -> &'static [&'static str] {
