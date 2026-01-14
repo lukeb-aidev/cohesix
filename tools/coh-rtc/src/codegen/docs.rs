@@ -3,6 +3,7 @@
 // Purpose: Emit manifest-derived Markdown snippets for documentation.
 // Author: Lukas Bower
 
+use crate::codegen::hash_bytes;
 use crate::ir::Manifest;
 use anyhow::{Context, Result};
 use std::fmt::Write as _;
@@ -15,6 +16,8 @@ pub struct DocFragments {
     pub namespace_md: String,
     pub sharding_md: String,
     pub ecosystem_md: String,
+    pub observability_interfaces_md: String,
+    pub observability_security_md: String,
 }
 
 impl DocFragments {
@@ -88,6 +91,144 @@ impl DocFragments {
             schema_md,
             "- `telemetry.cursor.retain_on_boot`: `{}`",
             manifest.telemetry.cursor.retain_on_boot
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_9p.sessions`: `{}`",
+            manifest.observability.proc_9p.sessions
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_9p.outstanding`: `{}`",
+            manifest.observability.proc_9p.outstanding
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_9p.short_writes`: `{}`",
+            manifest.observability.proc_9p.short_writes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_9p.sessions_bytes`: `{}`",
+            manifest.observability.proc_9p.sessions_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_9p.outstanding_bytes`: `{}`",
+            manifest.observability.proc_9p.outstanding_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_9p.short_writes_bytes`: `{}`",
+            manifest.observability.proc_9p.short_writes_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.p50_ms`: `{}`",
+            manifest.observability.proc_ingest.p50_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.p95_ms`: `{}`",
+            manifest.observability.proc_ingest.p95_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.backpressure`: `{}`",
+            manifest.observability.proc_ingest.backpressure
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.dropped`: `{}`",
+            manifest.observability.proc_ingest.dropped
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.queued`: `{}`",
+            manifest.observability.proc_ingest.queued
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.watch`: `{}`",
+            manifest.observability.proc_ingest.watch
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.p50_ms_bytes`: `{}`",
+            manifest.observability.proc_ingest.p50_ms_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.p95_ms_bytes`: `{}`",
+            manifest.observability.proc_ingest.p95_ms_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.backpressure_bytes`: `{}`",
+            manifest.observability.proc_ingest.backpressure_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.dropped_bytes`: `{}`",
+            manifest.observability.proc_ingest.dropped_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.queued_bytes`: `{}`",
+            manifest.observability.proc_ingest.queued_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.watch_max_entries`: `{}`",
+            manifest.observability.proc_ingest.watch_max_entries
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.watch_line_bytes`: `{}`",
+            manifest.observability.proc_ingest.watch_line_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.watch_min_interval_ms`: `{}`",
+            manifest.observability.proc_ingest.watch_min_interval_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.latency_samples`: `{}`",
+            manifest.observability.proc_ingest.latency_samples
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.latency_tolerance_ms`: `{}`",
+            manifest.observability.proc_ingest.latency_tolerance_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_ingest.counter_tolerance`: `{}`",
+            manifest.observability.proc_ingest.counter_tolerance
         )
         .ok();
         writeln!(
@@ -396,11 +537,157 @@ impl DocFragments {
         .ok();
         writeln!(ecosystem_md, "- Nodes appear only when enabled.").ok();
 
+        let proc_9p = &manifest.observability.proc_9p;
+        let proc_ingest = &manifest.observability.proc_ingest;
+        let proc_9p_enabled = proc_9p.sessions || proc_9p.outstanding || proc_9p.short_writes;
+        let proc_ingest_enabled = proc_ingest.p50_ms
+            || proc_ingest.p95_ms
+            || proc_ingest.backpressure
+            || proc_ingest.dropped
+            || proc_ingest.queued
+            || proc_ingest.watch;
+
+        let mut observability_interfaces_md = String::new();
+        writeln!(
+            observability_interfaces_md,
+            "### /proc observability nodes (generated)"
+        )
+        .ok();
+        if !proc_9p_enabled && !proc_ingest_enabled {
+            writeln!(observability_interfaces_md, "- (disabled)").ok();
+        } else {
+            if proc_9p.sessions {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/9p/sessions` (read-only, max {} bytes): `sessions total=<u64> worker=<u64> shard_bits=<u8> shard_count=<u16>` plus `shard <hex> <count>` lines.",
+                    proc_9p.sessions_bytes
+                )
+                .ok();
+            }
+            if proc_9p.outstanding {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/9p/outstanding` (read-only, max {} bytes): `outstanding current=<u64> limit=<u64>`.",
+                    proc_9p.outstanding_bytes
+                )
+                .ok();
+            }
+            if proc_9p.short_writes {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/9p/short_writes` (read-only, max {} bytes): `short_writes total=<u64> retries=<u64>`.",
+                    proc_9p.short_writes_bytes
+                )
+                .ok();
+            }
+            if proc_ingest.p50_ms {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/ingest/p50_ms` (read-only, max {} bytes): `p50_ms=<u32>` (milliseconds).",
+                    proc_ingest.p50_ms_bytes
+                )
+                .ok();
+            }
+            if proc_ingest.p95_ms {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/ingest/p95_ms` (read-only, max {} bytes): `p95_ms=<u32>` (milliseconds).",
+                    proc_ingest.p95_ms_bytes
+                )
+                .ok();
+            }
+            if proc_ingest.backpressure {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/ingest/backpressure` (read-only, max {} bytes): `backpressure=<u64>`.",
+                    proc_ingest.backpressure_bytes
+                )
+                .ok();
+            }
+            if proc_ingest.dropped {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/ingest/dropped` (read-only, max {} bytes): `dropped=<u64>`.",
+                    proc_ingest.dropped_bytes
+                )
+                .ok();
+            }
+            if proc_ingest.queued {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/ingest/queued` (read-only, max {} bytes): `queued=<u32>`.",
+                    proc_ingest.queued_bytes
+                )
+                .ok();
+            }
+            if proc_ingest.watch {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/ingest/watch` (append-only, max_entries={}, line_bytes={}, min_interval_ms={}): `watch ts_ms=<u64> p50_ms=<u32> p95_ms=<u32> queued=<u32> backpressure=<u64> dropped=<u64>`.",
+                    proc_ingest.watch_max_entries,
+                    proc_ingest.watch_line_bytes,
+                    proc_ingest.watch_min_interval_ms
+                )
+                .ok();
+            }
+        }
+        let interfaces_hash = hash_bytes(observability_interfaces_md.as_bytes());
+        writeln!(
+            observability_interfaces_md,
+            "\n_Generated by coh-rtc (sha256: `{interfaces_hash}`)._"
+        )
+        .ok();
+
+        let mut observability_security_md = String::new();
+        writeln!(
+            observability_security_md,
+            "### Observability tolerances (generated)"
+        )
+        .ok();
+        if !proc_ingest_enabled {
+            writeln!(observability_security_md, "- (disabled)").ok();
+        } else {
+            writeln!(
+                observability_security_md,
+                "- `observability.proc_ingest.latency_samples`: `{}`",
+                proc_ingest.latency_samples
+            )
+            .ok();
+            writeln!(
+                observability_security_md,
+                "- `observability.proc_ingest.latency_tolerance_ms`: `{}`",
+                proc_ingest.latency_tolerance_ms
+            )
+            .ok();
+            writeln!(
+                observability_security_md,
+                "- `observability.proc_ingest.counter_tolerance`: `{}`",
+                proc_ingest.counter_tolerance
+            )
+            .ok();
+            if proc_ingest.watch {
+                writeln!(
+                    observability_security_md,
+                    "- `observability.proc_ingest.watch_min_interval_ms`: `{}`",
+                    proc_ingest.watch_min_interval_ms
+                )
+                .ok();
+            }
+        }
+        let security_hash = hash_bytes(observability_security_md.as_bytes());
+        writeln!(
+            observability_security_md,
+            "\n_Generated by coh-rtc (sha256: `{security_hash}`)._"
+        )
+        .ok();
+
         Self {
             schema_md,
             namespace_md,
             sharding_md,
             ecosystem_md,
+            observability_interfaces_md,
+            observability_security_md,
         }
     }
 }
@@ -428,6 +715,42 @@ pub fn emit_doc_snippet(manifest_hash: &str, docs: &DocFragments, path: &Path) -
     )?;
     fs::write(path, contents)
         .with_context(|| format!("failed to write docs snippet {}", path.display()))?;
+    Ok(())
+}
+
+pub fn emit_observability_interfaces_snippet(docs: &DocFragments, path: &Path) -> Result<()> {
+    let mut contents = String::new();
+    writeln!(contents, "<!-- Author: Lukas Bower -->")?;
+    writeln!(
+        contents,
+        "<!-- Purpose: Generated observability snippet consumed by docs/INTERFACES.md. -->"
+    )?;
+    writeln!(contents)?;
+    writeln!(contents, "{}", docs.observability_interfaces_md.trim_end())?;
+    fs::write(path, contents).with_context(|| {
+        format!(
+            "failed to write observability interfaces snippet {}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+pub fn emit_observability_security_snippet(docs: &DocFragments, path: &Path) -> Result<()> {
+    let mut contents = String::new();
+    writeln!(contents, "<!-- Author: Lukas Bower -->")?;
+    writeln!(
+        contents,
+        "<!-- Purpose: Generated observability snippet consumed by docs/SECURITY.md. -->"
+    )?;
+    writeln!(contents)?;
+    writeln!(contents, "{}", docs.observability_security_md.trim_end())?;
+    fs::write(path, contents).with_context(|| {
+        format!(
+            "failed to write observability security snippet {}",
+            path.display()
+        )
+    })?;
     Ok(())
 }
 

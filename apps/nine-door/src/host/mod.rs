@@ -29,6 +29,7 @@ mod control;
 mod audit;
 mod core;
 mod namespace;
+mod observe;
 mod pipeline;
 mod policy;
 mod replay;
@@ -39,6 +40,7 @@ use self::core::{role_to_uname, ServerCore};
 pub use self::namespace::{HostNamespaceConfig, HostProvider, ShardLayout};
 pub use self::audit::{AuditConfig, AuditLimits, ReplayConfig};
 pub use self::policy::{PolicyConfig, PolicyDecision, PolicyLimits, PolicyRuleSpec};
+pub use self::observe::{ObserveConfig, ProcIngestConfig, Proc9pConfig};
 pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 pub use self::telemetry::{
     TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryManifestStore,

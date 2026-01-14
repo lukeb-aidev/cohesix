@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use secure9p_codec::{ErrorCode, Qid, QidType};
 use trace_model::TraceLevel;
 
+use super::observe::ObserveConfig;
 use super::telemetry::{
     TelemetryAudit, TelemetryAuditLevel, TelemetryConfig, TelemetryFile, TelemetryManifestStore,
 };
@@ -778,11 +779,6 @@ impl Namespace {
             SELFTEST_NEGATIVE_SCRIPT.as_bytes(),
         )
         .expect("create /proc/tests/selftest_negative.coh");
-        self.ensure_dir(&proc_path, "9p")
-            .expect("create /proc/9p");
-        let proc_9p_path = vec!["proc".to_owned(), "9p".to_owned()];
-        self.ensure_read_only_file(&proc_9p_path, "sessions", b"")
-            .expect("create /proc/9p/sessions");
 
         self.ensure_dir(&[], "log").expect("create /log");
         let log_path = vec!["log".to_owned()];
@@ -832,6 +828,50 @@ impl Namespace {
             self.bootstrap_replay()
                 .expect("create /replay namespace");
         }
+    }
+
+    /// Install manifest-driven /proc observability nodes.
+    pub fn install_observability(&mut self, config: ObserveConfig) -> Result<(), NineDoorError> {
+        if !config.enabled() {
+            return Ok(());
+        }
+        let proc_path = vec!["proc".to_owned()];
+        if config.proc_9p.enabled() {
+            self.ensure_dir(&proc_path, "9p")?;
+            let proc_9p_path = vec!["proc".to_owned(), "9p".to_owned()];
+            if config.proc_9p.sessions {
+                self.ensure_read_only_file(&proc_9p_path, "sessions", b"")?;
+            }
+            if config.proc_9p.outstanding {
+                self.ensure_read_only_file(&proc_9p_path, "outstanding", b"")?;
+            }
+            if config.proc_9p.short_writes {
+                self.ensure_read_only_file(&proc_9p_path, "short_writes", b"")?;
+            }
+        }
+        if config.proc_ingest.enabled() {
+            self.ensure_dir(&proc_path, "ingest")?;
+            let ingest_path = vec!["proc".to_owned(), "ingest".to_owned()];
+            if config.proc_ingest.p50_ms {
+                self.ensure_read_only_file(&ingest_path, "p50_ms", b"")?;
+            }
+            if config.proc_ingest.p95_ms {
+                self.ensure_read_only_file(&ingest_path, "p95_ms", b"")?;
+            }
+            if config.proc_ingest.backpressure {
+                self.ensure_read_only_file(&ingest_path, "backpressure", b"")?;
+            }
+            if config.proc_ingest.dropped {
+                self.ensure_read_only_file(&ingest_path, "dropped", b"")?;
+            }
+            if config.proc_ingest.queued {
+                self.ensure_read_only_file(&ingest_path, "queued", b"")?;
+            }
+            if config.proc_ingest.watch {
+                self.ensure_append_only_file(&ingest_path, "watch", b"")?;
+            }
+        }
+        Ok(())
     }
 
     fn bootstrap_host(&mut self) -> Result<(), NineDoorError> {
@@ -1085,6 +1125,57 @@ impl Namespace {
     pub fn set_proc_sessions_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
         let parent = vec!["proc".to_owned(), "9p".to_owned()];
         self.set_read_only_file(&parent, "sessions", data)
+    }
+
+    /// Replace the `/proc/9p/outstanding` contents.
+    pub fn set_proc_outstanding_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "9p".to_owned()];
+        self.set_read_only_file(&parent, "outstanding", data)
+    }
+
+    /// Replace the `/proc/9p/short_writes` contents.
+    pub fn set_proc_short_writes_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "9p".to_owned()];
+        self.set_read_only_file(&parent, "short_writes", data)
+    }
+
+    /// Replace the `/proc/ingest/p50_ms` contents.
+    pub fn set_proc_ingest_p50_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "ingest".to_owned()];
+        self.set_read_only_file(&parent, "p50_ms", data)
+    }
+
+    /// Replace the `/proc/ingest/p95_ms` contents.
+    pub fn set_proc_ingest_p95_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "ingest".to_owned()];
+        self.set_read_only_file(&parent, "p95_ms", data)
+    }
+
+    /// Replace the `/proc/ingest/backpressure` contents.
+    pub fn set_proc_ingest_backpressure_payload(
+        &mut self,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "ingest".to_owned()];
+        self.set_read_only_file(&parent, "backpressure", data)
+    }
+
+    /// Replace the `/proc/ingest/dropped` contents.
+    pub fn set_proc_ingest_dropped_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "ingest".to_owned()];
+        self.set_read_only_file(&parent, "dropped", data)
+    }
+
+    /// Replace the `/proc/ingest/queued` contents.
+    pub fn set_proc_ingest_queued_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "ingest".to_owned()];
+        self.set_read_only_file(&parent, "queued", data)
+    }
+
+    /// Replace the `/proc/ingest/watch` contents.
+    pub fn set_proc_ingest_watch_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "ingest".to_owned()];
+        self.set_append_only_file(&parent, "watch", data)
     }
 
     fn set_read_only_file(

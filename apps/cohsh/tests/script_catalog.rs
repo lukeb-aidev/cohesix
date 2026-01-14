@@ -95,6 +95,7 @@ fn script_feature_inventory_is_stable() {
         "CMD:ls".to_owned(),
         "CMD:quit".to_owned(),
         "CMD:spawn".to_owned(),
+        "CMD:tail".to_owned(),
         "EXPECT ERR".to_owned(),
         "EXPECT OK".to_owned(),
         "EXPECT SUBSTR".to_owned(),
@@ -129,7 +130,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "host_sidecar_mock.coh:9a3d2a016f7946f48a1a3dc10684d688d14ac774a1556d69ebe05b9cdaa2d633"
             .to_owned(),
-        "observe_watch.coh:1155ef2d36586a464370b4e201c15268ac7bdcc526fee6ce0d09490e0302eddf"
+        "observe_watch.coh:cb6ae987049eb345c4dd7501fc657bfe6bd99c6f235593a5aab82e85ce3d4a9e"
             .to_owned(),
         "policy_gate.coh:6d7ad6b827641b2578843e3db0bedcd9ffcf911f48520a6e0478d468860f239f"
             .to_owned(),

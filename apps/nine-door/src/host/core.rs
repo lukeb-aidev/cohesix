@@ -41,6 +41,7 @@ use super::policy::{
     PolicyGateDenial, PolicyStore,
 };
 use super::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
+use super::observe::{ObserveConfig, ObserveState};
 use super::replay::ReplayState;
 use super::telemetry::{TelemetryAuditLevel, TelemetryConfig, TelemetryManifestStore};
 use super::{Clock, NineDoorError};
@@ -57,6 +58,7 @@ pub(crate) struct ServerCore {
     clock: Arc<dyn Clock>,
     limits: SessionLimits,
     pipeline: Pipeline,
+    observe: ObserveState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +82,7 @@ impl ServerCore {
         policy: PolicyConfig,
         audit: AuditConfig,
     ) -> Self {
+        let observe = ObserveState::new(ObserveConfig::default(), clock.now());
         let pipeline = Pipeline::new(PipelineConfig::from_limits(limits));
         let policy_store = PolicyStore::new(policy).expect("policy config");
         let policy_namespace = if policy_store.enabled() {
@@ -99,27 +102,41 @@ impl ServerCore {
         } else {
             ReplayNamespaceConfig::disabled()
         };
-        Self {
+        let mut control = ControlPlane::new(
+            telemetry,
+            telemetry_manifest,
+            shards,
+            host,
+            policy_namespace,
+            policy_store,
+            audit_namespace,
+            audit_store,
+            replay_namespace,
+            replay_state,
+        );
+        control
+            .namespace_mut()
+            .install_observability(observe.config())
+            .expect("install /proc observability");
+        let mut core = Self {
             codec: Codec,
-            control: ControlPlane::new(
-                telemetry,
-                telemetry_manifest,
-                shards,
-                host,
-                policy_namespace,
-                policy_store,
-                audit_namespace,
-                audit_store,
-                replay_namespace,
-                replay_state,
-            ),
+            control,
             next_session: 1,
             sessions: HashMap::new(),
             ticket_keys: HashMap::new(),
             clock,
             limits,
             pipeline,
+            observe,
         }
+        ;
+        let _ = core.observe.update_proc_9p(&mut core.control.namespace, core.pipeline.metrics());
+        let _ = core.observe.update_proc_ingest(
+            &mut core.control.namespace,
+            core.clock.now(),
+            core.pipeline.metrics(),
+        );
+        core
     }
 
     pub(crate) fn allocate_session(&mut self) -> SessionId {
@@ -168,9 +185,8 @@ impl ServerCore {
             let count = shard_counts.get(idx).copied().unwrap_or(0);
             let _ = writeln!(payload, "shard {} {}", label, count);
         }
-        self.control
-            .namespace_mut()
-            .set_proc_sessions_payload(payload.as_bytes())
+        self.observe
+            .update_sessions(self.control.namespace_mut(), payload.as_str())
     }
 
     pub(crate) fn register_service(
@@ -210,6 +226,7 @@ impl ServerCore {
         session: SessionId,
         batch: &[u8],
     ) -> Result<Vec<u8>, NineDoorError> {
+        let start = self.clock.now();
         let mut state = match self.sessions.remove(&session) {
             Some(state) => state,
             None => {
@@ -244,6 +261,7 @@ impl ServerCore {
         let batch_overflow = batch.len() > negotiated_msize as usize;
         let frame_overflow = entries.len() > self.limits.batch_frames;
         let mut responses = vec![None; entries.len()];
+        let mut dropped = 0u64;
         let mut reserved = vec![false; entries.len()];
 
         for (idx, (request, frame_len)) in entries.iter().enumerate() {
@@ -252,6 +270,7 @@ impl ServerCore {
                     code: ErrorCode::TooBig,
                     message: "batch exceeds negotiated msize".to_owned(),
                 });
+                dropped = dropped.saturating_add(1);
                 continue;
             }
             if frame_overflow {
@@ -271,6 +290,7 @@ impl ServerCore {
                     code: ErrorCode::TooBig,
                     message: "frame exceeds negotiated msize".to_owned(),
                 });
+                dropped = dropped.saturating_add(1);
                 continue;
             }
             match state.tag_window.reserve(request.tag) {
@@ -349,6 +369,21 @@ impl ServerCore {
             encoded.push(self.codec.encode_response(&response)?);
         }
         self.pipeline.write_batch(&mut writer, &encoded)?;
+        let end = self.clock.now();
+        let elapsed_ms = end
+            .duration_since(start)
+            .as_millis()
+            .try_into()
+            .unwrap_or(u32::MAX);
+        self.observe.record_ingest_latency(elapsed_ms);
+        self.observe.record_ingest_dropped(dropped);
+        let metrics = self.pipeline.metrics();
+        {
+            let namespace = self.control.namespace_mut();
+            let observe = &mut self.observe;
+            let _ = observe.update_proc_9p(namespace, metrics);
+            let _ = observe.update_proc_ingest(namespace, end, metrics);
+        }
         Ok(buffer)
     }
 

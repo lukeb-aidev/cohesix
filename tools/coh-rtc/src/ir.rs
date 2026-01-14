@@ -20,6 +20,13 @@ const EVENT_PUMP_MAX_TELEMETRY_WORKERS: u32 = 8;
 const MAX_POLICY_QUEUE_ENTRIES: u16 = 64;
 const MAX_POLICY_RULE_ID_LEN: usize = 64;
 const MAX_REPLAY_ENTRIES: u16 = 256;
+const MAX_OBSERVE_LATENCY_SAMPLES: u16 = 64;
+const MAX_OBSERVE_WATCH_ENTRIES: u16 = 64;
+const MAX_U64_DIGITS: usize = 20;
+const MAX_U32_DIGITS: usize = 10;
+const MAX_U8_DIGITS: usize = 3;
+const SHARD_LABEL_BYTES: usize = 2;
+const SHARD_COUNT_DIGITS: usize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -42,6 +49,8 @@ pub struct Manifest {
     pub ecosystem: Ecosystem,
     #[serde(default)]
     pub telemetry: Telemetry,
+    #[serde(default)]
+    pub observability: Observability,
     #[serde(default)]
     pub client_policies: ClientPolicies,
 }
@@ -89,6 +98,7 @@ impl Manifest {
         self.validate_tickets()?;
         self.validate_ecosystem()?;
         self.validate_telemetry()?;
+        self.validate_observability()?;
         self.validate_client_policies()?;
         Ok(())
     }
@@ -360,6 +370,135 @@ impl Manifest {
         Ok(())
     }
 
+    fn validate_observability(&self) -> Result<()> {
+        let proc_9p = &self.observability.proc_9p;
+        let shard_count = self.proc_9p_shard_count();
+        if proc_9p.sessions {
+            let required = required_proc_9p_sessions_bytes(shard_count);
+            ensure_buffer_bytes(
+                "observability.proc_9p.sessions_bytes",
+                proc_9p.sessions_bytes,
+                required,
+            )?;
+        }
+        if proc_9p.outstanding {
+            let required = required_proc_9p_outstanding_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_9p.outstanding_bytes",
+                proc_9p.outstanding_bytes,
+                required,
+            )?;
+        }
+        if proc_9p.short_writes {
+            let required = required_proc_9p_short_writes_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_9p.short_writes_bytes",
+                proc_9p.short_writes_bytes,
+                required,
+            )?;
+        }
+
+        let proc_ingest = &self.observability.proc_ingest;
+        let ingest_enabled = proc_ingest.p50_ms
+            || proc_ingest.p95_ms
+            || proc_ingest.backpressure
+            || proc_ingest.dropped
+            || proc_ingest.queued
+            || proc_ingest.watch;
+
+        if ingest_enabled {
+            if proc_ingest.latency_samples == 0 {
+                bail!("observability.proc_ingest.latency_samples must be >= 1");
+            }
+            if proc_ingest.latency_samples > MAX_OBSERVE_LATENCY_SAMPLES {
+                bail!(
+                    "observability.proc_ingest.latency_samples {} exceeds max {}",
+                    proc_ingest.latency_samples,
+                    MAX_OBSERVE_LATENCY_SAMPLES
+                );
+            }
+        }
+
+        if proc_ingest.p50_ms {
+            let required = required_proc_ingest_p50_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_ingest.p50_ms_bytes",
+                proc_ingest.p50_ms_bytes,
+                required,
+            )?;
+        }
+        if proc_ingest.p95_ms {
+            let required = required_proc_ingest_p95_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_ingest.p95_ms_bytes",
+                proc_ingest.p95_ms_bytes,
+                required,
+            )?;
+        }
+        if proc_ingest.backpressure {
+            let required = required_proc_ingest_backpressure_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_ingest.backpressure_bytes",
+                proc_ingest.backpressure_bytes,
+                required,
+            )?;
+        }
+        if proc_ingest.dropped {
+            let required = required_proc_ingest_dropped_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_ingest.dropped_bytes",
+                proc_ingest.dropped_bytes,
+                required,
+            )?;
+        }
+        if proc_ingest.queued {
+            let required = required_proc_ingest_queued_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_ingest.queued_bytes",
+                proc_ingest.queued_bytes,
+                required,
+            )?;
+        }
+        if proc_ingest.watch {
+            if !proc_ingest.p50_ms
+                || !proc_ingest.p95_ms
+                || !proc_ingest.backpressure
+                || !proc_ingest.dropped
+                || !proc_ingest.queued
+            {
+                bail!("observability.proc_ingest.watch requires p50_ms, p95_ms, backpressure, dropped, and queued to be enabled");
+            }
+            if proc_ingest.watch_max_entries == 0 {
+                bail!("observability.proc_ingest.watch_max_entries must be >= 1");
+            }
+            if proc_ingest.watch_max_entries > MAX_OBSERVE_WATCH_ENTRIES {
+                bail!(
+                    "observability.proc_ingest.watch_max_entries {} exceeds max {}",
+                    proc_ingest.watch_max_entries,
+                    MAX_OBSERVE_WATCH_ENTRIES
+                );
+            }
+            if proc_ingest.watch_min_interval_ms == 0 {
+                bail!("observability.proc_ingest.watch_min_interval_ms must be >= 1");
+            }
+            let required = required_proc_ingest_watch_line_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_ingest.watch_line_bytes",
+                proc_ingest.watch_line_bytes,
+                required,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn proc_9p_shard_count(&self) -> usize {
+        if self.sharding.enabled {
+            1usize << self.sharding.shard_bits
+        } else {
+            1
+        }
+    }
+
     fn validate_client_policies(&self) -> Result<()> {
         let pool = &self.client_policies.cohsh.pool;
         if pool.control_sessions == 0 {
@@ -554,6 +693,92 @@ impl Default for Telemetry {
             ring_bytes_per_worker: 1024,
             frame_schema: TelemetryFrameSchema::LegacyPlaintext,
             cursor: TelemetryCursor::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Observability {
+    pub proc_9p: Proc9pObservability,
+    pub proc_ingest: ProcIngestObservability,
+}
+
+impl Default for Observability {
+    fn default() -> Self {
+        Self {
+            proc_9p: Proc9pObservability::default(),
+            proc_ingest: ProcIngestObservability::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Proc9pObservability {
+    pub sessions: bool,
+    pub outstanding: bool,
+    pub short_writes: bool,
+    pub sessions_bytes: u32,
+    pub outstanding_bytes: u32,
+    pub short_writes_bytes: u32,
+}
+
+impl Default for Proc9pObservability {
+    fn default() -> Self {
+        Self {
+            sessions: false,
+            outstanding: false,
+            short_writes: false,
+            sessions_bytes: 1024,
+            outstanding_bytes: 128,
+            short_writes_bytes: 128,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProcIngestObservability {
+    pub p50_ms: bool,
+    pub p95_ms: bool,
+    pub backpressure: bool,
+    pub dropped: bool,
+    pub queued: bool,
+    pub watch: bool,
+    pub p50_ms_bytes: u32,
+    pub p95_ms_bytes: u32,
+    pub backpressure_bytes: u32,
+    pub dropped_bytes: u32,
+    pub queued_bytes: u32,
+    pub watch_max_entries: u16,
+    pub watch_line_bytes: u32,
+    pub watch_min_interval_ms: u64,
+    pub latency_samples: u16,
+    pub latency_tolerance_ms: u32,
+    pub counter_tolerance: u32,
+}
+
+impl Default for ProcIngestObservability {
+    fn default() -> Self {
+        Self {
+            p50_ms: false,
+            p95_ms: false,
+            backpressure: false,
+            dropped: false,
+            queued: false,
+            watch: false,
+            p50_ms_bytes: 64,
+            p95_ms_bytes: 64,
+            backpressure_bytes: 64,
+            dropped_bytes: 64,
+            queued_bytes: 64,
+            watch_max_entries: 16,
+            watch_line_bytes: 160,
+            watch_min_interval_ms: 50,
+            latency_samples: 16,
+            latency_tolerance_ms: 5,
+            counter_tolerance: 1,
         }
     }
 }
@@ -790,6 +1015,79 @@ impl Role {
 
 fn default_host_mount() -> String {
     "/host".to_owned()
+}
+
+fn ensure_buffer_bytes(label: &str, value: u32, required: usize) -> Result<()> {
+    if required > MAX_MSIZE as usize {
+        bail!(
+            "{label} requires at least {required} bytes which exceeds max {MAX_MSIZE}"
+        );
+    }
+    if value < required as u32 {
+        bail!("{label} {value} is below required minimum {required}");
+    }
+    if value > MAX_MSIZE {
+        bail!("{label} {value} exceeds max {MAX_MSIZE}");
+    }
+    Ok(())
+}
+
+fn required_proc_9p_sessions_bytes(shard_count: usize) -> usize {
+    let header = "sessions total=".len()
+        + MAX_U64_DIGITS
+        + " worker=".len()
+        + MAX_U64_DIGITS
+        + " shard_bits=".len()
+        + MAX_U8_DIGITS
+        + " shard_count=".len()
+        + SHARD_COUNT_DIGITS
+        + 1;
+    let shard_line = "shard ".len() + SHARD_LABEL_BYTES + 1 + MAX_U64_DIGITS + 1;
+    header + shard_count.saturating_mul(shard_line)
+}
+
+fn required_proc_9p_outstanding_bytes() -> usize {
+    "outstanding current=".len() + MAX_U64_DIGITS + " limit=".len() + MAX_U64_DIGITS + 1
+}
+
+fn required_proc_9p_short_writes_bytes() -> usize {
+    "short_writes total=".len() + MAX_U64_DIGITS + " retries=".len() + MAX_U64_DIGITS + 1
+}
+
+fn required_proc_ingest_p50_bytes() -> usize {
+    "p50_ms=".len() + MAX_U32_DIGITS + 1
+}
+
+fn required_proc_ingest_p95_bytes() -> usize {
+    "p95_ms=".len() + MAX_U32_DIGITS + 1
+}
+
+fn required_proc_ingest_backpressure_bytes() -> usize {
+    "backpressure=".len() + MAX_U64_DIGITS + 1
+}
+
+fn required_proc_ingest_dropped_bytes() -> usize {
+    "dropped=".len() + MAX_U64_DIGITS + 1
+}
+
+fn required_proc_ingest_queued_bytes() -> usize {
+    "queued=".len() + MAX_U32_DIGITS + 1
+}
+
+fn required_proc_ingest_watch_line_bytes() -> usize {
+    "watch ts_ms=".len()
+        + MAX_U64_DIGITS
+        + " p50_ms=".len()
+        + MAX_U32_DIGITS
+        + " p95_ms=".len()
+        + MAX_U32_DIGITS
+        + " queued=".len()
+        + MAX_U32_DIGITS
+        + " backpressure=".len()
+        + MAX_U64_DIGITS
+        + " dropped=".len()
+        + MAX_U64_DIGITS
+        + 1
 }
 
 fn validate_policy_rule(rule: &PolicyRule) -> Result<()> {

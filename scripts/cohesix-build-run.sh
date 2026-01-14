@@ -543,13 +543,15 @@ main() {
     fi
 
     RTC_MANIFEST="${COH_RTC_MANIFEST:-$PROJECT_ROOT/configs/root_task.toml}"
-    log "Regenerating coh-rtc artefacts via: cargo run -p coh-rtc -- ${RTC_MANIFEST} --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh --doc-snippet docs/snippets/root_task_manifest.md"
+    log "Regenerating coh-rtc artefacts via: cargo run -p coh-rtc -- ${RTC_MANIFEST} --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh --doc-snippet docs/snippets/root_task_manifest.md --observability-interfaces-snippet docs/snippets/observability_interfaces.md --observability-security-snippet docs/snippets/observability_security.md"
     cargo run -p coh-rtc -- \
         "$RTC_MANIFEST" \
         --out "$PROJECT_ROOT/apps/root-task/src/generated" \
         --manifest "$PROJECT_ROOT/out/manifests/root_task_resolved.json" \
         --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \
-        --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md"
+        --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md" \
+        --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
+        --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md"
 
     SEL4_COMPONENT_PACKAGES=(nine-door worker-heart worker-gpu)
     HOST_TOOL_PACKAGES=(gpu-bridge-host host-sidecar-bridge)

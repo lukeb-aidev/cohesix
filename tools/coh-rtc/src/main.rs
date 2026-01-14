@@ -8,6 +8,7 @@ use clap::Parser;
 use coh_rtc::{
     compile, default_cbor_snippet_path, default_cli_script_path, default_cohsh_policy_doc_path,
     default_cohsh_policy_path, default_cohsh_policy_rust_path, default_doc_snippet_path,
+    default_observability_interfaces_snippet_path, default_observability_security_snippet_path,
     CompileOptions,
 };
 use std::path::PathBuf;
@@ -29,6 +30,12 @@ struct Args {
     /// Output path for the manifest schema snippet.
     #[arg(long, default_value_os_t = default_doc_snippet_path())]
     doc_snippet: PathBuf,
+    /// Output path for the observability interfaces snippet.
+    #[arg(long, default_value_os_t = default_observability_interfaces_snippet_path())]
+    observability_interfaces_snippet: PathBuf,
+    /// Output path for the observability security snippet.
+    #[arg(long, default_value_os_t = default_observability_security_snippet_path())]
+    observability_security_snippet: PathBuf,
     /// Output path for the CBOR telemetry schema snippet.
     #[arg(long, default_value_os_t = default_cbor_snippet_path())]
     cbor_snippet: PathBuf,
@@ -51,6 +58,8 @@ fn main() -> Result<()> {
         manifest_out: args.manifest_out,
         cli_script_out: args.cli_script,
         doc_snippet_out: args.doc_snippet,
+        observability_interfaces_snippet_out: args.observability_interfaces_snippet,
+        observability_security_snippet_out: args.observability_security_snippet,
         cbor_snippet_out: args.cbor_snippet,
         cohsh_policy_out: args.cohsh_policy,
         cohsh_policy_rust_out: args.cohsh_policy_rust,

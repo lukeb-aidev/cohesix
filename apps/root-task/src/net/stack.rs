@@ -46,11 +46,12 @@ use smoltcp::wire::{
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
     outbound::{OutboundCoalescer, OutboundLane, SendError},
-    ConsoleNetConfig, NetBackend, NetConsoleDisconnectReason, NetConsoleEvent, NetCounters,
-    NetDevice, NetDriverError, NetPoller, NetSelfTestReport, NetSelfTestResult, NetStage,
-    NetTelemetry, DEFAULT_NET_BACKEND, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG,
-    NET_STAGE,
+    ConsoleLine, ConsoleNetConfig, NetBackend, NetConsoleDisconnectReason, NetConsoleEvent,
+    NetCounters, NetDevice, NetDriverError, NetPoller, NetSelfTestReport, NetSelfTestResult,
+    NetStage, NetTelemetry, DEFAULT_NET_BACKEND, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
+    NET_DIAG, NET_STAGE,
 };
+use crate::observe::IngestSnapshot;
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 use crate::debug::maybe_report_str_write;
 #[cfg(not(feature = "net-backend-virtio"))]
@@ -4233,7 +4234,8 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
 
     fn drain_console_lines(
         &mut self,
-        visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
+        now_ms: u64,
+        visitor: &mut dyn FnMut(ConsoleLine),
     ) {
         if let Some((snapshot, reason)) = readiness::gate() {
             if !self.session_state.not_ready_logged {
@@ -4248,11 +4250,15 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                 let _ = write!(line, "ERR not-ready reason={reason}\r\n");
                 let _ = self.server.enqueue_outbound(line.as_str());
             }
-            self.server.drain_console_lines(&mut |_line| {});
+            self.server.drain_console_lines(now_ms, &mut |_line| {});
             return;
         }
         self.session_state.not_ready_logged = false;
-        self.server.drain_console_lines(visitor);
+        self.server.drain_console_lines(now_ms, visitor);
+    }
+
+    fn ingest_snapshot(&self) -> IngestSnapshot {
+        self.server.ingest_snapshot()
     }
 
     fn send_console_line(&mut self, line: &str) {
@@ -4426,8 +4432,8 @@ pub fn run_tcp_console<D: NetDevice>(
     let mut now_ms = 0u64;
     loop {
         let _ = stack.poll_with_time(now_ms);
-        stack.server.drain_console_lines(&mut |line| {
-            let _ = writeln!(console, "{line}");
+        stack.server.drain_console_lines(now_ms, &mut |line| {
+            let _ = writeln!(console, "{}", line.text);
         });
         now_ms = now_ms.saturating_add(5);
     }

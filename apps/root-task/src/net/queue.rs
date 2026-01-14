@@ -17,9 +17,10 @@ use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
 
 use super::{
-    console_srv::TcpConsoleServer, NetPoller, NetTelemetry, AUTH_TOKEN, IDLE_TIMEOUT_MS,
-    MAX_FRAME_LEN,
+    console_srv::TcpConsoleServer, ConsoleLine, NetPoller, NetTelemetry, AUTH_TOKEN,
+    IDLE_TIMEOUT_MS, MAX_FRAME_LEN,
 };
+use crate::observe::IngestSnapshot;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 
 /// Number of frames retained in the RX ring buffer.
@@ -459,9 +460,14 @@ impl NetPoller for NetStack {
 
     fn drain_console_lines(
         &mut self,
-        visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
+        now_ms: u64,
+        visitor: &mut dyn FnMut(ConsoleLine),
     ) {
-        self.server.drain_console_lines(visitor);
+        self.server.drain_console_lines(now_ms, visitor);
+    }
+
+    fn ingest_snapshot(&self) -> IngestSnapshot {
+        self.server.ingest_snapshot()
     }
 
     fn send_console_line(&mut self, line: &str) {
@@ -557,8 +563,8 @@ mod tests {
         stack.enqueue_console_line("log\n");
         let mut observed: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 4> =
             heapless::Vec::new();
-        stack.drain_console_lines(&mut |line| {
-            observed.push(line).unwrap();
+        stack.drain_console_lines(10, &mut |line| {
+            observed.push(line.text).unwrap();
         });
         assert_eq!(observed.len(), 2);
         assert_eq!(observed[0].as_str(), "attach queen token");

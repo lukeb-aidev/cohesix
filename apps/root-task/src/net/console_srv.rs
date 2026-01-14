@@ -11,8 +11,9 @@ use log::{debug, info, warn};
 use portable_atomic::{AtomicBool, Ordering};
 use secure9p_codec::MAX_MSIZE;
 
-use super::{AUTH_TIMEOUT_MS, CONSOLE_QUEUE_DEPTH};
+use super::{ConsoleLine, AUTH_TIMEOUT_MS, CONSOLE_QUEUE_DEPTH};
 use crate::console::proto::{render_ack, AckStatus, LineFormatError};
+use crate::observe::{IngestMetrics, IngestSnapshot};
 use crate::serial::DEFAULT_LINE_CAPACITY;
 use cohesix_proto::{REASON_EXPECTED_TOKEN, REASON_INVALID_LENGTH, REASON_INVALID_TOKEN};
 use console_ack_wire::AckLine;
@@ -70,7 +71,7 @@ pub struct TcpConsoleServer {
     frame_len_pos: usize,
     frame_payload_len: Option<usize>,
     drop_remaining: usize,
-    inbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
+    inbound: Deque<ConsoleLine, CONSOLE_QUEUE_DEPTH>,
     priority_outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, { CONSOLE_QUEUE_DEPTH * 4 }>,
     outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
     // Retains the oldest and newest console lines while no authenticated client is
@@ -83,16 +84,32 @@ pub struct TcpConsoleServer {
     outbound_drops: u64,
     preauth_drop_count: u64,
     preauth_drop_warned: bool,
+    ingest_metrics: IngestMetrics,
 }
 
 impl TcpConsoleServer {
-    fn snapshot_queue_ptr<const N: usize>(
+    fn snapshot_console_queue_ptr<const N: usize>(
+        queue: &mut Deque<ConsoleLine, N>,
+    ) -> Option<usize> {
+        if queue.is_full() {
+            return None;
+        }
+        let sample = ConsoleLine::new(HeaplessString::new(), 0);
+        queue.push_back(sample).ok()?;
+        let ptr = queue
+            .back()
+            .map(|line| line.text.as_bytes().as_ptr() as usize);
+        let _ = queue.pop_back();
+        ptr
+    }
+
+    fn snapshot_string_queue_ptr<const N: usize>(
         queue: &mut Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, N>,
     ) -> Option<usize> {
         if queue.is_full() {
             return None;
         }
-        let sample: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+        let sample = HeaplessString::new();
         queue.push_back(sample).ok()?;
         let ptr = queue.back().map(|line| line.as_bytes().as_ptr() as usize);
         let _ = queue.pop_back();
@@ -113,21 +130,21 @@ impl TcpConsoleServer {
             "[net-console] addr marker={marker} label=line-buffer ptr=0x{line_ptr:016x} len=0x{len:04x}",
             len = DEFAULT_LINE_CAPACITY,
         );
-        if let Some(ptr) = Self::snapshot_queue_ptr(&mut self.inbound) {
+        if let Some(ptr) = Self::snapshot_console_queue_ptr(&mut self.inbound) {
             info!(
                 target: "net-console",
                 "[net-console] addr marker={marker} label=inbound-queue ptr=0x{ptr:016x} len=0x{len:04x}",
                 len = DEFAULT_LINE_CAPACITY,
             );
         }
-        if let Some(ptr) = Self::snapshot_queue_ptr(&mut self.priority_outbound) {
+        if let Some(ptr) = Self::snapshot_string_queue_ptr(&mut self.priority_outbound) {
             info!(
                 target: "net-console",
                 "[net-console] addr marker={marker} label=priority-outbound ptr=0x{ptr:016x} len=0x{len:04x}",
                 len = DEFAULT_LINE_CAPACITY,
             );
         }
-        if let Some(ptr) = Self::snapshot_queue_ptr(&mut self.outbound) {
+        if let Some(ptr) = Self::snapshot_string_queue_ptr(&mut self.outbound) {
             info!(
                 target: "net-console",
                 "[net-console] addr marker={marker} label=outbound ptr=0x{ptr:016x} len=0x{len:04x}",
@@ -194,6 +211,7 @@ impl TcpConsoleServer {
             outbound_drops: 0,
             preauth_drop_count: 0,
             preauth_drop_warned: false,
+            ingest_metrics: IngestMetrics::default(),
         }
     }
 
@@ -329,7 +347,7 @@ impl TcpConsoleServer {
                         line.len(),
                         &line.as_bytes()[..core::cmp::min(line.len(), 32)],
                     );
-                    event = self.handle_line(line);
+                    event = self.handle_line(line, now_ms);
                     if matches!(event, SessionEvent::Close) {
                         break;
                     }
@@ -363,7 +381,7 @@ impl TcpConsoleServer {
                     self.frame_buffer.clear();
                     if payload_len == 0 {
                         let line = HeaplessString::new();
-                        event = self.handle_line(line);
+                        event = self.handle_line(line, now_ms);
                         self.frame_payload_len = None;
                         if matches!(event, SessionEvent::Close) {
                             break;
@@ -396,15 +414,21 @@ impl TcpConsoleServer {
         self.line_buffer.clear();
     }
 
-    fn handle_line(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) -> SessionEvent {
+    fn handle_line(
+        &mut self,
+        line: HeaplessString<DEFAULT_LINE_CAPACITY>,
+        now_ms: u64,
+    ) -> SessionEvent {
         match self.state {
             SessionState::WaitingAuth => self.process_auth(line),
             SessionState::Authenticated => {
-                let line_clone = line.clone();
-                if self.inbound.push_back(line).is_err() {
+                let entry = ConsoleLine::new(line, now_ms);
+                if let Err(entry) = self.inbound.push_back(entry) {
                     // Drop oldest to make space for high-priority lines.
                     let _ = self.inbound.pop_front();
-                    let _ = self.inbound.push_back(line_clone);
+                    let _ = self.inbound.push_back(entry);
+                    self.ingest_metrics.record_backpressure();
+                    self.ingest_metrics.record_drop();
                 }
                 SessionEvent::None
             }
@@ -553,11 +577,19 @@ impl TcpConsoleServer {
     /// Forward buffered console lines to the provided visitor.
     pub fn drain_console_lines(
         &mut self,
-        visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
+        now_ms: u64,
+        visitor: &mut dyn FnMut(ConsoleLine),
     ) {
         while let Some(line) = self.inbound.pop_front() {
+            let latency = now_ms.saturating_sub(line.ingest_ms);
+            self.ingest_metrics.record_latency_ms(latency);
             visitor(line);
         }
+    }
+
+    /// Snapshot ingest metrics for observability providers.
+    pub fn ingest_snapshot(&self) -> IngestSnapshot {
+        self.ingest_metrics.snapshot(self.inbound.len())
     }
 
     /// Queue a console response for transmission to the authenticated client.

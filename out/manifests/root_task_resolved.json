@@ -100,6 +100,35 @@
       "retain_on_boot": false
     }
   },
+  "observability": {
+    "proc_9p": {
+      "sessions": true,
+      "outstanding": true,
+      "short_writes": true,
+      "sessions_bytes": 8192,
+      "outstanding_bytes": 128,
+      "short_writes_bytes": 128
+    },
+    "proc_ingest": {
+      "p50_ms": true,
+      "p95_ms": true,
+      "backpressure": true,
+      "dropped": true,
+      "queued": true,
+      "watch": true,
+      "p50_ms_bytes": 64,
+      "p95_ms_bytes": 64,
+      "backpressure_bytes": 64,
+      "dropped_bytes": 64,
+      "queued_bytes": 64,
+      "watch_max_entries": 16,
+      "watch_line_bytes": 192,
+      "watch_min_interval_ms": 50,
+      "latency_samples": 32,
+      "latency_tolerance_ms": 5,
+      "counter_tolerance": 1
+    }
+  },
   "client_policies": {
     "cohsh": {
       "pool": {

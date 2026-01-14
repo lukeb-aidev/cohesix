@@ -1258,9 +1258,10 @@ Expose audit-friendly observability nodes under `/proc` generated from the manif
 - `apps/nine-door/src/host/observe.rs` (new module) providing read-only providers for `/proc/9p/{sessions,outstanding,short_writes}` and `/proc/ingest/{p50_ms,p95_ms,backpressure,dropped,queued}` plus append-only `/proc/ingest/watch` snapshots.
 - Event pump updates (`apps/root-task/src/event/mod.rs`) to update ingest metrics without heap allocation; telemetry forwarded through generated providers.
 - Unit tests covering metric counters and ensuring no allocations on hot paths; CLI regression `scripts/cohsh/observe_watch.coh` tails `/proc/ingest/watch` verifying stable grammar.
-- TODO: Implement scripts/cohsh/observe_watch.coh and add it to regression pack DoD.
 - Manifest IR v1.3 fields: `observability.proc_9p` and `observability.proc_ingest` enabling individual nodes and documenting retention policies. Validation enforces bounded buffer sizes.
 - Docs: `docs/SECURITY.md` gains monitoring appendix sourced from manifest snippets; `docs/INTERFACES.md` documents output grammar.
+
+**Status:** Complete — /proc observability providers, ingest metrics hooks, CLI regressions, doc snippets, and regression pack coverage are aligned and green.
 
 **Commands**
 - `cargo test -p nine-door`

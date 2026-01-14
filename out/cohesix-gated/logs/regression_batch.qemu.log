@@ -1,10 +1,10 @@
 [cohesix-build] Final root-task feature set: cohesix-dev
 [cohesix-build] TCP console NIC backend: virtio
 [cohesix-build] Using QEMU binary: qemu-system-aarch64 (QEMU emulator version 10.1.0)
-[cohesix-build] Regenerating coh-rtc artefacts via: cargo run -p coh-rtc -- /Users/lukasbower/GitHub/cohesix/configs/root_task_regression.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh --doc-snippet docs/snippets/root_task_manifest.md
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.03s
-     Running `target/debug/coh-rtc /Users/lukasbower/GitHub/cohesix/configs/root_task_regression.toml --out /Users/lukasbower/GitHub/cohesix/apps/root-task/src/generated --manifest /Users/lukasbower/GitHub/cohesix/out/manifests/root_task_resolved.json --cli-script /Users/lukasbower/GitHub/cohesix/scripts/cohsh/boot_v0.coh --doc-snippet /Users/lukasbower/GitHub/cohesix/docs/snippets/root_task_manifest.md`
-coh-rtc: wrote rust=/Users/lukasbower/GitHub/cohesix/apps/root-task/src/generated, manifest=/Users/lukasbower/GitHub/cohesix/out/manifests/root_task_resolved.json, cli=/Users/lukasbower/GitHub/cohesix/scripts/cohsh/boot_v0.coh, docs=/Users/lukasbower/GitHub/cohesix/docs/snippets/root_task_manifest.md, cbor=docs/snippets/telemetry_cbor_schema.md, cohsh_policy=out/cohsh_policy.toml, cohsh_hash=out/cohsh_policy.toml.sha256, cohsh_rust=apps/cohsh/src/generated/policy.rs, cohsh_docs=docs/snippets/cohsh_policy.md
+[cohesix-build] Regenerating coh-rtc artefacts via: cargo run -p coh-rtc -- /Users/lukasbower/GitHub/cohesix/configs/root_task_regression.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh --doc-snippet docs/snippets/root_task_manifest.md --observability-interfaces-snippet docs/snippets/observability_interfaces.md --observability-security-snippet docs/snippets/observability_security.md
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running `target/debug/coh-rtc /Users/lukasbower/GitHub/cohesix/configs/root_task_regression.toml --out /Users/lukasbower/GitHub/cohesix/apps/root-task/src/generated --manifest /Users/lukasbower/GitHub/cohesix/out/manifests/root_task_resolved.json --cli-script /Users/lukasbower/GitHub/cohesix/scripts/cohsh/boot_v0.coh --doc-snippet /Users/lukasbower/GitHub/cohesix/docs/snippets/root_task_manifest.md --observability-interfaces-snippet /Users/lukasbower/GitHub/cohesix/docs/snippets/observability_interfaces.md --observability-security-snippet /Users/lukasbower/GitHub/cohesix/docs/snippets/observability_security.md`
+coh-rtc: wrote rust=/Users/lukasbower/GitHub/cohesix/apps/root-task/src/generated, manifest=/Users/lukasbower/GitHub/cohesix/out/manifests/root_task_resolved.json, cli=/Users/lukasbower/GitHub/cohesix/scripts/cohsh/boot_v0.coh, docs=/Users/lukasbower/GitHub/cohesix/docs/snippets/root_task_manifest.md, obs_interfaces=/Users/lukasbower/GitHub/cohesix/docs/snippets/observability_interfaces.md, obs_security=/Users/lukasbower/GitHub/cohesix/docs/snippets/observability_security.md, cbor=docs/snippets/telemetry_cbor_schema.md, cohsh_policy=out/cohsh_policy.toml, cohsh_hash=out/cohsh_policy.toml.sha256, cohsh_rust=apps/cohsh/src/generated/policy.rs, cohsh_docs=docs/snippets/cohsh_policy.md
 [cohesix-build] Building host tooling via: cargo build --release -p gpu-bridge-host -p host-sidecar-bridge
 warning: methods `journal_bounds` and `decisions_bounds` are never used
    --> apps/nine-door/src/host/audit.rs:156:12
@@ -32,36 +32,36 @@ warning: field `offset_start` is never read
     = note: `LogEntry` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
 
 warning: methods `handle_frame` and `dispatch` are never used
-   --> apps/nine-door/src/host/core.rs:200:19
+   --> apps/nine-door/src/host/core.rs:216:19
     |
-72  | impl ServerCore {
+74  | impl ServerCore {
     | --------------- methods in this implementation
 ...
-200 |     pub(crate) fn handle_frame(
+216 |     pub(crate) fn handle_frame(
     |                   ^^^^^^^^^^^^
 ...
-359 |     fn dispatch(
+394 |     fn dispatch(
     |        ^^^^^^^^
 
 warning: associated items `new_with_telemetry_and_manifest`, `new_with_telemetry_manifest_and_host`, and `policy_enabled` are never used
-   --> apps/nine-door/src/host/namespace.rs:384:12
+   --> apps/nine-door/src/host/namespace.rs:385:12
     |
-363 | impl Namespace {
+364 | impl Namespace {
     | -------------- associated items in this implementation
 ...
-384 |     pub fn new_with_telemetry_and_manifest(
+385 |     pub fn new_with_telemetry_and_manifest(
     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
-426 |     pub fn new_with_telemetry_manifest_and_host(
+427 |     pub fn new_with_telemetry_manifest_and_host(
     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
-458 |     pub fn policy_enabled(&self) -> bool {
+459 |     pub fn policy_enabled(&self) -> bool {
     |            ^^^^^^^^^^^^^^
 
 warning: `nine-door` (lib) generated 4 warnings
    Compiling cohsh v0.1.0 (/Users/lukasbower/GitHub/cohesix/apps/cohsh)
    Compiling host-sidecar-bridge v0.1.0 (/Users/lukasbower/GitHub/cohesix/apps/host-sidecar-bridge)
-    Finished `release` profile [optimized] target(s) in 5.66s
+    Finished `release` profile [optimized] target(s) in 20.09s
 [cohesix-build] Building cohsh CLI with TCP transport via: cargo build --release -p cohsh --features tcp
 warning: methods `journal_bounds` and `decisions_bounds` are never used
    --> apps/nine-door/src/host/audit.rs:156:12
@@ -89,81 +89,87 @@ warning: field `offset_start` is never read
     = note: `LogEntry` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
 
 warning: methods `handle_frame` and `dispatch` are never used
-   --> apps/nine-door/src/host/core.rs:200:19
+   --> apps/nine-door/src/host/core.rs:216:19
     |
-72  | impl ServerCore {
+74  | impl ServerCore {
     | --------------- methods in this implementation
 ...
-200 |     pub(crate) fn handle_frame(
+216 |     pub(crate) fn handle_frame(
     |                   ^^^^^^^^^^^^
 ...
-359 |     fn dispatch(
+394 |     fn dispatch(
     |        ^^^^^^^^
 
 warning: associated items `new_with_telemetry_and_manifest`, `new_with_telemetry_manifest_and_host`, and `policy_enabled` are never used
-   --> apps/nine-door/src/host/namespace.rs:384:12
+   --> apps/nine-door/src/host/namespace.rs:385:12
     |
-363 | impl Namespace {
+364 | impl Namespace {
     | -------------- associated items in this implementation
 ...
-384 |     pub fn new_with_telemetry_and_manifest(
+385 |     pub fn new_with_telemetry_and_manifest(
     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
-426 |     pub fn new_with_telemetry_manifest_and_host(
+427 |     pub fn new_with_telemetry_manifest_and_host(
     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
-458 |     pub fn policy_enabled(&self) -> bool {
+459 |     pub fn policy_enabled(&self) -> bool {
     |            ^^^^^^^^^^^^^^
 
 warning: `nine-door` (lib) generated 4 warnings
    Compiling cohsh v0.1.0 (/Users/lukasbower/GitHub/cohesix/apps/cohsh)
-    Finished `release` profile [optimized] target(s) in 8.37s
+    Finished `release` profile [optimized] target(s) in 31.06s
 [cohesix-build] Using root-task linker script: /Users/lukasbower/GitHub/cohesix/apps/root-task/sel4.ld
 [cohesix-build] Building root-task via: cargo build --target aarch64-unknown-none --release -p root-task --no-default-features --features cohesix-dev
    Compiling sel4-sys v0.0.28 (/Users/lukasbower/GitHub/cohesix/crates/sel4-sys)
    Compiling root-task v0.1.0 (/Users/lukasbower/GitHub/cohesix/apps/root-task)
-   Compiling sel4-panicking v0.7.0 (/Users/lukasbower/GitHub/cohesix/crates/sel4-panicking)
    Compiling sel4-runtime v0.7.0 (/Users/lukasbower/GitHub/cohesix/crates/sel4-runtime)
+   Compiling sel4-panicking v0.7.0 (/Users/lukasbower/GitHub/cohesix/crates/sel4-panicking)
+warning: unused import: `crate::observe::IngestSnapshot`
+  --> apps/root-task/src/event/mod.rs:52:5
+   |
+52 | use crate::observe::IngestSnapshot;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
 warning: unused import: `crate::net::NetPoller`
   --> apps/root-task/src/userland/mod.rs:32:5
    |
 32 | use crate::net::NetPoller;
    |     ^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: `#[warn(unused_imports)]` on by default
 
 warning: value assigned to `summary_storage` is never read
-    --> apps/root-task/src/event/mod.rs:1434:45
+    --> apps/root-task/src/event/mod.rs:1441:45
      |
-1434 | ...                   let mut summary_storage: Option<
+1441 | ...                   let mut summary_storage: Option<
      |                               ^^^^^^^^^^^^^^^
      |
      = help: maybe it is overwritten before being read?
      = note: `#[warn(unused_assignments)]` on by default
 
 warning: value assigned to `activity` is never read
-    --> apps/root-task/src/net/stack.rs:3473:37
+    --> apps/root-task/src/net/stack.rs:3474:37
      |
-3473 | ...                   activity |= Self::flush_outbound(
+3474 | ...                   activity |= Self::flush_outbound(
      |                       ^^^^^^^^
      |
      = help: maybe it is overwritten before being read?
 
 warning: value assigned to `allow_flush` is never read
-    --> apps/root-task/src/net/stack.rs:3932:21
+    --> apps/root-task/src/net/stack.rs:3933:21
      |
-3932 |                     allow_flush = false;
+3933 |                     allow_flush = false;
      |                     ^^^^^^^^^^^
      |
      = help: maybe it is overwritten before being read?
 
-warning: `root-task` (lib) generated 4 warnings (run `cargo fix --lib -p root-task` to apply 1 suggestion)
-    Finished `release` profile [optimized] target(s) in 9.77s
+warning: `root-task` (lib) generated 5 warnings (run `cargo fix --lib -p root-task` to apply 2 suggestions)
+    Finished `release` profile [optimized] target(s) in 22.58s
 [cohesix-build] Building seL4 components via: cargo build --target aarch64-unknown-none --release -p nine-door -p worker-heart -p worker-gpu
-    Finished `release` profile [optimized] target(s) in 0.03s
-[cohesix-build] Built root-task: target/aarch64-unknown-none/release/root-task (1643792 bytes, sha256=fe38d238b802c8ac13590f08f8d2494e471417ba18561c15abe23b9d24c43860)
-[cohesix-build] Sanitised elfloader copied to out/cohesix-gated/staging/elfloader (archive 3051520 -> 1839324 bytes, rootserver delta -1211768 bytes)
-[cohesix-build] Sanitised elfloader: out/cohesix-gated/staging/elfloader (3259760 bytes, sha256=1e3b702ea9216d16a81053b5082b9d374c7c2439531332c3124393d4721be3dd)
+    Finished `release` profile [optimized] target(s) in 0.06s
+[cohesix-build] Built root-task: target/aarch64-unknown-none/release/root-task (1653800 bytes, sha256=f50a3a36d97d71ff2f7583d5142f4d7715a6f96c8975f1c3396201fe7c25df17)
+[cohesix-build] Sanitised elfloader copied to out/cohesix-gated/staging/elfloader (archive 3051520 -> 1849332 bytes, rootserver delta -1201760 bytes)
+[cohesix-build] Sanitised elfloader: out/cohesix-gated/staging/elfloader (3259760 bytes, sha256=e42d50a49b961e53d7c170c97587cc02c7a1c7cfe0fda4964222c2021b09f0a7)
 [cohesix-build] Packaged component binary: out/cohesix-gated/staging/cohesix/bin/root-task
 [cohesix-build] Packaged component binary: out/cohesix-gated/staging/cohesix/bin/nine-door
 [cohesix-build] Packaged component binary: out/cohesix-gated/staging/cohesix/bin/worker-heart
@@ -175,15 +181,15 @@ warning: `root-task` (lib) generated 4 warnings (run `cargo fix --lib -p root-ta
 [cohesix-build] Packaged selftest script: out/cohesix-gated/staging/cohesix/proc/tests/selftest_full.coh
 [cohesix-build] Packaged selftest script: out/cohesix-gated/staging/cohesix/proc/tests/selftest_negative.coh
 [cohesix-build] Packaged component binary: out/cohesix-gated/staging/rootserver
-[cohesix-build] Staged rootserver size: out/cohesix-gated/staging/rootserver (1643792 bytes)
-[cohesix-build] rootserver sha256=fe38d238b802c8ac13590f08f8d2494e471417ba18561c15abe23b9d24c43860
+[cohesix-build] Staged rootserver size: out/cohesix-gated/staging/rootserver (1653800 bytes)
+[cohesix-build] rootserver sha256=f50a3a36d97d71ff2f7583d5142f4d7715a6f96c8975f1c3396201fe7c25df17
 [cohesix-build] seL4 kernel: out/cohesix-gated/staging/kernel.elf (898288 bytes, sha256=f7a12c48a914e6eedca07f3c52ed2ece68c400cf117c68404d522badd3076682)
-[cohesix-build] Root server: out/cohesix-gated/staging/rootserver (1643792 bytes, sha256=fe38d238b802c8ac13590f08f8d2494e471417ba18561c15abe23b9d24c43860)
+[cohesix-build] Root server: out/cohesix-gated/staging/rootserver (1653800 bytes, sha256=f50a3a36d97d71ff2f7583d5142f4d7715a6f96c8975f1c3396201fe7c25df17)
 [cohesix-build] Manifest written to out/cohesix-gated/staging/cohesix/manifest.json
 [cohesix-build] Creating payload archive at /Users/lukasbower/GitHub/cohesix/out/cohesix-gated/cohesix-system.cpio
-3224 blocks
-[cohesix-build] Payload CPIO: /Users/lukasbower/GitHub/cohesix/out/cohesix-gated/cohesix-system.cpio (1650688 bytes, sha256=5ba0edb30ef6d07a0938dc8af1d7032dd3971ccef8357ae601ced7da3f291000)
-Archive size OK: 1650688 bytes
+3244 blocks
+[cohesix-build] Payload CPIO: /Users/lukasbower/GitHub/cohesix/out/cohesix-gated/cohesix-system.cpio (1660928 bytes, sha256=5d22a707bd8091825dbbd9b3d929895ec0197cd745bf4c628a5e3d06524d6512)
+Archive size OK: 1660928 bytes
 [cohesix-build] Auto-detected GIC version: gic-version=2
 [cohesix-build] Wiring virtio-net MMIO NIC for TCP console
 
@@ -198,8 +204,8 @@ ELF-loading image 'kernel' to 40000000
   vaddr=[ffffff8040000000..ffffff8040236fff]
   virt_entry=ffffff8040000000
 ELF-loading image 'rootserver' to 40239000
-  paddr=[40239000..403b9fff]
-  vaddr=[0..180fff]
+  paddr=[40239000..403bbfff]
+  vaddr=[0..182fff]
   virt_entry=0
 Enabling MMU and paging
 Jumping to kernel-image entry point...
@@ -211,7 +217,7 @@ available phys memory regions: 1
 reserved virt address space regions: 3
   [ffffff8040000000..ffffff8040237000)
   [ffffff8040237000..ffffff8040238e11)
-  [ffffff8040239000..ffffff80403ba000)
+  [ffffff8040239000..ffffff80403bc000)
 Booting all finished, dropped to user space
 [kernel:entry] root-task entry reached
 [MARK] boot_state=COLD
@@ -219,25 +225,25 @@ Booting all finished, dropped to user space
 CSpaceCanonicalise
 [mark] bootinfo.validate.begin
 BootInfoValidate
-[bootinfo:cspace] root=0x0002 init_bits=13 empty=[0x01d2..0x2000)
+[bootinfo:cspace] root=0x0002 init_bits=13 empty=[0x01d3..0x2000)
 [mark] bootinfo.validate.ok
 [mark] bootinfo.view.ok
 MemoryLayoutBuild
-[boot:layout] text=[0x00000000..0x000b5da7) rodata=[0x000b5da7..0x000b5da7) data=[0x000b5da7..0x00113478) bss=[0x00113478..0x0011e7a8) heap=[0x0011f000..0x0015f000) stack=[0x0015f000..0x00
-[bootinfo] kernel=0x0000000000182000 snapshot=0x0000000000182000
-[vaddr] reserved heap=[0x0011f000..0x0015f000) stack=[0x0015f000..0x0017f000) bootinfo=[0x00182000..0x00185000)
+[boot:layout] text=[0x00000000..0x000b7897) rodata=[0x000b7897..0x000b7897) data=[0x000b7897..0x00115478) bss=[0x00115478..0x001207a8) heap=[0x00121000..0x00161000) stack=[0x00161000..0x00
+[bootinfo] kernel=0x0000000000184000 snapshot=0x0000000000184000
+[vaddr] reserved heap=[0x00121000..0x00161000) stack=[0x00161000..0x00181000) bootinfo=[0x00184000..0x00187000)
 [boot] allocator ready
 log.transport=UART_ONLY
 [INFO root_task::sel4] [sel4-type-sanity] seL4_Word size=8 align=8 seL4_CNode size=8 align=8 seL4_Error size=4 align=4
 [INFO root_task::sel4] [sel4-type-sanity] seL4_CapRights size=8 align=8 seL4_CPtr size=8 align=8
 [breadcrumb] before bootinfo snapshot capture
-[bootinfo:probe] [probe] snapshot.capture.complete pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e5801
-[state] snapshot_region=[0x00000000000e2ad0..0x00000000000e5809) bootinfo=0x0000000000182000 total=0x00002d29 pages=3 backing=0x00000000000e2ad8 len=0x00002d29 snap_pages=3
-[bootinfo] snapshot region=[0x00000000000e2ad0..0x00000000000e5809)
-[bootinfo:probe] [probe] after.snapshot.validation pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e5801
+[bootinfo:probe] [probe] snapshot.capture.complete pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e7801
+[state] snapshot_region=[0x00000000000e4ad0..0x00000000000e7809) bootinfo=0x0000000000184000 total=0x00002d29 pages=3 backing=0x00000000000e4ad8 len=0x00002d29 snap_pages=3
+[bootinfo] snapshot region=[0x00000000000e4ad0..0x00000000000e7809)
+[bootinfo:probe] [probe] after.snapshot.validation pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e7801
 [breadcrumb] before BUILD log
-[BUILD] 6dd31488 2026-01-14T05:07:43.409674+00:00 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1]
-[INFO root_task::kernel] [BUILD] 6dd31488 2026-01-14T05:07:43.409674+00:00 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1]
+[BUILD] 909bb998 2026-01-14T10:57:47.891149+00:00 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1]
+[INFO root_task::kernel] [BUILD] 909bb998 2026-01-14T10:57:47.891149+00:00 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1]
 [breadcrumb] after BUILD log
 cohesix-dev enabled (dev-virt cache-trace control-trace net-diag timer-trace)
 [mark] bootstrap.enter
@@ -246,35 +252,35 @@ cohesix-dev enabled (dev-virt cache-trace control-trace net-diag timer-trace)
 [breadcrumb] before CSpaceRecord
 CSpaceRecord
 [INFO root_task::bootstrap::cspace] [cnode] canonical alias uses init CNode slot=0x0002
-[bootinfo:probe] [probe] after.CSpaceRecord pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e5801
-[guard] stage=IPCInstall.install_init_ipc_buffer call=seL4_SetIPCBuffer ipc_ptr=0x0000000000181000
-[boot] ipcbuf installed early ptr=0x0000000000181000
-[guard] stage=IPCInstall.ipcbuf_sanity call=seL4_CNode_Copy root=0x0002 dst=0x01d3 src=0x0001 depth=64
-[boot] ipcbuf sanity copy src=0x0001 dst=0x01d3 empty=[0x01d2..0x2000) err=0 (seL4_NoError)
-[guard] stage=IPCInstall.ipcbuf_sanity call=seL4_CNode_Delete root=0x0002 dst=0x01d3 depth=64
+[bootinfo:probe] [probe] after.CSpaceRecord pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e7801
+[guard] stage=IPCInstall.install_init_ipc_buffer call=seL4_SetIPCBuffer ipc_ptr=0x0000000000183000
+[boot] ipcbuf installed early ptr=0x0000000000183000
+[guard] stage=IPCInstall.ipcbuf_sanity call=seL4_CNode_Copy root=0x0002 dst=0x01d4 src=0x0001 depth=64
+[boot] ipcbuf sanity copy src=0x0001 dst=0x01d4 empty=[0x01d3..0x2000) err=0 (seL4_NoError)
+[guard] stage=IPCInstall.ipcbuf_sanity call=seL4_CNode_Delete root=0x0002 dst=0x01d4 depth=64
 [boot] ipcbuf sanity ok (copy+delete)
 IPCInstall
 [mark] ipc.install.ok
-[bootinfo:probe] [probe] after.IPCInstall pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e5801
+[bootinfo:probe] [probe] after.IPCInstall pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e7801
 [breadcrumb] after ipcbuf sanity ok
-[state] bootinfo=0x00000000000e2ad8 bootinfo_page=[0x0000000000182000..0x0000000000185000) ipcbuf=0x0000000000181000 heap=[0x0011f000..0x0015f000) stack=[0x0015f000..0x0017f000)
-[INFO root_task::kernel] [rt-fix] cspace window [0x01d2..0x2000), initBits=13, initCNode=0x0002
+[state] bootinfo=0x00000000000e4ad8 bootinfo_page=[0x0000000000184000..0x0000000000187000) ipcbuf=0x0000000000183000 heap=[0x00121000..0x00161000) stack=[0x00161000..0x00181000)
+[INFO root_task::kernel] [rt-fix] cspace window [0x01d3..0x2000), initBits=13, initCNode=0x0002
 [INFO root_task::bootstrap::cspace] [probe] skipping BootInfo frame slot verification during bring-up
-[INFO root_task::kernel] [probe] dest path OK at slot=0x01d2
+[INFO root_task::kernel] [probe] dest path OK at slot=0x01d3
 [INFO root_task::audit::boot] [kernel:entry] about to log stage0 entry
 [cohesix:root-task] entered from seL4 (stage0)
 [cohesix:root-task] Cohesix boot: root-task online
-[cohesix:root-task] bootinfo @ 0x00000000000e2ad8 (header 3848 bytes)
+[cohesix:root-task] bootinfo @ 0x00000000000e4ad8 (header 3848 bytes)
 [cohesix:root-task] bootinfo.extraLen = 7713 bytes (~964 words)
-[cohesix:root-task] bootinfo.extra region [0x00000000000e39e0..0x00000000000e5801)
-[cohesix:root-task] node_id=0 nodes=1 ipc_buffer=0x0000000000181000
+[cohesix:root-task] bootinfo.extra region [0x00000000000e59e0..0x00000000000e7801)
+[cohesix:root-task] node_id=0 nodes=1 ipc_buffer=0x0000000000183000
 [cohesix:root-task] initThreadCNode=0x0002 bits=13 capacity=8192
-[cohesix:root-task] empty slots [0x01d2..0x2000) span=7726
-[cohesix:root-task] cs: root=0x0002 bits=13 first_free=0x01d2
+[cohesix:root-task] empty slots [0x01d3..0x2000) span=7725
+[cohesix:root-task] cs: root=0x0002 bits=13 first_free=0x01d3
 [cohesix:root-task] Cohesix v0 (AArch64/virt)
 [cohesix:root-task] manifest.schema=1.3
 [cohesix:root-task] manifest.profile=virt-aarch64
-[cohesix:root-task] manifest.sha256=dc24d82a338659106a0b61e312734451d9db0e04cfd06f7ca0cdb8c41a554ef7
+[cohesix:root-task] manifest.sha256=86eb3b842933f76f179a1a50d9c2020cf5fdda73c21b09762b4e636cfe6625b8
 [cohesix:root-task] manifest.tickets=3
 [cohesix:root-task] manifest.namespaces=0 role_isolation=true
 [cohesix:root-task] manifest.secure9p.msize=8192
@@ -296,7 +302,7 @@ IPCInstall
 [cohesix:root-task] manifest.features.net_console=true
 [cohesix:root-task] event_pump.fds=serial,timer,ipc,net-console,ninedoor
 [cohesix:root-task] [manifest] namespaces=0 hash=4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
-[INFO root_task::sel4] [cohesix:root-task] bootinfo.raw: initCNode=0x2 initBits=13 empty=[0x01d2..0x2000)
+[INFO root_task::sel4] [cohesix:root-task] bootinfo.raw: initCNode=0x2 initBits=13 empty=[0x01d3..0x2000)
 [INFO root_task::kernel] [caps] Null=0 TCB=1 CNode=2 VSpace=3 IPCBuf=10 BootInfo=9
 [guard] stage=BootCaps.identify call=seL4_CapIdentify.skip slot=0x0000 reason=null-cap
 [guard] stage=BootCaps.identify call=seL4_CapIdentify slot=0x0001
@@ -392,13 +398,13 @@ IPCInstall
 [INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x001e type=0x00000001
 [guard] stage=BootCaps.dump call=seL4_CapIdentify slot=0x001f
 [INFO root_task::bootstrap::cspace_sys] [cnode.slot] slot=0x001f type=0x00000001
-[bootstrap] device-pt untyped selected: idx=59 cap=0x1d1 sizeBits=17 paddr=0x7ffe0000 (candidates paddr range: 0x40000000–0x7ffe0000)
-[retype:plan] reserved device PageTable pool ut=0x1d1 bits=17 paddr=0x7ffe0000 capacity=131072B
-[INFO root_task::sel4] [cohesix:root-task] bootinfo.empty slots [0x01d2..0x2000) span=7726 root_cnode_bits=13
-[bootinfo.window.pointers] marker=arm bootinfo=0x00000000000e2ad8 bootinfo.empty=0x00000000000e2b00 guard.window=0x00000000000e2b00 expected=[0x01d2..0x2000) capacity=0x2000 observed=[0x01d2..0x2000) snapshot=0x000000000011d240 snapshot.window=0x000000000011d2a0 snapshot.empty=0x00000000000e2b00
+[bootstrap] device-pt untyped selected: idx=58 cap=0x1d2 sizeBits=17 paddr=0x7ffe0000 (candidates paddr range: 0x40000000–0x7ffe0000)
+[retype:plan] reserved device PageTable pool ut=0x1d2 bits=17 paddr=0x7ffe0000 capacity=131072B
+[INFO root_task::sel4] [cohesix:root-task] bootinfo.empty slots [0x01d3..0x2000) span=7725 root_cnode_bits=13
+[bootinfo.window.pointers] marker=arm bootinfo=0x00000000000e4ad8 bootinfo.empty=0x00000000000e4b00 guard.window=0x00000000000e4b00 expected=[0x01d3..0x2000) capacity=0x2000 observed=[0x01d3..0x2000) snapshot=0x000000000011f240 snapshot.window=0x000000000011f2a0 snapshot.empty=0x00000000000e4b00
 [INFO root_task::sel4] 
-[INFO root_task::sel4] [device-pt] reserved pool ut=0x1d1 tables=32 bytes=131072
-[state] extra_range=[0x00000000000e39e0..0x00000000000e5801) ptr=0x00000000000e39e0 len=7713
+[INFO root_task::sel4] [device-pt] reserved pool ut=0x1d2 tables=32 bytes=131072
+[state] extra_range=[0x00000000000e59e0..0x00000000000e7801) ptr=0x00000000000e59e0 len=7713
 [breadcrumb] before DTB locate
 [cohesix:root-task] [boot] deferring DTB parse
 [MARK 30] after DTB deferred
@@ -410,36 +416,36 @@ IPCInstall
 [MARK 36] before bootstrap-minimal
 [MARK 38] before bootstrap_ep
 [mark] ep.bootstrap.begin
-[boot] root-ep preflight ep_ready=0 first_free=0x01d2
+[boot] root-ep preflight ep_ready=0 first_free=0x01d3
 [boot] bootstrap_ep: entry
 [boot] bootstrap_ep: entering
 [boot] bootstrap_ep: after alloc_slot
-[boot] bootstrap_ep: slot=0x01d2
+[boot] bootstrap_ep: slot=0x01d3
 [boot] bootstrap_ep: window ready
-[cs: root=0x2 bits=13 first_free=0x1d2]
+[cs: root=0x2 bits=13 first_free=0x1d3]
 [boot] bootstrap_ep: before verify
-[boot] bootstrap_ep: verify slot=0x01d2
+[boot] bootstrap_ep: verify slot=0x01d3
 [boot] bootstrap_ep: verify ok
 [boot] bootstrap_ep: before retype
-[boot] bootstrap_ep: retype ut=0x01b4 -> slot=0x01d2
-[guard] stage=EP.Retype call=seL4_Untyped_Retype root=0x0002 ut=0x01b4 dst=0x01d2 depth=13
-[INFO root_task::bootstrap::cspace_sys] [retype.ep] root=0x0002 slot=0x01d2 depth=13 ut=0x01b4 err=0
+[boot] bootstrap_ep: retype ut=0x01b6 -> slot=0x01d3
+[guard] stage=EP.Retype call=seL4_Untyped_Retype root=0x0002 ut=0x01b6 dst=0x01d3 depth=13
+[INFO root_task::bootstrap::cspace_sys] [retype.ep] root=0x0002 slot=0x01d3 depth=13 ut=0x01b6 err=0
 [boot] bootstrap_ep: after retype
 [boot] bootstrap_ep: retype ok
-[guard] stage=bootstrap_ep.identify call=seL4_DebugCapIdentify slot=0x01d2
+[guard] stage=bootstrap_ep.identify call=seL4_DebugCapIdentify slot=0x01d3
 [boot] root endpoint published
 [boot] bootstrap_ep: after publish
-[boot] bootstrap_ep: published ep=0x01d2
-[boot] bootstrap_ep: success slot=0x01d2 badge=0x0000 published=1 ident=0x0004
+[boot] bootstrap_ep: published ep=0x01d3
+[boot] bootstrap_ep: success slot=0x01d3 badge=0x0000 published=1 ident=0x0004
 [MARK 39] after bootstrap_ep ok
-[boot] root-ep report slot=0x01d2 verify=Some(0) retype=Some(0) ident=0x0004 preexisting=0
-[bootinfo:probe] [probe] after.bootstrap_ep pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e5801
+[boot] root-ep report slot=0x01d3 verify=Some(0) retype=Some(0) ident=0x0004 preexisting=0
+[bootinfo:probe] [probe] after.bootstrap_ep pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e7801
 [breadcrumb] before trace_ep
-[ep=0x00000000000001d2]
+[ep=0x00000000000001d3]
 [breadcrumb] after trace_ep
 [breadcrumb] before ep publish line
-[cohesix:root-task] [boot] root endpoint published ep=0x01d2
-[mark] ep.publish.ok root_ep=0x01d2
+[cohesix:root-task] [boot] root endpoint published ep=0x01d3
+[mark] ep.publish.ok root_ep=0x01d3
 [breadcrumb] after ep publish line
 [breadcrumb] before boot_tracer drain
 [breadcrumb] before boot_tracer drain
@@ -456,199 +462,199 @@ IPCInstall
 [INFO root_task::boot::tcb] [tcb] canonical root uses init TCB cap=0x0001; copy suppressed
 [boot:bypass] tcb.copy.end (ep_ready=1 ep_validated=1 ipc_unlocked=0)
 [boot:bypass] ipcbuf.begin (ep_ready=1 ep_validated=1 ipc_unlocked=0)
-[INFO root_task::sel4] [ipcbuf] capid frame=0x000a ty=0x00000001 (frame) vaddr=0x00181000
-[INFO root_task::bootstrap::ipcbuf] [boot] using boot-provided IPC buffer without re-binding: tcb=0x0001 frame=0x000a vaddr=0x00181000
+[INFO root_task::sel4] [ipcbuf] capid frame=0x000a ty=0x00000001 (frame) vaddr=0x00183000
+[INFO root_task::bootstrap::ipcbuf] [boot] using boot-provided IPC buffer without re-binding: tcb=0x0001 frame=0x000a vaddr=0x00183000
 [boot:bypass] ipcbuf.done (ep_ready=1 ep_validated=1 ipc_unlocked=0)
-[cohesix:root-task] [boot] ipc buffer mapped @ 0x00181000
-[INFO root_task::boot::ep] [cs] alloc root=0x0002 bits=13 first_free=0x01d3 empty=[0x01d3..0x01d3)
-[INFO root_task::boot::ep] [cs] bootinfo root=0x0002 bits=13 first_free=0x01d3 empty=[0x01d2..0x2000)
-[guard] stage=EP.Retype call=seL4_Untyped_Retype root=0x0002 ut=0x01b4 dst=0x01d3 depth=13
-[INFO root_task::bootstrap::cspace_sys] [retype.ep] root=0x0002 slot=0x01d3 depth=13 ut=0x01b4 err=0
-[INFO root_task::boot::ep] [ep] fault ep retype root=0x0002 depth=13 dst=0x01d3 err=0
-[INFO root_task::boot::ep] [cs] first_free=0x01d4
-[guard] stage=bootstrap_fault_ep.identify call=seL4_DebugCapIdentify slot=0x01d3
-[INFO root_task::boot::ep] [boot] fault endpoint slot=0x01d3 identify=0x00000004
-[boot] fault-ep ready slot=0x01d3 badge=0x0000 ident=0x0004 published=0
-[INFO root_task::bootstrap] [boot] dedicated fault endpoint ready ep=0x01d3
-[INFO root_task::kernel] [ipc] root EP installed at slot=0x01d2 (role=LOG+CONTROL / QUEEN bootstrap)
-[INFO root_task::kernel] [ipc] EP 0x01d2 loop online; waiting for messages
-[INFO root_task::kernel] [ipc] fault EP installed at slot=0x01d3 (dedicated fault handler)
-[INFO root_task::kernel] [ipc] EP 0x01d2: dispatcher thread initialised on core=0
+[cohesix:root-task] [boot] ipc buffer mapped @ 0x00183000
+[INFO root_task::boot::ep] [cs] alloc root=0x0002 bits=13 first_free=0x01d4 empty=[0x01d4..0x01d4)
+[INFO root_task::boot::ep] [cs] bootinfo root=0x0002 bits=13 first_free=0x01d4 empty=[0x01d3..0x2000)
+[guard] stage=EP.Retype call=seL4_Untyped_Retype root=0x0002 ut=0x01b6 dst=0x01d4 depth=13
+[INFO root_task::bootstrap::cspace_sys] [retype.ep] root=0x0002 slot=0x01d4 depth=13 ut=0x01b6 err=0
+[INFO root_task::boot::ep] [ep] fault ep retype root=0x0002 depth=13 dst=0x01d4 err=0
+[INFO root_task::boot::ep] [cs] first_free=0x01d5
+[guard] stage=bootstrap_fault_ep.identify call=seL4_DebugCapIdentify slot=0x01d4
+[INFO root_task::boot::ep] [boot] fault endpoint slot=0x01d4 identify=0x00000004
+[boot] fault-ep ready slot=0x01d4 badge=0x0000 ident=0x0004 published=0
+[INFO root_task::bootstrap] [boot] dedicated fault endpoint ready ep=0x01d4
+[INFO root_task::kernel] [ipc] root EP installed at slot=0x01d3 (role=LOG+CONTROL / QUEEN bootstrap)
+[INFO root_task::kernel] [ipc] EP 0x01d3 loop online; waiting for messages
+[INFO root_task::kernel] [ipc] fault EP installed at slot=0x01d4 (dedicated fault handler)
+[INFO root_task::kernel] [ipc] EP 0x01d3: dispatcher thread initialised on core=0
 [boot] commit_minimal satisfied
 [INFO root_task::cspace] [cspace] using CSpace root=0x0002 (type=0x0000000a) as destRoot for CNode ops
-[INFO root_task::cspace] [cnode] Mint dst=0x01d4 depth=64
-[INFO root_task::cspace] [cnode] Mint src=0x01d3 depth=64
-[INFO root_task::kernel::fault] [fault] minted badged fault cap slot=0x01d4 ep=0x01d3 badge=0x0001
-[INFO root_task::kernel::fault] [fault] installed handler for init-tcb: tcb=0x0001 badge=0x0001 fault_cap=0x01d4
+[INFO root_task::cspace] [cnode] Mint dst=0x01d5 depth=64
+[INFO root_task::cspace] [cnode] Mint src=0x01d4 depth=64
+[INFO root_task::kernel::fault] [fault] minted badged fault cap slot=0x01d5 ep=0x01d4 badge=0x0001
+[INFO root_task::kernel::fault] [fault] installed handler for init-tcb: tcb=0x0001 badge=0x0001 fault_cap=0x01d5
 [INFO root_task::kernel::fault] [tcb] spawn init-tcb: badge=0x0001 tcb_cap=0x0001 entry=None sp=<unknown>
-[INFO root_task::bootstrap] [boot] fault handler installed tcb_slot=0x0001 ep=0x01d3 badge=0x0001
-[INFO root_task::bootstrap::cspace] [boot] empty=[0x1d2..0x2000) cnode_bits=13
-[boot] empty=[0x1d2..0x2000) cnode_bits=13
+[INFO root_task::bootstrap] [boot] fault handler installed tcb_slot=0x0001 ep=0x01d4 badge=0x0001
+[INFO root_task::bootstrap::cspace] [boot] empty=[0x1d3..0x2000) cnode_bits=13
+[boot] empty=[0x1d3..0x2000) cnode_bits=13
 [breadcrumb] before UntypedPlan
-[bootinfo:probe] [probe] before.UntypedPlan pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e5801
+[bootinfo:probe] [probe] before.UntypedPlan pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e7801
 UntypedPlan
 [boot:phase] UntypedEnumerate
-[retype:plan] skipping Page from ut=0x1b4: 1x4096B would exceed 65536B capacity (used=65536B)
-[retype:plan] ut=0x1b4 sz=16 -> 1xPT + 14xPage (dest start=0x01d2)
-[bootinfo:probe] [probe] after.UntypedPlan pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e5801
+[retype:plan] skipping Page from ut=0x1b6: 1x4096B would exceed 65536B capacity (used=65536B)
+[retype:plan] ut=0x1b6 sz=16 -> 1xPT + 14xPage (dest start=0x01d3)
+[bootinfo:probe] [probe] after.UntypedPlan pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e7801
 RetypeCommit
-[bootinfo:probe] [probe] after.RetypeCommit pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e5801
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01d5 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01d5 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01d5 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0003 sz=5 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01d5 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0003 sz=5 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001d5 n=1
+[bootinfo:probe] [probe] after.RetypeCommit pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e7801
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01d6 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01d6 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01d6 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0003 sz=5 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01d6 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0003 sz=5 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001d6 n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[ffi] seL4_CNode_Mint destRoot=0x0002 destIndex=0x00000000000001d6 destDepth=64 srcRoot=0x0002 srcIndex=0x0000000000000002 srcDepth=64 rights=0x0f badge=0x0000
-[INFO root_task::bootstrap::cspace] [cnode] mint-success path=direct:init-cnode dest=0x01d6 ident(init=0x0000000a,copy=0x0000000a) rights(init=RWGP,copy=RWGP)
-[INFO root_task::bootstrap] [boot] notification retyped ut=0x1b4 slot=0x01d5
+[ffi] seL4_CNode_Mint destRoot=0x0002 destIndex=0x00000000000001d7 destDepth=64 srcRoot=0x0002 srcIndex=0x0000000000000002 srcDepth=64 rights=0x0f badge=0x0000
+[INFO root_task::bootstrap::cspace] [cnode] mint-success path=direct:init-cnode dest=0x01d7 ident(init=0x0000000a,copy=0x0000000a) rights(init=RWGP,copy=RWGP)
+[INFO root_task::bootstrap] [boot] notification retyped ut=0x1b6 slot=0x01d6
 [boot:phase] RetypeBegin
-[bootinfo:probe] [probe] retype.begin pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e5801
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01d7 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01d7 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01d7 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0009 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01d7 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0009 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001d7 n=1
+[bootinfo:probe] [probe] retype.begin pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e7801
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01d8 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01d8 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01d8 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0009 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01d8 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0009 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001d8 n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01d8 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01d8 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01d8 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01d8 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001d8 n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01d9 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01d9 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01d9 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01d9 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001d9 n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01d9 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01d9 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01d9 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01d9 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001d9 n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01da guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01da guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01da index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01da index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001da n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01da guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01da guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01da index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01da index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001da n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01db guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01db guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01db index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01db index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001db n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01db guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01db guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01db index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01db index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001db n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01dc guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01dc guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01dc index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01dc index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001dc n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01dc guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01dc guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01dc index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01dc index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001dc n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01dd guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01dd guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01dd index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01dd index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001dd n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01dd guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01dd guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01dd index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01dd index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001dd n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01de guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01de guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01de index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01de index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001de n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01de guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01de guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01de index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01de index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001de n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01df guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01df guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01df index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01df index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001df n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01df guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01df guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01df index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01df index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001df n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01e0 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01e0 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01e0 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01e0 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001e0 n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01e0 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01e0 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01e0 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01e0 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001e0 n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01e1 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01e1 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01e1 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01e1 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001e1 n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01e1 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01e1 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01e1 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01e1 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001e1 n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01e2 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01e2 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01e2 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01e2 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001e2 n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01e2 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01e2 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01e2 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01e2 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001e2 n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01e3 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01e3 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01e3 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01e3 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001e3 n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01e3 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01e3 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01e3 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01e3 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001e3 n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01e4 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01e4 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01e4 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01e4 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001e4 n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01e4 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01e4 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01e4 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01e4 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001e4 n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01e5 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01e5 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01e5 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01e5 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001e5 n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
-[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01e5 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[retype] path=direct:init-cnode dest=0x01e5 guard_depth=0 root_bits=13 window=[0x01d2..0x2000)
-[INFO root_task::bootstrap::retype] [retype] dst=0x01e5 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[retype] dst=0x01e5 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b4 obj=0x0007 sz=12 n=1 empty=[0x01d2,0x2000)
-[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b4 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001e5 n=1
+[INFO root_task::bootstrap::cspace] [retype] path=direct:init-cnode dest=0x01e6 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[retype] path=direct:init-cnode dest=0x01e6 guard_depth=0 root_bits=13 window=[0x01d3..0x2000)
+[INFO root_task::bootstrap::retype] [retype] dst=0x01e6 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[retype] dst=0x01e6 index=0x00000000000002 depth=64 root=0x0002 style=Raw ut=0x01b6 obj=0x0007 sz=12 n=1 empty=[0x01d3,0x2000)
+[INFO root_task::bootstrap::ffi] [retype] ut=0x00000000000001b6 root=0x0002 depth=64 index=0x0000000000000002 offset=0x00000000000001e6 n=1
 [INFO root_task::bootstrap::retype] [retype:ret] err=0 style=Raw
 [retype:ret] err=0 style=Raw
 [boot:phase] RetypeProgress 15/15
 [boot:phase] RetypeDone
-[bootinfo:probe] [probe] retype.done pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e5801
-[ffi] seL4_CNode_Mint destRoot=0x0002 destIndex=0x00000000000001e6 destDepth=64 srcRoot=0x0002 srcIndex=0x0000000000000002 srcDepth=64 rights=0x0f badge=0x0000
-[INFO root_task::bootstrap::cspace] [cnode] mint-success path=direct:init-cnode dest=0x01e6 ident(init=0x0000000a,copy=0x0000000a) rights(init=RWGP,copy=RWGP)
+[bootinfo:probe] [probe] retype.done pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e7801
+[ffi] seL4_CNode_Mint destRoot=0x0002 destIndex=0x00000000000001e7 destDepth=64 srcRoot=0x0002 srcIndex=0x0000000000000002 srcDepth=64 rights=0x0f badge=0x0000
+[INFO root_task::bootstrap::cspace] [cnode] mint-success path=direct:init-cnode dest=0x01e7 ident(init=0x0000000a,copy=0x0000000a) rights(init=RWGP,copy=RWGP)
 [WARN root_task::kernel] [boot] reconciled bootstrap slot usage measured=21 tracked=20
-[cohesix:root-task] bootinfo.empty slots [0x01d2..0x2000) span=7726 root_cnode_bits=13
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1a6 type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1e7 n=1
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1d1 type=0x9 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1e8 n=1
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1d1 type=0x9 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1e9 n=1
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1d1 type=0x9 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1ea n=1
-[INFO boot] [uart:mmio] paddr=0x09000000 cap=0x01e7 vaddr=0x00000000a0000000 mapped=true
+[cohesix:root-task] bootinfo.empty slots [0x01d3..0x2000) span=7725 root_cnode_bits=13
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1a8 type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1e8 n=1
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1d2 type=0x9 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1e9 n=1
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1d2 type=0x9 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1ea n=1
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1d2 type=0x9 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1eb n=1
+[INFO boot] [uart:mmio] paddr=0x09000000 cap=0x01e8 vaddr=0x00000000a0000000 mapped=true
 [cohesix:root-task] [vspace:map] pl011 paddr=0x09000000 -> vaddr=0x00000000a0000000 attrs=UNCACHED OK
 [cohesix:root-task] [uart] init OK
 [console] PL011 console online
 [cohesix:root-task] uart logger online
 [INFO root_task::kernel] [boot] after uart logger online
-[INFO net-storage] [net-storage] preinit marker=apps/root-task/src/net/stack.rs:1383 in_use=false owner=0x0000000000000000 tag=0x00000000 tag_label=(unknown) flag_addr=0x000000000011c984
-[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1383 label=socket flag=0x000000000011c984 owner=0x000000000011ca30 tag=0x000000000011c9dc storage=0x00000000000
-[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1383 label=tcp-rx flag=0x000000000011c985 owner=0x000000000011ca38 tag=0x000000000011c9e0 storage=0x0000000000
-[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1383 label=tcp-tx flag=0x000000000011c986 owner=0x000000000011ca40 tag=0x000000000011c9e4 storage=0x0000000000
-[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1383 label=tcp-smoke-rx flag=0x000000000011c987 owner=0x000000000011ca48 tag=0x000000000011c9e8 storage=0x0000000
-[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1383 label=tcp-smoke-tx flag=0x000000000011c988 owner=0x000000000011ca50 tag=0x000000000011c9ec storage=0x0000000
-[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1383 label=tcp-smoke-out-rx flag=0x000000000011c989 owner=0x000000000011ca58 tag=0x000000000011c9f0 storage=0x000
-[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1383 label=tcp-smoke-out-tx flag=0x000000000011c98a owner=0x000000000011ca60 tag=0x000000000011c9f4 storage=0x000
-[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1383 label=udp-beacon flag=0x000000000011c98b owner=0x000000000011ca68 tag=0x000000000011c9f8 storage=0x000000000
-[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1383 label=udp-echo flag=0x000000000011c98c owner=0x000000000011ca70 tag=0x000000000011c9fc storage=0x0000000000
+[INFO net-storage] [net-storage] preinit marker=apps/root-task/src/net/stack.rs:1384 in_use=false owner=0x0000000000000000 tag=0x00000000 tag_label=(unknown) flag_addr=0x000000000011e984
+[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1384 label=socket flag=0x000000000011e984 owner=0x000000000011ea30 tag=0x000000000011e9dc storage=0x00000000000
+[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1384 label=tcp-rx flag=0x000000000011e985 owner=0x000000000011ea38 tag=0x000000000011e9e0 storage=0x0000000000
+[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1384 label=tcp-tx flag=0x000000000011e986 owner=0x000000000011ea40 tag=0x000000000011e9e4 storage=0x0000000000
+[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1384 label=tcp-smoke-rx flag=0x000000000011e987 owner=0x000000000011ea48 tag=0x000000000011e9e8 storage=0x0000000
+[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1384 label=tcp-smoke-tx flag=0x000000000011e988 owner=0x000000000011ea50 tag=0x000000000011e9ec storage=0x0000000
+[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1384 label=tcp-smoke-out-rx flag=0x000000000011e989 owner=0x000000000011ea58 tag=0x000000000011e9f0 storage=0x000
+[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1384 label=tcp-smoke-out-tx flag=0x000000000011e98a owner=0x000000000011ea60 tag=0x000000000011e9f4 storage=0x000
+[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1384 label=udp-beacon flag=0x000000000011e98b owner=0x000000000011ea68 tag=0x000000000011e9f8 storage=0x000000000
+[INFO net-storage] [net-storage] addr marker=apps/root-task/src/net/stack.rs:1384 label=udp-echo flag=0x000000000011e98c owner=0x000000000011ea70 tag=0x000000000011e9fc storage=0x0000000000
 [INFO root_task::net::stack] [net-console] config: iface_ip=10.0.2.15/24 gateway=10.0.2.2 listen_port=31337 udp_echo_port=31338 tcp_smoke_port=31339
 [INFO root_task::net::stack] [net-init] attempt_id=0x0000000100000001 state=0->1 tag=net-console:init
 [INFO root_task::net::stack] [net-console] init: constructing smoltcp stack
-[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.begin region=[0x00000000000e2ad0..0x00000000000e5809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe post=0x
+[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.begin region=[0x00000000000e4ad0..0x00000000000e7809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe post=0x
 [INFO root_task::net::stack] [net-console] init: bringing up virtio-net with ip=10.0.2.15/24 netmask=255.255.255.0 gateway=10.0.2.2
 [INFO root_task::net::stack] [net-console] init: creating virtio-net device (listen_port=31337)
 [INFO root_task::net::stack] [net-console] net.stage=full
-[INFO bootinfo.window] [bootinfo.window] addr marker=net.init.begin ptr=0x00000000000e2b00 len=0x00000010
+[INFO bootinfo.window] [bootinfo.window] addr marker=net.init.begin ptr=0x00000000000e4b00 len=0x00000010
 [INFO root_task::drivers::virtio::net] [net-console] init: probing virtio-mmio bus
 [INFO root_task::drivers::virtio::net] [net-console] expecting virtio-net on virtio-mmio base=0x0a000000, slots=0-7, stride=0x200
 [INFO root_task::drivers::virtio::net] [net-console] probing virtio-mmio slot=0 paddr=0x0a000000
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1a7 type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1eb n=1
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1a9 type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1ec n=1
 [INFO net-console] virtio-mmio id: magic=0x74726976, version=0x00000002, device_id=0x00000001
 [INFO net-console] modern virtio-mmio v2 detected (vendor=0x554d4551)
 [INFO net-console] [virtio-net] found device: slot=0 mmio=0x0a000000 device_id=0x0001 vendor=0x554d4551 version=0x00000002
@@ -669,143 +675,143 @@ RetypeCommit
 [INFO net-console] [net-console] status set to FEATURES_OK: 0x0b
 [INFO root_task::drivers::virtio::net] [net-console] allocating virtqueue backing memory
 [INFO virtio-net] [virtio-net][virtq] metadata attr policy=default uncached_flag=false device_flag=false attr=0x00000003 default=0x00000003 uncached=0x00000000 device=0x00000004
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1b9 type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1ec n=1
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1b9 type=0x9 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1ed n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0000000 paddr=0x403ba000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1ba type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1ee n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0001000 paddr=0x403bc000 attr=0x00000003
-[INFO virtio-net] [virtio-net][dma] qmem mapping cacheable=true map_attr=0x00000003 rx_vaddr=0x00000000b0000000..0x00000000b0001000 rx_paddr=0x00000000403ba000..0x00000000403bb000 tx_vaddr=0
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1ed n=1
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x9 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1ee n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0000000 paddr=0x403bc000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1ef n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0001000 paddr=0x403be000 attr=0x00000003
+[INFO virtio-net] [virtio-net][dma] qmem mapping cacheable=true map_attr=0x00000003 rx_vaddr=0x00000000b0000000..0x00000000b0001000 rx_paddr=0x00000000403bc000..0x00000000403bd000 tx_vaddr=0
 [INFO root_task::drivers::virtio::net] [net-console] provisioning RX descriptors (16 entries)
-[dma][share] prepare label=virtq vaddr=0x00000000b0000000 paddr=0x00000000403ba000 len=0x000001a8
-[dma][cache] clean-before-share label=virtq vaddr=0x00000000b0000000 paddr=0x00000000403ba000 len=0x000001a8
-[dma][share] ready label=virtq vaddr=0x00000000b0000000 paddr=0x00000000403ba000 len=0x000001a8
+[dma][share] prepare label=virtq vaddr=0x00000000b0000000 paddr=0x00000000403bc000 len=0x000001a8
+[dma][cache] clean-before-share label=virtq vaddr=0x00000000b0000000 paddr=0x00000000403bc000 len=0x000001a8
+[dma][share] ready label=virtq vaddr=0x00000000b0000000 paddr=0x00000000403bc000 len=0x000001a8
 [INFO net-console] [virtio-net][layout] computed: qsize=16 desc@+0x000/len=256 avail@+0x100/len=36 used@+0x124/len=132 total=424
-[INFO virtio-net] [virtio-net][dma] virtq.desc: vaddr=0x00000000b0000000 paddr=0x00000000403ba000 len=0x00000100 page_aligned=true
-[INFO virtio-net] [virtio-net][dma] virtq.avail: vaddr=0x00000000b0000100 paddr=0x00000000403ba100 len=0x00000024 page_aligned=false
-[INFO virtio-net] [virtio-net][dma] virtq.used: vaddr=0x00000000b0000124 paddr=0x00000000403ba124 len=0x00000084 page_aligned=false
-[WARN virtio-net] [virtio-net] DMA region misaligned (len within single page): label=virtq.avail paddr=0x00000000403ba100 len=0x24
-[WARN virtio-net] [virtio-net] DMA region misaligned (len within single page): label=virtq.used paddr=0x00000000403ba124 len=0x84
-[INFO net-console] [virtio-net][layout] addr queue=0 base_vaddr=0x00000000b0000000 base_paddr=0x00000000403ba000 desc=[0x00000000b0000000 len=0x0100] avail=[0x00000000b0000100 len=0x0024
-[INFO net-console] [virtio-net] queue 0 ring canary: size=16 initial_avail_idx=0 slot_rule=idx%size
-[INFO net-console] [virtio-net][layout] queue=0 size=16 qmem_vaddr=0x00000000b0000000 qmem_paddr=0x00000000403ba000 desc@+0x000/len=256 avail@+0x100/len=36 used@+0x124/len=132 total_len=424
-[INFO virtio-net] [virtio-net][virtq-id] rx desc vaddr=0x00000000b0000000 paddr=0x00000000403ba000 len=0x100 avail vaddr=0x00000000b0000100 paddr=0x00000000403ba100 len=0x24 used vaddr=0x000
-[INFO virtio-net] [virtio-net][virtq-id] rx desc[0] vaddr=0x00000000b0000000 paddr=0x00000000403ba000 len=0x10 avail.ring[0] vaddr=0x00000000b0000104 paddr=0x00000000403ba104 len=0x2
-[INFO virtio-net] [virtio-net][virtq-id] rx used.ring[0] vaddr=0x00000000b0000128 paddr=0x00000000403ba128 len=0x8 used.idx vaddr=0x00000000b0000126 paddr=0x00000000403ba126 len=0x2
-[INFO virtio-net] [virtio-net][queue-prog] queue=0 mode=Modern select=0 num=16 desc=0x00000000403ba000..0x00000000403ba100 avail=0x00000000403ba100..0x00000000403ba124 used=0x00000000403ba12
-[INFO virtio-net] [virtio-net][queue-prog] queue=0 write pfn=0x000403ba readback num=0 desc=0x0000000000000000 avail=0x0000000000000000 used=0x0000000000000000 pfn=0x00000000
-[WARN net-console] [virtio-net][queue-prog] queue 0 readback mismatch (non-fatal): expected num=16 desc=0x00000000403ba000 avail=0x00000000403ba100 used=0x00000000403ba124 pfn=0x000403ba
-[INFO net-console] [virtio-net] queue 0 configured: size=16 pfn=0x403ba mode=Modern
-[INFO virtio-net] [virtio-net][virtq-alias] rx reason=setup qmem vaddr=0x00000000b0000000..0x00000000b00001a8 paddr=0x00000000403ba000..0x00000000403ba1a8 len=0x1a8 cacheable=true vpage=0x00
-[INFO virtio-net] [virtio-net][virtq-alias] rx desc vaddr=0x00000000b0000000..0x00000000b0000100 paddr=0x00000000403ba000..0x00000000403ba100 len=0x100 vpage=0x00000000b0000000..0x00000000
-[INFO virtio-net] [virtio-net][virtq-alias] rx avail vaddr=0x00000000b0000100..0x00000000b0000124 paddr=0x00000000403ba100..0x00000000403ba124 len=0x24 vpage=0x00000000b0000000..0x00000000
-[INFO virtio-net] [virtio-net][virtq-alias] rx used vaddr=0x00000000b0000124..0x00000000b00001a8 paddr=0x00000000403ba124..0x00000000403ba1a8 len=0x84 vpage=0x00000000b0000000..0x00000000
-[INFO hal] [hal][dma-map] virtq.desc hit=1 idx=0 paddr=0x00000000403ba000..0x00000000403bb000 vaddr=0x00000000b0000000..0x00000000b0001000 len=0x1000 attr=0x00000003
-[INFO hal] [hal][dma-map] virtq.avail hit=1 idx=0 paddr=0x00000000403ba000..0x00000000403bb000 vaddr=0x00000000b0000000..0x00000000b0001000 len=0x1000 attr=0x00000003
-[INFO hal] [hal][dma-map] virtq.used hit=1 idx=0 paddr=0x00000000403ba000..0x00000000403bb000 vaddr=0x00000000b0000000..0x00000000b0001000 len=0x1000 attr=0x00000003
-[INFO virtio-net] [virtio-net][virtq-alias] rx reason=setup cache-op clean avail.slot+idx slot=0 vaddr=0x00000000b0000100..0x00000000b0000140 paddr=0x00000000403ba100..0x00000000403ba140
-[INFO virtio-net] [virtio-net][virtq-alias] rx reason=setup cache-op invalidate used.header(idx) vaddr=0x00000000b0000124..0x00000000b0000128 paddr=0x00000000403ba124..0x00000000403ba128
-[INFO virtio-net] [virtio-net][virtq-alias] rx reason=setup cache-op invalidate used.ring[0] vaddr=0x00000000b0000128..0x00000000b0000130 paddr=0x00000000403ba128..0x00000000403ba130 len=0x8
-[INFO virtio-net] [virtio-net][virtq-alias] rx reason=setup cache-op clean desc[0] vaddr=0x00000000b0000000..0x00000000b0000010 paddr=0x00000000403ba000..0x00000000403ba010 len=0x10
-[INFO root_task::drivers::virtio::net] [net-console] provisioning TX descriptors (16 entries)
-[dma][share] prepare label=virtq vaddr=0x00000000b0001000 paddr=0x00000000403bc000 len=0x000001a8
-[dma][cache] clean-before-share label=virtq vaddr=0x00000000b0001000 paddr=0x00000000403bc000 len=0x000001a8
-[dma][share] ready label=virtq vaddr=0x00000000b0001000 paddr=0x00000000403bc000 len=0x000001a8
-[INFO virtio-net] [virtio-net][dma] virtq.desc: vaddr=0x00000000b0001000 paddr=0x00000000403bc000 len=0x00000100 page_aligned=true
-[INFO virtio-net] [virtio-net][dma] virtq.avail: vaddr=0x00000000b0001100 paddr=0x00000000403bc100 len=0x00000024 page_aligned=false
-[INFO virtio-net] [virtio-net][dma] virtq.used: vaddr=0x00000000b0001124 paddr=0x00000000403bc124 len=0x00000084 page_aligned=false
+[INFO virtio-net] [virtio-net][dma] virtq.desc: vaddr=0x00000000b0000000 paddr=0x00000000403bc000 len=0x00000100 page_aligned=true
+[INFO virtio-net] [virtio-net][dma] virtq.avail: vaddr=0x00000000b0000100 paddr=0x00000000403bc100 len=0x00000024 page_aligned=false
+[INFO virtio-net] [virtio-net][dma] virtq.used: vaddr=0x00000000b0000124 paddr=0x00000000403bc124 len=0x00000084 page_aligned=false
 [WARN virtio-net] [virtio-net] DMA region misaligned (len within single page): label=virtq.avail paddr=0x00000000403bc100 len=0x24
 [WARN virtio-net] [virtio-net] DMA region misaligned (len within single page): label=virtq.used paddr=0x00000000403bc124 len=0x84
-[INFO net-console] [virtio-net][layout] addr queue=1 base_vaddr=0x00000000b0001000 base_paddr=0x00000000403bc000 desc=[0x00000000b0001000 len=0x0100] avail=[0x00000000b0001100 len=0x0024
+[INFO net-console] [virtio-net][layout] addr queue=0 base_vaddr=0x00000000b0000000 base_paddr=0x00000000403bc000 desc=[0x00000000b0000000 len=0x0100] avail=[0x00000000b0000100 len=0x0024
+[INFO net-console] [virtio-net] queue 0 ring canary: size=16 initial_avail_idx=0 slot_rule=idx%size
+[INFO net-console] [virtio-net][layout] queue=0 size=16 qmem_vaddr=0x00000000b0000000 qmem_paddr=0x00000000403bc000 desc@+0x000/len=256 avail@+0x100/len=36 used@+0x124/len=132 total_len=424
+[INFO virtio-net] [virtio-net][virtq-id] rx desc vaddr=0x00000000b0000000 paddr=0x00000000403bc000 len=0x100 avail vaddr=0x00000000b0000100 paddr=0x00000000403bc100 len=0x24 used vaddr=0x000
+[INFO virtio-net] [virtio-net][virtq-id] rx desc[0] vaddr=0x00000000b0000000 paddr=0x00000000403bc000 len=0x10 avail.ring[0] vaddr=0x00000000b0000104 paddr=0x00000000403bc104 len=0x2
+[INFO virtio-net] [virtio-net][virtq-id] rx used.ring[0] vaddr=0x00000000b0000128 paddr=0x00000000403bc128 len=0x8 used.idx vaddr=0x00000000b0000126 paddr=0x00000000403bc126 len=0x2
+[INFO virtio-net] [virtio-net][queue-prog] queue=0 mode=Modern select=0 num=16 desc=0x00000000403bc000..0x00000000403bc100 avail=0x00000000403bc100..0x00000000403bc124 used=0x00000000403bc12
+[INFO virtio-net] [virtio-net][queue-prog] queue=0 write pfn=0x000403bc readback num=0 desc=0x0000000000000000 avail=0x0000000000000000 used=0x0000000000000000 pfn=0x00000000
+[WARN net-console] [virtio-net][queue-prog] queue 0 readback mismatch (non-fatal): expected num=16 desc=0x00000000403bc000 avail=0x00000000403bc100 used=0x00000000403bc124 pfn=0x000403bc
+[INFO net-console] [virtio-net] queue 0 configured: size=16 pfn=0x403bc mode=Modern
+[INFO virtio-net] [virtio-net][virtq-alias] rx reason=setup qmem vaddr=0x00000000b0000000..0x00000000b00001a8 paddr=0x00000000403bc000..0x00000000403bc1a8 len=0x1a8 cacheable=true vpage=0x00
+[INFO virtio-net] [virtio-net][virtq-alias] rx desc vaddr=0x00000000b0000000..0x00000000b0000100 paddr=0x00000000403bc000..0x00000000403bc100 len=0x100 vpage=0x00000000b0000000..0x00000000
+[INFO virtio-net] [virtio-net][virtq-alias] rx avail vaddr=0x00000000b0000100..0x00000000b0000124 paddr=0x00000000403bc100..0x00000000403bc124 len=0x24 vpage=0x00000000b0000000..0x00000000
+[INFO virtio-net] [virtio-net][virtq-alias] rx used vaddr=0x00000000b0000124..0x00000000b00001a8 paddr=0x00000000403bc124..0x00000000403bc1a8 len=0x84 vpage=0x00000000b0000000..0x00000000
+[INFO hal] [hal][dma-map] virtq.desc hit=1 idx=0 paddr=0x00000000403bc000..0x00000000403bd000 vaddr=0x00000000b0000000..0x00000000b0001000 len=0x1000 attr=0x00000003
+[INFO hal] [hal][dma-map] virtq.avail hit=1 idx=0 paddr=0x00000000403bc000..0x00000000403bd000 vaddr=0x00000000b0000000..0x00000000b0001000 len=0x1000 attr=0x00000003
+[INFO hal] [hal][dma-map] virtq.used hit=1 idx=0 paddr=0x00000000403bc000..0x00000000403bd000 vaddr=0x00000000b0000000..0x00000000b0001000 len=0x1000 attr=0x00000003
+[INFO virtio-net] [virtio-net][virtq-alias] rx reason=setup cache-op clean avail.slot+idx slot=0 vaddr=0x00000000b0000100..0x00000000b0000140 paddr=0x00000000403bc100..0x00000000403bc140
+[INFO virtio-net] [virtio-net][virtq-alias] rx reason=setup cache-op invalidate used.header(idx) vaddr=0x00000000b0000124..0x00000000b0000128 paddr=0x00000000403bc124..0x00000000403bc128
+[INFO virtio-net] [virtio-net][virtq-alias] rx reason=setup cache-op invalidate used.ring[0] vaddr=0x00000000b0000128..0x00000000b0000130 paddr=0x00000000403bc128..0x00000000403bc130 len=0x8
+[INFO virtio-net] [virtio-net][virtq-alias] rx reason=setup cache-op clean desc[0] vaddr=0x00000000b0000000..0x00000000b0000010 paddr=0x00000000403bc000..0x00000000403bc010 len=0x10
+[INFO root_task::drivers::virtio::net] [net-console] provisioning TX descriptors (16 entries)
+[dma][share] prepare label=virtq vaddr=0x00000000b0001000 paddr=0x00000000403be000 len=0x000001a8
+[dma][cache] clean-before-share label=virtq vaddr=0x00000000b0001000 paddr=0x00000000403be000 len=0x000001a8
+[dma][share] ready label=virtq vaddr=0x00000000b0001000 paddr=0x00000000403be000 len=0x000001a8
+[INFO virtio-net] [virtio-net][dma] virtq.desc: vaddr=0x00000000b0001000 paddr=0x00000000403be000 len=0x00000100 page_aligned=true
+[INFO virtio-net] [virtio-net][dma] virtq.avail: vaddr=0x00000000b0001100 paddr=0x00000000403be100 len=0x00000024 page_aligned=false
+[INFO virtio-net] [virtio-net][dma] virtq.used: vaddr=0x00000000b0001124 paddr=0x00000000403be124 len=0x00000084 page_aligned=false
+[WARN virtio-net] [virtio-net] DMA region misaligned (len within single page): label=virtq.avail paddr=0x00000000403be100 len=0x24
+[WARN virtio-net] [virtio-net] DMA region misaligned (len within single page): label=virtq.used paddr=0x00000000403be124 len=0x84
+[INFO net-console] [virtio-net][layout] addr queue=1 base_vaddr=0x00000000b0001000 base_paddr=0x00000000403be000 desc=[0x00000000b0001000 len=0x0100] avail=[0x00000000b0001100 len=0x0024
 [INFO net-console] [virtio-net] queue 1 ring canary: size=16 initial_avail_idx=0 slot_rule=idx%size
-[INFO net-console] [virtio-net][layout] queue=1 size=16 qmem_vaddr=0x00000000b0001000 qmem_paddr=0x00000000403bc000 desc@+0x000/len=256 avail@+0x100/len=36 used@+0x124/len=132 total_len=424
-[INFO virtio-net] [virtio-net][virtq-id] tx desc vaddr=0x00000000b0001000 paddr=0x00000000403bc000 len=0x100 avail vaddr=0x00000000b0001100 paddr=0x00000000403bc100 len=0x24 used vaddr=0x000
-[INFO virtio-net] [virtio-net][virtq-id] tx desc[0] vaddr=0x00000000b0001000 paddr=0x00000000403bc000 len=0x10 avail.ring[0] vaddr=0x00000000b0001104 paddr=0x00000000403bc104 len=0x2
-[INFO virtio-net] [virtio-net][virtq-id] tx used.ring[0] vaddr=0x00000000b0001128 paddr=0x00000000403bc128 len=0x8 used.idx vaddr=0x00000000b0001126 paddr=0x00000000403bc126 len=0x2
-[INFO virtio-net] [virtio-net][queue-prog] queue=1 mode=Modern select=1 num=16 desc=0x00000000403bc000..0x00000000403bc100 avail=0x00000000403bc100..0x00000000403bc124 used=0x00000000403bc12
-[INFO virtio-net] [virtio-net][queue-prog] queue=1 write pfn=0x000403bc readback num=0 desc=0x0000000000000000 avail=0x0000000000000000 used=0x0000000000000000 pfn=0x00000000
-[WARN net-console] [virtio-net][queue-prog] queue 1 readback mismatch (non-fatal): expected num=16 desc=0x00000000403bc000 avail=0x00000000403bc100 used=0x00000000403bc124 pfn=0x000403bc
-[INFO net-console] [virtio-net] queue 1 configured: size=16 pfn=0x403bc mode=Modern
-[INFO virtio-net] [virtio-net][virtq-alias] tx reason=setup qmem vaddr=0x00000000b0001000..0x00000000b00011a8 paddr=0x00000000403bc000..0x00000000403bc1a8 len=0x1a8 cacheable=true vpage=0x00
-[INFO virtio-net] [virtio-net][virtq-alias] tx desc vaddr=0x00000000b0001000..0x00000000b0001100 paddr=0x00000000403bc000..0x00000000403bc100 len=0x100 vpage=0x00000000b0001000..0x00000000
-[INFO virtio-net] [virtio-net][virtq-alias] tx avail vaddr=0x00000000b0001100..0x00000000b0001124 paddr=0x00000000403bc100..0x00000000403bc124 len=0x24 vpage=0x00000000b0001000..0x00000000
-[INFO virtio-net] [virtio-net][virtq-alias] tx used vaddr=0x00000000b0001124..0x00000000b00011a8 paddr=0x00000000403bc124..0x00000000403bc1a8 len=0x84 vpage=0x00000000b0001000..0x00000000
-[INFO hal] [hal][dma-map] virtq.desc hit=1 idx=1 paddr=0x00000000403bc000..0x00000000403bd000 vaddr=0x00000000b0001000..0x00000000b0002000 len=0x1000 attr=0x00000003
-[INFO hal] [hal][dma-map] virtq.avail hit=1 idx=1 paddr=0x00000000403bc000..0x00000000403bd000 vaddr=0x00000000b0001000..0x00000000b0002000 len=0x1000 attr=0x00000003
-[INFO hal] [hal][dma-map] virtq.used hit=1 idx=1 paddr=0x00000000403bc000..0x00000000403bd000 vaddr=0x00000000b0001000..0x00000000b0002000 len=0x1000 attr=0x00000003
-[INFO virtio-net] [virtio-net][virtq-alias] tx reason=setup cache-op clean avail.slot+idx slot=0 vaddr=0x00000000b0001100..0x00000000b0001140 paddr=0x00000000403bc100..0x00000000403bc140
-[INFO virtio-net] [virtio-net][virtq-alias] tx reason=setup cache-op invalidate used.header(idx) vaddr=0x00000000b0001124..0x00000000b0001128 paddr=0x00000000403bc124..0x00000000403bc128
-[INFO virtio-net] [virtio-net][virtq-alias] tx reason=setup cache-op invalidate used.ring[0] vaddr=0x00000000b0001128..0x00000000b0001130 paddr=0x00000000403bc128..0x00000000403bc130 len=0x8
-[INFO virtio-net] [virtio-net][virtq-alias] tx reason=setup cache-op clean desc[0] vaddr=0x00000000b0001000..0x00000000b0001010 paddr=0x00000000403bc000..0x00000000403bc010 len=0x10
-[INFO virtio-net] [virtio-net][queue-wire] rx desc vaddr=0x00000000b0000000 paddr=0x00000000403ba000 avail vaddr=0x00000000b0000100 paddr=0x00000000403ba100 used vaddr=0x00000000b0000124
-[INFO virtio-net] [virtio-net][queue-wire] tx desc vaddr=0x00000000b0001000 paddr=0x00000000403bc000 avail vaddr=0x00000000b0001100 paddr=0x00000000403bc100 used vaddr=0x00000000b0001124
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1ba type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1ef n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0002000 paddr=0x403bd000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1ba type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f0 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0003000 paddr=0x403be000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1ba type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f1 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0004000 paddr=0x403bf000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f2 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0005000 paddr=0x403c0000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f3 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0006000 paddr=0x403c1000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f4 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0007000 paddr=0x403c2000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f5 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0008000 paddr=0x403c3000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f6 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0009000 paddr=0x403c4000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f7 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb000a000 paddr=0x403c5000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f8 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb000b000 paddr=0x403c6000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f9 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb000c000 paddr=0x403c7000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1fa n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb000d000 paddr=0x403c8000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1fb n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb000e000 paddr=0x403c9000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1fc n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb000f000 paddr=0x403ca000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1fd n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0010000 paddr=0x403cb000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1fe n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0011000 paddr=0x403cc000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1ff n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0012000 paddr=0x403cd000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x200 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0013000 paddr=0x403ce000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x201 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0014000 paddr=0x403cf000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x202 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0015000 paddr=0x403d0000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x203 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0016000 paddr=0x403d1000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x204 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0017000 paddr=0x403d2000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x205 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0018000 paddr=0x403d3000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x206 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0019000 paddr=0x403d4000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x207 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb001a000 paddr=0x403d5000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x208 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb001b000 paddr=0x403d6000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x209 n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb001c000 paddr=0x403d7000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x20a n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb001d000 paddr=0x403d8000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x20b n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb001e000 paddr=0x403d9000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x20c n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb001f000 paddr=0x403da000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x20d n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0020000 paddr=0x403db000 attr=0x00000003
-[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x20e n=1
-[INFO hal] [hal] dma frame mapped vaddr=0xb0021000 paddr=0x403dc000 attr=0x00000003
+[INFO net-console] [virtio-net][layout] queue=1 size=16 qmem_vaddr=0x00000000b0001000 qmem_paddr=0x00000000403be000 desc@+0x000/len=256 avail@+0x100/len=36 used@+0x124/len=132 total_len=424
+[INFO virtio-net] [virtio-net][virtq-id] tx desc vaddr=0x00000000b0001000 paddr=0x00000000403be000 len=0x100 avail vaddr=0x00000000b0001100 paddr=0x00000000403be100 len=0x24 used vaddr=0x000
+[INFO virtio-net] [virtio-net][virtq-id] tx desc[0] vaddr=0x00000000b0001000 paddr=0x00000000403be000 len=0x10 avail.ring[0] vaddr=0x00000000b0001104 paddr=0x00000000403be104 len=0x2
+[INFO virtio-net] [virtio-net][virtq-id] tx used.ring[0] vaddr=0x00000000b0001128 paddr=0x00000000403be128 len=0x8 used.idx vaddr=0x00000000b0001126 paddr=0x00000000403be126 len=0x2
+[INFO virtio-net] [virtio-net][queue-prog] queue=1 mode=Modern select=1 num=16 desc=0x00000000403be000..0x00000000403be100 avail=0x00000000403be100..0x00000000403be124 used=0x00000000403be12
+[INFO virtio-net] [virtio-net][queue-prog] queue=1 write pfn=0x000403be readback num=0 desc=0x0000000000000000 avail=0x0000000000000000 used=0x0000000000000000 pfn=0x00000000
+[WARN net-console] [virtio-net][queue-prog] queue 1 readback mismatch (non-fatal): expected num=16 desc=0x00000000403be000 avail=0x00000000403be100 used=0x00000000403be124 pfn=0x000403be
+[INFO net-console] [virtio-net] queue 1 configured: size=16 pfn=0x403be mode=Modern
+[INFO virtio-net] [virtio-net][virtq-alias] tx reason=setup qmem vaddr=0x00000000b0001000..0x00000000b00011a8 paddr=0x00000000403be000..0x00000000403be1a8 len=0x1a8 cacheable=true vpage=0x00
+[INFO virtio-net] [virtio-net][virtq-alias] tx desc vaddr=0x00000000b0001000..0x00000000b0001100 paddr=0x00000000403be000..0x00000000403be100 len=0x100 vpage=0x00000000b0001000..0x00000000
+[INFO virtio-net] [virtio-net][virtq-alias] tx avail vaddr=0x00000000b0001100..0x00000000b0001124 paddr=0x00000000403be100..0x00000000403be124 len=0x24 vpage=0x00000000b0001000..0x00000000
+[INFO virtio-net] [virtio-net][virtq-alias] tx used vaddr=0x00000000b0001124..0x00000000b00011a8 paddr=0x00000000403be124..0x00000000403be1a8 len=0x84 vpage=0x00000000b0001000..0x00000000
+[INFO hal] [hal][dma-map] virtq.desc hit=1 idx=1 paddr=0x00000000403be000..0x00000000403bf000 vaddr=0x00000000b0001000..0x00000000b0002000 len=0x1000 attr=0x00000003
+[INFO hal] [hal][dma-map] virtq.avail hit=1 idx=1 paddr=0x00000000403be000..0x00000000403bf000 vaddr=0x00000000b0001000..0x00000000b0002000 len=0x1000 attr=0x00000003
+[INFO hal] [hal][dma-map] virtq.used hit=1 idx=1 paddr=0x00000000403be000..0x00000000403bf000 vaddr=0x00000000b0001000..0x00000000b0002000 len=0x1000 attr=0x00000003
+[INFO virtio-net] [virtio-net][virtq-alias] tx reason=setup cache-op clean avail.slot+idx slot=0 vaddr=0x00000000b0001100..0x00000000b0001140 paddr=0x00000000403be100..0x00000000403be140
+[INFO virtio-net] [virtio-net][virtq-alias] tx reason=setup cache-op invalidate used.header(idx) vaddr=0x00000000b0001124..0x00000000b0001128 paddr=0x00000000403be124..0x00000000403be128
+[INFO virtio-net] [virtio-net][virtq-alias] tx reason=setup cache-op invalidate used.ring[0] vaddr=0x00000000b0001128..0x00000000b0001130 paddr=0x00000000403be128..0x00000000403be130 len=0x8
+[INFO virtio-net] [virtio-net][virtq-alias] tx reason=setup cache-op clean desc[0] vaddr=0x00000000b0001000..0x00000000b0001010 paddr=0x00000000403be000..0x00000000403be010 len=0x10
+[INFO virtio-net] [virtio-net][queue-wire] rx desc vaddr=0x00000000b0000000 paddr=0x00000000403bc000 avail vaddr=0x00000000b0000100 paddr=0x00000000403bc100 used vaddr=0x00000000b0000124
+[INFO virtio-net] [virtio-net][queue-wire] tx desc vaddr=0x00000000b0001000 paddr=0x00000000403be000 avail vaddr=0x00000000b0001100 paddr=0x00000000403be100 used vaddr=0x00000000b0001124
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bb type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f0 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0002000 paddr=0x403bf000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f1 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0003000 paddr=0x403c0000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f2 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0004000 paddr=0x403c1000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f3 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0005000 paddr=0x403c2000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f4 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0006000 paddr=0x403c3000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f5 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0007000 paddr=0x403c4000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f6 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0008000 paddr=0x403c5000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f7 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0009000 paddr=0x403c6000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f8 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb000a000 paddr=0x403c7000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1f9 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb000b000 paddr=0x403c8000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1fa n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb000c000 paddr=0x403c9000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1fb n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb000d000 paddr=0x403ca000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1fc n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb000e000 paddr=0x403cb000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1fd n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb000f000 paddr=0x403cc000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1fe n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0010000 paddr=0x403cd000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x1ff n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0011000 paddr=0x403ce000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x200 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0012000 paddr=0x403cf000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x201 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0013000 paddr=0x403d0000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x202 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0014000 paddr=0x403d1000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x203 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0015000 paddr=0x403d2000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x204 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0016000 paddr=0x403d3000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x205 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0017000 paddr=0x403d4000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x206 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0018000 paddr=0x403d5000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x207 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0019000 paddr=0x403d6000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x208 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb001a000 paddr=0x403d7000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x209 n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb001b000 paddr=0x403d8000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x20a n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb001c000 paddr=0x403d9000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x20b n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb001d000 paddr=0x403da000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x20c n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb001e000 paddr=0x403db000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x20d n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb001f000 paddr=0x403dc000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x20e n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0020000 paddr=0x403dd000 attr=0x00000003
+[INFO root_task::bootstrap::cspace_sys] [retype] ut=0x1bc type=0x7 size_bits=12 root=0x2 idx=0x2 depth=64 off=0x20f n=1
+[INFO hal] [hal] dma frame mapped vaddr=0xb0021000 paddr=0x403de000 attr=0x00000003
 [INFO root_task::drivers::virtio::net] [net-console] device-reported MAC: 52-55-00-d1-55-01
 [INFO root_task::drivers::virtio::net] [net-console] virtio-net ready: rx_buffers=16 tx_buffers=16 mac=52-55-00-d1-55-01
 [INFO virtio-net] [virtio-net][rx-arm] start buffers=16 hdr_len=12 payload_cap=1536 frame_cap=1548
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0002000 paddr=0x00000000403bd000 len=0x0000060c page_aligned=true
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0002000 paddr=0x00000000403bf000 len=0x0000060c page_aligned=true
 [INFO virtio-net] [virtio-net][dma] cache op reason=clean rx buffer header
 [INFO virtio-net] [virtio-net][dma] clean enter ptr=0x00000000b0002000 len=12
 [INFO virtio-net] [virtio-net][dma] clean exit ptr=0x00000000b0002000 len=12
@@ -817,70 +823,70 @@ RetypeCommit
 [INFO virtio-net] [virtio-net][virtq-cache] op=clean addr=0x00000000b0000100 len=0x40 label=rx.avail.idx suppressed=false
 [INFO virtio-net] [virtio-net][virtq-cache] op=clean addr=0x00000000b0000100 len=0x40 label=rx.used.ring[0] suppressed=false
 [INFO virtio-net] [virtio-net][virtq-cache] op=clean addr=0x00000000b0000100 len=0x40 label=rx.used.idx suppressed=false
-[INFO net-console] [virtio-net][forensics] publish RX avail=0->1 slot=0 head=0 desc{addr=0x00000000403bd000 len=1548 flags=0x0002 next=0}
-[INFO net-console] [virtio-net] rx[0] desc=0 addr=0x00000000403bd000 len=1548 flags=0x0002 next=0 header_len=12 payload_len=1536
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0003000 paddr=0x00000000403be000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=1->2 slot=1 head=1 desc{addr=0x00000000403be000 len=1548 flags=0x0002 next=0}
-[INFO net-console] [virtio-net] rx[1] desc=1 addr=0x00000000403be000 len=1548 flags=0x0002 next=0 header_len=12 payload_len=1536
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0004000 paddr=0x00000000403bf000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=2->3 slot=2 head=2 desc{addr=0x00000000403bf000 len=1548 flags=0x0002 next=0}
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0005000 paddr=0x00000000403c0000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=3->4 slot=3 head=3 desc{addr=0x00000000403c0000 len=1548 flags=0x0002 next=0}
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0006000 paddr=0x00000000403c1000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=4->5 slot=4 head=4 desc{addr=0x00000000403c1000 len=1548 flags=0x0002 next=0}
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0007000 paddr=0x00000000403c2000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=5->6 slot=5 head=5 desc{addr=0x00000000403c2000 len=1548 flags=0x0002 next=0}
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0008000 paddr=0x00000000403c3000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=6->7 slot=6 head=6 desc{addr=0x00000000403c3000 len=1548 flags=0x0002 next=0}
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0009000 paddr=0x00000000403c4000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=7->8 slot=7 head=7 desc{addr=0x00000000403c4000 len=1548 flags=0x0002 next=0}
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b000a000 paddr=0x00000000403c5000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=8->9 slot=8 head=8 desc{addr=0x00000000403c5000 len=1548 flags=0x0002 next=0}
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b000b000 paddr=0x00000000403c6000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=9->10 slot=9 head=9 desc{addr=0x00000000403c6000 len=1548 flags=0x0002 next=0}
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b000c000 paddr=0x00000000403c7000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=10->11 slot=10 head=10 desc{addr=0x00000000403c7000 len=1548 flags=0x0002 next=0}
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b000d000 paddr=0x00000000403c8000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=11->12 slot=11 head=11 desc{addr=0x00000000403c8000 len=1548 flags=0x0002 next=0}
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b000e000 paddr=0x00000000403c9000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=12->13 slot=12 head=12 desc{addr=0x00000000403c9000 len=1548 flags=0x0002 next=0}
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b000f000 paddr=0x00000000403ca000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=13->14 slot=13 head=13 desc{addr=0x00000000403ca000 len=1548 flags=0x0002 next=0}
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0010000 paddr=0x00000000403cb000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=14->15 slot=14 head=14 desc{addr=0x00000000403cb000 len=1548 flags=0x0002 next=0}
-[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0011000 paddr=0x00000000403cc000 len=0x0000060c page_aligned=true
-[INFO net-console] [virtio-net][forensics] publish RX avail=15->16 slot=15 head=15 desc{addr=0x00000000403cc000 len=1548 flags=0x0002 next=0}
+[INFO net-console] [virtio-net][forensics] publish RX avail=0->1 slot=0 head=0 desc{addr=0x00000000403bf000 len=1548 flags=0x0002 next=0}
+[INFO net-console] [virtio-net] rx[0] desc=0 addr=0x00000000403bf000 len=1548 flags=0x0002 next=0 header_len=12 payload_len=1536
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0003000 paddr=0x00000000403c0000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=1->2 slot=1 head=1 desc{addr=0x00000000403c0000 len=1548 flags=0x0002 next=0}
+[INFO net-console] [virtio-net] rx[1] desc=1 addr=0x00000000403c0000 len=1548 flags=0x0002 next=0 header_len=12 payload_len=1536
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0004000 paddr=0x00000000403c1000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=2->3 slot=2 head=2 desc{addr=0x00000000403c1000 len=1548 flags=0x0002 next=0}
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0005000 paddr=0x00000000403c2000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=3->4 slot=3 head=3 desc{addr=0x00000000403c2000 len=1548 flags=0x0002 next=0}
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0006000 paddr=0x00000000403c3000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=4->5 slot=4 head=4 desc{addr=0x00000000403c3000 len=1548 flags=0x0002 next=0}
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0007000 paddr=0x00000000403c4000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=5->6 slot=5 head=5 desc{addr=0x00000000403c4000 len=1548 flags=0x0002 next=0}
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0008000 paddr=0x00000000403c5000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=6->7 slot=6 head=6 desc{addr=0x00000000403c5000 len=1548 flags=0x0002 next=0}
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0009000 paddr=0x00000000403c6000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=7->8 slot=7 head=7 desc{addr=0x00000000403c6000 len=1548 flags=0x0002 next=0}
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b000a000 paddr=0x00000000403c7000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=8->9 slot=8 head=8 desc{addr=0x00000000403c7000 len=1548 flags=0x0002 next=0}
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b000b000 paddr=0x00000000403c8000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=9->10 slot=9 head=9 desc{addr=0x00000000403c8000 len=1548 flags=0x0002 next=0}
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b000c000 paddr=0x00000000403c9000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=10->11 slot=10 head=10 desc{addr=0x00000000403c9000 len=1548 flags=0x0002 next=0}
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b000d000 paddr=0x00000000403ca000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=11->12 slot=11 head=11 desc{addr=0x00000000403ca000 len=1548 flags=0x0002 next=0}
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b000e000 paddr=0x00000000403cb000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=12->13 slot=12 head=12 desc{addr=0x00000000403cb000 len=1548 flags=0x0002 next=0}
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b000f000 paddr=0x00000000403cc000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=13->14 slot=13 head=13 desc{addr=0x00000000403cc000 len=1548 flags=0x0002 next=0}
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0010000 paddr=0x00000000403cd000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=14->15 slot=14 head=14 desc{addr=0x00000000403cd000 len=1548 flags=0x0002 next=0}
+[INFO virtio-net] [virtio-net][dma] virtq.rx.buffer: vaddr=0x00000000b0011000 paddr=0x00000000403ce000 len=0x0000060c page_aligned=true
+[INFO net-console] [virtio-net][forensics] publish RX avail=15->16 slot=15 head=15 desc{addr=0x00000000403ce000 len=1548 flags=0x0002 next=0}
 [INFO virtio-net] [virtio-net][rx-arm] end buffers=16 avail.idx=16 used.idx=0
 [INFO virtio-net] [virtio-net][rx-arm] complete
 [INFO root_task::drivers::virtio::net] [virtio-net] RX queue armed: size=16 buffers=16 last_used=0
-[INFO net-console] [virtio-net] RX queue initialised: size=16 buffers=16 avail.idx=16 used.idx=0 first_paddr=0x403bd000 last_paddr=0x403cc000
+[INFO net-console] [virtio-net] RX queue initialised: size=16 buffers=16 avail.idx=16 used.idx=0 first_paddr=0x403bf000 last_paddr=0x403ce000
 [INFO net-console] [virtio-net] TX queue initialised: size=16 buffers=16 free_entries=16
-[INFO net-console] [virtio-net] post-setup: queue0_pfn=0x403ba, queue1_pfn=0x403bc, status=0x0b
+[INFO net-console] [virtio-net] post-setup: queue0_pfn=0x403bc, queue1_pfn=0x403be, status=0x0b
 [INFO virtio-net] [virtio-net] DRIVER_OK about to set
 [INFO root_task::drivers::virtio::net] [net-console] driver status set to DRIVER_OK (status=0x0f)
 [INFO root_task::net::stack] [net-console] virtio-net device online: mac=52-55-00-d1-55-01
-[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.device region=[0x00000000000e2ad0..0x00000000000e5809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe post=0x
+[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.device region=[0x00000000000e4ad0..0x00000000000e7809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe post=0x
 [INFO root_task::net::stack] [net-console] smoltcp interface created; assigning ip=10.0.2.15/24 netmask=255.255.255.0
 [INFO root_task::net::stack] [net-console] default gateway set to 10.0.2.2
 [INFO root_task::net::stack] [net-console] iface cfg ip=10.0.2.15/24 gateway=10.0.2.2 neighbor_cache_entries=8
-[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.interface region=[0x00000000000e2ad0..0x00000000000e5809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe post=0
-[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.socketset region=[0x00000000000e2ad0..0x00000000000e5809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe post=0
-[INFO net-console] [net-console] addr marker=net.init.buffers label=outbound-ring ptr=0x0000000000102e10 len=0x1000
-[INFO net-console] [net-console] addr marker=net.init.buffers label=outbound-slots ptr=0x0000000000102ae0 count=80 slot_size=0x0006
-[INFO net-console] [net-console] addr marker=net.init.buffers label=line-buffer ptr=0x0000000000102870 len=0x00c0
-[INFO net-console] [net-console] addr marker=net.init.buffers label=inbound-queue ptr=0x00000000000ffc38 len=0x00c0
-[INFO net-console] [net-console] addr marker=net.init.buffers label=priority-outbound ptr=0x0000000000100290 len=0x00c0
-[INFO net-console] [net-console] addr marker=net.init.buffers label=outbound ptr=0x0000000000101ba8 len=0x00c0
-[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.socket.tcp region=[0x00000000000e2ad0..0x00000000000e5809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe post=
-[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.socket.udp_beacon region=[0x00000000000e2ad0..0x00000000000e5809) len=0x00002d39 pre=0x0b0f1ce5ca4ecaf
+[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.interface region=[0x00000000000e4ad0..0x00000000000e7809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe post=0
+[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.socketset region=[0x00000000000e4ad0..0x00000000000e7809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe post=0
+[INFO net-console] [net-console] addr marker=net.init.buffers label=outbound-ring ptr=0x0000000000104c18 len=0x1000
+[INFO net-console] [net-console] addr marker=net.init.buffers label=outbound-slots ptr=0x00000000001048e8 count=80 slot_size=0x0006
+[INFO net-console] [net-console] addr marker=net.init.buffers label=line-buffer ptr=0x00000000001045d8 len=0x00c0
+[INFO net-console] [net-console] addr marker=net.init.buffers label=inbound-queue ptr=0x0000000000101960 len=0x00c0
+[INFO net-console] [net-console] addr marker=net.init.buffers label=priority-outbound ptr=0x0000000000101ff8 len=0x00c0
+[INFO net-console] [net-console] addr marker=net.init.buffers label=outbound ptr=0x0000000000103910 len=0x00c0
+[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.socket.tcp region=[0x00000000000e4ad0..0x00000000000e7809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe post=
+[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.socket.udp_beacon region=[0x00000000000e4ad0..0x00000000000e7809) len=0x00002d39 pre=0x0b0f1ce5ca4ecaf
 [INFO root_task::net::stack] [net-selftest] udp-echo ready on 0.0.0.0:31338 (beacon dst=10.0.2.2:31338)
-[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.socket.udp_echo region=[0x00000000000e2ad0..0x00000000000e5809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe
+[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.socket.udp_echo region=[0x00000000000e4ad0..0x00000000000e7809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe
 [INFO root_task::net::stack] [net-selftest] tcp-smoke listener ready on 0.0.0.0:31339
-[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.socket.tcp_smoke region=[0x00000000000e2ad0..0x00000000000e5809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe
-[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.socket.tcp_smoke_out region=[0x00000000000e2ad0..0x00000000000e5809) len=0x00002d39 pre=0x0
+[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.socket.tcp_smoke region=[0x00000000000e4ad0..0x00000000000e7809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe
+[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.socket.tcp_smoke_out region=[0x00000000000e4ad0..0x00000000000e7809) len=0x00002d39 pre=0x0
 [INFO net-console] [net-console] init: TCP listener socket prepared (port=31337)
 [INFO net-console] [net-console] init: success; tcp console wired (non-blocking, port=31337)
-[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.post region=[0x00000000000e2ad0..0x00000000000e5809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe post=0x
+[INFO root_task::net::stack] [bootinfo:net] attempt_id=0x0000000100000001 mark=net.init.post region=[0x00000000000e4ad0..0x00000000000e7809) len=0x00002d39 pre=0x0b0f1ce5ca4ecafe post=0x
 [INFO root_task::net::stack] [net-init] attempt_id=0x0000000100000001 transitioned to online
 [net-console] ready ip=10.0.2.15 port=31337 mac=52-55-00-d1-55-01
 [INFO root_task::kernel] [boot] net-console init complete; continuing with timers and IPC
@@ -900,8 +906,8 @@ RetypeCommit
 [INFO root_task::kernel::timer] [timers] worker: spawn requested (deferred wait loop)
 [INFO root_task::kernel::timer] [timers] worker: cooperative polling (no blocking wait in init)
 [INFO root_task::kernel] [boot] TimersAndIPC: timer.worker.spawn.end
-[INFO root_task::kernel] [boot] TimersAndIPC: ipc.init.begin ep=0x01d2
-[INFO root_task::kernel] [boot] TimersAndIPC: ipc.init.end ep=0x01d2 staged=false
+[INFO root_task::kernel] [boot] TimersAndIPC: ipc.init.begin ep=0x01d3
+[INFO root_task::kernel] [boot] TimersAndIPC: ipc.init.end ep=0x01d3 staged=false
 [cohesix:root-task] [manifest] ticket role=Queen source=generated
 [cohesix:root-task] [manifest] ticket role=WorkerHeartbeat source=generated
 [cohesix:root-task] [manifest] ticket role=WorkerGpu source=generated
@@ -918,7 +924,7 @@ RetypeCommit
 [dbg] logger.switch complete; about to send bootstrap to EP 0x0130
 [cohesix:root-task] [net] virtio-net up mac=52-55-00-d1-55-01 ip=10.0.2.15/24 gw=10.0.2.2
 [cohesix:root-task] [console] tcp listen :31337
-[boot:ok] retyped=16 caps_used=[0x01d2..0x01e7) left=7705
+[boot:ok] retyped=16 caps_used=[0x01d3..0x01e8) left=7704
 [INFO root_task::bootstrap] [boot] bootstrap.done
 [boot:phase] HandOff
 UserlandHandoff
@@ -926,7 +932,7 @@ UserlandHandoff
 [console] serial fallback ready
 [BOOT] run.min.start
 [INFO root_task::bootstrap] [boot] run.minimal.begin
-[INFO root_task::bootstrap] [cs: win] root=0x0002 bits=13 first_free=0x01d2
+[INFO root_task::bootstrap] [cs: win] root=0x0002 bits=13 first_free=0x01d3
 [INFO root_task::bootstrap] [boot] run.minimal.end
 [BOOT] run.min.end
 [INFO boot] [boot] net init: virtio_present=true net=true net_console=true
@@ -962,7 +968,7 @@ Commands:
   nettest  - Run network self-test (dev-virt)
   netstats - Show network counters
   quit  - Exit the console session
-cohesix> audit tcp.conn.open conn_id=1 peer=10.0.2.2:56286
+cohesix> audit tcp.conn.open conn_id=1 peer=10.0.2.2:61386
 cohesix> audit tcp.cmd.begin conn_id=1 sid=0 verb=ATTACH
 cohesix> audit tcp.session.attach conn_id=1 sid=1 role=queen
 cohesix> audit tcp.cmd.end conn_id=1 sid=1 verb=ATTACH status=ok term=END
@@ -1000,15 +1006,15 @@ cohesix> audit tcp.cmd.begin conn_id=1 sid=6 verb=QUIT
 cohesix> audit tcp.session.detach conn_id=1 sid=6 reason=quit
 cohesix> audit tcp.cmd.end conn_id=1 sid=6 verb=QUIT status=ok term=EOF
 cohesix> audit tcp.conn.close conn_id=1 reason=quit
-cohesix> audit tcp.conn.open conn_id=2 peer=10.0.2.2:56287
+cohesix> audit tcp.conn.open conn_id=2 peer=10.0.2.2:61387
 cohesix> audit tcp.cmd.begin conn_id=2 sid=0 verb=QUIT
 cohesix> audit tcp.cmd.end conn_id=2 sid=0 verb=QUIT status=ok term=EOF
 cohesix> audit tcp.conn.close conn_id=2 reason=quit
-cohesix> audit tcp.conn.open conn_id=3 peer=10.0.2.2:56288
+cohesix> audit tcp.conn.open conn_id=3 peer=10.0.2.2:61412
 cohesix> audit tcp.cmd.begin conn_id=3 sid=0 verb=QUIT
 cohesix> audit tcp.cmd.end conn_id=3 sid=0 verb=QUIT status=ok term=EOF
 cohesix> audit tcp.conn.close conn_id=3 reason=quit
-cohesix> audit tcp.conn.open conn_id=4 peer=10.0.2.2:56292
+cohesix> audit tcp.conn.open conn_id=4 peer=10.0.2.2:61413
 cohesix> audit tcp.cmd.begin conn_id=4 sid=0 verb=ATTACH
 cohesix> audit tcp.session.attach conn_id=4 sid=7 role=queen
 cohesix> audit tcp.cmd.end conn_id=4 sid=7 verb=ATTACH status=ok term=END
@@ -1045,12 +1051,12 @@ cohesix> audit tcp.cmd.begin conn_id=4 sid=12 verb=QUIT
 cohesix> audit tcp.session.detach conn_id=4 sid=12 reason=quit
 cohesix> audit tcp.cmd.end conn_id=4 sid=12 verb=QUIT status=ok term=EOF
 cohesix> audit tcp.conn.close conn_id=4 reason=quit
-cohesix> audit tcp.conn.open conn_id=5 peer=10.0.2.2:56294
+cohesix> audit tcp.conn.open conn_id=5 peer=10.0.2.2:61415
 cohesix> audit tcp.cmd.begin conn_id=5 sid=0 verb=QUIT
 cohesix> audit tcp.cmd.end conn_id=5 sid=0 verb=QUIT status=ok term=EOF
 cohesix> audit tcp.conn.close conn_id=5 reason=quit
-cohesix> audit tcp.conn.open conn_id=6 peer=10.0.2.2:56295
+cohesix> audit tcp.conn.open conn_id=6 peer=10.0.2.2:61416
 cohesix> audit tcp.cmd.begin conn_id=6 sid=0 verb=QUIT
 cohesix> audit tcp.cmd.end conn_id=6 sid=0 verb=QUIT status=ok term=EOF
 cohesix> audit tcp.conn.close conn_id=6 reason=quit
-cohesix> qemu-system-aarch64: terminating on signal 15 from pid 87003 (<unknown process>)
+cohesix> qemu-system-aarch64: terminating on signal 15 from pid 7243 (<unknown process>)

@@ -28,6 +28,8 @@ pub mod arch;
 pub mod audit;
 pub mod console;
 pub mod event;
+/// Observability metric helpers shared with the event pump.
+pub mod observe;
 /// Compile-time profile surface exposed to kernels and tests.
 pub mod profile;
 /// Compile-time feature manifest and guard rails.
@@ -116,7 +118,6 @@ pub mod sel4;
 #[cfg(feature = "kernel")]
 pub mod sel4_view;
 
-#[cfg(feature = "kernel")]
 /// Generated manifest tables and bootstrap helpers (do not edit).
 #[path = "generated/mod.rs"]
 pub mod generated;

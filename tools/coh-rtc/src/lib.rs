@@ -16,6 +16,8 @@ pub struct CompileOptions {
     pub manifest_out: PathBuf,
     pub cli_script_out: PathBuf,
     pub doc_snippet_out: PathBuf,
+    pub observability_interfaces_snippet_out: PathBuf,
+    pub observability_security_snippet_out: PathBuf,
     pub cbor_snippet_out: PathBuf,
     pub cohsh_policy_out: PathBuf,
     pub cohsh_policy_rust_out: PathBuf,
@@ -59,6 +61,18 @@ pub fn default_cbor_snippet_path() -> PathBuf {
     Path::new("docs")
         .join("snippets")
         .join("telemetry_cbor_schema.md")
+}
+
+pub fn default_observability_interfaces_snippet_path() -> PathBuf {
+    Path::new("docs")
+        .join("snippets")
+        .join("observability_interfaces.md")
+}
+
+pub fn default_observability_security_snippet_path() -> PathBuf {
+    Path::new("docs")
+        .join("snippets")
+        .join("observability_security.md")
 }
 
 pub fn default_cohsh_policy_path() -> PathBuf {

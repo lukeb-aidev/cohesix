@@ -69,6 +69,43 @@ pub struct TelemetryConfig {
     pub cursor: TelemetryCursorConfig,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Proc9pConfig {
+    pub sessions: bool,
+    pub outstanding: bool,
+    pub short_writes: bool,
+    pub sessions_bytes: u32,
+    pub outstanding_bytes: u32,
+    pub short_writes_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ProcIngestConfig {
+    pub p50_ms: bool,
+    pub p95_ms: bool,
+    pub backpressure: bool,
+    pub dropped: bool,
+    pub queued: bool,
+    pub watch: bool,
+    pub p50_ms_bytes: u32,
+    pub p95_ms_bytes: u32,
+    pub backpressure_bytes: u32,
+    pub dropped_bytes: u32,
+    pub queued_bytes: u32,
+    pub watch_max_entries: u16,
+    pub watch_line_bytes: u32,
+    pub watch_min_interval_ms: u64,
+    pub latency_samples: u16,
+    pub latency_tolerance_ms: u32,
+    pub counter_tolerance: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ObservabilityConfig {
+    pub proc_9p: Proc9pConfig,
+    pub proc_ingest: ProcIngestConfig,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostProvider {
     Systemd,
@@ -118,7 +155,7 @@ pub struct AuditConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.3";
-pub const MANIFEST_SHA256: &str = "fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861";
+pub const MANIFEST_SHA256: &str = "85293384c1eca19df9552d0c392589290885d786d10b72cd7d1f6b76bb010f99";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
@@ -127,6 +164,18 @@ pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;
 pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;
 pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();
 pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;
+pub const OBSERVABILITY_CONFIG: ObservabilityConfig = bootstrap::OBSERVABILITY_CONFIG;
+pub const PROC_9P_SESSIONS_BYTES: usize = bootstrap::PROC_9P_SESSIONS_BYTES;
+pub const PROC_9P_OUTSTANDING_BYTES: usize = bootstrap::PROC_9P_OUTSTANDING_BYTES;
+pub const PROC_9P_SHORT_WRITES_BYTES: usize = bootstrap::PROC_9P_SHORT_WRITES_BYTES;
+pub const PROC_INGEST_P50_BYTES: usize = bootstrap::PROC_INGEST_P50_BYTES;
+pub const PROC_INGEST_P95_BYTES: usize = bootstrap::PROC_INGEST_P95_BYTES;
+pub const PROC_INGEST_BACKPRESSURE_BYTES: usize = bootstrap::PROC_INGEST_BACKPRESSURE_BYTES;
+pub const PROC_INGEST_DROPPED_BYTES: usize = bootstrap::PROC_INGEST_DROPPED_BYTES;
+pub const PROC_INGEST_QUEUED_BYTES: usize = bootstrap::PROC_INGEST_QUEUED_BYTES;
+pub const PROC_INGEST_WATCH_MAX_ENTRIES: usize = bootstrap::PROC_INGEST_WATCH_MAX_ENTRIES;
+pub const PROC_INGEST_WATCH_LINE_BYTES: usize = bootstrap::PROC_INGEST_WATCH_LINE_BYTES;
+pub const PROC_INGEST_LATENCY_SAMPLES: usize = bootstrap::PROC_INGEST_LATENCY_SAMPLES;
 pub const HOST_CONFIG: HostConfig = bootstrap::HOST_CONFIG;
 pub const POLICY_CONFIG: PolicyConfig = bootstrap::POLICY_CONFIG;
 pub const POLICY_RULES_JSON: &str = bootstrap::POLICY_RULES_JSON;
@@ -163,6 +212,10 @@ pub const fn shard_labels() -> &'static [&'static str] {
 
 pub const fn telemetry_config() -> TelemetryConfig {
     bootstrap::TELEMETRY_CONFIG
+}
+
+pub const fn observability_config() -> ObservabilityConfig {
+    bootstrap::OBSERVABILITY_CONFIG
 }
 
 pub const fn host_config() -> HostConfig {

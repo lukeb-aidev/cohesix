@@ -12,6 +12,7 @@ use crate::bootstrap::{boot_tracer, log as boot_log, BootPhase};
 use crate::event::AuditSink;
 use crate::generated;
 use crate::log_buffer;
+use crate::observe::IngestSnapshot;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 use alloc::{collections::VecDeque, format, string::String, vec::Vec};
 use core::fmt::{self, Write};
@@ -27,6 +28,13 @@ const PROC_TESTS_PATH: &str = "/proc/tests";
 const PROC_TESTS_QUICK_PATH: &str = "/proc/tests/selftest_quick.coh";
 const PROC_TESTS_FULL_PATH: &str = "/proc/tests/selftest_full.coh";
 const PROC_TESTS_NEGATIVE_PATH: &str = "/proc/tests/selftest_negative.coh";
+const PROC_INGEST_ROOT_PATH: &str = "/proc/ingest";
+const PROC_INGEST_P50_PATH: &str = "/proc/ingest/p50_ms";
+const PROC_INGEST_P95_PATH: &str = "/proc/ingest/p95_ms";
+const PROC_INGEST_BACKPRESSURE_PATH: &str = "/proc/ingest/backpressure";
+const PROC_INGEST_DROPPED_PATH: &str = "/proc/ingest/dropped";
+const PROC_INGEST_QUEUED_PATH: &str = "/proc/ingest/queued";
+const PROC_INGEST_WATCH_PATH: &str = "/proc/ingest/watch";
 const BOOT_HEADER: &str = "Cohesix boot: root-task online";
 const MAX_STREAM_LINES: usize = log_buffer::LOG_SNAPSHOT_LINES;
 const MAX_WORKERS: usize = 8;
@@ -50,6 +58,22 @@ const MAX_ACTION_ID_LEN: usize = 64;
 const SYSTEMD_UNITS: [&str; 2] = ["cohesix-agent.service", "ssh.service"];
 const K8S_NODES: [&str; 1] = ["node-1"];
 const NVIDIA_GPUS: [&str; 1] = ["0"];
+const OBSERVE_P50_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_ingest.p50_ms_bytes as usize;
+const OBSERVE_P95_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_ingest.p95_ms_bytes as usize;
+const OBSERVE_BACKPRESSURE_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_ingest.backpressure_bytes as usize;
+const OBSERVE_DROPPED_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_ingest.dropped_bytes as usize;
+const OBSERVE_QUEUED_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_ingest.queued_bytes as usize;
+const OBSERVE_WATCH_MAX_ENTRIES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_ingest.watch_max_entries as usize;
+const OBSERVE_WATCH_LINE_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_ingest.watch_line_bytes as usize;
+const OBSERVE_WATCH_MIN_INTERVAL_MS: u64 =
+    generated::OBSERVABILITY_CONFIG.proc_ingest.watch_min_interval_ms as u64;
 
 const SELFTEST_QUICK_SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -77,6 +101,7 @@ pub struct NineDoorBridge {
     policy: PolicyState,
     audit: AuditState,
     replay: ReplayState,
+    observe: ObserveState,
 }
 
 /// Errors surfaced by [`NineDoorBridge`] operations.
@@ -128,6 +153,7 @@ impl NineDoorBridge {
             policy: PolicyState::new(),
             audit: AuditState::new(generated::audit_config()),
             replay: ReplayState::new(generated::audit_config()),
+            observe: ObserveState::new(),
         }
     }
 
@@ -198,10 +224,27 @@ impl NineDoorBridge {
         Ok(())
     }
 
+    /// Emit lines for `/proc/ingest/watch` with throttling applied.
+    pub fn ingest_watch_lines(
+        &mut self,
+        now_ms: u64,
+        audit: &mut dyn AuditSink,
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
+        self.observe.watch_lines(now_ms, audit)
+    }
+
     /// Handle a log stream request.
     pub fn log_stream(&mut self, audit: &mut dyn AuditSink) -> Result<(), NineDoorBridgeError> {
         audit.info("nine-door: log stream requested");
         Ok(())
+    }
+
+    /// Update the most recent ingest snapshot from the event pump.
+    pub fn update_ingest_snapshot(&mut self, snapshot: IngestSnapshot) {
+        self.observe.update_ingest_snapshot(snapshot);
     }
 
     /// Handle a spawn request.
@@ -475,6 +518,9 @@ impl NineDoorBridge {
         if path == PROC_TESTS_NEGATIVE_PATH {
             return script_lines(SELFTEST_NEGATIVE_SCRIPT);
         }
+        if let Some(result) = self.observe.ingest_lines(path) {
+            return result;
+        }
         Err(NineDoorBridgeError::InvalidPath)
     }
 
@@ -538,7 +584,13 @@ impl NineDoorBridge {
             return list_from_slice(&["queen.log"]);
         }
         if path == "/proc" {
-            return list_from_slice(&["boot", "tests"]);
+            let mut output = HeaplessVec::new();
+            push_list_entry(&mut output, "boot")?;
+            push_list_entry(&mut output, "tests")?;
+            if self.observe.proc_ingest_enabled() {
+                push_list_entry(&mut output, "ingest")?;
+            }
+            return Ok(output);
         }
         if path == "/proc/tests" {
             return list_from_slice(&[
@@ -546,6 +598,9 @@ impl NineDoorBridge {
                 "selftest_full.coh",
                 "selftest_negative.coh",
             ]);
+        }
+        if path == PROC_INGEST_ROOT_PATH {
+            return self.observe.list_ingest();
         }
         if path == "/queen" {
             return list_from_slice(&["ctl"]);
@@ -873,6 +928,181 @@ impl HostWriteOutcome {
             HostWriteOutcome::Allowed => "allow",
             HostWriteOutcome::Denied => "deny",
         }
+    }
+}
+
+#[derive(Debug)]
+struct ObserveState {
+    proc_ingest: generated::ProcIngestConfig,
+    snapshot: IngestSnapshot,
+    watch: IngestWatch,
+}
+
+impl ObserveState {
+    fn new() -> Self {
+        let config = generated::observability_config();
+        Self {
+            proc_ingest: config.proc_ingest,
+            snapshot: IngestSnapshot::default(),
+            watch: IngestWatch::new(),
+        }
+    }
+
+    fn proc_ingest_enabled(&self) -> bool {
+        self.proc_ingest.p50_ms
+            || self.proc_ingest.p95_ms
+            || self.proc_ingest.backpressure
+            || self.proc_ingest.dropped
+            || self.proc_ingest.queued
+            || self.proc_ingest.watch
+    }
+
+    fn update_ingest_snapshot(&mut self, snapshot: IngestSnapshot) {
+        self.snapshot = snapshot;
+    }
+
+    fn ingest_lines(
+        &self,
+        path: &str,
+    ) -> Option<
+        Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>,
+    > {
+        match path {
+            PROC_INGEST_P50_PATH if self.proc_ingest.p50_ms => Some(
+                render_p50_line(self.snapshot)
+                    .and_then(|line| lines_from_text(line.as_str())),
+            ),
+            PROC_INGEST_P95_PATH if self.proc_ingest.p95_ms => Some(
+                render_p95_line(self.snapshot)
+                    .and_then(|line| lines_from_text(line.as_str())),
+            ),
+            PROC_INGEST_BACKPRESSURE_PATH if self.proc_ingest.backpressure => Some(
+                render_backpressure_line(self.snapshot)
+                    .and_then(|line| lines_from_text(line.as_str())),
+            ),
+            PROC_INGEST_DROPPED_PATH if self.proc_ingest.dropped => Some(
+                render_dropped_line(self.snapshot)
+                    .and_then(|line| lines_from_text(line.as_str())),
+            ),
+            PROC_INGEST_QUEUED_PATH if self.proc_ingest.queued => Some(
+                render_queued_line(self.snapshot)
+                    .and_then(|line| lines_from_text(line.as_str())),
+            ),
+            PROC_INGEST_WATCH_PATH if self.proc_ingest.watch => Some(self.watch.lines()),
+            _ => None,
+        }
+    }
+
+    fn watch_lines(
+        &mut self,
+        now_ms: u64,
+        audit: &mut dyn AuditSink,
+    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+    {
+        if !self.proc_ingest.watch {
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        self.watch.maybe_append(now_ms, self.snapshot, audit)?;
+        self.watch.lines()
+    }
+
+    fn list_ingest(
+        &self,
+    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+    {
+        if !self.proc_ingest_enabled() {
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        let mut output = HeaplessVec::new();
+        if self.proc_ingest.p50_ms {
+            push_list_entry(&mut output, "p50_ms")?;
+        }
+        if self.proc_ingest.p95_ms {
+            push_list_entry(&mut output, "p95_ms")?;
+        }
+        if self.proc_ingest.backpressure {
+            push_list_entry(&mut output, "backpressure")?;
+        }
+        if self.proc_ingest.dropped {
+            push_list_entry(&mut output, "dropped")?;
+        }
+        if self.proc_ingest.queued {
+            push_list_entry(&mut output, "queued")?;
+        }
+        if self.proc_ingest.watch {
+            push_list_entry(&mut output, "watch")?;
+        }
+        Ok(output)
+    }
+}
+
+#[derive(Debug)]
+struct IngestWatch {
+    entries: HeaplessVec<HeaplessString<OBSERVE_WATCH_LINE_BYTES>, OBSERVE_WATCH_MAX_ENTRIES>,
+    last_emit_ms: Option<u64>,
+}
+
+impl IngestWatch {
+    fn new() -> Self {
+        Self {
+            entries: HeaplessVec::new(),
+            last_emit_ms: None,
+        }
+    }
+
+    fn maybe_append(
+        &mut self,
+        now_ms: u64,
+        snapshot: IngestSnapshot,
+        audit: &mut dyn AuditSink,
+    ) -> Result<(), NineDoorBridgeError> {
+        if OBSERVE_WATCH_MAX_ENTRIES == 0 || OBSERVE_WATCH_LINE_BYTES == 0 {
+            return Ok(());
+        }
+        if let Some(last) = self.last_emit_ms {
+            let next_ok = last.saturating_add(OBSERVE_WATCH_MIN_INTERVAL_MS);
+            if now_ms < next_ok {
+                let delay_ms = next_ok.saturating_sub(now_ms);
+                log_watch_throttle(audit, delay_ms);
+                return Ok(());
+            }
+        }
+        let mut line = HeaplessString::new();
+        write!(
+            line,
+            "watch ts_ms={} p50_ms={} p95_ms={} queued={} backpressure={} dropped={}",
+            now_ms,
+            snapshot.p50_ms,
+            snapshot.p95_ms,
+            snapshot.queued,
+            snapshot.backpressure,
+            snapshot.dropped
+        )
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        if self.entries.is_full() {
+            let _ = self.entries.remove(0);
+        }
+        self.entries
+            .push(line)
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        self.last_emit_ms = Some(now_ms);
+        Ok(())
+    }
+
+    fn lines(
+        &self,
+    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+    {
+        let mut output = HeaplessVec::new();
+        for entry in self.entries.iter() {
+            let mut line = HeaplessString::new();
+            line.push_str(entry.as_str())
+                .map_err(|_| NineDoorBridgeError::BufferFull)?;
+            output
+                .push(line)
+                .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        }
+        Ok(output)
     }
 }
 
@@ -2149,6 +2379,62 @@ fn lines_from_text(
 ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
 {
     script_lines(text)
+}
+
+fn render_p50_line(
+    snapshot: IngestSnapshot,
+) -> Result<HeaplessString<OBSERVE_P50_BYTES>, NineDoorBridgeError> {
+    let mut line = HeaplessString::new();
+    write!(line, "p50_ms={}", snapshot.p50_ms)
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
+}
+
+fn render_p95_line(
+    snapshot: IngestSnapshot,
+) -> Result<HeaplessString<OBSERVE_P95_BYTES>, NineDoorBridgeError> {
+    let mut line = HeaplessString::new();
+    write!(line, "p95_ms={}", snapshot.p95_ms)
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
+}
+
+fn render_backpressure_line(
+    snapshot: IngestSnapshot,
+) -> Result<HeaplessString<OBSERVE_BACKPRESSURE_BYTES>, NineDoorBridgeError> {
+    let mut line = HeaplessString::new();
+    write!(line, "backpressure={}", snapshot.backpressure)
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
+}
+
+fn render_dropped_line(
+    snapshot: IngestSnapshot,
+) -> Result<HeaplessString<OBSERVE_DROPPED_BYTES>, NineDoorBridgeError> {
+    let mut line = HeaplessString::new();
+    write!(line, "dropped={}", snapshot.dropped)
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
+}
+
+fn render_queued_line(
+    snapshot: IngestSnapshot,
+) -> Result<HeaplessString<OBSERVE_QUEUED_BYTES>, NineDoorBridgeError> {
+    let mut line = HeaplessString::new();
+    write!(line, "queued={}", snapshot.queued)
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
+}
+
+fn log_watch_throttle(audit: &mut dyn AuditSink, delay_ms: u64) {
+    let mut line = HeaplessString::<128>::new();
+    let _ = write!(
+        line,
+        "observe ingest.watch throttled delay_ms={} min_interval_ms={}",
+        delay_ms,
+        OBSERVE_WATCH_MIN_INTERVAL_MS
+    );
+    audit.info(line.as_str());
 }
 
 fn validate_json_envelope(payload: &str) -> Result<(), NineDoorBridgeError> {

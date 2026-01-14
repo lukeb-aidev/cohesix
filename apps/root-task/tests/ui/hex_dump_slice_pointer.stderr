@@ -1,7 +1,7 @@
 error[E0308]: mismatched types
-  --> tests/ui/hex_dump_slice_pointer.rs:13:24
+  --> tests/ui/hex_dump_slice_pointer.rs:16:24
    |
-13 |     accepts_slice_only(ptr);
+16 |     accepts_slice_only(ptr);
    |     ------------------ ^^^ expected `&[u8]`, found `*const u8`
    |     |
    |     arguments to this function are incorrect
@@ -9,7 +9,7 @@ error[E0308]: mismatched types
    = note: expected reference `&[u8]`
             found raw pointer `*const u8`
 note: function defined here
-  --> tests/ui/hex_dump_slice_pointer.rs:17:4
+  --> tests/ui/hex_dump_slice_pointer.rs:20:4
    |
-17 | fn accepts_slice_only(_slice: &[u8]) {}
+20 | fn accepts_slice_only(_slice: &[u8]) {}
    |    ^^^^^^^^^^^^^^^^^^ -------------

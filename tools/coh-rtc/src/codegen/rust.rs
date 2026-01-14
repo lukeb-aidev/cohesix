@@ -87,6 +87,43 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "    pub cursor: TelemetryCursorConfig,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct Proc9pConfig {{")?;
+    writeln!(mod_contents, "    pub sessions: bool,")?;
+    writeln!(mod_contents, "    pub outstanding: bool,")?;
+    writeln!(mod_contents, "    pub short_writes: bool,")?;
+    writeln!(mod_contents, "    pub sessions_bytes: u32,")?;
+    writeln!(mod_contents, "    pub outstanding_bytes: u32,")?;
+    writeln!(mod_contents, "    pub short_writes_bytes: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct ProcIngestConfig {{")?;
+    writeln!(mod_contents, "    pub p50_ms: bool,")?;
+    writeln!(mod_contents, "    pub p95_ms: bool,")?;
+    writeln!(mod_contents, "    pub backpressure: bool,")?;
+    writeln!(mod_contents, "    pub dropped: bool,")?;
+    writeln!(mod_contents, "    pub queued: bool,")?;
+    writeln!(mod_contents, "    pub watch: bool,")?;
+    writeln!(mod_contents, "    pub p50_ms_bytes: u32,")?;
+    writeln!(mod_contents, "    pub p95_ms_bytes: u32,")?;
+    writeln!(mod_contents, "    pub backpressure_bytes: u32,")?;
+    writeln!(mod_contents, "    pub dropped_bytes: u32,")?;
+    writeln!(mod_contents, "    pub queued_bytes: u32,")?;
+    writeln!(mod_contents, "    pub watch_max_entries: u16,")?;
+    writeln!(mod_contents, "    pub watch_line_bytes: u32,")?;
+    writeln!(mod_contents, "    pub watch_min_interval_ms: u64,")?;
+    writeln!(mod_contents, "    pub latency_samples: u16,")?;
+    writeln!(mod_contents, "    pub latency_tolerance_ms: u32,")?;
+    writeln!(mod_contents, "    pub counter_tolerance: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct ObservabilityConfig {{")?;
+    writeln!(mod_contents, "    pub proc_9p: Proc9pConfig,")?;
+    writeln!(mod_contents, "    pub proc_ingest: ProcIngestConfig,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
     writeln!(mod_contents, "pub enum HostProvider {{")?;
     writeln!(mod_contents, "    Systemd,")?;
@@ -145,6 +182,18 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;")?;
     writeln!(mod_contents, "pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();")?;
     writeln!(mod_contents, "pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;")?;
+    writeln!(mod_contents, "pub const OBSERVABILITY_CONFIG: ObservabilityConfig = bootstrap::OBSERVABILITY_CONFIG;")?;
+    writeln!(mod_contents, "pub const PROC_9P_SESSIONS_BYTES: usize = bootstrap::PROC_9P_SESSIONS_BYTES;")?;
+    writeln!(mod_contents, "pub const PROC_9P_OUTSTANDING_BYTES: usize = bootstrap::PROC_9P_OUTSTANDING_BYTES;")?;
+    writeln!(mod_contents, "pub const PROC_9P_SHORT_WRITES_BYTES: usize = bootstrap::PROC_9P_SHORT_WRITES_BYTES;")?;
+    writeln!(mod_contents, "pub const PROC_INGEST_P50_BYTES: usize = bootstrap::PROC_INGEST_P50_BYTES;")?;
+    writeln!(mod_contents, "pub const PROC_INGEST_P95_BYTES: usize = bootstrap::PROC_INGEST_P95_BYTES;")?;
+    writeln!(mod_contents, "pub const PROC_INGEST_BACKPRESSURE_BYTES: usize = bootstrap::PROC_INGEST_BACKPRESSURE_BYTES;")?;
+    writeln!(mod_contents, "pub const PROC_INGEST_DROPPED_BYTES: usize = bootstrap::PROC_INGEST_DROPPED_BYTES;")?;
+    writeln!(mod_contents, "pub const PROC_INGEST_QUEUED_BYTES: usize = bootstrap::PROC_INGEST_QUEUED_BYTES;")?;
+    writeln!(mod_contents, "pub const PROC_INGEST_WATCH_MAX_ENTRIES: usize = bootstrap::PROC_INGEST_WATCH_MAX_ENTRIES;")?;
+    writeln!(mod_contents, "pub const PROC_INGEST_WATCH_LINE_BYTES: usize = bootstrap::PROC_INGEST_WATCH_LINE_BYTES;")?;
+    writeln!(mod_contents, "pub const PROC_INGEST_LATENCY_SAMPLES: usize = bootstrap::PROC_INGEST_LATENCY_SAMPLES;")?;
     writeln!(mod_contents, "pub const HOST_CONFIG: HostConfig = bootstrap::HOST_CONFIG;")?;
     writeln!(mod_contents, "pub const POLICY_CONFIG: PolicyConfig = bootstrap::POLICY_CONFIG;")?;
     writeln!(mod_contents, "pub const POLICY_RULES_JSON: &str = bootstrap::POLICY_RULES_JSON;")?;
@@ -181,6 +230,10 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn telemetry_config() -> TelemetryConfig {{")?;
     writeln!(mod_contents, "    bootstrap::TELEMETRY_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn observability_config() -> ObservabilityConfig {{")?;
+    writeln!(mod_contents, "    bootstrap::OBSERVABILITY_CONFIG")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn host_config() -> HostConfig {{")?;
@@ -230,7 +283,7 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AuditConfig, CachePolicy, HostConfig, HostProvider, NamespaceMount, PolicyConfig, PolicyLimits, PolicyRule, Secure9pLimits, ShardingConfig, ShortWritePolicy, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
+        "use super::{{AuditConfig, CachePolicy, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -311,6 +364,88 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
         manifest.telemetry.ring_bytes_per_worker,
         telemetry_schema_to_rust(&manifest.telemetry.frame_schema),
         manifest.telemetry.cursor.retain_on_boot
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_9P_SESSIONS_BYTES: usize = {};",
+        manifest.observability.proc_9p.sessions_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_9P_OUTSTANDING_BYTES: usize = {};",
+        manifest.observability.proc_9p.outstanding_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_9P_SHORT_WRITES_BYTES: usize = {};",
+        manifest.observability.proc_9p.short_writes_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_INGEST_P50_BYTES: usize = {};",
+        manifest.observability.proc_ingest.p50_ms_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_INGEST_P95_BYTES: usize = {};",
+        manifest.observability.proc_ingest.p95_ms_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_INGEST_BACKPRESSURE_BYTES: usize = {};",
+        manifest.observability.proc_ingest.backpressure_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_INGEST_DROPPED_BYTES: usize = {};",
+        manifest.observability.proc_ingest.dropped_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_INGEST_QUEUED_BYTES: usize = {};",
+        manifest.observability.proc_ingest.queued_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_INGEST_WATCH_MAX_ENTRIES: usize = {};",
+        manifest.observability.proc_ingest.watch_max_entries as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_INGEST_WATCH_LINE_BYTES: usize = {};",
+        manifest.observability.proc_ingest.watch_line_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_INGEST_LATENCY_SAMPLES: usize = {};",
+        manifest.observability.proc_ingest.latency_samples as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const OBSERVABILITY_CONFIG: ObservabilityConfig = ObservabilityConfig {{ proc_9p: Proc9pConfig {{ sessions: {}, outstanding: {}, short_writes: {}, sessions_bytes: {}, outstanding_bytes: {}, short_writes_bytes: {} }}, proc_ingest: ProcIngestConfig {{ p50_ms: {}, p95_ms: {}, backpressure: {}, dropped: {}, queued: {}, watch: {}, p50_ms_bytes: {}, p95_ms_bytes: {}, backpressure_bytes: {}, dropped_bytes: {}, queued_bytes: {}, watch_max_entries: {}, watch_line_bytes: {}, watch_min_interval_ms: {}, latency_samples: {}, latency_tolerance_ms: {}, counter_tolerance: {} }} }};\n",
+        manifest.observability.proc_9p.sessions,
+        manifest.observability.proc_9p.outstanding,
+        manifest.observability.proc_9p.short_writes,
+        manifest.observability.proc_9p.sessions_bytes,
+        manifest.observability.proc_9p.outstanding_bytes,
+        manifest.observability.proc_9p.short_writes_bytes,
+        manifest.observability.proc_ingest.p50_ms,
+        manifest.observability.proc_ingest.p95_ms,
+        manifest.observability.proc_ingest.backpressure,
+        manifest.observability.proc_ingest.dropped,
+        manifest.observability.proc_ingest.queued,
+        manifest.observability.proc_ingest.watch,
+        manifest.observability.proc_ingest.p50_ms_bytes,
+        manifest.observability.proc_ingest.p95_ms_bytes,
+        manifest.observability.proc_ingest.backpressure_bytes,
+        manifest.observability.proc_ingest.dropped_bytes,
+        manifest.observability.proc_ingest.queued_bytes,
+        manifest.observability.proc_ingest.watch_max_entries,
+        manifest.observability.proc_ingest.watch_line_bytes,
+        manifest.observability.proc_ingest.watch_min_interval_ms,
+        manifest.observability.proc_ingest.latency_samples,
+        manifest.observability.proc_ingest.latency_tolerance_ms,
+        manifest.observability.proc_ingest.counter_tolerance
     )?;
     writeln!(
         bootstrap_contents,

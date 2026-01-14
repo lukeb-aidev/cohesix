@@ -16,6 +16,29 @@
 - `telemetry.ring_bytes_per_worker`: `1024`
 - `telemetry.frame_schema`: `legacy-plaintext`
 - `telemetry.cursor.retain_on_boot`: `false`
+- `observability.proc_9p.sessions`: `true`
+- `observability.proc_9p.outstanding`: `true`
+- `observability.proc_9p.short_writes`: `true`
+- `observability.proc_9p.sessions_bytes`: `8192`
+- `observability.proc_9p.outstanding_bytes`: `128`
+- `observability.proc_9p.short_writes_bytes`: `128`
+- `observability.proc_ingest.p50_ms`: `true`
+- `observability.proc_ingest.p95_ms`: `true`
+- `observability.proc_ingest.backpressure`: `true`
+- `observability.proc_ingest.dropped`: `true`
+- `observability.proc_ingest.queued`: `true`
+- `observability.proc_ingest.watch`: `true`
+- `observability.proc_ingest.p50_ms_bytes`: `64`
+- `observability.proc_ingest.p95_ms_bytes`: `64`
+- `observability.proc_ingest.backpressure_bytes`: `64`
+- `observability.proc_ingest.dropped_bytes`: `64`
+- `observability.proc_ingest.queued_bytes`: `64`
+- `observability.proc_ingest.watch_max_entries`: `16`
+- `observability.proc_ingest.watch_line_bytes`: `192`
+- `observability.proc_ingest.watch_min_interval_ms`: `50`
+- `observability.proc_ingest.latency_samples`: `32`
+- `observability.proc_ingest.latency_tolerance_ms`: `5`
+- `observability.proc_ingest.counter_tolerance`: `1`
 - `client_policies.cohsh.pool.control_sessions`: `2`
 - `client_policies.cohsh.pool.telemetry_sessions`: `4`
 - `client_policies.retry.max_attempts`: `3`
@@ -36,7 +59,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 3 entries
-- `manifest.sha256`: `fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861`
+- `manifest.sha256`: `85293384c1eca19df9552d0c392589290885d786d10b72cd7d1f6b76bb010f99`
 
 ### Namespace mounts (generated)
 - (none)
@@ -70,4 +93,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861`)._
+_Generated from `configs/root_task.toml` (sha256: `85293384c1eca19df9552d0c392589290885d786d10b72cd7d1f6b76bb010f99`)._

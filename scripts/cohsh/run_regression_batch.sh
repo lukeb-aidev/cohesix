@@ -206,7 +206,9 @@ run_batch() {
         --out "$PROJECT_ROOT/apps/root-task/src/generated" \
         --manifest "$PROJECT_ROOT/out/manifests/root_task_resolved.json" \
         --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \
-        --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md"
+        --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md" \
+        --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
+        --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md"
 
     COH_RTC_MANIFEST="$manifest" SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
         --sel4-build "$HOME/seL4/build" \
@@ -295,6 +297,8 @@ cargo run -p coh-rtc -- \
     --out "$PROJECT_ROOT/apps/root-task/src/generated" \
     --manifest "$PROJECT_ROOT/out/manifests/root_task_resolved.json" \
     --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \
-    --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md"
+    --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md" \
+    --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
+    --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md"
 
 echo "regression batch complete: $(( ${#BASE_SCRIPTS[@]} + ${#GATED_SCRIPTS[@]} )) scripts passed"

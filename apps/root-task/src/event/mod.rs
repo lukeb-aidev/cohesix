@@ -45,9 +45,11 @@ use crate::debug_uart::debug_uart_str;
 use crate::log_buffer;
 #[cfg(feature = "net-console")]
 use crate::net::{
-    NetConsoleDisconnectReason, NetConsoleEvent, NetDiagSnapshot, NetPoller, NetTelemetry,
-    CONSOLE_QUEUE_DEPTH, NET_DIAG, NET_DIAG_FEATURED,
+    ConsoleLine, NetConsoleDisconnectReason, NetConsoleEvent, NetDiagSnapshot, NetPoller,
+    NetTelemetry, CONSOLE_QUEUE_DEPTH, NET_DIAG, NET_DIAG_FEATURED,
 };
+#[cfg(feature = "net-console")]
+use crate::observe::IngestSnapshot;
 #[cfg(feature = "kernel")]
 use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
 #[cfg(feature = "kernel")]
@@ -587,19 +589,20 @@ where
             let telemetry = net.telemetry();
             let conn_id = net.active_console_conn_id();
             let mut buffered: HeaplessVec<
-                HeaplessString<DEFAULT_LINE_CAPACITY>,
+                ConsoleLine,
                 { CONSOLE_QUEUE_DEPTH },
             > = HeaplessVec::new();
-            net.drain_console_lines(&mut |line| {
+            net.drain_console_lines(self.now_ms, &mut |line| {
                 let _ = buffered.push(line);
             });
-            Some((activity, telemetry, buffered, conn_id))
+            let ingest_snapshot: IngestSnapshot = net.ingest_snapshot();
+            Some((activity, telemetry, buffered, conn_id, ingest_snapshot))
         } else {
             None
         };
 
         #[cfg(feature = "net-console")]
-        if let Some((activity, telemetry, buffered, conn_id)) = net_poll {
+        if let Some((activity, telemetry, buffered, conn_id, ingest_snapshot)) = net_poll {
             self.net_conn_id = conn_id;
             if NET_DIAG_FEATURED {
                 self.log_net_diag(telemetry);
@@ -611,7 +614,11 @@ where
                 self.audit.info(message.as_str());
             }
             for line in buffered {
-                self.handle_network_line(line);
+                self.handle_network_line(line.text);
+            }
+            #[cfg(feature = "kernel")]
+            if let Some(bridge) = self.ninedoor.as_mut() {
+                bridge.update_ingest_snapshot(ingest_snapshot);
             }
             self.drain_net_console_events();
         }
@@ -1795,6 +1802,17 @@ where
                 Command::Tail { path } if path.as_str() == "/log/queen.log" => {
                     self.emit_log_snapshot();
                 }
+                Command::Tail { path } if path.as_str() == "/proc/ingest/watch" => {
+                    if let Some(bridge) = self.ninedoor.as_mut() {
+                        if let Ok(lines) =
+                            bridge.ingest_watch_lines(self.now_ms, &mut *self.audit)
+                        {
+                            for line in lines {
+                                self.emit_console_line(line.as_str());
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -2737,7 +2755,7 @@ mod tests {
     #[test]
     fn network_lines_feed_parser() {
         struct FakeNet {
-            lines: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 4>,
+            lines: heapless::Vec<ConsoleLine, 4>,
             sent: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 4>,
         }
 
@@ -2765,12 +2783,17 @@ mod tests {
 
             fn drain_console_lines(
                 &mut self,
-                visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
+                _now_ms: u64,
+                visitor: &mut dyn FnMut(ConsoleLine),
             ) {
                 while !self.lines.is_empty() {
                     let line = self.lines.remove(0);
                     visitor(line);
                 }
+            }
+
+            fn ingest_snapshot(&self) -> IngestSnapshot {
+                IngestSnapshot::default()
             }
 
             fn send_console_line(&mut self, line: &str) {
@@ -2794,7 +2817,7 @@ mod tests {
         let token = issue_token("net", Role::Queen);
         line.push_str(format!("attach queen {token}").as_str())
             .unwrap();
-        net.lines.push(line).unwrap();
+        net.lines.push(ConsoleLine::new(line, 1)).unwrap();
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.poll();
         drop(pump);

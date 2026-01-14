@@ -16,6 +16,7 @@ pub use diag::{NetDiagSnapshot, NET_DIAG, NET_DIAG_FEATURED};
 use core::ops::Range;
 
 use crate::serial::DEFAULT_LINE_CAPACITY;
+use crate::observe::IngestSnapshot;
 #[cfg(all(feature = "net", feature = "kernel"))]
 pub mod outbound;
 pub use cohesix_net_constants::{COHESIX_TCP_CONSOLE_PORT, COHSH_TCP_PORT, TCP_CONSOLE_PORT};
@@ -151,6 +152,23 @@ pub struct NetTelemetry {
     pub tx_drops: u32,
     /// Millisecond timestamp of the most recent poll.
     pub last_poll_ms: u64,
+}
+
+/// Console line captured from the TCP listener with an ingest timestamp.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsoleLine {
+    /// Raw line text (without trailing newline).
+    pub text: HeaplessString<DEFAULT_LINE_CAPACITY>,
+    /// Monotonic ingest timestamp in milliseconds.
+    pub ingest_ms: u64,
+}
+
+impl ConsoleLine {
+    /// Construct a console line with the supplied ingest timestamp.
+    #[must_use]
+    pub fn new(text: HeaplessString<DEFAULT_LINE_CAPACITY>, ingest_ms: u64) -> Self {
+        Self { text, ingest_ms }
+    }
 }
 
 /// Counters gathered from the NIC driver for diagnostics.
@@ -367,7 +385,8 @@ pub trait NetPoller {
     /// Drain any pending console lines produced by TCP listeners.
     fn drain_console_lines(
         &mut self,
-        visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
+        now_ms: u64,
+        visitor: &mut dyn FnMut(ConsoleLine),
     );
 
     /// Queue a console line for transmission to remote clients.
@@ -378,6 +397,11 @@ pub trait NetPoller {
 
     /// Drain pending net-console connection events (optional).
     fn drain_console_events(&mut self, _visitor: &mut dyn FnMut(NetConsoleEvent)) {}
+
+    /// Snapshot ingest metrics for observability providers.
+    fn ingest_snapshot(&self) -> IngestSnapshot {
+        IngestSnapshot::default()
+    }
 
     /// Return the active TCP console connection identifier, if any.
     fn active_console_conn_id(&self) -> Option<u64> {

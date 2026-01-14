@@ -1,8 +1,22 @@
-# PLACEHOLDER: not implemented until Milestone 16
 # Author: Lukas Bower
-# Purpose: Placeholder observability checks gated by ERR responses.
+# Purpose: Validate /proc/ingest/watch output and deterministic ERR handling.
 attach queen
 EXPECT OK
-cat /proc/ingest/watch
+
+# Tail watch node to confirm line-oriented output.
+tail /proc/ingest/watch
+EXPECT OK
+EXPECT SUBSTR path=/proc/ingest/watch
+
+# Rapid polling to induce watch back-pressure throttling.
+tail /proc/ingest/watch
+EXPECT OK
+tail /proc/ingest/watch
+EXPECT OK
+
+# Unsupported node should return deterministic ERR.
+cat /proc/ingest/unsupported
 EXPECT ERR
+
 quit
+EXPECT OK
