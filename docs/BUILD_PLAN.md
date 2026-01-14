@@ -23,6 +23,7 @@ Cohesix is a hive-style orchestrator: one Queen coordinating many workers via a 
 - Milestones 0–15 are implemented: the cooperative event pump, PL011 root console, TCP console listener, Secure9P namespace, HAL-backed device mapping, manifest-driven `coh-rtc` compiler, cache-safe DMA plumbing, in-session `coh> test` with preinstalled `.coh` scripts, Secure9P pipelining/batching, telemetry rings + cursor retention, host-sidecar `/host` gating, PolicyFS/AuditFS/ReplayFS, sharded worker namespaces with per-shard fid tables, and manifest-derived `cohsh` client policy files (session pooling, retry scheduling, heartbeat cadence) with hash enforcement and regression coverage are live and reflected in the architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
 - Dual consoles run concurrently; the TCP listener is non-blocking and mirrors serial semantics while keeping PL011 always-on for recovery. The `coh> test` command exercises real server-hosted regression scripts for quick/full verification.
 - NineDoor attach/namespace semantics follow `SECURE9P.md` and role mounts from `ROLES_AND_SCHEDULING.md`; worker-heart and worker-gpu are scoped to their documented namespaces, with GPU hardware remaining host-side via `gpu-bridge-host`.
+- Next release target is an Alpha after Milestone 20.x; Milestones 21-24 define the plug-and-play host-bridge track (coh mount/gpu/run/peft/telemetry/doctor/python).
 - Remaining milestones focus on observability via files and forward control-plane extensions described below.
 
 ## seL4 Reference Manual Alignment (v13.0.0)
@@ -2197,9 +2198,325 @@ Checks:
 Deliverables:
   - Offline replay documentation and fixtures stored in tests/fixtures/transcripts/.
 ```
+----
+**Alpha Release 1**
+----
+
+Alpha Release 1 targets a plug-and-play operator experience immediately after Milestone 20.x. Milestones 21-24 define the Alpha track; the AWS AMI work follows as Milestone 25.
+
+## Milestone 21 — Alpha: Host Bridges (coh mount, coh gpu, coh telemetry pull)
+
+**Why now (adoption):** After Milestone 20.x, we need plug-and-play host UX that integrates with existing CUDA/MIG workflows without new protocols or VM expansion.
+
+**Goal**
+Deliver filesystem-first host access, GPU lease UX, and pull-based telemetry export while preserving Secure9P and console semantics.
+
+**Deliverables**
+- `coh` host tool (single binary) with subcommands `mount`, `gpu`, and `telemetry pull`, built on `cohsh-core` transports and policy tables without introducing new verbs.
+- `coh mount` FUSE mount of Secure9P namespaces (for example `/mnt/coh`) with strict path validation, append-only enforcement, and fid lifecycle checks; never bypasses policy.
+- `coh gpu` discovery/status/lease UX with `--mock` backend for CI and non-NVIDIA hosts, plus NVML backend on Linux; MIG visibility only when defined in `docs/GPU_NODES.md`.
+- `coh telemetry pull` pulls bundles from `/queen/telemetry/*` into host storage; resumable and idempotent (no streaming).
+- Invariant envelope: `msize <= 8192`, walk depth <= 8, no `..`, ACK-before-side-effects, bounded work per command.
+
+**Commands**
+- `cargo test -p coh --features mock`
+- `cargo run -p coh --features mock -- mount --mock --at /tmp/coh-mount`
+- `cargo run -p coh --features mock -- gpu list --mock`
+- `cargo run -p coh --features mock -- telemetry pull --mock --out out/telemetry`
+
+**Checks (DoD)**
+- `coh mount` works in `--mock` and against a dev instance; invalid paths return deterministic ERR with audit line.
+- `coh gpu` lease grant/deny is deterministic and logged; mock and NVML backends produce identical lease semantics.
+- `coh telemetry pull` resumes without duplicates and is idempotent across restarts; no streaming or background polling.
+- Golden transcript markers or fixtures prove stable ACK/ERR ordering for `coh` subcommands.
+- Deterministic denial semantics for invalid tickets/paths/quotas are verified in tests.
+- Bounded memory and bounded work per operation (no unbounded queues, no infinite retries) are enforced by limits and tests.
+- Secure9P invariants preserved (msize <= 8192, path validation, fid lifecycle).
+- Console semantics preserved (ACK-before-side-effects) for console-backed flows.
+- Regression pack runs unchanged; output drift fails and new tests are additive.
+- CI runs mock-mode tests on x86_64.
+
+**Compiler touchpoints**
+- `coh-rtc` emits `coh` defaults (mount root, allowlisted paths, telemetry export bounds, retry ceilings) into a manifest snippet consumed by `coh` and documented in `docs/USERLAND_AND_CLI.md`.
+- Manifest gates enforce host-tool-only features (FUSE, NVML) with explicit fallbacks to `--mock`.
+
+**Task Breakdown**
+```
+Title/ID: m21-coh-cli-skeleton
+Goal: Introduce coh host CLI with strict subcommand parsing and policy loading.
+Inputs: crates/cohsh-core, docs/USERLAND_AND_CLI.md, docs/INTERFACES.md.
+Changes:
+  - apps/coh/src/main.rs — CLI entrypoint with mount/gpu/telemetry pull subcommands.
+  - apps/coh/src/policy.rs — manifest-backed limits and allowlist loader.
+Commands:
+  - cargo test -p coh --features mock
+Checks:
+  - Unknown subcommand or invalid args returns deterministic ERR without side effects.
+Deliverables:
+  - coh CLI skeleton and policy loader documented in docs/USERLAND_AND_CLI.md.
+
+Title/ID: m21-coh-mount
+Goal: Implement Secure9P-backed FUSE mount with bounded operations.
+Inputs: secure9p-core, docs/SECURE9P.md.
+Changes:
+  - apps/coh/src/mount.rs — FUSE adapter enforcing path validation, append-only, and fid lifecycle.
+  - apps/coh/tests/mount.rs — invalid path and offset denial tests.
+Commands:
+  - cargo test -p coh --features mock --test mount
+Checks:
+  - `..` walk attempts and oversized reads return deterministic ERR; mount never bypasses policy.
+Deliverables:
+  - FUSE mount docs and regression fixtures.
+
+Title/ID: m21-coh-gpu-telemetry
+Goal: Add coh gpu UX and telemetry pull with mock backend.
+Inputs: docs/GPU_NODES.md, docs/INTERFACES.md.
+Changes:
+  - apps/coh/src/gpu.rs — list/status/lease UX with mock and NVML backends.
+  - apps/coh/src/telemetry.rs — resumable pull from /queen/telemetry/*.
+Commands:
+  - cargo run -p coh --features mock -- gpu list --mock
+  - cargo run -p coh --features mock -- telemetry pull --mock --out out/telemetry
+Checks:
+  - Lease grant/deny is deterministic; telemetry pull resumes without duplicates.
+Deliverables:
+  - coh gpu + telemetry pull behavior documented with transcript fixtures.
+```
+
 ---
 
-## Milestone 21 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)
+## Milestone 22 — Alpha: Runtime Convenience (coh run) + GPU Job Breadcrumbs
+
+**Why now (adoption):** Operators need a two-minute "lease -> run -> observe -> release" loop without introducing a runtime orchestrator.
+
+**Goal**
+Provide a `coh run` wrapper that validates leases, runs a user command, and records bounded lifecycle breadcrumbs.
+
+**Deliverables**
+- `coh run` subcommand that verifies an active lease via `/gpu/<id>/lease` before execution and refuses to run without one.
+- Wrapper executes a user-specified command (Docker or local binary) and appends bounded lifecycle breadcrumbs to `/gpu/<id>/status` (per `docs/GPU_NODES.md`) through the host bridge interface.
+- Denial path emits deterministic ERR with no side effects; wrapper remains non-orchestrating.
+
+**Commands**
+- `cargo test -p coh --features mock --test run`
+- `cargo run -p coh --features mock -- gpu lease --mock --gpu GPU-0 --mem-mb 4096 --ttl-s 60`
+- `cargo run -p coh --features mock -- run --mock --gpu GPU-0 -- echo ok`
+
+**Checks (DoD)**
+- Demo script proves "lease -> run -> observe -> release" in under two minutes using `--mock`.
+- `coh run` denies when no valid lease exists and logs deterministic ERR without side effects.
+- Breadcrumbs in `/gpu/<id>/status` are bounded, ordered, and schema-tagged; regressions enforce ordering and denial semantics.
+- Deterministic denial semantics for invalid tickets/paths/quotas are verified in tests.
+- Bounded memory and bounded work per operation (no unbounded queues, no infinite retries) are enforced by limits and tests.
+- Secure9P invariants preserved (msize <= 8192, path validation, fid lifecycle).
+- Console semantics preserved (ACK-before-side-effects) for console-backed flows.
+- Regression pack runs unchanged; output drift fails and new tests are additive.
+- CI runs mock-mode tests on x86_64.
+
+**Compiler touchpoints**
+- `coh-rtc` emits breadcrumb schema, max line bytes, and lease validation defaults into a manifest snippet consumed by `coh`.
+- Manifest gates ensure breadcrumb fields match documented `/gpu/<id>/status` semantics.
+
+**Task Breakdown**
+```
+Title/ID: m22-coh-run
+Goal: Implement coh run wrapper with lease validation and bounded lifecycle logging.
+Inputs: docs/GPU_NODES.md, docs/INTERFACES.md, cohsh-core transport.
+Changes:
+  - apps/coh/src/run.rs — lease check, command spawn, breadcrumb emission.
+  - apps/coh/tests/run.rs — denial path and ordered breadcrumb tests.
+Commands:
+  - cargo test -p coh --features mock --test run
+Checks:
+  - No-lease path returns deterministic ERR; breadcrumbs are ordered and bounded.
+Deliverables:
+  - coh run behavior documented with transcript fixtures.
+
+Title/ID: m22-breadcrumb-schema
+Goal: Define and lock breadcrumb schema for /gpu/<id>/status entries.
+Inputs: docs/GPU_NODES.md, manifest IR.
+Changes:
+  - tools/coh-rtc/ — emit breadcrumb schema and limits for host tooling.
+  - docs/INTERFACES.md — update status schema snippet via codegen.
+Commands:
+  - cargo run -p coh-rtc
+Checks:
+  - Generated schema hash matches committed docs; invalid fields rejected by coh.
+Deliverables:
+  - Breadcrumb schema published and referenced by host tools.
+
+Title/ID: m22-run-regressions
+Goal: Add regression coverage for run wrapper ordering and denial semantics.
+Inputs: scripts/cohsh/*.coh, tests/fixtures/transcripts/.
+Changes:
+  - scripts/cohsh/run_demo.coh — lease, run, observe, release sequence.
+  - apps/coh/tests/transcript.rs — compare coh run transcript to cohsh baseline.
+Commands:
+  - cargo test -p coh --features mock --test transcript
+Checks:
+  - Transcript diff is zero; denial case emits deterministic ERR.
+Deliverables:
+  - Regression fixtures stored; CI hook updated.
+```
+
+---
+
+## Milestone 23 — Alpha: PEFT/LoRA Lifecycle Glue (coh peft)
+
+**Why now (adoption):** PEFT users need a file-native loop to export jobs, import adapters, and activate or rollback safely without a new control plane.
+
+**Goal**
+Provide `coh peft` commands that export LoRA jobs, import adapters, and atomically activate or rollback models.
+
+**Deliverables**
+- `coh peft export` pulls `/queen/export/lora_jobs/<job_id>/` into a host directory with manifest and provenance.
+- `coh peft import` stages adapters into host storage and exposes them as `/gpu/models/available/<model_id>/manifest.toml` with hash/size/provenance checks.
+- `coh peft activate` swaps `/gpu/models/active` atomically; `coh peft rollback` reverts to the previous pointer with a documented recovery path.
+- No training in VM and no registry service; file-native only.
+
+**Commands**
+- `cargo test -p coh --features mock --test peft`
+- `cargo run -p coh --features mock -- peft export --job job_8932 --out out/lora_jobs`
+- `cargo run -p coh --features mock -- peft import --model llama3-edge-v7 --from out/adapter`
+- `cargo run -p coh --features mock -- peft activate --model llama3-edge-v7`
+
+**Checks (DoD)**
+- End-to-end demo covers export -> import -> activate -> rollback with deterministic outputs.
+- Adapter hash/size/provenance checks reject invalid input with deterministic ERR and no side effects.
+- Rollback procedure is documented and tested.
+- Deterministic denial semantics for invalid tickets/paths/quotas are verified in tests.
+- Bounded memory and bounded work per operation (no unbounded queues, no infinite retries) are enforced by limits and tests.
+- Secure9P invariants preserved (msize <= 8192, path validation, fid lifecycle).
+- Console semantics preserved (ACK-before-side-effects) for console-backed flows.
+- Regression pack runs unchanged; output drift fails and new tests are additive.
+- CI runs mock-mode tests on x86_64.
+
+**Compiler touchpoints**
+- `coh-rtc` emits LoRA job manifest schema, adapter provenance fields, and pointer-swap limits for `coh peft`.
+- Generated snippets refresh `docs/INTERFACES.md` and `docs/GPU_NODES.md` to keep schema alignment.
+
+**Task Breakdown**
+```
+Title/ID: m23-peft-export
+Goal: Implement coh peft export from /queen/export/lora_jobs/* with bounded pulls.
+Inputs: docs/GPU_NODES.md, docs/INTERFACES.md.
+Changes:
+  - apps/coh/src/peft/export.rs — pull job directory with manifest validation.
+  - apps/coh/tests/peft_export.rs — resumable pull and idempotency tests.
+Commands:
+  - cargo test -p coh --features mock --test peft_export
+Checks:
+  - Export resumes without duplicates; missing job returns deterministic ERR.
+Deliverables:
+  - Export workflow documented with fixtures.
+
+Title/ID: m23-peft-import-activate
+Goal: Import adapters and atomically activate model pointers.
+Inputs: host model registry, docs/GPU_NODES.md.
+Changes:
+  - apps/coh/src/peft/import.rs — hash/size/provenance checks for adapters.
+  - apps/coh/src/peft/activate.rs — atomic pointer swap with rollback metadata.
+Commands:
+  - cargo test -p coh --features mock --test peft_import
+Checks:
+  - Invalid hashes rejected; pointer swap is atomic and rollback restores previous model.
+Deliverables:
+  - Activation/rollback behavior documented with transcript fixtures.
+
+Title/ID: m23-peft-regressions
+Goal: Validate end-to-end PEFT lifecycle flows.
+Inputs: scripts/cohsh/*.coh, tests/fixtures/transcripts/.
+Changes:
+  - scripts/cohsh/peft_roundtrip.coh — export/import/activate/rollback sequence.
+  - apps/coh/tests/transcript.rs — parity check with cohsh output.
+Commands:
+  - cargo test -p coh --features mock --test transcript
+Checks:
+  - Transcript diff zero; rollback emits deterministic ACK/ERR ordering.
+Deliverables:
+  - Regression fixtures stored and referenced in docs.
+```
+
+---
+
+## Milestone 24 — Alpha: Python Client + Examples (cohesix) + Doctor + Release Cut
+
+**Why now (adoption):** A thin, non-authoritative Python layer and a setup doctor reduce friction for CUDA, PEFT, and edge users without altering the control plane.
+
+**Goal**
+Deliver the `cohesix` Python client, runnable examples, `coh doctor`, and Alpha packaging/quickstart.
+
+**Deliverables**
+- `cohesix` Python library with filesystem backend (via `coh mount`) and TCP backend (via `cohsh-core` grammar); parity tests prove no new semantics.
+- Examples (fast, inspectable artifacts): CUDA lease+run, MIG lease+run (when available), PEFT export/import/activate/rollback, edge telemetry write + `coh telemetry pull`.
+- `coh doctor` subcommand for deterministic environment checks (tickets, mount capability, NVML or `--mock`, runtime prerequisites).
+- Alpha packaging and minimal quickstart docs for `coh` + `cohesix`.
+
+**Commands**
+- `cargo run -p coh --features mock -- doctor --mock`
+- `python -m pytest -k cohesix_parity`
+- `python tools/cohesix-py/examples/quickstart.py --mock`
+
+**Checks (DoD)**
+- Fresh host can run `coh doctor` then a demo in < 15 minutes using `--mock`.
+- Python parity tests match `cohsh` or namespace behavior byte-for-byte where applicable; no new semantics introduced.
+- Examples leave inspectable artifacts and exit deterministically.
+- Deterministic denial semantics for invalid tickets/paths/quotas are verified in tests.
+- Bounded memory and bounded work per operation (no unbounded queues, no infinite retries) are enforced by limits and tests.
+- Secure9P invariants preserved (msize <= 8192, path validation, fid lifecycle).
+- Console semantics preserved (ACK-before-side-effects) for console-backed flows.
+- Regression pack runs unchanged; output drift fails and new tests are additive.
+- CI runs mock-mode tests on x86_64.
+
+**Compiler touchpoints**
+- `coh-rtc` emits Python client defaults (paths, size limits, example fixtures) and `coh doctor` checks into manifest-backed snippets for docs.
+- Parity fixtures are hashed and referenced in docs/TEST_PLAN.md.
+
+**Task Breakdown**
+```
+Title/ID: m24-python-client
+Goal: Build cohesix Python client with filesystem + TCP backends and parity tests.
+Inputs: crates/cohsh-core, docs/USERLAND_AND_CLI.md, docs/INTERFACES.md.
+Changes:
+  - tools/cohesix-py/ — Python package with fs and TCP backends.
+  - tools/cohesix-py/tests/parity.py — parity tests against cohsh transcripts.
+Commands:
+  - python -m pytest -k cohesix_parity
+Checks:
+  - Parity tests match cohsh transcripts; invalid ticket yields deterministic ERR.
+Deliverables:
+  - Python client package and parity fixtures.
+
+Title/ID: m24-examples
+Goal: Provide quick examples that leave inspectable artifacts.
+Inputs: tools/cohesix-py/examples/, docs/GPU_NODES.md.
+Changes:
+  - tools/cohesix-py/examples/lease_run.py — lease -> run -> release example.
+  - tools/cohesix-py/examples/peft_roundtrip.py — export/import/activate/rollback.
+Commands:
+  - python tools/cohesix-py/examples/lease_run.py --mock
+Checks:
+  - Example outputs are deterministic and bounded; artifacts stored under out/examples/.
+Deliverables:
+  - Example artifacts and docs/USERLAND_AND_CLI.md updates.
+
+Title/ID: m24-doctor-release
+Goal: Implement coh doctor and Alpha packaging/quickstart.
+Inputs: apps/coh/, docs/USERLAND_AND_CLI.md, README.md.
+Changes:
+  - apps/coh/src/doctor.rs — deterministic checks for tickets, mounts, NVML/mock, runtime prerequisites.
+  - docs/QUICKSTART_ALPHA.md — minimal Alpha quickstart for coh + cohesix.
+Commands:
+  - cargo run -p coh --features mock -- doctor --mock
+Checks:
+  - Doctor emits deterministic actionable output; packaging contains coh + cohesix.
+Deliverables:
+  - Alpha quickstart docs and packaging notes.
+```
+
+---
+
+## Milestone 25 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)
 
 **Why now (platform):**  
 Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is a single signed EFI binary.
