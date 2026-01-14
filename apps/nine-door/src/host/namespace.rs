@@ -5,10 +5,11 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use gpu_bridge_host::{GpuModelCatalog, TelemetrySchema};
+use sha2::{Digest, Sha256};
 use secure9p_codec::{ErrorCode, Qid, QidType};
 use trace_model::TraceLevel;
 
@@ -56,6 +57,187 @@ impl HostProvider {
             HostProvider::Jetson => "jetson",
             HostProvider::Net => "net",
         }
+    }
+}
+
+/// Manifest-driven shard layout for worker namespaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShardLayout {
+    enabled: bool,
+    shard_bits: u8,
+    legacy_worker_alias: bool,
+}
+
+impl ShardLayout {
+    /// Construct a disabled shard layout (legacy `/worker/<id>`).
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            shard_bits: 0,
+            legacy_worker_alias: false,
+        }
+    }
+
+    /// Construct an enabled shard layout.
+    pub fn enabled(shard_bits: u8, legacy_worker_alias: bool) -> Self {
+        debug_assert!(shard_bits <= 8, "shard_bits must be <= 8");
+        Self {
+            enabled: true,
+            shard_bits,
+            legacy_worker_alias,
+        }
+    }
+
+    /// Return true when sharding is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Return the configured shard bits.
+    pub fn shard_bits(&self) -> u8 {
+        self.shard_bits
+    }
+
+    /// Return true when legacy `/worker/<id>` aliases are enabled.
+    pub fn legacy_worker_alias(&self) -> bool {
+        self.legacy_worker_alias
+    }
+
+    /// Return true when legacy aliases are active in sharded mode.
+    pub fn legacy_worker_alias_enabled(&self) -> bool {
+        self.enabled && self.legacy_worker_alias
+    }
+
+    /// Return the number of shards implied by the shard bits.
+    pub fn shard_count(&self) -> usize {
+        if self.enabled {
+            1usize << self.shard_bits
+        } else {
+            1
+        }
+    }
+
+    /// Render a two-digit shard label.
+    pub fn shard_label(&self, shard: u8) -> String {
+        format!("{:02x}", shard)
+    }
+
+    /// Compute the shard/provider index for a worker identifier.
+    pub fn worker_shard(&self, worker_id: &str) -> u8 {
+        if !self.enabled || self.shard_bits == 0 {
+            return 0;
+        }
+        let digest = Sha256::digest(worker_id.as_bytes());
+        let mut shard = digest[0];
+        if self.shard_bits < 8 {
+            shard >>= 8 - self.shard_bits;
+        }
+        shard
+    }
+
+    /// Compute the shard label for a worker identifier.
+    pub fn worker_shard_label(&self, worker_id: &str) -> String {
+        self.shard_label(self.worker_shard(worker_id))
+    }
+
+    /// Return shard labels in deterministic order.
+    pub fn shard_labels(&self) -> Vec<String> {
+        (0..self.shard_count())
+            .map(|idx| self.shard_label(idx as u8))
+            .collect()
+    }
+
+    /// Return the canonical parent path for a worker directory.
+    pub fn worker_parent(&self, worker_id: &str) -> Vec<String> {
+        if self.enabled {
+            vec![
+                "shard".to_owned(),
+                self.worker_shard_label(worker_id),
+                "worker".to_owned(),
+            ]
+        } else {
+            vec!["worker".to_owned()]
+        }
+    }
+
+    /// Return the canonical path to a worker directory.
+    pub fn worker_root(&self, worker_id: &str) -> Vec<String> {
+        let mut path = self.worker_parent(worker_id);
+        path.push(worker_id.to_owned());
+        path
+    }
+
+    /// Return the canonical path to a worker telemetry file.
+    pub fn worker_telemetry_path(&self, worker_id: &str) -> Vec<String> {
+        let mut path = self.worker_root(worker_id);
+        path.push("telemetry".to_owned());
+        path
+    }
+
+    /// Return true when the supplied path is a worker telemetry file.
+    pub fn is_worker_telemetry_path(&self, path: &[String], worker_id: &str) -> bool {
+        if self.enabled {
+            if matches!(
+                path,
+                [first, shard, mid, id, leaf]
+                    if first == "shard"
+                        && mid == "worker"
+                        && leaf == "telemetry"
+                        && id == worker_id
+                        && shard == self.worker_shard_label(worker_id).as_str()
+            ) {
+                return true;
+            }
+            if self.legacy_worker_alias_enabled() {
+                return matches!(path, [first, id, leaf] if first == "worker" && id == worker_id && leaf == "telemetry");
+            }
+            return false;
+        }
+        matches!(path, [first, id, leaf] if first == "worker" && id == worker_id && leaf == "telemetry")
+    }
+
+    /// Return a worker id when the path resolves to a telemetry file.
+    pub fn worker_id_from_telemetry_path<'a>(&self, path: &'a [String]) -> Option<&'a str> {
+        if self.enabled {
+            if let [first, shard, mid, id, leaf] = path {
+                if first == "shard"
+                    && mid == "worker"
+                    && leaf == "telemetry"
+                    && shard == self.worker_shard_label(id).as_str()
+                {
+                    return Some(id.as_str());
+                }
+            }
+            if self.legacy_worker_alias_enabled() {
+                if let [first, id, leaf] = path {
+                    if first == "worker" && leaf == "telemetry" {
+                        return Some(id.as_str());
+                    }
+                }
+            }
+            return None;
+        }
+        if let [first, id, leaf] = path {
+            if first == "worker" && leaf == "telemetry" {
+                return Some(id.as_str());
+            }
+        }
+        None
+    }
+
+    /// Return the maximum worker telemetry path depth implied by this layout.
+    pub fn max_worker_path_depth(&self) -> usize {
+        if self.enabled {
+            5
+        } else {
+            3
+        }
+    }
+}
+
+impl Default for ShardLayout {
+    fn default() -> Self {
+        Self::enabled(8, true)
     }
 }
 
@@ -168,8 +350,10 @@ impl ReplayNamespaceConfig {
 pub struct Namespace {
     root: Node,
     trace: TraceFs,
+    shards: ShardLayout,
     telemetry: TelemetryConfig,
     telemetry_manifest: TelemetryManifestStore,
+    worker_ids: BTreeSet<String>,
     host: HostNamespaceConfig,
     policy: PolicyNamespaceConfig,
     audit: AuditNamespaceConfig,
@@ -188,6 +372,7 @@ impl Namespace {
         Self::new_with_telemetry_manifest_host_policy(
             telemetry,
             TelemetryManifestStore::default(),
+            ShardLayout::default(),
             HostNamespaceConfig::disabled(),
             PolicyNamespaceConfig::disabled(),
             AuditNamespaceConfig::disabled(),
@@ -203,6 +388,7 @@ impl Namespace {
         Self::new_with_telemetry_manifest_host_policy(
             telemetry,
             telemetry_manifest,
+            ShardLayout::default(),
             HostNamespaceConfig::disabled(),
             PolicyNamespaceConfig::disabled(),
             AuditNamespaceConfig::disabled(),
@@ -214,6 +400,7 @@ impl Namespace {
     pub fn new_with_telemetry_manifest_host_policy(
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
+        shards: ShardLayout,
         host: HostNamespaceConfig,
         policy: PolicyNamespaceConfig,
         audit: AuditNamespaceConfig,
@@ -222,8 +409,10 @@ impl Namespace {
         let mut namespace = Self {
             root: Node::directory(Vec::new()),
             trace: TraceFs::new(),
+            shards,
             telemetry,
             telemetry_manifest,
+            worker_ids: BTreeSet::new(),
             host,
             policy,
             audit,
@@ -242,6 +431,7 @@ impl Namespace {
         Self::new_with_telemetry_manifest_host_policy(
             telemetry,
             telemetry_manifest,
+            ShardLayout::default(),
             host,
             PolicyNamespaceConfig::disabled(),
             AuditNamespaceConfig::disabled(),
@@ -252,6 +442,11 @@ impl Namespace {
     /// Retrieve the root Qid.
     pub fn root_qid(&self) -> Qid {
         self.root.qid
+    }
+
+    /// Return the manifest-driven shard layout.
+    pub fn shard_layout(&self) -> &ShardLayout {
+        &self.shards
     }
 
     /// Return the configured host mount path, if enabled.
@@ -280,10 +475,19 @@ impl Namespace {
         }
 
         let retain_on_boot = self.telemetry.cursor.retain_on_boot;
-        let worker_id = telemetry_worker_id(path).map(str::to_owned);
+        let worker_id = self
+            .shards
+            .worker_id_from_telemetry_path(path)
+            .map(str::to_owned);
         let mut audit = None;
         let mut manifest_snapshot = None;
         let action = {
+            if self.shards.legacy_worker_alias_enabled()
+                && matches!(path, [single] if single == "worker")
+            {
+                let listing = render_directory_listing(self.worker_alias_listing());
+                return Ok(read_slice(&listing, offset, count));
+            }
             let node = self.lookup_mut(path)?;
             match node.node.kind_mut() {
                 NodeKind::Directory { .. } => {
@@ -344,7 +548,10 @@ impl Namespace {
         data: &[u8],
     ) -> Result<u32, NineDoorError> {
         let retain_on_boot = self.telemetry.cursor.retain_on_boot;
-        let worker_id = telemetry_worker_id(path).map(str::to_owned);
+        let worker_id = self
+            .shards
+            .worker_id_from_telemetry_path(path)
+            .map(str::to_owned);
         let mut audit = None;
         let mut manifest_snapshot = None;
         let result = {
@@ -415,9 +622,9 @@ impl Namespace {
             ));
         }
         let telemetry_config = self.telemetry;
-        let worker_root = vec!["worker".to_owned()];
+        let worker_parent = self.shards.worker_parent(worker_id);
         {
-            let node = self.lookup_mut(&worker_root)?;
+            let node = self.lookup_mut(&worker_parent)?;
             if node.has_child(worker_id) {
                 return Err(NineDoorError::protocol(
                     ErrorCode::Busy,
@@ -433,9 +640,10 @@ impl Namespace {
             self.telemetry_manifest.clear_worker(worker_id);
             TelemetryFile::new(telemetry_config)
         };
-        let mut node = self.lookup_mut(&worker_root)?;
+        let mut node = self.lookup_mut(&worker_parent)?;
         let worker_dir = node.ensure_directory(worker_id);
         worker_dir.ensure_file("telemetry", FileNode::Telemetry(telemetry_file));
+        self.worker_ids.insert(worker_id.to_owned());
         let proc_root = vec!["proc".to_owned()];
         self.ensure_dir(&proc_root, worker_id)?;
         let proc_path = vec!["proc".to_owned(), worker_id.to_owned()];
@@ -446,14 +654,15 @@ impl Namespace {
 
     /// Remove namespace entries for a killed worker.
     pub fn remove_worker(&mut self, worker_id: &str) -> Result<(), NineDoorError> {
-        let worker_root = vec!["worker".to_owned()];
-        let mut node = self.lookup_mut(&worker_root)?;
-        if node.remove_child(worker_id).is_none() {
+        if !self.worker_ids.remove(worker_id) {
             return Err(NineDoorError::protocol(
                 ErrorCode::NotFound,
                 format!("worker {worker_id} not found"),
             ));
         }
+        let worker_parent = self.shards.worker_parent(worker_id);
+        let mut node = self.lookup_mut(&worker_parent)?;
+        let _ = node.remove_child(worker_id);
         let proc_root = vec!["proc".to_owned()];
         if let Ok(mut proc_dir) = self.lookup_mut(&proc_root) {
             let _ = proc_dir.remove_child(worker_id);
@@ -496,10 +705,28 @@ impl Namespace {
         }
     }
 
+    fn worker_alias_listing(&self) -> Vec<String> {
+        self.worker_ids.iter().cloned().collect()
+    }
+
+    fn resolve_path(&self, path: &[String]) -> Vec<String> {
+        if self.shards.legacy_worker_alias_enabled() {
+            if let [first, worker_id, rest @ ..] = path {
+                if first == "worker" {
+                    let mut resolved = self.shards.worker_root(worker_id);
+                    resolved.extend_from_slice(rest);
+                    return resolved;
+                }
+            }
+        }
+        path.to_vec()
+    }
+
     /// Lookup a node by path.
     pub fn lookup(&self, path: &[String]) -> Result<NodeView<'_>, NineDoorError> {
+        let resolved = self.resolve_path(path);
         let mut node = &self.root;
-        for component in path {
+        for component in &resolved {
             node = node.child(component).ok_or_else(|| {
                 NineDoorError::protocol(
                     ErrorCode::NotFound,
@@ -511,8 +738,9 @@ impl Namespace {
     }
 
     fn lookup_mut(&mut self, path: &[String]) -> Result<NodeViewMut<'_>, NineDoorError> {
+        let resolved = self.resolve_path(path);
         let mut node = &mut self.root;
-        for component in path {
+        for component in &resolved {
             node = node.child_mut(component).ok_or_else(|| {
                 NineDoorError::protocol(
                     ErrorCode::NotFound,
@@ -550,6 +778,11 @@ impl Namespace {
             SELFTEST_NEGATIVE_SCRIPT.as_bytes(),
         )
         .expect("create /proc/tests/selftest_negative.coh");
+        self.ensure_dir(&proc_path, "9p")
+            .expect("create /proc/9p");
+        let proc_9p_path = vec!["proc".to_owned(), "9p".to_owned()];
+        self.ensure_read_only_file(&proc_9p_path, "sessions", b"")
+            .expect("create /proc/9p/sessions");
 
         self.ensure_dir(&[], "log").expect("create /log");
         let log_path = vec!["log".to_owned()];
@@ -560,8 +793,22 @@ impl Namespace {
         let queen_path = vec!["queen".to_owned()];
         self.ensure_append_only_file(&queen_path, "ctl", b"")
             .expect("create /queen/ctl");
-
-        self.ensure_dir(&[], "worker").expect("create /worker");
+        if self.shards.is_enabled() {
+            self.ensure_dir(&[], "shard").expect("create /shard");
+            let shard_root = vec!["shard".to_owned()];
+            for label in self.shards.shard_labels() {
+                self.ensure_dir(&shard_root, &label)
+                    .expect("create /shard/<id>");
+                let shard_path = vec!["shard".to_owned(), label];
+                self.ensure_dir(&shard_path, "worker")
+                    .expect("create /shard/<id>/worker");
+            }
+            if self.shards.legacy_worker_alias_enabled() {
+                self.ensure_dir(&[], "worker").expect("create /worker alias");
+            }
+        } else {
+            self.ensure_dir(&[], "worker").expect("create /worker");
+        }
         self.ensure_dir(&[], "gpu").expect("create /gpu");
         self.ensure_dir(&[], "trace").expect("create /trace");
         let trace_path = vec!["trace".to_owned()];
@@ -832,6 +1079,12 @@ impl Namespace {
         let path = vec!["gpu".to_owned(), gpu_id.to_owned(), "status".to_owned()];
         self.write_append(&path, u64::MAX, payload)?;
         Ok(())
+    }
+
+    /// Replace the `/proc/9p/sessions` contents.
+    pub fn set_proc_sessions_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "9p".to_owned()];
+        self.set_read_only_file(&parent, "sessions", data)
     }
 
     fn set_read_only_file(
@@ -1113,16 +1366,6 @@ fn parse_host_mount(mount_at: &str) -> Result<Vec<String>, NineDoorError> {
         }
     }
     Ok(components)
-}
-
-fn telemetry_worker_id(path: &[String]) -> Option<&str> {
-    if path.len() != 3 {
-        return None;
-    }
-    if path[0] != "worker" || path[2] != "telemetry" {
-        return None;
-    }
-    Some(path[1].as_str())
 }
 
 fn read_slice(data: &[u8], offset: u64, count: u32) -> Vec<u8> {

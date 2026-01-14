@@ -25,11 +25,22 @@
 - `features.std_console`: `false`
 - `features.std_host_tools`: `false`
 - `namespaces.role_isolation`: `true`
+- `sharding.enabled`: `true`
+- `sharding.shard_bits`: `8`
+- `sharding.legacy_worker_alias`: `true`
 - `tickets`: 3 entries
-- `manifest.sha256`: `6f58dd705b235b26f0b3524f4a5d632d664015be6338c06e4953257ea0c83413`
+- `manifest.sha256`: `441642311a4ea259051a9f0b50b6d1ee74b16f51ae6c8d3c5793fe17a733ecf3`
 
 ### Namespace mounts (generated)
 - (none)
+
+### Sharded worker namespace (generated)
+- `sharding.enabled`: `true`
+- `sharding.shard_bits`: `8`
+- `sharding.legacy_worker_alias`: `true`
+- shard labels: `00..ff` (count: 256)
+- canonical worker path: `/shard/<label>/worker/<id>/telemetry`
+- legacy alias: `/worker/<id>/telemetry`
 
 ### Ecosystem section (generated)
 - `ecosystem.host.enable`: `false`
@@ -52,4 +63,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `6f58dd705b235b26f0b3524f4a5d632d664015be6338c06e4953257ea0c83413`)._
+_Generated from `configs/root_task.toml` (sha256: `441642311a4ea259051a9f0b50b6d1ee74b16f51ae6c8d3c5793fe17a733ecf3`)._

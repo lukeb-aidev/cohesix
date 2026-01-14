@@ -90,6 +90,34 @@ pub struct JobDescriptor {
     pub payload_b64: Option<String>,
 }
 
+/// Sharding configuration for worker output paths.
+#[derive(Debug, Clone, Copy)]
+pub struct ShardingSpec {
+    /// True when sharded worker output paths are enabled.
+    pub enabled: bool,
+    /// Number of shard bits used to derive the label.
+    pub shard_bits: u8,
+}
+
+impl ShardingSpec {
+    /// Return a legacy (non-sharded) layout.
+    pub const fn legacy() -> Self {
+        Self {
+            enabled: false,
+            shard_bits: 0,
+        }
+    }
+}
+
+impl Default for ShardingSpec {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            shard_bits: 8,
+        }
+    }
+}
+
 impl JobDescriptor {
     /// Validate the descriptor semantics and optional payload hash.
     pub fn validate(&self) -> Result<()> {
@@ -121,11 +149,17 @@ pub struct GpuWorker {
     ticket: TicketClaims,
     session: SessionId,
     lease: GpuLease,
+    sharding: ShardingSpec,
 }
 
 impl GpuWorker {
     /// Construct a GPU worker with the provided lease specification.
     pub fn new(session: SessionId, lease: GpuLease) -> Self {
+        Self::new_with_sharding(session, lease, ShardingSpec::default())
+    }
+
+    /// Construct a GPU worker with explicit sharding configuration.
+    pub fn new_with_sharding(session: SessionId, lease: GpuLease, sharding: ShardingSpec) -> Self {
         let ticket = TicketClaims::new(
             Role::WorkerGpu,
             BudgetSpec::default_gpu(),
@@ -137,6 +171,7 @@ impl GpuWorker {
             ticket,
             session,
             lease,
+            sharding,
         }
     }
 
@@ -188,6 +223,12 @@ impl GpuWorker {
         let hash = hasher.finalize();
         let hash_hex = hex::encode(hash);
         let encoded = BASE64_STANDARD.encode(payload);
+        let output_path = if self.sharding.enabled {
+            let label = worker_shard_label(&self.lease.worker_id, self.sharding.shard_bits);
+            format!("/shard/{label}/worker/{}/result", self.lease.worker_id)
+        } else {
+            format!("/worker/{}/result", self.lease.worker_id)
+        };
         let descriptor = JobDescriptor {
             job: JobId::random(),
             kernel,
@@ -195,7 +236,7 @@ impl GpuWorker {
             block: [self.lease.streams as u32, 1, 1],
             bytes_hash: format!("sha256:{hash_hex}"),
             inputs: vec![format!("/bundles/{}.ptx", kernel)],
-            outputs: vec![format!("/worker/{}/result", self.lease.worker_id)],
+            outputs: vec![output_path],
             timeout_ms: 5_000,
             payload_b64: Some(encoded),
         };
@@ -253,6 +294,18 @@ fn serialize_operands(a: &[f32], b: &[f32], extra: &[f32]) -> Vec<u8> {
         }
     }
     bytes
+}
+
+fn worker_shard_label(worker_id: &str, shard_bits: u8) -> String {
+    if shard_bits == 0 {
+        return "00".to_owned();
+    }
+    let digest = Sha256::digest(worker_id.as_bytes());
+    let mut shard = digest[0];
+    if shard_bits < 8 {
+        shard >>= 8 - shard_bits;
+    }
+    format!("{:02x}", shard)
 }
 
 #[cfg(test)]

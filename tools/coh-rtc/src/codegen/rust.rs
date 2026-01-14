@@ -63,6 +63,13 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct ShardingConfig {{")?;
+    writeln!(mod_contents, "    pub enabled: bool,")?;
+    writeln!(mod_contents, "    pub shard_bits: u8,")?;
+    writeln!(mod_contents, "    pub legacy_worker_alias: bool,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub enum TelemetryFrameSchema {{")?;
     writeln!(mod_contents, "    LegacyPlaintext,")?;
     writeln!(mod_contents, "    CborV1,")?;
@@ -135,6 +142,8 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;")?;
     writeln!(mod_contents, "pub const CACHE_POLICY: CachePolicy = bootstrap::CACHE_POLICY;")?;
     writeln!(mod_contents, "pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;")?;
+    writeln!(mod_contents, "pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;")?;
+    writeln!(mod_contents, "pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();")?;
     writeln!(mod_contents, "pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;")?;
     writeln!(mod_contents, "pub const HOST_CONFIG: HostConfig = bootstrap::HOST_CONFIG;")?;
     writeln!(mod_contents, "pub const POLICY_CONFIG: PolicyConfig = bootstrap::POLICY_CONFIG;")?;
@@ -160,6 +169,14 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn secure9p_limits() -> Secure9pLimits {{")?;
     writeln!(mod_contents, "    bootstrap::SECURE9P_LIMITS")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn sharding_config() -> ShardingConfig {{")?;
+    writeln!(mod_contents, "    bootstrap::SHARDING_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn shard_labels() -> &'static [&'static str] {{")?;
+    writeln!(mod_contents, "    &bootstrap::SHARD_LABELS")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn telemetry_config() -> TelemetryConfig {{")?;
@@ -213,7 +230,7 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AuditConfig, CachePolicy, HostConfig, HostProvider, NamespaceMount, PolicyConfig, PolicyLimits, PolicyRule, Secure9pLimits, ShortWritePolicy, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
+        "use super::{{AuditConfig, CachePolicy, HostConfig, HostProvider, NamespaceMount, PolicyConfig, PolicyLimits, PolicyRule, Secure9pLimits, ShardingConfig, ShortWritePolicy, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -271,6 +288,23 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
         manifest.secure9p.batch_frames,
         short_write_policy_to_rust(&manifest.secure9p.short_write.policy)
     )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const SHARDING_CONFIG: ShardingConfig = ShardingConfig {{ enabled: {}, shard_bits: {}, legacy_worker_alias: {} }};\n",
+        manifest.sharding.enabled,
+        manifest.sharding.shard_bits,
+        manifest.sharding.legacy_worker_alias
+    )?;
+    let shard_labels = build_shard_labels(manifest);
+    writeln!(
+        bootstrap_contents,
+        "pub const SHARD_LABELS: [&str; {}] = [",
+        shard_labels.len()
+    )?;
+    for label in &shard_labels {
+        writeln!(bootstrap_contents, "    \"{}\",", escape_literal(label))?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
     writeln!(
         bootstrap_contents,
         "pub const TELEMETRY_CONFIG: TelemetryConfig = TelemetryConfig {{ ring_bytes_per_worker: {}, frame_schema: {}, cursor: TelemetryCursorConfig {{ retain_on_boot: {} }} }};\n",
@@ -467,6 +501,15 @@ fn build_event_pump_fds(manifest: &Manifest) -> Vec<&'static str> {
     fds
 }
 
+fn build_shard_labels(manifest: &Manifest) -> Vec<String> {
+    let count = if manifest.sharding.enabled {
+        1usize << manifest.sharding.shard_bits
+    } else {
+        1
+    };
+    (0..count).map(|idx| format!("{:02x}", idx)).collect()
+}
+
 fn build_audit_lines(
     manifest: &Manifest,
     manifest_hash: &str,
@@ -498,6 +541,16 @@ fn build_audit_lines(
         format!(
             "manifest.secure9p.short_write.policy={}",
             short_write_policy_label(&manifest.secure9p.short_write.policy)
+        ),
+        format!("manifest.sharding.enabled={}", manifest.sharding.enabled),
+        format!("manifest.sharding.shard_bits={}", manifest.sharding.shard_bits),
+        format!(
+            "manifest.sharding.legacy_worker_alias={}",
+            manifest.sharding.legacy_worker_alias
+        ),
+        format!(
+            "manifest.sharding.shard_count={}",
+            build_shard_labels(manifest).len()
         ),
         format!(
             "telemetry.ring_bytes_per_worker={}",

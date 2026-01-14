@@ -119,7 +119,7 @@ fn build_script(queen_token: &str, worker_token: &str) -> Vec<String> {
         "log".to_string(),
         "spawn {\"spawn\":\"heartbeat\",\"ticks\":5}".to_string(),
         format!("attach worker {worker_token}"),
-        "tail /worker/self/telemetry".to_string(),
+        "tail /shard/13/worker/worker-1/telemetry".to_string(),
         "quit".to_string(),
     ]
 }

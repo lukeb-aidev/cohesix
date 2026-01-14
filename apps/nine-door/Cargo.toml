@@ -17,6 +17,7 @@ secure9p-core = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 worker-gpu = { path = "../worker-gpu" }
 gpu-bridge-host = { path = "../gpu-bridge-host" }
 trace-model = { path = "../../crates/trace-model" }

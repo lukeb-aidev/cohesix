@@ -8,3 +8,4 @@ edition = "2021"
 anyhow = { workspace = true }
 cohesix-ticket = { workspace = true }
 cohsh = { path = "../apps/cohsh", features = ["tcp"] }
+nine-door = { path = "../apps/nine-door" }

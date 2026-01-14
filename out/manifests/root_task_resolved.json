@@ -52,6 +52,11 @@
     "role_isolation": true,
     "mounts": []
   },
+  "sharding": {
+    "enabled": true,
+    "shard_bits": 8,
+    "legacy_worker_alias": true
+  },
   "ecosystem": {
     "host": {
       "enable": false,

@@ -31,7 +31,7 @@ flowchart LR
       ND["NineDoor (Secure9P server)<br/>9P2000.L only<br/>ops: version/attach/walk/open/read/write/clunk/stat<br/>remove: DISABLED<br/>msize<=8192<br/>per-session fid tables<br/>append-only semantics enforced"]:::vm
 
       Q["Queen role session<br/>(orchestrates via /queen/ctl)"]:::role
-      WH["worker-heart<br/>(writes /worker/<id>/telemetry)"]:::role
+      WH["worker-heart<br/>(writes /shard/<label>/worker/<id>/telemetry)"]:::role
       WG["worker-gpu (VM stub)<br/>(file ops only; no CUDA/NVML)"]:::role
     end
   end
@@ -42,7 +42,7 @@ flowchart LR
   subgraph NS["Secure9P namespace (role-scoped mounts)"]
     PROC["/proc (synthetic)"]:::path
     QUEEN["/queen/ctl (append-only JSON lines)<br/>spawn/kill/bind/mount/spawn:gpu(lease)"]:::path
-    WORK["/worker/<id>/telemetry (append-only)<br/>newline-delimited records"]:::path
+    WORK["/shard/<label>/worker/<id>/telemetry (append-only)<br/>newline-delimited records"]:::path
     LOG["/log/* (append-only streams)"]:::path
     GPU["/gpu/<id>/{info,ctl,job,status}<br/>(host-mirrored provider nodes)"]:::path
   end
@@ -121,7 +121,7 @@ The logical architecture—root-task, NineDoor, workers, Secure9P transports, GP
 4. **Operational State**
    - Queen and worker processes attach through NineDoor, exchanging capability tickets that encode their role and budgets.
    - The queen drives orchestration by appending JSON commands to `/queen/ctl`.
- - Telemetry and logs are streamed through append-only files in `/worker/<id>/telemetry` and `/log/queen.log`.
+ - Telemetry and logs are streamed through append-only files in `/shard/<label>/worker/<id>/telemetry` (legacy `/worker/<id>/telemetry` when enabled) and `/log/queen.log`.
   - Remote operators attach via the TCP-backed console (`cohsh --transport tcp`) which mirrors serial semantics while applying
     heartbeat-driven keep-alives and exponential back-off so networking stalls cannot starve the event pump.
 
@@ -169,7 +169,7 @@ The logical architecture—root-task, NineDoor, workers, Secure9P transports, GP
 - Spawned by queen commands; each worker receives a ticket describing its role and budget, and remains capability-limited to its
   assigned mounts.【F:docs/ROLES_AND_SCHEDULING.md†L4-L17】
 - Communicate exclusively through their mounted NineDoor namespace—no raw IPC between workers; queen keeps orchestration state
-  in `/queen` while worker-heart processes stick to `/worker/<id>`.
+  in `/queen` while worker-heart processes stick to `/shard/<label>/worker/<id>` (legacy `/worker/<id>` when enabled).
 - Heartbeat workers emit periodic telemetry; worker-gpu stubs exist for future host-bridge coordination but stay isolated from
   queen mounts beyond their lease scopes.
 - The Queen role drives one-to-many worker orchestration through `/queen/ctl`, creating, configuring, and revoking multiple worker instances within the hive.
@@ -196,10 +196,10 @@ The logical architecture—root-task, NineDoor, workers, Secure9P transports, GP
 
 ## 4. Namespaces & Mount Tables
 - Each session is mounted according to role:
-  - **Queen**: `/`, `/queen`, `/proc`, `/log`, `/worker/*`, `/gpu/* (future)`.
-  - **WorkerHeartbeat**: `/proc/boot`, `/worker/self/telemetry`, `/log/queen.log (read-only)`.
+  - **Queen**: `/`, `/queen`, `/proc`, `/log`, `/shard/*/worker/*` (legacy `/worker/*` when enabled), `/gpu/* (future)`.
+  - **WorkerHeartbeat**: `/proc/boot`, `/shard/<label>/worker/<id>/telemetry` (legacy `/worker/<id>/telemetry` when enabled), `/log/queen.log (read-only)`.
   - **WorkerGpu (future)**: Worker heartbeat view + `/gpu/<lease>/*` nodes.
-- Mount tables keep `/queen`, `/worker/<id>`, `/log`, and `/gpu/*` isolated so worker processes cannot traverse queen control or
+- Mount tables keep `/queen`, `/shard/<label>/worker/<id>` (legacy `/worker/<id>` when enabled), `/log`, and `/gpu/*` isolated so worker processes cannot traverse queen control or
   other worker directories even when sharing a NineDoor transport.【F:docs/ROLES_AND_SCHEDULING.md†L4-L17】
 - `bind` and `mount` operations are implemented via per-session mount tables maintained by NineDoor. Operations are scoped to a single path (no union mounts) and require queen privileges.
 
@@ -210,7 +210,7 @@ The logical architecture—root-task, NineDoor, workers, Secure9P transports, GP
 
 ## 6. Data Flow Highlights
 - **Queen Control**: Append JSON commands to `/queen/ctl`; NineDoor forwards valid commands to root-task orchestration APIs.
-- **Telemetry**: Workers append newline-delimited status records to `/worker/<id>/telemetry`. NineDoor enforces append-only semantics by ignoring offsets.
+- **Telemetry**: Workers append newline-delimited status records to `/shard/<label>/worker/<id>/telemetry` (legacy `/worker/<id>/telemetry` when enabled). NineDoor enforces append-only semantics by ignoring offsets.
 - **Logging**: Root task and queen append to `/log/queen.log`; workers read logs read-only for situational awareness.
 - **GPU Integration (future)**: Host bridge exposes GPU metadata/control/job/status nodes; WorkerGpu instances mediate job submission and read back status via NineDoor.
 
@@ -340,17 +340,34 @@ CLI scripts, or bootstrap tables change.
 - `features.std_console`: `false`
 - `features.std_host_tools`: `false`
 - `namespaces.role_isolation`: `true`
+- `sharding.enabled`: `true`
+- `sharding.shard_bits`: `8`
+- `sharding.legacy_worker_alias`: `true`
 - `tickets`: 3 entries
-- `manifest.sha256`: `09e9cf4605174cbb41993b5c5035466b81edf24f70c08c89c49d535bfa01e9c3`
+- `manifest.sha256`: `441642311a4ea259051a9f0b50b6d1ee74b16f51ae6c8d3c5793fe17a733ecf3`
 
 ### Namespace mounts (generated)
 - (none)
+
+### Sharded worker namespace (generated)
+- `sharding.enabled`: `true`
+- `sharding.shard_bits`: `8`
+- `sharding.legacy_worker_alias`: `true`
+- shard labels: `00..ff` (count: 256)
+- canonical worker path: `/shard/<label>/worker/<id>/telemetry`
+- legacy alias: `/worker/<id>/telemetry`
 
 ### Ecosystem section (generated)
 - `ecosystem.host.enable`: `false`
 - `ecosystem.host.mount_at`: `/host`
 - `ecosystem.host.providers`: `(none)`
 - `ecosystem.audit.enable`: `false`
+- `ecosystem.audit.journal_max_bytes`: `8192`
+- `ecosystem.audit.decisions_max_bytes`: `4096`
+- `ecosystem.audit.replay_enable`: `false`
+- `ecosystem.audit.replay_max_entries`: `64`
+- `ecosystem.audit.replay_ctl_max_bytes`: `1024`
+- `ecosystem.audit.replay_status_max_bytes`: `1024`
 - `ecosystem.policy.enable`: `false`
 - `ecosystem.policy.queue_max_entries`: `32`
 - `ecosystem.policy.queue_max_bytes`: `4096`
@@ -361,7 +378,7 @@ CLI scripts, or bootstrap tables change.
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `09e9cf4605174cbb41993b5c5035466b81edf24f70c08c89c49d535bfa01e9c3`)._
+_Generated from `configs/root_task.toml` (sha256: `441642311a4ea259051a9f0b50b6d1ee74b16f51ae6c8d3c5793fe17a733ecf3`)._
 
 ### 11.1 Host Sidecar Bridge (`/host`)
 When `ecosystem.host.enable = true`, NineDoor publishes a `/host` namespace (mount path defined by `ecosystem.host.mount_at`) containing host-only provider stubs. Providers are listed in `ecosystem.host.providers[]`, and each adds its minimal file-only tree:

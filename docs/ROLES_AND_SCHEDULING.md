@@ -7,12 +7,20 @@
 ## 1. Roles
 | Role | Capabilities | Namespace |
 |------|--------------|-----------|
-| **Queen** | Hive-wide orchestrator driven by `cohsh`: spawn/kill workers, bind/mount namespaces, inspect logs, request GPU leases across many worker instances | Full `/`, `/queen`, `/worker/*`, `/log`, `/gpu/*` (when installed), plus `/policy` + `/actions` and `/audit` + `/replay` when enabled |
-| **WorkerHeartbeat** | Minimal worker that emits heartbeat telemetry and confirms console/attach paths; many instances may run concurrently under the Queen | `/proc/boot`, `/worker/self/telemetry`, `/log/queen.log` (RO) |
+| **Queen** | Hive-wide orchestrator driven by `cohsh`: spawn/kill workers, bind/mount namespaces, inspect logs, request GPU leases across many worker instances | Full `/`, `/queen`, `/shard/*/worker/*` (canonical), legacy `/worker/*` when enabled, `/log`, `/gpu/*` (when installed), plus `/policy` + `/actions` and `/audit` + `/replay` when enabled |
+| **WorkerHeartbeat** | Minimal worker that emits heartbeat telemetry and confirms console/attach paths; many instances may run concurrently under the Queen | `/proc/boot`, `/shard/<label>/worker/<id>/telemetry`, `/log/queen.log` (RO); legacy `/worker/<id>/telemetry` when enabled |
 | **WorkerGpu** | GPU-centric worker that reads ticket/lease state and reports telemetry for host-provided GPU nodes; treated as another worker type under the Queen | WorkerHeartbeat view + `/gpu/<id>/*` |
 | **Observer** (future) | Read-only status access | `/proc`, `/log` |
 
 Exactly one Queen exists per hive, but many worker instances (across worker-heart, worker-gpu, and future types) can be orchestrated simultaneously. The queen session attached via `cohsh` is the canonical path for operators and automation to exercise these roles.
+
+### Worker Namespace Sharding
+- Canonical worker path: `/shard/<label>/worker/<id>/telemetry`.
+- `label` is derived from `sha256(worker_id)[0..=shard_bits)` (top `shard_bits` of the first byte), formatted as two hex digits.
+- `sharding.legacy_worker_alias = true` enables legacy `/worker/<id>/telemetry` aliases that resolve to the canonical shard path.
+- Alias-disabled manifests must not reference `/worker/*` in mounts or policy rules; `coh-rtc` rejects them deterministically.
+- Sharding requires `secure9p.walk_depth >= 5` (canonical path depth). Example compiler error: `sharding.enabled requires secure9p.walk_depth >= 5`.
+- Legacy aliases require `secure9p.walk_depth >= 3`. Example compiler error: `sharding.legacy_worker_alias requires secure9p.walk_depth >= 3`.
 
 ## 2. Ticket Lifecycle
 1. Queen requests spawn with desired role/budget.
@@ -58,4 +66,4 @@ Cross-refs: see `SECURE9P.md` for namespace enforcement, `USERLAND_AND_CLI.md` f
 ## 7. Future Extensions
 - Role hierarchy for observers/auditors.
 - Quotas for memory/IPC buffers enforced via seL4 resource allocation APIs.
-- Worker-side cooperative yields signalled via `/worker/self/yield` control file.
+- Worker-side cooperative yields signalled via `/shard/<label>/worker/<id>/yield` (legacy `/worker/<id>/yield` when enabled).

@@ -1,0 +1,14 @@
+# Author: Lukas Bower
+# Purpose: Validate sharded worker paths and legacy alias compatibility.
+attach queen
+EXPECT OK
+spawn heartbeat ticks=10 ttl_s=60
+EXPECT OK
+# worker-1 shard label = sha256("worker-1")[0] = 0x13
+echo shard-ok > /shard/13/worker/worker-1/telemetry
+EXPECT OK
+EXPECT SUBSTR path=/shard/13/worker/worker-1/telemetry
+echo legacy-ok > /worker/worker-1/telemetry
+EXPECT OK
+EXPECT SUBSTR path=/worker/worker-1/telemetry
+quit

@@ -8,7 +8,7 @@ use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
 use secure9p_codec::{ErrorCode, OpenMode, MAX_MSIZE};
 
 use nine_door::{
-    Clock, NineDoor, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema,
+    Clock, NineDoor, ShardLayout, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema,
     TelemetryManifestStore,
 };
 
@@ -38,6 +38,10 @@ fn issue_ticket(secret: &str, role: Role, subject: &str) -> String {
         0,
     );
     issuer.issue(claims).unwrap().encode().unwrap()
+}
+
+fn worker_telemetry_path(worker_id: &str) -> Vec<String> {
+    ShardLayout::default().worker_telemetry_path(worker_id)
 }
 
 #[test]
@@ -89,11 +93,7 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
             )
             .expect("attach worker");
 
-        let telemetry_path = vec![
-            "worker".to_owned(),
-            "worker-1".to_owned(),
-            "telemetry".to_owned(),
-        ];
+        let telemetry_path = worker_telemetry_path("worker-1");
         worker
             .walk(1, 2, &telemetry_path)
             .expect("walk telemetry");
@@ -158,11 +158,7 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
         )
         .expect("attach worker");
 
-    let telemetry_path = vec![
-        "worker".to_owned(),
-        "worker-1".to_owned(),
-        "telemetry".to_owned(),
-    ];
+    let telemetry_path = worker_telemetry_path("worker-1");
     worker
         .walk(1, 2, &telemetry_path)
         .expect("walk telemetry");

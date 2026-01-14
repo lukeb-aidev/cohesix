@@ -5,7 +5,10 @@
 
 use anyhow::Result;
 use clap::Parser;
-use coh_rtc::{compile, default_cbor_snippet_path, default_doc_snippet_path, CompileOptions};
+use coh_rtc::{
+    compile, default_cbor_snippet_path, default_cli_script_path, default_doc_snippet_path,
+    CompileOptions,
+};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -20,7 +23,7 @@ struct Args {
     #[arg(long = "manifest", alias = "manifest-out")]
     manifest_out: PathBuf,
     /// Output path for the baseline cohsh CLI script.
-    #[arg(long)]
+    #[arg(long, default_value_os_t = default_cli_script_path())]
     cli_script: PathBuf,
     /// Output path for the manifest schema snippet.
     #[arg(long, default_value_os_t = default_doc_snippet_path())]

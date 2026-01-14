@@ -36,7 +36,7 @@ mod telemetry;
 mod tracefs;
 
 use self::core::{role_to_uname, ServerCore};
-pub use self::namespace::{HostNamespaceConfig, HostProvider};
+pub use self::namespace::{HostNamespaceConfig, HostProvider, ShardLayout};
 pub use self::audit::{AuditConfig, AuditLimits, ReplayConfig};
 pub use self::policy::{PolicyConfig, PolicyDecision, PolicyLimits, PolicyRuleSpec};
 pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
@@ -111,21 +111,33 @@ impl NineDoor {
     /// Construct a new NineDoor server populated with the synthetic namespace.
     #[must_use]
     pub fn new() -> Self {
-        Self::new_with_limits_and_telemetry(
+        Self::new_with_shard_layout(ShardLayout::default())
+    }
+
+    /// Construct a new NineDoor server with an explicit shard layout.
+    #[must_use]
+    pub fn new_with_shard_layout(shards: ShardLayout) -> Self {
+        Self::new_with_limits_telemetry_host_policy_shards(
             Arc::new(SystemClock),
             SessionLimits::default(),
             TelemetryConfig::default(),
+            TelemetryManifestStore::default(),
+            shards,
+            HostNamespaceConfig::disabled(),
+            PolicyConfig::disabled(),
+            AuditConfig::disabled(),
         )
     }
 
     /// Construct a new NineDoor server with host namespace configuration.
     #[must_use]
     pub fn new_with_host_config(host: HostNamespaceConfig) -> Self {
-        Self::new_with_limits_telemetry_host_policy(
+        Self::new_with_limits_telemetry_host_policy_shards(
             Arc::new(SystemClock),
             SessionLimits::default(),
             TelemetryConfig::default(),
             TelemetryManifestStore::default(),
+            ShardLayout::default(),
             host,
             PolicyConfig::disabled(),
             AuditConfig::disabled(),
@@ -148,11 +160,12 @@ impl NineDoor {
         policy: PolicyConfig,
         audit: AuditConfig,
     ) -> Self {
-        Self::new_with_limits_telemetry_host_policy(
+        Self::new_with_limits_telemetry_host_policy_shards(
             Arc::new(SystemClock),
             SessionLimits::default(),
             TelemetryConfig::default(),
             TelemetryManifestStore::default(),
+            ShardLayout::default(),
             host,
             policy,
             audit,
@@ -214,22 +227,24 @@ impl NineDoor {
         telemetry_manifest: TelemetryManifestStore,
         host: HostNamespaceConfig,
     ) -> Self {
-        Self::new_with_limits_telemetry_host_policy(
+        Self::new_with_limits_telemetry_host_policy_shards(
             clock,
             limits,
             telemetry,
             telemetry_manifest,
+            ShardLayout::default(),
             host,
             PolicyConfig::disabled(),
             AuditConfig::disabled(),
         )
     }
 
-    fn new_with_limits_telemetry_host_policy(
+    fn new_with_limits_telemetry_host_policy_shards(
         clock: Arc<dyn Clock>,
         limits: SessionLimits,
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
+        shards: ShardLayout,
         host: HostNamespaceConfig,
         policy: PolicyConfig,
         audit: AuditConfig,
@@ -240,6 +255,7 @@ impl NineDoor {
                 limits,
                 telemetry,
                 telemetry_manifest.clone(),
+                shards,
                 host,
                 policy,
                 audit,

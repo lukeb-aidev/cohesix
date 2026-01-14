@@ -12,6 +12,9 @@ use std::path::Path;
 const SCHEMA_VERSION: &str = "1.2";
 const MAX_WALK_DEPTH: usize = 8;
 const MAX_MSIZE: u32 = 8192;
+const MAX_SHARD_BITS: u8 = 8;
+const SHARDED_WORKER_PATH_DEPTH: usize = 5;
+const LEGACY_WORKER_PATH_DEPTH: usize = 3;
 const EVENT_PUMP_TELEMETRY_BUDGET_BYTES: u32 = 32 * 1024;
 const EVENT_PUMP_MAX_TELEMETRY_WORKERS: u32 = 8;
 const MAX_POLICY_QUEUE_ENTRIES: u16 = 64;
@@ -33,6 +36,8 @@ pub struct Manifest {
     pub tickets: Vec<TicketSpec>,
     #[serde(default)]
     pub namespaces: Namespaces,
+    #[serde(default)]
+    pub sharding: Sharding,
     #[serde(default)]
     pub ecosystem: Ecosystem,
     #[serde(default)]
@@ -78,6 +83,7 @@ impl Manifest {
         }
         self.validate_cache()?;
         self.validate_namespace_mounts()?;
+        self.validate_sharding()?;
         self.validate_tickets()?;
         self.validate_ecosystem()?;
         self.validate_telemetry()?;
@@ -114,6 +120,58 @@ impl Manifest {
             let key = (ticket.role.as_str(), ticket.secret.as_str());
             if !seen.insert(key) {
                 bail!("duplicate ticket entry for role {}", ticket.role.as_str());
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_sharding(&self) -> Result<()> {
+        if self.sharding.shard_bits > MAX_SHARD_BITS {
+            bail!(
+                "sharding.shard_bits {} exceeds max {}",
+                self.sharding.shard_bits,
+                MAX_SHARD_BITS
+            );
+        }
+        if self.sharding.enabled {
+            if (self.secure9p.walk_depth as usize) < SHARDED_WORKER_PATH_DEPTH {
+                bail!(
+                    "sharding.enabled requires secure9p.walk_depth >= {}",
+                    SHARDED_WORKER_PATH_DEPTH
+                );
+            }
+            if self.sharding.legacy_worker_alias
+                && (self.secure9p.walk_depth as usize) < LEGACY_WORKER_PATH_DEPTH
+            {
+                bail!(
+                    "sharding.legacy_worker_alias requires secure9p.walk_depth >= {}",
+                    LEGACY_WORKER_PATH_DEPTH
+                );
+            }
+            if !self.sharding.legacy_worker_alias {
+                self.reject_legacy_worker_paths()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn reject_legacy_worker_paths(&self) -> Result<()> {
+        for mount in &self.namespaces.mounts {
+            if matches!(mount.target.first(), Some(component) if component == "worker") {
+                bail!(
+                    "namespace mount {} references legacy /worker paths while sharding.legacy_worker_alias is false",
+                    mount.service
+                );
+            }
+        }
+        for rule in &self.ecosystem.policy.rules {
+            let target = rule.target.trim();
+            let components: Vec<&str> =
+                target.split('/').filter(|seg| !seg.is_empty()).collect();
+            if matches!(components.first(), Some(component) if *component == "worker") {
+                bail!(
+                    "ecosystem.policy.rules[].target references legacy /worker paths while sharding.legacy_worker_alias is false"
+                );
             }
         }
         Ok(())
@@ -409,6 +467,24 @@ impl Default for Namespaces {
         Self {
             role_isolation: true,
             mounts: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Sharding {
+    pub enabled: bool,
+    pub shard_bits: u8,
+    pub legacy_worker_alias: bool,
+}
+
+impl Default for Sharding {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            shard_bits: 0,
+            legacy_worker_alias: false,
         }
     }
 }

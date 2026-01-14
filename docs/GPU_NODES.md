@@ -56,7 +56,7 @@ pub struct GpuLease {
   "block": [256, 1, 1],
   "bytes_hash": "sha256:...",
   "inputs": ["/bundles/vadd.ptx"],
-  "outputs": ["/worker/jid-42/result"],
+  "outputs": ["/shard/<label>/worker/<id>/result"],
   "timeout_ms": 5000,
   "payload_b64": "..."
 }
@@ -167,8 +167,10 @@ The worker:
 - Propagates `model_id` / `lora_id` from `/gpu/models/active` into every forwarded record
 - Emits consolidated telemetry upstream:
 
-/worker/self/telemetry/
+/shard/<label>/worker/<id>/telemetry/
 window_2025-01-08.cbor
+
+Legacy aliases at `/worker/<id>/telemetry` are available only when `sharding.legacy_worker_alias = true`.
 
 This step is important on Jetson:
 - Bandwidth-aware

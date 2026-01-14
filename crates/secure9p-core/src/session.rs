@@ -6,6 +6,9 @@
 //! Session tracking primitives for Secure9P servers.
 
 use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::vec::Vec;
+
+use spin::Mutex;
 
 /// Tag window errors returned by Secure9P tracking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +24,15 @@ pub enum TagError {
 pub enum QueueError {
     /// The queue is full.
     Full,
+}
+
+/// Fid table errors returned by sharded tracking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FidError {
+    /// The fid is already active.
+    InUse,
+    /// The fid was clunked and may not be reused.
+    Retired,
 }
 
 /// Short write retry policy for transport adapters.
@@ -230,5 +242,110 @@ impl<T> FidTable<T> {
 impl<T> Default for FidTable<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Default number of shards used by [`ShardedFidTable`].
+pub const DEFAULT_FID_SHARDS: usize = 16;
+
+#[derive(Debug)]
+struct FidShard<T> {
+    active: BTreeMap<u32, T>,
+    retired: BTreeSet<u32>,
+}
+
+impl<T> FidShard<T> {
+    fn new() -> Self {
+        Self {
+            active: BTreeMap::new(),
+            retired: BTreeSet::new(),
+        }
+    }
+}
+
+/// Sharded fid table with per-shard locking and clunk retirement.
+#[derive(Debug)]
+pub struct ShardedFidTable<T> {
+    shards: Vec<Mutex<FidShard<T>>>,
+}
+
+impl<T> ShardedFidTable<T> {
+    /// Create a sharded fid table with the requested number of shards.
+    #[must_use]
+    pub fn new(shard_count: usize) -> Self {
+        let count = shard_count.max(1);
+        let mut shards = Vec::with_capacity(count);
+        for _ in 0..count {
+            shards.push(Mutex::new(FidShard::new()));
+        }
+        Self { shards }
+    }
+
+    /// Return true if the fid is active or has been clunked.
+    #[must_use]
+    pub fn contains(&self, fid: u32) -> bool {
+        let shard = self.shard_for(fid);
+        let guard = self.shards[shard].lock();
+        guard.active.contains_key(&fid) || guard.retired.contains(&fid)
+    }
+
+    /// Insert a fid entry, rejecting reuse after clunk.
+    pub fn insert(&self, fid: u32, value: T) -> Result<(), FidError> {
+        let shard = self.shard_for(fid);
+        let mut guard = self.shards[shard].lock();
+        if guard.active.contains_key(&fid) {
+            return Err(FidError::InUse);
+        }
+        if guard.retired.contains(&fid) {
+            return Err(FidError::Retired);
+        }
+        guard.active.insert(fid, value);
+        Ok(())
+    }
+
+    /// Borrow an entry by cloning it.
+    pub fn get(&self, fid: u32) -> Option<T>
+    where
+        T: Clone,
+    {
+        let shard = self.shard_for(fid);
+        let guard = self.shards[shard].lock();
+        guard.active.get(&fid).cloned()
+    }
+
+    /// Apply a read-only function to an entry.
+    pub fn with_entry<R>(&self, fid: u32, f: impl FnOnce(&T) -> R) -> Option<R> {
+        let shard = self.shard_for(fid);
+        let guard = self.shards[shard].lock();
+        guard.active.get(&fid).map(f)
+    }
+
+    /// Apply a mutable function to an entry.
+    pub fn with_entry_mut<R>(&self, fid: u32, f: impl FnOnce(&mut T) -> R) -> Option<R> {
+        let shard = self.shard_for(fid);
+        let mut guard = self.shards[shard].lock();
+        guard.active.get_mut(&fid).map(f)
+    }
+
+    /// Remove an entry and retire the fid.
+    pub fn remove(&self, fid: u32) -> Option<T> {
+        let shard = self.shard_for(fid);
+        let mut guard = self.shards[shard].lock();
+        let entry = guard.active.remove(&fid);
+        if entry.is_some() {
+            guard.retired.insert(fid);
+        }
+        entry
+    }
+
+    fn shard_for(&self, fid: u32) -> usize {
+        let idx = fid as usize;
+        idx % self.shards.len()
+    }
+}
+
+impl<T> Default for ShardedFidTable<T> {
+    fn default() -> Self {
+        Self::new(DEFAULT_FID_SHARDS)
     }
 }

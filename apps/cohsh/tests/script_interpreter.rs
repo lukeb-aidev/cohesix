@@ -211,12 +211,15 @@ fn script_allows_expect_after_err_ack() {
         ..Default::default()
     };
     let mut shell = Shell::new(transport, Cursor::new(Vec::new()));
-    let script = "\
-attach queen
-EXPECT OK
-cat /worker/worker-0/telemetry
-EXPECT ERR
-";
+    let telemetry_path = format!(
+        "/{}",
+        nine_door::ShardLayout::default()
+            .worker_telemetry_path("worker-0")
+            .join("/")
+    );
+    let script = format!(
+        "attach queen\nEXPECT OK\ncat {telemetry_path}\nEXPECT ERR\n"
+    );
     shell
         .run_script(Cursor::new(script.as_bytes()))
         .expect("script should allow EXPECT after ERR ack");

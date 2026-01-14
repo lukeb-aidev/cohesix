@@ -17,6 +17,7 @@ use alloc::{collections::VecDeque, format, string::String, vec::Vec};
 use core::fmt::{self, Write};
 use core::str;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
+use sha2::{Digest, Sha256};
 use secure9p_codec::ErrorCode;
 
 const LOG_PATH: &str = "/log/queen.log";
@@ -31,7 +32,6 @@ const MAX_STREAM_LINES: usize = log_buffer::LOG_SNAPSHOT_LINES;
 const MAX_WORKERS: usize = 8;
 const MAX_WORKER_ID_LEN: usize = 32;
 const TELEMETRY_AUDIT_LINE: usize = 128;
-const WORKER_ROOT: &str = "/worker/";
 const WORKER_TELEMETRY_FILE: &str = "telemetry";
 const POLICY_CTL_PATH: &str = "/policy/ctl";
 const POLICY_RULES_PATH: &str = "/policy/rules";
@@ -486,13 +486,38 @@ impl NineDoorBridge {
         HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
         NineDoorBridgeError,
     > {
+        let sharding = generated::sharding_config();
         if path == "/worker" {
+            if sharding.enabled && !legacy_worker_alias_enabled(sharding) {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
             return self.list_workers();
+        }
+        if path == "/shard" {
+            if !sharding.enabled {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return list_shard_labels();
+        }
+        if let Some((label, worker_root)) = parse_shard_worker_root(path) {
+            if !sharding.enabled || !shard_label_known(label) {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            if worker_root {
+                return self.list_workers_for_shard(label);
+            }
+            return list_from_slice(&["worker"]);
         }
         if path == "/" {
             let mut output = HeaplessVec::new();
-            for entry in ["gpu", "kmesg", "log", "proc", "queen", "trace", "worker"] {
+            for entry in ["gpu", "kmesg", "log", "proc", "queen", "trace"] {
                 push_list_entry(&mut output, entry)?;
+            }
+            if sharding.enabled {
+                push_list_entry(&mut output, "shard")?;
+            }
+            if !sharding.enabled || legacy_worker_alias_enabled(sharding) {
+                push_list_entry(&mut output, "worker")?;
             }
             if self.host.enabled {
                 push_list_entry(&mut output, self.host.mount_label())?;
@@ -528,7 +553,13 @@ impl NineDoorBridge {
         if path == "/trace" {
             return list_from_slice(&["ctl", "events"]);
         }
-        if path == "/worker" || path == "/gpu" {
+        if path == "/gpu" {
+            return Ok(HeaplessVec::new());
+        }
+        if path == "/worker" {
+            if sharding.enabled && !legacy_worker_alias_enabled(sharding) {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
             return Ok(HeaplessVec::new());
         }
         if self.policy.enabled {
@@ -565,6 +596,24 @@ impl NineDoorBridge {
             output
                 .push(line)
                 .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        }
+        Ok(output)
+    }
+
+    fn list_workers_for_shard(
+        &self,
+        label: &str,
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
+        let sharding = generated::sharding_config();
+        let mut output = HeaplessVec::new();
+        for worker in self.workers.iter() {
+            let worker_label = worker_shard_label(worker.id.as_str(), sharding);
+            if worker_label == label {
+                push_list_entry(&mut output, worker.id.as_str())?;
+            }
         }
         Ok(output)
     }
@@ -2014,6 +2063,37 @@ fn split_path_segments(path: &str) -> HeaplessVec<&str, MAX_POLICY_PATH_COMPONEN
     segments
 }
 
+fn legacy_worker_alias_enabled(sharding: generated::ShardingConfig) -> bool {
+    sharding.enabled && sharding.legacy_worker_alias
+}
+
+fn worker_shard_label(worker_id: &str, sharding: generated::ShardingConfig) -> String {
+    if !sharding.enabled || sharding.shard_bits == 0 {
+        return String::from("00");
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(worker_id.as_bytes());
+    let digest = hasher.finalize();
+    let mut shard = digest[0];
+    if sharding.shard_bits < 8 {
+        shard >>= 8 - sharding.shard_bits;
+    }
+    format!("{:02x}", shard)
+}
+
+fn shard_label_known(label: &str) -> bool {
+    generated::shard_labels().iter().any(|entry| *entry == label)
+}
+
+fn parse_shard_worker_root(path: &str) -> Option<(&str, bool)> {
+    let segments = split_path_segments(path);
+    match segments.as_slice() {
+        ["shard", label] => Some((*label, false)),
+        ["shard", label, "worker"] => Some((*label, true)),
+        _ => None,
+    }
+}
+
 fn parse_action_status_path(path: &str) -> Option<&str> {
     let rest = path.strip_prefix("/actions/")?;
     let (action_id, leaf) = rest.split_once('/')?;
@@ -2030,6 +2110,16 @@ fn list_from_slice(
     let mut output = HeaplessVec::new();
     for entry in entries {
         push_list_entry(&mut output, entry)?;
+    }
+    Ok(output)
+}
+
+fn list_shard_labels(
+) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+{
+    let mut output = HeaplessVec::new();
+    for label in generated::shard_labels() {
+        push_list_entry(&mut output, label)?;
     }
     Ok(output)
 }
@@ -2177,12 +2267,37 @@ fn log_policy_action(role: &str, ticket: &str, action: &PolicyAction) {
 }
 
 fn parse_worker_telemetry_path(path: &str) -> Option<&str> {
-    let rest = path.strip_prefix(WORKER_ROOT)?;
-    let (worker_id, leaf) = rest.split_once('/')?;
-    if worker_id.is_empty() || leaf != WORKER_TELEMETRY_FILE {
+    let segments = split_path_segments(path);
+    let sharding = generated::sharding_config();
+    if sharding.enabled {
+        if let ["shard", label, "worker", worker_id, leaf] = segments.as_slice() {
+            if *leaf != WORKER_TELEMETRY_FILE {
+                return None;
+            }
+            if !shard_label_known(label) {
+                return None;
+            }
+            let expected = worker_shard_label(worker_id, sharding);
+            if expected != *label {
+                return None;
+            }
+            return Some(worker_id);
+        }
+        if legacy_worker_alias_enabled(sharding) {
+            if let ["worker", worker_id, leaf] = segments.as_slice() {
+                if *leaf == WORKER_TELEMETRY_FILE {
+                    return Some(worker_id);
+                }
+            }
+        }
         return None;
     }
-    Some(worker_id)
+    if let ["worker", worker_id, leaf] = segments.as_slice() {
+        if *leaf == WORKER_TELEMETRY_FILE {
+            return Some(worker_id);
+        }
+    }
+    None
 }
 
 fn append_log_bytes(

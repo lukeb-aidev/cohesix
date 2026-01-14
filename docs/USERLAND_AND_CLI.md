@@ -192,10 +192,10 @@ Disposable worker lifecycle with ID assertion:
 ```
 spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=1 ttl_s=60
 EXPECT OK
-ls /worker
+ls /shard
 EXPECT OK
-EXPECT SUBSTR worker-
-tail /worker/worker-123/telemetry
+EXPECT SUBSTR path=/shard
+tail /shard/<label>/worker/worker-123/telemetry
 EXPECT OK
 WAIT 500
 kill worker-123

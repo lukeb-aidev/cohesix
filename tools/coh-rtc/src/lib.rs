@@ -48,6 +48,10 @@ pub fn default_doc_snippet_path() -> PathBuf {
     Path::new("docs").join("snippets").join("root_task_manifest.md")
 }
 
+pub fn default_cli_script_path() -> PathBuf {
+    Path::new("scripts").join("cohsh").join("boot_v0.coh")
+}
+
 pub fn default_cbor_snippet_path() -> PathBuf {
     Path::new("docs")
         .join("snippets")

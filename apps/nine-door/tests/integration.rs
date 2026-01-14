@@ -5,8 +5,9 @@
 #![forbid(unsafe_code)]
 
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
-use nine_door::{Clock, InProcessConnection, NineDoor, NineDoorError};
+use nine_door::{Clock, InProcessConnection, NineDoor, NineDoorError, ShardLayout};
 use secure9p_codec::{ErrorCode, OpenMode, MAX_MSIZE};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use worker_gpu::{GpuLease, GpuWorker};
@@ -26,6 +27,19 @@ fn issue_ticket(secret: &str, role: Role, subject: &str) -> String {
         0,
     );
     issuer.issue(claims).unwrap().encode().unwrap()
+}
+
+fn shard_layout() -> ShardLayout {
+    ShardLayout::default()
+}
+
+fn worker_root_string(worker_id: &str) -> String {
+    let shards = shard_layout();
+    format!("/{}", shards.worker_root(worker_id).join("/"))
+}
+
+fn worker_telemetry_path(worker_id: &str) -> Vec<String> {
+    shard_layout().worker_telemetry_path(worker_id)
 }
 
 #[test]
@@ -72,9 +86,10 @@ fn queen_bind_is_session_scoped() {
         .write(2, spawn_payload)
         .expect("spawn heartbeat worker");
 
-    let bind_payload = b"{\"bind\":{\"from\":\"/worker/worker-1\",\"to\":\"/queen\"}}\n";
+    let worker_root = worker_root_string("worker-1");
+    let bind_payload = format!("{{\"bind\":{{\"from\":\"{worker_root}\",\"to\":\"/queen\"}}}}\n");
     queen1
-        .write(2, bind_payload)
+        .write(2, bind_payload.as_bytes())
         .expect("bind worker telemetry over /queen");
 
     let queen_remap = vec!["queen".to_owned(), "telemetry".to_owned()];
@@ -204,11 +219,7 @@ fn spawn_emit_kill_logs_revocation() {
             Some(issue_ticket("worker-secret", Role::WorkerHeartbeat, "worker-1").as_str()),
         )
         .expect("worker attach");
-    let telemetry = vec![
-        "worker".to_owned(),
-        "worker-1".to_owned(),
-        "telemetry".to_owned(),
-    ];
+    let telemetry = worker_telemetry_path("worker-1");
     worker.walk(1, 2, &telemetry).expect("walk telemetry");
     worker
         .open(2, OpenMode::write_append())
@@ -298,11 +309,7 @@ fn queen_spawns_gpu_worker_and_runs_job() {
     assert!(status.contains("\"state\":\"QUEUED\""));
     assert!(status.contains("\"state\":\"OK\""));
 
-    let telemetry_path = vec![
-        "worker".to_owned(),
-        "worker-1".to_owned(),
-        "telemetry".to_owned(),
-    ];
+    let telemetry_path = worker_telemetry_path("worker-1");
     queen
         .walk(1, 4, &telemetry_path)
         .expect("walk telemetry path");
@@ -469,12 +476,15 @@ fn attach_queen(server: &NineDoor) -> InProcessConnection {
 
 fn write_queen_command(client: &mut InProcessConnection, payload: &str) {
     let path = vec!["queen".to_owned(), "ctl".to_owned()];
-    client.walk(1, 2, &path).expect("walk /queen/ctl");
+    let fid = next_fid();
+    client.walk(1, fid, &path).expect("walk /queen/ctl");
     client
-        .open(2, OpenMode::write_append())
+        .open(fid, OpenMode::write_append())
         .expect("open /queen/ctl");
-    client.write(2, payload.as_bytes()).expect("write command");
-    client.clunk(2).expect("clunk ctl fid");
+    client
+        .write(fid, payload.as_bytes())
+        .expect("write command");
+    client.clunk(fid).expect("clunk ctl fid");
 }
 
 fn attach_gpu_worker(server: &NineDoor, id: &str) -> InProcessConnection {
@@ -500,7 +510,7 @@ fn open_gpu_job_file(client: &mut InProcessConnection, fid: u32, gpu_id: &str) {
 }
 
 fn read_all(client: &mut InProcessConnection, path: &[String]) -> String {
-    let fid = 97;
+    let fid = next_fid();
     client.walk(1, fid, path).expect("walk read path");
     client
         .open(fid, OpenMode::read_only())
@@ -522,6 +532,11 @@ fn read_all(client: &mut InProcessConnection, path: &[String]) -> String {
     }
     client.clunk(fid).expect("clunk read fid");
     String::from_utf8(buffer).expect("path utf8")
+}
+
+fn next_fid() -> u32 {
+    static NEXT_FID: AtomicU32 = AtomicU32::new(100);
+    NEXT_FID.fetch_add(1, Ordering::Relaxed)
 }
 
 #[derive(Debug)]

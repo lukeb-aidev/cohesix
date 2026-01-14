@@ -45,6 +45,13 @@ pub struct Secure9pLimits {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct ShardingConfig {
+    pub enabled: bool,
+    pub shard_bits: u8,
+    pub legacy_worker_alias: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum TelemetryFrameSchema {
     LegacyPlaintext,
     CborV1,
@@ -111,12 +118,14 @@ pub struct AuditConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.2";
-pub const MANIFEST_SHA256: &str = "6f58dd705b235b26f0b3524f4a5d632d664015be6338c06e4953257ea0c83413";
+pub const MANIFEST_SHA256: &str = "441642311a4ea259051a9f0b50b6d1ee74b16f51ae6c8d3c5793fe17a733ecf3";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
 pub const CACHE_POLICY: CachePolicy = bootstrap::CACHE_POLICY;
 pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;
+pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;
+pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();
 pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;
 pub const HOST_CONFIG: HostConfig = bootstrap::HOST_CONFIG;
 pub const POLICY_CONFIG: PolicyConfig = bootstrap::POLICY_CONFIG;
@@ -142,6 +151,14 @@ pub const fn cache_policy() -> CachePolicy {
 
 pub const fn secure9p_limits() -> Secure9pLimits {
     bootstrap::SECURE9P_LIMITS
+}
+
+pub const fn sharding_config() -> ShardingConfig {
+    bootstrap::SHARDING_CONFIG
+}
+
+pub const fn shard_labels() -> &'static [&'static str] {
+    &bootstrap::SHARD_LABELS
 }
 
 pub const fn telemetry_config() -> TelemetryConfig {

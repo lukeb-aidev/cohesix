@@ -181,3 +181,185 @@ secret = "bootstrap"
     let err = compile(&options).expect_err("manifest should be rejected");
     assert!(err.to_string().contains("cache.kernel_ops"));
 }
+
+#[test]
+fn sharding_shard_bits_over_max_rejected() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let manifest = r#"
+# Author: Lukas Bower
+# Purpose: Invalid sharding manifest sample for coh-rtc tests.
+[root_task]
+schema = "1.2"
+
+[profile]
+name = "virt-aarch64"
+kernel = true
+
+[event_pump]
+tick_ms = 5
+
+[secure9p]
+msize = 8192
+walk_depth = 8
+tags_per_session = 4
+batch_frames = 1
+
+[secure9p.short_write]
+policy = "reject"
+
+[features]
+net_console = false
+serial_console = true
+std_console = false
+std_host_tools = false
+
+[sharding]
+enabled = true
+shard_bits = 9
+legacy_worker_alias = true
+
+[[tickets]]
+role = "queen"
+secret = "bootstrap"
+"#;
+
+    let manifest_path = temp_dir.path().join("bad-sharding.toml");
+    fs::write(&manifest_path, manifest).expect("write manifest");
+
+    let options = CompileOptions {
+        manifest_path,
+        out_dir: temp_dir.path().join("out"),
+        manifest_out: temp_dir.path().join("resolved.json"),
+        cli_script_out: temp_dir.path().join("boot_v0.coh"),
+        doc_snippet_out: temp_dir.path().join("snippet.md"),
+        cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
+    };
+
+    let err = compile(&options).expect_err("manifest should be rejected");
+    assert!(err.to_string().contains("sharding.shard_bits"));
+}
+
+#[test]
+fn legacy_worker_paths_rejected_when_alias_disabled() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let manifest = r#"
+# Author: Lukas Bower
+# Purpose: Invalid alias manifest sample for coh-rtc tests.
+[root_task]
+schema = "1.2"
+
+[profile]
+name = "virt-aarch64"
+kernel = true
+
+[event_pump]
+tick_ms = 5
+
+[secure9p]
+msize = 8192
+walk_depth = 8
+tags_per_session = 4
+batch_frames = 1
+
+[secure9p.short_write]
+policy = "reject"
+
+[features]
+net_console = false
+serial_console = true
+std_console = false
+std_host_tools = false
+
+[namespaces]
+role_isolation = true
+
+[[namespaces.mounts]]
+service = "legacy-worker"
+target = ["worker", "self"]
+
+[sharding]
+enabled = true
+shard_bits = 8
+legacy_worker_alias = false
+
+[[tickets]]
+role = "queen"
+secret = "bootstrap"
+"#;
+
+    let manifest_path = temp_dir.path().join("bad-alias.toml");
+    fs::write(&manifest_path, manifest).expect("write manifest");
+
+    let options = CompileOptions {
+        manifest_path,
+        out_dir: temp_dir.path().join("out"),
+        manifest_out: temp_dir.path().join("resolved.json"),
+        cli_script_out: temp_dir.path().join("boot_v0.coh"),
+        doc_snippet_out: temp_dir.path().join("snippet.md"),
+        cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
+    };
+
+    let err = compile(&options).expect_err("manifest should be rejected");
+    assert!(err
+        .to_string()
+        .contains("references legacy /worker paths"));
+}
+
+#[test]
+fn sharding_requires_walk_depth() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let manifest = r#"
+# Author: Lukas Bower
+# Purpose: Invalid walk depth manifest sample for coh-rtc tests.
+[root_task]
+schema = "1.2"
+
+[profile]
+name = "virt-aarch64"
+kernel = true
+
+[event_pump]
+tick_ms = 5
+
+[secure9p]
+msize = 8192
+walk_depth = 4
+tags_per_session = 4
+batch_frames = 1
+
+[secure9p.short_write]
+policy = "reject"
+
+[features]
+net_console = false
+serial_console = true
+std_console = false
+std_host_tools = false
+
+[sharding]
+enabled = true
+shard_bits = 8
+legacy_worker_alias = true
+
+[[tickets]]
+role = "queen"
+secret = "bootstrap"
+"#;
+
+    let manifest_path = temp_dir.path().join("bad-walk-depth.toml");
+    fs::write(&manifest_path, manifest).expect("write manifest");
+
+    let options = CompileOptions {
+        manifest_path,
+        out_dir: temp_dir.path().join("out"),
+        manifest_out: temp_dir.path().join("resolved.json"),
+        cli_script_out: temp_dir.path().join("boot_v0.coh"),
+        doc_snippet_out: temp_dir.path().join("snippet.md"),
+        cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
+    };
+
+    let err = compile(&options).expect_err("manifest should be rejected");
+    assert!(err
+        .to_string()
+        .contains("sharding.enabled requires secure9p.walk_depth >= 5"));
+}

@@ -13,6 +13,7 @@ use std::path::Path;
 pub struct DocFragments {
     pub schema_md: String,
     pub namespace_md: String,
+    pub sharding_md: String,
     pub ecosystem_md: String,
 }
 
@@ -143,6 +144,24 @@ impl DocFragments {
             manifest.namespaces.role_isolation
         )
         .ok();
+        writeln!(
+            schema_md,
+            "- `sharding.enabled`: `{}`",
+            manifest.sharding.enabled
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `sharding.shard_bits`: `{}`",
+            manifest.sharding.shard_bits
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `sharding.legacy_worker_alias`: `{}`",
+            manifest.sharding.legacy_worker_alias
+        )
+        .ok();
         writeln!(schema_md, "- `tickets`: {} entries", manifest.tickets.len()).ok();
         writeln!(schema_md, "- `manifest.sha256`: `{}`", manifest_hash).ok();
 
@@ -159,6 +178,53 @@ impl DocFragments {
                 };
                 writeln!(namespace_md, "- service `{}` → `{}`", mount.service, target).ok();
             }
+        }
+
+        let mut sharding_md = String::new();
+        writeln!(sharding_md, "### Sharded worker namespace (generated)").ok();
+        writeln!(
+            sharding_md,
+            "- `sharding.enabled`: `{}`",
+            manifest.sharding.enabled
+        )
+        .ok();
+        writeln!(
+            sharding_md,
+            "- `sharding.shard_bits`: `{}`",
+            manifest.sharding.shard_bits
+        )
+        .ok();
+        writeln!(
+            sharding_md,
+            "- `sharding.legacy_worker_alias`: `{}`",
+            manifest.sharding.legacy_worker_alias
+        )
+        .ok();
+        let shard_labels = build_shard_labels(manifest);
+        if manifest.sharding.enabled {
+            let range = render_shard_range(&shard_labels);
+            writeln!(
+                sharding_md,
+                "- shard labels: `{range}` (count: {})",
+                shard_labels.len()
+            )
+            .ok();
+            writeln!(
+                sharding_md,
+                "- canonical worker path: `/shard/<label>/worker/<id>/telemetry`"
+            )
+            .ok();
+            if manifest.sharding.legacy_worker_alias {
+                writeln!(sharding_md, "- legacy alias: `/worker/<id>/telemetry`").ok();
+            } else {
+                writeln!(sharding_md, "- legacy alias: `(disabled)`").ok();
+            }
+        } else {
+            writeln!(
+                sharding_md,
+                "- sharding disabled; worker path: `/worker/<id>/telemetry`"
+            )
+            .ok();
         }
 
         let mut ecosystem_md = String::new();
@@ -291,6 +357,7 @@ impl DocFragments {
         Self {
             schema_md,
             namespace_md,
+            sharding_md,
             ecosystem_md,
         }
     }
@@ -307,6 +374,8 @@ pub fn emit_doc_snippet(manifest_hash: &str, docs: &DocFragments, path: &Path) -
     writeln!(contents, "{}", docs.schema_md.trim_end())?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.namespace_md.trim_end())?;
+    writeln!(contents)?;
+    writeln!(contents, "{}", docs.sharding_md.trim_end())?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.ecosystem_md.trim_end())?;
     writeln!(contents)?;
@@ -341,5 +410,22 @@ fn format_telemetry_schema(schema: &crate::ir::TelemetryFrameSchema) -> &'static
     match schema {
         crate::ir::TelemetryFrameSchema::LegacyPlaintext => "legacy-plaintext",
         crate::ir::TelemetryFrameSchema::CborV1 => "cbor-v1",
+    }
+}
+
+fn build_shard_labels(manifest: &Manifest) -> Vec<String> {
+    let count = if manifest.sharding.enabled {
+        1usize << manifest.sharding.shard_bits
+    } else {
+        1
+    };
+    (0..count).map(|idx| format!("{:02x}", idx)).collect()
+}
+
+fn render_shard_range(labels: &[String]) -> String {
+    match (labels.first(), labels.last()) {
+        (Some(first), Some(last)) if first == last => first.clone(),
+        (Some(first), Some(last)) => format!("{first}..{last}"),
+        _ => "(none)".to_owned(),
     }
 }

@@ -134,9 +134,11 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "replay_journal.coh:1ff3cc6ac006c47fe8a6f914fb5b079d352a41691c2b5da34cf6441fba4d5a8f"
             .to_owned(),
+        "shard_1k.coh:8e12322ca8b75812b2e97d3c7bcc9a2070ac76b692f0a9ec466b24369cf4dbfc"
+            .to_owned(),
         "tcp_basic.coh:619970b6ff14332bbef80f704c117b4471653bb75f7a6187b27d93fbc16415a7"
             .to_owned(),
-        "telemetry_ring.coh:6402e4b80f374648c317da9d35a1ae2c7cda90719f4d7d68e82d0722c5d1bb7f"
+        "telemetry_ring.coh:7412e91fa6d10175cd695c298a6d80a0bed05264ae75c92167c9a6f9bee5b2f6"
             .to_owned(),
     ]);
     assert_eq!(results, expected);

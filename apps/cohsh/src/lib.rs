@@ -39,6 +39,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::{Role, TicketToken};
+use console_ack_wire::{render_ack, AckLine, AckStatus};
 use log::info;
 use nine_door::{InProcessConnection, NineDoor};
 use secure9p_codec::{OpenMode, SessionId, MAX_MSIZE};
@@ -421,6 +422,7 @@ pub struct NineDoorTransport {
     server: NineDoor,
     connection: Option<InProcessConnection>,
     next_fid: u32,
+    ack_lines: VecDeque<String>,
 }
 
 impl NineDoorTransport {
@@ -430,6 +432,7 @@ impl NineDoorTransport {
             server,
             connection: None,
             next_fid: ROOT_FID,
+            ack_lines: VecDeque::new(),
         }
     }
 
@@ -437,6 +440,22 @@ impl NineDoorTransport {
         let fid = self.next_fid;
         self.next_fid = self.next_fid.wrapping_add(1);
         fid
+    }
+
+    fn push_ack(&mut self, status: AckStatus, verb: &str, detail: Option<&str>) {
+        let mut line = String::new();
+        let ack = AckLine { status, verb, detail };
+        if render_ack(&mut line, &ack).is_ok() {
+            self.ack_lines.push_back(line);
+        }
+    }
+
+    fn role_label(role: Role) -> &'static str {
+        match role {
+            Role::Queen => proto_role_label(ProtoRole::Queen),
+            Role::WorkerHeartbeat => proto_role_label(ProtoRole::Worker),
+            Role::WorkerGpu => proto_role_label(ProtoRole::GpuWorker),
+        }
     }
 
     fn read_lines(&mut self, path: &str) -> Result<Vec<String>> {
@@ -516,10 +535,17 @@ impl Transport for NineDoorTransport {
         };
         let attach_result =
             connection.attach_with_identity(ROOT_FID, role, subject.as_deref(), ticket_payload);
-        attach_result.context("attach request failed")?;
+        let attach_result = attach_result.context("attach request failed");
+        if let Err(err) = attach_result {
+            let detail = format!("reason={err}");
+            self.push_ack(AckStatus::Err, "ATTACH", Some(detail.as_str()));
+            return Err(err);
+        }
         self.next_fid = ROOT_FID + 1;
         let session = Session::new(connection.session_id(), role);
         self.connection = Some(connection);
+        let detail = format!("role={}", Self::role_label(role));
+        self.push_ack(AckStatus::Ok, "ATTACH", Some(detail.as_str()));
         Ok(session)
     }
 
@@ -541,41 +567,116 @@ impl Transport for NineDoorTransport {
     }
 
     fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
-        self.read_lines(path)
+        match self.read_lines(path) {
+            Ok(lines) => {
+                let detail = format!("path={path}");
+                self.push_ack(AckStatus::Ok, "TAIL", Some(detail.as_str()));
+                Ok(lines)
+            }
+            Err(err) => {
+                let detail = format!("path={path} reason={err}");
+                self.push_ack(AckStatus::Err, "TAIL", Some(detail.as_str()));
+                Err(err)
+            }
+        }
     }
 
     fn read(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
-        self.read_lines(path)
+        match self.read_lines(path) {
+            Ok(lines) => {
+                let detail = format!("path={path}");
+                self.push_ack(AckStatus::Ok, "CAT", Some(detail.as_str()));
+                Ok(lines)
+            }
+            Err(err) => {
+                let detail = format!("path={path} reason={err}");
+                self.push_ack(AckStatus::Err, "CAT", Some(detail.as_str()));
+                Err(err)
+            }
+        }
     }
 
     fn list(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
-        self.read_lines(path)
+        match self.read_lines(path) {
+            Ok(lines) => {
+                let detail = format!("path={path}");
+                self.push_ack(AckStatus::Ok, "LS", Some(detail.as_str()));
+                Ok(lines)
+            }
+            Err(err) => {
+                let detail = format!("path={path} reason={err}");
+                self.push_ack(AckStatus::Err, "LS", Some(detail.as_str()));
+                Err(err)
+            }
+        }
     }
 
     fn write(&mut self, _session: &Session, path: &str, payload: &[u8]) -> Result<()> {
-        let components = parse_path(path)?;
+        let verb = if path == QUEEN_CTL_PATH {
+            if let Ok(payload_text) = std::str::from_utf8(payload) {
+                if payload_text.contains("\"kill\"") {
+                    "KILL"
+                } else if payload_text.contains("\"spawn\"") {
+                    "SPAWN"
+                } else {
+                    "ECHO"
+                }
+            } else {
+                "ECHO"
+            }
+        } else {
+            "ECHO"
+        };
+        let components = match parse_path(path) {
+            Ok(components) => components,
+            Err(err) => {
+                let detail = format!("path={path} reason={err}");
+                self.push_ack(AckStatus::Err, verb, Some(detail.as_str()));
+                return Err(err);
+            }
+        };
         let fid = self.allocate_fid();
-        let connection = self
-            .connection
-            .as_mut()
-            .context("attach to a session before running write")?;
-        connection
-            .walk(ROOT_FID, fid, &components)
-            .with_context(|| format!("failed to walk to {path}"))?;
-        connection
-            .open(fid, OpenMode::write_append())
-            .with_context(|| format!("failed to open {path}"))?;
-        let written = connection
-            .write(fid, payload)
-            .with_context(|| format!("failed to write {path}"))?;
-        connection.clunk(fid).context("failed to clunk fid")?;
+        let result = (|| {
+            let connection = self
+                .connection
+                .as_mut()
+                .context("attach to a session before running write")?;
+            connection
+                .walk(ROOT_FID, fid, &components)
+                .with_context(|| format!("failed to walk to {path}"))?;
+            connection
+                .open(fid, OpenMode::write_append())
+                .with_context(|| format!("failed to open {path}"))?;
+            let written = connection
+                .write(fid, payload)
+                .with_context(|| format!("failed to write {path}"))?;
+            connection.clunk(fid).context("failed to clunk fid")?;
+            Ok(written)
+        })();
+        let written = match result {
+            Ok(written) => written,
+            Err(err) => {
+                let detail = format!("path={path} reason={err}");
+                self.push_ack(AckStatus::Err, verb, Some(detail.as_str()));
+                return Err(err);
+            }
+        };
         if written as usize != payload.len() {
-            return Err(anyhow!(
+            let err = anyhow!(
                 "short write to {path}: expected {} bytes, wrote {written}",
                 payload.len()
-            ));
+            );
+            let detail = format!("path={path} reason={err}");
+            self.push_ack(AckStatus::Err, verb, Some(detail.as_str()));
+            return Err(err);
         }
+        let detail = format!("path={path} bytes={}", payload.len());
+        self.push_ack(AckStatus::Ok, verb, Some(detail.as_str()));
         Ok(())
+    }
+
+    fn drain_acknowledgements(&mut self) -> Vec<String> {
+        self.ack_lines.drain(..).collect()
     }
 }
 
@@ -2421,7 +2522,7 @@ fn should_skip_no_mutate(keyword: &str, line: &str) -> bool {
         "tail" => line
             .split_whitespace()
             .nth(1)
-            .map(|path| path.starts_with("/worker/"))
+            .map(|path| path.starts_with("/worker/") || path.starts_with("/shard/"))
             .unwrap_or(false),
         _ => false,
     }

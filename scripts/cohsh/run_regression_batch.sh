@@ -11,6 +11,7 @@ BASE_SCRIPTS=(
     "9p_batch.coh"
     "host_absent.coh"
     "telemetry_ring.coh"
+    "shard_1k.coh"
     "observe_watch.coh"
     "cas_roundtrip.coh"
     "tcp_basic.coh"
@@ -151,6 +152,9 @@ run_cohsh() {
             ;;
         telemetry_ring.coh)
             "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/telemetry_ring.coh
+            ;;
+        shard_1k.coh)
+            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/shard_1k.coh
             ;;
         observe_watch.coh)
             "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/observe_watch.coh

@@ -163,7 +163,7 @@ Each signage hub is a hive with one Queen orchestrating multiple workers, all co
 
 ### 25) Kubernetes coexistence: Cohesix as the secure out‑of‑band orchestrator
 **Why:** Kubernetes stays the workload plane while Cohesix is the control‑plane boundary exposing file APIs for lifecycle, telemetry, GPU leasing, and updates.
-**Needs:** Kubernetes sidecar bridge on the host mapping K8s operations into `/queen/...` and `/worker/...`, identity mapping, RBAC→tickets.
+**Needs:** Kubernetes sidecar bridge on the host mapping K8s operations into `/queen/...` and `/shard/...` (legacy `/worker/...` when enabled), identity mapping, RBAC→tickets.
 **Constraints:** avoid duplicating K8s; clear separation of responsibilities.
 
 ### 26) Edge learning feedback loop (LoRA / PEFT, control-plane only)
@@ -209,8 +209,8 @@ flowchart LR
   CAM -->|"telemetry/video"| W2
   PLC -->|"fieldbus"| OT
   OT -->|"mirrored files<br/>into namespace"| Q
-  W1 -->|"append telemetry<br/>/worker/<id>/telemetry"| Q
-  W2 -->|"append summaries<br/>/worker/<id>/telemetry"| Q
+  W1 -->|"append telemetry<br/>/shard/<label>/worker/<id>/telemetry"| Q
+  W2 -->|"append summaries<br/>/shard/<label>/worker/<id>/telemetry"| Q
   W3 -->|"control + status"| Q
 
   Q -->|"ticketed orchestration<br/>/queen/ctl"| W1

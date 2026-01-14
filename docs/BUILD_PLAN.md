@@ -19,11 +19,11 @@ preparing and executing tasks.
 
 Cohesix is a hive-style orchestrator: one Queen coordinating many workers via a shared Secure9P namespace and commanded through `cohsh`.
 
-**Current Status Snapshot (through Milestone 9)**
-- Milestones 0–9 are implemented: the cooperative event pump, PL011 root console, TCP console listener, Secure9P namespace, HAL-backed device mapping, manifest-driven `coh-rtc` compiler, cache-safe DMA plumbing, in-session `coh> test` with preinstalled `.coh` scripts, and Secure9P pipelining/batching are live and reflected in the architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
+**Current Status Snapshot (through Milestone 14)**
+- Milestones 0–14 are implemented: the cooperative event pump, PL011 root console, TCP console listener, Secure9P namespace, HAL-backed device mapping, manifest-driven `coh-rtc` compiler, cache-safe DMA plumbing, in-session `coh> test` with preinstalled `.coh` scripts, Secure9P pipelining/batching, telemetry rings + cursor retention, host-sidecar `/host` gating, PolicyFS/AuditFS/ReplayFS, and sharded worker namespaces with per-shard fid tables are live and reflected in the architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
 - Dual consoles run concurrently; the TCP listener is non-blocking and mirrors serial semantics while keeping PL011 always-on for recovery. The `coh> test` command exercises real server-hosted regression scripts for quick/full verification.
 - NineDoor attach/namespace semantics follow `SECURE9P.md` and role mounts from `ROLES_AND_SCHEDULING.md`; worker-heart and worker-gpu are scoped to their documented namespaces, with GPU hardware remaining host-side via `gpu-bridge-host`.
-- Remaining milestones focus on telemetry rings, cursor resumption, and future control-plane extensions described below.
+- Remaining milestones focus on client concurrency, session pooling, and forward control-plane extensions described below.
 
 ## seL4 Reference Manual Alignment (v13.0.0)
 
@@ -1130,7 +1130,9 @@ Introduce manifest-driven namespace sharding with optional legacy aliases.
 - `crates/secure9p-core` exposes a sharded fid table ensuring per-shard locking and eliminating global mutex contention.
 - Manifest IR v1.2 additions: `sharding.enabled`, `sharding.shard_bits`, `sharding.legacy_worker_alias`. Validation enforces `shard_bits ≤ 8` and forbids aliases when depth would exceed limits.
 - Docs updates in `docs/ROLES_AND_SCHEDULING.md` describing shard hashing (`sha256(worker_id)[0..=shard_bits)`), alias behaviour, and operational guidance.
-- TODO: Implement scripts/cohsh/shard_1k.coh and add it to regression pack DoD.
+- `scripts/cohsh/shard_1k.coh` added to the regression pack DoD.
+
+**Status:** Complete — sharded layouts, fid tables, manifest validation, CLI/regression coverage, and docs are aligned; regression pack is green.
 
 **Commands**
 - `cargo test -p nine-door`

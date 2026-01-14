@@ -38,6 +38,11 @@ std_host_tools = false
 [namespaces]
 role_isolation = true
 
+[sharding]
+enabled = true
+shard_bits = 8
+legacy_worker_alias = true
+
 [telemetry]
 ring_bytes_per_worker = 1024
 frame_schema = "legacy-plaintext"

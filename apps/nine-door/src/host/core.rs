@@ -4,6 +4,7 @@
 // Author: Lukas Bower
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,7 +17,9 @@ use secure9p_codec::{
     Codec, ErrorCode, OpenMode, Qid, Request, RequestBody, Response, ResponseBody, SessionId,
     MAX_MSIZE, VERSION,
 };
-use secure9p_core::{FidTable, QueueDepth, QueueError, SessionLimits, TagError, TagWindow};
+use secure9p_core::{
+    FidError, QueueDepth, QueueError, SessionLimits, ShardedFidTable, TagError, TagWindow,
+};
 use trace_model::TraceLevel;
 use worker_gpu::{GpuLease as WorkerGpuLease, JobDescriptor};
 
@@ -29,7 +32,10 @@ use super::audit::{
     AuditConfig, AuditStore, ControlOutcome, PolicyActionDecision as AuditPolicyActionDecision,
     PolicyGateDecision as AuditPolicyGateDecision, ReplayWindowError,
 };
-use super::namespace::{AuditNamespaceConfig, HostNamespaceConfig, Namespace, PolicyNamespaceConfig, ReplayNamespaceConfig};
+use super::namespace::{
+    AuditNamespaceConfig, HostNamespaceConfig, Namespace, PolicyNamespaceConfig, ReplayNamespaceConfig,
+    ShardLayout,
+};
 use super::policy::{
     PolicyActionAudit, PolicyConfig, PolicyDecision, PolicyGateAllowance, PolicyGateDecision,
     PolicyGateDenial, PolicyStore,
@@ -69,6 +75,7 @@ impl ServerCore {
         limits: SessionLimits,
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
+        shards: ShardLayout,
         host: HostNamespaceConfig,
         policy: PolicyConfig,
         audit: AuditConfig,
@@ -97,6 +104,7 @@ impl ServerCore {
             control: ControlPlane::new(
                 telemetry,
                 telemetry_manifest,
+                shards,
                 host,
                 policy_namespace,
                 policy_store,
@@ -121,6 +129,48 @@ impl ServerCore {
         self.sessions
             .insert(id, SessionState::new(now, self.limits));
         id
+    }
+
+    fn refresh_proc_sessions(&mut self, current: Option<&SessionState>) -> Result<(), NineDoorError> {
+        let shards = self.control.namespace().shard_layout();
+        let mut shard_counts = vec![0usize; shards.shard_count()];
+        let mut worker_sessions = 0usize;
+        for state in self.sessions.values() {
+            if let Some(worker_id) = state.worker_id() {
+                worker_sessions = worker_sessions.saturating_add(1);
+                let shard = shards.worker_shard(worker_id) as usize;
+                if let Some(entry) = shard_counts.get_mut(shard) {
+                    *entry = entry.saturating_add(1);
+                }
+            }
+        }
+        let mut total_sessions = self.sessions.len();
+        if let Some(state) = current {
+            total_sessions = total_sessions.saturating_add(1);
+            if let Some(worker_id) = state.worker_id() {
+                worker_sessions = worker_sessions.saturating_add(1);
+                let shard = shards.worker_shard(worker_id) as usize;
+                if let Some(entry) = shard_counts.get_mut(shard) {
+                    *entry = entry.saturating_add(1);
+                }
+            }
+        }
+        let mut payload = String::new();
+        let _ = writeln!(
+            payload,
+            "sessions total={} worker={} shard_bits={} shard_count={}",
+            total_sessions,
+            worker_sessions,
+            shards.shard_bits(),
+            shards.shard_count()
+        );
+        for (idx, label) in shards.shard_labels().iter().enumerate() {
+            let count = shard_counts.get(idx).copied().unwrap_or(0);
+            let _ = writeln!(payload, "shard {} {}", label, count);
+        }
+        self.control
+            .namespace_mut()
+            .set_proc_sessions_payload(payload.as_bytes())
     }
 
     pub(crate) fn register_service(
@@ -550,12 +600,6 @@ impl ServerCore {
                 "version negotiation required before attach",
             ));
         }
-        if state.has_fid(fid) {
-            return Err(NineDoorError::protocol(
-                ErrorCode::Busy,
-                format!("fid {fid} already in use"),
-            ));
-        }
         let (role, identity) = parse_role_from_uname(uname)?;
         let ticket = ticket.trim();
         let mut ticket_payload = None;
@@ -668,8 +712,11 @@ impl ServerCore {
         }
         state.set_ticket(ticket_payload);
         let qid = self.control.namespace().root_qid();
-        state.insert_fid(fid, Vec::new(), Vec::new(), qid);
+        if let Err(err) = state.insert_fid(fid, Vec::new(), Vec::new(), qid) {
+            return Err(fid_insert_error(fid, err));
+        }
         state.mark_attached();
+        self.refresh_proc_sessions(Some(state))?;
         Ok(ResponseBody::Attach { qid })
     }
 
@@ -691,12 +738,29 @@ impl ServerCore {
         let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
         let host_mount = host_mount_owned.as_deref();
         if wnames.is_empty() {
-            state.insert_fid(
+            if newfid == fid {
+                if state
+                    .with_fid_mut(fid, |entry| {
+                        entry.view_path = existing.view_path.clone();
+                        entry.canonical_path = existing.canonical_path.clone();
+                        entry.qid = existing.qid;
+                        entry.open_mode = None;
+                    })
+                    .is_none()
+                {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::NotFound,
+                        format!("fid {fid} not found"),
+                    ));
+                }
+            } else if let Err(err) = state.insert_fid(
                 newfid,
                 existing.view_path.clone(),
                 existing.canonical_path.clone(),
                 existing.qid,
-            );
+            ) {
+                return Err(fid_insert_error(newfid, err));
+            }
             return Ok(ResponseBody::Walk { qids: Vec::new() });
         }
         let mut qids = Vec::with_capacity(wnames.len());
@@ -706,13 +770,38 @@ impl ServerCore {
         for component in wnames {
             view_path.push(component.clone());
             let resolved = state.resolve_view_path(&view_path);
-            AccessPolicy::ensure_path(role, worker_id, gpu_scope, host_mount, &resolved)?;
+            let shards = self.control.namespace().shard_layout();
+            AccessPolicy::ensure_path(
+                shards,
+                role,
+                worker_id,
+                gpu_scope,
+                host_mount,
+                &resolved,
+            )?;
             let node = self.control.namespace().lookup(&resolved)?;
             current_qid = node.qid();
             qids.push(current_qid);
             canonical_path = resolved;
         }
-        state.insert_fid(newfid, view_path, canonical_path, current_qid);
+        if newfid == fid {
+            if state
+                .with_fid_mut(fid, |entry| {
+                    entry.view_path = view_path.clone();
+                    entry.canonical_path = canonical_path.clone();
+                    entry.qid = current_qid;
+                    entry.open_mode = None;
+                })
+                .is_none()
+            {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::NotFound,
+                    format!("fid {fid} not found"),
+                ));
+            }
+        } else if let Err(err) = state.insert_fid(newfid, view_path, canonical_path, current_qid) {
+            return Err(fid_insert_error(newfid, err));
+        }
         Ok(ResponseBody::Walk { qids })
     }
 
@@ -731,48 +820,53 @@ impl ServerCore {
         let host_mount = host_mount_owned.as_deref();
         let ticket = state.ticket().map(str::to_owned);
         let iounit = state.negotiated_msize();
-        let qid = {
-            let entry = state.fid_mut(fid).ok_or_else(|| {
-                NineDoorError::protocol(ErrorCode::NotFound, format!("fid {fid} not found"))
-            })?;
-            if mode.allows_write() {
-                if let Some(target) = host_write_target(&entry.canonical_path, host_mount) {
-                    if role != Some(Role::Queen) {
-                        self.control.record_host_write_audit(
-                            &target,
-                            HostWriteOutcome::Denied,
-                            role,
-                            ticket.as_deref(),
-                            None,
-                        )?;
-                        return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
-                    }
+        let entry = state.fid(fid).ok_or_else(|| {
+            NineDoorError::protocol(ErrorCode::NotFound, format!("fid {fid} not found"))
+        })?;
+        if mode.allows_write() {
+            if let Some(target) = host_write_target(&entry.canonical_path, host_mount) {
+                if role != Some(Role::Queen) {
+                    self.control.record_host_write_audit(
+                        &target,
+                        HostWriteOutcome::Denied,
+                        role,
+                        ticket.as_deref(),
+                        None,
+                    )?;
+                    return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
                 }
             }
-            AccessPolicy::ensure_open(
-                role,
-                worker_id,
-                gpu_scope,
-                host_mount,
-                &entry.canonical_path,
-                mode,
-            )?;
-            let node = self.control.namespace().lookup(&entry.canonical_path)?;
-            if node.is_directory() && mode.allows_write() {
-                return Err(NineDoorError::protocol(
-                    ErrorCode::Permission,
-                    "cannot write directories",
-                ));
-            }
-            if mode.allows_write() && !node.qid().ty().is_append_only() {
-                return Err(NineDoorError::protocol(
-                    ErrorCode::Permission,
-                    "fid is not append-only",
-                ));
-            }
-            entry.open_mode = Some(mode);
-            node.qid()
-        };
+        }
+        let shards = self.control.namespace().shard_layout();
+        AccessPolicy::ensure_open(
+            shards,
+            role,
+            worker_id,
+            gpu_scope,
+            host_mount,
+            &entry.canonical_path,
+            mode,
+        )?;
+        let node = self.control.namespace().lookup(&entry.canonical_path)?;
+        if node.is_directory() && mode.allows_write() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                "cannot write directories",
+            ));
+        }
+        if mode.allows_write() && !node.qid().ty().is_append_only() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                "fid is not append-only",
+            ));
+        }
+        if state.with_fid_mut(fid, |entry| entry.open_mode = Some(mode)).is_none() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::NotFound,
+                format!("fid {fid} not found"),
+            ));
+        }
+        let qid = node.qid();
         Ok(ResponseBody::Open { qid, iounit })
     }
 
@@ -799,7 +893,9 @@ impl ServerCore {
         let gpu_scope = gpu_scope_owned.as_deref();
         let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
         let host_mount = host_mount_owned.as_deref();
+        let shards = self.control.namespace().shard_layout();
         AccessPolicy::ensure_read(
+            shards,
             state.role(),
             state.worker_id(),
             gpu_scope,
@@ -830,7 +926,7 @@ impl ServerCore {
         let host_mount = host_mount_owned.as_deref();
         let ticket = state.ticket().map(str::to_owned);
         let path = {
-            let entry = state.fid_mut(fid).ok_or_else(|| {
+            let entry = state.fid(fid).ok_or_else(|| {
                 NineDoorError::protocol(ErrorCode::NotFound, format!("fid {fid} not found"))
             })?;
             let mode = entry.open_mode.ok_or_else(|| {
@@ -908,7 +1004,8 @@ impl ServerCore {
                 return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
             }
         }
-        AccessPolicy::ensure_write(role, worker_id, gpu_scope, host_mount, &path)?;
+        let shards = *self.control.namespace().shard_layout();
+        AccessPolicy::ensure_write(&shards, role, worker_id, gpu_scope, host_mount, &path)?;
         if policy_enabled {
             let decision = self.control.consume_policy_gate(&path)?;
             match decision {
@@ -947,7 +1044,7 @@ impl ServerCore {
             }
         }
         let telemetry_write = worker_id
-            .map(|id| is_worker_telemetry_path(&path, id))
+            .map(|id| is_worker_telemetry_path(&shards, &path, id))
             .unwrap_or(false);
         if telemetry_write {
             if let Err(reason) = state.consume_tick() {
@@ -972,7 +1069,15 @@ impl ServerCore {
             for event in &events {
                 match event {
                     QueenEvent::Bound { target, mount } | QueenEvent::Mounted { target, mount } => {
-                        state.apply_mount(role, worker_id, gpu_scope, host_mount, target, mount)?;
+                        state.apply_mount(
+                            &shards,
+                            role,
+                            worker_id,
+                            gpu_scope,
+                            host_mount,
+                            target,
+                            mount,
+                        )?;
                     }
                     _ => {}
                 }
@@ -1101,6 +1206,7 @@ impl ControlPlane {
     fn new(
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
+        shards: ShardLayout,
         host: HostNamespaceConfig,
         policy_namespace: PolicyNamespaceConfig,
         policy: PolicyStore,
@@ -1113,6 +1219,7 @@ impl ControlPlane {
             namespace: Namespace::new_with_telemetry_manifest_host_policy(
                 telemetry,
                 telemetry_manifest,
+                shards,
                 host,
                 policy_namespace,
                 audit_namespace,
@@ -1971,7 +2078,7 @@ enum QueenEvent {
 struct SessionState {
     msize: Option<u32>,
     attached: bool,
-    fids: FidTable<FidState>,
+    fids: ShardedFidTable<FidState>,
     role: Option<Role>,
     worker_id: Option<String>,
     gpu_scope: Option<String>,
@@ -1989,7 +2096,7 @@ impl SessionState {
         Self {
             msize: None,
             attached: false,
-            fids: FidTable::new(),
+            fids: ShardedFidTable::default(),
             role: None,
             worker_id: None,
             gpu_scope: None,
@@ -2030,17 +2137,13 @@ impl SessionState {
         }
     }
 
-    fn has_fid(&self, fid: u32) -> bool {
-        self.fids.contains(&fid)
-    }
-
     fn insert_fid(
         &mut self,
         fid: u32,
         view_path: Vec<String>,
         canonical_path: Vec<String>,
         qid: Qid,
-    ) {
+    ) -> Result<(), FidError> {
         self.fids.insert(
             fid,
             FidState {
@@ -2049,19 +2152,19 @@ impl SessionState {
                 qid,
                 open_mode: None,
             },
-        );
+        )
     }
 
-    fn fid(&self, fid: u32) -> Option<&FidState> {
-        self.fids.get(&fid)
+    fn fid(&self, fid: u32) -> Option<FidState> {
+        self.fids.get(fid)
     }
 
-    fn fid_mut(&mut self, fid: u32) -> Option<&mut FidState> {
-        self.fids.get_mut(&fid)
+    fn with_fid_mut<R>(&self, fid: u32, f: impl FnOnce(&mut FidState) -> R) -> Option<R> {
+        self.fids.with_entry_mut(fid, f)
     }
 
     fn remove_fid(&mut self, fid: u32) -> Option<FidState> {
-        self.fids.remove(&fid)
+        self.fids.remove(fid)
     }
 
     fn configure_role(
@@ -2123,6 +2226,7 @@ impl SessionState {
 
     fn apply_mount(
         &mut self,
+        shards: &ShardLayout,
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
@@ -2130,7 +2234,7 @@ impl SessionState {
         target: &[String],
         mount: &[String],
     ) -> Result<(), NineDoorError> {
-        AccessPolicy::ensure_path(role, worker_id, gpu_scope, host_mount, target)?;
+        AccessPolicy::ensure_path(shards, role, worker_id, gpu_scope, host_mount, target)?;
         self.mounts.bind(target.to_vec(), mount.to_vec())
     }
 
@@ -2270,6 +2374,7 @@ struct AccessPolicy;
 
 impl AccessPolicy {
     fn ensure_open(
+        shards: &ShardLayout,
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
@@ -2277,17 +2382,18 @@ impl AccessPolicy {
         path: &[String],
         mode: OpenMode,
     ) -> Result<(), NineDoorError> {
-        Self::ensure_path(role, worker_id, gpu_scope, host_mount, path)?;
+        Self::ensure_path(shards, role, worker_id, gpu_scope, host_mount, path)?;
         if mode.allows_write() {
-            Self::ensure_write(role, worker_id, gpu_scope, host_mount, path)?;
+            Self::ensure_write(shards, role, worker_id, gpu_scope, host_mount, path)?;
         }
         if mode.allows_read() {
-            Self::ensure_read(role, worker_id, gpu_scope, host_mount, path)?;
+            Self::ensure_read(shards, role, worker_id, gpu_scope, host_mount, path)?;
         }
         Ok(())
     }
 
     fn ensure_read(
+        shards: &ShardLayout,
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
@@ -2297,7 +2403,9 @@ impl AccessPolicy {
         match role {
             Some(Role::Queen) => Ok(()),
             Some(Role::WorkerHeartbeat) => {
-                if host_allowed_path(host_mount, path) || worker_allowed_path(worker_id, path) {
+                if host_allowed_path(host_mount, path)
+                    || worker_allowed_path(shards, worker_id, path)
+                {
                     Ok(())
                 } else {
                     Err(Self::permission_denied(path))
@@ -2305,7 +2413,7 @@ impl AccessPolicy {
             }
             Some(Role::WorkerGpu) => {
                 if host_allowed_path(host_mount, path)
-                    || worker_allowed_path(worker_id, path)
+                    || worker_allowed_path(shards, worker_id, path)
                     || gpu_allowed_read(gpu_scope, path)
                 {
                     Ok(())
@@ -2321,6 +2429,7 @@ impl AccessPolicy {
     }
 
     fn ensure_write(
+        shards: &ShardLayout,
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
@@ -2332,7 +2441,7 @@ impl AccessPolicy {
             Some(Role::WorkerHeartbeat) => {
                 if host_allowed_path(host_mount, path) {
                     Err(Self::permission_denied(path))
-                } else if worker_allowed_write(worker_id, path) {
+                } else if worker_allowed_write(shards, worker_id, path) {
                     Ok(())
                 } else {
                     Err(Self::permission_denied(path))
@@ -2341,7 +2450,7 @@ impl AccessPolicy {
             Some(Role::WorkerGpu) => {
                 if host_allowed_path(host_mount, path) {
                     Err(Self::permission_denied(path))
-                } else if worker_allowed_write(worker_id, path)
+                } else if worker_allowed_write(shards, worker_id, path)
                     || gpu_allowed_write(gpu_scope, path)
                 {
                     Ok(())
@@ -2357,6 +2466,7 @@ impl AccessPolicy {
     }
 
     fn ensure_path(
+        shards: &ShardLayout,
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
@@ -2366,7 +2476,9 @@ impl AccessPolicy {
         match role {
             Some(Role::Queen) => Ok(()),
             Some(Role::WorkerHeartbeat) => {
-                if host_allowed_prefix(host_mount, path) || worker_allowed_prefix(worker_id, path) {
+                if host_allowed_prefix(host_mount, path)
+                    || worker_allowed_prefix(shards, worker_id, path)
+                {
                     Ok(())
                 } else {
                     Err(Self::permission_denied(path))
@@ -2374,7 +2486,7 @@ impl AccessPolicy {
             }
             Some(Role::WorkerGpu) => {
                 if host_allowed_prefix(host_mount, path)
-                    || worker_allowed_prefix(worker_id, path)
+                    || worker_allowed_prefix(shards, worker_id, path)
                     || gpu_allowed_prefix(gpu_scope, path)
                 {
                     Ok(())
@@ -2397,21 +2509,55 @@ impl AccessPolicy {
     }
 }
 
-fn worker_allowed_prefix(worker_id: Option<&str>, path: &[String]) -> bool {
-    match worker_id {
-        None => false,
-        Some(id) => match path.len() {
-            0 => true,
-            1 => matches!(path[0].as_str(), "proc" | "log" | "worker"),
-            2 => match (path[0].as_str(), path[1].as_str()) {
-                ("proc", "boot") => true,
-                ("log", "queen.log") => true,
-                ("worker", other) => other == id,
-                _ => false,
-            },
-            3 => path[0] == "worker" && path[1] == id && path[2] == "telemetry",
-            _ => false,
-        },
+fn worker_allowed_prefix(shards: &ShardLayout, worker_id: Option<&str>, path: &[String]) -> bool {
+    let Some(id) = worker_id else {
+        return false;
+    };
+    if path.is_empty() {
+        return true;
+    }
+    match path {
+        [first] if first == "proc" || first == "log" => return true,
+        [first, second] if first == "proc" && second == "boot" => return true,
+        [first, second] if first == "log" && second == "queen.log" => return true,
+        _ => {}
+    }
+    if shards.is_enabled() {
+        let shard_label = shards.worker_shard_label(id);
+        let shard_label = shard_label.as_str();
+        match path {
+            [first] if first == "shard" => return true,
+            [first, shard] if first == "shard" => return shard == shard_label,
+            [first, shard, second] if first == "shard" && second == "worker" => {
+                return shard == shard_label
+            }
+            [first, shard, second, worker] if first == "shard" && second == "worker" => {
+                return shard == shard_label && worker == id
+            }
+            [first, shard, second, worker, leaf]
+                if first == "shard" && second == "worker" && leaf == "telemetry" =>
+            {
+                return shard == shard_label && worker == id
+            }
+            _ => {}
+        }
+        if shards.legacy_worker_alias_enabled() {
+            match path {
+                [first] if first == "worker" => return true,
+                [first, worker] if first == "worker" => return worker == id,
+                [first, worker, leaf] if first == "worker" && leaf == "telemetry" => {
+                    return worker == id
+                }
+                _ => {}
+            }
+        }
+        return false;
+    }
+    match path {
+        [first] if first == "worker" => true,
+        [first, worker] if first == "worker" => worker == id,
+        [first, worker, leaf] if first == "worker" && leaf == "telemetry" => worker == id,
+        _ => false,
     }
 }
 
@@ -2423,22 +2569,26 @@ fn host_allowed_path(host_mount: Option<&[String]>, path: &[String]) -> bool {
     host_allowed_prefix(host_mount, path)
 }
 
-fn worker_allowed_path(worker_id: Option<&str>, path: &[String]) -> bool {
-    if !worker_allowed_prefix(worker_id, path) {
+fn worker_allowed_path(shards: &ShardLayout, worker_id: Option<&str>, path: &[String]) -> bool {
+    if !worker_allowed_prefix(shards, worker_id, path) {
         return false;
     }
     match path {
         [] => true,
-        [single] => single != "worker",
-        [first, second] if first == "worker" => second != "self",
+        [first] if first == "worker" => false,
+        [first, second] if first == "worker" && second == "self" => false,
+        [first] if shards.is_enabled() && first == "shard" => false,
+        [first, _] if shards.is_enabled() && first == "shard" => false,
+        [first, _, second] if shards.is_enabled() && first == "shard" && second == "worker" => {
+            false
+        }
         _ => true,
     }
 }
 
-fn worker_allowed_write(worker_id: Option<&str>, path: &[String]) -> bool {
+fn worker_allowed_write(shards: &ShardLayout, worker_id: Option<&str>, path: &[String]) -> bool {
     match worker_id {
-        Some(id) => matches!(path, [first, second, third]
-            if first == "worker" && second == id && third == "telemetry"),
+        Some(id) => shards.is_worker_telemetry_path(path, id),
         None => false,
     }
 }
@@ -2491,9 +2641,21 @@ fn min_budget_field(record: Option<u64>, override_budget: Option<u64>) -> Option
     }
 }
 
-fn is_worker_telemetry_path(path: &[String], worker_id: &str) -> bool {
-    matches!(path, [first, second, third]
-        if first == "worker" && second == worker_id && third == "telemetry")
+fn fid_insert_error(fid: u32, err: FidError) -> NineDoorError {
+    match err {
+        FidError::InUse => NineDoorError::protocol(
+            ErrorCode::Busy,
+            format!("fid {fid} already in use"),
+        ),
+        FidError::Retired => NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("fid {fid} was clunked"),
+        ),
+    }
+}
+
+fn is_worker_telemetry_path(shards: &ShardLayout, path: &[String], worker_id: &str) -> bool {
+    shards.is_worker_telemetry_path(path, worker_id)
 }
 
 fn is_gpu_job_path(path: &[String], scope: &str) -> bool {
@@ -2631,6 +2793,7 @@ mod tests {
     use crate::{InProcessConnection, NineDoor};
     use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
     use secure9p_codec::OpenMode;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -2639,11 +2802,7 @@ mod tests {
         let server = NineDoor::new();
         let mut queen = attach_queen(&server);
         write_queen_command(&mut queen, "{\"spawn\":\"heartbeat\",\"ticks\":3}\n");
-        let worker_path = vec![
-            "worker".to_owned(),
-            "worker-1".to_owned(),
-            "telemetry".to_owned(),
-        ];
+        let worker_path = worker_telemetry_path("worker-1");
         queen.walk(1, 3, &worker_path).unwrap();
         queen.open(3, OpenMode::read_only()).unwrap();
         let data = queen.read(3, 0, 128).unwrap();
@@ -2673,11 +2832,7 @@ mod tests {
         let mut queen = attach_queen(&server);
         write_queen_command(&mut queen, "{\"spawn\":\"heartbeat\",\"ticks\":5}\n");
         write_queen_command(&mut queen, "{\"kill\":\"worker-1\"}\n");
-        let worker_path = vec![
-            "worker".to_owned(),
-            "worker-1".to_owned(),
-            "telemetry".to_owned(),
-        ];
+        let worker_path = worker_telemetry_path("worker-1");
         let err = queen.walk(1, 4, &worker_path).unwrap_err();
         assert!(matches!(
             err,
@@ -2762,11 +2917,7 @@ mod tests {
         write_queen_command(&mut queen, "{\"spawn\":\"heartbeat\",\"ticks\":5}\n");
 
         let mut worker_two = attach_worker(&server, "worker-2");
-        let worker_one_path = vec![
-            "worker".to_owned(),
-            "worker-1".to_owned(),
-            "telemetry".to_owned(),
-        ];
+        let worker_one_path = worker_telemetry_path("worker-1");
         let err = worker_two.walk(1, 3, &worker_one_path).unwrap_err();
         assert!(matches!(
             err,
@@ -2783,11 +2934,7 @@ mod tests {
         let mut queen = attach_queen(&server);
         write_queen_command(&mut queen, "{\"spawn\":\"heartbeat\",\"ticks\":1}\n");
         let mut worker = attach_worker(&server, "worker-1");
-        let telemetry = vec![
-            "worker".to_owned(),
-            "worker-1".to_owned(),
-            "telemetry".to_owned(),
-        ];
+        let telemetry = worker_telemetry_path("worker-1");
         worker.walk(1, 2, &telemetry).unwrap();
         worker.open(2, OpenMode::write_append()).unwrap();
         worker.write(2, b"heartbeat 1\n").unwrap();
@@ -2817,11 +2964,7 @@ mod tests {
             "{\"budget\":{\"ttl_s\":1}}\n{\"spawn\":\"heartbeat\",\"ticks\":5}\n",
         );
         let mut worker = attach_worker(&server, "worker-1");
-        let telemetry = vec![
-            "worker".to_owned(),
-            "worker-1".to_owned(),
-            "telemetry".to_owned(),
-        ];
+        let telemetry = worker_telemetry_path("worker-1");
         worker.walk(1, 2, &telemetry).unwrap();
         clock.advance(Duration::from_secs(2));
         let err = worker.open(2, OpenMode::write_append()).unwrap_err();
@@ -2860,12 +3003,18 @@ mod tests {
         client
     }
 
+    fn worker_telemetry_path(worker_id: &str) -> Vec<String> {
+        ShardLayout::default().worker_telemetry_path(worker_id)
+    }
+
     fn write_queen_command(client: &mut InProcessConnection, payload: &str) {
+        static NEXT_FID: AtomicU32 = AtomicU32::new(100);
         let path = vec!["queen".to_owned(), "ctl".to_owned()];
-        client.walk(1, 2, &path).unwrap();
-        client.open(2, OpenMode::write_append()).unwrap();
-        client.write(2, payload.as_bytes()).unwrap();
-        client.clunk(2).unwrap();
+        let fid = NEXT_FID.fetch_add(1, Ordering::Relaxed);
+        client.walk(1, fid, &path).unwrap();
+        client.open(fid, OpenMode::write_append()).unwrap();
+        client.write(fid, payload.as_bytes()).unwrap();
+        client.clunk(fid).unwrap();
     }
 
     #[derive(Debug)]
