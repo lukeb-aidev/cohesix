@@ -2386,7 +2386,7 @@ No networking, 9P semantics, or console behaviors may diverge between VM and UEF
 
 ---
 
-### Prerequisite (must be completed before Milestone 18)
+### Prerequisite (must be completed before Milestone 25)
 **Upstream elfloader EFI support**
 - Confirm and enable upstream seL4 **elfloader EFI build** to produce a valid PE/COFF EFI executable (`elfloader.efi`) for aarch64.
 - The EFI-built elfloader must:
