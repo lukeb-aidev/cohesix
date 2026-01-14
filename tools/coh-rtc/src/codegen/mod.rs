@@ -4,6 +4,7 @@
 // Author: Lukas Bower
 
 mod cli;
+mod cohsh;
 pub mod cbor;
 mod docs;
 mod rust;
@@ -24,17 +25,25 @@ pub struct GeneratedArtifacts {
     pub cli_script: PathBuf,
     pub doc_snippet: PathBuf,
     pub cbor_snippet: PathBuf,
+    pub cohsh_policy: PathBuf,
+    pub cohsh_policy_hash: PathBuf,
+    pub cohsh_policy_rust: PathBuf,
+    pub cohsh_policy_doc: PathBuf,
 }
 
 impl GeneratedArtifacts {
     pub fn summary(&self) -> String {
         format!(
-            "rust={}, manifest={}, cli={}, docs={}, cbor={}",
+            "rust={}, manifest={}, cli={}, docs={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}",
             self.rust_dir.display(),
             self.manifest_json.display(),
             self.cli_script.display(),
             self.doc_snippet.display(),
-            self.cbor_snippet.display()
+            self.cbor_snippet.display(),
+            self.cohsh_policy.display(),
+            self.cohsh_policy_hash.display(),
+            self.cohsh_policy_rust.display(),
+            self.cohsh_policy_doc.display()
         )
     }
 }
@@ -64,11 +73,30 @@ pub fn emit_all(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    if let Some(parent) = options.cohsh_policy_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.cohsh_policy_rust_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.cohsh_policy_doc_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
 
     rust::emit_rust(manifest, manifest_hash, &options.out_dir)?;
     cli::emit_cli_script(manifest, &options.cli_script_out)?;
     docs::emit_doc_snippet(manifest_hash, docs, &options.doc_snippet_out)?;
     cbor::emit_cbor_snippet(&options.cbor_snippet_out)?;
+    let cohsh_artifacts = cohsh::emit_cohsh_policy(
+        manifest,
+        manifest_hash,
+        &options.cohsh_policy_out,
+        &options.cohsh_policy_rust_out,
+        &options.cohsh_policy_doc_out,
+    )?;
 
     fs::write(&options.manifest_out, resolved_json).with_context(|| {
         format!(
@@ -100,6 +128,10 @@ pub fn emit_all(
         cli_script: options.cli_script_out.clone(),
         doc_snippet: options.doc_snippet_out.clone(),
         cbor_snippet: options.cbor_snippet_out.clone(),
+        cohsh_policy: cohsh_artifacts.policy_toml,
+        cohsh_policy_hash: cohsh_artifacts.policy_hash,
+        cohsh_policy_rust: cohsh_artifacts.policy_rust,
+        cohsh_policy_doc: cohsh_artifacts.policy_doc,
     })
 }
 

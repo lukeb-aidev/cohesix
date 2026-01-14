@@ -15,6 +15,7 @@ BASE_SCRIPTS=(
     "observe_watch.coh"
     "cas_roundtrip.coh"
     "tcp_basic.coh"
+    "session_pool.coh"
 )
 
 GATED_SCRIPTS=(
@@ -164,6 +165,9 @@ run_cohsh() {
             ;;
         tcp_basic.coh)
             "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/tcp_basic.coh
+            ;;
+        session_pool.coh)
+            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/session_pool.coh
             ;;
         policy_gate.coh)
             "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/policy_gate.coh

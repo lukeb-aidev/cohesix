@@ -6,7 +6,8 @@
 use anyhow::Result;
 use clap::Parser;
 use coh_rtc::{
-    compile, default_cbor_snippet_path, default_cli_script_path, default_doc_snippet_path,
+    compile, default_cbor_snippet_path, default_cli_script_path, default_cohsh_policy_doc_path,
+    default_cohsh_policy_path, default_cohsh_policy_rust_path, default_doc_snippet_path,
     CompileOptions,
 };
 use std::path::PathBuf;
@@ -31,6 +32,15 @@ struct Args {
     /// Output path for the CBOR telemetry schema snippet.
     #[arg(long, default_value_os_t = default_cbor_snippet_path())]
     cbor_snippet: PathBuf,
+    /// Output path for the cohsh policy TOML.
+    #[arg(long, default_value_os_t = default_cohsh_policy_path())]
+    cohsh_policy: PathBuf,
+    /// Output path for the cohsh policy Rust constants.
+    #[arg(long, default_value_os_t = default_cohsh_policy_rust_path())]
+    cohsh_policy_rust: PathBuf,
+    /// Output path for the cohsh policy doc snippet.
+    #[arg(long, default_value_os_t = default_cohsh_policy_doc_path())]
+    cohsh_policy_doc: PathBuf,
 }
 
 fn main() -> Result<()> {
@@ -42,6 +52,9 @@ fn main() -> Result<()> {
         cli_script_out: args.cli_script,
         doc_snippet_out: args.doc_snippet,
         cbor_snippet_out: args.cbor_snippet,
+        cohsh_policy_out: args.cohsh_policy,
+        cohsh_policy_rust_out: args.cohsh_policy_rust,
+        cohsh_policy_doc_out: args.cohsh_policy_doc,
     };
     let output = compile(&options)?;
     println!("coh-rtc: wrote {}", output.summary());

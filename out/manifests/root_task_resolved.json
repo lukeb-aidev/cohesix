@@ -4,7 +4,7 @@
     "purpose": "Root-task manifest input for coh-rtc."
   },
   "root_task": {
-    "schema": "1.2"
+    "schema": "1.3"
   },
   "profile": {
     "name": "virt-aarch64",
@@ -98,6 +98,23 @@
     "frame_schema": "legacy-plaintext",
     "cursor": {
       "retain_on_boot": false
+    }
+  },
+  "client_policies": {
+    "cohsh": {
+      "pool": {
+        "control_sessions": 2,
+        "telemetry_sessions": 4
+      }
+    },
+    "retry": {
+      "max_attempts": 3,
+      "backoff_ms": 200,
+      "ceiling_ms": 2000,
+      "timeout_ms": 5000
+    },
+    "heartbeat": {
+      "interval_ms": 15000
     }
   }
 }

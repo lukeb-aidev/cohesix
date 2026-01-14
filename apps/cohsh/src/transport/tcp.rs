@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use std::env;
 use std::io::{self, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -18,7 +19,7 @@ use log::{debug, error, info, trace, warn};
 use secure9p_codec::SessionId;
 
 use crate::proto::{parse_ack, AckStatus};
-use crate::{Session, Transport};
+use crate::{CohshRetryPolicy, Session, Transport, TransportMetrics};
 
 /// Default TCP timeout applied to socket operations.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -150,6 +151,25 @@ impl AckOwned {
     }
 }
 
+/// Shared TCP transport wrapper that serialises access to a single connection.
+#[derive(Clone)]
+pub struct SharedTcpTransport {
+    inner: Arc<Mutex<TcpTransport>>,
+}
+
+impl SharedTcpTransport {
+    /// Create a new shared TCP transport wrapper.
+    pub fn new(inner: Arc<Mutex<TcpTransport>>) -> Self {
+        Self { inner }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, TcpTransport> {
+        self.inner
+            .lock()
+            .expect("shared TCP transport lock poisoned")
+    }
+}
+
 /// TCP transport speaking the root-task console protocol.
 #[derive(Debug)]
 pub struct TcpTransport {
@@ -176,6 +196,7 @@ pub struct TcpTransport {
     pending_timeouts: usize,
     authenticated: bool,
     auth_state: AuthState,
+    inject_short_write: Option<usize>,
 }
 
 impl TcpTransport {
@@ -213,6 +234,7 @@ impl TcpTransport {
             pending_timeouts: 0,
             authenticated: false,
             auth_state: AuthState::Start,
+            inject_short_write: None,
         }
     }
 
@@ -234,6 +256,17 @@ impl TcpTransport {
     #[must_use]
     pub fn with_max_retries(mut self, attempts: usize) -> Self {
         self.max_retries = attempts.max(1);
+        self
+    }
+
+    /// Apply retry scheduling policy derived from the manifest.
+    #[must_use]
+    pub fn with_retry_policy(mut self, policy: CohshRetryPolicy) -> Self {
+        self.max_retries = policy.max_attempts as usize;
+        self.retry_backoff = Duration::from_millis(policy.backoff_ms);
+        self.retry_ceiling =
+            Duration::from_millis(policy.ceiling_ms).max(self.retry_backoff);
+        self.timeout = Duration::from_millis(policy.timeout_ms);
         self
     }
 
@@ -564,7 +597,20 @@ impl TcpTransport {
         let len: u32 = total_len
             .try_into()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "frame too large"))?;
-        stream.write_all(&len.to_le_bytes())?;
+        let len_bytes = len.to_le_bytes();
+        if let Some(limit) = self.inject_short_write.take() {
+            let mut frame = Vec::with_capacity(total_len);
+            frame.extend_from_slice(&len_bytes);
+            frame.extend_from_slice(line.as_bytes());
+            let to_write = limit.min(frame.len());
+            let _ = stream.write(&frame[..to_write]);
+            let _ = stream.flush();
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "injected short write",
+            ));
+        }
+        stream.write_all(&len_bytes)?;
         stream.write_all(line.as_bytes())?;
         trace!(
             "[cohsh][tcp] wrote {} bytes in state {:?}",
@@ -579,6 +625,34 @@ impl TcpTransport {
         let mut delay = self.retry_backoff;
         loop {
             self.ensure_authenticated()?;
+            match self.send_line_raw(line) {
+                Ok(()) => {
+                    return Ok(());
+                }
+                Err(err) => {
+                    self.telemetry.log_disconnect(&err);
+                    self.reset_connection();
+                    attempt += 1;
+                    if attempt > self.max_retries {
+                        return Err(anyhow!("failed to send command after retries: {err}"));
+                    }
+                    self.telemetry.log_reconnect(attempt, delay);
+                    thread::sleep(delay);
+                    delay = Self::next_delay(delay, self.retry_ceiling);
+                }
+            }
+        }
+    }
+
+    fn send_line_attached(&mut self, line: &str) -> Result<()> {
+        let mut attempt = 0usize;
+        let mut delay = self.retry_backoff;
+        loop {
+            if self.session_cache.is_some() && self.auth_state != AuthState::Attached {
+                self.recover_session()?;
+            } else {
+                self.ensure_authenticated()?;
+            }
             match self.send_line_raw(line) {
                 Ok(()) => {
                     return Ok(());
@@ -976,6 +1050,19 @@ impl TcpTransport {
         proto_role_label(Self::proto_role_from_ticket(role))
     }
 
+    fn build_echo_command(path: &str, payload: &[u8]) -> Result<String> {
+        let payload_str = std::str::from_utf8(payload).context("payload must be UTF-8")?;
+        let trimmed = payload_str.strip_suffix('\n').unwrap_or(payload_str);
+        if trimmed.contains('\n') || trimmed.contains('\r') {
+            return Err(anyhow!("echo payload must be a single line"));
+        }
+        if trimmed.is_empty() {
+            Ok(format!("ECHO {path}"))
+        } else {
+            Ok(format!("ECHO {path} {trimmed}"))
+        }
+    }
+
     fn trim_line(line: &str) -> String {
         line.trim_end_matches(['\r', '\n']).to_owned()
     }
@@ -984,8 +1071,9 @@ impl TcpTransport {
         let command = format!("{verb} {path}");
         let mut attempts = 0usize;
         let mut lines = Vec::new();
+        let mut summary_line: Option<String> = None;
         loop {
-            self.send_line(&command)?;
+            self.send_line_attached(&command)?;
             loop {
                 match self.next_protocol_line()? {
                     Some(response) => {
@@ -997,9 +1085,27 @@ impl TcpTransport {
                             if matches!(ack.status, AckStatus::Err) {
                                 return Err(anyhow!("{verb} failed: {response}"));
                             }
+                            if verb.eq_ignore_ascii_case("CAT")
+                                && ack.verb.eq_ignore_ascii_case("CAT")
+                                && summary_line.is_none()
+                            {
+                                if let Some(detail) = ack.detail {
+                                    if let Some(idx) = detail.find("data=") {
+                                        let summary = detail[idx + "data=".len()..].trim();
+                                        if !summary.is_empty() {
+                                            summary_line = Some(summary.to_owned());
+                                        }
+                                    }
+                                }
+                            }
                             continue;
                         }
                         if response == "END" {
+                            if lines.is_empty() {
+                                if let Some(summary) = summary_line.take() {
+                                    lines.push(summary);
+                                }
+                            }
                             return Ok(lines);
                         }
                         if response.starts_with("ERR") {
@@ -1223,19 +1329,10 @@ impl Transport for TcpTransport {
     }
 
     fn write(&mut self, _session: &Session, path: &str, payload: &[u8]) -> Result<()> {
-        let payload_str = std::str::from_utf8(payload).context("payload must be UTF-8")?;
-        let trimmed = payload_str.strip_suffix('\n').unwrap_or(payload_str);
-        if trimmed.contains('\n') || trimmed.contains('\r') {
-            return Err(anyhow!("echo payload must be a single line"));
-        }
-        let command = if trimmed.is_empty() {
-            format!("ECHO {path}")
-        } else {
-            format!("ECHO {path} {trimmed}")
-        };
+        let command = Self::build_echo_command(path, payload)?;
         let mut attempts = 0usize;
         loop {
-            self.send_line(&command)?;
+            self.send_line_attached(&command)?;
             loop {
                 match self.next_protocol_line()? {
                     Some(response) => {
@@ -1273,6 +1370,73 @@ impl Transport for TcpTransport {
                         break;
                     }
                 }
+            }
+        }
+    }
+
+    fn write_batch(
+        &mut self,
+        _session: &Session,
+        path: &str,
+        payloads: &[Vec<u8>],
+    ) -> Result<usize> {
+        if payloads.is_empty() {
+            return Ok(0);
+        }
+        let mut commands = Vec::with_capacity(payloads.len());
+        for payload in payloads {
+            commands.push(Self::build_echo_command(path, payload)?);
+        }
+
+        let mut sent = 0usize;
+        let mut acked = 0usize;
+        let mut attempts = 0usize;
+        loop {
+            while sent < commands.len() {
+                self.send_line_attached(&commands[sent])?;
+                sent = sent.saturating_add(1);
+            }
+            while acked < commands.len() {
+                match self.next_protocol_line()? {
+                    Some(response) => {
+                        if let Some(ack) = parse_ack(&response) {
+                            let _ = self.record_ack(&response);
+                            if is_frame_error(&ack) {
+                                return Err(anyhow!("echo failed: {response}"));
+                            }
+                            if matches!(ack.status, AckStatus::Err)
+                                && ack.verb.eq_ignore_ascii_case("PARSE")
+                            {
+                                return Err(anyhow!("echo failed: {response}"));
+                            }
+                            if ack.verb.eq_ignore_ascii_case("ECHO") {
+                                if matches!(ack.status, AckStatus::Ok) {
+                                    acked = acked.saturating_add(1);
+                                    continue;
+                                }
+                                return Err(anyhow!("echo failed: {response}"));
+                            }
+                            continue;
+                        }
+                        if response.starts_with("ERR") {
+                            return Err(anyhow!("echo failed: {response}"));
+                        }
+                    }
+                    None => {
+                        attempts = attempts.saturating_add(1);
+                        if attempts > self.max_retries {
+                            return Err(anyhow!(
+                                "connection dropped repeatedly while writing to {path}"
+                            ));
+                        }
+                        self.recover_session()?;
+                        sent = acked;
+                        break;
+                    }
+                }
+            }
+            if acked >= commands.len() {
+                return Ok(acked);
             }
         }
     }
@@ -1320,6 +1484,90 @@ impl Transport for TcpTransport {
             .drain(..)
             .map(AckOwned::into_line)
             .collect()
+    }
+
+    fn metrics(&self) -> TransportMetrics {
+        TransportMetrics {
+            connects: self.telemetry.connects,
+            reconnects: self.telemetry.reconnects,
+            heartbeats: self.telemetry.heartbeats,
+        }
+    }
+
+    fn inject_short_write(&mut self, bytes: usize) -> bool {
+        self.inject_short_write = Some(bytes);
+        true
+    }
+}
+
+impl Transport for SharedTcpTransport {
+    fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session> {
+        let mut inner = self.lock();
+        inner.attach(role, ticket)
+    }
+
+    fn kind(&self) -> &'static str {
+        "tcp"
+    }
+
+    fn ping(&mut self, session: &Session) -> Result<String> {
+        let mut inner = self.lock();
+        inner.ping(session)
+    }
+
+    fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
+        let mut inner = self.lock();
+        inner.tail(session, path)
+    }
+
+    fn read(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
+        let mut inner = self.lock();
+        inner.read(session, path)
+    }
+
+    fn list(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
+        let mut inner = self.lock();
+        inner.list(session, path)
+    }
+
+    fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()> {
+        let mut inner = self.lock();
+        inner.write(session, path, payload)
+    }
+
+    fn write_batch(
+        &mut self,
+        session: &Session,
+        path: &str,
+        payloads: &[Vec<u8>],
+    ) -> Result<usize> {
+        let mut inner = self.lock();
+        inner.write_batch(session, path, payloads)
+    }
+
+    fn quit(&mut self, session: &Session) -> Result<()> {
+        let mut inner = self.lock();
+        inner.quit(session)
+    }
+
+    fn drain_acknowledgements(&mut self) -> Vec<String> {
+        let mut inner = self.lock();
+        inner.drain_acknowledgements()
+    }
+
+    fn metrics(&self) -> TransportMetrics {
+        let inner = self.lock();
+        inner.metrics()
+    }
+
+    fn inject_short_write(&mut self, bytes: usize) -> bool {
+        let mut inner = self.lock();
+        inner.inject_short_write(bytes)
+    }
+
+    fn tcp_endpoint(&self) -> Option<(String, u16)> {
+        let inner = self.lock();
+        inner.tcp_endpoint()
     }
 }
 

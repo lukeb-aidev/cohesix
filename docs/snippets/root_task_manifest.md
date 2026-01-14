@@ -4,7 +4,7 @@
 ### Root-task manifest schema (generated)
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.2`
+- `root_task.schema`: `1.3`
 - `profile.name`: `virt-aarch64`
 - `profile.kernel`: `true`
 - `event_pump.tick_ms`: `5`
@@ -16,6 +16,13 @@
 - `telemetry.ring_bytes_per_worker`: `1024`
 - `telemetry.frame_schema`: `legacy-plaintext`
 - `telemetry.cursor.retain_on_boot`: `false`
+- `client_policies.cohsh.pool.control_sessions`: `2`
+- `client_policies.cohsh.pool.telemetry_sessions`: `4`
+- `client_policies.retry.max_attempts`: `3`
+- `client_policies.retry.backoff_ms`: `200`
+- `client_policies.retry.ceiling_ms`: `2000`
+- `client_policies.retry.timeout_ms`: `5000`
+- `client_policies.heartbeat.interval_ms`: `15000`
 - `cache.kernel_ops`: `true`
 - `cache.dma_clean`: `true`
 - `cache.dma_invalidate`: `true`
@@ -29,7 +36,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 3 entries
-- `manifest.sha256`: `441642311a4ea259051a9f0b50b6d1ee74b16f51ae6c8d3c5793fe17a733ecf3`
+- `manifest.sha256`: `fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861`
 
 ### Namespace mounts (generated)
 - (none)
@@ -63,4 +70,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `441642311a4ea259051a9f0b50b6d1ee74b16f51ae6c8d3c5793fe17a733ecf3`)._
+_Generated from `configs/root_task.toml` (sha256: `fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861`)._

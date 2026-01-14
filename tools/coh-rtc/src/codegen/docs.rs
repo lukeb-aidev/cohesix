@@ -92,6 +92,48 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `client_policies.cohsh.pool.control_sessions`: `{}`",
+            manifest.client_policies.cohsh.pool.control_sessions
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.cohsh.pool.telemetry_sessions`: `{}`",
+            manifest.client_policies.cohsh.pool.telemetry_sessions
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.retry.max_attempts`: `{}`",
+            manifest.client_policies.retry.max_attempts
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.retry.backoff_ms`: `{}`",
+            manifest.client_policies.retry.backoff_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.retry.ceiling_ms`: `{}`",
+            manifest.client_policies.retry.ceiling_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.retry.timeout_ms`: `{}`",
+            manifest.client_policies.retry.timeout_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.heartbeat.interval_ms`: `{}`",
+            manifest.client_policies.heartbeat.interval_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
             "- `cache.kernel_ops`: `{}`",
             manifest.cache.kernel_ops
         )

@@ -1,0 +1,10 @@
+Welcome to Cohesix. Type 'help' for commands.
+detached shell: run 'attach <role>' to connect
+[console] OK AUTH
+[console] OK ATTACH role=queen
+attached session SessionId(2) as Queen
+pool bench limits msize=8192 max_payload=8168 batch=8 kind=Telemetry
+pool bench baseline ops=64 elapsed_ms=2160 ops_per_s=29
+pool bench pooled ops=64 elapsed_ms=269 ops_per_s=237
+pool bench result OK retries=1 pool_exhausted=1 failures=0 expected=64 observed=64
+closing session

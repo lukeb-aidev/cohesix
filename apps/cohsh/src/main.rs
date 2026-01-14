@@ -11,8 +11,13 @@ use std::env;
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::path::PathBuf;
+use std::sync::Arc;
+#[cfg(feature = "tcp")]
+use std::sync::Mutex;
+#[cfg(feature = "tcp")]
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, ValueEnum};
 use cohesix_ticket::Role;
 use env_logger::Env;
@@ -20,15 +25,17 @@ use log::LevelFilter;
 
 #[cfg(feature = "tcp")]
 use cohsh::{
-    tcp_debug_enabled, validate_script, AutoAttach, NineDoorTransport, QemuTransport, RoleArg,
-    Shell, Transport,
+    default_policy_path, load_policy, tcp_debug_enabled, validate_script, AutoAttach,
+    NineDoorTransport, PolicyOverrides, QemuTransport, RoleArg, SessionPool, Shell,
+    Transport, TransportFactory,
 };
 #[cfg(not(feature = "tcp"))]
 use cohsh::{
-    validate_script, AutoAttach, NineDoorTransport, QemuTransport, RoleArg, Shell, Transport,
+    default_policy_path, load_policy, validate_script, AutoAttach, NineDoorTransport,
+    PolicyOverrides, QemuTransport, RoleArg, SessionPool, Shell, Transport, TransportFactory,
 };
 #[cfg(feature = "tcp")]
-use cohsh::{TcpTransport, COHSH_TCP_PORT};
+use cohsh::{SharedTcpTransport, TcpTransport, COHSH_TCP_PORT};
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum TransportKind {
@@ -57,6 +64,38 @@ struct Cli {
     /// Validate a script file without executing it.
     #[arg(long, value_name = "FILE", conflicts_with = "script")]
     check: Option<PathBuf>,
+
+    /// Path to the manifest-derived cohsh policy TOML.
+    #[arg(long, value_name = "FILE")]
+    policy: Option<PathBuf>,
+
+    /// Override cohsh pool control session capacity.
+    #[arg(long)]
+    pool_control_sessions: Option<u16>,
+
+    /// Override cohsh pool telemetry session capacity.
+    #[arg(long)]
+    pool_telemetry_sessions: Option<u16>,
+
+    /// Override retry max attempts.
+    #[arg(long)]
+    retry_max_attempts: Option<u8>,
+
+    /// Override retry backoff in milliseconds.
+    #[arg(long)]
+    retry_backoff_ms: Option<u64>,
+
+    /// Override retry ceiling in milliseconds.
+    #[arg(long)]
+    retry_ceiling_ms: Option<u64>,
+
+    /// Override retry timeout in milliseconds.
+    #[arg(long)]
+    retry_timeout_ms: Option<u64>,
+
+    /// Override heartbeat interval in milliseconds.
+    #[arg(long)]
+    heartbeat_interval_ms: Option<u64>,
 
     /// Select the transport backing the shell session.
     #[cfg_attr(feature = "tcp", arg(long, value_enum, default_value_t = TransportKind::Tcp))]
@@ -119,6 +158,52 @@ fn init_logging(verbose: bool) {
     let _ = builder.try_init();
 }
 
+fn parse_env_number<T>(key: &str) -> Result<Option<T>>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match env::var(key) {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                trimmed
+                    .parse::<T>()
+                    .map(Some)
+                    .map_err(|err| anyhow!("invalid {key} value '{trimmed}': {err}"))
+            }
+        }
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(err) => Err(anyhow!("failed to read {key}: {err}")),
+    }
+}
+
+fn env_override<T>(cli_value: Option<T>, key: &str) -> Result<Option<T>>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    if cli_value.is_some() {
+        return Ok(cli_value);
+    }
+    parse_env_number(key)
+}
+
+fn resolve_policy_path(cli_path: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(path) = cli_path {
+        return Ok(path);
+    }
+    if let Ok(value) = env::var("COHSH_POLICY") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
+    Ok(default_policy_path())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     init_logging(cli.verbose);
@@ -154,6 +239,34 @@ fn main() -> Result<()> {
         (host, port, token, tcp_debug)
     };
 
+    let policy_path = resolve_policy_path(cli.policy.clone())?;
+    let overrides = PolicyOverrides {
+        pool_control_sessions: env_override(
+            cli.pool_control_sessions,
+            "COHSH_POOL_CONTROL_SESSIONS",
+        )?,
+        pool_telemetry_sessions: env_override(
+            cli.pool_telemetry_sessions,
+            "COHSH_POOL_TELEMETRY_SESSIONS",
+        )?,
+        retry_max_attempts: env_override(cli.retry_max_attempts, "COHSH_RETRY_MAX_ATTEMPTS")?,
+        retry_backoff_ms: env_override(cli.retry_backoff_ms, "COHSH_RETRY_BACKOFF_MS")?,
+        retry_ceiling_ms: env_override(cli.retry_ceiling_ms, "COHSH_RETRY_CEILING_MS")?,
+        retry_timeout_ms: env_override(cli.retry_timeout_ms, "COHSH_RETRY_TIMEOUT_MS")?,
+        heartbeat_interval_ms: env_override(
+            cli.heartbeat_interval_ms,
+            "COHSH_HEARTBEAT_INTERVAL_MS",
+        )?,
+    };
+    let policy = load_policy(&policy_path)
+        .with_context(|| format!("failed to load cohsh policy {}", policy_path.display()))?;
+    let policy = policy.with_overrides(&overrides).with_context(|| {
+        format!(
+            "invalid cohsh policy overrides for {}",
+            policy_path.display()
+        )
+    })?;
+
     if let Some(script_path) = cli.check {
         let file = File::open(&script_path)
             .with_context(|| format!("failed to open script {script_path:?}"))?;
@@ -162,24 +275,56 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let transport: Box<dyn Transport> = match cli.transport {
-        TransportKind::Mock => Box::new(NineDoorTransport::new(nine_door::NineDoor::new())),
-        TransportKind::Qemu => Box::new(QemuTransport::new(
-            cli.qemu_bin.clone(),
-            cli.qemu_out_dir.clone(),
-            cli.qemu_gic_version.clone(),
-            qemu_args,
-        )),
-        #[cfg(feature = "tcp")]
-        TransportKind::Tcp => Box::new(
-            TcpTransport::new(tcp_host.clone(), tcp_port)
-                .with_timeout(std::time::Duration::from_secs(5))
-                .with_heartbeat_interval(std::time::Duration::from_secs(15))
-                .with_auth_token(auth_token.clone())
-                .with_tcp_debug(tcp_debug),
-        ),
-    };
+    let (transport, pool_factory): (Box<dyn Transport>, Option<Arc<dyn TransportFactory>>) =
+        match cli.transport {
+            TransportKind::Mock => {
+                let server = nine_door::NineDoor::new();
+                let pool_server = server.clone();
+                let factory = Arc::new(move || {
+                    Ok(Box::new(NineDoorTransport::new(pool_server.clone()))
+                        as Box<dyn Transport + Send>)
+                });
+                (Box::new(NineDoorTransport::new(server)), Some(factory))
+            }
+            TransportKind::Qemu => (
+                Box::new(QemuTransport::new(
+                    cli.qemu_bin.clone(),
+                    cli.qemu_out_dir.clone(),
+                    cli.qemu_gic_version.clone(),
+                    qemu_args,
+                )),
+                None,
+            ),
+            #[cfg(feature = "tcp")]
+            TransportKind::Tcp => {
+                let retry = policy.retry;
+                let heartbeat = policy.heartbeat;
+                let shared = Arc::new(Mutex::new(
+                    TcpTransport::new(tcp_host.clone(), tcp_port)
+                        .with_retry_policy(retry)
+                        .with_heartbeat_interval(Duration::from_millis(heartbeat.interval_ms))
+                        .with_auth_token(auth_token.clone())
+                        .with_tcp_debug(tcp_debug),
+                ));
+                let transport = Box::new(SharedTcpTransport::new(Arc::clone(&shared)));
+                let pool_shared = Arc::clone(&shared);
+                let factory = Arc::new(move || {
+                    Ok(Box::new(SharedTcpTransport::new(Arc::clone(
+                        &pool_shared,
+                    ))) as Box<dyn Transport + Send>)
+                });
+                (transport, Some(factory))
+            }
+        };
     let mut shell = Shell::new(transport, writer);
+    if let Some(factory) = pool_factory {
+        let pool = SessionPool::new(
+            policy.pool.control_sessions,
+            policy.pool.telemetry_sessions,
+            factory,
+        );
+        shell = shell.with_pool(pool);
+    }
     shell.write_line("Welcome to Cohesix. Type 'help' for commands.")?;
 
     if let Some(script_path) = cli.script {

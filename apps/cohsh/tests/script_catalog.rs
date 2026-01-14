@@ -91,6 +91,7 @@ fn script_feature_inventory_is_stable() {
         "CMD:echo".to_owned(),
         "CMD:help".to_owned(),
         "CMD:log".to_owned(),
+        "CMD:pool".to_owned(),
         "CMD:ls".to_owned(),
         "CMD:quit".to_owned(),
         "CMD:spawn".to_owned(),
@@ -134,7 +135,9 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "replay_journal.coh:1ff3cc6ac006c47fe8a6f914fb5b079d352a41691c2b5da34cf6441fba4d5a8f"
             .to_owned(),
-        "shard_1k.coh:8e12322ca8b75812b2e97d3c7bcc9a2070ac76b692f0a9ec466b24369cf4dbfc"
+        "session_pool.coh:30d87dcbb8a12e6bff565614f4b6d380780ef44d548ca8e8d24eead5bce46ee4"
+            .to_owned(),
+        "shard_1k.coh:571083fdfab4147b6a6f10350bf4fe8810d8e7242f8ea6a7a8c68dd2b2d796bf"
             .to_owned(),
         "tcp_basic.coh:619970b6ff14332bbef80f704c117b4471653bb75f7a6187b27d93fbc16415a7"
             .to_owned(),

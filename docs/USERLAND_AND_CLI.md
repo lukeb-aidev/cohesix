@@ -64,6 +64,27 @@ Key options from `--help`:
 - `--transport <mock|qemu|tcp>` to choose backend; TCP exposes `--tcp-host` / `--tcp-port` (defaults `127.0.0.1:31337`).【F:apps/cohsh/src/main.rs†L44-L132】
 - QEMU helpers: `--qemu-bin`, `--qemu-out-dir`, `--qemu-gic-version`, `--qemu-arg` (dev/CI convenience).【F:apps/cohsh/src/main.rs†L52-L131】
 - `--auth-token` forwards the TCP console authentication secret; defaults to `changeme`.【F:apps/cohsh/src/main.rs†L78-L115】
+- `--policy <file>` (or `COHSH_POLICY`) selects the manifest-derived client policy TOML; `cohsh` fails fast if the policy hash mismatches compiled defaults. Defaults to `out/cohsh_policy.toml`.
+- Pool sizing overrides: `--pool-control-sessions`, `--pool-telemetry-sessions` (env `COHSH_POOL_CONTROL_SESSIONS`, `COHSH_POOL_TELEMETRY_SESSIONS`).
+- Retry/heartbeat overrides: `--retry-max-attempts`, `--retry-backoff-ms`, `--retry-ceiling-ms`, `--retry-timeout-ms`, `--heartbeat-interval-ms` (env `COHSH_RETRY_MAX_ATTEMPTS`, `COHSH_RETRY_BACKOFF_MS`, `COHSH_RETRY_CEILING_MS`, `COHSH_RETRY_TIMEOUT_MS`, `COHSH_HEARTBEAT_INTERVAL_MS`).
+
+Manifest-derived policy defaults are emitted by `coh-rtc` into `out/cohsh_policy.toml` and embedded into the CLI at build time. The CLI refuses to start if the policy or manifest hash drifts.
+
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Generated cohsh policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
+
+### cohsh client policy (generated)
+- `manifest.sha256`: `fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861`
+- `policy.sha256`: `3e6bfee24c10636655135e0036addc355f4ccab5843d1f28eb328c7efd50f256`
+- `cohsh.pool.control_sessions`: `2`
+- `cohsh.pool.telemetry_sessions`: `4`
+- `retry.max_attempts`: `3`
+- `retry.backoff_ms`: `200`
+- `retry.ceiling_ms`: `2000`
+- `retry.timeout_ms`: `5000`
+- `heartbeat.interval_ms`: `15000`
+
+_Generated from `configs/root_task.toml` (sha256: `fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861`)._
 
 ### Interactive shell surface
 Startup banner and prompt:
@@ -81,6 +102,7 @@ Commands and status:
 - `ping` – reports attachment status; errors when detached or when given arguments.【F:apps/cohsh/src/lib.rs†L1181-L1194】
 - `test [--mode <quick|full>] [--json] [--timeout <s>] [--no-mutate]` – run the in-session self-tests sourced from `/proc/tests/` (default mode `quick`, default timeout 30s, hard cap 120s). `--no-mutate` skips spawn/kill steps. When `--json` is supplied, emit the stable schema described below.【F:apps/cohsh/src/lib.rs†L1512-L1763】
   - Note: the bundled self-test scripts end with `quit`, so a successful run leaves the shell detached and requires a fresh `attach`.
+- `pool bench <k=v...>` – run the pooled throughput benchmark and retry/exhaustion checks; options include `path`, `ops`, `batch`, `payload`, `payload_bytes`, `delay_ms`, `inject_failures`, `inject_bytes`, `exhaust`, `kind`.
 - `echo <text> > <path>` – append a newline-terminated payload to an absolute path via NineDoor.【F:apps/cohsh/src/lib.rs†L1211-L1222】【F:apps/cohsh/src/lib.rs†L1319-L1332】
 - `ls <path>` – list directory entries; entries are newline-delimited and returned in lexicographic order.
 - `cat <path>` – bounded read of file contents.

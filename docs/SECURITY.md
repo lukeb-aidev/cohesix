@@ -64,7 +64,24 @@ The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; Q
   were live at the time of an intrusion and whether the networking queues are under pressure.
 - The only control-plane interfaces are `cohsh` over serial/TCP and the Secure9P namespaces; any host-side WASM GUI is treated as an unprivileged client layered on top of these paths and does not expand the in-VM attack surface. One Queen orchestrating many workers keeps logging and audit scoped per hive (append-only `/log/*.log`).
 
-## 4. Telemetry Ring Latency Metrics (Generated)
+## 4. cohsh Pooling & Retry Policy (Generated)
+- `cohsh` preserves ACK/ERR ordering for strictly ordered flows (`attach`, `log`, `tail`, `quit`). Pooled sessions are reserved for concurrency benchmarks and telemetry batch writes, and they drain acknowledgements before returning leases to avoid cross-command reordering.
+- Retry scheduling is bounded and manifest-driven; injected short-write retries re-authenticate and re-attach before resending, preventing duplicate telemetry writes in pooled workflows.
+
+### cohsh client policy (generated)
+- `manifest.sha256`: `fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861`
+- `policy.sha256`: `3e6bfee24c10636655135e0036addc355f4ccab5843d1f28eb328c7efd50f256`
+- `cohsh.pool.control_sessions`: `2`
+- `cohsh.pool.telemetry_sessions`: `4`
+- `retry.max_attempts`: `3`
+- `retry.backoff_ms`: `200`
+- `retry.ceiling_ms`: `2000`
+- `retry.timeout_ms`: `5000`
+- `heartbeat.interval_ms`: `15000`
+
+_Generated from `configs/root_task.toml` (sha256: `fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861`)._
+
+## 5. Telemetry Ring Latency Metrics (Generated)
 <!-- metrics:latency:start -->
 ### Telemetry Ring Latency (generated)
 - Suite: `nine-door/telemetry_ring`

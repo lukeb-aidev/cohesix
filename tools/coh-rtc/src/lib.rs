@@ -17,6 +17,9 @@ pub struct CompileOptions {
     pub cli_script_out: PathBuf,
     pub doc_snippet_out: PathBuf,
     pub cbor_snippet_out: PathBuf,
+    pub cohsh_policy_out: PathBuf,
+    pub cohsh_policy_rust_out: PathBuf,
+    pub cohsh_policy_doc_out: PathBuf,
 }
 
 pub fn compile(options: &CompileOptions) -> Result<codegen::GeneratedArtifacts> {
@@ -56,4 +59,22 @@ pub fn default_cbor_snippet_path() -> PathBuf {
     Path::new("docs")
         .join("snippets")
         .join("telemetry_cbor_schema.md")
+}
+
+pub fn default_cohsh_policy_path() -> PathBuf {
+    Path::new("out").join("cohsh_policy.toml")
+}
+
+pub fn default_cohsh_policy_rust_path() -> PathBuf {
+    Path::new("apps")
+        .join("cohsh")
+        .join("src")
+        .join("generated")
+        .join("policy.rs")
+}
+
+pub fn default_cohsh_policy_doc_path() -> PathBuf {
+    Path::new("docs")
+        .join("snippets")
+        .join("cohsh_policy.md")
 }

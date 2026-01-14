@@ -4,7 +4,7 @@
 [cohesix-build] Regenerating coh-rtc artefacts via: cargo run -p coh-rtc -- /Users/lukasbower/GitHub/cohesix/configs/root_task_regression.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh --doc-snippet docs/snippets/root_task_manifest.md
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.03s
      Running `target/debug/coh-rtc /Users/lukasbower/GitHub/cohesix/configs/root_task_regression.toml --out /Users/lukasbower/GitHub/cohesix/apps/root-task/src/generated --manifest /Users/lukasbower/GitHub/cohesix/out/manifests/root_task_resolved.json --cli-script /Users/lukasbower/GitHub/cohesix/scripts/cohsh/boot_v0.coh --doc-snippet /Users/lukasbower/GitHub/cohesix/docs/snippets/root_task_manifest.md`
-coh-rtc: wrote rust=/Users/lukasbower/GitHub/cohesix/apps/root-task/src/generated, manifest=/Users/lukasbower/GitHub/cohesix/out/manifests/root_task_resolved.json, cli=/Users/lukasbower/GitHub/cohesix/scripts/cohsh/boot_v0.coh, docs=/Users/lukasbower/GitHub/cohesix/docs/snippets/root_task_manifest.md, cbor=docs/snippets/telemetry_cbor_schema.md
+coh-rtc: wrote rust=/Users/lukasbower/GitHub/cohesix/apps/root-task/src/generated, manifest=/Users/lukasbower/GitHub/cohesix/out/manifests/root_task_resolved.json, cli=/Users/lukasbower/GitHub/cohesix/scripts/cohsh/boot_v0.coh, docs=/Users/lukasbower/GitHub/cohesix/docs/snippets/root_task_manifest.md, cbor=docs/snippets/telemetry_cbor_schema.md, cohsh_policy=out/cohsh_policy.toml, cohsh_hash=out/cohsh_policy.toml.sha256, cohsh_rust=apps/cohsh/src/generated/policy.rs, cohsh_docs=docs/snippets/cohsh_policy.md
 [cohesix-build] Building host tooling via: cargo build --release -p gpu-bridge-host -p host-sidecar-bridge
 warning: methods `journal_bounds` and `decisions_bounds` are never used
    --> apps/nine-door/src/host/audit.rs:156:12
@@ -59,7 +59,9 @@ warning: associated items `new_with_telemetry_and_manifest`, `new_with_telemetry
     |            ^^^^^^^^^^^^^^
 
 warning: `nine-door` (lib) generated 4 warnings
-    Finished `release` profile [optimized] target(s) in 0.06s
+   Compiling cohsh v0.1.0 (/Users/lukasbower/GitHub/cohesix/apps/cohsh)
+   Compiling host-sidecar-bridge v0.1.0 (/Users/lukasbower/GitHub/cohesix/apps/host-sidecar-bridge)
+    Finished `release` profile [optimized] target(s) in 5.66s
 [cohesix-build] Building cohsh CLI with TCP transport via: cargo build --release -p cohsh --features tcp
 warning: methods `journal_bounds` and `decisions_bounds` are never used
    --> apps/nine-door/src/host/audit.rs:156:12
@@ -114,7 +116,8 @@ warning: associated items `new_with_telemetry_and_manifest`, `new_with_telemetry
     |            ^^^^^^^^^^^^^^
 
 warning: `nine-door` (lib) generated 4 warnings
-    Finished `release` profile [optimized] target(s) in 0.04s
+   Compiling cohsh v0.1.0 (/Users/lukasbower/GitHub/cohesix/apps/cohsh)
+    Finished `release` profile [optimized] target(s) in 8.37s
 [cohesix-build] Using root-task linker script: /Users/lukasbower/GitHub/cohesix/apps/root-task/sel4.ld
 [cohesix-build] Building root-task via: cargo build --target aarch64-unknown-none --release -p root-task --no-default-features --features cohesix-dev
    Compiling sel4-sys v0.0.28 (/Users/lukasbower/GitHub/cohesix/crates/sel4-sys)
@@ -155,12 +158,12 @@ warning: value assigned to `allow_flush` is never read
      = help: maybe it is overwritten before being read?
 
 warning: `root-task` (lib) generated 4 warnings (run `cargo fix --lib -p root-task` to apply 1 suggestion)
-    Finished `release` profile [optimized] target(s) in 9.94s
+    Finished `release` profile [optimized] target(s) in 9.77s
 [cohesix-build] Building seL4 components via: cargo build --target aarch64-unknown-none --release -p nine-door -p worker-heart -p worker-gpu
     Finished `release` profile [optimized] target(s) in 0.03s
-[cohesix-build] Built root-task: target/aarch64-unknown-none/release/root-task (1643792 bytes, sha256=bed8716c3387c620641486949204d93727bb50ff714b1ac9fcc7741ab436d8ac)
+[cohesix-build] Built root-task: target/aarch64-unknown-none/release/root-task (1643792 bytes, sha256=fe38d238b802c8ac13590f08f8d2494e471417ba18561c15abe23b9d24c43860)
 [cohesix-build] Sanitised elfloader copied to out/cohesix-gated/staging/elfloader (archive 3051520 -> 1839324 bytes, rootserver delta -1211768 bytes)
-[cohesix-build] Sanitised elfloader: out/cohesix-gated/staging/elfloader (3259760 bytes, sha256=9b5c6c0fe7b008157a2fd0b97f3eef0d0224b256bf70ee1eb4624d0f82aeab90)
+[cohesix-build] Sanitised elfloader: out/cohesix-gated/staging/elfloader (3259760 bytes, sha256=1e3b702ea9216d16a81053b5082b9d374c7c2439531332c3124393d4721be3dd)
 [cohesix-build] Packaged component binary: out/cohesix-gated/staging/cohesix/bin/root-task
 [cohesix-build] Packaged component binary: out/cohesix-gated/staging/cohesix/bin/nine-door
 [cohesix-build] Packaged component binary: out/cohesix-gated/staging/cohesix/bin/worker-heart
@@ -173,13 +176,13 @@ warning: `root-task` (lib) generated 4 warnings (run `cargo fix --lib -p root-ta
 [cohesix-build] Packaged selftest script: out/cohesix-gated/staging/cohesix/proc/tests/selftest_negative.coh
 [cohesix-build] Packaged component binary: out/cohesix-gated/staging/rootserver
 [cohesix-build] Staged rootserver size: out/cohesix-gated/staging/rootserver (1643792 bytes)
-[cohesix-build] rootserver sha256=bed8716c3387c620641486949204d93727bb50ff714b1ac9fcc7741ab436d8ac
+[cohesix-build] rootserver sha256=fe38d238b802c8ac13590f08f8d2494e471417ba18561c15abe23b9d24c43860
 [cohesix-build] seL4 kernel: out/cohesix-gated/staging/kernel.elf (898288 bytes, sha256=f7a12c48a914e6eedca07f3c52ed2ece68c400cf117c68404d522badd3076682)
-[cohesix-build] Root server: out/cohesix-gated/staging/rootserver (1643792 bytes, sha256=bed8716c3387c620641486949204d93727bb50ff714b1ac9fcc7741ab436d8ac)
+[cohesix-build] Root server: out/cohesix-gated/staging/rootserver (1643792 bytes, sha256=fe38d238b802c8ac13590f08f8d2494e471417ba18561c15abe23b9d24c43860)
 [cohesix-build] Manifest written to out/cohesix-gated/staging/cohesix/manifest.json
 [cohesix-build] Creating payload archive at /Users/lukasbower/GitHub/cohesix/out/cohesix-gated/cohesix-system.cpio
 3224 blocks
-[cohesix-build] Payload CPIO: /Users/lukasbower/GitHub/cohesix/out/cohesix-gated/cohesix-system.cpio (1650688 bytes, sha256=1e90ab147fe159a6b88ca55435ed2c905f8f33dad50d66d968601d24d245f9af)
+[cohesix-build] Payload CPIO: /Users/lukasbower/GitHub/cohesix/out/cohesix-gated/cohesix-system.cpio (1650688 bytes, sha256=5ba0edb30ef6d07a0938dc8af1d7032dd3971ccef8357ae601ced7da3f291000)
 Archive size OK: 1650688 bytes
 [cohesix-build] Auto-detected GIC version: gic-version=2
 [cohesix-build] Wiring virtio-net MMIO NIC for TCP console
@@ -233,8 +236,8 @@ log.transport=UART_ONLY
 [bootinfo] snapshot region=[0x00000000000e2ad0..0x00000000000e5809)
 [bootinfo:probe] [probe] after.snapshot.validation pre=0x0b0f1ce5ca4ecafe post=0x9ddf1ce5f00dbeef expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef post_addr=0x00000000000e5801
 [breadcrumb] before BUILD log
-[BUILD] 29e90ab6 2026-01-14T00:11:52.319148+00:00 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1]
-[INFO root_task::kernel] [BUILD] 29e90ab6 2026-01-14T00:11:52.319148+00:00 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1]
+[BUILD] 6dd31488 2026-01-14T05:07:43.409674+00:00 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1]
+[INFO root_task::kernel] [BUILD] 6dd31488 2026-01-14T05:07:43.409674+00:00 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1]
 [breadcrumb] after BUILD log
 cohesix-dev enabled (dev-virt cache-trace control-trace net-diag timer-trace)
 [mark] bootstrap.enter
@@ -269,9 +272,9 @@ IPCInstall
 [cohesix:root-task] empty slots [0x01d2..0x2000) span=7726
 [cohesix:root-task] cs: root=0x0002 bits=13 first_free=0x01d2
 [cohesix:root-task] Cohesix v0 (AArch64/virt)
-[cohesix:root-task] manifest.schema=1.2
+[cohesix:root-task] manifest.schema=1.3
 [cohesix:root-task] manifest.profile=virt-aarch64
-[cohesix:root-task] manifest.sha256=598eec148b0b36e526f2cd327684d8b548e0060ed559d2c38fc3711b95b34e6f
+[cohesix:root-task] manifest.sha256=dc24d82a338659106a0b61e312734451d9db0e04cfd06f7ca0cdb8c41a554ef7
 [cohesix:root-task] manifest.tickets=3
 [cohesix:root-task] manifest.namespaces=0 role_isolation=true
 [cohesix:root-task] manifest.secure9p.msize=8192
@@ -959,49 +962,95 @@ Commands:
   nettest  - Run network self-test (dev-virt)
   netstats - Show network counters
   quit  - Exit the console session
-cohesix> audit tcp.conn.open conn_id=1 peer=10.0.2.2:54226
+cohesix> audit tcp.conn.open conn_id=1 peer=10.0.2.2:56286
 cohesix> audit tcp.cmd.begin conn_id=1 sid=0 verb=ATTACH
 cohesix> audit tcp.session.attach conn_id=1 sid=1 role=queen
 cohesix> audit tcp.cmd.end conn_id=1 sid=1 verb=ATTACH status=ok term=END
-cohesix> audit tcp.cmd.begin conn_id=1 sid=1 verb=CAT
-cohesix> audit tcp.cmd.end conn_id=1 sid=1 verb=CAT status=ok term=END
-cohesix> audit tcp.cmd.begin conn_id=1 sid=1 verb=ECHO
-cohesix> audit tcp.cmd.end conn_id=1 sid=1 verb=ECHO status=ok term=END
-cohesix> audit tcp.cmd.begin conn_id=1 sid=1 verb=ECHO
-cohesix> audit tcp.cmd.end conn_id=1 sid=1 verb=ECHO status=ok term=END
-cohesix> audit tcp.cmd.begin conn_id=1 sid=1 verb=CAT
-cohesix> audit tcp.cmd.end conn_id=1 sid=1 verb=CAT status=ok term=END
-cohesix> audit tcp.cmd.begin conn_id=1 sid=1 verb=ECHO
-cohesix> audit tcp.cmd.end conn_id=1 sid=1 verb=ECHO status=ok term=END
-cohesix> audit tcp.cmd.begin conn_id=1 sid=1 verb=CAT
-cohesix> audit tcp.cmd.end conn_id=1 sid=1 verb=CAT status=ok term=END
-cohesix> audit tcp.cmd.begin conn_id=1 sid=1 verb=ECHO
-cohesix> audit ninedoor.err sid=1 op=ECHO path=/replay/ctl err=invalid payload
-cohesix> audit tcp.cmd.end conn_id=1 sid=1 verb=ECHO status=err term=END
-cohesix> audit tcp.cmd.begin conn_id=1 sid=1 verb=QUIT
-cohesix> audit tcp.session.detach conn_id=1 sid=1 reason=quit
-cohesix> audit tcp.cmd.end conn_id=1 sid=1 verb=QUIT status=ok term=EOF
+cohesix> audit tcp.cmd.begin conn_id=1 sid=1 verb=ATTACH
+cohesix> audit tcp.session.attach conn_id=1 sid=2 role=queen
+cohesix> audit tcp.cmd.end conn_id=1 sid=2 verb=ATTACH status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=1 sid=2 verb=ATTACH
+cohesix> audit tcp.session.attach conn_id=1 sid=3 role=queen
+cohesix> audit tcp.cmd.end conn_id=1 sid=3 verb=ATTACH status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=1 sid=3 verb=ATTACH
+cohesix> audit tcp.session.attach conn_id=1 sid=4 role=queen
+cohesix> audit tcp.cmd.end conn_id=1 sid=4 verb=ATTACH status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=1 sid=4 verb=ATTACH
+cohesix> audit tcp.session.attach conn_id=1 sid=5 role=queen
+cohesix> audit tcp.cmd.end conn_id=1 sid=5 verb=ATTACH status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=1 sid=5 verb=ATTACH
+cohesix> audit tcp.session.attach conn_id=1 sid=6 role=queen
+cohesix> audit tcp.cmd.end conn_id=1 sid=6 verb=ATTACH status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=1 sid=6 verb=CAT
+cohesix> audit tcp.cmd.end conn_id=1 sid=6 verb=CAT status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=1 sid=6 verb=ECHO
+cohesix> audit tcp.cmd.end conn_id=1 sid=6 verb=ECHO status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=1 sid=6 verb=ECHO
+cohesix> audit tcp.cmd.end conn_id=1 sid=6 verb=ECHO status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=1 sid=6 verb=CAT
+cohesix> audit tcp.cmd.end conn_id=1 sid=6 verb=CAT status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=1 sid=6 verb=ECHO
+cohesix> audit tcp.cmd.end conn_id=1 sid=6 verb=ECHO status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=1 sid=6 verb=CAT
+cohesix> audit tcp.cmd.end conn_id=1 sid=6 verb=CAT status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=1 sid=6 verb=ECHO
+cohesix> audit ninedoor.err sid=6 op=ECHO path=/replay/ctl err=invalid payload
+cohesix> audit tcp.cmd.end conn_id=1 sid=6 verb=ECHO status=err term=END
+cohesix> audit tcp.cmd.begin conn_id=1 sid=6 verb=QUIT
+cohesix> audit tcp.session.detach conn_id=1 sid=6 reason=quit
+cohesix> audit tcp.cmd.end conn_id=1 sid=6 verb=QUIT status=ok term=EOF
 cohesix> audit tcp.conn.close conn_id=1 reason=quit
-cohesix> audit tcp.conn.open conn_id=2 peer=10.0.2.2:54227
-cohesix> audit tcp.cmd.begin conn_id=2 sid=0 verb=ATTACH
-cohesix> audit tcp.session.attach conn_id=2 sid=2 role=queen
-cohesix> audit tcp.cmd.end conn_id=2 sid=2 verb=ATTACH status=ok term=END
-cohesix> audit tcp.cmd.begin conn_id=2 sid=2 verb=ECHO
-cohesix> audit ninedoor.err sid=2 op=ECHO path=/host/systemd/cohesix-agent.service/restart err=EPERM
-cohesix> audit tcp.cmd.end conn_id=2 sid=2 verb=ECHO status=err term=END
-cohesix> audit tcp.cmd.begin conn_id=2 sid=2 verb=ECHO
-cohesix> audit tcp.cmd.end conn_id=2 sid=2 verb=ECHO status=ok term=END
-cohesix> audit tcp.cmd.begin conn_id=2 sid=2 verb=CAT
-cohesix> audit tcp.cmd.end conn_id=2 sid=2 verb=CAT status=ok term=END
-cohesix> audit tcp.cmd.begin conn_id=2 sid=2 verb=ECHO
-cohesix> audit tcp.cmd.end conn_id=2 sid=2 verb=ECHO status=ok term=END
-cohesix> audit tcp.cmd.begin conn_id=2 sid=2 verb=CAT
-cohesix> audit tcp.cmd.end conn_id=2 sid=2 verb=CAT status=ok term=END
-cohesix> audit tcp.cmd.begin conn_id=2 sid=2 verb=ECHO
-cohesix> audit ninedoor.err sid=2 op=ECHO path=/host/systemd/cohesix-agent.service/restart err=EPERM
-cohesix> audit tcp.cmd.end conn_id=2 sid=2 verb=ECHO status=err term=END
-cohesix> audit tcp.cmd.begin conn_id=2 sid=2 verb=QUIT
-cohesix> audit tcp.session.detach conn_id=2 sid=2 reason=quit
-cohesix> audit tcp.cmd.end conn_id=2 sid=2 verb=QUIT status=ok term=EOF
+cohesix> audit tcp.conn.open conn_id=2 peer=10.0.2.2:56287
+cohesix> audit tcp.cmd.begin conn_id=2 sid=0 verb=QUIT
+cohesix> audit tcp.cmd.end conn_id=2 sid=0 verb=QUIT status=ok term=EOF
 cohesix> audit tcp.conn.close conn_id=2 reason=quit
-cohesix> qemu-system-aarch64: terminating on signal 15 from pid 81328 (<unknown process>)
+cohesix> audit tcp.conn.open conn_id=3 peer=10.0.2.2:56288
+cohesix> audit tcp.cmd.begin conn_id=3 sid=0 verb=QUIT
+cohesix> audit tcp.cmd.end conn_id=3 sid=0 verb=QUIT status=ok term=EOF
+cohesix> audit tcp.conn.close conn_id=3 reason=quit
+cohesix> audit tcp.conn.open conn_id=4 peer=10.0.2.2:56292
+cohesix> audit tcp.cmd.begin conn_id=4 sid=0 verb=ATTACH
+cohesix> audit tcp.session.attach conn_id=4 sid=7 role=queen
+cohesix> audit tcp.cmd.end conn_id=4 sid=7 verb=ATTACH status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=4 sid=7 verb=ATTACH
+cohesix> audit tcp.session.attach conn_id=4 sid=8 role=queen
+cohesix> audit tcp.cmd.end conn_id=4 sid=8 verb=ATTACH status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=4 sid=8 verb=ATTACH
+cohesix> audit tcp.session.attach conn_id=4 sid=9 role=queen
+cohesix> audit tcp.cmd.end conn_id=4 sid=9 verb=ATTACH status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=4 sid=9 verb=ATTACH
+cohesix> audit tcp.session.attach conn_id=4 sid=10 role=queen
+cohesix> audit tcp.cmd.end conn_id=4 sid=10 verb=ATTACH status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=4 sid=10 verb=ATTACH
+cohesix> audit tcp.session.attach conn_id=4 sid=11 role=queen
+cohesix> audit tcp.cmd.end conn_id=4 sid=11 verb=ATTACH status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=4 sid=11 verb=ATTACH
+cohesix> audit tcp.session.attach conn_id=4 sid=12 role=queen
+cohesix> audit tcp.cmd.end conn_id=4 sid=12 verb=ATTACH status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=4 sid=12 verb=ECHO
+cohesix> audit ninedoor.err sid=12 op=ECHO path=/host/systemd/cohesix-agent.service/restart err=EPERM
+cohesix> audit tcp.cmd.end conn_id=4 sid=12 verb=ECHO status=err term=END
+cohesix> audit tcp.cmd.begin conn_id=4 sid=12 verb=ECHO
+cohesix> audit tcp.cmd.end conn_id=4 sid=12 verb=ECHO status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=4 sid=12 verb=CAT
+cohesix> audit tcp.cmd.end conn_id=4 sid=12 verb=CAT status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=4 sid=12 verb=ECHO
+cohesix> audit tcp.cmd.end conn_id=4 sid=12 verb=ECHO status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=4 sid=12 verb=CAT
+cohesix> audit tcp.cmd.end conn_id=4 sid=12 verb=CAT status=ok term=END
+cohesix> audit tcp.cmd.begin conn_id=4 sid=12 verb=ECHO
+cohesix> audit ninedoor.err sid=12 op=ECHO path=/host/systemd/cohesix-agent.service/restart err=EPERM
+cohesix> audit tcp.cmd.end conn_id=4 sid=12 verb=ECHO status=err term=END
+cohesix> audit tcp.cmd.begin conn_id=4 sid=12 verb=QUIT
+cohesix> audit tcp.session.detach conn_id=4 sid=12 reason=quit
+cohesix> audit tcp.cmd.end conn_id=4 sid=12 verb=QUIT status=ok term=EOF
+cohesix> audit tcp.conn.close conn_id=4 reason=quit
+cohesix> audit tcp.conn.open conn_id=5 peer=10.0.2.2:56294
+cohesix> audit tcp.cmd.begin conn_id=5 sid=0 verb=QUIT
+cohesix> audit tcp.cmd.end conn_id=5 sid=0 verb=QUIT status=ok term=EOF
+cohesix> audit tcp.conn.close conn_id=5 reason=quit
+cohesix> audit tcp.conn.open conn_id=6 peer=10.0.2.2:56295
+cohesix> audit tcp.cmd.begin conn_id=6 sid=0 verb=QUIT
+cohesix> audit tcp.cmd.end conn_id=6 sid=0 verb=QUIT status=ok term=EOF
+cohesix> audit tcp.conn.close conn_id=6 reason=quit
+cohesix> qemu-system-aarch64: terminating on signal 15 from pid 87003 (<unknown process>)

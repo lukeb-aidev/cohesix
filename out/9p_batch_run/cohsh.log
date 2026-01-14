@@ -1,0 +1,11 @@
+Welcome to Cohesix. Type 'help' for commands.
+detached shell: run 'attach <role>' to connect
+[console] OK AUTH
+[console] OK ATTACH role=queen
+attached session SessionId(2) as Queen
+[console] OK ECHO path=/log/queen.log bytes=7
+[console] OK ECHO path=/log/queen.log bytes=7
+[console] OK ECHO path=/log/queen.log bytes=7
+[console] OK CAT path=/log/queen.log data=batch-1|batch-2|batch-3
+[console] ERR FRAME reason=invalid-length
+closing session

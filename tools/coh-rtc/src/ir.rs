@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-const SCHEMA_VERSION: &str = "1.2";
+const SCHEMA_VERSION: &str = "1.3";
 const MAX_WALK_DEPTH: usize = 8;
 const MAX_MSIZE: u32 = 8192;
 const MAX_SHARD_BITS: u8 = 8;
@@ -42,6 +42,8 @@ pub struct Manifest {
     pub ecosystem: Ecosystem,
     #[serde(default)]
     pub telemetry: Telemetry,
+    #[serde(default)]
+    pub client_policies: ClientPolicies,
 }
 
 impl Manifest {
@@ -87,6 +89,7 @@ impl Manifest {
         self.validate_tickets()?;
         self.validate_ecosystem()?;
         self.validate_telemetry()?;
+        self.validate_client_policies()?;
         Ok(())
     }
 
@@ -356,6 +359,38 @@ impl Manifest {
         }
         Ok(())
     }
+
+    fn validate_client_policies(&self) -> Result<()> {
+        let pool = &self.client_policies.cohsh.pool;
+        if pool.control_sessions == 0 {
+            bail!("client_policies.cohsh.pool.control_sessions must be >= 1");
+        }
+        if pool.telemetry_sessions == 0 {
+            bail!("client_policies.cohsh.pool.telemetry_sessions must be >= 1");
+        }
+        let retry = &self.client_policies.retry;
+        if retry.max_attempts == 0 {
+            bail!("client_policies.retry.max_attempts must be >= 1");
+        }
+        if retry.backoff_ms == 0 {
+            bail!("client_policies.retry.backoff_ms must be >= 1");
+        }
+        if retry.ceiling_ms < retry.backoff_ms {
+            bail!(
+                "client_policies.retry.ceiling_ms {} must be >= backoff_ms {}",
+                retry.ceiling_ms,
+                retry.backoff_ms
+            );
+        }
+        if retry.timeout_ms == 0 {
+            bail!("client_policies.retry.timeout_ms must be >= 1");
+        }
+        let heartbeat = &self.client_policies.heartbeat;
+        if heartbeat.interval_ms == 0 {
+            bail!("client_policies.heartbeat.interval_ms must be >= 1");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -520,6 +555,86 @@ impl Default for Telemetry {
             frame_schema: TelemetryFrameSchema::LegacyPlaintext,
             cursor: TelemetryCursor::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ClientPolicies {
+    pub cohsh: CohshClientPolicy,
+    pub retry: ClientRetryPolicy,
+    pub heartbeat: ClientHeartbeatPolicy,
+}
+
+impl Default for ClientPolicies {
+    fn default() -> Self {
+        Self {
+            cohsh: CohshClientPolicy::default(),
+            retry: ClientRetryPolicy::default(),
+            heartbeat: ClientHeartbeatPolicy::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct CohshClientPolicy {
+    pub pool: CohshPoolPolicy,
+}
+
+impl Default for CohshClientPolicy {
+    fn default() -> Self {
+        Self {
+            pool: CohshPoolPolicy::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct CohshPoolPolicy {
+    pub control_sessions: u16,
+    pub telemetry_sessions: u16,
+}
+
+impl Default for CohshPoolPolicy {
+    fn default() -> Self {
+        Self {
+            control_sessions: 2,
+            telemetry_sessions: 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ClientRetryPolicy {
+    pub max_attempts: u8,
+    pub backoff_ms: u64,
+    pub ceiling_ms: u64,
+    pub timeout_ms: u64,
+}
+
+impl Default for ClientRetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            backoff_ms: 200,
+            ceiling_ms: 2000,
+            timeout_ms: 5000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ClientHeartbeatPolicy {
+    pub interval_ms: u64,
+}
+
+impl Default for ClientHeartbeatPolicy {
+    fn default() -> Self {
+        Self { interval_ms: 15000 }
     }
 }
 

@@ -1,0 +1,30 @@
+{
+  "profile": "release",
+  "target": "aarch64-unknown-none",
+  "binaries": [
+    {
+      "name": "root-task",
+      "path": "cohesix/bin/root-task",
+      "size": 1643080,
+      "sha256": "c58972e79a1486aed4f74f9464cd296bbaf5fdc6698fa4b22779af7e145b0ebe"
+    },
+    {
+      "name": "nine-door",
+      "path": "cohesix/bin/nine-door",
+      "size": 1080,
+      "sha256": "12499bc5c598e15e761bc6c479a14feea7f0790049bd0d96d46ffd46f6759d1d"
+    },
+    {
+      "name": "worker-heart",
+      "path": "cohesix/bin/worker-heart",
+      "size": 1080,
+      "sha256": "6c415d0a745f9035f77eb4a5d5fd271581c36facbb043d34148418f7ea1f21cf"
+    },
+    {
+      "name": "worker-gpu",
+      "path": "cohesix/bin/worker-gpu",
+      "size": 1080,
+      "sha256": "7c33211ae4745c8e1cc4617dd2e2e4a24dce6f691878642805b2ca4cca6bb01e"
+    }
+  ]
+}

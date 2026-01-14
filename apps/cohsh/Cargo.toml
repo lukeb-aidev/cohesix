@@ -26,9 +26,10 @@ log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+toml = "0.8"
 
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"
-hex = { workspace = true }
-sha2 = { workspace = true }

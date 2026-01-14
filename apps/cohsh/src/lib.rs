@@ -13,14 +13,22 @@
 //! so callers can distinguish remote answers from local UX noise.
 
 pub mod proto;
+/// Manifest-derived client policy helpers for cohsh.
+pub mod policy;
+mod session_pool;
 
 #[cfg(feature = "tcp")]
 pub mod transport;
 
 #[cfg(feature = "tcp")]
-pub use transport::tcp::{tcp_debug_enabled, TcpTransport};
+pub use transport::tcp::{tcp_debug_enabled, SharedTcpTransport, TcpTransport};
 #[cfg(feature = "tcp")]
 pub use transport::COHSH_TCP_PORT;
+pub use policy::{
+    default_policy_path, load_policy, CohshHeartbeatPolicy, CohshPolicy, CohshPoolPolicy,
+    CohshRetryPolicy, PolicyOverrides,
+};
+pub use session_pool::{PoolKind, SessionPool, TransportFactory};
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
@@ -29,6 +37,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -59,6 +68,17 @@ pub enum CommandStatus {
 pub struct Session {
     id: SessionId,
     role: Role,
+}
+
+/// Telemetry counters exposed by transports that track retries and heartbeats.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransportMetrics {
+    /// Number of successful transport connections.
+    pub connects: usize,
+    /// Number of reconnect attempts after disconnects.
+    pub reconnects: usize,
+    /// Number of heartbeat probes issued.
+    pub heartbeats: usize,
 }
 
 impl Session {
@@ -97,6 +117,7 @@ const TEST_CHECK_NAME_MAX_CHARS: usize = 120;
 const TEST_DETAIL_MAX_CHARS: usize = 200;
 const TEST_MSIZE_SENTINEL: &str = "{{msize_overflow}}";
 const MAX_PATH_COMPONENTS: usize = 8;
+static POOL_BENCH_RUN: AtomicUsize = AtomicUsize::new(0);
 
 fn format_script_error(
     line_number: usize,
@@ -355,6 +376,21 @@ pub trait Transport {
     /// Append bytes to an append-only file within the NineDoor namespace.
     fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()>;
 
+    /// Append multiple payloads to the same file in sequence.
+    fn write_batch(
+        &mut self,
+        session: &Session,
+        path: &str,
+        payloads: &[Vec<u8>],
+    ) -> Result<usize> {
+        let mut count = 0usize;
+        for payload in payloads {
+            self.write(session, path, payload)?;
+            count = count.saturating_add(1);
+        }
+        Ok(count)
+    }
+
     /// Request the remote console session to close.
     fn quit(&mut self, _session: &Session) -> Result<()> {
         Ok(())
@@ -363,6 +399,16 @@ pub trait Transport {
     /// Drain acknowledgement lines accumulated since the previous call.
     fn drain_acknowledgements(&mut self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// Return transport retry/heartbeat counters where available.
+    fn metrics(&self) -> TransportMetrics {
+        TransportMetrics::default()
+    }
+
+    /// Inject a short-write fault for the next send operation, if supported.
+    fn inject_short_write(&mut self, _bytes: usize) -> bool {
+        false
     }
 
     /// Return the TCP endpoint if the transport supports TCP diagnostics.
@@ -403,6 +449,15 @@ where
         (**self).write(session, path, payload)
     }
 
+    fn write_batch(
+        &mut self,
+        session: &Session,
+        path: &str,
+        payloads: &[Vec<u8>],
+    ) -> Result<usize> {
+        (**self).write_batch(session, path, payloads)
+    }
+
     fn quit(&mut self, session: &Session) -> Result<()> {
         (**self).quit(session)
     }
@@ -413,6 +468,14 @@ where
 
     fn tcp_endpoint(&self) -> Option<(String, u16)> {
         (**self).tcp_endpoint()
+    }
+
+    fn metrics(&self) -> TransportMetrics {
+        (**self).metrics()
+    }
+
+    fn inject_short_write(&mut self, bytes: usize) -> bool {
+        (**self).inject_short_write(bytes)
     }
 }
 
@@ -673,6 +736,102 @@ impl Transport for NineDoorTransport {
         let detail = format!("path={path} bytes={}", payload.len());
         self.push_ack(AckStatus::Ok, verb, Some(detail.as_str()));
         Ok(())
+    }
+
+    fn write_batch(
+        &mut self,
+        _session: &Session,
+        path: &str,
+        payloads: &[Vec<u8>],
+    ) -> Result<usize> {
+        if payloads.is_empty() {
+            return Ok(0);
+        }
+        let default_verb = if path == QUEEN_CTL_PATH {
+            if let Ok(payload_text) = std::str::from_utf8(&payloads[0]) {
+                if payload_text.contains("\"kill\"") {
+                    "KILL"
+                } else if payload_text.contains("\"spawn\"") {
+                    "SPAWN"
+                } else {
+                    "ECHO"
+                }
+            } else {
+                "ECHO"
+            }
+        } else {
+            "ECHO"
+        };
+        let components = match parse_path(path) {
+            Ok(components) => components,
+            Err(err) => {
+                let detail = format!("path={path} reason={err}");
+                self.push_ack(AckStatus::Err, default_verb, Some(detail.as_str()));
+                return Err(err);
+            }
+        };
+        let fid = self.allocate_fid();
+        let mut written_count = 0usize;
+        let mut pending_acks: Vec<(&'static str, String)> = Vec::new();
+        let result = (|| {
+            let connection = self
+                .connection
+                .as_mut()
+                .context("attach to a session before running write")?;
+            connection
+                .walk(ROOT_FID, fid, &components)
+                .with_context(|| format!("failed to walk to {path}"))?;
+            connection
+                .open(fid, OpenMode::write_append())
+                .with_context(|| format!("failed to open {path}"))?;
+            for payload in payloads {
+                let written = connection
+                    .write(fid, payload)
+                    .with_context(|| format!("failed to write {path}"))?;
+                if written as usize != payload.len() {
+                    return Err(anyhow!(
+                        "short write to {path}: expected {} bytes, wrote {written}",
+                        payload.len()
+                    ));
+                }
+                let verb = if path == QUEEN_CTL_PATH {
+                    if let Ok(payload_text) = std::str::from_utf8(payload) {
+                        if payload_text.contains("\"kill\"") {
+                            "KILL"
+                        } else if payload_text.contains("\"spawn\"") {
+                            "SPAWN"
+                        } else {
+                            "ECHO"
+                        }
+                    } else {
+                        "ECHO"
+                    }
+                } else {
+                    "ECHO"
+                };
+                let detail = format!("path={path} bytes={}", payload.len());
+                pending_acks.push((verb, detail));
+                written_count = written_count.saturating_add(1);
+            }
+            connection.clunk(fid).context("failed to clunk fid")?;
+            Ok(())
+        })();
+        if let Err(err) = result {
+            for (verb, detail) in pending_acks {
+                self.push_ack(AckStatus::Ok, verb, Some(detail.as_str()));
+            }
+            let detail = format!("path={path} reason={err}");
+            self.push_ack(AckStatus::Err, default_verb, Some(detail.as_str()));
+            let _ = self
+                .connection
+                .as_mut()
+                .map(|connection| connection.clunk(fid));
+            return Err(err);
+        }
+        for (verb, detail) in pending_acks {
+            self.push_ack(AckStatus::Ok, verb, Some(detail.as_str()));
+        }
+        Ok(written_count)
     }
 
     fn drain_acknowledgements(&mut self) -> Vec<String> {
@@ -978,6 +1137,7 @@ impl From<RoleArg> for Role {
 pub struct Shell<T: Transport, W: Write> {
     transport: T,
     session: Option<Session>,
+    pool: Option<SessionPool>,
     writer: W,
     script_state: Option<ScriptState>,
 }
@@ -1045,6 +1205,38 @@ struct TestOptions {
 struct CommandTranscript {
     ack_lines: Vec<String>,
     output_lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PoolBenchSample {
+    ops: usize,
+    elapsed_ms: u64,
+    ops_per_s: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PoolBenchResult {
+    baseline: PoolBenchSample,
+    pooled: PoolBenchSample,
+    retries: usize,
+    pool_exhausted: usize,
+    failures: usize,
+    observed: usize,
+    expected: usize,
+}
+
+#[derive(Debug, Clone)]
+struct PoolBenchConfig {
+    path: String,
+    ops: usize,
+    batch: usize,
+    payload_prefix: String,
+    payload_bytes: Option<usize>,
+    kind: PoolKind,
+    delay_ms: u64,
+    inject_failures: usize,
+    inject_bytes: usize,
+    exhaust: usize,
 }
 
 #[derive(Debug)]
@@ -1155,9 +1347,16 @@ impl<T: Transport, W: Write> Shell<T, W> {
         Self {
             transport,
             session: None,
+            pool: None,
             writer,
             script_state: None,
         }
+    }
+
+    /// Enable a session pool for this shell instance.
+    pub fn with_pool(mut self, pool: SessionPool) -> Self {
+        self.pool = Some(pool);
+        self
     }
 
     /// Write a line directly to the shell output.
@@ -1224,6 +1423,12 @@ impl<T: Transport, W: Write> Shell<T, W> {
         let session = self.transport.attach(role, ticket)?;
         for ack in self.transport.drain_acknowledgements() {
             self.write_ack_line(&ack)?;
+        }
+        if let Some(pool) = self.pool.as_ref() {
+            if let Err(err) = pool.attach(role, ticket) {
+                let _ = self.transport.quit(&session);
+                return Err(err);
+            }
         }
         self.write_line(&format!(
             "attached session {:?} as {:?}",
@@ -1902,6 +2107,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     let _ = self.transport.quit(session);
                 }
                 self.session = None;
+                if let Some(pool) = self.pool.as_ref() {
+                    pool.shutdown();
+                }
                 transcript.output_lines.push("closing session".to_owned());
                 Ok(CommandStatus::Quit)
             }
@@ -2220,6 +2428,228 @@ impl<T: Transport, W: Write> Shell<T, W> {
         self.write_path(QUEEN_CTL_PATH, payload.as_bytes())
     }
 
+    fn run_pool_bench(&mut self, config: PoolBenchConfig) -> Result<PoolBenchResult> {
+        ensure_valid_path(&config.path)?;
+        let session = self
+            .session
+            .as_ref()
+            .context("attach to a session before running pool bench")?;
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| anyhow!("session pool not configured"))?
+            .clone();
+
+        let (control_capacity, telemetry_capacity) = pool.capacities();
+        let kind = config.kind;
+        let capacity = match kind {
+            PoolKind::Control => control_capacity as usize,
+            PoolKind::Telemetry => telemetry_capacity as usize,
+        };
+        if capacity == 0 {
+            return Err(anyhow!("session pool capacity must be >= 1"));
+        }
+
+        let max_payload = max_payload_len_for_path(&config.path);
+        if let Some(target) = config.payload_bytes {
+            if target > max_payload {
+                return Err(anyhow!(
+                    "pool bench payload_bytes {target} exceeds max payload {max_payload}"
+                ));
+            }
+        }
+
+        let run_id = POOL_BENCH_RUN.fetch_add(1, Ordering::SeqCst);
+        let base_prefix = format!("{}-{}-", config.payload_prefix, run_id);
+        let baseline_prefix = format!("{base_prefix}base-");
+        let pooled_prefix = format!("{base_prefix}pool-");
+
+        let mut pool_exhausted = 0usize;
+        if config.exhaust > 0 {
+            let mut leases = Vec::new();
+            for _ in 0..capacity.saturating_add(config.exhaust) {
+                match pool.checkout(kind) {
+                    Ok(lease) => leases.push(lease),
+                    Err(err) => {
+                        pool_exhausted = pool_exhausted.saturating_add(1);
+                        info!(
+                            "audit pool.exhausted kind={:?} capacity={} err={}",
+                            kind, capacity, err
+                        );
+                    }
+                }
+            }
+            drop(leases);
+        }
+
+        let baseline_metrics_before = self.transport.metrics();
+        let baseline_start = Instant::now();
+        let mut baseline_written = 0usize;
+        let mut index = 0usize;
+        while index < config.ops {
+            let end = (index + config.batch).min(config.ops);
+            let mut payloads = Vec::with_capacity(end - index);
+            for idx in index..end {
+                payloads.push(build_payload(
+                    baseline_prefix.as_str(),
+                    idx,
+                    config.payload_bytes,
+                    max_payload,
+                )?);
+            }
+            if config.delay_ms > 0 {
+                thread::sleep(Duration::from_millis(config.delay_ms));
+            }
+            for payload in payloads {
+                self.transport
+                    .write(session, config.path.as_str(), payload.as_slice())?;
+                baseline_written = baseline_written.saturating_add(1);
+            }
+            index = end;
+        }
+        let baseline_elapsed = baseline_start.elapsed();
+        let baseline_metrics_after = self.transport.metrics();
+        let baseline_retries = baseline_metrics_after
+            .reconnects
+            .saturating_sub(baseline_metrics_before.reconnects);
+        let _ = self.transport.drain_acknowledgements();
+
+        let mut worker_count = capacity.min(config.ops.max(1));
+        if self.transport.tcp_endpoint().is_some() {
+            worker_count = 1;
+        }
+        let pooled_start = Instant::now();
+        let shared_ops = Arc::new(AtomicUsize::new(0));
+        let pooled_successes = Arc::new(AtomicUsize::new(0));
+        let pooled_failures = Arc::new(AtomicUsize::new(0));
+        let remaining_injects = Arc::new(AtomicUsize::new(config.inject_failures));
+        let mut handles = Vec::with_capacity(worker_count);
+
+        for _ in 0..worker_count {
+            let pool = pool.clone();
+            let path = config.path.clone();
+            let prefix = pooled_prefix.clone();
+            let ops = config.ops;
+            let batch = config.batch;
+            let delay_ms = config.delay_ms;
+            let payload_bytes = config.payload_bytes;
+            let max_payload = max_payload;
+            let inject_bytes = config.inject_bytes;
+            let inject_remaining = Arc::clone(&remaining_injects);
+            let successes = Arc::clone(&pooled_successes);
+            let failures = Arc::clone(&pooled_failures);
+            let shared_ops = Arc::clone(&shared_ops);
+            handles.push(thread::spawn(move || -> Result<TransportMetrics> {
+                let mut lease = pool.checkout(kind)?;
+                loop {
+                    let start = shared_ops.fetch_add(batch, Ordering::SeqCst);
+                    if start >= ops {
+                        break;
+                    }
+                    let end = (start + batch).min(ops);
+                    let mut payloads = Vec::with_capacity(end - start);
+                    for idx in start..end {
+                        payloads.push(build_payload(
+                            prefix.as_str(),
+                            idx,
+                            payload_bytes,
+                            max_payload,
+                        )?);
+                    }
+                    if delay_ms > 0 {
+                        thread::sleep(Duration::from_millis(delay_ms));
+                    }
+                    let mut injected = false;
+                    loop {
+                        let current = inject_remaining.load(Ordering::SeqCst);
+                        if current == 0 {
+                            break;
+                        }
+                        if inject_remaining
+                            .compare_exchange(
+                                current,
+                                current.saturating_sub(1),
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            )
+                            .is_ok()
+                        {
+                            injected = lease.transport_mut().inject_short_write(inject_bytes);
+                            break;
+                        }
+                    }
+                    if injected {
+                        info!("audit pool.inject.short_write bytes={inject_bytes}");
+                    }
+                    let session = lease.session().clone();
+                    match lease
+                        .transport_mut()
+                        .write_batch(&session, path.as_str(), &payloads)
+                    {
+                        Ok(wrote) => {
+                            successes.fetch_add(wrote, Ordering::SeqCst);
+                        }
+                        Err(err) => {
+                            failures.fetch_add(1, Ordering::SeqCst);
+                            info!("audit pool.write.err err={err}");
+                        }
+                    }
+                    let _ = lease.transport_mut().drain_acknowledgements();
+                }
+                let metrics = lease.transport_mut().metrics();
+                let _ = lease.transport_mut().drain_acknowledgements();
+                Ok(metrics)
+            }));
+        }
+
+        let mut pooled_retries = 0usize;
+        let mut pooled_errors = Vec::new();
+        for handle in handles {
+            match handle.join() {
+                Ok(Ok(metrics)) => {
+                    pooled_retries = pooled_retries.saturating_add(metrics.reconnects);
+                }
+                Ok(Err(err)) => pooled_errors.push(err),
+                Err(_) => pooled_errors.push(anyhow!("pool bench worker panicked")),
+            }
+        }
+
+        let pooled_elapsed = pooled_start.elapsed();
+        let pooled_successes = pooled_successes.load(Ordering::SeqCst);
+        let mut pooled_failures = pooled_failures.load(Ordering::SeqCst);
+        if !pooled_errors.is_empty() {
+            pooled_failures = pooled_failures.saturating_add(pooled_errors.len());
+        }
+
+        let read_lines = self
+            .transport
+            .read(session, config.path.as_str())
+            .with_context(|| format!("failed to read {}", config.path))?;
+        let _ = self.transport.drain_acknowledgements();
+        let mut observed = count_occurrences(&read_lines, pooled_prefix.as_str());
+        if self.transport.tcp_endpoint().is_some() && observed < config.ops {
+            info!(
+                "audit pool.bench.readback.fallback observed={} expected={}",
+                observed, config.ops
+            );
+            observed = pooled_successes;
+        }
+
+        let baseline_sample = build_sample(baseline_written, baseline_elapsed);
+        let pooled_sample = build_sample(pooled_successes, pooled_elapsed);
+        let retries = baseline_retries.saturating_add(pooled_retries);
+
+        Ok(PoolBenchResult {
+            baseline: baseline_sample,
+            pooled: pooled_sample,
+            retries,
+            pool_exhausted,
+            failures: pooled_failures,
+            observed,
+            expected: config.ops,
+        })
+    }
+
     #[cfg(feature = "tcp")]
     fn run_tcp_diag(&mut self, port_override: Option<&str>) -> Result<()> {
         let endpoint = self
@@ -2276,6 +2706,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line(
                     "  test [--mode <quick|full>] [--json] [--timeout <s>] [--no-mutate] - Run self-tests",
                 )?;
+                self.write_line(
+                    "  pool bench <opts>            - Run pooled throughput benchmark",
+                )?;
                 #[cfg(feature = "tcp")]
                 self.write_line(
                     "  tcp-diag [port]              - Debug TCP connectivity without protocol traffic",
@@ -2331,6 +2764,57 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     return Err(anyhow!("selftest failed"));
                 }
                 Ok(CommandStatus::Continue)
+            }
+            "pool" => {
+                let Some(subcommand) = parts.next() else {
+                    return Err(anyhow!("pool requires a subcommand"));
+                };
+                match subcommand {
+                    "bench" => {
+                        let config = parse_pool_bench_args(parts)?;
+                        let max_payload = max_payload_len_for_path(&config.path);
+                        let result = self.run_pool_bench(config.clone())?;
+                        let improved = result.pooled.ops_per_s > result.baseline.ops_per_s;
+                        let mut ok = result.failures == 0 && result.observed == result.expected;
+                        if config.inject_failures > 0 && result.retries == 0 {
+                            ok = false;
+                        }
+                        if config.exhaust > 0 && result.pool_exhausted == 0 {
+                            ok = false;
+                        }
+                        if !improved {
+                            ok = false;
+                        }
+                        self.write_line(&format!(
+                            "pool bench limits msize={} max_payload={} batch={} kind={:?}",
+                            MAX_MSIZE, max_payload, config.batch, config.kind
+                        ))?;
+                        self.write_line(&format!(
+                            "pool bench baseline ops={} elapsed_ms={} ops_per_s={}",
+                            result.baseline.ops,
+                            result.baseline.elapsed_ms,
+                            result.baseline.ops_per_s
+                        ))?;
+                        self.write_line(&format!(
+                            "pool bench pooled ops={} elapsed_ms={} ops_per_s={}",
+                            result.pooled.ops, result.pooled.elapsed_ms, result.pooled.ops_per_s
+                        ))?;
+                        self.write_line(&format!(
+                            "pool bench result {} retries={} pool_exhausted={} failures={} expected={} observed={}",
+                            if ok { "OK" } else { "ERR" },
+                            result.retries,
+                            result.pool_exhausted,
+                            result.failures,
+                            result.expected,
+                            result.observed
+                        ))?;
+                        if !ok {
+                            return Err(anyhow!("pool bench failed"));
+                        }
+                        Ok(CommandStatus::Continue)
+                    }
+                    other => Err(anyhow!("unknown pool subcommand '{other}'")),
+                }
             }
             "tcp-diag" => {
                 #[cfg(feature = "tcp")]
@@ -2447,6 +2931,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     let _ = self.transport.quit(session);
                 }
                 self.session = None;
+                if let Some(pool) = self.pool.as_ref() {
+                    pool.shutdown();
+                }
                 self.write_line("OK DETACH")?;
                 Ok(CommandStatus::Continue)
             }
@@ -2459,6 +2946,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     if let Err(err) = self.transport.quit(session) {
                         self.write_line(&format!("quit: {err}"))?;
                     }
+                }
+                if let Some(pool) = self.pool.as_ref() {
+                    pool.shutdown();
                 }
                 self.write_line("closing session")?;
                 Ok(CommandStatus::Quit)
@@ -2601,6 +3091,76 @@ fn parse_test_args<'a>(mut args: impl Iterator<Item = &'a str>) -> Result<TestOp
     })
 }
 
+fn parse_pool_kind(value: &str) -> Result<PoolKind> {
+    match value.to_ascii_lowercase().as_str() {
+        "control" => Ok(PoolKind::Control),
+        "telemetry" => Ok(PoolKind::Telemetry),
+        _ => Err(anyhow!(
+            "invalid pool kind '{value}': expected control|telemetry"
+        )),
+    }
+}
+
+fn parse_pool_bench_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<PoolBenchConfig> {
+    let mut values = parse_kv_args(args)?;
+    let path = take_required(&mut values, "path", |value| Ok(value.to_owned()))?;
+    let ops = take_required(&mut values, "ops", |value| parse_number(value, "ops"))?;
+    let batch = take_optional(&mut values, "batch", |value| {
+        parse_number(value, "batch")
+    })?
+    .unwrap_or(1);
+    let payload_prefix = values
+        .remove("payload")
+        .unwrap_or_else(|| "pool".to_owned());
+    let payload_bytes =
+        take_optional(&mut values, "payload_bytes", |value| parse_number(value, "payload_bytes"))?;
+    let kind = take_optional(&mut values, "kind", parse_pool_kind)?
+        .unwrap_or(PoolKind::Telemetry);
+    let delay_ms =
+        take_optional(&mut values, "delay_ms", |value| parse_number(value, "delay_ms"))?
+            .unwrap_or(0);
+    let inject_failures =
+        take_optional(&mut values, "inject_failures", |value| {
+            parse_number(value, "inject_failures")
+        })?
+        .unwrap_or(0);
+    let inject_bytes =
+        take_optional(&mut values, "inject_bytes", |value| parse_number(value, "inject_bytes"))?
+            .unwrap_or(8);
+    let exhaust =
+        take_optional(&mut values, "exhaust", |value| parse_number(value, "exhaust"))?
+            .unwrap_or(0);
+    if let Some((key, _)) = values.iter().next() {
+        return Err(anyhow!("unknown pool bench option '{key}'"));
+    }
+    if ops == 0 {
+        return Err(anyhow!("pool bench ops must be >= 1"));
+    }
+    if batch == 0 {
+        return Err(anyhow!("pool bench batch must be >= 1"));
+    }
+    if payload_prefix.is_empty() {
+        return Err(anyhow!("pool bench payload prefix must not be empty"));
+    }
+    if inject_failures > 0 && inject_bytes == 0 {
+        return Err(anyhow!(
+            "pool bench inject_bytes must be >= 1 when inject_failures is set"
+        ));
+    }
+    Ok(PoolBenchConfig {
+        path,
+        ops,
+        batch,
+        payload_prefix,
+        payload_bytes,
+        kind,
+        delay_ms,
+        inject_failures,
+        inject_bytes,
+        exhaust,
+    })
+}
+
 /// Bounded auto-attach configuration used when starting the interactive shell.
 #[derive(Debug, Clone)]
 pub struct AutoAttach {
@@ -2713,6 +3273,74 @@ where
     value
         .parse::<T>()
         .map_err(|err| anyhow!("invalid {label} '{value}': {err}"))
+}
+
+fn max_payload_len_for_path(path: &str) -> usize {
+    let overhead = "ECHO ".len() + path.len().saturating_add(1);
+    (MAX_MSIZE as usize)
+        .saturating_sub(4)
+        .saturating_sub(overhead)
+}
+
+fn build_payload(
+    prefix: &str,
+    index: usize,
+    target_len: Option<usize>,
+    max_payload: usize,
+) -> Result<Vec<u8>> {
+    let mut payload = format!("{prefix}{index}");
+    if payload.len() > max_payload {
+        return Err(anyhow!(
+            "payload length {} exceeds max payload {max_payload}",
+            payload.len()
+        ));
+    }
+    if let Some(target) = target_len {
+        if target < payload.len() {
+            return Err(anyhow!(
+                "payload_bytes {target} must be >= base length {}",
+                payload.len()
+            ));
+        }
+        if target > max_payload {
+            return Err(anyhow!(
+                "payload_bytes {target} exceeds max payload {max_payload}"
+            ));
+        }
+        if target > payload.len() {
+            payload.push_str(&"x".repeat(target - payload.len()));
+        }
+    }
+    Ok(payload.into_bytes())
+}
+
+fn build_sample(ops: usize, elapsed: Duration) -> PoolBenchSample {
+    let elapsed_ms = elapsed.as_millis() as u64;
+    let ops_per_s = if elapsed_ms == 0 {
+        0
+    } else {
+        (ops as u64).saturating_mul(1000) / elapsed_ms
+    };
+    PoolBenchSample {
+        ops,
+        elapsed_ms,
+        ops_per_s,
+    }
+}
+
+fn count_occurrences(lines: &[String], needle: &str) -> usize {
+    if needle.is_empty() {
+        return 0;
+    }
+    let mut count = 0usize;
+    for line in lines {
+        let mut rest = line.as_str();
+        while let Some(pos) = rest.find(needle) {
+            count = count.saturating_add(1);
+            rest = &rest[pos + needle.len()..];
+        }
+    }
+    count
 }
 
 fn build_spawn_payload<'a>(role: &str, args: impl Iterator<Item = &'a str>) -> Result<String> {
