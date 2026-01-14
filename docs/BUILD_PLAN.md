@@ -1881,86 +1881,7 @@ Deliverables:
 ```
 ---
 
-## Milestone 20e — Edge Local Status (UEFI Host Tool)
-
-**Why now (compiler):** Field techs need offline status on edge devices using the same 9P grammar. Tool must respect UEFI profile and attestation outputs.
-
-**Goal**
-Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection of boot/attest data over local (same-host) 9P/TCP where available.
-
-**Deliverables**
-- `coh-status` binary reading `/proc/boot`, `/proc/attest/*`, `/worker/*/telemetry` via localhost 9P/TCP; offline-friendly.
-- TPM attestation check displaying manifest fingerprint and verifying against cached reference.
-- Shared CBOR parsing code with SwarmUI to preserve grammar.
-
-**Commands**
-- `cargo build -p coh-status`
-- `cargo run -p coh-status -- --script scripts/cohsh/boot_v0.coh`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh`
-
-**Checks (DoD)**
-- Works offline; wrong/expired ticket → deterministic `ERR reason=Permission` surfaced to user.
-- CBOR parsing identical to SwarmUI; transcript diff zero for shared flows.
-- Abuse case: attempt to write via coh-status returns ERR and does not mutate state.
-- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
-
-**Compiler touchpoints**
-- `coh-rtc` emits localhost binding guidance and attestation paths for UEFI profile into docs/HARDWARE_BRINGUP.md and docs/USERLAND_AND_CLI.md.
-
-**Task Breakdown**
-```
-Title/ID: m20e-status-tool
-Goal: Build coh-status for offline/local status reads over 9P/TCP.
-Inputs: apps/coh-status/, UEFI manifest outputs, attestation nodes.
-Changes:
-  - apps/coh-status/src/main.rs — read-only client using cohsh-core; offline cache for attest data.
-  - apps/coh-status/tests/offline.rs — simulate offline read and expired ticket.
-Commands:
-  - cargo build -p coh-status
-  - cargo run -p coh-status -- --script scripts/cohsh/boot_v0.coh
-Checks:
-  - Expired ticket returns ERR; offline cache used when transport unavailable.
-Deliverables:
-  - Tool usage documented in docs/HARDWARE_BRINGUP.md and docs/USERLAND_AND_CLI.md.
-
-Title/ID: m20e-attest-verify
-Goal: Verify TPM attestation parsing parity with SwarmUI.
-Inputs: /proc/attest outputs, SwarmUI CBOR parsers.
-Changes:
-  - apps/coh-status/src/attest.rs — verify manifest fingerprint against cached reference.
-  - shared CBOR decoder module reused from SwarmUI/cohsh-core.
-Commands:
-  - cargo test -p coh-status --test attest
-  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh
-Checks:
-  - Malformed attestation rejected with ERR; valid attestation matches manifest hash identically to SwarmUI.
-Deliverables:
-  - Verified attestation workflow documented; regression outputs stored.
-
-Title/ID: m20e-repo-headers
-Goal: Add SPDX/copyright/purpose headers and NOTICE for repository compliance.
-Inputs: AGENTS.md, README.md, docs/*.md, apps/**, crates/**, tools/**, tests/**.
-Changes:
-  - apps/** — add SPDX/copyright/purpose headers to Rust and Markdown files.
-  - crates/** — add SPDX/copyright/purpose headers to Rust and Markdown files.
-  - tools/** — add SPDX/copyright/purpose headers to Rust and Markdown files.
-  - tests/** — add SPDX/copyright/purpose headers to Rust files.
-  - docs/** — add SPDX/copyright/purpose headers to Markdown files.
-  - NOTICE.txt — add repository notice statement.
-Commands:
-  - rg --files -g '*.rs' apps crates tools tests
-  - rg --files -g '*.md' docs apps crates tools
-  - rg --files -g '*.md' .
-Checks:
-  - In-scope Rust and Markdown files contain copyright, SPDX, and Purpose headers.
-  - NOTICE.txt present at repo root.
-Deliverables:
-  - Header updates across Rust and Markdown files; NOTICE.txt added.
-```
-
----
-
-## Milestone 20f — CLI/UI Convergence Tests
+## Milestone 20e — CLI/UI Convergence Tests
 
 **Why now (compiler):** After UI/CLI/library convergence, we need hard regression proof across all frontends with deterministic timing windows.
 
@@ -1988,7 +1909,7 @@ Establish a convergence harness comparing console, `cohsh`, `cohsh-core`, SwarmU
 
 **Task Breakdown**
 ```
-Title/ID: m20f-transcript-suite
+Title/ID: m20e-transcript-suite
 Goal: Build shared transcript fixtures and comparison harness.
 Inputs: tests/fixtures/transcripts/, console + TCP outputs.
 Changes:
@@ -2002,7 +1923,7 @@ Checks:
 Deliverables:
   - Transcript fixtures stored; docs/TEST_PLAN.md references hashes.
 
-Title/ID: m20f-ui-cli-sync
+Title/ID: m20e-ui-cli-sync
 Goal: Integrate SwarmUI/coh-status into convergence CI.
 Inputs: apps/swarmui/tests/transcript.rs, apps/coh-status/tests/transcript.rs.
 Changes:
@@ -2019,7 +1940,7 @@ Deliverables:
 
 ---
 
-## Milestone 20g — UI Security Hardening (Tickets & Quotas)
+## Milestone 20f — UI Security Hardening (Tickets & Quotas)
 
 **Why now (compiler):** With UI parity established, enforce least privilege and quotas to protect interactive sessions.
 
@@ -2047,7 +1968,7 @@ Add ticket-scoped quotas and audit metrics for UI interactions without altering 
 
 **Task Breakdown**
 ```
-Title/ID: m20g-ticket-quotas
+Title/ID: m20f-ticket-quotas
 Goal: Enforce per-ticket path/verb/rate quotas with audit metrics.
 Inputs: apps/nine-door/src/host/security.rs, PumpMetrics.
 Changes:
@@ -2060,7 +1981,7 @@ Checks:
 Deliverables:
   - Quota tables documented via compiler output in docs/SECURITY.md.
 
-Title/ID: m20g-cli-ui-regressions
+Title/ID: m20f-cli-ui-regressions
 Goal: Validate quota enforcement across CLI and UI clients.
 Inputs: scripts/cohsh/telemetry_ring.coh (extended), SwarmUI/coh-status regression hooks.
 Changes:
@@ -2077,7 +1998,7 @@ Deliverables:
 
 ---
 
-## Milestone 20h — Deterministic Snapshot & Replay (UI Testing)
+## Milestone 20g — Deterministic Snapshot & Replay (UI Testing)
 
 **Why now (compiler):** To stabilize UI regressions without live targets, we need deterministic trace capture and replay consistent with CLI/console semantics.
 
@@ -2104,7 +2025,7 @@ Add trace record/replay across `cohsh-core`, SwarmUI, and coh-status to enable d
 
 **Task Breakdown**
 ```
-Title/ID: m20h-trace-core
+Title/ID: m20g-trace-core
 Goal: Implement trace recorder/replayer in cohsh-core with bounds.
 Inputs: crates/cohsh-core, tests/fixtures/transcripts/.
 Changes:
@@ -2117,7 +2038,7 @@ Checks:
 Deliverables:
   - Trace schema referenced in docs/TEST_PLAN.md via compiler snippet.
 
-Title/ID: m20h-ui-replay
+Title/ID: m20g-ui-replay
 Goal: Add offline replay to SwarmUI and coh-status for deterministic UI tests.
 Inputs: apps/swarmui/src/trace.rs, apps/coh-status/src/trace.rs, docs/TEST_PLAN.md.
 Changes:
@@ -2539,7 +2460,7 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 
 ## Task Breakdown
 
-### Title/ID: m18-uefi-bootchain
+### Title/ID: m25-uefi-bootchain
 **Goal:** Boot via UEFI → elfloader.efi → seL4; load manifest from ESP; emit stable fingerprint lines.  
 **Inputs:** EFI-built elfloader, `scripts/make_uefi_image.py`, `scripts/qemu-run.sh`, `configs/root_task.toml` (`profile.name`).  
 **Changes:**
@@ -2556,7 +2477,7 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 
 ---
 
-### Title/ID: m18-attestation
+### Title/ID: m25-attestation
 **Goal:** Implement TPM/DICE identity sealing and export via `/proc/boot` with strict determinism.  
 **Inputs:** `apps/root-task/src/attest.rs`, `docs/SECURITY.md` (attestation section).  
 **Changes:**
@@ -2573,7 +2494,84 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 **Deliverables:**
 - Attestation evidence documented in `docs/SECURITY.md` and `docs/HARDWARE_BRINGUP.md`.
 
-## Milestone 26 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)
+## Milestone 26 — Edge Local Status (UEFI Host Tool)
+
+**Why now (compiler):** Field techs need offline status on edge devices using the same 9P grammar. Tool must respect UEFI profile and attestation outputs.
+
+**Goal**
+Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection of boot/attest data over local (same-host) 9P/TCP where available.
+
+**Deliverables**
+- `coh-status` binary reading `/proc/boot`, `/proc/attest/*`, `/worker/*/telemetry` via localhost 9P/TCP; offline-friendly.
+- TPM attestation check displaying manifest fingerprint and verifying against cached reference.
+- Shared CBOR parsing code with SwarmUI to preserve grammar.
+
+**Commands**
+- `cargo build -p coh-status`
+- `cargo run -p coh-status -- --script scripts/cohsh/boot_v0.coh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh`
+
+**Checks (DoD)**
+- Works offline; wrong/expired ticket → deterministic `ERR reason=Permission` surfaced to user.
+- CBOR parsing identical to SwarmUI; transcript diff zero for shared flows.
+- Abuse case: attempt to write via coh-status returns ERR and does not mutate state.
+- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
+
+**Compiler touchpoints**
+- `coh-rtc` emits localhost binding guidance and attestation paths for UEFI profile into docs/HARDWARE_BRINGUP.md and docs/USERLAND_AND_CLI.md.
+
+**Task Breakdown**
+```
+Title/ID: m20e-status-tool
+Goal: Build coh-status for offline/local status reads over 9P/TCP.
+Inputs: apps/coh-status/, UEFI manifest outputs, attestation nodes.
+Changes:
+  - apps/coh-status/src/main.rs — read-only client using cohsh-core; offline cache for attest data.
+  - apps/coh-status/tests/offline.rs — simulate offline read and expired ticket.
+Commands:
+  - cargo build -p coh-status
+  - cargo run -p coh-status -- --script scripts/cohsh/boot_v0.coh
+Checks:
+  - Expired ticket returns ERR; offline cache used when transport unavailable.
+Deliverables:
+  - Tool usage documented in docs/HARDWARE_BRINGUP.md and docs/USERLAND_AND_CLI.md.
+
+Title/ID: m26-attest-verify
+Goal: Verify TPM attestation parsing parity with SwarmUI.
+Inputs: /proc/attest outputs, SwarmUI CBOR parsers.
+Changes:
+  - apps/coh-status/src/attest.rs — verify manifest fingerprint against cached reference.
+  - shared CBOR decoder module reused from SwarmUI/cohsh-core.
+Commands:
+  - cargo test -p coh-status --test attest
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh
+Checks:
+  - Malformed attestation rejected with ERR; valid attestation matches manifest hash identically to SwarmUI.
+Deliverables:
+  - Verified attestation workflow documented; regression outputs stored.
+
+Title/ID: m26-repo-headers
+Goal: Add SPDX/copyright/purpose headers and NOTICE for repository compliance.
+Inputs: AGENTS.md, README.md, docs/*.md, apps/**, crates/**, tools/**, tests/**.
+Changes:
+  - apps/** — add SPDX/copyright/purpose headers to Rust and Markdown files.
+  - crates/** — add SPDX/copyright/purpose headers to Rust and Markdown files.
+  - tools/** — add SPDX/copyright/purpose headers to Rust and Markdown files.
+  - tests/** — add SPDX/copyright/purpose headers to Rust files.
+  - docs/** — add SPDX/copyright/purpose headers to Markdown files.
+  - NOTICE.txt — add repository notice statement.
+Commands:
+  - rg --files -g '*.rs' apps crates tools tests
+  - rg --files -g '*.md' docs apps crates tools
+  - rg --files -g '*.md' .
+Checks:
+  - In-scope Rust and Markdown files contain copyright, SPDX, and Purpose headers.
+  - NOTICE.txt present at repo root.
+Deliverables:
+  - Header updates across Rust and Markdown files; NOTICE.txt added.
+```
+
+## Milestone 27 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)
 
 **Why now (platform):**  
 Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is a single signed EFI binary.
@@ -2614,7 +2612,7 @@ Boot Cohesix directly from UEFI on AWS EC2 using an in-tree ENA NIC driver, dete
 
 **Task Breakdown**
 ```
-Title/ID: m21-efi-entry
+Title/ID: m27-efi-entry
 Goal: Establish UEFI entry path and EFI binary layout.
 Inputs: crates/cohesix-efi/, linker scripts.
 Changes:
@@ -2627,7 +2625,7 @@ Checks:
 Deliverables:
 - Documented ESP layout and build recipe.
 
-Title/ID: m21-ena-adminq
+Title/ID: m27-ena-adminq
 Goal: Implement ENA PCIe discovery and admin queue.
 Inputs: crates/net-ena/.
 Changes:
@@ -2640,7 +2638,7 @@ Checks:
 Deliverables:
 - AdminQ protocol notes in docs/AWS_AMI.md.
 
-Title/ID: m21-ena-io
+Title/ID: m27-ena-io
 Goal: Bring up minimal ENA dataplane.
 Inputs: crates/net-ena/, net stack abstractions.
 Changes:
@@ -2653,7 +2651,7 @@ Checks:
 Deliverables:
 - Deterministic dataplane invariants documented.
 
-Title/ID: m21-net-bootstrap
+Title/ID: m27-net-bootstrap
 Goal: Network bootstrap to fabric.
 Inputs: crates/net/, crates/crypto/.
 Changes:
@@ -2667,7 +2665,7 @@ Checks:
 Deliverables:
 - Bootstrap timing guarantees recorded.
 
-Title/ID: m21-fabric-mount
+Title/ID: m27-fabric-mount
 Goal: Mount 9door namespace and enter steady state.
 Inputs: crates/door9p/, crates/fabric/.
 Changes:
@@ -2680,7 +2678,7 @@ Checks:
 Deliverables:
 - Fabric bootstrap flow documented.
 
-Title/ID: m21-ami-pipeline
+Title/ID: m27-ami-pipeline
 Goal: Produce and validate AWS AMI.
 Inputs: scripts/aws/, docs/AWS_AMI.md.
 Changes:
