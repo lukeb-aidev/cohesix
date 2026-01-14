@@ -2199,10 +2199,10 @@ Deliverables:
   - Offline replay documentation and fixtures stored in tests/fixtures/transcripts/.
 ```
 ----
-**Alpha Release 1**
+**Alpha Release 1 achieved here**
 ----
 
-Alpha Release 1 targets a plug-and-play operator experience immediately after Milestone 20.x. Milestones 21-24 define the Alpha track; the AWS AMI work follows as Milestone 25.
+Next, Alpha Release 2 targets a plug-and-play operator experience immediately after Milestone 20.x. Milestones 21-24 define the Alpha track; the AWS AMI work follows as Milestone 25.
 
 ## Milestone 21 — Alpha: Host Bridges (coh mount, coh gpu, coh telemetry pull)
 
@@ -2514,7 +2514,9 @@ Deliverables:
   - Alpha quickstart docs and packaging notes.
 ```
 
----
+----
+**Alpha Release 2 achieved here**
+----
 
 ## Milestone 25 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)
 
