@@ -2371,6 +2371,11 @@ Deliverables:
 ----
 **Alpha Release 2 achieved here**
 ----
+
+Next, Alpha release 3 targets bare metal UEFI and AWS native boot via AMI.
+
+--
+
 ## Milestone 25 — UEFI Bare-Metal Boot & Device Identity
 
 **Why now (context):**  
