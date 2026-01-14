@@ -1386,74 +1386,7 @@ Deliverables:
 ```
 ---
 
-## Milestone 18 — UEFI Bare-Metal Boot & Device Identity
-
-**Why now (context):** To meet hardware deployment goals (Edge §3 retail hubs, Edge §8 defense ISR, Security §12 segmentation) we must boot on physical aarch64 hardware with attested manifests while preserving the lean `no_std` footprint.
-
-Note: No networking, 9P semantics, or console behaviours may diverge between VM and UEFI profiles except where explicitly marked as hardware-profile-specific in `ARCHITECTURE.md`. Any divergence must be documented and schema-gated. This milestone is the bridge from the QEMU reference profile used earlier in the plan to deployment on physical UEFI hardware, with VM behaviour expected to mirror the hardware target.
-
-**Goal**
-Deliver a UEFI boot path that loads the generated manifest, performs TPM-backed identity attestation, and mirrors VM behaviour.
-
-**Deliverables**
-- New crate `apps/root-task-uefi/` (or feature within `apps/root-task`) building a PE/COFF binary that invokes the same generated bootstrap tables without introducing `std`. Integration with `sel4-runtime` remains feature-gated.
-- `scripts/make_uefi_image.py` packaging FAT images containing `EFI/BOOT/BOOTAA64.EFI`, generated manifest JSON, manifest hash file, and rootfs CPIO. Script emits reproducible build logs captured in CI artefacts.
-- Identity subsystem leveraging TPM 2.0 (or DICE fallback) to seal capability ticket seeds; attestation statements appended to `/proc/boot` and exported via NineDoor for remote verification.
-- Secure Boot guidance aligning with `docs/SECURITY.md` red lines; measurement documentation and manifest fingerprints captured in `docs/HARDWARE_BRINGUP.md`.
-- Manifest IR v1.4 fields: `hardware.profile = "uefi_aarch64"`, `hardware.devices[]` (UART, NET, TPM, RTC), `hardware.secure_boot`, `hardware.attestation`. Validation enforces required MMIO addresses and TPM availability when attestation is enabled.
-- Host automation updates (`scripts/qemu-run.sh --uefi`) plus lab checklist for bring-up on the reference dev board.
-
-**Commands**
-- `cargo build -p root-task-uefi --target aarch64-unknown-uefi`
-- `python scripts/make_uefi_image.py --manifest out/manifests/root_task_resolved.json`
-- `scripts/qemu-run.sh --uefi --console serial --tcp-port 31337`
-- Physical hardware checklist: run attestation script, capture `/proc/boot` output, and compare manifest hash to CI baseline.
-
-**Checks (DoD)**
-- UEFI image boots under QEMU TCG and on the reference dev board; serial output matches VM baseline including manifest fingerprint and ticket registration lines.
-- TPM-backed attestation chain exported via `/proc/boot` matches manifest hash and does not leak secret material; failure to access TPM causes boot abort with audited error.
-- Compiler rejects manifests selecting the UEFI profile without providing required hardware bindings or attestation settings.
-- For this milestone, run the full Regression Pack both under QEMU and (where applicable) on the target hardware profile, and treat any divergence between the two as a bug unless explicitly documented.
-- UEFI boot MUST preserve exact serial startup ordering: any drift vs. VM baseline is treated as a bug unless documented and gated by profile.
-- Abuse case: incorrect TPM quote or missing secure_boot flag fails boot with deterministic error and leaves no partial ticket material.
-
-**Compiler touchpoints**
-- `coh-rtc` emits hardware tables for the selected profile; docs import them for `docs/HARDWARE_BRINGUP.md` and `docs/ARCHITECTURE.md`.
-- Regeneration guard compares manifest fingerprints recorded in UEFI docs against generated outputs, failing CI on drift.
-
-**Task Breakdown**
-```
-Title/ID: m18-uefi-build
-Goal: Produce UEFI root-task binary and boot image with manifest fingerprints.
-Inputs: apps/root-task-uefi/, scripts/make_uefi_image.py, configs/root_task.toml hardware.profile.
-Changes:
-  - apps/root-task-uefi/src/main.rs — PE/COFF entry, bootstrap table reuse, no_std gating.
-  - scripts/make_uefi_image.py — build FAT image with manifest hash and rootfs CPIO.
-Commands:
-  - cargo build -p root-task-uefi --target aarch64-unknown-uefi
-  - python scripts/make_uefi_image.py --manifest out/manifests/root_task_resolved.json
-Checks:
-  - QEMU --uefi boot matches serial ordering baseline; secure_boot missing triggers deterministic failure.
-Deliverables:
-  - UEFI build artefacts and manifest fingerprints referenced in docs/HARDWARE_BRINGUP.md.
-
-Title/ID: m18-attestation-path
-Goal: Implement TPM/DICE identity sealing and export via /proc/boot.
-Inputs: apps/root-task-uefi/src/attest.rs, docs/SECURITY.md attestation section.
-Changes:
-  - apps/root-task-uefi/src/attest.rs — TPM quote + DICE fallback, ticket seed sealing.
-  - apps/root-task/src/generated/bootstrap.rs — include attestation descriptors for VM parity.
-Commands:
-  - scripts/qemu-run.sh --uefi --console serial --tcp-port 31337
-  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh
-Checks:
-  - Attestation failure aborts boot with audit; successful quote hash matches manifest fingerprint; VM vs hardware outputs compared.
-Deliverables:
-  - Attestation evidence documented in docs/SECURITY.md and docs/HARDWARE_BRINGUP.md.
-```
----
-
-## Milestone 19 — Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern)
+## Milestone 18 — Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern)
 
 **Why now (context):** Remaining edge use cases (Edge §§1–4,8,9; Science §§13–14) depend on deterministic adapters for industrial buses and constrained links. Implementing them as sidecars preserves the lean `no_std` core while meeting operational demands.
 
@@ -1520,7 +1453,7 @@ Deliverables:
   - CLI transcript stored; manifest hash updated in docs.
 ```
 ---
-## Milestone 20a — `cohsh-core` Extraction (Shared Grammar & Transport)
+## Milestone 19 — `cohsh-core` Extraction (Shared Grammar & Transport)
 
 **Why now (compiler):** UI and automation consumers need a shared grammar without duplicating console logic. Extracting a core library keeps ACK/ERR stability while enabling multiple frontends.
 
@@ -1548,7 +1481,7 @@ Publish a reusable `cohsh-core` crate with shared verb grammar and transports th
 
 **Task Breakdown**
 ```
-Title/ID: m20a-core-crate
+Title/ID: m19-core-crate
 Goal: Extract shared verb grammar and transports into cohsh-core.
 Inputs: apps/cohsh/src/lib.rs existing grammar, scripts/cohsh/boot_v0.coh fixtures.
 Changes:
@@ -1562,7 +1495,7 @@ Checks:
 Deliverables:
   - Shared crate and regenerated grammar snippets in docs/USERLAND_AND_CLI.md.
 
-Title/ID: m20a-transcript-harness
+Title/ID: m19-transcript-harness
 Goal: Ensure transcript parity across console/TCP/core transports.
 Inputs: scripts/cohsh/boot_v0.coh, new tests in crates/cohsh-core/tests/transcripts.rs.
 Changes:
@@ -1579,7 +1512,7 @@ Deliverables:
 
 ---
 
-## Milestone 20b — `cohsh` as 9P Client Library
+## Milestone 20a — `cohsh` as 9P Client Library
 
 **Why now (compiler):** Automation and UI need a library-level 9P client that reuses grammar without console coupling. A first-class client library keeps ordering/idempotency intact.
 
@@ -1607,7 +1540,7 @@ Refactor `cohsh` into a reusable 9P client library with helpers for control verb
 
 **Task Breakdown**
 ```
-Title/ID: m20b-client-api
+Title/ID: m20a-client-api
 Goal: Build CohClient library with tail and control helpers.
 Inputs: apps/cohsh/src/lib.rs, crates/cohsh-core transport.
 Changes:
@@ -1621,7 +1554,7 @@ Checks:
 Deliverables:
   - Client API docs in docs/USERLAND_AND_CLI.md via compiler snippet.
 
-Title/ID: m20b-replay-harness
+Title/ID: m20a-replay-harness
 Goal: Replay sessions over 9P and compare to console baselines.
 Inputs: scripts/cohsh/session_pool.coh, new regression harness for 9P replay.
 Changes:
@@ -1637,7 +1570,7 @@ Deliverables:
 
 ---
 
-## Milestone 20c — NineDoor UI Providers
+## Milestone 20b — NineDoor UI Providers
 
 **Why now (compiler):** UI surfaces need read-only summaries without adding protocols. Providers must reuse existing `/proc` mechanics and stay bounded.
 
@@ -1664,7 +1597,7 @@ Expose UI-friendly read-only providers under NineDoor with cursor-resume semanti
 
 **Task Breakdown**
 ```
-Title/ID: m20c-provider-impl
+Title/ID: m20b-provider-impl
 Goal: Implement bounded UI providers with CBOR/text outputs.
 Inputs: apps/nine-door/src/host/{observe.rs,policy.rs,updates.rs}, manifest toggles.
 Changes:
@@ -1678,7 +1611,7 @@ Checks:
 Deliverables:
   - Provider docs and CBOR schemas refreshed in docs/INTERFACES.md.
 
-Title/ID: m20c-updates-status
+Title/ID: m20b-updates-status
 Goal: Surface update status for UI consumption via NineDoor.
 Inputs: apps/nine-door/src/host/cas.rs status hooks, scripts/cohsh/cas_roundtrip.coh.
 Changes:
@@ -1694,7 +1627,7 @@ Deliverables:
 
 ---
 
-## Milestone 20d — SwarmUI Desktop (Tauri, Pure 9P/TCP)
+## Milestone 20c — SwarmUI Desktop (Tauri, Pure 9P/TCP)
 
 **Why now (compiler):** Desktop operators need a UI that *reflects the namespace* and reuses the existing 9P grammar without introducing new transports or control semantics. SwarmUI must prove strict parity with CLI behavior and respect ticket-scoped authority.
 
@@ -1729,7 +1662,7 @@ SwarmUI is a thin presentation layer only: all protocol semantics, state machine
 
 **Task Breakdown**
 ```
-Title/ID: m20d-ui-backend
+Title/ID: m20c-ui-backend
 Goal: Wire SwarmUI backend to cohsh-core with 9P-only transport and per-ticket sessions.
 Inputs: apps/swarmui/src-tauri/, crates/cohsh-core, scripts/cohsh/telemetry_ring.coh.
 Changes:
@@ -1743,7 +1676,7 @@ Checks:
 Deliverables:
 - UI backend notes and cache path documented in docs/USERLAND_AND_CLI.md.
 
-Title/ID: m20d-ui-fixtures
+Title/ID: m20c-ui-fixtures
 Goal: Capture UI/CLI transcript parity and namespace-derived fleet rendering.
 Inputs: UI snapshot fixtures, /proc/ingest providers.
 Changes:
@@ -1758,7 +1691,7 @@ Deliverables:
 - Updated docs/INTERFACES.md with SwarmUI consumption guidance and non-goals.
 ```
 ---
-## Milestone 20d(2) — SwarmUI Live Hive Rendering (PixiJS, GPU-First)
+## Milestone 20d — SwarmUI Live Hive Rendering (PixiJS, GPU-First)
 
 **Why now (SwarmUI):**  
 Milestone 20d proves SwarmUI can act as a strict, ticket-scoped presentation layer over the 9P namespace with byte-stable CLI parity. The remaining risk is visual overload or architectural drift (SVG/D3 DOM graphs, UI-invented state, per-event rendering). This extension locks in a **single, elegant, GPU-first “Live Hive” renderer** that is visually compelling while remaining protocol-faithful, deterministic, and bounded.
@@ -1827,7 +1760,7 @@ SwarmUI remains a thin presentation layer: frontend code renders only. All proto
 
 ### Task Breakdown
 ```
-Title/ID: m20d2-hive-renderer
+Title/ID: m20d-hive-renderer
 Goal: Add GPU-first Live Hive renderer without altering protocol semantics.
 Inputs: apps/swarmui/, crates/cohsh-core, telemetry streams, CBOR snapshots.
 Changes:
@@ -1842,7 +1775,7 @@ Checks:
 Deliverables:
 - Live Hive view documented as non-authoritative renderer in docs/INTERFACES.md.
 
-Title/ID: m20d2-hive-fixtures
+Title/ID: m20d-hive-fixtures
 Goal: Prove deterministic rendering and replay stability.
 Inputs: golden transcripts, CBOR snapshots.
 Changes:
@@ -1855,7 +1788,7 @@ Checks:
 Deliverables:
 - Golden demo snapshots committed for CI and demos.
 
-Title/ID: m20d2-design-fonts
+Title/ID: m20d-design-fonts
 Goal: Establish a cross-platform, UI-safe font system aligned with Tauri and PixiJS best practices.
 Inputs: apps/swarmui/, design guidelines, Tauri asset bundling.
 Changes:
@@ -1871,7 +1804,7 @@ Checks:
 Deliverables:
 - Documented font policy and usage rules in docs/INTERFACES.md.
 
-Title/ID: m20d2-design-colors
+Title/ID: m20d-design-colors
 Goal: Define a minimal, dark-first color system shared by HTML UI and PixiJS hive renderer.
 Inputs: SwarmUI frontend, PixiJS renderer.
 Changes:
@@ -1886,7 +1819,7 @@ Checks:
 Deliverables:
 - Color token table and usage notes added to docs/INTERFACES.md.
 
-Title/ID: m20d2-design-layout
+Title/ID: m20d-design-layout
 Goal: Lock down layout, spacing, and panel rules for a dense operator UI.
 Inputs: SwarmUI frontend panels.
 Changes:
@@ -1901,7 +1834,7 @@ Checks:
 Deliverables:
 - Layout and spacing rules documented for contributors.
 
-Title/ID: m20d2-design-icons
+Title/ID: m20d-design-icons
 Goal: Standardise iconography for SwarmUI controls and panels.
 Inputs: SwarmUI frontend.
 Changes:
@@ -1916,7 +1849,7 @@ Checks:
 Deliverables:
 - Icon usage guidelines added to docs/INTERFACES.md.
 
-Title/ID: m20d2-hive-visual-language
+Title/ID: m20d-hive-visual-language
 Goal: Define and enforce the visual language for the Live Hive renderer.
 Inputs: PixiJS hive renderer.
 Changes:
@@ -1931,7 +1864,7 @@ Checks:
 Deliverables:
 - Live Hive visual language documented as non-authoritative rendering rules.
 
-Title/ID: m20d2-design-tokens
+Title/ID: m20d-design-tokens
 Goal: Centralise all design constants into a single token system.
 Inputs: SwarmUI frontend, PixiJS renderer.
 Changes:
@@ -2517,8 +2450,130 @@ Deliverables:
 ----
 **Alpha Release 2 achieved here**
 ----
+## Milestone 25 — UEFI Bare-Metal Boot & Device Identity
 
-## Milestone 25 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)
+**Why now (context):**  
+To meet hardware deployment goals (Edge §3 retail hubs, Edge §8 defense ISR, Security §12 segmentation), Cohesix must boot on physical aarch64 UEFI hardware with attested manifests while preserving the lean `no_std` footprint and the upstream seL4 boot model. This milestone transitions from the QEMU reference profile to physical UEFI deployment, with VM behavior expected to mirror the hardware target unless explicitly profile-gated.
+
+**Non-negotiable constraint:**  
+No networking, 9P semantics, or console behaviors may diverge between VM and UEFI profiles except where explicitly marked as hardware-profile-specific in `ARCHITECTURE.md`. Any divergence must be documented and schema-gated. UEFI firmware networking is out of scope; all TCP behavior remains post-seL4 boot in root-task.
+
+---
+
+### Prerequisite (must be completed before Milestone 18)
+**Upstream elfloader EFI support**
+- Confirm and enable upstream seL4 **elfloader EFI build** to produce a valid PE/COFF EFI executable (`elfloader.efi`) for aarch64.
+- The EFI-built elfloader must:
+  - Relocate correctly under UEFI.
+  - Load the seL4 kernel, initial user image, DTB (when present), and CPIO rootfs.
+  - Preserve existing VM boot semantics once seL4 is entered.
+- Any local build glue required to emit `elfloader.efi` must not fork elfloader logic and must track upstream.
+
+---
+
+### Goal
+Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads the generated manifest from boot media, performs TPM-backed (or DICE-fallback) identity attestation in root-task, and mirrors VM behavior deterministically.
+
+---
+
+### Deliverables
+
+- **UEFI boot chain**
+  - Use upstream **elfloader built as an EFI PE/COFF binary** (`EFI/BOOT/BOOTAA64.EFI`) as the sole UEFI application.
+  - Root-task remains the first user process post-kernel boot; root-task is never executed as an EFI application.
+
+- **UEFI image builder**
+  - `scripts/make_uefi_image.py` builds a reproducible FAT ESP containing:
+    - `EFI/BOOT/BOOTAA64.EFI` (elfloader EFI)
+    - `kernel.elf`
+    - `rootfs.cpio`
+    - `manifest.json` and `manifest.sha256`
+    - optional `dtb/` assets (platform-specific)
+  - Deterministic file ordering and hashes; build logs captured as CI artifacts.
+
+- **Identity & attestation**
+  - Identity subsystem implemented in root-task leveraging **TPM 2.0** or declared **DICE fallback**.
+  - Capability ticket seeds are sealed only after successful attestation.
+  - Attestation evidence bound to the manifest fingerprint is appended to `/proc/boot` and exported via NineDoor.
+  - If attestation is enabled but unavailable, boot aborts deterministically with audited error and no partial state.
+
+- **Schema & validation**
+  - Manifest IR v1.4 uses `profile.name: uefi-aarch64`.
+  - Hardware declarations under a gated section (e.g., `hw.devices[]` with UART, NET, TPM, RTC; `hw.secure_boot`; `hw.attestation`).
+  - Validation enforces required bindings and TPM availability when attestation is enabled.
+
+- **Secure Boot documentation**
+  - Secure Boot treated as firmware enforcement; OS records and validates observable state where trustworthy.
+  - Measurements, manifest fingerprints, and bring-up notes captured in `docs/HARDWARE_BRINGUP.md` and aligned with `docs/SECURITY.md`.
+
+- **Automation & bring-up**
+  - `scripts/qemu-run.sh --uefi` using EDK2 pflash and the EFI-built elfloader.
+  - Optional host-only TPM emulation (e.g., `swtpm`) for QEMU testing.
+  - Lab checklist for the reference dev board.
+
+---
+
+### Commands
+- `cargo build -p elfloader --target aarch64-unknown-uefi`
+- `python scripts/make_uefi_image.py --manifest out/manifests/root_task_resolved.json`
+- `scripts/qemu-run.sh --uefi --console serial --tcp-port 31337`
+- Physical hardware checklist: capture `/proc/boot`, compare manifest hash to CI baseline.
+
+---
+
+### Checks (DoD)
+- EFI-built elfloader boots under QEMU TCG and on the reference dev board.
+- Serial startup ordering **exactly matches** VM baseline; any drift is a bug unless profile-gated and documented.
+- Manifest fingerprint printed early and matches packaged hash.
+- If `hw.attestation.enabled=true`, attestation succeeds and evidence hash matches the manifest fingerprint; if unavailable, boot aborts deterministically.
+- Compiler rejects manifests selecting `uefi-aarch64` without required hardware bindings or attestation settings.
+- Full Regression Pack passes under QEMU and (where applicable) on hardware; any divergence is treated as a bug unless explicitly documented.
+
+---
+
+### Compiler touchpoints
+- `coh-rtc` emits hardware tables for the selected profile; docs import them into `docs/HARDWARE_BRINGUP.md` and `docs/ARCHITECTURE.md`.
+- Regeneration guard compares manifest fingerprints recorded in UEFI docs against generated outputs, failing CI on drift.
+
+---
+
+## Task Breakdown
+
+### Title/ID: m18-uefi-bootchain
+**Goal:** Boot via UEFI → elfloader.efi → seL4; load manifest from ESP; emit stable fingerprint lines.  
+**Inputs:** EFI-built elfloader, `scripts/make_uefi_image.py`, `scripts/qemu-run.sh`, `configs/root_task.toml` (`profile.name`).  
+**Changes:**
+- `scripts/make_uefi_image.py` — build ESP with `BOOTAA64.EFI` (elfloader), kernel, rootfs, manifest + hash; deterministic logs.
+- `scripts/qemu-run.sh` — `--uefi` path using EDK2 pflash; keep `virt` machine for parity.
+- `apps/root-task` — print manifest fingerprint in the same serial ordering as VM baseline.
+**Commands:**
+- `cargo build -p elfloader --target aarch64-unknown-uefi`
+- `python scripts/make_uefi_image.py --manifest out/manifests/root_task_resolved.json`
+**Checks:**
+- QEMU `--uefi` serial output matches VM ordering; missing/invalid manifest aborts before any ticket material.
+**Deliverables:**
+- UEFI boot artifacts and referenced fingerprints in `docs/HARDWARE_BRINGUP.md`.
+
+---
+
+### Title/ID: m18-attestation
+**Goal:** Implement TPM/DICE identity sealing and export via `/proc/boot` with strict determinism.  
+**Inputs:** `apps/root-task/src/attest.rs`, `docs/SECURITY.md` (attestation section).  
+**Changes:**
+- `apps/root-task/src/attest.rs` — bounded TPM quote path + DICE fallback; seal ticket seeds only after successful attestation.
+- `/proc/boot` — append evidence summary (hashes/IDs only; no secrets).
+- Host docs/scripts for optional QEMU TPM emulation.
+**Commands:**
+- `scripts/qemu-run.sh --uefi --console serial --tcp-port 31337`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh`
+**Checks:**
+- Attestation failure aborts boot deterministically with audit.
+- Successful evidence hash matches manifest fingerprint.
+- VM vs hardware outputs compared; differences must be profile-gated.
+**Deliverables:**
+- Attestation evidence documented in `docs/SECURITY.md` and `docs/HARDWARE_BRINGUP.md`.
+
+## Milestone 26 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)
 
 **Why now (platform):**  
 Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is a single signed EFI binary.
