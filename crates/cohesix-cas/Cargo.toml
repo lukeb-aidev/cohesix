@@ -1,0 +1,12 @@
+# Author: Lukas Bower
+# Purpose: Provide CAS manifest encoding/decoding helpers shared across Cohesix.
+[package]
+name = "cohesix-cas"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[features]
+default = []

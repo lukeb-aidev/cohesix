@@ -1,7 +1,7 @@
 # Author: Lukas Bower
 # Purpose: Generated cohsh client policy derived from configs/root_task.toml.
 [meta]
-manifest_sha256 = "85293384c1eca19df9552d0c392589290885d786d10b72cd7d1f6b76bb010f99"
+manifest_sha256 = "99878893a38c8b0b632e10d1f9f39973eb1a9fea97bc4be58c963e4be946f196"
 
 [cohsh.pool]
 control_sessions = 2

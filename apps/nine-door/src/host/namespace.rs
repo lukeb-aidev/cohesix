@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use secure9p_codec::{ErrorCode, Qid, QidType};
 use trace_model::TraceLevel;
 
+use super::cas::{parse_sha256, validate_epoch, CasConfig, CasStore, ModelFileKind};
 use super::observe::ObserveConfig;
 use super::telemetry::{
     TelemetryAudit, TelemetryAuditLevel, TelemetryConfig, TelemetryFile, TelemetryManifestStore,
@@ -354,6 +355,7 @@ pub struct Namespace {
     shards: ShardLayout,
     telemetry: TelemetryConfig,
     telemetry_manifest: TelemetryManifestStore,
+    cas: CasStore,
     worker_ids: BTreeSet<String>,
     host: HostNamespaceConfig,
     policy: PolicyNamespaceConfig,
@@ -373,6 +375,7 @@ impl Namespace {
         Self::new_with_telemetry_manifest_host_policy(
             telemetry,
             TelemetryManifestStore::default(),
+            CasConfig::disabled(),
             ShardLayout::default(),
             HostNamespaceConfig::disabled(),
             PolicyNamespaceConfig::disabled(),
@@ -389,6 +392,7 @@ impl Namespace {
         Self::new_with_telemetry_manifest_host_policy(
             telemetry,
             telemetry_manifest,
+            CasConfig::disabled(),
             ShardLayout::default(),
             HostNamespaceConfig::disabled(),
             PolicyNamespaceConfig::disabled(),
@@ -401,6 +405,7 @@ impl Namespace {
     pub fn new_with_telemetry_manifest_host_policy(
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
+        cas: CasConfig,
         shards: ShardLayout,
         host: HostNamespaceConfig,
         policy: PolicyNamespaceConfig,
@@ -413,6 +418,7 @@ impl Namespace {
             shards,
             telemetry,
             telemetry_manifest,
+            cas: CasStore::new(cas),
             worker_ids: BTreeSet::new(),
             host,
             policy,
@@ -432,6 +438,7 @@ impl Namespace {
         Self::new_with_telemetry_manifest_host_policy(
             telemetry,
             telemetry_manifest,
+            CasConfig::disabled(),
             ShardLayout::default(),
             host,
             PolicyNamespaceConfig::disabled(),
@@ -473,6 +480,9 @@ impl Namespace {
             TraceEvents,
             KernelMessages,
             TaskTrace(String),
+            CasManifest(String),
+            CasChunk([u8; 32]),
+            CasModel { digest: [u8; 32], kind: ModelFileKind },
         }
 
         let retain_on_boot = self.telemetry.cursor.retain_on_boot;
@@ -487,6 +497,10 @@ impl Namespace {
                 && matches!(path, [single] if single == "worker")
             {
                 let listing = render_directory_listing(self.worker_alias_listing());
+                return Ok(read_slice(&listing, offset, count));
+            }
+            if let Some(listing) = self.cas_directory_listing(path)? {
+                let listing = render_directory_listing(listing);
                 return Ok(read_slice(&listing, offset, count));
             }
             let node = self.lookup_mut(path)?;
@@ -517,6 +531,14 @@ impl Namespace {
                 NodeKind::File(FileNode::TraceEvents) => ReadAction::TraceEvents,
                 NodeKind::File(FileNode::KernelMessages) => ReadAction::KernelMessages,
                 NodeKind::File(FileNode::TaskTrace(task)) => ReadAction::TaskTrace(task.clone()),
+                NodeKind::File(FileNode::CasManifest { epoch }) => {
+                    ReadAction::CasManifest(epoch.clone())
+                }
+                NodeKind::File(FileNode::CasChunk { digest, .. }) => ReadAction::CasChunk(*digest),
+                NodeKind::File(FileNode::CasModel { digest, kind }) => ReadAction::CasModel {
+                    digest: *digest,
+                    kind: *kind,
+                },
             }
         };
         let data = match action {
@@ -528,6 +550,11 @@ impl Namespace {
             ReadAction::TraceEvents => self.trace.read_events(offset, count),
             ReadAction::KernelMessages => self.trace.read_kmesg(offset, count),
             ReadAction::TaskTrace(task) => self.trace.read_task(&task, offset, count),
+            ReadAction::CasManifest(epoch) => self.cas.read_manifest(&epoch, offset, count)?,
+            ReadAction::CasChunk(digest) => self.cas.read_chunk(&digest, offset, count)?,
+            ReadAction::CasModel { digest, kind } => {
+                self.cas.read_model_file(&digest, kind, offset, count)?
+            }
         };
         if let Some(audit) = audit {
             self.record_telemetry_audit(audit)?;
@@ -548,6 +575,13 @@ impl Namespace {
         offset: u64,
         data: &[u8],
     ) -> Result<u32, NineDoorError> {
+        enum WriteAction {
+            Result(Result<u32, NineDoorError>),
+            CasManifest(String),
+            CasChunk { epoch: String, digest: [u8; 32] },
+            CasModel { digest: [u8; 32], kind: ModelFileKind },
+        }
+
         let retain_on_boot = self.telemetry.cursor.retain_on_boot;
         let worker_id = self
             .shards
@@ -555,12 +589,12 @@ impl Namespace {
             .map(str::to_owned);
         let mut audit = None;
         let mut manifest_snapshot = None;
-        let result = {
+        let action = {
             let node = self.lookup_mut(path)?;
             match node.node.kind_mut() {
                 NodeKind::File(FileNode::AppendOnly(buffer)) => {
                     buffer.extend_from_slice(data);
-                    Ok(data.len() as u32)
+                    WriteAction::Result(Ok(data.len() as u32))
                 }
                 NodeKind::File(FileNode::Telemetry(file)) => match file.append(offset, data) {
                     Ok(outcome) => {
@@ -568,7 +602,7 @@ impl Namespace {
                         if retain_on_boot && worker_id.is_some() {
                             manifest_snapshot = Some(file.snapshot());
                         }
-                        Ok(outcome.count)
+                        WriteAction::Result(Ok(outcome.count))
                     }
                     Err(err) => {
                         audit = err.audit;
@@ -582,24 +616,53 @@ impl Namespace {
                                 ErrorCode::Invalid
                             }
                         };
-                        Err(NineDoorError::protocol(code, err.message))
+                        WriteAction::Result(Err(NineDoorError::protocol(code, err.message)))
                     }
                 },
-                NodeKind::File(FileNode::ReadOnly(_)) => Err(NineDoorError::protocol(
-                    ErrorCode::Permission,
-                    format!("cannot write read-only file /{}", join_path(path)),
+                NodeKind::File(FileNode::ReadOnly(_)) => WriteAction::Result(Err(
+                    NineDoorError::protocol(
+                        ErrorCode::Permission,
+                        format!("cannot write read-only file /{}", join_path(path)),
+                    ),
                 )),
-                NodeKind::File(FileNode::TraceControl) => self.trace.write_ctl(data),
+                NodeKind::File(FileNode::TraceControl) => {
+                    WriteAction::Result(self.trace.write_ctl(data))
+                }
                 NodeKind::File(FileNode::TraceEvents)
                 | NodeKind::File(FileNode::KernelMessages)
-                | NodeKind::File(FileNode::TaskTrace(_)) => Err(NineDoorError::protocol(
-                    ErrorCode::Permission,
-                    format!("cannot write read-only file /{}", join_path(path)),
+                | NodeKind::File(FileNode::TaskTrace(_)) => WriteAction::Result(Err(
+                    NineDoorError::protocol(
+                        ErrorCode::Permission,
+                        format!("cannot write read-only file /{}", join_path(path)),
+                    ),
                 )),
-                NodeKind::Directory { .. } => Err(NineDoorError::protocol(
+                NodeKind::File(FileNode::CasManifest { epoch }) => {
+                    WriteAction::CasManifest(epoch.clone())
+                }
+                NodeKind::File(FileNode::CasChunk { epoch, digest }) => WriteAction::CasChunk {
+                    epoch: epoch.clone(),
+                    digest: *digest,
+                },
+                NodeKind::File(FileNode::CasModel { digest, kind }) => WriteAction::CasModel {
+                    digest: *digest,
+                    kind: *kind,
+                },
+                NodeKind::Directory { .. } => WriteAction::Result(Err(NineDoorError::protocol(
                     ErrorCode::Permission,
                     format!("cannot write directory /{}", join_path(path)),
-                )),
+                ))),
+            }
+        };
+        let result = match action {
+            WriteAction::Result(result) => result,
+            WriteAction::CasManifest(epoch) => {
+                self.cas.append_manifest(epoch.as_str(), offset, data)
+            }
+            WriteAction::CasChunk { epoch, digest } => {
+                self.cas.append_chunk(epoch.as_str(), &digest, offset, data)
+            }
+            WriteAction::CasModel { digest, kind } => {
+                self.cas.append_model_file(&digest, kind, offset, data)
             }
         };
         if let Some(audit) = audit {
@@ -611,6 +674,7 @@ impl Namespace {
                     .persist_snapshot(&worker_id, snapshot);
             }
         }
+        self.flush_cas_events()?;
         result
     }
 
@@ -724,8 +788,9 @@ impl Namespace {
     }
 
     /// Lookup a node by path.
-    pub fn lookup(&self, path: &[String]) -> Result<NodeView<'_>, NineDoorError> {
+    pub fn lookup(&mut self, path: &[String]) -> Result<NodeView<'_>, NineDoorError> {
         let resolved = self.resolve_path(path);
+        self.ensure_cas_path(&resolved)?;
         let mut node = &self.root;
         for component in &resolved {
             node = node.child(component).ok_or_else(|| {
@@ -740,8 +805,13 @@ impl Namespace {
 
     fn lookup_mut(&mut self, path: &[String]) -> Result<NodeViewMut<'_>, NineDoorError> {
         let resolved = self.resolve_path(path);
+        self.ensure_cas_path(&resolved)?;
+        self.lookup_mut_raw(&resolved)
+    }
+
+    fn lookup_mut_raw(&mut self, path: &[String]) -> Result<NodeViewMut<'_>, NineDoorError> {
         let mut node = &mut self.root;
-        for component in &resolved {
+        for component in path {
             node = node.child_mut(component).ok_or_else(|| {
                 NineDoorError::protocol(
                     ErrorCode::NotFound,
@@ -750,6 +820,175 @@ impl Namespace {
             })?;
         }
         Ok(NodeViewMut { node })
+    }
+
+    fn cas_directory_listing(
+        &mut self,
+        path: &[String],
+    ) -> Result<Option<Vec<String>>, NineDoorError> {
+        let Some(cas_path) = parse_cas_path(path)? else {
+            return Ok(None);
+        };
+        match cas_path {
+            CasPath::UpdatesRoot => {
+                self.ensure_cas_path(path)?;
+                Ok(Some(self.cas.list_updates()))
+            }
+            CasPath::UpdateEpoch { .. } => {
+                self.ensure_cas_path(path)?;
+                Ok(Some(vec![
+                    "chunks".to_owned(),
+                    "manifest.cbor".to_owned(),
+                ]))
+            }
+            CasPath::UpdateChunks { epoch } => {
+                self.ensure_cas_path(path)?;
+                Ok(Some(self.cas.list_update_chunks(&epoch)))
+            }
+            CasPath::ModelsRoot => {
+                self.ensure_cas_path(path)?;
+                Ok(Some(self.cas.list_models()))
+            }
+            CasPath::ModelRoot { digest } => {
+                self.ensure_cas_path(path)?;
+                Ok(Some(self.cas.list_model_entries(&digest)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn ensure_cas_path(&mut self, path: &[String]) -> Result<(), NineDoorError> {
+        let Some(cas_path) = parse_cas_path(path)? else {
+            return Ok(());
+        };
+        match cas_path {
+            CasPath::UpdatesRoot => {
+                if !self.cas.enabled() {
+                    return Err(NineDoorError::protocol(ErrorCode::NotFound, "cas disabled"));
+                }
+                self.ensure_dir_raw(&[], "updates")?;
+            }
+            CasPath::UpdateEpoch { epoch }
+            | CasPath::UpdateManifest { epoch }
+            | CasPath::UpdateChunks { epoch } => {
+                self.cas.ensure_update(&epoch)?;
+                self.ensure_cas_update_nodes(&epoch)?;
+            }
+            CasPath::UpdateChunk { epoch, digest } => {
+                self.cas.ensure_update(&epoch)?;
+                self.ensure_cas_update_nodes(&epoch)?;
+                self.ensure_cas_chunk_node(&epoch, &digest)?;
+            }
+            CasPath::ModelsRoot => {
+                if !self.cas.models_enabled() {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::NotFound,
+                        "models disabled",
+                    ));
+                }
+                self.ensure_dir_raw(&[], "models")?;
+            }
+            CasPath::ModelRoot { digest } | CasPath::ModelFile { digest, .. } => {
+                self.cas.ensure_model_entry(&digest)?;
+                self.ensure_cas_model_nodes(&digest)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_cas_update_nodes(&mut self, epoch: &str) -> Result<(), NineDoorError> {
+        self.ensure_dir_raw(&[], "updates")?;
+        let updates_root = vec!["updates".to_owned()];
+        self.ensure_dir_raw(&updates_root, epoch)?;
+        let update_path = vec!["updates".to_owned(), epoch.to_owned()];
+        self.ensure_file_raw(
+            &update_path,
+            "manifest.cbor",
+            FileNode::CasManifest {
+                epoch: epoch.to_owned(),
+            },
+        )?;
+        self.ensure_dir_raw(&update_path, "chunks")?;
+        Ok(())
+    }
+
+    fn ensure_cas_chunk_node(
+        &mut self,
+        epoch: &str,
+        digest: &[u8; 32],
+    ) -> Result<(), NineDoorError> {
+        let update_path = vec!["updates".to_owned(), epoch.to_owned(), "chunks".to_owned()];
+        self.ensure_file_raw(
+            &update_path,
+            &hex::encode(digest),
+            FileNode::CasChunk {
+                epoch: epoch.to_owned(),
+                digest: *digest,
+            },
+        )?;
+        Ok(())
+    }
+
+    fn ensure_cas_model_nodes(&mut self, digest: &[u8; 32]) -> Result<(), NineDoorError> {
+        self.ensure_dir_raw(&[], "models")?;
+        let models_root = vec!["models".to_owned()];
+        let hex_digest = hex::encode(digest);
+        self.ensure_dir_raw(&models_root, &hex_digest)?;
+        let model_path = vec!["models".to_owned(), hex_digest];
+        self.ensure_file_raw(
+            &model_path,
+            "weights",
+            FileNode::CasModel {
+                digest: *digest,
+                kind: ModelFileKind::Weights,
+            },
+        )?;
+        self.ensure_file_raw(
+            &model_path,
+            "schema",
+            FileNode::CasModel {
+                digest: *digest,
+                kind: ModelFileKind::Schema,
+            },
+        )?;
+        self.ensure_file_raw(
+            &model_path,
+            "signature",
+            FileNode::CasModel {
+                digest: *digest,
+                kind: ModelFileKind::Signature,
+            },
+        )?;
+        Ok(())
+    }
+
+    fn flush_cas_events(&mut self) -> Result<(), NineDoorError> {
+        let events = self.cas.drain_events();
+        if events.is_empty() {
+            return Ok(());
+        }
+        for event in events {
+            self.trace.record(event.level, "cas", None, &event.message);
+            self.append_cas_log(&event.message)?;
+        }
+        Ok(())
+    }
+
+    fn append_cas_log(&mut self, message: &str) -> Result<(), NineDoorError> {
+        let log_path = vec!["log".to_owned(), "queen.log".to_owned()];
+        let log_node = self.lookup_mut(&log_path)?;
+        let mut line = message.as_bytes().to_vec();
+        line.push(b'\n');
+        match log_node.node.kind_mut() {
+            NodeKind::File(FileNode::AppendOnly(buffer)) => {
+                buffer.extend_from_slice(&line);
+                Ok(())
+            }
+            _ => Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                "cannot append cas log line",
+            )),
+        }
     }
 
     fn bootstrap(&mut self) {
@@ -804,6 +1043,12 @@ impl Namespace {
             }
         } else {
             self.ensure_dir(&[], "worker").expect("create /worker");
+        }
+        if self.cas.enabled() {
+            self.ensure_dir(&[], "updates").expect("create /updates");
+            if self.cas.models_enabled() {
+                self.ensure_dir(&[], "models").expect("create /models");
+            }
         }
         self.ensure_dir(&[], "gpu").expect("create /gpu");
         self.ensure_dir(&[], "trace").expect("create /trace");
@@ -1000,6 +1245,23 @@ impl Namespace {
             self.ensure_dir(&current, component)?;
             current.push(component.clone());
         }
+        Ok(())
+    }
+
+    fn ensure_dir_raw(&mut self, parent: &[String], name: &str) -> Result<(), NineDoorError> {
+        let mut node = self.lookup_mut_raw(parent)?;
+        node.ensure_directory(name);
+        Ok(())
+    }
+
+    fn ensure_file_raw(
+        &mut self,
+        parent: &[String],
+        name: &str,
+        file: FileNode,
+    ) -> Result<(), NineDoorError> {
+        let mut node = self.lookup_mut_raw(parent)?;
+        node.ensure_file(name, file);
         Ok(())
     }
 
@@ -1258,6 +1520,69 @@ impl Namespace {
 }
 
 #[derive(Debug, Clone)]
+enum CasPath {
+    UpdatesRoot,
+    UpdateEpoch { epoch: String },
+    UpdateManifest { epoch: String },
+    UpdateChunks { epoch: String },
+    UpdateChunk { epoch: String, digest: [u8; 32] },
+    ModelsRoot,
+    ModelRoot { digest: [u8; 32] },
+    ModelFile { digest: [u8; 32], kind: ModelFileKind },
+}
+
+fn parse_cas_path(path: &[String]) -> Result<Option<CasPath>, NineDoorError> {
+    match path {
+        [root] if root == "updates" => return Ok(Some(CasPath::UpdatesRoot)),
+        [root] if root == "models" => return Ok(Some(CasPath::ModelsRoot)),
+        _ => {}
+    }
+    if let [root, epoch, rest @ ..] = path {
+        if root == "updates" {
+            validate_epoch(epoch)?;
+            return Ok(match rest {
+                [] => Some(CasPath::UpdateEpoch {
+                    epoch: epoch.to_owned(),
+                }),
+                [leaf] if leaf == "manifest.cbor" => Some(CasPath::UpdateManifest {
+                    epoch: epoch.to_owned(),
+                }),
+                [leaf] if leaf == "chunks" => Some(CasPath::UpdateChunks {
+                    epoch: epoch.to_owned(),
+                }),
+                [leaf, digest] if leaf == "chunks" => Some(CasPath::UpdateChunk {
+                    epoch: epoch.to_owned(),
+                    digest: parse_sha256(digest)?,
+                }),
+                _ => None,
+            });
+        }
+    }
+    if let [root, digest, rest @ ..] = path {
+        if root == "models" {
+            let digest = parse_sha256(digest)?;
+            return Ok(match rest {
+                [] => Some(CasPath::ModelRoot { digest }),
+                [leaf] if leaf == "weights" => Some(CasPath::ModelFile {
+                    digest,
+                    kind: ModelFileKind::Weights,
+                }),
+                [leaf] if leaf == "schema" => Some(CasPath::ModelFile {
+                    digest,
+                    kind: ModelFileKind::Schema,
+                }),
+                [leaf] if leaf == "signature" => Some(CasPath::ModelFile {
+                    digest,
+                    kind: ModelFileKind::Signature,
+                }),
+                _ => None,
+            });
+        }
+    }
+    Ok(None)
+}
+
+#[derive(Debug, Clone)]
 struct Node {
     path: Vec<String>,
     qid: Qid,
@@ -1284,6 +1609,9 @@ impl Node {
             FileNode::TraceEvents | FileNode::KernelMessages | FileNode::TaskTrace(_) => {
                 QidType::FILE
             }
+            FileNode::CasManifest { .. }
+            | FileNode::CasChunk { .. }
+            | FileNode::CasModel { .. } => QidType::APPEND_ONLY,
         };
         Self {
             qid: Qid::new(ty, 0, hash_path(&path)),
@@ -1367,6 +1695,9 @@ enum FileNode {
     TraceEvents,
     KernelMessages,
     TaskTrace(String),
+    CasManifest { epoch: String },
+    CasChunk { epoch: String, digest: [u8; 32] },
+    CasModel { digest: [u8; 32], kind: ModelFileKind },
 }
 
 /// Borrowed node view used by callers.

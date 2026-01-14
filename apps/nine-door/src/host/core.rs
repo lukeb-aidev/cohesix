@@ -32,6 +32,7 @@ use super::audit::{
     AuditConfig, AuditStore, ControlOutcome, PolicyActionDecision as AuditPolicyActionDecision,
     PolicyGateDecision as AuditPolicyGateDecision, ReplayWindowError,
 };
+use super::CasConfig;
 use super::namespace::{
     AuditNamespaceConfig, HostNamespaceConfig, Namespace, PolicyNamespaceConfig, ReplayNamespaceConfig,
     ShardLayout,
@@ -77,6 +78,7 @@ impl ServerCore {
         limits: SessionLimits,
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
+        cas: CasConfig,
         shards: ShardLayout,
         host: HostNamespaceConfig,
         policy: PolicyConfig,
@@ -105,6 +107,7 @@ impl ServerCore {
         let mut control = ControlPlane::new(
             telemetry,
             telemetry_manifest,
+            cas,
             shards,
             host,
             policy_namespace,
@@ -149,7 +152,7 @@ impl ServerCore {
     }
 
     fn refresh_proc_sessions(&mut self, current: Option<&SessionState>) -> Result<(), NineDoorError> {
-        let shards = self.control.namespace().shard_layout();
+        let shards = *self.control.namespace().shard_layout();
         let mut shard_counts = vec![0usize; shards.shard_count()];
         let mut worker_sessions = 0usize;
         for state in self.sessions.values() {
@@ -799,22 +802,22 @@ impl ServerCore {
             return Ok(ResponseBody::Walk { qids: Vec::new() });
         }
         let mut qids = Vec::with_capacity(wnames.len());
+        let shards = *self.control.namespace().shard_layout();
         let mut view_path = existing.view_path.clone();
         let mut canonical_path = existing.canonical_path.clone();
         let mut current_qid = existing.qid;
         for component in wnames {
             view_path.push(component.clone());
             let resolved = state.resolve_view_path(&view_path);
-            let shards = self.control.namespace().shard_layout();
             AccessPolicy::ensure_path(
-                shards,
+                &shards,
                 role,
                 worker_id,
                 gpu_scope,
                 host_mount,
                 &resolved,
             )?;
-            let node = self.control.namespace().lookup(&resolved)?;
+            let node = self.control.namespace_mut().lookup(&resolved)?;
             current_qid = node.qid();
             qids.push(current_qid);
             canonical_path = resolved;
@@ -872,9 +875,9 @@ impl ServerCore {
                 }
             }
         }
-        let shards = self.control.namespace().shard_layout();
+        let shards = *self.control.namespace().shard_layout();
         AccessPolicy::ensure_open(
-            shards,
+            &shards,
             role,
             worker_id,
             gpu_scope,
@@ -882,7 +885,7 @@ impl ServerCore {
             &entry.canonical_path,
             mode,
         )?;
-        let node = self.control.namespace().lookup(&entry.canonical_path)?;
+        let node = self.control.namespace_mut().lookup(&entry.canonical_path)?;
         if node.is_directory() && mode.allows_write() {
             return Err(NineDoorError::protocol(
                 ErrorCode::Permission,
@@ -1241,6 +1244,7 @@ impl ControlPlane {
     fn new(
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
+        cas: CasConfig,
         shards: ShardLayout,
         host: HostNamespaceConfig,
         policy_namespace: PolicyNamespaceConfig,
@@ -1254,6 +1258,7 @@ impl ControlPlane {
             namespace: Namespace::new_with_telemetry_manifest_host_policy(
                 telemetry,
                 telemetry_manifest,
+                cas,
                 shards,
                 host,
                 policy_namespace,

@@ -7,9 +7,9 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: &str = "1.3";
+const SCHEMA_VERSION: &str = "1.4";
 const MAX_WALK_DEPTH: usize = 8;
 const MAX_MSIZE: u32 = 8192;
 const MAX_SHARD_BITS: u8 = 8;
@@ -17,6 +17,8 @@ const SHARDED_WORKER_PATH_DEPTH: usize = 5;
 const LEGACY_WORKER_PATH_DEPTH: usize = 3;
 const EVENT_PUMP_TELEMETRY_BUDGET_BYTES: u32 = 32 * 1024;
 const EVENT_PUMP_MAX_TELEMETRY_WORKERS: u32 = 8;
+const EVENT_PUMP_CAS_BUDGET_BYTES: u32 = 32 * 1024;
+const CAS_MAX_CHUNKS: u32 = 8;
 const MAX_POLICY_QUEUE_ENTRIES: u16 = 64;
 const MAX_POLICY_RULE_ID_LEN: usize = 64;
 const MAX_REPLAY_ENTRIES: u16 = 256;
@@ -53,10 +55,16 @@ pub struct Manifest {
     pub observability: Observability,
     #[serde(default)]
     pub client_policies: ClientPolicies,
+    #[serde(default)]
+    pub cas: CasConfig,
 }
 
 impl Manifest {
     pub fn validate(&self) -> Result<()> {
+        self.validate_with_base(None)
+    }
+
+    pub fn validate_with_base(&self, base_dir: Option<&Path>) -> Result<()> {
         if self.root_task.schema != SCHEMA_VERSION {
             bail!(
                 "unsupported root_task.schema {} (expected {})",
@@ -100,6 +108,7 @@ impl Manifest {
         self.validate_telemetry()?;
         self.validate_observability()?;
         self.validate_client_policies()?;
+        self.validate_cas(base_dir)?;
         Ok(())
     }
 
@@ -530,6 +539,73 @@ impl Manifest {
         }
         Ok(())
     }
+
+    fn validate_cas(&self, base_dir: Option<&Path>) -> Result<()> {
+        if self.ecosystem.models.enable && !self.cas.enable {
+            bail!("ecosystem.models.enable requires cas.enable = true");
+        }
+        if !self.cas.enable {
+            return Ok(());
+        }
+        if self.cas.store.chunk_bytes == 0 {
+            bail!("cas.store.chunk_bytes must be > 0");
+        }
+        if self.cas.store.chunk_bytes > self.secure9p.msize {
+            bail!(
+                "cas.store.chunk_bytes {} exceeds secure9p.msize {}",
+                self.cas.store.chunk_bytes,
+                self.secure9p.msize
+            );
+        }
+        let required = self
+            .cas
+            .store
+            .chunk_bytes
+            .saturating_mul(CAS_MAX_CHUNKS);
+        if required > EVENT_PUMP_CAS_BUDGET_BYTES {
+            bail!(
+                "cas.store.chunk_bytes {} with max_chunks {} exceeds event-pump budget {}",
+                self.cas.store.chunk_bytes,
+                CAS_MAX_CHUNKS,
+                EVENT_PUMP_CAS_BUDGET_BYTES
+            );
+        }
+        if self.cas.delta.enable && !self.cas.enable {
+            bail!("cas.delta.enable requires cas.enable = true");
+        }
+        let signing = self.cas.signing.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("cas.signing section required when cas.enable = true")
+        })?;
+        if signing.required {
+            let key_path = signing
+                .key_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("cas.signing.key_path required when signing.required = true"))?;
+            let resolved = resolve_manifest_relative_path(base_dir, key_path);
+            let key_bytes = fs::read(&resolved).with_context(|| {
+                format!("failed to read cas signing key {}", resolved.display())
+            })?;
+            let key_text = std::str::from_utf8(&key_bytes)
+                .with_context(|| format!("cas signing key {} is not valid UTF-8", resolved.display()))?;
+            let key_text = key_text.trim();
+            if key_text.is_empty() {
+                bail!("cas signing key {} is empty", resolved.display());
+            }
+            let raw = hex::decode(key_text).map_err(|err| {
+                anyhow::anyhow!("cas signing key {} must be hex: {err}", resolved.display())
+            })?;
+            if raw.len() != 32 {
+                bail!(
+                    "cas signing key {} must be 32 bytes (got {})",
+                    resolved.display(),
+                    raw.len()
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -865,6 +941,57 @@ impl Default for ClientHeartbeatPolicy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
+pub struct CasConfig {
+    pub enable: bool,
+    pub store: CasStoreConfig,
+    pub delta: CasDeltaConfig,
+    pub signing: Option<CasSigningConfig>,
+}
+
+impl Default for CasConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            store: CasStoreConfig::default(),
+            delta: CasDeltaConfig::default(),
+            signing: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct CasStoreConfig {
+    pub chunk_bytes: u32,
+}
+
+impl Default for CasStoreConfig {
+    fn default() -> Self {
+        Self { chunk_bytes: 0 }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct CasDeltaConfig {
+    pub enable: bool,
+}
+
+impl Default for CasDeltaConfig {
+    fn default() -> Self {
+        Self { enable: false }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CasSigningConfig {
+    pub required: bool,
+    pub key_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
 pub struct TelemetryCursor {
     pub retain_on_boot: bool,
 }
@@ -1136,6 +1263,26 @@ pub fn load_manifest(path: &Path) -> Result<Manifest> {
     let manifest: Manifest = toml::from_str(&contents)
         .with_context(|| format!("invalid manifest TOML in {}", path.display()))?;
     Ok(manifest)
+}
+
+pub(crate) fn resolve_manifest_relative_path(base_dir: Option<&Path>, value: &str) -> PathBuf {
+    let trimmed = value.trim();
+    let candidate = Path::new(trimmed);
+    if candidate.is_absolute() || base_dir.is_none() {
+        return candidate.to_path_buf();
+    }
+    let base = base_dir.unwrap_or_else(|| Path::new("."));
+    let primary = base.join(candidate);
+    if primary.exists() {
+        return primary;
+    }
+    if let Some(parent) = base.parent() {
+        let secondary = parent.join(candidate);
+        if secondary.exists() {
+            return secondary;
+        }
+    }
+    primary
 }
 
 pub fn serialize_manifest(manifest: &Manifest) -> Result<Vec<u8>> {

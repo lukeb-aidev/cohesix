@@ -14,10 +14,20 @@ use crate::generated;
 use crate::log_buffer;
 use crate::observe::IngestSnapshot;
 use crate::serial::DEFAULT_LINE_CAPACITY;
-use alloc::{collections::VecDeque, format, string::String, vec::Vec};
+use alloc::{
+    borrow::ToOwned,
+    collections::{BTreeMap, VecDeque},
+    format,
+    string::String,
+    vec::Vec,
+};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use cohesix_cas::{CasManifest, CasManifestError, CAS_MANIFEST_SCHEMA};
+use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 use core::fmt::{self, Write};
 use core::str;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
+use signature::Verifier;
 use sha2::{Digest, Sha256};
 use secure9p_codec::ErrorCode;
 
@@ -38,6 +48,13 @@ const PROC_INGEST_WATCH_PATH: &str = "/proc/ingest/watch";
 const BOOT_HEADER: &str = "Cohesix boot: root-task online";
 const MAX_STREAM_LINES: usize = log_buffer::LOG_SNAPSHOT_LINES;
 const MAX_WORKERS: usize = 8;
+const MAX_BINDS: usize = 8;
+const CAS_MAX_CHUNKS: usize = 8;
+const CAS_MAX_UPDATES: usize = 8;
+const CAS_MAX_MODELS: usize = 8;
+const CAS_QUARANTINE_LIMIT: usize = 8;
+const CAS_MANIFEST_MAX_BYTES: usize = 2048;
+const MAX_EPOCH_LEN: usize = 20;
 const MAX_WORKER_ID_LEN: usize = 32;
 const TELEMETRY_AUDIT_LINE: usize = 128;
 const WORKER_TELEMETRY_FILE: &str = "telemetry";
@@ -97,11 +114,13 @@ pub struct NineDoorBridge {
     next_worker_id: u32,
     telemetry: generated::TelemetryConfig,
     workers: HeaplessVec<WorkerTelemetry, MAX_WORKERS>,
+    binds: HeaplessVec<BindEntry, MAX_BINDS>,
     host: HostState,
     policy: PolicyState,
     audit: AuditState,
     replay: ReplayState,
     observe: ObserveState,
+    cas: CasState,
 }
 
 /// Errors surfaced by [`NineDoorBridge`] operations.
@@ -149,11 +168,13 @@ impl NineDoorBridge {
             next_worker_id: 1,
             telemetry: generated::telemetry_config(),
             workers: HeaplessVec::new(),
+            binds: HeaplessVec::new(),
             host: HostState::new(),
             policy: PolicyState::new(),
             audit: AuditState::new(generated::audit_config()),
             replay: ReplayState::new(generated::audit_config()),
             observe: ObserveState::new(),
+            cas: CasState::new(generated::cas_config()),
         }
     }
 
@@ -162,6 +183,7 @@ impl NineDoorBridge {
         self.attached = false;
         self.session_role = None;
         self.session_ticket = None;
+        self.binds.clear();
     }
 
     /// Returns `true` when the bridge has successfully attached to the host.
@@ -450,7 +472,15 @@ impl NineDoorBridge {
             }
             return Err(NineDoorBridgeError::Permission);
         }
-        if let Some(worker_id) = parse_worker_telemetry_path(path) {
+        let resolved = self.resolve_bound_path(path);
+        let resolved_path = resolved.as_deref().unwrap_or(path);
+        if let Some(outcome) = self
+            .cas
+            .append_path(resolved_path, payload.as_bytes(), self.is_queen())?
+        {
+            return Ok(outcome);
+        }
+        if let Some(worker_id) = parse_worker_telemetry_path(resolved_path) {
             return self.append_worker_telemetry(worker_id, payload.as_bytes());
         }
         Err(NineDoorBridgeError::InvalidPath)
@@ -458,7 +488,7 @@ impl NineDoorBridge {
 
     /// Read file contents as line-oriented output.
     pub fn cat(
-        &self,
+        &mut self,
         path: &str,
     ) -> Result<
         HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
@@ -503,6 +533,11 @@ impl NineDoorBridge {
                 return self.action_status_lines(action_id);
             }
         }
+        let resolved = self.resolve_bound_path(path);
+        let path = resolved.as_deref().unwrap_or(path);
+        if let Some(bytes) = self.cas.read_path(path, self.is_queen())? {
+            return cas_lines_from_bytes(&bytes);
+        }
         if let Some(value) = self.host.entry_value(path) {
             return lines_from_text(value);
         }
@@ -526,7 +561,7 @@ impl NineDoorBridge {
 
     /// List directory entries (not yet supported by the shim bridge).
     pub fn list(
-        &self,
+        &mut self,
         path: &str,
     ) -> Result<
         HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
@@ -558,6 +593,12 @@ impl NineDoorBridge {
             let mut output = HeaplessVec::new();
             for entry in ["gpu", "kmesg", "log", "proc", "queen", "trace"] {
                 push_list_entry(&mut output, entry)?;
+            }
+            if self.cas.enabled() {
+                push_list_entry(&mut output, "updates")?;
+                if self.cas.models_enabled() {
+                    push_list_entry(&mut output, "models")?;
+                }
             }
             if sharding.enabled {
                 push_list_entry(&mut output, "shard")?;
@@ -631,6 +672,11 @@ impl NineDoorBridge {
         if self.replay.enabled && path == REPLAY_ROOT_PATH {
             return list_from_slice(&["ctl", "status"]);
         }
+        let resolved = self.resolve_bound_path(path);
+        let path = resolved.as_deref().unwrap_or(path);
+        if let Some(output) = self.cas.list_path(path, self.is_queen())? {
+            return Ok(output);
+        }
         if let Some(output) = self.host.list(path) {
             return Ok(output);
         }
@@ -678,6 +724,7 @@ impl NineDoorBridge {
         match command {
             QueenCtlCommand::Spawn(target) => self.spawn_worker(target),
             QueenCtlCommand::Kill(worker_id) => self.remove_worker(worker_id),
+            QueenCtlCommand::Bind { from, to } => self.bind_namespace(from, to),
         }
     }
 
@@ -704,6 +751,57 @@ impl NineDoorBridge {
             .ok_or(NineDoorBridgeError::InvalidPath)?;
         let _ = self.workers.swap_remove(position);
         Ok(())
+    }
+
+    fn bind_namespace(&mut self, from: &str, to: &str) -> Result<(), NineDoorBridgeError> {
+        validate_bind_path(from)?;
+        validate_bind_path(to)?;
+        let from = normalize_path(from);
+        let to = normalize_path(to);
+        if let Some(existing) = self.binds.iter_mut().find(|entry| entry.to == to) {
+            existing.from = from;
+            return Ok(());
+        }
+        self.binds
+            .push(BindEntry { from, to })
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        Ok(())
+    }
+
+    fn resolve_bound_path(&self, path: &str) -> Option<String> {
+        if self.binds.is_empty() {
+            return None;
+        }
+        let normalized = normalize_path(path);
+        let mut best: Option<&BindEntry> = None;
+        let mut best_len = 0usize;
+        for entry in self.binds.iter() {
+            let to = entry.to.as_str();
+            if normalized == to {
+                if to.len() > best_len {
+                    best = Some(entry);
+                    best_len = to.len();
+                }
+                continue;
+            }
+            if normalized.starts_with(to) {
+                let remainder = &normalized[to.len()..];
+                if remainder.starts_with('/') && to.len() > best_len {
+                    best = Some(entry);
+                    best_len = to.len();
+                }
+            }
+        }
+        let entry = best?;
+        let to = entry.to.as_str();
+        if normalized == to {
+            return Some(entry.from.clone());
+        }
+        let remainder = &normalized[to.len()..];
+        let mut out = String::new();
+        out.push_str(entry.from.as_str());
+        out.push_str(remainder);
+        Some(out)
     }
 
     fn append_worker_telemetry(
@@ -1104,6 +1202,682 @@ impl IngestWatch {
         }
         Ok(output)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelFileKind {
+    Weights,
+    Schema,
+    Signature,
+}
+
+#[derive(Debug, Clone)]
+enum CasPath {
+    UpdatesRoot,
+    UpdateEpoch { epoch: String },
+    UpdateManifest { epoch: String },
+    UpdateChunks { epoch: String },
+    UpdateChunk { epoch: String, digest: [u8; 32] },
+    ModelsRoot,
+    ModelRoot { digest: [u8; 32] },
+    ModelFile { digest: [u8; 32], kind: ModelFileKind },
+}
+
+#[derive(Debug)]
+struct CasState {
+    config: generated::CasConfig,
+    updates: BTreeMap<String, UpdateBundle>,
+    chunks: BTreeMap<[u8; 32], Vec<u8>>,
+    pending_chunks: BTreeMap<[u8; 32], Vec<u8>>,
+    models: BTreeMap<[u8; 32], ModelBundle>,
+    quarantine: VecDeque<QuarantineEntry>,
+    bytes_used: usize,
+}
+
+impl CasState {
+    fn new(config: generated::CasConfig) -> Self {
+        Self {
+            config,
+            updates: BTreeMap::new(),
+            chunks: BTreeMap::new(),
+            pending_chunks: BTreeMap::new(),
+            models: BTreeMap::new(),
+            quarantine: VecDeque::new(),
+            bytes_used: 0,
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.config.enable
+    }
+
+    fn models_enabled(&self) -> bool {
+        self.config.enable && self.config.models_enabled
+    }
+
+    fn append_path(
+        &mut self,
+        path: &str,
+        payload: &[u8],
+        is_queen: bool,
+    ) -> Result<Option<()>, NineDoorBridgeError> {
+        let Some(cas_path) = parse_cas_path(path)? else {
+            return Ok(None);
+        };
+        if !is_queen {
+            return Err(NineDoorBridgeError::Permission);
+        }
+        match cas_path {
+            CasPath::UpdateManifest { epoch } => {
+                let _ = self.append_manifest(&epoch, u64::MAX, payload)?;
+                Ok(Some(()))
+            }
+            CasPath::UpdateChunk { epoch, digest } => {
+                let _ = self.append_chunk(&epoch, &digest, u64::MAX, payload)?;
+                Ok(Some(()))
+            }
+            CasPath::ModelFile { digest, kind } => {
+                let _ = self.append_model_file(&digest, kind, u64::MAX, payload)?;
+                Ok(Some(()))
+            }
+            _ => Err(NineDoorBridgeError::InvalidPath),
+        }
+    }
+
+    fn read_path(
+        &mut self,
+        path: &str,
+        is_queen: bool,
+    ) -> Result<Option<Vec<u8>>, NineDoorBridgeError> {
+        let Some(cas_path) = parse_cas_path(path)? else {
+            return Ok(None);
+        };
+        if !is_queen {
+            return Err(NineDoorBridgeError::Permission);
+        }
+        let data = match cas_path {
+            CasPath::UpdateManifest { epoch } => self.read_manifest(&epoch)?,
+            CasPath::UpdateChunk { digest, .. } => self.read_chunk(&digest)?,
+            CasPath::ModelFile { digest, kind } => self.read_model_file(&digest, kind)?,
+            _ => return Err(NineDoorBridgeError::InvalidPath),
+        };
+        Ok(Some(data))
+    }
+
+    fn list_path(
+        &mut self,
+        path: &str,
+        is_queen: bool,
+    ) -> Result<
+        Option<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>>,
+        NineDoorBridgeError,
+    > {
+        let Some(cas_path) = parse_cas_path(path)? else {
+            return Ok(None);
+        };
+        if !is_queen {
+            return Err(NineDoorBridgeError::Permission);
+        }
+        let entries = match cas_path {
+            CasPath::UpdatesRoot => {
+                self.ensure_enabled()?;
+                self.list_updates()
+            }
+            CasPath::UpdateEpoch { epoch } => {
+                self.ensure_update(&epoch)?;
+                let mut entries = Vec::new();
+                entries.push("chunks".to_owned());
+                entries.push("manifest.cbor".to_owned());
+                entries
+            }
+            CasPath::UpdateChunks { epoch } => {
+                self.ensure_update(&epoch)?;
+                self.list_update_chunks(&epoch)
+            }
+            CasPath::ModelsRoot => {
+                self.ensure_models_enabled()?;
+                self.list_models()
+            }
+            CasPath::ModelRoot { digest } => {
+                self.ensure_model_entry(&digest)?;
+                self.list_model_entries(&digest)
+            }
+            _ => return Err(NineDoorBridgeError::InvalidPath),
+        };
+        let mut output = HeaplessVec::new();
+        for entry in entries {
+            push_list_entry(&mut output, entry.as_str())?;
+        }
+        Ok(Some(output))
+    }
+
+    fn read_manifest(&self, epoch: &str) -> Result<Vec<u8>, NineDoorBridgeError> {
+        let bundle = self.updates.get(epoch).ok_or(NineDoorBridgeError::InvalidPath)?;
+        let data = bundle
+            .manifest_bytes
+            .as_deref()
+            .ok_or(NineDoorBridgeError::InvalidPath)?;
+        Ok(data.to_vec())
+    }
+
+    fn read_chunk(&self, digest: &[u8; 32]) -> Result<Vec<u8>, NineDoorBridgeError> {
+        let data = self.chunks.get(digest).ok_or(NineDoorBridgeError::InvalidPath)?;
+        Ok(data.clone())
+    }
+
+    fn read_model_file(
+        &self,
+        digest: &[u8; 32],
+        kind: ModelFileKind,
+    ) -> Result<Vec<u8>, NineDoorBridgeError> {
+        let model = self.models.get(digest).ok_or(NineDoorBridgeError::InvalidPath)?;
+        match kind {
+            ModelFileKind::Weights => self.read_chunk(digest),
+            ModelFileKind::Schema => model
+                .schema
+                .as_deref()
+                .map(|data| data.to_vec())
+                .ok_or(NineDoorBridgeError::InvalidPath),
+            ModelFileKind::Signature => model
+                .signature
+                .as_deref()
+                .map(|data| data.to_vec())
+                .ok_or(NineDoorBridgeError::InvalidPath),
+        }
+    }
+
+    fn append_manifest(
+        &mut self,
+        epoch: &str,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<u32, NineDoorBridgeError> {
+        self.ensure_enabled()?;
+        self.ensure_update(epoch)?;
+        let mut decoded = None;
+        let mut manifest_bytes = None;
+        {
+            let bundle = self
+                .updates
+                .get_mut(epoch)
+                .expect("update bundle must exist");
+            if bundle.manifest_bytes.is_some() {
+                return Err(NineDoorBridgeError::Permission);
+            }
+            let payload = decode_cas_payload(data)?;
+            let expected_offset = bundle.manifest_pending.len() as u64;
+            let provided_offset = if offset == u64::MAX {
+                expected_offset
+            } else {
+                offset
+            };
+            if provided_offset != expected_offset {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            let new_len = bundle
+                .manifest_pending
+                .len()
+                .saturating_add(payload.len());
+            if new_len > CAS_MANIFEST_MAX_BYTES {
+                return Err(NineDoorBridgeError::BufferFull);
+            }
+            bundle.manifest_pending.extend_from_slice(&payload);
+            match CasManifest::decode(&bundle.manifest_pending) {
+                Ok(manifest) => {
+                    manifest_bytes = Some(bundle.manifest_pending.clone());
+                    decoded = Some(manifest);
+                }
+                Err(CasManifestError::UnexpectedEof) => return Ok(data.len() as u32),
+                Err(_) => {
+                    bundle.manifest_pending.clear();
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+            }
+        }
+        let Some(manifest) = decoded else {
+            return Ok(data.len() as u32);
+        };
+        if let Err(err) = self.validate_manifest(epoch, &manifest) {
+            if let Some(bundle) = self.updates.get_mut(epoch) {
+                bundle.manifest_pending.clear();
+            }
+            return Err(err);
+        }
+        if let Some(bundle) = self.updates.get_mut(epoch) {
+            bundle.manifest_bytes = manifest_bytes;
+            bundle.manifest_pending.clear();
+            bundle.manifest = Some(manifest);
+        }
+        Ok(data.len() as u32)
+    }
+
+    fn append_chunk(
+        &mut self,
+        epoch: &str,
+        digest: &[u8; 32],
+        offset: u64,
+        data: &[u8],
+    ) -> Result<u32, NineDoorBridgeError> {
+        self.ensure_enabled()?;
+        self.ensure_update(epoch)?;
+        self.append_chunk_internal(epoch, digest, offset, data)
+    }
+
+    fn append_chunk_internal(
+        &mut self,
+        label: &str,
+        digest: &[u8; 32],
+        offset: u64,
+        data: &[u8],
+    ) -> Result<u32, NineDoorBridgeError> {
+        let payload = decode_cas_payload(data)?;
+        if let Some(existing) = self.chunks.get(digest) {
+            if offset != 0 && offset != u64::MAX {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            if existing.as_slice() == payload.as_slice() {
+                return Ok(data.len() as u32);
+            }
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        let chunk_bytes = self.chunk_bytes();
+        if payload.len() > chunk_bytes {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        if !self.can_reserve_bytes(payload.len()) {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        let mut quarantine = None;
+        {
+            let pending = self.pending_chunks.entry(*digest).or_default();
+            let expected_offset = pending.len() as u64;
+            let provided_offset = if offset == u64::MAX {
+                expected_offset
+            } else {
+                offset
+            };
+            if provided_offset != expected_offset {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            pending.extend_from_slice(&payload);
+            self.bytes_used = self.bytes_used.saturating_add(payload.len());
+            let pending_len = pending.len();
+            if pending_len < chunk_bytes {
+                return Ok(data.len() as u32);
+            }
+            if pending_len > chunk_bytes {
+                pending.clear();
+                self.bytes_used = self.bytes_used.saturating_sub(pending_len);
+                return Err(NineDoorBridgeError::BufferFull);
+            }
+            let actual = Sha256::digest(pending.as_slice());
+            if actual.as_slice() != digest {
+                let mut actual_bytes = [0u8; 32];
+                actual_bytes.copy_from_slice(actual.as_slice());
+                pending.clear();
+                quarantine = Some((actual_bytes, pending_len));
+            }
+        }
+        if let Some((actual_bytes, pending_len)) = quarantine {
+            self.quarantine_chunk(label, digest, &actual_bytes, pending_len);
+            self.bytes_used = self.bytes_used.saturating_sub(pending_len);
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        let committed = self.pending_chunks.remove(digest).unwrap_or_default();
+        self.chunks.insert(*digest, committed);
+        Ok(data.len() as u32)
+    }
+
+    fn append_model_file(
+        &mut self,
+        digest: &[u8; 32],
+        kind: ModelFileKind,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<u32, NineDoorBridgeError> {
+        self.ensure_models_enabled()?;
+        self.ensure_model_entry(digest)?;
+        match kind {
+            ModelFileKind::Weights => {
+                if self
+                    .models
+                    .get(digest)
+                    .is_some_and(|model| model.weights_committed)
+                {
+                    return Err(NineDoorBridgeError::Permission);
+                }
+                let count = self.append_chunk_internal("model", digest, offset, data)?;
+                if self.chunks.contains_key(digest) {
+                    if let Some(model) = self.models.get_mut(digest) {
+                        model.weights_committed = true;
+                    }
+                }
+                Ok(count)
+            }
+            ModelFileKind::Schema => {
+                if self
+                    .models
+                    .get(digest)
+                    .and_then(|model| model.schema.as_ref())
+                    .is_some()
+                {
+                    return Err(NineDoorBridgeError::Permission);
+                }
+                let payload = decode_cas_payload(data)?;
+                let chunk_bytes = self.chunk_bytes();
+                if payload.len() > chunk_bytes {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                let expected_offset = self
+                    .models
+                    .get(digest)
+                    .and_then(|model| model.schema.as_ref())
+                    .map_or(0, |data| data.len()) as u64;
+                let provided_offset = if offset == u64::MAX {
+                    expected_offset
+                } else {
+                    offset
+                };
+                if provided_offset != expected_offset {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                if !self.can_reserve_bytes(payload.len()) {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                {
+                    let model = self.models.get_mut(digest).expect("model must exist");
+                    model
+                        .schema
+                        .get_or_insert_with(Vec::new)
+                        .extend_from_slice(&payload);
+                }
+                self.bytes_used = self.bytes_used.saturating_add(payload.len());
+                Ok(data.len() as u32)
+            }
+            ModelFileKind::Signature => {
+                if self
+                    .models
+                    .get(digest)
+                    .and_then(|model| model.signature.as_ref())
+                    .is_some()
+                {
+                    return Err(NineDoorBridgeError::Permission);
+                }
+                let payload = decode_cas_payload(data)?;
+                let chunk_bytes = self.chunk_bytes();
+                if payload.len() > chunk_bytes {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                let expected_offset = self
+                    .models
+                    .get(digest)
+                    .and_then(|model| model.signature.as_ref())
+                    .map_or(0, |data| data.len()) as u64;
+                let provided_offset = if offset == u64::MAX {
+                    expected_offset
+                } else {
+                    offset
+                };
+                if provided_offset != expected_offset {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                if !self.can_reserve_bytes(payload.len()) {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                {
+                    let model = self.models.get_mut(digest).expect("model must exist");
+                    model
+                        .signature
+                        .get_or_insert_with(Vec::new)
+                        .extend_from_slice(&payload);
+                }
+                self.bytes_used = self.bytes_used.saturating_add(payload.len());
+                Ok(data.len() as u32)
+            }
+        }
+    }
+
+    fn validate_manifest(
+        &mut self,
+        epoch: &str,
+        manifest: &CasManifest,
+    ) -> Result<(), NineDoorBridgeError> {
+        if manifest.schema != CAS_MANIFEST_SCHEMA {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        if manifest.epoch != epoch {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        if manifest.chunk_bytes as usize != self.chunk_bytes() {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        let expected_bytes = (manifest.chunks.len() as u64)
+            .saturating_mul(manifest.chunk_bytes as u64);
+        if manifest.payload_bytes != expected_bytes {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        if manifest.chunks.len() > CAS_MAX_CHUNKS {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        if let Some(delta) = &manifest.delta {
+            if !self.config.delta_enable {
+                return Err(NineDoorBridgeError::Permission);
+            }
+            let base = self
+                .updates
+                .get(&delta.base_epoch)
+                .and_then(|bundle| bundle.manifest.as_ref())
+                .ok_or(NineDoorBridgeError::InvalidPath)?;
+            if base.delta.is_some() {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            if base.payload_sha256 != delta.base_sha256 {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+        }
+        if self.config.signing_required && manifest.signature.is_none() {
+            self.log_event(&format!(
+                "cas-manifest rejected epoch={} reason=missing-signature",
+                epoch
+            ));
+            return Err(NineDoorBridgeError::Permission);
+        }
+        if let Some(signature) = manifest.signature {
+            let key = self.config.signing_key.ok_or_else(|| {
+                self.log_event(&format!(
+                    "cas-manifest rejected epoch={} reason=signing-key-missing",
+                    epoch
+                ));
+                NineDoorBridgeError::Permission
+            })?;
+            let verifying_key = SigningKey::from_bytes(&key).verifying_key();
+            let payload = manifest
+                .signature_payload()
+                .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            let signature = Signature::from_bytes(&signature);
+            if verifying_key.verify(&payload, &signature).is_err() {
+                self.log_event(&format!(
+                    "cas-manifest rejected epoch={} reason=signature-failed",
+                    epoch
+                ));
+                return Err(NineDoorBridgeError::Permission);
+            }
+        }
+        let payload = self.assemble_payload(manifest)?;
+        let computed = Sha256::digest(&payload);
+        if computed.as_slice() != manifest.payload_sha256 {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        let delta_label = if manifest.delta.is_some() { "delta" } else { "base" };
+        let payload_hex = hex::encode(manifest.payload_sha256);
+        self.log_event(&format!(
+            "cas-manifest accepted epoch={} kind={} payload_sha256={payload_hex} chunks={}",
+            epoch,
+            delta_label,
+            manifest.chunks.len()
+        ));
+        Ok(())
+    }
+
+    fn assemble_payload(&self, manifest: &CasManifest) -> Result<Vec<u8>, NineDoorBridgeError> {
+        let mut payload = Vec::new();
+        if let Some(delta) = &manifest.delta {
+            let base = self
+                .updates
+                .get(&delta.base_epoch)
+                .and_then(|bundle| bundle.manifest.as_ref())
+                .ok_or(NineDoorBridgeError::InvalidPath)?;
+            for digest in &base.chunks {
+                let chunk = self.chunks.get(digest).ok_or(NineDoorBridgeError::InvalidPath)?;
+                payload.extend_from_slice(chunk);
+            }
+        }
+        for digest in &manifest.chunks {
+            let chunk = self.chunks.get(digest).ok_or(NineDoorBridgeError::InvalidPath)?;
+            payload.extend_from_slice(chunk);
+        }
+        Ok(payload)
+    }
+
+    fn list_updates(&self) -> Vec<String> {
+        self.updates.keys().cloned().collect()
+    }
+
+    fn list_models(&self) -> Vec<String> {
+        self.models.keys().map(hex::encode).collect()
+    }
+
+    fn list_update_chunks(&self, epoch: &str) -> Vec<String> {
+        let Some(manifest) = self
+            .updates
+            .get(epoch)
+            .and_then(|bundle| bundle.manifest.as_ref())
+        else {
+            return Vec::new();
+        };
+        let mut entries: Vec<String> = manifest.chunks.iter().map(hex::encode).collect();
+        entries.sort();
+        entries
+    }
+
+    fn list_model_entries(&self, digest: &[u8; 32]) -> Vec<String> {
+        let Some(model) = self.models.get(digest) else {
+            return Vec::new();
+        };
+        let mut entries = Vec::new();
+        entries.push("weights".to_owned());
+        if model.schema.is_some() {
+            entries.push("schema".to_owned());
+        }
+        if model.signature.is_some() {
+            entries.push("signature".to_owned());
+        }
+        entries.sort();
+        entries
+    }
+
+    fn ensure_enabled(&self) -> Result<(), NineDoorBridgeError> {
+        if self.config.enable {
+            Ok(())
+        } else {
+            Err(NineDoorBridgeError::InvalidPath)
+        }
+    }
+
+    fn ensure_models_enabled(&self) -> Result<(), NineDoorBridgeError> {
+        if self.config.enable && self.config.models_enabled {
+            Ok(())
+        } else {
+            Err(NineDoorBridgeError::InvalidPath)
+        }
+    }
+
+    fn ensure_update(&mut self, epoch: &str) -> Result<(), NineDoorBridgeError> {
+        self.ensure_enabled()?;
+        validate_epoch(epoch)?;
+        if self.updates.contains_key(epoch) {
+            return Ok(());
+        }
+        if self.updates.len() >= CAS_MAX_UPDATES {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        self.updates
+            .insert(epoch.to_owned(), UpdateBundle::default());
+        Ok(())
+    }
+
+    fn ensure_model_entry(&mut self, digest: &[u8; 32]) -> Result<(), NineDoorBridgeError> {
+        self.ensure_models_enabled()?;
+        if self.models.contains_key(digest) {
+            return Ok(());
+        }
+        if self.models.len() >= CAS_MAX_MODELS {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        self.models.insert(*digest, ModelBundle::default());
+        Ok(())
+    }
+
+    fn can_reserve_bytes(&self, additional: usize) -> bool {
+        if self.chunk_bytes() == 0 {
+            return false;
+        }
+        let max_bytes = self.chunk_bytes().saturating_mul(CAS_MAX_CHUNKS);
+        self.bytes_used.saturating_add(additional) <= max_bytes
+    }
+
+    fn chunk_bytes(&self) -> usize {
+        self.config.chunk_bytes as usize
+    }
+
+    fn quarantine_chunk(&mut self, epoch: &str, expected: &[u8; 32], actual: &[u8], bytes: usize) {
+        let entry = QuarantineEntry {
+            epoch: epoch.to_owned(),
+            expected: hex::encode(expected),
+            actual: hex::encode(actual),
+            bytes,
+        };
+        if self.quarantine.len() >= CAS_QUARANTINE_LIMIT {
+            let _ = self.quarantine.pop_front();
+        }
+        self.log_event(&format!(
+            "cas-chunk quarantined epoch={} expected={} actual={} bytes={}",
+            entry.epoch, entry.expected, entry.actual, entry.bytes
+        ));
+        self.quarantine.push_back(entry);
+    }
+
+    fn log_event(&self, message: &str) {
+        log_buffer::append_log_line(message);
+    }
+}
+
+#[derive(Debug, Default)]
+struct UpdateBundle {
+    manifest_bytes: Option<Vec<u8>>,
+    manifest_pending: Vec<u8>,
+    manifest: Option<CasManifest>,
+}
+
+#[derive(Debug, Default)]
+struct ModelBundle {
+    weights_committed: bool,
+    schema: Option<Vec<u8>>,
+    signature: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone)]
+struct BindEntry {
+    from: String,
+    to: String,
+}
+
+#[derive(Debug)]
+struct QuarantineEntry {
+    epoch: String,
+    expected: String,
+    actual: String,
+    bytes: usize,
 }
 
 #[derive(Debug)]
@@ -2171,6 +2945,7 @@ enum SpawnTarget {
 enum QueenCtlCommand<'a> {
     Spawn(SpawnTarget),
     Kill(&'a str),
+    Bind { from: &'a str, to: &'a str },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2374,6 +3149,39 @@ fn lines_from_bytes(
     lines_from_text(text)
 }
 
+fn cas_lines_from_bytes(
+    data: &[u8],
+) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+{
+    let encoded = BASE64_STANDARD.encode(data);
+    let mut output = HeaplessVec::new();
+    let max_payload = (DEFAULT_LINE_CAPACITY.saturating_sub(4) / 4) * 4;
+    if encoded.len().saturating_add(4) <= DEFAULT_LINE_CAPACITY {
+        let mut line = HeaplessString::new();
+        line.push_str("b64:")
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        line.push_str(encoded.as_str())
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        output
+            .push(line)
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        return Ok(output);
+    }
+    for chunk in encoded.as_bytes().chunks(max_payload) {
+        let chunk_str =
+            core::str::from_utf8(chunk).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+        let mut line = HeaplessString::new();
+        line.push_str("b64:")
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        line.push_str(chunk_str)
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        output
+            .push(line)
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    }
+    Ok(output)
+}
+
 fn lines_from_text(
     text: &str,
 ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
@@ -2519,6 +3327,10 @@ fn validate_action_target(target: &str) -> Result<(), NineDoorBridgeError> {
     Ok(())
 }
 
+fn validate_bind_path(target: &str) -> Result<(), NineDoorBridgeError> {
+    validate_action_target(target)
+}
+
 fn path_matches_pattern(pattern: &str, path: &str) -> bool {
     let pattern_segments = split_path_segments(pattern);
     let path_segments = split_path_segments(path);
@@ -2584,6 +3396,112 @@ fn parse_worker_telemetry_path(path: &str) -> Option<&str> {
         }
     }
     None
+}
+
+fn parse_cas_path(path: &str) -> Result<Option<CasPath>, NineDoorBridgeError> {
+    let segments = split_path_segments(path);
+    match segments.as_slice() {
+        ["updates"] => return Ok(Some(CasPath::UpdatesRoot)),
+        ["models"] => return Ok(Some(CasPath::ModelsRoot)),
+        _ => {}
+    }
+    match segments.as_slice() {
+        ["updates", epoch] => {
+            validate_epoch(epoch)?;
+            return Ok(Some(CasPath::UpdateEpoch {
+                epoch: (*epoch).to_owned(),
+            }));
+        }
+        ["updates", epoch, "manifest.cbor"] => {
+            validate_epoch(epoch)?;
+            return Ok(Some(CasPath::UpdateManifest {
+                epoch: (*epoch).to_owned(),
+            }));
+        }
+        ["updates", epoch, "chunks"] => {
+            validate_epoch(epoch)?;
+            return Ok(Some(CasPath::UpdateChunks {
+                epoch: (*epoch).to_owned(),
+            }));
+        }
+        ["updates", epoch, "chunks", digest] => {
+            validate_epoch(epoch)?;
+            return Ok(Some(CasPath::UpdateChunk {
+                epoch: (*epoch).to_owned(),
+                digest: parse_sha256(digest)?,
+            }));
+        }
+        _ => {}
+    }
+    match segments.as_slice() {
+        ["models", digest] => {
+            return Ok(Some(CasPath::ModelRoot {
+                digest: parse_sha256(digest)?,
+            }));
+        }
+        ["models", digest, "weights"] => {
+            return Ok(Some(CasPath::ModelFile {
+                digest: parse_sha256(digest)?,
+                kind: ModelFileKind::Weights,
+            }));
+        }
+        ["models", digest, "schema"] => {
+            return Ok(Some(CasPath::ModelFile {
+                digest: parse_sha256(digest)?,
+                kind: ModelFileKind::Schema,
+            }));
+        }
+        ["models", digest, "signature"] => {
+            return Ok(Some(CasPath::ModelFile {
+                digest: parse_sha256(digest)?,
+                kind: ModelFileKind::Signature,
+            }));
+        }
+        _ => {}
+    }
+    Ok(None)
+}
+
+fn validate_epoch(epoch: &str) -> Result<(), NineDoorBridgeError> {
+    let trimmed = epoch.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_EPOCH_LEN {
+        return Err(NineDoorBridgeError::InvalidPath);
+    }
+    if !trimmed.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err(NineDoorBridgeError::InvalidPath);
+    }
+    Ok(())
+}
+
+fn parse_sha256(hex_str: &str) -> Result<[u8; 32], NineDoorBridgeError> {
+    if hex_str.len() != 64 || !hex_str.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(NineDoorBridgeError::InvalidPath);
+    }
+    let mut out = [0u8; 32];
+    hex::decode_to_slice(hex_str.as_bytes(), &mut out)
+        .map_err(|_| NineDoorBridgeError::InvalidPath)?;
+    Ok(out)
+}
+
+fn decode_cas_payload(data: &[u8]) -> Result<Vec<u8>, NineDoorBridgeError> {
+    let trimmed = trim_payload(data);
+    if let Some(encoded) = trimmed.strip_prefix(b"b64:") {
+        return BASE64_STANDARD
+            .decode(encoded)
+            .map_err(|_| NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(trimmed.to_vec())
+}
+
+fn trim_payload(data: &[u8]) -> &[u8] {
+    let mut end = data.len();
+    if end > 0 && data[end - 1] == b'\n' {
+        end -= 1;
+        if end > 0 && data[end - 1] == b'\r' {
+            end -= 1;
+        }
+    }
+    &data[..end]
 }
 
 fn append_log_bytes(
@@ -2714,6 +3632,13 @@ fn parse_queen_ctl(payload: &str) -> Result<QueenCtlCommand<'_>, NineDoorBridgeE
     }
     if let Some(worker_id) = parse_json_string_field(payload, "kill") {
         return Ok(QueenCtlCommand::Kill(worker_id));
+    }
+    if payload.contains("\"bind\"") {
+        let from =
+            parse_json_string_field(payload, "from").ok_or(NineDoorBridgeError::InvalidPayload)?;
+        let to =
+            parse_json_string_field(payload, "to").ok_or(NineDoorBridgeError::InvalidPayload)?;
+        return Ok(QueenCtlCommand::Bind { from, to });
     }
     Err(NineDoorBridgeError::InvalidPayload)
 }

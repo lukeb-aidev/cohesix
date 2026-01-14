@@ -1,0 +1,24 @@
+# Author: Lukas Bower
+# Purpose: Configure the CAS packaging and upload tool.
+[package]
+name = "cas-tool"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+cohesix-cas = { workspace = true }
+ed25519-dalek = { workspace = true }
+signature = { workspace = true }
+cohesix-ticket = { workspace = true }
+cohsh = { path = "../cohsh", features = ["tcp"] }
+
+[dev-dependencies]
+tempfile = "3.10"

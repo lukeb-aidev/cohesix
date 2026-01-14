@@ -14,7 +14,8 @@ attached session SessionId(2) as Queen
 {"state":"idle"}
 [console] OK ECHO path=/host/k8s/node/node-1/cordon bytes=6
 [console] OK ECHO path=/host/k8s/node/node-1/drain bytes=5
-[console] OK CAT path=/audit/export data=
+[console] OK CAT path=/audit/export data={"journal_base":0,"journal_next":268,"decisions_base":0,"decisions_next":0,"replay_enabled":true,"replay
+{"journal_base":0,"journal_next":268,"decisions_base":0,"decisions_next":0,"replay_enabled":true,"replay
 [console] OK ECHO path=/replay/ctl bytes=10
 [console] OK CAT path=/replay/status data={"state":"ok","from":0,"to":268,"entries":2,"match":true,"sequence_fnv1a":"6df28b82c98d2471"}
 {"state":"ok","from":0,"to":268,"entries":2,"match":true,"sequence_fnv1a":"6df28b82c98d2471"}

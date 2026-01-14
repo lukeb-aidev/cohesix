@@ -26,6 +26,7 @@ use secure9p_core::SessionLimits;
 use thiserror::Error;
 
 mod control;
+mod cas;
 mod audit;
 mod core;
 mod namespace;
@@ -37,6 +38,7 @@ mod telemetry;
 mod tracefs;
 
 use self::core::{role_to_uname, ServerCore};
+pub use self::cas::CasConfig;
 pub use self::namespace::{HostNamespaceConfig, HostProvider, ShardLayout};
 pub use self::audit::{AuditConfig, AuditLimits, ReplayConfig};
 pub use self::policy::{PolicyConfig, PolicyDecision, PolicyLimits, PolicyRuleSpec};
@@ -124,6 +126,7 @@ impl NineDoor {
             SessionLimits::default(),
             TelemetryConfig::default(),
             TelemetryManifestStore::default(),
+            CasConfig::disabled(),
             shards,
             HostNamespaceConfig::disabled(),
             PolicyConfig::disabled(),
@@ -139,6 +142,7 @@ impl NineDoor {
             SessionLimits::default(),
             TelemetryConfig::default(),
             TelemetryManifestStore::default(),
+            CasConfig::disabled(),
             ShardLayout::default(),
             host,
             PolicyConfig::disabled(),
@@ -167,6 +171,7 @@ impl NineDoor {
             SessionLimits::default(),
             TelemetryConfig::default(),
             TelemetryManifestStore::default(),
+            CasConfig::disabled(),
             ShardLayout::default(),
             host,
             policy,
@@ -222,6 +227,22 @@ impl NineDoor {
         )
     }
 
+    /// Construct a new NineDoor server with CAS enabled and default limits.
+    #[must_use]
+    pub fn new_with_cas_config(cas: CasConfig) -> Self {
+        Self::new_with_limits_telemetry_host_policy_shards(
+            Arc::new(SystemClock),
+            SessionLimits::default(),
+            TelemetryConfig::default(),
+            TelemetryManifestStore::default(),
+            cas,
+            ShardLayout::default(),
+            HostNamespaceConfig::disabled(),
+            PolicyConfig::disabled(),
+            AuditConfig::disabled(),
+        )
+    }
+
     fn new_with_limits_telemetry_and_host(
         clock: Arc<dyn Clock>,
         limits: SessionLimits,
@@ -234,6 +255,7 @@ impl NineDoor {
             limits,
             telemetry,
             telemetry_manifest,
+            CasConfig::disabled(),
             ShardLayout::default(),
             host,
             PolicyConfig::disabled(),
@@ -246,6 +268,7 @@ impl NineDoor {
         limits: SessionLimits,
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
+        cas: CasConfig,
         shards: ShardLayout,
         host: HostNamespaceConfig,
         policy: PolicyConfig,
@@ -257,6 +280,7 @@ impl NineDoor {
                 limits,
                 telemetry,
                 telemetry_manifest.clone(),
+                cas,
                 shards,
                 host,
                 policy,

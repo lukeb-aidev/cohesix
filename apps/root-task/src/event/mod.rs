@@ -1559,6 +1559,35 @@ where
                                             }
                                         }
                                     }
+                                    if path.as_str().starts_with("/updates/")
+                                        || path.as_str().starts_with("/models/")
+                                    {
+                                        if let Some(line) = summary_lines.first() {
+                                            if line.as_str().starts_with("b64:") {
+                                                summary.clear();
+                                                for ch in line.as_str().chars() {
+                                                    if summary.push(ch).is_err() {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    let max_summary_len = 128usize.saturating_sub(
+                                        "path=".len() + path.as_str().len() + " data=".len(),
+                                    );
+                                    if summary.len() > max_summary_len {
+                                        let mut trimmed: HeaplessString<128> = HeaplessString::new();
+                                        for ch in summary.as_str().chars() {
+                                            if trimmed.len() >= max_summary_len {
+                                                break;
+                                            }
+                                            if trimmed.push(ch).is_err() {
+                                                break;
+                                            }
+                                        }
+                                        summary = trimmed;
+                                    }
                                     let detail = format_message(format_args!(
                                         "path={} data={}",
                                         path.as_str(),

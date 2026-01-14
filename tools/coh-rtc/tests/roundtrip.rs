@@ -23,10 +23,13 @@ fn manifest_codegen_is_deterministic() {
     let manifest_path = repo_path("configs/root_task.toml");
     let out_dir = temp_dir.path().join("generated");
     let manifest_out = temp_dir.path().join("root_task_resolved.json");
+    let cas_manifest_template = temp_dir.path().join("cas_manifest_template.json");
     let cli_script = temp_dir.path().join("boot_v0.coh");
     let doc_snippet = temp_dir.path().join("snippet.md");
     let observability_interfaces_snippet = temp_dir.path().join("observability_interfaces.md");
     let observability_security_snippet = temp_dir.path().join("observability_security.md");
+    let cas_interfaces_snippet = temp_dir.path().join("cas_interfaces.md");
+    let cas_security_snippet = temp_dir.path().join("cas_security.md");
     let cbor_snippet = temp_dir.path().join("telemetry_cbor.md");
     let cohsh_policy = temp_dir.path().join("cohsh_policy.toml");
     let cohsh_policy_rust = temp_dir.path().join("cohsh_policy.rs");
@@ -36,10 +39,13 @@ fn manifest_codegen_is_deterministic() {
         manifest_path,
         out_dir: out_dir.clone(),
         manifest_out: manifest_out.clone(),
+        cas_manifest_template_out: cas_manifest_template.clone(),
         cli_script_out: cli_script.clone(),
         doc_snippet_out: doc_snippet.clone(),
         observability_interfaces_snippet_out: observability_interfaces_snippet.clone(),
         observability_security_snippet_out: observability_security_snippet.clone(),
+        cas_interfaces_snippet_out: cas_interfaces_snippet.clone(),
+        cas_security_snippet_out: cas_security_snippet.clone(),
         cbor_snippet_out: cbor_snippet.clone(),
         cohsh_policy_out: cohsh_policy.clone(),
         cohsh_policy_rust_out: cohsh_policy_rust.clone(),
@@ -49,12 +55,16 @@ fn manifest_codegen_is_deterministic() {
     let first = compile(&options).expect("compile manifest");
     let baseline = snapshot_dir(&out_dir);
     let baseline_manifest = fs::read(&manifest_out).expect("manifest json");
+    let baseline_cas_template = fs::read(&cas_manifest_template).expect("cas template json");
     let baseline_cli = fs::read(&cli_script).expect("cli script");
     let baseline_docs = fs::read(&doc_snippet).expect("docs snippet");
     let baseline_obs_interfaces =
         fs::read(&observability_interfaces_snippet).expect("observability interfaces snippet");
     let baseline_obs_security =
         fs::read(&observability_security_snippet).expect("observability security snippet");
+    let baseline_cas_interfaces =
+        fs::read(&cas_interfaces_snippet).expect("cas interfaces snippet");
+    let baseline_cas_security = fs::read(&cas_security_snippet).expect("cas security snippet");
     let baseline_cbor = fs::read(&cbor_snippet).expect("cbor snippet");
     let baseline_policy = fs::read(&cohsh_policy).expect("cohsh policy");
     let baseline_policy_rust = fs::read(&cohsh_policy_rust).expect("cohsh policy rust");
@@ -63,12 +73,16 @@ fn manifest_codegen_is_deterministic() {
     let second = compile(&options).expect("compile manifest again");
     let second_snapshot = snapshot_dir(&out_dir);
     let second_manifest = fs::read(&manifest_out).expect("manifest json");
+    let second_cas_template = fs::read(&cas_manifest_template).expect("cas template json");
     let second_cli = fs::read(&cli_script).expect("cli script");
     let second_docs = fs::read(&doc_snippet).expect("docs snippet");
     let second_obs_interfaces =
         fs::read(&observability_interfaces_snippet).expect("observability interfaces snippet");
     let second_obs_security =
         fs::read(&observability_security_snippet).expect("observability security snippet");
+    let second_cas_interfaces =
+        fs::read(&cas_interfaces_snippet).expect("cas interfaces snippet");
+    let second_cas_security = fs::read(&cas_security_snippet).expect("cas security snippet");
     let second_cbor = fs::read(&cbor_snippet).expect("cbor snippet");
     let second_policy = fs::read(&cohsh_policy).expect("cohsh policy");
     let second_policy_rust = fs::read(&cohsh_policy_rust).expect("cohsh policy rust");
@@ -76,10 +90,13 @@ fn manifest_codegen_is_deterministic() {
 
     assert_eq!(baseline, second_snapshot);
     assert_eq!(baseline_manifest, second_manifest);
+    assert_eq!(baseline_cas_template, second_cas_template);
     assert_eq!(baseline_cli, second_cli);
     assert_eq!(baseline_docs, second_docs);
     assert_eq!(baseline_obs_interfaces, second_obs_interfaces);
     assert_eq!(baseline_obs_security, second_obs_security);
+    assert_eq!(baseline_cas_interfaces, second_cas_interfaces);
+    assert_eq!(baseline_cas_security, second_cas_security);
     assert_eq!(baseline_cbor, second_cbor);
     assert_eq!(baseline_policy, second_policy);
     assert_eq!(baseline_policy_rust, second_policy_rust);
@@ -94,7 +111,7 @@ fn invalid_manifest_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.3"
+schema = "1.4"
 
 [profile]
 name = "virt-aarch64"
@@ -130,6 +147,7 @@ secret = "bootstrap"
         manifest_path,
         out_dir: temp_dir.path().join("out"),
         manifest_out: temp_dir.path().join("resolved.json"),
+        cas_manifest_template_out: temp_dir.path().join("cas_manifest_template.json"),
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
         observability_interfaces_snippet_out: temp_dir
@@ -138,6 +156,8 @@ secret = "bootstrap"
         observability_security_snippet_out: temp_dir
             .path()
             .join("observability_security.md"),
+        cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
+        cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
@@ -169,7 +189,7 @@ fn cache_kernel_ops_required_for_dma() {
 # Author: Lukas Bower
 # Purpose: Invalid cache manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.3"
+schema = "1.4"
 
 [profile]
 name = "virt-aarch64"
@@ -211,6 +231,7 @@ secret = "bootstrap"
         manifest_path,
         out_dir: temp_dir.path().join("out"),
         manifest_out: temp_dir.path().join("resolved.json"),
+        cas_manifest_template_out: temp_dir.path().join("cas_manifest_template.json"),
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
         observability_interfaces_snippet_out: temp_dir
@@ -219,6 +240,8 @@ secret = "bootstrap"
         observability_security_snippet_out: temp_dir
             .path()
             .join("observability_security.md"),
+        cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
+        cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
@@ -236,7 +259,7 @@ fn sharding_shard_bits_over_max_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid sharding manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.3"
+schema = "1.4"
 
 [profile]
 name = "virt-aarch64"
@@ -277,6 +300,7 @@ secret = "bootstrap"
         manifest_path,
         out_dir: temp_dir.path().join("out"),
         manifest_out: temp_dir.path().join("resolved.json"),
+        cas_manifest_template_out: temp_dir.path().join("cas_manifest_template.json"),
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
         observability_interfaces_snippet_out: temp_dir
@@ -285,6 +309,8 @@ secret = "bootstrap"
         observability_security_snippet_out: temp_dir
             .path()
             .join("observability_security.md"),
+        cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
+        cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
@@ -302,7 +328,7 @@ fn legacy_worker_paths_rejected_when_alias_disabled() {
 # Author: Lukas Bower
 # Purpose: Invalid alias manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.3"
+schema = "1.4"
 
 [profile]
 name = "virt-aarch64"
@@ -350,6 +376,7 @@ secret = "bootstrap"
         manifest_path,
         out_dir: temp_dir.path().join("out"),
         manifest_out: temp_dir.path().join("resolved.json"),
+        cas_manifest_template_out: temp_dir.path().join("cas_manifest_template.json"),
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
         observability_interfaces_snippet_out: temp_dir
@@ -358,6 +385,8 @@ secret = "bootstrap"
         observability_security_snippet_out: temp_dir
             .path()
             .join("observability_security.md"),
+        cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
+        cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
@@ -377,7 +406,7 @@ fn sharding_requires_walk_depth() {
 # Author: Lukas Bower
 # Purpose: Invalid walk depth manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.3"
+schema = "1.4"
 
 [profile]
 name = "virt-aarch64"
@@ -418,6 +447,7 @@ secret = "bootstrap"
         manifest_path,
         out_dir: temp_dir.path().join("out"),
         manifest_out: temp_dir.path().join("resolved.json"),
+        cas_manifest_template_out: temp_dir.path().join("cas_manifest_template.json"),
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
         observability_interfaces_snippet_out: temp_dir
@@ -426,6 +456,8 @@ secret = "bootstrap"
         observability_security_snippet_out: temp_dir
             .path()
             .join("observability_security.md"),
+        cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
+        cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),

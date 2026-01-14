@@ -21,6 +21,7 @@ BASE_SCRIPTS=(
 GATED_SCRIPTS=(
     "replay_journal.coh"
     "policy_gate.coh"
+    "model_cas_bind.coh"
 )
 
 BASE_MANIFEST="${PROJECT_ROOT}/configs/root_task.toml"
@@ -172,6 +173,9 @@ run_cohsh() {
         policy_gate.coh)
             "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/policy_gate.coh
             ;;
+        model_cas_bind.coh)
+            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/model_cas_bind.coh
+            ;;
         replay_journal.coh)
             "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/replay_journal.coh
             ;;
@@ -205,10 +209,13 @@ run_batch() {
         "$manifest" \
         --out "$PROJECT_ROOT/apps/root-task/src/generated" \
         --manifest "$PROJECT_ROOT/out/manifests/root_task_resolved.json" \
+        --cas-manifest-template "$PROJECT_ROOT/out/cas_manifest_template.json" \
         --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \
         --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md" \
         --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
-        --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md"
+        --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md" \
+        --cas-interfaces-snippet "$PROJECT_ROOT/docs/snippets/cas_interfaces.md" \
+        --cas-security-snippet "$PROJECT_ROOT/docs/snippets/cas_security.md"
 
     COH_RTC_MANIFEST="$manifest" SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
         --sel4-build "$HOME/seL4/build" \
@@ -296,9 +303,12 @@ cargo run -p coh-rtc -- \
     "$PROJECT_ROOT/configs/root_task.toml" \
     --out "$PROJECT_ROOT/apps/root-task/src/generated" \
     --manifest "$PROJECT_ROOT/out/manifests/root_task_resolved.json" \
+    --cas-manifest-template "$PROJECT_ROOT/out/cas_manifest_template.json" \
     --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \
     --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md" \
     --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
-    --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md"
+    --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md" \
+    --cas-interfaces-snippet "$PROJECT_ROOT/docs/snippets/cas_interfaces.md" \
+    --cas-security-snippet "$PROJECT_ROOT/docs/snippets/cas_security.md"
 
 echo "regression batch complete: $(( ${#BASE_SCRIPTS[@]} + ${#GATED_SCRIPTS[@]} )) scripts passed"

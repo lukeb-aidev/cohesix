@@ -12,7 +12,7 @@
 
 use std::fmt;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims};
 use rand::{rngs::OsRng, TryRngCore};
@@ -131,7 +131,7 @@ impl JobDescriptor {
         if let Some(encoded) = &self.payload_b64 {
             let payload = BASE64_STANDARD
                 .decode(encoded)
-                .context("payload_b64 is not valid base64")?;
+                .map_err(|_| anyhow!("payload_b64 is not valid base64"))?;
             let mut hasher = Sha256::new();
             hasher.update(&payload);
             let hash = hasher.finalize();

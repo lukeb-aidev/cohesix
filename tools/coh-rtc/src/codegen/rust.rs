@@ -4,14 +4,19 @@
 // Author: Lukas Bower
 
 use crate::codegen::hash_bytes;
-use crate::ir::{HostProvider, Manifest, Role};
+use crate::ir::{resolve_manifest_relative_path, HostProvider, Manifest, Role};
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
-pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Result<()> {
+pub fn emit_rust(
+    manifest: &Manifest,
+    manifest_hash: &str,
+    out_dir: &Path,
+    manifest_dir: Option<&Path>,
+) -> Result<()> {
     let mod_rs = out_dir.join("mod.rs");
     let bootstrap_rs = out_dir.join("bootstrap.rs");
 
@@ -85,6 +90,16 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "    pub ring_bytes_per_worker: u32,")?;
     writeln!(mod_contents, "    pub frame_schema: TelemetryFrameSchema,")?;
     writeln!(mod_contents, "    pub cursor: TelemetryCursorConfig,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct CasConfig {{")?;
+    writeln!(mod_contents, "    pub enable: bool,")?;
+    writeln!(mod_contents, "    pub chunk_bytes: u32,")?;
+    writeln!(mod_contents, "    pub delta_enable: bool,")?;
+    writeln!(mod_contents, "    pub signing_required: bool,")?;
+    writeln!(mod_contents, "    pub signing_key: Option<[u8; 32]>,")?;
+    writeln!(mod_contents, "    pub models_enabled: bool,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -183,6 +198,7 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();")?;
     writeln!(mod_contents, "pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;")?;
     writeln!(mod_contents, "pub const OBSERVABILITY_CONFIG: ObservabilityConfig = bootstrap::OBSERVABILITY_CONFIG;")?;
+    writeln!(mod_contents, "pub const CAS_CONFIG: CasConfig = bootstrap::CAS_CONFIG;")?;
     writeln!(mod_contents, "pub const PROC_9P_SESSIONS_BYTES: usize = bootstrap::PROC_9P_SESSIONS_BYTES;")?;
     writeln!(mod_contents, "pub const PROC_9P_OUTSTANDING_BYTES: usize = bootstrap::PROC_9P_OUTSTANDING_BYTES;")?;
     writeln!(mod_contents, "pub const PROC_9P_SHORT_WRITES_BYTES: usize = bootstrap::PROC_9P_SHORT_WRITES_BYTES;")?;
@@ -236,6 +252,10 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(mod_contents, "    bootstrap::OBSERVABILITY_CONFIG")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn cas_config() -> CasConfig {{")?;
+    writeln!(mod_contents, "    bootstrap::CAS_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn host_config() -> HostConfig {{")?;
     writeln!(mod_contents, "    bootstrap::HOST_CONFIG")?;
     writeln!(mod_contents, "}}")?;
@@ -275,6 +295,13 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
             .as_slice(),
     );
     let policy_rules_json = render_policy_rules_json(manifest)?;
+    let cas_signing_required = manifest
+        .cas
+        .signing
+        .as_ref()
+        .map(|signing| signing.required)
+        .unwrap_or(false);
+    let cas_signing_key = cas_signing_key_literal(manifest, manifest_dir)?;
 
     let mut bootstrap_contents = String::new();
     writeln!(bootstrap_contents, "// Author: Lukas Bower")?;
@@ -283,7 +310,7 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AuditConfig, CachePolicy, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
+        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -364,6 +391,16 @@ pub fn emit_rust(manifest: &Manifest, manifest_hash: &str, out_dir: &Path) -> Re
         manifest.telemetry.ring_bytes_per_worker,
         telemetry_schema_to_rust(&manifest.telemetry.frame_schema),
         manifest.telemetry.cursor.retain_on_boot
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const CAS_CONFIG: CasConfig = CasConfig {{ enable: {}, chunk_bytes: {}, delta_enable: {}, signing_required: {}, signing_key: {}, models_enabled: {} }};\n",
+        manifest.cas.enable,
+        manifest.cas.store.chunk_bytes,
+        manifest.cas.delta.enable,
+        cas_signing_required,
+        cas_signing_key,
+        manifest.ecosystem.models.enable
     )?;
     writeln!(
         bootstrap_contents,
@@ -575,6 +612,43 @@ fn telemetry_schema_label(schema: &crate::ir::TelemetryFrameSchema) -> &'static 
         crate::ir::TelemetryFrameSchema::LegacyPlaintext => "legacy-plaintext",
         crate::ir::TelemetryFrameSchema::CborV1 => "cbor-v1",
     }
+}
+
+fn cas_signing_key_literal(manifest: &Manifest, manifest_dir: Option<&Path>) -> Result<String> {
+    let key_path = manifest
+        .cas
+        .signing
+        .as_ref()
+        .and_then(|signing| signing.key_path.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(path) = key_path else {
+        return Ok("None".to_owned());
+    };
+    let resolved = resolve_manifest_relative_path(manifest_dir, path);
+    let key_bytes = fs::read(&resolved).with_context(|| {
+        format!("failed to read cas signing key {}", resolved.display())
+    })?;
+    let key_text = std::str::from_utf8(&key_bytes)
+        .with_context(|| format!("cas signing key {} is not valid UTF-8", resolved.display()))?;
+    let raw = hex::decode(key_text.trim()).map_err(|err| {
+        anyhow::anyhow!("cas signing key {} must be hex: {err}", resolved.display())
+    })?;
+    if raw.len() != 32 {
+        return Err(anyhow::anyhow!(
+            "cas signing key {} must be 32 bytes (got {})",
+            resolved.display(),
+            raw.len()
+        ));
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&raw);
+    let literal = key
+        .iter()
+        .map(|byte| format!("0x{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(format!("Some([{literal}])"))
 }
 
 #[derive(Serialize)]

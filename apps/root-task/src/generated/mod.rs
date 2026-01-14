@@ -70,6 +70,16 @@ pub struct TelemetryConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct CasConfig {
+    pub enable: bool,
+    pub chunk_bytes: u32,
+    pub delta_enable: bool,
+    pub signing_required: bool,
+    pub signing_key: Option<[u8; 32]>,
+    pub models_enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct Proc9pConfig {
     pub sessions: bool,
     pub outstanding: bool,
@@ -154,8 +164,8 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.3";
-pub const MANIFEST_SHA256: &str = "85293384c1eca19df9552d0c392589290885d786d10b72cd7d1f6b76bb010f99";
+pub const MANIFEST_SCHEMA: &str = "1.4";
+pub const MANIFEST_SHA256: &str = "99878893a38c8b0b632e10d1f9f39973eb1a9fea97bc4be58c963e4be946f196";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
@@ -165,6 +175,7 @@ pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;
 pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();
 pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;
 pub const OBSERVABILITY_CONFIG: ObservabilityConfig = bootstrap::OBSERVABILITY_CONFIG;
+pub const CAS_CONFIG: CasConfig = bootstrap::CAS_CONFIG;
 pub const PROC_9P_SESSIONS_BYTES: usize = bootstrap::PROC_9P_SESSIONS_BYTES;
 pub const PROC_9P_OUTSTANDING_BYTES: usize = bootstrap::PROC_9P_OUTSTANDING_BYTES;
 pub const PROC_9P_SHORT_WRITES_BYTES: usize = bootstrap::PROC_9P_SHORT_WRITES_BYTES;
@@ -216,6 +227,10 @@ pub const fn telemetry_config() -> TelemetryConfig {
 
 pub const fn observability_config() -> ObservabilityConfig {
     bootstrap::OBSERVABILITY_CONFIG
+}
+
+pub const fn cas_config() -> CasConfig {
+    bootstrap::CAS_CONFIG
 }
 
 pub const fn host_config() -> HostConfig {

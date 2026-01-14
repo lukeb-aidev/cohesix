@@ -3,6 +3,7 @@
 // Purpose: Emit deterministic artefacts from the root-task manifest.
 // Author: Lukas Bower
 
+mod cas;
 mod cli;
 mod cohsh;
 pub mod cbor;
@@ -22,10 +23,14 @@ pub struct GeneratedArtifacts {
     pub rust_dir: PathBuf,
     pub manifest_json: PathBuf,
     pub manifest_hash: PathBuf,
+    pub cas_manifest_template: PathBuf,
+    pub cas_manifest_template_hash: PathBuf,
     pub cli_script: PathBuf,
     pub doc_snippet: PathBuf,
     pub observability_interfaces_snippet: PathBuf,
     pub observability_security_snippet: PathBuf,
+    pub cas_interfaces_snippet: PathBuf,
+    pub cas_security_snippet: PathBuf,
     pub cbor_snippet: PathBuf,
     pub cohsh_policy: PathBuf,
     pub cohsh_policy_hash: PathBuf,
@@ -36,13 +41,17 @@ pub struct GeneratedArtifacts {
 impl GeneratedArtifacts {
     pub fn summary(&self) -> String {
         format!(
-            "rust={}, manifest={}, cli={}, docs={}, obs_interfaces={}, obs_security={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}",
+            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, obs_interfaces={}, obs_security={}, cas_interfaces={}, cas_security={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}",
             self.rust_dir.display(),
             self.manifest_json.display(),
+            self.cas_manifest_template.display(),
+            self.cas_manifest_template_hash.display(),
             self.cli_script.display(),
             self.doc_snippet.display(),
             self.observability_interfaces_snippet.display(),
             self.observability_security_snippet.display(),
+            self.cas_interfaces_snippet.display(),
+            self.cas_security_snippet.display(),
             self.cbor_snippet.display(),
             self.cohsh_policy.display(),
             self.cohsh_policy_hash.display(),
@@ -65,6 +74,10 @@ pub fn emit_all(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    if let Some(parent) = options.cas_manifest_template_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
     if let Some(parent) = options.cli_script_out.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -78,6 +91,14 @@ pub fn emit_all(
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     if let Some(parent) = options.observability_security_snippet_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.cas_interfaces_snippet_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.cas_security_snippet_out.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
@@ -98,11 +119,16 @@ pub fn emit_all(
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
 
-    rust::emit_rust(manifest, manifest_hash, &options.out_dir)?;
+    let manifest_dir = options.manifest_path.parent();
+    rust::emit_rust(manifest, manifest_hash, &options.out_dir, manifest_dir)?;
+    let cas_template = cas::build_cas_template(manifest);
+    let cas_artifacts = cas::emit_cas_template(&cas_template, &options.cas_manifest_template_out)?;
     cli::emit_cli_script(manifest, &options.cli_script_out)?;
     docs::emit_doc_snippet(manifest_hash, docs, &options.doc_snippet_out)?;
     docs::emit_observability_interfaces_snippet(docs, &options.observability_interfaces_snippet_out)?;
     docs::emit_observability_security_snippet(docs, &options.observability_security_snippet_out)?;
+    docs::emit_cas_interfaces_snippet(docs, &options.cas_interfaces_snippet_out)?;
+    docs::emit_cas_security_snippet(docs, &options.cas_security_snippet_out)?;
     cbor::emit_cbor_snippet(&options.cbor_snippet_out)?;
     let cohsh_artifacts = cohsh::emit_cohsh_policy(
         manifest,
@@ -139,10 +165,14 @@ pub fn emit_all(
         rust_dir: options.out_dir.clone(),
         manifest_json: options.manifest_out.clone(),
         manifest_hash: hash_path,
+        cas_manifest_template: cas_artifacts.template_json,
+        cas_manifest_template_hash: cas_artifacts.template_hash,
         cli_script: options.cli_script_out.clone(),
         doc_snippet: options.doc_snippet_out.clone(),
         observability_interfaces_snippet: options.observability_interfaces_snippet_out.clone(),
         observability_security_snippet: options.observability_security_snippet_out.clone(),
+        cas_interfaces_snippet: options.cas_interfaces_snippet_out.clone(),
+        cas_security_snippet: options.cas_security_snippet_out.clone(),
         cbor_snippet: options.cbor_snippet_out.clone(),
         cohsh_policy: cohsh_artifacts.policy_toml,
         cohsh_policy_hash: cohsh_artifacts.policy_hash,

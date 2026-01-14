@@ -40,7 +40,7 @@ pub const MAX_TICKET_LEN: usize = 192;
 const MAX_PATH_LEN: usize = 96;
 const MAX_JSON_LEN: usize = 192;
 const MAX_ID_LEN: usize = 32;
-const MAX_ECHO_LEN: usize = 96;
+const MAX_ECHO_LEN: usize = 128;
 
 const MAX_FAILED_LOGINS: u32 = 3;
 const RATE_LIMIT_WINDOW_MS: u64 = 60_000;

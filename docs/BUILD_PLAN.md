@@ -19,12 +19,12 @@ preparing and executing tasks.
 
 Cohesix is a hive-style orchestrator: one Queen coordinating many workers via a shared Secure9P namespace and commanded through `cohsh`.
 
-**Current Status Snapshot (through Milestone 15)**
-- Milestones 0–15 are implemented: the cooperative event pump, PL011 root console, TCP console listener, Secure9P namespace, HAL-backed device mapping, manifest-driven `coh-rtc` compiler, cache-safe DMA plumbing, in-session `coh> test` with preinstalled `.coh` scripts, Secure9P pipelining/batching, telemetry rings + cursor retention, host-sidecar `/host` gating, PolicyFS/AuditFS/ReplayFS, sharded worker namespaces with per-shard fid tables, and manifest-derived `cohsh` client policy files (session pooling, retry scheduling, heartbeat cadence) with hash enforcement and regression coverage are live and reflected in the architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
+**Current Status Snapshot (through Milestone 17)**
+- Milestones 0–17 are implemented: the cooperative event pump, PL011 root console, TCP console listener, Secure9P namespace, HAL-backed device mapping, manifest-driven `coh-rtc` compiler, cache-safe DMA plumbing, in-session `coh> test` with preinstalled `.coh` scripts, Secure9P pipelining/batching, telemetry rings + cursor retention, host-sidecar `/host` gating, PolicyFS/AuditFS/ReplayFS, sharded worker namespaces with per-shard fid tables, manifest-derived `cohsh` client policy files (session pooling, retry scheduling, heartbeat cadence) with hash enforcement, `/proc` observability nodes via compiler snippets, and CAS-backed updates/models (NineDoor provider + cas-tool) with resume/signing/delta + model-bind regressions are live and reflected in the architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
 - Dual consoles run concurrently; the TCP listener is non-blocking and mirrors serial semantics while keeping PL011 always-on for recovery. The `coh> test` command exercises real server-hosted regression scripts for quick/full verification.
 - NineDoor attach/namespace semantics follow `SECURE9P.md` and role mounts from `ROLES_AND_SCHEDULING.md`; worker-heart and worker-gpu are scoped to their documented namespaces, with GPU hardware remaining host-side via `gpu-bridge-host`.
 - Next release target is an Alpha after Milestone 20.x; Milestones 21-24 define the plug-and-play host-bridge track (coh mount/gpu/run/peft/telemetry/doctor/python).
-- Remaining milestones focus on observability via files and forward control-plane extensions described below.
+- Remaining milestones focus on status surfaces, UEFI parity, and the plug-and-play host-bridge track described below.
 
 ## seL4 Reference Manual Alignment (v13.0.0)
 
@@ -1324,12 +1324,12 @@ Provide CAS-backed update distribution via NineDoor with compiler-enforced integ
 - `apps/nine-door/src/host/cas.rs` implementing a CAS provider exposing `/updates/<epoch>/{manifest.cbor,chunks/<hash>}` with optional delta packs. Provider enforces SHA-256 chunk integrity and optional Ed25519 signatures when manifest enables `cas.signing`.
 - Host tooling `apps/cas-tool/` (new crate) packaging update bundles, generating manifests, and uploading via Secure9P.
 - CLI regression `scripts/cohsh/cas_roundtrip.coh` verifying download resume, signature enforcement, and delta replay.
-- TODO: Implement scripts/cohsh/cas_roundtrip.coh and add it to regression pack DoD.
 - Models as CAS (registry semantics via files, no new service): expose `/models/<sha256>/{weights,schema,signature}` backed by the same CAS provider; include doc example binding a model into a worker namespace via mount/bind.
 - CLI regression `scripts/cohsh/model_cas_bind.coh` uploads a dummy model bundle, verifies hash, and binds it into a worker namespace.
-- TODO: Implement scripts/cohsh/model_cas_bind.coh and add it to regression pack DoD.
 - Manifest IR v1.4 fields: `cas.enable`, `cas.store.chunk_bytes`, `cas.delta.enable`, `cas.signing.key_path`. Validation ensures chunk size ≤ negotiated `msize` and signing keys present when required.
 - Docs: `docs/INTERFACES.md` describes CAS grammar, delta rules, and operational runbooks sourced from compiler output; `docs/SECURITY.md` records threat model.
+
+**Status:** Complete — CAS provider, cas-tool, model bindings, compiler v1.4 CAS fields, doc snippets, and regression coverage are aligned and green.
 
 **Commands**
 - `cargo test -p nine-door`

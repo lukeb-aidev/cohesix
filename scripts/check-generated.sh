@@ -17,10 +17,13 @@ trap 'rm -rf "${work_dir}"' EXIT
 
 generated_dir="$work_dir/generated"
 manifest_out="$work_dir/root_task_resolved.json"
+cas_template="$work_dir/cas_manifest_template.json"
 cli_script="$work_dir/boot_v0.coh"
 doc_snippet="$work_dir/root_task_manifest.md"
 observability_interfaces="$work_dir/observability_interfaces.md"
 observability_security="$work_dir/observability_security.md"
+cas_interfaces="$work_dir/cas_interfaces.md"
+cas_security="$work_dir/cas_security.md"
 cohsh_policy="$work_dir/cohsh_policy.toml"
 cohsh_policy_rust="$work_dir/cohsh_policy.rs"
 cohsh_policy_doc="$work_dir/cohsh_policy.md"
@@ -29,10 +32,13 @@ cargo run -p coh-rtc -- \
   "$manifest_path" \
   --out "$generated_dir" \
   --manifest "$manifest_out" \
+  --cas-manifest-template "$cas_template" \
   --cli-script "$cli_script" \
   --doc-snippet "$doc_snippet" \
   --observability-interfaces-snippet "$observability_interfaces" \
   --observability-security-snippet "$observability_security" \
+  --cas-interfaces-snippet "$cas_interfaces" \
+  --cas-security-snippet "$cas_security" \
   --cohsh-policy "$cohsh_policy" \
   --cohsh-policy-rust "$cohsh_policy_rust" \
   --cohsh-policy-doc "$cohsh_policy_doc"
@@ -50,10 +56,14 @@ compare_file "$repo_root/apps/root-task/src/generated/mod.rs" "$generated_dir/mo
 compare_file "$repo_root/apps/root-task/src/generated/bootstrap.rs" "$generated_dir/bootstrap.rs"
 compare_file "$repo_root/out/manifests/root_task_resolved.json" "$manifest_out"
 compare_file "$repo_root/out/manifests/root_task_resolved.json.sha256" "${manifest_out}.sha256"
+compare_file "$repo_root/out/cas_manifest_template.json" "$cas_template"
+compare_file "$repo_root/out/cas_manifest_template.json.sha256" "${cas_template}.sha256"
 compare_file "$repo_root/scripts/cohsh/boot_v0.coh" "$cli_script"
 compare_file "$repo_root/docs/snippets/root_task_manifest.md" "$doc_snippet"
 compare_file "$repo_root/docs/snippets/observability_interfaces.md" "$observability_interfaces"
 compare_file "$repo_root/docs/snippets/observability_security.md" "$observability_security"
+compare_file "$repo_root/docs/snippets/cas_interfaces.md" "$cas_interfaces"
+compare_file "$repo_root/docs/snippets/cas_security.md" "$cas_security"
 compare_file "$repo_root/out/cohsh_policy.toml" "$cohsh_policy"
 compare_file "$repo_root/out/cohsh_policy.toml.sha256" "${cohsh_policy}.sha256"
 compare_file "$repo_root/apps/cohsh/src/generated/policy.rs" "$cohsh_policy_rust"
