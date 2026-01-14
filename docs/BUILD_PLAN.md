@@ -2455,7 +2455,7 @@ Deliver the `cohesix` Python client, runnable examples, `coh doctor`, and Alpha 
 **Commands**
 - `cargo run -p coh --features mock -- doctor --mock`
 - `python -m pytest -k cohesix_parity`
-- `python tools/cohesix-py/examples/quickstart.py --mock`
+- `python tools/cohesix-py/examples/lease_run.py --mock`
 
 **Checks (DoD)**
 - Fresh host can run `coh doctor` then a demo in < 15 minutes using `--mock`.
