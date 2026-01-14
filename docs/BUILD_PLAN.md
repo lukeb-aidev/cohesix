@@ -19,11 +19,11 @@ preparing and executing tasks.
 
 Cohesix is a hive-style orchestrator: one Queen coordinating many workers via a shared Secure9P namespace and commanded through `cohsh`.
 
-**Current Status Snapshot (through Milestone 14)**
-- Milestones 0–14 are implemented: the cooperative event pump, PL011 root console, TCP console listener, Secure9P namespace, HAL-backed device mapping, manifest-driven `coh-rtc` compiler, cache-safe DMA plumbing, in-session `coh> test` with preinstalled `.coh` scripts, Secure9P pipelining/batching, telemetry rings + cursor retention, host-sidecar `/host` gating, PolicyFS/AuditFS/ReplayFS, and sharded worker namespaces with per-shard fid tables are live and reflected in the architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
+**Current Status Snapshot (through Milestone 15)**
+- Milestones 0–15 are implemented: the cooperative event pump, PL011 root console, TCP console listener, Secure9P namespace, HAL-backed device mapping, manifest-driven `coh-rtc` compiler, cache-safe DMA plumbing, in-session `coh> test` with preinstalled `.coh` scripts, Secure9P pipelining/batching, telemetry rings + cursor retention, host-sidecar `/host` gating, PolicyFS/AuditFS/ReplayFS, sharded worker namespaces with per-shard fid tables, and manifest-derived `cohsh` client policy files (session pooling, retry scheduling, heartbeat cadence) with hash enforcement and regression coverage are live and reflected in the architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
 - Dual consoles run concurrently; the TCP listener is non-blocking and mirrors serial semantics while keeping PL011 always-on for recovery. The `coh> test` command exercises real server-hosted regression scripts for quick/full verification.
 - NineDoor attach/namespace semantics follow `SECURE9P.md` and role mounts from `ROLES_AND_SCHEDULING.md`; worker-heart and worker-gpu are scoped to their documented namespaces, with GPU hardware remaining host-side via `gpu-bridge-host`.
-- Remaining milestones focus on client concurrency, session pooling, and forward control-plane extensions described below.
+- Remaining milestones focus on observability via files and forward control-plane extensions described below.
 
 ## seL4 Reference Manual Alignment (v13.0.0)
 
@@ -1194,8 +1194,9 @@ Add pooled sessions and retry policies to `cohsh`, governed by compiler-exported
 - `apps/cohsh/tests/pooling.rs` verifies pooled throughput and idempotent retry behaviour.
 - Manifest IR v1.3: `client_policies.cohsh.pool`, `client_policies.retry`, `client_policies.heartbeat`. Compiler emits `out/cohsh_policy.toml` consumed at runtime (CLI loads it on start, failing if missing/out-of-sync).
 - CLI regression `scripts/cohsh/session_pool.coh` demonstrating increased throughput under load and safe recovery from injected failures.
-- TODO: Implement scripts/cohsh/session_pool.coh and add it to regression pack DoD.
 - Docs (`docs/USERLAND_AND_CLI.md`) describe new CLI flags/env overrides, referencing manifest-derived defaults.
+
+**Status:** Complete — session pooling, retry policies, policy hashing, CLI regression coverage, and docs updates are in place; regression pack is green.
 
 **Commands**
 - `cargo test -p cohsh`
