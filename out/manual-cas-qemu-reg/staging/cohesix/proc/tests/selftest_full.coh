@@ -1,0 +1,28 @@
+# Author: Lukas Bower
+# Purpose: Full in-session selftest script for cohsh.
+ping
+EXPECT OK
+cat /proc/boot
+EXPECT OK
+ls /proc
+EXPECT OK
+EXPECT SUBSTR boot
+echo test-ack-1 > /log/queen.log
+EXPECT OK
+echo test-ack-2 > /log/queen.log
+EXPECT OK
+cat /log/queen.log
+EXPECT OK
+EXPECT SUBSTR test-ack-1
+EXPECT SUBSTR test-ack-2
+tail /log/queen.log
+EXPECT OK
+WAIT 200
+spawn heartbeat ticks=2 ttl_s=30
+EXPECT OK
+tail /worker/worker-0/telemetry
+EXPECT OK
+WAIT 200
+kill worker-0
+EXPECT OK
+quit

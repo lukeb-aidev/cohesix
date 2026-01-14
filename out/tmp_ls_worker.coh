@@ -1,0 +1,5 @@
+attach queen
+EXPECT OK
+ls /worker
+EXPECT OK
+quit
