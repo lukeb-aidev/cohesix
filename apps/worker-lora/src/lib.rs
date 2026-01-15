@@ -8,6 +8,12 @@
 
 //! LoRa worker template for in-VM builds.
 
+extern crate alloc;
+
+mod common;
+
+pub use common::*;
+
 #[cfg(not(target_os = "none"))]
 mod host;
 

@@ -100,6 +100,7 @@ portable-atomic = "1.6"
 secure9p-codec = { workspace = true }
 sha2 = { workspace = true, default-features = false }
 cohesix-cas = { workspace = true }
+sidecar-bus = { path = "../sidecar-bus", default-features = false }
 ed25519-dalek = { workspace = true }
 signature = { workspace = true }
 hex = { workspace = true }

@@ -35,7 +35,7 @@ use super::audit::{
 use super::CasConfig;
 use super::namespace::{
     AuditNamespaceConfig, HostNamespaceConfig, Namespace, PolicyNamespaceConfig, ReplayNamespaceConfig,
-    ShardLayout, SidecarNamespaceConfig, SidecarScope,
+    ShardLayout, SidecarKind, SidecarNamespaceConfig, SidecarScope,
 };
 use super::policy::{
     PolicyActionAudit, PolicyConfig, PolicyDecision, PolicyGateAllowance, PolicyGateDecision,
@@ -685,7 +685,7 @@ impl ServerCore {
         match role {
             Role::Queen => {
                 let budget = budget_override.unwrap_or_else(BudgetSpec::unbounded);
-                state.configure_role(role, identity, None, budget, now);
+                state.configure_role(role, identity, None, None, None, budget, now);
             }
             Role::WorkerHeartbeat => {
                 let worker_id = identity.clone().ok_or_else(|| {
@@ -705,7 +705,7 @@ impl ServerCore {
                         let budget = budget_override
                             .map(|override_budget| clamp_budget(record.budget(), override_budget))
                             .unwrap_or_else(|| record.budget());
-                        state.configure_role(role, Some(worker_id), None, budget, now);
+                        state.configure_role(role, Some(worker_id), None, None, None, budget, now);
                     }
                     WorkerKind::Gpu(_) => {
                         return Err(NineDoorError::protocol(
@@ -737,6 +737,8 @@ impl ServerCore {
                             role,
                             Some(worker_id),
                             Some(gpu.lease.gpu_id.clone()),
+                            None,
+                            None,
                             budget,
                             now,
                         );
@@ -748,6 +750,38 @@ impl ServerCore {
                         ));
                     }
                 }
+            }
+            Role::WorkerBus => {
+                let scope = identity.clone().ok_or_else(|| {
+                    NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "worker-bus attach requires identity",
+                    )
+                })?;
+                if !self.control.bus_scope_exists(&scope) {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::NotFound,
+                        format!("bus scope {scope} not found"),
+                    ));
+                }
+                let budget = budget_override.unwrap_or_else(BudgetSpec::default_heartbeat);
+                state.configure_role(role, None, None, Some(scope), None, budget, now);
+            }
+            Role::WorkerLora => {
+                let scope = identity.clone().ok_or_else(|| {
+                    NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "worker-lora attach requires identity",
+                    )
+                })?;
+                if !self.control.lora_scope_exists(&scope) {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::NotFound,
+                        format!("lora scope {scope} not found"),
+                    ));
+                }
+                let budget = budget_override.unwrap_or_else(BudgetSpec::default_heartbeat);
+                state.configure_role(role, None, None, None, Some(scope), budget, now);
             }
         }
         state.set_ticket(ticket_payload);
@@ -775,8 +809,14 @@ impl ServerCore {
         let worker_id = worker_id_owned.as_deref();
         let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
         let gpu_scope = gpu_scope_owned.as_deref();
+        let bus_scope_owned = state.bus_scope().map(|scope| scope.to_owned());
+        let bus_scope = bus_scope_owned.as_deref();
+        let lora_scope_owned = state.lora_scope().map(|scope| scope.to_owned());
+        let lora_scope = lora_scope_owned.as_deref();
         let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
         let host_mount = host_mount_owned.as_deref();
+        let sidecar_bus_scopes = self.control.sidecar_bus_scopes().to_vec();
+        let sidecar_lora_scopes = self.control.sidecar_lora_scopes().to_vec();
         if wnames.is_empty() {
             if newfid == fid {
                 if state
@@ -811,14 +851,21 @@ impl ServerCore {
         for component in wnames {
             view_path.push(component.clone());
             let resolved = state.resolve_view_path(&view_path);
-            AccessPolicy::ensure_path(
+            if let Err(err) = AccessPolicy::ensure_path(
                 &shards,
                 role,
                 worker_id,
                 gpu_scope,
+                bus_scope,
+                lora_scope,
                 host_mount,
+                &sidecar_bus_scopes,
+                &sidecar_lora_scopes,
                 &resolved,
-            )?;
+            ) {
+                self.maybe_log_sidecar_denial(&resolved, bus_scope, lora_scope, &err)?;
+                return Err(err);
+            }
             let node = self.control.namespace_mut().lookup(&resolved)?;
             current_qid = node.qid();
             qids.push(current_qid);
@@ -856,8 +903,14 @@ impl ServerCore {
         let worker_id = worker_id_owned.as_deref();
         let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
         let gpu_scope = gpu_scope_owned.as_deref();
+        let bus_scope_owned = state.bus_scope().map(|scope| scope.to_owned());
+        let bus_scope = bus_scope_owned.as_deref();
+        let lora_scope_owned = state.lora_scope().map(|scope| scope.to_owned());
+        let lora_scope = lora_scope_owned.as_deref();
         let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
         let host_mount = host_mount_owned.as_deref();
+        let sidecar_bus_scopes = self.control.sidecar_bus_scopes().to_vec();
+        let sidecar_lora_scopes = self.control.sidecar_lora_scopes().to_vec();
         let ticket = state.ticket().map(str::to_owned);
         let iounit = state.negotiated_msize();
         let entry = state.fid(fid).ok_or_else(|| {
@@ -878,15 +931,22 @@ impl ServerCore {
             }
         }
         let shards = *self.control.namespace().shard_layout();
-        AccessPolicy::ensure_open(
+        if let Err(err) = AccessPolicy::ensure_open(
             &shards,
             role,
             worker_id,
             gpu_scope,
+            bus_scope,
+            lora_scope,
             host_mount,
+            &sidecar_bus_scopes,
+            &sidecar_lora_scopes,
             &entry.canonical_path,
             mode,
-        )?;
+        ) {
+            self.maybe_log_sidecar_denial(&entry.canonical_path, bus_scope, lora_scope, &err)?;
+            return Err(err);
+        }
         let node = self.control.namespace_mut().lookup(&entry.canonical_path)?;
         if node.is_directory() && mode.allows_write() {
             return Err(NineDoorError::protocol(
@@ -931,17 +991,30 @@ impl ServerCore {
         }
         let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
         let gpu_scope = gpu_scope_owned.as_deref();
+        let bus_scope_owned = state.bus_scope().map(|scope| scope.to_owned());
+        let bus_scope = bus_scope_owned.as_deref();
+        let lora_scope_owned = state.lora_scope().map(|scope| scope.to_owned());
+        let lora_scope = lora_scope_owned.as_deref();
         let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
         let host_mount = host_mount_owned.as_deref();
+        let sidecar_bus_scopes = self.control.sidecar_bus_scopes().to_vec();
+        let sidecar_lora_scopes = self.control.sidecar_lora_scopes().to_vec();
         let shards = self.control.namespace().shard_layout();
-        AccessPolicy::ensure_read(
+        if let Err(err) = AccessPolicy::ensure_read(
             shards,
             state.role(),
             state.worker_id(),
             gpu_scope,
+            bus_scope,
+            lora_scope,
             host_mount,
+            &sidecar_bus_scopes,
+            &sidecar_lora_scopes,
             &entry.canonical_path,
-        )?;
+        ) {
+            self.maybe_log_sidecar_denial(&entry.canonical_path, bus_scope, lora_scope, &err)?;
+            return Err(err);
+        }
         let data = self
             .control
             .namespace_mut()
@@ -962,8 +1035,14 @@ impl ServerCore {
         let worker_id = worker_id_owned.as_deref();
         let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
         let gpu_scope = gpu_scope_owned.as_deref();
+        let bus_scope_owned = state.bus_scope().map(|scope| scope.to_owned());
+        let bus_scope = bus_scope_owned.as_deref();
+        let lora_scope_owned = state.lora_scope().map(|scope| scope.to_owned());
+        let lora_scope = lora_scope_owned.as_deref();
         let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
         let host_mount = host_mount_owned.as_deref();
+        let sidecar_bus_scopes = self.control.sidecar_bus_scopes().to_vec();
+        let sidecar_lora_scopes = self.control.sidecar_lora_scopes().to_vec();
         let ticket = state.ticket().map(str::to_owned);
         let path = {
             let entry = state.fid(fid).ok_or_else(|| {
@@ -1045,7 +1124,21 @@ impl ServerCore {
             }
         }
         let shards = *self.control.namespace().shard_layout();
-        AccessPolicy::ensure_write(&shards, role, worker_id, gpu_scope, host_mount, &path)?;
+        if let Err(err) = AccessPolicy::ensure_write(
+            &shards,
+            role,
+            worker_id,
+            gpu_scope,
+            bus_scope,
+            lora_scope,
+            host_mount,
+            &sidecar_bus_scopes,
+            &sidecar_lora_scopes,
+            &path,
+        ) {
+            self.maybe_log_sidecar_denial(&path, bus_scope, lora_scope, &err)?;
+            return Err(err);
+        }
         if policy_enabled {
             let decision = self.control.consume_policy_gate(&path)?;
             match decision {
@@ -1114,7 +1207,11 @@ impl ServerCore {
                             role,
                             worker_id,
                             gpu_scope,
+                            bus_scope,
+                            lora_scope,
                             host_mount,
+                            &sidecar_bus_scopes,
+                            &sidecar_lora_scopes,
                             target,
                             mount,
                         )?;
@@ -1227,6 +1324,33 @@ impl ServerCore {
         }
         NineDoorError::protocol(ErrorCode::Closed, reason)
     }
+
+    fn maybe_log_sidecar_denial(
+        &mut self,
+        path: &[String],
+        bus_scope: Option<&str>,
+        lora_scope: Option<&str>,
+        err: &NineDoorError,
+    ) -> Result<(), NineDoorError> {
+        let NineDoorError::Protocol { code, .. } = err else {
+            return Ok(());
+        };
+        if *code != ErrorCode::Permission {
+            return Ok(());
+        }
+        let Some(kind) = self.control.namespace().sidecar_kind_for_path(path) else {
+            return Ok(());
+        };
+        let scope = match kind {
+            SidecarKind::Bus => bus_scope,
+            SidecarKind::Lora => lora_scope,
+        }
+        .unwrap_or("none");
+        let message = format!("sidecar-deny kind={} scope={}", kind.as_str(), scope);
+        self.control
+            .log_event("sidecar", TraceLevel::Warn, None, &message)?;
+        Ok(())
+    }
 }
 
 struct ControlPlane {
@@ -1291,6 +1415,22 @@ impl ControlPlane {
 
     fn host_mount_path(&self) -> Option<&[String]> {
         self.namespace.host_mount_path()
+    }
+
+    fn sidecar_bus_scopes(&self) -> &[SidecarScope] {
+        self.namespace.sidecar_bus_scopes()
+    }
+
+    fn sidecar_lora_scopes(&self) -> &[SidecarScope] {
+        self.namespace.sidecar_lora_scopes()
+    }
+
+    fn bus_scope_exists(&self, scope: &str) -> bool {
+        self.namespace.bus_scope_exists(scope)
+    }
+
+    fn lora_scope_exists(&self, scope: &str) -> bool {
+        self.namespace.lora_scope_exists(scope)
     }
 
     fn policy_enabled(&self) -> bool {
@@ -2290,11 +2430,26 @@ impl SessionState {
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
+        bus_scope: Option<&str>,
+        lora_scope: Option<&str>,
         host_mount: Option<&[String]>,
+        sidecar_bus_scopes: &[SidecarScope],
+        sidecar_lora_scopes: &[SidecarScope],
         target: &[String],
         mount: &[String],
     ) -> Result<(), NineDoorError> {
-        AccessPolicy::ensure_path(shards, role, worker_id, gpu_scope, host_mount, target)?;
+        AccessPolicy::ensure_path(
+            shards,
+            role,
+            worker_id,
+            gpu_scope,
+            bus_scope,
+            lora_scope,
+            host_mount,
+            sidecar_bus_scopes,
+            sidecar_lora_scopes,
+            target,
+        )?;
         self.mounts.bind(target.to_vec(), mount.to_vec())
     }
 
@@ -2438,16 +2593,53 @@ impl AccessPolicy {
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
+        bus_scope: Option<&str>,
+        lora_scope: Option<&str>,
         host_mount: Option<&[String]>,
+        sidecar_bus_scopes: &[SidecarScope],
+        sidecar_lora_scopes: &[SidecarScope],
         path: &[String],
         mode: OpenMode,
     ) -> Result<(), NineDoorError> {
-        Self::ensure_path(shards, role, worker_id, gpu_scope, host_mount, path)?;
+        Self::ensure_path(
+            shards,
+            role,
+            worker_id,
+            gpu_scope,
+            bus_scope,
+            lora_scope,
+            host_mount,
+            sidecar_bus_scopes,
+            sidecar_lora_scopes,
+            path,
+        )?;
         if mode.allows_write() {
-            Self::ensure_write(shards, role, worker_id, gpu_scope, host_mount, path)?;
+            Self::ensure_write(
+                shards,
+                role,
+                worker_id,
+                gpu_scope,
+                bus_scope,
+                lora_scope,
+                host_mount,
+                sidecar_bus_scopes,
+                sidecar_lora_scopes,
+                path,
+            )?;
         }
         if mode.allows_read() {
-            Self::ensure_read(shards, role, worker_id, gpu_scope, host_mount, path)?;
+            Self::ensure_read(
+                shards,
+                role,
+                worker_id,
+                gpu_scope,
+                bus_scope,
+                lora_scope,
+                host_mount,
+                sidecar_bus_scopes,
+                sidecar_lora_scopes,
+                path,
+            )?;
         }
         Ok(())
     }
@@ -2457,7 +2649,11 @@ impl AccessPolicy {
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
+        bus_scope: Option<&str>,
+        lora_scope: Option<&str>,
         host_mount: Option<&[String]>,
+        sidecar_bus_scopes: &[SidecarScope],
+        sidecar_lora_scopes: &[SidecarScope],
         path: &[String],
     ) -> Result<(), NineDoorError> {
         match role {
@@ -2481,6 +2677,26 @@ impl AccessPolicy {
                     Err(Self::permission_denied(path))
                 }
             }
+            Some(Role::WorkerBus) => {
+                if host_allowed_path(host_mount, path)
+                    || worker_common_path(path)
+                    || sidecar_allowed_path(sidecar_bus_scopes, bus_scope, path)
+                {
+                    Ok(())
+                } else {
+                    Err(Self::permission_denied(path))
+                }
+            }
+            Some(Role::WorkerLora) => {
+                if host_allowed_path(host_mount, path)
+                    || worker_common_path(path)
+                    || sidecar_allowed_path(sidecar_lora_scopes, lora_scope, path)
+                {
+                    Ok(())
+                } else {
+                    Err(Self::permission_denied(path))
+                }
+            }
             None => Err(NineDoorError::protocol(
                 ErrorCode::Invalid,
                 "attach required before operation",
@@ -2493,7 +2709,11 @@ impl AccessPolicy {
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
+        bus_scope: Option<&str>,
+        lora_scope: Option<&str>,
         host_mount: Option<&[String]>,
+        sidecar_bus_scopes: &[SidecarScope],
+        sidecar_lora_scopes: &[SidecarScope],
         path: &[String],
     ) -> Result<(), NineDoorError> {
         match role {
@@ -2518,6 +2738,24 @@ impl AccessPolicy {
                     Err(Self::permission_denied(path))
                 }
             }
+            Some(Role::WorkerBus) => {
+                if host_allowed_path(host_mount, path) {
+                    Err(Self::permission_denied(path))
+                } else if sidecar_allowed_path(sidecar_bus_scopes, bus_scope, path) {
+                    Ok(())
+                } else {
+                    Err(Self::permission_denied(path))
+                }
+            }
+            Some(Role::WorkerLora) => {
+                if host_allowed_path(host_mount, path) {
+                    Err(Self::permission_denied(path))
+                } else if sidecar_allowed_path(sidecar_lora_scopes, lora_scope, path) {
+                    Ok(())
+                } else {
+                    Err(Self::permission_denied(path))
+                }
+            }
             None => Err(NineDoorError::protocol(
                 ErrorCode::Invalid,
                 "attach required before operation",
@@ -2530,7 +2768,11 @@ impl AccessPolicy {
         role: Option<Role>,
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
+        bus_scope: Option<&str>,
+        lora_scope: Option<&str>,
         host_mount: Option<&[String]>,
+        sidecar_bus_scopes: &[SidecarScope],
+        sidecar_lora_scopes: &[SidecarScope],
         path: &[String],
     ) -> Result<(), NineDoorError> {
         match role {
@@ -2548,6 +2790,26 @@ impl AccessPolicy {
                 if host_allowed_prefix(host_mount, path)
                     || worker_allowed_prefix(shards, worker_id, path)
                     || gpu_allowed_prefix(gpu_scope, path)
+                {
+                    Ok(())
+                } else {
+                    Err(Self::permission_denied(path))
+                }
+            }
+            Some(Role::WorkerBus) => {
+                if host_allowed_prefix(host_mount, path)
+                    || worker_common_prefix(path)
+                    || sidecar_allowed_prefix(sidecar_bus_scopes, bus_scope, path)
+                {
+                    Ok(())
+                } else {
+                    Err(Self::permission_denied(path))
+                }
+            }
+            Some(Role::WorkerLora) => {
+                if host_allowed_prefix(host_mount, path)
+                    || worker_common_prefix(path)
+                    || sidecar_allowed_prefix(sidecar_lora_scopes, lora_scope, path)
                 {
                     Ok(())
                 } else {
@@ -2576,11 +2838,8 @@ fn worker_allowed_prefix(shards: &ShardLayout, worker_id: Option<&str>, path: &[
     if path.is_empty() {
         return true;
     }
-    match path {
-        [first] if first == "proc" || first == "log" => return true,
-        [first, second] if first == "proc" && second == "boot" => return true,
-        [first, second] if first == "log" && second == "queen.log" => return true,
-        _ => {}
+    if worker_common_prefix(path) {
+        return true;
     }
     if shards.is_enabled() {
         let shard_label = shards.worker_shard_label(id);
@@ -2619,6 +2878,19 @@ fn worker_allowed_prefix(shards: &ShardLayout, worker_id: Option<&str>, path: &[
         [first, worker, leaf] if first == "worker" && leaf == "telemetry" => worker == id,
         _ => false,
     }
+}
+
+fn worker_common_prefix(path: &[String]) -> bool {
+    match path {
+        [first] if first == "proc" || first == "log" => true,
+        [first, second] if first == "proc" && second == "boot" => true,
+        [first, second] if first == "log" && second == "queen.log" => true,
+        _ => false,
+    }
+}
+
+fn worker_common_path(path: &[String]) -> bool {
+    worker_common_prefix(path)
 }
 
 fn host_allowed_prefix(host_mount: Option<&[String]>, path: &[String]) -> bool {
@@ -2679,6 +2951,26 @@ fn gpu_allowed_write(gpu_scope: Option<&str>, path: &[String]) -> bool {
         Some(scope) => is_gpu_job_path(path, scope),
         None => false,
     }
+}
+
+fn sidecar_scope_for<'a>(
+    scopes: &'a [SidecarScope],
+    scope: Option<&str>,
+) -> Option<&'a SidecarScope> {
+    let scope = scope?;
+    scopes.iter().find(|entry| entry.scope() == scope)
+}
+
+fn sidecar_allowed_prefix(scopes: &[SidecarScope], scope: Option<&str>, path: &[String]) -> bool {
+    sidecar_scope_for(scopes, scope)
+        .map(|entry| entry.matches_prefix(path))
+        .unwrap_or(false)
+}
+
+fn sidecar_allowed_path(scopes: &[SidecarScope], scope: Option<&str>, path: &[String]) -> bool {
+    sidecar_scope_for(scopes, scope)
+        .map(|entry| entry.contains_path(path))
+        .unwrap_or(false)
 }
 
 fn format_budget_value(value: Option<u64>) -> String {

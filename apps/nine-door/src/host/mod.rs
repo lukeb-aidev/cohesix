@@ -155,6 +155,23 @@ impl NineDoor {
         )
     }
 
+    /// Construct a new NineDoor server with sidecar namespace configuration.
+    #[must_use]
+    pub fn new_with_sidecar_config(sidecars: SidecarNamespaceConfig) -> Self {
+        Self::new_with_limits_telemetry_host_policy_shards(
+            Arc::new(SystemClock),
+            SessionLimits::default(),
+            TelemetryConfig::default(),
+            TelemetryManifestStore::default(),
+            CasConfig::disabled(),
+            ShardLayout::default(),
+            HostNamespaceConfig::disabled(),
+            sidecars,
+            PolicyConfig::disabled(),
+            AuditConfig::disabled(),
+        )
+    }
+
     /// Construct a new NineDoor server with host and policy configuration.
     #[must_use]
     pub fn new_with_host_and_policy_config(

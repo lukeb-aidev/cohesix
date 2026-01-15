@@ -421,7 +421,15 @@ impl SidecarScope {
     }
 
     fn matches_path(&self, path: &[String]) -> bool {
+        self.matches_prefix(path)
+    }
+
+    pub(crate) fn matches_prefix(&self, path: &[String]) -> bool {
         path.starts_with(&self.mount_root) || self.mount_root.starts_with(path)
+    }
+
+    pub(crate) fn contains_path(&self, path: &[String]) -> bool {
+        path.starts_with(&self.mount_root)
     }
 }
 
@@ -1781,9 +1789,18 @@ impl Namespace {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SidecarKind {
+pub(crate) enum SidecarKind {
     Bus,
     Lora,
+}
+
+impl SidecarKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Bus => "bus",
+            Self::Lora => "lora",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

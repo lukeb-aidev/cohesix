@@ -13,6 +13,7 @@ fn issue_ticket(secret: &str, role: Role, subject: &str) -> String {
         Role::Queen => BudgetSpec::unbounded(),
         Role::WorkerHeartbeat => BudgetSpec::default_heartbeat(),
         Role::WorkerGpu => BudgetSpec::default_gpu(),
+        Role::WorkerBus | Role::WorkerLora => BudgetSpec::default_heartbeat(),
     };
     let issuer = TicketIssuer::new(secret);
     let claims = TicketClaims::new(

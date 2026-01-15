@@ -23,16 +23,23 @@ use alloc::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohesix_cas::{CasManifest, CasManifestError, CAS_MANIFEST_SCHEMA};
+use cohesix_ticket::TicketToken;
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 use core::fmt::{self, Write};
 use core::str;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
+use sidecar_bus::{LinkState, OfflineSpool, SpoolConfig, SpoolError, SpoolFrame};
 use signature::Verifier;
 use sha2::{Digest, Sha256};
 use secure9p_codec::ErrorCode;
+use worker_lora::{
+    DutyCycleConfig, DutyCycleGuard, TamperEntry, TamperLog, TamperReason,
+};
 
 const LOG_PATH: &str = "/log/queen.log";
 const QUEEN_CTL_PATH: &str = "/queen/ctl";
+const BUS_ROOT_PATH: &str = "/bus";
+const LORA_ROOT_PATH: &str = "/lora";
 const PROC_BOOT_PATH: &str = "/proc/boot";
 const PROC_TESTS_PATH: &str = "/proc/tests";
 const PROC_TESTS_QUICK_PATH: &str = "/proc/tests/selftest_quick.coh";
@@ -91,6 +98,7 @@ const OBSERVE_WATCH_LINE_BYTES: usize =
     generated::OBSERVABILITY_CONFIG.proc_ingest.watch_line_bytes as usize;
 const OBSERVE_WATCH_MIN_INTERVAL_MS: u64 =
     generated::OBSERVABILITY_CONFIG.proc_ingest.watch_min_interval_ms as u64;
+const SIDECAR_LOG_MAX_BYTES: usize = generated::SECURE9P_LIMITS.msize as usize;
 
 const SELFTEST_QUICK_SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -111,11 +119,13 @@ pub struct NineDoorBridge {
     attached: bool,
     session_role: Option<SessionRoleLabel>,
     session_ticket: Option<String>,
+    session_scope: Option<String>,
     next_worker_id: u32,
     telemetry: generated::TelemetryConfig,
     workers: HeaplessVec<WorkerTelemetry, MAX_WORKERS>,
     binds: HeaplessVec<BindEntry, MAX_BINDS>,
     host: HostState,
+    sidecars: SidecarState,
     policy: PolicyState,
     audit: AuditState,
     replay: ReplayState,
@@ -165,11 +175,13 @@ impl NineDoorBridge {
             attached: false,
             session_role: None,
             session_ticket: None,
+            session_scope: None,
             next_worker_id: 1,
             telemetry: generated::telemetry_config(),
             workers: HeaplessVec::new(),
             binds: HeaplessVec::new(),
             host: HostState::new(),
+            sidecars: SidecarState::new(),
             policy: PolicyState::new(),
             audit: AuditState::new(generated::audit_config()),
             replay: ReplayState::new(generated::audit_config()),
@@ -183,6 +195,7 @@ impl NineDoorBridge {
         self.attached = false;
         self.session_role = None;
         self.session_ticket = None;
+        self.session_scope = None;
         self.binds.clear();
     }
 
@@ -335,6 +348,7 @@ impl NineDoorBridge {
         if payload.contains('\n') || payload.contains('\r') {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
+        let segments = split_path_segments(path);
         if path == LOG_PATH {
             log_buffer::append_user_line(payload);
             log_buffer::append_log_line(payload);
@@ -472,6 +486,20 @@ impl NineDoorBridge {
             }
             return Err(NineDoorBridgeError::Permission);
         }
+        if let Some(kind) = self.sidecars.kind_for_path(segments.as_slice()) {
+            if !self.sidecar_allowed(kind, segments.as_slice(), SidecarAccess::Write) {
+                self.log_sidecar_denial(kind);
+                return Err(NineDoorBridgeError::Permission);
+            }
+            if self
+                .sidecars
+                .write(segments.as_slice(), payload.as_bytes())?
+                .is_some()
+            {
+                return Ok(());
+            }
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
         let resolved = self.resolve_bound_path(path);
         let resolved_path = resolved.as_deref().unwrap_or(path);
         if let Some(outcome) = self
@@ -494,6 +522,7 @@ impl NineDoorBridge {
         HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
         NineDoorBridgeError,
     > {
+        let segments = split_path_segments(path);
         if path == LOG_PATH {
             return Ok(log_buffer::snapshot_lines::<
                 DEFAULT_LINE_CAPACITY,
@@ -533,6 +562,16 @@ impl NineDoorBridge {
                 return self.action_status_lines(action_id);
             }
         }
+        if let Some(kind) = self.sidecars.kind_for_path(segments.as_slice()) {
+            if !self.sidecar_allowed(kind, segments.as_slice(), SidecarAccess::Read) {
+                self.log_sidecar_denial(kind);
+                return Err(NineDoorBridgeError::Permission);
+            }
+            if let Some(data) = self.sidecars.read(segments.as_slice()) {
+                return lines_from_bytes(&data);
+            }
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
         let resolved = self.resolve_bound_path(path);
         let path = resolved.as_deref().unwrap_or(path);
         if let Some(bytes) = self.cas.read_path(path, self.is_queen())? {
@@ -568,6 +607,7 @@ impl NineDoorBridge {
         NineDoorBridgeError,
     > {
         let sharding = generated::sharding_config();
+        let segments = split_path_segments(path);
         if path == "/worker" {
             if sharding.enabled && !legacy_worker_alias_enabled(sharding) {
                 return Err(NineDoorBridgeError::InvalidPath);
@@ -609,6 +649,7 @@ impl NineDoorBridge {
             if self.host.enabled {
                 push_list_entry(&mut output, self.host.mount_label())?;
             }
+            self.sidecars.push_root_entries(&mut output)?;
             if self.policy.enabled {
                 push_list_entry(&mut output, "policy")?;
                 push_list_entry(&mut output, "actions")?;
@@ -671,6 +712,16 @@ impl NineDoorBridge {
         }
         if self.replay.enabled && path == REPLAY_ROOT_PATH {
             return list_from_slice(&["ctl", "status"]);
+        }
+        if let Some(kind) = self.sidecars.kind_for_path(segments.as_slice()) {
+            if !self.sidecar_allowed(kind, segments.as_slice(), SidecarAccess::List) {
+                self.log_sidecar_denial(kind);
+                return Err(NineDoorBridgeError::Permission);
+            }
+            if let Some(output) = self.sidecars.list(segments.as_slice()) {
+                return output;
+            }
+            return Err(NineDoorBridgeError::InvalidPath);
         }
         let resolved = self.resolve_bound_path(path);
         let path = resolved.as_deref().unwrap_or(path);
@@ -837,6 +888,17 @@ impl NineDoorBridge {
     fn update_session_context(&mut self, role: &str, ticket: Option<&str>) {
         self.session_role = parse_session_role(role);
         self.session_ticket = ticket.map(String::from);
+        self.session_scope = None;
+        if matches!(
+            self.session_role,
+            Some(SessionRoleLabel::WorkerBus | SessionRoleLabel::WorkerLora)
+        ) {
+            if let Some(ticket) = ticket {
+                if let Ok(claims) = TicketToken::decode_unverified(ticket) {
+                    self.session_scope = claims.subject;
+                }
+            }
+        }
     }
 
     fn role_label(&self) -> &'static str {
@@ -856,6 +918,41 @@ impl NineDoorBridge {
 
     fn is_queen(&self) -> bool {
         matches!(self.session_role, Some(SessionRoleLabel::Queen))
+    }
+
+    fn session_scope(&self) -> Option<&str> {
+        self.session_scope.as_deref()
+    }
+
+    fn sidecar_role(&self) -> Option<SidecarKind> {
+        match self.session_role {
+            Some(SessionRoleLabel::WorkerBus) => Some(SidecarKind::Bus),
+            Some(SessionRoleLabel::WorkerLora) => Some(SidecarKind::Lora),
+            _ => None,
+        }
+    }
+
+    fn log_sidecar_denial(&self, kind: SidecarKind) {
+        let scope = self.session_scope().unwrap_or("none");
+        let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let _ = write!(line, "sidecar-deny kind={} scope={}", kind.as_str(), scope);
+        log_buffer::append_log_line(line.as_str());
+    }
+
+    fn sidecar_allowed(&self, kind: SidecarKind, path: &[&str], access: SidecarAccess) -> bool {
+        if self.is_queen() {
+            return true;
+        }
+        if self.sidecar_role() != Some(kind) {
+            return false;
+        }
+        let scope = self.session_scope();
+        match access {
+            SidecarAccess::List | SidecarAccess::Read => {
+                self.sidecars.allowed_prefix(kind, scope, path)
+            }
+            SidecarAccess::Write => self.sidecars.allowed_path(kind, scope, path),
+        }
     }
 
     fn apply_policy_gate(
@@ -2128,6 +2225,556 @@ impl HostState {
             value: String::from(value),
             control,
         });
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidecarKind {
+    Bus,
+    Lora,
+}
+
+impl SidecarKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Bus => "bus",
+            Self::Lora => "lora",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SidecarAccess {
+    List,
+    Read,
+    Write,
+}
+
+#[derive(Debug)]
+struct SidecarState {
+    bus: SidecarBusState,
+    lora: SidecarLoraState,
+}
+
+impl SidecarState {
+    fn new() -> Self {
+        let config = generated::sidecar_config();
+        let bus = SidecarBusState::new(config.modbus, config.dnp3);
+        let lora = SidecarLoraState::new(config.lora);
+        Self { bus, lora }
+    }
+
+    fn push_root_entries(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
+        let mut seen: Vec<String> = Vec::new();
+        self.bus.push_root_entries(output, &mut seen)?;
+        self.lora.push_root_entries(output, &mut seen)?;
+        Ok(())
+    }
+
+    fn kind_for_path(&self, path: &[&str]) -> Option<SidecarKind> {
+        if self.bus.matches_path(path) {
+            return Some(SidecarKind::Bus);
+        }
+        if self.lora.matches_path(path) {
+            return Some(SidecarKind::Lora);
+        }
+        None
+    }
+
+    fn allowed_prefix(&self, kind: SidecarKind, scope: Option<&str>, path: &[&str]) -> bool {
+        match kind {
+            SidecarKind::Bus => self.bus.allowed_prefix(scope, path),
+            SidecarKind::Lora => self.lora.allowed_prefix(scope, path),
+        }
+    }
+
+    fn allowed_path(&self, kind: SidecarKind, scope: Option<&str>, path: &[&str]) -> bool {
+        match kind {
+            SidecarKind::Bus => self.bus.allowed_path(scope, path),
+            SidecarKind::Lora => self.lora.allowed_path(scope, path),
+        }
+    }
+
+    fn list(
+        &self,
+        path: &[&str],
+    ) -> Option<
+        Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>,
+    > {
+        self.bus.list(path).or_else(|| self.lora.list(path))
+    }
+
+    fn read(&self, path: &[&str]) -> Option<Vec<u8>> {
+        self.bus.read(path).or_else(|| self.lora.read(path))
+    }
+
+    fn write(
+        &mut self,
+        path: &[&str],
+        payload: &[u8],
+    ) -> Result<Option<u32>, NineDoorBridgeError> {
+        if let Some(count) = self.bus.write(path, payload, SIDECAR_LOG_MAX_BYTES)? {
+            return Ok(Some(count));
+        }
+        if let Some(count) = self.lora.write(path, payload, SIDECAR_LOG_MAX_BYTES)? {
+            return Ok(Some(count));
+        }
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidecarBusFile {
+    Ctl,
+    Telemetry,
+    Link,
+    Replay,
+    Spool,
+}
+
+#[derive(Debug)]
+struct SidecarBusAdapterState {
+    mount_root: Vec<String>,
+    mount_label: String,
+    scope: String,
+    spool: OfflineSpool,
+    link_state: LinkState,
+    telemetry: Vec<u8>,
+    ctl: Vec<u8>,
+    link: Vec<u8>,
+    replay: Vec<u8>,
+}
+
+impl SidecarBusAdapterState {
+    fn match_file(&self, path: &[&str]) -> Option<SidecarBusFile> {
+        if path.len() != self.mount_root.len().saturating_add(1) {
+            return None;
+        }
+        if !segments_start_with(path, &self.mount_root) {
+            return None;
+        }
+        match path.last()? {
+            &"ctl" => Some(SidecarBusFile::Ctl),
+            &"telemetry" => Some(SidecarBusFile::Telemetry),
+            &"link" => Some(SidecarBusFile::Link),
+            &"replay" => Some(SidecarBusFile::Replay),
+            &"spool" => Some(SidecarBusFile::Spool),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SidecarBusState {
+    adapters: Vec<SidecarBusAdapterState>,
+}
+
+impl SidecarBusState {
+    fn new(modbus: generated::SidecarBusConfig, dnp3: generated::SidecarBusConfig) -> Self {
+        let mut adapters = Vec::new();
+        Self::push_adapters(&mut adapters, modbus);
+        Self::push_adapters(&mut adapters, dnp3);
+        Self { adapters }
+    }
+
+    fn push_adapters(adapters: &mut Vec<SidecarBusAdapterState>, config: generated::SidecarBusConfig) {
+        if !config.enable {
+            return;
+        }
+        for adapter in config.adapters.iter().copied() {
+            let mount_root = sidecar_mount_root(config.mount_at, adapter.mount);
+            let spool = SpoolConfig::new(
+                adapter.spool.max_entries as usize,
+                adapter.spool.max_bytes as usize,
+            );
+            adapters.push(SidecarBusAdapterState {
+                mount_root,
+                mount_label: adapter.mount.to_owned(),
+                scope: adapter.scope.to_owned(),
+                spool: OfflineSpool::new(spool),
+                link_state: LinkState::Offline,
+                telemetry: Vec::new(),
+                ctl: Vec::new(),
+                link: Vec::new(),
+                replay: Vec::new(),
+            });
+        }
+    }
+
+    fn push_root_entries(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        seen: &mut Vec<String>,
+    ) -> Result<(), NineDoorBridgeError> {
+        for adapter in &self.adapters {
+            if let Some(label) = adapter.mount_root.first() {
+                if !seen.iter().any(|entry| entry == label) {
+                    push_list_entry(output, label.as_str())?;
+                    seen.push(label.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn matches_path(&self, path: &[&str]) -> bool {
+        self.adapters
+            .iter()
+            .any(|adapter| segments_match_prefix(path, &adapter.mount_root))
+    }
+
+    fn allowed_prefix(&self, scope: Option<&str>, path: &[&str]) -> bool {
+        let Some(scope) = scope else {
+            return false;
+        };
+        self.adapters.iter().any(|adapter| {
+            adapter.scope == scope && segments_match_prefix(path, &adapter.mount_root)
+        })
+    }
+
+    fn allowed_path(&self, scope: Option<&str>, path: &[&str]) -> bool {
+        let Some(scope) = scope else {
+            return false;
+        };
+        self.adapters
+            .iter()
+            .any(|adapter| adapter.scope == scope && segments_start_with(path, &adapter.mount_root))
+    }
+
+    fn list(
+        &self,
+        path: &[&str],
+    ) -> Option<
+        Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>,
+    > {
+        if self.adapters.is_empty() {
+            return None;
+        }
+        let mut output = HeaplessVec::new();
+        let mut matched_root = false;
+        for adapter in &self.adapters {
+            let root_len = adapter.mount_root.len().saturating_sub(1);
+            let root = &adapter.mount_root[..root_len];
+            if segments_equal(path, root) {
+                matched_root = true;
+                if push_list_entry(&mut output, adapter.mount_label.as_str()).is_err() {
+                    return Some(Err(NineDoorBridgeError::BufferFull));
+                }
+            }
+        }
+        if matched_root {
+            return Some(Ok(output));
+        }
+        for adapter in &self.adapters {
+            if segments_equal(path, &adapter.mount_root) {
+                return Some(list_from_slice(&["ctl", "telemetry", "link", "replay", "spool"]));
+            }
+        }
+        None
+    }
+
+    fn read(&self, path: &[&str]) -> Option<Vec<u8>> {
+        let (adapter, file) = self.adapter_for_path(path)?;
+        match file {
+            SidecarBusFile::Ctl => Some(adapter.ctl.clone()),
+            SidecarBusFile::Telemetry => Some(adapter.telemetry.clone()),
+            SidecarBusFile::Link => Some(adapter.link.clone()),
+            SidecarBusFile::Replay => Some(adapter.replay.clone()),
+            SidecarBusFile::Spool => Some(render_spool_status(&adapter.spool, SIDECAR_LOG_MAX_BYTES)),
+        }
+    }
+
+    fn write(
+        &mut self,
+        path: &[&str],
+        data: &[u8],
+        max_bytes: usize,
+    ) -> Result<Option<u32>, NineDoorBridgeError> {
+        let Some((adapter, file)) = self.adapter_for_path_mut(path) else {
+            return Ok(None);
+        };
+        match file {
+            SidecarBusFile::Ctl => Ok(Some(append_sidecar_bounded(
+                &mut adapter.ctl,
+                data,
+                max_bytes,
+            )?)),
+            SidecarBusFile::Link => {
+                let text = core::str::from_utf8(trim_payload(data))
+                    .map_err(|_| NineDoorBridgeError::InvalidPayload)?
+                    .trim();
+                match text {
+                    "online" => adapter.link_state = LinkState::Online,
+                    "offline" => adapter.link_state = LinkState::Offline,
+                    _ => return Err(NineDoorBridgeError::InvalidPayload),
+                }
+                Ok(Some(append_sidecar_bounded(
+                    &mut adapter.link,
+                    data,
+                    max_bytes,
+                )?))
+            }
+            SidecarBusFile::Telemetry => match adapter.link_state {
+                LinkState::Online => Ok(Some(append_sidecar_bounded(
+                    &mut adapter.telemetry,
+                    data,
+                    max_bytes,
+                )?)),
+                LinkState::Offline => {
+                    let payload = ensure_line_terminated(data);
+                    match adapter.spool.push(&payload) {
+                        Ok(_) => Ok(Some(payload.len() as u32)),
+                        Err(SpoolError::Full | SpoolError::Oversize { .. }) => {
+                            Err(NineDoorBridgeError::InvalidPayload)
+                        }
+                    }
+                }
+            },
+            SidecarBusFile::Replay => {
+                let snapshot = adapter.spool.snapshot();
+                let total_bytes: usize = snapshot.iter().map(|frame| frame.payload.len()).sum();
+                if adapter.telemetry.len().saturating_add(total_bytes) > max_bytes {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                let drained = adapter.spool.drain();
+                for frame in drained {
+                    adapter.telemetry.extend_from_slice(&frame.payload);
+                }
+                let summary = format!("replay entries={} bytes={}\n", snapshot.len(), total_bytes);
+                Ok(Some(append_sidecar_bounded(
+                    &mut adapter.replay,
+                    summary.as_bytes(),
+                    max_bytes,
+                )?))
+            }
+            SidecarBusFile::Spool => Err(NineDoorBridgeError::Permission),
+        }
+    }
+
+    fn adapter_for_path(&self, path: &[&str]) -> Option<(&SidecarBusAdapterState, SidecarBusFile)> {
+        self.adapters
+            .iter()
+            .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
+    }
+
+    fn adapter_for_path_mut(
+        &mut self,
+        path: &[&str],
+    ) -> Option<(&mut SidecarBusAdapterState, SidecarBusFile)> {
+        self.adapters
+            .iter_mut()
+            .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidecarLoraFile {
+    Ctl,
+    Telemetry,
+    Tamper,
+}
+
+#[derive(Debug)]
+struct SidecarLoraAdapterState {
+    mount_root: Vec<String>,
+    mount_label: String,
+    scope: String,
+    guard: DutyCycleGuard,
+    tamper: TamperLog,
+    telemetry: Vec<u8>,
+    ctl: Vec<u8>,
+}
+
+impl SidecarLoraAdapterState {
+    fn match_file(&self, path: &[&str]) -> Option<SidecarLoraFile> {
+        if path.len() != self.mount_root.len().saturating_add(1) {
+            return None;
+        }
+        if !segments_start_with(path, &self.mount_root) {
+            return None;
+        }
+        match path.last()? {
+            &"ctl" => Some(SidecarLoraFile::Ctl),
+            &"telemetry" => Some(SidecarLoraFile::Telemetry),
+            &"tamper" => Some(SidecarLoraFile::Tamper),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SidecarLoraState {
+    adapters: Vec<SidecarLoraAdapterState>,
+    clock_ms: u64,
+}
+
+impl SidecarLoraState {
+    fn new(config: generated::SidecarLoraConfig) -> Self {
+        if !config.enable {
+            return Self {
+                adapters: Vec::new(),
+                clock_ms: 0,
+            };
+        }
+        let mut adapters = Vec::new();
+        for adapter in config.adapters.iter().copied() {
+            let mount_root = sidecar_mount_root(config.mount_at, adapter.mount);
+            let duty_cycle = DutyCycleConfig {
+                duty_cycle_percent: adapter.duty_cycle_percent,
+                window_ms: adapter.window_ms,
+                max_payload_bytes: adapter.max_payload_bytes,
+            };
+            adapters.push(SidecarLoraAdapterState {
+                mount_root,
+                mount_label: adapter.mount.to_owned(),
+                scope: adapter.scope.to_owned(),
+                guard: DutyCycleGuard::new(duty_cycle),
+                tamper: TamperLog::new(adapter.tamper_log_max_entries as usize),
+                telemetry: Vec::new(),
+                ctl: Vec::new(),
+            });
+        }
+        Self { adapters, clock_ms: 0 }
+    }
+
+    fn push_root_entries(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        seen: &mut Vec<String>,
+    ) -> Result<(), NineDoorBridgeError> {
+        for adapter in &self.adapters {
+            if let Some(label) = adapter.mount_root.first() {
+                if !seen.iter().any(|entry| entry == label) {
+                    push_list_entry(output, label.as_str())?;
+                    seen.push(label.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn matches_path(&self, path: &[&str]) -> bool {
+        self.adapters
+            .iter()
+            .any(|adapter| segments_match_prefix(path, &adapter.mount_root))
+    }
+
+    fn allowed_prefix(&self, scope: Option<&str>, path: &[&str]) -> bool {
+        let Some(scope) = scope else {
+            return false;
+        };
+        self.adapters.iter().any(|adapter| {
+            adapter.scope == scope && segments_match_prefix(path, &adapter.mount_root)
+        })
+    }
+
+    fn allowed_path(&self, scope: Option<&str>, path: &[&str]) -> bool {
+        let Some(scope) = scope else {
+            return false;
+        };
+        self.adapters
+            .iter()
+            .any(|adapter| adapter.scope == scope && segments_start_with(path, &adapter.mount_root))
+    }
+
+    fn list(
+        &self,
+        path: &[&str],
+    ) -> Option<
+        Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>,
+    > {
+        if self.adapters.is_empty() {
+            return None;
+        }
+        let mut output = HeaplessVec::new();
+        let mut matched_root = false;
+        for adapter in &self.adapters {
+            let root_len = adapter.mount_root.len().saturating_sub(1);
+            let root = &adapter.mount_root[..root_len];
+            if segments_equal(path, root) {
+                matched_root = true;
+                if push_list_entry(&mut output, adapter.mount_label.as_str()).is_err() {
+                    return Some(Err(NineDoorBridgeError::BufferFull));
+                }
+            }
+        }
+        if matched_root {
+            return Some(Ok(output));
+        }
+        for adapter in &self.adapters {
+            if segments_equal(path, &adapter.mount_root) {
+                return Some(list_from_slice(&["ctl", "telemetry", "tamper"]));
+            }
+        }
+        None
+    }
+
+    fn read(&self, path: &[&str]) -> Option<Vec<u8>> {
+        let (adapter, file) = self.adapter_for_path(path)?;
+        match file {
+            SidecarLoraFile::Ctl => Some(adapter.ctl.clone()),
+            SidecarLoraFile::Telemetry => Some(adapter.telemetry.clone()),
+            SidecarLoraFile::Tamper => Some(render_tamper_log(
+                adapter.tamper.snapshot(),
+                SIDECAR_LOG_MAX_BYTES,
+            )),
+        }
+    }
+
+    fn write(
+        &mut self,
+        path: &[&str],
+        data: &[u8],
+        max_bytes: usize,
+    ) -> Result<Option<u32>, NineDoorBridgeError> {
+        let Some((adapter, file)) = self.adapter_for_path_mut(path) else {
+            return Ok(None);
+        };
+        match file {
+            SidecarLoraFile::Ctl => {
+                let _ = append_sidecar_bounded(&mut adapter.ctl, data, max_bytes)?;
+                let now_ms = self.next_clock();
+                match adapter.guard.attempt(now_ms, data.len() as u32) {
+                    Ok(()) => Ok(Some(append_sidecar_bounded(
+                        &mut adapter.telemetry,
+                        data,
+                        max_bytes,
+                    )?)),
+                    Err(reason) => {
+                        adapter.tamper.push(TamperEntry {
+                            timestamp_ms: now_ms,
+                            reason,
+                            payload_bytes: data.len() as u32,
+                        });
+                        Err(NineDoorBridgeError::InvalidPayload)
+                    }
+                }
+            }
+            SidecarLoraFile::Telemetry | SidecarLoraFile::Tamper => Err(NineDoorBridgeError::Permission),
+        }
+    }
+
+    fn adapter_for_path(&self, path: &[&str]) -> Option<(&SidecarLoraAdapterState, SidecarLoraFile)> {
+        self.adapters
+            .iter()
+            .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
+    }
+
+    fn adapter_for_path_mut(
+        &mut self,
+        path: &[&str],
+    ) -> Option<(&mut SidecarLoraAdapterState, SidecarLoraFile)> {
+        self.adapters
+            .iter_mut()
+            .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
+    }
+
+    fn next_clock(&mut self) -> u64 {
+        self.clock_ms = self.clock_ms.saturating_add(1);
+        self.clock_ms
     }
 }
 
