@@ -22,7 +22,9 @@ Cohesix is intentionally opinionated. It treats **determinism, auditability, and
 
 Cohesix is a **minimal orchestration operating system** for secure edge management, targeting a defined set of [use cases](docs/USE_CASES.md) around AI hives and distributed GPU workloads.
 
-Technically, Cohesix is a **pure Rust userspace** running on upstream **seL4** on `aarch64/virt` (GICv3). Userspace is shipped as a static CPIO boot payload containing the root task, the NineDoor Secure9P server, worker roles, and host-facing tools. Cohesix does **not** include a traditional filesystem; instead it exposes a **synthetic Secure9P namespace** where paths represent capability-scoped control and telemetry interfaces rather than persistent storage.
+Technically, Cohesix is a **pure Rust userspace** running on upstream **seL4** on `aarch64/virt` (GICv3). Userspace is shipped as a static CPIO boot payload containing the root task, the NineDoor Secure9P server, worker roles, and host-facing tools. Cohesix does **not include a traditional filesystem**; instead it exposes a **synthetic Secure9P namespace** where paths represent capability-scoped control and telemetry interfaces rather than persistent storage.
+
+Cohesix does not provide HTTPS or TLS. Instead, it relies on an **authenticated, encrypted private network** (e.g. VPN or overlay) for transport security, keeping the Cohesix TCB small and focused. See this [example](docs/NETWORK_CONFIG.md)
 
 All control and telemetry flows through Secure9P. There are **no ad-hoc RPC channels**, no background daemons, and no general in-VM networking services.
 
