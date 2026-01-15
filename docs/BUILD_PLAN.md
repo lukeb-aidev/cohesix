@@ -43,7 +43,21 @@ cross-checks each milestone against the relevant chapters to ensure we remain wi
 
 We revisit these sections whenever we specify new kernel interactions or manifest changes so that documentation and implementations remain aligned.
 
-## Milestone 0 — Repository Skeleton & Toolchain (1–2 days)
+---
+| Milestone | Description | <a id="Milestones"></a>
+|--------|-------------|
+| [0](#0) | Repository Skeleton & Toolchain |
+| [1](#1) | Boot Banner, Timer, & First IPC |
+| [2](#2) |  |
+| [3](#3) |  |
+| [4](#4) |  |
+| [5](#5) |  |
+| [6](#6) |  |
+| [7](#7) |  |
+| [8](#8) |  |
+---
+
+## Milestone 0 — Repository Skeleton & Toolchain <a id="0"></a> [Milestones](#Milestones)
 **Status:** Complete — repo/workspace scaffolding, build scripts, and size guard are in place; keep regenerated artefacts in sync with toolchain outputs.
 **Deliverables**
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
@@ -58,7 +72,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - `qemu-system-aarch64 --version` reports the expected binary.
 - `scripts/ci/size_guard.sh out/rootfs.cpio` rejects oversized archives.
 
-## Milestone 1 — Boot Banner, Timer, & First IPC
+## Milestone 1 — Boot Banner, Timer, & First IPC <a id="1"></a> [Milestones](#Milestones)
 **Status:** Complete — boot banner, timer tick, and initial IPC appear in current boot logs; retain existing log ordering.
 **Deliverables**
 - Root task prints a banner and configures a periodic timer tick.
@@ -76,7 +90,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 **M1 → M2 Transition Note**
 - Retype now targets the init root CNode using the canonical tuple `(root=seL4_CapInitThreadCNode, node_index=0, node_depth=bootinfo.initThreadCNodeSizeBits, slot)` and validates capacity via `initThreadCNodeSizeBits`.
 
-## Milestone 2 — NineDoor Minimal 9P
+## Milestone 2 — NineDoor Minimal 9P <a id="2"></a> [Milestones](#Milestones)
 **Status:** Complete — Secure9P codec, fid/session handling, and the synthetic namespace are active; follow-up limited to ongoing fuzz coverage.
 **Deliverables**
 - Secure9P codec + fid/session table implementing `version`, `attach`, `walk`, `open`, `read`, `write`, `clunk`.
