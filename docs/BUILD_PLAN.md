@@ -42,15 +42,15 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 <a id="Milestones"></a>
 | Milestone | Description | Status |
 |----------|-------------|------|
-| [0](#0) | Repository Skeleton & Toolchain |
-| [1](#1) | Boot Banner, Timer, & First IPC |
-| [2](#2) | NineDoor Minimal 9P |
-| [3](#3) | Queen/Worker MVP with Roles |
-| [4](#4) | Bind & Mount Namespaces |
-| [5](#5) | Hardening & Test Automation (ongoing)  |
-| [6](#6) | GPU Worker Integration |
-| [6a](#6a) | GPU Model Lifecycle & Telemetry Semantics (LoRA-ready) |
-| [7a](#7a) | Root-Task Event Pump & Authenticated Kernel Entry |
+| [0](#0) | Repository Skeleton & Toolchain | Complete |
+| [1](#1) | Boot Banner, Timer, & First IPC | Complete |
+| [2](#2) | NineDoor Minimal 9P | Complete |
+| [3](#3) | Queen/Worker MVP with Roles | Complete |
+| [4](#4) | Bind & Mount Namespaces | Complete |
+| [5](#5) | Hardening & Test Automation (ongoing) | Complete |
+| [6](#6) | GPU Worker Integration | Complete |
+| [6a](#6a) | GPU Model Lifecycle & Telemetry Semantics (LoRA-ready) | Complete |
+| [7a](#7a) | Root-Task Event Pump & Authenticated Kernel Entry | Complete |
 
 ---
 
