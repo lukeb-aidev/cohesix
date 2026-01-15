@@ -91,6 +91,8 @@ pub fn format_host_write_audit(
         Some(Role::Queen) => "queen",
         Some(Role::WorkerHeartbeat) => "worker-heartbeat",
         Some(Role::WorkerGpu) => "worker-gpu",
+        Some(Role::WorkerBus) => "worker-bus",
+        Some(Role::WorkerLora) => "worker-lora",
         None => "unauthenticated",
     };
     let path = if target.path.is_empty() {
@@ -127,6 +129,8 @@ pub fn format_policy_action_audit(
         Some(Role::Queen) => "queen",
         Some(Role::WorkerHeartbeat) => "worker-heartbeat",
         Some(Role::WorkerGpu) => "worker-gpu",
+        Some(Role::WorkerBus) => "worker-bus",
+        Some(Role::WorkerLora) => "worker-lora",
         None => "unauthenticated",
     };
     format!(
@@ -153,6 +157,8 @@ pub fn format_policy_gate_allow(
         Some(Role::Queen) => "queen",
         Some(Role::WorkerHeartbeat) => "worker-heartbeat",
         Some(Role::WorkerGpu) => "worker-gpu",
+        Some(Role::WorkerBus) => "worker-bus",
+        Some(Role::WorkerLora) => "worker-lora",
         None => "unauthenticated",
     };
     let path_label = if path.is_empty() {
@@ -184,6 +190,8 @@ pub fn format_policy_gate_deny(
         Some(Role::Queen) => "queen",
         Some(Role::WorkerHeartbeat) => "worker-heartbeat",
         Some(Role::WorkerGpu) => "worker-gpu",
+        Some(Role::WorkerBus) => "worker-bus",
+        Some(Role::WorkerLora) => "worker-lora",
         None => "unauthenticated",
     };
     let path_label = if path.is_empty() {

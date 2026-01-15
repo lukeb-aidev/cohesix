@@ -1014,7 +1014,7 @@ impl TcpTransport {
                 }
                 Ok(trimmed)
             }
-            Role::WorkerHeartbeat | Role::WorkerGpu => {
+            Role::WorkerHeartbeat | Role::WorkerGpu | Role::WorkerBus | Role::WorkerLora => {
                 let value = trimmed.ok_or_else(|| {
                     anyhow!("role {:?} requires a non-empty ticket payload", role)
                 })?;
@@ -1043,6 +1043,8 @@ impl TcpTransport {
             Role::Queen => ProtoRole::Queen,
             Role::WorkerHeartbeat => ProtoRole::Worker,
             Role::WorkerGpu => ProtoRole::GpuWorker,
+            Role::WorkerBus => ProtoRole::BusWorker,
+            Role::WorkerLora => ProtoRole::LoraWorker,
         }
     }
 

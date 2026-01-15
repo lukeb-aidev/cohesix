@@ -4,9 +4,10 @@
 // Author: Lukas Bower
 
 use crate::codegen::hash_bytes;
-use crate::ir::{resolve_manifest_relative_path, HostProvider, Manifest, Role};
+use crate::ir::{resolve_manifest_relative_path, HostProvider, Manifest, Role, SidecarLink};
 use anyhow::{Context, Result};
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
@@ -156,6 +157,61 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub enum SidecarLink {{")?;
+    writeln!(mod_contents, "    Serial,")?;
+    writeln!(mod_contents, "    Tcp,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct SpoolConfig {{")?;
+    writeln!(mod_contents, "    pub max_entries: u16,")?;
+    writeln!(mod_contents, "    pub max_bytes: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct SidecarBusAdapter {{")?;
+    writeln!(mod_contents, "    pub id: &'static str,")?;
+    writeln!(mod_contents, "    pub mount: &'static str,")?;
+    writeln!(mod_contents, "    pub scope: &'static str,")?;
+    writeln!(mod_contents, "    pub link: SidecarLink,")?;
+    writeln!(mod_contents, "    pub baud: u32,")?;
+    writeln!(mod_contents, "    pub spool: SpoolConfig,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct SidecarBusConfig {{")?;
+    writeln!(mod_contents, "    pub enable: bool,")?;
+    writeln!(mod_contents, "    pub mount_at: &'static str,")?;
+    writeln!(mod_contents, "    pub adapters: &'static [SidecarBusAdapter],")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct SidecarLoraAdapter {{")?;
+    writeln!(mod_contents, "    pub id: &'static str,")?;
+    writeln!(mod_contents, "    pub mount: &'static str,")?;
+    writeln!(mod_contents, "    pub scope: &'static str,")?;
+    writeln!(mod_contents, "    pub region: &'static str,")?;
+    writeln!(mod_contents, "    pub duty_cycle_percent: u8,")?;
+    writeln!(mod_contents, "    pub window_ms: u64,")?;
+    writeln!(mod_contents, "    pub max_payload_bytes: u32,")?;
+    writeln!(mod_contents, "    pub tamper_log_max_entries: u16,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct SidecarLoraConfig {{")?;
+    writeln!(mod_contents, "    pub enable: bool,")?;
+    writeln!(mod_contents, "    pub mount_at: &'static str,")?;
+    writeln!(mod_contents, "    pub adapters: &'static [SidecarLoraAdapter],")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct SidecarConfig {{")?;
+    writeln!(mod_contents, "    pub modbus: SidecarBusConfig,")?;
+    writeln!(mod_contents, "    pub dnp3: SidecarBusConfig,")?;
+    writeln!(mod_contents, "    pub lora: SidecarLoraConfig,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct PolicyRule {{")?;
     writeln!(mod_contents, "    pub id: &'static str,")?;
     writeln!(mod_contents, "    pub target: &'static str,")?;
@@ -211,6 +267,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "pub const PROC_INGEST_WATCH_LINE_BYTES: usize = bootstrap::PROC_INGEST_WATCH_LINE_BYTES;")?;
     writeln!(mod_contents, "pub const PROC_INGEST_LATENCY_SAMPLES: usize = bootstrap::PROC_INGEST_LATENCY_SAMPLES;")?;
     writeln!(mod_contents, "pub const HOST_CONFIG: HostConfig = bootstrap::HOST_CONFIG;")?;
+    writeln!(mod_contents, "pub const SIDECAR_CONFIG: SidecarConfig = bootstrap::SIDECAR_CONFIG;")?;
     writeln!(mod_contents, "pub const POLICY_CONFIG: PolicyConfig = bootstrap::POLICY_CONFIG;")?;
     writeln!(mod_contents, "pub const POLICY_RULES_JSON: &str = bootstrap::POLICY_RULES_JSON;")?;
     writeln!(mod_contents, "pub const AUDIT_CONFIG: AuditConfig = bootstrap::AUDIT_CONFIG;")?;
@@ -258,6 +315,10 @@ pub fn emit_rust(
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn host_config() -> HostConfig {{")?;
     writeln!(mod_contents, "    bootstrap::HOST_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn sidecar_config() -> SidecarConfig {{")?;
+    writeln!(mod_contents, "    bootstrap::SIDECAR_CONFIG")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn policy_config() -> PolicyConfig {{")?;
@@ -310,7 +371,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
+        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -503,6 +564,81 @@ pub fn emit_rust(
         manifest.ecosystem.host.enable,
         escape_literal(&manifest.ecosystem.host.mount_at)
     )?;
+
+    let (modbus_adapters, dnp3_adapters) = resolve_bus_adapters(manifest)?;
+    let lora_adapters = resolve_lora_adapters(manifest)?;
+
+    writeln!(
+        bootstrap_contents,
+        "pub const MODBUS_ADAPTERS: [SidecarBusAdapter; {}] = [",
+        modbus_adapters.len()
+    )?;
+    for adapter in &modbus_adapters {
+        writeln!(
+            bootstrap_contents,
+            "    SidecarBusAdapter {{ id: \"{}\", mount: \"{}\", scope: \"{}\", link: {}, baud: {}, spool: SpoolConfig {{ max_entries: {}, max_bytes: {} }} }},",
+            escape_literal(adapter.id),
+            escape_literal(&adapter.mount),
+            escape_literal(adapter.scope),
+            sidecar_link_to_rust(adapter.link),
+            adapter.baud,
+            adapter.spool.max_entries,
+            adapter.spool.max_bytes
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+
+    writeln!(
+        bootstrap_contents,
+        "pub const DNP3_ADAPTERS: [SidecarBusAdapter; {}] = [",
+        dnp3_adapters.len()
+    )?;
+    for adapter in &dnp3_adapters {
+        writeln!(
+            bootstrap_contents,
+            "    SidecarBusAdapter {{ id: \"{}\", mount: \"{}\", scope: \"{}\", link: {}, baud: {}, spool: SpoolConfig {{ max_entries: {}, max_bytes: {} }} }},",
+            escape_literal(adapter.id),
+            escape_literal(&adapter.mount),
+            escape_literal(adapter.scope),
+            sidecar_link_to_rust(adapter.link),
+            adapter.baud,
+            adapter.spool.max_entries,
+            adapter.spool.max_bytes
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+
+    writeln!(
+        bootstrap_contents,
+        "pub const LORA_ADAPTERS: [SidecarLoraAdapter; {}] = [",
+        lora_adapters.len()
+    )?;
+    for adapter in &lora_adapters {
+        writeln!(
+            bootstrap_contents,
+            "    SidecarLoraAdapter {{ id: \"{}\", mount: \"{}\", scope: \"{}\", region: \"{}\", duty_cycle_percent: {}, window_ms: {}, max_payload_bytes: {}, tamper_log_max_entries: {} }},",
+            escape_literal(adapter.id),
+            escape_literal(&adapter.mount),
+            escape_literal(adapter.scope),
+            escape_literal(&adapter.region),
+            adapter.duty_cycle_percent,
+            adapter.window_ms,
+            adapter.max_payload_bytes,
+            adapter.tamper_log_max_entries
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+
+    writeln!(
+        bootstrap_contents,
+        "pub const SIDECAR_CONFIG: SidecarConfig = SidecarConfig {{ modbus: SidecarBusConfig {{ enable: {}, mount_at: \"{}\", adapters: &MODBUS_ADAPTERS }}, dnp3: SidecarBusConfig {{ enable: {}, mount_at: \"{}\", adapters: &DNP3_ADAPTERS }}, lora: SidecarLoraConfig {{ enable: {}, mount_at: \"{}\", adapters: &LORA_ADAPTERS }} }};\n",
+        manifest.sidecars.modbus.enable,
+        escape_literal(&manifest.sidecars.modbus.mount_at),
+        manifest.sidecars.dnp3.enable,
+        escape_literal(&manifest.sidecars.dnp3.mount_at),
+        manifest.sidecars.lora.enable,
+        escape_literal(&manifest.sidecars.lora.mount_at)
+    )?;
     writeln!(
         bootstrap_contents,
         "pub const POLICY_RULES: [PolicyRule; {}] = [",
@@ -573,6 +709,8 @@ fn role_to_rust(role: Role) -> &'static str {
         Role::Queen => "Role::Queen",
         Role::WorkerHeartbeat => "Role::WorkerHeartbeat",
         Role::WorkerGpu => "Role::WorkerGpu",
+        Role::WorkerBus => "Role::WorkerBus",
+        Role::WorkerLora => "Role::WorkerLora",
     }
 }
 
@@ -583,6 +721,140 @@ fn host_provider_to_rust(provider: &HostProvider) -> &'static str {
         HostProvider::Nvidia => "HostProvider::Nvidia",
         HostProvider::Jetson => "HostProvider::Jetson",
         HostProvider::Net => "HostProvider::Net",
+    }
+}
+
+struct ResolvedSidecarBusAdapter<'a> {
+    id: &'a str,
+    mount: String,
+    scope: &'a str,
+    link: SidecarLink,
+    baud: u32,
+    spool: &'a crate::ir::SpoolConfig,
+}
+
+struct ResolvedSidecarLoraAdapter<'a> {
+    id: &'a str,
+    mount: String,
+    scope: &'a str,
+    region: &'a str,
+    duty_cycle_percent: u8,
+    window_ms: u64,
+    max_payload_bytes: u32,
+    tamper_log_max_entries: u16,
+}
+
+fn resolve_bus_adapters(
+    manifest: &Manifest,
+) -> Result<(
+    Vec<ResolvedSidecarBusAdapter<'_>>,
+    Vec<ResolvedSidecarBusAdapter<'_>>,
+)> {
+    let mut used = sidecar_reserved_names();
+    let modbus = resolve_sidecar_bus("modbus", &manifest.sidecars.modbus, &mut used)?;
+    let dnp3 = resolve_sidecar_bus("dnp3", &manifest.sidecars.dnp3, &mut used)?;
+    Ok((modbus, dnp3))
+}
+
+fn resolve_lora_adapters(manifest: &Manifest) -> Result<Vec<ResolvedSidecarLoraAdapter<'_>>> {
+    let mut used = sidecar_reserved_names();
+    resolve_sidecar_lora(&manifest.sidecars.lora, &mut used)
+}
+
+fn resolve_sidecar_bus<'a>(
+    kind: &str,
+    config: &'a crate::ir::SidecarBusConfig,
+    used: &mut BTreeSet<String>,
+) -> Result<Vec<ResolvedSidecarBusAdapter<'a>>> {
+    if !config.enable {
+        return Ok(Vec::new());
+    }
+    let mut resolved = Vec::new();
+    for adapter in &config.adapters {
+        let mount = resolve_sidecar_mount(kind, &adapter.id, &adapter.mount, used)?;
+        resolved.push(ResolvedSidecarBusAdapter {
+            id: adapter.id.as_str(),
+            mount,
+            scope: adapter.scope.as_str(),
+            link: adapter.link,
+            baud: adapter.baud,
+            spool: &adapter.spool,
+        });
+    }
+    Ok(resolved)
+}
+
+fn resolve_sidecar_lora<'a>(
+    config: &'a crate::ir::SidecarLoraConfig,
+    used: &mut BTreeSet<String>,
+) -> Result<Vec<ResolvedSidecarLoraAdapter<'a>>> {
+    if !config.enable {
+        return Ok(Vec::new());
+    }
+    let mut resolved = Vec::new();
+    for adapter in &config.adapters {
+        let mount = resolve_sidecar_mount("lora", &adapter.id, &adapter.mount, used)?;
+        resolved.push(ResolvedSidecarLoraAdapter {
+            id: adapter.id.as_str(),
+            mount,
+            scope: adapter.scope.as_str(),
+            region: adapter.region.as_str(),
+            duty_cycle_percent: adapter.duty_cycle_percent,
+            window_ms: adapter.window_ms,
+            max_payload_bytes: adapter.max_payload_bytes,
+            tamper_log_max_entries: adapter.tamper_log_max_entries,
+        });
+    }
+    Ok(resolved)
+}
+
+fn resolve_sidecar_mount(
+    kind: &str,
+    adapter_id: &str,
+    mount: &str,
+    used: &mut BTreeSet<String>,
+) -> Result<String> {
+    let mut label = mount.to_owned();
+    if used.contains(&label) {
+        label = hashed_sidecar_label(kind, adapter_id, mount);
+    }
+    if used.contains(&label) {
+        return Err(anyhow::anyhow!(
+            "sidecar {kind} mount '{}' collides after hashing",
+            mount
+        ));
+    }
+    if label.len() > 255 {
+        return Err(anyhow::anyhow!(
+            "sidecar {kind} mount '{}' exceeds max component length 255",
+            label
+        ));
+    }
+    used.insert(label.clone());
+    Ok(label)
+}
+
+fn hashed_sidecar_label(kind: &str, adapter_id: &str, mount: &str) -> String {
+    let seed = format!("{kind}:{adapter_id}:{mount}");
+    let digest = hash_bytes(seed.as_bytes());
+    let prefix = digest.get(0..8).unwrap_or("00000000");
+    format!("{prefix}-{mount}")
+}
+
+fn sidecar_reserved_names() -> BTreeSet<String> {
+    [
+        "proc", "log", "queen", "worker", "shard", "gpu", "host", "policy", "actions", "audit",
+        "replay", "updates", "models", "trace", "kmesg", "bus", "lora",
+    ]
+    .iter()
+    .map(|entry| entry.to_string())
+    .collect()
+}
+
+fn sidecar_link_to_rust(link: SidecarLink) -> &'static str {
+    match link {
+        SidecarLink::Serial => "SidecarLink::Serial",
+        SidecarLink::Tcp => "SidecarLink::Tcp",
     }
 }
 

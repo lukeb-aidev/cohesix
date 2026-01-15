@@ -335,7 +335,10 @@ impl SessionRole {
     fn from_role(role: Role) -> Option<Self> {
         match role {
             Role::Queen => Some(Self::Queen),
-            Role::WorkerHeartbeat | Role::WorkerGpu => Some(Self::Worker),
+            Role::WorkerHeartbeat
+            | Role::WorkerGpu
+            | Role::WorkerBus
+            | Role::WorkerLora => Some(Self::Worker),
         }
     }
 }
@@ -2299,6 +2302,12 @@ fn parse_role(raw: &str) -> Option<Role> {
         value if value.eq_ignore_ascii_case(proto_role_label(ProtoRole::GpuWorker)) => {
             Some(Role::WorkerGpu)
         }
+        value if value.eq_ignore_ascii_case(proto_role_label(ProtoRole::BusWorker)) => {
+            Some(Role::WorkerBus)
+        }
+        value if value.eq_ignore_ascii_case(proto_role_label(ProtoRole::LoraWorker)) => {
+            Some(Role::WorkerLora)
+        }
         _ => None,
     }
 }
@@ -2308,6 +2317,8 @@ fn proto_role_from_ticket(role: Role) -> ProtoRole {
         Role::Queen => ProtoRole::Queen,
         Role::WorkerHeartbeat => ProtoRole::Worker,
         Role::WorkerGpu => ProtoRole::GpuWorker,
+        Role::WorkerBus => ProtoRole::BusWorker,
+        Role::WorkerLora => ProtoRole::LoraWorker,
     }
 }
 
@@ -2567,6 +2578,8 @@ mod tests {
             Role::Queen => BudgetSpec::unbounded(),
             Role::WorkerHeartbeat => BudgetSpec::default_heartbeat(),
             Role::WorkerGpu => BudgetSpec::default_gpu(),
+            Role::WorkerBus => BudgetSpec::default_heartbeat(),
+            Role::WorkerLora => BudgetSpec::default_heartbeat(),
         };
         let issuer = TicketIssuer::new(secret);
         let claims = TicketClaims::new(role, budget, None, MountSpec::empty(), 0);

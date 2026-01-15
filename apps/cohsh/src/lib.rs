@@ -518,6 +518,8 @@ impl NineDoorTransport {
             Role::Queen => proto_role_label(ProtoRole::Queen),
             Role::WorkerHeartbeat => proto_role_label(ProtoRole::Worker),
             Role::WorkerGpu => proto_role_label(ProtoRole::GpuWorker),
+            Role::WorkerBus => proto_role_label(ProtoRole::BusWorker),
+            Role::WorkerLora => proto_role_label(ProtoRole::LoraWorker),
         }
     }
 
@@ -570,7 +572,10 @@ impl Transport for NineDoorTransport {
         let mut ticket_payload = ticket.map(str::trim).filter(|value| !value.is_empty());
         match role {
             Role::Queen => {}
-            Role::WorkerHeartbeat | Role::WorkerGpu => {
+            Role::WorkerHeartbeat
+            | Role::WorkerGpu
+            | Role::WorkerBus
+            | Role::WorkerLora => {
                 let provided = ticket_payload.ok_or_else(|| {
                     anyhow!(
                         "role {:?} requires a capability ticket containing an identity",
@@ -1110,6 +1115,10 @@ pub enum RoleArg {
     WorkerHeartbeat,
     /// Worker GPU role.
     WorkerGpu,
+    /// Worker bus role.
+    WorkerBus,
+    /// Worker LoRa role.
+    WorkerLora,
 }
 
 impl fmt::Display for RoleArg {
@@ -1118,6 +1127,8 @@ impl fmt::Display for RoleArg {
             Self::Queen => ProtoRole::Queen,
             Self::WorkerHeartbeat => ProtoRole::Worker,
             Self::WorkerGpu => ProtoRole::GpuWorker,
+            Self::WorkerBus => ProtoRole::BusWorker,
+            Self::WorkerLora => ProtoRole::LoraWorker,
         };
         write!(f, "{}", proto_role_label(label))
     }
@@ -1129,6 +1140,8 @@ impl From<RoleArg> for Role {
             RoleArg::Queen => Role::Queen,
             RoleArg::WorkerHeartbeat => Role::WorkerHeartbeat,
             RoleArg::WorkerGpu => Role::WorkerGpu,
+            RoleArg::WorkerBus => Role::WorkerBus,
+            RoleArg::WorkerLora => Role::WorkerLora,
         }
     }
 }
@@ -3461,6 +3474,10 @@ fn parse_role(input: &str) -> Result<Role> {
         Ok(Role::WorkerHeartbeat)
     } else if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::GpuWorker)) {
         Ok(Role::WorkerGpu)
+    } else if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::BusWorker)) {
+        Ok(Role::WorkerBus)
+    } else if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::LoraWorker)) {
+        Ok(Role::WorkerLora)
     } else {
         Err(anyhow!("unknown role '{input}'"))
     }

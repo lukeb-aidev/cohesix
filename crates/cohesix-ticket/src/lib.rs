@@ -34,6 +34,10 @@ pub enum Role {
     WorkerHeartbeat,
     /// Future GPU worker role.
     WorkerGpu,
+    /// Field bus worker role.
+    WorkerBus,
+    /// LoRa worker role.
+    WorkerLora,
 }
 
 impl Role {
@@ -42,6 +46,8 @@ impl Role {
             Role::Queen => 0,
             Role::WorkerHeartbeat => 1,
             Role::WorkerGpu => 2,
+            Role::WorkerBus => 3,
+            Role::WorkerLora => 4,
         }
     }
 
@@ -50,6 +56,8 @@ impl Role {
             0 => Ok(Role::Queen),
             1 => Ok(Role::WorkerHeartbeat),
             2 => Ok(Role::WorkerGpu),
+            3 => Ok(Role::WorkerBus),
+            4 => Ok(Role::WorkerLora),
             other => Err(TicketError::UnsupportedRole(other)),
         }
     }

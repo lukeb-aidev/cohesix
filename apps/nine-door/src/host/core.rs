@@ -35,7 +35,7 @@ use super::audit::{
 use super::CasConfig;
 use super::namespace::{
     AuditNamespaceConfig, HostNamespaceConfig, Namespace, PolicyNamespaceConfig, ReplayNamespaceConfig,
-    ShardLayout,
+    ShardLayout, SidecarNamespaceConfig, SidecarScope,
 };
 use super::policy::{
     PolicyActionAudit, PolicyConfig, PolicyDecision, PolicyGateAllowance, PolicyGateDecision,
@@ -81,6 +81,7 @@ impl ServerCore {
         cas: CasConfig,
         shards: ShardLayout,
         host: HostNamespaceConfig,
+        sidecars: SidecarNamespaceConfig,
         policy: PolicyConfig,
         audit: AuditConfig,
     ) -> Self {
@@ -110,6 +111,7 @@ impl ServerCore {
             cas,
             shards,
             host,
+            sidecars,
             policy_namespace,
             policy_store,
             audit_namespace,
@@ -1247,6 +1249,7 @@ impl ControlPlane {
         cas: CasConfig,
         shards: ShardLayout,
         host: HostNamespaceConfig,
+        sidecars: SidecarNamespaceConfig,
         policy_namespace: PolicyNamespaceConfig,
         policy: PolicyStore,
         audit_namespace: AuditNamespaceConfig,
@@ -1261,6 +1264,7 @@ impl ControlPlane {
                 cas,
                 shards,
                 host,
+                sidecars,
                 policy_namespace,
                 audit_namespace,
                 replay_namespace,
@@ -2122,6 +2126,8 @@ struct SessionState {
     role: Option<Role>,
     worker_id: Option<String>,
     gpu_scope: Option<String>,
+    bus_scope: Option<String>,
+    lora_scope: Option<String>,
     ticket: Option<String>,
     budget: BudgetState,
     mounts: MountTable,
@@ -2140,6 +2146,8 @@ impl SessionState {
             role: None,
             worker_id: None,
             gpu_scope: None,
+            bus_scope: None,
+            lora_scope: None,
             ticket: None,
             budget: BudgetState::new(BudgetSpec::unbounded(), now),
             mounts: MountTable::default(),
@@ -2212,12 +2220,16 @@ impl SessionState {
         role: Role,
         identity: Option<String>,
         gpu_scope: Option<String>,
+        bus_scope: Option<String>,
+        lora_scope: Option<String>,
         budget: BudgetSpec,
         now: Instant,
     ) {
         self.role = Some(role);
         self.worker_id = identity;
         self.gpu_scope = gpu_scope;
+        self.bus_scope = bus_scope;
+        self.lora_scope = lora_scope;
         self.budget = BudgetState::new(budget, now);
     }
 
@@ -2235,6 +2247,14 @@ impl SessionState {
 
     fn gpu_scope(&self) -> Option<&str> {
         self.gpu_scope.as_deref()
+    }
+
+    fn bus_scope(&self) -> Option<&str> {
+        self.bus_scope.as_deref()
+    }
+
+    fn lora_scope(&self) -> Option<&str> {
+        self.lora_scope.as_deref()
     }
 
     fn ticket(&self) -> Option<&str> {
@@ -2755,6 +2775,8 @@ fn role_label(role: Role) -> &'static str {
         Role::Queen => "queen",
         Role::WorkerHeartbeat => "worker-heartbeat",
         Role::WorkerGpu => "worker-gpu",
+        Role::WorkerBus => "worker-bus",
+        Role::WorkerLora => "worker-lora",
     }
 }
 
@@ -2793,6 +2815,30 @@ fn parse_role_from_uname(uname: &str) -> Result<(Role, Option<String>), NineDoor
         }
         return Ok((Role::WorkerGpu, Some(rest.to_owned())));
     }
+    if let Some(rest) = uname
+        .strip_prefix(proto_role_label(ProtoRole::BusWorker))
+        .and_then(|value| value.strip_prefix(':'))
+    {
+        if rest.is_empty() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "worker-bus identity cannot be empty",
+            ));
+        }
+        return Ok((Role::WorkerBus, Some(rest.to_owned())));
+    }
+    if let Some(rest) = uname
+        .strip_prefix(proto_role_label(ProtoRole::LoraWorker))
+        .and_then(|value| value.strip_prefix(':'))
+    {
+        if rest.is_empty() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "worker-lora identity cannot be empty",
+            ));
+        }
+        return Ok((Role::WorkerLora, Some(rest.to_owned())));
+    }
     Err(NineDoorError::protocol(
         ErrorCode::Invalid,
         format!("unknown role string '{uname}'"),
@@ -2823,6 +2869,28 @@ pub(crate) fn role_to_uname(role: Role, identity: Option<&str>) -> Result<String
                     )
                 })?;
             Ok(format!("{}:{id}", proto_role_label(ProtoRole::GpuWorker)))
+        }
+        Role::WorkerBus => {
+            let id = identity
+                .and_then(|value| (!value.is_empty()).then_some(value))
+                .ok_or_else(|| {
+                    NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "worker-bus attach requires identity",
+                    )
+                })?;
+            Ok(format!("{}:{id}", proto_role_label(ProtoRole::BusWorker)))
+        }
+        Role::WorkerLora => {
+            let id = identity
+                .and_then(|value| (!value.is_empty()).then_some(value))
+                .ok_or_else(|| {
+                    NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "worker-lora attach requires identity",
+                    )
+                })?;
+            Ok(format!("{}:{id}", proto_role_label(ProtoRole::LoraWorker)))
         }
     }
 }

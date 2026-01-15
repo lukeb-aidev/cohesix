@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: &str = "1.4";
+const SCHEMA_VERSION: &str = "1.5";
 const MAX_WALK_DEPTH: usize = 8;
 const MAX_MSIZE: u32 = 8192;
 const MAX_SHARD_BITS: u8 = 8;
@@ -18,12 +18,18 @@ const LEGACY_WORKER_PATH_DEPTH: usize = 3;
 const EVENT_PUMP_TELEMETRY_BUDGET_BYTES: u32 = 32 * 1024;
 const EVENT_PUMP_MAX_TELEMETRY_WORKERS: u32 = 8;
 const EVENT_PUMP_CAS_BUDGET_BYTES: u32 = 32 * 1024;
+const EVENT_PUMP_SIDECAR_BUDGET_BYTES: u32 = 16 * 1024;
 const CAS_MAX_CHUNKS: u32 = 8;
 const MAX_POLICY_QUEUE_ENTRIES: u16 = 64;
 const MAX_POLICY_RULE_ID_LEN: usize = 64;
 const MAX_REPLAY_ENTRIES: u16 = 256;
 const MAX_OBSERVE_LATENCY_SAMPLES: u16 = 64;
 const MAX_OBSERVE_WATCH_ENTRIES: u16 = 64;
+const MAX_SIDECAR_SCOPE_LEN: usize = 64;
+const MAX_SIDECAR_ID_LEN: usize = 64;
+const MAX_SIDECAR_MOUNT_LEN: usize = 64;
+const MAX_SPOOL_ENTRIES: u16 = 256;
+const LORA_TAMPER_ENTRY_BYTES: u32 = 128;
 const MAX_U64_DIGITS: usize = 20;
 const MAX_U32_DIGITS: usize = 10;
 const MAX_U8_DIGITS: usize = 3;
@@ -49,6 +55,8 @@ pub struct Manifest {
     pub sharding: Sharding,
     #[serde(default)]
     pub ecosystem: Ecosystem,
+    #[serde(default)]
+    pub sidecars: Sidecars,
     #[serde(default)]
     pub telemetry: Telemetry,
     #[serde(default)]
@@ -105,6 +113,7 @@ impl Manifest {
         self.validate_sharding()?;
         self.validate_tickets()?;
         self.validate_ecosystem()?;
+        self.validate_sidecars()?;
         self.validate_telemetry()?;
         self.validate_observability()?;
         self.validate_client_policies()?;
@@ -214,6 +223,271 @@ impl Manifest {
         }
         if !self.namespaces.role_isolation {
             bail!("ecosystem.host.enable requires namespaces.role_isolation = true");
+        }
+        Ok(())
+    }
+
+    fn validate_sidecars(&self) -> Result<()> {
+        self.validate_sidecar_bus("sidecars.modbus", &self.sidecars.modbus)?;
+        self.validate_sidecar_bus("sidecars.dnp3", &self.sidecars.dnp3)?;
+        self.validate_sidecar_lora(&self.sidecars.lora)?;
+        self.validate_sidecar_scopes()?;
+        self.validate_sidecar_budget()?;
+        Ok(())
+    }
+
+    fn validate_sidecar_bus(&self, label: &str, config: &SidecarBusConfig) -> Result<()> {
+        if !config.enable {
+            return Ok(());
+        }
+        self.validate_sidecar_mount_at(&format!("{label}.mount_at"), &config.mount_at)?;
+        if config.adapters.is_empty() {
+            bail!("{label}.enable requires at least one adapter");
+        }
+        let mut scopes = BTreeSet::new();
+        for adapter in &config.adapters {
+            self.validate_sidecar_adapter(label, adapter)?;
+            if !scopes.insert(adapter.scope.as_str()) {
+                bail!("{label}.adapters scope '{}' is duplicated", adapter.scope);
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_sidecar_lora(&self, config: &SidecarLoraConfig) -> Result<()> {
+        if !config.enable {
+            return Ok(());
+        }
+        self.validate_sidecar_mount_at("sidecars.lora.mount_at", &config.mount_at)?;
+        if config.adapters.is_empty() {
+            bail!("sidecars.lora.enable requires at least one adapter");
+        }
+        let mut scopes = BTreeSet::new();
+        for adapter in &config.adapters {
+            self.validate_sidecar_id("sidecars.lora.adapters[].id", &adapter.id)?;
+            self.validate_sidecar_mount("sidecars.lora.adapters[].mount", &adapter.mount)?;
+            self.validate_sidecar_scope("sidecars.lora.adapters[].scope", &adapter.scope)?;
+            if adapter.region.trim().is_empty() {
+                bail!("sidecars.lora.adapters[].region must not be empty");
+            }
+            if adapter.duty_cycle_percent == 0 || adapter.duty_cycle_percent > 100 {
+                bail!("sidecars.lora.adapters[].duty_cycle_percent must be 1..=100");
+            }
+            if adapter.window_ms == 0 {
+                bail!("sidecars.lora.adapters[].window_ms must be >= 1");
+            }
+            if adapter.max_payload_bytes == 0 {
+                bail!("sidecars.lora.adapters[].max_payload_bytes must be >= 1");
+            }
+            if adapter.max_payload_bytes > self.secure9p.msize {
+                bail!(
+                    "sidecars.lora.adapters[].max_payload_bytes {} exceeds secure9p.msize {}",
+                    adapter.max_payload_bytes,
+                    self.secure9p.msize
+                );
+            }
+            if adapter.tamper_log_max_entries == 0 {
+                bail!("sidecars.lora.adapters[].tamper_log_max_entries must be >= 1");
+            }
+            if !scopes.insert(adapter.scope.as_str()) {
+                bail!(
+                    "sidecars.lora.adapters scope '{}' is duplicated",
+                    adapter.scope
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_sidecar_adapter(
+        &self,
+        label: &str,
+        adapter: &SidecarBusAdapter,
+    ) -> Result<()> {
+        self.validate_sidecar_id(&format!("{label}.adapters[].id"), &adapter.id)?;
+        self.validate_sidecar_mount(&format!("{label}.adapters[].mount"), &adapter.mount)?;
+        self.validate_sidecar_scope(&format!("{label}.adapters[].scope"), &adapter.scope)?;
+        match adapter.link {
+            SidecarLink::Serial => {
+                if adapter.baud == 0 {
+                    bail!("{label}.adapters[].baud must be >= 1 for serial links");
+                }
+            }
+            SidecarLink::Tcp => {}
+        }
+        self.validate_spool(&format!("{label}.adapters[].spool"), &adapter.spool)?;
+        Ok(())
+    }
+
+    fn validate_spool(&self, label: &str, spool: &SpoolConfig) -> Result<()> {
+        if spool.max_entries == 0 {
+            bail!("{label}.max_entries must be >= 1");
+        }
+        if spool.max_entries > MAX_SPOOL_ENTRIES {
+            bail!(
+                "{label}.max_entries {} exceeds max {}",
+                spool.max_entries,
+                MAX_SPOOL_ENTRIES
+            );
+        }
+        if spool.max_bytes == 0 {
+            bail!("{label}.max_bytes must be >= 1");
+        }
+        if spool.max_bytes > self.secure9p.msize {
+            bail!(
+                "{label}.max_bytes {} exceeds secure9p.msize {}",
+                spool.max_bytes,
+                self.secure9p.msize
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_sidecar_mount_at(&self, label: &str, mount_at: &str) -> Result<()> {
+        let trimmed = mount_at.trim();
+        if !trimmed.starts_with('/') {
+            bail!("{label} must be an absolute path");
+        }
+        let components: Vec<&str> = trimmed.split('/').filter(|seg| !seg.is_empty()).collect();
+        if components.is_empty() {
+            bail!("{label} must not be root");
+        }
+        if components.len() > self.secure9p.walk_depth as usize {
+            bail!(
+                "{label} exceeds secure9p.walk_depth {}",
+                self.secure9p.walk_depth
+            );
+        }
+        if components.len() + 1 > self.secure9p.walk_depth as usize {
+            bail!(
+                "{label} requires secure9p.walk_depth >= {}",
+                components.len() + 1
+            );
+        }
+        for component in components {
+            if component == ".." {
+                bail!("{label} contains disallowed '..'");
+            }
+            if component.is_empty() {
+                bail!("{label} contains empty path component");
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_sidecar_id(&self, label: &str, id: &str) -> Result<()> {
+        let trimmed = id.trim();
+        if trimmed.is_empty() {
+            bail!("{label} must not be empty");
+        }
+        if trimmed.len() > MAX_SIDECAR_ID_LEN {
+            bail!(
+                "{label} '{}' exceeds max length {}",
+                trimmed,
+                MAX_SIDECAR_ID_LEN
+            );
+        }
+        if trimmed.contains('/') {
+            bail!("{label} '{}' must not include '/'", trimmed);
+        }
+        if trimmed == ".." {
+            bail!("{label} must not be '..'");
+        }
+        Ok(())
+    }
+
+    fn validate_sidecar_mount(&self, label: &str, mount: &str) -> Result<()> {
+        let trimmed = mount.trim();
+        if trimmed.is_empty() {
+            bail!("{label} must not be empty");
+        }
+        if trimmed.len() > MAX_SIDECAR_MOUNT_LEN {
+            bail!(
+                "{label} '{}' exceeds max length {}",
+                trimmed,
+                MAX_SIDECAR_MOUNT_LEN
+            );
+        }
+        if trimmed.contains('/') {
+            bail!("{label} '{}' must not include '/'", trimmed);
+        }
+        if trimmed == ".." {
+            bail!("{label} must not be '..'");
+        }
+        Ok(())
+    }
+
+    fn validate_sidecar_scope(&self, label: &str, scope: &str) -> Result<()> {
+        let trimmed = scope.trim();
+        if trimmed.is_empty() {
+            bail!("{label} must not be empty");
+        }
+        if trimmed.len() > MAX_SIDECAR_SCOPE_LEN {
+            bail!(
+                "{label} '{}' exceeds max length {}",
+                trimmed,
+                MAX_SIDECAR_SCOPE_LEN
+            );
+        }
+        if trimmed.contains('/') {
+            bail!("{label} '{}' must not include '/'", trimmed);
+        }
+        if trimmed == ".." {
+            bail!("{label} must not be '..'");
+        }
+        Ok(())
+    }
+
+    fn validate_sidecar_budget(&self) -> Result<()> {
+        let mut bytes = 0u32;
+        if self.sidecars.modbus.enable {
+            for adapter in &self.sidecars.modbus.adapters {
+                bytes = bytes.saturating_add(adapter.spool.max_bytes);
+            }
+        }
+        if self.sidecars.dnp3.enable {
+            for adapter in &self.sidecars.dnp3.adapters {
+                bytes = bytes.saturating_add(adapter.spool.max_bytes);
+            }
+        }
+        if self.sidecars.lora.enable {
+            for adapter in &self.sidecars.lora.adapters {
+                let entries = u32::from(adapter.tamper_log_max_entries);
+                bytes = bytes.saturating_add(entries.saturating_mul(LORA_TAMPER_ENTRY_BYTES));
+            }
+        }
+        if bytes > EVENT_PUMP_SIDECAR_BUDGET_BYTES {
+            bail!(
+                "sidecar budgets {} bytes exceed event-pump budget {} bytes",
+                bytes,
+                EVENT_PUMP_SIDECAR_BUDGET_BYTES
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_sidecar_scopes(&self) -> Result<()> {
+        let mut scopes = BTreeSet::new();
+        if self.sidecars.modbus.enable {
+            for adapter in &self.sidecars.modbus.adapters {
+                if !scopes.insert(adapter.scope.as_str()) {
+                    bail!("sidecar scope '{}' is duplicated", adapter.scope);
+                }
+            }
+        }
+        if self.sidecars.dnp3.enable {
+            for adapter in &self.sidecars.dnp3.adapters {
+                if !scopes.insert(adapter.scope.as_str()) {
+                    bail!("sidecar scope '{}' is duplicated", adapter.scope);
+                }
+            }
+        }
+        if self.sidecars.lora.enable {
+            for adapter in &self.sidecars.lora.adapters {
+                if !scopes.insert(adapter.scope.as_str()) {
+                    bail!("sidecar scope '{}' is duplicated", adapter.scope);
+                }
+            }
         }
         Ok(())
     }
@@ -757,6 +1031,112 @@ pub struct Ecosystem {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
+pub struct Sidecars {
+    pub modbus: SidecarBusConfig,
+    pub dnp3: SidecarBusConfig,
+    pub lora: SidecarLoraConfig,
+}
+
+impl Default for Sidecars {
+    fn default() -> Self {
+        Self {
+            modbus: SidecarBusConfig::default(),
+            dnp3: SidecarBusConfig::default(),
+            lora: SidecarLoraConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SidecarBusConfig {
+    pub enable: bool,
+    #[serde(default = "default_bus_mount")]
+    pub mount_at: String,
+    #[serde(default)]
+    pub adapters: Vec<SidecarBusAdapter>,
+}
+
+impl Default for SidecarBusConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            mount_at: default_bus_mount(),
+            adapters: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SidecarBusAdapter {
+    pub id: String,
+    pub mount: String,
+    pub scope: String,
+    pub link: SidecarLink,
+    pub baud: u32,
+    #[serde(default)]
+    pub spool: SpoolConfig,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SidecarLink {
+    Serial,
+    Tcp,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SpoolConfig {
+    pub max_entries: u16,
+    pub max_bytes: u32,
+}
+
+impl Default for SpoolConfig {
+    fn default() -> Self {
+        Self {
+            max_entries: 32,
+            max_bytes: 4096,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SidecarLoraConfig {
+    pub enable: bool,
+    #[serde(default = "default_lora_mount")]
+    pub mount_at: String,
+    #[serde(default)]
+    pub adapters: Vec<SidecarLoraAdapter>,
+}
+
+impl Default for SidecarLoraConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            mount_at: default_lora_mount(),
+            adapters: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SidecarLoraAdapter {
+    pub id: String,
+    pub mount: String,
+    pub scope: String,
+    pub region: String,
+    pub duty_cycle_percent: u8,
+    pub window_ms: u64,
+    pub max_payload_bytes: u32,
+    pub tamper_log_max_entries: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
 pub struct Telemetry {
     pub ring_bytes_per_worker: u32,
     pub frame_schema: TelemetryFrameSchema,
@@ -1128,6 +1508,8 @@ pub enum Role {
     Queen,
     WorkerHeartbeat,
     WorkerGpu,
+    WorkerBus,
+    WorkerLora,
 }
 
 impl Role {
@@ -1136,12 +1518,22 @@ impl Role {
             Self::Queen => "queen",
             Self::WorkerHeartbeat => "worker-heartbeat",
             Self::WorkerGpu => "worker-gpu",
+            Self::WorkerBus => "worker-bus",
+            Self::WorkerLora => "worker-lora",
         }
     }
 }
 
 fn default_host_mount() -> String {
     "/host".to_owned()
+}
+
+fn default_bus_mount() -> String {
+    "/bus".to_owned()
+}
+
+fn default_lora_mount() -> String {
+    "/lora".to_owned()
 }
 
 fn ensure_buffer_bytes(label: &str, value: u32, required: usize) -> Result<()> {

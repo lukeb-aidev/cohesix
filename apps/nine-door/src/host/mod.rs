@@ -39,7 +39,10 @@ mod tracefs;
 
 use self::core::{role_to_uname, ServerCore};
 pub use self::cas::CasConfig;
-pub use self::namespace::{HostNamespaceConfig, HostProvider, ShardLayout};
+pub use self::namespace::{
+    HostNamespaceConfig, HostProvider, ShardLayout, SidecarBusAdapterConfig, SidecarBusConfig,
+    SidecarLoraAdapterConfig, SidecarLoraConfig, SidecarNamespaceConfig,
+};
 pub use self::audit::{AuditConfig, AuditLimits, ReplayConfig};
 pub use self::policy::{PolicyConfig, PolicyDecision, PolicyLimits, PolicyRuleSpec};
 pub use self::observe::{ObserveConfig, ProcIngestConfig, Proc9pConfig};
@@ -129,6 +132,7 @@ impl NineDoor {
             CasConfig::disabled(),
             shards,
             HostNamespaceConfig::disabled(),
+            SidecarNamespaceConfig::disabled(),
             PolicyConfig::disabled(),
             AuditConfig::disabled(),
         )
@@ -145,6 +149,7 @@ impl NineDoor {
             CasConfig::disabled(),
             ShardLayout::default(),
             host,
+            SidecarNamespaceConfig::disabled(),
             PolicyConfig::disabled(),
             AuditConfig::disabled(),
         )
@@ -174,6 +179,7 @@ impl NineDoor {
             CasConfig::disabled(),
             ShardLayout::default(),
             host,
+            SidecarNamespaceConfig::disabled(),
             policy,
             audit,
         )
@@ -238,6 +244,7 @@ impl NineDoor {
             cas,
             ShardLayout::default(),
             HostNamespaceConfig::disabled(),
+            SidecarNamespaceConfig::disabled(),
             PolicyConfig::disabled(),
             AuditConfig::disabled(),
         )
@@ -258,6 +265,7 @@ impl NineDoor {
             CasConfig::disabled(),
             ShardLayout::default(),
             host,
+            SidecarNamespaceConfig::disabled(),
             PolicyConfig::disabled(),
             AuditConfig::disabled(),
         )
@@ -271,6 +279,7 @@ impl NineDoor {
         cas: CasConfig,
         shards: ShardLayout,
         host: HostNamespaceConfig,
+        sidecars: SidecarNamespaceConfig,
         policy: PolicyConfig,
         audit: AuditConfig,
     ) -> Self {
@@ -283,6 +292,7 @@ impl NineDoor {
                 cas,
                 shards,
                 host,
+                sidecars,
                 policy,
                 audit,
             ))),

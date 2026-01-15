@@ -5,7 +5,7 @@ author = "Lukas Bower"
 purpose = "Regression manifest enabling host/policy/audit/replay surfaces."
 
 [root_task]
-schema = "1.4"
+schema = "1.5"
 
 [profile]
 name = "virt-aarch64"
@@ -114,6 +114,44 @@ secret = "worker"
 [[tickets]]
 role = "worker-gpu"
 secret = "worker-gpu"
+
+[[tickets]]
+role = "worker-bus"
+secret = "worker-bus"
+
+[[tickets]]
+role = "worker-lora"
+secret = "worker-lora"
+
+[sidecars.modbus]
+enable = true
+mount_at = "/bus"
+
+[[sidecars.modbus.adapters]]
+id = "modbus-main"
+mount = "modbus-main"
+scope = "modbus-main"
+link = "serial"
+baud = 19200
+spool = { max_entries = 8, max_bytes = 512 }
+
+[sidecars.dnp3]
+enable = false
+mount_at = "/bus"
+
+[sidecars.lora]
+enable = true
+mount_at = "/lora"
+
+[[sidecars.lora.adapters]]
+id = "lora-main"
+mount = "lora-main"
+scope = "lora-main"
+region = "us915"
+duty_cycle_percent = 1
+window_ms = 1000
+max_payload_bytes = 64
+tamper_log_max_entries = 8
 
 [ecosystem.host]
 enable = true

@@ -9,9 +9,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use gpu_bridge_host::{GpuModelCatalog, TelemetrySchema};
+use sidecar_bus::{LinkState, OfflineSpool, SpoolConfig, SpoolError, SpoolFrame};
 use sha2::{Digest, Sha256};
 use secure9p_codec::{ErrorCode, Qid, QidType};
 use trace_model::TraceLevel;
+use worker_lora::{
+    DutyCycleConfig, DutyCycleDecision, DutyCycleGuard, TamperEntry, TamperLog, TamperReason,
+};
 
 use super::cas::{parse_sha256, validate_epoch, CasConfig, CasStore, ModelFileKind};
 use super::observe::ObserveConfig;
@@ -272,6 +276,155 @@ impl HostNamespaceConfig {
     }
 }
 
+/// Configuration for a single bus-sidecar adapter.
+#[derive(Debug, Clone)]
+pub struct SidecarBusAdapterConfig {
+    mount: String,
+    scope: String,
+    spool: SpoolConfig,
+}
+
+impl SidecarBusAdapterConfig {
+    /// Construct a bus adapter configuration.
+    pub fn new(mount: impl Into<String>, scope: impl Into<String>, spool: SpoolConfig) -> Self {
+        Self {
+            mount: mount.into(),
+            scope: scope.into(),
+            spool,
+        }
+    }
+}
+
+/// Configuration describing a bus sidecar namespace.
+#[derive(Debug, Clone)]
+pub struct SidecarBusConfig {
+    enabled: bool,
+    mount_path: Vec<String>,
+    adapters: Vec<SidecarBusAdapterConfig>,
+}
+
+impl SidecarBusConfig {
+    /// Construct a disabled bus sidecar configuration.
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            mount_path: vec!["bus".to_owned()],
+            adapters: Vec::new(),
+        }
+    }
+
+    /// Construct an enabled bus sidecar configuration.
+    pub fn enabled(
+        mount_at: &str,
+        adapters: &[SidecarBusAdapterConfig],
+    ) -> Result<Self, NineDoorError> {
+        let mount_path = parse_sidecar_mount("bus", mount_at)?;
+        Ok(Self {
+            enabled: true,
+            mount_path,
+            adapters: adapters.to_vec(),
+        })
+    }
+}
+
+/// Configuration for a single LoRa sidecar adapter.
+#[derive(Debug, Clone)]
+pub struct SidecarLoraAdapterConfig {
+    mount: String,
+    scope: String,
+    duty_cycle: DutyCycleConfig,
+    tamper_log_max_entries: usize,
+}
+
+impl SidecarLoraAdapterConfig {
+    /// Construct a LoRa adapter configuration.
+    pub fn new(
+        mount: impl Into<String>,
+        scope: impl Into<String>,
+        duty_cycle: DutyCycleConfig,
+        tamper_log_max_entries: usize,
+    ) -> Self {
+        Self {
+            mount: mount.into(),
+            scope: scope.into(),
+            duty_cycle,
+            tamper_log_max_entries,
+        }
+    }
+}
+
+/// Configuration describing a LoRa sidecar namespace.
+#[derive(Debug, Clone)]
+pub struct SidecarLoraConfig {
+    enabled: bool,
+    mount_path: Vec<String>,
+    adapters: Vec<SidecarLoraAdapterConfig>,
+}
+
+impl SidecarLoraConfig {
+    /// Construct a disabled LoRa sidecar configuration.
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            mount_path: vec!["lora".to_owned()],
+            adapters: Vec::new(),
+        }
+    }
+
+    /// Construct an enabled LoRa sidecar configuration.
+    pub fn enabled(
+        mount_at: &str,
+        adapters: &[SidecarLoraAdapterConfig],
+    ) -> Result<Self, NineDoorError> {
+        let mount_path = parse_sidecar_mount("lora", mount_at)?;
+        Ok(Self {
+            enabled: true,
+            mount_path,
+            adapters: adapters.to_vec(),
+        })
+    }
+}
+
+/// Namespace configuration for bus and LoRa sidecars.
+#[derive(Debug, Clone)]
+pub struct SidecarNamespaceConfig {
+    modbus: SidecarBusConfig,
+    dnp3: SidecarBusConfig,
+    lora: SidecarLoraConfig,
+}
+
+impl SidecarNamespaceConfig {
+    /// Construct a disabled sidecar configuration.
+    pub fn disabled() -> Self {
+        Self {
+            modbus: SidecarBusConfig::disabled(),
+            dnp3: SidecarBusConfig::disabled(),
+            lora: SidecarLoraConfig::disabled(),
+        }
+    }
+}
+
+/// Capability scope entry tied to a sidecar mount.
+#[derive(Debug, Clone)]
+pub struct SidecarScope {
+    scope: String,
+    mount_root: Vec<String>,
+}
+
+impl SidecarScope {
+    pub fn scope(&self) -> &str {
+        self.scope.as_str()
+    }
+
+    pub fn mount_root(&self) -> &[String] {
+        &self.mount_root
+    }
+
+    fn matches_path(&self, path: &[String]) -> bool {
+        path.starts_with(&self.mount_root) || self.mount_root.starts_with(path)
+    }
+}
+
 /// Configuration describing whether `/policy` and `/actions` should be mounted.
 #[derive(Debug, Clone)]
 pub struct PolicyNamespaceConfig {
@@ -358,6 +511,11 @@ pub struct Namespace {
     cas: CasStore,
     worker_ids: BTreeSet<String>,
     host: HostNamespaceConfig,
+    sidecar_modbus: SidecarBusState,
+    sidecar_dnp3: SidecarBusState,
+    sidecar_lora: SidecarLoraState,
+    sidecar_bus_scopes: Vec<SidecarScope>,
+    sidecar_lora_scopes: Vec<SidecarScope>,
     policy: PolicyNamespaceConfig,
     audit: AuditNamespaceConfig,
     replay: ReplayNamespaceConfig,
@@ -378,6 +536,7 @@ impl Namespace {
             CasConfig::disabled(),
             ShardLayout::default(),
             HostNamespaceConfig::disabled(),
+            SidecarNamespaceConfig::disabled(),
             PolicyNamespaceConfig::disabled(),
             AuditNamespaceConfig::disabled(),
             ReplayNamespaceConfig::disabled(),
@@ -395,6 +554,7 @@ impl Namespace {
             CasConfig::disabled(),
             ShardLayout::default(),
             HostNamespaceConfig::disabled(),
+            SidecarNamespaceConfig::disabled(),
             PolicyNamespaceConfig::disabled(),
             AuditNamespaceConfig::disabled(),
             ReplayNamespaceConfig::disabled(),
@@ -408,10 +568,18 @@ impl Namespace {
         cas: CasConfig,
         shards: ShardLayout,
         host: HostNamespaceConfig,
+        sidecars: SidecarNamespaceConfig,
         policy: PolicyNamespaceConfig,
         audit: AuditNamespaceConfig,
         replay: ReplayNamespaceConfig,
     ) -> Self {
+        let sidecar_modbus = SidecarBusState::new(sidecars.modbus);
+        let sidecar_dnp3 = SidecarBusState::new(sidecars.dnp3);
+        let sidecar_lora = SidecarLoraState::new(sidecars.lora);
+        let mut sidecar_bus_scopes = Vec::new();
+        sidecar_bus_scopes.extend(sidecar_modbus.scopes());
+        sidecar_bus_scopes.extend(sidecar_dnp3.scopes());
+        let sidecar_lora_scopes = sidecar_lora.scopes();
         let mut namespace = Self {
             root: Node::directory(Vec::new()),
             trace: TraceFs::new(),
@@ -421,6 +589,11 @@ impl Namespace {
             cas: CasStore::new(cas),
             worker_ids: BTreeSet::new(),
             host,
+            sidecar_modbus,
+            sidecar_dnp3,
+            sidecar_lora,
+            sidecar_bus_scopes,
+            sidecar_lora_scopes,
             policy,
             audit,
             replay,
@@ -441,6 +614,7 @@ impl Namespace {
             CasConfig::disabled(),
             ShardLayout::default(),
             host,
+            SidecarNamespaceConfig::disabled(),
             PolicyNamespaceConfig::disabled(),
             AuditNamespaceConfig::disabled(),
             ReplayNamespaceConfig::disabled(),
@@ -460,6 +634,41 @@ impl Namespace {
     /// Return the configured host mount path, if enabled.
     pub fn host_mount_path(&self) -> Option<&[String]> {
         self.host.enabled.then_some(self.host.mount_path.as_slice())
+    }
+
+    /// Return the configured bus sidecar scopes.
+    pub(crate) fn sidecar_bus_scopes(&self) -> &[SidecarScope] {
+        &self.sidecar_bus_scopes
+    }
+
+    /// Return the configured LoRa sidecar scopes.
+    pub(crate) fn sidecar_lora_scopes(&self) -> &[SidecarScope] {
+        &self.sidecar_lora_scopes
+    }
+
+    /// Return true if a bus scope is declared.
+    pub(crate) fn bus_scope_exists(&self, scope: &str) -> bool {
+        self.sidecar_bus_scopes
+            .iter()
+            .any(|entry| entry.scope() == scope)
+    }
+
+    /// Return true if a LoRa scope is declared.
+    pub(crate) fn lora_scope_exists(&self, scope: &str) -> bool {
+        self.sidecar_lora_scopes
+            .iter()
+            .any(|entry| entry.scope() == scope)
+    }
+
+    /// Return the sidecar kind if the path is within a sidecar mount.
+    pub(crate) fn sidecar_kind_for_path(&self, path: &[String]) -> Option<SidecarKind> {
+        if self.sidecar_modbus.matches_path(path) || self.sidecar_dnp3.matches_path(path) {
+            return Some(SidecarKind::Bus);
+        }
+        if self.sidecar_lora.matches_path(path) {
+            return Some(SidecarKind::Lora);
+        }
+        None
     }
 
     /// Return true when policy namespaces are enabled.
@@ -486,6 +695,9 @@ impl Namespace {
         }
 
         let retain_on_boot = self.telemetry.cursor.retain_on_boot;
+        if let Some(data) = self.read_sidecar(path, offset, count)? {
+            return Ok(data);
+        }
         let worker_id = self
             .shards
             .worker_id_from_telemetry_path(path)
@@ -583,6 +795,9 @@ impl Namespace {
         }
 
         let retain_on_boot = self.telemetry.cursor.retain_on_boot;
+        if let Some(count) = self.write_sidecar(path, offset, data)? {
+            return Ok(count);
+        }
         let worker_id = self
             .shards
             .worker_id_from_telemetry_path(path)
@@ -676,6 +891,43 @@ impl Namespace {
         }
         self.flush_cas_events()?;
         result
+    }
+
+    fn read_sidecar(
+        &mut self,
+        path: &[String],
+        offset: u64,
+        count: u32,
+    ) -> Result<Option<Vec<u8>>, NineDoorError> {
+        if let Some(data) = self.sidecar_modbus.read(path, offset, count) {
+            return Ok(Some(data));
+        }
+        if let Some(data) = self.sidecar_dnp3.read(path, offset, count) {
+            return Ok(Some(data));
+        }
+        if let Some(data) = self.sidecar_lora.read(path, offset, count) {
+            return Ok(Some(data));
+        }
+        Ok(None)
+    }
+
+    fn write_sidecar(
+        &mut self,
+        path: &[String],
+        offset: u64,
+        data: &[u8],
+    ) -> Result<Option<u32>, NineDoorError> {
+        let max_log_bytes = MAX_MSIZE as usize;
+        if let Some(count) = self.sidecar_modbus.write(path, offset, data, max_log_bytes)? {
+            return Ok(Some(count));
+        }
+        if let Some(count) = self.sidecar_dnp3.write(path, offset, data, max_log_bytes)? {
+            return Ok(Some(count));
+        }
+        if let Some(count) = self.sidecar_lora.write(path, offset, data, max_log_bytes)? {
+            return Ok(Some(count));
+        }
+        Ok(None)
     }
 
     /// Create namespace entries for a spawned worker.
@@ -1058,6 +1310,8 @@ impl Namespace {
         self.ensure_trace_events(&trace_path, "events")
             .expect("create /trace/events");
         self.ensure_kernel_messages().expect("create /kmesg");
+        self.bootstrap_sidecars()
+            .expect("create /bus and /lora namespaces");
         if self.host.enabled {
             self.bootstrap_host().expect("create /host namespace");
         }
@@ -1116,6 +1370,13 @@ impl Namespace {
                 self.ensure_append_only_file(&ingest_path, "watch", b"")?;
             }
         }
+        Ok(())
+    }
+
+    fn bootstrap_sidecars(&mut self) -> Result<(), NineDoorError> {
+        self.sidecar_modbus.bootstrap(self)?;
+        self.sidecar_dnp3.bootstrap(self)?;
+        self.sidecar_lora.bootstrap(self)?;
         Ok(())
     }
 
@@ -1519,6 +1780,443 @@ impl Namespace {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidecarKind {
+    Bus,
+    Lora,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidecarBusFile {
+    Ctl,
+    Telemetry,
+    Link,
+    Replay,
+    Spool,
+}
+
+#[derive(Debug, Clone)]
+struct SidecarBusAdapterState {
+    mount_root: Vec<String>,
+    mount_label: String,
+    scope: String,
+    spool: OfflineSpool,
+    link_state: LinkState,
+    telemetry: Vec<u8>,
+    ctl: Vec<u8>,
+    link: Vec<u8>,
+    replay: Vec<u8>,
+}
+
+impl SidecarBusAdapterState {
+    fn match_file(&self, path: &[String]) -> Option<SidecarBusFile> {
+        let rel = path.strip_prefix(&self.mount_root)?;
+        match rel {
+            [leaf] if leaf == "ctl" => Some(SidecarBusFile::Ctl),
+            [leaf] if leaf == "telemetry" => Some(SidecarBusFile::Telemetry),
+            [leaf] if leaf == "link" => Some(SidecarBusFile::Link),
+            [leaf] if leaf == "replay" => Some(SidecarBusFile::Replay),
+            [leaf] if leaf == "spool" => Some(SidecarBusFile::Spool),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SidecarBusState {
+    enabled: bool,
+    mount_path: Vec<String>,
+    adapters: Vec<SidecarBusAdapterState>,
+}
+
+impl SidecarBusState {
+    fn new(config: SidecarBusConfig) -> Self {
+        if !config.enabled {
+            return Self {
+                enabled: false,
+                mount_path: config.mount_path,
+                adapters: Vec::new(),
+            };
+        }
+        let mut adapters = Vec::new();
+        for adapter in config.adapters {
+            let mut mount_root = config.mount_path.clone();
+            mount_root.push(adapter.mount.clone());
+            adapters.push(SidecarBusAdapterState {
+                mount_root,
+                mount_label: adapter.mount.clone(),
+                scope: adapter.scope.clone(),
+                spool: OfflineSpool::new(adapter.spool),
+                link_state: LinkState::Offline,
+                telemetry: Vec::new(),
+                ctl: Vec::new(),
+                link: Vec::new(),
+                replay: Vec::new(),
+            });
+        }
+        Self {
+            enabled: true,
+            mount_path: config.mount_path,
+            adapters,
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn scopes(&self) -> Vec<SidecarScope> {
+        self.adapters
+            .iter()
+            .map(|adapter| SidecarScope {
+                scope: adapter.scope.clone(),
+                mount_root: adapter.mount_root.clone(),
+            })
+            .collect()
+    }
+
+    fn matches_path(&self, path: &[String]) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        self.adapters.iter().any(|adapter| {
+            path.starts_with(&adapter.mount_root) || adapter.mount_root.starts_with(path)
+        })
+    }
+
+    fn adapter_for_path(&self, path: &[String]) -> Option<(&SidecarBusAdapterState, SidecarBusFile)> {
+        self.adapters
+            .iter()
+            .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
+    }
+
+    fn adapter_for_path_mut(
+        &mut self,
+        path: &[String],
+    ) -> Option<(&mut SidecarBusAdapterState, SidecarBusFile)> {
+        self.adapters
+            .iter_mut()
+            .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
+    }
+
+    fn bootstrap(&self, namespace: &mut Namespace) -> Result<(), NineDoorError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        namespace.ensure_dir_path(&self.mount_path)?;
+        for adapter in &self.adapters {
+            let mut adapter_path = self.mount_path.clone();
+            adapter_path.push(adapter.mount_label.clone());
+            namespace.ensure_dir_path(&adapter_path)?;
+            namespace.ensure_append_only_file(&adapter_path, "ctl", b"")?;
+            namespace.ensure_append_only_file(&adapter_path, "telemetry", b"")?;
+            namespace.ensure_append_only_file(&adapter_path, "link", b"")?;
+            namespace.ensure_append_only_file(&adapter_path, "replay", b"")?;
+            namespace.ensure_read_only_file(&adapter_path, "spool", b"")?;
+        }
+        Ok(())
+    }
+
+    fn read(&self, path: &[String], offset: u64, count: u32) -> Option<Vec<u8>> {
+        let (adapter, file) = self.adapter_for_path(path)?;
+        match file {
+            SidecarBusFile::Ctl => Some(read_slice(&adapter.ctl, offset, count)),
+            SidecarBusFile::Telemetry => Some(read_slice(&adapter.telemetry, offset, count)),
+            SidecarBusFile::Link => Some(read_slice(&adapter.link, offset, count)),
+            SidecarBusFile::Replay => Some(read_slice(&adapter.replay, offset, count)),
+            SidecarBusFile::Spool => {
+                let data = render_spool_status(&adapter.spool);
+                Some(read_slice(&data, offset, count))
+            }
+        }
+    }
+
+    fn write(
+        &mut self,
+        path: &[String],
+        offset: u64,
+        data: &[u8],
+        max_log_bytes: usize,
+    ) -> Result<Option<u32>, NineDoorError> {
+        let (adapter, file) = match self.adapter_for_path_mut(path) {
+            Some(found) => found,
+            None => return Ok(None),
+        };
+        if offset != u64::MAX {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "sidecar writes must use append-only offsets",
+            ));
+        }
+        match file {
+            SidecarBusFile::Ctl => {
+                let count = append_bounded(&mut adapter.ctl, data, max_log_bytes)?;
+                Ok(Some(count))
+            }
+            SidecarBusFile::Link => {
+                let text = std::str::from_utf8(data)
+                    .map_err(|_| NineDoorError::protocol(ErrorCode::Invalid, "invalid link payload"))?
+                    .trim();
+                match text {
+                    "online" => adapter.link_state = LinkState::Online,
+                    "offline" => adapter.link_state = LinkState::Offline,
+                    _ => {
+                        return Err(NineDoorError::protocol(
+                            ErrorCode::Invalid,
+                            "link state must be 'online' or 'offline'",
+                        ))
+                    }
+                }
+                let count = append_bounded(&mut adapter.link, data, max_log_bytes)?;
+                Ok(Some(count))
+            }
+            SidecarBusFile::Telemetry => match adapter.link_state {
+                LinkState::Online => {
+                    let count = append_bounded(&mut adapter.telemetry, data, max_log_bytes)?;
+                    Ok(Some(count))
+                }
+                LinkState::Offline => match adapter.spool.push(data) {
+                    Ok(_) => Ok(Some(data.len() as u32)),
+                    Err(SpoolError::Full) => Err(NineDoorError::protocol(
+                        ErrorCode::TooBig,
+                        "sidecar spool full",
+                    )),
+                    Err(SpoolError::Oversize { .. }) => Err(NineDoorError::protocol(
+                        ErrorCode::TooBig,
+                        "sidecar payload exceeds spool limit",
+                    )),
+                },
+            },
+            SidecarBusFile::Replay => {
+                let snapshot = adapter.spool.snapshot();
+                let total_bytes: usize = snapshot.iter().map(|frame| frame.payload.len()).sum();
+                if adapter
+                    .telemetry
+                    .len()
+                    .saturating_add(total_bytes)
+                    > max_log_bytes
+                {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::TooBig,
+                        "sidecar telemetry buffer full",
+                    ));
+                }
+                let drained = adapter.spool.drain();
+                for frame in drained {
+                    adapter.telemetry.extend_from_slice(&frame.payload);
+                }
+                let summary = format!("replay entries={} bytes={}\n", snapshot.len(), total_bytes);
+                let count = append_bounded(&mut adapter.replay, summary.as_bytes(), max_log_bytes)?;
+                Ok(Some(count))
+            }
+            SidecarBusFile::Spool => Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                "sidecar spool is read-only",
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidecarLoraFile {
+    Ctl,
+    Telemetry,
+    Tamper,
+}
+
+#[derive(Debug, Clone)]
+struct SidecarLoraAdapterState {
+    mount_root: Vec<String>,
+    mount_label: String,
+    scope: String,
+    guard: DutyCycleGuard,
+    tamper: TamperLog,
+    telemetry: Vec<u8>,
+    ctl: Vec<u8>,
+}
+
+impl SidecarLoraAdapterState {
+    fn match_file(&self, path: &[String]) -> Option<SidecarLoraFile> {
+        let rel = path.strip_prefix(&self.mount_root)?;
+        match rel {
+            [leaf] if leaf == "ctl" => Some(SidecarLoraFile::Ctl),
+            [leaf] if leaf == "telemetry" => Some(SidecarLoraFile::Telemetry),
+            [leaf] if leaf == "tamper" => Some(SidecarLoraFile::Tamper),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SidecarLoraState {
+    enabled: bool,
+    mount_path: Vec<String>,
+    adapters: Vec<SidecarLoraAdapterState>,
+    clock_ms: u64,
+}
+
+impl SidecarLoraState {
+    fn new(config: SidecarLoraConfig) -> Self {
+        if !config.enabled {
+            return Self {
+                enabled: false,
+                mount_path: config.mount_path,
+                adapters: Vec::new(),
+                clock_ms: 0,
+            };
+        }
+        let mut adapters = Vec::new();
+        for adapter in config.adapters {
+            let mut mount_root = config.mount_path.clone();
+            mount_root.push(adapter.mount.clone());
+            adapters.push(SidecarLoraAdapterState {
+                mount_root,
+                mount_label: adapter.mount.clone(),
+                scope: adapter.scope.clone(),
+                guard: DutyCycleGuard::new(adapter.duty_cycle),
+                tamper: TamperLog::new(adapter.tamper_log_max_entries),
+                telemetry: Vec::new(),
+                ctl: Vec::new(),
+            });
+        }
+        Self {
+            enabled: true,
+            mount_path: config.mount_path,
+            adapters,
+            clock_ms: 0,
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn scopes(&self) -> Vec<SidecarScope> {
+        self.adapters
+            .iter()
+            .map(|adapter| SidecarScope {
+                scope: adapter.scope.clone(),
+                mount_root: adapter.mount_root.clone(),
+            })
+            .collect()
+    }
+
+    fn matches_path(&self, path: &[String]) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        self.adapters.iter().any(|adapter| {
+            path.starts_with(&adapter.mount_root) || adapter.mount_root.starts_with(path)
+        })
+    }
+
+    fn adapter_for_path(
+        &self,
+        path: &[String],
+    ) -> Option<(&SidecarLoraAdapterState, SidecarLoraFile)> {
+        self.adapters
+            .iter()
+            .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
+    }
+
+    fn adapter_for_path_mut(
+        &mut self,
+        path: &[String],
+    ) -> Option<(&mut SidecarLoraAdapterState, SidecarLoraFile)> {
+        self.adapters
+            .iter_mut()
+            .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
+    }
+
+    fn bootstrap(&self, namespace: &mut Namespace) -> Result<(), NineDoorError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        namespace.ensure_dir_path(&self.mount_path)?;
+        for adapter in &self.adapters {
+            let mut adapter_path = self.mount_path.clone();
+            adapter_path.push(adapter.mount_label.clone());
+            namespace.ensure_dir_path(&adapter_path)?;
+            namespace.ensure_append_only_file(&adapter_path, "ctl", b"")?;
+            namespace.ensure_append_only_file(&adapter_path, "telemetry", b"")?;
+            namespace.ensure_read_only_file(&adapter_path, "tamper", b"")?;
+        }
+        Ok(())
+    }
+
+    fn read(&self, path: &[String], offset: u64, count: u32) -> Option<Vec<u8>> {
+        let (adapter, file) = self.adapter_for_path(path)?;
+        match file {
+            SidecarLoraFile::Ctl => Some(read_slice(&adapter.ctl, offset, count)),
+            SidecarLoraFile::Telemetry => Some(read_slice(&adapter.telemetry, offset, count)),
+            SidecarLoraFile::Tamper => {
+                let data = render_tamper_log(adapter.tamper.snapshot());
+                Some(read_slice(&data, offset, count))
+            }
+        }
+    }
+
+    fn write(
+        &mut self,
+        path: &[String],
+        offset: u64,
+        data: &[u8],
+        max_log_bytes: usize,
+    ) -> Result<Option<u32>, NineDoorError> {
+        let (adapter, file) = match self.adapter_for_path_mut(path) {
+            Some(found) => found,
+            None => return Ok(None),
+        };
+        if offset != u64::MAX {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "sidecar writes must use append-only offsets",
+            ));
+        }
+        match file {
+            SidecarLoraFile::Ctl => {
+                let count = append_bounded(&mut adapter.ctl, data, max_log_bytes)?;
+                let now_ms = self.next_clock();
+                match adapter.guard.attempt(now_ms, data.len() as u32) {
+                    Ok(()) => {
+                        let count = append_bounded(&mut adapter.telemetry, data, max_log_bytes)?;
+                        Ok(Some(count))
+                    }
+                    Err(reason) => {
+                        adapter.tamper.push(TamperEntry {
+                            timestamp_ms: now_ms,
+                            reason,
+                            payload_bytes: data.len() as u32,
+                        });
+                        let (code, message) = match reason {
+                            TamperReason::PayloadOversize => {
+                                (ErrorCode::TooBig, "lora payload exceeds max bytes")
+                            }
+                            TamperReason::DutyCycleExceeded => {
+                                (ErrorCode::Busy, "lora duty cycle exceeded")
+                            }
+                        };
+                        Err(NineDoorError::protocol(code, message))
+                    }
+                }
+            }
+            SidecarLoraFile::Telemetry => Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                "lora telemetry is read-only",
+            )),
+            SidecarLoraFile::Tamper => Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                "lora tamper log is read-only",
+            )),
+        }
+    }
+
+    fn next_clock(&mut self) -> u64 {
+        self.clock_ms = self.clock_ms.saturating_add(1);
+        self.clock_ms
+    }
+}
+
 #[derive(Debug, Clone)]
 enum CasPath {
     UpdatesRoot,
@@ -1788,6 +2486,81 @@ fn parse_host_mount(mount_at: &str) -> Result<Vec<String>, NineDoorError> {
         }
     }
     Ok(components)
+}
+
+fn parse_sidecar_mount(label: &str, mount_at: &str) -> Result<Vec<String>, NineDoorError> {
+    let trimmed = mount_at.trim();
+    if trimmed.is_empty() || !trimmed.starts_with('/') {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("sidecar {label} mount must be an absolute path"),
+        ));
+    }
+    let components: Vec<String> = trimmed
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if components.is_empty() {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("sidecar {label} mount must not be root"),
+        ));
+    }
+    Ok(components)
+}
+
+fn append_bounded(
+    buffer: &mut Vec<u8>,
+    data: &[u8],
+    max_bytes: usize,
+) -> Result<u32, NineDoorError> {
+    if buffer.len().saturating_add(data.len()) > max_bytes {
+        return Err(NineDoorError::protocol(
+            ErrorCode::TooBig,
+            "sidecar buffer capacity exceeded",
+        ));
+    }
+    buffer.extend_from_slice(data);
+    Ok(data.len() as u32)
+}
+
+fn render_spool_status(spool: &OfflineSpool) -> Vec<u8> {
+    let config = spool.config();
+    let entries = spool.snapshot();
+    let mut out = String::new();
+    out.push_str(&format!(
+        "entries={} bytes={} max_entries={} max_bytes={}\n",
+        entries.len(),
+        spool.buffered_bytes(),
+        config.max_entries,
+        config.max_bytes
+    ));
+    for frame in entries {
+        let payload = String::from_utf8_lossy(&frame.payload);
+        out.push_str(&format!(
+            "seq={} bytes={} payload={}\n",
+            frame.seq,
+            frame.payload.len(),
+            payload
+        ));
+    }
+    out.into_bytes()
+}
+
+fn render_tamper_log(entries: Vec<TamperEntry>) -> Vec<u8> {
+    let mut out = String::new();
+    for entry in entries {
+        let reason = match entry.reason {
+            TamperReason::PayloadOversize => "payload-oversize",
+            TamperReason::DutyCycleExceeded => "duty-cycle",
+        };
+        out.push_str(&format!(
+            "tamper ts_ms={} reason={} bytes={}\n",
+            entry.timestamp_ms, reason, entry.payload_bytes
+        ));
+    }
+    out.into_bytes()
 }
 
 fn read_slice(data: &[u8], offset: u64, count: u32) -> Vec<u8> {

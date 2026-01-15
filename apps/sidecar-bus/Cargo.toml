@@ -1,0 +1,18 @@
+# Author: Lukas Bower
+# Purpose: Configure the sidecar-bus crate for host-side field bus adapters.
+[package]
+name = "sidecar-bus"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = ["std"]
+std = []
+modbus = []
+dnp3 = []
+lora = []
+tokio = ["std", "dep:tokio"]
+
+[dependencies]
+tokio = { version = "1.39", features = ["rt", "time"], optional = true }

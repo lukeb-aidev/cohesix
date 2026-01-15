@@ -15,6 +15,10 @@ pub enum Role {
     Worker,
     /// GPU worker role.
     GpuWorker,
+    /// Field bus worker role.
+    BusWorker,
+    /// LoRa worker role.
+    LoraWorker,
 }
 
 /// Return the canonical label for the provided role.
@@ -23,6 +27,8 @@ pub const fn role_label(role: Role) -> &'static str {
         Role::Queen => "queen",
         Role::Worker => "worker-heartbeat",
         Role::GpuWorker => "worker-gpu",
+        Role::BusWorker => "worker-bus",
+        Role::LoraWorker => "worker-lora",
     }
 }
 

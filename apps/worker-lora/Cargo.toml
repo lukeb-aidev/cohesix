@@ -1,0 +1,14 @@
+# Author: Lukas Bower
+# Purpose: Configure the worker-lora crate dependencies and metadata.
+[package]
+name = "worker-lora"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[target.'cfg(not(target_os = "none"))'.dependencies]
+anyhow = { workspace = true }
+cohesix-ticket = { workspace = true }
+secure9p-codec = { workspace = true }

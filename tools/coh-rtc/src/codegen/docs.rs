@@ -15,6 +15,7 @@ pub struct DocFragments {
     pub schema_md: String,
     pub namespace_md: String,
     pub sharding_md: String,
+    pub sidecar_md: String,
     pub ecosystem_md: String,
     pub observability_interfaces_md: String,
     pub observability_security_md: String,
@@ -441,6 +442,24 @@ impl DocFragments {
             .ok();
         }
 
+        let mut sidecar_md = String::new();
+        writeln!(sidecar_md, "### Sidecars section (generated)").ok();
+        let mut bus_used = sidecar_reserved_names();
+        render_sidecar_bus_section(
+            "modbus",
+            &manifest.sidecars.modbus,
+            &mut bus_used,
+            &mut sidecar_md,
+        );
+        render_sidecar_bus_section(
+            "dnp3",
+            &manifest.sidecars.dnp3,
+            &mut bus_used,
+            &mut sidecar_md,
+        );
+        let mut lora_used = sidecar_reserved_names();
+        render_sidecar_lora_section(&manifest.sidecars.lora, &mut lora_used, &mut sidecar_md);
+
         let mut ecosystem_md = String::new();
         writeln!(ecosystem_md, "### Ecosystem section (generated)").ok();
         writeln!(
@@ -824,6 +843,7 @@ impl DocFragments {
             schema_md,
             namespace_md,
             sharding_md,
+            sidecar_md,
             ecosystem_md,
             observability_interfaces_md,
             observability_security_md,
@@ -846,6 +866,8 @@ pub fn emit_doc_snippet(manifest_hash: &str, docs: &DocFragments, path: &Path) -
     writeln!(contents, "{}", docs.namespace_md.trim_end())?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.sharding_md.trim_end())?;
+    writeln!(contents)?;
+    writeln!(contents, "{}", docs.sidecar_md.trim_end())?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.ecosystem_md.trim_end())?;
     writeln!(contents)?;
@@ -929,6 +951,117 @@ pub fn emit_cas_security_snippet(docs: &DocFragments, path: &Path) -> Result<()>
         )
     })?;
     Ok(())
+}
+
+fn render_sidecar_bus_section(
+    label: &str,
+    config: &crate::ir::SidecarBusConfig,
+    used: &mut std::collections::BTreeSet<String>,
+    output: &mut String,
+) {
+    writeln!(
+        output,
+        "- `sidecars.{label}.enable`: `{}`",
+        config.enable
+    )
+    .ok();
+    writeln!(
+        output,
+        "- `sidecars.{label}.mount_at`: `{}`",
+        config.mount_at
+    )
+    .ok();
+    if config.adapters.is_empty() {
+        writeln!(output, "- `sidecars.{label}.adapters`: `(none)`").ok();
+    } else {
+        for adapter in &config.adapters {
+            let resolved = resolve_sidecar_mount(label, &adapter.id, &adapter.mount, used);
+            writeln!(
+                output,
+                "- `sidecars.{label}.adapters`: id=`{}` mount=`{}` scope=`{}` link=`{}` baud=`{}` spool.max_entries=`{}` spool.max_bytes=`{}`",
+                adapter.id,
+                resolved,
+                adapter.scope,
+                format_sidecar_link(adapter.link),
+                adapter.baud,
+                adapter.spool.max_entries,
+                adapter.spool.max_bytes
+            )
+            .ok();
+        }
+    }
+}
+
+fn render_sidecar_lora_section(
+    config: &crate::ir::SidecarLoraConfig,
+    used: &mut std::collections::BTreeSet<String>,
+    output: &mut String,
+) {
+    writeln!(output, "- `sidecars.lora.enable`: `{}`", config.enable).ok();
+    writeln!(
+        output,
+        "- `sidecars.lora.mount_at`: `{}`",
+        config.mount_at
+    )
+    .ok();
+    if config.adapters.is_empty() {
+        writeln!(output, "- `sidecars.lora.adapters`: `(none)`").ok();
+    } else {
+        for adapter in &config.adapters {
+            let resolved = resolve_sidecar_mount("lora", &adapter.id, &adapter.mount, used);
+            writeln!(
+                output,
+                "- `sidecars.lora.adapters`: id=`{}` mount=`{}` scope=`{}` region=`{}` duty_cycle_percent=`{}` window_ms=`{}` max_payload_bytes=`{}` tamper_log_max_entries=`{}`",
+                adapter.id,
+                resolved,
+                adapter.scope,
+                adapter.region,
+                adapter.duty_cycle_percent,
+                adapter.window_ms,
+                adapter.max_payload_bytes,
+                adapter.tamper_log_max_entries
+            )
+            .ok();
+        }
+    }
+}
+
+fn format_sidecar_link(link: crate::ir::SidecarLink) -> &'static str {
+    match link {
+        crate::ir::SidecarLink::Serial => "serial",
+        crate::ir::SidecarLink::Tcp => "tcp",
+    }
+}
+
+fn resolve_sidecar_mount(
+    kind: &str,
+    adapter_id: &str,
+    mount: &str,
+    used: &mut std::collections::BTreeSet<String>,
+) -> String {
+    let mut label = mount.to_owned();
+    if used.contains(&label) {
+        label = hashed_sidecar_label(kind, adapter_id, mount);
+    }
+    used.insert(label.clone());
+    label
+}
+
+fn hashed_sidecar_label(kind: &str, adapter_id: &str, mount: &str) -> String {
+    let seed = format!("{kind}:{adapter_id}:{mount}");
+    let digest = hash_bytes(seed.as_bytes());
+    let prefix = digest.get(0..8).unwrap_or("00000000");
+    format!("{prefix}-{mount}")
+}
+
+fn sidecar_reserved_names() -> std::collections::BTreeSet<String> {
+    [
+        "proc", "log", "queen", "worker", "shard", "gpu", "host", "policy", "actions", "audit",
+        "replay", "updates", "models", "trace", "kmesg", "bus", "lora",
+    ]
+    .iter()
+    .map(|entry| entry.to_string())
+    .collect()
 }
 
 fn format_provider(provider: &crate::ir::HostProvider) -> &'static str {

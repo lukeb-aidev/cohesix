@@ -844,6 +844,8 @@ impl NineDoorBridge {
             Some(SessionRoleLabel::Queen) => "queen",
             Some(SessionRoleLabel::WorkerHeartbeat) => "worker-heartbeat",
             Some(SessionRoleLabel::WorkerGpu) => "worker-gpu",
+            Some(SessionRoleLabel::WorkerBus) => "worker-bus",
+            Some(SessionRoleLabel::WorkerLora) => "worker-lora",
             None => "unauthenticated",
         }
     }
@@ -998,6 +1000,8 @@ enum SessionRoleLabel {
     Queen,
     WorkerHeartbeat,
     WorkerGpu,
+    WorkerBus,
+    WorkerLora,
 }
 
 fn parse_session_role(role: &str) -> Option<SessionRoleLabel> {
@@ -1009,6 +1013,10 @@ fn parse_session_role(role: &str) -> Option<SessionRoleLabel> {
         Some(SessionRoleLabel::WorkerHeartbeat)
     } else if role.eq_ignore_ascii_case("worker-gpu") {
         Some(SessionRoleLabel::WorkerGpu)
+    } else if role.eq_ignore_ascii_case("worker-bus") {
+        Some(SessionRoleLabel::WorkerBus)
+    } else if role.eq_ignore_ascii_case("worker-lora") {
+        Some(SessionRoleLabel::WorkerLora)
     } else {
         None
     }
