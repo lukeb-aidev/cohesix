@@ -31,7 +31,7 @@ Technically, Cohesix is a **pure Rust userspace** running on upstream **seL4** o
 
 Cohesix does **not include a traditional filesystem**; instead it exposes a **synthetic Secure9P namespace** where paths represent capability-scoped control and telemetry interfaces rather than persistent storage.
 
-Cohesix does not provide HTTPS or TLS. Instead, it relies on an **authenticated, encrypted private network** (e.g. VPN or overlay) for transport security, keeping the Cohesix TCB small and focused. See this [example](docs/NETWORK_CONFIG.md)
+Cohesix does not provide HTTPS or TLS. Instead, it relies on an **authenticated, encrypted private network** (e.g. VPN or overlay) for transport security, keeping the Cohesix TCB small and focused. See this [example](docs/NETWORK_CONFIG.md).
 
 All control and telemetry flows through Secure9P. There are **no ad-hoc RPC channels**, no background daemons, and no general in-VM networking services.
 
