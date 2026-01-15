@@ -44,6 +44,7 @@ cross-checks each milestone against the relevant chapters to ensure we remain wi
 We revisit these sections whenever we specify new kernel interactions or manifest changes so that documentation and implementations remain aligned.
 
 ---
+
 ## Milestones <a id="Milestones"></a>
 | Milestone | Description |
 | [0](#0) | Repository Skeleton & Toolchain |
@@ -55,6 +56,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [6](#6) |  |
 | [7](#7) |  |
 | [8](#8) |  |
+
 ---
 
 ## Milestone 0 — Repository Skeleton & Toolchain <a id="0"></a> [Milestones](#Milestones)
