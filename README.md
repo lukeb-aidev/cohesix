@@ -18,6 +18,11 @@ Cohesix is intentionally opinionated. It treats **determinism, auditability, and
 
 ---
 
+### seL4 foundation
+
+Cohesix runs on **[seL4](https://sel4.systems/)**, a high-assurance capability-based microkernel with a machine-checked proof of correctness. seL4 provides strong isolation, explicit authority, and deterministic scheduling while keeping the kernel extremely small. This lets Cohesix place all policy and orchestration logic in a **pure Rust userspace**, minimize the trusted computing base, and enforce capability-scoped control planes without relying on POSIX semantics, in-kernel drivers, or ambient authority.
+
+---
 ## What is Cohesix?
 
 Cohesix is a **minimal orchestration operating system** for secure edge management, targeting a defined set of [use cases](docs/USE_CASES.md) around AI hives and distributed GPU workloads.
