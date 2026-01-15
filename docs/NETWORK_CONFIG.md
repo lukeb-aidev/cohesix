@@ -1,5 +1,8 @@
-
-# Secure Network Topology for Cohesix  
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Example secure network topology for Cohesix. -->
+# Example Secure Network Topology for Cohesix  
 **AWS Queen + Individually Roaming Jetson Edge Workers**
 
 ---
