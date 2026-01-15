@@ -45,7 +45,8 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 
 ---
 
-## Milestones <a id="Milestones"></a>
+## Milestones ##
+<a id="Milestones"></a>
 | Milestone | Description |
 |----------|-------------|
 | [0](#0) | Repository Skeleton & Toolchain |
