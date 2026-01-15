@@ -108,7 +108,7 @@ flowchart LR
   %% Edge Devices
   %% ========================
   subgraph EDGE["Edge (Roaming Jetsons)"]
-    J1["Jetson A\n(host tools + workloads)"]
+    J1["Jetson A<br />(host tools + workloads)"]
     J2["Jetson B\n(host tools + workloads)"]
     JN["Jetson N\n(host tools + workloads)"]
   end
