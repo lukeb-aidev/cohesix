@@ -49,17 +49,18 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | Milestone | Description |
 | [0](#0) | Repository Skeleton & Toolchain |
 | [1](#1) | Boot Banner, Timer, & First IPC |
-| [2](#2) |  |
-| [3](#3) |  |
-| [4](#4) |  |
-| [5](#5) |  |
+| [2](#2) | NineDoor Minimal 9P |
+| [3](#3) | Queen/Worker MVP with Roles |
+| [4](#4) | Bind & Mount Namespaces |
+| [5](#5) | Hardening & Test Automation (ongoing)  |
 | [6](#6) |  |
 | [7](#7) |  |
 | [8](#8) |  |
 
 ---
 
-## Milestone 0 — Repository Skeleton & Toolchain <a id="0"></a> [Milestones](#Milestones)
+## Milestone 0 — Repository Skeleton & Toolchain <a id="0"></a> 
+[Milestones](#Milestones)
 **Status:** Complete — repo/workspace scaffolding, build scripts, and size guard are in place; keep regenerated artefacts in sync with toolchain outputs.
 **Deliverables**
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
@@ -74,7 +75,8 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - `qemu-system-aarch64 --version` reports the expected binary.
 - `scripts/ci/size_guard.sh out/rootfs.cpio` rejects oversized archives.
 
-## Milestone 1 — Boot Banner, Timer, & First IPC <a id="1"></a> [Milestones](#Milestones)
+## Milestone 1 — Boot Banner, Timer, & First IPC <a id="1"></a> 
+[Milestones](#Milestones)
 **Status:** Complete — boot banner, timer tick, and initial IPC appear in current boot logs; retain existing log ordering.
 **Deliverables**
 - Root task prints a banner and configures a periodic timer tick.
@@ -92,7 +94,8 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 **M1 → M2 Transition Note**
 - Retype now targets the init root CNode using the canonical tuple `(root=seL4_CapInitThreadCNode, node_index=0, node_depth=bootinfo.initThreadCNodeSizeBits, slot)` and validates capacity via `initThreadCNodeSizeBits`.
 
-## Milestone 2 — NineDoor Minimal 9P <a id="2"></a> [Milestones](#Milestones)
+## Milestone 2 — NineDoor Minimal 9P <a id="2"></a> 
+[Milestones](#Milestones)
 **Status:** Complete — Secure9P codec, fid/session handling, and the synthetic namespace are active; follow-up limited to ongoing fuzz coverage.
 **Deliverables**
 - Secure9P codec + fid/session table implementing `version`, `attach`, `walk`, `open`, `read`, `write`, `clunk`.
@@ -112,7 +115,8 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Attempting to write to `/proc/boot` fails with `Permission`.
 - Decoder corpus covers malformed frames (length mismatch, fid reuse).
 
-## Milestone 3 — Queen/Worker MVP with Roles
+## Milestone 3 — Queen/Worker MVP with Roles <a id="3"></a> 
+[Milestones](#Milestones)
 **Status:** Complete — Queen/worker roles, budgets, and `/queen/ctl` JSON handling are live; keep tests aligned with current ticket and namespace semantics.
 **Deliverables**
 - Role-aware access policy implementing `Queen` and `WorkerHeartbeat` roles.
@@ -131,7 +135,8 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Writing kill removes worker directory and closes telemetry file.
 - Role isolation tests deny cross-role reads/writes.
 
-## Milestone 4 — Bind & Mount Namespaces
+## Milestone 4 — Bind & Mount Namespaces <a id="24"></a> 
+[Milestones](#Milestones)
 **Status:** Complete — Per-session mount tables are implemented; future changes must preserve established bind/mount semantics from `SECURE9P.md`.
 **Deliverables**
 - Per-session mount table with `bind(from, to)` and `mount(service, at)` operations scoped to a single path.
@@ -144,7 +149,8 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Queen remaps `/queen` to a subdirectory without affecting other sessions.
 - Attempted bind by a worker fails with `Permission`.
 
-## Milestone 5 — Hardening & Test Automation (ongoing)
+## Milestone 5 — Hardening & Test Automation (ongoing) <a id="5"></a> 
+[Milestones](#Milestones)
 **Status:** Complete — Unit/fuzz/integration coverage exists; maintain regression packs as features evolve.
 **Deliverables**
 - Unit tests for codec, fid lifecycle, and access policy negative paths.
