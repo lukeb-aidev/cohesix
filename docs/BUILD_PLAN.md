@@ -44,8 +44,8 @@ cross-checks each milestone against the relevant chapters to ensure we remain wi
 We revisit these sections whenever we specify new kernel interactions or manifest changes so that documentation and implementations remain aligned.
 
 ---
-| Milestone | Description | <a id="Milestones"></a>
-|--------|-------------|
+## Milestones <a id="Milestones"></a>
+| Milestone | Description |
 | [0](#0) | Repository Skeleton & Toolchain |
 | [1](#1) | Boot Banner, Timer, & First IPC |
 | [2](#2) |  |
