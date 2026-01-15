@@ -108,7 +108,14 @@ flowchart LR
   %% Edge Devices
   %% ========================
   subgraph EDGE["Edge (Roaming Jetsons)"]
-    J1["Jetson A<br />(host tools + workloads)"]<br />    J2["Jetson B<br />(host tools + workloads)"]<br />    JN["Jetson N<br />(host tools + workloads)"]<br />  end<br /><br />  %% ========================<br />  %% Internet<br />  %% ========================
+    J1["Jetson A\n(host tools + workloads)"]
+    J2["Jetson B\n(host tools + workloads)"]
+    JN["Jetson N\n(host tools + workloads)"]
+  end
+
+  %% ========================
+  %% Internet
+  %% ========================
   subgraph NET["Public Internet"]
     I["Untrusted Network"]
   end
@@ -118,11 +125,11 @@ flowchart LR
   %% ========================
   subgraph AWS["AWS VPC"]
     subgraph PUB["Public Subnet"]
-      WG["WireGuard Hub<br />(UDP 51820)"]
+      WG["WireGuard Hub\n(UDP 51820)"]
     end
 
     subgraph PRIV["Private Subnet"]
-      Q["Cohesix Queen<br />(seL4 VM)<br />No Public IP"]
+      Q["Cohesix Queen\n(seL4 VM)\nNo Public IP"]
     end
   end
 
@@ -135,7 +142,7 @@ flowchart LR
 
   I --> WG
 
-  WG -->|Plain TCP<br />VPN-only CIDR| Q
+  WG -->|Plain TCP\nVPN-only CIDR| Q
 ```
 ## Connection Flow (Step-by-Step)
 
