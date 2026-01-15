@@ -51,6 +51,39 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [6](#6) | GPU Worker Integration | Complete |
 | [6a](#6a) | GPU Model Lifecycle & Telemetry Semantics (LoRA-ready) | Complete |
 | [7a](#7a) | Root-Task Event Pump & Authenticated Kernel Entry | Complete |
+| [7b](#7b) | Standalone Console & Networking (QEMU-first) | Complete |
+| [7c](#7c) | TCP transport parity while retaining existing flows | Complete |
+| [7d](#7d) | ACK/ERR broadcast is implemented across serial and TCP | Complete |
+| [7e](#7e) | TraceFS (JSONL Synthetic Filesystem) | Complete |
+| [8a](#8a) | Lightweight Hardware Abstraction Layer | Complete |
+| [8b](#8b) | Root-Task Compiler & Deterministic Profiles | Complete |
+| [8c](#8c) | Cache-Safe DMA via AArch64 VSpace Calls | Complete |
+| [8d](#8d) | In-Session test Command + Preinstalled .coh Regression Scripts | Complete |
+| [9](#9) | Secure9P Pipelining & Batching | Complete |
+| [10](#10) | Telemetry Rings & Cursor Resumption | Complete |
+| [11](#11) | Host Sidecar Bridge & /host Namespace (Ecosystem Coexistence) | Complete |
+| [12](#12) | PolicyFS & Approval Gates | Complete |
+| [13](#13) | AuditFS & ReplayFS | Complete |
+| [14](#14) | Sharded Namespaces & Provider Split | Complete |
+| [15](#15) | Client Concurrency & Session Pooling | Complete |
+| [16](#16) | Observability via Files (No New Protocols) | Complete |
+| [17](#17) | Content-Addressed Updates (CAS) — 9P-first | Complete |
+| [18](#18) | Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern) | Pending |
+| [19](#19) | cohsh-core Extraction (Shared Grammar & Transport) | Pending |
+| [20a](#20a) | cohsh as 9P Client Library | Pending |
+| [20b](#20b) | NineDoor UI Providers | Pending |
+| [20c](#20c) | SwarmUI Desktop (Tauri, Pure 9P/TCP) | Pending |
+| [20d](#20d) | SwarmUI Live Hive Rendering (PixiJS, GPU-First | Pending |
+| [20e](#20e) | CLI/UI Convergence Tests | Pending |
+| [20f](#20f) | UI Security Hardening (Tickets & Quotas) | Pending |
+| [20g](#20g) | Deterministic Snapshot & Replay (UI Testing) | Pending |
+| [21](#21) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
+| [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Pending |
+| [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Pending |
+| [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Pending |
+| [25](#25) | UEFI Bare-Metal Boot & Device Identity | Pending |
+| [26](#26) | Edge Local Status (UEFI Host Tool) | Pending |
+| [27](#27) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
 
 ---
 
@@ -428,7 +461,9 @@ Checks: Documentation builds cleanly, reflects new architecture, and guides deve
 Deliverables: Synchronized documentation explaining event pump adoption, security posture, and developer workflows.
 ```
 
-## Milestone 7b — Standalone Console & Networking (QEMU-first)
+## Milestone 7b — Standalone Console & Networking (QEMU-first)   <a id="7b"></a> 
+[Milestones](#Milestones)
+
 **Status:** Complete — PL011 root console and TCP console co-exist; networking stack is feature-gated and non-blocking. Virtio-console is not used; PL011 remains the root console (see `ARCHITECTURE.md` for dual-console expectations).
 **Deliverables**
 - **Serial console integration**
@@ -491,7 +526,9 @@ Commands: cd crates/root-task && cargo test --features net console_parser && car
 Checks: Parser rejects invalid verbs, enforces max length, rate limits failed logins, normalises newline sequences, and verifies capability enforcement via mocks.
 Deliverables: Hardened console loop with comprehensive parser tests integrated into root-task and lint-clean CI coverage.
 ```
-## Milestone 7c
+## Milestone 7c - TCP transport parity while retaining existing flows   <a id="7c"></a> 
+[Milestones](#Milestones)
+
 **Status:** Complete — TCP transport, documentation updates, and integration tests are in tree; keep host build scripts and console fixtures in sync when toggling transport flags.
 **Deliverables**
 - **Remote transport**
@@ -532,7 +569,9 @@ Checks: Automated QEMU run brings up TCP console reachable from host; integratio
 Deliverables: Updated documentation set, automation scripts, and passing QEMU TCP console integration test with lint coverage.
 ```
 
-## Milestone 7d
+## Milestone 7d - ACK/ERR broadcast is implemented across serial and TCP  <a id="7d"></a> 
+[Milestones](#Milestones)
+
 **Status:** Complete — ACK/ERR broadcast is implemented across serial and TCP with shared fixtures, reconnection semantics, and documentation in place.
 **Deliverables**
 - Ensure the PL011 root console remains active alongside the TCP listener; TCP handling must stay non-blocking so serial recovery remains deterministic (see `ARCHITECTURE.md`).
@@ -575,7 +614,9 @@ Deliverables: Bidirectional console acknowledgements spanning serial and TCP tra
 - `https://crates.io/crates/nb` (non-blocking IO helpers)
 - `https://crates.io/crates/spin` (lock primitives for bounded queues)
 
-## Milestone 7e — TraceFS (JSONL Synthetic Filesystem)
+## Milestone 7e — TraceFS (JSONL Synthetic Filesystem)   <a id="7e"></a> 
+[Milestones](#Milestones)
+
 **Status:** Complete — TraceFS provider backs `/trace/*` and worker traces; control-plane filters and CLI coverage are wired without regressing existing mounts (see `SECURE9P.md`).
 **Purpose**
 Add a minimal synthetic 9P provider (`tracefs`) exposing JSONL-based tracing and diagnostic streams.  
@@ -620,7 +661,8 @@ cohsh> tail /trace/events
 * Code aligned with `secure9p-*` layering; passes `cargo clippy -- -D warnings`.
 * TCP console must remain non-blocking and PL011 stays active as the fallback root console (see `ARCHITECTURE.md`).
 
-## Milestone 8a — Lightweight Hardware Abstraction Layer
+## Milestone 8a — Lightweight Hardware Abstraction Layer   <a id="8a"></a> 
+[Milestones](#Milestones)
 
 **Why now (context):** Kernel bring-up now relies on multiple MMIO peripherals (PL011 UART, virtio-net). Tight coupling to `KernelEnv`
 spread driver responsibilities across modules, making future platform work and compiler integration harder to reason about.
@@ -659,7 +701,8 @@ the feature gate) while keeping console output stable.
   - **Scope note (authorized):** Instrumentation noise reduction (`cleanup-2-instrumentation-noise-reduction`) is permitted, limited to heapless rate-limited counters and demoting/rate-limiting net/event pump spam without changing console protocol lines, ordering, or CLI/ACK semantics.
 
 ---
-## Milestone 8b — Root-Task Compiler & Deterministic Profiles
+## Milestone 8b — Root-Task Compiler & Deterministic Profiles <a id="8b"></a> 
+[Milestones](#Milestones)
 
 **Why now (context):** The event pump, HAL, and authenticated console now run end-to-end, but the configuration that wires tickets, namespaces, and capability budgets together still lives in hand-written Rust. A manifest-driven compiler lets us regenerate bootstrap code, docs, and CLI fixtures from one artefact so deployments stay auditable and reproducible.
 
@@ -716,7 +759,8 @@ Introduce the `coh-rtc` compiler that ingests `configs/root_task.toml` and emits
 
 ---
 
-## Milestone 8c — Cache-Safe DMA via AArch64 VSpace Calls
+## Milestone 8c — Cache-Safe DMA via AArch64 VSpace Calls <a id="8c"></a> 
+[Milestones](#Milestones)
 
 **Why now (context):** DMA regions shared with host-side GPUs, telemetry rings, and future sidecars cross NineDoor and HAL boundaries, but our cache maintenance is still implicit. Section 10.9.2 of the seL4 manual exposes the AArch64-only `seL4_ARM_VSpace_{Clean, CleanInvalidate, Invalidate, Unify}_Data` invocations; wrapping them in Rust lets us publish deterministic cache semantics instead of trusting ad-hoc CPU flushes.
 
@@ -742,7 +786,8 @@ Wrap the AArch64-specific VSpace cache operations in the HAL, wire them into man
 - `coh-rtc` refuses to emit bootstrap tables for DMA cache maintenance when `cache.kernel_ops` is disabled, keeping docs/code aligned with the manual’s capability requirements.
 
 ---
-## Milestone 8d — In-Session `test` Command + Preinstalled `.coh` Regression Scripts
+## Milestone 8d — In-Session `test` Command + Preinstalled `.coh` Regression Scripts <a id="8d"></a> 
+[Milestones](#Milestones)
 
 **Why now (context):** The TCP console is now viable, but operators and CI need a deterministic, single-command proof that `cohsh` protocol semantics and server-side Secure9P/NineDoor behaviours remain intact. An in-session `coh> test` that exercises client↔server flows via preinstalled scripts ensures regressions surface immediately, including namespace side effects and negative paths.
 
@@ -792,7 +837,8 @@ Following the .coh script format as documented in docs/USERLAND_AND_CLI.md "## c
 - Regression command reruns are documented: operators must execute this suite whenever console handling, Secure9P transport, namespace structure, or access policies change.
 
 ---
-## Milestone 9 — Secure9P Pipelining & Batching
+## Milestone 9 — Secure9P Pipelining & Batching <a id="9"></a> 
+[Milestones](#Milestones)
 
 (Clarification) Milestones 9–15 intentionally build on the full 7d acknowledgement grammar. Do NOT attempt to pull 9P batching/pipelining earlier than 7d; doing so breaks test surfaces.
 
@@ -868,7 +914,8 @@ Deliverables:
 ```
 ---
 
-## Milestone 10 — Telemetry Rings & Cursor Resumption
+## Milestone 10 — Telemetry Rings & Cursor Resumption <a id="10"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** Persistent telemetry is currently mock-only. Operators need bounded append-only logs with resumable cursors, generated from the manifest so memory ceilings and schemas stay auditable.
 
@@ -935,7 +982,8 @@ Deliverables:
 ```
 ---
 
-## Milestone 11 — Host Sidecar Bridge & /host Namespace (Ecosystem Coexistence)
+## Milestone 11 — Host Sidecar Bridge & /host Namespace (Ecosystem Coexistence)  <a id="11"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** Cohesix needs to govern existing fleets (systemd units, Kubernetes nodes, GPUs) without moving those systems into the VM. Mirroring host controls into `/host` via Secure9P keeps determinism and the tiny TCB while exposing file-driven levers.
 
@@ -1007,7 +1055,8 @@ Deliverables:
 ```
 ---
 
-## Milestone 12 — PolicyFS & Approval Gates
+## Milestone 12 — PolicyFS & Approval Gates <a id="12"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** Host mirroring introduces higher-risk controls. Converting approvals into manifest-driven files keeps operations human-auditable without new protocols.
 
@@ -1075,7 +1124,8 @@ Deliverables:
 ```
 ---
 
-## Milestone 13 — AuditFS & ReplayFS
+## Milestone 13 — AuditFS & ReplayFS <a id="13"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** With host mirroring and policy gates, operators need deterministic replay for investigations without expanding the TCB. Bounded audit/replay surfaces make Cohesix operations repeatable and inspectable.
 
@@ -1147,7 +1197,8 @@ Deliverables:
 ```
 ---
 
-## Milestone 14 — Sharded Namespaces & Provider Split
+## Milestone 14 — Sharded Namespaces & Provider Split <a id="13"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** Scaling beyond hundreds of workers will otherwise bottleneck on single-directory namespaces. Deterministic sharding keeps walk depth bounded and aligns provider routing with manifest entries.
 
@@ -1212,7 +1263,8 @@ Deliverables:
 ```
 ---
 
-## Milestone 15 — Client Concurrency & Session Pooling
+## Milestone 15 — Client Concurrency & Session Pooling <a id="15"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** Server-side pipelining is useless unless the CLI and automation harness can take advantage of it safely. Manifest-driven client policy keeps retries and pooling deterministic across deployments.
 
@@ -1277,7 +1329,8 @@ Deliverables:
 ```
 ---
 
-## Milestone 16 — Observability via Files (No New Protocols)
+## Milestone 16 — Observability via Files (No New Protocols) <a id="16"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** Operators need structured observability without adding new protocols inside the VM. Manifest-defined `/proc` endpoints ensure metrics stay aligned with runtime behaviour.
 
@@ -1342,7 +1395,8 @@ Deliverables:
 ```
 ---
 
-## Milestone 17 — Content-Addressed Updates (CAS) — 9P-first
+## Milestone 17 — Content-Addressed Updates (CAS) — 9P-first <a id="17"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** Upcoming edge deployments need resumable, verifiable updates without bloating the VM with new protocols. Manifest-governed CAS ensures integrity rules and storage budgets remain enforceable.
 
@@ -1415,7 +1469,8 @@ Deliverables:
 ```
 ---
 
-## Milestone 18 — Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern)
+## Milestone 18 — Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern) <a id="18"></a> 
+[Milestones](#Milestones)
 
 **Why now (context):** Remaining edge use cases (Edge §§1–4,8,9; Science §§13–14) depend on deterministic adapters for industrial buses and constrained links. Implementing them as sidecars preserves the lean `no_std` core while meeting operational demands.
 
@@ -1482,7 +1537,8 @@ Deliverables:
   - CLI transcript stored; manifest hash updated in docs.
 ```
 ---
-## Milestone 19 — `cohsh-core` Extraction (Shared Grammar & Transport)
+## Milestone 19 — `cohsh-core` Extraction (Shared Grammar & Transport) <a id="19"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** UI and automation consumers need a shared grammar without duplicating console logic. Extracting a core library keeps ACK/ERR stability while enabling multiple frontends.
 
@@ -1541,7 +1597,8 @@ Deliverables:
 
 ---
 
-## Milestone 20a — `cohsh` as 9P Client Library
+## Milestone 20a — `cohsh` as 9P Client Library <a id="20a"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** Automation and UI need a library-level 9P client that reuses grammar without console coupling. A first-class client library keeps ordering/idempotency intact.
 
@@ -1599,7 +1656,8 @@ Deliverables:
 
 ---
 
-## Milestone 20b — NineDoor UI Providers
+## Milestone 20b — NineDoor UI Providers <a id="20b"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** UI surfaces need read-only summaries without adding protocols. Providers must reuse existing `/proc` mechanics and stay bounded.
 
@@ -1656,7 +1714,8 @@ Deliverables:
 
 ---
 
-## Milestone 20c — SwarmUI Desktop (Tauri, Pure 9P/TCP)
+## Milestone 20c — SwarmUI Desktop (Tauri, Pure 9P/TCP) <a id="20c"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** Desktop operators need a UI that *reflects the namespace* and reuses the existing 9P grammar without introducing new transports or control semantics. SwarmUI must prove strict parity with CLI behavior and respect ticket-scoped authority.
 
@@ -1720,7 +1779,8 @@ Deliverables:
 - Updated docs/INTERFACES.md with SwarmUI consumption guidance and non-goals.
 ```
 ---
-## Milestone 20d — SwarmUI Live Hive Rendering (PixiJS, GPU-First)
+## Milestone 20d — SwarmUI Live Hive Rendering (PixiJS, GPU-First) <a id="20d"></a> 
+[Milestones](#Milestones)
 
 **Why now (SwarmUI):**  
 Milestone 20d proves SwarmUI can act as a strict, ticket-scoped presentation layer over the 9P namespace with byte-stable CLI parity. The remaining risk is visual overload or architectural drift (SVG/D3 DOM graphs, UI-invented state, per-event rendering). This extension locks in a **single, elegant, GPU-first “Live Hive” renderer** that is visually compelling while remaining protocol-faithful, deterministic, and bounded.
@@ -1910,7 +1970,8 @@ Deliverables:
 ```
 ---
 
-## Milestone 20e — CLI/UI Convergence Tests
+## Milestone 20e — CLI/UI Convergence Tests <a id="20e"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** After UI/CLI/library convergence, we need hard regression proof across all frontends with deterministic timing windows.
 
@@ -1969,7 +2030,8 @@ Deliverables:
 
 ---
 
-## Milestone 20f — UI Security Hardening (Tickets & Quotas)
+## Milestone 20f — UI Security Hardening (Tickets & Quotas) <a id="20f"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** With UI parity established, enforce least privilege and quotas to protect interactive sessions.
 
@@ -2027,7 +2089,8 @@ Deliverables:
 
 ---
 
-## Milestone 20g — Deterministic Snapshot & Replay (UI Testing)
+## Milestone 20g — Deterministic Snapshot & Replay (UI Testing) <a id="20g"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** To stabilize UI regressions without live targets, we need deterministic trace capture and replay consistent with CLI/console semantics.
 
@@ -2087,7 +2150,8 @@ Deliverables:
 
 Next, Alpha Release 2 targets a plug-and-play operator experience immediately after Milestone 20.x. Milestones 21-24 define the Alpha track; the AWS AMI work follows as Milestone 25.
 
-## Milestone 21 — Alpha: Host Bridges (coh mount, coh gpu, coh telemetry pull)
+## Milestone 21 — Alpha: Host Bridges (coh mount, coh gpu, coh telemetry pull) <a id="21"></a> 
+[Milestones](#Milestones)
 
 **Why now (adoption):** After Milestone 20.x, we need plug-and-play host UX that integrates with existing CUDA/MIG workflows without new protocols or VM expansion.
 
@@ -2168,7 +2232,8 @@ Deliverables:
 
 ---
 
-## Milestone 22 — Alpha: Runtime Convenience (coh run) + GPU Job Breadcrumbs
+## Milestone 22 — Alpha: Runtime Convenience (coh run) + GPU Job Breadcrumbs  <a id="22"></a> 
+[Milestones](#Milestones)
 
 **Why now (adoption):** Operators need a two-minute "lease -> run -> observe -> release" loop without introducing a runtime orchestrator.
 
@@ -2244,7 +2309,8 @@ Deliverables:
 
 ---
 
-## Milestone 23 — Alpha: PEFT/LoRA Lifecycle Glue (coh peft)
+## Milestone 23 — Alpha: PEFT/LoRA Lifecycle Glue (coh peft) <a id="23"></a> 
+[Milestones](#Milestones)
 
 **Why now (adoption):** PEFT users need a file-native loop to export jobs, import adapters, and activate or rollback safely without a new control plane.
 
@@ -2322,7 +2388,8 @@ Deliverables:
 
 ---
 
-## Milestone 24 — Alpha: Python Client + Examples (cohesix) + Doctor + Release Cut
+## Milestone 24 — Alpha: Python Client + Examples (cohesix) + Doctor + Release Cut <a id="24"></a> 
+[Milestones](#Milestones)
 
 **Why now (adoption):** A thin, non-authoritative Python layer and a setup doctor reduce friction for CUDA, PEFT, and edge users without altering the control plane.
 
@@ -2405,7 +2472,8 @@ Next, Alpha release 3 targets bare metal UEFI and AWS native boot via AMI.
 
 --
 
-## Milestone 25 — UEFI Bare-Metal Boot & Device Identity
+## Milestone 25 — UEFI Bare-Metal Boot & Device Identity <a id="25"></a> 
+[Milestones](#Milestones)
 
 **Why now (context):**  
 To meet hardware deployment goals (Edge §3 retail hubs, Edge §8 defense ISR, Security §12 segmentation), Cohesix must boot on physical aarch64 UEFI hardware with attested manifests while preserving the lean `no_std` footprint and the upstream seL4 boot model. This milestone transitions from the QEMU reference profile to physical UEFI deployment, with VM behavior expected to mirror the hardware target unless explicitly profile-gated.
@@ -2528,7 +2596,8 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 **Deliverables:**
 - Attestation evidence documented in `docs/SECURITY.md` and `docs/HARDWARE_BRINGUP.md`.
 
-## Milestone 26 — Edge Local Status (UEFI Host Tool)
+## Milestone 26 — Edge Local Status (UEFI Host Tool)  <a id="26"></a> 
+[Milestones](#Milestones)
 
 **Why now (compiler):** Field techs need offline status on edge devices using the same 9P grammar. Tool must respect UEFI profile and attestation outputs.
 
@@ -2556,7 +2625,7 @@ Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection 
 
 **Task Breakdown**
 ```
-Title/ID: m20e-status-tool
+Title/ID: m26-status-tool
 Goal: Build coh-status for offline/local status reads over 9P/TCP.
 Inputs: apps/coh-status/, UEFI manifest outputs, attestation nodes.
 Changes:
@@ -2605,7 +2674,8 @@ Deliverables:
   - Header updates across Rust and Markdown files; NOTICE.txt added.
 ```
 
-## Milestone 27 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)
+## Milestone 27 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)  <a id="27"></a> 
+[Milestones](#Milestones)
 
 **Why now (platform):**  
 Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is a single signed EFI binary.
