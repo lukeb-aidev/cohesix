@@ -1,6 +1,5 @@
-# NETWORK_CONFIG.md
 
-## Secure Network Topology for Cohesix  
+# Secure Network Topology for Cohesix  
 **AWS Queen + Individually Roaming Jetson Edge Workers**
 
 ---
