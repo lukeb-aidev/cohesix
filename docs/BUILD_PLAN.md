@@ -47,20 +47,22 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 
 ## Milestones <a id="Milestones"></a>
 | Milestone | Description |
+|----------|-------------|
 | [0](#0) | Repository Skeleton & Toolchain |
 | [1](#1) | Boot Banner, Timer, & First IPC |
 | [2](#2) | NineDoor Minimal 9P |
 | [3](#3) | Queen/Worker MVP with Roles |
 | [4](#4) | Bind & Mount Namespaces |
-| [5](#5) | Hardening & Test Automation (ongoing)  |
-| [6](#6) |  |
-| [7](#7) |  |
-| [8](#8) |  |
+| [5](#5) | Hardening & Test Automation (ongoing) |
+| [6](#6) | |
+| [7](#7) | |
+| [8](#8) | |
 
 ---
 
 ## Milestone 0 — Repository Skeleton & Toolchain <a id="0"></a> 
 [Milestones](#Milestones)
+
 **Status:** Complete — repo/workspace scaffolding, build scripts, and size guard are in place; keep regenerated artefacts in sync with toolchain outputs.
 **Deliverables**
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
@@ -96,6 +98,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 
 ## Milestone 2 — NineDoor Minimal 9P <a id="2"></a> 
 [Milestones](#Milestones)
+
 **Status:** Complete — Secure9P codec, fid/session handling, and the synthetic namespace are active; follow-up limited to ongoing fuzz coverage.
 **Deliverables**
 - Secure9P codec + fid/session table implementing `version`, `attach`, `walk`, `open`, `read`, `write`, `clunk`.
@@ -117,6 +120,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 
 ## Milestone 3 — Queen/Worker MVP with Roles <a id="3"></a> 
 [Milestones](#Milestones)
+
 **Status:** Complete — Queen/worker roles, budgets, and `/queen/ctl` JSON handling are live; keep tests aligned with current ticket and namespace semantics.
 **Deliverables**
 - Role-aware access policy implementing `Queen` and `WorkerHeartbeat` roles.
@@ -137,6 +141,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 
 ## Milestone 4 — Bind & Mount Namespaces <a id="24"></a> 
 [Milestones](#Milestones)
+
 **Status:** Complete — Per-session mount tables are implemented; future changes must preserve established bind/mount semantics from `SECURE9P.md`.
 **Deliverables**
 - Per-session mount table with `bind(from, to)` and `mount(service, at)` operations scoped to a single path.
@@ -151,6 +156,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 
 ## Milestone 5 — Hardening & Test Automation (ongoing) <a id="5"></a> 
 [Milestones](#Milestones)
+
 **Status:** Complete — Unit/fuzz/integration coverage exists; maintain regression packs as features evolve.
 **Deliverables**
 - Unit tests for codec, fid lifecycle, and access policy negative paths.
