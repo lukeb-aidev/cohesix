@@ -19,13 +19,6 @@ preparing and executing tasks.
 
 Cohesix is a hive-style orchestrator: one Queen coordinating many workers via a shared Secure9P namespace and commanded through `cohsh`.
 
-**Current Status Snapshot (through Milestone 17)**
-- Milestones 0–17 are implemented: the cooperative event pump, PL011 root console, TCP console listener, Secure9P namespace, HAL-backed device mapping, manifest-driven `coh-rtc` compiler, cache-safe DMA plumbing, in-session `coh> test` with preinstalled `.coh` scripts, Secure9P pipelining/batching, telemetry rings + cursor retention, host-sidecar `/host` gating, PolicyFS/AuditFS/ReplayFS, sharded worker namespaces with per-shard fid tables, manifest-derived `cohsh` client policy files (session pooling, retry scheduling, heartbeat cadence) with hash enforcement, `/proc` observability nodes via compiler snippets, and CAS-backed updates/models (NineDoor provider + cas-tool) with resume/signing/delta + model-bind regressions are live and reflected in the architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
-- Dual consoles run concurrently; the TCP listener is non-blocking and mirrors serial semantics while keeping PL011 always-on for recovery. The `coh> test` command exercises real server-hosted regression scripts for quick/full verification.
-- NineDoor attach/namespace semantics follow `SECURE9P.md` and role mounts from `ROLES_AND_SCHEDULING.md`; worker-heart and worker-gpu are scoped to their documented namespaces, with GPU hardware remaining host-side via `gpu-bridge-host`.
-- Next release target is an Alpha after Milestone 20.x; Milestones 21-24 define the plug-and-play host-bridge track (coh mount/gpu/run/peft/telemetry/doctor/python).
-- Remaining milestones focus on status surfaces, UEFI parity, and the plug-and-play host-bridge track described below.
-
 ## seL4 Reference Manual Alignment (v13.0.0)
 
 We treat the seL4 Reference Manual v13.0.0 (`seL4/seL4-manual-latest.pdf`) as the authoritative description of kernel semantics. This plan
@@ -47,8 +40,8 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 
 ## Milestones ##
 <a id="Milestones"></a>
-| Milestone | Description |
-|----------|-------------|
+| Milestone | Description | Status |
+|----------|-------------|------|
 | [0](#0) | Repository Skeleton & Toolchain |
 | [1](#1) | Boot Banner, Timer, & First IPC |
 | [2](#2) | NineDoor Minimal 9P |
