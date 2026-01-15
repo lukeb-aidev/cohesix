@@ -54,10 +54,10 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [2](#2) | NineDoor Minimal 9P |
 | [3](#3) | Queen/Worker MVP with Roles |
 | [4](#4) | Bind & Mount Namespaces |
-| [5](#5) | Hardening & Test Automation (ongoing) |
-| [6](#6) | |
-| [7](#7) | |
-| [8](#8) | |
+| [5](#5) | Hardening & Test Automation (ongoing)  |
+| [6](#6) | GPU Worker Integration |
+| [6a](#6a) | GPU Model Lifecycle & Telemetry Semantics (LoRA-ready) |
+| [7a](#7a) | Root-Task Event Pump & Authenticated Kernel Entry |
 
 ---
 
@@ -80,6 +80,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 
 ## Milestone 1 — Boot Banner, Timer, & First IPC <a id="1"></a> 
 [Milestones](#Milestones)
+
 **Status:** Complete — boot banner, timer tick, and initial IPC appear in current boot logs; retain existing log ordering.
 **Deliverables**
 - Root task prints a banner and configures a periodic timer tick.
@@ -170,7 +171,9 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - `cargo test` passes in CI.
 - Fuzz harness runs N iterations (configurable) without panic.
 
-## Milestone 6 — GPU Worker Integration
+## Milestone 6 — GPU Worker Integration <a id="6"></a> 
+[Milestones](#Milestones)
+
 **Status:** Complete (host-side scaffolding in place; VM-side worker stubs remain minimal until host bridge integration lands).
 **Deliverables**
 - Define `WorkerGpu` role and extend `/queen/ctl` schema with GPU lease requests.
@@ -190,7 +193,9 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 
 > **Future Note:** A host-side WASM GUI is expected as a hive dashboard layered on the `cohsh` protocol; it does not alter kernel/userspace boundaries or introduce new in-VM services.
 
-## Milestone 6a — GPU Model Lifecycle & Telemetry Semantics (LoRA-ready)
+## Milestone 6a — GPU Model Lifecycle & Telemetry Semantics (LoRA-ready) <a id="6a"></a> 
+[Milestones](#Milestones)
+
 **Status:** Complete — host bridge and documentation now define model lifecycle surfaces, schema-tagged telemetry, and export guarantees without altering in-VM capabilities.
 
 **Why this exists (context)**  
@@ -346,7 +351,9 @@ After Milestone 6a:
 Milestone 6 stays about **capability**.  
 Milestone 6a is about **intent**.
 
-## Milestone 7a — Root-Task Event Pump & Authenticated Kernel Entry
+## Milestone 7a — Root-Task Event Pump & Authenticated Kernel Entry  <a id="7a"></a> 
+[Milestones](#Milestones)
+
 **Status:** Complete — Event pump replaces the spin loop; authenticated console flow and serial integration are live. Preserve PL011 logging and audit ordering during follow-up changes.
 **Deliverables**
 - **Deprecate legacy spin loop**
