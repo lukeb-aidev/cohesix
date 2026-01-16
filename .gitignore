@@ -2,6 +2,7 @@
 /target
 /.target_check
 /out/cohesix
+/out/cohesix-gated
 /out/regression-logs
 !/out/manifests/
 !/out/manifests/**
