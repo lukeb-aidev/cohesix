@@ -22,7 +22,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::str;
 
-// Keep in sync with apps/root-task/src/console/mod.rs MAX_ECHO_LEN.
+// Keep in sync with crates/cohsh-core/src/command.rs MAX_ECHO_LEN.
 const MAX_ECHO_PAYLOAD_BYTES: usize = 128;
 const B64_PREFIX: &str = "b64:";
 const MAX_B64_CHUNK_LEN: usize =

@@ -31,9 +31,9 @@ pub use op::BootstrapOp;
 use core::cmp::min;
 use core::fmt::{self, Write as FmtWrite};
 
-use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::Role;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
+use cohsh_core::{ConsoleVerb, RoleParseMode};
 
 #[cfg(feature = "kernel")]
 use crate::bootstrap::log as boot_log;
@@ -1218,7 +1218,7 @@ where
         let command_clone = command.clone();
         #[cfg(feature = "kernel")]
         let mut forwarded = false;
-        let verb_label = Self::command_label(&command);
+        let verb_label = command.verb().ack_label();
         let audit_net = matches!(self.last_input_source, ConsoleInputSource::Net);
         let conn_id = if audit_net {
             self.active_tcp_conn_id()
@@ -1244,36 +1244,36 @@ where
                 self.audit.info("console: help");
                 self.metrics.accepted_commands += 1;
                 self.emit_help();
-                self.emit_ack_ok("HELP", None);
+                self.emit_ack_ok(verb_label, None);
             }
             Command::BootInfo => {
                 if self.emit_bootinfo() {
                     self.metrics.accepted_commands += 1;
-                    self.emit_ack_ok("BOOTINFO", None);
+                    self.emit_ack_ok(verb_label, None);
                 } else {
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
-                    self.emit_ack_err("BOOTINFO", Some("reason=unavailable"));
+                    self.emit_ack_err(verb_label, Some("reason=unavailable"));
                 }
             }
             Command::Caps => {
                 if self.emit_caps() {
                     self.metrics.accepted_commands += 1;
-                    self.emit_ack_ok("CAPS", None);
+                    self.emit_ack_ok(verb_label, None);
                 } else {
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
-                    self.emit_ack_err("CAPS", Some("reason=unavailable"));
+                    self.emit_ack_err(verb_label, Some("reason=unavailable"));
                 }
             }
             Command::Mem => {
                 if self.emit_mem() {
                     self.metrics.accepted_commands += 1;
-                    self.emit_ack_ok("MEM", None);
+                    self.emit_ack_ok(verb_label, None);
                 } else {
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
-                    self.emit_ack_err("MEM", Some("reason=unavailable"));
+                    self.emit_ack_err(verb_label, Some("reason=unavailable"));
                 }
             }
             Command::CacheLog { count } => {
@@ -1282,27 +1282,27 @@ where
                 {
                     self.emit_cache_log(count);
                     self.metrics.accepted_commands += 1;
-                    self.emit_ack_ok("CACHELOG", None);
+                    self.emit_ack_ok(verb_label, None);
                 }
                 #[cfg(not(all(feature = "kernel", target_os = "none")))]
                 {
                     let _ = count;
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
-                    self.emit_ack_err("CACHELOG", Some("reason=unsupported"));
+                    self.emit_ack_err(verb_label, Some("reason=unsupported"));
                 }
             }
             Command::Ping => {
                 self.audit.info("console: ping");
                 self.metrics.accepted_commands += 1;
                 self.emit_console_line("PONG");
-                self.emit_ack_ok("PING", Some("reply=pong"));
+                self.emit_ack_ok(verb_label, Some("reply=pong"));
             }
             Command::Test => {
                 self.audit.info("console: test rejected (host-only)");
                 self.metrics.denied_commands += 1;
                 cmd_status = "err";
-                self.emit_ack_err("TEST", Some("reason=host-only"));
+                self.emit_ack_err(verb_label, Some("reason=host-only"));
             }
             Command::NetTest => {
                 #[cfg(feature = "net-console")]
@@ -1311,23 +1311,23 @@ where
                         if net.start_self_test(self.now_ms) {
                             self.metrics.accepted_commands += 1;
                             self.emit_console_line("[net-selftest] triggered");
-                            self.emit_ack_ok("NETTEST", None);
+                            self.emit_ack_ok(verb_label, None);
                         } else {
                             self.metrics.denied_commands += 1;
                             cmd_status = "err";
-                            self.emit_ack_err("NETTEST", Some("reason=unsupported"));
+                            self.emit_ack_err(verb_label, Some("reason=unsupported"));
                         }
                     } else {
                         self.metrics.denied_commands += 1;
                         cmd_status = "err";
-                        self.emit_ack_err("NETTEST", Some("reason=net-disabled"));
+                        self.emit_ack_err(verb_label, Some("reason=net-disabled"));
                     }
                 }
                 #[cfg(not(feature = "net-console"))]
                 {
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
-                    self.emit_ack_err("NETTEST", Some("reason=net-disabled"));
+                    self.emit_ack_err(verb_label, Some("reason=net-disabled"));
                 }
             }
             Command::NetStats => {
@@ -1375,24 +1375,24 @@ where
                         self.emit_console_line(line_four.as_str());
                         self.emit_console_line(status_line.as_str());
                         self.metrics.accepted_commands += 1;
-                        self.emit_ack_ok("NETSTATS", None);
+                        self.emit_ack_ok(verb_label, None);
                     } else {
                         self.metrics.denied_commands += 1;
                         cmd_status = "err";
-                        self.emit_ack_err("NETSTATS", Some("reason=net-disabled"));
+                        self.emit_ack_err(verb_label, Some("reason=net-disabled"));
                     }
                 }
                 #[cfg(not(feature = "net-console"))]
                 {
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
-                    self.emit_ack_err("NETSTATS", Some("reason=net-disabled"));
+                    self.emit_ack_err(verb_label, Some("reason=net-disabled"));
                 }
             }
             Command::Quit => {
                 self.audit.info("console: quit");
                 self.metrics.accepted_commands += 1;
-                self.emit_ack_ok("QUIT", None);
+                self.emit_ack_ok(verb_label, None);
                 #[cfg(feature = "net-console")]
                 if self.last_input_source == ConsoleInputSource::Net {
                     if let Some(net) = self.net.as_mut() {
@@ -1417,7 +1417,7 @@ where
                     self.audit.info(message.as_str());
                     self.metrics.accepted_commands += 1;
                     let detail = format_message(format_args!("path={}", path.as_str()));
-                    self.emit_ack_ok("TAIL", Some(detail.as_str()));
+                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
                     self.stream_end_pending = true;
                     self.tail_active = true;
                     let sid = self.session_id.unwrap_or(0);
@@ -1428,7 +1428,7 @@ where
                     }
                 } else {
                     cmd_status = "err";
-                    self.emit_auth_failure("TAIL");
+                    self.emit_auth_failure(verb_label);
                 }
             }
             Command::Cat { path } => {
@@ -1596,7 +1596,7 @@ where
                                         path.as_str(),
                                         summary.as_str()
                                     ));
-                                    self.emit_ack_ok("CAT", Some(detail.as_str()));
+                                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
                                     for line in lines {
                                         self.emit_console_line(line.as_str());
                                     }
@@ -1615,22 +1615,22 @@ where
                                         path.as_str(),
                                         err_msg.as_str(),
                                     );
-                                    self.emit_ack_err("CAT", Some(detail.as_str()));
+                                    self.emit_ack_err(verb_label, Some(detail.as_str()));
                                 }
                             }
                         } else {
                             cmd_status = "err";
-                            self.emit_ack_err("CAT", Some("reason=ninedoor-unavailable"));
+                            self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
                         }
                     }
                     #[cfg(not(feature = "kernel"))]
                     {
                         cmd_status = "err";
-                        self.emit_ack_err("CAT", Some("reason=ninedoor-unavailable"));
+                        self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
                     }
                 } else {
                     cmd_status = "err";
-                    self.emit_auth_failure("CAT");
+                    self.emit_auth_failure(verb_label);
                 }
             }
             Command::Ls { path } => {
@@ -1648,7 +1648,7 @@ where
                                         path.as_str(),
                                         entries.len()
                                     ));
-                                    self.emit_ack_ok("LS", Some(detail.as_str()));
+                                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
                                     for entry in entries {
                                         self.emit_console_line(entry.as_str());
                                     }
@@ -1667,29 +1667,29 @@ where
                                         path.as_str(),
                                         err_msg.as_str(),
                                     );
-                                    self.emit_ack_err("LS", Some(detail.as_str()));
+                                    self.emit_ack_err(verb_label, Some(detail.as_str()));
                                 }
                             }
                         } else {
                             cmd_status = "err";
-                            self.emit_ack_err("LS", Some("reason=ninedoor-unavailable"));
+                            self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
                         }
                     }
                     #[cfg(not(feature = "kernel"))]
                     {
                         cmd_status = "err";
-                        self.emit_ack_err("LS", Some("reason=ninedoor-unavailable"));
+                        self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
                     }
                 } else {
                     cmd_status = "err";
-                    self.emit_auth_failure("LS");
+                    self.emit_auth_failure(verb_label);
                 }
             }
             Command::Log => {
                 if self.ensure_authenticated(SessionRole::Queen) {
                     self.audit.info("console: log stream start");
                     self.metrics.accepted_commands += 1;
-                    self.emit_ack_ok("LOG", None);
+                    self.emit_ack_ok(verb_label, None);
                     self.stream_end_pending = true;
                     self.tail_active = true;
                     let sid = self.session_id.unwrap_or(0);
@@ -1700,7 +1700,7 @@ where
                     }
                 } else {
                     cmd_status = "err";
-                    self.emit_auth_failure("LOG");
+                    self.emit_auth_failure(verb_label);
                 }
             }
             Command::Echo { path, payload } => {
@@ -1712,7 +1712,7 @@ where
                         self.metrics.denied_commands += 1;
                         self.audit.denied("echo denied");
                         cmd_status = "err";
-                        self.emit_ack_err("ECHO", Some("reason=denied"));
+                        self.emit_ack_err(verb_label, Some("reason=denied"));
                     } else {
                         let message = format_message(format_args!(
                             "console: echo {} bytes={}",
@@ -1731,7 +1731,7 @@ where
                                         path_str,
                                         payload.len()
                                     ));
-                                    self.emit_ack_ok("ECHO", Some(detail.as_str()));
+                                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
                                 }
                                 Err(err) => {
                                     let detail = format_message(format_args!(
@@ -1746,23 +1746,23 @@ where
                                         path.as_str(),
                                         err_msg.as_str(),
                                     );
-                                    self.emit_ack_err("ECHO", Some(detail.as_str()));
+                                    self.emit_ack_err(verb_label, Some(detail.as_str()));
                                 }
                             }
                         } else {
                             cmd_status = "err";
-                            self.emit_ack_err("ECHO", Some("reason=ninedoor-unavailable"));
+                            self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
                         }
                     }
                     #[cfg(not(feature = "kernel"))]
                     {
                         cmd_status = "err";
-                        self.emit_ack_err("ECHO", Some("reason=ninedoor-unavailable"));
+                        self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
                     }
                     }
                 } else {
                     cmd_status = "err";
-                    self.emit_auth_failure("ECHO");
+                    self.emit_auth_failure(verb_label);
                 }
             }
             Command::Spawn(payload) => {
@@ -1772,14 +1772,14 @@ where
                     self.audit.info(message.as_str());
                     self.metrics.accepted_commands += 1;
                     let detail = format_message(format_args!("payload={}", payload.as_str()));
-                    self.emit_ack_ok("SPAWN", Some(detail.as_str()));
+                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
                     #[cfg(feature = "kernel")]
                     {
                         forwarded = true;
                     }
                 } else {
                     cmd_status = "err";
-                    self.emit_auth_failure("SPAWN");
+                    self.emit_auth_failure(verb_label);
                 }
             }
             Command::Kill(ident) => {
@@ -1788,14 +1788,14 @@ where
                     self.audit.info(message.as_str());
                     self.metrics.accepted_commands += 1;
                     let detail = format_message(format_args!("id={}", ident.as_str()));
-                    self.emit_ack_ok("KILL", Some(detail.as_str()));
+                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
                     #[cfg(feature = "kernel")]
                     {
                         forwarded = true;
                     }
                 } else {
                     cmd_status = "err";
-                    self.emit_auth_failure("KILL");
+                    self.emit_auth_failure(verb_label);
                 }
             }
         }
@@ -1887,7 +1887,7 @@ where
             vtable_sentinel();
         }
 
-        let verb = CommandVerb::from(command);
+        let verb = command.verb();
 
         let Some(bridge_ref) = self.ninedoor.as_mut() else {
             #[cfg(debug_assertions)]
@@ -1957,18 +1957,18 @@ where
             CommandDispatchError::NineDoorUnavailable { verb } => {
                 self.audit.denied("ninedoor unavailable");
                 self.emit_console_line("ERR: NineDoor unavailable");
-                self.emit_ack_err(verb.as_label(), Some("reason=ninedoor-unavailable"));
+                self.emit_ack_err(verb.ack_label(), Some("reason=ninedoor-unavailable"));
             }
             CommandDispatchError::UnsupportedForNineDoor { verb } => {
                 self.audit.denied("ninedoor unsupported command");
                 self.emit_console_line("ERR unsupported for NineDoor");
-                self.emit_ack_err(verb.as_label(), Some("reason=unsupported"));
+                self.emit_ack_err(verb.ack_label(), Some("reason=unsupported"));
             }
             CommandDispatchError::Bridge { verb, source } => {
                 let detail = format_message(format_args!("reason=ninedoor-error error={source}"));
                 let audit_line = format_message(format_args!("ninedoor bridge error: {source}"));
                 self.audit.denied(audit_line.as_str());
-                self.emit_ack_err(verb.as_label(), Some(detail.as_str()));
+                self.emit_ack_err(verb.ack_label(), Some(detail.as_str()));
             }
         }
     }
@@ -1982,29 +1982,6 @@ where
                 self.audit_tail_stop(sid, "eof");
                 self.tail_active = false;
             }
-        }
-    }
-
-    fn command_label(command: &Command) -> &'static str {
-        match command {
-            Command::Help => "HELP",
-            Command::BootInfo => "BOOTINFO",
-            Command::Caps => "CAPS",
-            Command::Mem => "MEM",
-            Command::Ping => "PING",
-            Command::Test => "TEST",
-            Command::Attach { .. } => "ATTACH",
-            Command::Tail { .. } => "TAIL",
-            Command::Cat { .. } => "CAT",
-            Command::Ls { .. } => "LS",
-            Command::Echo { .. } => "ECHO",
-            Command::Log => "LOG",
-            Command::Quit => "QUIT",
-            Command::NetTest => "NETTEST",
-            Command::NetStats => "NETSTATS",
-            Command::Spawn(_) => "SPAWN",
-            Command::Kill(_) => "KILL",
-            Command::CacheLog { .. } => "CACHELOG",
         }
     }
 
@@ -2200,14 +2177,19 @@ where
             self.audit.denied(message.as_str());
             self.metrics.denied_commands += 1;
             let detail = format_message(format_args!("reason=throttled delay_ms={delay}"));
-            self.emit_ack_err("ATTACH", Some(detail.as_str()));
+            self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some(detail.as_str()));
             return false;
         }
 
-        let Some(requested_role) = parse_role(&role) else {
+        let Some(requested_role) =
+            cohsh_core::parse_role(role.as_str(), RoleParseMode::AllowWorkerAlias)
+        else {
             self.audit.denied("attach: invalid role");
             self.metrics.denied_commands += 1;
-            self.emit_ack_err("ATTACH", Some("reason=invalid-role"));
+            self.emit_ack_err(
+                ConsoleVerb::Attach.ack_label(),
+                Some("reason=invalid-role"),
+            );
             return false;
         };
 
@@ -2229,7 +2211,7 @@ where
                 }
                 other => format_message(format_args!("reason={}", other)),
             };
-            self.emit_ack_err("ATTACH", Some(detail.as_str()));
+            self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some(detail.as_str()));
             return false;
         }
 
@@ -2243,9 +2225,9 @@ where
             self.throttle.register_success();
             let message = format_message(format_args!("attach accepted role={:?}", requested_role));
             self.audit.info(message.as_str());
-            let role_label = proto_role_label(proto_role_from_ticket(requested_role));
+            let role_label = cohsh_core::role_label(requested_role);
             let detail = format_message(format_args!("role={role_label}"));
-            self.emit_ack_ok("ATTACH", Some(detail.as_str()));
+            self.emit_ack_ok(ConsoleVerb::Attach.ack_label(), Some(detail.as_str()));
             log::info!(
                 target: "net-console",
                 "[net-console] auth: success; attaching session role={role_label}"
@@ -2265,7 +2247,7 @@ where
                 requested_role,
                 ticket_str.is_some()
             );
-            self.emit_ack_err("ATTACH", Some("reason=denied"));
+            self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some("reason=denied"));
         }
         false
     }
@@ -2300,126 +2282,12 @@ where
     }
 }
 
-fn parse_role(raw: &str) -> Option<Role> {
-    match raw {
-        value if value.eq_ignore_ascii_case(proto_role_label(ProtoRole::Queen)) => {
-            Some(Role::Queen)
-        }
-        "worker" => Some(Role::WorkerHeartbeat),
-        value if value.eq_ignore_ascii_case(proto_role_label(ProtoRole::Worker)) => {
-            Some(Role::WorkerHeartbeat)
-        }
-        value if value.eq_ignore_ascii_case(proto_role_label(ProtoRole::GpuWorker)) => {
-            Some(Role::WorkerGpu)
-        }
-        value if value.eq_ignore_ascii_case(proto_role_label(ProtoRole::BusWorker)) => {
-            Some(Role::WorkerBus)
-        }
-        value if value.eq_ignore_ascii_case(proto_role_label(ProtoRole::LoraWorker)) => {
-            Some(Role::WorkerLora)
-        }
-        _ => None,
-    }
-}
-
-fn proto_role_from_ticket(role: Role) -> ProtoRole {
-    match role {
-        Role::Queen => ProtoRole::Queen,
-        Role::WorkerHeartbeat => ProtoRole::Worker,
-        Role::WorkerGpu => ProtoRole::GpuWorker,
-        Role::WorkerBus => ProtoRole::BusWorker,
-        Role::WorkerLora => ProtoRole::LoraWorker,
-    }
-}
-
-#[cfg(feature = "kernel")]
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum CommandVerb {
-    Attach,
-    Tail,
-    Cat,
-    Ls,
-    Echo,
-    Log,
-    CacheLog,
-    Quit,
-    Spawn,
-    Kill,
-    Help,
-    BootInfo,
-    Caps,
-    Mem,
-    Ping,
-    Test,
-    NetTest,
-    NetStats,
-}
-
-#[cfg(feature = "kernel")]
-impl CommandVerb {
-    fn as_label(self) -> &'static str {
-        match self {
-            Self::Attach => "ATTACH",
-            Self::Tail => "TAIL",
-            Self::Cat => "CAT",
-            Self::Ls => "LS",
-            Self::Echo => "ECHO",
-            Self::Log => "LOG",
-            Self::CacheLog => "CACHELOG",
-            Self::Quit => "QUIT",
-            Self::Spawn => "SPAWN",
-            Self::Kill => "KILL",
-            Self::Help => "HELP",
-            Self::BootInfo => "BOOTINFO",
-            Self::Caps => "CAPS",
-            Self::Mem => "MEM",
-            Self::Ping => "PING",
-            Self::Test => "TEST",
-            Self::NetTest => "NETTEST",
-            Self::NetStats => "NETSTATS",
-        }
-    }
-}
-
-#[cfg(feature = "kernel")]
-impl From<&Command> for CommandVerb {
-    fn from(command: &Command) -> Self {
-        match command {
-            Command::Attach { .. } => Self::Attach,
-            Command::Tail { .. } => Self::Tail,
-            Command::Cat { .. } => Self::Cat,
-            Command::Ls { .. } => Self::Ls,
-            Command::Echo { .. } => Self::Echo,
-            Command::Log => Self::Log,
-            Command::CacheLog { .. } => Self::CacheLog,
-            Command::Quit => Self::Quit,
-            Command::Spawn(_) => Self::Spawn,
-            Command::Kill(_) => Self::Kill,
-            Command::Help => Self::Help,
-            Command::BootInfo => Self::BootInfo,
-            Command::Caps => Self::Caps,
-            Command::Mem => Self::Mem,
-            Command::Ping => Self::Ping,
-            Command::Test => Self::Test,
-            Command::NetTest => Self::NetTest,
-            Command::NetStats => Self::NetStats,
-        }
-    }
-}
-
 #[cfg(feature = "kernel")]
 #[derive(Debug)]
 pub(crate) enum CommandDispatchError {
-    NineDoorUnavailable {
-        verb: CommandVerb,
-    },
-    UnsupportedForNineDoor {
-        verb: CommandVerb,
-    },
-    Bridge {
-        verb: CommandVerb,
-        source: NineDoorBridgeError,
-    },
+    NineDoorUnavailable { verb: ConsoleVerb },
+    UnsupportedForNineDoor { verb: ConsoleVerb },
+    Bridge { verb: ConsoleVerb, source: NineDoorBridgeError },
 }
 
 #[cfg(not(feature = "kernel"))]
@@ -3157,7 +3025,7 @@ mod tests {
 
         match result {
             Err(CommandDispatchError::NineDoorUnavailable { verb }) => {
-                assert_eq!(verb.as_label(), "LOG");
+                assert_eq!(verb.ack_label(), "LOG");
             }
             other => panic!("unexpected result: {other:?}"),
         }

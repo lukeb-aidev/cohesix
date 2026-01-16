@@ -86,6 +86,7 @@ fn script_feature_inventory_is_stable() {
     }
     let expected = BTreeSet::from([
         "CMD:attach".to_owned(),
+        "CMD:bind".to_owned(),
         "CMD:cat".to_owned(),
         "CMD:detach".to_owned(),
         "CMD:echo".to_owned(),
@@ -124,11 +125,13 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "boot_v0.coh:8cead851b286c62cde383098a2da802c78d7d324d792ed43bad880ed8cbea3e4"
             .to_owned(),
-        "cas_roundtrip.coh:aed77e239f8731255c2713647a5d849c57138651d4e4e6c9f3dd17dffcab15c9"
+        "cas_roundtrip.coh:0d87ab1841f0d027ef4778b232b73e85519124532cea88475676bbb7fbf6641b"
             .to_owned(),
         "host_absent.coh:2fa2a736b03716ca96080dc2be5d2bf59bb077f41c8ece646c86dcf3cd56901f"
             .to_owned(),
         "host_sidecar_mock.coh:9a3d2a016f7946f48a1a3dc10684d688d14ac774a1556d69ebe05b9cdaa2d633"
+            .to_owned(),
+        "model_cas_bind.coh:56bb0c3908dc28d2f04381977d9dcaf9e98a179cca8904c88e9ee89a031c7311"
             .to_owned(),
         "observe_watch.coh:cb6ae987049eb345c4dd7501fc657bfe6bd99c6f235593a5aab82e85ce3d4a9e"
             .to_owned(),
@@ -139,6 +142,8 @@ fn script_token_stream_is_stable() {
         "session_pool.coh:30d87dcbb8a12e6bff565614f4b6d380780ef44d548ca8e8d24eead5bce46ee4"
             .to_owned(),
         "shard_1k.coh:571083fdfab4147b6a6f10350bf4fe8810d8e7242f8ea6a7a8c68dd2b2d796bf"
+            .to_owned(),
+        "sidecar_integration.coh:273e41136ca07324aa2b71524a1697ec48403385cc278b6beab5f2fe16f1471d"
             .to_owned(),
         "tcp_basic.coh:619970b6ff14332bbef80f704c117b4471653bb75f7a6187b27d93fbc16415a7"
             .to_owned(),

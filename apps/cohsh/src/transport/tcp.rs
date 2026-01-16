@@ -13,8 +13,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
-use cohesix_ticket::{Role, TicketToken};
+use cohesix_ticket::Role;
+use cohsh_core::{normalize_ticket, role_label, TicketPolicy};
 use log::{debug, error, info, trace, warn};
 use secure9p_codec::SessionId;
 
@@ -940,7 +940,7 @@ impl TcpTransport {
         self.telemetry.log_disconnect(err.as_ref());
         let attach_line = format!(
             "ATTACH {} {}",
-            Self::role_label(cache.role),
+            role_label(cache.role),
             cache.ticket.as_deref().unwrap_or("")
         );
         let mut attempt = 0usize;
@@ -998,58 +998,30 @@ impl TcpTransport {
     }
 
     fn normalise_ticket(role: Role, ticket: Option<&str>) -> Result<Option<String>> {
-        let trimmed = ticket.and_then(|value| {
-            let candidate = value.trim();
-            if candidate.is_empty() {
-                None
-            } else {
-                Some(candidate.to_owned())
-            }
-        });
-        match role {
-            Role::Queen => {
-                if let Some(value) = trimmed.as_deref() {
-                    TicketToken::decode_unverified(value)
-                        .map_err(|err| anyhow!("ticket is not a valid claims token: {err}"))?;
-                }
-                Ok(trimmed)
-            }
-            Role::WorkerHeartbeat | Role::WorkerGpu | Role::WorkerBus | Role::WorkerLora => {
-                let value = trimmed.ok_or_else(|| {
-                    anyhow!("role {:?} requires a non-empty ticket payload", role)
-                })?;
-                let claims = TicketToken::decode_unverified(&value)
-                    .map_err(|err| anyhow!("ticket is not a valid claims token: {err}"))?;
-                if claims.role != role {
-                    return Err(anyhow!(
-                        "ticket role {:?} does not match requested role {:?}",
-                        claims.role,
-                        role
-                    ));
-                }
-                if claims.subject.as_deref().is_none() {
-                    return Err(anyhow!(
-                        "ticket for role {:?} must include a subject identity",
-                        role
-                    ));
-                }
-                Ok(Some(value))
-            }
-        }
+        let ticket_check = normalize_ticket(role, ticket, TicketPolicy::tcp())
+            .map_err(|err| Self::map_ticket_error(role, err))?;
+        Ok(ticket_check.ticket.map(str::to_owned))
     }
 
-    fn proto_role_from_ticket(role: Role) -> ProtoRole {
-        match role {
-            Role::Queen => ProtoRole::Queen,
-            Role::WorkerHeartbeat => ProtoRole::Worker,
-            Role::WorkerGpu => ProtoRole::GpuWorker,
-            Role::WorkerBus => ProtoRole::BusWorker,
-            Role::WorkerLora => ProtoRole::LoraWorker,
+    fn map_ticket_error(role: Role, err: cohsh_core::TicketError) -> anyhow::Error {
+        match err {
+            cohsh_core::TicketError::Missing => {
+                anyhow!("role {:?} requires a non-empty ticket payload", role)
+            }
+            cohsh_core::TicketError::TooLong(max) => {
+                anyhow!("ticket payload exceeds {max} bytes")
+            }
+            cohsh_core::TicketError::Invalid(inner) => {
+                anyhow!("ticket is not a valid claims token: {inner}")
+            }
+            cohsh_core::TicketError::RoleMismatch { expected, found } => anyhow!(
+                "ticket role {:?} does not match requested role {:?}",
+                found, expected
+            ),
+            cohsh_core::TicketError::MissingSubject => {
+                anyhow!("ticket for role {:?} must include a subject identity", role)
+            }
         }
-    }
-
-    fn role_label(role: Role) -> &'static str {
-        proto_role_label(Self::proto_role_from_ticket(role))
     }
 
     fn build_echo_command(path: &str, payload: &[u8]) -> Result<String> {
@@ -1173,7 +1145,7 @@ impl Transport for TcpTransport {
         );
         let attach_line = format!(
             "ATTACH {} {}",
-            Self::role_label(role),
+            role_label(role),
             ticket_payload.as_deref().unwrap_or("")
         );
         let mut attempts = 0usize;

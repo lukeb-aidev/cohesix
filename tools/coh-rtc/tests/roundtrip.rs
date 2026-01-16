@@ -34,6 +34,8 @@ fn manifest_codegen_is_deterministic() {
     let cohsh_policy = temp_dir.path().join("cohsh_policy.toml");
     let cohsh_policy_rust = temp_dir.path().join("cohsh_policy.rs");
     let cohsh_policy_doc = temp_dir.path().join("cohsh_policy.md");
+    let cohsh_grammar_doc = temp_dir.path().join("cohsh_grammar.md");
+    let cohsh_ticket_policy_doc = temp_dir.path().join("cohsh_ticket_policy.md");
 
     let options = CompileOptions {
         manifest_path,
@@ -50,6 +52,8 @@ fn manifest_codegen_is_deterministic() {
         cohsh_policy_out: cohsh_policy.clone(),
         cohsh_policy_rust_out: cohsh_policy_rust.clone(),
         cohsh_policy_doc_out: cohsh_policy_doc.clone(),
+        cohsh_grammar_doc_out: cohsh_grammar_doc.clone(),
+        cohsh_ticket_policy_doc_out: cohsh_ticket_policy_doc.clone(),
     };
 
     let first = compile(&options).expect("compile manifest");
@@ -69,6 +73,9 @@ fn manifest_codegen_is_deterministic() {
     let baseline_policy = fs::read(&cohsh_policy).expect("cohsh policy");
     let baseline_policy_rust = fs::read(&cohsh_policy_rust).expect("cohsh policy rust");
     let baseline_policy_doc = fs::read(&cohsh_policy_doc).expect("cohsh policy doc");
+    let baseline_grammar_doc = fs::read(&cohsh_grammar_doc).expect("cohsh grammar doc");
+    let baseline_ticket_doc =
+        fs::read(&cohsh_ticket_policy_doc).expect("cohsh ticket policy doc");
 
     let second = compile(&options).expect("compile manifest again");
     let second_snapshot = snapshot_dir(&out_dir);
@@ -87,6 +94,9 @@ fn manifest_codegen_is_deterministic() {
     let second_policy = fs::read(&cohsh_policy).expect("cohsh policy");
     let second_policy_rust = fs::read(&cohsh_policy_rust).expect("cohsh policy rust");
     let second_policy_doc = fs::read(&cohsh_policy_doc).expect("cohsh policy doc");
+    let second_grammar_doc = fs::read(&cohsh_grammar_doc).expect("cohsh grammar doc");
+    let second_ticket_doc =
+        fs::read(&cohsh_ticket_policy_doc).expect("cohsh ticket policy doc");
 
     assert_eq!(baseline, second_snapshot);
     assert_eq!(baseline_manifest, second_manifest);
@@ -101,6 +111,8 @@ fn manifest_codegen_is_deterministic() {
     assert_eq!(baseline_policy, second_policy);
     assert_eq!(baseline_policy_rust, second_policy_rust);
     assert_eq!(baseline_policy_doc, second_policy_doc);
+    assert_eq!(baseline_grammar_doc, second_grammar_doc);
+    assert_eq!(baseline_ticket_doc, second_ticket_doc);
     assert_eq!(first.summary(), second.summary());
 }
 
@@ -162,6 +174,8 @@ secret = "bootstrap"
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
         cohsh_policy_doc_out: temp_dir.path().join("cohsh_policy.md"),
+        cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
+        cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
     };
 
     let err = compile(&options).expect_err("manifest should be rejected");
@@ -246,6 +260,8 @@ secret = "bootstrap"
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
         cohsh_policy_doc_out: temp_dir.path().join("cohsh_policy.md"),
+        cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
+        cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
     };
 
     let err = compile(&options).expect_err("manifest should be rejected");
@@ -315,6 +331,8 @@ secret = "bootstrap"
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
         cohsh_policy_doc_out: temp_dir.path().join("cohsh_policy.md"),
+        cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
+        cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
     };
 
     let err = compile(&options).expect_err("manifest should be rejected");
@@ -391,6 +409,8 @@ secret = "bootstrap"
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
         cohsh_policy_doc_out: temp_dir.path().join("cohsh_policy.md"),
+        cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
+        cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
     };
 
     let err = compile(&options).expect_err("manifest should be rejected");
@@ -462,6 +482,8 @@ secret = "bootstrap"
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
         cohsh_policy_doc_out: temp_dir.path().join("cohsh_policy.md"),
+        cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
+        cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
     };
 
     let err = compile(&options).expect_err("manifest should be rejected");

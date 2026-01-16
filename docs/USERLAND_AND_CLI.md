@@ -86,6 +86,43 @@ Manifest-derived policy defaults are emitted by `coh-rtc` into `out/cohsh_policy
 
 _Generated from `configs/root_task.toml` (sha256: `fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861`)._
 
+Shared console grammar and ticket policy are emitted by `coh-rtc` from `cohsh-core` so CLI and console stay aligned.
+
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Generated cohsh grammar snippet consumed by docs/USERLAND_AND_CLI.md. -->
+
+### cohsh console grammar (generated)
+- `help`
+- `bi`
+- `caps`
+- `mem`
+- `ping`
+- `test`
+- `nettest`
+- `netstats`
+- `log`
+- `cachelog [n]`
+- `quit`
+- `tail <path>`
+- `cat <path>`
+- `ls <path>`
+- `echo <path> <payload>`
+- `attach <role> [ticket]`
+- `spawn <payload>`
+- `kill <worker>`
+
+_Generated from cohsh-core verb specs (18 verbs)._
+
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Generated cohsh ticket policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
+
+### cohsh ticket policy (generated)
+- `ticket.max_len`: `192`
+- `queen` tickets are optional; TCP validates claims when present, NineDoor passes through.
+- `worker-*` tickets are required; role must match and subject identity is mandatory.
+
+_Generated from cohsh-core ticket policy._
+
 ### Interactive shell surface
 Startup banner and prompt:
 ```

@@ -5,8 +5,8 @@
 
 //! Console acknowledgement formatting utilities shared across the root task.
 
-use console_ack_wire::render_ack as render_wire_ack;
-pub use console_ack_wire::{AckLine, AckStatus};
+use cohsh_core::wire::render_ack as render_wire_ack;
+pub use cohsh_core::wire::{AckLine, AckStatus};
 use heapless::String;
 
 /// Errors encountered while formatting acknowledgement lines.

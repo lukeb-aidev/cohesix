@@ -16,7 +16,7 @@ use crate::console::proto::{render_ack, AckStatus, LineFormatError};
 use crate::observe::{IngestMetrics, IngestSnapshot};
 use crate::serial::DEFAULT_LINE_CAPACITY;
 use cohesix_proto::{REASON_EXPECTED_TOKEN, REASON_INVALID_LENGTH, REASON_INVALID_TOKEN};
-use console_ack_wire::AckLine;
+use cohsh_core::wire::AckLine;
 
 // Transport-level guard to prevent unauthenticated TCP sessions from issuing console verbs.
 // Application-layer ticket and role checks are enforced by the console/event pump.

@@ -47,8 +47,9 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
-use cohesix_ticket::{Role, TicketToken};
-use console_ack_wire::{render_ack, AckLine, AckStatus};
+use cohesix_ticket::Role;
+use cohsh_core::{normalize_ticket, role_label, ConsoleVerb, RoleParseMode, TicketPolicy};
+use cohsh_core::wire::{render_ack, AckLine, AckStatus};
 use log::info;
 use nine_door::{InProcessConnection, NineDoor};
 use secure9p_codec::{OpenMode, SessionId, MAX_MSIZE};
@@ -513,16 +514,6 @@ impl NineDoorTransport {
         }
     }
 
-    fn role_label(role: Role) -> &'static str {
-        match role {
-            Role::Queen => proto_role_label(ProtoRole::Queen),
-            Role::WorkerHeartbeat => proto_role_label(ProtoRole::Worker),
-            Role::WorkerGpu => proto_role_label(ProtoRole::GpuWorker),
-            Role::WorkerBus => proto_role_label(ProtoRole::BusWorker),
-            Role::WorkerLora => proto_role_label(ProtoRole::LoraWorker),
-        }
-    }
-
     fn read_lines(&mut self, path: &str) -> Result<Vec<String>> {
         let components = parse_path(path)?;
         let fid = self.allocate_fid();
@@ -568,52 +559,53 @@ impl Transport for NineDoorTransport {
         connection
             .version(MAX_MSIZE)
             .context("version negotiation failed")?;
-        let mut subject = None;
-        let mut ticket_payload = ticket.map(str::trim).filter(|value| !value.is_empty());
-        match role {
-            Role::Queen => {}
-            Role::WorkerHeartbeat
-            | Role::WorkerGpu
-            | Role::WorkerBus
-            | Role::WorkerLora => {
-                let provided = ticket_payload.ok_or_else(|| {
-                    anyhow!(
-                        "role {:?} requires a capability ticket containing an identity",
-                        role
-                    )
-                })?;
-                let claims = TicketToken::decode_unverified(provided)
-                    .map_err(|err| anyhow!("invalid ticket: {err}"))?;
-                if claims.role != role {
-                    return Err(anyhow!(
-                        "ticket role {:?} does not match requested role {:?}",
-                        claims.role,
-                        role
-                    ));
+        let ticket_check = normalize_ticket(role, ticket, TicketPolicy::ninedoor()).map_err(|err| {
+            match err {
+                cohsh_core::TicketError::Missing => anyhow!(
+                    "role {:?} requires a capability ticket containing an identity",
+                    role
+                ),
+                cohsh_core::TicketError::TooLong(max) => {
+                    anyhow!("ticket payload exceeds {max} bytes")
                 }
-                let subject_value = claims.subject.as_deref().ok_or_else(|| {
-                    anyhow!(
-                        "ticket is missing required subject identity for role {:?}",
-                        role
-                    )
-                })?;
-                subject = Some(subject_value.to_string());
-                ticket_payload = Some(provided);
+                cohsh_core::TicketError::Invalid(inner) => anyhow!("invalid ticket: {inner}"),
+                cohsh_core::TicketError::RoleMismatch { expected, found } => anyhow!(
+                    "ticket role {:?} does not match requested role {:?}",
+                    found, expected
+                ),
+                cohsh_core::TicketError::MissingSubject => anyhow!(
+                    "ticket is missing required subject identity for role {:?}",
+                    role
+                ),
             }
-        };
+        })?;
+        let mut subject = None;
+        if let Some(claims) = ticket_check.claims.as_ref() {
+            if let Some(value) = claims.subject.as_deref() {
+                subject = Some(value.to_string());
+            }
+        }
         let attach_result =
-            connection.attach_with_identity(ROOT_FID, role, subject.as_deref(), ticket_payload);
+            connection.attach_with_identity(ROOT_FID, role, subject.as_deref(), ticket_check.ticket);
         let attach_result = attach_result.context("attach request failed");
         if let Err(err) = attach_result {
             let detail = format!("reason={err}");
-            self.push_ack(AckStatus::Err, "ATTACH", Some(detail.as_str()));
+            self.push_ack(
+                AckStatus::Err,
+                ConsoleVerb::Attach.ack_label(),
+                Some(detail.as_str()),
+            );
             return Err(err);
         }
         self.next_fid = ROOT_FID + 1;
         let session = Session::new(connection.session_id(), role);
         self.connection = Some(connection);
-        let detail = format!("role={}", Self::role_label(role));
-        self.push_ack(AckStatus::Ok, "ATTACH", Some(detail.as_str()));
+        let detail = format!("role={}", role_label(role));
+        self.push_ack(
+            AckStatus::Ok,
+            ConsoleVerb::Attach.ack_label(),
+            Some(detail.as_str()),
+        );
         Ok(session)
     }
 
@@ -638,12 +630,20 @@ impl Transport for NineDoorTransport {
         match self.read_lines(path) {
             Ok(lines) => {
                 let detail = format!("path={path}");
-                self.push_ack(AckStatus::Ok, "TAIL", Some(detail.as_str()));
+                self.push_ack(
+                    AckStatus::Ok,
+                    ConsoleVerb::Tail.ack_label(),
+                    Some(detail.as_str()),
+                );
                 Ok(lines)
             }
             Err(err) => {
                 let detail = format!("path={path} reason={err}");
-                self.push_ack(AckStatus::Err, "TAIL", Some(detail.as_str()));
+                self.push_ack(
+                    AckStatus::Err,
+                    ConsoleVerb::Tail.ack_label(),
+                    Some(detail.as_str()),
+                );
                 Err(err)
             }
         }
@@ -653,12 +653,20 @@ impl Transport for NineDoorTransport {
         match self.read_lines(path) {
             Ok(lines) => {
                 let detail = format!("path={path}");
-                self.push_ack(AckStatus::Ok, "CAT", Some(detail.as_str()));
+                self.push_ack(
+                    AckStatus::Ok,
+                    ConsoleVerb::Cat.ack_label(),
+                    Some(detail.as_str()),
+                );
                 Ok(lines)
             }
             Err(err) => {
                 let detail = format!("path={path} reason={err}");
-                self.push_ack(AckStatus::Err, "CAT", Some(detail.as_str()));
+                self.push_ack(
+                    AckStatus::Err,
+                    ConsoleVerb::Cat.ack_label(),
+                    Some(detail.as_str()),
+                );
                 Err(err)
             }
         }
@@ -668,12 +676,20 @@ impl Transport for NineDoorTransport {
         match self.read_lines(path) {
             Ok(lines) => {
                 let detail = format!("path={path}");
-                self.push_ack(AckStatus::Ok, "LS", Some(detail.as_str()));
+                self.push_ack(
+                    AckStatus::Ok,
+                    ConsoleVerb::Ls.ack_label(),
+                    Some(detail.as_str()),
+                );
                 Ok(lines)
             }
             Err(err) => {
                 let detail = format!("path={path} reason={err}");
-                self.push_ack(AckStatus::Err, "LS", Some(detail.as_str()));
+                self.push_ack(
+                    AckStatus::Err,
+                    ConsoleVerb::Ls.ack_label(),
+                    Some(detail.as_str()),
+                );
                 Err(err)
             }
         }
@@ -1433,7 +1449,15 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 "already attached; run 'quit' to close the current session"
             ));
         }
-        let session = self.transport.attach(role, ticket)?;
+        let session = match self.transport.attach(role, ticket) {
+            Ok(session) => session,
+            Err(err) => {
+                for ack in self.transport.drain_acknowledgements() {
+                    self.write_ack_line(&ack)?;
+                }
+                return Err(err);
+            }
+        };
         for ack in self.transport.drain_acknowledgements() {
             self.write_ack_line(&ack)?;
         }
@@ -2707,18 +2731,15 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     return Err(anyhow!("help does not take any arguments"));
                 }
                 self.write_line("Cohesix command surface:")?;
-                self.write_line("  help                         - Show this help message")?;
-                self.write_line("  attach <role> [ticket]       - Attach to a NineDoor session")?;
+                let console_lines = cohsh_core::help::COHSH_CONSOLE_HELP_LINES;
+                self.write_line(console_lines[0])?;
+                self.write_line(console_lines[1])?;
                 self.write_line("  login <role> [ticket]        - Alias for attach")?;
                 self.write_line("  detach                       - Close the current session")?;
-                self.write_line("  tail <path>                  - Stream a file via NineDoor")?;
-                self.write_line("  log                          - Tail /log/queen.log")?;
-                self.write_line(
-                    "  ping                         - Report attachment status for health checks",
-                )?;
-                self.write_line(
-                    "  test [--mode <quick|full>] [--json] [--timeout <s>] [--no-mutate] - Run self-tests",
-                )?;
+                self.write_line(console_lines[2])?;
+                self.write_line(console_lines[3])?;
+                self.write_line(console_lines[4])?;
+                self.write_line(console_lines[5])?;
                 self.write_line(
                     "  pool bench <opts>            - Run pooled throughput benchmark",
                 )?;
@@ -2726,16 +2747,14 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line(
                     "  tcp-diag [port]              - Debug TCP connectivity without protocol traffic",
                 )?;
-                self.write_line("  ls <path>                    - Enumerate directory entries")?;
-                self.write_line("  cat <path>                   - Read file contents")?;
-                self.write_line(
-                    "  echo <text> > <path>         - Append to a file (adds newline)",
-                )?;
-                self.write_line("  spawn <role> [opts]          - Queue worker spawn command")?;
-                self.write_line("  kill <worker_id>             - Queue worker termination")?;
+                self.write_line(console_lines[6])?;
+                self.write_line(console_lines[7])?;
+                self.write_line(console_lines[8])?;
+                self.write_line(console_lines[9])?;
+                self.write_line(console_lines[10])?;
                 self.write_line("  bind <src> <dst>             - Bind namespace path")?;
                 self.write_line("  mount <service> <path>       - Mount service namespace")?;
-                self.write_line("  quit                         - Close the session and exit")?;
+                self.write_line(console_lines[11])?;
                 Ok(CommandStatus::Continue)
             }
             "tail" => {
@@ -3468,19 +3487,8 @@ fn parse_path(path: &str) -> Result<Vec<String>> {
 }
 
 fn parse_role(input: &str) -> Result<Role> {
-    if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::Queen)) {
-        Ok(Role::Queen)
-    } else if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::Worker)) {
-        Ok(Role::WorkerHeartbeat)
-    } else if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::GpuWorker)) {
-        Ok(Role::WorkerGpu)
-    } else if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::BusWorker)) {
-        Ok(Role::WorkerBus)
-    } else if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::LoraWorker)) {
-        Ok(Role::WorkerLora)
-    } else {
-        Err(anyhow!("unknown role '{input}'"))
-    }
+    cohsh_core::parse_role(input, RoleParseMode::Strict)
+        .ok_or_else(|| anyhow!("unknown role '{input}'"))
 }
 
 fn parse_attach_args<'a>(cmd: &str, args: &'a [&'a str]) -> Result<(Role, Option<&'a str>)> {

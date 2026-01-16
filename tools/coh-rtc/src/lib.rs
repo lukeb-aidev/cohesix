@@ -25,6 +25,8 @@ pub struct CompileOptions {
     pub cohsh_policy_out: PathBuf,
     pub cohsh_policy_rust_out: PathBuf,
     pub cohsh_policy_doc_out: PathBuf,
+    pub cohsh_grammar_doc_out: PathBuf,
+    pub cohsh_ticket_policy_doc_out: PathBuf,
 }
 
 pub fn compile(options: &CompileOptions) -> Result<codegen::GeneratedArtifacts> {
@@ -105,4 +107,16 @@ pub fn default_cohsh_policy_doc_path() -> PathBuf {
     Path::new("docs")
         .join("snippets")
         .join("cohsh_policy.md")
+}
+
+pub fn default_cohsh_grammar_doc_path() -> PathBuf {
+    Path::new("docs")
+        .join("snippets")
+        .join("cohsh_grammar.md")
+}
+
+pub fn default_cohsh_ticket_policy_doc_path() -> PathBuf {
+    Path::new("docs")
+        .join("snippets")
+        .join("cohsh_ticket_policy.md")
 }

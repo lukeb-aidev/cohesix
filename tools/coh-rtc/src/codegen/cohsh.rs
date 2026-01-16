@@ -6,6 +6,7 @@
 use crate::codegen::hash_bytes;
 use crate::ir::Manifest;
 use anyhow::{Context, Result};
+use cohsh_core::docs::{render_console_grammar_doc, render_ticket_policy_doc};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,6 +17,12 @@ pub struct CohshPolicyArtifacts {
     pub policy_hash: PathBuf,
     pub policy_rust: PathBuf,
     pub policy_doc: PathBuf,
+}
+
+#[derive(Debug)]
+pub struct CohshDocArtifacts {
+    pub grammar_doc: PathBuf,
+    pub ticket_policy_doc: PathBuf,
 }
 
 pub fn emit_cohsh_policy(
@@ -63,6 +70,28 @@ pub fn emit_cohsh_policy(
         policy_hash: policy_hash_path,
         policy_rust: policy_rust_out.to_path_buf(),
         policy_doc: policy_doc_out.to_path_buf(),
+    })
+}
+
+pub fn emit_cohsh_docs(
+    grammar_out: &Path,
+    ticket_policy_out: &Path,
+) -> Result<CohshDocArtifacts> {
+    let grammar_doc = render_console_grammar_doc();
+    fs::write(grammar_out, grammar_doc)
+        .with_context(|| format!("failed to write cohsh grammar doc {}", grammar_out.display()))?;
+
+    let ticket_policy_doc = render_ticket_policy_doc();
+    fs::write(ticket_policy_out, ticket_policy_doc).with_context(|| {
+        format!(
+            "failed to write cohsh ticket policy doc {}",
+            ticket_policy_out.display()
+        )
+    })?;
+
+    Ok(CohshDocArtifacts {
+        grammar_doc: grammar_out.to_path_buf(),
+        ticket_policy_doc: ticket_policy_out.to_path_buf(),
     })
 }
 

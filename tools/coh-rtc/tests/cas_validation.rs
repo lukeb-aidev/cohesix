@@ -70,6 +70,8 @@ fn compile_error(manifest: &str) -> String {
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
         cohsh_policy_doc_out: temp_dir.path().join("cohsh_policy.md"),
+        cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
+        cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
     };
     let err = compile(&options).expect_err("manifest should be rejected");
     err.to_string()

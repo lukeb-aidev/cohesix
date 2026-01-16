@@ -17,6 +17,7 @@ members = [
     "apps/host-sidecar-bridge",
     "crates/cohesix-cas",
     "crates/cohesix-ticket",
+    "crates/cohsh-core",
     "crates/secure9p-codec",
     "crates/secure9p-core",
     "crates/secure9p-transport",
@@ -48,6 +49,7 @@ license = "MIT"
 
 [workspace.dependencies]
 cohesix-ticket = { path = "crates/cohesix-ticket" }
+cohsh-core = { path = "crates/cohsh-core" }
 secure9p-codec = { path = "crates/secure9p-codec" }
 secure9p-core = { path = "crates/secure9p-core" }
 secure9p-transport = { path = "crates/secure9p-transport" }

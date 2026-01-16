@@ -17,9 +17,9 @@ tcp = []
 anyhow = { workspace = true }
 clap = { workspace = true }
 cohesix-ticket = { workspace = true }
+cohsh-core = { workspace = true }
 cohesix-net-constants = { workspace = true }
 cohesix-proto = { workspace = true }
-console-ack-wire = { workspace = true }
 secure9p-codec = { workspace = true }
 nine-door = { path = "../nine-door" }
 log = "0.4"

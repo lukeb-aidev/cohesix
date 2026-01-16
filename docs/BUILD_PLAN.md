@@ -69,7 +69,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [16](#16) | Observability via Files (No New Protocols) | Complete |
 | [17](#17) | Content-Addressed Updates (CAS) — 9P-first | Complete |
 | [18](#18) | Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern) | Complete |
-| [19](#19) | cohsh-core Extraction (Shared Grammar & Transport) | Pending |
+| [19](#19) | cohsh-core Extraction (Shared Grammar & Transport) | Complete |
 | [20a](#20a) | cohsh as 9P Client Library | Pending |
 | [20b](#20b) | NineDoor UI Providers | Pending |
 | [20c](#20c) | SwarmUI Desktop (Tauri, Pure 9P/TCP) | Pending |
@@ -1551,6 +1551,8 @@ Publish a reusable `cohsh-core` crate with shared verb grammar and transports th
 - New crate `crates/cohsh-core/` encapsulating verb grammar (`attach`, `tail`, `spawn`, `kill`, `quit`), ACK/ERR/END model, login throttling, and ticket checks. Supports `no_std + alloc` with optional smoltcp TCP transport feature.
 - Golden transcript fixtures covering serial, TCP, and in-process transports to prove byte-identical ACK/ERR sequences.
 - CLI harness using `cohsh-core` to ensure parity with existing `cohsh` commands; docs reference the shared grammar.
+
+**Status:** Complete — cohsh-core grammar/ACK models are shared by console and CLI, transcript parity is enforced across transports, and coh-rtc emits guarded grammar/policy snippets.
 
 **Commands**
 - `cargo test -p cohsh-core`

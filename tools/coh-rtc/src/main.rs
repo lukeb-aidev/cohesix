@@ -8,7 +8,8 @@ use clap::Parser;
 use coh_rtc::{
     compile, default_cas_interfaces_snippet_path, default_cas_manifest_template_path,
     default_cas_security_snippet_path, default_cbor_snippet_path, default_cli_script_path,
-    default_cohsh_policy_doc_path, default_cohsh_policy_path, default_cohsh_policy_rust_path,
+    default_cohsh_grammar_doc_path, default_cohsh_policy_doc_path, default_cohsh_policy_path,
+    default_cohsh_policy_rust_path, default_cohsh_ticket_policy_doc_path,
     default_doc_snippet_path, default_observability_interfaces_snippet_path,
     default_observability_security_snippet_path, CompileOptions,
 };
@@ -58,6 +59,12 @@ struct Args {
     /// Output path for the cohsh policy doc snippet.
     #[arg(long, default_value_os_t = default_cohsh_policy_doc_path())]
     cohsh_policy_doc: PathBuf,
+    /// Output path for the cohsh grammar doc snippet.
+    #[arg(long, default_value_os_t = default_cohsh_grammar_doc_path())]
+    cohsh_grammar_doc: PathBuf,
+    /// Output path for the cohsh ticket policy doc snippet.
+    #[arg(long, default_value_os_t = default_cohsh_ticket_policy_doc_path())]
+    cohsh_ticket_policy_doc: PathBuf,
 }
 
 fn main() -> Result<()> {
@@ -77,6 +84,8 @@ fn main() -> Result<()> {
         cohsh_policy_out: args.cohsh_policy,
         cohsh_policy_rust_out: args.cohsh_policy_rust,
         cohsh_policy_doc_out: args.cohsh_policy_doc,
+        cohsh_grammar_doc_out: args.cohsh_grammar_doc,
+        cohsh_ticket_policy_doc_out: args.cohsh_ticket_policy_doc,
     };
     let output = compile(&options)?;
     println!("coh-rtc: wrote {}", output.summary());

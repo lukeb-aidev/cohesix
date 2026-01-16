@@ -219,7 +219,9 @@ run_batch() {
         --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
         --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md" \
         --cas-interfaces-snippet "$PROJECT_ROOT/docs/snippets/cas_interfaces.md" \
-        --cas-security-snippet "$PROJECT_ROOT/docs/snippets/cas_security.md"
+        --cas-security-snippet "$PROJECT_ROOT/docs/snippets/cas_security.md" \
+        --cohsh-grammar-doc "$PROJECT_ROOT/docs/snippets/cohsh_grammar.md" \
+        --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md"
 
     COH_RTC_MANIFEST="$manifest" SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
         --sel4-build "$HOME/seL4/build" \
@@ -313,6 +315,8 @@ cargo run -p coh-rtc -- \
     --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
     --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md" \
     --cas-interfaces-snippet "$PROJECT_ROOT/docs/snippets/cas_interfaces.md" \
-    --cas-security-snippet "$PROJECT_ROOT/docs/snippets/cas_security.md"
+    --cas-security-snippet "$PROJECT_ROOT/docs/snippets/cas_security.md" \
+    --cohsh-grammar-doc "$PROJECT_ROOT/docs/snippets/cohsh_grammar.md" \
+    --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md"
 
 echo "regression batch complete: $(( ${#BASE_SCRIPTS[@]} + ${#GATED_SCRIPTS[@]} )) scripts passed"

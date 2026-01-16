@@ -17,6 +17,9 @@
   TOOLCHAIN_MAC_ARM64.md
   USERLAND_AND_CLI.md
   snippets/
+    cohsh_grammar.md
+    cohsh_policy.md
+    cohsh_ticket_policy.md
     root_task_manifest.md
 /configs/
   root_task.toml
