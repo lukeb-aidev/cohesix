@@ -622,7 +622,7 @@ main() {
     describe_file "Built root-task" "$SEL4_ARTIFACT_DIR/root-task"
 
     COMPONENT_BINS=(root-task nine-door worker-heart worker-gpu)
-    HOST_ONLY_BINS=(cohsh gpu-bridge-host host-sidecar-bridge)
+    HOST_ONLY_BINS=(cohsh gpu-bridge-host host-sidecar-bridge cas-tool)
 
     mkdir -p "$OUT_DIR"
     OUT_DIR_ABS="$(cd "$OUT_DIR" && pwd)"
