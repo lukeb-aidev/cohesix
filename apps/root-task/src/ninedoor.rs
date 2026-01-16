@@ -2730,19 +2730,22 @@ impl SidecarLoraState {
         data: &[u8],
         max_bytes: usize,
     ) -> Result<Option<u32>, NineDoorBridgeError> {
-        let Some((adapter, file)) = self.adapter_for_path_mut(path) else {
+        let Some((index, file)) = self.adapter_index_for_path(path) else {
             return Ok(None);
         };
         match file {
             SidecarLoraFile::Ctl => {
-                let _ = append_sidecar_bounded(&mut adapter.ctl, data, max_bytes)?;
+                let count = {
+                    let adapter = &mut self.adapters[index];
+                    append_sidecar_bounded(&mut adapter.ctl, data, max_bytes)?
+                };
                 let now_ms = self.next_clock();
+                let adapter = &mut self.adapters[index];
                 match adapter.guard.attempt(now_ms, data.len() as u32) {
-                    Ok(()) => Ok(Some(append_sidecar_bounded(
-                        &mut adapter.telemetry,
-                        data,
-                        max_bytes,
-                    )?)),
+                    Ok(()) => {
+                        append_sidecar_bounded(&mut adapter.telemetry, data, max_bytes)?;
+                        Ok(Some(count))
+                    }
                     Err(reason) => {
                         adapter.tamper.push(TamperEntry {
                             timestamp_ms: now_ms,
@@ -2761,6 +2764,13 @@ impl SidecarLoraState {
         self.adapters
             .iter()
             .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
+    }
+
+    fn adapter_index_for_path(&self, path: &[&str]) -> Option<(usize, SidecarLoraFile)> {
+        self.adapters
+            .iter()
+            .enumerate()
+            .find_map(|(idx, adapter)| adapter.match_file(path).map(|file| (idx, file)))
     }
 
     fn adapter_for_path_mut(
@@ -3723,6 +3733,46 @@ fn split_path_segments(path: &str) -> HeaplessVec<&str, MAX_POLICY_PATH_COMPONEN
     segments
 }
 
+fn sidecar_mount_root(mount_at: &str, adapter_mount: &str) -> Vec<String> {
+    let segments = split_path_segments(mount_at);
+    let mut root = Vec::new();
+    for segment in segments.iter() {
+        root.push((*segment).to_owned());
+    }
+    if !adapter_mount.is_empty() {
+        root.push(adapter_mount.to_owned());
+    }
+    root
+}
+
+fn segments_start_with(path: &[&str], prefix: &[String]) -> bool {
+    if path.len() < prefix.len() {
+        return false;
+    }
+    path.iter()
+        .zip(prefix.iter())
+        .all(|(segment, prefix_segment)| *segment == prefix_segment.as_str())
+}
+
+fn segments_match_prefix(path: &[&str], prefix: &[String]) -> bool {
+    if path.len() >= prefix.len() {
+        return segments_start_with(path, prefix);
+    }
+    prefix
+        .iter()
+        .zip(path.iter())
+        .all(|(prefix_segment, segment)| prefix_segment.as_str() == *segment)
+}
+
+fn segments_equal(path: &[&str], other: &[String]) -> bool {
+    if path.len() != other.len() {
+        return false;
+    }
+    path.iter()
+        .zip(other.iter())
+        .all(|(segment, other_segment)| *segment == other_segment.as_str())
+}
+
 fn legacy_worker_alias_enabled(sharding: generated::ShardingConfig) -> bool {
     sharding.enabled && sharding.legacy_worker_alias
 }
@@ -4157,6 +4207,71 @@ fn trim_payload(data: &[u8]) -> &[u8] {
         }
     }
     &data[..end]
+}
+
+fn append_sidecar_bounded(
+    buffer: &mut Vec<u8>,
+    data: &[u8],
+    max_bytes: usize,
+) -> Result<u32, NineDoorBridgeError> {
+    if buffer.len().saturating_add(data.len()) > max_bytes {
+        return Err(NineDoorBridgeError::BufferFull);
+    }
+    buffer.extend_from_slice(data);
+    Ok(data.len() as u32)
+}
+
+fn push_bounded_line(out: &mut String, line: &str, max_bytes: usize) -> bool {
+    if out.len().saturating_add(line.len()) > max_bytes {
+        return false;
+    }
+    out.push_str(line);
+    true
+}
+
+fn render_spool_status(spool: &OfflineSpool, max_bytes: usize) -> Vec<u8> {
+    let config = spool.config();
+    let entries: Vec<SpoolFrame> = spool.snapshot();
+    let mut out = String::new();
+    let summary = format!(
+        "entries={} bytes={} max_entries={} max_bytes={}\n",
+        entries.len(),
+        spool.buffered_bytes(),
+        config.max_entries,
+        config.max_bytes
+    );
+    let _ = push_bounded_line(&mut out, &summary, max_bytes);
+    for frame in entries {
+        let payload = String::from_utf8_lossy(&frame.payload);
+        let line = format!(
+            "seq={} bytes={} payload={}\n",
+            frame.seq,
+            frame.payload.len(),
+            payload
+        );
+        if !push_bounded_line(&mut out, &line, max_bytes) {
+            break;
+        }
+    }
+    out.into_bytes()
+}
+
+fn render_tamper_log(entries: Vec<TamperEntry>, max_bytes: usize) -> Vec<u8> {
+    let mut out = String::new();
+    for entry in entries {
+        let reason = match entry.reason {
+            TamperReason::PayloadOversize => "payload-oversize",
+            TamperReason::DutyCycleExceeded => "duty-cycle",
+        };
+        let line = format!(
+            "tamper ts_ms={} reason={} bytes={}\n",
+            entry.timestamp_ms, reason, entry.payload_bytes
+        );
+        if !push_bounded_line(&mut out, &line, max_bytes) {
+            break;
+        }
+    }
+    out.into_bytes()
 }
 
 fn append_log_bytes(

@@ -68,7 +68,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [15](#15) | Client Concurrency & Session Pooling | Complete |
 | [16](#16) | Observability via Files (No New Protocols) | Complete |
 | [17](#17) | Content-Addressed Updates (CAS) — 9P-first | Complete |
-| [18](#18) | Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern) | Pending |
+| [18](#18) | Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern) | Complete |
 | [19](#19) | cohsh-core Extraction (Shared Grammar & Transport) | Pending |
 | [20a](#20a) | cohsh as 9P Client Library | Pending |
 | [20b](#20b) | NineDoor UI Providers | Pending |
@@ -1483,7 +1483,9 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 - Scheduling integration for LoRa duty-cycle management and tamper logging, aligned with `docs/USE_CASES.md` defense and science requirements.
 - Compiler IR v1.5 fields `sidecars.modbus`, `sidecars.dnp3`, `sidecars.lora` describing mounts, baud/link settings, and capability scopes; validation ensures resources stay within event-pump budget.
 - Documentation updates (`docs/ARCHITECTURE.md §12`, `docs/INTERFACES.md`) illustrating the sidecar pattern, security boundaries, and testing strategy.
-- TODO: Implement scripts/cohsh/sidecar_integration.coh and add it to regression pack DoD.
+- `scripts/cohsh/sidecar_integration.coh` integrated into the regression pack DoD.
+
+**Status:** Complete — sidecar framework, worker templates, CLI regression coverage, and docs are aligned; Milestone 17 boundary remains `3e6faa33410af58ed8d1942ce58ab701a276b882`.
 
 **Use-case alignment**
 - Industrial IoT gateways (Edge §1) gain MODBUS/CAN integration without bloating the VM.

@@ -133,6 +133,61 @@ pub struct HostConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub enum SidecarLink {
+    Serial,
+    Tcp,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SpoolConfig {
+    pub max_entries: u16,
+    pub max_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SidecarBusAdapter {
+    pub id: &'static str,
+    pub mount: &'static str,
+    pub scope: &'static str,
+    pub link: SidecarLink,
+    pub baud: u32,
+    pub spool: SpoolConfig,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SidecarBusConfig {
+    pub enable: bool,
+    pub mount_at: &'static str,
+    pub adapters: &'static [SidecarBusAdapter],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SidecarLoraAdapter {
+    pub id: &'static str,
+    pub mount: &'static str,
+    pub scope: &'static str,
+    pub region: &'static str,
+    pub duty_cycle_percent: u8,
+    pub window_ms: u64,
+    pub max_payload_bytes: u32,
+    pub tamper_log_max_entries: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SidecarLoraConfig {
+    pub enable: bool,
+    pub mount_at: &'static str,
+    pub adapters: &'static [SidecarLoraAdapter],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SidecarConfig {
+    pub modbus: SidecarBusConfig,
+    pub dnp3: SidecarBusConfig,
+    pub lora: SidecarLoraConfig,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct PolicyRule {
     pub id: &'static str,
     pub target: &'static str,
@@ -164,8 +219,8 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.4";
-pub const MANIFEST_SHA256: &str = "99878893a38c8b0b632e10d1f9f39973eb1a9fea97bc4be58c963e4be946f196";
+pub const MANIFEST_SCHEMA: &str = "1.5";
+pub const MANIFEST_SHA256: &str = "8796b84b532bc33c84730634234ac478e1ddebb59608a4589f4a81bcf60df0d4";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
@@ -188,6 +243,7 @@ pub const PROC_INGEST_WATCH_MAX_ENTRIES: usize = bootstrap::PROC_INGEST_WATCH_MA
 pub const PROC_INGEST_WATCH_LINE_BYTES: usize = bootstrap::PROC_INGEST_WATCH_LINE_BYTES;
 pub const PROC_INGEST_LATENCY_SAMPLES: usize = bootstrap::PROC_INGEST_LATENCY_SAMPLES;
 pub const HOST_CONFIG: HostConfig = bootstrap::HOST_CONFIG;
+pub const SIDECAR_CONFIG: SidecarConfig = bootstrap::SIDECAR_CONFIG;
 pub const POLICY_CONFIG: PolicyConfig = bootstrap::POLICY_CONFIG;
 pub const POLICY_RULES_JSON: &str = bootstrap::POLICY_RULES_JSON;
 pub const AUDIT_CONFIG: AuditConfig = bootstrap::AUDIT_CONFIG;
@@ -235,6 +291,10 @@ pub const fn cas_config() -> CasConfig {
 
 pub const fn host_config() -> HostConfig {
     bootstrap::HOST_CONFIG
+}
+
+pub const fn sidecar_config() -> SidecarConfig {
+    bootstrap::SIDECAR_CONFIG
 }
 
 pub const fn policy_config() -> PolicyConfig {

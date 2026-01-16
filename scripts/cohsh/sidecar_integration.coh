@@ -1,0 +1,35 @@
+# Author: Lukas Bower
+# Purpose: Validate sidecar mount gating, spool replay, and scope enforcement.
+attach worker-bus cohesix-ticket-01030fe80300000000000010270000000000002c010000000000000b006d6f646275732d6d61696e000000000000000000000000.385f6684703f12fb9cfcd61d84ffec1997212ebb45b19d88d29e56fc2090ee0a
+EXPECT OK
+ls /bus
+EXPECT OK
+EXPECT SUBSTR entries=1
+ls /bus/dnp3-main
+EXPECT ERR
+EXPECT SUBSTR invalid path
+cat /bus/modbus-main/spool
+EXPECT OK
+EXPECT SUBSTR entries=0
+echo alpha > /bus/modbus-main/telemetry
+EXPECT OK
+echo beta > /bus/modbus-main/telemetry
+EXPECT OK
+cat /bus/modbus-main/spool
+EXPECT OK
+EXPECT SUBSTR entries=2
+echo replay > /bus/modbus-main/replay
+EXPECT OK
+cat /bus/modbus-main/replay
+EXPECT OK
+EXPECT SUBSTR entries=2
+cat /bus/modbus-main/spool
+EXPECT OK
+EXPECT SUBSTR entries=0
+echo denied > /lora/lora-main/ctl
+EXPECT ERR
+EXPECT SUBSTR EPERM
+cat /log/queen.log
+EXPECT OK
+EXPECT SUBSTR sidecar-deny kind=lora
+quit

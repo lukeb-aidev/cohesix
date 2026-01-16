@@ -11,7 +11,7 @@ use std::hash::{Hash, Hasher};
 use gpu_bridge_host::{GpuModelCatalog, TelemetrySchema};
 use sidecar_bus::{LinkState, OfflineSpool, SpoolConfig, SpoolError, SpoolFrame};
 use sha2::{Digest, Sha256};
-use secure9p_codec::{ErrorCode, Qid, QidType};
+use secure9p_codec::{ErrorCode, Qid, QidType, MAX_MSIZE};
 use trace_model::TraceLevel;
 use worker_lora::{
     DutyCycleConfig, DutyCycleDecision, DutyCycleGuard, TamperEntry, TamperLog, TamperReason,
@@ -1382,9 +1382,12 @@ impl Namespace {
     }
 
     fn bootstrap_sidecars(&mut self) -> Result<(), NineDoorError> {
-        self.sidecar_modbus.bootstrap(self)?;
-        self.sidecar_dnp3.bootstrap(self)?;
-        self.sidecar_lora.bootstrap(self)?;
+        let modbus = self.sidecar_modbus.clone();
+        let dnp3 = self.sidecar_dnp3.clone();
+        let lora = self.sidecar_lora.clone();
+        modbus.bootstrap(self)?;
+        dnp3.bootstrap(self)?;
+        lora.bootstrap(self)?;
         Ok(())
     }
 
@@ -1827,7 +1830,7 @@ struct SidecarBusAdapterState {
 
 impl SidecarBusAdapterState {
     fn match_file(&self, path: &[String]) -> Option<SidecarBusFile> {
-        let rel = path.strip_prefix(&self.mount_root)?;
+        let rel = path.strip_prefix(self.mount_root.as_slice())?;
         match rel {
             [leaf] if leaf == "ctl" => Some(SidecarBusFile::Ctl),
             [leaf] if leaf == "telemetry" => Some(SidecarBusFile::Telemetry),
@@ -2054,7 +2057,7 @@ struct SidecarLoraAdapterState {
 
 impl SidecarLoraAdapterState {
     fn match_file(&self, path: &[String]) -> Option<SidecarLoraFile> {
-        let rel = path.strip_prefix(&self.mount_root)?;
+        let rel = path.strip_prefix(self.mount_root.as_slice())?;
         match rel {
             [leaf] if leaf == "ctl" => Some(SidecarLoraFile::Ctl),
             [leaf] if leaf == "telemetry" => Some(SidecarLoraFile::Telemetry),
@@ -2136,6 +2139,13 @@ impl SidecarLoraState {
             .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
     }
 
+    fn adapter_index_for_path(&self, path: &[String]) -> Option<(usize, SidecarLoraFile)> {
+        self.adapters
+            .iter()
+            .enumerate()
+            .find_map(|(idx, adapter)| adapter.match_file(path).map(|file| (idx, file)))
+    }
+
     fn adapter_for_path_mut(
         &mut self,
         path: &[String],
@@ -2180,7 +2190,7 @@ impl SidecarLoraState {
         data: &[u8],
         max_log_bytes: usize,
     ) -> Result<Option<u32>, NineDoorError> {
-        let (adapter, file) = match self.adapter_for_path_mut(path) {
+        let (index, file) = match self.adapter_index_for_path(path) {
             Some(found) => found,
             None => return Ok(None),
         };
@@ -2192,11 +2202,15 @@ impl SidecarLoraState {
         }
         match file {
             SidecarLoraFile::Ctl => {
-                let count = append_bounded(&mut adapter.ctl, data, max_log_bytes)?;
+                let count = {
+                    let adapter = &mut self.adapters[index];
+                    append_bounded(&mut adapter.ctl, data, max_log_bytes)?
+                };
                 let now_ms = self.next_clock();
+                let adapter = &mut self.adapters[index];
                 match adapter.guard.attempt(now_ms, data.len() as u32) {
                     Ok(()) => {
-                        let count = append_bounded(&mut adapter.telemetry, data, max_log_bytes)?;
+                        append_bounded(&mut adapter.telemetry, data, max_log_bytes)?;
                         Ok(Some(count))
                     }
                     Err(reason) => {

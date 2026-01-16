@@ -69,7 +69,7 @@ pub const DEFAULT_RX_CAPACITY: usize = 512;
 pub const DEFAULT_TX_CAPACITY: usize = 256;
 
 /// Maximum number of UTF-8 codepoints retained in a console line.
-pub const DEFAULT_LINE_CAPACITY: usize = 192;
+pub const DEFAULT_LINE_CAPACITY: usize = 256;
 
 /// Error type surfaced by the serial subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

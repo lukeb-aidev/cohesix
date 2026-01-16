@@ -1704,22 +1704,31 @@ where
                 }
             }
             Command::Echo { path, payload } => {
-                if self.ensure_authenticated(SessionRole::Queen) {
-                    let message = format_message(format_args!(
-                        "console: echo {} bytes={}",
-                        path.as_str(),
-                        payload.len()
-                    ));
-                    self.audit.info(message.as_str());
-                    self.metrics.accepted_commands += 1;
+                if self.ensure_authenticated(SessionRole::Worker) {
+                    let path_str = path.as_str();
+                    let worker_restricted = matches!(self.session, Some(SessionRole::Worker))
+                        && !(path_str.starts_with("/bus/") || path_str.starts_with("/lora/"));
+                    if worker_restricted {
+                        self.metrics.denied_commands += 1;
+                        self.audit.denied("echo denied");
+                        cmd_status = "err";
+                        self.emit_ack_err("ECHO", Some("reason=denied"));
+                    } else {
+                        let message = format_message(format_args!(
+                            "console: echo {} bytes={}",
+                            path_str,
+                            payload.len()
+                        ));
+                        self.audit.info(message.as_str());
+                        self.metrics.accepted_commands += 1;
                     #[cfg(feature = "kernel")]
                     {
                         if let Some(bridge_ref) = self.ninedoor.as_mut() {
-                            match bridge_ref.echo(path.as_str(), payload.as_str()) {
+                            match bridge_ref.echo(path_str, payload.as_str()) {
                                 Ok(()) => {
                                     let detail = format_message(format_args!(
                                         "path={} bytes={}",
-                                        path.as_str(),
+                                        path_str,
                                         payload.len()
                                     ));
                                     self.emit_ack_ok("ECHO", Some(detail.as_str()));
@@ -1749,6 +1758,7 @@ where
                     {
                         cmd_status = "err";
                         self.emit_ack_err("ECHO", Some("reason=ninedoor-unavailable"));
+                    }
                     }
                 } else {
                     cmd_status = "err";
@@ -2774,7 +2784,7 @@ mod tests {
     #[test]
     fn successful_attach_allows_privileged_commands() {
         let driver = LoopbackSerial::<256>::new();
-        let serial = SerialPort::<_, 256, 256, 192>::new(driver);
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -2876,7 +2886,7 @@ mod tests {
     #[test]
     fn console_acknowledgements_emit_expected_lines() {
         let driver = LoopbackSerial::<256>::new();
-        let serial = SerialPort::<_, 256, 256, 192>::new(driver);
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -2909,7 +2919,7 @@ mod tests {
     #[test]
     fn parser_recovers_after_invalid_command() {
         let driver = LoopbackSerial::<256>::new();
-        let serial = SerialPort::<_, 256, 256, 192>::new(driver);
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -2935,7 +2945,7 @@ mod tests {
     #[test]
     fn session_end_clears_partial_input() {
         let driver = LoopbackSerial::<256>::new();
-        let serial = SerialPort::<_, 256, 256, 192>::new(driver);
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -2963,7 +2973,7 @@ mod tests {
     #[test]
     fn tail_command_emits_end_sentinel() {
         let driver = LoopbackSerial::<512>::new();
-        let serial = SerialPort::<_, 512, 512, 192>::new(driver);
+        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -3002,7 +3012,7 @@ mod tests {
     #[test]
     fn log_command_emits_end_sentinel_and_quit_clears_session() {
         let driver = LoopbackSerial::<256>::new();
-        let serial = SerialPort::<_, 256, 256, 192>::new(driver);
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();

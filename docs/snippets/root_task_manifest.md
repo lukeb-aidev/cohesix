@@ -4,7 +4,7 @@
 ### Root-task manifest schema (generated)
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.4`
+- `root_task.schema`: `1.5`
 - `profile.name`: `virt-aarch64`
 - `profile.kernel`: `true`
 - `event_pump.tick_ms`: `5`
@@ -63,8 +63,8 @@
 - `sharding.enabled`: `true`
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
-- `tickets`: 3 entries
-- `manifest.sha256`: `99878893a38c8b0b632e10d1f9f39973eb1a9fea97bc4be58c963e4be946f196`
+- `tickets`: 5 entries
+- `manifest.sha256`: `8796b84b532bc33c84730634234ac478e1ddebb59608a4589f4a81bcf60df0d4`
 
 ### Namespace mounts (generated)
 - (none)
@@ -76,6 +76,17 @@
 - shard labels: `00..ff` (count: 256)
 - canonical worker path: `/shard/<label>/worker/<id>/telemetry`
 - legacy alias: `/worker/<id>/telemetry`
+
+### Sidecars section (generated)
+- `sidecars.modbus.enable`: `false`
+- `sidecars.modbus.mount_at`: `/bus`
+- `sidecars.modbus.adapters`: `(none)`
+- `sidecars.dnp3.enable`: `false`
+- `sidecars.dnp3.mount_at`: `/bus`
+- `sidecars.dnp3.adapters`: `(none)`
+- `sidecars.lora.enable`: `false`
+- `sidecars.lora.mount_at`: `/lora`
+- `sidecars.lora.adapters`: `(none)`
 
 ### Ecosystem section (generated)
 - `ecosystem.host.enable`: `false`
@@ -98,4 +109,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `99878893a38c8b0b632e10d1f9f39973eb1a9fea97bc4be58c963e4be946f196`)._
+_Generated from `configs/root_task.toml` (sha256: `8796b84b532bc33c84730634234ac478e1ddebb59608a4589f4a81bcf60df0d4`)._

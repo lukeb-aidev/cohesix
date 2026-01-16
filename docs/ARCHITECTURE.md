@@ -422,6 +422,10 @@ Shared DMA buffers (telemetry rings, GPU windows, and future sidecar regions) cr
   control stubs or schedulers (e.g., LoRa duty-cycle timers) execute
   **inside** the VM under strict manifest quotas to preserve a lean,
   deterministic TCB.
+- **Field-bus surfaces**: Bus and LoRa adapters mount under `/bus/<adapter>`
+  and `/lora/<adapter>`, with append-only control files and read-only status
+  (`/bus/*/spool`, `/lora/*/tamper`) to keep sidecar replay and tamper
+  telemetry deterministic while preserving the VM boundary.
 - **Lifecycle & discovery**: Sidecar mounts and capability scopes are
   declared in the **manifest**; the **host launcher** inspects the
   manifest at boot, spawns or connects required sidecars, and only then

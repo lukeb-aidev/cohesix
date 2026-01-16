@@ -31,7 +31,7 @@ use core::fmt::Write as FmtWrite;
 use sel4_sys::seL4_CPtr;
 
 /// Maximum length accepted for a single console line.
-pub const MAX_LINE_LEN: usize = 192;
+pub const MAX_LINE_LEN: usize = 256;
 
 /// Maximum number of characters permitted in a role identifier when parsing `attach`.
 pub const MAX_ROLE_LEN: usize = 16;

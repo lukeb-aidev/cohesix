@@ -22,6 +22,7 @@ GATED_SCRIPTS=(
     "replay_journal.coh"
     "policy_gate.coh"
     "model_cas_bind.coh"
+    "sidecar_integration.coh"
 )
 
 BASE_MANIFEST="${PROJECT_ROOT}/configs/root_task.toml"
@@ -178,6 +179,9 @@ run_cohsh() {
             ;;
         replay_journal.coh)
             "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/replay_journal.coh
+            ;;
+        sidecar_integration.coh)
+            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/sidecar_integration.coh
             ;;
         *)
             echo "Unknown script: $script" >&2

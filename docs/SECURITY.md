@@ -15,7 +15,7 @@ The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; Q
   queues never rely on wall-clock drift.
 - smoltcp is compiled without default features; only the IPv4/TCP stack is enabled. Random seeds and MAC addresses are
   deterministic to ensure reproducible boots inside QEMU and when mirrored on hardware.
-- Console buffers (`heapless::String`) cap line length at 192 bytes and reject control characters beyond backspace/delete to
+- Console buffers (`heapless::String`) cap line length at 256 bytes and reject control characters beyond backspace/delete to
   prevent uncontrolled allocations. The serial façade uses `heapless::spsc::Queue` staging buffers sized at 256 bytes for RX and
   TX, and exposes atomic back-pressure counters so `/proc/boot` can surface saturation data without dynamic allocation.
 - The virtio-console driver mirrors device descriptor rings with bounded `heapless::spsc::Queue` structures (mirroring the RX/TX
@@ -43,6 +43,13 @@ The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; Q
   with root-task audit trails.
 - The TCP console mirrors the serial surface exactly. Line-oriented commands are terminated by `END` sentinels so scripts can
   verify log completion without relying on socket closure.
+
+### Sidecar Isolation & Spooling
+- Sidecar mounts are manifest-gated; adapters that are not declared are unreachable, and mount labels are hash-prefixed on collision.
+- Capability scopes are enforced per adapter; unauthorized access yields deterministic `ERR` responses and appends `sidecar-deny` to `/log/queen.log`.
+- Offline spooling is bounded by manifest limits; replay drains the spool deterministically and never exceeds `secure9p.msize`.
+- LoRa duty-cycle enforcement rejects oversized or over-budget payloads and records bounded tamper entries for audit review.
+- Sidecars never add in-VM TCP listeners; host-side sidecars communicate over the existing Secure9P/console boundary.
 
 ## 3. Event Pump & Threat Model Extensions
 - User networking in QEMU is only enabled when `scripts/qemu-run.sh --tcp-port <port>` is provided, limiting the window in which
