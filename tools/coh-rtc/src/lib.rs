@@ -25,6 +25,8 @@ pub struct CompileOptions {
     pub cohsh_policy_out: PathBuf,
     pub cohsh_policy_rust_out: PathBuf,
     pub cohsh_policy_doc_out: PathBuf,
+    pub cohsh_client_rust_out: PathBuf,
+    pub cohsh_client_doc_out: PathBuf,
     pub cohsh_grammar_doc_out: PathBuf,
     pub cohsh_ticket_policy_doc_out: PathBuf,
 }
@@ -107,6 +109,20 @@ pub fn default_cohsh_policy_doc_path() -> PathBuf {
     Path::new("docs")
         .join("snippets")
         .join("cohsh_policy.md")
+}
+
+pub fn default_cohsh_client_rust_path() -> PathBuf {
+    Path::new("apps")
+        .join("cohsh")
+        .join("src")
+        .join("generated")
+        .join("client.rs")
+}
+
+pub fn default_cohsh_client_doc_path() -> PathBuf {
+    Path::new("docs")
+        .join("snippets")
+        .join("cohsh_client.md")
 }
 
 pub fn default_cohsh_grammar_doc_path() -> PathBuf {

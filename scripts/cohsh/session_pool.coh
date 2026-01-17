@@ -6,3 +6,14 @@ pool bench path=/log/queen.log ops=64 batch=8 payload=pool inject_failures=1 inj
 EXPECT SUBSTR pool bench result OK
 EXPECT SUBSTR expected=64 observed=64
 quit
+# 9P-only replay section (ignored by cohsh after quit)
+attach queen
+EXPECT OK
+spawn heartbeat ticks=1 ttl_s=30
+EXPECT OK
+kill worker-1
+EXPECT OK
+tail /log/queen.log
+EXPECT OK
+tail /log/../queen.log
+EXPECT ERR

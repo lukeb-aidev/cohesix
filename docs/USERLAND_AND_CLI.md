@@ -74,8 +74,8 @@ Manifest-derived policy defaults are emitted by `coh-rtc` into `out/cohsh_policy
 <!-- Purpose: Generated cohsh policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### cohsh client policy (generated)
-- `manifest.sha256`: `fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861`
-- `policy.sha256`: `3e6bfee24c10636655135e0036addc355f4ccab5843d1f28eb328c7efd50f256`
+- `manifest.sha256`: `1af6c0417cf026b5c44554f98279870e2072cfb21c7a05ff2ea8400980176432`
+- `policy.sha256`: `72104d9a1a34b2ce666f1cda458ee22a351d9d967914c379e2eb005ea5f20398`
 - `cohsh.pool.control_sessions`: `2`
 - `cohsh.pool.telemetry_sessions`: `4`
 - `retry.max_attempts`: `3`
@@ -84,7 +84,21 @@ Manifest-derived policy defaults are emitted by `coh-rtc` into `out/cohsh_policy
 - `retry.timeout_ms`: `5000`
 - `heartbeat.interval_ms`: `15000`
 
-_Generated from `configs/root_task.toml` (sha256: `fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861`)._
+_Generated from `configs/root_task.toml` (sha256: `1af6c0417cf026b5c44554f98279870e2072cfb21c7a05ff2ea8400980176432`)._
+
+Manifest-derived CohClient defaults (paths and Secure9P bounds) are emitted by `coh-rtc`.
+
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Generated cohsh client snippet consumed by docs/USERLAND_AND_CLI.md. -->
+
+### cohsh client defaults (generated)
+- `manifest.sha256`: `1af6c0417cf026b5c44554f98279870e2072cfb21c7a05ff2ea8400980176432`
+- `secure9p.msize`: `8192`
+- `secure9p.walk_depth`: `8`
+- `client_paths.queen_ctl`: `/queen/ctl`
+- `client_paths.log`: `/log/queen.log`
+
+_Generated from `configs/root_task.toml` (sha256: `1af6c0417cf026b5c44554f98279870e2072cfb21c7a05ff2ea8400980176432`)._
 
 Shared console grammar and ticket policy are emitted by `coh-rtc` from `cohsh-core` so CLI and console stay aligned.
 

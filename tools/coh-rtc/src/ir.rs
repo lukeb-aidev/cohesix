@@ -64,6 +64,8 @@ pub struct Manifest {
     #[serde(default)]
     pub client_policies: ClientPolicies,
     #[serde(default)]
+    pub client_paths: ClientPaths,
+    #[serde(default)]
     pub cas: CasConfig,
 }
 
@@ -117,6 +119,7 @@ impl Manifest {
         self.validate_telemetry()?;
         self.validate_observability()?;
         self.validate_client_policies()?;
+        self.validate_client_paths()?;
         self.validate_cas(base_dir)?;
         Ok(())
     }
@@ -814,6 +817,41 @@ impl Manifest {
         Ok(())
     }
 
+    fn validate_client_paths(&self) -> Result<()> {
+        self.validate_client_path("client_paths.queen_ctl", &self.client_paths.queen_ctl)?;
+        self.validate_client_path("client_paths.log", &self.client_paths.log)?;
+        Ok(())
+    }
+
+    fn validate_client_path(&self, label: &str, path: &str) -> Result<()> {
+        if !path.starts_with('/') {
+            bail!("{label} must be an absolute path");
+        }
+        let mut depth = 0usize;
+        for component in path.split('/').skip(1) {
+            if component.is_empty() {
+                continue;
+            }
+            if component == "." || component == ".." {
+                bail!("{label} contains disallowed path component '{component}'");
+            }
+            if component.as_bytes().contains(&0) {
+                bail!("{label} contains NUL byte");
+            }
+            depth = depth.saturating_add(1);
+            if depth > self.secure9p.walk_depth as usize {
+                bail!(
+                    "{label} exceeds secure9p.walk_depth {}",
+                    self.secure9p.walk_depth
+                );
+            }
+        }
+        if depth == 0 {
+            bail!("{label} must not be empty");
+        }
+        Ok(())
+    }
+
     fn validate_cas(&self, base_dir: Option<&Path>) -> Result<()> {
         if self.ecosystem.models.enable && !self.cas.enable {
             bail!("ecosystem.models.enable requires cas.enable = true");
@@ -1253,6 +1291,22 @@ impl Default for ClientPolicies {
             cohsh: CohshClientPolicy::default(),
             retry: ClientRetryPolicy::default(),
             heartbeat: ClientHeartbeatPolicy::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ClientPaths {
+    pub queen_ctl: String,
+    pub log: String,
+}
+
+impl Default for ClientPaths {
+    fn default() -> Self {
+        Self {
+            queen_ctl: "/queen/ctl".to_owned(),
+            log: "/log/queen.log".to_owned(),
         }
     }
 }

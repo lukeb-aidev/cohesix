@@ -15,7 +15,16 @@
 pub mod proto;
 /// Manifest-derived client policy helpers for cohsh.
 pub mod policy;
+/// Cohesix Secure9P client helpers.
+pub mod client;
+/// Queen control payload helpers for /queen/ctl.
+pub mod queen;
 mod session_pool;
+
+#[allow(clippy::all, dead_code)]
+mod generated_client {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/generated/client.rs"));
+}
 
 #[cfg(feature = "tcp")]
 pub mod transport;
@@ -105,7 +114,8 @@ const ROOT_FID: u32 = 1;
 const MAX_SCRIPT_LINES: usize = 256;
 const MAX_SCRIPT_WAIT_MS: u64 = 2000;
 const MAX_SCRIPT_RESPONSES: usize = 8;
-const QUEEN_CTL_PATH: &str = "/queen/ctl";
+const QUEEN_CTL_PATH: &str = generated_client::CLIENT_QUEEN_CTL_PATH;
+const QUEEN_LOG_PATH: &str = generated_client::CLIENT_LOG_PATH;
 const TEST_SCRIPT_QUICK_PATH: &str = "/proc/tests/selftest_quick.coh";
 const TEST_SCRIPT_FULL_PATH: &str = "/proc/tests/selftest_full.coh";
 const TEST_SCRIPT_NEGATIVE_PATH: &str = "/proc/tests/selftest_negative.coh";
@@ -1092,9 +1102,9 @@ impl Transport for QemuTransport {
     }
 
     fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
-        if path != "/log/queen.log" {
+        if path != QUEEN_LOG_PATH {
             return Err(anyhow!(
-                "QEMU transport currently supports tailing /log/queen.log only"
+                "QEMU transport currently supports tailing {QUEEN_LOG_PATH} only"
             ));
         }
         let raw_lines = self.wait_for_log(Duration::from_secs(15))?;
@@ -2010,7 +2020,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         transcript,
                     );
                 }
-                return self.execute_test_command("tail /log/queen.log");
+                return self.execute_test_command(&format!("tail {QUEEN_LOG_PATH}"));
             }
             "cat" => {
                 let Some(path) = parts.next() else {
@@ -2223,7 +2233,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
             match self.attach(auto.role, auto.ticket.as_deref()) {
                 Ok(()) => {
                     if auto.auto_log {
-                        if let Err(err) = self.tail_path("/log/queen.log") {
+                        if let Err(err) = self.tail_path(QUEEN_LOG_PATH) {
                             self.write_line(&format!("auto-log failed: {err}"))?;
                         }
                     }
@@ -2771,7 +2781,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 if parts.next().is_some() {
                     return Err(anyhow!("log does not take any arguments"));
                 }
-                self.tail_path("/log/queen.log")?;
+                self.tail_path(QUEEN_LOG_PATH)?;
                 Ok(CommandStatus::Continue)
             }
             "ping" => {
@@ -3213,7 +3223,7 @@ fn ensure_valid_path(path: &str) -> Result<()> {
     Ok(())
 }
 
-fn ensure_json_string<'a>(value: &'a str, label: &str) -> Result<&'a str> {
+pub(crate) fn ensure_json_string<'a>(value: &'a str, label: &str) -> Result<&'a str> {
     if value.is_empty() {
         return Err(anyhow!("{label} must not be empty"));
     }
@@ -3225,7 +3235,7 @@ fn ensure_json_string<'a>(value: &'a str, label: &str) -> Result<&'a str> {
     Ok(value)
 }
 
-fn normalise_payload(input: &str) -> Result<String> {
+pub(crate) fn normalise_payload(input: &str) -> Result<String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(anyhow!("payload must not be empty"));
@@ -3375,7 +3385,10 @@ fn count_occurrences(lines: &[String], needle: &str) -> usize {
     count
 }
 
-fn build_spawn_payload<'a>(role: &str, args: impl Iterator<Item = &'a str>) -> Result<String> {
+pub(crate) fn build_spawn_payload<'a>(
+    role: &str,
+    args: impl Iterator<Item = &'a str>,
+) -> Result<String> {
     let mut values = parse_kv_args(args)?;
     match role.to_ascii_lowercase().as_str() {
         "heartbeat" | "worker" | "worker-heartbeat" => {
@@ -3513,7 +3526,9 @@ mod tests {
         let buffer = Vec::new();
         let mut shell = Shell::new(transport, Cursor::new(buffer));
         shell.attach(Role::Queen, None).unwrap();
-        shell.execute("tail /log/queen.log").unwrap();
+        shell
+            .execute(&format!("tail {QUEEN_LOG_PATH}"))
+            .unwrap();
         let (_transport, cursor) = shell.into_parts();
         let output = cursor.into_inner();
         let rendered = String::from_utf8(output).unwrap();

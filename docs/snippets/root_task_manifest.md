@@ -51,6 +51,8 @@
 - `client_policies.retry.ceiling_ms`: `2000`
 - `client_policies.retry.timeout_ms`: `5000`
 - `client_policies.heartbeat.interval_ms`: `15000`
+- `client_paths.queen_ctl`: `/queen/ctl`
+- `client_paths.log`: `/log/queen.log`
 - `cache.kernel_ops`: `true`
 - `cache.dma_clean`: `true`
 - `cache.dma_invalidate`: `true`
@@ -64,7 +66,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `8796b84b532bc33c84730634234ac478e1ddebb59608a4589f4a81bcf60df0d4`
+- `manifest.sha256`: `1af6c0417cf026b5c44554f98279870e2072cfb21c7a05ff2ea8400980176432`
 
 ### Namespace mounts (generated)
 - (none)
@@ -109,4 +111,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `8796b84b532bc33c84730634234ac478e1ddebb59608a4589f4a81bcf60df0d4`)._
+_Generated from `configs/root_task.toml` (sha256: `1af6c0417cf026b5c44554f98279870e2072cfb21c7a05ff2ea8400980176432`)._

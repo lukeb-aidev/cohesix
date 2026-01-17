@@ -91,6 +91,7 @@ fn script_feature_inventory_is_stable() {
         "CMD:detach".to_owned(),
         "CMD:echo".to_owned(),
         "CMD:help".to_owned(),
+        "CMD:kill".to_owned(),
         "CMD:log".to_owned(),
         "CMD:pool".to_owned(),
         "CMD:ls".to_owned(),
@@ -139,7 +140,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "replay_journal.coh:1ff3cc6ac006c47fe8a6f914fb5b079d352a41691c2b5da34cf6441fba4d5a8f"
             .to_owned(),
-        "session_pool.coh:30d87dcbb8a12e6bff565614f4b6d380780ef44d548ca8e8d24eead5bce46ee4"
+        "session_pool.coh:ba523237c1933fbce09df879e871e4269013b74b5b8f8a046adbd2de00e7395e"
             .to_owned(),
         "shard_1k.coh:571083fdfab4147b6a6f10350bf4fe8810d8e7242f8ea6a7a8c68dd2b2d796bf"
             .to_owned(),

@@ -36,6 +36,8 @@ pub struct GeneratedArtifacts {
     pub cohsh_policy_hash: PathBuf,
     pub cohsh_policy_rust: PathBuf,
     pub cohsh_policy_doc: PathBuf,
+    pub cohsh_client_rust: PathBuf,
+    pub cohsh_client_doc: PathBuf,
     pub cohsh_grammar_doc: PathBuf,
     pub cohsh_ticket_policy_doc: PathBuf,
 }
@@ -43,7 +45,7 @@ pub struct GeneratedArtifacts {
 impl GeneratedArtifacts {
     pub fn summary(&self) -> String {
         format!(
-            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, obs_interfaces={}, obs_security={}, cas_interfaces={}, cas_security={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_grammar={}, cohsh_ticket_policy={}",
+            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, obs_interfaces={}, obs_security={}, cas_interfaces={}, cas_security={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_client_rust={}, cohsh_client_doc={}, cohsh_grammar={}, cohsh_ticket_policy={}",
             self.rust_dir.display(),
             self.manifest_json.display(),
             self.cas_manifest_template.display(),
@@ -59,6 +61,8 @@ impl GeneratedArtifacts {
             self.cohsh_policy_hash.display(),
             self.cohsh_policy_rust.display(),
             self.cohsh_policy_doc.display(),
+            self.cohsh_client_rust.display(),
+            self.cohsh_client_doc.display(),
             self.cohsh_grammar_doc.display(),
             self.cohsh_ticket_policy_doc.display()
         )
@@ -122,6 +126,14 @@ pub fn emit_all(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    if let Some(parent) = options.cohsh_client_rust_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.cohsh_client_doc_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
     if let Some(parent) = options.cohsh_grammar_doc_out.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -148,6 +160,12 @@ pub fn emit_all(
         &options.cohsh_policy_out,
         &options.cohsh_policy_rust_out,
         &options.cohsh_policy_doc_out,
+    )?;
+    let cohsh_client_artifacts = cohsh::emit_cohsh_client(
+        manifest,
+        manifest_hash,
+        &options.cohsh_client_rust_out,
+        &options.cohsh_client_doc_out,
     )?;
     let cohsh_doc_artifacts = cohsh::emit_cohsh_docs(
         &options.cohsh_grammar_doc_out,
@@ -194,6 +212,8 @@ pub fn emit_all(
         cohsh_policy_hash: cohsh_artifacts.policy_hash,
         cohsh_policy_rust: cohsh_artifacts.policy_rust,
         cohsh_policy_doc: cohsh_artifacts.policy_doc,
+        cohsh_client_rust: cohsh_client_artifacts.client_rust,
+        cohsh_client_doc: cohsh_client_artifacts.client_doc,
         cohsh_grammar_doc: cohsh_doc_artifacts.grammar_doc,
         cohsh_ticket_policy_doc: cohsh_doc_artifacts.ticket_policy_doc,
     })

@@ -70,7 +70,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [17](#17) | Content-Addressed Updates (CAS) — 9P-first | Complete |
 | [18](#18) | Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern) | Complete |
 | [19](#19) | cohsh-core Extraction (Shared Grammar & Transport) | Complete |
-| [20a](#20a) | cohsh as 9P Client Library | Pending |
+| [20a](#20a) | cohsh as 9P Client Library | Complete |
 | [20b](#20b) | NineDoor UI Providers | Pending |
 | [20c](#20c) | SwarmUI Desktop (Tauri, Pure 9P/TCP) | Pending |
 | [20d](#20d) | SwarmUI Live Hive Rendering (PixiJS, GPU-First | Pending |
@@ -1657,6 +1657,8 @@ Checks:
 Deliverables:
   - Updated regression pack metadata and manifest hashes.
 ```
+
+**Status:** Complete — CohClient API and queen helpers are in tree, client defaults are compiler-emitted, and the 9P replay harness matches console transcripts with regression coverage.
 
 ---
 

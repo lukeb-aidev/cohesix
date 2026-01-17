@@ -171,6 +171,10 @@
       "interval_ms": 15000
     }
   },
+  "client_paths": {
+    "queen_ctl": "/queen/ctl",
+    "log": "/log/queen.log"
+  },
   "cas": {
     "enable": true,
     "store": {

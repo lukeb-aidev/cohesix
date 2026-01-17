@@ -307,6 +307,18 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `client_paths.queen_ctl`: `{}`",
+            manifest.client_paths.queen_ctl
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_paths.log`: `{}`",
+            manifest.client_paths.log
+        )
+        .ok();
+        writeln!(
+            schema_md,
             "- `cache.kernel_ops`: `{}`",
             manifest.cache.kernel_ops
         )

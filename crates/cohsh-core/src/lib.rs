@@ -14,6 +14,7 @@ extern crate alloc;
 pub mod command;
 pub mod docs;
 pub mod help;
+pub mod secure9p;
 pub mod ticket;
 pub mod verb;
 pub mod wire;
@@ -25,6 +26,7 @@ pub use command::{
     Command, CommandParser, ConsoleError, RateLimiter, MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN,
     MAX_LINE_LEN, MAX_PATH_LEN, MAX_ROLE_LEN, MAX_TICKET_LEN,
 };
+pub use secure9p::{ClientError as Secure9pError, Secure9pClient, Secure9pTransport};
 pub use ticket::{
     normalize_ticket, parse_role, proto_role_from_ticket, role_label, QueenTicketMode,
     RoleParseMode, TicketCheck, TicketError, TicketPolicy,

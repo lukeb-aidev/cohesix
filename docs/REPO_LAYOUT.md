@@ -17,6 +17,7 @@
   TOOLCHAIN_MAC_ARM64.md
   USERLAND_AND_CLI.md
   snippets/
+    cohsh_client.md
     cohsh_grammar.md
     cohsh_policy.md
     cohsh_ticket_policy.md
@@ -28,16 +29,24 @@
     root_task_resolved.json
 /scripts/
   qemu-run.sh
+  regression/
+    client_vs_console.sh
+    transcript_diff.sh
   ci/
     size_guard.sh
 /toolchain/
   setup_macos_arm64.sh
 /tools/
   coh-rtc/
+/crates/
+  cohsh-core/
 /apps/
   cohesix-proto/
   console-ack-wire/
   cohsh/
+    src/
+      client.rs
+      queen.rs
   root-task/
     README.md            ← Event pump overview, testing commands, and feature flag notes
   nine-door/

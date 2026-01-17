@@ -27,6 +27,8 @@ cas_security="$work_dir/cas_security.md"
 cohsh_policy="$work_dir/cohsh_policy.toml"
 cohsh_policy_rust="$work_dir/cohsh_policy.rs"
 cohsh_policy_doc="$work_dir/cohsh_policy.md"
+cohsh_client_rust="$work_dir/cohsh_client.rs"
+cohsh_client_doc="$work_dir/cohsh_client.md"
 cohsh_grammar_doc="$work_dir/cohsh_grammar.md"
 cohsh_ticket_policy_doc="$work_dir/cohsh_ticket_policy.md"
 
@@ -44,6 +46,8 @@ cargo run -p coh-rtc -- \
   --cohsh-policy "$cohsh_policy" \
   --cohsh-policy-rust "$cohsh_policy_rust" \
   --cohsh-policy-doc "$cohsh_policy_doc" \
+  --cohsh-client-rust "$cohsh_client_rust" \
+  --cohsh-client-doc "$cohsh_client_doc" \
   --cohsh-grammar-doc "$cohsh_grammar_doc" \
   --cohsh-ticket-policy-doc "$cohsh_ticket_policy_doc"
 
@@ -72,6 +76,8 @@ compare_file "$repo_root/out/cohsh_policy.toml" "$cohsh_policy"
 compare_file "$repo_root/out/cohsh_policy.toml.sha256" "${cohsh_policy}.sha256"
 compare_file "$repo_root/apps/cohsh/src/generated/policy.rs" "$cohsh_policy_rust"
 compare_file "$repo_root/docs/snippets/cohsh_policy.md" "$cohsh_policy_doc"
+compare_file "$repo_root/apps/cohsh/src/generated/client.rs" "$cohsh_client_rust"
+compare_file "$repo_root/docs/snippets/cohsh_client.md" "$cohsh_client_doc"
 compare_file "$repo_root/docs/snippets/cohsh_grammar.md" "$cohsh_grammar_doc"
 compare_file "$repo_root/docs/snippets/cohsh_ticket_policy.md" "$cohsh_ticket_policy_doc"
 
