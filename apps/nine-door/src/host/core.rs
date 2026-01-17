@@ -4,7 +4,6 @@
 // Author: Lukas Bower
 
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write as _;
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -39,12 +38,14 @@ use super::namespace::{
 };
 use super::policy::{
     PolicyActionAudit, PolicyConfig, PolicyDecision, PolicyGateAllowance, PolicyGateDecision,
-    PolicyGateDenial, PolicyStore,
+    PolicyGateDenial, PolicyPreflightPayloads, PolicyStore,
 };
+use super::namespace::UiProviderInfo;
 use super::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 use super::observe::{ObserveConfig, ObserveState};
 use super::replay::ReplayState;
 use super::telemetry::{TelemetryAuditLevel, TelemetryConfig, TelemetryManifestStore};
+use super::ui::{UiProviderConfig, UiVariant, UI_MAX_READ_BYTES};
 use super::{Clock, NineDoorError};
 
 // New server core implementation and access policy are defined below.
@@ -80,12 +81,13 @@ impl ServerCore {
         telemetry_manifest: TelemetryManifestStore,
         cas: CasConfig,
         shards: ShardLayout,
+        ui: UiProviderConfig,
         host: HostNamespaceConfig,
         sidecars: SidecarNamespaceConfig,
         policy: PolicyConfig,
         audit: AuditConfig,
     ) -> Self {
-        let observe = ObserveState::new(ObserveConfig::default(), clock.now());
+        let observe = ObserveState::new(ObserveConfig::default(), ui, clock.now());
         let pipeline = Pipeline::new(PipelineConfig::from_limits(limits));
         let policy_store = PolicyStore::new(policy).expect("policy config");
         let policy_namespace = if policy_store.enabled() {
@@ -110,6 +112,7 @@ impl ServerCore {
             telemetry_manifest,
             cas,
             shards,
+            ui,
             host,
             sidecars,
             policy_namespace,
@@ -141,6 +144,7 @@ impl ServerCore {
             core.clock.now(),
             core.pipeline.metrics(),
         );
+        let _ = core.control.refresh_policy_preflight();
         core
     }
 
@@ -177,21 +181,15 @@ impl ServerCore {
                 }
             }
         }
-        let mut payload = String::new();
-        let _ = writeln!(
-            payload,
-            "sessions total={} worker={} shard_bits={} shard_count={}",
+        let shard_labels = shards.shard_labels();
+        self.observe.update_sessions(
+            self.control.namespace_mut(),
             total_sessions,
             worker_sessions,
             shards.shard_bits(),
-            shards.shard_count()
-        );
-        for (idx, label) in shards.shard_labels().iter().enumerate() {
-            let count = shard_counts.get(idx).copied().unwrap_or(0);
-            let _ = writeln!(payload, "shard {} {}", label, count);
-        }
-        self.observe
-            .update_sessions(self.control.namespace_mut(), payload.as_str())
+            &shard_labels,
+            &shard_counts,
+        )
     }
 
     pub(crate) fn register_service(
@@ -848,6 +846,40 @@ impl ServerCore {
         let mut view_path = existing.view_path.clone();
         let mut canonical_path = existing.canonical_path.clone();
         let mut current_qid = existing.qid;
+        let mut full_view_path = existing.view_path.clone();
+        full_view_path.extend(wnames.iter().cloned());
+        let full_resolved = state.resolve_view_path(&full_view_path);
+        if let Err(err) = AccessPolicy::ensure_path(
+            &shards,
+            role,
+            worker_id,
+            gpu_scope,
+            bus_scope,
+            lora_scope,
+            host_mount,
+            &sidecar_bus_scopes,
+            &sidecar_lora_scopes,
+            &full_resolved,
+        ) {
+            self.maybe_log_sidecar_denial(&full_resolved, bus_scope, lora_scope, &err)?;
+            return Err(err);
+        }
+        if let Some(info) = self.control.namespace().ui_provider_info(&full_resolved) {
+            if !info.enabled {
+                self.control.record_ui_provider_denial(
+                    &full_resolved,
+                    info,
+                    "disabled",
+                    role,
+                    state.ticket(),
+                    None,
+                )?;
+                return Err(NineDoorError::protocol(
+                    ErrorCode::NotFound,
+                    format!("ui provider {} disabled", info.kind.label()),
+                ));
+            }
+        }
         for component in wnames {
             view_path.push(component.clone());
             let resolved = state.resolve_view_path(&view_path);
@@ -865,6 +897,22 @@ impl ServerCore {
             ) {
                 self.maybe_log_sidecar_denial(&resolved, bus_scope, lora_scope, &err)?;
                 return Err(err);
+            }
+            if let Some(info) = self.control.namespace().ui_provider_info(&resolved) {
+                if !info.enabled {
+                    self.control.record_ui_provider_denial(
+                        &resolved,
+                        info,
+                        "disabled",
+                        role,
+                        state.ticket(),
+                        None,
+                    )?;
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::NotFound,
+                        format!("ui provider {} disabled", info.kind.label()),
+                    ));
+                }
             }
             let node = self.control.namespace_mut().lookup(&resolved)?;
             current_qid = node.qid();
@@ -916,6 +964,28 @@ impl ServerCore {
         let entry = state.fid(fid).ok_or_else(|| {
             NineDoorError::protocol(ErrorCode::NotFound, format!("fid {fid} not found"))
         })?;
+        if mode.allows_read() {
+            if let Some(info) = self
+                .control
+                .namespace()
+                .ui_provider_info(&entry.canonical_path)
+            {
+                if !info.enabled {
+                    self.control.record_ui_provider_denial(
+                        &entry.canonical_path,
+                        info,
+                        "disabled",
+                        role,
+                        ticket.as_deref(),
+                        None,
+                    )?;
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::NotFound,
+                        format!("ui provider {} disabled", info.kind.label()),
+                    ));
+                }
+            }
+        }
         if mode.allows_write() {
             if let Some(target) = host_write_target(&entry.canonical_path, host_mount) {
                 if role != Some(Role::Queen) {
@@ -988,6 +1058,44 @@ impl ServerCore {
                 ErrorCode::Permission,
                 "fid opened without read permission",
             ));
+        }
+        if let Some(info) = self
+            .control
+            .namespace()
+            .ui_provider_info(&entry.canonical_path)
+        {
+            if !info.enabled {
+                self.control.record_ui_provider_denial(
+                    &entry.canonical_path,
+                    info,
+                    "disabled",
+                    state.role(),
+                    state.ticket(),
+                    None,
+                )?;
+                return Err(NineDoorError::protocol(
+                    ErrorCode::NotFound,
+                    format!("ui provider {} disabled", info.kind.label()),
+                ));
+            }
+            if count > UI_MAX_READ_BYTES {
+                self.control.record_ui_provider_denial(
+                    &entry.canonical_path,
+                    info,
+                    "oversize-read",
+                    state.role(),
+                    state.ticket(),
+                    Some(count),
+                )?;
+                return Err(NineDoorError::protocol(
+                    ErrorCode::TooBig,
+                    format!(
+                        "ui provider {} read exceeds {} bytes",
+                        info.kind.label(),
+                        UI_MAX_READ_BYTES
+                    ),
+                ));
+            }
         }
         let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
         let gpu_scope = gpu_scope_owned.as_deref();
@@ -1372,6 +1480,7 @@ impl ControlPlane {
         telemetry_manifest: TelemetryManifestStore,
         cas: CasConfig,
         shards: ShardLayout,
+        ui: UiProviderConfig,
         host: HostNamespaceConfig,
         sidecars: SidecarNamespaceConfig,
         policy_namespace: PolicyNamespaceConfig,
@@ -1387,6 +1496,7 @@ impl ControlPlane {
                 telemetry_manifest,
                 cas,
                 shards,
+                ui,
                 host,
                 sidecars,
                 policy_namespace,
@@ -1626,6 +1736,7 @@ impl ControlPlane {
                     .set_action_status_payload(&action.id, &payload)?;
             }
         }
+        self.refresh_policy_preflight()?;
         Ok((outcome.count, outcome.appended))
     }
 
@@ -1912,6 +2023,7 @@ impl ControlPlane {
             }
             PolicyGateDecision::Denied(PolicyGateDenial::Missing) => {}
         }
+        self.refresh_policy_preflight()?;
         Ok(decision)
     }
 
@@ -2121,6 +2233,90 @@ impl ControlPlane {
             .tracefs_mut()
             .record(level, category, task, message);
         self.append_queen_log(message)
+    }
+
+    fn record_ui_provider_denial(
+        &mut self,
+        path: &[String],
+        info: UiProviderInfo,
+        reason: &str,
+        role: Option<Role>,
+        ticket: Option<&str>,
+        count: Option<u32>,
+    ) -> Result<(), NineDoorError> {
+        let role_label = match role {
+            Some(role) => role_label(role),
+            None => "unauthenticated",
+        };
+        let path_label = if path.is_empty() {
+            "/".to_owned()
+        } else {
+            format!("/{}", path.join("/"))
+        };
+        let variant = match info.variant {
+            UiVariant::Text => "text",
+            UiVariant::Cbor => "cbor",
+        };
+        let mut message = format!(
+            "ui-provider outcome=deny reason={} provider={} variant={} role={} ticket={} path={}",
+            reason,
+            info.kind.label(),
+            variant,
+            role_label,
+            ticket.unwrap_or("none"),
+            path_label
+        );
+        if let Some(count) = count {
+            message.push_str(&format!(" count={count}"));
+        }
+        self.log_event("ui", TraceLevel::Warn, None, &message)
+    }
+
+    fn refresh_policy_preflight(&mut self) -> Result<(), NineDoorError> {
+        if !self.policy.enabled() {
+            return Ok(());
+        }
+        let req = self.policy.preflight_req_payloads()?;
+        self.apply_policy_preflight(req, true)?;
+        let diff = self.policy.preflight_diff_payloads()?;
+        self.apply_policy_preflight(diff, false)?;
+        Ok(())
+    }
+
+    fn apply_policy_preflight(
+        &mut self,
+        payloads: PolicyPreflightPayloads,
+        is_req: bool,
+    ) -> Result<(), NineDoorError> {
+        let text_result = if is_req {
+            self.namespace
+                .set_policy_preflight_req_payload(&payloads.text)
+        } else {
+            self.namespace
+                .set_policy_preflight_diff_payload(&payloads.text)
+        };
+        self.ignore_not_found(text_result)?;
+        let cbor_result = if is_req {
+            self.namespace
+                .set_policy_preflight_req_cbor_payload(&payloads.cbor)
+        } else {
+            self.namespace
+                .set_policy_preflight_diff_cbor_payload(&payloads.cbor)
+        };
+        self.ignore_not_found(cbor_result)?;
+        Ok(())
+    }
+
+    fn ignore_not_found(&self, result: Result<(), NineDoorError>) -> Result<(), NineDoorError> {
+        if let Err(err) = result {
+            if let NineDoorError::Protocol { code, .. } = &err {
+                if *code == ErrorCode::NotFound {
+                    return Ok(());
+                }
+            }
+            return Err(err);
+        }
+        Ok(())
     }
 
     fn record_host_write_audit(

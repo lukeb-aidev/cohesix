@@ -28,6 +28,7 @@ use thiserror::Error;
 mod control;
 mod cas;
 mod audit;
+mod cbor;
 mod core;
 mod namespace;
 mod observe;
@@ -36,6 +37,7 @@ mod policy;
 mod replay;
 mod telemetry;
 mod tracefs;
+mod ui;
 
 use self::core::{role_to_uname, ServerCore};
 pub use self::cas::CasConfig;
@@ -49,6 +51,9 @@ pub use self::observe::{ObserveConfig, ProcIngestConfig, Proc9pConfig};
 pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 pub use self::telemetry::{
     TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryManifestStore,
+};
+pub use self::ui::{
+    UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig,
 };
 
 /// Errors surfaced by NineDoor operations.
@@ -131,6 +136,7 @@ impl NineDoor {
             TelemetryManifestStore::default(),
             CasConfig::disabled(),
             shards,
+            UiProviderConfig::default(),
             HostNamespaceConfig::disabled(),
             SidecarNamespaceConfig::disabled(),
             PolicyConfig::disabled(),
@@ -148,6 +154,7 @@ impl NineDoor {
             TelemetryManifestStore::default(),
             CasConfig::disabled(),
             ShardLayout::default(),
+            UiProviderConfig::default(),
             host,
             SidecarNamespaceConfig::disabled(),
             PolicyConfig::disabled(),
@@ -165,6 +172,7 @@ impl NineDoor {
             TelemetryManifestStore::default(),
             CasConfig::disabled(),
             ShardLayout::default(),
+            UiProviderConfig::default(),
             HostNamespaceConfig::disabled(),
             sidecars,
             PolicyConfig::disabled(),
@@ -195,6 +203,30 @@ impl NineDoor {
             TelemetryManifestStore::default(),
             CasConfig::disabled(),
             ShardLayout::default(),
+            UiProviderConfig::default(),
+            host,
+            SidecarNamespaceConfig::disabled(),
+            policy,
+            audit,
+        )
+    }
+
+    /// Construct a new NineDoor server with host, policy, audit, and UI provider configuration.
+    #[must_use]
+    pub fn new_with_host_policy_audit_ui_config(
+        host: HostNamespaceConfig,
+        policy: PolicyConfig,
+        audit: AuditConfig,
+        ui: UiProviderConfig,
+    ) -> Self {
+        Self::new_with_limits_telemetry_host_policy_shards(
+            Arc::new(SystemClock),
+            SessionLimits::default(),
+            TelemetryConfig::default(),
+            TelemetryManifestStore::default(),
+            CasConfig::disabled(),
+            ShardLayout::default(),
+            ui,
             host,
             SidecarNamespaceConfig::disabled(),
             policy,
@@ -260,6 +292,25 @@ impl NineDoor {
             TelemetryManifestStore::default(),
             cas,
             ShardLayout::default(),
+            UiProviderConfig::default(),
+            HostNamespaceConfig::disabled(),
+            SidecarNamespaceConfig::disabled(),
+            PolicyConfig::disabled(),
+            AuditConfig::disabled(),
+        )
+    }
+
+    /// Construct a new NineDoor server with CAS and UI provider configuration.
+    #[must_use]
+    pub fn new_with_cas_config_ui(cas: CasConfig, ui: UiProviderConfig) -> Self {
+        Self::new_with_limits_telemetry_host_policy_shards(
+            Arc::new(SystemClock),
+            SessionLimits::default(),
+            TelemetryConfig::default(),
+            TelemetryManifestStore::default(),
+            cas,
+            ShardLayout::default(),
+            ui,
             HostNamespaceConfig::disabled(),
             SidecarNamespaceConfig::disabled(),
             PolicyConfig::disabled(),
@@ -281,6 +332,7 @@ impl NineDoor {
             telemetry_manifest,
             CasConfig::disabled(),
             ShardLayout::default(),
+            UiProviderConfig::default(),
             host,
             SidecarNamespaceConfig::disabled(),
             PolicyConfig::disabled(),
@@ -295,6 +347,7 @@ impl NineDoor {
         telemetry_manifest: TelemetryManifestStore,
         cas: CasConfig,
         shards: ShardLayout,
+        ui: UiProviderConfig,
         host: HostNamespaceConfig,
         sidecars: SidecarNamespaceConfig,
         policy: PolicyConfig,
@@ -308,6 +361,7 @@ impl NineDoor {
                 telemetry_manifest.clone(),
                 cas,
                 shards,
+                ui,
                 host,
                 sidecars,
                 policy,

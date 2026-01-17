@@ -5,10 +5,14 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+use std::fmt::Write as _;
+
 use serde::{Deserialize, Serialize};
 use secure9p_codec::ErrorCode;
 use secure9p_core::append_only_write_bounds;
 
+use super::cbor::{CborError, CborWriter};
+use super::ui::UI_MAX_STREAM_BYTES;
 use crate::NineDoorError;
 
 const MAX_POLICY_PATH_COMPONENTS: usize = 8;
@@ -97,6 +101,15 @@ pub(crate) struct PolicyStore {
     actions: Vec<PolicyAction>,
 }
 
+/// Preflight payloads for policy UI providers.
+#[derive(Debug, Clone)]
+pub struct PolicyPreflightPayloads {
+    /// Text payload.
+    pub text: Vec<u8>,
+    /// CBOR payload.
+    pub cbor: Vec<u8>,
+}
+
 impl PolicyStore {
     pub fn new(config: PolicyConfig) -> Result<Self, NineDoorError> {
         let rules = config
@@ -138,6 +151,80 @@ impl PolicyStore {
     pub fn action_status_payload(&self, id: &str) -> Option<Vec<u8>> {
         let action = self.actions.iter().find(|action| action.id == id)?;
         Some(action.status_payload(self.limits()))
+    }
+
+    pub fn preflight_req_payloads(&self) -> Result<PolicyPreflightPayloads, NineDoorError> {
+        let mut total = 0usize;
+        let mut queued = 0usize;
+        let mut consumed = 0usize;
+        for action in &self.actions {
+            total = total.saturating_add(1);
+            if action.consumed {
+                consumed = consumed.saturating_add(1);
+            } else {
+                queued = queued.saturating_add(1);
+            }
+        }
+        let mut text = String::new();
+        let _ = writeln!(text, "req total={} queued={} consumed={}", total, queued, consumed);
+        for action in &self.actions {
+            let state = if action.consumed { "consumed" } else { "queued" };
+            let decision = policy_decision_label(action.decision);
+            let _ = writeln!(
+                text,
+                "req id={} target={} decision={} state={}",
+                action.id, action.target, decision, state
+            );
+        }
+        ensure_stream_len("policy/preflight/req", text.len())?;
+        let cbor = build_preflight_req_cbor(total, queued, consumed, &self.actions)?;
+        Ok(PolicyPreflightPayloads {
+            text: text.into_bytes(),
+            cbor,
+        })
+    }
+
+    pub fn preflight_diff_payloads(&self) -> Result<PolicyPreflightPayloads, NineDoorError> {
+        let mut unmatched = 0usize;
+        for action in &self.actions {
+            if !self.rules.iter().any(|rule| rule.matches_path(&action.path)) {
+                unmatched = unmatched.saturating_add(1);
+            }
+        }
+        let mut text = String::new();
+        let _ = writeln!(
+            text,
+            "diff rules={} actions={} unmatched={}",
+            self.rules.len(),
+            self.actions.len(),
+            unmatched
+        );
+        let mut rule_counts = Vec::with_capacity(self.rules.len());
+        for rule in &self.rules {
+            let mut queued = 0usize;
+            let mut consumed = 0usize;
+            for action in &self.actions {
+                if rule.matches_path(&action.path) {
+                    if action.consumed {
+                        consumed = consumed.saturating_add(1);
+                    } else {
+                        queued = queued.saturating_add(1);
+                    }
+                }
+            }
+            rule_counts.push((queued, consumed));
+            let _ = writeln!(
+                text,
+                "rule id={} target={} queued={} consumed={}",
+                rule.id, rule.target, queued, consumed
+            );
+        }
+        ensure_stream_len("policy/preflight/diff", text.len())?;
+        let cbor = build_preflight_diff_cbor(self.rules.len(), self.actions.len(), unmatched, &self.rules, &rule_counts)?;
+        Ok(PolicyPreflightPayloads {
+            text: text.into_bytes(),
+            cbor,
+        })
     }
 
     pub fn append_policy_ctl(
@@ -448,6 +535,93 @@ struct PolicyStatusSnapshot<'a> {
     state: &'a str,
 }
 
+fn build_preflight_req_cbor(
+    total: usize,
+    queued: usize,
+    consumed: usize,
+    actions: &[PolicyAction],
+) -> Result<Vec<u8>, NineDoorError> {
+    let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
+    writer
+        .map(4)
+        .map_err(|err| cbor_error("policy/preflight/req.cbor", err))?;
+    writer
+        .text("total")
+        .and_then(|_| writer.unsigned(total as u64))
+        .map_err(|err| cbor_error("policy/preflight/req.cbor", err))?;
+    writer
+        .text("queued")
+        .and_then(|_| writer.unsigned(queued as u64))
+        .map_err(|err| cbor_error("policy/preflight/req.cbor", err))?;
+    writer
+        .text("consumed")
+        .and_then(|_| writer.unsigned(consumed as u64))
+        .map_err(|err| cbor_error("policy/preflight/req.cbor", err))?;
+    writer
+        .text("actions")
+        .and_then(|_| writer.array(actions.len()))
+        .map_err(|err| cbor_error("policy/preflight/req.cbor", err))?;
+    for action in actions {
+        let state = if action.consumed { "consumed" } else { "queued" };
+        let decision = policy_decision_label(action.decision);
+        writer
+            .map(4)
+            .and_then(|_| writer.text("id"))
+            .and_then(|_| writer.text(&action.id))
+            .and_then(|_| writer.text("target"))
+            .and_then(|_| writer.text(&action.target))
+            .and_then(|_| writer.text("decision"))
+            .and_then(|_| writer.text(decision))
+            .and_then(|_| writer.text("state"))
+            .and_then(|_| writer.text(state))
+            .map_err(|err| cbor_error("policy/preflight/req.cbor", err))?;
+    }
+    Ok(writer.into_bytes())
+}
+
+fn build_preflight_diff_cbor(
+    rules_total: usize,
+    actions_total: usize,
+    unmatched: usize,
+    rules: &[PolicyRule],
+    rule_counts: &[(usize, usize)],
+) -> Result<Vec<u8>, NineDoorError> {
+    let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
+    writer
+        .map(4)
+        .map_err(|err| cbor_error("policy/preflight/diff.cbor", err))?;
+    writer
+        .text("rules")
+        .and_then(|_| writer.unsigned(rules_total as u64))
+        .map_err(|err| cbor_error("policy/preflight/diff.cbor", err))?;
+    writer
+        .text("actions")
+        .and_then(|_| writer.unsigned(actions_total as u64))
+        .map_err(|err| cbor_error("policy/preflight/diff.cbor", err))?;
+    writer
+        .text("unmatched")
+        .and_then(|_| writer.unsigned(unmatched as u64))
+        .map_err(|err| cbor_error("policy/preflight/diff.cbor", err))?;
+    writer
+        .text("entries")
+        .and_then(|_| writer.array(rules.len()))
+        .map_err(|err| cbor_error("policy/preflight/diff.cbor", err))?;
+    for (rule, (queued, consumed)) in rules.iter().zip(rule_counts.iter()) {
+        writer
+            .map(4)
+            .and_then(|_| writer.text("id"))
+            .and_then(|_| writer.text(&rule.id))
+            .and_then(|_| writer.text("target"))
+            .and_then(|_| writer.text(&rule.target))
+            .and_then(|_| writer.text("queued"))
+            .and_then(|_| writer.unsigned(*queued as u64))
+            .and_then(|_| writer.text("consumed"))
+            .and_then(|_| writer.unsigned(*consumed as u64))
+            .map_err(|err| cbor_error("policy/preflight/diff.cbor", err))?;
+    }
+    Ok(writer.into_bytes())
+}
+
 fn render_rules_snapshot(
     enabled: bool,
     rules: &[PolicyRule],
@@ -540,6 +714,35 @@ fn parse_action_lines(data: &[u8]) -> Result<Vec<ActionRequest>, NineDoorError> 
         actions.push(action);
     }
     Ok(actions)
+}
+
+fn ensure_stream_len(label: &str, len: usize) -> Result<(), NineDoorError> {
+    if len > UI_MAX_STREAM_BYTES {
+        return Err(NineDoorError::protocol(
+            ErrorCode::TooBig,
+            format!(
+                "{label} output exceeds {} bytes",
+                UI_MAX_STREAM_BYTES
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn cbor_error(label: &str, err: CborError) -> NineDoorError {
+    match err {
+        CborError::TooLarge => NineDoorError::protocol(
+            ErrorCode::TooBig,
+            format!("{label} output exceeds {} bytes", UI_MAX_STREAM_BYTES),
+        ),
+    }
+}
+
+fn policy_decision_label(decision: PolicyDecision) -> &'static str {
+    match decision {
+        PolicyDecision::Approve => "approve",
+        PolicyDecision::Deny => "deny",
+    }
 }
 
 fn validate_action_id(id: &str) -> Result<(), NineDoorError> {

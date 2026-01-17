@@ -24,6 +24,9 @@ EXPECT OK
 cat /updates/100/manifest.cbor
 EXPECT OK
 EXPECT SUBSTR data=b64:iHdjb2hlc2l4
+cat /updates/100/status
+EXPECT OK
+EXPECT SUBSTR state=ready
 
 # Invalid signature manifest (negative case).
 echo b64:iHdjb2hlc2l4LWNhcy9tYW5pZmVzdC12MWMxMDIYgBiAWCC2rDzBA4YzHHZfBPBBwUfQ8njyrtjqoCHi0AV/xvb/noFY > /updates/102/manifest.cbor
@@ -56,4 +59,6 @@ EXPECT SUBSTR data=b64:iHdjb2hlc2l4LWNh
 cat /updates/100/chunks/b6ac3cc10386331c765f04f041c147d0f278f2aed8eaa021e2d0057fc6f6ff9e
 EXPECT OK
 EXPECT SUBSTR data=b64:QUFB
+cat /policy/preflight/req
+EXPECT ERR
 quit

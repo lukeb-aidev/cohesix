@@ -140,6 +140,40 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub proc_ingest: ProcIngestConfig,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct UiProc9pConfig {{")?;
+    writeln!(mod_contents, "    pub sessions: bool,")?;
+    writeln!(mod_contents, "    pub outstanding: bool,")?;
+    writeln!(mod_contents, "    pub short_writes: bool,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct UiProcIngestConfig {{")?;
+    writeln!(mod_contents, "    pub p50_ms: bool,")?;
+    writeln!(mod_contents, "    pub p95_ms: bool,")?;
+    writeln!(mod_contents, "    pub backpressure: bool,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct UiPolicyPreflightConfig {{")?;
+    writeln!(mod_contents, "    pub req: bool,")?;
+    writeln!(mod_contents, "    pub diff: bool,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct UiUpdatesConfig {{")?;
+    writeln!(mod_contents, "    pub manifest: bool,")?;
+    writeln!(mod_contents, "    pub status: bool,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct UiProviderConfig {{")?;
+    writeln!(mod_contents, "    pub proc_9p: UiProc9pConfig,")?;
+    writeln!(mod_contents, "    pub proc_ingest: UiProcIngestConfig,")?;
+    writeln!(mod_contents, "    pub policy_preflight: UiPolicyPreflightConfig,")?;
+    writeln!(mod_contents, "    pub updates: UiUpdatesConfig,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
     writeln!(mod_contents, "pub enum HostProvider {{")?;
     writeln!(mod_contents, "    Systemd,")?;
@@ -254,6 +288,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();")?;
     writeln!(mod_contents, "pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;")?;
     writeln!(mod_contents, "pub const OBSERVABILITY_CONFIG: ObservabilityConfig = bootstrap::OBSERVABILITY_CONFIG;")?;
+    writeln!(mod_contents, "pub const UI_PROVIDER_CONFIG: UiProviderConfig = bootstrap::UI_PROVIDER_CONFIG;")?;
     writeln!(mod_contents, "pub const CAS_CONFIG: CasConfig = bootstrap::CAS_CONFIG;")?;
     writeln!(mod_contents, "pub const PROC_9P_SESSIONS_BYTES: usize = bootstrap::PROC_9P_SESSIONS_BYTES;")?;
     writeln!(mod_contents, "pub const PROC_9P_OUTSTANDING_BYTES: usize = bootstrap::PROC_9P_OUTSTANDING_BYTES;")?;
@@ -307,6 +342,10 @@ pub fn emit_rust(
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn observability_config() -> ObservabilityConfig {{")?;
     writeln!(mod_contents, "    bootstrap::OBSERVABILITY_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn ui_provider_config() -> UiProviderConfig {{")?;
+    writeln!(mod_contents, "    bootstrap::UI_PROVIDER_CONFIG")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn cas_config() -> CasConfig {{")?;
@@ -371,7 +410,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec}};"
+        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -544,6 +583,20 @@ pub fn emit_rust(
         manifest.observability.proc_ingest.latency_samples,
         manifest.observability.proc_ingest.latency_tolerance_ms,
         manifest.observability.proc_ingest.counter_tolerance
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const UI_PROVIDER_CONFIG: UiProviderConfig = UiProviderConfig {{ proc_9p: UiProc9pConfig {{ sessions: {}, outstanding: {}, short_writes: {} }}, proc_ingest: UiProcIngestConfig {{ p50_ms: {}, p95_ms: {}, backpressure: {} }}, policy_preflight: UiPolicyPreflightConfig {{ req: {}, diff: {} }}, updates: UiUpdatesConfig {{ manifest: {}, status: {} }} }};\n",
+        manifest.ui_providers.proc_9p.sessions,
+        manifest.ui_providers.proc_9p.outstanding,
+        manifest.ui_providers.proc_9p.short_writes,
+        manifest.ui_providers.proc_ingest.p50_ms,
+        manifest.ui_providers.proc_ingest.p95_ms,
+        manifest.ui_providers.proc_ingest.backpressure,
+        manifest.ui_providers.policy_preflight.req,
+        manifest.ui_providers.policy_preflight.diff,
+        manifest.ui_providers.updates.manifest,
+        manifest.ui_providers.updates.status
     )?;
     writeln!(
         bootstrap_contents,

@@ -71,7 +71,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [18](#18) | Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern) | Complete |
 | [19](#19) | cohsh-core Extraction (Shared Grammar & Transport) | Complete |
 | [20a](#20a) | cohsh as 9P Client Library | Complete |
-| [20b](#20b) | NineDoor UI Providers | Pending |
+| [20b](#20b) | NineDoor UI Providers | Complete |
 | [20c](#20c) | SwarmUI Desktop (Tauri, Pure 9P/TCP) | Pending |
 | [20d](#20d) | SwarmUI Live Hive Rendering (PixiJS, GPU-First | Pending |
 | [20e](#20e) | CLI/UI Convergence Tests | Pending |
@@ -1717,6 +1717,8 @@ Checks:
 Deliverables:
   - UI fixture outputs stored; docs reference status grammar.
 ```
+
+**Status:** Complete — UI providers are manifest-gated with bounded cursor-resume semantics, CBOR/text parity, and audit-deny paths; tests and regression pack are green.
 
 ---
 

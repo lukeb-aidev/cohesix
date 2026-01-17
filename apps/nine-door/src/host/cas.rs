@@ -6,6 +6,7 @@
 #![warn(missing_docs)]
 
 use std::collections::{BTreeMap, VecDeque};
+use std::fmt::Write as _;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohesix_cas::{CasManifest, CasManifestError, CAS_MANIFEST_SCHEMA};
@@ -15,6 +16,8 @@ use sha2::{Digest, Sha256};
 use signature::Verifier;
 use trace_model::TraceLevel;
 
+use super::cbor::{CborError, CborWriter};
+use super::ui::UI_MAX_STREAM_BYTES;
 use crate::NineDoorError;
 
 const CAS_MAX_CHUNKS: usize = 8;
@@ -93,6 +96,15 @@ pub struct CasStore {
     quarantine: VecDeque<QuarantineEntry>,
     events: VecDeque<CasEvent>,
     bytes_used: usize,
+}
+
+/// UI provider payloads for update status.
+#[derive(Debug, Clone)]
+pub struct UpdateStatusPayloads {
+    /// Text payload bytes.
+    pub text: Vec<u8>,
+    /// CBOR payload bytes.
+    pub cbor: Vec<u8>,
 }
 
 impl CasStore {
@@ -237,6 +249,17 @@ impl CasStore {
                 Ok(read_slice(data, offset, count))
             }
         }
+    }
+
+    /// Build update status payloads for UI providers.
+    pub fn update_status_payloads(
+        &self,
+        epoch: &str,
+    ) -> Result<UpdateStatusPayloads, NineDoorError> {
+        let snapshot = self.update_status_snapshot(epoch)?;
+        let text = build_update_status_text(&snapshot)?;
+        let cbor = build_update_status_cbor(&snapshot)?;
+        Ok(UpdateStatusPayloads { text, cbor })
     }
 
     pub fn append_manifest(
@@ -815,6 +838,22 @@ struct UpdateBundle {
     manifest: Option<CasManifest>,
 }
 
+#[derive(Debug, Clone)]
+struct UpdateStatusSnapshot {
+    epoch: String,
+    state: &'static str,
+    manifest_bytes: usize,
+    manifest_pending_bytes: usize,
+    chunks_expected: usize,
+    chunks_committed: usize,
+    chunks_pending: usize,
+    chunks_missing: usize,
+    payload_bytes: u64,
+    payload_sha256: Option<[u8; 32]>,
+    delta_base_epoch: Option<String>,
+    delta_base_sha256: Option<[u8; 32]>,
+}
+
 #[derive(Debug, Default)]
 struct ModelBundle {
     weights_committed: bool,
@@ -859,6 +898,63 @@ pub enum ModelFileKind {
     Signature,
 }
 
+impl CasStore {
+    fn update_status_snapshot(&self, epoch: &str) -> Result<UpdateStatusSnapshot, NineDoorError> {
+        let bundle = self
+            .updates
+            .get(epoch)
+            .ok_or_else(|| NineDoorError::protocol(ErrorCode::NotFound, "update not found"))?;
+        let manifest_bytes = bundle.manifest_bytes.as_ref().map_or(0, |data| data.len());
+        let manifest_pending_bytes = bundle.manifest_pending.len();
+        let mut snapshot = UpdateStatusSnapshot {
+            epoch: epoch.to_owned(),
+            state: "empty",
+            manifest_bytes,
+            manifest_pending_bytes,
+            chunks_expected: 0,
+            chunks_committed: 0,
+            chunks_pending: 0,
+            chunks_missing: 0,
+            payload_bytes: 0,
+            payload_sha256: None,
+            delta_base_epoch: None,
+            delta_base_sha256: None,
+        };
+        let Some(manifest) = bundle.manifest.as_ref() else {
+            if manifest_pending_bytes > 0 {
+                snapshot.state = "manifest_pending";
+            }
+            return Ok(snapshot);
+        };
+        snapshot.payload_bytes = manifest.payload_bytes;
+        snapshot.payload_sha256 = Some(manifest.payload_sha256);
+        if let Some(delta) = &manifest.delta {
+            snapshot.delta_base_epoch = Some(delta.base_epoch.clone());
+            snapshot.delta_base_sha256 = Some(delta.base_sha256);
+        }
+        snapshot.chunks_expected = manifest.chunks.len();
+        for digest in &manifest.chunks {
+            if self.chunks.contains_key(digest) {
+                snapshot.chunks_committed = snapshot.chunks_committed.saturating_add(1);
+                continue;
+            }
+            if self.pending_chunks.contains_key(digest) {
+                snapshot.chunks_pending = snapshot.chunks_pending.saturating_add(1);
+            }
+        }
+        snapshot.chunks_missing = snapshot
+            .chunks_expected
+            .saturating_sub(snapshot.chunks_committed)
+            .saturating_sub(snapshot.chunks_pending);
+        if snapshot.chunks_expected == snapshot.chunks_committed {
+            snapshot.state = "ready";
+        } else {
+            snapshot.state = "chunks_pending";
+        }
+        Ok(snapshot)
+    }
+}
+
 pub fn decode_payload(data: &[u8]) -> Result<Vec<u8>, NineDoorError> {
     let trimmed = trim_payload(data);
     if let Some(encoded) = trimmed.strip_prefix(b"b64:") {
@@ -867,6 +963,139 @@ pub fn decode_payload(data: &[u8]) -> Result<Vec<u8>, NineDoorError> {
         });
     }
     Ok(trimmed.to_vec())
+}
+
+fn build_update_status_text(snapshot: &UpdateStatusSnapshot) -> Result<Vec<u8>, NineDoorError> {
+    let payload_sha = snapshot
+        .payload_sha256
+        .map(hex::encode)
+        .unwrap_or_else(|| "none".to_owned());
+    let (delta_epoch, delta_sha) = match (&snapshot.delta_base_epoch, snapshot.delta_base_sha256) {
+        (Some(epoch), Some(sha)) => (epoch.as_str(), hex::encode(sha)),
+        _ => ("none", "none".to_owned()),
+    };
+    let mut text = String::new();
+    let _ = writeln!(
+        text,
+        "status epoch={} state={}",
+        snapshot.epoch,
+        snapshot.state
+    );
+    let _ = writeln!(
+        text,
+        "manifest_bytes={} manifest_pending_bytes={}",
+        snapshot.manifest_bytes,
+        snapshot.manifest_pending_bytes
+    );
+    let _ = writeln!(
+        text,
+        "chunks_expected={} chunks_committed={} chunks_pending={} chunks_missing={}",
+        snapshot.chunks_expected,
+        snapshot.chunks_committed,
+        snapshot.chunks_pending,
+        snapshot.chunks_missing
+    );
+    let _ = writeln!(
+        text,
+        "payload_bytes={} payload_sha256={}",
+        snapshot.payload_bytes,
+        payload_sha
+    );
+    let _ = writeln!(
+        text,
+        "delta_base_epoch={} delta_base_sha256={}",
+        delta_epoch,
+        delta_sha
+    );
+    ensure_stream_len("updates/<epoch>/status", text.len())?;
+    Ok(text.into_bytes())
+}
+
+fn build_update_status_cbor(snapshot: &UpdateStatusSnapshot) -> Result<Vec<u8>, NineDoorError> {
+    let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
+    writer
+        .map(11)
+        .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
+    writer
+        .text("epoch")
+        .and_then(|_| writer.text(&snapshot.epoch))
+        .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
+    writer
+        .text("state")
+        .and_then(|_| writer.text(snapshot.state))
+        .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
+    writer
+        .text("manifest_bytes")
+        .and_then(|_| writer.unsigned(snapshot.manifest_bytes as u64))
+        .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
+    writer
+        .text("manifest_pending_bytes")
+        .and_then(|_| writer.unsigned(snapshot.manifest_pending_bytes as u64))
+        .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
+    writer
+        .text("chunks_expected")
+        .and_then(|_| writer.unsigned(snapshot.chunks_expected as u64))
+        .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
+    writer
+        .text("chunks_committed")
+        .and_then(|_| writer.unsigned(snapshot.chunks_committed as u64))
+        .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
+    writer
+        .text("chunks_pending")
+        .and_then(|_| writer.unsigned(snapshot.chunks_pending as u64))
+        .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
+    writer
+        .text("chunks_missing")
+        .and_then(|_| writer.unsigned(snapshot.chunks_missing as u64))
+        .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
+    writer
+        .text("payload_bytes")
+        .and_then(|_| writer.unsigned(snapshot.payload_bytes))
+        .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
+    writer
+        .text("payload_sha256")
+        .and_then(|_| match snapshot.payload_sha256 {
+            Some(sha) => writer.bytes(&sha),
+            None => writer.null(),
+        })
+        .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
+    writer
+        .text("delta")
+        .and_then(|_| match (&snapshot.delta_base_epoch, snapshot.delta_base_sha256) {
+            (Some(epoch), Some(sha)) => {
+                writer.map(2)?;
+                writer.text("base_epoch")?;
+                writer.text(epoch)?;
+                writer.text("base_sha256")?;
+                writer.bytes(&sha)?;
+                Ok(())
+            }
+            _ => writer.null(),
+        })
+        .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
+    Ok(writer.into_bytes())
+}
+
+fn ensure_stream_len(label: &str, len: usize) -> Result<(), NineDoorError> {
+    if len > UI_MAX_STREAM_BYTES {
+        return Err(NineDoorError::protocol(
+            ErrorCode::TooBig,
+            format!(
+                "{label} output exceeds {} bytes",
+                UI_MAX_STREAM_BYTES
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn cbor_error(label: &str, err: CborError) -> NineDoorError {
+    match err {
+        CborError::TooLarge => NineDoorError::protocol(
+            ErrorCode::TooBig,
+            format!("{label} output exceeds {} bytes", UI_MAX_STREAM_BYTES),
+        ),
+    }
 }
 
 fn trim_payload(data: &[u8]) -> &[u8] {

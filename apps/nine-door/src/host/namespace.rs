@@ -17,12 +17,15 @@ use worker_lora::{
     DutyCycleConfig, DutyCycleDecision, DutyCycleGuard, TamperEntry, TamperLog, TamperReason,
 };
 
-use super::cas::{parse_sha256, validate_epoch, CasConfig, CasStore, ModelFileKind};
+use super::cas::{
+    parse_sha256, validate_epoch, CasConfig, CasStore, ModelFileKind, UpdateStatusPayloads,
+};
 use super::observe::ObserveConfig;
 use super::telemetry::{
     TelemetryAudit, TelemetryAuditLevel, TelemetryConfig, TelemetryFile, TelemetryManifestStore,
 };
 use super::tracefs::TraceFs;
+use super::ui::{match_ui_provider, UiProviderConfig, UiProviderKind, UiVariant};
 use crate::NineDoorError;
 
 const SELFTEST_QUICK_SCRIPT: &str = include_str!(concat!(
@@ -518,6 +521,7 @@ pub struct Namespace {
     telemetry_manifest: TelemetryManifestStore,
     cas: CasStore,
     worker_ids: BTreeSet<String>,
+    ui: UiProviderConfig,
     host: HostNamespaceConfig,
     sidecar_modbus: SidecarBusState,
     sidecar_dnp3: SidecarBusState,
@@ -527,6 +531,17 @@ pub struct Namespace {
     policy: PolicyNamespaceConfig,
     audit: AuditNamespaceConfig,
     replay: ReplayNamespaceConfig,
+}
+
+/// Metadata for matched UI provider paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiProviderInfo {
+    /// Provider kind.
+    pub kind: UiProviderKind,
+    /// Variant requested for the provider.
+    pub variant: UiVariant,
+    /// Whether the provider is enabled for this namespace.
+    pub enabled: bool,
 }
 
 impl Namespace {
@@ -543,6 +558,7 @@ impl Namespace {
             TelemetryManifestStore::default(),
             CasConfig::disabled(),
             ShardLayout::default(),
+            UiProviderConfig::default(),
             HostNamespaceConfig::disabled(),
             SidecarNamespaceConfig::disabled(),
             PolicyNamespaceConfig::disabled(),
@@ -561,6 +577,7 @@ impl Namespace {
             telemetry_manifest,
             CasConfig::disabled(),
             ShardLayout::default(),
+            UiProviderConfig::default(),
             HostNamespaceConfig::disabled(),
             SidecarNamespaceConfig::disabled(),
             PolicyNamespaceConfig::disabled(),
@@ -575,6 +592,7 @@ impl Namespace {
         telemetry_manifest: TelemetryManifestStore,
         cas: CasConfig,
         shards: ShardLayout,
+        ui: UiProviderConfig,
         host: HostNamespaceConfig,
         sidecars: SidecarNamespaceConfig,
         policy: PolicyNamespaceConfig,
@@ -596,6 +614,7 @@ impl Namespace {
             telemetry_manifest,
             cas: CasStore::new(cas),
             worker_ids: BTreeSet::new(),
+            ui,
             host,
             sidecar_modbus,
             sidecar_dnp3,
@@ -621,6 +640,7 @@ impl Namespace {
             telemetry_manifest,
             CasConfig::disabled(),
             ShardLayout::default(),
+            UiProviderConfig::default(),
             host,
             SidecarNamespaceConfig::disabled(),
             PolicyNamespaceConfig::disabled(),
@@ -637,6 +657,30 @@ impl Namespace {
     /// Return the manifest-driven shard layout.
     pub fn shard_layout(&self) -> &ShardLayout {
         &self.shards
+    }
+
+    /// Return UI provider metadata for the supplied canonical path.
+    pub fn ui_provider_info(&self, path: &[String]) -> Option<UiProviderInfo> {
+        let matched = match_ui_provider(path)?;
+        let enabled = match matched.kind {
+            UiProviderKind::Proc9pSessions => self.ui.proc_9p.sessions,
+            UiProviderKind::Proc9pOutstanding => self.ui.proc_9p.outstanding,
+            UiProviderKind::Proc9pShortWrites => self.ui.proc_9p.short_writes,
+            UiProviderKind::ProcIngestP50 => self.ui.proc_ingest.p50_ms,
+            UiProviderKind::ProcIngestP95 => self.ui.proc_ingest.p95_ms,
+            UiProviderKind::ProcIngestBackpressure => self.ui.proc_ingest.backpressure,
+            UiProviderKind::PolicyPreflightReq => self.ui.policy_preflight.req && self.policy.enabled,
+            UiProviderKind::PolicyPreflightDiff => {
+                self.ui.policy_preflight.diff && self.policy.enabled
+            }
+            UiProviderKind::UpdatesManifest => self.ui.updates.manifest && self.cas.enabled(),
+            UiProviderKind::UpdatesStatus => self.ui.updates.status && self.cas.enabled(),
+        };
+        Some(UiProviderInfo {
+            kind: matched.kind,
+            variant: matched.variant,
+            enabled,
+        })
     }
 
     /// Return the configured host mount path, if enabled.
@@ -876,6 +920,11 @@ impl Namespace {
                 ))),
             }
         };
+        let update_epoch = match &action {
+            WriteAction::CasManifest(epoch) => Some(epoch.clone()),
+            WriteAction::CasChunk { epoch, .. } => Some(epoch.clone()),
+            _ => None,
+        };
         let result = match action {
             WriteAction::Result(result) => result,
             WriteAction::CasManifest(epoch) => {
@@ -888,6 +937,13 @@ impl Namespace {
                 self.cas.append_model_file(&digest, kind, offset, data)
             }
         };
+        if let Some(epoch) = update_epoch {
+            if let Err(err) = self.refresh_update_status(&epoch) {
+                if result.is_ok() {
+                    return Err(err);
+                }
+            }
+        }
         if let Some(audit) = audit {
             self.record_telemetry_audit(audit)?;
         }
@@ -1096,10 +1152,15 @@ impl Namespace {
             }
             CasPath::UpdateEpoch { .. } => {
                 self.ensure_cas_path(path)?;
-                Ok(Some(vec![
-                    "chunks".to_owned(),
-                    "manifest.cbor".to_owned(),
-                ]))
+                let mut entries = vec!["chunks".to_owned()];
+                if self.ui.updates.manifest {
+                    entries.push("manifest.cbor".to_owned());
+                }
+                if self.ui.updates.status {
+                    entries.push("status".to_owned());
+                    entries.push("status.cbor".to_owned());
+                }
+                Ok(Some(entries))
             }
             CasPath::UpdateChunks { epoch } => {
                 self.ensure_cas_path(path)?;
@@ -1130,6 +1191,7 @@ impl Namespace {
             }
             CasPath::UpdateEpoch { epoch }
             | CasPath::UpdateManifest { epoch }
+            | CasPath::UpdateStatus { epoch, .. }
             | CasPath::UpdateChunks { epoch } => {
                 self.cas.ensure_update(&epoch)?;
                 self.ensure_cas_update_nodes(&epoch)?;
@@ -1161,13 +1223,19 @@ impl Namespace {
         let updates_root = vec!["updates".to_owned()];
         self.ensure_dir_raw(&updates_root, epoch)?;
         let update_path = vec!["updates".to_owned(), epoch.to_owned()];
-        self.ensure_file_raw(
-            &update_path,
-            "manifest.cbor",
-            FileNode::CasManifest {
-                epoch: epoch.to_owned(),
-            },
-        )?;
+        if self.ui.updates.manifest {
+            self.ensure_file_raw(
+                &update_path,
+                "manifest.cbor",
+                FileNode::CasManifest {
+                    epoch: epoch.to_owned(),
+                },
+            )?;
+        }
+        if self.ui.updates.status {
+            self.ensure_read_only_file(&update_path, "status", b"")?;
+            self.ensure_read_only_file(&update_path, "status.cbor", b"")?;
+        }
         self.ensure_dir_raw(&update_path, "chunks")?;
         Ok(())
     }
@@ -1231,6 +1299,25 @@ impl Namespace {
             self.trace.record(event.level, "cas", None, &event.message);
             self.append_cas_log(&event.message)?;
         }
+        Ok(())
+    }
+
+    fn refresh_update_status(&mut self, epoch: &str) -> Result<(), NineDoorError> {
+        if !self.ui.updates.status || !self.cas.enabled() {
+            return Ok(());
+        }
+        let payloads = self.cas.update_status_payloads(epoch)?;
+        self.write_update_status_payloads(epoch, payloads)
+    }
+
+    fn write_update_status_payloads(
+        &mut self,
+        epoch: &str,
+        payloads: UpdateStatusPayloads,
+    ) -> Result<(), NineDoorError> {
+        self.ensure_cas_update_nodes(epoch)?;
+        self.set_update_status_payload(epoch, &payloads.text)?;
+        self.set_update_status_cbor_payload(epoch, &payloads.cbor)?;
         Ok(())
     }
 
@@ -1346,27 +1433,33 @@ impl Namespace {
         if config.proc_9p.enabled() {
             self.ensure_dir(&proc_path, "9p")?;
             let proc_9p_path = vec!["proc".to_owned(), "9p".to_owned()];
-            if config.proc_9p.sessions {
+            if config.proc_9p.sessions && self.ui.proc_9p.sessions {
                 self.ensure_read_only_file(&proc_9p_path, "sessions", b"")?;
+                self.ensure_read_only_file(&proc_9p_path, "sessions.cbor", b"")?;
             }
-            if config.proc_9p.outstanding {
+            if config.proc_9p.outstanding && self.ui.proc_9p.outstanding {
                 self.ensure_read_only_file(&proc_9p_path, "outstanding", b"")?;
+                self.ensure_read_only_file(&proc_9p_path, "outstanding.cbor", b"")?;
             }
-            if config.proc_9p.short_writes {
+            if config.proc_9p.short_writes && self.ui.proc_9p.short_writes {
                 self.ensure_read_only_file(&proc_9p_path, "short_writes", b"")?;
+                self.ensure_read_only_file(&proc_9p_path, "short_writes.cbor", b"")?;
             }
         }
         if config.proc_ingest.enabled() {
             self.ensure_dir(&proc_path, "ingest")?;
             let ingest_path = vec!["proc".to_owned(), "ingest".to_owned()];
-            if config.proc_ingest.p50_ms {
+            if config.proc_ingest.p50_ms && self.ui.proc_ingest.p50_ms {
                 self.ensure_read_only_file(&ingest_path, "p50_ms", b"")?;
+                self.ensure_read_only_file(&ingest_path, "p50_ms.cbor", b"")?;
             }
-            if config.proc_ingest.p95_ms {
+            if config.proc_ingest.p95_ms && self.ui.proc_ingest.p95_ms {
                 self.ensure_read_only_file(&ingest_path, "p95_ms", b"")?;
+                self.ensure_read_only_file(&ingest_path, "p95_ms.cbor", b"")?;
             }
-            if config.proc_ingest.backpressure {
+            if config.proc_ingest.backpressure && self.ui.proc_ingest.backpressure {
                 self.ensure_read_only_file(&ingest_path, "backpressure", b"")?;
+                self.ensure_read_only_file(&ingest_path, "backpressure.cbor", b"")?;
             }
             if config.proc_ingest.dropped {
                 self.ensure_read_only_file(&ingest_path, "dropped", b"")?;
@@ -1413,6 +1506,18 @@ impl Namespace {
         let rules_snapshot = self.policy.rules_snapshot.clone();
         self.ensure_append_only_file(&policy_root, "ctl", b"")?;
         self.ensure_read_only_file(&policy_root, "rules", &rules_snapshot)?;
+        if self.ui.policy_preflight.req || self.ui.policy_preflight.diff {
+            self.ensure_dir(&policy_root, "preflight")?;
+            let preflight_root = vec!["policy".to_owned(), "preflight".to_owned()];
+            if self.ui.policy_preflight.req {
+                self.ensure_read_only_file(&preflight_root, "req", b"")?;
+                self.ensure_read_only_file(&preflight_root, "req.cbor", b"")?;
+            }
+            if self.ui.policy_preflight.diff {
+                self.ensure_read_only_file(&preflight_root, "diff", b"")?;
+                self.ensure_read_only_file(&preflight_root, "diff.cbor", b"")?;
+            }
+        }
         self.ensure_dir(&[], "actions")?;
         let actions_root = vec!["actions".to_owned()];
         self.ensure_append_only_file(&actions_root, "queue", b"")?;
@@ -1657,32 +1762,84 @@ impl Namespace {
 
     /// Replace the `/proc/9p/sessions` contents.
     pub fn set_proc_sessions_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(self.ui.proc_9p.sessions, "proc/9p/sessions")?;
         let parent = vec!["proc".to_owned(), "9p".to_owned()];
         self.set_read_only_file(&parent, "sessions", data)
     }
 
+    /// Replace the `/proc/9p/sessions.cbor` contents.
+    pub fn set_proc_sessions_cbor_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(self.ui.proc_9p.sessions, "proc/9p/sessions.cbor")?;
+        let parent = vec!["proc".to_owned(), "9p".to_owned()];
+        self.set_read_only_file(&parent, "sessions.cbor", data)
+    }
+
     /// Replace the `/proc/9p/outstanding` contents.
     pub fn set_proc_outstanding_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(self.ui.proc_9p.outstanding, "proc/9p/outstanding")?;
         let parent = vec!["proc".to_owned(), "9p".to_owned()];
         self.set_read_only_file(&parent, "outstanding", data)
     }
 
+    /// Replace the `/proc/9p/outstanding.cbor` contents.
+    pub fn set_proc_outstanding_cbor_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(
+            self.ui.proc_9p.outstanding,
+            "proc/9p/outstanding.cbor",
+        )?;
+        let parent = vec!["proc".to_owned(), "9p".to_owned()];
+        self.set_read_only_file(&parent, "outstanding.cbor", data)
+    }
+
     /// Replace the `/proc/9p/short_writes` contents.
     pub fn set_proc_short_writes_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(self.ui.proc_9p.short_writes, "proc/9p/short_writes")?;
         let parent = vec!["proc".to_owned(), "9p".to_owned()];
         self.set_read_only_file(&parent, "short_writes", data)
     }
 
+    /// Replace the `/proc/9p/short_writes.cbor` contents.
+    pub fn set_proc_short_writes_cbor_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(
+            self.ui.proc_9p.short_writes,
+            "proc/9p/short_writes.cbor",
+        )?;
+        let parent = vec!["proc".to_owned(), "9p".to_owned()];
+        self.set_read_only_file(&parent, "short_writes.cbor", data)
+    }
+
     /// Replace the `/proc/ingest/p50_ms` contents.
     pub fn set_proc_ingest_p50_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(self.ui.proc_ingest.p50_ms, "proc/ingest/p50_ms")?;
         let parent = vec!["proc".to_owned(), "ingest".to_owned()];
         self.set_read_only_file(&parent, "p50_ms", data)
     }
 
+    /// Replace the `/proc/ingest/p50_ms.cbor` contents.
+    pub fn set_proc_ingest_p50_cbor_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(
+            self.ui.proc_ingest.p50_ms,
+            "proc/ingest/p50_ms.cbor",
+        )?;
+        let parent = vec!["proc".to_owned(), "ingest".to_owned()];
+        self.set_read_only_file(&parent, "p50_ms.cbor", data)
+    }
+
     /// Replace the `/proc/ingest/p95_ms` contents.
     pub fn set_proc_ingest_p95_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(self.ui.proc_ingest.p95_ms, "proc/ingest/p95_ms")?;
         let parent = vec!["proc".to_owned(), "ingest".to_owned()];
         self.set_read_only_file(&parent, "p95_ms", data)
+    }
+
+    /// Replace the `/proc/ingest/p95_ms.cbor` contents.
+    pub fn set_proc_ingest_p95_cbor_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(
+            self.ui.proc_ingest.p95_ms,
+            "proc/ingest/p95_ms.cbor",
+        )?;
+        let parent = vec!["proc".to_owned(), "ingest".to_owned()];
+        self.set_read_only_file(&parent, "p95_ms.cbor", data)
     }
 
     /// Replace the `/proc/ingest/backpressure` contents.
@@ -1690,8 +1847,25 @@ impl Namespace {
         &mut self,
         data: &[u8],
     ) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(
+            self.ui.proc_ingest.backpressure,
+            "proc/ingest/backpressure",
+        )?;
         let parent = vec!["proc".to_owned(), "ingest".to_owned()];
         self.set_read_only_file(&parent, "backpressure", data)
+    }
+
+    /// Replace the `/proc/ingest/backpressure.cbor` contents.
+    pub fn set_proc_ingest_backpressure_cbor_payload(
+        &mut self,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(
+            self.ui.proc_ingest.backpressure,
+            "proc/ingest/backpressure.cbor",
+        )?;
+        let parent = vec!["proc".to_owned(), "ingest".to_owned()];
+        self.set_read_only_file(&parent, "backpressure.cbor", data)
     }
 
     /// Replace the `/proc/ingest/dropped` contents.
@@ -1712,6 +1886,68 @@ impl Namespace {
         self.set_append_only_file(&parent, "watch", data)
     }
 
+    /// Replace the `/policy/preflight/req` contents.
+    pub fn set_policy_preflight_req_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(self.ui.policy_preflight.req, "policy/preflight/req")?;
+        let parent = vec!["policy".to_owned(), "preflight".to_owned()];
+        self.set_read_only_file(&parent, "req", data)
+    }
+
+    /// Replace the `/policy/preflight/req.cbor` contents.
+    pub fn set_policy_preflight_req_cbor_payload(
+        &mut self,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(
+            self.ui.policy_preflight.req,
+            "policy/preflight/req.cbor",
+        )?;
+        let parent = vec!["policy".to_owned(), "preflight".to_owned()];
+        self.set_read_only_file(&parent, "req.cbor", data)
+    }
+
+    /// Replace the `/policy/preflight/diff` contents.
+    pub fn set_policy_preflight_diff_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(self.ui.policy_preflight.diff, "policy/preflight/diff")?;
+        let parent = vec!["policy".to_owned(), "preflight".to_owned()];
+        self.set_read_only_file(&parent, "diff", data)
+    }
+
+    /// Replace the `/policy/preflight/diff.cbor` contents.
+    pub fn set_policy_preflight_diff_cbor_payload(
+        &mut self,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(
+            self.ui.policy_preflight.diff,
+            "policy/preflight/diff.cbor",
+        )?;
+        let parent = vec!["policy".to_owned(), "preflight".to_owned()];
+        self.set_read_only_file(&parent, "diff.cbor", data)
+    }
+
+    /// Replace the `/updates/<epoch>/status` contents.
+    pub fn set_update_status_payload(
+        &mut self,
+        epoch: &str,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(self.ui.updates.status, "updates/<epoch>/status")?;
+        let parent = vec!["updates".to_owned(), epoch.to_owned()];
+        self.set_read_only_file(&parent, "status", data)
+    }
+
+    /// Replace the `/updates/<epoch>/status.cbor` contents.
+    pub fn set_update_status_cbor_payload(
+        &mut self,
+        epoch: &str,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        self.ensure_ui_provider_enabled(self.ui.updates.status, "updates/<epoch>/status.cbor")?;
+        let parent = vec!["updates".to_owned(), epoch.to_owned()];
+        self.set_read_only_file(&parent, "status.cbor", data)
+    }
+
     fn set_read_only_file(
         &mut self,
         parent: &[String],
@@ -1721,6 +1957,20 @@ impl Namespace {
         let mut node = self.lookup_mut(parent)?;
         node.remove_child(name);
         node.ensure_file(name, FileNode::ReadOnly(data.to_vec()));
+        Ok(())
+    }
+
+    fn ensure_ui_provider_enabled(
+        &self,
+        enabled: bool,
+        label: &str,
+    ) -> Result<(), NineDoorError> {
+        if !enabled {
+            return Err(NineDoorError::protocol(
+                ErrorCode::NotFound,
+                format!("ui provider {label} disabled"),
+            ));
+        }
         Ok(())
     }
 
@@ -2253,6 +2503,7 @@ enum CasPath {
     UpdatesRoot,
     UpdateEpoch { epoch: String },
     UpdateManifest { epoch: String },
+    UpdateStatus { epoch: String, variant: UiVariant },
     UpdateChunks { epoch: String },
     UpdateChunk { epoch: String, digest: [u8; 32] },
     ModelsRoot,
@@ -2275,6 +2526,14 @@ fn parse_cas_path(path: &[String]) -> Result<Option<CasPath>, NineDoorError> {
                 }),
                 [leaf] if leaf == "manifest.cbor" => Some(CasPath::UpdateManifest {
                     epoch: epoch.to_owned(),
+                }),
+                [leaf] if leaf == "status" => Some(CasPath::UpdateStatus {
+                    epoch: epoch.to_owned(),
+                    variant: UiVariant::Text,
+                }),
+                [leaf] if leaf == "status.cbor" => Some(CasPath::UpdateStatus {
+                    epoch: epoch.to_owned(),
+                    variant: UiVariant::Cbor,
                 }),
                 [leaf] if leaf == "chunks" => Some(CasPath::UpdateChunks {
                     epoch: epoch.to_owned(),

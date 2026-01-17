@@ -154,6 +154,26 @@
       "counter_tolerance": 1
     }
   },
+  "ui_providers": {
+    "proc_9p": {
+      "sessions": true,
+      "outstanding": true,
+      "short_writes": true
+    },
+    "proc_ingest": {
+      "p50_ms": true,
+      "p95_ms": true,
+      "backpressure": true
+    },
+    "policy_preflight": {
+      "req": false,
+      "diff": false
+    },
+    "updates": {
+      "manifest": true,
+      "status": true
+    }
+  },
   "client_policies": {
     "cohsh": {
       "pool": {

@@ -11,8 +11,10 @@ use std::time::Instant;
 
 use log::info;
 
+use super::cbor::{CborError, CborWriter};
 use super::pipeline::PipelineMetrics;
 use super::namespace::Namespace;
+use super::ui::{UiProviderConfig, UI_MAX_STREAM_BYTES};
 use crate::NineDoorError;
 
 /// Configuration for /proc/9p observability files.
@@ -142,16 +144,18 @@ impl Default for ObserveConfig {
 #[derive(Debug)]
 pub struct ObserveState {
     config: ObserveConfig,
+    ui: UiProviderConfig,
     start: Instant,
     ingest: IngestState,
 }
 
 impl ObserveState {
     /// Create a new observability state seeded with the supplied configuration.
-    pub fn new(config: ObserveConfig, start: Instant) -> Self {
+    pub fn new(config: ObserveConfig, ui: UiProviderConfig, start: Instant) -> Self {
         Self {
             ingest: IngestState::new(config.proc_ingest),
             config,
+            ui,
             start,
         }
     }
@@ -165,17 +169,45 @@ impl ObserveState {
     pub fn update_sessions(
         &self,
         namespace: &mut Namespace,
-        payload: &str,
+        total_sessions: usize,
+        worker_sessions: usize,
+        shard_bits: u8,
+        shard_labels: &[String],
+        shard_counts: &[usize],
     ) -> Result<(), NineDoorError> {
-        if !self.config.proc_9p.sessions {
+        if !self.config.proc_9p.sessions || !self.ui.proc_9p.sessions {
             return Ok(());
+        }
+        let mut payload = String::new();
+        let _ = writeln!(
+            payload,
+            "sessions total={} worker={} shard_bits={} shard_count={}",
+            total_sessions,
+            worker_sessions,
+            shard_bits,
+            shard_labels.len()
+        );
+        for (idx, label) in shard_labels.iter().enumerate() {
+            let count = shard_counts.get(idx).copied().unwrap_or(0);
+            let _ = writeln!(payload, "shard {} {}", label, count);
         }
         ensure_len(
             "proc/9p/sessions",
             payload.len(),
             self.config.proc_9p.sessions_bytes,
         )?;
-        namespace.set_proc_sessions_payload(payload.as_bytes())
+        ensure_stream_len("proc/9p/sessions", payload.len())?;
+        namespace.set_proc_sessions_payload(payload.as_bytes())?;
+
+        let cbor = build_proc_9p_sessions_cbor(
+            total_sessions as u64,
+            worker_sessions as u64,
+            shard_bits,
+            shard_labels,
+            shard_counts,
+        )?;
+        ensure_stream_len("proc/9p/sessions.cbor", cbor.len())?;
+        namespace.set_proc_sessions_cbor_payload(&cbor)
     }
 
     /// Update /proc/9p metrics derived from pipeline state.
@@ -184,7 +216,7 @@ impl ObserveState {
         namespace: &mut Namespace,
         metrics: PipelineMetrics,
     ) -> Result<(), NineDoorError> {
-        if self.config.proc_9p.outstanding {
+        if self.config.proc_9p.outstanding && self.ui.proc_9p.outstanding {
             let mut line = String::new();
             let _ = writeln!(
                 line,
@@ -196,9 +228,17 @@ impl ObserveState {
                 line.len(),
                 self.config.proc_9p.outstanding_bytes,
             )?;
+            ensure_stream_len("proc/9p/outstanding", line.len())?;
             namespace.set_proc_outstanding_payload(line.as_bytes())?;
+
+            let cbor = build_proc_9p_outstanding_cbor(
+                metrics.queue_depth as u64,
+                metrics.queue_limit as u64,
+            )?;
+            ensure_stream_len("proc/9p/outstanding.cbor", cbor.len())?;
+            namespace.set_proc_outstanding_cbor_payload(&cbor)?;
         }
-        if self.config.proc_9p.short_writes {
+        if self.config.proc_9p.short_writes && self.ui.proc_9p.short_writes {
             let mut line = String::new();
             let _ = writeln!(
                 line,
@@ -210,7 +250,12 @@ impl ObserveState {
                 line.len(),
                 self.config.proc_9p.short_writes_bytes,
             )?;
+            ensure_stream_len("proc/9p/short_writes", line.len())?;
             namespace.set_proc_short_writes_payload(line.as_bytes())?;
+
+            let cbor = build_proc_9p_short_writes_cbor(metrics.short_writes, metrics.short_write_retries)?;
+            ensure_stream_len("proc/9p/short_writes.cbor", cbor.len())?;
+            namespace.set_proc_short_writes_cbor_payload(&cbor)?;
         }
         Ok(())
     }
@@ -245,19 +290,29 @@ impl ObserveState {
             .try_into()
             .unwrap_or(u64::MAX);
         let snapshot = self.ingest.snapshot(metrics);
-        if config.p50_ms {
+        if config.p50_ms && self.ui.proc_ingest.p50_ms {
             let mut line = String::new();
             let _ = writeln!(line, "p50_ms={}", snapshot.p50_ms);
             ensure_len("proc/ingest/p50_ms", line.len(), config.p50_ms_bytes)?;
+            ensure_stream_len("proc/ingest/p50_ms", line.len())?;
             namespace.set_proc_ingest_p50_payload(line.as_bytes())?;
+
+            let cbor = build_proc_ingest_p50_cbor(snapshot.p50_ms)?;
+            ensure_stream_len("proc/ingest/p50_ms.cbor", cbor.len())?;
+            namespace.set_proc_ingest_p50_cbor_payload(&cbor)?;
         }
-        if config.p95_ms {
+        if config.p95_ms && self.ui.proc_ingest.p95_ms {
             let mut line = String::new();
             let _ = writeln!(line, "p95_ms={}", snapshot.p95_ms);
             ensure_len("proc/ingest/p95_ms", line.len(), config.p95_ms_bytes)?;
+            ensure_stream_len("proc/ingest/p95_ms", line.len())?;
             namespace.set_proc_ingest_p95_payload(line.as_bytes())?;
+
+            let cbor = build_proc_ingest_p95_cbor(snapshot.p95_ms)?;
+            ensure_stream_len("proc/ingest/p95_ms.cbor", cbor.len())?;
+            namespace.set_proc_ingest_p95_cbor_payload(&cbor)?;
         }
-        if config.backpressure {
+        if config.backpressure && self.ui.proc_ingest.backpressure {
             let mut line = String::new();
             let _ = writeln!(line, "backpressure={}", snapshot.backpressure);
             ensure_len(
@@ -265,7 +320,12 @@ impl ObserveState {
                 line.len(),
                 config.backpressure_bytes,
             )?;
+            ensure_stream_len("proc/ingest/backpressure", line.len())?;
             namespace.set_proc_ingest_backpressure_payload(line.as_bytes())?;
+
+            let cbor = build_proc_ingest_backpressure_cbor(snapshot.backpressure)?;
+            ensure_stream_len("proc/ingest/backpressure.cbor", cbor.len())?;
+            namespace.set_proc_ingest_backpressure_cbor_payload(&cbor)?;
         }
         if config.dropped {
             let mut line = String::new();
@@ -466,4 +526,138 @@ fn ensure_len(label: &str, len: usize, max: usize) -> Result<(), NineDoorError> 
         ));
     }
     Ok(())
+}
+
+fn ensure_stream_len(label: &str, len: usize) -> Result<(), NineDoorError> {
+    if len > UI_MAX_STREAM_BYTES {
+        return Err(NineDoorError::protocol(
+            secure9p_codec::ErrorCode::TooBig,
+            format!(
+                "{label} output exceeds {} bytes",
+                UI_MAX_STREAM_BYTES
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn build_proc_9p_sessions_cbor(
+    total: u64,
+    worker: u64,
+    shard_bits: u8,
+    shard_labels: &[String],
+    shard_counts: &[usize],
+) -> Result<Vec<u8>, NineDoorError> {
+    let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
+    writer
+        .map(5)
+        .map_err(|err| cbor_error("proc/9p/sessions.cbor", err))?;
+    writer
+        .text("total")
+        .and_then(|_| writer.unsigned(total))
+        .map_err(|err| cbor_error("proc/9p/sessions.cbor", err))?;
+    writer
+        .text("worker")
+        .and_then(|_| writer.unsigned(worker))
+        .map_err(|err| cbor_error("proc/9p/sessions.cbor", err))?;
+    writer
+        .text("shard_bits")
+        .and_then(|_| writer.unsigned(shard_bits as u64))
+        .map_err(|err| cbor_error("proc/9p/sessions.cbor", err))?;
+    writer
+        .text("shard_count")
+        .and_then(|_| writer.unsigned(shard_labels.len() as u64))
+        .map_err(|err| cbor_error("proc/9p/sessions.cbor", err))?;
+    writer
+        .text("shards")
+        .and_then(|_| writer.array(shard_labels.len()))
+        .map_err(|err| cbor_error("proc/9p/sessions.cbor", err))?;
+    for (idx, label) in shard_labels.iter().enumerate() {
+        let count = shard_counts.get(idx).copied().unwrap_or(0) as u64;
+        writer
+            .map(2)
+            .and_then(|_| writer.text("label"))
+            .and_then(|_| writer.text(label))
+            .and_then(|_| writer.text("count"))
+            .and_then(|_| writer.unsigned(count))
+            .map_err(|err| cbor_error("proc/9p/sessions.cbor", err))?;
+    }
+    Ok(writer.into_bytes())
+}
+
+fn build_proc_9p_outstanding_cbor(current: u64, limit: u64) -> Result<Vec<u8>, NineDoorError> {
+    let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
+    writer
+        .map(2)
+        .map_err(|err| cbor_error("proc/9p/outstanding.cbor", err))?;
+    writer
+        .text("current")
+        .and_then(|_| writer.unsigned(current))
+        .map_err(|err| cbor_error("proc/9p/outstanding.cbor", err))?;
+    writer
+        .text("limit")
+        .and_then(|_| writer.unsigned(limit))
+        .map_err(|err| cbor_error("proc/9p/outstanding.cbor", err))?;
+    Ok(writer.into_bytes())
+}
+
+fn build_proc_9p_short_writes_cbor(total: u64, retries: u64) -> Result<Vec<u8>, NineDoorError> {
+    let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
+    writer
+        .map(2)
+        .map_err(|err| cbor_error("proc/9p/short_writes.cbor", err))?;
+    writer
+        .text("total")
+        .and_then(|_| writer.unsigned(total))
+        .map_err(|err| cbor_error("proc/9p/short_writes.cbor", err))?;
+    writer
+        .text("retries")
+        .and_then(|_| writer.unsigned(retries))
+        .map_err(|err| cbor_error("proc/9p/short_writes.cbor", err))?;
+    Ok(writer.into_bytes())
+}
+
+fn build_proc_ingest_p50_cbor(value: u32) -> Result<Vec<u8>, NineDoorError> {
+    let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
+    writer
+        .map(1)
+        .map_err(|err| cbor_error("proc/ingest/p50_ms.cbor", err))?;
+    writer
+        .text("p50_ms")
+        .and_then(|_| writer.unsigned(value as u64))
+        .map_err(|err| cbor_error("proc/ingest/p50_ms.cbor", err))?;
+    Ok(writer.into_bytes())
+}
+
+fn build_proc_ingest_p95_cbor(value: u32) -> Result<Vec<u8>, NineDoorError> {
+    let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
+    writer
+        .map(1)
+        .map_err(|err| cbor_error("proc/ingest/p95_ms.cbor", err))?;
+    writer
+        .text("p95_ms")
+        .and_then(|_| writer.unsigned(value as u64))
+        .map_err(|err| cbor_error("proc/ingest/p95_ms.cbor", err))?;
+    Ok(writer.into_bytes())
+}
+
+fn build_proc_ingest_backpressure_cbor(value: u64) -> Result<Vec<u8>, NineDoorError> {
+    let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
+    writer
+        .map(1)
+        .map_err(|err| cbor_error("proc/ingest/backpressure.cbor", err))?;
+    writer
+        .text("backpressure")
+        .and_then(|_| writer.unsigned(value))
+        .map_err(|err| cbor_error("proc/ingest/backpressure.cbor", err))?;
+    Ok(writer.into_bytes())
+}
+
+fn cbor_error(label: &str, err: CborError) -> NineDoorError {
+    match err {
+        CborError::TooLarge => NineDoorError::protocol(
+            secure9p_codec::ErrorCode::TooBig,
+            format!("{label} output exceeds {} bytes", UI_MAX_STREAM_BYTES),
+        ),
+    }
 }

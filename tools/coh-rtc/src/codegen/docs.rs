@@ -265,6 +265,66 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `ui_providers.proc_9p.sessions`: `{}`",
+            manifest.ui_providers.proc_9p.sessions
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `ui_providers.proc_9p.outstanding`: `{}`",
+            manifest.ui_providers.proc_9p.outstanding
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `ui_providers.proc_9p.short_writes`: `{}`",
+            manifest.ui_providers.proc_9p.short_writes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `ui_providers.proc_ingest.p50_ms`: `{}`",
+            manifest.ui_providers.proc_ingest.p50_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `ui_providers.proc_ingest.p95_ms`: `{}`",
+            manifest.ui_providers.proc_ingest.p95_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `ui_providers.proc_ingest.backpressure`: `{}`",
+            manifest.ui_providers.proc_ingest.backpressure
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `ui_providers.policy_preflight.req`: `{}`",
+            manifest.ui_providers.policy_preflight.req
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `ui_providers.policy_preflight.diff`: `{}`",
+            manifest.ui_providers.policy_preflight.diff
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `ui_providers.updates.manifest`: `{}`",
+            manifest.ui_providers.updates.manifest
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `ui_providers.updates.status`: `{}`",
+            manifest.ui_providers.updates.status
+        )
+        .ok();
+        writeln!(
+            schema_md,
             "- `client_policies.cohsh.pool.control_sessions`: `{}`",
             manifest.client_policies.cohsh.pool.control_sessions
         )

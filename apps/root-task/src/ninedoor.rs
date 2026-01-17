@@ -62,12 +62,18 @@ const CAS_MAX_MODELS: usize = 8;
 const CAS_QUARANTINE_LIMIT: usize = 8;
 const CAS_MANIFEST_MAX_BYTES: usize = 2048;
 const MAX_EPOCH_LEN: usize = 20;
+const UI_MAX_STREAM_BYTES: usize = 32 * 1024;
 const MAX_WORKER_ID_LEN: usize = 32;
 const TELEMETRY_AUDIT_LINE: usize = 128;
 const WORKER_TELEMETRY_FILE: &str = "telemetry";
 const POLICY_CTL_PATH: &str = "/policy/ctl";
 const POLICY_RULES_PATH: &str = "/policy/rules";
 const POLICY_ROOT_PATH: &str = "/policy";
+const POLICY_PREFLIGHT_ROOT_PATH: &str = "/policy/preflight";
+const POLICY_PREFLIGHT_REQ_PATH: &str = "/policy/preflight/req";
+const POLICY_PREFLIGHT_REQ_CBOR_PATH: &str = "/policy/preflight/req.cbor";
+const POLICY_PREFLIGHT_DIFF_PATH: &str = "/policy/preflight/diff";
+const POLICY_PREFLIGHT_DIFF_CBOR_PATH: &str = "/policy/preflight/diff.cbor";
 const ACTIONS_QUEUE_PATH: &str = "/actions/queue";
 const ACTIONS_ROOT_PATH: &str = "/actions";
 const AUDIT_ROOT_PATH: &str = "/audit";
@@ -121,6 +127,7 @@ pub struct NineDoorBridge {
     session_ticket: Option<String>,
     session_scope: Option<String>,
     next_worker_id: u32,
+    ui: generated::UiProviderConfig,
     telemetry: generated::TelemetryConfig,
     workers: HeaplessVec<WorkerTelemetry, MAX_WORKERS>,
     binds: HeaplessVec<BindEntry, MAX_BINDS>,
@@ -177,6 +184,7 @@ impl NineDoorBridge {
             session_ticket: None,
             session_scope: None,
             next_worker_id: 1,
+            ui: generated::ui_provider_config(),
             telemetry: generated::telemetry_config(),
             workers: HeaplessVec::new(),
             binds: HeaplessVec::new(),
@@ -549,6 +557,22 @@ impl NineDoorBridge {
             }
         }
         if self.policy.enabled {
+            if self.ui.policy_preflight.req && path == POLICY_PREFLIGHT_REQ_PATH {
+                let payload = self.policy.preflight_req_text()?;
+                return lines_from_bytes(payload.as_slice());
+            }
+            if self.ui.policy_preflight.req && path == POLICY_PREFLIGHT_REQ_CBOR_PATH {
+                let payload = self.policy.preflight_req_cbor()?;
+                return cas_lines_from_bytes(payload.as_slice());
+            }
+            if self.ui.policy_preflight.diff && path == POLICY_PREFLIGHT_DIFF_PATH {
+                let payload = self.policy.preflight_diff_text()?;
+                return lines_from_bytes(payload.as_slice());
+            }
+            if self.ui.policy_preflight.diff && path == POLICY_PREFLIGHT_DIFF_CBOR_PATH {
+                let payload = self.policy.preflight_diff_cbor()?;
+                return cas_lines_from_bytes(payload.as_slice());
+            }
             if path == POLICY_RULES_PATH {
                 return script_lines(self.policy.rules_json());
             }
@@ -574,6 +598,19 @@ impl NineDoorBridge {
         }
         let resolved = self.resolve_bound_path(path);
         let path = resolved.as_deref().unwrap_or(path);
+        if let Some(CasPath::UpdateStatus { epoch, cbor }) = parse_cas_path(path)? {
+            if !self.is_queen() {
+                return Err(NineDoorBridgeError::Permission);
+            }
+            if !self.cas.enabled() || !self.ui.updates.status {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            let payloads = self.cas.update_status_payloads(epoch.as_str())?;
+            if cbor {
+                return cas_lines_from_bytes(payloads.cbor.as_slice());
+            }
+            return lines_from_bytes(payloads.text.as_slice());
+        }
         if let Some(bytes) = self.cas.read_path(path, self.is_queen())? {
             return cas_lines_from_bytes(&bytes);
         }
@@ -701,7 +738,28 @@ impl NineDoorBridge {
         }
         if self.policy.enabled {
             if path == POLICY_ROOT_PATH {
-                return list_from_slice(&["ctl", "rules"]);
+                let mut output = HeaplessVec::new();
+                push_list_entry(&mut output, "ctl")?;
+                push_list_entry(&mut output, "rules")?;
+                if self.ui.policy_preflight.req || self.ui.policy_preflight.diff {
+                    push_list_entry(&mut output, "preflight")?;
+                }
+                return Ok(output);
+            }
+            if path == POLICY_PREFLIGHT_ROOT_PATH {
+                if !self.ui.policy_preflight.req && !self.ui.policy_preflight.diff {
+                    return Err(NineDoorBridgeError::InvalidPath);
+                }
+                let mut output = HeaplessVec::new();
+                if self.ui.policy_preflight.req {
+                    push_list_entry(&mut output, "req")?;
+                    push_list_entry(&mut output, "req.cbor")?;
+                }
+                if self.ui.policy_preflight.diff {
+                    push_list_entry(&mut output, "diff")?;
+                    push_list_entry(&mut output, "diff.cbor")?;
+                }
+                return Ok(output);
             }
             if path == ACTIONS_ROOT_PATH {
                 return list_from_slice(&["queue"]);
@@ -725,7 +783,12 @@ impl NineDoorBridge {
         }
         let resolved = self.resolve_bound_path(path);
         let path = resolved.as_deref().unwrap_or(path);
-        if let Some(output) = self.cas.list_path(path, self.is_queen())? {
+        if let Some(output) = self.cas.list_path(
+            path,
+            self.is_queen(),
+            self.ui.updates.manifest,
+            self.ui.updates.status,
+        )? {
             return Ok(output);
         }
         if let Some(output) = self.host.list(path) {
@@ -1321,6 +1384,7 @@ enum CasPath {
     UpdatesRoot,
     UpdateEpoch { epoch: String },
     UpdateManifest { epoch: String },
+    UpdateStatus { epoch: String, cbor: bool },
     UpdateChunks { epoch: String },
     UpdateChunk { epoch: String, digest: [u8; 32] },
     ModelsRoot,
@@ -1413,6 +1477,8 @@ impl CasState {
         &mut self,
         path: &str,
         is_queen: bool,
+        ui_updates_manifest: bool,
+        ui_updates_status: bool,
     ) -> Result<
         Option<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>>,
         NineDoorBridgeError,
@@ -1432,7 +1498,13 @@ impl CasState {
                 self.ensure_update(&epoch)?;
                 let mut entries = Vec::new();
                 entries.push("chunks".to_owned());
-                entries.push("manifest.cbor".to_owned());
+                if ui_updates_manifest {
+                    entries.push("manifest.cbor".to_owned());
+                }
+                if ui_updates_status {
+                    entries.push("status".to_owned());
+                    entries.push("status.cbor".to_owned());
+                }
                 entries
             }
             CasPath::UpdateChunks { epoch } => {
@@ -1489,6 +1561,74 @@ impl CasState {
                 .map(|data| data.to_vec())
                 .ok_or(NineDoorBridgeError::InvalidPath),
         }
+    }
+
+    fn update_status_payloads(
+        &self,
+        epoch: &str,
+    ) -> Result<UpdateStatusPayloads, NineDoorBridgeError> {
+        let snapshot = self.update_status_snapshot(epoch)?;
+        let text = build_update_status_text(&snapshot)?;
+        let cbor = build_update_status_cbor(&snapshot)?;
+        Ok(UpdateStatusPayloads { text, cbor })
+    }
+
+    fn update_status_snapshot(
+        &self,
+        epoch: &str,
+    ) -> Result<UpdateStatusSnapshot, NineDoorBridgeError> {
+        let bundle = self
+            .updates
+            .get(epoch)
+            .ok_or(NineDoorBridgeError::InvalidPath)?;
+        let manifest_bytes = bundle.manifest_bytes.as_ref().map_or(0, |data| data.len());
+        let manifest_pending_bytes = bundle.manifest_pending.len();
+        let mut snapshot = UpdateStatusSnapshot {
+            epoch: epoch.to_owned(),
+            state: "empty",
+            manifest_bytes,
+            manifest_pending_bytes,
+            chunks_expected: 0,
+            chunks_committed: 0,
+            chunks_pending: 0,
+            chunks_missing: 0,
+            payload_bytes: 0,
+            payload_sha256: None,
+            delta_base_epoch: None,
+            delta_base_sha256: None,
+        };
+        let Some(manifest) = bundle.manifest.as_ref() else {
+            if manifest_pending_bytes > 0 {
+                snapshot.state = "manifest_pending";
+            }
+            return Ok(snapshot);
+        };
+        snapshot.payload_bytes = manifest.payload_bytes;
+        snapshot.payload_sha256 = Some(manifest.payload_sha256);
+        if let Some(delta) = &manifest.delta {
+            snapshot.delta_base_epoch = Some(delta.base_epoch.clone());
+            snapshot.delta_base_sha256 = Some(delta.base_sha256);
+        }
+        snapshot.chunks_expected = manifest.chunks.len();
+        for digest in &manifest.chunks {
+            if self.chunks.contains_key(digest) {
+                snapshot.chunks_committed = snapshot.chunks_committed.saturating_add(1);
+                continue;
+            }
+            if self.pending_chunks.contains_key(digest) {
+                snapshot.chunks_pending = snapshot.chunks_pending.saturating_add(1);
+            }
+        }
+        snapshot.chunks_missing = snapshot
+            .chunks_expected
+            .saturating_sub(snapshot.chunks_committed)
+            .saturating_sub(snapshot.chunks_pending);
+        if snapshot.chunks_expected == snapshot.chunks_committed {
+            snapshot.state = "ready";
+        } else {
+            snapshot.state = "chunks_pending";
+        }
+        Ok(snapshot)
     }
 
     fn append_manifest(
@@ -1962,6 +2102,28 @@ struct UpdateBundle {
     manifest_bytes: Option<Vec<u8>>,
     manifest_pending: Vec<u8>,
     manifest: Option<CasManifest>,
+}
+
+#[derive(Debug)]
+struct UpdateStatusPayloads {
+    text: Vec<u8>,
+    cbor: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct UpdateStatusSnapshot {
+    epoch: String,
+    state: &'static str,
+    manifest_bytes: usize,
+    manifest_pending_bytes: usize,
+    chunks_expected: usize,
+    chunks_committed: usize,
+    chunks_pending: usize,
+    chunks_missing: usize,
+    payload_bytes: u64,
+    payload_sha256: Option<[u8; 32]>,
+    delta_base_epoch: Option<String>,
+    delta_base_sha256: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Default)]
@@ -2846,6 +3008,157 @@ impl PolicyState {
 
     fn queue_log(&self) -> &[u8] {
         &self.queue_log
+    }
+
+    fn preflight_req_text(&self) -> Result<Vec<u8>, NineDoorBridgeError> {
+        let mut total = 0usize;
+        let mut queued = 0usize;
+        let mut consumed = 0usize;
+        for action in &self.actions {
+            total = total.saturating_add(1);
+            if action.consumed {
+                consumed = consumed.saturating_add(1);
+            } else {
+                queued = queued.saturating_add(1);
+            }
+        }
+        let mut text = String::new();
+        let _ = writeln!(text, "req total={} queued={} consumed={}", total, queued, consumed);
+        for action in &self.actions {
+            let state = if action.consumed { "consumed" } else { "queued" };
+            let _ = writeln!(
+                text,
+                "req id={} target={} decision={} state={}",
+                action.id,
+                action.target,
+                action.decision.as_str(),
+                state
+            );
+        }
+        ensure_ui_stream_len(text.len())?;
+        Ok(text.into_bytes())
+    }
+
+    fn preflight_req_cbor(&self) -> Result<Vec<u8>, NineDoorBridgeError> {
+        let mut total = 0usize;
+        let mut queued = 0usize;
+        let mut consumed = 0usize;
+        for action in &self.actions {
+            total = total.saturating_add(1);
+            if action.consumed {
+                consumed = consumed.saturating_add(1);
+            } else {
+                queued = queued.saturating_add(1);
+            }
+        }
+        let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
+        writer.map(4).map_err(cbor_error)?;
+        writer.text("total").and_then(|_| writer.unsigned(total as u64)).map_err(cbor_error)?;
+        writer.text("queued").and_then(|_| writer.unsigned(queued as u64)).map_err(cbor_error)?;
+        writer.text("consumed").and_then(|_| writer.unsigned(consumed as u64)).map_err(cbor_error)?;
+        writer.text("actions").and_then(|_| writer.array(self.actions.len())).map_err(cbor_error)?;
+        for action in &self.actions {
+            let state = if action.consumed { "consumed" } else { "queued" };
+            writer.map(4)
+                .and_then(|_| writer.text("id"))
+                .and_then(|_| writer.text(&action.id))
+                .and_then(|_| writer.text("target"))
+                .and_then(|_| writer.text(&action.target))
+                .and_then(|_| writer.text("decision"))
+                .and_then(|_| writer.text(action.decision.as_str()))
+                .and_then(|_| writer.text("state"))
+                .and_then(|_| writer.text(state))
+                .map_err(cbor_error)?;
+        }
+        Ok(writer.finish())
+    }
+
+    fn preflight_diff_text(&self) -> Result<Vec<u8>, NineDoorBridgeError> {
+        let mut unmatched = 0usize;
+        for action in &self.actions {
+            if !self
+                .rules
+                .iter()
+                .any(|rule| path_matches_pattern(rule.target, action.target.as_str()))
+            {
+                unmatched = unmatched.saturating_add(1);
+            }
+        }
+        let mut text = String::new();
+        let _ = writeln!(
+            text,
+            "diff rules={} actions={} unmatched={}",
+            self.rules.len(),
+            self.actions.len(),
+            unmatched
+        );
+        for rule in self.rules.iter() {
+            let mut queued = 0usize;
+            let mut consumed = 0usize;
+            for action in &self.actions {
+                if path_matches_pattern(rule.target, action.target.as_str()) {
+                    if action.consumed {
+                        consumed = consumed.saturating_add(1);
+                    } else {
+                        queued = queued.saturating_add(1);
+                    }
+                }
+            }
+            let _ = writeln!(
+                text,
+                "rule id={} target={} queued={} consumed={}",
+                rule.id, rule.target, queued, consumed
+            );
+        }
+        ensure_ui_stream_len(text.len())?;
+        Ok(text.into_bytes())
+    }
+
+    fn preflight_diff_cbor(&self) -> Result<Vec<u8>, NineDoorBridgeError> {
+        let mut unmatched = 0usize;
+        for action in &self.actions {
+            if !self
+                .rules
+                .iter()
+                .any(|rule| path_matches_pattern(rule.target, action.target.as_str()))
+            {
+                unmatched = unmatched.saturating_add(1);
+            }
+        }
+        let mut rule_counts = Vec::with_capacity(self.rules.len());
+        for rule in self.rules.iter() {
+            let mut queued = 0usize;
+            let mut consumed = 0usize;
+            for action in &self.actions {
+                if path_matches_pattern(rule.target, action.target.as_str()) {
+                    if action.consumed {
+                        consumed = consumed.saturating_add(1);
+                    } else {
+                        queued = queued.saturating_add(1);
+                    }
+                }
+            }
+            rule_counts.push((queued, consumed));
+        }
+        let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
+        writer.map(4).map_err(cbor_error)?;
+        writer.text("rules").and_then(|_| writer.unsigned(self.rules.len() as u64)).map_err(cbor_error)?;
+        writer.text("actions").and_then(|_| writer.unsigned(self.actions.len() as u64)).map_err(cbor_error)?;
+        writer.text("unmatched").and_then(|_| writer.unsigned(unmatched as u64)).map_err(cbor_error)?;
+        writer.text("entries").and_then(|_| writer.array(self.rules.len())).map_err(cbor_error)?;
+        for (rule, (queued, consumed)) in self.rules.iter().zip(rule_counts.iter()) {
+            writer.map(4)
+                .and_then(|_| writer.text("id"))
+                .and_then(|_| writer.text(rule.id))
+                .and_then(|_| writer.text("target"))
+                .and_then(|_| writer.text(rule.target))
+                .and_then(|_| writer.text("queued"))
+                .and_then(|_| writer.unsigned(*queued as u64))
+                .and_then(|_| writer.text("consumed"))
+                .and_then(|_| writer.unsigned(*consumed as u64))
+                .map_err(cbor_error)?;
+        }
+        Ok(writer.finish())
     }
 
     fn append_policy_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
@@ -3887,11 +4200,129 @@ fn cas_lines_from_bytes(
     Ok(output)
 }
 
+fn ensure_ui_stream_len(len: usize) -> Result<(), NineDoorBridgeError> {
+    if len > UI_MAX_STREAM_BYTES {
+        return Err(NineDoorBridgeError::BufferFull);
+    }
+    Ok(())
+}
+
+fn cbor_error(_: CborError) -> NineDoorBridgeError {
+    NineDoorBridgeError::BufferFull
+}
+
 fn lines_from_text(
     text: &str,
 ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
 {
     script_lines(text)
+}
+
+fn build_update_status_text(
+    snapshot: &UpdateStatusSnapshot,
+) -> Result<Vec<u8>, NineDoorBridgeError> {
+    let payload_sha = snapshot
+        .payload_sha256
+        .map(hex::encode)
+        .unwrap_or_else(|| "none".to_owned());
+    let (delta_epoch, delta_sha) = match (&snapshot.delta_base_epoch, snapshot.delta_base_sha256) {
+        (Some(epoch), Some(sha)) => (epoch.as_str(), hex::encode(sha)),
+        _ => ("none", "none".to_owned()),
+    };
+    let mut text = String::new();
+    let _ = writeln!(
+        text,
+        "status epoch={} state={}",
+        snapshot.epoch,
+        snapshot.state
+    );
+    let _ = writeln!(
+        text,
+        "manifest_bytes={} manifest_pending_bytes={}",
+        snapshot.manifest_bytes,
+        snapshot.manifest_pending_bytes
+    );
+    let _ = writeln!(
+        text,
+        "chunks_expected={} chunks_committed={} chunks_pending={} chunks_missing={}",
+        snapshot.chunks_expected,
+        snapshot.chunks_committed,
+        snapshot.chunks_pending,
+        snapshot.chunks_missing
+    );
+    let _ = writeln!(
+        text,
+        "payload_bytes={} payload_sha256={}",
+        snapshot.payload_bytes,
+        payload_sha
+    );
+    let _ = writeln!(
+        text,
+        "delta_base_epoch={} delta_base_sha256={}",
+        delta_epoch,
+        delta_sha
+    );
+    ensure_ui_stream_len(text.len())?;
+    Ok(text.into_bytes())
+}
+
+fn build_update_status_cbor(
+    snapshot: &UpdateStatusSnapshot,
+) -> Result<Vec<u8>, NineDoorBridgeError> {
+    let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
+    writer.map(11).map_err(cbor_error)?;
+    writer.text("epoch").and_then(|_| writer.text(snapshot.epoch.as_str())).map_err(cbor_error)?;
+    writer.text("state").and_then(|_| writer.text(snapshot.state)).map_err(cbor_error)?;
+    writer
+        .text("manifest_bytes")
+        .and_then(|_| writer.unsigned(snapshot.manifest_bytes as u64))
+        .map_err(cbor_error)?;
+    writer
+        .text("manifest_pending_bytes")
+        .and_then(|_| writer.unsigned(snapshot.manifest_pending_bytes as u64))
+        .map_err(cbor_error)?;
+    writer
+        .text("chunks_expected")
+        .and_then(|_| writer.unsigned(snapshot.chunks_expected as u64))
+        .map_err(cbor_error)?;
+    writer
+        .text("chunks_committed")
+        .and_then(|_| writer.unsigned(snapshot.chunks_committed as u64))
+        .map_err(cbor_error)?;
+    writer
+        .text("chunks_pending")
+        .and_then(|_| writer.unsigned(snapshot.chunks_pending as u64))
+        .map_err(cbor_error)?;
+    writer
+        .text("chunks_missing")
+        .and_then(|_| writer.unsigned(snapshot.chunks_missing as u64))
+        .map_err(cbor_error)?;
+    writer
+        .text("payload_bytes")
+        .and_then(|_| writer.unsigned(snapshot.payload_bytes))
+        .map_err(cbor_error)?;
+    writer
+        .text("payload_sha256")
+        .and_then(|_| match snapshot.payload_sha256 {
+            Some(sha) => writer.bytes(&sha),
+            None => writer.null(),
+        })
+        .map_err(cbor_error)?;
+    writer
+        .text("delta")
+        .and_then(|_| match (&snapshot.delta_base_epoch, snapshot.delta_base_sha256) {
+            (Some(epoch), Some(sha)) => {
+                writer.map(2)?;
+                writer.text("base_epoch")?;
+                writer.text(epoch.as_str())?;
+                writer.text("base_sha256")?;
+                writer.bytes(&sha)?;
+                Ok(())
+            }
+            _ => writer.null(),
+        })
+        .map_err(cbor_error)?;
+    Ok(writer.finish())
 }
 
 fn render_p50_line(
@@ -3937,6 +4368,87 @@ fn render_queued_line(
     write!(line, "queued={}", snapshot.queued)
         .map_err(|_| NineDoorBridgeError::BufferFull)?;
     Ok(line)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CborError {
+    TooLarge,
+}
+
+#[derive(Debug)]
+struct CborWriter {
+    buffer: Vec<u8>,
+    max_len: usize,
+}
+
+impl CborWriter {
+    fn new(max_len: usize) -> Self {
+        Self {
+            buffer: Vec::new(),
+            max_len,
+        }
+    }
+
+    fn finish(self) -> Vec<u8> {
+        self.buffer
+    }
+
+    fn map(&mut self, len: usize) -> Result<(), CborError> {
+        self.write_type_and_len(5, len as u64)
+    }
+
+    fn array(&mut self, len: usize) -> Result<(), CborError> {
+        self.write_type_and_len(4, len as u64)
+    }
+
+    fn text(&mut self, value: &str) -> Result<(), CborError> {
+        self.write_type_and_len(3, value.len() as u64)?;
+        self.push(value.as_bytes())
+    }
+
+    fn bytes(&mut self, value: &[u8]) -> Result<(), CborError> {
+        self.write_type_and_len(2, value.len() as u64)?;
+        self.push(value)
+    }
+
+    fn unsigned(&mut self, value: u64) -> Result<(), CborError> {
+        self.write_type_and_len(0, value)
+    }
+
+    fn null(&mut self) -> Result<(), CborError> {
+        self.push_u8(0xf6)
+    }
+
+    fn write_type_and_len(&mut self, major: u8, len: u64) -> Result<(), CborError> {
+        let (info, extra) = if len <= 23 {
+            (len as u8, None)
+        } else if len <= u8::MAX as u64 {
+            (24, Some(len.to_be_bytes()[7..8].to_vec()))
+        } else if len <= u16::MAX as u64 {
+            (25, Some((len as u16).to_be_bytes().to_vec()))
+        } else if len <= u32::MAX as u64 {
+            (26, Some((len as u32).to_be_bytes().to_vec()))
+        } else {
+            (27, Some(len.to_be_bytes().to_vec()))
+        };
+        self.push_u8((major << 5) | info)?;
+        if let Some(bytes) = extra {
+            self.push(&bytes)?;
+        }
+        Ok(())
+    }
+
+    fn push_u8(&mut self, value: u8) -> Result<(), CborError> {
+        self.push(&[value])
+    }
+
+    fn push(&mut self, bytes: &[u8]) -> Result<(), CborError> {
+        if self.buffer.len().saturating_add(bytes.len()) > self.max_len {
+            return Err(CborError::TooLarge);
+        }
+        self.buffer.extend_from_slice(bytes);
+        Ok(())
+    }
 }
 
 fn log_watch_throttle(audit: &mut dyn AuditSink, delay_ms: u64) {
@@ -4121,6 +4633,20 @@ fn parse_cas_path(path: &str) -> Result<Option<CasPath>, NineDoorBridgeError> {
             validate_epoch(epoch)?;
             return Ok(Some(CasPath::UpdateManifest {
                 epoch: (*epoch).to_owned(),
+            }));
+        }
+        ["updates", epoch, "status"] => {
+            validate_epoch(epoch)?;
+            return Ok(Some(CasPath::UpdateStatus {
+                epoch: (*epoch).to_owned(),
+                cbor: false,
+            }));
+        }
+        ["updates", epoch, "status.cbor"] => {
+            validate_epoch(epoch)?;
+            return Ok(Some(CasPath::UpdateStatus {
+                epoch: (*epoch).to_owned(),
+                cbor: true,
             }));
         }
         ["updates", epoch, "chunks"] => {

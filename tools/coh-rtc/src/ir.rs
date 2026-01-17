@@ -62,6 +62,8 @@ pub struct Manifest {
     #[serde(default)]
     pub observability: Observability,
     #[serde(default)]
+    pub ui_providers: UiProviders,
+    #[serde(default)]
     pub client_policies: ClientPolicies,
     #[serde(default)]
     pub client_paths: ClientPaths,
@@ -118,6 +120,7 @@ impl Manifest {
         self.validate_sidecars()?;
         self.validate_telemetry()?;
         self.validate_observability()?;
+        self.validate_ui_providers()?;
         self.validate_client_policies()?;
         self.validate_client_paths()?;
         self.validate_cas(base_dir)?;
@@ -777,6 +780,50 @@ impl Manifest {
         Ok(())
     }
 
+    fn validate_ui_providers(&self) -> Result<()> {
+        let ui = &self.ui_providers;
+        let proc_9p = &self.observability.proc_9p;
+        let proc_ingest = &self.observability.proc_ingest;
+        if ui.proc_9p.sessions && !proc_9p.sessions {
+            bail!("ui_providers.proc_9p.sessions requires observability.proc_9p.sessions = true");
+        }
+        if ui.proc_9p.outstanding && !proc_9p.outstanding {
+            bail!(
+                "ui_providers.proc_9p.outstanding requires observability.proc_9p.outstanding = true"
+            );
+        }
+        if ui.proc_9p.short_writes && !proc_9p.short_writes {
+            bail!(
+                "ui_providers.proc_9p.short_writes requires observability.proc_9p.short_writes = true"
+            );
+        }
+        if ui.proc_ingest.p50_ms && !proc_ingest.p50_ms {
+            bail!(
+                "ui_providers.proc_ingest.p50_ms requires observability.proc_ingest.p50_ms = true"
+            );
+        }
+        if ui.proc_ingest.p95_ms && !proc_ingest.p95_ms {
+            bail!(
+                "ui_providers.proc_ingest.p95_ms requires observability.proc_ingest.p95_ms = true"
+            );
+        }
+        if ui.proc_ingest.backpressure && !proc_ingest.backpressure {
+            bail!(
+                "ui_providers.proc_ingest.backpressure requires observability.proc_ingest.backpressure = true"
+            );
+        }
+        if (ui.policy_preflight.req || ui.policy_preflight.diff) && !self.ecosystem.policy.enable {
+            bail!("ui_providers.policy_preflight requires ecosystem.policy.enable = true");
+        }
+        if (ui.updates.manifest || ui.updates.status) && !self.cas.enable {
+            bail!("ui_providers.updates requires cas.enable = true");
+        }
+        if self.cas.enable && !ui.updates.manifest {
+            bail!("ui_providers.updates.manifest must be true when cas.enable = true");
+        }
+        Ok(())
+    }
+
     fn proc_9p_shard_count(&self) -> usize {
         if self.sharding.enabled {
             1usize << self.sharding.shard_bits
@@ -1273,6 +1320,94 @@ impl Default for ProcIngestObservability {
             latency_samples: 16,
             latency_tolerance_ms: 5,
             counter_tolerance: 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct UiProviders {
+    pub proc_9p: UiProc9p,
+    pub proc_ingest: UiProcIngest,
+    pub policy_preflight: UiPolicyPreflight,
+    pub updates: UiUpdates,
+}
+
+impl Default for UiProviders {
+    fn default() -> Self {
+        Self {
+            proc_9p: UiProc9p::default(),
+            proc_ingest: UiProcIngest::default(),
+            policy_preflight: UiPolicyPreflight::default(),
+            updates: UiUpdates::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct UiProc9p {
+    pub sessions: bool,
+    pub outstanding: bool,
+    pub short_writes: bool,
+}
+
+impl Default for UiProc9p {
+    fn default() -> Self {
+        Self {
+            sessions: false,
+            outstanding: false,
+            short_writes: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct UiProcIngest {
+    pub p50_ms: bool,
+    pub p95_ms: bool,
+    pub backpressure: bool,
+}
+
+impl Default for UiProcIngest {
+    fn default() -> Self {
+        Self {
+            p50_ms: false,
+            p95_ms: false,
+            backpressure: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct UiPolicyPreflight {
+    pub req: bool,
+    pub diff: bool,
+}
+
+impl Default for UiPolicyPreflight {
+    fn default() -> Self {
+        Self {
+            req: false,
+            diff: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct UiUpdates {
+    pub manifest: bool,
+    pub status: bool,
+}
+
+impl Default for UiUpdates {
+    fn default() -> Self {
+        Self {
+            manifest: false,
+            status: false,
         }
     }
 }

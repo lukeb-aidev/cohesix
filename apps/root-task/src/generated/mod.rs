@@ -116,6 +116,40 @@ pub struct ObservabilityConfig {
     pub proc_ingest: ProcIngestConfig,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct UiProc9pConfig {
+    pub sessions: bool,
+    pub outstanding: bool,
+    pub short_writes: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct UiProcIngestConfig {
+    pub p50_ms: bool,
+    pub p95_ms: bool,
+    pub backpressure: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct UiPolicyPreflightConfig {
+    pub req: bool,
+    pub diff: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct UiUpdatesConfig {
+    pub manifest: bool,
+    pub status: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct UiProviderConfig {
+    pub proc_9p: UiProc9pConfig,
+    pub proc_ingest: UiProcIngestConfig,
+    pub policy_preflight: UiPolicyPreflightConfig,
+    pub updates: UiUpdatesConfig,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostProvider {
     Systemd,
@@ -220,7 +254,7 @@ pub struct AuditConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
-pub const MANIFEST_SHA256: &str = "1af6c0417cf026b5c44554f98279870e2072cfb21c7a05ff2ea8400980176432";
+pub const MANIFEST_SHA256: &str = "b83a1ff39cf2efaf599ddab3d4b40fc4270b4c63e7c19d89126ffdd774ca4b0d";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
@@ -230,6 +264,7 @@ pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;
 pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();
 pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;
 pub const OBSERVABILITY_CONFIG: ObservabilityConfig = bootstrap::OBSERVABILITY_CONFIG;
+pub const UI_PROVIDER_CONFIG: UiProviderConfig = bootstrap::UI_PROVIDER_CONFIG;
 pub const CAS_CONFIG: CasConfig = bootstrap::CAS_CONFIG;
 pub const PROC_9P_SESSIONS_BYTES: usize = bootstrap::PROC_9P_SESSIONS_BYTES;
 pub const PROC_9P_OUTSTANDING_BYTES: usize = bootstrap::PROC_9P_OUTSTANDING_BYTES;
@@ -283,6 +318,10 @@ pub const fn telemetry_config() -> TelemetryConfig {
 
 pub const fn observability_config() -> ObservabilityConfig {
     bootstrap::OBSERVABILITY_CONFIG
+}
+
+pub const fn ui_provider_config() -> UiProviderConfig {
+    bootstrap::UI_PROVIDER_CONFIG
 }
 
 pub const fn cas_config() -> CasConfig {

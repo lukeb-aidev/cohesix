@@ -90,6 +90,24 @@ latency_samples = 32
 latency_tolerance_ms = 5
 counter_tolerance = 1
 
+[ui_providers.proc_9p]
+sessions = true
+outstanding = true
+short_writes = true
+
+[ui_providers.proc_ingest]
+p50_ms = true
+p95_ms = true
+backpressure = true
+
+[ui_providers.policy_preflight]
+req = true
+diff = true
+
+[ui_providers.updates]
+manifest = true
+status = true
+
 [client_policies.cohsh.pool]
 control_sessions = 2
 telemetry_sessions = 4

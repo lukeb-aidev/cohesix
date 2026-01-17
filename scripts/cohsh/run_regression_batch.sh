@@ -2,6 +2,9 @@
 # Author: Lukas Bower
 # Purpose: Run the cohsh .coh regression pack in two QEMU boots (base + gated).
 
+# Note: override timeouts via env vars, e.g. READY_TIMEOUT=300 PORT_TIMEOUT=60 QUIT_CLOSE_TIMEOUT=60 scripts/cohsh/run_regression_batch.sh
+# ** Note: typical end-to-end runtime is ~17 minutes; plan for >= 20 minutes to avoid repeated retries.
+
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -32,8 +35,6 @@ READY_MARKER="Cohesix console ready"
 READY_TIMEOUT="${READY_TIMEOUT:-180}"
 PORT_TIMEOUT="${PORT_TIMEOUT:-30}"
 QUIT_CLOSE_TIMEOUT="${QUIT_CLOSE_TIMEOUT:-30}"
-# Note: override timeouts via env vars, e.g. READY_TIMEOUT=300 PORT_TIMEOUT=60 QUIT_CLOSE_TIMEOUT=60 scripts/cohsh/run_regression_batch.sh
-# Note: typical end-to-end runtime is ~15 minutes; plan for >= 20 minutes to avoid repeated retries.
 
 check_port_open() {
     local host="$1"

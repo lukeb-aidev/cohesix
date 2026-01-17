@@ -29,6 +29,9 @@
     root_task_resolved.json
 /scripts/
   qemu-run.sh
+  cohsh/
+    cas_roundtrip.coh
+    observe_watch.coh
   regression/
     client_vs_console.sh
     transcript_diff.sh
@@ -50,6 +53,12 @@
   root-task/
     README.md            ← Event pump overview, testing commands, and feature flag notes
   nine-door/
+    src/
+      host/
+        cbor.rs          ← Minimal CBOR writer for UI providers
+        ui.rs            ← UI provider config + path matching
+    tests/
+      ui_providers.rs    ← UI provider bounds + audit tests
   worker-heart/
   worker-gpu/
   gpu-bridge-host/       (host-only tools)

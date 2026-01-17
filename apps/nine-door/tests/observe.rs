@@ -53,7 +53,7 @@ fn read_proc_text(
     client
         .open(fid, OpenMode::read_only())
         .expect("open proc path");
-    let data = client.read(fid, 0, u32::MAX).expect("read proc path");
+    let data = client.read(fid, 0, MAX_MSIZE).expect("read proc path");
     client.clunk(fid).expect("clunk proc fid");
     String::from_utf8(data).expect("proc output should be utf8")
 }
