@@ -2,324 +2,223 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Describe the Cohesix system architecture, component responsibilities, and boundary constraints. -->
 <!-- Author: Lukas Bower -->
-# Cohesix Architecture Overview
-Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
+# Cohesix Architecture (As-Built)
 
-**Figure 1.** Cohesix architecture overview
+Cohesix is a control-plane OS for secure orchestration and telemetry of edge GPU nodes using a Queen/Worker hive model. This document describes the current as-built system for the QEMU `aarch64/virt` target and the macOS host; manifest-gated features are called out explicitly.
+
+## 1. Scope and Non-Goals
+Scope:
+- Host: macOS 26 on Apple Silicon for build, QEMU, and host tools.
+- Target: QEMU `aarch64/virt` (GICv3) running upstream seL4; userspace is a pure Rust CPIO rootfs.
+- Control plane: Secure9P namespace plus a deterministic console grammar shared with `cohsh`.
+
+Non-goals:
+- In-VM GPU runtimes (CUDA/NVML), POSIX emulation, or dynamic loading.
+- Control channels outside Secure9P and the console grammar (no ad-hoc RPC, no shared-memory shortcuts).
+- In-VM TCP services except the authenticated root-task console.
+- UI clients or hardware/UEFI deployment details (UEFI boot is planned; see `docs/BUILD_PLAN.md`).
+
+## 2. System Boundaries and TCB
+- VM boundary: seL4 kernel plus the CPIO userspace payload (`root-task` and worker binaries). This is the trusted computing base.
+- The root task owns capability setup, the event pump, console surfaces, HAL, logging, and the in-VM NineDoor bridge. It is the sole authority for side effects.
+- Host tooling (`cohsh`, `gpu-bridge-host`, `host-sidecar-bridge`, `cas-tool`) is outside the TCB and interacts only through Secure9P or the console.
+- The only in-VM TCP listener is the root-task console; all other TCP services remain host-only.
+- Device access (MMIO, DMA, cache ops) goes through the HAL; no direct MMIO outside HAL.
+
+## 3. Top-Level Architecture
+- `root-task` (`apps/root-task`): seL4 bootstrap, CSpace management, event pump, console (serial + TCP), ticket issuance, log buffer (`/log/queen.log`), HAL, and the in-VM NineDoor bridge.
+- `NineDoor` (`apps/nine-door`): Secure9P server for host builds and in-process tests. On seL4, `apps/root-task/src/ninedoor.rs` provides `NineDoorBridge`, a namespace/control shim used by the console path.
+- Secure9P core (`crates/secure9p-*`): 9P2000.L codec and session logic used by NineDoor and `cohsh`.
+- Worker crates (`apps/worker-heart`, `apps/worker-gpu`, `apps/worker-bus`, `apps/worker-lora`): role-specific binaries; orchestration is file-driven via `/queen/ctl` and role-scoped mounts.
+- Host tools: `cohsh` CLI (`apps/cohsh`), `gpu-bridge-host`, `host-sidecar-bridge`, and `cas-tool`.
+- Manifest compiler: `tools/coh-rtc` generates root-task tables, policies, and docs snippets from `configs/root_task.toml` into `apps/root-task/src/generated` and `out/manifests/`.
+
+## 4. Control Surfaces
+### Secure9P namespace (NineDoor)
+- Protocol: 9P2000.L only; ops include `version`, `attach`, `walk`, `open`, `read`, `write`, `clunk`, `stat`. `remove` is disabled.
+- Bounds: `msize <= 8192`, walk depth <= 8, path components <= 255 bytes, UTF-8 only, no `..`.
+- Append-only semantics apply to control and stream files (`/queen/ctl`, `/log/*`, telemetry, policy/audit sinks).
+- The path layout and constraints are shared between the host NineDoor server and the in-VM console bridge; host-only providers may be absent in the seL4 build.
+
+### Console surfaces
+- Serial console: PL011-backed `cohesix>` prompt when `serial-console` is built; used for bring-up and bootinfo checks.
+- TCP console: smoltcp-based listener when `net-console` is built; frames are length-prefixed (4-byte little-endian) and capped by `secure9p_codec::MAX_MSIZE`.
+- Session guard: `AUTH <token>` handshake before any console verbs; failed auth is rate-limited.
+- Command grammar: shared with `cohsh-core`; acknowledgements (`OK` / `ERR`) precede side effects and streamed commands terminate with `END`.
+- Line bounds: 256-byte console line cap across transports.
+
+### Host tooling
+- `cohsh` is the canonical operator client. It speaks Secure9P for in-process/host NineDoor sessions and the console grammar over TCP for QEMU/VM sessions.
+- `gpu-bridge-host` and `host-sidecar-bridge` publish provider data into `/gpu/*` and `/host/*` via Secure9P; they never run inside the VM.
+
+## 5. Boot and Bring-Up Flow
+1. seL4 elfloader enters the root-task entry point.
+2. Root task reconstructs canonical CSpace addressing using `seL4_CapInitThreadCNode` and `bootinfo.initThreadCNodeSizeBits`, validates the `bootinfo.empty` window, and logs copy/mint/retype tuples before consuming slots.
+3. UART is mapped and the serial logger is activated; the boot banner is emitted.
+4. HAL setup, timer initialization, and IPC endpoints are established.
+5. Manifest-generated tables (tickets, Secure9P limits, policy/audit flags) are loaded from `apps/root-task/src/generated`.
+6. The log buffer (`/log/queen.log`) and NineDoorBridge are initialized.
+7. Serial console starts; TCP console is started if `net-console` is built.
+8. The event pump enters its cooperative loop (serial, timer, networking, IPC, NineDoorBridge), avoiding busy waits.
+
+### CSpace bootstrap invariants
+- Root CNode addressing uses the kernel-advertised radix (`initThreadCNodeSizeBits`), with `seL4_CapInitThreadCNode` as the root and offsets fixed at 0.
+- Destination slots are constrained to the `bootinfo.empty` window; reserved slots remain untouched.
+- A smoke copy into the empty window validates the addressing policy before further retypes.
+
+## 6. Role Model and Mounts
+| Role | Namespace view (as-built) | Notes |
+| --- | --- | --- |
+| Queen | Full tree (`/`, `/queen`, `/log`, `/proc`, `/shard/*/worker/*`, legacy `/worker/*` when enabled) plus manifest-gated `/gpu`, `/host`, `/policy`, `/actions`, `/audit`, `/replay` | Queen tickets are optional; worker tickets are required. |
+| WorkerHeartbeat | `/proc/boot`, `/shard/<label>/worker/<id>/telemetry`, `/log/queen.log` (RO); legacy `/worker/<id>/telemetry` when enabled | Ticket must include a subject identity. |
+| WorkerGpu | WorkerHeartbeat view + `/gpu/<id>/*` when GPU nodes are present | GPU nodes are host-published; no in-VM GPU stack. |
+| WorkerBus | WorkerHeartbeat view + `/bus/<adapter>/*` when MODBUS/DNP3 sidecars are enabled | Scope is derived from ticket subject. |
+| WorkerLora | WorkerHeartbeat view + `/lora/<adapter>/*` when LoRa sidecars are enabled | Scope is derived from ticket subject. |
+
+Mount and bind semantics:
+- NineDoor maintains a per-session mount table; `bind` and `mount` are queen-only (mount is implemented in the host NineDoor server).
+- Sharding is canonical: `/shard/<label>/worker/<id>/telemetry`; legacy `/worker/<id>/telemetry` exists only when `sharding.legacy_worker_alias = true`.
+- Role isolation is enforced before provider logic runs.
+
+## 7. Key Invariants (Red Lines)
+- Secure9P: 9P2000.L only; `msize <= 8192`; walk depth <= 8; UTF-8 paths; no `..`; no fid reuse after `clunk`; `remove` disabled.
+- Append-only: `/queen/ctl`, `/log/*`, telemetry, policy/audit sinks ignore offsets and reject writes that break bounds.
+- Only TCP listener inside the VM is the authenticated root-task console.
+- Rootfs CPIO remains < 4 MiB (`scripts/ci/size_guard.sh`).
+- VM artifacts remain `no_std`; no POSIX or libc-style emulation layers.
+- All device access goes through HAL; no ad-hoc MMIO or unsafe device access outside HAL.
+- GPU access is host-only; worker-gpu is file-driven and lease-bound.
+
+## 8. Data Flows
+- **Orchestration:** Queen appends JSON lines to `/queen/ctl`; NineDoor validates and the root task updates worker state, bind tables, and audits to `/log/queen.log` (mount is implemented in the host NineDoor server).
+- **Telemetry:** Workers append newline-delimited records to `/shard/<label>/worker/<id>/telemetry`; ring sizes and schema selection are manifest-driven (`telemetry.ring_bytes_per_worker`, `telemetry.frame_schema`).
+- **Logging:** All roles read `/log/queen.log`; only queen/host tools append.
+- **Observability:** `/proc/boot` exposes manifest fingerprints; `/proc/tests/*` carries regression scripts; `/proc/ingest/*` is available when enabled; `/proc/9p/*` is provided by the host NineDoor server.
+- **GPU:** Host GPU bridge publishes `/gpu/<id>/*` nodes; worker-gpu reads `info/status` and appends to `job/ctl` within ticket scope.
+- **Host sidecars:** `/host/*` is present only when `ecosystem.host.enable = true`; providers are published by `host-sidecar-bridge`.
+- **Policy/Audit/Replay:** `/policy`, `/actions`, `/audit`, `/replay` appear only when enabled in the manifest; writes are append-only and audited.
+- **CAS:** `/updates/*` and `/models/*` are available when CAS is enabled (`cas.enable = true`).
+
+## 9. Security Posture
+- Capability tickets are MACed (`blake3::keyed_hash`) and bound to role, budget, subject, and mount scope.
+- Role isolation is enforced at attach and on every path operation; NineDoor normalizes and validates paths before providers run.
+- The console grammar and Secure9P semantics are shared via `cohsh-core` to keep ACK/ERR/END lines deterministic across transports.
+- DMA cache maintenance follows manifest policy (`cache.*`) and is audited; misconfiguration is rejected by `coh-rtc`.
+- Heavy ecosystems (CUDA/NVML, host sidecars, policy engines) remain host-side and do not expand the VM TCB.
+
+## 10. Operational Workflows
+- **Bring-up:** Use the PL011 serial console for bootinfo and capability checks; use `cohsh --transport tcp` for authenticated remote workflows.
+- **Queen control:** `cohsh` appends to `/queen/ctl` to spawn/kill workers, then tails `/log/queen.log` or worker telemetry files.
+- **Self-test:** `coh> test` executes the preinstalled `/proc/tests/*.coh` scripts; it is the canonical regression gate for console and Secure9P behavior.
+- **Regression pack:** `scripts/cohsh/run_regression_batch.sh` runs the full `.coh` suite across base and gated manifests using QEMU.
+
+## 11. Diagrams
+### Boundary and components
 ```mermaid
 flowchart LR
-
-  %% =========================
-  %% Host side (outside VM/TCB)
-  %% =========================
-  subgraph HOST["Host (outside Cohesix VM/TCB)"]
-    COHSH["cohsh (host-only CLI)<br/>- 9P client (preferred)<br/>- TCP console client (--transport tcp)<br/>- local ticket hygiene"]:::host
-    GPUB["gpu-bridge-host (host GPU bridge)<br/>- owns CUDA/NVML<br/>- publishes /gpu/*<br/>- enforces leases/priorities<br/>- host-only networking"]:::host
+  subgraph Host["Host (outside VM/TCB)"]
+    Cohsh["cohsh (CLI)"]
+    GPUB["gpu-bridge-host"]
+    HS["host-sidecar-bridge"]
   end
 
-  %% =========================
-  %% Cohesix target (VM)
-  %% =========================
-  subgraph VM["Cohesix target (seL4 VM today; UEFI ARM64 later)"]
-    subgraph K["Upstream seL4 kernel"]
-      SEL4["seL4<br/>(caps, IPC, scheduling, IRQ/timer)"]:::kernel
+  subgraph VM["Cohesix target (seL4 VM)"]
+    subgraph K["seL4 kernel"]
+      SEL4["seL4"]
     end
-
-    subgraph U["Pure Rust userspace (CPIO rootfs)"]
-      RT["root-task<br/>- bootstraps caps/sched<br/>- deterministic event pump<br/>- TCP console :31337 + UART console<br/>- spawns NineDoor + workers<br/>- sole side-effect authority"]:::vm
-
-      ND["NineDoor (Secure9P server)<br/>9P2000.L only<br/>ops: version/attach/walk/open/read/write/clunk/stat<br/>remove: DISABLED<br/>msize<=8192<br/>per-session fid tables<br/>append-only semantics enforced"]:::vm
-
-      Q["Queen role session<br/>(orchestrates via /queen/ctl)"]:::role
-      WH["worker-heart<br/>(writes /shard/<label>/worker/<id>/telemetry)"]:::role
-      WG["worker-gpu (VM stub)<br/>(file ops only; no CUDA/NVML)"]:::role
+    subgraph U["Userspace (CPIO rootfs)"]
+      RT["root-task\n(event pump + console + HAL)"]
+      ND["NineDoor\n(Secure9P namespace; bridge in seL4 build)"]
+      WH["worker-heart"]
+      WG["worker-gpu"]
+      WB["worker-bus"]
+      WL["worker-lora"]
     end
   end
 
-  %% =========================
-  %% Logical namespace (NineDoor)
-  %% =========================
-  subgraph NS["Secure9P namespace (role-scoped mounts)"]
-    PROC["/proc (synthetic)"]:::path
-    QUEEN["/queen/ctl (append-only JSON lines)<br/>spawn/kill/bind/mount/spawn:gpu(lease)"]:::path
-    WORK["/shard/<label>/worker/<id>/telemetry (append-only)<br/>newline-delimited records"]:::path
-    LOG["/log/* (append-only streams)"]:::path
-    GPU["/gpu/<id>/{info,ctl,job,status}<br/>(host-mirrored provider nodes)"]:::path
+  subgraph NS["Secure9P namespace (role-scoped)"]
+    QCTL["/queen/ctl"]
+    LOG["/log/queen.log"]
+    PROC["/proc/*"]
+    TEL["/shard/<label>/worker/<id>/telemetry"]
+    GPU["/gpu/<id>/* (when enabled)"]
+    HOST["/host/* (when enabled)"]
   end
 
-  %% =========================
-  %% Console surface (root-task)
-  %% =========================
-  TCP["root-task TCP console<br/>--transport tcp<br/>default 127.0.0.1:31337<br/>line<=128B<br/>PING/PONG<br/>ACK-before-side-effects<br/>rate-limit auth failures"]:::console
-  UART["PL011 UART console<br/>always-on fallback"]:::console
-
-  %% =========================
-  %% Wiring
-  %% =========================
   SEL4 --> RT
   RT --> ND
-  RT --- TCP
-  RT --- UART
-
-  %% cohsh can use both transports
-  COHSH -->|"Secure9P client<br/>TVERSION(msize<=8192)<br/>TATTACH(ticket)<br/>TWALK/TOPEN/TREAD/TWRITE"| ND
-  COHSH -->|"Line protocol<br/>ATTACH <role> <ticket?><br/>TAIL <path><br/>PING/PONG"| TCP
-
-  %% In-VM roles use NineDoor only
-  Q -->|"Secure9P session"| ND
-  WH -->|"Secure9P session"| ND
-  WG -->|"Secure9P session"| ND
-
-  %% NineDoor publishes namespace
-  ND --> PROC
-  ND --> QUEEN
-  ND --> WORK
+  WH --> ND
+  WG --> ND
+  WB --> ND
+  WL --> ND
+  ND --> QCTL
   ND --> LOG
+  ND --> PROC
+  ND --> TEL
   ND --> GPU
+  ND --> HOST
 
-  %% Queen control surface triggers validated internal actions
-  QUEEN -->|"validated JSON + ticket perms<br/>then internal RootTaskControl"| RT
-
-  %% GPU bridge publishes /gpu providers into NineDoor
-  GPUB -->|"Secure9P provider (host)<br/>publishes GPU nodes<br/>updates status"| ND
-  GPUB --> GPU
-
-  %% =========================
-  %% Styles (supported on GitHub Mermaid)
-  %% =========================
-  classDef kernel fill:#eeeeee,stroke:#555555,stroke-width:1px;
-  classDef vm fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
-  classDef host fill:#fff7ed,stroke:#c2410c,stroke-width:1px;
-  classDef role fill:#f0fdf4,stroke:#15803d,stroke-width:1px;
-  classDef console fill:#faf5ff,stroke:#7c3aed,stroke-width:1px;
-  classDef path fill:#f8fafc,stroke:#334155,stroke-dasharray: 4 3;
+  Cohsh -->|"TCP console"| RT
+  Cohsh -->|"Secure9P client"| ND
+  GPUB -->|"Secure9P provider"| ND
+  HS -->|"Secure9P provider"| ND
 ```
 
-## 1. System Boundaries
-- **Kernel**: Upstream seL4 for `aarch64/virt (GICv3)`; treated as an external dependency that provides the capability system, scheduling primitives, and IRQ/timer services.
-- **Userspace**: Entirely Rust, delivered as a CPIO rootfs containing the root task and all services.
-- **Host Tooling**: macOS 26 (Apple Silicon M4) developer workstation running QEMU for validation, plus auxiliary host workers (e.g., GPU bridge) that communicate with the Cohesix instance over 9P or serial transports (the same transport model applies when running on physical hardware).
+### TCP console attach + tail
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Operator
+  participant Cohsh as cohsh
+  participant TCP as root-task TCP console
+  participant ND as NineDoorBridge
+  participant Log as /log/queen.log
 
-A single Cohesix deployment is a hive: one Queen process plus multiple workers sharing a Secure9P namespace.
+  Operator->>Cohsh: run cohsh --transport tcp
+  Cohsh->>TCP: AUTH <token>
+  TCP-->>Cohsh: OK AUTH (or ERR AUTH)
 
-The logical architecture—root-task, NineDoor, workers, Secure9P transports, GPU bridge—is hardware-agnostic. The current reference implementation runs on QEMU `aarch64/virt` for development and CI, and the roadmap brings this exact behaviour to UEFI-booted ARM64 hardware; VM semantics are expected to match the physical deployment profile.
+  Cohsh->>TCP: ATTACH queen [ticket]
+  TCP->>ND: validate role + ticket
+  ND-->>TCP: accept/deny
+  TCP-->>Cohsh: OK ATTACH role=queen (or ERR ATTACH)
 
-## 2. High-Level Boot Flow
-1. **seL4 Bootstraps** using the external elfloader and enters the Cohesix root task entry point.
-2. **Root Task Initialisation**
-   - Configures serial logging and prints the boot banner.
-   - Reconstructs canonical init CSpace access (probe + init-root alias) before any mutable syscall, then walks `bootinfo.empty`
-     to plan untyped retypes and capability consumption. 【F:apps/root-task/src/kernel.rs†L640-L718】
-   - Publishes the root endpoint before any IPC attempt and routes all calls through guarded helpers that refuse to touch seL4 syscalls until the endpoint is live. 【F:apps/root-task/src/kernel.rs†L760-L833】【F:apps/root-task/src/sel4.rs†L74-L154】
-   - Maps PL011 early, brings up the UART driver, and logs the resolved vaddr/slot before switching the logger to userland. 【F:apps/root-task/src/kernel.rs†L1119-L1217】
-   - Establishes a periodic timer and registers IRQ handlers.
-   - Constructs the cooperative event pump that rotates through serial RX/TX, timer ticks, networking polls (behind the `net`
-     feature), and IPC dispatch without relying on busy waits; enters it after announcing the root console endpoint and TCP listener when enabled. 【F:apps/root-task/src/kernel.rs†L1474-L1565】
-3. **Service Bring-up**
-   - Spawns the **NineDoor** 9P server task and hands it the root capability set.
-   - Registers static providers that expose `/proc`, `/queen`, `/log`, and the worker namespace.
-4. **Operational State**
-   - Queen and worker processes attach through NineDoor, exchanging capability tickets that encode their role and budgets.
-   - The queen drives orchestration by appending JSON commands to `/queen/ctl`.
- - Telemetry and logs are streamed through append-only files in `/shard/<label>/worker/<id>/telemetry` (legacy `/worker/<id>/telemetry` when enabled) and `/log/queen.log`.
-  - Remote operators attach via the TCP-backed console (`cohsh --transport tcp`) which mirrors serial semantics while applying
-    heartbeat-driven keep-alives and exponential back-off so networking stalls cannot starve the event pump.
+  Cohsh->>TCP: TAIL /log/queen.log
+  TCP->>ND: open + snapshot
+  TCP-->>Cohsh: OK TAIL path=/log/queen.log
+  loop stream
+    TCP-->>Cohsh: log line
+  end
+  TCP-->>Cohsh: END
+```
 
-### Bootstrap CSpace Addressing
+## 12. References
+- `AGENTS.md`
+- `docs/BUILD_PLAN.md`
+- `docs/INTERFACES.md`
+- `docs/SECURE9P.md`
+- `docs/USERLAND_AND_CLI.md`
+- `docs/ROLES_AND_SCHEDULING.md`
+- `docs/REPO_LAYOUT.md`
+- `docs/GPU_NODES.md`
+- `configs/root_task.toml`
+- `out/manifests/root_task_resolved.json`
+- `apps/root-task`
+- `apps/nine-door`
+- `apps/cohsh`
+- `tools/coh-rtc`
+- `scripts/cohsh/run_regression_batch.sh`
+- `tests/integration`
 
-- All bootstrap `seL4_CNode_*` calls use the kernel-advertised radix depth so the init thread's single-level CSpace resolves correctly: `dest_root = seL4_CapInitThreadCNode`, `dest_depth = initThreadCNodeSizeBits`, and `dest_offset = 0`. Only the `dest_index` varies per allocation.
-- Source capabilities for mint/copy/move mirror the same tuple with `src_depth = initThreadCNodeSizeBits`, ensuring the kernel traverses the root CNode using the declared radix.
-- Untyped retypes reuse the same addressing policy; the destination tuple is `(root = seL4_CapInitThreadCNode, index = <slot>, depth = initThreadCNodeSizeBits, offset = 0)` so retypes stay aligned with the bootinfo metadata.
-- Bootstrapping begins with a smoke copy of the init TCB capability into `bootinfo.empty.start`, confirming that the canonical addressing policy succeeds before any mutable capability traffic occurs.
-- The bootstrap allocator derives `init_cnode_bits` and the empty window directly from `BootInfo`, asserting that every destination slot satisfies `slot < 2^{init_cnode_bits}` before issuing the syscall. Violations panic before touching the kernel, eliminating decode-time ambiguity.
-- The kernel-seeded slots are treated as reserved exactly as listed in Table 9.1 of `seL4/seL4-manual-latest.pdf` (`seL4_CapNull` through `seL4_CapInitThreadSC`, plus Arm’s optional `seL4_CapSMC`), so the allocator only consumes indices from the advertised `bootinfo.empty` window onward.【F:apps/root-task/src/sel4.rs†L120-L142】
-- Diagnostic logs for Copy → Mint → Retype include the exact `(index, depth, offset, badge)` tuple so regressions surface in
-  the boot transcript immediately.
-
-## 3. Component Responsibilities
-### Root Task (crate: `root-task`)
-- Owns seL4 initial caps, configures memory, and manages scheduling budgets.
-- Provides a minimal RPC surface to NineDoor for spawning/killing tasks and for timer events.
-- Enforces budget expiry (ticks, ops, ttl) and revokes capabilities on violation.
-- Pre-seeds the device and DMA windows with translation tables so device mappings never trigger `seL4_FailedLookup` (error 6)
-  when the kernel installs frames for peripherals.
-- Exposes a deterministic event pump (`event::EventPump`) that coordinates serial, timer, networking, and IPC tasks. The pump
-  emits structured audit lines whenever subsystems are initialised and ensures each poll cycle services every source without
-  revisiting the legacy spin loop.
-- Hosts the deterministic networking stack (`net::NetStack`) which wraps smoltcp behind a HAL-provided NIC abstraction. Virtio-net
-  (the default `dev-virt` backend) and the optional RTL8139 fallback both rely on `KernelHal` for device mappings, DMA frames, and
-  diagnostics; `NetworkClock` advances in timer-driven increments.
-- Provides the PL011-backed serial façade (`serial::pl011` + `console::Console`) that powers the always-on root shell
-  when `serial-console` is enabled. Input/output is line-buffered with bounded heapless queues and UTF-8
-  normalisation shared with the TCP transport.
-- Runs the serial/TCP console loop (`console::CommandParser`) which multiplexes authenticated commands (`help`, `attach`, `tail`,
-  `log`, `spawn`, `kill`, `quit`) alongside timer and networking events inside the root-task scheduler. Capability validation is
-  driven by a deterministic ticket table (`event::TicketTable`) that records bootstrap secrets, and an acknowledgement dispatcher
-  emits `OK <verb>` / `ERR <verb>` lines across both transports before side effects fire so automation can align with root-task
-  state transitions.【F:apps/root-task/src/event/mod.rs†L329-L360】
-- Designs the capability distribution and event pump sequencing to support one Queen orchestrating many workers rather than a single privileged process.
-
-### NineDoor 9P Server (crate: `nine-door`)
-- Implements the Secure9P codec/core stack and publishes the synthetic namespace.
-- Delegates permission checks to a role-aware `AccessPolicy` using capability tickets minted by the root task.
-- Tracks per-session state (fid tables, msize) and ensures append-only semantics on log/telemetry nodes.
-- Presents the shared hive namespace so queen and worker mounts reflect their orchestration roles.
-
-### Workers (crate family: `worker-*`)
-- Spawned by queen commands; each worker receives a ticket describing its role and budget, and remains capability-limited to its
-  assigned mounts.【F:docs/ROLES_AND_SCHEDULING.md†L4-L17】
-- Communicate exclusively through their mounted NineDoor namespace—no raw IPC between workers; queen keeps orchestration state
-  in `/queen` while worker-heart processes stick to `/shard/<label>/worker/<id>` (legacy `/worker/<id>` when enabled).
-- Heartbeat workers emit periodic telemetry; worker-gpu stubs exist for future host-bridge coordination but stay isolated from
-  queen mounts beyond their lease scopes.
-- The Queen role drives one-to-many worker orchestration through `/queen/ctl`, creating, configuring, and revoking multiple worker instances within the hive.
-
-### Control Surfaces
-- `cohsh` is the canonical operator shell for the hive, speaking the same console and NineDoor verbs over serial or TCP transports.
-- Automated systems are expected to embed `cohsh` or speak the same protocol when issuing hive orchestration commands.
-- A future host-side WASM GUI is planned as a hive dashboard that wraps the `cohsh` protocol; it introduces no new in-VM control channel.
-
-### Networking Stack and HAL Boundary
-- The HAL (`KernelHal` implementing the `Hardware` trait) is the sole entry point for device mappings, DMA frame allocation, and
-  device coverage bookkeeping. NIC drivers invoke these helpers instead of touching physical addresses directly so snapshot and
-  diagnostics paths remain coherent.
-- Both NICs in tree (virtio-net for `dev-virt`, RTL8139 as an optional alternate) implement a small `NetDevice` trait and plug
-  into the smoltcp-backed `NetStack`. The stack remains NIC-agnostic: it consumes MAC address, link telemetry, and RX/TX tokens but
-  never inspects device registers.
-- TCP console traffic flows NIC driver → `NetStack` (smoltcp) → TCP console server → shared console runtime. Backend choice is a
-  HAL concern; console authentication and verb parsing stay identical regardless of NIC.
-
-### Host GPU Bridge (future, crate: `gpu-bridge-host`)
-- Runs **outside** the VM, using NVML/CUDA to manage real hardware.
-- Mirrors GPU control surfaces into the Cohesix instance (QEMU during development, physical hardware in deployment) via a 9P transport adapter (`secure9p-transport::Tcp` on the host side only).
-- Maintains lease agreements and enforces memory/stream quotas independent of the VM profile.
-
-## 4. Namespaces & Mount Tables
-- Each session is mounted according to role:
-  - **Queen**: `/`, `/queen`, `/proc`, `/log`, `/shard/*/worker/*` (legacy `/worker/*` when enabled), `/gpu/* (future)`.
-  - **WorkerHeartbeat**: `/proc/boot`, `/shard/<label>/worker/<id>/telemetry` (legacy `/worker/<id>/telemetry` when enabled), `/log/queen.log (read-only)`.
-  - **WorkerGpu (future)**: Worker heartbeat view + `/gpu/<lease>/*` nodes.
-- Mount tables keep `/queen`, `/shard/<label>/worker/<id>` (legacy `/worker/<id>` when enabled), `/log`, and `/gpu/*` isolated so worker processes cannot traverse queen control or
-  other worker directories even when sharing a NineDoor transport.【F:docs/ROLES_AND_SCHEDULING.md†L4-L17】
-- `bind` and `mount` operations are implemented via per-session mount tables maintained by NineDoor. Operations are scoped to a single path (no union mounts) and require queen privileges.
-
-## 5. Capability & Role Model
-- **Ticket**: 32-byte capability minted by the root task, bound to `{role, budget, mounts}`.
-- **Session**: Contains ticket, negotiated `msize`, fid allocator, and mount table.
-- NineDoor verifies every `walk`/`open`/`write` call against the ticket role and append/read mode before delegating to the provider.
-
-## 6. Data Flow Highlights
-- **Queen Control**: Append JSON commands to `/queen/ctl`; NineDoor forwards valid commands to root-task orchestration APIs.
-- **Telemetry**: Workers append newline-delimited status records to `/shard/<label>/worker/<id>/telemetry` (legacy `/worker/<id>/telemetry` when enabled). NineDoor enforces append-only semantics by ignoring offsets.
-- **Logging**: Root task and queen append to `/log/queen.log`; workers read logs read-only for situational awareness.
-- **GPU Integration (future)**: Host bridge exposes GPU metadata/control/job/status nodes; WorkerGpu instances mediate job submission and read back status via NineDoor.
-
-## 7. Networking & Console Integration
-- The root shell always runs on the PL011 UART when the `serial-console` feature is enabled, presenting the `cohesix>` prompt
-  for low-level debug, bootinfo inspection, and capability sanity checks. It is intended as the non-negotiable bring-up path
-  and remains active regardless of other transports.【F:apps/root-task/src/userland/mod.rs†L27-L120】
-- When the `net` and `net-console` features are enabled, a TCP-backed console listener starts alongside the PL011 console. It
-  speaks the same command parser, accepts `cohsh --transport tcp` sessions over the NineDoor-compatible protocol, and is
-  required to remain non-blocking so it cannot interfere with root shell input or event-pump cadence.【F:apps/root-task/src/net/console_srv.rs†L1-L134】
-- Both consoles run concurrently; remote access is additive rather than a replacement, ensuring local serial recovery remains
-  available even when TCP listeners are present.【F:apps/root-task/src/kernel.rs†L1474-L1565】
-- The networking substrate uses HAL-provided NICs (`NetDevice`) backed by fixed-size DMA frames rather than ad-hoc mappings. RTL8139
-  is the default backend for `dev-virt` while virtio-net remains feature-gated for experiments. smoltcp provides the IPv4/TCP stack
-  and the HAL boundary allows future hardware drivers to plug in without touching console or parser logic. The module is
-  feature-gated (`--features net`) so developers can defer the footprint when working on console-only flows. The event pump owns the
-  smoltcp poll cadence and publishes link status metrics into the boot log.
-- The console loop multiplexes serial input and TCP sessions. A shared finite-state parser enforces maximum line length,
-  exponential back-off for repeated authentication failures, and funnels all verbs through capability checks before invoking
-  NineDoor or root-task orchestration APIs. Sanitised console lines are counted once in the event-pump metrics so `/proc/boot`
-  can expose console pressure regardless of transport. TCP transports mirror the parser exactly, emitting `PING`/`PONG`
-  heartbeats every 15 seconds (configurable) and logging reconnect attempts so host operators can correlate transient drops with
-  root-task audit lines. Every command generates a deterministic acknowledgement (`OK`/`ERR`) broadcast to serial and TCP clients
-  so operators can script against shared semantics without guessing event timing.【F:apps/root-task/src/event/mod.rs†L329-L360】【F:apps/root-task/src/net/queue.rs†L526-L559】
-- Root-task’s event pump advances the networking clock on every timer tick, services console input, and emits structured log
-  lines so host tooling (`cohsh`) can mirror state over either serial or TCP transports while timers and IPC continue to run.
-
-`cohsh` is a host-only CLI: it never executes inside the VM or QEMU guest, instead running on macOS and connecting over the TCP
-transport (or wrapping a local QEMU subprocess via the `qemu` transport) using the NineDoor protocol, and the same host-driven
-posture applies when Cohesix runs on physical hardware. It mirrors the root shell command set but keeps orchestration off-VM,
-matching the build instructions in `docs/USERLAND_AND_CLI.md`. 【F:apps/cohsh/src/main.rs†L44-L132】
-
-## 8. Reliability & Security Considerations
-- Minimal trusted computing base: no POSIX layers, no TCP servers inside the VM, no dynamic loading.
-- All inter-process communication is file-based via 9P; no shared memory between workers.
-- Timer and watchdog infrastructure ensures runaway workers are revoked cleanly.
-- NineDoor core is `no_std + alloc` capable, allowing potential reuse in bare-metal contexts.
-
-## 9. Roadmap Dependencies
-- **Milestone alignment**: Architecture is realised incrementally per `BUILD_PLAN.md` milestones.
-- **Documentation as Source of Truth**: Changes to components or interfaces must be reflected here to avoid drift.
-
-## 10. Milestone 7 Migration Notes
-- **Event pump adoption**: Developers upgrading from the legacy spin loop
-  must initialise the `event::EventPump` in `kernel_start` and remove any
-  ad-hoc busy waits. The pump now owns serial, timer, networking, and IPC
-  poll cadence; new subsystems must register via typed handlers so audits
-  continue to show `event-pump: init <subsystem>` lines during boot.
-- **Serial driver integration**: The virtio-console façade replaces
-  direct PL011 shims. It exposes heapless RX/TX queues and atomic
-  back-pressure counters. Tests should exercise the shared console parser
-  via `cargo test -p root-task console_auth` to confirm UTF-8
-  sanitisation, rate limiting, and audit logging remain intact.
-- **Networking feature flag**: The deterministic smoltcp glue is guarded
-  by `--features net`. Enable the flag before touching networking code
-  and run `cargo check -p root-task --features net` plus
-  `cargo clippy -p root-task --features net --tests` to validate bounded
-  queue usage. Disable the feature for serial-only builds to keep the
-  baseline footprint minimal.
-- **Integration workflow**: `scripts/qemu-run.sh --console serial --net`
-  exercises the complete Milestone 7 event pump (serial + networking).
-  Pair it with `tests/integration/qemu_tcp_console.rs` to confirm the TCP
-  transport stays responsive while timers and NineDoor services continue
-  to operate.
-
-## 11. Manifest Compiler & As-Built Guarantees
-- **Single manifest**: Beginning with Milestone 8, the root task, docs,
-  and CLI scripts are generated from `root_task.toml` via the
-  `tools/coh-rtc` compiler. The manifest encodes architecture profile,
-  Secure9P bounds, provider topology, ticket policies, and feature gates
-  that keep VM artefacts `#![no_std]`.
-- **Validation**: The compiler enforces red lines (walk depth ≤ 8,
-  `msize ≤ 8192`, no `..`, no fid reuse, capability scoping) and refuses
-  manifests that would require `std`, exceed memory budgets, or enable
-  unimplemented transports. Generated Rust modules remain `no_std`
-  compatible (no `std` usage) and are formatted deterministically to
-  support reproducible builds and compliance audits.
-- **Telemetry ring budget**: The event pump reserves a 32 KiB telemetry
-  ring budget sized for up to eight workers. `coh-rtc` rejects manifests
-  where `telemetry.ring_bytes_per_worker × 8` exceeds 32768 bytes,
-  ensuring telemetry rings do not exceed deterministic event-pump
-  allocations.
-- **Docs-as-built**: Architecture, interfaces, and security documents
-  ingest compiler snippets (CBOR schemas, `/proc` layouts, concurrency
-  knobs, hardware tables). CI compares manifest fingerprints and embedded
-  excerpts to guarantee documentation reflects the running system. At
-  release time, tools/coh-rtc regenerates Markdown fragments (e.g., `/proc`
-  layout, concurrency knobs, CBOR schemas) and injects them into
-  `docs/INTERFACES.md` and `docs/SECURE9P.md`, ensuring each release
-  candidate’s documentation matches the compiled manifest exactly.
-- **Policy export**: Compiler outputs `out/manifests/*.json` and
-  operator policy files consumed by `cohsh`, enabling deterministic
-  session pooling, retry budgets, and future hardware profiles without
-  editing runtime code.
-- **Regeneration workflow**: Run
-  `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh`
-  to refresh root-task bootstrap tables, manifest fingerprints, CLI
-  scripts, and docs snippets. Commit all regenerated artefacts together
-  to keep docs-as-built guarantees intact.
-
-### 11.1 Manifest schema snapshot (generated)
-The following snapshot is generated by `coh-rtc` and mirrored in
-`docs/snippets/root_task_manifest.md`. Regenerate whenever the manifest,
-CLI scripts, or bootstrap tables change.
+### Manifest snapshot (generated)
+The following block is generated by `coh-rtc` and mirrored from `docs/snippets/root_task_manifest.md`. Do not edit by hand.
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Generated manifest snippet consumed by docs/ARCHITECTURE.md. -->
 
 ### Root-task manifest schema (generated)
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.3`
+- `root_task.schema`: `1.5`
 - `profile.name`: `virt-aarch64`
 - `profile.kernel`: `true`
 - `event_pump.tick_ms`: `5`
@@ -328,9 +227,37 @@ CLI scripts, or bootstrap tables change.
 - `secure9p.tags_per_session`: `16`
 - `secure9p.batch_frames`: `1`
 - `secure9p.short_write.policy`: `reject`
+- `cas.enable`: `true`
+- `cas.store.chunk_bytes`: `128`
+- `cas.delta.enable`: `true`
+- `cas.signing.required`: `true`
+- `cas.signing.key_path`: `resources/fixtures/cas_signing_key.hex`
 - `telemetry.ring_bytes_per_worker`: `1024`
 - `telemetry.frame_schema`: `legacy-plaintext`
 - `telemetry.cursor.retain_on_boot`: `false`
+- `observability.proc_9p.sessions`: `true`
+- `observability.proc_9p.outstanding`: `true`
+- `observability.proc_9p.short_writes`: `true`
+- `observability.proc_9p.sessions_bytes`: `8192`
+- `observability.proc_9p.outstanding_bytes`: `128`
+- `observability.proc_9p.short_writes_bytes`: `128`
+- `observability.proc_ingest.p50_ms`: `true`
+- `observability.proc_ingest.p95_ms`: `true`
+- `observability.proc_ingest.backpressure`: `true`
+- `observability.proc_ingest.dropped`: `true`
+- `observability.proc_ingest.queued`: `true`
+- `observability.proc_ingest.watch`: `true`
+- `observability.proc_ingest.p50_ms_bytes`: `64`
+- `observability.proc_ingest.p95_ms_bytes`: `64`
+- `observability.proc_ingest.backpressure_bytes`: `64`
+- `observability.proc_ingest.dropped_bytes`: `64`
+- `observability.proc_ingest.queued_bytes`: `64`
+- `observability.proc_ingest.watch_max_entries`: `16`
+- `observability.proc_ingest.watch_line_bytes`: `192`
+- `observability.proc_ingest.watch_min_interval_ms`: `50`
+- `observability.proc_ingest.latency_samples`: `32`
+- `observability.proc_ingest.latency_tolerance_ms`: `5`
+- `observability.proc_ingest.counter_tolerance`: `1`
 - `client_policies.cohsh.pool.control_sessions`: `2`
 - `client_policies.cohsh.pool.telemetry_sessions`: `4`
 - `client_policies.retry.max_attempts`: `3`
@@ -338,6 +265,8 @@ CLI scripts, or bootstrap tables change.
 - `client_policies.retry.ceiling_ms`: `2000`
 - `client_policies.retry.timeout_ms`: `5000`
 - `client_policies.heartbeat.interval_ms`: `15000`
+- `client_paths.queen_ctl`: `/queen/ctl`
+- `client_paths.log`: `/log/queen.log`
 - `cache.kernel_ops`: `true`
 - `cache.dma_clean`: `true`
 - `cache.dma_invalidate`: `true`
@@ -350,8 +279,8 @@ CLI scripts, or bootstrap tables change.
 - `sharding.enabled`: `true`
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
-- `tickets`: 3 entries
-- `manifest.sha256`: `fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861`
+- `tickets`: 5 entries
+- `manifest.sha256`: `1af6c0417cf026b5c44554f98279870e2072cfb21c7a05ff2ea8400980176432`
 
 ### Namespace mounts (generated)
 - (none)
@@ -363,6 +292,17 @@ CLI scripts, or bootstrap tables change.
 - shard labels: `00..ff` (count: 256)
 - canonical worker path: `/shard/<label>/worker/<id>/telemetry`
 - legacy alias: `/worker/<id>/telemetry`
+
+### Sidecars section (generated)
+- `sidecars.modbus.enable`: `false`
+- `sidecars.modbus.mount_at`: `/bus`
+- `sidecars.modbus.adapters`: `(none)`
+- `sidecars.dnp3.enable`: `false`
+- `sidecars.dnp3.mount_at`: `/bus`
+- `sidecars.dnp3.adapters`: `(none)`
+- `sidecars.lora.enable`: `false`
+- `sidecars.lora.mount_at`: `/lora`
+- `sidecars.lora.adapters`: `(none)`
 
 ### Ecosystem section (generated)
 - `ecosystem.host.enable`: `false`
@@ -385,62 +325,4 @@ CLI scripts, or bootstrap tables change.
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `fb3a4bc5434eaf31cc7ff4b1c2fcf33103f480a3ba30a60e3dc12bb5552a2861`)._
-
-### 11.1 Host Sidecar Bridge (`/host`)
-When `ecosystem.host.enable = true`, NineDoor publishes a `/host` namespace (mount path defined by `ecosystem.host.mount_at`) containing host-only provider stubs. Providers are listed in `ecosystem.host.providers[]`, and each adds its minimal file-only tree:
-- `systemd`: `/host/systemd/<unit>/{status,restart}`
-- `k8s`: `/host/k8s/node/<name>/{cordon,drain}`
-- `nvidia`: `/host/nvidia/gpu/<id>/{status,power_cap,thermal}`
-
-Control nodes (`restart`, `cordon`, `drain`, `power_cap`) are append-only and queen-only; every write emits a deterministic audit line to `/log/queen.log` via the existing NineDoor logging path. The host sidecar bridge runs outside the VM, connects via the existing Secure9P/console boundary, and mirrors host status into these files without adding new in-VM transports.
-
-### 11.2 Cache-safe DMA contracts
-Shared DMA buffers (telemetry rings, GPU windows, and future sidecar regions) cross the HAL and NineDoor boundary and therefore must not depend on implicit cache behavior. On AArch64 the seL4 kernel exposes VSpace cache operations (`seL4_ARM_VSpace_Clean_Data`, `seL4_ARM_VSpace_CleanInvalidate_Data`, `seL4_ARM_VSpace_Invalidate_Data`, `seL4_ARM_VSpace_Unify_Instruction`) that the root task must invoke to guarantee deterministic coherence. The manifest’s cache section records which maintenance operations are required:
-- `cache.kernel_ops` enables the kernel capability required to submit VSpace cache ops.
-- `cache.dma_clean` and `cache.dma_invalidate` define whether buffers are cleaned before sharing and invalidated after reclaim.
-- `cache.unify_instructions` gates instruction cache unification for shared executable buffers.
-
-`coh-rtc` refuses to generate bootstrap tables when any DMA cache maintenance flag is set while `cache.kernel_ops` is false, ensuring docs, manifest, and runtime behavior remain aligned. Root-task audit logs bracket each DMA hand-off with cache-maintenance entries so operators can verify flush/invalidate ordering in serial logs.
-
-## 12. Hardware Trajectory & Host/Worker Sidecar Pattern
-- **UEFI readiness**: Later milestones introduce an aarch64 UEFI loader
-  that boots the generated manifest on physical hardware without a VM.
-  The loader maps UART/NET MMIO regions defined in the manifest,
-  initialises the same event pump, and emits attestation records to
-  `/proc/boot`. Secure Boot measurements cover generated artefacts,
-  ensuring retail, industrial, and defense deployments can trust the
-  runtime state.
-- **Device identity**: TPM (or DICE) integration seals ticket seeds and
-  records boot hashes. NineDoor exposes attestation logs via read-only
-  files so host tooling and operators can verify provenance before
-  enabling privileged commands.
-- **Host/Worker sidecar pattern**: *Sidecars* are auxiliary processes that
-  run **outside the seL4 VM** whenever possible (on the host or another
-  container). Each sidecar exposes its namespace into the VM **over 9P**
-  using the same security model as internal providers. Only lightweight
-  control stubs or schedulers (e.g., LoRa duty-cycle timers) execute
-  **inside** the VM under strict manifest quotas to preserve a lean,
-  deterministic TCB.
-- **Field-bus surfaces**: Bus and LoRa adapters mount under `/bus/<adapter>`
-  and `/lora/<adapter>`, with append-only control files and read-only status
-  (`/bus/*/spool`, `/lora/*/tamper`) to keep sidecar replay and tamper
-  telemetry deterministic while preserving the VM boundary.
-- **Lifecycle & discovery**: Sidecar mounts and capability scopes are
-  declared in the **manifest**; the **host launcher** inspects the
-  manifest at boot, spawns or connects required sidecars, and only then
-  hands control to the root task. This keeps deployment topology in
-  lockstep with what the compiler planned.
-- **Common bridge trait (optional)**: All sidecars conform to a shared
-  trait surface (e.g., `sidecar::ProviderBridge`) so new buses (MODBUS,
-  DNP3, CAN, LoRa) can be added without modifying the VM.
-- **Budget discipline**: Sidecar-related workers are feature-gated and
-  bound by manifest quotas so the event pump remains deterministic even
-  under constrained links. Host tooling validates dependencies before
-  enabling sidecars, preventing drift between planned and deployed
-  topologies.
-
-## Future Notes (post–Milestone 7c)
-- Event loop unification and shared transport polling land in later Milestone 7d/7e work to remove remaining spin-based fallbacks.【F:docs/BUILD_PLAN.md†L218-L340】
-- Worker lifecycle automation (spawn/kill, budget expiry) is scheduled for the post-7c scheduler hardening tasks in the build plan.【F:docs/BUILD_PLAN.md†L218-L340】
-- GPU node expansion follows the Milestone 6/8 host-bridge roadmap, keeping VM-side worker-gpu stubs minimal until host leases are available.【F:docs/BUILD_PLAN.md†L120-L135】
+_Generated from `configs/root_task.toml` (sha256: `1af6c0417cf026b5c44554f98279870e2072cfb21c7a05ff2ea8400980176432`)._
