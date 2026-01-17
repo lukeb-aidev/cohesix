@@ -125,6 +125,20 @@ interval_ms = 15000
 queen_ctl = "/queen/ctl"
 log = "/log/queen.log"
 
+[swarmui]
+ticket_scope = "per-ticket"
+
+[swarmui.cache]
+enabled = false
+max_bytes = 262144
+ttl_s = 3600
+
+[swarmui.paths]
+telemetry_root = "/worker"
+proc_ingest_root = "/proc/ingest"
+worker_root = "/worker"
+namespace_roots = ["/proc", "/queen", "/worker", "/log", "/gpu"]
+
 [[tickets]]
 role = "queen"
 secret = "bootstrap"

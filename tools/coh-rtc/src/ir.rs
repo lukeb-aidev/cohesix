@@ -68,6 +68,8 @@ pub struct Manifest {
     #[serde(default)]
     pub client_paths: ClientPaths,
     #[serde(default)]
+    pub swarmui: SwarmUiConfig,
+    #[serde(default)]
     pub cas: CasConfig,
 }
 
@@ -123,6 +125,7 @@ impl Manifest {
         self.validate_ui_providers()?;
         self.validate_client_policies()?;
         self.validate_client_paths()?;
+        self.validate_swarmui()?;
         self.validate_cas(base_dir)?;
         Ok(())
     }
@@ -870,6 +873,33 @@ impl Manifest {
         Ok(())
     }
 
+    fn validate_swarmui(&self) -> Result<()> {
+        let swarmui = &self.swarmui;
+        if swarmui.cache.max_bytes == 0 {
+            bail!("swarmui.cache.max_bytes must be > 0");
+        }
+        if swarmui.cache.ttl_s == 0 {
+            bail!("swarmui.cache.ttl_s must be > 0");
+        }
+        self.validate_client_path(
+            "swarmui.paths.telemetry_root",
+            &swarmui.paths.telemetry_root,
+        )?;
+        self.validate_client_path(
+            "swarmui.paths.proc_ingest_root",
+            &swarmui.paths.proc_ingest_root,
+        )?;
+        self.validate_client_path("swarmui.paths.worker_root", &swarmui.paths.worker_root)?;
+        if swarmui.paths.namespace_roots.is_empty() {
+            bail!("swarmui.paths.namespace_roots must not be empty");
+        }
+        for (idx, path) in swarmui.paths.namespace_roots.iter().enumerate() {
+            let label = format!("swarmui.paths.namespace_roots[{idx}]");
+            self.validate_client_path(&label, path)?;
+        }
+        Ok(())
+    }
+
     fn validate_client_path(&self, label: &str, path: &str) -> Result<()> {
         if !path.starts_with('/') {
             bail!("{label} must be an absolute path");
@@ -1442,6 +1472,84 @@ impl Default for ClientPaths {
         Self {
             queen_ctl: "/queen/ctl".to_owned(),
             log: "/log/queen.log".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SwarmUiTicketScope {
+    PerTicket,
+    PerRole,
+}
+
+impl SwarmUiTicketScope {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SwarmUiTicketScope::PerTicket => "per-ticket",
+            SwarmUiTicketScope::PerRole => "per-role",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SwarmUiConfig {
+    pub ticket_scope: SwarmUiTicketScope,
+    pub cache: SwarmUiCacheConfig,
+    pub paths: SwarmUiPathsConfig,
+}
+
+impl Default for SwarmUiConfig {
+    fn default() -> Self {
+        Self {
+            ticket_scope: SwarmUiTicketScope::PerTicket,
+            cache: SwarmUiCacheConfig::default(),
+            paths: SwarmUiPathsConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SwarmUiCacheConfig {
+    pub enabled: bool,
+    pub max_bytes: u32,
+    pub ttl_s: u64,
+}
+
+impl Default for SwarmUiCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_bytes: 262_144,
+            ttl_s: 3600,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SwarmUiPathsConfig {
+    pub telemetry_root: String,
+    pub proc_ingest_root: String,
+    pub worker_root: String,
+    pub namespace_roots: Vec<String>,
+}
+
+impl Default for SwarmUiPathsConfig {
+    fn default() -> Self {
+        Self {
+            telemetry_root: "/worker".to_owned(),
+            proc_ingest_root: "/proc/ingest".to_owned(),
+            worker_root: "/worker".to_owned(),
+            namespace_roots: vec![
+                "/proc".to_owned(),
+                "/queen".to_owned(),
+                "/worker".to_owned(),
+                "/log".to_owned(),
+                "/gpu".to_owned(),
+            ],
         }
     }
 }

@@ -63,6 +63,14 @@
 - `client_policies.heartbeat.interval_ms`: `15000`
 - `client_paths.queen_ctl`: `/queen/ctl`
 - `client_paths.log`: `/log/queen.log`
+- `swarmui.ticket_scope`: `per-ticket`
+- `swarmui.cache.enabled`: `false`
+- `swarmui.cache.max_bytes`: `262144`
+- `swarmui.cache.ttl_s`: `3600`
+- `swarmui.paths.telemetry_root`: `/worker`
+- `swarmui.paths.proc_ingest_root`: `/proc/ingest`
+- `swarmui.paths.worker_root`: `/worker`
+- `swarmui.paths.namespace_roots`: `/proc, /queen, /worker, /log, /gpu`
 - `cache.kernel_ops`: `true`
 - `cache.dma_clean`: `true`
 - `cache.dma_invalidate`: `true`
@@ -76,7 +84,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `b83a1ff39cf2efaf599ddab3d4b40fc4270b4c63e7c19d89126ffdd774ca4b0d`
+- `manifest.sha256`: `b5576e9cb184113c1708970e46efeafb953f20d68b5265988718d5fdfbe860a6`
 
 ### Namespace mounts (generated)
 - (none)
@@ -121,4 +129,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `b83a1ff39cf2efaf599ddab3d4b40fc4270b4c63e7c19d89126ffdd774ca4b0d`)._
+_Generated from `configs/root_task.toml` (sha256: `b5576e9cb184113c1708970e46efeafb953f20d68b5265988718d5fdfbe860a6`)._

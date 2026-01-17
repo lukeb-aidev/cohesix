@@ -38,6 +38,9 @@ fn manifest_codegen_is_deterministic() {
     let cohsh_client_doc = temp_dir.path().join("cohsh_client.md");
     let cohsh_grammar_doc = temp_dir.path().join("cohsh_grammar.md");
     let cohsh_ticket_policy_doc = temp_dir.path().join("cohsh_ticket_policy.md");
+    let swarmui_defaults = temp_dir.path().join("swarmui_defaults.toml");
+    let swarmui_defaults_rust = temp_dir.path().join("swarmui_defaults.rs");
+    let swarmui_defaults_doc = temp_dir.path().join("swarmui_defaults.md");
 
     let options = CompileOptions {
         manifest_path,
@@ -58,6 +61,9 @@ fn manifest_codegen_is_deterministic() {
         cohsh_client_doc_out: cohsh_client_doc.clone(),
         cohsh_grammar_doc_out: cohsh_grammar_doc.clone(),
         cohsh_ticket_policy_doc_out: cohsh_ticket_policy_doc.clone(),
+        swarmui_defaults_out: swarmui_defaults.clone(),
+        swarmui_defaults_rust_out: swarmui_defaults_rust.clone(),
+        swarmui_defaults_doc_out: swarmui_defaults_doc.clone(),
     };
 
     let first = compile(&options).expect("compile manifest");
@@ -82,6 +88,12 @@ fn manifest_codegen_is_deterministic() {
     let baseline_grammar_doc = fs::read(&cohsh_grammar_doc).expect("cohsh grammar doc");
     let baseline_ticket_doc =
         fs::read(&cohsh_ticket_policy_doc).expect("cohsh ticket policy doc");
+    let baseline_swarmui_defaults =
+        fs::read(&swarmui_defaults).expect("swarmui defaults");
+    let baseline_swarmui_defaults_rust =
+        fs::read(&swarmui_defaults_rust).expect("swarmui defaults rust");
+    let baseline_swarmui_defaults_doc =
+        fs::read(&swarmui_defaults_doc).expect("swarmui defaults doc");
 
     let second = compile(&options).expect("compile manifest again");
     let second_snapshot = snapshot_dir(&out_dir);
@@ -105,6 +117,11 @@ fn manifest_codegen_is_deterministic() {
     let second_grammar_doc = fs::read(&cohsh_grammar_doc).expect("cohsh grammar doc");
     let second_ticket_doc =
         fs::read(&cohsh_ticket_policy_doc).expect("cohsh ticket policy doc");
+    let second_swarmui_defaults = fs::read(&swarmui_defaults).expect("swarmui defaults");
+    let second_swarmui_defaults_rust =
+        fs::read(&swarmui_defaults_rust).expect("swarmui defaults rust");
+    let second_swarmui_defaults_doc =
+        fs::read(&swarmui_defaults_doc).expect("swarmui defaults doc");
 
     assert_eq!(baseline, second_snapshot);
     assert_eq!(baseline_manifest, second_manifest);
@@ -123,6 +140,9 @@ fn manifest_codegen_is_deterministic() {
     assert_eq!(baseline_client_doc, second_client_doc);
     assert_eq!(baseline_grammar_doc, second_grammar_doc);
     assert_eq!(baseline_ticket_doc, second_ticket_doc);
+    assert_eq!(baseline_swarmui_defaults, second_swarmui_defaults);
+    assert_eq!(baseline_swarmui_defaults_rust, second_swarmui_defaults_rust);
+    assert_eq!(baseline_swarmui_defaults_doc, second_swarmui_defaults_doc);
     assert_eq!(first.summary(), second.summary());
 }
 
@@ -188,6 +208,9 @@ secret = "bootstrap"
         cohsh_client_doc_out: temp_dir.path().join("cohsh_client.md"),
         cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
         cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
+        swarmui_defaults_out: temp_dir.path().join("swarmui_defaults.toml"),
+        swarmui_defaults_rust_out: temp_dir.path().join("swarmui_defaults.rs"),
+        swarmui_defaults_doc_out: temp_dir.path().join("swarmui_defaults.md"),
     };
 
     let err = compile(&options).expect_err("manifest should be rejected");
@@ -276,6 +299,9 @@ secret = "bootstrap"
         cohsh_client_doc_out: temp_dir.path().join("cohsh_client.md"),
         cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
         cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
+        swarmui_defaults_out: temp_dir.path().join("swarmui_defaults.toml"),
+        swarmui_defaults_rust_out: temp_dir.path().join("swarmui_defaults.rs"),
+        swarmui_defaults_doc_out: temp_dir.path().join("swarmui_defaults.md"),
     };
 
     let err = compile(&options).expect_err("manifest should be rejected");
@@ -349,6 +375,9 @@ secret = "bootstrap"
         cohsh_client_doc_out: temp_dir.path().join("cohsh_client.md"),
         cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
         cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
+        swarmui_defaults_out: temp_dir.path().join("swarmui_defaults.toml"),
+        swarmui_defaults_rust_out: temp_dir.path().join("swarmui_defaults.rs"),
+        swarmui_defaults_doc_out: temp_dir.path().join("swarmui_defaults.md"),
     };
 
     let err = compile(&options).expect_err("manifest should be rejected");
@@ -429,6 +458,9 @@ secret = "bootstrap"
         cohsh_client_doc_out: temp_dir.path().join("cohsh_client.md"),
         cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
         cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
+        swarmui_defaults_out: temp_dir.path().join("swarmui_defaults.toml"),
+        swarmui_defaults_rust_out: temp_dir.path().join("swarmui_defaults.rs"),
+        swarmui_defaults_doc_out: temp_dir.path().join("swarmui_defaults.md"),
     };
 
     let err = compile(&options).expect_err("manifest should be rejected");
@@ -504,6 +536,9 @@ secret = "bootstrap"
         cohsh_client_doc_out: temp_dir.path().join("cohsh_client.md"),
         cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
         cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
+        swarmui_defaults_out: temp_dir.path().join("swarmui_defaults.toml"),
+        swarmui_defaults_rust_out: temp_dir.path().join("swarmui_defaults.rs"),
+        swarmui_defaults_doc_out: temp_dir.path().join("swarmui_defaults.md"),
     };
 
     let err = compile(&options).expect_err("manifest should be rejected");

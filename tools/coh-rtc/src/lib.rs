@@ -29,6 +29,9 @@ pub struct CompileOptions {
     pub cohsh_client_doc_out: PathBuf,
     pub cohsh_grammar_doc_out: PathBuf,
     pub cohsh_ticket_policy_doc_out: PathBuf,
+    pub swarmui_defaults_out: PathBuf,
+    pub swarmui_defaults_rust_out: PathBuf,
+    pub swarmui_defaults_doc_out: PathBuf,
 }
 
 pub fn compile(options: &CompileOptions) -> Result<codegen::GeneratedArtifacts> {
@@ -135,4 +138,21 @@ pub fn default_cohsh_ticket_policy_doc_path() -> PathBuf {
     Path::new("docs")
         .join("snippets")
         .join("cohsh_ticket_policy.md")
+}
+
+pub fn default_swarmui_defaults_path() -> PathBuf {
+    Path::new("out").join("swarmui_defaults.toml")
+}
+
+pub fn default_swarmui_defaults_rust_path() -> PathBuf {
+    Path::new("apps")
+        .join("swarmui")
+        .join("src")
+        .join("generated.rs")
+}
+
+pub fn default_swarmui_defaults_doc_path() -> PathBuf {
+    Path::new("docs")
+        .join("snippets")
+        .join("swarmui_defaults.md")
 }

@@ -216,6 +216,7 @@ impl ServerCore {
             .insert(role, TicketKey::from_secret(secret));
     }
 
+    #[allow(dead_code)]
     pub(crate) fn handle_frame(
         &mut self,
         session: SessionId,
@@ -394,6 +395,7 @@ impl ServerCore {
         self.pipeline.metrics()
     }
 
+    #[allow(dead_code)]
     fn dispatch(
         &mut self,
         session: SessionId,

@@ -153,10 +153,12 @@ impl AuditStore {
         self.config.replay()
     }
 
+    #[allow(dead_code)]
     pub fn journal_bounds(&self) -> LogBounds {
         self.journal.bounds()
     }
 
+    #[allow(dead_code)]
     pub fn decisions_bounds(&self) -> LogBounds {
         self.decisions.bounds()
     }
@@ -601,7 +603,6 @@ impl BoundedLog {
         let offset_end = offset_start.saturating_add(bytes.len() as u64);
         self.entries.push_back(LogEntry {
             bytes,
-            offset_start,
             offset_end,
         });
         self.total_bytes = self.total_bytes.saturating_add(self.entries.back().unwrap().bytes.len());
@@ -625,7 +626,6 @@ pub struct LogBounds {
 #[derive(Debug)]
 struct LogEntry {
     bytes: Vec<u8>,
-    offset_start: u64,
     offset_end: u64,
 }
 

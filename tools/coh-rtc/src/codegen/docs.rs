@@ -379,6 +379,54 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `swarmui.ticket_scope`: `{}`",
+            manifest.swarmui.ticket_scope.as_str()
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.cache.enabled`: `{}`",
+            manifest.swarmui.cache.enabled
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.cache.max_bytes`: `{}`",
+            manifest.swarmui.cache.max_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.cache.ttl_s`: `{}`",
+            manifest.swarmui.cache.ttl_s
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.paths.telemetry_root`: `{}`",
+            manifest.swarmui.paths.telemetry_root
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.paths.proc_ingest_root`: `{}`",
+            manifest.swarmui.paths.proc_ingest_root
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.paths.worker_root`: `{}`",
+            manifest.swarmui.paths.worker_root
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.paths.namespace_roots`: `{}`",
+            manifest.swarmui.paths.namespace_roots.join(", ")
+        )
+        .ok();
+        writeln!(
+            schema_md,
             "- `cache.kernel_ops`: `{}`",
             manifest.cache.kernel_ops
         )

@@ -72,7 +72,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [19](#19) | cohsh-core Extraction (Shared Grammar & Transport) | Complete |
 | [20a](#20a) | cohsh as 9P Client Library | Complete |
 | [20b](#20b) | NineDoor UI Providers | Complete |
-| [20c](#20c) | SwarmUI Desktop (Tauri, Pure 9P/TCP) | Pending |
+| [20c](#20c) | SwarmUI Desktop (Tauri, Pure 9P/TCP) | Complete |
 | [20d](#20d) | SwarmUI Live Hive Rendering (PixiJS, GPU-First | Pending |
 | [20e](#20e) | CLI/UI Convergence Tests | Pending |
 | [20f](#20f) | UI Security Hardening (Tickets & Quotas) | Pending |
@@ -1786,6 +1786,7 @@ Checks:
 Deliverables:
 - Updated docs/INTERFACES.md with SwarmUI consumption guidance and non-goals.
 ```
+**Status:** Complete — SwarmUI desktop is wired to cohsh-core with ticket-scoped sessions, transcript parity tests, bounded offline cache, and no-HTTP dependency enforcement; regression pack remains green.
 ---
 ## Milestone 20d — SwarmUI Live Hive Rendering (PixiJS, GPU-First) <a id="20d"></a> 
 [Milestones](#Milestones)

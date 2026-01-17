@@ -24,7 +24,7 @@ use alloc::{
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohesix_cas::{CasManifest, CasManifestError, CAS_MANIFEST_SCHEMA};
 use cohesix_ticket::TicketToken;
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, SigningKey};
 use core::fmt::{self, Write};
 use core::str;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
@@ -1639,9 +1639,7 @@ impl CasState {
     ) -> Result<u32, NineDoorBridgeError> {
         self.ensure_enabled()?;
         self.ensure_update(epoch)?;
-        let mut decoded = None;
-        let mut manifest_bytes = None;
-        {
+        let (decoded, manifest_bytes) = {
             let bundle = self
                 .updates
                 .get_mut(epoch)
@@ -1668,17 +1666,17 @@ impl CasState {
             }
             bundle.manifest_pending.extend_from_slice(&payload);
             match CasManifest::decode(&bundle.manifest_pending) {
-                Ok(manifest) => {
-                    manifest_bytes = Some(bundle.manifest_pending.clone());
-                    decoded = Some(manifest);
-                }
+                Ok(manifest) => (
+                    Some(manifest),
+                    Some(bundle.manifest_pending.clone()),
+                ),
                 Err(CasManifestError::UnexpectedEof) => return Ok(data.len() as u32),
                 Err(_) => {
                     bundle.manifest_pending.clear();
                     return Err(NineDoorBridgeError::InvalidPayload);
                 }
             }
-        }
+        };
         let Some(manifest) = decoded else {
             return Ok(data.len() as u32);
         };

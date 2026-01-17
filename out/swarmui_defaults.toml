@@ -1,0 +1,18 @@
+# Author: Lukas Bower
+# Purpose: Generated SwarmUI defaults derived from configs/root_task.toml.
+[meta]
+manifest_sha256 = "b5576e9cb184113c1708970e46efeafb953f20d68b5265988718d5fdfbe860a6"
+
+[swarmui]
+ticket_scope = "per-ticket"
+
+[swarmui.cache]
+enabled = false
+max_bytes = 262144
+ttl_s = 3600
+
+[swarmui.paths]
+telemetry_root = "/worker"
+proc_ingest_root = "/proc/ingest"
+worker_root = "/worker"
+namespace_roots = ["/proc", "/queen", "/worker", "/log", "/gpu"]

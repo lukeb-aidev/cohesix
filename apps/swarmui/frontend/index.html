@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>SwarmUI</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Cohesix SwarmUI</p>
+          <h1>Hive telemetry, grounded in the namespace.</h1>
+          <p class="lede">
+            SwarmUI renders a strict view of Secure9P state. No new verbs, no
+            hidden polling, and no protocol drift.
+          </p>
+        </div>
+        <div class="hero-actions">
+          <div class="session-controls">
+            <label class="label" for="session-role">Role</label>
+            <select id="session-role" class="select">
+              <option value="queen">queen</option>
+              <option value="worker-heartbeat">worker-heartbeat</option>
+              <option value="worker-gpu">worker-gpu</option>
+              <option value="worker-bus">worker-bus</option>
+              <option value="worker-lora">worker-lora</option>
+            </select>
+            <label class="label" for="session-ticket">Ticket</label>
+            <input
+              id="session-ticket"
+              class="input"
+              type="text"
+              placeholder="ticket (optional)"
+            />
+          </div>
+          <div class="session-buttons">
+            <button id="connect" class="action primary">Connect</button>
+            <button id="offline" class="action ghost">Offline mode</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <header>
+            <h2>Telemetry Rings</h2>
+            <p>Tail worker telemetry streams on demand.</p>
+          </header>
+          <div class="panel-body mono" id="telemetry-output">
+            <p class="placeholder">No telemetry loaded.</p>
+          </div>
+          <footer class="split">
+            <input
+              id="worker-id"
+              class="input"
+              type="text"
+              value="worker-1"
+            />
+            <button id="load-telemetry" class="action">Load telemetry</button>
+          </footer>
+        </article>
+
+        <article class="panel">
+          <header>
+            <h2>Fleet Map</h2>
+            <p>Read-only ingest snapshots and worker presence.</p>
+          </header>
+          <div class="panel-body mono" id="fleet-output">
+            <p class="placeholder">Awaiting ingest snapshot.</p>
+          </div>
+          <footer>
+            <button id="load-fleet" class="action">Load fleet</button>
+          </footer>
+        </article>
+
+        <article class="panel wide">
+          <header>
+            <h2>Namespace Browser</h2>
+            <p>Browse /proc, /queen, /worker, /log, /gpu (read-only).</p>
+          </header>
+          <div class="panel-body mono" id="namespace-output">
+            <p class="placeholder">Select a root to list entries.</p>
+          </div>
+          <footer class="split">
+            <select id="namespace-root" class="select">
+              <option value="/proc">/proc</option>
+              <option value="/queen">/queen</option>
+              <option value="/worker">/worker</option>
+              <option value="/log">/log</option>
+              <option value="/gpu">/gpu</option>
+            </select>
+            <button id="load-namespace" class="action">List entries</button>
+          </footer>
+        </article>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

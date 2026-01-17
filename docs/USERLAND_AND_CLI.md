@@ -74,8 +74,8 @@ Manifest-derived policy defaults are emitted by `coh-rtc` into `out/cohsh_policy
 <!-- Purpose: Generated cohsh policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### cohsh client policy (generated)
-- `manifest.sha256`: `1af6c0417cf026b5c44554f98279870e2072cfb21c7a05ff2ea8400980176432`
-- `policy.sha256`: `72104d9a1a34b2ce666f1cda458ee22a351d9d967914c379e2eb005ea5f20398`
+- `manifest.sha256`: `b5576e9cb184113c1708970e46efeafb953f20d68b5265988718d5fdfbe860a6`
+- `policy.sha256`: `80f612d96f8ea90a67035482ad278f1aa745ac3e42192c44ba20f791a777a33b`
 - `cohsh.pool.control_sessions`: `2`
 - `cohsh.pool.telemetry_sessions`: `4`
 - `retry.max_attempts`: `3`
@@ -84,7 +84,8 @@ Manifest-derived policy defaults are emitted by `coh-rtc` into `out/cohsh_policy
 - `retry.timeout_ms`: `5000`
 - `heartbeat.interval_ms`: `15000`
 
-_Generated from `configs/root_task.toml` (sha256: `1af6c0417cf026b5c44554f98279870e2072cfb21c7a05ff2ea8400980176432`)._
+_Generated from `configs/root_task.toml` (sha256: `b5576e9cb184113c1708970e46efeafb953f20d68b5265988718d5fdfbe860a6`)._
+
 
 Manifest-derived CohClient defaults (paths and Secure9P bounds) are emitted by `coh-rtc`.
 
@@ -92,13 +93,14 @@ Manifest-derived CohClient defaults (paths and Secure9P bounds) are emitted by `
 <!-- Purpose: Generated cohsh client snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `1af6c0417cf026b5c44554f98279870e2072cfb21c7a05ff2ea8400980176432`
+- `manifest.sha256`: `b5576e9cb184113c1708970e46efeafb953f20d68b5265988718d5fdfbe860a6`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
 - `client_paths.queen_ctl`: `/queen/ctl`
 - `client_paths.log`: `/log/queen.log`
 
-_Generated from `configs/root_task.toml` (sha256: `1af6c0417cf026b5c44554f98279870e2072cfb21c7a05ff2ea8400980176432`)._
+_Generated from `configs/root_task.toml` (sha256: `b5576e9cb184113c1708970e46efeafb953f20d68b5265988718d5fdfbe860a6`)._
+
 
 Shared console grammar and ticket policy are emitted by `coh-rtc` from `cohsh-core` so CLI and console stay aligned.
 
@@ -127,6 +129,7 @@ Shared console grammar and ticket policy are emitted by `coh-rtc` from `cohsh-co
 
 _Generated from cohsh-core verb specs (18 verbs)._
 
+
 <!-- Author: Lukas Bower -->
 <!-- Purpose: Generated cohsh ticket policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
@@ -136,6 +139,34 @@ _Generated from cohsh-core verb specs (18 verbs)._
 - `worker-*` tickets are required; role must match and subject identity is mandatory.
 
 _Generated from cohsh-core ticket policy._
+
+
+## SwarmUI Desktop (Host UI)
+- Host-only Tauri app at `apps/swarmui`.
+- Speaks Secure9P via `cohsh-core` (9P/TCP). No HTTP/REST dependencies.
+- Presentation-only frontend: no retries, caching policy, or background polling logic.
+- Offline mode reads cached CBOR snapshots from `$DATA_DIR/snapshots/` and never touches the network.
+- When caching is enabled, successful panel reads persist CBOR transcripts for offline replay.
+
+Manifest-derived SwarmUI defaults are emitted by `coh-rtc`.
+<!-- coh-rtc:swarmui-defaults:start -->
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Generated SwarmUI defaults snippet consumed by docs/USERLAND_AND_CLI.md. -->
+
+### SwarmUI defaults (generated)
+- `manifest.sha256`: `b5576e9cb184113c1708970e46efeafb953f20d68b5265988718d5fdfbe860a6`
+- `swarmui.defaults.sha256`: `80b972a04bac979ca33fa3f85cc416b53ce7050030fd4cafaa054494bd363cb4`
+- `swarmui.ticket_scope`: `per-ticket`
+- `swarmui.cache.enabled`: `false`
+- `swarmui.cache.max_bytes`: `262144`
+- `swarmui.cache.ttl_s`: `3600`
+- `swarmui.paths.telemetry_root`: `/worker`
+- `swarmui.paths.proc_ingest_root`: `/proc/ingest`
+- `swarmui.paths.worker_root`: `/worker`
+- `swarmui.paths.namespace_roots`: `/proc, /queen, /worker, /log, /gpu`
+
+_Generated from `configs/root_task.toml` (sha256: `b5576e9cb184113c1708970e46efeafb953f20d68b5265988718d5fdfbe860a6`)._
+<!-- coh-rtc:swarmui-defaults:end -->
 
 ### Interactive shell surface
 Startup banner and prompt:

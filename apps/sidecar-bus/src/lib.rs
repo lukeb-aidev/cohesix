@@ -51,7 +51,12 @@ pub enum SpoolError {
     /// The frame would exceed queue or byte limits.
     Full,
     /// The payload exceeds the configured maximum.
-    Oversize { requested: usize, max_bytes: usize },
+    Oversize {
+        /// Payload size in bytes requested by the caller.
+        requested: usize,
+        /// Maximum payload size permitted by configuration.
+        max_bytes: usize,
+    },
 }
 
 /// Recorded spool entry with deterministic sequencing.
@@ -201,7 +206,10 @@ pub enum SpoolResult {
     /// Payload should be delivered immediately.
     Delivered,
     /// Payload has been buffered for replay.
-    Queued { seq: u64 },
+    Queued {
+        /// Sequence number assigned to the queued payload.
+        seq: u64,
+    },
 }
 
 /// Bus adapter with bounded offline spooling.

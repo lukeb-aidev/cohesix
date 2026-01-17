@@ -6,6 +6,7 @@ members = [
     "apps/console-ack-wire",
     "apps/cohsh",
     "apps/cas-tool",
+    "apps/swarmui",
     "apps/root-task",
     "apps/nine-door",
     "apps/worker-heart",

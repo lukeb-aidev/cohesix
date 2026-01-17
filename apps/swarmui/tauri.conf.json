@@ -1,0 +1,32 @@
+{
+  "build": {
+    "beforeBuildCommand": "",
+    "beforeDevCommand": "",
+    "devPath": "frontend",
+    "distDir": "frontend"
+  },
+  "package": {
+    "productName": "SwarmUI",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "windows": [
+      {
+        "title": "SwarmUI",
+        "width": 1100,
+        "height": 720,
+        "resizable": true
+      }
+    ],
+    "bundle": {
+      "active": false,
+      "identifier": "com.cohesix.swarmui"
+    },
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    },
+    "allowlist": {
+      "all": false
+    }
+  }
+}

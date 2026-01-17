@@ -74,6 +74,9 @@ fn compile_error(manifest: &str) -> String {
         cohsh_client_doc_out: temp_dir.path().join("cohsh_client.md"),
         cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
         cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
+        swarmui_defaults_out: temp_dir.path().join("swarmui_defaults.toml"),
+        swarmui_defaults_rust_out: temp_dir.path().join("swarmui_defaults.rs"),
+        swarmui_defaults_doc_out: temp_dir.path().join("swarmui_defaults.md"),
     };
     let err = compile(&options).expect_err("manifest should be rejected");
     err.to_string()

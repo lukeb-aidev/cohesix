@@ -61,6 +61,7 @@ impl CborWriter {
     }
 
     /// Encode a CBOR boolean.
+    #[allow(dead_code)]
     pub(crate) fn boolean(&mut self, value: bool) -> Result<(), CborError> {
         let byte = if value { 0xf5 } else { 0xf4 };
         self.push_u8(byte)

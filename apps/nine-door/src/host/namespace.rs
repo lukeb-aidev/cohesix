@@ -9,13 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use gpu_bridge_host::{GpuModelCatalog, TelemetrySchema};
-use sidecar_bus::{LinkState, OfflineSpool, SpoolConfig, SpoolError, SpoolFrame};
+use sidecar_bus::{LinkState, OfflineSpool, SpoolConfig, SpoolError};
 use sha2::{Digest, Sha256};
 use secure9p_codec::{ErrorCode, Qid, QidType, MAX_MSIZE};
 use trace_model::TraceLevel;
-use worker_lora::{
-    DutyCycleConfig, DutyCycleDecision, DutyCycleGuard, TamperEntry, TamperLog, TamperReason,
-};
+use worker_lora::{DutyCycleConfig, DutyCycleGuard, TamperEntry, TamperLog, TamperReason};
 
 use super::cas::{
     parse_sha256, validate_epoch, CasConfig, CasStore, ModelFileKind, UpdateStatusPayloads,
@@ -419,10 +417,12 @@ impl SidecarScope {
         self.scope.as_str()
     }
 
+    #[allow(dead_code)]
     pub fn mount_root(&self) -> &[String] {
         &self.mount_root
     }
 
+    #[allow(dead_code)]
     fn matches_path(&self, path: &[String]) -> bool {
         self.matches_prefix(path)
     }
@@ -568,6 +568,7 @@ impl Namespace {
     }
 
     /// Construct the namespace with explicit telemetry configuration and manifest store.
+    #[allow(dead_code)]
     pub fn new_with_telemetry_and_manifest(
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
@@ -630,6 +631,7 @@ impl Namespace {
     }
 
     /// Construct the namespace with telemetry, manifest storage, and host provider config.
+    #[allow(dead_code)]
     pub fn new_with_telemetry_manifest_and_host(
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
@@ -724,6 +726,7 @@ impl Namespace {
     }
 
     /// Return true when policy namespaces are enabled.
+    #[allow(dead_code)]
     pub fn policy_enabled(&self) -> bool {
         self.policy.enabled
     }
@@ -2131,6 +2134,7 @@ impl SidecarBusState {
         }
     }
 
+    #[allow(dead_code)]
     fn enabled(&self) -> bool {
         self.enabled
     }
@@ -2357,6 +2361,7 @@ impl SidecarLoraState {
         }
     }
 
+    #[allow(dead_code)]
     fn enabled(&self) -> bool {
         self.enabled
     }
@@ -2396,6 +2401,7 @@ impl SidecarLoraState {
             .find_map(|(idx, adapter)| adapter.match_file(path).map(|file| (idx, file)))
     }
 
+    #[allow(dead_code)]
     fn adapter_for_path_mut(
         &mut self,
         path: &[String],
@@ -2503,12 +2509,12 @@ enum CasPath {
     UpdatesRoot,
     UpdateEpoch { epoch: String },
     UpdateManifest { epoch: String },
-    UpdateStatus { epoch: String, variant: UiVariant },
+    UpdateStatus { epoch: String, _variant: UiVariant },
     UpdateChunks { epoch: String },
     UpdateChunk { epoch: String, digest: [u8; 32] },
     ModelsRoot,
     ModelRoot { digest: [u8; 32] },
-    ModelFile { digest: [u8; 32], kind: ModelFileKind },
+    ModelFile { digest: [u8; 32], _kind: ModelFileKind },
 }
 
 fn parse_cas_path(path: &[String]) -> Result<Option<CasPath>, NineDoorError> {
@@ -2529,11 +2535,11 @@ fn parse_cas_path(path: &[String]) -> Result<Option<CasPath>, NineDoorError> {
                 }),
                 [leaf] if leaf == "status" => Some(CasPath::UpdateStatus {
                     epoch: epoch.to_owned(),
-                    variant: UiVariant::Text,
+                    _variant: UiVariant::Text,
                 }),
                 [leaf] if leaf == "status.cbor" => Some(CasPath::UpdateStatus {
                     epoch: epoch.to_owned(),
-                    variant: UiVariant::Cbor,
+                    _variant: UiVariant::Cbor,
                 }),
                 [leaf] if leaf == "chunks" => Some(CasPath::UpdateChunks {
                     epoch: epoch.to_owned(),
@@ -2553,15 +2559,15 @@ fn parse_cas_path(path: &[String]) -> Result<Option<CasPath>, NineDoorError> {
                 [] => Some(CasPath::ModelRoot { digest }),
                 [leaf] if leaf == "weights" => Some(CasPath::ModelFile {
                     digest,
-                    kind: ModelFileKind::Weights,
+                    _kind: ModelFileKind::Weights,
                 }),
                 [leaf] if leaf == "schema" => Some(CasPath::ModelFile {
                     digest,
-                    kind: ModelFileKind::Schema,
+                    _kind: ModelFileKind::Schema,
                 }),
                 [leaf] if leaf == "signature" => Some(CasPath::ModelFile {
                     digest,
-                    kind: ModelFileKind::Signature,
+                    _kind: ModelFileKind::Signature,
                 }),
                 _ => None,
             });

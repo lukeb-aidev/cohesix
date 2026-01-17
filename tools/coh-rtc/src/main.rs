@@ -13,6 +13,8 @@ use coh_rtc::{
     default_cohsh_ticket_policy_doc_path,
     default_doc_snippet_path, default_observability_interfaces_snippet_path,
     default_observability_security_snippet_path, CompileOptions,
+    default_swarmui_defaults_doc_path, default_swarmui_defaults_path,
+    default_swarmui_defaults_rust_path,
 };
 use std::path::PathBuf;
 
@@ -72,6 +74,15 @@ struct Args {
     /// Output path for the cohsh ticket policy doc snippet.
     #[arg(long, default_value_os_t = default_cohsh_ticket_policy_doc_path())]
     cohsh_ticket_policy_doc: PathBuf,
+    /// Output path for the SwarmUI defaults TOML.
+    #[arg(long, default_value_os_t = default_swarmui_defaults_path())]
+    swarmui_defaults: PathBuf,
+    /// Output path for the SwarmUI defaults Rust constants.
+    #[arg(long, default_value_os_t = default_swarmui_defaults_rust_path())]
+    swarmui_defaults_rust: PathBuf,
+    /// Output path for the SwarmUI defaults doc snippet.
+    #[arg(long, default_value_os_t = default_swarmui_defaults_doc_path())]
+    swarmui_defaults_doc: PathBuf,
 }
 
 fn main() -> Result<()> {
@@ -95,6 +106,9 @@ fn main() -> Result<()> {
         cohsh_client_doc_out: args.cohsh_client_doc,
         cohsh_grammar_doc_out: args.cohsh_grammar_doc,
         cohsh_ticket_policy_doc_out: args.cohsh_ticket_policy_doc,
+        swarmui_defaults_out: args.swarmui_defaults,
+        swarmui_defaults_rust_out: args.swarmui_defaults_rust,
+        swarmui_defaults_doc_out: args.swarmui_defaults_doc,
     };
     let output = compile(&options)?;
     println!("coh-rtc: wrote {}", output.summary());

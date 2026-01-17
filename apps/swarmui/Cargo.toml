@@ -1,0 +1,36 @@
+# Author: Lukas Bower
+# Purpose: Configure the SwarmUI Tauri host application.
+[package]
+name = "swarmui"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "SwarmUI desktop client for Cohesix (Tauri host UI)"
+
+[[bin]]
+name = "swarmui"
+path = "src-tauri/main.rs"
+
+[features]
+default = ["offline-cache"]
+offline-cache = []
+
+[dependencies]
+cohsh = { path = "../cohsh" }
+cohsh-core = { workspace = true }
+cohesix-ticket = { workspace = true }
+secure9p-codec = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_cbor = "0.11"
+log = "0.4"
+tauri = { version = "1.5.4", features = ["custom-protocol"] }
+
+[build-dependencies]
+tauri-build = { version = "1.5.4", default-features = false }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+nine-door = { path = "../nine-door" }
+serde_json = { workspace = true }
+tempfile = "3.12"

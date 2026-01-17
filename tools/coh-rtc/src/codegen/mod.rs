@@ -9,6 +9,7 @@ mod cohsh;
 pub mod cbor;
 mod docs;
 mod rust;
+mod swarmui;
 
 use crate::ir::Manifest;
 use anyhow::{Context, Result};
@@ -40,12 +41,16 @@ pub struct GeneratedArtifacts {
     pub cohsh_client_doc: PathBuf,
     pub cohsh_grammar_doc: PathBuf,
     pub cohsh_ticket_policy_doc: PathBuf,
+    pub swarmui_defaults: PathBuf,
+    pub swarmui_defaults_hash: PathBuf,
+    pub swarmui_defaults_rust: PathBuf,
+    pub swarmui_defaults_doc: PathBuf,
 }
 
 impl GeneratedArtifacts {
     pub fn summary(&self) -> String {
         format!(
-            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, obs_interfaces={}, obs_security={}, cas_interfaces={}, cas_security={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_client_rust={}, cohsh_client_doc={}, cohsh_grammar={}, cohsh_ticket_policy={}",
+            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, obs_interfaces={}, obs_security={}, cas_interfaces={}, cas_security={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_client_rust={}, cohsh_client_doc={}, cohsh_grammar={}, cohsh_ticket_policy={}, swarmui_defaults={}, swarmui_hash={}, swarmui_rust={}, swarmui_doc={}",
             self.rust_dir.display(),
             self.manifest_json.display(),
             self.cas_manifest_template.display(),
@@ -64,7 +69,11 @@ impl GeneratedArtifacts {
             self.cohsh_client_rust.display(),
             self.cohsh_client_doc.display(),
             self.cohsh_grammar_doc.display(),
-            self.cohsh_ticket_policy_doc.display()
+            self.cohsh_ticket_policy_doc.display(),
+            self.swarmui_defaults.display(),
+            self.swarmui_defaults_hash.display(),
+            self.swarmui_defaults_rust.display(),
+            self.swarmui_defaults_doc.display()
         )
     }
 }
@@ -142,6 +151,18 @@ pub fn emit_all(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    if let Some(parent) = options.swarmui_defaults_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.swarmui_defaults_rust_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.swarmui_defaults_doc_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
 
     let manifest_dir = options.manifest_path.parent();
     rust::emit_rust(manifest, manifest_hash, &options.out_dir, manifest_dir)?;
@@ -170,6 +191,13 @@ pub fn emit_all(
     let cohsh_doc_artifacts = cohsh::emit_cohsh_docs(
         &options.cohsh_grammar_doc_out,
         &options.cohsh_ticket_policy_doc_out,
+    )?;
+    let swarmui_artifacts = swarmui::emit_swarmui_defaults(
+        manifest,
+        manifest_hash,
+        &options.swarmui_defaults_out,
+        &options.swarmui_defaults_rust_out,
+        &options.swarmui_defaults_doc_out,
     )?;
 
     fs::write(&options.manifest_out, resolved_json).with_context(|| {
@@ -216,6 +244,10 @@ pub fn emit_all(
         cohsh_client_doc: cohsh_client_artifacts.client_doc,
         cohsh_grammar_doc: cohsh_doc_artifacts.grammar_doc,
         cohsh_ticket_policy_doc: cohsh_doc_artifacts.ticket_policy_doc,
+        swarmui_defaults: swarmui_artifacts.defaults_toml,
+        swarmui_defaults_hash: swarmui_artifacts.defaults_hash,
+        swarmui_defaults_rust: swarmui_artifacts.defaults_rust,
+        swarmui_defaults_doc: swarmui_artifacts.defaults_doc,
     })
 }
 

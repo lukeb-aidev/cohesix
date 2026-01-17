@@ -2280,15 +2280,14 @@ impl<D: NetDevice> NetStack<D> {
         if poll_result != PollResult::None {
             log::debug!("[net] smoltcp: events processed at now_ms={}", now_ms);
         }
-        let mut activity = poll_result != PollResult::None;
+        let mut activity = false;
+        activity |= poll_result != PollResult::None;
         let tcp_activity = if self.stage_policy.allow_tcp {
             self.process_tcp(now_ms)
         } else {
             false
         };
-        if tcp_activity {
-            activity = true;
-        }
+        activity |= tcp_activity;
 
         // Run a second poll pass when TCP work was observed so any queued
         // responses (including AUTH acknowledgements) are flushed to the wire
@@ -2298,20 +2297,19 @@ impl<D: NetDevice> NetStack<D> {
             poll_result = self
                 .interface
                 .poll(timestamp, &mut self.device, &mut self.sockets);
-            if poll_result != PollResult::None {
+            let poll_activity = poll_result != PollResult::None;
+            if poll_activity {
                 log::debug!("[net] smoltcp: post-tcp poll now_ms={}", now_ms);
-                activity = true;
             }
+            activity |= poll_activity;
         }
 
-        if self.stage_policy.allow_selftest && self.service_self_test(now_ms, timestamp) {
-            activity = true;
-        }
+        activity |= self.stage_policy.allow_selftest && self.service_self_test(now_ms, timestamp);
 
         #[cfg(feature = "net-outbound-probe")]
-        if self.stage_policy.allow_outbound_probe && self.service_outbound_probe(now_ms, timestamp)
         {
-            activity = true;
+            activity |= self.stage_policy.allow_outbound_probe
+                && self.service_outbound_probe(now_ms, timestamp);
         }
 
         self.telemetry.last_poll_ms = now_ms;
@@ -3471,7 +3469,7 @@ impl<D: NetDevice> NetStack<D> {
                                         "[cohsh-net][auth] auth OK, session established (conn_id={})",
                                         conn_id
                                     );
-                                    activity |= Self::flush_outbound(
+                                    let _ = Self::flush_outbound(
                                         &mut self.server,
                                         &mut self.outbound,
                                         &mut self.telemetry,
@@ -3930,7 +3928,6 @@ impl<D: NetDevice> NetStack<D> {
                     Self::force_relisten(socket, listen_port);
                     reset_session = true;
                     reset_tcp_state = Some(socket.state());
-                    allow_flush = false;
                 }
             }
 

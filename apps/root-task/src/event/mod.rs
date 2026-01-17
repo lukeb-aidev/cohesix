@@ -1441,7 +1441,7 @@ where
                         if let Some(bridge_ref) = self.ninedoor.as_mut() {
                             match bridge_ref.cat(path.as_str()) {
                                 Ok(lines) => {
-                                    let mut summary_storage: Option<
+                                    let summary_storage: Option<
                                         HeaplessVec<
                                             HeaplessString<DEFAULT_LINE_CAPACITY>,
                                             {
@@ -1449,58 +1449,57 @@ where
                                                     + log_buffer::LOG_USER_SNAPSHOT_LINES
                                             },
                                         >,
-                                    > = None;
+                                    > = if path.as_str() == "/log/queen.log" {
+                                        let user_lines = log_buffer::snapshot_user_lines::<
+                                            DEFAULT_LINE_CAPACITY,
+                                            { log_buffer::LOG_USER_SNAPSHOT_LINES },
+                                        >();
+                                        if user_lines.is_empty() {
+                                            None
+                                        } else {
+                                            let mut merged: HeaplessVec<
+                                                HeaplessString<DEFAULT_LINE_CAPACITY>,
+                                                {
+                                                    log_buffer::LOG_SNAPSHOT_LINES
+                                                        + log_buffer::LOG_USER_SNAPSHOT_LINES
+                                                },
+                                            > = HeaplessVec::new();
+                                            for user_line in user_lines.iter() {
+                                                let _ = merged.push(user_line.clone());
+                                            }
+                                            let mut last_user_idx: Option<usize> = None;
+                                            for (idx, line) in lines.iter().enumerate() {
+                                                if user_lines
+                                                    .iter()
+                                                    .any(|user_line| user_line.as_str() == line.as_str())
+                                                {
+                                                    last_user_idx = Some(idx);
+                                                }
+                                            }
+                                            let start = last_user_idx.map(|idx| idx + 1).unwrap_or(0);
+                                            for line in lines.iter().skip(start) {
+                                                if line.as_str().starts_with('[') {
+                                                    continue;
+                                                }
+                                                if user_lines
+                                                    .iter()
+                                                    .any(|user_line| user_line.as_str() == line.as_str())
+                                                {
+                                                    continue;
+                                                }
+                                                let _ = merged.push(line.clone());
+                                            }
+                                            Some(merged)
+                                        }
+                                    } else {
+                                        None
+                                    };
                                     // Prefer user echo lines while also surfacing newer audit entries.
                                     let summary_lines: &[HeaplessString<DEFAULT_LINE_CAPACITY>] =
-                                        if path.as_str() == "/log/queen.log" {
-                                            let user_lines = log_buffer::snapshot_user_lines::<
-                                                DEFAULT_LINE_CAPACITY,
-                                                { log_buffer::LOG_USER_SNAPSHOT_LINES },
-                                            >();
-                                            if user_lines.is_empty() {
-                                                lines.as_slice()
-                                            } else {
-                                                let mut merged: HeaplessVec<
-                                                    HeaplessString<DEFAULT_LINE_CAPACITY>,
-                                                    {
-                                                        log_buffer::LOG_SNAPSHOT_LINES
-                                                            + log_buffer::LOG_USER_SNAPSHOT_LINES
-                                                    },
-                                                > = HeaplessVec::new();
-                                                for user_line in user_lines.iter() {
-                                                    let _ = merged.push(user_line.clone());
-                                                }
-                                                let mut last_user_idx: Option<usize> = None;
-                                                for (idx, line) in lines.iter().enumerate() {
-                                                    if user_lines
-                                                        .iter()
-                                                        .any(|user_line| user_line.as_str() == line.as_str())
-                                                    {
-                                                        last_user_idx = Some(idx);
-                                                    }
-                                                }
-                                                let start = last_user_idx.map(|idx| idx + 1).unwrap_or(0);
-                                                for line in lines.iter().skip(start) {
-                                                    if line.as_str().starts_with('[') {
-                                                        continue;
-                                                    }
-                                                    if user_lines
-                                                        .iter()
-                                                        .any(|user_line| user_line.as_str() == line.as_str())
-                                                    {
-                                                        continue;
-                                                    }
-                                                    let _ = merged.push(line.clone());
-                                                }
-                                                summary_storage = Some(merged);
-                                                summary_storage
-                                                    .as_ref()
-                                                    .map(|lines| lines.as_slice())
-                                                    .unwrap_or(lines.as_slice())
-                                            }
-                                        } else {
-                                            lines.as_slice()
-                                        };
+                                        summary_storage
+                                            .as_ref()
+                                            .map(|lines| lines.as_slice())
+                                            .unwrap_or(lines.as_slice());
                                     let mut summary: HeaplessString<128> = HeaplessString::new();
                                     let mut selected: HeaplessVec<
                                         usize,

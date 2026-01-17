@@ -2,8 +2,8 @@
 <!-- Purpose: Generated cohsh policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### cohsh client policy (generated)
-- `manifest.sha256`: `b83a1ff39cf2efaf599ddab3d4b40fc4270b4c63e7c19d89126ffdd774ca4b0d`
-- `policy.sha256`: `96d0e3a953b2b466443929aee3964788d3d408402b06440710e5fc592db67668`
+- `manifest.sha256`: `b5576e9cb184113c1708970e46efeafb953f20d68b5265988718d5fdfbe860a6`
+- `policy.sha256`: `80f612d96f8ea90a67035482ad278f1aa745ac3e42192c44ba20f791a777a33b`
 - `cohsh.pool.control_sessions`: `2`
 - `cohsh.pool.telemetry_sessions`: `4`
 - `retry.max_attempts`: `3`
@@ -12,4 +12,4 @@
 - `retry.timeout_ms`: `5000`
 - `heartbeat.interval_ms`: `15000`
 
-_Generated from `configs/root_task.toml` (sha256: `b83a1ff39cf2efaf599ddab3d4b40fc4270b4c63e7c19d89126ffdd774ca4b0d`)._
+_Generated from `configs/root_task.toml` (sha256: `b5576e9cb184113c1708970e46efeafb953f20d68b5265988718d5fdfbe860a6`)._

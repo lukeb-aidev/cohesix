@@ -10,9 +10,7 @@
 use anyhow::{anyhow, Result};
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims};
 use secure9p_codec::SessionId;
-use crate::{
-    DutyCycleConfig, DutyCycleDecision, DutyCycleGuard, TamperEntry, TamperLog, TamperReason,
-};
+use crate::{DutyCycleConfig, DutyCycleDecision, DutyCycleGuard, TamperEntry, TamperLog};
 
 /// Paths exposed for a LoRa mount under `/lora`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,6 +133,7 @@ impl LoraWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TamperReason;
 
     #[test]
     fn duty_cycle_throttles_and_logs() {
