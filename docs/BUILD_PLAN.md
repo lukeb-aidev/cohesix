@@ -73,7 +73,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [20a](#20a) | cohsh as 9P Client Library | Complete |
 | [20b](#20b) | NineDoor UI Providers | Complete |
 | [20c](#20c) | SwarmUI Desktop (Tauri, Pure 9P/TCP) | Complete |
-| [20d](#20d) | SwarmUI Live Hive Rendering (PixiJS, GPU-First | Pending |
+| [20d](#20d) | SwarmUI Live Hive Rendering (PixiJS, GPU-First | Complete |
 | [20e](#20e) | CLI/UI Convergence Tests | Pending |
 | [20f](#20f) | UI Security Hardening (Tickets & Quotas) | Pending |
 | [20g](#20g) | Deterministic Snapshot & Replay (UI Testing) | Pending |
@@ -1863,7 +1863,7 @@ Goal: Add GPU-first Live Hive renderer without altering protocol semantics.
 Inputs: apps/swarmui/, crates/cohsh-core, telemetry streams, CBOR snapshots.
 Changes:
 - apps/swarmui/frontend/hive/ — PixiJS scene, simulation model, LOD rules.
-- apps/swarmui/frontend/events.ts — event → simulation diff mapping.
+- apps/swarmui/frontend/events.js — event → simulation diff mapping.
 - apps/swarmui/src-tauri/ — replay mode wiring (no new verbs).
 Commands:
 - cargo test -p swarmui
@@ -1890,7 +1890,7 @@ Title/ID: m20d-design-fonts
 Goal: Establish a cross-platform, UI-safe font system aligned with Tauri and PixiJS best practices.
 Inputs: apps/swarmui/, design guidelines, Tauri asset bundling.
 Changes:
-- apps/swarmui/assets/fonts/ — bundle Inter and JetBrains Mono font files (limited weights only).
+- apps/swarmui/frontend/assets/fonts/ — bundle Inter and JetBrains Mono font files (limited weights only).
 - apps/swarmui/frontend/styles/fonts.css — define canonical font stacks and defaults.
 - apps/swarmui/frontend/styles/tokens.css — expose font tokens (`--font-ui`, `--font-mono`, sizes, line-heights).
 - Disable ligatures by default for monospace; expose opt-in toggle.
@@ -1908,7 +1908,7 @@ Inputs: SwarmUI frontend, PixiJS renderer.
 Changes:
 - apps/swarmui/frontend/styles/colors.css — base palette, semantic colors, opacity rules.
 - apps/swarmui/frontend/styles/tokens.css — color tokens shared by UI and canvas overlays.
-- apps/swarmui/frontend/hive/palette.ts — PixiJS color constants derived from tokens.
+- apps/swarmui/frontend/hive/palette.js — PixiJS color constants derived from tokens.
 Commands:
 - cargo test -p swarmui
 Checks:
@@ -1936,8 +1936,8 @@ Title/ID: m20d-design-icons
 Goal: Standardise iconography for SwarmUI controls and panels.
 Inputs: SwarmUI frontend.
 Changes:
-- apps/swarmui/assets/icons/ — bundle Phosphor Icons SVG subset.
-- apps/swarmui/frontend/components/Icon.tsx — single icon wrapper enforcing size/weight.
+- apps/swarmui/frontend/assets/icons/ — bundle Phosphor Icons SVG subset.
+- apps/swarmui/frontend/components/icon.js — single icon wrapper enforcing size/weight.
 - Replace mixed or ad-hoc icons with Phosphor set.
 Commands:
 - cargo test -p swarmui
@@ -1951,7 +1951,7 @@ Title/ID: m20d-hive-visual-language
 Goal: Define and enforce the visual language for the Live Hive renderer.
 Inputs: PixiJS hive renderer.
 Changes:
-- apps/swarmui/frontend/hive/style.ts — shape, motion, glow, and blending constants.
+- apps/swarmui/frontend/hive/style.js — shape, motion, glow, and blending constants.
 - Enforce circle/soft-blob primitives only; no sharp geometry.
 - Define motion easing and pulse rules for normal vs error states.
 Commands:
@@ -1967,7 +1967,7 @@ Goal: Centralise all design constants into a single token system.
 Inputs: SwarmUI frontend, PixiJS renderer.
 Changes:
 - apps/swarmui/frontend/styles/tokens.css — fonts, colors, spacing, motion.
-- apps/swarmui/frontend/hive/tokens.ts — generated or mirrored constants for PixiJS.
+- apps/swarmui/frontend/hive/tokens.js — generated or mirrored constants for PixiJS.
 - Remove duplicated constants across UI and renderer.
 Commands:
 - cargo test -p swarmui
@@ -1977,6 +1977,7 @@ Checks:
 Deliverables:
 - Single source-of-truth design tokens referenced in docs/INTERFACES.md.
 ```
+**Status:** Complete — Live Hive PixiJS rendering is wired with deterministic replay fixtures, compiler-emitted hive defaults, and documented design tokens; regression pack is green.
 ---
 
 ## Milestone 20e — CLI/UI Convergence Tests <a id="20e"></a> 

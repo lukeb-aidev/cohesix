@@ -1,3 +1,6 @@
+import { hydrateIcons } from "./components/icon.js";
+import { createHiveController } from "./hive/index.js";
+
 const output = (id, text) => {
   const node = document.getElementById(id);
   if (!node) {
@@ -43,6 +46,15 @@ const renderTranscript = (id, transcript) => {
   }
   output(id, transcript.lines.join("\n"));
 };
+
+const setStatus = (id, text) => {
+  const node = document.getElementById(id);
+  if (node) {
+    node.textContent = text;
+  }
+};
+
+hydrateIcons();
 
 document.getElementById("connect")?.addEventListener("click", async () => {
   const session = readSession();
@@ -116,3 +128,107 @@ document
     }
     renderTranscript("namespace-output", res.result);
   });
+
+const hiveCanvas = document.getElementById("hive-canvas");
+const hiveStatus = document.getElementById("hive-status");
+const hivePressure = document.getElementById("hive-pressure");
+const hiveController = hiveCanvas
+  ? createHiveController(hiveCanvas, hiveStatus)
+  : null;
+
+let hiveActive = false;
+let hivePollTimer = null;
+let hivePollInFlight = false;
+let hivePollInterval = 300;
+
+const updateHivePressure = (batch) => {
+  if (!hivePressure) {
+    return;
+  }
+  const pressure = batch.pressure ?? 0;
+  const backlog = batch.backlog ?? 0;
+  const dropped = batch.dropped ?? 0;
+  hivePressure.textContent = `Pressure ${(pressure * 100).toFixed(0)}% · backlog ${backlog} · dropped ${dropped}`;
+};
+
+const stopHivePolling = () => {
+  if (hivePollTimer) {
+    clearTimeout(hivePollTimer);
+    hivePollTimer = null;
+  }
+};
+
+const pollHive = async () => {
+  if (!hiveActive || hivePollInFlight) {
+    return;
+  }
+  hivePollInFlight = true;
+  const session = readSession();
+  const res = await invoke("swarmui_hive_poll", {
+    role: session.role,
+    ticket: session.ticket,
+  });
+  hivePollInFlight = false;
+  if (!res.ok) {
+    setStatus("hive-status", `Hive halted (${res.error})`);
+    hiveActive = false;
+    stopHivePolling();
+    return;
+  }
+  hiveController?.ingest(res.result);
+  updateHivePressure(res.result);
+  if (res.result.done) {
+    hiveActive = false;
+    stopHivePolling();
+    return;
+  }
+  hivePollTimer = setTimeout(pollHive, hivePollInterval);
+};
+
+const startHive = async () => {
+  if (!hiveController) {
+    return;
+  }
+  const session = readSession();
+  const snapshotKey =
+    document.getElementById("hive-snapshot-key")?.value?.trim() || "demo";
+  const res = await invoke("swarmui_hive_bootstrap", {
+    role: session.role,
+    ticket: session.ticket,
+    snapshot_key: snapshotKey,
+  });
+  if (!res.ok) {
+    setStatus("hive-status", `Hive blocked (${res.error})`);
+    return;
+  }
+  hiveController.bootstrap(res.result);
+  hiveController.start();
+  hiveActive = true;
+  hivePollInterval = Math.max(
+    120,
+    Math.floor(1000 / (res.result.hive?.frame_cap_fps || 60))
+  );
+  stopHivePolling();
+  pollHive();
+};
+
+const stopHive = async () => {
+  if (!hiveController) {
+    return;
+  }
+  hiveActive = false;
+  stopHivePolling();
+  hiveController.stop();
+  const session = readSession();
+  await invoke("swarmui_hive_reset", {
+    role: session.role,
+    ticket: session.ticket,
+  });
+  setStatus("hive-status", "Hive idle");
+};
+
+document.getElementById("hive-start")?.addEventListener("click", startHive);
+document.getElementById("hive-stop")?.addEventListener("click", stopHive);
+document
+  .getElementById("hive-reset-view")
+  ?.addEventListener("click", () => hiveController?.resetView());

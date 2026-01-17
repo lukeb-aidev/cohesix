@@ -1,7 +1,7 @@
 # Author: Lukas Bower
 # Purpose: Generated SwarmUI defaults derived from configs/root_task.toml.
 [meta]
-manifest_sha256 = "b5576e9cb184113c1708970e46efeafb953f20d68b5265988718d5fdfbe860a6"
+manifest_sha256 = "6b2cb0b8a80b57f75acb5049fe17f2aae92e0d7adf690b34fc30eb01b084710c"
 
 [swarmui]
 ticket_scope = "per-ticket"
@@ -10,6 +10,14 @@ ticket_scope = "per-ticket"
 enabled = false
 max_bytes = 262144
 ttl_s = 3600
+
+[swarmui.hive]
+frame_cap_fps = 60
+step_ms = 16
+lod_zoom_out = 0.7
+lod_zoom_in = 1.25
+lod_event_budget = 512
+snapshot_max_events = 4096
 
 [swarmui.paths]
 telemetry_root = "/worker"

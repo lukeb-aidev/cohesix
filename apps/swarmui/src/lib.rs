@@ -8,9 +8,14 @@
 //! SwarmUI backend helpers: session management, transcripts, and cache handling.
 
 mod cache;
+mod hive;
 mod transport;
 
 pub use cache::{CacheError, SnapshotCache, SnapshotRecord};
+pub use hive::{
+    SwarmUiHiveAgent, SwarmUiHiveBatch, SwarmUiHiveBootstrap, SwarmUiHiveConfig,
+    SwarmUiHiveEvent, SwarmUiHiveEventKind, SwarmUiHiveSnapshot,
+};
 pub use transport::{TcpTransport, TcpTransportError, TcpTransportFactory};
 
 use std::collections::{HashMap, VecDeque};
@@ -33,6 +38,7 @@ const MAX_AUDIT_LOG: usize = 64;
 const TELEMETRY_CACHE_PREFIX: &str = "telemetry:";
 const FLEET_CACHE_KEY: &str = "fleet:ingest";
 const NAMESPACE_CACHE_PREFIX: &str = "namespace:";
+const HIVE_CACHE_PREFIX: &str = "hive:";
 
 /// Session cache scope configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +93,8 @@ pub struct SwarmUiConfig {
     pub paths: SwarmUiPaths,
     /// Cache configuration.
     pub cache: SwarmUiCacheConfig,
+    /// Hive rendering defaults.
+    pub hive: SwarmUiHiveConfig,
     /// Offline mode (disables network access).
     pub offline: bool,
 }
@@ -109,11 +117,20 @@ impl SwarmUiConfig {
                 .map(|value| (*value).to_owned())
                 .collect(),
         };
+        let hive = SwarmUiHiveConfig {
+            frame_cap_fps: generated::SWARMUI_HIVE_FRAME_CAP_FPS,
+            step_ms: generated::SWARMUI_HIVE_STEP_MS,
+            lod_zoom_out: generated::SWARMUI_HIVE_LOD_ZOOM_OUT,
+            lod_zoom_in: generated::SWARMUI_HIVE_LOD_ZOOM_IN,
+            lod_event_budget: generated::SWARMUI_HIVE_LOD_EVENT_BUDGET,
+            snapshot_max_events: generated::SWARMUI_HIVE_SNAPSHOT_MAX_EVENTS,
+        };
         Self {
             data_dir,
             ticket_scope,
             paths,
             cache,
+            hive,
             offline: false,
         }
     }
@@ -166,6 +183,8 @@ pub enum SwarmUiError {
     InvalidPath(String),
     /// Snapshot cache error.
     Cache(CacheError),
+    /// Hive replay or snapshot errors.
+    Hive(String),
     /// Generic transport error.
     Transport(String),
 }
@@ -179,6 +198,7 @@ impl std::fmt::Display for SwarmUiError {
             SwarmUiError::Permission(err) => write!(f, "{err}"),
             SwarmUiError::InvalidPath(err) => write!(f, "{err}"),
             SwarmUiError::Cache(err) => write!(f, "{err}"),
+            SwarmUiError::Hive(err) => write!(f, "{err}"),
             SwarmUiError::Transport(err) => write!(f, "{err}"),
         }
     }
@@ -217,6 +237,8 @@ where
     config: SwarmUiConfig,
     factory: F,
     sessions: HashMap<SessionKey, SwarmUiSession<F::Transport>>,
+    hive_states: HashMap<SessionKey, hive::HiveSessionState>,
+    hive_replay: Option<hive::HiveReplay>,
     audit: VecDeque<String>,
     active_tails: usize,
     cache: Option<SnapshotCache>,
@@ -241,6 +263,8 @@ where
             config,
             factory,
             sessions: HashMap::new(),
+            hive_states: HashMap::new(),
+            hive_replay: None,
             audit: VecDeque::new(),
             active_tails: 0,
             cache,
@@ -594,6 +618,201 @@ where
         transcript
     }
 
+    /// Load a hive replay payload into memory.
+    pub fn load_hive_replay(&mut self, payload: &[u8]) -> Result<(), SwarmUiError> {
+        let replay = hive::HiveReplay::decode(payload).map_err(SwarmUiError::Hive)?;
+        replay
+            .snapshot()
+            .validate(self.config.hive.snapshot_max_events as usize)
+            .map_err(SwarmUiError::Hive)?;
+        self.hive_replay = Some(replay);
+        Ok(())
+    }
+
+    /// Bootstrap Live Hive with either a replay snapshot or live worker list.
+    pub fn hive_bootstrap(
+        &mut self,
+        role: Role,
+        ticket: Option<&str>,
+        snapshot_key: Option<&str>,
+    ) -> Result<SwarmUiHiveBootstrap, SwarmUiError> {
+        if let Some(replay) = self.hive_replay.as_mut() {
+            replay.reset();
+            return Ok(replay.bootstrap(
+                self.config.hive.clone(),
+                self.config.paths.namespace_roots.clone(),
+            ));
+        }
+
+        if self.config.offline {
+            let key = snapshot_key.unwrap_or("demo");
+            let cache_key = cache_key_for_path(HIVE_CACHE_PREFIX, key);
+            let record = self.cache_read(&cache_key)?;
+            let replay = hive::HiveReplay::decode(&record.payload)
+                .map_err(SwarmUiError::Hive)?;
+            replay
+                .snapshot()
+                .validate(self.config.hive.snapshot_max_events as usize)
+                .map_err(SwarmUiError::Hive)?;
+            let session_key = self.session_key(role, ticket);
+            self.hive_states.remove(&session_key);
+            let bootstrap = replay.bootstrap(
+                self.config.hive.clone(),
+                self.config.paths.namespace_roots.clone(),
+            );
+            self.hive_replay = Some(replay);
+            return Ok(bootstrap);
+        }
+
+        let worker_root = self.config.paths.worker_root.clone();
+        let namespace_roots = self.config.paths.namespace_roots.clone();
+        let hive_config = self.config.hive.clone();
+        let key = self.session_key(role, ticket);
+        let subject = if role == Role::Queen {
+            None
+        } else {
+            let claims = validate_ticket_claims(role, ticket)?;
+            let subject = claims
+                .as_ref()
+                .and_then(|claims| claims.subject.as_deref())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    SwarmUiError::Permission("ticket subject identity missing".to_owned())
+                })?;
+            let path = telemetry_path(&worker_root, subject)?;
+            ensure_role_allowed(role, claims.as_ref(), &path)?;
+            Some(subject.to_owned())
+        };
+
+        let mut fids = Vec::new();
+        if let Some(mut state) = self.hive_states.remove(&key) {
+            fids = state.take_fids();
+        }
+
+        let workers = {
+            let session = self.session_for(role, ticket)?;
+            for fid in fids {
+                let _ = session.client.clunk(fid);
+            }
+            if role == Role::Queen {
+                let mut workers = list_workers(&mut session.client, &worker_root)?;
+                workers.sort();
+                workers
+            } else {
+                vec![subject.expect("subject already validated")]
+            }
+        };
+
+        let mut agents = Vec::new();
+        agents.push(SwarmUiHiveAgent {
+            id: "queen".to_owned(),
+            role: "queen".to_owned(),
+            namespace: "/queen".to_owned(),
+        });
+        for worker in &workers {
+            agents.push(SwarmUiHiveAgent {
+                id: worker.to_owned(),
+                role: "worker".to_owned(),
+                namespace: format!("{}/{}", worker_root, worker),
+            });
+        }
+
+        self.hive_states
+            .insert(key, hive::HiveSessionState::new(workers));
+        self.hive_replay = None;
+
+        Ok(SwarmUiHiveBootstrap {
+            agents,
+            namespace_roots,
+            hive: hive_config,
+            replay: false,
+        })
+    }
+
+    /// Poll Live Hive event deltas.
+    pub fn hive_poll(
+        &mut self,
+        role: Role,
+        ticket: Option<&str>,
+    ) -> Result<SwarmUiHiveBatch, SwarmUiError> {
+        if let Some(replay) = self.hive_replay.as_mut() {
+            let max_events = self
+                .config
+                .hive
+                .lod_event_budget
+                .min(self.config.hive.snapshot_max_events) as usize;
+            return Ok(replay.next_batch(
+                max_events,
+                self.config.hive.lod_event_budget,
+            ));
+        }
+        if self.config.offline {
+            return Err(SwarmUiError::Offline);
+        }
+        let worker_root = self.config.paths.worker_root.clone();
+        let hive_config = self.config.hive.clone();
+        let key = self.session_key(role, ticket);
+        let mut state = self
+            .hive_states
+            .remove(&key)
+            .ok_or_else(|| SwarmUiError::Hive("hive not bootstrapped".to_owned()))?;
+        let ingest_result = {
+            let session = self.session_for(role, ticket)?;
+            state.ingest(
+                &mut session.client,
+                &worker_root,
+                SECURE9P_MSIZE,
+                &hive_config,
+            )
+        };
+        self.hive_states.insert(key.clone(), state);
+        ingest_result?;
+        let state = self.hive_states.get_mut(&key).expect("hive state");
+        let max_events = hive_config.lod_event_budget as usize;
+        let events = state.drain(max_events);
+        let backlog = state.queue_len();
+        let pressure = if hive_config.lod_event_budget == 0 {
+            0.0
+        } else {
+            backlog as f32 / hive_config.lod_event_budget as f32
+        };
+        Ok(SwarmUiHiveBatch {
+            events,
+            pressure,
+            backlog,
+            dropped: state.dropped(),
+            done: false,
+        })
+    }
+
+    /// Reset Live Hive session state and close any open telemetry cursors.
+    pub fn hive_reset(
+        &mut self,
+        role: Role,
+        ticket: Option<&str>,
+    ) -> Result<(), SwarmUiError> {
+        if let Some(replay) = self.hive_replay.as_mut() {
+            replay.reset();
+            return Ok(());
+        }
+        if self.config.offline {
+            return Ok(());
+        }
+        let key = self.session_key(role, ticket);
+        let mut fids = Vec::new();
+        if let Some(mut state) = self.hive_states.remove(&key) {
+            fids = state.take_fids();
+        }
+        if fids.is_empty() {
+            return Ok(());
+        }
+        let session = self.session_for(role, ticket)?;
+        for fid in fids {
+            let _ = session.client.clunk(fid);
+        }
+        Ok(())
+    }
+
     /// Cache a CBOR snapshot payload.
     pub fn cache_write(&mut self, key: &str, payload: &[u8]) -> Result<SnapshotRecord, SwarmUiError> {
         if self.config.offline {
@@ -787,6 +1006,22 @@ fn read_lines<T: cohsh_core::Secure9pTransport>(
     let text = String::from_utf8(buffer)
         .map_err(|_| SwarmUiError::Transport("payload is not valid UTF-8".to_owned()))?;
     Ok(text.lines().map(|line| line.to_owned()).collect())
+}
+
+fn list_workers<T: cohsh_core::Secure9pTransport>(
+    client: &mut CohClient<T>,
+    worker_root: &str,
+) -> Result<Vec<String>, SwarmUiError> {
+    let entries = read_lines(client, worker_root)?;
+    let mut workers = Vec::new();
+    for entry in entries {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        workers.push(trimmed.to_owned());
+    }
+    Ok(workers)
 }
 
 fn ensure_role_allowed(

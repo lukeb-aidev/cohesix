@@ -881,6 +881,25 @@ impl Manifest {
         if swarmui.cache.ttl_s == 0 {
             bail!("swarmui.cache.ttl_s must be > 0");
         }
+        let hive = &swarmui.hive;
+        if hive.frame_cap_fps < 30 || hive.frame_cap_fps > 60 {
+            bail!("swarmui.hive.frame_cap_fps must be within 30..=60");
+        }
+        if hive.step_ms == 0 {
+            bail!("swarmui.hive.step_ms must be > 0");
+        }
+        if hive.lod_zoom_out <= 0.0 || hive.lod_zoom_out >= 1.0 {
+            bail!("swarmui.hive.lod_zoom_out must be within (0.0, 1.0)");
+        }
+        if hive.lod_zoom_in <= hive.lod_zoom_out {
+            bail!("swarmui.hive.lod_zoom_in must be > lod_zoom_out");
+        }
+        if hive.lod_event_budget == 0 {
+            bail!("swarmui.hive.lod_event_budget must be > 0");
+        }
+        if hive.snapshot_max_events == 0 {
+            bail!("swarmui.hive.snapshot_max_events must be > 0");
+        }
         self.validate_client_path(
             "swarmui.paths.telemetry_root",
             &swarmui.paths.telemetry_root,
@@ -1497,6 +1516,7 @@ impl SwarmUiTicketScope {
 pub struct SwarmUiConfig {
     pub ticket_scope: SwarmUiTicketScope,
     pub cache: SwarmUiCacheConfig,
+    pub hive: SwarmUiHiveConfig,
     pub paths: SwarmUiPathsConfig,
 }
 
@@ -1505,6 +1525,7 @@ impl Default for SwarmUiConfig {
         Self {
             ticket_scope: SwarmUiTicketScope::PerTicket,
             cache: SwarmUiCacheConfig::default(),
+            hive: SwarmUiHiveConfig::default(),
             paths: SwarmUiPathsConfig::default(),
         }
     }
@@ -1524,6 +1545,30 @@ impl Default for SwarmUiCacheConfig {
             enabled: false,
             max_bytes: 262_144,
             ttl_s: 3600,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SwarmUiHiveConfig {
+    pub frame_cap_fps: u16,
+    pub step_ms: u16,
+    pub lod_zoom_out: f32,
+    pub lod_zoom_in: f32,
+    pub lod_event_budget: u32,
+    pub snapshot_max_events: u32,
+}
+
+impl Default for SwarmUiHiveConfig {
+    fn default() -> Self {
+        Self {
+            frame_cap_fps: 60,
+            step_ms: 16,
+            lod_zoom_out: 0.7,
+            lod_zoom_in: 1.25,
+            lod_event_budget: 512,
+            snapshot_max_events: 4096,
         }
     }
 }

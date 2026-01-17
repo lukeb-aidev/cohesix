@@ -11,95 +11,169 @@
   </head>
   <body>
     <main class="shell">
-      <section class="hero">
-        <div class="hero-copy">
+      <header class="topbar">
+        <div class="brand">
           <p class="eyebrow">Cohesix SwarmUI</p>
-          <h1>Hive telemetry, grounded in the namespace.</h1>
+          <h1>Live Hive telemetry</h1>
           <p class="lede">
-            SwarmUI renders a strict view of Secure9P state. No new verbs, no
-            hidden polling, and no protocol drift.
+            GPU-first rendering of Secure9P activity. Rendering only, no new
+            verbs or transports.
           </p>
         </div>
-        <div class="hero-actions">
-          <div class="session-controls">
-            <label class="label" for="session-role">Role</label>
-            <select id="session-role" class="select">
-              <option value="queen">queen</option>
-              <option value="worker-heartbeat">worker-heartbeat</option>
-              <option value="worker-gpu">worker-gpu</option>
-              <option value="worker-bus">worker-bus</option>
-              <option value="worker-lora">worker-lora</option>
-            </select>
-            <label class="label" for="session-ticket">Ticket</label>
-            <input
-              id="session-ticket"
-              class="input"
-              type="text"
-              placeholder="ticket (optional)"
-            />
-          </div>
-          <div class="session-buttons">
-            <button id="connect" class="action primary">Connect</button>
-            <button id="offline" class="action ghost">Offline mode</button>
-          </div>
+        <div class="status-bar">
+          <span class="badge" id="hive-status">Hive idle</span>
+          <span class="badge ghost" id="hive-pressure">Pressure 0% · backlog 0 · dropped 0</span>
         </div>
-      </section>
+        <div class="session-block">
+          <label class="label" for="session-role">Role</label>
+          <select id="session-role" class="select">
+            <option value="queen">queen</option>
+            <option value="worker-heartbeat">worker-heartbeat</option>
+            <option value="worker-gpu">worker-gpu</option>
+            <option value="worker-bus">worker-bus</option>
+            <option value="worker-lora">worker-lora</option>
+          </select>
+          <label class="label" for="session-ticket">Ticket</label>
+          <input
+            id="session-ticket"
+            class="input"
+            type="text"
+            placeholder="ticket (optional)"
+          />
+        </div>
+        <div class="session-actions">
+          <button id="connect" class="action primary">
+            <span data-icon="plug"></span>
+            Connect
+          </button>
+          <button id="offline" class="action ghost">
+            <span data-icon="cloud-slash"></span>
+            Offline mode
+          </button>
+        </div>
+      </header>
 
-      <section class="grid">
-        <article class="panel">
-          <header>
-            <h2>Telemetry Rings</h2>
-            <p>Tail worker telemetry streams on demand.</p>
-          </header>
-          <div class="panel-body mono" id="telemetry-output">
-            <p class="placeholder">No telemetry loaded.</p>
-          </div>
-          <footer class="split">
-            <input
-              id="worker-id"
-              class="input"
-              type="text"
-              value="worker-1"
-            />
-            <button id="load-telemetry" class="action">Load telemetry</button>
-          </footer>
-        </article>
+      <section class="layout">
+        <aside class="sidebar">
+          <article class="panel">
+            <header>
+              <h2>Live Hive Controls</h2>
+              <p>Render-only simulation fed by telemetry streams or snapshots.</p>
+            </header>
+            <div class="panel-body">
+              <div class="field">
+                <label class="label" for="hive-snapshot-key">Snapshot key</label>
+                <input
+                  id="hive-snapshot-key"
+                  class="input"
+                  type="text"
+                  value="demo"
+                />
+              </div>
+              <div class="field hint mono">
+                Offline mode reads cached CBOR snapshots; replay uses CLI
+                `--replay`.
+              </div>
+            </div>
+            <footer class="panel-footer split">
+              <button id="hive-start" class="action primary">
+                <span data-icon="play"></span>
+                Start
+              </button>
+              <button id="hive-stop" class="action">
+                <span data-icon="stop"></span>
+                Stop
+              </button>
+            </footer>
+          </article>
 
-        <article class="panel">
-          <header>
-            <h2>Fleet Map</h2>
-            <p>Read-only ingest snapshots and worker presence.</p>
-          </header>
-          <div class="panel-body mono" id="fleet-output">
-            <p class="placeholder">Awaiting ingest snapshot.</p>
-          </div>
-          <footer>
-            <button id="load-fleet" class="action">Load fleet</button>
-          </footer>
-        </article>
+          <article class="panel">
+            <header>
+              <h2>Telemetry Rings</h2>
+              <p>Tail worker telemetry streams on demand.</p>
+            </header>
+            <div class="panel-body mono" id="telemetry-output">
+              <p class="placeholder">No telemetry loaded.</p>
+            </div>
+            <footer class="panel-footer split">
+              <input
+                id="worker-id"
+                class="input"
+                type="text"
+                value="worker-1"
+              />
+              <button id="load-telemetry" class="action">
+                <span data-icon="pulse"></span>
+                Load telemetry
+              </button>
+            </footer>
+          </article>
 
-        <article class="panel wide">
-          <header>
-            <h2>Namespace Browser</h2>
-            <p>Browse /proc, /queen, /worker, /log, /gpu (read-only).</p>
-          </header>
-          <div class="panel-body mono" id="namespace-output">
-            <p class="placeholder">Select a root to list entries.</p>
-          </div>
-          <footer class="split">
-            <select id="namespace-root" class="select">
-              <option value="/proc">/proc</option>
-              <option value="/queen">/queen</option>
-              <option value="/worker">/worker</option>
-              <option value="/log">/log</option>
-              <option value="/gpu">/gpu</option>
-            </select>
-            <button id="load-namespace" class="action">List entries</button>
-          </footer>
-        </article>
+          <article class="panel">
+            <header>
+              <h2>Fleet Map</h2>
+              <p>Read-only ingest snapshots and worker presence.</p>
+            </header>
+            <div class="panel-body mono" id="fleet-output">
+              <p class="placeholder">Awaiting ingest snapshot.</p>
+            </div>
+            <footer class="panel-footer">
+              <button id="load-fleet" class="action">
+                <span data-icon="map-trifold"></span>
+                Load fleet
+              </button>
+            </footer>
+          </article>
+        </aside>
+
+        <section class="main">
+          <article class="panel hive-panel">
+            <header class="panel-header">
+              <div>
+                <h2>Live Hive Canvas</h2>
+                <p>Agents, pollen, heat, and error pulses rendered in WebGL.</p>
+              </div>
+              <button id="hive-reset-view" class="action ghost">
+                <span data-icon="crosshair"></span>
+                Reset view
+              </button>
+            </header>
+            <div class="panel-body hive-body">
+              <div id="hive-canvas" class="hive-canvas"></div>
+              <div class="hive-overlay mono">
+                <span class="badge soft">Zoom with trackpad / scroll</span>
+                <span class="badge soft">Drag to pan</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel wide">
+            <header>
+              <h2>Namespace Browser</h2>
+              <p>Browse /proc, /queen, /worker, /log, /gpu (read-only).</p>
+            </header>
+            <div class="panel-body mono" id="namespace-output">
+              <p class="placeholder">Select a root to list entries.</p>
+            </div>
+            <footer class="panel-footer split">
+              <select id="namespace-root" class="select">
+                <option value="/proc">/proc</option>
+                <option value="/queen">/queen</option>
+                <option value="/worker">/worker</option>
+                <option value="/log">/log</option>
+                <option value="/gpu">/gpu</option>
+              </select>
+              <button id="load-namespace" class="action">
+                <span data-icon="folder-open"></span>
+                List entries
+              </button>
+            </footer>
+          </article>
+        </section>
       </section>
     </main>
 
-    <script src="app.js"></script>
+    <script src="vendor/pixi.min.js"></script>
+    <script type="module" src="app.js"></script>
   </body>
 </html>

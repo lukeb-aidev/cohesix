@@ -202,6 +202,14 @@
       "max_bytes": 262144,
       "ttl_s": 3600
     },
+    "hive": {
+      "frame_cap_fps": 60,
+      "step_ms": 16,
+      "lod_zoom_out": 0.7,
+      "lod_zoom_in": 1.25,
+      "lod_event_budget": 512,
+      "snapshot_max_events": 4096
+    },
     "paths": {
       "telemetry_root": "/worker",
       "proc_ingest_root": "/proc/ingest",

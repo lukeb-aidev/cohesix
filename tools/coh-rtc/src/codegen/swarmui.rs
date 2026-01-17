@@ -103,6 +103,39 @@ fn render_defaults_toml(manifest: &Manifest, manifest_hash: &str) -> String {
     .ok();
     writeln!(contents, "ttl_s = {}", manifest.swarmui.cache.ttl_s).ok();
     writeln!(contents).ok();
+    writeln!(contents, "[swarmui.hive]").ok();
+    writeln!(
+        contents,
+        "frame_cap_fps = {}",
+        manifest.swarmui.hive.frame_cap_fps
+    )
+    .ok();
+    writeln!(contents, "step_ms = {}", manifest.swarmui.hive.step_ms).ok();
+    writeln!(
+        contents,
+        "lod_zoom_out = {}",
+        manifest.swarmui.hive.lod_zoom_out
+    )
+    .ok();
+    writeln!(
+        contents,
+        "lod_zoom_in = {}",
+        manifest.swarmui.hive.lod_zoom_in
+    )
+    .ok();
+    writeln!(
+        contents,
+        "lod_event_budget = {}",
+        manifest.swarmui.hive.lod_event_budget
+    )
+    .ok();
+    writeln!(
+        contents,
+        "snapshot_max_events = {}",
+        manifest.swarmui.hive.snapshot_max_events
+    )
+    .ok();
+    writeln!(contents).ok();
     writeln!(contents, "[swarmui.paths]").ok();
     writeln!(
         contents,
@@ -185,6 +218,42 @@ fn render_defaults_rust(manifest: &Manifest, manifest_hash: &str) -> String {
     .ok();
     writeln!(
         contents,
+        "pub const SWARMUI_HIVE_FRAME_CAP_FPS: u16 = {};",
+        manifest.swarmui.hive.frame_cap_fps
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_HIVE_STEP_MS: u16 = {};",
+        manifest.swarmui.hive.step_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_HIVE_LOD_ZOOM_OUT: f32 = {};",
+        manifest.swarmui.hive.lod_zoom_out
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_HIVE_LOD_ZOOM_IN: f32 = {};",
+        manifest.swarmui.hive.lod_zoom_in
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_HIVE_LOD_EVENT_BUDGET: u32 = {};",
+        manifest.swarmui.hive.lod_event_budget
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_HIVE_SNAPSHOT_MAX_EVENTS: u32 = {};",
+        manifest.swarmui.hive.snapshot_max_events
+    )
+    .ok();
+    writeln!(
+        contents,
         "pub const SWARMUI_TELEMETRY_ROOT: &str = \"{}\";",
         manifest.swarmui.paths.telemetry_root
     )
@@ -243,6 +312,42 @@ fn render_defaults_doc(manifest: &Manifest, manifest_hash: &str, defaults_hash: 
         contents,
         "- `swarmui.cache.ttl_s`: `{}`",
         manifest.swarmui.cache.ttl_s
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.frame_cap_fps`: `{}`",
+        manifest.swarmui.hive.frame_cap_fps
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.step_ms`: `{}`",
+        manifest.swarmui.hive.step_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.lod_zoom_out`: `{}`",
+        manifest.swarmui.hive.lod_zoom_out
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.lod_zoom_in`: `{}`",
+        manifest.swarmui.hive.lod_zoom_in
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.lod_event_budget`: `{}`",
+        manifest.swarmui.hive.lod_event_budget
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.snapshot_max_events`: `{}`",
+        manifest.swarmui.hive.snapshot_max_events
     )
     .ok();
     writeln!(

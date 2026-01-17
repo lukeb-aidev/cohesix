@@ -403,6 +403,42 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `swarmui.hive.frame_cap_fps`: `{}`",
+            manifest.swarmui.hive.frame_cap_fps
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.hive.step_ms`: `{}`",
+            manifest.swarmui.hive.step_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.hive.lod_zoom_out`: `{}`",
+            manifest.swarmui.hive.lod_zoom_out
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.hive.lod_zoom_in`: `{}`",
+            manifest.swarmui.hive.lod_zoom_in
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.hive.lod_event_budget`: `{}`",
+            manifest.swarmui.hive.lod_event_budget
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.hive.snapshot_max_events`: `{}`",
+            manifest.swarmui.hive.snapshot_max_events
+        )
+        .ok();
+        writeln!(
+            schema_md,
             "- `swarmui.paths.telemetry_root`: `{}`",
             manifest.swarmui.paths.telemetry_root
         )
