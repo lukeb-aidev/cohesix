@@ -1,0 +1,10 @@
+# Author: Lukas Bower
+# Purpose: Quick in-session selftest script for cohsh.
+ping
+EXPECT OK
+cat /proc/boot
+EXPECT OK
+tail /log/queen.log
+EXPECT OK
+WAIT 200
+quit
