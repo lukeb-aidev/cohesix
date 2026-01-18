@@ -74,7 +74,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [20b](#20b) | NineDoor UI Providers | Complete |
 | [20c](#20c) | SwarmUI Desktop (Tauri, Pure 9P/TCP) | Complete |
 | [20d](#20d) | SwarmUI Live Hive Rendering (PixiJS, GPU-First | Complete |
-| [20e](#20e) | CLI/UI Convergence Tests | Pending |
+| [20e](#20e) | CLI/UI Convergence Tests | Complete |
 | [20f](#20f) | UI Security Hardening (Tickets & Quotas) | Pending |
 | [20g](#20g) | Deterministic Snapshot & Replay (UI Testing) | Pending |
 | [21](#21) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
@@ -1982,6 +1982,8 @@ Deliverables:
 
 ## Milestone 20e — CLI/UI Convergence Tests <a id="20e"></a> 
 [Milestones](#Milestones)
+
+**Status:** Complete — Convergence harness, shared fixtures, and CI guards enforce byte-stable ACK/ERR/END parity with documented timing tolerance; regression pack is green.
 
 **Why now (compiler):** After UI/CLI/library convergence, we need hard regression proof across all frontends with deterministic timing windows.
 

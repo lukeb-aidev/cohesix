@@ -27,5 +27,6 @@ default-features = false
 features = ["alloc", "proto-ipv4", "socket-tcp"]
 
 [dev-dependencies]
+cohsh = { path = "../../apps/cohsh" }
 sha2 = { workspace = true }
 hex = { workspace = true }

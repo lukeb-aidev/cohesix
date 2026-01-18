@@ -1,0 +1,14 @@
+OK ATTACH role=queen
+OK ATTACH role=queen
+OK ATTACH role=queen
+OK ATTACH role=queen
+OK ATTACH role=queen
+OK ATTACH role=queen
+OK TAIL path=/log/queen.log
+END
+OK QUIT
+OK QUIT
+OK QUIT
+OK QUIT
+OK QUIT
+OK QUIT

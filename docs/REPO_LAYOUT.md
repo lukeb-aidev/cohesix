@@ -14,6 +14,7 @@
   INTERFACES.md
   ROLES_AND_SCHEDULING.md
   SECURE9P.md
+  TEST_PLAN.md
   TOOLCHAIN_MAC_ARM64.md
   USERLAND_AND_CLI.md
   snippets/
@@ -34,8 +35,10 @@
     observe_watch.coh
   regression/
     client_vs_console.sh
+    transcript_compare.sh
     transcript_diff.sh
   ci/
+    convergence_tests.sh
     size_guard.sh
 /toolchain/
   setup_macos_arm64.sh
@@ -50,6 +53,7 @@
     src/
       client.rs
       queen.rs
+  coh-status/
   root-task/
     README.md            ← Event pump overview, testing commands, and feature flag notes
   nine-door/

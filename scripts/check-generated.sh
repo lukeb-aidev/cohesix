@@ -81,4 +81,6 @@ compare_file "$repo_root/docs/snippets/cohsh_client.md" "$cohsh_client_doc"
 compare_file "$repo_root/docs/snippets/cohsh_grammar.md" "$cohsh_grammar_doc"
 compare_file "$repo_root/docs/snippets/cohsh_ticket_policy.md" "$cohsh_ticket_policy_doc"
 
+"$repo_root/scripts/ci/check_test_plan.sh"
+
 printf "coh-rtc outputs match committed artefacts.\n"

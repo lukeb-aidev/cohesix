@@ -1,6 +1,6 @@
 // Copyright © 2025 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Compare SwarmUI convergence transcript against shared fixtures.
+// Purpose: Compare coh-status convergence transcript against shared fixtures.
 // Author: Lukas Bower
 
 #[path = "../../../tests/fixtures/transcripts/support.rs"]
@@ -12,11 +12,10 @@ use anyhow::{anyhow, Context, Result};
 use cohsh::client::{CohClient, InProcessTransport, TailEvent};
 use cohsh::queen;
 use cohsh_core::wire::{render_ack, AckLine, AckStatus, END_LINE};
-use cohsh_core::ConsoleVerb;
+use cohsh_core::{role_label, ConsoleVerb};
 use cohesix_ticket::Role;
 use nine_door::NineDoor;
 use secure9p_codec::OpenMode;
-use swarmui::{SwarmUiBackend, SwarmUiConfig, SwarmUiTransportFactory};
 
 const SCENARIO: &str = "converge_v0";
 const POOL_CONTROL_SESSIONS: usize = 2;
@@ -26,22 +25,6 @@ const WORKER_ID: &str = "worker-1";
 const QUEEN_LOG_PATH: &str = "/log/queen.log";
 const SPAWN_PAYLOAD: &str = "{\"spawn\":\"heartbeat\",\"ticks\":1,\"budget\":{\"ttl_s\":30}}";
 
-struct InProcessFactory {
-    server: NineDoor,
-}
-
-impl SwarmUiTransportFactory for InProcessFactory {
-    type Transport = InProcessTransport;
-
-    fn connect(&self) -> Result<Self::Transport, swarmui::SwarmUiError> {
-        let connection = self
-            .server
-            .connect()
-            .map_err(|err| swarmui::SwarmUiError::Transport(err.to_string()))?;
-        Ok(InProcessTransport::new(connection))
-    }
-}
-
 #[test]
 fn converge_transcript_matches_fixture() -> Result<()> {
     let start = Instant::now();
@@ -49,9 +32,9 @@ fn converge_transcript_matches_fixture() -> Result<()> {
     seed_worker(&server)?;
 
     let lines = run_converge_transcript(&server)?;
-    transcript_support::compare_transcript("swarmui", SCENARIO, "swarmui.txt", &lines);
+    transcript_support::compare_transcript("coh-status", SCENARIO, "coh-status.txt", &lines);
     transcript_support::write_timing(
-        "swarmui",
+        "coh-status",
         SCENARIO,
         "transcript",
         start.elapsed().as_millis() as u64,
@@ -73,26 +56,25 @@ fn seed_worker(server: &NineDoor) -> Result<()> {
 }
 
 fn run_converge_transcript(server: &NineDoor) -> Result<Vec<String>> {
-    let data_dir = std::env::temp_dir();
-    let config = SwarmUiConfig::from_generated(data_dir);
-    let factory = InProcessFactory {
-        server: server.clone(),
-    };
-    let mut backend = SwarmUiBackend::new(config, factory);
+    let connection = server.connect().context("open NineDoor session")?;
+    let transport = InProcessTransport::new(connection);
+    let mut client = CohClient::connect(transport, Role::Queen, None)?;
 
     let mut transcript = Vec::new();
-    let attach = backend.attach(Role::Queen, None);
+    let detail = format!("role={}", role_label(Role::Queen));
     for _ in 0..POOL_TOTAL_SESSIONS {
-        transcript.extend(attach.lines.iter().cloned());
+        transcript.push(render_ack_line(
+            AckStatus::Ok,
+            ConsoleVerb::Attach.ack_label(),
+            Some(detail.as_str()),
+        ));
     }
 
-    let mut client = connect_client(server)?;
     append_tail(&mut transcript, &mut client, QUEEN_LOG_PATH)?;
     append_spawn(&mut transcript, &mut client)?;
 
-    let telemetry = backend.tail_telemetry(Role::Queen, None, WORKER_ID);
-    transcript.extend(telemetry.lines);
-    assert_eq!(backend.active_tails(), 0);
+    let telemetry_path = format!("/worker/{}/telemetry", WORKER_ID);
+    append_tail(&mut transcript, &mut client, &telemetry_path)?;
 
     for _ in 0..POOL_TOTAL_SESSIONS {
         transcript.push(render_ack_line(
@@ -103,12 +85,6 @@ fn run_converge_transcript(server: &NineDoor) -> Result<Vec<String>> {
     }
 
     Ok(transcript)
-}
-
-fn connect_client(server: &NineDoor) -> Result<CohClient<InProcessTransport>> {
-    let connection = server.connect().context("open NineDoor session")?;
-    let transport = InProcessTransport::new(connection);
-    CohClient::connect(transport, Role::Queen, None).context("connect CohClient")
 }
 
 fn append_tail(

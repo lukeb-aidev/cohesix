@@ -1,0 +1,17 @@
+OK ATTACH role=queen
+OK ATTACH role=queen
+OK ATTACH role=queen
+OK ATTACH role=queen
+OK ATTACH role=queen
+OK ATTACH role=queen
+OK TAIL path=/log/queen.log
+END
+OK ECHO path=/queen/ctl bytes=53
+OK TAIL path=/worker/worker-1/telemetry
+END
+OK QUIT
+OK QUIT
+OK QUIT
+OK QUIT
+OK QUIT
+OK QUIT

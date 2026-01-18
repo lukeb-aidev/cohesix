@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
-# Purpose: Compare cohsh transcripts across transports (wrapper for transcript_compare.sh).
+# Purpose: CI hook for transcript convergence tests.
 
 set -euo pipefail
 

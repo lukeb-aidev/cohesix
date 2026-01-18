@@ -1,0 +1,19 @@
+# Author: Lukas Bower
+# Purpose: Configure the Cohesix status tool crate.
+[package]
+name = "coh-status"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Cohesix status tool (host-side)"
+
+[dependencies]
+
+[dev-dependencies]
+anyhow = { workspace = true }
+cohesix-ticket = { workspace = true }
+cohsh = { path = "../cohsh" }
+cohsh-core = { workspace = true }
+nine-door = { path = "../nine-door" }
+secure9p-codec = { workspace = true }
