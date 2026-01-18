@@ -8,6 +8,7 @@
 //! LoRa worker scaffolding with deterministic duty-cycle enforcement.
 
 use anyhow::{anyhow, Result};
+use std::time::{SystemTime, UNIX_EPOCH};
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims};
 use secure9p_codec::SessionId;
 use crate::{DutyCycleConfig, DutyCycleDecision, DutyCycleGuard, TamperEntry, TamperLog};
@@ -67,12 +68,13 @@ impl LoraWorker {
         let mount_at = mount_at.into();
         let mount = mount.into();
         let paths = LoraPaths::new(mount_at.as_str(), mount.as_str())?;
+        let issued_at_ms = unix_time_ms();
         let ticket = TicketClaims::new(
             Role::WorkerLora,
             BudgetSpec::default_heartbeat(),
             Some(scope.clone()),
             MountSpec::empty(),
-            0,
+            issued_at_ms,
         );
         Ok(Self {
             ticket,
@@ -128,6 +130,13 @@ impl LoraWorker {
     pub fn tamper_snapshot(&self) -> Vec<TamperEntry> {
         self.tamper.snapshot()
     }
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 #[cfg(test)]

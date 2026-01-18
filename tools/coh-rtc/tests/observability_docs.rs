@@ -62,3 +62,29 @@ fn security_observability_snippet_matches_codegen() {
     );
     assert_eq!(extracted, docs.observability_security_md.trim());
 }
+
+#[test]
+fn security_ticket_quota_snippet_matches_codegen() {
+    let docs = generated_docs();
+    let security_path = repo_path("docs/SECURITY.md");
+    let contents = fs::read_to_string(&security_path).expect("read security");
+    let extracted = extract_snippet(
+        &contents,
+        "<!-- coh-rtc:ticket-quotas:start -->",
+        "<!-- coh-rtc:ticket-quotas:end -->",
+    );
+    assert_eq!(extracted, docs.ticket_quotas_md.trim());
+}
+
+#[test]
+fn userland_ticket_quota_snippet_matches_codegen() {
+    let docs = generated_docs();
+    let userland_path = repo_path("docs/USERLAND_AND_CLI.md");
+    let contents = fs::read_to_string(&userland_path).expect("read userland");
+    let extracted = extract_snippet(
+        &contents,
+        "<!-- coh-rtc:ticket-quotas:start -->",
+        "<!-- coh-rtc:ticket-quotas:end -->",
+    );
+    assert_eq!(extracted, docs.ticket_quotas_md.trim());
+}

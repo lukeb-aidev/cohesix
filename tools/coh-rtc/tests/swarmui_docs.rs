@@ -40,6 +40,7 @@ fn compile_swarmui_defaults(temp_dir: &TempDir) -> PathBuf {
         doc_snippet_out: temp_dir.path().join("snippet.md"),
         observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
         observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
+        ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),

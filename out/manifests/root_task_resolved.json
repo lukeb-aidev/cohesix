@@ -56,6 +56,14 @@
       "secret": "worker-lora"
     }
   ],
+  "ticket_limits": {
+    "max_scopes": 8,
+    "max_scope_path_len": 128,
+    "max_scope_rate_per_s": 64,
+    "bandwidth_bytes": 131072,
+    "cursor_resumes": 16,
+    "cursor_advances": 256
+  },
   "namespaces": {
     "role_isolation": true,
     "mounts": []

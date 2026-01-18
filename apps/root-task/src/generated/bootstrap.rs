@@ -4,12 +4,12 @@
 
 #![allow(unused_imports)]
 
-use super::{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig};
+use super::{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig};
 use cohesix_ticket::Role;
 
 pub const TICKET_TABLE_SHA256: &str = "fd0ebff1d0b4cfcc2a03a1015578545dfa68f0240e782b60ad7956c2492972eb";
 pub const NAMESPACE_TABLE_SHA256: &str = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
-pub const AUDIT_TABLE_SHA256: &str = "e6e1fbf58d273fc1883a989573edd6f62f9441aeba91210e00c9a51b03677f67";
+pub const AUDIT_TABLE_SHA256: &str = "8420c24831b8c8c8db07c88e0c49d51a68ebfe90ec3d3f632e08bf59110de89d";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec { role: Role::Queen, secret: "bootstrap" },
@@ -25,6 +25,8 @@ pub const NAMESPACE_MOUNTS: [NamespaceMount; 0] = [
 pub const CACHE_POLICY: CachePolicy = CachePolicy { kernel_ops: true, dma_clean: true, dma_invalidate: true, unify_instructions: false };
 
 pub const SECURE9P_LIMITS: Secure9pLimits = Secure9pLimits { msize: 8192, walk_depth: 8, tags_per_session: 16, batch_frames: 1, short_write_policy: ShortWritePolicy::Reject };
+
+pub const TICKET_LIMITS: TicketLimits = TicketLimits { max_scopes: 8, max_scope_path_len: 128, max_scope_rate_per_s: 64, bandwidth_bytes: 131072, cursor_resumes: 16, cursor_advances: 256 };
 
 pub const SHARDING_CONFIG: ShardingConfig = ShardingConfig { enabled: true, shard_bits: 8, legacy_worker_alias: true };
 
@@ -344,7 +346,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = [
 pub const INITIAL_AUDIT_LINES: [&str; 23] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=6b2cb0b8a80b57f75acb5049fe17f2aae92e0d7adf690b34fc30eb01b084710c",
+    "manifest.sha256=0b887f3ed65c907434f2d0935f79dce99812ffd34941c8ce54a43aa6ee1734c6",
     "manifest.tickets=5",
     "manifest.namespaces=0 role_isolation=true",
     "manifest.secure9p.msize=8192",

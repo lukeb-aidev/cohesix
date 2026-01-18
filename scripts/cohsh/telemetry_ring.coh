@@ -1,7 +1,16 @@
 # Author: Lukas Bower
-# Purpose: Exercise telemetry ring wraparound, quota rejection, and stale cursor handling.
-attach queen
+# Purpose: Exercise telemetry ring wraparound, ticket scope denials, rate limits, and stale cursor handling.
+attach queen cohesix-ticket-0100040000000000000000000000000000000000000000.e9b8bc4e26e2f06725347bdd8983fb3efc170658fc6af53cabb746bef58deddb
+EXPECT ERR
+EXPECT SUBSTR expired
+attach queen cohesix-ticket-0100040000000000000000000000000000000000000000.e9b8bc4e26e2f06725347bdd8983fb3efc170658fc6af53cabb746bef58deddb
+EXPECT ERR
+EXPECT SUBSTR expired
+attach queen cohesix-ticket-0100100000000000000000000000000304002f6c6f67000100000006002f717565656e010000000006002f73686172640100000000.94654352a09687c6eead1ab8176b1b4dabe2d7df6dd28da30387ecad770edd56
 EXPECT OK
+echo forbidden > /log/queen.log
+EXPECT ERR
+EXPECT SUBSTR EPERM
 spawn heartbeat ticks=40 ttl_s=60
 EXPECT OK
 # Force ring wraparound with repeated appends (payload <= 96 chars).
@@ -32,6 +41,9 @@ EXPECT OK
 WAIT 200
 cat /log/queen.log
 EXPECT SUBSTR telemetry ring wrap
+cat /log/queen.log
+EXPECT ERR
+EXPECT SUBSTR ELIMIT
 cat /shard/13/worker/worker-1/telemetry
 EXPECT ERR
 quit

@@ -5,6 +5,7 @@
 #![cfg(feature = "net-console")]
 
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
+use std::time::{SystemTime, UNIX_EPOCH};
 use root_task::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 use root_task::net::{NetStack, CONSOLE_QUEUE_DEPTH, CONSOLE_TCP_PORT};
 use root_task::serial::{
@@ -112,9 +113,21 @@ fn build_pump<'a>(
 
 fn issue_queen_token(secret: &str) -> String {
     let issuer = TicketIssuer::new(secret);
-    let claims =
-        TicketClaims::new(Role::Queen, BudgetSpec::unbounded(), None, MountSpec::empty(), 0);
+    let claims = TicketClaims::new(
+        Role::Queen,
+        BudgetSpec::unbounded(),
+        None,
+        MountSpec::empty(),
+        unix_time_ms(),
+    );
     issuer.issue(claims).unwrap().encode().unwrap()
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 #[test]

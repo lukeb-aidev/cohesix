@@ -64,6 +64,7 @@ fn compile_error(manifest: &str) -> String {
         observability_security_snippet_out: temp_dir
             .path()
             .join("observability_security.md"),
+        ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),

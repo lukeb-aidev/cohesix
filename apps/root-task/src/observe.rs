@@ -17,6 +17,8 @@ pub struct IngestSnapshot {
     pub backpressure: u64,
     pub dropped: u64,
     pub queued: u32,
+    pub ui_reads: u64,
+    pub ui_denies: u64,
 }
 
 /// Mutable ingest metric tracker used by the event pump.
@@ -25,6 +27,8 @@ pub struct IngestMetrics {
     backpressure: u64,
     dropped: u64,
     latency: LatencySamples,
+    ui_reads: u64,
+    ui_denies: u64,
 }
 
 impl IngestMetrics {
@@ -36,6 +40,16 @@ impl IngestMetrics {
     /// Record a dropped ingest entry.
     pub fn record_drop(&mut self) {
         self.dropped = self.dropped.saturating_add(1);
+    }
+
+    /// Record a UI read.
+    pub fn record_ui_read(&mut self) {
+        self.ui_reads = self.ui_reads.saturating_add(1);
+    }
+
+    /// Record a UI denial.
+    pub fn record_ui_deny(&mut self) {
+        self.ui_denies = self.ui_denies.saturating_add(1);
     }
 
     /// Record an ingest latency sample (milliseconds).
@@ -52,6 +66,8 @@ impl IngestMetrics {
             backpressure: self.backpressure,
             dropped: self.dropped,
             queued: queued as u32,
+            ui_reads: self.ui_reads,
+            ui_denies: self.ui_denies,
         }
     }
 }

@@ -14,8 +14,6 @@ mod io;
 #[cfg(feature = "kernel")]
 pub use io::Console;
 
-use core::fmt;
-
 pub use cohsh_core::{
     Command, CommandParser, ConsoleError, MAX_LINE_LEN, MAX_ROLE_LEN, MAX_TICKET_LEN,
 };
@@ -27,10 +25,10 @@ use crate::sel4::BootInfoExt;
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4;
 
-use heapless::String;
-
 #[cfg(feature = "kernel")]
-use core::fmt::Write as FmtWrite;
+use core::fmt::{self, Write as FmtWrite};
+#[cfg(feature = "kernel")]
+use heapless::String;
 #[cfg(feature = "kernel")]
 use sel4_sys::seL4_CPtr;
 

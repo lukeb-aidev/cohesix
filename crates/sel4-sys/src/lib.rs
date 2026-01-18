@@ -1683,8 +1683,11 @@ mod imp {
     #[derive(Clone, Copy)]
     pub struct seL4_CNode_CapData;
 
+    #[repr(C)]
     #[derive(Clone, Copy)]
-    pub struct seL4_IPCBuffer;
+    pub struct seL4_IPCBuffer {
+        _private: u8,
+    }
 
     #[derive(Clone, Copy)]
     pub struct seL4_ARM_VMAttributes(pub seL4_Word);

@@ -75,7 +75,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [20c](#20c) | SwarmUI Desktop (Tauri, Pure 9P/TCP) | Complete |
 | [20d](#20d) | SwarmUI Live Hive Rendering (PixiJS, GPU-First | Complete |
 | [20e](#20e) | CLI/UI Convergence Tests | Complete |
-| [20f](#20f) | UI Security Hardening (Tickets & Quotas) | Pending |
+| [20f](#20f) | UI Security Hardening (Tickets & Quotas) | Complete |
 | [20g](#20g) | Deterministic Snapshot & Replay (UI Testing) | Pending |
 | [21](#21) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Pending |
@@ -2044,6 +2044,8 @@ Deliverables:
 
 ## Milestone 20f — UI Security Hardening (Tickets & Quotas) <a id="20f"></a> 
 [Milestones](#Milestones)
+
+**Status:** Complete — Ticket scopes/quotas enforce UI denials with audited EPERM/ELIMIT paths; regression pack is green.
 
 **Why now (compiler):** With UI parity established, enforce least privilege and quotas to protect interactive sessions.
 

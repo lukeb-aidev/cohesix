@@ -13,6 +13,12 @@
 - `secure9p.tags_per_session`: `16`
 - `secure9p.batch_frames`: `1`
 - `secure9p.short_write.policy`: `reject`
+- `ticket_limits.max_scopes`: `8`
+- `ticket_limits.max_scope_path_len`: `128`
+- `ticket_limits.max_scope_rate_per_s`: `64`
+- `ticket_limits.bandwidth_bytes`: `131072`
+- `ticket_limits.cursor_resumes`: `16`
+- `ticket_limits.cursor_advances`: `256`
 - `cas.enable`: `true`
 - `cas.store.chunk_bytes`: `128`
 - `cas.delta.enable`: `true`
@@ -90,7 +96,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `6b2cb0b8a80b57f75acb5049fe17f2aae92e0d7adf690b34fc30eb01b084710c`
+- `manifest.sha256`: `0b887f3ed65c907434f2d0935f79dce99812ffd34941c8ce54a43aa6ee1734c6`
 
 ### Namespace mounts (generated)
 - (none)
@@ -135,4 +141,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `6b2cb0b8a80b57f75acb5049fe17f2aae92e0d7adf690b34fc30eb01b084710c`)._
+_Generated from `configs/root_task.toml` (sha256: `0b887f3ed65c907434f2d0935f79dce99812ffd34941c8ce54a43aa6ee1734c6`)._

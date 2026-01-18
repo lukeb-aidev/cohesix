@@ -1552,7 +1552,7 @@ mod tests {
     use std::io::Read;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use cohesix_proto::REASON_INVALID_TOKEN;
     use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
@@ -1597,7 +1597,7 @@ mod tests {
             BudgetSpec::default_heartbeat(),
             Some("worker-1".to_string()),
             MountSpec::empty(),
-            0,
+            unix_time_ms(),
         );
         let valid_token = issuer.issue(claims).unwrap().encode().unwrap();
         assert!(TcpTransport::normalise_ticket(Role::Queen, None)
@@ -1613,6 +1613,13 @@ mod tests {
             Some(valid_token.as_str()),
         )
         .is_ok());
+    }
+
+    fn unix_time_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
     }
 
     #[test]

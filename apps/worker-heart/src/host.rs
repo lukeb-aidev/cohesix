@@ -13,6 +13,7 @@
 //! brought online.
 
 use anyhow::Result;
+use std::time::{SystemTime, UNIX_EPOCH};
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims};
 use secure9p_codec::SessionId;
 
@@ -27,13 +28,14 @@ impl HeartbeatWorker {
     /// Create a heartbeat worker descriptor bound to the worker role and supplied session.
     #[must_use]
     pub fn new(session: SessionId) -> Self {
+        let issued_at_ms = unix_time_ms();
         Self {
             ticket: TicketClaims::new(
                 Role::WorkerHeartbeat,
                 BudgetSpec::default_heartbeat(),
                 None,
                 MountSpec::empty(),
-                0,
+                issued_at_ms,
             ),
             session,
         }
@@ -55,6 +57,13 @@ impl HeartbeatWorker {
     pub fn emit(&self, tick: u64) -> Result<String> {
         Ok(format!("heartbeat {tick}"))
     }
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 #[cfg(test)]

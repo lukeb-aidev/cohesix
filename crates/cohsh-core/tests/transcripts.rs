@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use cohsh::queen;
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer, TicketKey, TicketToken};
@@ -420,10 +420,17 @@ fn issue_token(secret: &str, role: Role, subject: Option<&str>) -> String {
         budget,
         subject.map(str::to_owned),
         MountSpec::empty(),
-        0,
+        unix_time_ms(),
     );
     let token = issuer.issue(claims).expect("issue token");
     token.encode().expect("encode token")
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn build_validator() -> TicketValidator {

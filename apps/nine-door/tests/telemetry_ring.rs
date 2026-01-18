@@ -6,6 +6,7 @@
 
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
 use secure9p_codec::{ErrorCode, OpenMode, MAX_MSIZE};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use nine_door::{
     Clock, NineDoor, ShardLayout, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema,
@@ -36,9 +37,16 @@ fn issue_ticket(secret: &str, role: Role, subject: &str) -> String {
         budget,
         Some(subject.to_owned()),
         MountSpec::empty(),
-        0,
+        unix_time_ms(),
     );
     issuer.issue(claims).unwrap().encode().unwrap()
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn worker_telemetry_path(worker_id: &str) -> Vec<String> {

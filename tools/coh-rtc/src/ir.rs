@@ -35,6 +35,8 @@ const MAX_U32_DIGITS: usize = 10;
 const MAX_U8_DIGITS: usize = 3;
 const SHARD_LABEL_BYTES: usize = 2;
 const SHARD_COUNT_DIGITS: usize = 3;
+const MAX_TICKET_SCOPES: u16 = 16;
+const MAX_TICKET_SCOPE_PATH_LEN: usize = 255;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +51,8 @@ pub struct Manifest {
     #[serde(default)]
     pub cache: CacheConfig,
     pub tickets: Vec<TicketSpec>,
+    #[serde(default)]
+    pub ticket_limits: TicketLimits,
     #[serde(default)]
     pub namespaces: Namespaces,
     #[serde(default)]
@@ -118,6 +122,7 @@ impl Manifest {
         self.validate_namespace_mounts()?;
         self.validate_sharding()?;
         self.validate_tickets()?;
+        self.validate_ticket_limits()?;
         self.validate_ecosystem()?;
         self.validate_sidecars()?;
         self.validate_telemetry()?;
@@ -161,6 +166,27 @@ impl Manifest {
             if !seen.insert(key) {
                 bail!("duplicate ticket entry for role {}", ticket.role.as_str());
             }
+        }
+        Ok(())
+    }
+
+    fn validate_ticket_limits(&self) -> Result<()> {
+        if self.ticket_limits.max_scopes > MAX_TICKET_SCOPES {
+            bail!(
+                "ticket_limits.max_scopes {} exceeds maximum {}",
+                self.ticket_limits.max_scopes,
+                MAX_TICKET_SCOPES
+            );
+        }
+        if self.ticket_limits.max_scope_path_len == 0 {
+            bail!("ticket_limits.max_scope_path_len must be >= 1");
+        }
+        if self.ticket_limits.max_scope_path_len as usize > MAX_TICKET_SCOPE_PATH_LEN {
+            bail!(
+                "ticket_limits.max_scope_path_len {} exceeds maximum {}",
+                self.ticket_limits.max_scope_path_len,
+                MAX_TICKET_SCOPE_PATH_LEN
+            );
         }
         Ok(())
     }
@@ -1111,6 +1137,30 @@ impl Default for CacheConfig {
 pub struct TicketSpec {
     pub role: Role,
     pub secret: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct TicketLimits {
+    pub max_scopes: u16,
+    pub max_scope_path_len: u16,
+    pub max_scope_rate_per_s: u32,
+    pub bandwidth_bytes: u64,
+    pub cursor_resumes: u32,
+    pub cursor_advances: u32,
+}
+
+impl Default for TicketLimits {
+    fn default() -> Self {
+        Self {
+            max_scopes: 8,
+            max_scope_path_len: 128,
+            max_scope_rate_per_s: 64,
+            bandwidth_bytes: 131_072,
+            cursor_resumes: 16,
+            cursor_advances: 256,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

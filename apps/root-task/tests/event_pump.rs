@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
 use embedded_io::ErrorType;
@@ -132,9 +133,21 @@ impl SerialDriver for SharedSerial {
 
 fn issue_queen_token(secret: &str) -> String {
     let issuer = TicketIssuer::new(secret);
-    let claims =
-        TicketClaims::new(Role::Queen, BudgetSpec::unbounded(), None, MountSpec::empty(), 0);
+    let claims = TicketClaims::new(
+        Role::Queen,
+        BudgetSpec::unbounded(),
+        None,
+        MountSpec::empty(),
+        unix_time_ms(),
+    );
     issuer.issue(claims).unwrap().encode().unwrap()
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 #[test]

@@ -45,6 +45,16 @@ pub struct Secure9pLimits {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct TicketLimits {
+    pub max_scopes: u16,
+    pub max_scope_path_len: u16,
+    pub max_scope_rate_per_s: u32,
+    pub bandwidth_bytes: u64,
+    pub cursor_resumes: u32,
+    pub cursor_advances: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct ShardingConfig {
     pub enabled: bool,
     pub shard_bits: u8,
@@ -254,12 +264,13 @@ pub struct AuditConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
-pub const MANIFEST_SHA256: &str = "6b2cb0b8a80b57f75acb5049fe17f2aae92e0d7adf690b34fc30eb01b084710c";
+pub const MANIFEST_SHA256: &str = "0b887f3ed65c907434f2d0935f79dce99812ffd34941c8ce54a43aa6ee1734c6";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
 pub const CACHE_POLICY: CachePolicy = bootstrap::CACHE_POLICY;
 pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;
+pub const TICKET_LIMITS: TicketLimits = bootstrap::TICKET_LIMITS;
 pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;
 pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();
 pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;
@@ -302,6 +313,10 @@ pub const fn cache_policy() -> CachePolicy {
 
 pub const fn secure9p_limits() -> Secure9pLimits {
     bootstrap::SECURE9P_LIMITS
+}
+
+pub const fn ticket_limits() -> TicketLimits {
+    bootstrap::TICKET_LIMITS
 }
 
 pub const fn sharding_config() -> ShardingConfig {

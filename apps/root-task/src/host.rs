@@ -7,7 +7,7 @@
 
 use std::io::{self, Write};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result as AnyhowResult};
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
@@ -102,13 +102,20 @@ const WORKER_SECRET: &str = "worker-ticket";
 
 fn mint_token(secret: &str, role: Role, budget: BudgetSpec) -> Result<String> {
     let issuer = TicketIssuer::new(secret);
-    let claims = TicketClaims::new(role, budget, None, MountSpec::empty(), 0);
+    let claims = TicketClaims::new(role, budget, None, MountSpec::empty(), unix_time_ms());
     let token = issuer
         .issue(claims)
         .map_err(|err| anyhow!("failed to issue ticket: {err:?}"))?;
     token
         .encode()
         .map_err(|err| anyhow!("failed to encode ticket: {err:?}"))
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 /// Scripted console commands used to exercise the event pump.

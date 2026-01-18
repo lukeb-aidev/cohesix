@@ -69,6 +69,16 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct TicketLimits {{")?;
+    writeln!(mod_contents, "    pub max_scopes: u16,")?;
+    writeln!(mod_contents, "    pub max_scope_path_len: u16,")?;
+    writeln!(mod_contents, "    pub max_scope_rate_per_s: u32,")?;
+    writeln!(mod_contents, "    pub bandwidth_bytes: u64,")?;
+    writeln!(mod_contents, "    pub cursor_resumes: u32,")?;
+    writeln!(mod_contents, "    pub cursor_advances: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct ShardingConfig {{")?;
     writeln!(mod_contents, "    pub enabled: bool,")?;
     writeln!(mod_contents, "    pub shard_bits: u8,")?;
@@ -284,6 +294,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;")?;
     writeln!(mod_contents, "pub const CACHE_POLICY: CachePolicy = bootstrap::CACHE_POLICY;")?;
     writeln!(mod_contents, "pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;")?;
+    writeln!(mod_contents, "pub const TICKET_LIMITS: TicketLimits = bootstrap::TICKET_LIMITS;")?;
     writeln!(mod_contents, "pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;")?;
     writeln!(mod_contents, "pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();")?;
     writeln!(mod_contents, "pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;")?;
@@ -326,6 +337,10 @@ pub fn emit_rust(
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn secure9p_limits() -> Secure9pLimits {{")?;
     writeln!(mod_contents, "    bootstrap::SECURE9P_LIMITS")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn ticket_limits() -> TicketLimits {{")?;
+    writeln!(mod_contents, "    bootstrap::TICKET_LIMITS")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn sharding_config() -> ShardingConfig {{")?;
@@ -412,7 +427,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -469,6 +484,16 @@ pub fn emit_rust(
         manifest.secure9p.tags_per_session,
         manifest.secure9p.batch_frames,
         short_write_policy_to_rust(&manifest.secure9p.short_write.policy)
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const TICKET_LIMITS: TicketLimits = TicketLimits {{ max_scopes: {}, max_scope_path_len: {}, max_scope_rate_per_s: {}, bandwidth_bytes: {}, cursor_resumes: {}, cursor_advances: {} }};\n",
+        manifest.ticket_limits.max_scopes,
+        manifest.ticket_limits.max_scope_path_len,
+        manifest.ticket_limits.max_scope_rate_per_s,
+        manifest.ticket_limits.bandwidth_bytes,
+        manifest.ticket_limits.cursor_resumes,
+        manifest.ticket_limits.cursor_advances
     )?;
     writeln!(
         bootstrap_contents,

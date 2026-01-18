@@ -9,10 +9,17 @@ use nine_door::{NineDoor, ShardLayout};
 use secure9p_codec::{OpenMode, MAX_MSIZE};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const WORKER_COUNT: usize = 1_000;
 const ATTACH_THREADS: usize = 32;
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 #[test]
 fn sharded_attach_scales_and_exports_metrics() {
@@ -41,7 +48,7 @@ fn sharded_attach_scales_and_exports_metrics() {
                 BudgetSpec::default_heartbeat(),
                 Some(worker_id.clone()),
                 MountSpec::empty(),
-                0,
+                unix_time_ms(),
             );
             let token = issuer.issue(claims).unwrap().encode().unwrap();
             (worker_id, token)

@@ -41,6 +41,8 @@ fn tail_watch_output_is_line_oriented() {
         "queued",
         "backpressure",
         "dropped",
+        "ui_reads",
+        "ui_denies",
     ];
     for key in expected_keys {
         let part = parts

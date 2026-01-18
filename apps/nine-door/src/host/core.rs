@@ -6,10 +6,10 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
-use cohesix_ticket::{BudgetSpec, Role, TicketKey, TicketToken};
+use cohesix_ticket::{BudgetSpec, Role, TicketKey, TicketToken, TicketVerb};
 use gpu_bridge_host::{status_entry, GpuNamespaceSnapshot};
 use log::{debug, info, trace};
 use secure9p_codec::{
@@ -44,6 +44,7 @@ use super::namespace::UiProviderInfo;
 use super::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 use super::observe::{ObserveConfig, ObserveState};
 use super::replay::ReplayState;
+use super::security::{CursorCheck, TicketDeny, TicketLimits, TicketUsage};
 use super::telemetry::{TelemetryAuditLevel, TelemetryConfig, TelemetryManifestStore};
 use super::ui::{UiProviderConfig, UiVariant, UI_MAX_READ_BYTES};
 use super::{Clock, NineDoorError};
@@ -57,6 +58,8 @@ pub(crate) struct ServerCore {
     next_session: u64,
     sessions: HashMap<SessionId, SessionState>,
     ticket_keys: HashMap<Role, TicketKey>,
+    ticket_limits: TicketLimits,
+    ticket_usage: HashMap<String, TicketUsage>,
     clock: Arc<dyn Clock>,
     limits: SessionLimits,
     pipeline: Pipeline,
@@ -77,6 +80,7 @@ impl ServerCore {
     pub(crate) fn new(
         clock: Arc<dyn Clock>,
         limits: SessionLimits,
+        ticket_limits: TicketLimits,
         telemetry: TelemetryConfig,
         telemetry_manifest: TelemetryManifestStore,
         cas: CasConfig,
@@ -132,6 +136,8 @@ impl ServerCore {
             next_session: 1,
             sessions: HashMap::new(),
             ticket_keys: HashMap::new(),
+            ticket_limits,
+            ticket_usage: HashMap::new(),
             clock,
             limits,
             pipeline,
@@ -645,6 +651,7 @@ impl ServerCore {
         let mut ticket_payload = None;
         let mut identity = identity;
         let mut budget_override = None;
+        let mut ticket_claims = None;
         if !ticket.is_empty() {
             let key = self
                 .ticket_keys
@@ -673,7 +680,9 @@ impl ServerCore {
                     _ => {}
                 }
             }
-            budget_override = Some(claims.claims().budget);
+            let claims_ref = claims.claims();
+            budget_override = Some(claims_ref.budget);
+            ticket_claims = Some(claims_ref.clone());
             ticket_payload = Some(ticket.to_owned());
         } else if role != Role::Queen {
             return Err(NineDoorError::protocol(
@@ -682,6 +691,34 @@ impl ServerCore {
             ));
         }
         let now = self.clock.now();
+        if let Some(claims) = ticket_claims.as_mut() {
+            if let Some(ttl_s) = claims.budget.ttl_s() {
+                let now_ms = unix_time_ms();
+                let ttl_ms = ttl_s.saturating_mul(1_000);
+                let expires_at_ms = claims.issued_at_ms.saturating_add(ttl_ms);
+                if now_ms >= expires_at_ms {
+                    self.record_ticket_expired(role, ticket, claims, now_ms)?;
+                    self.pipeline.record_ui_deny();
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Permission,
+                        "ticket expired",
+                    ));
+                }
+                let remaining_ms = expires_at_ms.saturating_sub(now_ms);
+                let remaining_s = remaining_ms.saturating_add(999) / 1_000;
+                claims.budget = claims.budget.with_ttl(Some(remaining_s));
+                budget_override = Some(claims.budget);
+            }
+            let usage = TicketUsage::from_claims(claims, self.ticket_limits, now).map_err(|err| {
+                let _ = self.record_ticket_claim_denial(role, ticket, &err);
+                NineDoorError::protocol(ErrorCode::Permission, format!("ticket invalid: {err}"))
+            })?;
+            if usage.has_enforcement() {
+                self.ticket_usage
+                    .entry(ticket.to_owned())
+                    .or_insert(usage);
+            }
+        }
         match role {
             Role::Queen => {
                 let budget = budget_override.unwrap_or_else(BudgetSpec::unbounded);
@@ -882,6 +919,13 @@ impl ServerCore {
                 ));
             }
         }
+        self.enforce_ticket_scope(
+            state,
+            &full_resolved,
+            TicketVerb::Read,
+            true,
+            false,
+        )?;
         for component in wnames {
             view_path.push(component.clone());
             let resolved = state.resolve_view_path(&view_path);
@@ -1019,6 +1063,24 @@ impl ServerCore {
             self.maybe_log_sidecar_denial(&entry.canonical_path, bus_scope, lora_scope, &err)?;
             return Err(err);
         }
+        if mode.allows_read() {
+            self.enforce_ticket_scope(
+                state,
+                &entry.canonical_path,
+                TicketVerb::Read,
+                false,
+                false,
+            )?;
+        }
+        if mode.allows_write() {
+            self.enforce_ticket_scope(
+                state,
+                &entry.canonical_path,
+                TicketVerb::Write,
+                false,
+                false,
+            )?;
+        }
         let node = self.control.namespace_mut().lookup(&entry.canonical_path)?;
         if node.is_directory() && mode.allows_write() {
             return Err(NineDoorError::protocol(
@@ -1061,14 +1123,12 @@ impl ServerCore {
                 "fid opened without read permission",
             ));
         }
-        if let Some(info) = self
-            .control
-            .namespace()
-            .ui_provider_info(&entry.canonical_path)
-        {
+        let path = entry.canonical_path.clone();
+        let ui_info = self.control.namespace().ui_provider_info(&path);
+        if let Some(info) = ui_info {
             if !info.enabled {
                 self.control.record_ui_provider_denial(
-                    &entry.canonical_path,
+                    &path,
                     info,
                     "disabled",
                     state.role(),
@@ -1082,7 +1142,7 @@ impl ServerCore {
             }
             if count > UI_MAX_READ_BYTES {
                 self.control.record_ui_provider_denial(
-                    &entry.canonical_path,
+                    &path,
                     info,
                     "oversize-read",
                     state.role(),
@@ -1109,9 +1169,9 @@ impl ServerCore {
         let host_mount = host_mount_owned.as_deref();
         let sidecar_bus_scopes = self.control.sidecar_bus_scopes().to_vec();
         let sidecar_lora_scopes = self.control.sidecar_lora_scopes().to_vec();
-        let shards = self.control.namespace().shard_layout();
+        let shards = *self.control.namespace().shard_layout();
         if let Err(err) = AccessPolicy::ensure_read(
-            shards,
+            &shards,
             state.role(),
             state.worker_id(),
             gpu_scope,
@@ -1120,15 +1180,32 @@ impl ServerCore {
             host_mount,
             &sidecar_bus_scopes,
             &sidecar_lora_scopes,
-            &entry.canonical_path,
+            &path,
         ) {
-            self.maybe_log_sidecar_denial(&entry.canonical_path, bus_scope, lora_scope, &err)?;
+            self.maybe_log_sidecar_denial(&path, bus_scope, lora_scope, &err)?;
             return Err(err);
+        }
+        self.enforce_ticket_scope(state, &path, TicketVerb::Read, false, true)?;
+        self.enforce_ticket_bandwidth(state, &path, TicketVerb::Read, count as u64)?;
+        let mut cursor_check = None;
+        let mut cursor_key = None;
+        if shards.worker_id_from_telemetry_path(&path).is_some() {
+            let key = path.join("/");
+            cursor_check =
+                self.check_ticket_cursor(state, key.as_str(), &path, TicketVerb::Read, offset)?;
+            cursor_key = Some(key);
         }
         let data = self
             .control
             .namespace_mut()
-            .read(&entry.canonical_path, offset, count)?;
+            .read(&path, offset, count)?;
+        if let (Some(check), Some(key)) = (cursor_check, cursor_key) {
+            self.record_ticket_cursor(state, key, offset, data.len(), check);
+        }
+        self.consume_ticket_bandwidth(state, data.len() as u64);
+        if ui_info.is_some() {
+            self.pipeline.record_ui_read();
+        }
         Ok(ResponseBody::Read { data })
     }
 
@@ -1169,12 +1246,15 @@ impl ServerCore {
             }
             entry.canonical_path.clone()
         };
+        let requested_bytes = data.len() as u64;
         let policy_enabled = self.control.policy_enabled();
         let audit_enabled = self.control.audit_enabled();
         if audit_enabled && is_audit_journal_path(&path) {
+            self.enforce_ticket_write_limits(state, &path, requested_bytes)?;
             let count = self
                 .control
                 .process_audit_journal_write(offset, data, role, ticket.as_deref())?;
+            self.consume_ticket_bandwidth(state, count as u64);
             return Ok(ResponseBody::Write { count });
         }
         if audit_enabled && is_audit_decisions_path(&path) {
@@ -1187,9 +1267,11 @@ impl ServerCore {
         }
         let replay_enabled = self.control.replay_enabled();
         if replay_enabled && is_replay_ctl_path(&path) {
+            self.enforce_ticket_write_limits(state, &path, requested_bytes)?;
             let count = self
                 .control
                 .process_replay_ctl_write(offset, data)?;
+            self.consume_ticket_bandwidth(state, count as u64);
             return Ok(ResponseBody::Write { count });
         }
         if replay_enabled && is_replay_status_path(&path) {
@@ -1197,10 +1279,13 @@ impl ServerCore {
             return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
         }
         if policy_enabled && is_policy_ctl_path(&path) {
+            self.enforce_ticket_write_limits(state, &path, requested_bytes)?;
             let count = self.control.process_policy_ctl_write(offset, data)?;
+            self.consume_ticket_bandwidth(state, count as u64);
             return Ok(ResponseBody::Write { count });
         }
         if policy_enabled && is_actions_queue_path(&path) {
+            self.enforce_ticket_write_limits(state, &path, requested_bytes)?;
             let (count, actions) = self.control.process_action_queue_write(offset, data)?;
             for action in actions {
                 self.control
@@ -1209,6 +1294,7 @@ impl ServerCore {
                     self.control.record_decision_action(&action, role, ticket.as_deref())?;
                 }
             }
+            self.consume_ticket_bandwidth(state, count as u64);
             return Ok(ResponseBody::Write { count });
         }
         let host_target = host_write_target(&path, host_mount);
@@ -1249,6 +1335,7 @@ impl ServerCore {
             self.maybe_log_sidecar_denial(&path, bus_scope, lora_scope, &err)?;
             return Err(err);
         }
+        self.enforce_ticket_write_limits(state, &path, requested_bytes)?;
         if policy_enabled {
             let decision = self.control.consume_policy_gate(&path)?;
             match decision {
@@ -1297,6 +1384,7 @@ impl ServerCore {
         if let (Some(worker), Some(scope)) = (worker_id, gpu_scope) {
             if is_gpu_job_path(&path, scope) {
                 let count = self.control.process_gpu_job(worker, scope, data)?;
+                self.consume_ticket_bandwidth(state, count as u64);
                 return Ok(ResponseBody::Write { count });
             }
         }
@@ -1330,6 +1418,7 @@ impl ServerCore {
                 }
             }
             self.process_queen_events(events, session)?;
+            self.consume_ticket_bandwidth(state, data.len() as u64);
             Ok(ResponseBody::Write {
                 count: data.len() as u32,
             })
@@ -1354,12 +1443,14 @@ impl ServerCore {
                     ticket.as_deref(),
                 )?;
             }
+            self.consume_ticket_bandwidth(state, count as u64);
             Ok(ResponseBody::Write { count })
         } else {
             let count = self
                 .control
                 .namespace_mut()
                 .write_append(&path, offset, data)?;
+            self.consume_ticket_bandwidth(state, count as u64);
             Ok(ResponseBody::Write { count })
         }
     }
@@ -1460,6 +1551,208 @@ impl ServerCore {
         self.control
             .log_event("sidecar", TraceLevel::Warn, None, &message)?;
         Ok(())
+    }
+
+    fn record_ticket_claim_denial(
+        &mut self,
+        role: Role,
+        ticket: &str,
+        err: &dyn std::fmt::Display,
+    ) -> Result<(), NineDoorError> {
+        self.pipeline.record_ui_deny();
+        let role_label = role_label(role);
+        let message = format!(
+            "ui-ticket outcome=deny reason=invalid-claims role={} ticket={} detail={err}",
+            role_label, ticket
+        );
+        self.control.log_event("ui", TraceLevel::Warn, None, &message)
+    }
+
+    fn record_ticket_expired(
+        &mut self,
+        role: Role,
+        ticket: &str,
+        claims: &cohesix_ticket::TicketClaims,
+        now_ms: u64,
+    ) -> Result<(), NineDoorError> {
+        let role_label = role_label(role);
+        let ttl_s = claims.budget.ttl_s().unwrap_or(0);
+        let message = format!(
+            "ui-ticket outcome=deny reason=expired role={} ticket={} issued_at_ms={} ttl_s={} now_ms={}",
+            role_label,
+            ticket,
+            claims.issued_at_ms,
+            ttl_s,
+            now_ms
+        );
+        self.control.log_event("ui", TraceLevel::Warn, None, &message)
+    }
+
+    fn record_ticket_denial(
+        &mut self,
+        path: &[String],
+        verb: TicketVerb,
+        denial: TicketDeny,
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<(), NineDoorError> {
+        self.pipeline.record_ui_deny();
+        let role_label = match role {
+            Some(role) => role_label(role),
+            None => "unauthenticated",
+        };
+        let path_label = if path.is_empty() {
+            "/".to_owned()
+        } else {
+            format!("/{}", path.join("/"))
+        };
+        let verb_label = ticket_verb_label(verb);
+        let mut message = format!(
+            "ui-ticket outcome=deny reason={} role={} ticket={} path={} verb={}",
+            ticket_deny_reason(denial),
+            role_label,
+            ticket.unwrap_or("none"),
+            path_label,
+            verb_label
+        );
+        match denial {
+            TicketDeny::Scope => {}
+            TicketDeny::Rate { limit_per_s } => {
+                message.push_str(&format!(" limit_per_s={limit_per_s} window_ms=1000"));
+            }
+            TicketDeny::Bandwidth {
+                limit_bytes,
+                remaining_bytes,
+                requested_bytes,
+            } => {
+                message.push_str(&format!(
+                    " limit_bytes={limit_bytes} remaining_bytes={remaining_bytes} requested_bytes={requested_bytes}"
+                ));
+            }
+            TicketDeny::CursorResume { limit } => {
+                message.push_str(&format!(" limit={limit}"));
+            }
+            TicketDeny::CursorAdvance { limit } => {
+                message.push_str(&format!(" limit={limit}"));
+            }
+        }
+        self.control.log_event("ui", TraceLevel::Warn, None, &message)
+    }
+
+    fn enforce_ticket_scope(
+        &mut self,
+        state: &SessionState,
+        path: &[String],
+        verb: TicketVerb,
+        allow_ancestor: bool,
+        check_rate: bool,
+    ) -> Result<(), NineDoorError> {
+        let Some(ticket) = state.ticket() else {
+            return Ok(());
+        };
+        let Some(usage) = self.ticket_usage.get_mut(ticket) else {
+            return Ok(());
+        };
+        if !usage.has_enforcement() {
+            return Ok(());
+        }
+        let outcome = if check_rate {
+            usage.check_scope(path, verb, allow_ancestor, self.clock.now())
+        } else {
+            usage.check_scope_no_rate(path, verb, allow_ancestor)
+        };
+        if let Err(denial) = outcome {
+            self.record_ticket_denial(path, verb, denial, state.role(), Some(ticket))?;
+            return Err(ticket_denial_error(denial));
+        }
+        Ok(())
+    }
+
+    fn enforce_ticket_bandwidth(
+        &mut self,
+        state: &SessionState,
+        path: &[String],
+        verb: TicketVerb,
+        requested_bytes: u64,
+    ) -> Result<(), NineDoorError> {
+        let Some(ticket) = state.ticket() else {
+            return Ok(());
+        };
+        let Some(usage) = self.ticket_usage.get_mut(ticket) else {
+            return Ok(());
+        };
+        if !usage.has_enforcement() {
+            return Ok(());
+        }
+        if let Err(denial) = usage.check_bandwidth(requested_bytes) {
+            self.record_ticket_denial(path, verb, denial, state.role(), Some(ticket))?;
+            return Err(ticket_denial_error(denial));
+        }
+        Ok(())
+    }
+
+    fn enforce_ticket_write_limits(
+        &mut self,
+        state: &SessionState,
+        path: &[String],
+        requested_bytes: u64,
+    ) -> Result<(), NineDoorError> {
+        self.enforce_ticket_scope(state, path, TicketVerb::Write, false, true)?;
+        self.enforce_ticket_bandwidth(state, path, TicketVerb::Write, requested_bytes)?;
+        Ok(())
+    }
+
+    fn check_ticket_cursor(
+        &mut self,
+        state: &SessionState,
+        path_key: &str,
+        path: &[String],
+        verb: TicketVerb,
+        offset: u64,
+    ) -> Result<Option<CursorCheck>, NineDoorError> {
+        let Some(ticket) = state.ticket() else {
+            return Ok(None);
+        };
+        let Some(usage) = self.ticket_usage.get_mut(ticket) else {
+            return Ok(None);
+        };
+        if !usage.has_enforcement() {
+            return Ok(None);
+        }
+        match usage.check_cursor(path_key, offset) {
+            Ok(check) => Ok(Some(check)),
+            Err(denial) => {
+                self.record_ticket_denial(path, verb, denial, state.role(), Some(ticket))?;
+                Err(ticket_denial_error(denial))
+            }
+        }
+    }
+
+    fn consume_ticket_bandwidth(&mut self, state: &SessionState, consumed: u64) {
+        let Some(ticket) = state.ticket() else {
+            return;
+        };
+        let Some(usage) = self.ticket_usage.get_mut(ticket) else {
+            return;
+        };
+        usage.consume_bandwidth(consumed);
+    }
+
+    fn record_ticket_cursor(
+        &mut self,
+        state: &SessionState,
+        path_key: String,
+        offset: u64,
+        len: usize,
+        check: CursorCheck,
+    ) {
+        let Some(ticket) = state.ticket() else {
+            return;
+        };
+        let Some(usage) = self.ticket_usage.get_mut(ticket) else {
+            return;
+        };
+        usage.record_cursor(path_key, offset, len, check);
     }
 }
 
@@ -3277,6 +3570,41 @@ fn policy_decision_label(decision: PolicyDecision) -> &'static str {
     }
 }
 
+fn ticket_denial_error(denial: TicketDeny) -> NineDoorError {
+    match denial {
+        TicketDeny::Scope => NineDoorError::protocol(ErrorCode::Permission, "EPERM"),
+        TicketDeny::Rate { .. }
+        | TicketDeny::Bandwidth { .. }
+        | TicketDeny::CursorResume { .. }
+        | TicketDeny::CursorAdvance { .. } => NineDoorError::protocol(ErrorCode::TooBig, "ELIMIT"),
+    }
+}
+
+fn ticket_deny_reason(denial: TicketDeny) -> &'static str {
+    match denial {
+        TicketDeny::Scope => "scope",
+        TicketDeny::Rate { .. } => "rate",
+        TicketDeny::Bandwidth { .. } => "bandwidth",
+        TicketDeny::CursorResume { .. } => "cursor-resume",
+        TicketDeny::CursorAdvance { .. } => "cursor-advance",
+    }
+}
+
+fn ticket_verb_label(verb: TicketVerb) -> &'static str {
+    match verb {
+        TicketVerb::Read => "read",
+        TicketVerb::Write => "write",
+        TicketVerb::ReadWrite => "read-write",
+    }
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 fn parse_role_from_uname(uname: &str) -> Result<(Role, Option<String>), NineDoorError> {
     if uname == proto_role_label(ProtoRole::Queen) {
         return Ok((Role::Queen, None));
@@ -3590,7 +3918,7 @@ mod tests {
             BudgetSpec::default_heartbeat(),
             Some(id.to_owned()),
             MountSpec::empty(),
-            0,
+            unix_time_ms(),
         );
         let token = issuer.issue(claims).unwrap().encode().unwrap();
         let mut client = server.connect().unwrap();

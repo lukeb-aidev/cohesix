@@ -1336,13 +1336,15 @@ impl IngestWatch {
         let mut line = HeaplessString::new();
         write!(
             line,
-            "watch ts_ms={} p50_ms={} p95_ms={} queued={} backpressure={} dropped={}",
+            "watch ts_ms={} p50_ms={} p95_ms={} queued={} backpressure={} dropped={} ui_reads={} ui_denies={}",
             now_ms,
             snapshot.p50_ms,
             snapshot.p95_ms,
             snapshot.queued,
             snapshot.backpressure,
-            snapshot.dropped
+            snapshot.dropped,
+            snapshot.ui_reads,
+            snapshot.ui_denies
         )
         .map_err(|_| NineDoorBridgeError::BufferFull)?;
         if self.entries.is_full() {

@@ -1,6 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Validate /host control writes for non-queen vs queen sessions.
-attach worker-heartbeat cohesix-ticket-01010fe80300000000000010270000000000002c010000000000000800776f726b65722d31000000000000000000000000.9bada67b2cdede252bdc11e3fc714b04085390cefaa41b8451d07160f5e9bfba
+attach worker-heartbeat cohesix-ticket-0101080800776f726b65722d31000000000000000000000000.ea7bee86230e67031e6e758fa01c00eaa9c1f0bfff4b41548424a3df0356cff9
 EXPECT OK
 echo restart > /host/systemd/cohesix-agent.service/restart
 EXPECT ERR

@@ -352,6 +352,8 @@ impl ObserveState {
                 snapshot.queued,
                 snapshot.backpressure,
                 snapshot.dropped,
+                snapshot.ui_reads,
+                snapshot.ui_denies,
             ) {
                 info!(
                     "[observe] ingest watch throttled delay_ms={delay_ms} min_interval_ms={}",
@@ -388,6 +390,8 @@ impl IngestState {
             backpressure: metrics.backpressure_events,
             dropped: self.dropped,
             queued: metrics.queue_depth as u32,
+            ui_reads: metrics.ui_reads,
+            ui_denies: metrics.ui_denies,
         }
     }
 }
@@ -399,6 +403,8 @@ struct IngestSnapshot {
     backpressure: u64,
     dropped: u64,
     queued: u32,
+    ui_reads: u64,
+    ui_denies: u64,
 }
 
 #[derive(Debug)]
@@ -472,6 +478,8 @@ impl WatchRing {
         queued: u32,
         backpressure: u64,
         dropped: u64,
+        ui_reads: u64,
+        ui_denies: u64,
     ) -> WatchAppend {
         if !config.watch || self.max_entries == 0 || self.line_bytes == 0 {
             return WatchAppend::Disabled;
@@ -485,8 +493,8 @@ impl WatchRing {
         let mut line = String::new();
         let _ = writeln!(
             line,
-            "watch ts_ms={} p50_ms={} p95_ms={} queued={} backpressure={} dropped={}",
-            now_ms, p50_ms, p95_ms, queued, backpressure, dropped
+            "watch ts_ms={} p50_ms={} p95_ms={} queued={} backpressure={} dropped={} ui_reads={} ui_denies={}",
+            now_ms, p50_ms, p95_ms, queued, backpressure, dropped, ui_reads, ui_denies
         );
         if line.len() > self.line_bytes {
             return WatchAppend::Disabled;

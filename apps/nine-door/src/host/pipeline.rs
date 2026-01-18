@@ -47,6 +47,10 @@ pub struct PipelineMetrics {
     pub short_writes: u64,
     /// Number of retries triggered by short writes.
     pub short_write_retries: u64,
+    /// Successful UI-oriented reads.
+    pub ui_reads: u64,
+    /// UI denials due to ticket scope or quota enforcement.
+    pub ui_denies: u64,
 }
 
 /// Pipeline helper tracking batching and write retry behavior.
@@ -83,6 +87,16 @@ impl Pipeline {
     /// Increment back-pressure refusal counters.
     pub fn record_backpressure(&mut self) {
         self.metrics.backpressure_events += 1;
+    }
+
+    /// Increment UI read counters.
+    pub fn record_ui_read(&mut self) {
+        self.metrics.ui_reads = self.metrics.ui_reads.saturating_add(1);
+    }
+
+    /// Increment UI denial counters.
+    pub fn record_ui_deny(&mut self) {
+        self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
     }
 
     /// Write a batch of frames using the configured short-write policy.

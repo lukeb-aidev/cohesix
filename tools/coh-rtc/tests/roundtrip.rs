@@ -28,6 +28,7 @@ fn manifest_codegen_is_deterministic() {
     let doc_snippet = temp_dir.path().join("snippet.md");
     let observability_interfaces_snippet = temp_dir.path().join("observability_interfaces.md");
     let observability_security_snippet = temp_dir.path().join("observability_security.md");
+    let ticket_quotas_snippet = temp_dir.path().join("ticket_quotas.md");
     let cas_interfaces_snippet = temp_dir.path().join("cas_interfaces.md");
     let cas_security_snippet = temp_dir.path().join("cas_security.md");
     let cbor_snippet = temp_dir.path().join("telemetry_cbor.md");
@@ -51,6 +52,7 @@ fn manifest_codegen_is_deterministic() {
         doc_snippet_out: doc_snippet.clone(),
         observability_interfaces_snippet_out: observability_interfaces_snippet.clone(),
         observability_security_snippet_out: observability_security_snippet.clone(),
+        ticket_quotas_snippet_out: ticket_quotas_snippet.clone(),
         cas_interfaces_snippet_out: cas_interfaces_snippet.clone(),
         cas_security_snippet_out: cas_security_snippet.clone(),
         cbor_snippet_out: cbor_snippet.clone(),
@@ -76,6 +78,8 @@ fn manifest_codegen_is_deterministic() {
         fs::read(&observability_interfaces_snippet).expect("observability interfaces snippet");
     let baseline_obs_security =
         fs::read(&observability_security_snippet).expect("observability security snippet");
+    let baseline_ticket_quotas =
+        fs::read(&ticket_quotas_snippet).expect("ticket quotas snippet");
     let baseline_cas_interfaces =
         fs::read(&cas_interfaces_snippet).expect("cas interfaces snippet");
     let baseline_cas_security = fs::read(&cas_security_snippet).expect("cas security snippet");
@@ -105,6 +109,8 @@ fn manifest_codegen_is_deterministic() {
         fs::read(&observability_interfaces_snippet).expect("observability interfaces snippet");
     let second_obs_security =
         fs::read(&observability_security_snippet).expect("observability security snippet");
+    let second_ticket_quotas =
+        fs::read(&ticket_quotas_snippet).expect("ticket quotas snippet");
     let second_cas_interfaces =
         fs::read(&cas_interfaces_snippet).expect("cas interfaces snippet");
     let second_cas_security = fs::read(&cas_security_snippet).expect("cas security snippet");
@@ -130,6 +136,7 @@ fn manifest_codegen_is_deterministic() {
     assert_eq!(baseline_docs, second_docs);
     assert_eq!(baseline_obs_interfaces, second_obs_interfaces);
     assert_eq!(baseline_obs_security, second_obs_security);
+    assert_eq!(baseline_ticket_quotas, second_ticket_quotas);
     assert_eq!(baseline_cas_interfaces, second_cas_interfaces);
     assert_eq!(baseline_cas_security, second_cas_security);
     assert_eq!(baseline_cbor, second_cbor);
@@ -198,6 +205,7 @@ secret = "bootstrap"
         observability_security_snippet_out: temp_dir
             .path()
             .join("observability_security.md"),
+        ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
@@ -289,6 +297,7 @@ secret = "bootstrap"
         observability_security_snippet_out: temp_dir
             .path()
             .join("observability_security.md"),
+        ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
@@ -365,6 +374,7 @@ secret = "bootstrap"
         observability_security_snippet_out: temp_dir
             .path()
             .join("observability_security.md"),
+        ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
@@ -448,6 +458,7 @@ secret = "bootstrap"
         observability_security_snippet_out: temp_dir
             .path()
             .join("observability_security.md"),
+        ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
@@ -526,6 +537,7 @@ secret = "bootstrap"
         observability_security_snippet_out: temp_dir
             .path()
             .join("observability_security.md"),
+        ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),

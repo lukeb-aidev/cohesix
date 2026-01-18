@@ -34,6 +34,7 @@ mod namespace;
 mod observe;
 mod pipeline;
 mod policy;
+mod security;
 mod replay;
 mod telemetry;
 mod tracefs;
@@ -49,6 +50,7 @@ pub use self::audit::{AuditConfig, AuditLimits, ReplayConfig};
 pub use self::policy::{PolicyConfig, PolicyDecision, PolicyLimits, PolicyRuleSpec};
 pub use self::observe::{ObserveConfig, ProcIngestConfig, Proc9pConfig};
 pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
+pub use self::security::TicketLimits;
 pub use self::telemetry::{
     TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryManifestStore,
 };
@@ -357,6 +359,7 @@ impl NineDoor {
             inner: Arc::new(Mutex::new(ServerCore::new(
                 clock,
                 limits,
+                TicketLimits::default(),
                 telemetry,
                 telemetry_manifest.clone(),
                 cas,

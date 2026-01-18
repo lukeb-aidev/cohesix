@@ -24,6 +24,13 @@ extern crate std;
 const CLAIMS_VERSION: u8 = 1;
 const TICKET_PREFIX: &str = "cohesix-ticket-";
 const MAX_MOUNT_FIELD_LEN: usize = 255;
+const MAX_SCOPE_COUNT: usize = 16;
+const FLAG_TICKS: u8 = 0b0000_0001;
+const FLAG_OPS: u8 = 0b0000_0010;
+const FLAG_TTL: u8 = 0b0000_0100;
+const FLAG_SUBJECT: u8 = 0b0000_1000;
+const FLAG_SCOPES: u8 = 0b0001_0000;
+const FLAG_QUOTAS: u8 = 0b0010_0000;
 
 /// Roles recognised by the Cohesix capability system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -174,6 +181,101 @@ impl MountSpec {
     }
 }
 
+/// Verbs allowed by a ticket scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TicketVerb {
+    /// Read-only access.
+    Read,
+    /// Write-only access.
+    Write,
+    /// Read and write access.
+    ReadWrite,
+}
+
+impl TicketVerb {
+    fn as_u8(self) -> u8 {
+        match self {
+            TicketVerb::Read => 0,
+            TicketVerb::Write => 1,
+            TicketVerb::ReadWrite => 2,
+        }
+    }
+
+    fn from_u8(value: u8) -> Result<Self, TicketError> {
+        match value {
+            0 => Ok(TicketVerb::Read),
+            1 => Ok(TicketVerb::Write),
+            2 => Ok(TicketVerb::ReadWrite),
+            other => Err(TicketError::InvalidScopeVerb(other)),
+        }
+    }
+}
+
+/// Scope entry for ticket-bound UI access.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TicketScope {
+    /// Canonical path prefix (absolute).
+    pub path: String,
+    /// Allowed verbs for the scope.
+    pub verb: TicketVerb,
+    /// Rate limit per second (0 = unlimited).
+    pub rate_per_s: u32,
+}
+
+impl TicketScope {
+    /// Construct a new scope entry.
+    #[must_use]
+    pub fn new(path: impl Into<String>, verb: TicketVerb, rate_per_s: u32) -> Self {
+        Self {
+            path: path.into(),
+            verb,
+            rate_per_s,
+        }
+    }
+}
+
+/// Optional per-ticket quota limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TicketQuotas {
+    /// Maximum bandwidth in bytes (None = unlimited).
+    pub bandwidth_bytes: Option<u64>,
+    /// Maximum number of cursor resume reads (None = unlimited).
+    pub cursor_resumes: Option<u32>,
+    /// Maximum number of cursor advances (None = unlimited).
+    pub cursor_advances: Option<u32>,
+}
+
+impl TicketQuotas {
+    /// Quotas without restrictions.
+    #[must_use]
+    pub fn unbounded() -> Self {
+        Self::default()
+    }
+
+    fn has_any(self) -> bool {
+        self.bandwidth_bytes.is_some()
+            || self.cursor_resumes.is_some()
+            || self.cursor_advances.is_some()
+    }
+
+    fn encode(self, payload: &mut Vec<u8>) {
+        payload.extend_from_slice(&self.bandwidth_bytes.unwrap_or(0).to_le_bytes());
+        payload.extend_from_slice(&self.cursor_resumes.unwrap_or(0).to_le_bytes());
+        payload.extend_from_slice(&self.cursor_advances.unwrap_or(0).to_le_bytes());
+    }
+
+    fn decode(cursor: &mut PayloadCursor<'_>) -> Result<Self, TicketError> {
+        let bandwidth_bytes = cursor.read_u64()?;
+        let cursor_resumes = cursor.read_u32()?;
+        let cursor_advances = cursor.read_u32()?;
+        Ok(Self {
+            bandwidth_bytes: (bandwidth_bytes > 0).then_some(bandwidth_bytes),
+            cursor_resumes: (cursor_resumes > 0).then_some(cursor_resumes),
+            cursor_advances: (cursor_advances > 0).then_some(cursor_advances),
+        })
+    }
+}
+
 /// Claims embedded in capability tickets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TicketClaims {
@@ -187,6 +289,10 @@ pub struct TicketClaims {
     pub mounts: MountSpec,
     /// Millisecond timestamp when the ticket was issued.
     pub issued_at_ms: u64,
+    /// Optional UI scopes granted to the ticket.
+    pub scopes: Vec<TicketScope>,
+    /// Optional per-ticket quota limits.
+    pub quotas: TicketQuotas,
 }
 
 impl TicketClaims {
@@ -205,7 +311,23 @@ impl TicketClaims {
             subject,
             mounts,
             issued_at_ms,
+            scopes: Vec::new(),
+            quotas: TicketQuotas::default(),
         }
+    }
+
+    /// Override the scopes attached to the ticket.
+    #[must_use]
+    pub fn with_scopes(mut self, scopes: Vec<TicketScope>) -> Self {
+        self.scopes = scopes;
+        self
+    }
+
+    /// Override the quota limits attached to the ticket.
+    #[must_use]
+    pub fn with_quotas(mut self, quotas: TicketQuotas) -> Self {
+        self.quotas = quotas;
+        self
     }
 
     fn encode_payload(&self) -> Result<Vec<u8>, TicketError> {
@@ -214,16 +336,22 @@ impl TicketClaims {
         payload.push(self.role.as_u8());
         let mut flags = 0u8;
         if self.budget.ticks.is_some() {
-            flags |= 0b0000_0001;
+            flags |= FLAG_TICKS;
         }
         if self.budget.ops.is_some() {
-            flags |= 0b0000_0010;
+            flags |= FLAG_OPS;
         }
         if self.budget.ttl_s.is_some() {
-            flags |= 0b0000_0100;
+            flags |= FLAG_TTL;
         }
         if self.subject.is_some() {
-            flags |= 0b0000_1000;
+            flags |= FLAG_SUBJECT;
+        }
+        if !self.scopes.is_empty() {
+            flags |= FLAG_SCOPES;
+        }
+        if self.quotas.has_any() {
+            flags |= FLAG_QUOTAS;
         }
         payload.push(flags);
         if let Some(ticks) = self.budget.ticks {
@@ -241,6 +369,12 @@ impl TicketClaims {
         payload.extend_from_slice(&self.issued_at_ms.to_le_bytes());
         encode_string(&self.mounts.service, &mut payload)?;
         encode_string(&self.mounts.at, &mut payload)?;
+        if flags & FLAG_SCOPES != 0 {
+            encode_scopes(&self.scopes, &mut payload)?;
+        }
+        if flags & FLAG_QUOTAS != 0 {
+            self.quotas.encode(&mut payload);
+        }
         Ok(payload)
     }
 
@@ -252,22 +386,22 @@ impl TicketClaims {
         }
         let role = Role::from_u8(cursor.read_u8()?)?;
         let flags = cursor.read_u8()?;
-        let ticks = if flags & 0b0000_0001 != 0 {
+        let ticks = if flags & FLAG_TICKS != 0 {
             Some(cursor.read_u64()?)
         } else {
             None
         };
-        let ops = if flags & 0b0000_0010 != 0 {
+        let ops = if flags & FLAG_OPS != 0 {
             Some(cursor.read_u64()?)
         } else {
             None
         };
-        let ttl_s = if flags & 0b0000_0100 != 0 {
+        let ttl_s = if flags & FLAG_TTL != 0 {
             Some(cursor.read_u64()?)
         } else {
             None
         };
-        let subject = if flags & 0b0000_1000 != 0 {
+        let subject = if flags & FLAG_SUBJECT != 0 {
             Some(cursor.read_string()?)
         } else {
             None
@@ -275,6 +409,16 @@ impl TicketClaims {
         let issued_at_ms = cursor.read_u64()?;
         let service = cursor.read_string()?;
         let at = cursor.read_string()?;
+        let scopes = if flags & FLAG_SCOPES != 0 {
+            decode_scopes(&mut cursor)?
+        } else {
+            Vec::new()
+        };
+        let quotas = if flags & FLAG_QUOTAS != 0 {
+            TicketQuotas::decode(&mut cursor)?
+        } else {
+            TicketQuotas::default()
+        };
         cursor.ensure_empty()?;
         Ok(Self {
             role,
@@ -282,6 +426,8 @@ impl TicketClaims {
             subject,
             mounts: MountSpec { service, at },
             issued_at_ms,
+            scopes,
+            quotas,
         })
     }
 }
@@ -397,6 +543,12 @@ pub enum TicketError {
     /// The mount data exceeds expected limits.
     #[error("mount data exceeds allowed length")]
     MountTooLarge,
+    /// The ticket scope verb was invalid.
+    #[error("scope verb {0} is invalid")]
+    InvalidScopeVerb(u8),
+    /// Too many scopes were included in the ticket.
+    #[error("scope count exceeds allowed maximum")]
+    ScopeTooMany,
     /// The claims payload is incomplete.
     #[error("claims payload truncated")]
     Truncated,
@@ -440,6 +592,38 @@ fn parse_token(token: &str) -> Result<(Vec<u8>, [u8; 32]), TicketError> {
     Ok((payload_bytes, mac))
 }
 
+fn encode_scopes(scopes: &[TicketScope], payload: &mut Vec<u8>) -> Result<(), TicketError> {
+    if scopes.len() > MAX_SCOPE_COUNT {
+        return Err(TicketError::ScopeTooMany);
+    }
+    payload.push(scopes.len() as u8);
+    for scope in scopes {
+        encode_string(&scope.path, payload)?;
+        payload.push(scope.verb.as_u8());
+        payload.extend_from_slice(&scope.rate_per_s.to_le_bytes());
+    }
+    Ok(())
+}
+
+fn decode_scopes(cursor: &mut PayloadCursor<'_>) -> Result<Vec<TicketScope>, TicketError> {
+    let count = cursor.read_u8()? as usize;
+    if count > MAX_SCOPE_COUNT {
+        return Err(TicketError::ScopeTooMany);
+    }
+    let mut scopes = Vec::with_capacity(count);
+    for _ in 0..count {
+        let path = cursor.read_string()?;
+        let verb = TicketVerb::from_u8(cursor.read_u8()?)?;
+        let rate_per_s = cursor.read_u32()?;
+        scopes.push(TicketScope {
+            path,
+            verb,
+            rate_per_s,
+        });
+    }
+    Ok(scopes)
+}
+
 struct PayloadCursor<'a> {
     bytes: &'a [u8],
     pos: usize,
@@ -468,6 +652,12 @@ impl<'a> PayloadCursor<'a> {
         let mut buf = [0u8; 8];
         buf.copy_from_slice(self.read_exact(8)?);
         Ok(u64::from_le_bytes(buf))
+    }
+
+    fn read_u32(&mut self) -> Result<u32, TicketError> {
+        let mut buf = [0u8; 4];
+        buf.copy_from_slice(self.read_exact(4)?);
+        Ok(u32::from_le_bytes(buf))
     }
 
     fn read_string(&mut self) -> Result<String, TicketError> {

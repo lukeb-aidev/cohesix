@@ -23,6 +23,7 @@
     cohsh_policy.md
     cohsh_ticket_policy.md
     root_task_manifest.md
+    ticket_quotas.md
 /configs/
   root_task.toml
 /out/

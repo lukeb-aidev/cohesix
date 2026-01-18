@@ -11,6 +11,7 @@
 //! `docs/GPU_NODES.md`.
 
 use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -160,12 +161,13 @@ impl GpuWorker {
 
     /// Construct a GPU worker with explicit sharding configuration.
     pub fn new_with_sharding(session: SessionId, lease: GpuLease, sharding: ShardingSpec) -> Self {
+        let issued_at_ms = unix_time_ms();
         let ticket = TicketClaims::new(
             Role::WorkerGpu,
             BudgetSpec::default_gpu(),
             None,
             MountSpec::empty(),
-            0,
+            issued_at_ms,
         );
         Self {
             ticket,
@@ -243,6 +245,13 @@ impl GpuWorker {
         descriptor.validate()?;
         Ok(descriptor)
     }
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 /// Lease specification used during spawn flows.

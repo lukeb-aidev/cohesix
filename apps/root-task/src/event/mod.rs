@@ -21,6 +21,8 @@ pub mod handlers;
 #[cfg(feature = "kernel")]
 pub mod op;
 
+extern crate alloc;
+
 #[cfg(feature = "kernel")]
 pub use dispatch::{dispatch_message, DispatchOutcome};
 #[cfg(feature = "kernel")]
@@ -31,7 +33,12 @@ pub use op::BootstrapOp;
 use core::cmp::min;
 use core::fmt::{self, Write as FmtWrite};
 
-use cohesix_ticket::Role;
+use alloc::borrow::ToOwned;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use cohesix_ticket::{Role, TicketClaims, TicketQuotas, TicketToken, TicketVerb};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use cohsh_core::{ConsoleVerb, RoleParseMode};
 
@@ -99,6 +106,7 @@ const BOOTSTRAP_IDLE_SPINS: usize = 512;
 
 const CONSOLE_BANNER: &str = "[Cohesix] Root console ready (type 'help' for commands)";
 const CONSOLE_PROMPT: &str = "cohesix> ";
+const QUEEN_CTL_PATH: &str = "/queen/ctl";
 #[cfg(feature = "net-console")]
 const NET_DIAG_HEARTBEAT_MS: u64 = 5_000;
 #[cfg(feature = "net-console")]
@@ -308,6 +316,442 @@ impl<const N: usize> CapabilityValidator for TicketTable<N> {
     }
 }
 
+const TICKET_RATE_WINDOW_MS: u64 = 1_000;
+
+/// Validation error when a ticket exceeds manifest limits.
+#[derive(Debug, Clone)]
+enum TicketClaimError {
+    ScopeCount { count: usize, max: u16 },
+    ScopePath { path: String, max_len: u16 },
+    ScopeRate { rate: u32, max: u32 },
+    Bandwidth { value: u64, max: u64 },
+    CursorResumes { value: u32, max: u32 },
+    CursorAdvances { value: u32, max: u32 },
+}
+
+impl fmt::Display for TicketClaimError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TicketClaimError::ScopeCount { count, max } => {
+                write!(f, "scope count {count} exceeds {max}")
+            }
+            TicketClaimError::ScopePath { path, max_len } => {
+                write!(f, "scope path '{path}' exceeds {max_len} bytes")
+            }
+            TicketClaimError::ScopeRate { rate, max } => write!(f, "scope rate {rate} exceeds {max}"),
+            TicketClaimError::Bandwidth { value, max } => {
+                write!(f, "bandwidth quota {value} exceeds {max}")
+            }
+            TicketClaimError::CursorResumes { value, max } => {
+                write!(f, "cursor resume quota {value} exceeds {max}")
+            }
+            TicketClaimError::CursorAdvances { value, max } => {
+                write!(f, "cursor advance quota {value} exceeds {max}")
+            }
+        }
+    }
+}
+
+/// Denial outcome for ticket enforcement.
+#[derive(Debug, Clone, Copy)]
+enum TicketDeny {
+    Scope,
+    Rate { limit_per_s: u32 },
+    Bandwidth {
+        limit_bytes: u64,
+        remaining_bytes: u64,
+        requested_bytes: u64,
+    },
+    CursorResume { limit: u32 },
+    CursorAdvance { limit: u32 },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CursorCheck {
+    is_resume: bool,
+}
+
+#[derive(Debug, Clone)]
+struct TicketScopeState {
+    path: Vec<String>,
+    verb: TicketVerb,
+    rate_limit: Option<u32>,
+    window_start_ms: u64,
+    window_count: u32,
+}
+
+impl TicketScopeState {
+    fn allows_verb(&self, verb: TicketVerb) -> bool {
+        match self.verb {
+            TicketVerb::Read => matches!(verb, TicketVerb::Read),
+            TicketVerb::Write => matches!(verb, TicketVerb::Write),
+            TicketVerb::ReadWrite => true,
+        }
+    }
+
+    fn matches_path(&self, path: &[String], allow_ancestor: bool) -> bool {
+        if path.starts_with(self.path.as_slice()) {
+            return true;
+        }
+        if allow_ancestor && self.path.starts_with(path) {
+            return true;
+        }
+        false
+    }
+
+    fn check_rate(&mut self, now_ms: u64) -> Result<(), TicketDeny> {
+        let Some(limit) = self.rate_limit else {
+            return Ok(());
+        };
+        if now_ms.saturating_sub(self.window_start_ms) >= TICKET_RATE_WINDOW_MS {
+            self.window_start_ms = now_ms;
+            self.window_count = 0;
+        }
+        if self.window_count >= limit {
+            return Err(TicketDeny::Rate { limit_per_s: limit });
+        }
+        self.window_count = self.window_count.saturating_add(1);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TicketQuotaState {
+    bandwidth_limit: Option<u64>,
+    bandwidth_remaining: Option<u64>,
+    cursor_resume_limit: Option<u32>,
+    cursor_resume_remaining: Option<u32>,
+    cursor_advance_limit: Option<u32>,
+    cursor_advance_remaining: Option<u32>,
+}
+
+impl TicketQuotaState {
+    fn bandwidth_limit(&self) -> Option<u64> {
+        self.bandwidth_limit
+    }
+
+    fn cursor_resume_limit(&self) -> Option<u32> {
+        self.cursor_resume_limit
+    }
+
+    fn cursor_advance_limit(&self) -> Option<u32> {
+        self.cursor_advance_limit
+    }
+
+    fn check_bandwidth(&self, requested: u64) -> Result<(), TicketDeny> {
+        let Some(remaining) = self.bandwidth_remaining else {
+            return Ok(());
+        };
+        if requested > remaining {
+            let limit = self.bandwidth_limit.unwrap_or(remaining);
+            return Err(TicketDeny::Bandwidth {
+                limit_bytes: limit,
+                remaining_bytes: remaining,
+                requested_bytes: requested,
+            });
+        }
+        Ok(())
+    }
+
+    fn consume_bandwidth(&mut self, consumed: u64) {
+        if let Some(remaining) = &mut self.bandwidth_remaining {
+            *remaining = remaining.saturating_sub(consumed);
+        }
+    }
+
+    fn check_cursor(&self, is_resume: bool) -> Result<(), TicketDeny> {
+        if let Some(remaining) = self.cursor_advance_remaining {
+            if remaining == 0 {
+                let limit = self.cursor_advance_limit.unwrap_or(0);
+                return Err(TicketDeny::CursorAdvance { limit });
+            }
+        }
+        if is_resume {
+            if let Some(remaining) = self.cursor_resume_remaining {
+                if remaining == 0 {
+                    let limit = self.cursor_resume_limit.unwrap_or(0);
+                    return Err(TicketDeny::CursorResume { limit });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn consume_cursor(&mut self, is_resume: bool) {
+        if let Some(remaining) = &mut self.cursor_advance_remaining {
+            *remaining = remaining.saturating_sub(1);
+        }
+        if is_resume {
+            if let Some(remaining) = &mut self.cursor_resume_remaining {
+                *remaining = remaining.saturating_sub(1);
+            }
+        }
+    }
+
+    fn has_limits(&self) -> bool {
+        self.bandwidth_limit.is_some()
+            || self.cursor_resume_limit.is_some()
+            || self.cursor_advance_limit.is_some()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TicketUsage {
+    scopes: Vec<TicketScopeState>,
+    quotas: TicketQuotaState,
+    cursor_offsets: BTreeMap<String, u64>,
+}
+
+impl TicketUsage {
+    fn from_claims(
+        claims: &TicketClaims,
+        limits: crate::generated::TicketLimits,
+        now_ms: u64,
+    ) -> Result<Self, TicketClaimError> {
+        if claims.scopes.len() > limits.max_scopes as usize {
+            return Err(TicketClaimError::ScopeCount {
+                count: claims.scopes.len(),
+                max: limits.max_scopes,
+            });
+        }
+        let mut scopes = Vec::with_capacity(claims.scopes.len());
+        for scope in &claims.scopes {
+            let path = scope.path.trim().to_owned();
+            if path.len() > limits.max_scope_path_len as usize
+                || (!path.is_empty() && !path.starts_with('/'))
+            {
+                return Err(TicketClaimError::ScopePath {
+                    path,
+                    max_len: limits.max_scope_path_len,
+                });
+            }
+            if limits.max_scope_rate_per_s > 0 && scope.rate_per_s > limits.max_scope_rate_per_s {
+                return Err(TicketClaimError::ScopeRate {
+                    rate: scope.rate_per_s,
+                    max: limits.max_scope_rate_per_s,
+                });
+            }
+            let components = split_scope_path(&path, limits.max_scope_path_len)?;
+            let rate_limit = (scope.rate_per_s > 0).then_some(scope.rate_per_s);
+            scopes.push(TicketScopeState {
+                path: components,
+                verb: scope.verb,
+                rate_limit,
+                window_start_ms: now_ms,
+                window_count: 0,
+            });
+        }
+        let quotas = resolve_quotas(claims.quotas, limits)?;
+        Ok(Self {
+            scopes,
+            quotas,
+            cursor_offsets: BTreeMap::new(),
+        })
+    }
+
+    fn has_enforcement(&self) -> bool {
+        !self.scopes.is_empty() || self.quotas.has_limits()
+    }
+
+    fn check_scope(
+        &mut self,
+        path: &[String],
+        verb: TicketVerb,
+        allow_ancestor: bool,
+        now_ms: u64,
+    ) -> Result<(), TicketDeny> {
+        if self.scopes.is_empty() {
+            return Ok(());
+        }
+        let Some(idx) = self.best_scope_index(path, verb, allow_ancestor) else {
+            return Err(TicketDeny::Scope);
+        };
+        self.scopes[idx].check_rate(now_ms)
+    }
+
+    fn check_bandwidth(&self, requested: u64) -> Result<(), TicketDeny> {
+        self.quotas.check_bandwidth(requested)
+    }
+
+    fn consume_bandwidth(&mut self, consumed: u64) {
+        self.quotas.consume_bandwidth(consumed);
+    }
+
+    fn check_cursor(&self, path_key: &str, offset: u64) -> Result<CursorCheck, TicketDeny> {
+        let last = self.cursor_offsets.get(path_key).copied();
+        let is_resume = last.map_or(false, |last| offset < last);
+        self.quotas.check_cursor(is_resume)?;
+        Ok(CursorCheck { is_resume })
+    }
+
+    fn record_cursor(&mut self, path_key: String, offset: u64, len: usize, check: CursorCheck) {
+        let next = offset.saturating_add(len as u64);
+        self.cursor_offsets.insert(path_key, next);
+        self.quotas.consume_cursor(check.is_resume);
+    }
+
+    fn bandwidth_limit(&self) -> Option<u64> {
+        self.quotas.bandwidth_limit()
+    }
+
+    fn cursor_resume_limit(&self) -> Option<u32> {
+        self.quotas.cursor_resume_limit()
+    }
+
+    fn cursor_advance_limit(&self) -> Option<u32> {
+        self.quotas.cursor_advance_limit()
+    }
+
+    fn best_scope_index(
+        &self,
+        path: &[String],
+        verb: TicketVerb,
+        allow_ancestor: bool,
+    ) -> Option<usize> {
+        let mut best: Option<(usize, usize)> = None;
+        for (idx, scope) in self.scopes.iter().enumerate() {
+            if !scope.allows_verb(verb) {
+                continue;
+            }
+            if !scope.matches_path(path, allow_ancestor) {
+                continue;
+            }
+            let match_len = scope.path.len();
+            if best.map_or(true, |(_, best_len)| match_len > best_len) {
+                best = Some((idx, match_len));
+            }
+        }
+        best.map(|(idx, _)| idx)
+    }
+}
+
+fn split_scope_path(path: &str, max_len: u16) -> Result<Vec<String>, TicketClaimError> {
+    if path.is_empty() || path == "/" {
+        return Ok(Vec::new());
+    }
+    let components: Vec<String> = path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if components.iter().any(|segment| segment == "..") {
+        return Err(TicketClaimError::ScopePath {
+            path: path.to_owned(),
+            max_len,
+        });
+    }
+    Ok(components)
+}
+
+fn split_request_path(path: &str) -> Option<Vec<String>> {
+    if path.is_empty() {
+        return Some(Vec::new());
+    }
+    if !path.starts_with('/') {
+        return None;
+    }
+    let components: Vec<String> = path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if components.iter().any(|segment| segment == "..") {
+        return None;
+    }
+    Some(components)
+}
+
+fn resolve_quotas(
+    quotas: TicketQuotas,
+    limits: crate::generated::TicketLimits,
+) -> Result<TicketQuotaState, TicketClaimError> {
+    let bandwidth_limit = resolve_quota_u64(
+        quotas.bandwidth_bytes,
+        limits.bandwidth_bytes,
+        |value, max| TicketClaimError::Bandwidth { value, max },
+    )?;
+    let cursor_resume_limit = resolve_quota_u32(
+        quotas.cursor_resumes,
+        limits.cursor_resumes,
+        |value, max| TicketClaimError::CursorResumes { value, max },
+    )?;
+    let cursor_advance_limit = resolve_quota_u32(
+        quotas.cursor_advances,
+        limits.cursor_advances,
+        |value, max| TicketClaimError::CursorAdvances { value, max },
+    )?;
+    Ok(TicketQuotaState {
+        bandwidth_limit,
+        bandwidth_remaining: bandwidth_limit,
+        cursor_resume_limit,
+        cursor_resume_remaining: cursor_resume_limit,
+        cursor_advance_limit,
+        cursor_advance_remaining: cursor_advance_limit,
+    })
+}
+
+fn resolve_quota_u64<F>(
+    value: Option<u64>,
+    max: u64,
+    err: F,
+) -> Result<Option<u64>, TicketClaimError>
+where
+    F: FnOnce(u64, u64) -> TicketClaimError,
+{
+    match value {
+        Some(value) => {
+            if max > 0 && value > max {
+                return Err(err(value, max));
+            }
+            Ok(Some(value))
+        }
+        None => Ok((max > 0).then_some(max)),
+    }
+}
+
+fn resolve_quota_u32<F>(
+    value: Option<u32>,
+    max: u32,
+    err: F,
+) -> Result<Option<u32>, TicketClaimError>
+where
+    F: FnOnce(u32, u32) -> TicketClaimError,
+{
+    match value {
+        Some(value) => {
+            if max > 0 && value > max {
+                return Err(err(value, max));
+            }
+            Ok(Some(value))
+        }
+        None => Ok((max > 0).then_some(max)),
+    }
+}
+
+fn ticket_verb_label(verb: TicketVerb) -> &'static str {
+    match verb {
+        TicketVerb::Read => "read",
+        TicketVerb::Write => "write",
+        TicketVerb::ReadWrite => "read-write",
+    }
+}
+
+fn ticket_deny_reason(deny: TicketDeny) -> &'static str {
+    match deny {
+        TicketDeny::Scope => "scope",
+        TicketDeny::Rate { .. } => "rate",
+        TicketDeny::Bandwidth { .. } => "bandwidth",
+        TicketDeny::CursorResume { .. } => "cursor-resume",
+        TicketDeny::CursorAdvance { .. } => "cursor-advance",
+    }
+}
+
+fn is_telemetry_path(path: &str) -> bool {
+    path.ends_with("/telemetry")
+}
+
 /// Snapshot of event pump metrics used for diagnostics.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PumpMetrics {
@@ -317,6 +761,10 @@ pub struct PumpMetrics {
     pub denied_commands: u64,
     /// Commands executed successfully.
     pub accepted_commands: u64,
+    /// UI-oriented reads (tail/cat) accepted by the console.
+    pub ui_reads: u64,
+    /// UI-oriented denials (unauthenticated reads).
+    pub ui_denies: u64,
     /// Timer ticks processed.
     pub timer_ticks: u64,
     #[cfg(feature = "kernel")]
@@ -407,6 +855,26 @@ enum ConsoleInputSource {
     Net,
 }
 
+#[cfg(feature = "kernel")]
+#[derive(Debug)]
+struct PendingCursor {
+    path_key: String,
+    offset: u64,
+    len: usize,
+    check: CursorCheck,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Debug)]
+struct PendingStream {
+    lines: HeaplessVec<
+        HeaplessString<DEFAULT_LINE_CAPACITY>,
+        { log_buffer::LOG_SNAPSHOT_LINES },
+    >,
+    bandwidth_bytes: u64,
+    cursor: Option<PendingCursor>,
+}
+
 pub struct EventPump<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>
 where
     D: SerialDriver,
@@ -423,6 +891,9 @@ where
     metrics: PumpMetrics,
     now_ms: u64,
     session: Option<SessionRole>,
+    session_role: Option<Role>,
+    session_ticket: Option<String>,
+    ticket_usage: Option<TicketUsage>,
     session_id: Option<u64>,
     session_origin: Option<ConsoleInputSource>,
     next_session_id: u64,
@@ -430,6 +901,8 @@ where
     stream_end_pending: bool,
     tail_active: bool,
     throttle: AuthThrottle,
+    #[cfg(feature = "kernel")]
+    pending_stream: Option<PendingStream>,
     #[cfg(feature = "net-console")]
     net: Option<&'a mut dyn NetPoller>,
     #[cfg(feature = "net-console")]
@@ -490,6 +963,9 @@ where
             metrics: PumpMetrics::default(),
             now_ms: 0,
             session: None,
+            session_role: None,
+            session_ticket: None,
+            ticket_usage: None,
             session_id: None,
             session_origin: None,
             next_session_id: 1,
@@ -497,6 +973,8 @@ where
             stream_end_pending: false,
             tail_active: false,
             throttle: AuthThrottle::default(),
+            #[cfg(feature = "kernel")]
+            pending_stream: None,
             #[cfg(feature = "net-console")]
             net: None,
             #[cfg(feature = "net-console")]
@@ -1095,6 +1573,7 @@ where
     }
 
     fn emit_auth_failure(&mut self, verb: &str) {
+        self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
         self.emit_ack_err(verb, Some("reason=unauthenticated"));
     }
 
@@ -1413,18 +1892,66 @@ where
             }
             Command::Tail { path } => {
                 if self.ensure_authenticated(SessionRole::Worker) {
-                    let message = format_message(format_args!("console: tail {}", path.as_str()));
-                    self.audit.info(message.as_str());
-                    self.metrics.accepted_commands += 1;
-                    let detail = format_message(format_args!("path={}", path.as_str()));
-                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
-                    self.stream_end_pending = true;
-                    self.tail_active = true;
-                    let sid = self.session_id.unwrap_or(0);
-                    self.audit_tail_start(sid, path.as_str());
-                    #[cfg(feature = "kernel")]
-                    {
-                        forwarded = true;
+                    let path_str = path.as_str();
+                    if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Read) {
+                        self.record_ticket_denial(path_str, TicketVerb::Read, denial);
+                        self.emit_ticket_denied(verb_label, Some(path_str), denial);
+                        cmd_status = "err";
+                    } else {
+                        #[cfg(feature = "kernel")]
+                        let mut stream_bytes = 0u64;
+                        #[cfg(not(feature = "kernel"))]
+                        let stream_bytes = 0u64;
+                        #[cfg(feature = "kernel")]
+                        let mut pending_stream: Option<PendingStream> = None;
+                        #[cfg(feature = "kernel")]
+                        {
+                            if path_str == "/log/queen.log" {
+                                let lines = log_buffer::snapshot_lines::<
+                                    DEFAULT_LINE_CAPACITY,
+                                    { log_buffer::LOG_SNAPSHOT_LINES },
+                                >();
+                                stream_bytes = lines.iter().map(|line| line.len() as u64).sum();
+                                pending_stream = Some(PendingStream {
+                                    lines,
+                                    bandwidth_bytes: stream_bytes,
+                                    cursor: None,
+                                });
+                            } else if path_str == "/proc/ingest/watch" {
+                                if let Some(bridge) = self.ninedoor.as_mut() {
+                                    let lines = bridge
+                                        .ingest_watch_lines(self.now_ms, &mut *self.audit)
+                                        .unwrap_or_else(|_| HeaplessVec::new());
+                                    stream_bytes = lines.iter().map(|line| line.len() as u64).sum();
+                                    pending_stream = Some(PendingStream {
+                                        lines,
+                                        bandwidth_bytes: stream_bytes,
+                                        cursor: None,
+                                    });
+                                }
+                            }
+                        }
+                        if let Err(denial) = self.check_ticket_bandwidth(stream_bytes) {
+                            self.record_ticket_denial(path_str, TicketVerb::Read, denial);
+                            self.emit_ticket_denied(verb_label, Some(path_str), denial);
+                            cmd_status = "err";
+                        } else {
+                            let message = format_message(format_args!("console: tail {}", path_str));
+                            self.audit.info(message.as_str());
+                            self.metrics.accepted_commands += 1;
+                            self.metrics.ui_reads = self.metrics.ui_reads.saturating_add(1);
+                            let detail = format_message(format_args!("path={}", path_str));
+                            self.emit_ack_ok(verb_label, Some(detail.as_str()));
+                            self.stream_end_pending = true;
+                            self.tail_active = true;
+                            let sid = self.session_id.unwrap_or(0);
+                            self.audit_tail_start(sid, path_str);
+                            #[cfg(feature = "kernel")]
+                            {
+                                self.pending_stream = pending_stream;
+                                forwarded = true;
+                            }
+                        }
                     }
                 } else {
                     cmd_status = "err";
@@ -1433,199 +1960,266 @@ where
             }
             Command::Cat { path } => {
                 if self.ensure_authenticated(SessionRole::Worker) {
-                    let message = format_message(format_args!("console: cat {}", path.as_str()));
-                    self.audit.info(message.as_str());
-                    self.metrics.accepted_commands += 1;
-                    #[cfg(feature = "kernel")]
-                    {
-                        if let Some(bridge_ref) = self.ninedoor.as_mut() {
-                            match bridge_ref.cat(path.as_str()) {
-                                Ok(lines) => {
-                                    let summary_storage: Option<
-                                        HeaplessVec<
-                                            HeaplessString<DEFAULT_LINE_CAPACITY>,
-                                            {
-                                                log_buffer::LOG_SNAPSHOT_LINES
-                                                    + log_buffer::LOG_USER_SNAPSHOT_LINES
-                                            },
-                                        >,
-                                    > = if path.as_str() == "/log/queen.log" {
-                                        let user_lines = log_buffer::snapshot_user_lines::<
-                                            DEFAULT_LINE_CAPACITY,
-                                            { log_buffer::LOG_USER_SNAPSHOT_LINES },
-                                        >();
-                                        if user_lines.is_empty() {
-                                            None
+                    let path_str = path.as_str();
+                    if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Read) {
+                        self.record_ticket_denial(path_str, TicketVerb::Read, denial);
+                        self.emit_ticket_denied(verb_label, Some(path_str), denial);
+                        cmd_status = "err";
+                    } else {
+                        let message = format_message(format_args!("console: cat {}", path_str));
+                        self.audit.info(message.as_str());
+                        self.metrics.accepted_commands += 1;
+                        #[cfg(feature = "kernel")]
+                        {
+                            if let Some(bridge_ref) = self.ninedoor.as_mut() {
+                                match bridge_ref.cat(path_str) {
+                                    Ok(lines) => {
+                                        let data_bytes =
+                                            lines.iter().map(|line| line.len() as u64).sum();
+                                        if let Err(denial) = self.check_ticket_bandwidth(data_bytes) {
+                                            self.record_ticket_denial(
+                                                path_str,
+                                                TicketVerb::Read,
+                                                denial,
+                                            );
+                                            self.emit_ticket_denied(
+                                                verb_label,
+                                                Some(path_str),
+                                                denial,
+                                            );
+                                            cmd_status = "err";
                                         } else {
-                                            let mut merged: HeaplessVec<
-                                                HeaplessString<DEFAULT_LINE_CAPACITY>,
-                                                {
-                                                    log_buffer::LOG_SNAPSHOT_LINES
-                                                        + log_buffer::LOG_USER_SNAPSHOT_LINES
-                                                },
-                                            > = HeaplessVec::new();
-                                            for user_line in user_lines.iter() {
-                                                let _ = merged.push(user_line.clone());
-                                            }
-                                            let mut last_user_idx: Option<usize> = None;
-                                            for (idx, line) in lines.iter().enumerate() {
-                                                if user_lines
-                                                    .iter()
-                                                    .any(|user_line| user_line.as_str() == line.as_str())
-                                                {
-                                                    last_user_idx = Some(idx);
-                                                }
-                                            }
-                                            let start = last_user_idx.map(|idx| idx + 1).unwrap_or(0);
-                                            for line in lines.iter().skip(start) {
-                                                if line.as_str().starts_with('[') {
-                                                    continue;
-                                                }
-                                                if user_lines
-                                                    .iter()
-                                                    .any(|user_line| user_line.as_str() == line.as_str())
-                                                {
-                                                    continue;
-                                                }
-                                                let _ = merged.push(line.clone());
-                                            }
-                                            Some(merged)
-                                        }
-                                    } else {
-                                        None
-                                    };
-                                    // Prefer user echo lines while also surfacing newer audit entries.
-                                    let summary_lines: &[HeaplessString<DEFAULT_LINE_CAPACITY>] =
-                                        summary_storage
-                                            .as_ref()
-                                            .map(|lines| lines.as_slice())
-                                            .unwrap_or(lines.as_slice());
-                                    let mut summary: HeaplessString<128> = HeaplessString::new();
-                                    let mut selected: HeaplessVec<
-                                        usize,
-                                        { log_buffer::LOG_SNAPSHOT_LINES },
-                                    > = HeaplessVec::new();
-                                    let mut total_len = 0usize;
-                                    let max_line_len = summary.capacity() / 2;
-                                    let mut prefer_user_lines = true;
-                                    for _pass in 0..2 {
-                                        for (idx, line) in summary_lines.iter().enumerate().rev() {
-                                            if prefer_user_lines && line.as_str().starts_with('[') {
-                                                continue;
-                                            }
-                                            let line_len = line.len();
-                                            if line_len > max_line_len {
-                                                continue;
-                                            }
-                                            let sep = if total_len == 0 { 0 } else { 1 };
-                                            if line_len
-                                                .saturating_add(sep)
-                                                .saturating_add(total_len)
-                                                > summary.capacity()
-                                            {
-                                                continue;
-                                            }
-                                            total_len = total_len
-                                                .saturating_add(line_len)
-                                                .saturating_add(sep);
-                                            if selected.push(idx).is_err() {
-                                                break;
-                                            }
-                                        }
-                                        if !selected.is_empty() || !prefer_user_lines {
-                                            break;
-                                        }
-                                        selected.clear();
-                                        total_len = 0;
-                                        prefer_user_lines = false;
-                                    }
-                                    if selected.is_empty() && !summary_lines.is_empty() {
-                                        if let Some(line) = summary_lines.last() {
-                                            for ch in line.as_str().chars() {
-                                                if summary.push(ch).is_err() {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        for (pos, idx) in selected.iter().rev().enumerate() {
-                                            if pos > 0 {
-                                                if summary.push('|').is_err() {
-                                                    break;
-                                                }
-                                            }
-                                            if let Some(line) = summary_lines.get(*idx) {
-                                                if summary.push_str(line.as_str()).is_err() {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if path.as_str().starts_with("/updates/")
-                                        || path.as_str().starts_with("/models/")
-                                    {
-                                        if let Some(line) = summary_lines.first() {
-                                            if line.as_str().starts_with("b64:") {
-                                                summary.clear();
-                                                for ch in line.as_str().chars() {
-                                                    if summary.push(ch).is_err() {
+                                            let cursor_check =
+                                                match self.check_ticket_cursor(path_str, 0) {
+                                                    Ok(check) => check,
+                                                    Err(denial) => {
+                                                        self.record_ticket_denial(
+                                                            path_str,
+                                                            TicketVerb::Read,
+                                                            denial,
+                                                        );
+                                                        self.emit_ticket_denied(
+                                                            verb_label,
+                                                            Some(path_str),
+                                                            denial,
+                                                        );
+                                                        cmd_status = "err";
+                                                        None
+                                                    }
+                                                };
+                                            if cmd_status != "err" {
+                                                let summary_storage: Option<
+                                                    HeaplessVec<
+                                                        HeaplessString<DEFAULT_LINE_CAPACITY>,
+                                                        {
+                                                            log_buffer::LOG_SNAPSHOT_LINES
+                                                                + log_buffer::LOG_USER_SNAPSHOT_LINES
+                                                        },
+                                                    >,
+                                                > = if path.as_str() == "/log/queen.log" {
+                                                    let user_lines = log_buffer::snapshot_user_lines::<
+                                                        DEFAULT_LINE_CAPACITY,
+                                                        { log_buffer::LOG_USER_SNAPSHOT_LINES },
+                                                    >();
+                                                    if user_lines.is_empty() {
+                                                        None
+                                                    } else {
+                                                        let mut merged: HeaplessVec<
+                                                            HeaplessString<DEFAULT_LINE_CAPACITY>,
+                                                            {
+                                                                log_buffer::LOG_SNAPSHOT_LINES
+                                                                    + log_buffer::LOG_USER_SNAPSHOT_LINES
+                                                            },
+                                                        > = HeaplessVec::new();
+                                                        for user_line in user_lines.iter() {
+                                                            let _ = merged.push(user_line.clone());
+                                                        }
+                                                        let mut last_user_idx: Option<usize> = None;
+                                                        for (idx, line) in lines.iter().enumerate() {
+                                                            if user_lines
+                                                                .iter()
+                                                                .any(|user_line| {
+                                                                    user_line.as_str() == line.as_str()
+                                                                })
+                                                            {
+                                                                last_user_idx = Some(idx);
+                                                            }
+                                                        }
+                                                        let start = last_user_idx
+                                                            .map(|idx| idx + 1)
+                                                            .unwrap_or(0);
+                                                        for line in lines.iter().skip(start) {
+                                                            if line.as_str().starts_with('[') {
+                                                                continue;
+                                                            }
+                                                            if user_lines
+                                                                .iter()
+                                                                .any(|user_line| {
+                                                                    user_line.as_str() == line.as_str()
+                                                                })
+                                                            {
+                                                                continue;
+                                                            }
+                                                            let _ = merged.push(line.clone());
+                                                        }
+                                                        Some(merged)
+                                                    }
+                                                } else {
+                                                    None
+                                                };
+                                                // Prefer user echo lines while also surfacing newer audit entries.
+                                                let summary_lines: &[HeaplessString<DEFAULT_LINE_CAPACITY>] =
+                                                    summary_storage
+                                                        .as_ref()
+                                                        .map(|lines| lines.as_slice())
+                                                        .unwrap_or(lines.as_slice());
+                                                let mut summary: HeaplessString<128> =
+                                                    HeaplessString::new();
+                                                let mut selected: HeaplessVec<
+                                                    usize,
+                                                    { log_buffer::LOG_SNAPSHOT_LINES },
+                                                > = HeaplessVec::new();
+                                                let mut total_len = 0usize;
+                                                let max_line_len = summary.capacity() / 2;
+                                                let mut prefer_user_lines = true;
+                                                for _pass in 0..2 {
+                                                    for (idx, line) in
+                                                        summary_lines.iter().enumerate().rev()
+                                                    {
+                                                        if prefer_user_lines
+                                                            && line.as_str().starts_with('[')
+                                                        {
+                                                            continue;
+                                                        }
+                                                        let line_len = line.len();
+                                                        if line_len > max_line_len {
+                                                            continue;
+                                                        }
+                                                        let sep = if total_len == 0 { 0 } else { 1 };
+                                                        if line_len
+                                                            .saturating_add(sep)
+                                                            .saturating_add(total_len)
+                                                            > summary.capacity()
+                                                        {
+                                                            continue;
+                                                        }
+                                                        total_len = total_len
+                                                            .saturating_add(line_len)
+                                                            .saturating_add(sep);
+                                                        if selected.push(idx).is_err() {
+                                                            break;
+                                                        }
+                                                    }
+                                                    if !selected.is_empty() || !prefer_user_lines {
                                                         break;
                                                     }
+                                                    selected.clear();
+                                                    total_len = 0;
+                                                    prefer_user_lines = false;
                                                 }
+                                                if selected.is_empty() && !summary_lines.is_empty() {
+                                                    if let Some(line) = summary_lines.last() {
+                                                        for ch in line.as_str().chars() {
+                                                            if summary.push(ch).is_err() {
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                } else {
+                                                    for (pos, idx) in selected.iter().rev().enumerate()
+                                                    {
+                                                        if pos > 0 {
+                                                            if summary.push('|').is_err() {
+                                                                break;
+                                                            }
+                                                        }
+                                                        if let Some(line) = summary_lines.get(*idx) {
+                                                            if summary.push_str(line.as_str()).is_err() {
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if path.as_str().starts_with("/updates/")
+                                                    || path.as_str().starts_with("/models/")
+                                                {
+                                                    if let Some(line) = summary_lines.first() {
+                                                        if line.as_str().starts_with("b64:") {
+                                                            summary.clear();
+                                                            for ch in line.as_str().chars() {
+                                                                if summary.push(ch).is_err() {
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                let max_summary_len = 128usize.saturating_sub(
+                                                    "path=".len() + path.as_str().len() + " data=".len(),
+                                                );
+                                                if summary.len() > max_summary_len {
+                                                    let mut trimmed: HeaplessString<128> =
+                                                        HeaplessString::new();
+                                                    for ch in summary.as_str().chars() {
+                                                        if trimmed.len() >= max_summary_len {
+                                                            break;
+                                                        }
+                                                        if trimmed.push(ch).is_err() {
+                                                            break;
+                                                        }
+                                                    }
+                                                    summary = trimmed;
+                                                }
+                                                let detail = format_message(format_args!(
+                                                    "path={} data={}",
+                                                    path_str,
+                                                    summary.as_str()
+                                                ));
+                                                self.emit_ack_ok(verb_label, Some(detail.as_str()));
+                                                for line in lines {
+                                                    self.emit_console_line(line.as_str());
+                                                }
+                                                self.metrics.ui_reads =
+                                                    self.metrics.ui_reads.saturating_add(1);
+                                                self.consume_ticket_bandwidth(data_bytes);
+                                                if let Some(check) = cursor_check {
+                                                    self.record_ticket_cursor(
+                                                        path_str.to_owned(),
+                                                        0,
+                                                        data_bytes as usize,
+                                                        check,
+                                                    );
+                                                }
+                                                self.stream_end_pending = true;
                                             }
                                         }
                                     }
-                                    let max_summary_len = 128usize.saturating_sub(
-                                        "path=".len() + path.as_str().len() + " data=".len(),
-                                    );
-                                    if summary.len() > max_summary_len {
-                                        let mut trimmed: HeaplessString<128> = HeaplessString::new();
-                                        for ch in summary.as_str().chars() {
-                                            if trimmed.len() >= max_summary_len {
-                                                break;
-                                            }
-                                            if trimmed.push(ch).is_err() {
-                                                break;
-                                            }
-                                        }
-                                        summary = trimmed;
+                                    Err(err) => {
+                                        let detail = format_message(format_args!(
+                                            "reason=ninedoor-error error={err}"
+                                        ));
+                                        cmd_status = "err";
+                                        let sid = self.session_id.unwrap_or(0);
+                                        let err_msg = format_message(format_args!("{err}"));
+                                        self.audit_ninedoor_err(
+                                            sid,
+                                            "CAT",
+                                            path_str,
+                                            err_msg.as_str(),
+                                        );
+                                        self.emit_ack_err(verb_label, Some(detail.as_str()));
                                     }
-                                    let detail = format_message(format_args!(
-                                        "path={} data={}",
-                                        path.as_str(),
-                                        summary.as_str()
-                                    ));
-                                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
-                                    for line in lines {
-                                        self.emit_console_line(line.as_str());
-                                    }
-                                    self.stream_end_pending = true;
                                 }
-                                Err(err) => {
-                                    let detail = format_message(format_args!(
-                                        "reason=ninedoor-error error={err}"
-                                    ));
-                                    cmd_status = "err";
-                                    let sid = self.session_id.unwrap_or(0);
-                                    let err_msg = format_message(format_args!("{err}"));
-                                    self.audit_ninedoor_err(
-                                        sid,
-                                        "CAT",
-                                        path.as_str(),
-                                        err_msg.as_str(),
-                                    );
-                                    self.emit_ack_err(verb_label, Some(detail.as_str()));
-                                }
+                            } else {
+                                cmd_status = "err";
+                                self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
                             }
-                        } else {
+                        }
+                        #[cfg(not(feature = "kernel"))]
+                        {
                             cmd_status = "err";
                             self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
                         }
-                    }
-                    #[cfg(not(feature = "kernel"))]
-                    {
-                        cmd_status = "err";
-                        self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
                     }
                 } else {
                     cmd_status = "err";
@@ -1634,50 +2228,74 @@ where
             }
             Command::Ls { path } => {
                 if self.ensure_authenticated(SessionRole::Worker) {
-                    let message = format_message(format_args!("console: ls {}", path.as_str()));
-                    self.audit.info(message.as_str());
-                    self.metrics.accepted_commands += 1;
-                    #[cfg(feature = "kernel")]
-                    {
-                        if let Some(bridge_ref) = self.ninedoor.as_mut() {
-                            match bridge_ref.list(path.as_str()) {
-                                Ok(entries) => {
-                                    let detail = format_message(format_args!(
-                                        "path={} entries={}",
-                                        path.as_str(),
-                                        entries.len()
-                                    ));
-                                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
-                                    for entry in entries {
-                                        self.emit_console_line(entry.as_str());
+                    let path_str = path.as_str();
+                    if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Read) {
+                        self.record_ticket_denial(path_str, TicketVerb::Read, denial);
+                        self.emit_ticket_denied(verb_label, Some(path_str), denial);
+                        cmd_status = "err";
+                    } else {
+                        let message = format_message(format_args!("console: ls {}", path_str));
+                        self.audit.info(message.as_str());
+                        self.metrics.accepted_commands += 1;
+                        #[cfg(feature = "kernel")]
+                        {
+                            if let Some(bridge_ref) = self.ninedoor.as_mut() {
+                                match bridge_ref.list(path_str) {
+                                    Ok(entries) => {
+                                        let data_bytes =
+                                            entries.iter().map(|entry| entry.len() as u64).sum();
+                                        if let Err(denial) = self.check_ticket_bandwidth(data_bytes) {
+                                            self.record_ticket_denial(
+                                                path_str,
+                                                TicketVerb::Read,
+                                                denial,
+                                            );
+                                            self.emit_ticket_denied(
+                                                verb_label,
+                                                Some(path_str),
+                                                denial,
+                                            );
+                                            cmd_status = "err";
+                                        } else {
+                                            let detail = format_message(format_args!(
+                                                "path={} entries={}",
+                                                path_str,
+                                                entries.len()
+                                            ));
+                                            self.emit_ack_ok(verb_label, Some(detail.as_str()));
+                                            for entry in entries {
+                                                self.emit_console_line(entry.as_str());
+                                            }
+                                            self.consume_ticket_bandwidth(data_bytes);
+                                            self.stream_end_pending = true;
+                                        }
                                     }
-                                    self.stream_end_pending = true;
+                                    Err(err) => {
+                                        let detail = format_message(format_args!(
+                                            "reason=ninedoor-error error={err}"
+                                        ));
+                                        cmd_status = "err";
+                                        let sid = self.session_id.unwrap_or(0);
+                                        let err_msg = format_message(format_args!("{err}"));
+                                        self.audit_ninedoor_err(
+                                            sid,
+                                            "LS",
+                                            path_str,
+                                            err_msg.as_str(),
+                                        );
+                                        self.emit_ack_err(verb_label, Some(detail.as_str()));
+                                    }
                                 }
-                                Err(err) => {
-                                    let detail = format_message(format_args!(
-                                        "reason=ninedoor-error error={err}"
-                                    ));
-                                    cmd_status = "err";
-                                    let sid = self.session_id.unwrap_or(0);
-                                    let err_msg = format_message(format_args!("{err}"));
-                                    self.audit_ninedoor_err(
-                                        sid,
-                                        "LS",
-                                        path.as_str(),
-                                        err_msg.as_str(),
-                                    );
-                                    self.emit_ack_err(verb_label, Some(detail.as_str()));
-                                }
+                            } else {
+                                cmd_status = "err";
+                                self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
                             }
-                        } else {
+                        }
+                        #[cfg(not(feature = "kernel"))]
+                        {
                             cmd_status = "err";
                             self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
                         }
-                    }
-                    #[cfg(not(feature = "kernel"))]
-                    {
-                        cmd_status = "err";
-                        self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
                     }
                 } else {
                     cmd_status = "err";
@@ -1686,16 +2304,50 @@ where
             }
             Command::Log => {
                 if self.ensure_authenticated(SessionRole::Queen) {
-                    self.audit.info("console: log stream start");
-                    self.metrics.accepted_commands += 1;
-                    self.emit_ack_ok(verb_label, None);
-                    self.stream_end_pending = true;
-                    self.tail_active = true;
-                    let sid = self.session_id.unwrap_or(0);
-                    self.audit_tail_start(sid, "/log/queen.log");
-                    #[cfg(feature = "kernel")]
-                    {
-                        forwarded = true;
+                    let path_str = "/log/queen.log";
+                    if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Read) {
+                        self.record_ticket_denial(path_str, TicketVerb::Read, denial);
+                        self.emit_ticket_denied(verb_label, Some(path_str), denial);
+                        cmd_status = "err";
+                    } else {
+                        #[cfg(feature = "kernel")]
+                        let mut stream_bytes = 0u64;
+                        #[cfg(not(feature = "kernel"))]
+                        let stream_bytes = 0u64;
+                        #[cfg(feature = "kernel")]
+                        let mut pending_stream: Option<PendingStream> = None;
+                        #[cfg(feature = "kernel")]
+                        {
+                            let lines = log_buffer::snapshot_lines::<
+                                DEFAULT_LINE_CAPACITY,
+                                { log_buffer::LOG_SNAPSHOT_LINES },
+                            >();
+                            stream_bytes = lines.iter().map(|line| line.len() as u64).sum();
+                            pending_stream = Some(PendingStream {
+                                lines,
+                                bandwidth_bytes: stream_bytes,
+                                cursor: None,
+                            });
+                        }
+                        if let Err(denial) = self.check_ticket_bandwidth(stream_bytes) {
+                            self.record_ticket_denial(path_str, TicketVerb::Read, denial);
+                            self.emit_ticket_denied(verb_label, Some(path_str), denial);
+                            cmd_status = "err";
+                        } else {
+                            self.audit.info("console: log stream start");
+                            self.metrics.accepted_commands += 1;
+                            self.metrics.ui_reads = self.metrics.ui_reads.saturating_add(1);
+                            self.emit_ack_ok(verb_label, None);
+                            self.stream_end_pending = true;
+                            self.tail_active = true;
+                            let sid = self.session_id.unwrap_or(0);
+                            self.audit_tail_start(sid, path_str);
+                            #[cfg(feature = "kernel")]
+                            {
+                                self.pending_stream = pending_stream;
+                                forwarded = true;
+                            }
+                        }
                     }
                 } else {
                     cmd_status = "err";
@@ -1713,51 +2365,71 @@ where
                         cmd_status = "err";
                         self.emit_ack_err(verb_label, Some("reason=denied"));
                     } else {
-                        let message = format_message(format_args!(
-                            "console: echo {} bytes={}",
-                            path_str,
-                            payload.len()
-                        ));
-                        self.audit.info(message.as_str());
-                        self.metrics.accepted_commands += 1;
-                    #[cfg(feature = "kernel")]
-                    {
-                        if let Some(bridge_ref) = self.ninedoor.as_mut() {
-                            match bridge_ref.echo(path_str, payload.as_str()) {
-                                Ok(()) => {
-                                    let detail = format_message(format_args!(
-                                        "path={} bytes={}",
-                                        path_str,
-                                        payload.len()
-                                    ));
-                                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
-                                }
-                                Err(err) => {
-                                    let detail = format_message(format_args!(
-                                        "reason=ninedoor-error error={err}"
-                                    ));
+                        if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Write)
+                        {
+                            self.record_ticket_denial(path_str, TicketVerb::Write, denial);
+                            self.emit_ticket_denied(verb_label, Some(path_str), denial);
+                            cmd_status = "err";
+                        } else if let Err(denial) =
+                            self.check_ticket_bandwidth(payload.len() as u64)
+                        {
+                            self.record_ticket_denial(path_str, TicketVerb::Write, denial);
+                            self.emit_ticket_denied(verb_label, Some(path_str), denial);
+                            cmd_status = "err";
+                        } else {
+                            let message = format_message(format_args!(
+                                "console: echo {} bytes={}",
+                                path_str,
+                                payload.len()
+                            ));
+                            self.audit.info(message.as_str());
+                            self.metrics.accepted_commands += 1;
+                            #[cfg(feature = "kernel")]
+                            {
+                                if let Some(bridge_ref) = self.ninedoor.as_mut() {
+                                    match bridge_ref.echo(path_str, payload.as_str()) {
+                                        Ok(()) => {
+                                            let detail = format_message(format_args!(
+                                                "path={} bytes={}",
+                                                path_str,
+                                                payload.len()
+                                            ));
+                                            self.emit_ack_ok(verb_label, Some(detail.as_str()));
+                                            self.consume_ticket_bandwidth(payload.len() as u64);
+                                        }
+                                        Err(err) => {
+                                            let detail = format_message(format_args!(
+                                                "reason=ninedoor-error error={err}"
+                                            ));
+                                            cmd_status = "err";
+                                            let sid = self.session_id.unwrap_or(0);
+                                            let err_msg = format_message(format_args!("{err}"));
+                                            self.audit_ninedoor_err(
+                                                sid,
+                                                "ECHO",
+                                                path.as_str(),
+                                                err_msg.as_str(),
+                                            );
+                                            self.emit_ack_err(verb_label, Some(detail.as_str()));
+                                        }
+                                    }
+                                } else {
                                     cmd_status = "err";
-                                    let sid = self.session_id.unwrap_or(0);
-                                    let err_msg = format_message(format_args!("{err}"));
-                                    self.audit_ninedoor_err(
-                                        sid,
-                                        "ECHO",
-                                        path.as_str(),
-                                        err_msg.as_str(),
+                                    self.emit_ack_err(
+                                        verb_label,
+                                        Some("reason=ninedoor-unavailable"),
                                     );
-                                    self.emit_ack_err(verb_label, Some(detail.as_str()));
                                 }
                             }
-                        } else {
-                            cmd_status = "err";
-                            self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
+                            #[cfg(not(feature = "kernel"))]
+                            {
+                                cmd_status = "err";
+                                self.emit_ack_err(
+                                    verb_label,
+                                    Some("reason=ninedoor-unavailable"),
+                                );
+                            }
                         }
-                    }
-                    #[cfg(not(feature = "kernel"))]
-                    {
-                        cmd_status = "err";
-                        self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
-                    }
                     }
                 } else {
                     cmd_status = "err";
@@ -1766,15 +2438,30 @@ where
             }
             Command::Spawn(payload) => {
                 if self.ensure_authenticated(SessionRole::Queen) {
-                    let message =
-                        format_message(format_args!("console: spawn {}", payload.as_str()));
-                    self.audit.info(message.as_str());
-                    self.metrics.accepted_commands += 1;
-                    let detail = format_message(format_args!("payload={}", payload.as_str()));
-                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
-                    #[cfg(feature = "kernel")]
+                    if let Err(denial) =
+                        self.check_ticket_scope(QUEEN_CTL_PATH, TicketVerb::Write)
                     {
-                        forwarded = true;
+                        self.record_ticket_denial(QUEEN_CTL_PATH, TicketVerb::Write, denial);
+                        self.emit_ticket_denied(verb_label, Some(QUEEN_CTL_PATH), denial);
+                        cmd_status = "err";
+                    } else if let Err(denial) =
+                        self.check_ticket_bandwidth(payload.len() as u64)
+                    {
+                        self.record_ticket_denial(QUEEN_CTL_PATH, TicketVerb::Write, denial);
+                        self.emit_ticket_denied(verb_label, Some(QUEEN_CTL_PATH), denial);
+                        cmd_status = "err";
+                    } else {
+                        let message =
+                            format_message(format_args!("console: spawn {}", payload.as_str()));
+                        self.audit.info(message.as_str());
+                        self.metrics.accepted_commands += 1;
+                        let detail = format_message(format_args!("payload={}", payload.as_str()));
+                        self.emit_ack_ok(verb_label, Some(detail.as_str()));
+                        self.consume_ticket_bandwidth(payload.len() as u64);
+                        #[cfg(feature = "kernel")]
+                        {
+                            forwarded = true;
+                        }
                     }
                 } else {
                     cmd_status = "err";
@@ -1783,14 +2470,30 @@ where
             }
             Command::Kill(ident) => {
                 if self.ensure_authenticated(SessionRole::Queen) {
-                    let message = format_message(format_args!("console: kill {}", ident.as_str()));
-                    self.audit.info(message.as_str());
-                    self.metrics.accepted_commands += 1;
-                    let detail = format_message(format_args!("id={}", ident.as_str()));
-                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
-                    #[cfg(feature = "kernel")]
+                    let payload_len =
+                        format!("{{\"kill\":\"{}\"}}", ident.as_str()).len() as u64;
+                    if let Err(denial) =
+                        self.check_ticket_scope(QUEEN_CTL_PATH, TicketVerb::Write)
                     {
-                        forwarded = true;
+                        self.record_ticket_denial(QUEEN_CTL_PATH, TicketVerb::Write, denial);
+                        self.emit_ticket_denied(verb_label, Some(QUEEN_CTL_PATH), denial);
+                        cmd_status = "err";
+                    } else if let Err(denial) = self.check_ticket_bandwidth(payload_len) {
+                        self.record_ticket_denial(QUEEN_CTL_PATH, TicketVerb::Write, denial);
+                        self.emit_ticket_denied(verb_label, Some(QUEEN_CTL_PATH), denial);
+                        cmd_status = "err";
+                    } else {
+                        let message =
+                            format_message(format_args!("console: kill {}", ident.as_str()));
+                        self.audit.info(message.as_str());
+                        self.metrics.accepted_commands += 1;
+                        let detail = format_message(format_args!("id={}", ident.as_str()));
+                        self.emit_ack_ok(verb_label, Some(detail.as_str()));
+                        self.consume_ticket_bandwidth(payload_len);
+                        #[cfg(feature = "kernel")]
+                        {
+                            forwarded = true;
+                        }
                     }
                 } else {
                     cmd_status = "err";
@@ -1803,6 +2506,7 @@ where
         if forwarded {
             if let Err(err) = self.forward_to_ninedoor(&command_clone) {
                 self.stream_end_pending = false;
+                self.pending_stream = None;
                 cmd_status = "err";
                 #[cfg(feature = "cohesix-dev")]
                 if let CommandDispatchError::Bridge { source, .. } = &err {
@@ -1838,23 +2542,38 @@ where
 
         #[cfg(feature = "kernel")]
         if result.is_ok() && self.stream_end_pending {
-            match &command_clone {
-                Command::Log => self.emit_log_snapshot(),
-                Command::Tail { path } if path.as_str() == "/log/queen.log" => {
-                    self.emit_log_snapshot();
+            if let Some(pending) = self.pending_stream.take() {
+                for line in pending.lines {
+                    self.emit_console_line(line.as_str());
                 }
-                Command::Tail { path } if path.as_str() == "/proc/ingest/watch" => {
-                    if let Some(bridge) = self.ninedoor.as_mut() {
-                        if let Ok(lines) =
-                            bridge.ingest_watch_lines(self.now_ms, &mut *self.audit)
-                        {
-                            for line in lines {
-                                self.emit_console_line(line.as_str());
+                self.consume_ticket_bandwidth(pending.bandwidth_bytes);
+                if let Some(cursor) = pending.cursor {
+                    self.record_ticket_cursor(
+                        cursor.path_key,
+                        cursor.offset,
+                        cursor.len,
+                        cursor.check,
+                    );
+                }
+            } else {
+                match &command_clone {
+                    Command::Log => self.emit_log_snapshot(),
+                    Command::Tail { path } if path.as_str() == "/log/queen.log" => {
+                        self.emit_log_snapshot();
+                    }
+                    Command::Tail { path } if path.as_str() == "/proc/ingest/watch" => {
+                        if let Some(bridge) = self.ninedoor.as_mut() {
+                            if let Ok(lines) =
+                                bridge.ingest_watch_lines(self.now_ms, &mut *self.audit)
+                            {
+                                for line in lines {
+                                    self.emit_console_line(line.as_str());
+                                }
                             }
                         }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
@@ -2016,9 +2735,16 @@ where
             self.audit_tcp_session_detach(conn_id, sid, reason);
         }
         self.session = None;
+        self.session_role = None;
+        self.session_ticket = None;
+        self.ticket_usage = None;
         self.session_id = None;
         self.session_origin = None;
         self.stream_end_pending = false;
+        #[cfg(feature = "kernel")]
+        {
+            self.pending_stream = None;
+        }
         #[cfg(feature = "kernel")]
         if let Some(bridge) = self.ninedoor.as_mut() {
             bridge.reset_session();
@@ -2153,6 +2879,135 @@ where
         }
     }
 
+    fn session_role_label(&self) -> &'static str {
+        self.session_role
+            .map(cohsh_core::role_label)
+            .unwrap_or("unauthenticated")
+    }
+
+    fn session_ticket_label(&self) -> &str {
+        self.session_ticket.as_deref().unwrap_or("none")
+    }
+
+    fn record_ticket_claim_denial(&mut self, role: Role, ticket: &str, err: &dyn fmt::Display) {
+        let role_label = cohsh_core::role_label(role);
+        let message = format!(
+            "ui-ticket outcome=deny reason=invalid-claims role={} ticket={} detail={err}",
+            role_label, ticket
+        );
+        self.audit.denied(message.as_str());
+    }
+
+    fn record_ticket_expired(&mut self, role: Role, ticket: &str, claims: &TicketClaims) {
+        let role_label = cohsh_core::role_label(role);
+        let ttl_s = claims.budget.ttl_s().unwrap_or(0);
+        let message = format!(
+            "ui-ticket outcome=deny reason=expired role={} ticket={} issued_at_ms={} ttl_s={} now_ms={}",
+            role_label,
+            ticket,
+            claims.issued_at_ms,
+            ttl_s,
+            self.now_ms
+        );
+        self.audit.denied(message.as_str());
+    }
+
+    fn record_ticket_denial(&mut self, path: &str, verb: TicketVerb, denial: TicketDeny) {
+        let path_label = if path.is_empty() { "/" } else { path };
+        let verb_label = ticket_verb_label(verb);
+        let mut message = format!(
+            "ui-ticket outcome=deny reason={} role={} ticket={} path={} verb={}",
+            ticket_deny_reason(denial),
+            self.session_role_label(),
+            self.session_ticket_label(),
+            path_label,
+            verb_label
+        );
+        match denial {
+            TicketDeny::Scope => {}
+            TicketDeny::Rate { limit_per_s } => {
+                message.push_str(&format!(
+                    " limit_per_s={limit_per_s} window_ms={TICKET_RATE_WINDOW_MS}"
+                ));
+            }
+            TicketDeny::Bandwidth {
+                limit_bytes,
+                remaining_bytes,
+                requested_bytes,
+            } => {
+                message.push_str(&format!(
+                    " limit_bytes={limit_bytes} remaining_bytes={remaining_bytes} requested_bytes={requested_bytes}"
+                ));
+            }
+            TicketDeny::CursorResume { limit } => {
+                message.push_str(&format!(" limit={limit}"));
+            }
+            TicketDeny::CursorAdvance { limit } => {
+                message.push_str(&format!(" limit={limit}"));
+            }
+        }
+        self.audit.denied(message.as_str());
+    }
+
+    fn emit_ticket_denied(&mut self, verb: &str, path: Option<&str>, denial: TicketDeny) {
+        self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+        self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
+        let reason = match denial {
+            TicketDeny::Scope => "EPERM",
+            TicketDeny::Rate { .. }
+            | TicketDeny::Bandwidth { .. }
+            | TicketDeny::CursorResume { .. }
+            | TicketDeny::CursorAdvance { .. } => "ELIMIT",
+        };
+        let detail = match path {
+            Some(path) => format_message(format_args!("path={path} reason={reason}")),
+            None => format_message(format_args!("reason={reason}")),
+        };
+        self.emit_ack_err(verb, Some(detail.as_str()));
+    }
+
+    fn check_ticket_scope(&mut self, path: &str, verb: TicketVerb) -> Result<(), TicketDeny> {
+        let Some(usage) = self.ticket_usage.as_mut() else {
+            return Ok(());
+        };
+        if usage.scopes.is_empty() {
+            return Ok(());
+        }
+        let Some(components) = split_request_path(path) else {
+            return Ok(());
+        };
+        usage.check_scope(&components, verb, false, self.now_ms)
+    }
+
+    fn check_ticket_bandwidth(&self, requested: u64) -> Result<(), TicketDeny> {
+        let Some(usage) = self.ticket_usage.as_ref() else {
+            return Ok(());
+        };
+        usage.check_bandwidth(requested)
+    }
+
+    fn consume_ticket_bandwidth(&mut self, consumed: u64) {
+        if let Some(usage) = self.ticket_usage.as_mut() {
+            usage.consume_bandwidth(consumed);
+        }
+    }
+
+    fn check_ticket_cursor(&self, path: &str, offset: u64) -> Result<Option<CursorCheck>, TicketDeny> {
+        if !is_telemetry_path(path) {
+            return Ok(None);
+        }
+        let Some(usage) = self.ticket_usage.as_ref() else {
+            return Ok(None);
+        };
+        usage.check_cursor(path, offset).map(Some)
+    }
+
+    fn record_ticket_cursor(&mut self, path: String, offset: u64, len: usize, check: CursorCheck) {
+        if let Some(usage) = self.ticket_usage.as_mut() {
+            usage.record_cursor(path, offset, len, check);
+        }
+    }
+
     fn ensure_authenticated(&mut self, minimum: SessionRole) -> bool {
         match (self.session, minimum) {
             (Some(SessionRole::Queen), _) => true,
@@ -2215,7 +3070,50 @@ where
         }
 
         if validated {
+            let mut ticket_usage = None;
+            if let Some(ticket) = ticket_str {
+                let claims = match TicketToken::decode_unverified(ticket) {
+                    Ok(claims) => claims,
+                    Err(err) => {
+                        self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+                        self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
+                        self.record_ticket_claim_denial(requested_role, ticket, &err);
+                        self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some("reason=invalid-claims"));
+                        return false;
+                    }
+                };
+                if let Some(ttl_s) = claims.budget.ttl_s() {
+                    let ttl_ms = ttl_s.saturating_mul(1_000);
+                    let expires_at_ms = claims.issued_at_ms.saturating_add(ttl_ms);
+                    if self.now_ms >= expires_at_ms {
+                        self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+                        self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
+                        self.record_ticket_expired(requested_role, ticket, &claims);
+                        self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some("reason=expired"));
+                        return false;
+                    }
+                }
+                match TicketUsage::from_claims(&claims, crate::generated::ticket_limits(), self.now_ms)
+                {
+                    Ok(usage) => {
+                        if usage.has_enforcement() {
+                            ticket_usage = Some(usage);
+                        }
+                    }
+                    Err(err) => {
+                        self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+                        self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
+                        self.record_ticket_claim_denial(requested_role, ticket, &err);
+                        self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some("reason=invalid-claims"));
+                        return false;
+                    }
+                }
+            }
+
             self.session = SessionRole::from_role(requested_role);
+            self.session_role = Some(requested_role);
+            self.session_ticket = ticket_str.map(|value| value.to_owned());
+            self.ticket_usage = ticket_usage;
             self.session_origin = Some(self.last_input_source);
             let sid = self.next_session_id;
             self.next_session_id = self.next_session_id.wrapping_add(1);
@@ -2307,6 +3205,7 @@ mod tests {
     use crate::serial::test_support::LoopbackSerial;
     use crate::serial::SerialPort;
     use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TestTimer {
         ticks: HeaplessVec<TickEvent, 8>,
@@ -2459,8 +3358,15 @@ mod tests {
             Role::WorkerLora => BudgetSpec::default_heartbeat(),
         };
         let issuer = TicketIssuer::new(secret);
-        let claims = TicketClaims::new(role, budget, None, MountSpec::empty(), 0);
+        let claims = TicketClaims::new(role, budget, None, MountSpec::empty(), unix_time_ms());
         issuer.issue(claims).unwrap().encode().unwrap()
+    }
+
+    fn unix_time_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
     }
 
     impl AuditSink for AuditLog {

@@ -9,7 +9,7 @@ use nine_door::{Clock, InProcessConnection, NineDoor, NineDoorError, ShardLayout
 use secure9p_codec::{ErrorCode, OpenMode, MAX_MSIZE};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use worker_gpu::{GpuLease, GpuWorker};
 
 fn issue_ticket(secret: &str, role: Role, subject: &str) -> String {
@@ -25,9 +25,16 @@ fn issue_ticket(secret: &str, role: Role, subject: &str) -> String {
         budget,
         Some(subject.to_owned()),
         MountSpec::empty(),
-        0,
+        unix_time_ms(),
     );
     issuer.issue(claims).unwrap().encode().unwrap()
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn shard_layout() -> ShardLayout {

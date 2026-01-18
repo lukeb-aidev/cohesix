@@ -12,7 +12,8 @@ use coh_rtc::{
     default_cohsh_policy_doc_path, default_cohsh_policy_path, default_cohsh_policy_rust_path,
     default_cohsh_ticket_policy_doc_path,
     default_doc_snippet_path, default_observability_interfaces_snippet_path,
-    default_observability_security_snippet_path, CompileOptions,
+    default_observability_security_snippet_path, default_ticket_quotas_snippet_path,
+    CompileOptions,
     default_swarmui_defaults_doc_path, default_swarmui_defaults_path,
     default_swarmui_defaults_rust_path,
 };
@@ -44,6 +45,9 @@ struct Args {
     /// Output path for the observability security snippet.
     #[arg(long, default_value_os_t = default_observability_security_snippet_path())]
     observability_security_snippet: PathBuf,
+    /// Output path for the ticket quota snippet.
+    #[arg(long, default_value_os_t = default_ticket_quotas_snippet_path())]
+    ticket_quotas_snippet: PathBuf,
     /// Output path for the CAS interfaces snippet.
     #[arg(long, default_value_os_t = default_cas_interfaces_snippet_path())]
     cas_interfaces_snippet: PathBuf,
@@ -96,6 +100,7 @@ fn main() -> Result<()> {
         doc_snippet_out: args.doc_snippet,
         observability_interfaces_snippet_out: args.observability_interfaces_snippet,
         observability_security_snippet_out: args.observability_security_snippet,
+        ticket_quotas_snippet_out: args.ticket_quotas_snippet,
         cas_interfaces_snippet_out: args.cas_interfaces_snippet,
         cas_security_snippet_out: args.cas_security_snippet,
         cbor_snippet_out: args.cbor_snippet,
