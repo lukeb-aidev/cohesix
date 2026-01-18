@@ -2311,24 +2311,21 @@ where
                         cmd_status = "err";
                     } else {
                         #[cfg(feature = "kernel")]
-                        let mut stream_bytes = 0u64;
-                        #[cfg(not(feature = "kernel"))]
-                        let stream_bytes = 0u64;
-                        #[cfg(feature = "kernel")]
-                        let mut pending_stream: Option<PendingStream> = None;
-                        #[cfg(feature = "kernel")]
-                        {
+                        let (stream_bytes, pending_stream) = {
                             let lines = log_buffer::snapshot_lines::<
                                 DEFAULT_LINE_CAPACITY,
                                 { log_buffer::LOG_SNAPSHOT_LINES },
                             >();
-                            stream_bytes = lines.iter().map(|line| line.len() as u64).sum();
-                            pending_stream = Some(PendingStream {
+                            let stream_bytes = lines.iter().map(|line| line.len() as u64).sum();
+                            let pending_stream = Some(PendingStream {
                                 lines,
                                 bandwidth_bytes: stream_bytes,
                                 cursor: None,
                             });
-                        }
+                            (stream_bytes, pending_stream)
+                        };
+                        #[cfg(not(feature = "kernel"))]
+                        let stream_bytes = 0u64;
                         if let Err(denial) = self.check_ticket_bandwidth(stream_bytes) {
                             self.record_ticket_denial(path_str, TicketVerb::Read, denial);
                             self.emit_ticket_denied(verb_label, Some(path_str), denial);

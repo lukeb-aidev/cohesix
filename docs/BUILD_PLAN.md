@@ -76,6 +76,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [20d](#20d) | SwarmUI Live Hive Rendering (PixiJS, GPU-First | Complete |
 | [20e](#20e) | CLI/UI Convergence Tests | Complete |
 | [20f](#20f) | UI Security Hardening (Tickets & Quotas) | Complete |
+| [20f1](#20f1) | SwarmUI Host Tool Packaging + Tauri API Fix | Complete |
 | [20g](#20g) | Deterministic Snapshot & Replay (UI Testing) | Pending |
 | [21](#21) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Pending |
@@ -2099,6 +2100,83 @@ Checks:
   - ERR EPERM/ELIMIT identical across transports; metrics observed in /proc/ingest/watch.
 Deliverables:
   - Regression outputs captured; manifest hash noted in docs/USERLAND_AND_CLI.md.
+```
+
+---
+
+## Milestone 20f1 — SwarmUI Host Tool Packaging + Tauri API Fix <a id="20f1"></a>
+[Milestones](#Milestones)
+
+**Status:** Complete — SwarmUI is packaged in cohesix-dev host tools, the Tauri invoke bridge is resilient, and a clean build is warning-free.
+
+**Why now (host tools):** SwarmUI must be buildable and runnable from the standard `cohesix-dev` profile, and its frontend must reliably bind to the Tauri backend without changing protocol semantics.
+
+**Goal**
+Ensure SwarmUI is packaged with the `cohesix-dev` host tool set and fix the Tauri invoke bridge so the UI connects without altering 9P/console grammar.
+
+**Deliverables**
+- `cohesix-dev` host tool build includes SwarmUI in `out/*/host-tools`.
+- SwarmUI frontend uses the supported Tauri invoke bridge (no "Tauri API unavailable").
+- Clean `cohesix-dev` build emits no root-task warnings.
+- Build from a clean `out/` and `target/` completes successfully.
+
+**Commands (Mac ARM64)**
+```bash
+rm -rf out target
+SEL4_BUILD_DIR=$HOME/seL4/build \
+./scripts/cohesix-build-run.sh \
+  --sel4-build "$HOME/seL4/build" \
+  --out-dir out/cohesix \
+  --profile release \
+  --root-task-features cohesix-dev \
+  --cargo-target aarch64-unknown-none \
+  --raw-qemu \
+  --transport tcp
+```
+
+**Checks (DoD)**
+- SwarmUI binary is present in `out/cohesix/host-tools`.
+- SwarmUI connects without `ERR CONNECT Tauri API unavailable`.
+- No changes to ACK/ERR/END grammar or ordering.
+
+**Task Breakdown**
+```
+Title/ID: m20f1-swarmui-packaging
+Goal: Package SwarmUI with the cohesix-dev host tool set.
+Inputs: scripts/cohesix-build-run.sh, apps/swarmui/Cargo.toml.
+Changes:
+  - scripts/cohesix-build-run.sh — include swarmui when cohesix-dev is enabled.
+Commands:
+  - rm -rf out target
+  - ./scripts/cohesix-build-run.sh --root-task-features cohesix-dev ...
+Checks:
+  - out/cohesix/host-tools/swarmui exists.
+Deliverables:
+  - Updated build script; clean build output.
+
+Title/ID: m20f1-tauri-invoke-bridge
+Goal: Fix SwarmUI invoke bridge detection for Tauri.
+Inputs: apps/swarmui/frontend/app.js.
+Changes:
+  - apps/swarmui/frontend/app.js — use supported invoke bridge.
+Commands:
+  - cargo run -p swarmui
+Checks:
+  - UI connects without "Tauri API unavailable".
+Deliverables:
+  - Updated frontend invoke path.
+
+Title/ID: m20f1-clean-build-warnings
+Goal: Eliminate root-task build warnings during cohesix-dev builds.
+Inputs: apps/root-task/src/event/mod.rs.
+Changes:
+  - apps/root-task/src/event/mod.rs — remove unused assignments in log streaming path.
+Commands:
+  - ./scripts/cohesix-build-run.sh --root-task-features cohesix-dev ...
+Checks:
+  - No warnings emitted during root-task build.
+Deliverables:
+  - Clean build with zero root-task warnings.
 ```
 
 ---

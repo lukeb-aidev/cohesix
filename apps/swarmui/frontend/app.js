@@ -9,13 +9,26 @@ const output = (id, text) => {
   node.textContent = text;
 };
 
+const resolveInvoke = () => {
+  if (window.__TAURI__?.tauri?.invoke) {
+    return window.__TAURI__.tauri.invoke.bind(window.__TAURI__.tauri);
+  }
+  if (window.__TAURI__?.invoke) {
+    return window.__TAURI__.invoke.bind(window.__TAURI__);
+  }
+  if (window.__TAURI_INVOKE__) {
+    return window.__TAURI_INVOKE__;
+  }
+  return null;
+};
+
 const invoke = async (cmd, payload) => {
-  const tauri = window.__TAURI__ && window.__TAURI__.tauri;
-  if (!tauri || !tauri.invoke) {
+  const invokeFn = resolveInvoke();
+  if (!invokeFn) {
     return { ok: false, error: "Tauri API unavailable" };
   }
   try {
-    const result = await tauri.invoke(cmd, payload);
+    const result = await invokeFn(cmd, payload);
     return { ok: true, result };
   } catch (err) {
     return { ok: false, error: String(err) };

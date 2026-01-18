@@ -561,6 +561,9 @@ main() {
 
     SEL4_COMPONENT_PACKAGES=(nine-door worker-heart worker-gpu)
     HOST_TOOL_PACKAGES=(gpu-bridge-host host-sidecar-bridge cas-tool)
+    if has_root_task_feature "cohesix-dev"; then
+        HOST_TOOL_PACKAGES+=(swarmui)
+    fi
 
     HOST_BUILD_ARGS=(build)
     if (( ${#PROFILE_ARGS[@]} > 0 )); then
@@ -624,6 +627,9 @@ main() {
 
     COMPONENT_BINS=(root-task nine-door worker-heart worker-gpu)
     HOST_ONLY_BINS=(cohsh gpu-bridge-host host-sidecar-bridge cas-tool)
+    if has_root_task_feature "cohesix-dev"; then
+        HOST_ONLY_BINS+=(swarmui)
+    fi
 
     mkdir -p "$OUT_DIR"
     OUT_DIR_ABS="$(cd "$OUT_DIR" && pwd)"
