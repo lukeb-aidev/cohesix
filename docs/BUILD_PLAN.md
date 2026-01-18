@@ -2117,6 +2117,7 @@ Ensure SwarmUI is packaged with the `cohesix-dev` host tool set and fix the Taur
 **Deliverables**
 - `cohesix-dev` host tool build includes SwarmUI in `out/*/host-tools`.
 - SwarmUI frontend uses the supported Tauri invoke bridge (no "Tauri API unavailable").
+- SwarmUI defaults to the console TCP port (`31337`) unless overridden by `SWARMUI_9P_PORT`.
 - Clean `cohesix-dev` build emits no root-task warnings.
 - Build from a clean `out/` and `target/` completes successfully.
 
@@ -2165,6 +2166,18 @@ Checks:
   - UI connects without "Tauri API unavailable".
 Deliverables:
   - Updated frontend invoke path.
+
+Title/ID: m20f1-default-port
+Goal: Align SwarmUI default TCP port with the console listener.
+Inputs: apps/swarmui/src-tauri/main.rs, crates/net-constants.
+Changes:
+  - apps/swarmui/src-tauri/main.rs — default to `COHSH_TCP_PORT` when `SWARMUI_9P_PORT` unset.
+Commands:
+  - cargo run -p swarmui
+Checks:
+  - SwarmUI connects with no `SWARMUI_9P_PORT` set when QEMU forwards port 31337.
+Deliverables:
+  - Default port matches console transport.
 
 Title/ID: m20f1-clean-build-warnings
 Goal: Eliminate root-task build warnings during cohesix-dev builds.

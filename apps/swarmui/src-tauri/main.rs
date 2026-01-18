@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use tauri::State;
 
+use cohsh::COHSH_TCP_PORT;
 use swarmui::{
     parse_role_label, SwarmUiBackend, SwarmUiConfig, SwarmUiTranscript, TcpTransportFactory,
 };
@@ -142,7 +143,7 @@ fn main() {
     let port = env::var("SWARMUI_9P_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or(5640);
+        .unwrap_or(COHSH_TCP_PORT);
     let timeout = Duration::from_secs(2);
     let factory = TcpTransportFactory::new(
         host,
