@@ -13,7 +13,7 @@
 - CI job definition: `scripts/ci/convergence_tests.sh`.
 - Timing tolerance: 50 ms (test harness tolerance; not a protocol contract).
 - Fixture normalization: transcripts include only `OK ...`, `ERR ...`, and `END` lines; `OK/ERR AUTH` lines are excluded.
-- The converge sequence runs `help → attach → log → spawn → tail → quit` with `spawn` executed via `/queen/ctl` echo payloads.
+- The converge sequence runs `help -> attach -> log -> spawn -> tail -> quit` with `spawn` executed via `/queen/ctl` echo payloads.
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:f2d228dc21c98ee36acaf1d18370b3fc758407d97b7062d8c0e99036fe783a08`
