@@ -157,6 +157,14 @@ pub enum NineDoorBridgeError {
     InvalidPayload,
 }
 
+#[derive(Debug)]
+pub(crate) struct TelemetryTail {
+    pub(crate) lines:
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    pub(crate) start_offset: u64,
+    pub(crate) consumed_bytes: usize,
+}
+
 impl fmt::Display for NineDoorBridgeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -265,6 +273,29 @@ impl NineDoorBridge {
         }
         audit.info(message.as_str());
         Ok(())
+    }
+
+    /// Return telemetry lines for a worker ring, if the path targets telemetry.
+    pub(crate) fn telemetry_tail(
+        &mut self,
+        path: &str,
+        cursor_offset: u64,
+    ) -> Result<Option<TelemetryTail>, NineDoorBridgeError> {
+        let Some(worker_id) = parse_worker_telemetry_path(path) else {
+            return Ok(None);
+        };
+        let worker = self
+            .workers
+            .iter()
+            .find(|worker| worker.id.as_str() == worker_id)
+            .ok_or(NineDoorBridgeError::InvalidPath)?;
+        let read = worker.ring.read_from(cursor_offset, UI_MAX_STREAM_BYTES);
+        let lines = lines_from_bytes(read.bytes.as_slice())?;
+        Ok(Some(TelemetryTail {
+            lines,
+            start_offset: read.start_offset,
+            consumed_bytes: read.consumed_bytes,
+        }))
     }
 
     /// Emit lines for `/proc/ingest/watch` with throttling applied.
@@ -839,6 +870,7 @@ impl NineDoorBridge {
             QueenCtlCommand::Spawn(target) => self.spawn_worker(target),
             QueenCtlCommand::Kill(worker_id) => self.remove_worker(worker_id),
             QueenCtlCommand::Bind { from, to } => self.bind_namespace(from, to),
+            QueenCtlCommand::Mount { service, at } => self.mount_namespace(service, at),
         }
     }
 
@@ -880,6 +912,20 @@ impl NineDoorBridge {
             .push(BindEntry { from, to })
             .map_err(|_| NineDoorBridgeError::BufferFull)?;
         Ok(())
+    }
+
+    fn mount_namespace(&mut self, service: &str, at: &str) -> Result<(), NineDoorBridgeError> {
+        validate_bind_path(at)?;
+        let canonical = generated::namespace_mounts()
+            .iter()
+            .find(|mount| mount.service == service)
+            .map(|mount| join_path("", mount.target))
+            .ok_or(NineDoorBridgeError::InvalidPath)?;
+        let target = normalize_path(at);
+        if canonical == target {
+            return Ok(());
+        }
+        self.bind_namespace(canonical.as_str(), target.as_str())
     }
 
     fn resolve_bound_path(&self, path: &str) -> Option<String> {
@@ -3924,6 +3970,7 @@ enum QueenCtlCommand<'a> {
     Spawn(SpawnTarget),
     Kill(&'a str),
     Bind { from: &'a str, to: &'a str },
+    Mount { service: &'a str, at: &'a str },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3936,6 +3983,13 @@ struct RingWriteOutcome {
 #[derive(Debug)]
 enum RingWriteError {
     Oversize { requested: usize, capacity: usize },
+}
+
+#[derive(Debug)]
+struct TelemetryRead {
+    start_offset: u64,
+    consumed_bytes: usize,
+    bytes: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -3994,6 +4048,31 @@ impl TelemetryRing {
             dropped_bytes,
             new_base: self.base_offset,
         })
+    }
+
+    fn read_from(&self, offset: u64, max_bytes: usize) -> TelemetryRead {
+        let mut start_offset = offset.max(self.base_offset);
+        if start_offset > self.next_offset {
+            start_offset = self.next_offset;
+        }
+        let available = self.next_offset.saturating_sub(start_offset) as usize;
+        let read_len = available.min(max_bytes);
+        let mut bytes = Vec::with_capacity(read_len);
+        if read_len > 0 {
+            let capacity = self.capacity.max(1);
+            let start_idx = (start_offset % capacity as u64) as usize;
+            let first_len = (capacity - start_idx).min(read_len);
+            bytes.extend_from_slice(&self.buffer[start_idx..start_idx + first_len]);
+            if first_len < read_len {
+                let remaining = read_len - first_len;
+                bytes.extend_from_slice(&self.buffer[..remaining]);
+            }
+        }
+        TelemetryRead {
+            start_offset,
+            consumed_bytes: read_len,
+            bytes,
+        }
     }
 }
 
@@ -4935,6 +5014,13 @@ fn parse_queen_ctl(payload: &str) -> Result<QueenCtlCommand<'_>, NineDoorBridgeE
         let to =
             parse_json_string_field(payload, "to").ok_or(NineDoorBridgeError::InvalidPayload)?;
         return Ok(QueenCtlCommand::Bind { from, to });
+    }
+    if payload.contains("\"mount\"") {
+        let service =
+            parse_json_string_field(payload, "service").ok_or(NineDoorBridgeError::InvalidPayload)?;
+        let at =
+            parse_json_string_field(payload, "at").ok_or(NineDoorBridgeError::InvalidPayload)?;
+        return Ok(QueenCtlCommand::Mount { service, at });
     }
     Err(NineDoorBridgeError::InvalidPayload)
 }

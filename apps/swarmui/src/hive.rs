@@ -7,6 +7,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cohsh::client::CohClient;
+use cohsh::{Session, Transport};
 use cohsh_core::Secure9pTransport;
 use serde::{Deserialize, Serialize};
 use secure9p_codec::OpenMode;
@@ -403,7 +404,7 @@ fn parse_line_to_event(agent: &SwarmUiHiveAgent, line: &str, seq: &mut u64) -> O
     parse_line_to_event_with_namespace(&agent.id, &agent.namespace, line, seq)
 }
 
-fn parse_line_to_event_with_namespace(
+pub(crate) fn parse_line_to_event_with_namespace(
     agent: &str,
     namespace: &str,
     line: &str,
@@ -431,6 +432,97 @@ fn parse_line_to_event_with_namespace(
     };
     *seq = seq.saturating_add(1);
     Some(event)
+}
+
+#[derive(Debug)]
+pub(crate) struct ConsoleHiveSessionState {
+    workers: Vec<String>,
+    queue: VecDeque<SwarmUiHiveEvent>,
+    seq: u64,
+    dropped: u64,
+}
+
+impl ConsoleHiveSessionState {
+    pub(crate) fn new(workers: Vec<String>) -> Self {
+        Self {
+            workers,
+            queue: VecDeque::new(),
+            seq: 0,
+            dropped: 0,
+        }
+    }
+
+    pub(crate) fn ingest<T: Transport>(
+        &mut self,
+        transport: &mut T,
+        session: &Session,
+        worker_root: &str,
+        config: &SwarmUiHiveConfig,
+    ) -> Result<(), SwarmUiError> {
+        let mut budget = config.lod_event_budget as usize;
+        let max_queue = config.snapshot_max_events as usize;
+        let workers = self.workers.clone();
+        for worker_id in workers {
+            if budget == 0 {
+                break;
+            }
+            let path = format!("{worker_root}/{worker_id}/telemetry");
+            let lines = transport
+                .tail(session, &path)
+                .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
+            let _ = transport.drain_acknowledgements();
+            let namespace = format!("{worker_root}/{worker_id}/telemetry");
+            for line in lines {
+                if budget == 0 {
+                    break;
+                }
+                if let Some(event) =
+                    parse_line_to_event_with_namespace(&worker_id, &namespace, &line, &mut self.seq)
+                {
+                    self.queue.push_back(event);
+                    budget = budget.saturating_sub(1);
+                }
+            }
+            self.trim_queue(max_queue);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn drain(&mut self, max_events: usize) -> Vec<SwarmUiHiveEvent> {
+        let mut events = Vec::new();
+        for _ in 0..max_events {
+            if let Some(event) = self.queue.pop_front() {
+                events.push(event);
+            } else {
+                break;
+            }
+        }
+        events
+    }
+
+    pub(crate) fn queue_len(&self) -> usize {
+        self.queue.len()
+    }
+
+    pub(crate) fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.queue.clear();
+        self.seq = 0;
+        self.dropped = 0;
+    }
+
+    fn trim_queue(&mut self, max_queue: usize) {
+        if max_queue == 0 {
+            return;
+        }
+        while self.queue.len() > max_queue {
+            let _ = self.queue.pop_front();
+            self.dropped = self.dropped.saturating_add(1);
+        }
+    }
 }
 
 fn truncate_detail(line: &str) -> Option<String> {

@@ -6,8 +6,12 @@
 
 use std::collections::VecDeque;
 use std::env;
+use std::fs::OpenOptions;
 use std::io::{self, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::path::{Path, PathBuf};
+use std::process;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -15,6 +19,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use cohesix_ticket::Role;
 use cohsh_core::{normalize_ticket, role_label, TicketPolicy};
+use fs2::FileExt;
 use log::{debug, error, info, trace, warn};
 use secure9p_codec::SessionId;
 
@@ -34,6 +39,8 @@ const DEFAULT_MAX_RETRIES: usize = 3;
 /// Maximum number of acknowledgement lines retained between drains.
 const MAX_PENDING_ACK: usize = 32;
 const FRAME_ERROR_VERB: &str = "FRAME";
+const CONSOLE_LOCK_ENV: &str = "COHSH_CONSOLE_LOCK";
+const CONSOLE_LOCK_DISABLE_VALUES: &[&str] = &["0", "false", "off", "no"];
 
 /// Return true when verbose TCP debugging is enabled via the environment.
 pub fn tcp_debug_enabled() -> bool {
@@ -151,6 +158,93 @@ impl AckOwned {
     }
 }
 
+#[derive(Debug)]
+struct ConsoleLock {
+    _file: std::fs::File,
+    _path: PathBuf,
+}
+
+impl ConsoleLock {
+    fn acquire(host: &str, port: u16) -> Result<Option<Self>> {
+        if !console_lock_enabled() {
+            return Ok(None);
+        }
+        let path = console_lock_path(host, port);
+        let mut file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("failed to open console lock {}", path.display()))?;
+        if let Err(err) = file.try_lock_exclusive() {
+            if err.kind() == io::ErrorKind::WouldBlock {
+                let owner = read_lock_owner(&path).unwrap_or_else(|| "unknown".to_owned());
+                let detail = if owner.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (owner {owner})")
+                };
+                return Err(anyhow!(
+                    "console busy: lock held at {}{}",
+                    path.display(),
+                    detail
+                ));
+            }
+            return Err(anyhow!(
+                "failed to lock console at {}: {err}",
+                path.display()
+            ));
+        }
+        let _ = file.set_len(0);
+        let _ = writeln!(file, "pid={}", process::id());
+        let _ = file.flush();
+        Ok(Some(Self { _file: file, _path: path }))
+    }
+}
+
+fn console_lock_enabled() -> bool {
+    if cfg!(test) {
+        return false;
+    }
+    let Ok(value) = env::var(CONSOLE_LOCK_ENV) else {
+        return true;
+    };
+    let lowered = value.trim().to_ascii_lowercase();
+    !CONSOLE_LOCK_DISABLE_VALUES
+        .iter()
+        .any(|entry| *entry == lowered)
+}
+
+fn console_lock_path(host: &str, port: u16) -> PathBuf {
+    let mut path = env::temp_dir();
+    let host = sanitize_lock_component(host);
+    path.push(format!("cohesix-console-{}-{}.lock", host, port));
+    path
+}
+
+fn sanitize_lock_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn read_lock_owner(path: &Path) -> Option<String> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
 /// Shared TCP transport wrapper that serialises access to a single connection.
 #[derive(Clone)]
 pub struct SharedTcpTransport {
@@ -167,6 +261,29 @@ impl SharedTcpTransport {
         self.inner
             .lock()
             .expect("shared TCP transport lock poisoned")
+    }
+}
+
+/// Pooled TCP transport wrapper that reuses an attached connection.
+#[derive(Clone)]
+pub struct PooledTcpTransport {
+    inner: Arc<Mutex<TcpTransport>>,
+    next_session_id: Arc<AtomicU64>,
+}
+
+impl PooledTcpTransport {
+    /// Create a pooled TCP transport wrapper for session pool use.
+    pub fn new(inner: Arc<Mutex<TcpTransport>>, next_session_id: Arc<AtomicU64>) -> Self {
+        Self {
+            inner,
+            next_session_id,
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, TcpTransport> {
+        self.inner
+            .lock()
+            .expect("pooled TCP transport lock poisoned")
     }
 }
 
@@ -197,6 +314,7 @@ pub struct TcpTransport {
     authenticated: bool,
     auth_state: AuthState,
     inject_short_write: Option<usize>,
+    console_lock: Option<ConsoleLock>,
 }
 
 impl TcpTransport {
@@ -235,6 +353,7 @@ impl TcpTransport {
             authenticated: false,
             auth_state: AuthState::Start,
             inject_short_write: None,
+            console_lock: None,
         }
     }
 
@@ -538,6 +657,8 @@ impl TcpTransport {
             }
         }
 
+        self.ensure_console_lock()?;
+
         let mut attempt = 0usize;
         let mut delay = self.retry_backoff;
         loop {
@@ -587,6 +708,14 @@ impl TcpTransport {
 
     fn has_partial_frame(&self) -> bool {
         self.pending_frame_len.is_some() || !self.rx_buf.is_empty()
+    }
+
+    fn ensure_console_lock(&mut self) -> Result<()> {
+        if self.console_lock.is_some() {
+            return Ok(());
+        }
+        self.console_lock = ConsoleLock::acquire(&self.address, self.port)?;
+        Ok(())
     }
 
     fn send_line_raw(&mut self, line: &str) -> Result<(), io::Error> {
@@ -772,7 +901,16 @@ impl TcpTransport {
                     self.pending_frame_len = None;
                     self.pending_timeouts = 0;
                     self.last_activity = Instant::now();
-                    let line = String::from_utf8(payload).context("frame payload must be UTF-8")?;
+                    let line = match String::from_utf8(payload) {
+                        Ok(line) => line,
+                        Err(err) => {
+                            self.telemetry.log_disconnect(&err);
+                            self.rx_buf.clear();
+                            self.pending_frame_len = None;
+                            self.pending_timeouts = 0;
+                            return Ok(ReadStatus::Closed);
+                        }
+                    };
                     trace!(
                         "[cohsh][tcp] read {} bytes in state {:?}",
                         line.len(),
@@ -1417,9 +1555,14 @@ impl Transport for TcpTransport {
 
     fn quit(&mut self, _session: &Session) -> Result<()> {
         info!("audit quit.transport.begin");
-        self.send_line("quit")?;
+        if let Err(err) = self.send_line("quit") {
+            self.session_cache = None;
+            self.requested_role = None;
+            self.reset_connection();
+            return Err(err);
+        }
         let mut timeouts = 0usize;
-        loop {
+        let result = loop {
             match self.read_line_internal()? {
                 ReadStatus::Line(line) => {
                     let trimmed = Self::trim_line(&line);
@@ -1428,10 +1571,10 @@ impl Transport for TcpTransport {
                         if ack.verb.eq_ignore_ascii_case("QUIT") {
                             if matches!(ack.status, AckStatus::Err) {
                                 info!("audit quit.transport.end reason=err");
-                                return Err(anyhow!("quit rejected: {trimmed}"));
+                                break Err(anyhow!("quit rejected: {trimmed}"));
                             }
                             info!("audit quit.transport.end reason=ack");
-                            return Ok(());
+                            break Ok(());
                         }
                         continue;
                     }
@@ -1439,18 +1582,20 @@ impl Transport for TcpTransport {
                 ReadStatus::Timeout => {
                     timeouts += 1;
                     if timeouts > self.max_retries {
-                        self.reset_connection();
                         info!("audit quit.transport.end reason=timeout");
-                        return Ok(());
+                        break Ok(());
                     }
                 }
                 ReadStatus::Closed => {
-                    self.reset_connection();
                     info!("audit quit.transport.end reason=closed");
-                    return Ok(());
+                    break Ok(());
                 }
             }
-        }
+        };
+        self.session_cache = None;
+        self.requested_role = None;
+        self.reset_connection();
+        result
     }
 
     fn drain_acknowledgements(&mut self) -> Vec<String> {
@@ -1522,6 +1667,76 @@ impl Transport for SharedTcpTransport {
     fn quit(&mut self, session: &Session) -> Result<()> {
         let mut inner = self.lock();
         inner.quit(session)
+    }
+
+    fn drain_acknowledgements(&mut self) -> Vec<String> {
+        let mut inner = self.lock();
+        inner.drain_acknowledgements()
+    }
+
+    fn metrics(&self) -> TransportMetrics {
+        let inner = self.lock();
+        inner.metrics()
+    }
+
+    fn inject_short_write(&mut self, bytes: usize) -> bool {
+        let mut inner = self.lock();
+        inner.inject_short_write(bytes)
+    }
+
+    fn tcp_endpoint(&self) -> Option<(String, u16)> {
+        let inner = self.lock();
+        inner.tcp_endpoint()
+    }
+}
+
+impl Transport for PooledTcpTransport {
+    fn attach(&mut self, role: Role, _ticket: Option<&str>) -> Result<Session> {
+        let id = self.next_session_id.fetch_add(1, Ordering::SeqCst);
+        Ok(Session::new(SessionId::from_raw(id), role))
+    }
+
+    fn kind(&self) -> &'static str {
+        "tcp"
+    }
+
+    fn ping(&mut self, session: &Session) -> Result<String> {
+        let mut inner = self.lock();
+        inner.ping(session)
+    }
+
+    fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
+        let mut inner = self.lock();
+        inner.tail(session, path)
+    }
+
+    fn read(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
+        let mut inner = self.lock();
+        inner.read(session, path)
+    }
+
+    fn list(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
+        let mut inner = self.lock();
+        inner.list(session, path)
+    }
+
+    fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()> {
+        let mut inner = self.lock();
+        inner.write(session, path, payload)
+    }
+
+    fn write_batch(
+        &mut self,
+        session: &Session,
+        path: &str,
+        payloads: &[Vec<u8>],
+    ) -> Result<usize> {
+        let mut inner = self.lock();
+        inner.write_batch(session, path, payloads)
+    }
+
+    fn quit(&mut self, _session: &Session) -> Result<()> {
+        Ok(())
     }
 
     fn drain_acknowledgements(&mut self) -> Vec<String> {

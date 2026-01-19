@@ -17,7 +17,7 @@ default = ["offline-cache"]
 offline-cache = []
 
 [dependencies]
-cohsh = { path = "../cohsh" }
+cohsh = { path = "../cohsh", features = ["tcp"] }
 cohsh-core = { workspace = true }
 cohesix-ticket = { workspace = true }
 secure9p-codec = { workspace = true }

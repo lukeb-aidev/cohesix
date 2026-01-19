@@ -16,11 +16,125 @@ use tauri::State;
 
 use cohsh::COHSH_TCP_PORT;
 use swarmui::{
-    parse_role_label, SwarmUiBackend, SwarmUiConfig, SwarmUiTranscript, TcpTransportFactory,
+    parse_role_label, SwarmUiBackend, SwarmUiConfig, SwarmUiConsoleBackend, SwarmUiTranscript,
+    TcpTransportFactory,
 };
 
+enum SwarmUiService {
+    Secure9p(SwarmUiBackend<TcpTransportFactory>),
+    Console(SwarmUiConsoleBackend),
+}
+
+impl SwarmUiService {
+    fn attach(&mut self, role: cohesix_ticket::Role, ticket: Option<&str>) -> SwarmUiTranscript {
+        match self {
+            SwarmUiService::Secure9p(backend) => backend.attach(role, ticket),
+            SwarmUiService::Console(backend) => backend.attach(role, ticket),
+        }
+    }
+
+    fn set_offline(&mut self, offline: bool) {
+        match self {
+            SwarmUiService::Secure9p(backend) => backend.set_offline(offline),
+            SwarmUiService::Console(backend) => backend.set_offline(offline),
+        }
+    }
+
+    fn tail_telemetry(
+        &mut self,
+        role: cohesix_ticket::Role,
+        ticket: Option<&str>,
+        worker_id: &str,
+    ) -> SwarmUiTranscript {
+        match self {
+            SwarmUiService::Secure9p(backend) => backend.tail_telemetry(role, ticket, worker_id),
+            SwarmUiService::Console(backend) => backend.tail_telemetry(role, ticket, worker_id),
+        }
+    }
+
+    fn list_namespace(
+        &mut self,
+        role: cohesix_ticket::Role,
+        ticket: Option<&str>,
+        path: &str,
+    ) -> SwarmUiTranscript {
+        match self {
+            SwarmUiService::Secure9p(backend) => backend.list_namespace(role, ticket, path),
+            SwarmUiService::Console(backend) => backend.list_namespace(role, ticket, path),
+        }
+    }
+
+    fn fleet_snapshot(
+        &mut self,
+        role: cohesix_ticket::Role,
+        ticket: Option<&str>,
+    ) -> SwarmUiTranscript {
+        match self {
+            SwarmUiService::Secure9p(backend) => backend.fleet_snapshot(role, ticket),
+            SwarmUiService::Console(backend) => backend.fleet_snapshot(role, ticket),
+        }
+    }
+
+    fn hive_bootstrap(
+        &mut self,
+        role: cohesix_ticket::Role,
+        ticket: Option<&str>,
+        snapshot_key: Option<&str>,
+    ) -> Result<swarmui::SwarmUiHiveBootstrap, String> {
+        match self {
+            SwarmUiService::Secure9p(backend) => backend
+                .hive_bootstrap(role, ticket, snapshot_key)
+                .map_err(|err| err.to_string()),
+            SwarmUiService::Console(backend) => backend
+                .hive_bootstrap(role, ticket, snapshot_key)
+                .map_err(|err| err.to_string()),
+        }
+    }
+
+    fn hive_poll(
+        &mut self,
+        role: cohesix_ticket::Role,
+        ticket: Option<&str>,
+    ) -> Result<swarmui::SwarmUiHiveBatch, String> {
+        match self {
+            SwarmUiService::Secure9p(backend) => backend
+                .hive_poll(role, ticket)
+                .map_err(|err| err.to_string()),
+            SwarmUiService::Console(backend) => backend
+                .hive_poll(role, ticket)
+                .map_err(|err| err.to_string()),
+        }
+    }
+
+    fn hive_reset(
+        &mut self,
+        role: cohesix_ticket::Role,
+        ticket: Option<&str>,
+    ) -> Result<(), String> {
+        match self {
+            SwarmUiService::Secure9p(backend) => backend
+                .hive_reset(role, ticket)
+                .map_err(|err| err.to_string()),
+            SwarmUiService::Console(backend) => backend
+                .hive_reset(role, ticket)
+                .map_err(|err| err.to_string()),
+        }
+    }
+
+    fn load_hive_replay(&mut self, payload: &[u8]) -> Result<(), String> {
+        match self {
+            SwarmUiService::Secure9p(backend) => backend
+                .load_hive_replay(payload)
+                .map_err(|err| err.to_string()),
+            SwarmUiService::Console(backend) => backend
+                .load_hive_replay(payload)
+                .map_err(|err| err.to_string()),
+        }
+    }
+}
+
 struct AppState {
-    backend: Mutex<SwarmUiBackend<TcpTransportFactory>>,
+    backend: Mutex<SwarmUiService>,
 }
 
 #[tauri::command]
@@ -87,9 +201,7 @@ fn swarmui_hive_bootstrap(
     let role = role.unwrap_or_else(|| "queen".to_owned());
     let role = parse_role_label(&role).map_err(|err| err.to_string())?;
     let mut backend = state.backend.lock().map_err(|_| "state locked")?;
-    backend
-        .hive_bootstrap(role, ticket.as_deref(), snapshot_key.as_deref())
-        .map_err(|err| err.to_string())
+    backend.hive_bootstrap(role, ticket.as_deref(), snapshot_key.as_deref())
 }
 
 #[tauri::command]
@@ -100,9 +212,7 @@ fn swarmui_hive_poll(
 ) -> Result<swarmui::SwarmUiHiveBatch, String> {
     let role = parse_role_label(&role).map_err(|err| err.to_string())?;
     let mut backend = state.backend.lock().map_err(|_| "state locked")?;
-    backend
-        .hive_poll(role, ticket.as_deref())
-        .map_err(|err| err.to_string())
+    backend.hive_poll(role, ticket.as_deref())
 }
 
 #[tauri::command]
@@ -113,9 +223,7 @@ fn swarmui_hive_reset(
 ) -> Result<(), String> {
     let role = parse_role_label(&role).map_err(|err| err.to_string())?;
     let mut backend = state.backend.lock().map_err(|_| "state locked")?;
-    backend
-        .hive_reset(role, ticket.as_deref())
-        .map_err(|err| err.to_string())
+    backend.hive_reset(role, ticket.as_deref())
 }
 
 fn parse_replay_path(args: &[String]) -> Option<PathBuf> {
@@ -144,14 +252,34 @@ fn main() {
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(COHSH_TCP_PORT);
+    let transport = env::var("SWARMUI_TRANSPORT")
+        .unwrap_or_else(|_| "console".to_owned())
+        .trim()
+        .to_ascii_lowercase();
     let timeout = Duration::from_secs(2);
-    let factory = TcpTransportFactory::new(
-        host,
-        port,
-        timeout,
-        swarmui::SECURE9P_MSIZE,
-    );
-    let mut backend = SwarmUiBackend::new(config, factory);
+    let mut backend = match transport.as_str() {
+        "9p" | "secure9p" => {
+            let factory = TcpTransportFactory::new(
+                host,
+                port,
+                timeout,
+                swarmui::SECURE9P_MSIZE,
+            );
+            SwarmUiService::Secure9p(SwarmUiBackend::new(config, factory))
+        }
+        "console" | "tcp" => {
+            let auth_token = env::var("SWARMUI_AUTH_TOKEN")
+                .or_else(|_| env::var("COHSH_AUTH_TOKEN"))
+                .unwrap_or_else(|_| "changeme".to_owned());
+            SwarmUiService::Console(SwarmUiConsoleBackend::new(
+                config,
+                host,
+                port,
+                auth_token,
+            ))
+        }
+        other => panic!("unsupported SWARMUI_TRANSPORT '{other}' (use console or 9p)"),
+    };
     if let Some(path) = replay_path {
         let resolved = if path.is_relative() {
             data_dir.join("snapshots").join(path)

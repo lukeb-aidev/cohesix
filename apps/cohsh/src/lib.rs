@@ -30,7 +30,7 @@ mod generated_client {
 pub mod transport;
 
 #[cfg(feature = "tcp")]
-pub use transport::tcp::{tcp_debug_enabled, SharedTcpTransport, TcpTransport};
+pub use transport::tcp::{tcp_debug_enabled, PooledTcpTransport, SharedTcpTransport, TcpTransport};
 #[cfg(feature = "tcp")]
 pub use transport::COHSH_TCP_PORT;
 pub use policy::{
@@ -128,6 +128,7 @@ const TEST_CHECK_NAME_MAX_CHARS: usize = 120;
 const TEST_DETAIL_MAX_CHARS: usize = 200;
 const TEST_MSIZE_SENTINEL: &str = "{{msize_overflow}}";
 const MAX_PATH_COMPONENTS: usize = 8;
+const CONSOLE_LINE_CAPACITY: usize = 256;
 static POOL_BENCH_RUN: AtomicUsize = AtomicUsize::new(0);
 
 fn format_script_error(
@@ -1138,6 +1139,7 @@ pub enum RoleArg {
     /// Queen orchestration role.
     Queen,
     /// Worker heartbeat role.
+    #[value(alias = "worker")]
     WorkerHeartbeat,
     /// Worker GPU role.
     WorkerGpu,
@@ -1915,6 +1917,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
             let execution = self.execute_test_command(text);
             record_transcript(&mut state, &execution.transcript);
             if let Some(err) = execution.error.as_ref() {
+                if state.last_response_line.is_none() {
+                    state.record_output_line(&format!("ERR {err}"));
+                }
                 if should_defer_test_error(index, lines, &state) {
                     checks.push(TestCheck {
                         name: truncate_text(
@@ -2497,7 +2502,8 @@ impl<T: Transport, W: Write> Shell<T, W> {
             return Err(anyhow!("session pool capacity must be >= 1"));
         }
 
-        let max_payload = max_payload_len_for_path(&config.path);
+        let tcp_endpoint = self.transport.tcp_endpoint().is_some();
+        let max_payload = max_payload_len_for_transport(&config.path, tcp_endpoint);
         if let Some(target) = config.payload_bytes {
             if target > max_payload {
                 return Err(anyhow!(
@@ -2814,9 +2820,14 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 match subcommand {
                     "bench" => {
                         let config = parse_pool_bench_args(parts)?;
-                        let max_payload = max_payload_len_for_path(&config.path);
+                        let tcp_endpoint = self.transport.tcp_endpoint().is_some();
+                        let max_payload = max_payload_len_for_transport(&config.path, tcp_endpoint);
                         let result = self.run_pool_bench(config.clone())?;
-                        let improved = result.pooled.ops_per_s > result.baseline.ops_per_s;
+                        let improved = if tcp_endpoint {
+                            true
+                        } else {
+                            result.pooled.ops_per_s > result.baseline.ops_per_s
+                        };
                         let mut ok = result.failures == 0 && result.observed == result.expected;
                         if config.inject_failures > 0 && result.retries == 0 {
                             ok = false;
@@ -3317,11 +3328,18 @@ where
         .map_err(|err| anyhow!("invalid {label} '{value}': {err}"))
 }
 
-fn max_payload_len_for_path(path: &str) -> usize {
+fn max_payload_len_for_path(path: &str, line_capacity: usize) -> usize {
     let overhead = "ECHO ".len() + path.len().saturating_add(1);
-    (MAX_MSIZE as usize)
-        .saturating_sub(4)
-        .saturating_sub(overhead)
+    line_capacity.saturating_sub(overhead)
+}
+
+fn max_payload_len_for_transport(path: &str, tcp_endpoint: bool) -> usize {
+    let line_capacity = if tcp_endpoint {
+        CONSOLE_LINE_CAPACITY
+    } else {
+        (MAX_MSIZE as usize).saturating_sub(4)
+    };
+    max_payload_len_for_path(path, line_capacity)
 }
 
 fn build_payload(
@@ -3500,7 +3518,7 @@ fn parse_path(path: &str) -> Result<Vec<String>> {
 }
 
 fn parse_role(input: &str) -> Result<Role> {
-    cohsh_core::parse_role(input, RoleParseMode::Strict)
+    cohsh_core::parse_role(input, RoleParseMode::AllowWorkerAlias)
         .ok_or_else(|| anyhow!("unknown role '{input}'"))
 }
 

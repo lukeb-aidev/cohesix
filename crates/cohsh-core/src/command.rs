@@ -17,7 +17,7 @@ pub const MAX_LINE_LEN: usize = 256;
 /// Maximum number of characters permitted in a role identifier when parsing `attach`.
 pub const MAX_ROLE_LEN: usize = 16;
 /// Maximum number of characters accepted for ticket material presented to `attach`.
-pub const MAX_TICKET_LEN: usize = 192;
+pub const MAX_TICKET_LEN: usize = 224;
 /// Maximum number of characters accepted for file paths.
 pub const MAX_PATH_LEN: usize = 96;
 /// Maximum number of characters accepted for JSON payloads.

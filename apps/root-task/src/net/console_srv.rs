@@ -743,9 +743,8 @@ impl TcpConsoleServer {
             }
         } else {
             if self.outbound.is_full() {
-                if let Some(dropped) = self.evict_oldest_non_priority() {
-                    self.log_outbound_drop(dropped.as_str());
-                }
+                self.log_outbound_drop(buf.as_str());
+                return Err(());
             }
             let line_for_log = buf.clone();
             if self.outbound.push_back(buf).is_err() {
@@ -826,7 +825,10 @@ impl TcpConsoleServer {
 
     pub(crate) fn is_priority_line(line: &str) -> bool {
         let trimmed = line.trim_end_matches(['\r', '\n']);
-        trimmed.starts_with("OK ") || trimmed.starts_with("ERR ") || trimmed == "END"
+        if trimmed == "END" {
+            return false;
+        }
+        trimmed.starts_with("OK ") || trimmed.starts_with("ERR ")
     }
 
     fn is_preauth_allowed(line: &str) -> bool {

@@ -75,7 +75,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [20c](#20c) | SwarmUI Desktop (Tauri, Pure 9P/TCP) | Complete |
 | [20d](#20d) | SwarmUI Live Hive Rendering (PixiJS, GPU-First | Complete |
 | [20e](#20e) | CLI/UI Convergence Tests | Complete |
-| [20f](#20f) | UI Security Hardening (Tickets & Quotas) | Complete |
+| [20f](#20f) | UI Security Hardening (Tickets & Quotas) | In Progress |
 | [20f1](#20f1) | SwarmUI Host Tool Packaging + Tauri API Fix | Complete |
 | [20g](#20g) | Deterministic Snapshot & Replay (UI Testing) | Pending |
 | [21](#21) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
@@ -2046,7 +2046,7 @@ Deliverables:
 ## Milestone 20f — UI Security Hardening (Tickets & Quotas) <a id="20f"></a> 
 [Milestones](#Milestones)
 
-**Status:** Complete — Ticket scopes/quotas enforce UI denials with audited EPERM/ELIMIT paths; regression pack is green.
+**Status:** In Progress — Ticket scopes/quotas are enforced; CLI/SwarmUI console transport alignment in progress.
 
 **Why now (compiler):** With UI parity established, enforce least privilege and quotas to protect interactive sessions.
 
@@ -2089,9 +2089,10 @@ Deliverables:
 
 Title/ID: m20f-cli-ui-regressions
 Goal: Validate quota enforcement across CLI and UI clients.
-Inputs: scripts/cohsh/telemetry_ring.coh (extended), SwarmUI/coh-status regression hooks.
+Inputs: scripts/cohsh/telemetry_ring.coh (extended), crates/cohsh-core/src/command.rs, SwarmUI/coh-status regression hooks.
 Changes:
   - scripts/cohsh/telemetry_ring.coh — add read-only ticket write attempt and quota exhaustion loop.
+  - crates/cohsh-core/src/command.rs — widen ticket length cap for quota-bearing regression tickets.
   - apps/swarmui/tests/security.rs — mirror quota abuse from UI.
 Commands:
   - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh
@@ -2100,6 +2101,78 @@ Checks:
   - ERR EPERM/ELIMIT identical across transports; metrics observed in /proc/ingest/watch.
 Deliverables:
   - Regression outputs captured; manifest hash noted in docs/USERLAND_AND_CLI.md.
+
+Title/ID: m20f-cohsh-tcp-pool-safety
+Goal: Stabilize cohsh TCP pooling against the single-console connection while preserving pool bench semantics.
+Inputs: apps/cohsh/src/transport/tcp.rs, apps/cohsh/src/main.rs, scripts/cohsh/session_pool.coh.
+Changes:
+  - apps/cohsh/src/transport/tcp.rs — add pooled TCP wrapper that avoids extra ATTACH/QUIT on shared connections.
+  - apps/cohsh/src/main.rs — use pooled TCP wrapper for session pool factory.
+  - apps/cohsh/src/lib.rs — adjust pool bench TCP expectations, payload limits, and allow the worker alias for CLI roles.
+  - docs/USERLAND_AND_CLI.md — document TCP console pool bench expectations.
+Commands:
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/session_pool.coh
+Checks:
+  - cohsh interactive commands do not drop the console connection; pool bench reports OK.
+Deliverables:
+  - Regression logs covering session_pool.coh.
+
+Title/ID: m20f-swarmui-console-alignment
+Goal: Align SwarmUI with the TCP console transport and add telemetry tail support without changing ACK/ERR grammar.
+Inputs: apps/swarmui/src-tauri/main.rs, apps/swarmui/src/lib.rs, apps/root-task/src/event/mod.rs, apps/root-task/src/ninedoor.rs, docs/USERLAND_AND_CLI.md, docs/INTERFACES.md.
+Changes:
+  - apps/root-task/src/event/mod.rs — stream telemetry ring contents for tail requests with cursor tracking.
+  - apps/root-task/src/ninedoor.rs — expose worker telemetry reads for console tail.
+  - apps/swarmui/src/lib.rs — add console backend using cohsh transport and server-managed telemetry tails.
+  - apps/swarmui/src-tauri/main.rs — select console vs 9P transport via env settings.
+  - docs/USERLAND_AND_CLI.md — document SwarmUI transport selection and console telemetry tail behavior.
+  - docs/INTERFACES.md — record SwarmUI console transport alignment and non-goals.
+Commands:
+  - cargo check -p cohsh -p swarmui -p root-task
+  - SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh --sel4-build "$HOME/seL4/build" --out-dir out/cohesix --profile release --root-task-features cohesix-dev --cargo-target aarch64-unknown-none --raw-qemu --transport tcp
+Checks:
+  - SwarmUI connects via console transport and renders live hive updates.
+  - Interactive cohsh command set succeeds against TCP console.
+Deliverables:
+  - Updated docs and telemetry tail audit logs.
+
+Title/ID: m20f-console-frame-integrity
+Goal: Prevent partial TCP console sends from corrupting frame boundaries for cohsh and SwarmUI sessions.
+Inputs: apps/root-task/src/net/stack.rs, logs/qemu-run.log, logs/cohsh-queen-interactive.log.
+Changes:
+  - apps/root-task/src/net/stack.rs — gate TCP sends on available TX capacity; abort on partial send.
+Commands:
+  - cargo check -p root-task -p cohsh -p swarmui
+  - SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh --sel4-build "$HOME/seL4/build" --out-dir out/cohesix --profile release --root-task-features cohesix-dev --cargo-target aarch64-unknown-none --raw-qemu --transport tcp
+  - ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
+  - scripts/cohsh/run_regression_batch.sh
+Checks:
+  - Interactive cohsh commands (tail, ping, ls, cat, echo, spawn, kill, bind, mount) remain attached without reconnect loops.
+  - SwarmUI console session stays connected and updates hive telemetry.
+  - Regression pack passes unchanged.
+Deliverables:
+  - Updated qemu + cohsh logs showing stable tail output.
+
+Title/ID: m20f-cohsh-interactive-parity
+Goal: Ensure interactive cohsh commands and SwarmUI console sessions match script-mode behavior without connection churn.
+Inputs: apps/root-task/src/event/mod.rs, apps/root-task/src/net/stack.rs, apps/cohsh/src/transport/tcp.rs, apps/swarmui/src/lib.rs, logs/cohsh-*.log.
+Changes:
+  - apps/root-task/src/event/mod.rs — align CAT/TAIL streaming with pending stream handling and consistent END emission.
+  - apps/root-task/src/net/stack.rs — tune console send pacing/backpressure handling for stream output.
+  - apps/cohsh/src/transport/tcp.rs — harden console stream reads/reconnect logic and enforce exclusive console locking.
+  - apps/swarmui/src/lib.rs — match SwarmUI console error handling to cohsh transport semantics.
+Commands:
+  - cargo check -p root-task -p cohsh -p swarmui
+  - SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh --sel4-build "$HOME/seL4/build" --out-dir out/cohesix --profile release --root-task-features cohesix-dev --cargo-target aarch64-unknown-none --raw-qemu --transport tcp
+  - ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
+  - ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role worker
+  - scripts/cohsh/run_regression_batch.sh
+Checks:
+  - All interactive cohsh commands succeed without reconnect loops for both queen and worker roles.
+  - SwarmUI console transport remains attached and renders hive updates.
+  - Regression pack passes unchanged.
+Deliverables:
+  - Updated QEMU + cohsh logs validating interactive parity and SwarmUI stability.
 ```
 
 ---

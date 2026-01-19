@@ -13,6 +13,8 @@ use std::io::{self, BufReader};
 use std::path::PathBuf;
 use std::sync::Arc;
 #[cfg(feature = "tcp")]
+use std::sync::atomic::AtomicU64;
+#[cfg(feature = "tcp")]
 use std::sync::Mutex;
 #[cfg(feature = "tcp")]
 use std::time::Duration;
@@ -35,7 +37,7 @@ use cohsh::{
     PolicyOverrides, QemuTransport, RoleArg, SessionPool, Shell, Transport, TransportFactory,
 };
 #[cfg(feature = "tcp")]
-use cohsh::{SharedTcpTransport, TcpTransport, COHSH_TCP_PORT};
+use cohsh::{PooledTcpTransport, SharedTcpTransport, TcpTransport, COHSH_TCP_PORT};
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum TransportKind {
@@ -308,10 +310,12 @@ fn main() -> Result<()> {
                 ));
                 let transport = Box::new(SharedTcpTransport::new(Arc::clone(&shared)));
                 let pool_shared = Arc::clone(&shared);
+                let pool_session_ids = Arc::new(AtomicU64::new(2));
                 let factory = Arc::new(move || {
-                    Ok(Box::new(SharedTcpTransport::new(Arc::clone(
-                        &pool_shared,
-                    ))) as Box<dyn Transport + Send>)
+                    Ok(Box::new(PooledTcpTransport::new(
+                        Arc::clone(&pool_shared),
+                        Arc::clone(&pool_session_ids),
+                    )) as Box<dyn Transport + Send>)
                 });
                 (transport, Some(factory))
             }

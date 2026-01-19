@@ -60,6 +60,8 @@ use crate::observe::IngestSnapshot;
 #[cfg(feature = "kernel")]
 use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
 #[cfg(feature = "kernel")]
+use crate::ninedoor::TelemetryTail;
+#[cfg(feature = "kernel")]
 use crate::sel4;
 #[cfg(feature = "kernel")]
 use crate::sel4::{BootInfoExt, BootInfoView};
@@ -584,6 +586,10 @@ impl TicketUsage {
         Ok(CursorCheck { is_resume })
     }
 
+    fn cursor_offset(&self, path_key: &str) -> Option<u64> {
+        self.cursor_offsets.get(path_key).copied()
+    }
+
     fn record_cursor(&mut self, path_key: String, offset: u64, len: usize, check: CursorCheck) {
         let next = offset.saturating_add(len as u64);
         self.cursor_offsets.insert(path_key, next);
@@ -871,6 +877,7 @@ struct PendingStream {
         HeaplessString<DEFAULT_LINE_CAPACITY>,
         { log_buffer::LOG_SNAPSHOT_LINES },
     >,
+    next_line: usize,
     bandwidth_bytes: u64,
     cursor: Option<PendingCursor>,
 }
@@ -1107,6 +1114,8 @@ where
         self.ipc.dispatch(self.now_ms);
         #[cfg(feature = "kernel")]
         self.drain_bootstrap_ipc();
+        #[cfg(feature = "kernel")]
+        self.flush_pending_stream();
     }
 
     #[cfg(feature = "net-console")]
@@ -1285,7 +1294,7 @@ where
         self.emit_help_serial_only();
         #[cfg(feature = "net-console")]
         if let Some(net) = self.net.as_mut() {
-            net.send_console_line(
+            let _ = net.send_console_line(
                 "[net-console] authenticate using AUTH <role> <token> to receive console output",
             );
         }
@@ -1360,15 +1369,21 @@ where
 
     /// Emit a console line to the serial console and any attached TCP clients.
     pub fn emit_console_line(&mut self, line: &str) {
+        let _ = self.try_emit_console_line(line);
+    }
+
+    fn try_emit_console_line(&mut self, line: &str) -> bool {
         if self.last_input_source == ConsoleInputSource::Serial {
             self.emit_serial_line(line);
+            return true;
         }
         #[cfg(feature = "net-console")]
         if self.last_input_source == ConsoleInputSource::Net {
             if let Some(net) = self.net.as_mut() {
-                net.send_console_line(line);
+                return net.send_console_line(line);
             }
         }
+        false
     }
 
     fn emit_serial_line(&mut self, line: &str) {
@@ -1905,7 +1920,12 @@ where
                         #[cfg(feature = "kernel")]
                         let mut pending_stream: Option<PendingStream> = None;
                         #[cfg(feature = "kernel")]
+                        let mut telemetry_stream: Option<TelemetryTail> = None;
+                        #[cfg(feature = "kernel")]
+                        let mut path_supported = false;
+                        #[cfg(feature = "kernel")]
                         {
+                            let cursor_offset = self.ticket_cursor_offset(path_str).unwrap_or(0);
                             if path_str == "/log/queen.log" {
                                 let lines = log_buffer::snapshot_lines::<
                                     DEFAULT_LINE_CAPACITY,
@@ -1914,9 +1934,11 @@ where
                                 stream_bytes = lines.iter().map(|line| line.len() as u64).sum();
                                 pending_stream = Some(PendingStream {
                                     lines,
+                                    next_line: 0,
                                     bandwidth_bytes: stream_bytes,
                                     cursor: None,
                                 });
+                                path_supported = true;
                             } else if path_str == "/proc/ingest/watch" {
                                 if let Some(bridge) = self.ninedoor.as_mut() {
                                     let lines = bridge
@@ -1925,31 +1947,110 @@ where
                                     stream_bytes = lines.iter().map(|line| line.len() as u64).sum();
                                     pending_stream = Some(PendingStream {
                                         lines,
+                                        next_line: 0,
                                         bandwidth_bytes: stream_bytes,
                                         cursor: None,
                                     });
+                                    path_supported = true;
+                                }
+                            } else if let Some(bridge) = self.ninedoor.as_mut() {
+                                match bridge.telemetry_tail(path_str, cursor_offset) {
+                                    Ok(stream) => {
+                                        telemetry_stream = stream;
+                                        if let Some(stream) = telemetry_stream.as_ref() {
+                                            stream_bytes = stream
+                                                .lines
+                                                .iter()
+                                                .map(|line| line.len() as u64)
+                                                .sum();
+                                            path_supported = true;
+                                        }
+                                    }
+                                    Err(err) => {
+                                        let detail = format_message(format_args!(
+                                            "reason=ninedoor-error error={err}"
+                                        ));
+                                        cmd_status = "err";
+                                        let sid = self.session_id.unwrap_or(0);
+                                        let err_msg = format_message(format_args!("{err}"));
+                                        self.audit_ninedoor_err(
+                                            sid,
+                                            "TAIL",
+                                            path_str,
+                                            err_msg.as_str(),
+                                        );
+                                        self.emit_ack_err(verb_label, Some(detail.as_str()));
+                                    }
                                 }
                             }
                         }
-                        if let Err(denial) = self.check_ticket_bandwidth(stream_bytes) {
-                            self.record_ticket_denial(path_str, TicketVerb::Read, denial);
-                            self.emit_ticket_denied(verb_label, Some(path_str), denial);
+                        #[cfg(feature = "kernel")]
+                        if cmd_status != "err" && !path_supported {
                             cmd_status = "err";
-                        } else {
-                            let message = format_message(format_args!("console: tail {}", path_str));
-                            self.audit.info(message.as_str());
-                            self.metrics.accepted_commands += 1;
-                            self.metrics.ui_reads = self.metrics.ui_reads.saturating_add(1);
-                            let detail = format_message(format_args!("path={}", path_str));
-                            self.emit_ack_ok(verb_label, Some(detail.as_str()));
-                            self.stream_end_pending = true;
-                            self.tail_active = true;
-                            let sid = self.session_id.unwrap_or(0);
-                            self.audit_tail_start(sid, path_str);
-                            #[cfg(feature = "kernel")]
-                            {
-                                self.pending_stream = pending_stream;
-                                forwarded = true;
+                            let detail = format_message(format_args!(
+                                "reason=invalid-path path={}",
+                                path_str
+                            ));
+                            self.emit_ack_err(verb_label, Some(detail.as_str()));
+                        }
+                        if cmd_status != "err" {
+                            if let Err(denial) = self.check_ticket_bandwidth(stream_bytes) {
+                                self.record_ticket_denial(path_str, TicketVerb::Read, denial);
+                                self.emit_ticket_denied(verb_label, Some(path_str), denial);
+                                cmd_status = "err";
+                            } else {
+                                #[cfg(feature = "kernel")]
+                                if let Some(stream) = telemetry_stream {
+                                    let cursor_check =
+                                        match self.check_ticket_cursor(path_str, stream.start_offset) {
+                                            Ok(check) => check,
+                                            Err(denial) => {
+                                                self.record_ticket_denial(
+                                                    path_str,
+                                                    TicketVerb::Read,
+                                                    denial,
+                                                );
+                                                self.emit_ticket_denied(
+                                                    verb_label,
+                                                    Some(path_str),
+                                                    denial,
+                                                );
+                                                cmd_status = "err";
+                                                None
+                                            }
+                                        };
+                                    if cmd_status != "err" {
+                                        pending_stream = Some(PendingStream {
+                                            lines: stream.lines,
+                                            next_line: 0,
+                                            bandwidth_bytes: stream_bytes,
+                                            cursor: cursor_check.map(|check| PendingCursor {
+                                                path_key: path_str.to_owned(),
+                                                offset: stream.start_offset,
+                                                len: stream.consumed_bytes,
+                                                check,
+                                            }),
+                                        });
+                                    }
+                                }
+                                if cmd_status != "err" {
+                                    let message =
+                                        format_message(format_args!("console: tail {}", path_str));
+                                    self.audit.info(message.as_str());
+                                    self.metrics.accepted_commands += 1;
+                                    self.metrics.ui_reads = self.metrics.ui_reads.saturating_add(1);
+                                    let detail = format_message(format_args!("path={}", path_str));
+                                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
+                                    self.stream_end_pending = true;
+                                    self.tail_active = true;
+                                    let sid = self.session_id.unwrap_or(0);
+                                    self.audit_tail_start(sid, path_str);
+                                    #[cfg(feature = "kernel")]
+                                    {
+                                        self.pending_stream = pending_stream;
+                                        forwarded = true;
+                                    }
+                                }
                             }
                         }
                     }
@@ -2176,21 +2277,20 @@ where
                                                     summary.as_str()
                                                 ));
                                                 self.emit_ack_ok(verb_label, Some(detail.as_str()));
-                                                for line in lines {
-                                                    self.emit_console_line(line.as_str());
-                                                }
                                                 self.metrics.ui_reads =
                                                     self.metrics.ui_reads.saturating_add(1);
-                                                self.consume_ticket_bandwidth(data_bytes);
-                                                if let Some(check) = cursor_check {
-                                                    self.record_ticket_cursor(
-                                                        path_str.to_owned(),
-                                                        0,
-                                                        data_bytes as usize,
-                                                        check,
-                                                    );
-                                                }
                                                 self.stream_end_pending = true;
+                                                self.pending_stream = Some(PendingStream {
+                                                    lines,
+                                                    next_line: 0,
+                                                    bandwidth_bytes: data_bytes,
+                                                    cursor: cursor_check.map(|check| PendingCursor {
+                                                        path_key: path_str.to_owned(),
+                                                        offset: 0,
+                                                        len: data_bytes as usize,
+                                                        check,
+                                                    }),
+                                                });
                                             }
                                         }
                                     }
@@ -2319,6 +2419,7 @@ where
                             let stream_bytes = lines.iter().map(|line| line.len() as u64).sum();
                             let pending_stream = Some(PendingStream {
                                 lines,
+                                next_line: 0,
                                 bandwidth_bytes: stream_bytes,
                                 cursor: None,
                             });
@@ -2539,19 +2640,8 @@ where
 
         #[cfg(feature = "kernel")]
         if result.is_ok() && self.stream_end_pending {
-            if let Some(pending) = self.pending_stream.take() {
-                for line in pending.lines {
-                    self.emit_console_line(line.as_str());
-                }
-                self.consume_ticket_bandwidth(pending.bandwidth_bytes);
-                if let Some(cursor) = pending.cursor {
-                    self.record_ticket_cursor(
-                        cursor.path_key,
-                        cursor.offset,
-                        cursor.len,
-                        cursor.check,
-                    );
-                }
+            if self.pending_stream.is_some() {
+                self.flush_pending_stream();
             } else {
                 match &command_clone {
                     Command::Log => self.emit_log_snapshot(),
@@ -2571,6 +2661,7 @@ where
                     }
                     _ => {}
                 }
+                self.emit_stream_end_if_pending();
             }
         }
 
@@ -2690,14 +2781,46 @@ where
 
     fn emit_stream_end_if_pending(&mut self) {
         if self.stream_end_pending {
+            #[cfg(feature = "kernel")]
+            if let Some(pending) = self.pending_stream.as_ref() {
+                if pending.next_line < pending.lines.len() {
+                    return;
+                }
+            }
+            if !self.try_emit_console_line("END") {
+                return;
+            }
             self.stream_end_pending = false;
-            self.emit_console_line("END");
             if self.tail_active {
                 let sid = self.session_id.unwrap_or(0);
                 self.audit_tail_stop(sid, "eof");
                 self.tail_active = false;
             }
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn flush_pending_stream(&mut self) {
+        if !self.stream_end_pending {
+            return;
+        }
+        let Some(mut pending) = self.pending_stream.take() else {
+            self.emit_stream_end_if_pending();
+            return;
+        };
+        while pending.next_line < pending.lines.len() {
+            let line = pending.lines[pending.next_line].as_str();
+            if !self.try_emit_console_line(line) {
+                self.pending_stream = Some(pending);
+                return;
+            }
+            pending.next_line = pending.next_line.saturating_add(1);
+        }
+        self.consume_ticket_bandwidth(pending.bandwidth_bytes);
+        if let Some(cursor) = pending.cursor {
+            self.record_ticket_cursor(cursor.path_key, cursor.offset, cursor.len, cursor.check);
+        }
+        self.emit_stream_end_if_pending();
     }
 
     fn active_tcp_conn_id(&self) -> u64 {
@@ -2997,6 +3120,15 @@ where
             return Ok(None);
         };
         usage.check_cursor(path, offset).map(Some)
+    }
+
+    fn ticket_cursor_offset(&self, path: &str) -> Option<u64> {
+        if !is_telemetry_path(path) {
+            return None;
+        }
+        self.ticket_usage
+            .as_ref()
+            .and_then(|usage| usage.cursor_offset(path))
     }
 
     fn record_ticket_cursor(&mut self, path: String, offset: u64, len: usize, check: CursorCheck) {
@@ -3618,12 +3750,13 @@ mod tests {
                 IngestSnapshot::default()
             }
 
-            fn send_console_line(&mut self, line: &str) {
+            fn send_console_line(&mut self, line: &str) -> bool {
                 let mut buf = HeaplessString::new();
                 if buf.push_str(line).is_err() {
-                    return;
+                    return false;
                 }
                 let _ = self.sent.push(buf);
+                true
             }
         }
 

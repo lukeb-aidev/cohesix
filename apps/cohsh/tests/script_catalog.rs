@@ -148,7 +148,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "tcp_basic.coh:619970b6ff14332bbef80f704c117b4471653bb75f7a6187b27d93fbc16415a7"
             .to_owned(),
-        "telemetry_ring.coh:095ca793c4d49c059417c515eeba2a967c2b3843c18b2a2c7c5f16a6b2da595e"
+        "telemetry_ring.coh:2d33e86fd1619120f0bf26d45a7532bf03a57a10a532ea9841f1624bf98df351"
             .to_owned(),
     ]);
     assert_eq!(results, expected);

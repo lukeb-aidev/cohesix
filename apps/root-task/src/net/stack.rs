@@ -4083,6 +4083,11 @@ impl<D: NetDevice> NetStack<D> {
                     payload.len()
                 );
             }
+            // Avoid partial TCP writes; the console protocol depends on intact frames.
+            let available = socket.send_capacity().saturating_sub(socket.send_queue());
+            if payload.len() > available {
+                return Err(SendError::WouldBlock);
+            }
             match socket.send_slice(payload) {
                 Ok(sent) if sent == payload.len() => {
                     let preview_len = core::cmp::min(sent, 32);
@@ -4133,7 +4138,16 @@ impl<D: NetDevice> NetStack<D> {
                     }
                     Ok(())
                 }
-                Ok(_) => Err(SendError::WouldBlock),
+                Ok(sent) => {
+                    warn!(
+                        target: "root_task::net",
+                        "[tcp] send.partial sent={} expected={} (aborting console session)",
+                        sent,
+                        payload.len()
+                    );
+                    socket.abort();
+                    Err(SendError::Fault)
+                }
                 Err(err) => {
                     warn!(
                         target: "root_task::net",
@@ -4258,21 +4272,21 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.server.ingest_snapshot()
     }
 
-    fn send_console_line(&mut self, line: &str) {
+    fn send_console_line(&mut self, line: &str) -> bool {
         if !self.stage_policy.allow_console_io {
-            return;
+            return false;
         }
         let enqueue_result = self.server.enqueue_outbound(line);
         if enqueue_result.is_err() {
             self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
-            return;
+            return false;
         }
         if TcpConsoleServer::is_priority_line(line)
             && self.active_client_id.is_some()
             && self.session_active
         {
             let Some(now_ms) = self.last_now_ms else {
-                return;
+                return true;
             };
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
             let _ = Self::flush_outbound(
@@ -4288,6 +4302,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                 &mut self.session_state,
             );
         }
+        true
     }
 
     fn request_disconnect(&mut self) {

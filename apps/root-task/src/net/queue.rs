@@ -470,10 +470,12 @@ impl NetPoller for NetStack {
         self.server.ingest_snapshot()
     }
 
-    fn send_console_line(&mut self, line: &str) {
+    fn send_console_line(&mut self, line: &str) -> bool {
         if self.server.enqueue_outbound(line).is_err() {
             self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+            return false;
         }
+        true
     }
 
     fn inject_console_line(&mut self, line: &str) {

@@ -390,7 +390,7 @@ pub trait NetPoller {
     );
 
     /// Queue a console line for transmission to remote clients.
-    fn send_console_line(&mut self, line: &str);
+    fn send_console_line(&mut self, line: &str) -> bool;
 
     /// Request the active TCP console connection to close after flushing responses.
     fn request_disconnect(&mut self) {}
