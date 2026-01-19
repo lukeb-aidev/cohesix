@@ -20,9 +20,11 @@
 
   <!-- FINAL: Smaller, clean, centered "C" -->
   <!-- Center (256,256), radius = 48 -->
+<g transform="translate(-12,0)">
   <path class="core"
         d="M304 222
            A48 48 0 1 0 304 290" />
+</g>
 
   <!-- Nodes -->
   <circle class="node" cx="256" cy="78"  r="18"/>

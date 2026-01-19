@@ -27,9 +27,11 @@
 
     <!-- FINAL: Recognisable centered "C", ~20% smaller -->
     <!-- Center (210,190), radius = 44 -->
+<g transform="translate(-12,0)">
     <path class="core"
           d="M254 162
              A44 44 0 1 0 254 218" />
+</g>
 
     <!-- Nodes -->
     <circle class="node" cx="210" cy="46"  r="14"/>
