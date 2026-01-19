@@ -2153,6 +2153,34 @@ Checks:
 Deliverables:
   - Updated qemu + cohsh logs showing stable tail output.
 
+Title/ID: m20f-console-utf8-safe-truncation
+Goal: Prevent log truncation from emitting invalid UTF-8 that drops console sessions.
+Inputs: apps/root-task/src/net/outbound.rs, logs/cohsh-queen-*.log.
+Changes:
+  - apps/root-task/src/net/outbound.rs — truncate log lines on UTF-8 boundaries; add regression test.
+Commands:
+  - cargo test -p root-task
+Checks:
+  - LineBuf truncation preserves valid UTF-8; cohsh no longer drops on bind/mount sequence.
+Deliverables:
+  - Updated root-task test output; cohsh interactive logs for bind/mount.
+
+Title/ID: m20f-console-parity-plan
+Goal: Capture a reproducible trace of TCP console frame integrity issues and validate cohsh/SwarmUI parity before fixes.
+Inputs: logs/tcpdump-new-*.log, logs/qemu-run-*.log, apps/root-task/src/net/stack.rs, apps/root-task/src/net/outbound.rs, apps/cohsh/src/transport/tcp.rs, apps/cohsh/src/lib.rs.
+Changes:
+  - docs/BUILD_PLAN.md — record the console parity debug/validation plan and required logs.
+Commands:
+  - SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh --sel4-build "$HOME/seL4/build" --out-dir out/cohesix --profile release --root-task-features cohesix-dev --cargo-target aarch64-unknown-none --raw-qemu --transport tcp
+  - ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
+  - ./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role worker
+  - scripts/cohsh/run_regression_batch.sh
+Checks:
+  - Console frames remain valid (no invalid UTF-8 payloads, no send.partial aborts) during the full interactive command surface.
+  - Console lock semantics preserved; concurrent attachments require explicit COHSH_CONSOLE_LOCK=0 (debug only).
+Deliverables:
+  - Updated cohsh/QEMU/tcpdump logs documenting frame integrity and interactive parity.
+
 Title/ID: m20f-cohsh-interactive-parity
 Goal: Ensure interactive cohsh commands and SwarmUI console sessions match script-mode behavior without connection churn.
 Inputs: apps/root-task/src/event/mod.rs, apps/root-task/src/net/stack.rs, apps/cohsh/src/transport/tcp.rs, apps/swarmui/src/lib.rs, logs/cohsh-*.log.

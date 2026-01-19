@@ -1181,6 +1181,13 @@ pub struct Shell<T: Transport, W: Write> {
     pool: Option<SessionPool>,
     writer: W,
     script_state: Option<ScriptState>,
+    last_attach: Option<LastAttach>,
+}
+
+#[derive(Debug, Clone)]
+struct LastAttach {
+    role: Role,
+    ticket: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -1391,6 +1398,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
             pool: None,
             writer,
             script_state: None,
+            last_attach: None,
         }
     }
 
@@ -1485,6 +1493,11 @@ impl<T: Transport, W: Write> Shell<T, W> {
             session.role()
         ))?;
         self.session = Some(session);
+        let ticket = ticket
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        self.last_attach = Some(LastAttach { role, ticket });
         Ok(())
     }
 
@@ -1616,6 +1629,8 @@ impl<T: Transport, W: Write> Shell<T, W> {
         let start = Instant::now();
         let mut checks = Vec::new();
         let mut overall_ok = true;
+        let had_session = self.session.is_some();
+        let last_attach = self.last_attach.clone();
 
         let Some(session) = self.session.clone() else {
             checks.push(TestCheck {
@@ -1632,6 +1647,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 version: TEST_REPORT_VERSION.to_owned(),
             };
             self.emit_test_report(&report, options.json)?;
+            self.restore_after_selftest(had_session, &last_attach)?;
             return Ok(report);
         };
 
@@ -1662,6 +1678,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 version: TEST_REPORT_VERSION.to_owned(),
             };
             self.emit_test_report(&report, options.json)?;
+            self.restore_after_selftest(had_session, &last_attach)?;
             return Ok(report);
         }
 
@@ -1709,7 +1726,28 @@ impl<T: Transport, W: Write> Shell<T, W> {
             version: TEST_REPORT_VERSION.to_owned(),
         };
         self.emit_test_report(&report, options.json)?;
+        self.restore_after_selftest(had_session, &last_attach)?;
         Ok(report)
+    }
+
+    fn restore_after_selftest(
+        &mut self,
+        had_session: bool,
+        last_attach: &Option<LastAttach>,
+    ) -> Result<()> {
+        if self.script_state.is_some() {
+            return Ok(());
+        }
+        if !had_session || self.session.is_some() {
+            return Ok(());
+        }
+        let Some(last_attach) = last_attach else {
+            return Ok(());
+        };
+        if let Err(err) = self.attach(last_attach.role, last_attach.ticket.as_deref()) {
+            self.write_line(&format!("selftest: reattach failed: {err}"))?;
+        }
+        Ok(())
     }
 
     fn emit_test_report(&mut self, report: &TestReport, json: bool) -> Result<()> {
@@ -2674,13 +2712,23 @@ impl<T: Transport, W: Write> Shell<T, W> {
             pooled_failures = pooled_failures.saturating_add(pooled_errors.len());
         }
 
-        let read_lines = self
-            .transport
-            .read(session, config.path.as_str())
-            .with_context(|| format!("failed to read {}", config.path))?;
+        let read_lines = match self.transport.read(session, config.path.as_str()) {
+            Ok(lines) => Some(lines),
+            Err(err) => {
+                if tcp_endpoint {
+                    info!("audit pool.bench.readback.error err={err}");
+                    None
+                } else {
+                    return Err(err).with_context(|| format!("failed to read {}", config.path));
+                }
+            }
+        };
         let _ = self.transport.drain_acknowledgements();
-        let mut observed = count_occurrences(&read_lines, pooled_prefix.as_str());
-        if self.transport.tcp_endpoint().is_some() && observed < config.ops {
+        let mut observed = read_lines
+            .as_ref()
+            .map(|lines| count_occurrences(lines, pooled_prefix.as_str()))
+            .unwrap_or(0);
+        if tcp_endpoint && (read_lines.is_none() || observed < config.ops) {
             info!(
                 "audit pool.bench.readback.fallback observed={} expected={}",
                 observed, config.ops

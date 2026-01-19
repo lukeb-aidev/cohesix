@@ -128,7 +128,15 @@ fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
         "bootstrap.format_record_line",
     );
     let max_payload = MAX_FRAME_LEN.saturating_sub(2);
-    for &byte in formatted.as_bytes().iter().take(max_payload) {
+    let formatted_bytes = formatted.as_bytes();
+    let mut copy_len = min(formatted_bytes.len(), max_payload);
+    if copy_len < formatted_bytes.len() {
+        copy_len = match core::str::from_utf8(&formatted_bytes[..copy_len]) {
+            Ok(_) => copy_len,
+            Err(err) => err.valid_up_to(),
+        };
+    }
+    for &byte in formatted_bytes.iter().take(copy_len) {
         if line.push(byte).is_err() {
             break;
         }
@@ -485,6 +493,29 @@ mod tests {
             .args(format_args!("{}", long.as_str()))
             .level(Level::Info)
             .target("root_task::bootstrap::test")
+            .build();
+        let line = format_record_line(&record);
+        assert!(line.len() <= MAX_FRAME_LEN);
+        assert!(line.ends_with(b"\r\n"));
+        assert!(core::str::from_utf8(&line).is_ok());
+    }
+
+    #[test]
+    fn bootstrap_formatting_preserves_utf8_boundary() {
+        let target = "root_task::bootstrap::test";
+        let prefix = format!("[INFO {target}] ");
+        let max_payload = MAX_FRAME_LEN.saturating_sub(2);
+        assert!(prefix.len().saturating_add(1) < max_payload);
+        let filler_len = max_payload.saturating_sub(prefix.len()).saturating_sub(1);
+        let mut message = String::new();
+        message.push_str(&"A".repeat(filler_len));
+        message.push_str("\u{2192}");
+        message.push('B');
+
+        let record = Record::builder()
+            .args(format_args!("{}", message))
+            .level(Level::Info)
+            .target(target)
             .build();
         let line = format_record_line(&record);
         assert!(line.len() <= MAX_FRAME_LEN);

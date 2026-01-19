@@ -81,6 +81,17 @@ impl LineBuf {
         }
     }
 
+    fn utf8_prefix_len(line: &[u8], max_len: usize) -> usize {
+        let cap = min(line.len(), max_len);
+        if cap == 0 {
+            return 0;
+        }
+        match core::str::from_utf8(&line[..cap]) {
+            Ok(_) => cap,
+            Err(err) => err.valid_up_to(),
+        }
+    }
+
     fn as_slice(&self) -> &[u8] {
         &self.buf[..usize::from(self.len)]
     }
@@ -94,11 +105,14 @@ impl LineBuf {
         if line.len() > copy_len {
             truncated = true;
         }
-        let head_len = if truncated {
+        let mut head_len = if truncated {
             copy_len.saturating_sub(TRUNCATION_SUFFIX.len())
         } else {
             copy_len
         };
+        if truncated {
+            head_len = Self::utf8_prefix_len(line, head_len);
+        }
         let _ = maybe_report_str_write(
             self.buf.as_mut_ptr(),
             head_len,
@@ -626,6 +640,20 @@ mod tests {
         assert_eq!(outcome.sent_frames, 1);
         let stats = coalescer.stats();
         assert!(stats.bytes_sent <= MAX_PAYLOAD as u64);
+    }
+
+    #[test]
+    fn truncation_preserves_utf8_boundary() {
+        let head_len = LINE_CAP.saturating_sub(TRUNCATION_SUFFIX.len());
+        let mut line = [b'a'; LINE_CAP + 8];
+        let idx = head_len.saturating_sub(1);
+        line[idx] = 0xe2;
+        line[idx + 1] = 0x86;
+        line[idx + 2] = 0x92;
+        let mut buf = LineBuf::new();
+        buf.store(&line);
+        assert!(core::str::from_utf8(buf.as_slice()).is_ok());
+        assert!(buf.as_slice().ends_with(TRUNCATION_SUFFIX));
     }
 
     #[test]

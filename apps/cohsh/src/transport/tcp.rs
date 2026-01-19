@@ -904,11 +904,14 @@ impl TcpTransport {
                     let line = match String::from_utf8(payload) {
                         Ok(line) => line,
                         Err(err) => {
-                            self.telemetry.log_disconnect(&err);
-                            self.rx_buf.clear();
-                            self.pending_frame_len = None;
-                            self.pending_timeouts = 0;
-                            return Ok(ReadStatus::Closed);
+                            let payload = err.into_bytes();
+                            let preview_len = payload.len().min(32);
+                            warn!(
+                                "[cohsh][tcp] invalid UTF-8 frame len={} first_bytes={:02x?}",
+                                payload.len(),
+                                &payload[..preview_len]
+                            );
+                            String::from_utf8_lossy(&payload).into_owned()
                         }
                     };
                     trace!(

@@ -67,6 +67,8 @@ use spin::Mutex;
 
 const TCP_RX_BUFFER: usize = 2048;
 const TCP_TX_BUFFER: usize = 2048;
+const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 2;
+const MAX_CONSOLE_BYTES_PER_POLL: usize = 1_600;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
 const SOCKET_CAPACITY: usize = 6;
@@ -4044,8 +4046,15 @@ impl<D: NetDevice> NetStack<D> {
             session_state.last_flush_log_ms = now_ms;
         }
         session_state.flush_blocked_since = None;
+        let mut sent_frames: u32 = 0;
+        let mut sent_bytes: usize = 0;
         while let Some(line) = server.pop_outbound() {
             if pre_auth && !(line.starts_with("OK AUTH") || line.starts_with("ERR AUTH")) {
+                server.push_outbound_front(line);
+                break;
+            }
+            if sent_frames >= MAX_CONSOLE_FRAMES_PER_POLL || sent_bytes >= MAX_CONSOLE_BYTES_PER_POLL
+            {
                 server.push_outbound_front(line);
                 break;
             }
@@ -4054,114 +4063,53 @@ impl<D: NetDevice> NetStack<D> {
             } else {
                 OutboundLane::Log
             };
-            match lane {
-                OutboundLane::Control => {
-                    if outbound.enqueue_control(line.as_bytes()).is_err() {
-                        warn!(
-                            target: "net-console",
-                            "[net-console] outbound control enqueue failed; dropping queued outbound to recover"
-                        );
-                        outbound.reset();
-                        if outbound.enqueue_control(line.as_bytes()).is_err() {
-                            server.push_outbound_front(line);
-                            break;
-                        }
-                    }
+            let mut frame: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 4 }> = HeaplessVec::new();
+            let total_len = line.len().saturating_add(4);
+            let total_len_u32 = match u32::try_from(total_len) {
+                Ok(value) => value,
+                Err(_) => {
+                    server.push_outbound_front(line);
+                    break;
                 }
-                OutboundLane::Log => outbound.enqueue_log(line.as_bytes()),
+            };
+            if frame.extend_from_slice(&total_len_u32.to_le_bytes()).is_err()
+                || frame.extend_from_slice(line.as_bytes()).is_err()
+            {
+                server.push_outbound_front(line);
+                break;
             }
-        }
-
-        let outcome = outbound.flush(now_ms, |payload, lane| {
-            if pre_auth && matches!(lane, OutboundLane::Control) {
-                info!(
-                    "[net-console] handshake: sending {}-byte response to client",
-                    payload.len()
-                );
-                info!(
-                    "[cohsh-net] send: auth response len={} role='AUTH'",
-                    payload.len()
-                );
+            if sent_bytes.saturating_add(frame.len()) > MAX_CONSOLE_BYTES_PER_POLL {
+                server.push_outbound_front(line);
+                break;
             }
-            // Avoid partial TCP writes; the console protocol depends on intact frames.
-            let available = socket.send_capacity().saturating_sub(socket.send_queue());
-            if payload.len() > available {
-                return Err(SendError::WouldBlock);
-            }
-            match socket.send_slice(payload) {
-                Ok(sent) if sent == payload.len() => {
-                    let preview_len = core::cmp::min(sent, 32);
-                    log::debug!(
-                        target: "net-console",
-                        "[tcp] send on console socket: len={} first_bytes={:02x?}",
-                        sent,
-                        &payload[..preview_len],
-                    );
-                    *conn_bytes_written = conn_bytes_written.saturating_add(sent as u64);
-                    NET_DIAG.add_bytes_written(sent as u64);
-                    counters.tcp_tx_bytes = counters.tcp_tx_bytes.saturating_add(sent as u64);
-                    if !session_state.logged_first_send {
-                        info!(
-                            target: "root_task::net",
-                            "[tcp] first-send.ok bytes={sent}"
-                        );
-                        session_state.logged_first_send = true;
-                    }
-                    if server.is_authenticated() {
-                        server.mark_activity(now_ms);
-                    }
-                    let conn_id = conn_id.unwrap_or(0);
-                    Self::trace_conn_send(conn_id, payload);
-                    #[cfg(feature = "net-trace-31337")]
-                    {
-                        let tcp_state = socket.state();
-                        let dump_len = payload.len().min(32);
-                        info!(
-                            "[cohsh-net] send: {} bytes (state={:?}, auth_state={:?}): {:02x?}",
-                            sent,
-                            tcp_state,
-                            auth_state,
-                            &payload[..dump_len]
-                        );
-                    }
-                    if pre_auth && matches!(lane, OutboundLane::Control) {
-                        info!(
-                            "[net-console] conn {}: sent pre-auth payload len={} first_bytes={:02x?}",
-                            conn_id,
-                            payload.len(),
-                            &payload[..core::cmp::min(payload.len(), 32)]
-                        );
-                        info!(
-                            "[net-console] auth response sent; session state = {:?}",
-                            auth_state
-                        );
-                    }
-                    Ok(())
+            match Self::send_payload(
+                server,
+                conn_bytes_written,
+                counters,
+                socket,
+                conn_id,
+                auth_state,
+                session_state,
+                now_ms,
+                frame.as_slice(),
+                lane,
+                pre_auth,
+            ) {
+                Ok(()) => {
+                    sent_frames = sent_frames.saturating_add(1);
+                    sent_bytes = sent_bytes.saturating_add(frame.len());
+                    activity = true;
                 }
-                Ok(sent) => {
-                    warn!(
-                        target: "root_task::net",
-                        "[tcp] send.partial sent={} expected={} (aborting console session)",
-                        sent,
-                        payload.len()
-                    );
-                    socket.abort();
-                    Err(SendError::Fault)
+                Err(SendError::WouldBlock) => {
+                    telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
+                    server.push_outbound_front(line);
+                    break;
                 }
-                Err(err) => {
-                    warn!(
-                        target: "root_task::net",
-                        "[tcp] send.err err={err:?}"
-                    );
-                    Err(SendError::WouldBlock)
+                Err(SendError::Fault) => {
+                    server.push_outbound_front(line);
+                    break;
                 }
             }
-        });
-        if outcome.sent_frames > 0 {
-            activity = true;
-        }
-        if outcome.would_block {
-            telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
         }
         let stats = outbound.stats();
         NET_DIAG.update_outbound_stats(
@@ -4175,6 +4123,104 @@ impl<D: NetDevice> NetStack<D> {
         session_state.last_flush_state = Some(socket.state());
         session_state.last_flush_auth_state = Some(auth_state);
         activity
+    }
+
+    fn send_payload(
+        server: &mut TcpConsoleServer,
+        conn_bytes_written: &mut u64,
+        counters: &mut NetCounters,
+        socket: &mut TcpSocket,
+        conn_id: Option<u64>,
+        auth_state: AuthState,
+        session_state: &mut SessionState,
+        now_ms: u64,
+        payload: &[u8],
+        lane: OutboundLane,
+        pre_auth: bool,
+    ) -> Result<(), SendError> {
+        if pre_auth && matches!(lane, OutboundLane::Control) {
+            info!(
+                "[net-console] handshake: sending {}-byte response to client",
+                payload.len()
+            );
+            info!(
+                "[cohsh-net] send: auth response len={} role='AUTH'",
+                payload.len()
+            );
+        }
+        // Avoid partial TCP writes; the console protocol depends on intact frames.
+        let available = socket.send_capacity().saturating_sub(socket.send_queue());
+        if payload.len() > available {
+            return Err(SendError::WouldBlock);
+        }
+        match socket.send_slice(payload) {
+            Ok(sent) if sent == payload.len() => {
+                let preview_len = core::cmp::min(sent, 32);
+                log::debug!(
+                    target: "net-console",
+                    "[tcp] send on console socket: len={} first_bytes={:02x?}",
+                    sent,
+                    &payload[..preview_len],
+                );
+                *conn_bytes_written = conn_bytes_written.saturating_add(sent as u64);
+                NET_DIAG.add_bytes_written(sent as u64);
+                counters.tcp_tx_bytes = counters.tcp_tx_bytes.saturating_add(sent as u64);
+                if !session_state.logged_first_send {
+                    info!(
+                        target: "root_task::net",
+                        "[tcp] first-send.ok bytes={sent}"
+                    );
+                    session_state.logged_first_send = true;
+                }
+                if server.is_authenticated() {
+                    server.mark_activity(now_ms);
+                }
+                let conn_id = conn_id.unwrap_or(0);
+                Self::trace_conn_send(conn_id, payload);
+                #[cfg(feature = "net-trace-31337")]
+                {
+                    let tcp_state = socket.state();
+                    let dump_len = payload.len().min(32);
+                    info!(
+                        "[cohsh-net] send: {} bytes (state={:?}, auth_state={:?}): {:02x?}",
+                        sent,
+                        tcp_state,
+                        auth_state,
+                        &payload[..dump_len]
+                    );
+                }
+                if pre_auth && matches!(lane, OutboundLane::Control) {
+                    info!(
+                        "[net-console] conn {}: sent pre-auth payload len={} first_bytes={:02x?}",
+                        conn_id,
+                        payload.len(),
+                        &payload[..core::cmp::min(payload.len(), 32)]
+                    );
+                    info!(
+                        "[net-console] auth response sent; session state = {:?}",
+                        auth_state
+                    );
+                }
+                Ok(())
+            }
+            Ok(sent) => {
+                warn!(
+                    target: "root_task::net",
+                    "[tcp] send.partial sent={} expected={} (aborting console session)",
+                    sent,
+                    payload.len()
+                );
+                socket.abort();
+                Err(SendError::Fault)
+            }
+            Err(err) => {
+                warn!(
+                    target: "root_task::net",
+                    "[tcp] send.err err={err:?}"
+                );
+                Err(SendError::WouldBlock)
+            }
+        }
     }
 
     fn log_conn_summary(&self, conn_id: u64) {
