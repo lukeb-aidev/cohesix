@@ -2,8 +2,17 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Provide a high-level overview of Cohesix architecture and workspace layout. -->
 <!-- Author: Lukas Bower -->
-# Cohesix
-
+<table width="100%" cellpadding="0" cellspacing="0">
+  <tr>
+    <td align="center" bgcolor="#333333">
+      <img
+        src="apps/swarmui/frontend/assets/icons/cohesix-header.svg"
+        alt="Cohesix"
+        width="720"
+      />
+    </td>
+  </tr>
+</table>
 ## Why Cohesix?
 
 Cohesix explores a specific and deliberately narrow problem space: **how to build a small, auditable, and secure control plane for orchestrating distributed edge GPU systems**, without inheriting the complexity, opacity, and attack surface of general-purpose operating systems.
