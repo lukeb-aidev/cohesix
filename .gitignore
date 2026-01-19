@@ -1,11 +1,7 @@
 # Author: Lukas Bower
 /target
 /.target_check
-/out/cohesix
-/out/cohesix-gated
-/out/regression-logs
-!/out/manifests/
-!/out/manifests/**
+/out
 Cargo.lock
 .DS_Store
 /.vscode
