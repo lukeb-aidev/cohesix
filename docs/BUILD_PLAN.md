@@ -75,7 +75,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [20c](#20c) | SwarmUI Desktop (Tauri, Pure 9P/TCP) | Complete |
 | [20d](#20d) | SwarmUI Live Hive Rendering (PixiJS, GPU-First | Complete |
 | [20e](#20e) | CLI/UI Convergence Tests | Complete |
-| [20f](#20f) | UI Security Hardening (Tickets & Quotas) | In Progress |
+| [20f](#20f) | UI Security Hardening (Tickets & Quotas) | Complete |
 | [20f1](#20f1) | SwarmUI Host Tool Packaging + Tauri API Fix | Complete |
 | [20g](#20g) | Deterministic Snapshot & Replay (UI Testing) | Pending |
 | [21](#21) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
@@ -2046,28 +2046,40 @@ Deliverables:
 ## Milestone 20f — UI Security Hardening (Tickets & Quotas) <a id="20f"></a> 
 [Milestones](#Milestones)
 
-**Status:** In Progress — Ticket scopes/quotas are enforced; CLI/SwarmUI console transport alignment in progress.
+**Status:** Complete — Ticket scopes/quotas are enforced; multi-worker cohsh parity, command surface checks, and deterministic regression batching validated.
 
 **Why now (compiler):** With UI parity established, enforce least privilege and quotas to protect interactive sessions.
 
 **Goal**
-Add ticket-scoped quotas and audit metrics for UI interactions without altering ACK/ERR grammar.
+Lock UI/CLI security quotas and console grammar parity while proving cohsh works cleanly with multiple workers and a deterministic regression batch.
 
 **Deliverables**
 - Ticket scopes `{path, verb, rate}` with per-ticket bandwidth and cursor quotas enforced in NineDoor and consumed by UI/CLI.
 - `PumpMetrics` adds `ui_reads`, `ui_denies`; audit lines emitted for denials with manifest-driven limits.
-- CLI/UI regression scripts proving permission denials and quota breaches across transports.
+- CLI/UI regression scripts prove permission denials and quota breaches across transports.
+- Cohsh multi-worker regression coverage exercises spawn/tail/kill across multiple worker telemetry paths without ID drift.
+- `scripts/cohsh/run_regression_batch.sh` is a reliable manual compliance pack for this milestone (base + gated, deterministic worker-id scripts).
+- SwarmUI/CLI transcripts remain byte-stable against cohsh-core fixtures; no ACK/ERR/END drift.
 
 **Commands**
 - `cargo test -p nine-door --test ui_security`
 - `cargo test -p cohsh-core`
+- `cargo test -p cohsh --test script_catalog`
+- `cargo test -p swarmui --test security`
+- `scripts/regression/transcript_compare.sh`
+- `scripts/regression/client_vs_console.sh`
 - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh`
+- `scripts/cohsh/run_regression_batch.sh`
 
 **Checks (DoD)**
 - Write with read-only ticket → `ERR EPERM` across all transports; denial audited.
 - Quota breach → `ERR ELIMIT`; audit lines consistent and deterministic; no duplicate frames.
 - Abuse case: replayed ticket beyond expiry refuses access with deterministic ERR without consuming additional quota.
-- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
+- Multi-worker regression: spawn two workers, tail each telemetry path, kill both, and observe no path errors.
+- Cohsh command surface checklist passes for queen + worker sessions without console disconnects.
+- SwarmUI console transport passes transcript/security tests with no grammar drift.
+- Regression batch passes base + gated with deterministic worker-id scripts and archived logs.
+- UI/CLI/console equivalence preserved: ACK/ERR/END sequences remain byte-stable relative to the 7c baseline.
 
 **Compiler touchpoints**
 - `coh-rtc` emits ticket quota tables and hashes referenced by docs/SECURITY.md and docs/USERLAND_AND_CLI.md; regeneration guard enforces consistency.
@@ -2088,19 +2100,36 @@ Deliverables:
   - Quota tables documented via compiler output in docs/SECURITY.md.
 
 Title/ID: m20f-cli-ui-regressions
-Goal: Validate quota enforcement across CLI and UI clients.
-Inputs: scripts/cohsh/telemetry_ring.coh (extended), crates/cohsh-core/src/command.rs, SwarmUI/coh-status regression hooks.
+Goal: Validate quota enforcement and multi-worker parity across CLI and UI clients.
+Inputs: scripts/cohsh/telemetry_ring.coh, scripts/cohsh/shard_1k.coh, apps/cohsh/tests/script_catalog.rs, apps/swarmui/tests/security.rs.
 Changes:
-  - scripts/cohsh/telemetry_ring.coh — add read-only ticket write attempt and quota exhaustion loop.
-  - crates/cohsh-core/src/command.rs — widen ticket length cap for quota-bearing regression tickets.
+  - scripts/cohsh/telemetry_ring.coh — ensure read-only ticket write attempt and quota exhaustion loop remain deterministic.
+  - scripts/cohsh/shard_1k.coh — add multi-worker coverage (second spawn + telemetry checks).
+  - apps/cohsh/tests/script_catalog.rs — refresh script hashes to include updated regression scripts.
   - apps/swarmui/tests/security.rs — mirror quota abuse from UI.
 Commands:
   - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh
+  - cargo test -p cohsh --test script_catalog
   - cargo test -p swarmui --test security
 Checks:
   - ERR EPERM/ELIMIT identical across transports; metrics observed in /proc/ingest/watch.
+  - Multi-worker telemetry paths pass `tail` without invalid path errors.
 Deliverables:
   - Regression outputs captured; manifest hash noted in docs/USERLAND_AND_CLI.md.
+
+Title/ID: m20f-regression-batch-determinism
+Goal: Make the regression batch deterministic for worker-id dependent scripts and document it in the test plan.
+Inputs: scripts/cohsh/run_regression_batch.sh, docs/TEST_PLAN.md, resources/proc_tests/selftest_full.coh.
+Changes:
+  - scripts/cohsh/run_regression_batch.sh — isolate worker-id scripts into dedicated boots and archive logs per script.
+  - resources/proc_tests/selftest_full.coh — align worker ids with deterministic spawn ordering.
+  - docs/TEST_PLAN.md — add regression batch requirements and ordering.
+Commands:
+  - scripts/cohsh/run_regression_batch.sh
+Checks:
+  - Regression batch passes with no worker-id drift across scripts.
+Deliverables:
+  - Updated test plan documenting the manual regression pack.
 
 Title/ID: m20f-cohsh-tcp-pool-safety
 Goal: Stabilize cohsh TCP pooling against the single-console connection while preserving pool bench semantics.

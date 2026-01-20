@@ -18,9 +18,7 @@ use nine_door::NineDoor;
 use secure9p_codec::OpenMode;
 
 const SCENARIO: &str = "converge_v0";
-const POOL_CONTROL_SESSIONS: usize = 2;
-const POOL_TELEMETRY_SESSIONS: usize = 4;
-const POOL_TOTAL_SESSIONS: usize = POOL_CONTROL_SESSIONS + POOL_TELEMETRY_SESSIONS;
+const CONSOLE_ACK_FANOUT: usize = 1;
 const WORKER_ID: &str = "worker-1";
 const QUEEN_LOG_PATH: &str = "/log/queen.log";
 const SPAWN_PAYLOAD: &str = "{\"spawn\":\"heartbeat\",\"ticks\":1,\"budget\":{\"ttl_s\":30}}";
@@ -62,7 +60,7 @@ fn run_converge_transcript(server: &NineDoor) -> Result<Vec<String>> {
 
     let mut transcript = Vec::new();
     let detail = format!("role={}", role_label(Role::Queen));
-    for _ in 0..POOL_TOTAL_SESSIONS {
+    for _ in 0..CONSOLE_ACK_FANOUT {
         transcript.push(render_ack_line(
             AckStatus::Ok,
             ConsoleVerb::Attach.ack_label(),
@@ -76,7 +74,7 @@ fn run_converge_transcript(server: &NineDoor) -> Result<Vec<String>> {
     let telemetry_path = format!("/worker/{}/telemetry", WORKER_ID);
     append_tail(&mut transcript, &mut client, &telemetry_path)?;
 
-    for _ in 0..POOL_TOTAL_SESSIONS {
+    for _ in 0..CONSOLE_ACK_FANOUT {
         transcript.push(render_ack_line(
             AckStatus::Ok,
             ConsoleVerb::Quit.ack_label(),

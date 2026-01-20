@@ -4,11 +4,20 @@ attach queen
 EXPECT OK
 spawn heartbeat ticks=10 ttl_s=60
 EXPECT OK
+spawn heartbeat ticks=10 ttl_s=60
+EXPECT OK
 # worker-1 shard label = sha256("worker-1")[0] = 0x13
-echo shard-ok > /shard/13/worker/worker-1/telemetry
+echo shard-ok-1 > /shard/13/worker/worker-1/telemetry
 EXPECT OK
 EXPECT SUBSTR path=/shard/13/worker/worker-1/telemetry
-echo legacy-ok > /worker/worker-1/telemetry
+echo legacy-ok-1 > /worker/worker-1/telemetry
 EXPECT OK
 EXPECT SUBSTR path=/worker/worker-1/telemetry
+# worker-2 shard label = sha256("worker-2")[0] = 0x1c
+echo shard-ok-2 > /shard/1c/worker/worker-2/telemetry
+EXPECT OK
+EXPECT SUBSTR path=/shard/1c/worker/worker-2/telemetry
+echo legacy-ok-2 > /worker/worker-2/telemetry
+EXPECT OK
+EXPECT SUBSTR path=/worker/worker-2/telemetry
 quit

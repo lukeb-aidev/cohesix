@@ -998,6 +998,23 @@ struct HostCommandTarget {
     loopback: HeaplessString<48>,
 }
 
+#[cfg(feature = "cohesix-dev")]
+fn tcp_state_label(state: TcpState) -> &'static str {
+    match state {
+        TcpState::Closed => "Closed",
+        TcpState::Listen => "Listen",
+        TcpState::SynSent => "SynSent",
+        TcpState::SynReceived => "SynReceived",
+        TcpState::Established => "Established",
+        TcpState::FinWait1 => "FinWait1",
+        TcpState::FinWait2 => "FinWait2",
+        TcpState::CloseWait => "CloseWait",
+        TcpState::Closing => "Closing",
+        TcpState::LastAck => "LastAck",
+        TcpState::TimeWait => "TimeWait",
+    }
+}
+
 impl SelfTestState {
     fn new(enabled: bool) -> Self {
         Self {
@@ -3994,6 +4011,23 @@ impl<D: NetDevice> NetStack<D> {
         session_state: &mut SessionState,
     ) -> bool {
         if !socket.can_send() {
+            #[cfg(feature = "cohesix-dev")]
+            if server.has_outbound() || outbound.has_pending() {
+                let tcp_state = tcp_state_label(socket.state());
+                let send_queue = socket.send_queue();
+                let send_capacity = socket.send_capacity();
+                let mut message: HeaplessString<128> = HeaplessString::new();
+                let _ = message.push_str("audit tcp.flush.blocked state=");
+                let _ = message.push_str(tcp_state);
+                let _ = write!(
+                    message,
+                    " queue={}/{} auth={:?}",
+                    send_queue,
+                    send_capacity,
+                    auth_state
+                );
+                crate::debug_uart::debug_uart_line(message.as_str());
+            }
             return false;
         }
         let pre_auth = !server.is_authenticated();
@@ -4151,6 +4185,19 @@ impl<D: NetDevice> NetStack<D> {
         // Avoid partial TCP writes; the console protocol depends on intact frames.
         let available = socket.send_capacity().saturating_sub(socket.send_queue());
         if payload.len() > available {
+            #[cfg(feature = "cohesix-dev")]
+            {
+                let mut message: HeaplessString<128> = HeaplessString::new();
+                let _ = write!(
+                    message,
+                    "audit tcp.send.blocked len={} avail={} state={:?} auth={:?}",
+                    payload.len(),
+                    available,
+                    socket.state(),
+                    auth_state
+                );
+                crate::debug_uart::debug_uart_line(message.as_str());
+            }
             return Err(SendError::WouldBlock);
         }
         match socket.send_slice(payload) {
@@ -4204,6 +4251,19 @@ impl<D: NetDevice> NetStack<D> {
                 Ok(())
             }
             Ok(sent) => {
+                #[cfg(feature = "cohesix-dev")]
+                {
+                    let mut message: HeaplessString<128> = HeaplessString::new();
+                    let _ = write!(
+                        message,
+                        "audit tcp.send.partial sent={} expected={} state={:?} auth={:?}",
+                        sent,
+                        payload.len(),
+                        socket.state(),
+                        auth_state
+                    );
+                    crate::debug_uart::debug_uart_line(message.as_str());
+                }
                 warn!(
                     target: "root_task::net",
                     "[tcp] send.partial sent={} expected={} (aborting console session)",
@@ -4214,6 +4274,18 @@ impl<D: NetDevice> NetStack<D> {
                 Err(SendError::Fault)
             }
             Err(err) => {
+                #[cfg(feature = "cohesix-dev")]
+                {
+                    let mut message: HeaplessString<128> = HeaplessString::new();
+                    let _ = write!(
+                        message,
+                        "audit tcp.send.error err={:?} state={:?} auth={:?}",
+                        err,
+                        socket.state(),
+                        auth_state
+                    );
+                    crate::debug_uart::debug_uart_line(message.as_str());
+                }
                 warn!(
                     target: "root_task::net",
                     "[tcp] send.err err={err:?}"
@@ -4321,6 +4393,33 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     fn send_console_line(&mut self, line: &str) -> bool {
         if !self.stage_policy.allow_console_io {
             return false;
+        }
+        #[cfg(feature = "cohesix-dev")]
+        if line.starts_with("OK CAT") || line.starts_with("OK ECHO") || line == "END" {
+            let socket = self.sockets.get::<TcpSocket>(self.tcp_handle);
+            let tcp_state = tcp_state_label(socket.state());
+            let send_queue = socket.send_queue();
+            let send_capacity = socket.send_capacity();
+            let mut message: HeaplessString<128> = HeaplessString::new();
+            let _ = message.push_str("audit tcp.send.enqueue line=");
+            let _ = message.push_str(if line.starts_with("OK CAT") {
+                "OK CAT"
+            } else if line.starts_with("OK ECHO") {
+                "OK ECHO"
+            } else {
+                "END"
+            });
+            let _ = message.push_str(" state=");
+            let _ = message.push_str(tcp_state);
+            let _ = write!(
+                message,
+                " queue={}/{} active={} conn_id={:?}",
+                send_queue,
+                send_capacity,
+                self.session_active,
+                self.active_client_id
+            );
+            crate::debug_uart::debug_uart_line(message.as_str());
         }
         let enqueue_result = self.server.enqueue_outbound(line);
         if enqueue_result.is_err() {

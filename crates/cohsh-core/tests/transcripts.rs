@@ -30,9 +30,7 @@ const QUEEN_LOG_PATH: &str = "/log/queen.log";
 const QUEEN_SECRET: &str = "queen-secret";
 const WORKER_SECRET: &str = "worker-secret";
 const INVALID_SECRET: &str = "invalid-secret";
-const POOL_CONTROL_SESSIONS: usize = 2;
-const POOL_TELEMETRY_SESSIONS: usize = 4;
-const POOL_TOTAL_SESSIONS: usize = POOL_CONTROL_SESSIONS + POOL_TELEMETRY_SESSIONS;
+const CONSOLE_ACK_FANOUT: usize = 1;
 
 enum ScriptOp {
     Command(String),
@@ -677,19 +675,19 @@ fn transcripts_match_across_transports() {
             name: "boot_v0",
             ops: boot_ops,
             script_path: boot_script_path,
-            ack_fanout: POOL_TOTAL_SESSIONS,
+            ack_fanout: CONSOLE_ACK_FANOUT,
         },
         Scenario {
             name: "abuse",
             ops: abuse_ops,
             script_path: abuse_script_path,
-            ack_fanout: POOL_TOTAL_SESSIONS,
+            ack_fanout: CONSOLE_ACK_FANOUT,
         },
         Scenario {
             name: CONVERGE_SCENARIO,
             ops: converge_ops,
             script_path: converge_script_path,
-            ack_fanout: POOL_TOTAL_SESSIONS,
+            ack_fanout: CONSOLE_ACK_FANOUT,
         },
     ];
 

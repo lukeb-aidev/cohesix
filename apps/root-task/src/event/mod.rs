@@ -1369,7 +1369,20 @@ where
 
     /// Emit a console line to the serial console and any attached TCP clients.
     pub fn emit_console_line(&mut self, line: &str) {
-        let _ = self.try_emit_console_line(line);
+        if !self.try_emit_console_line(line) {
+            #[cfg(feature = "cohesix-dev")]
+            {
+                let source = match self.last_input_source {
+                    ConsoleInputSource::Serial => "serial",
+                    ConsoleInputSource::Net => "net",
+                };
+                let message = format_message(format_args!(
+                    "audit console.emit.failed source={} line={}",
+                    source, line
+                ));
+                crate::debug_uart::debug_uart_line(message.as_str());
+            }
+        }
     }
 
     fn try_emit_console_line(&mut self, line: &str) -> bool {
@@ -2077,7 +2090,9 @@ where
                                     Ok(lines) => {
                                         let data_bytes =
                                             lines.iter().map(|line| line.len() as u64).sum();
-                                        if let Err(denial) = self.check_ticket_bandwidth(data_bytes) {
+                                        let log_path = path_str == "/log/queen.log";
+                                        let stream_bytes = if log_path { 0 } else { data_bytes };
+                                        if let Err(denial) = self.check_ticket_bandwidth(stream_bytes) {
                                             self.record_ticket_denial(
                                                 path_str,
                                                 TicketVerb::Read,
@@ -2109,188 +2124,229 @@ where
                                                     }
                                                 };
                                             if cmd_status != "err" {
-                                                let summary_storage: Option<
-                                                    HeaplessVec<
+                                                let summary = {
+                                                    // Prefer user echo lines while also surfacing newer audit entries.
+                                                    // Keep references to avoid a large stack copy for /log/queen.log.
+                                                    let user_lines: HeaplessVec<
                                                         HeaplessString<DEFAULT_LINE_CAPACITY>,
+                                                        { log_buffer::LOG_USER_SNAPSHOT_LINES },
+                                                    > = if log_path {
+                                                        log_buffer::snapshot_user_lines::<
+                                                            DEFAULT_LINE_CAPACITY,
+                                                            { log_buffer::LOG_USER_SNAPSHOT_LINES },
+                                                        >()
+                                                    } else {
+                                                        HeaplessVec::new()
+                                                    };
+                                                    let mut summary_refs: HeaplessVec<
+                                                        &str,
                                                         {
                                                             log_buffer::LOG_SNAPSHOT_LINES
                                                                 + log_buffer::LOG_USER_SNAPSHOT_LINES
                                                         },
-                                                    >,
-                                                > = if path.as_str() == "/log/queen.log" {
-                                                    let user_lines = log_buffer::snapshot_user_lines::<
-                                                        DEFAULT_LINE_CAPACITY,
-                                                        { log_buffer::LOG_USER_SNAPSHOT_LINES },
-                                                    >();
-                                                    if user_lines.is_empty() {
-                                                        None
+                                                    > = HeaplessVec::new();
+                                                    if log_path {
+                                                        if user_lines.is_empty() {
+                                                            for line in lines.iter() {
+                                                                if summary_refs.push(line.as_str()).is_err() {
+                                                                    break;
+                                                                }
+                                                            }
+                                                        } else {
+                                                            for user_line in user_lines.iter() {
+                                                                if summary_refs
+                                                                    .push(user_line.as_str())
+                                                                    .is_err()
+                                                                {
+                                                                    break;
+                                                                }
+                                                            }
+                                                            let mut last_user_idx: Option<usize> = None;
+                                                            for (idx, line) in
+                                                                lines.iter().enumerate()
+                                                            {
+                                                                if user_lines
+                                                                    .iter()
+                                                                    .any(|user_line| {
+                                                                        user_line.as_str()
+                                                                            == line.as_str()
+                                                                    })
+                                                                {
+                                                                    last_user_idx = Some(idx);
+                                                                }
+                                                            }
+                                                            let start = last_user_idx
+                                                                .map(|idx| idx + 1)
+                                                                .unwrap_or(0);
+                                                            for line in lines.iter().skip(start) {
+                                                                if line.as_str().starts_with('[') {
+                                                                    continue;
+                                                                }
+                                                                if user_lines
+                                                                    .iter()
+                                                                    .any(|user_line| {
+                                                                        user_line.as_str()
+                                                                            == line.as_str()
+                                                                    })
+                                                                {
+                                                                    continue;
+                                                                }
+                                                                if summary_refs
+                                                                    .push(line.as_str())
+                                                                    .is_err()
+                                                                {
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
                                                     } else {
-                                                        let mut merged: HeaplessVec<
-                                                            HeaplessString<DEFAULT_LINE_CAPACITY>,
-                                                            {
-                                                                log_buffer::LOG_SNAPSHOT_LINES
-                                                                    + log_buffer::LOG_USER_SNAPSHOT_LINES
-                                                            },
-                                                        > = HeaplessVec::new();
-                                                        for user_line in user_lines.iter() {
-                                                            let _ = merged.push(user_line.clone());
-                                                        }
-                                                        let mut last_user_idx: Option<usize> = None;
-                                                        for (idx, line) in lines.iter().enumerate() {
-                                                            if user_lines
-                                                                .iter()
-                                                                .any(|user_line| {
-                                                                    user_line.as_str() == line.as_str()
-                                                                })
-                                                            {
-                                                                last_user_idx = Some(idx);
+                                                        for line in lines.iter() {
+                                                            if summary_refs.push(line.as_str()).is_err() {
+                                                                break;
                                                             }
                                                         }
-                                                        let start = last_user_idx
-                                                            .map(|idx| idx + 1)
-                                                            .unwrap_or(0);
-                                                        for line in lines.iter().skip(start) {
-                                                            if line.as_str().starts_with('[') {
-                                                                continue;
-                                                            }
-                                                            if user_lines
-                                                                .iter()
-                                                                .any(|user_line| {
-                                                                    user_line.as_str() == line.as_str()
-                                                                })
-                                                            {
-                                                                continue;
-                                                            }
-                                                            let _ = merged.push(line.clone());
-                                                        }
-                                                        Some(merged)
                                                     }
-                                                } else {
-                                                    None
-                                                };
-                                                // Prefer user echo lines while also surfacing newer audit entries.
-                                                let summary_lines: &[HeaplessString<DEFAULT_LINE_CAPACITY>] =
-                                                    summary_storage
-                                                        .as_ref()
-                                                        .map(|lines| lines.as_slice())
-                                                        .unwrap_or(lines.as_slice());
-                                                let mut summary: HeaplessString<128> =
-                                                    HeaplessString::new();
-                                                let mut selected: HeaplessVec<
-                                                    usize,
-                                                    { log_buffer::LOG_SNAPSHOT_LINES },
-                                                > = HeaplessVec::new();
-                                                let mut total_len = 0usize;
-                                                let max_line_len = summary.capacity() / 2;
-                                                let mut prefer_user_lines = true;
-                                                for _pass in 0..2 {
-                                                    for (idx, line) in
-                                                        summary_lines.iter().enumerate().rev()
-                                                    {
-                                                        if prefer_user_lines
-                                                            && line.as_str().starts_with('[')
+                                                    let summary_lines: &[&str] = summary_refs.as_slice();
+                                                    let mut summary: HeaplessString<128> =
+                                                        HeaplessString::new();
+                                                    let mut selected: HeaplessVec<
+                                                        usize,
+                                                        { log_buffer::LOG_SNAPSHOT_LINES },
+                                                    > = HeaplessVec::new();
+                                                    let mut total_len = 0usize;
+                                                    let max_line_len = summary.capacity() / 2;
+                                                    let mut prefer_user_lines = true;
+                                                    for _pass in 0..2 {
+                                                        for (idx, line) in
+                                                            summary_lines.iter().enumerate().rev()
                                                         {
-                                                            continue;
+                                                            if prefer_user_lines
+                                                                && line.starts_with('[')
+                                                            {
+                                                                continue;
+                                                            }
+                                                            let line_len = line.len();
+                                                            if line_len > max_line_len {
+                                                                continue;
+                                                            }
+                                                            let sep = if total_len == 0 { 0 } else { 1 };
+                                                            if line_len
+                                                                .saturating_add(sep)
+                                                                .saturating_add(total_len)
+                                                                > summary.capacity()
+                                                            {
+                                                                continue;
+                                                            }
+                                                            total_len = total_len
+                                                                .saturating_add(line_len)
+                                                                .saturating_add(sep);
+                                                            if selected.push(idx).is_err() {
+                                                                break;
+                                                            }
                                                         }
-                                                        let line_len = line.len();
-                                                        if line_len > max_line_len {
-                                                            continue;
-                                                        }
-                                                        let sep = if total_len == 0 { 0 } else { 1 };
-                                                        if line_len
-                                                            .saturating_add(sep)
-                                                            .saturating_add(total_len)
-                                                            > summary.capacity()
-                                                        {
-                                                            continue;
-                                                        }
-                                                        total_len = total_len
-                                                            .saturating_add(line_len)
-                                                            .saturating_add(sep);
-                                                        if selected.push(idx).is_err() {
+                                                        if !selected.is_empty() || !prefer_user_lines {
                                                             break;
                                                         }
+                                                        selected.clear();
+                                                        total_len = 0;
+                                                        prefer_user_lines = false;
                                                     }
-                                                    if !selected.is_empty() || !prefer_user_lines {
-                                                        break;
-                                                    }
-                                                    selected.clear();
-                                                    total_len = 0;
-                                                    prefer_user_lines = false;
-                                                }
-                                                if selected.is_empty() && !summary_lines.is_empty() {
-                                                    if let Some(line) = summary_lines.last() {
-                                                        for ch in line.as_str().chars() {
-                                                            if summary.push(ch).is_err() {
-                                                                break;
-                                                            }
-                                                        }
-                                                    }
-                                                } else {
-                                                    for (pos, idx) in selected.iter().rev().enumerate()
+                                                    if selected.is_empty()
+                                                        && !summary_lines.is_empty()
                                                     {
-                                                        if pos > 0 {
-                                                            if summary.push('|').is_err() {
-                                                                break;
-                                                            }
-                                                        }
-                                                        if let Some(line) = summary_lines.get(*idx) {
-                                                            if summary.push_str(line.as_str()).is_err() {
-                                                                break;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                if path.as_str().starts_with("/updates/")
-                                                    || path.as_str().starts_with("/models/")
-                                                {
-                                                    if let Some(line) = summary_lines.first() {
-                                                        if line.as_str().starts_with("b64:") {
-                                                            summary.clear();
-                                                            for ch in line.as_str().chars() {
+                                                        if let Some(line) = summary_lines.last() {
+                                                            for ch in line.chars() {
                                                                 if summary.push(ch).is_err() {
                                                                     break;
                                                                 }
                                                             }
                                                         }
-                                                    }
-                                                }
-                                                let max_summary_len = 128usize.saturating_sub(
-                                                    "path=".len() + path.as_str().len() + " data=".len(),
-                                                );
-                                                if summary.len() > max_summary_len {
-                                                    let mut trimmed: HeaplessString<128> =
-                                                        HeaplessString::new();
-                                                    for ch in summary.as_str().chars() {
-                                                        if trimmed.len() >= max_summary_len {
-                                                            break;
+                                                    } else {
+                                                        for (pos, idx) in
+                                                            selected.iter().rev().enumerate()
+                                                        {
+                                                            if pos > 0 {
+                                                                if summary.push('|').is_err() {
+                                                                    break;
+                                                                }
+                                                            }
+                                                            if let Some(line) =
+                                                                summary_lines.get(*idx)
+                                                            {
+                                                                if summary.push_str(line).is_err() {
+                                                                    break;
+                                                                }
+                                                            }
                                                         }
-                                                        if trimmed.push(ch).is_err() {
-                                                            break;
+                                                    }
+                                                    if path_str.starts_with("/updates/")
+                                                        || path_str.starts_with("/models/")
+                                                    {
+                                                        if let Some(line) = summary_lines.first() {
+                                                            if line.starts_with("b64:") {
+                                                                summary.clear();
+                                                                for ch in line.chars() {
+                                                                    if summary.push(ch).is_err() {
+                                                                        break;
+                                                                    }
+                                                                }
+                                                            }
                                                         }
                                                     }
-                                                    summary = trimmed;
-                                                }
+                                                    let max_summary_len = 128usize.saturating_sub(
+                                                        "path=".len()
+                                                            + path_str.len()
+                                                            + " data=".len(),
+                                                    );
+                                                    if summary.len() > max_summary_len {
+                                                        let mut trimmed: HeaplessString<128> =
+                                                            HeaplessString::new();
+                                                        for ch in summary.as_str().chars() {
+                                                            if trimmed.len() >= max_summary_len {
+                                                                break;
+                                                            }
+                                                            if trimmed.push(ch).is_err() {
+                                                                break;
+                                                            }
+                                                        }
+                                                        summary = trimmed;
+                                                    }
+                                                    summary
+                                                };
                                                 let detail = format_message(format_args!(
                                                     "path={} data={}",
                                                     path_str,
                                                     summary.as_str()
                                                 ));
+                                                #[cfg(feature = "cohesix-dev")]
+                                                {
+                                                    let message = format_message(format_args!(
+                                                        "audit cat.ack path={}",
+                                                        path_str
+                                                    ));
+                                                    crate::debug_uart::debug_uart_line(
+                                                        message.as_str(),
+                                                    );
+                                                }
                                                 self.emit_ack_ok(verb_label, Some(detail.as_str()));
                                                 self.metrics.ui_reads =
                                                     self.metrics.ui_reads.saturating_add(1);
                                                 self.stream_end_pending = true;
-                                                self.pending_stream = Some(PendingStream {
-                                                    lines,
-                                                    next_line: 0,
-                                                    bandwidth_bytes: data_bytes,
-                                                    cursor: cursor_check.map(|check| PendingCursor {
-                                                        path_key: path_str.to_owned(),
-                                                        offset: 0,
-                                                        len: data_bytes as usize,
-                                                        check,
-                                                    }),
-                                                });
+                                                if log_path {
+                                                    self.pending_stream = None;
+                                                } else {
+                                                    self.pending_stream = Some(PendingStream {
+                                                        lines,
+                                                        next_line: 0,
+                                                        bandwidth_bytes: stream_bytes,
+                                                        cursor: cursor_check.map(|check| PendingCursor {
+                                                            path_key: path_str.to_owned(),
+                                                            offset: 0,
+                                                            len: data_bytes as usize,
+                                                            check,
+                                                        }),
+                                                    });
+                                                }
                                             }
                                         }
                                     }

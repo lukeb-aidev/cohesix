@@ -19,9 +19,7 @@ use secure9p_codec::OpenMode;
 use swarmui::{SwarmUiBackend, SwarmUiConfig, SwarmUiTransportFactory};
 
 const SCENARIO: &str = "converge_v0";
-const POOL_CONTROL_SESSIONS: usize = 2;
-const POOL_TELEMETRY_SESSIONS: usize = 4;
-const POOL_TOTAL_SESSIONS: usize = POOL_CONTROL_SESSIONS + POOL_TELEMETRY_SESSIONS;
+const CONSOLE_ACK_FANOUT: usize = 1;
 const WORKER_ID: &str = "worker-1";
 const QUEEN_LOG_PATH: &str = "/log/queen.log";
 const SPAWN_PAYLOAD: &str = "{\"spawn\":\"heartbeat\",\"ticks\":1,\"budget\":{\"ttl_s\":30}}";
@@ -82,7 +80,7 @@ fn run_converge_transcript(server: &NineDoor) -> Result<Vec<String>> {
 
     let mut transcript = Vec::new();
     let attach = backend.attach(Role::Queen, None);
-    for _ in 0..POOL_TOTAL_SESSIONS {
+    for _ in 0..CONSOLE_ACK_FANOUT {
         transcript.extend(attach.lines.iter().cloned());
     }
 
@@ -94,7 +92,7 @@ fn run_converge_transcript(server: &NineDoor) -> Result<Vec<String>> {
     transcript.extend(telemetry.lines);
     assert_eq!(backend.active_tails(), 0);
 
-    for _ in 0..POOL_TOTAL_SESSIONS {
+    for _ in 0..CONSOLE_ACK_FANOUT {
         transcript.push(render_ack_line(
             AckStatus::Ok,
             ConsoleVerb::Quit.ack_label(),

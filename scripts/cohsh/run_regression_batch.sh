@@ -3,7 +3,7 @@
 # Purpose: Run the cohsh .coh regression pack in two QEMU boots (base + gated).
 
 # Note: override timeouts via env vars, e.g. READY_TIMEOUT=300 PORT_TIMEOUT=60 QUIT_CLOSE_TIMEOUT=60 scripts/cohsh/run_regression_batch.sh
-# ** Note: typical end-to-end runtime is ~17 minutes; plan for >= 20 minutes to avoid repeated retries.
+# ** Note: typical end-to-end runtime is ~25 minutes; plan for >= 30 minutes to avoid repeated retries.
 
 set -euo pipefail
 
@@ -13,12 +13,18 @@ BASE_SCRIPTS=(
     "boot_v0.coh"
     "9p_batch.coh"
     "host_absent.coh"
-    "telemetry_ring.coh"
-    "shard_1k.coh"
     "observe_watch.coh"
     "cas_roundtrip.coh"
     "tcp_basic.coh"
     "session_pool.coh"
+)
+
+BASE_TELEMETRY_SCRIPTS=(
+    "telemetry_ring.coh"
+)
+
+BASE_SHARD_SCRIPTS=(
+    "shard_1k.coh"
 )
 
 GATED_SCRIPTS=(
@@ -51,6 +57,16 @@ try:
 except OSError:
     sys.exit(1)
 PY
+    local status=$?
+    if [ "$status" -eq 0 ]; then
+        return 0
+    fi
+    if command -v lsof >/dev/null 2>&1; then
+        if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
 }
 
 wait_port_ready() {
@@ -305,6 +321,14 @@ if ! run_batch "base" "$BASE_MANIFEST" "out/cohesix" "${BASE_SCRIPTS[@]}"; then
     exit 1
 fi
 
+if ! run_batch "base-telemetry" "$BASE_MANIFEST" "out/cohesix" "${BASE_TELEMETRY_SCRIPTS[@]}"; then
+    exit 1
+fi
+
+if ! run_batch "base-shard" "$BASE_MANIFEST" "out/cohesix" "${BASE_SHARD_SCRIPTS[@]}"; then
+    exit 1
+fi
+
 if ! run_batch "gated" "$GATED_MANIFEST" "out/cohesix-gated" "${GATED_SCRIPTS[@]}"; then
     exit 1
 fi
@@ -324,4 +348,4 @@ cargo run -p coh-rtc -- \
     --cohsh-grammar-doc "$PROJECT_ROOT/docs/snippets/cohsh_grammar.md" \
     --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md"
 
-echo "regression batch complete: $(( ${#BASE_SCRIPTS[@]} + ${#GATED_SCRIPTS[@]} )) scripts passed"
+echo "regression batch complete: $(( ${#BASE_SCRIPTS[@]} + ${#BASE_TELEMETRY_SCRIPTS[@]} + ${#BASE_SHARD_SCRIPTS[@]} + ${#GATED_SCRIPTS[@]} )) scripts passed"
