@@ -1058,10 +1058,15 @@ impl TcpTransport {
         }
     }
 
-    fn next_protocol_line_with_deadline(&mut self, deadline: Instant) -> Result<Option<String>> {
+    fn next_protocol_line_with_deadline(
+        &mut self,
+        deadline: Instant,
+        allow_heartbeat: bool,
+    ) -> Result<Option<String>> {
         if self.reader.is_none() {
             self.ensure_authenticated()?;
         }
+        let mut timeouts = 0usize;
         loop {
             if Instant::now() >= deadline {
                 return Err(anyhow!("timeout waiting for console response"));
@@ -1093,11 +1098,16 @@ impl TcpTransport {
                     if self.has_partial_frame() {
                         continue;
                     }
-                    if self.last_activity.elapsed() >= self.heartbeat_interval {
+                    if allow_heartbeat && self.last_activity.elapsed() >= self.heartbeat_interval {
                         match self.issue_heartbeat()? {
                             HeartbeatOutcome::Ack => continue,
                             HeartbeatOutcome::Line(line) => return Ok(Some(line)),
                             HeartbeatOutcome::Closed => return Ok(None),
+                        }
+                    } else if !allow_heartbeat {
+                        timeouts = timeouts.saturating_add(1);
+                        if timeouts > self.max_retries {
+                            return Ok(None);
                         }
                     }
                 }
@@ -1237,7 +1247,7 @@ impl TcpTransport {
             self.send_line_attached(&command)?;
             loop {
                 let deadline = self.stream_deadline();
-                match self.next_protocol_line_with_deadline(deadline) {
+                match self.next_protocol_line_with_deadline(deadline, false) {
                     Ok(Some(response)) => {
                         if let Some(ack) = parse_ack(&response) {
                             if is_frame_error(&ack) {
@@ -1448,7 +1458,7 @@ impl Transport for TcpTransport {
         let deadline = now.checked_add(wait).unwrap_or(now);
         loop {
             self.send_line("PING")?;
-            match self.next_protocol_line_with_deadline(deadline) {
+            match self.next_protocol_line_with_deadline(deadline, false) {
                 Ok(Some(response)) => {
                     if self.record_ack(&response) {
                         if response.starts_with("OK PING") {
