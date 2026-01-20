@@ -623,13 +623,23 @@ impl TcpConsoleServer {
 
     /// Peek at the next outbound line without removing it.
     pub fn peek_outbound(&self) -> Option<&HeaplessString<DEFAULT_LINE_CAPACITY>> {
-        self.priority_outbound
-            .front()
-            .or_else(|| self.outbound.front())
+        if let Some(line) = self.priority_outbound.front() {
+            // Keep END queued without letting it jump ahead of stream data lines.
+            if Self::is_end_line(line.as_str()) && !self.outbound.is_empty() {
+                return self.outbound.front();
+            }
+            return Some(line);
+        }
+        self.outbound.front()
     }
 
     /// Pop the next outbound console line, if any.
     pub fn pop_outbound(&mut self) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+        if let Some(line) = self.priority_outbound.front() {
+            if Self::is_end_line(line.as_str()) && !self.outbound.is_empty() {
+                return self.outbound.pop_front();
+            }
+        }
         self.priority_outbound
             .pop_front()
             .or_else(|| self.outbound.pop_front())
@@ -823,12 +833,13 @@ impl TcpConsoleServer {
         }
     }
 
+    fn is_end_line(line: &str) -> bool {
+        line.trim_end_matches(['\r', '\n']) == "END"
+    }
+
     pub(crate) fn is_priority_line(line: &str) -> bool {
         let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed == "END" {
-            return false;
-        }
-        trimmed.starts_with("OK ") || trimmed.starts_with("ERR ")
+        trimmed == "END" || trimmed.starts_with("OK ") || trimmed.starts_with("ERR ")
     }
 
     fn is_preauth_allowed(line: &str) -> bool {

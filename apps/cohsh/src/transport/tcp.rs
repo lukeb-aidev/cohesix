@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::env;
 use std::fs::OpenOptions;
 use std::io::{self, BufReader, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -311,6 +311,7 @@ pub struct TcpTransport {
     rx_buf: Vec<u8>,
     pending_frame_len: Option<usize>,
     pending_timeouts: usize,
+    zero_reads: usize,
     authenticated: bool,
     auth_state: AuthState,
     inject_short_write: Option<usize>,
@@ -350,6 +351,7 @@ impl TcpTransport {
             rx_buf: Vec::new(),
             pending_frame_len: None,
             pending_timeouts: 0,
+            zero_reads: 0,
             authenticated: false,
             auth_state: AuthState::Start,
             inject_short_write: None,
@@ -692,6 +694,12 @@ impl TcpTransport {
     }
 
     fn reset_connection(&mut self) {
+        if let Some(stream) = self.stream.as_ref() {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+        if let Some(reader) = self.reader.as_ref() {
+            let _ = reader.get_ref().shutdown(Shutdown::Both);
+        }
         self.stream = None;
         self.reader = None;
         self.last_probe = None;
@@ -704,6 +712,7 @@ impl TcpTransport {
         self.rx_buf.clear();
         self.pending_frame_len = None;
         self.pending_timeouts = 0;
+        self.zero_reads = 0;
     }
 
     fn has_partial_frame(&self) -> bool {
@@ -813,15 +822,20 @@ impl TcpTransport {
                 if self.rx_buf.len() < 4 {
                     match reader.read(&mut temp) {
                         Ok(0) => {
-                            self.telemetry.log_disconnect(&io::Error::new(
-                                io::ErrorKind::ConnectionReset,
-                                "connection closed by peer",
-                            ));
-                            return Ok(ReadStatus::Closed);
+                            self.zero_reads = self.zero_reads.saturating_add(1);
+                            if self.zero_reads > self.max_retries.saturating_mul(4) {
+                                self.telemetry.log_disconnect(&io::Error::new(
+                                    io::ErrorKind::ConnectionReset,
+                                    "connection closed by peer",
+                                ));
+                                return Ok(ReadStatus::Closed);
+                            }
+                            break;
                         }
                         Ok(read) => {
                             self.rx_buf.extend_from_slice(&temp[..read]);
                             saw_data = true;
+                            self.zero_reads = 0;
                             continue;
                         }
                         Err(err)
@@ -830,6 +844,7 @@ impl TcpTransport {
                                 io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                             ) =>
                         {
+                            self.zero_reads = 0;
                             break;
                         }
                         Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
@@ -867,15 +882,20 @@ impl TcpTransport {
                 if self.rx_buf.len() < payload_len {
                     match reader.read(&mut temp) {
                         Ok(0) => {
-                            self.telemetry.log_disconnect(&io::Error::new(
-                                io::ErrorKind::ConnectionReset,
-                                "connection closed by peer",
+                            self.zero_reads = self.zero_reads.saturating_add(1);
+                            if self.zero_reads > self.max_retries.saturating_mul(4) {
+                                self.telemetry.log_disconnect(&io::Error::new(
+                                    io::ErrorKind::ConnectionReset,
+                                    "connection closed by peer",
                             ));
                             return Ok(ReadStatus::Closed);
+                            }
+                            break;
                         }
                         Ok(read) => {
                             self.rx_buf.extend_from_slice(&temp[..read]);
                             saw_data = true;
+                            self.zero_reads = 0;
                             continue;
                         }
                         Err(err)
@@ -884,6 +904,7 @@ impl TcpTransport {
                                 io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                             ) =>
                         {
+                            self.zero_reads = 0;
                             break;
                         }
                         Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
@@ -935,7 +956,7 @@ impl TcpTransport {
                     "timeout while reading console frame",
                 ));
                 self.reset_read_state();
-                return Ok(ReadStatus::Closed);
+                return Ok(ReadStatus::Timeout);
             }
         } else {
             self.pending_timeouts = 0;
@@ -982,9 +1003,17 @@ impl TcpTransport {
     }
 
     fn next_protocol_line(&mut self) -> Result<Option<String>> {
+        self.next_protocol_line_with_heartbeat(true)
+    }
+
+    fn next_protocol_line_with_heartbeat(
+        &mut self,
+        allow_heartbeat: bool,
+    ) -> Result<Option<String>> {
         if self.reader.is_none() {
             self.ensure_authenticated()?;
         }
+        let mut timeouts = 0usize;
         loop {
             match self.read_line_internal()? {
                 ReadStatus::Line(line) => {
@@ -1010,11 +1039,17 @@ impl TcpTransport {
                     if self.has_partial_frame() {
                         continue;
                     }
-                    if self.last_activity.elapsed() >= self.heartbeat_interval {
+                    if allow_heartbeat && self.last_activity.elapsed() >= self.heartbeat_interval {
                         match self.issue_heartbeat()? {
                             HeartbeatOutcome::Ack => continue,
                             HeartbeatOutcome::Line(line) => return Ok(Some(line)),
                             HeartbeatOutcome::Closed => return Ok(None),
+                        }
+                    }
+                    if !allow_heartbeat {
+                        timeouts = timeouts.saturating_add(1);
+                        if timeouts > self.max_retries {
+                            return Ok(None);
                         }
                     }
                 }
@@ -1069,6 +1104,17 @@ impl TcpTransport {
                 ReadStatus::Closed => return Ok(None),
             }
         }
+    }
+
+    fn stream_deadline(&self) -> Instant {
+        let wait = self
+            .timeout
+            .checked_mul(u32::try_from(self.max_retries + 1).unwrap_or(u32::MAX))
+            .unwrap_or(self.timeout)
+            .saturating_add(self.heartbeat_interval);
+        Instant::now()
+            .checked_add(wait)
+            .unwrap_or_else(Instant::now)
     }
 
     fn recover_session(&mut self) -> Result<()> {
@@ -1190,29 +1236,31 @@ impl TcpTransport {
         loop {
             self.send_line_attached(&command)?;
             loop {
-                match self.next_protocol_line()? {
-                    Some(response) => {
+                let deadline = self.stream_deadline();
+                match self.next_protocol_line_with_deadline(deadline) {
+                    Ok(Some(response)) => {
                         if let Some(ack) = parse_ack(&response) {
-                            let _ = self.record_ack(&response);
                             if is_frame_error(&ack) {
                                 return Err(anyhow!("console frame rejected: {response}"));
                             }
-                            if matches!(ack.status, AckStatus::Err) {
-                                return Err(anyhow!("{verb} failed: {response}"));
-                            }
-                            if verb.eq_ignore_ascii_case("CAT")
-                                && ack.verb.eq_ignore_ascii_case("CAT")
-                                && summary_line.is_none()
-                            {
-                                if let Some(detail) = ack.detail {
-                                    if let Some(idx) = detail.find("data=") {
-                                        let summary = detail[idx + "data=".len()..].trim();
-                                        if !summary.is_empty() {
-                                            summary_line = Some(summary.to_owned());
+                            if ack.verb.eq_ignore_ascii_case(verb) {
+                                let _ = self.record_ack(&response);
+                                if matches!(ack.status, AckStatus::Err) {
+                                    return Err(anyhow!("{verb} failed: {response}"));
+                                }
+                                if verb.eq_ignore_ascii_case("CAT") && summary_line.is_none() {
+                                    if let Some(detail) = ack.detail {
+                                        if let Some(idx) = detail.find("data=") {
+                                            let summary = detail[idx + "data=".len()..].trim();
+                                            if !summary.is_empty() {
+                                                summary_line = Some(summary.to_owned());
+                                            }
                                         }
                                     }
                                 }
+                                continue;
                             }
+                            // Ignore acknowledgements unrelated to this stream command.
                             continue;
                         }
                         if response == "END" {
@@ -1223,12 +1271,9 @@ impl TcpTransport {
                             }
                             return Ok(lines);
                         }
-                        if response.starts_with("ERR") {
-                            return Err(anyhow!("{verb} failed: {response}"));
-                        }
                         lines.push(response);
                     }
-                    None => {
+                    Ok(None) => {
                         attempts += 1;
                         if attempts > self.max_retries {
                             return Err(anyhow!(
@@ -1237,6 +1282,11 @@ impl TcpTransport {
                         }
                         self.recover_session()?;
                         break;
+                    }
+                    Err(err) => {
+                        return Err(err).with_context(|| {
+                            format!("timeout waiting for {verb} response on {path}")
+                        });
                     }
                 }
             }

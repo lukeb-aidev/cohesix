@@ -207,7 +207,7 @@ Commands and status:
 - `test [--mode <quick|full>] [--json] [--timeout <s>] [--no-mutate]` – run the in-session self-tests sourced from `/proc/tests/` (default mode `quick`, default timeout 30s, hard cap 120s). `--no-mutate` skips spawn/kill steps. When `--json` is supplied, emit the stable schema described below.【F:apps/cohsh/src/lib.rs†L1512-L1763】
   - Note: the bundled self-test scripts end with `quit`; interactive `cohsh` reattaches to the last session when possible, while `--script` runs remain detached and require a fresh `attach`.
 - `pool bench <k=v...>` – run the pooled throughput benchmark and retry/exhaustion checks; options include `path`, `ops`, `batch`, `payload`, `payload_bytes`, `delay_ms`, `inject_failures`, `inject_bytes`, `exhaust`, `kind`.
-  - On TCP console transports, throughput is informational only; line-length limits apply before `payload_bytes`.
+  - On TCP console transports, throughput is informational only; readback uses write acknowledgements (CAT is skipped) and line-length limits apply before `payload_bytes`.
 - `echo <text> > <path>` – append a newline-terminated payload to an absolute path via NineDoor.【F:apps/cohsh/src/lib.rs†L1211-L1222】【F:apps/cohsh/src/lib.rs†L1319-L1332】
 - `ls <path>` – list directory entries; entries are newline-delimited and returned in lexicographic order.
 - `cat <path>` – bounded read of file contents.

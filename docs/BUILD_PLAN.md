@@ -2108,7 +2108,7 @@ Inputs: apps/cohsh/src/transport/tcp.rs, apps/cohsh/src/main.rs, scripts/cohsh/s
 Changes:
   - apps/cohsh/src/transport/tcp.rs — add pooled TCP wrapper that avoids extra ATTACH/QUIT on shared connections.
   - apps/cohsh/src/main.rs — use pooled TCP wrapper for session pool factory.
-  - apps/cohsh/src/lib.rs — adjust pool bench TCP expectations, payload limits, and allow the worker alias for CLI roles.
+  - apps/cohsh/src/lib.rs — adjust pool bench TCP expectations, payload limits, and skip CAT readback on console transports.
   - docs/USERLAND_AND_CLI.md — document TCP console pool bench expectations.
 Commands:
   - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/session_pool.coh
@@ -2138,9 +2138,10 @@ Deliverables:
 
 Title/ID: m20f-console-frame-integrity
 Goal: Prevent partial TCP console sends from corrupting frame boundaries for cohsh and SwarmUI sessions.
-Inputs: apps/root-task/src/net/stack.rs, logs/qemu-run.log, logs/cohsh-queen-interactive.log.
+Inputs: apps/root-task/src/net/stack.rs, apps/root-task/src/drivers/virtio/net.rs, logs/qemu-run.log, logs/cohsh-queen-interactive.log.
 Changes:
   - apps/root-task/src/net/stack.rs — gate TCP sends on available TX capacity; abort on partial send.
+  - apps/root-task/src/drivers/virtio/net.rs — fix TX written_len accounting to avoid payload truncation on repeated bytes.
 Commands:
   - cargo check -p root-task -p cohsh -p swarmui
   - SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh --sel4-build "$HOME/seL4/build" --out-dir out/cohesix --profile release --root-task-features cohesix-dev --cargo-target aarch64-unknown-none --raw-qemu --transport tcp
@@ -2150,6 +2151,7 @@ Checks:
   - Interactive cohsh commands (tail, ping, ls, cat, echo, spawn, kill, bind, mount) remain attached without reconnect loops.
   - SwarmUI console session stays connected and updates hive telemetry.
   - Regression pack passes unchanged.
+  - virtio-net TX logs show written_len == payload_len for console frames; no invalid UTF-8 in console stream.
 Deliverables:
   - Updated qemu + cohsh logs showing stable tail output.
 
@@ -2183,10 +2185,11 @@ Deliverables:
 
 Title/ID: m20f-cohsh-interactive-parity
 Goal: Ensure interactive cohsh commands and SwarmUI console sessions match script-mode behavior without connection churn.
-Inputs: apps/root-task/src/event/mod.rs, apps/root-task/src/net/stack.rs, apps/cohsh/src/transport/tcp.rs, apps/swarmui/src/lib.rs, logs/cohsh-*.log.
+Inputs: apps/root-task/src/event/mod.rs, apps/root-task/src/net/stack.rs, apps/root-task/src/net/console_srv.rs, apps/cohsh/src/transport/tcp.rs, apps/swarmui/src/lib.rs, logs/cohsh-*.log.
 Changes:
   - apps/root-task/src/event/mod.rs — align CAT/TAIL streaming with pending stream handling and consistent END emission.
   - apps/root-task/src/net/stack.rs — tune console send pacing/backpressure handling for stream output.
+  - apps/root-task/src/net/console_srv.rs — preserve END delivery without reordering stream data lines.
   - apps/cohsh/src/transport/tcp.rs — harden console stream reads/reconnect logic and enforce exclusive console locking.
   - apps/swarmui/src/lib.rs — match SwarmUI console error handling to cohsh transport semantics.
 Commands:

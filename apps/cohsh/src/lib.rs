@@ -2712,28 +2712,30 @@ impl<T: Transport, W: Write> Shell<T, W> {
             pooled_failures = pooled_failures.saturating_add(pooled_errors.len());
         }
 
-        let read_lines = match self.transport.read(session, config.path.as_str()) {
-            Ok(lines) => Some(lines),
-            Err(err) => {
-                if tcp_endpoint {
-                    info!("audit pool.bench.readback.error err={err}");
-                    None
-                } else {
+        let read_lines = if tcp_endpoint {
+            None
+        } else {
+            match self.transport.read(session, config.path.as_str()) {
+                Ok(lines) => Some(lines),
+                Err(err) => {
                     return Err(err).with_context(|| format!("failed to read {}", config.path));
                 }
             }
         };
         let _ = self.transport.drain_acknowledgements();
-        let mut observed = read_lines
-            .as_ref()
-            .map(|lines| count_occurrences(lines, pooled_prefix.as_str()))
-            .unwrap_or(0);
-        if tcp_endpoint && (read_lines.is_none() || observed < config.ops) {
+        let observed = if tcp_endpoint {
+            pooled_successes
+        } else {
+            read_lines
+                .as_ref()
+                .map(|lines| count_occurrences(lines, pooled_prefix.as_str()))
+                .unwrap_or(0)
+        };
+        if tcp_endpoint && observed < config.ops {
             info!(
                 "audit pool.bench.readback.fallback observed={} expected={}",
                 observed, config.ops
             );
-            observed = pooled_successes;
         }
 
         let baseline_sample = build_sample(baseline_written, baseline_elapsed);

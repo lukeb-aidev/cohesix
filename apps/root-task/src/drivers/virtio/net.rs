@@ -7343,17 +7343,6 @@ impl VirtioNet {
         }
     }
 
-    fn compute_written_len(payload_len: usize, before: &[u8], after: &[u8]) -> usize {
-        let limit = core::cmp::min(payload_len, core::cmp::min(before.len(), after.len()));
-        let mut written = 0usize;
-        for idx in 0..limit {
-            if before[idx] != after[idx] {
-                written = idx + 1;
-            }
-        }
-        written
-    }
-
     fn tx_total_len(header_len: usize, written_len: usize) -> Option<usize> {
         header_len
             .checked_add(written_len)
@@ -9159,18 +9148,9 @@ impl TxToken for VirtioTxToken {
                 let (header, payload) =
                     mut_slice.split_at_mut(core::cmp::min(header_len, total_capacity));
                 header.fill(0);
-                let copy_len = core::cmp::min(payload_len, MAX_FRAME_LEN);
-                let mut payload_before = [0u8; MAX_FRAME_LEN];
-                let mut payload_after = [0u8; MAX_FRAME_LEN];
-                payload_before[..copy_len].copy_from_slice(&payload[..copy_len]);
+                payload[..payload_len].fill(0);
                 result = f(&mut payload[..payload_len]);
-                let after_len = core::cmp::min(payload_len, MAX_FRAME_LEN);
-                payload_after[..after_len].copy_from_slice(&payload[..after_len]);
-                written_len = VirtioNet::compute_written_len(
-                    payload_len,
-                    &payload_before[..copy_len],
-                    &payload_after[..after_len],
-                );
+                written_len = payload_len;
                 log_tcp_trace("TX", &payload[..payload_len]);
             }
             driver.log_tx_attempt(attempt_seq, len, payload_len, written_len);

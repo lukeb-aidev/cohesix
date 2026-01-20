@@ -67,8 +67,8 @@ use spin::Mutex;
 
 const TCP_RX_BUFFER: usize = 2048;
 const TCP_TX_BUFFER: usize = 2048;
-const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 2;
-const MAX_CONSOLE_BYTES_PER_POLL: usize = 1_600;
+const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 16;
+const MAX_CONSOLE_BYTES_PER_POLL: usize = 8_192;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
 const SOCKET_CAPACITY: usize = 6;
