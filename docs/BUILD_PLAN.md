@@ -2353,6 +2353,9 @@ Add trace record/replay across `cohsh-core`, SwarmUI, and coh-status to enable d
 - Replay reproduces identical telemetry curves and ACK sequences; diff harness reports zero delta.
 - Abuse case: tampered trace (truncated or modified hash) is rejected with deterministic error and no UI state change.
 - UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
+All testing and verification for this milestone is governed by:
+
+> **`docs/TEST_PLAN.md` — the sole authority on test phases, execution order, and acceptance criteria.**
 
 **Compiler touchpoints**
 - `coh-rtc` emits trace metadata schema and default size limits into docs/TEST_PLAN.md; regeneration guard verifies hash alignment.
@@ -2386,6 +2389,225 @@ Checks:
 Deliverables:
   - Offline replay documentation and fixtures stored in tests/fixtures/transcripts/.
 ```
+
+## Milestone 20h — Alpha Release Gate: As-Built Verification, Live Hive Demo, SwarmUI Replay, & Release Bundle
+
+**Why now (compiler):**  
+Milestone 20g defines the point at which Cohesix becomes **control-plane complete and deterministic**. An alpha release is only valid if the **as-built system passes the full Test Plan**, from a clean checkout, with no hidden assumptions.
+
+This milestone is a **release gate**, not a feature milestone.  
+It adds **no new architecture, protocols, or semantics**.  
+It exists to prove correctness, operability, and legibility.
+
+---
+
+## Goal
+
+1. **Complete Milestone 20g** exactly as specified in `docs/BUILD_PLAN.md`.  
+2. Verify the **as-built system** against **all applicable phases in `docs/TEST_PLAN.md`**.  
+3. Deliver both:
+   - a **Deterministic Replay Demo** (trust, auditability), and
+   - a **Live Hive Demo** (real-time, exciting, but controlled).
+4. Produce a **self-contained alpha release bundle** that a third party can run using only:
+   - the bundle
+   - the QEMU runner
+   - `docs/QUICKSTART.md`
+
+---
+
+## Hard Preconditions
+
+### A) Milestone 20g completion (blocking)
+- All deliverables for Milestone 20g implemented.
+- All Milestone 20g checks satisfied.
+- Documentation reflects **as-built** behavior.
+
+**Rule:** Milestone 20h MUST NOT be marked *Complete* unless Milestone 20g is already complete.
+
+---
+
+## Testing & Verification (Canonical)
+
+All testing and verification for this milestone is governed by:
+
+> **`docs/TEST_PLAN.md` — the sole authority on test phases, execution order, and acceptance criteria.**
+
+Ad-hoc commands, manual test lists, or one-off scripts **must not** be used as acceptance criteria.  
+They may be *inputs* to the Test Plan, but **DoD is defined only by Test Plan gates**.
+
+---
+
+### B) Clean Build & Reproducibility Gate  
+(Per TEST_PLAN: *Build Integrity* + *Reproducibility* phases)
+
+**Requirements**
+- Remove all build artifacts (`target/`, `out/`, and equivalents).
+- Rebuild Cohesix from a clean workspace using the canonical build flow.
+- Re-run `coh-rtc` and verify generated artifacts match committed expectations.
+
+**Acceptance**
+- Clean build succeeds.
+- No new build warnings remain unaddressed.
+- No features are disabled or bypassed to achieve a clean build.
+- Generated artifacts, manifests, and doc snippets are consistent.
+
+---
+
+### C) CLI & Control-Plane Surface Gate  
+(Per TEST_PLAN: *CLI Semantics*, *Role Enforcement*, *Concurrency*)
+
+The full `cohsh` command surface MUST be validated via the **CLI test phases** defined in `docs/TEST_PLAN.md`, including:
+
+- Queen role coverage
+- Worker role coverage
+- Concurrent session behavior
+- Deterministic ACK/ERR semantics
+- Negative/denial cases
+
+**Key properties verified (via TEST_PLAN)**
+- Every documented `cohsh` command is exercised.
+- Role-scoped authority is enforced (queen vs worker).
+- Concurrent sessions do not corrupt state or reorder acknowledgements.
+- All failures are explicit, deterministic, and auditable.
+
+**Evidence**
+- Test Plan artifacts (logs, transcripts, or summaries) are collected and referenced.
+- No manual “it looked right” validation is acceptable.
+
+---
+
+### D) Regression & Stability Gate  
+(Per TEST_PLAN: *Regression*, *Long-Run*, *Non-Regression*)
+
+- Execute the **full regression batch** as defined by `docs/TEST_PLAN.md`.
+- Long-running tests must complete within declared time bounds.
+- Output drift fails the gate unless explicitly approved and documented.
+
+**Acceptance**
+- All regression phases PASS.
+- No existing regression tests are weakened.
+- New tests (if any) are additive and documented.
+
+---
+
+## Demo Deliverables (Post-Gate)
+
+Only after all **TEST_PLAN gates pass** may the following demo artifacts be finalized.
+
+---
+
+### 1) Deterministic Replay Demo
+
+- Canonical snapshot / trace generated under Milestone 20g.
+- Used by:
+  - CLI replay demo
+  - SwarmUI Replay Mode
+- Replay produces byte-identical behavior across runs.
+
+This demo proves:
+- determinism
+- auditability
+- UI correctness without live risk
+
+---
+
+### 2) Live Hive Demo (Controlled)
+
+**Purpose:** demonstrate Cohesix *alive* — workers spawning, telemetry flowing — without violating control-plane discipline.
+
+**Rules (strict)**
+- Live mutation occurs only via:
+  - `cohsh`
+  - scripted flows covered by TEST_PLAN
+- SwarmUI is **observational only** in live mode.
+- No UI-initiated control.
+
+**Validated via**
+- TEST_PLAN live-operation phase
+- Role enforcement + audit verification
+- Deterministic logging under live load
+
+---
+
+### 3) SwarmUI — Dual-Mode Alpha
+
+**Replay Mode (default)**
+- Loads canonical snapshot
+- Full timeline scrub (pause / rewind / step)
+- Deterministic visualization
+
+**Live Hive Mode**
+- Read-only view of live state
+- Mirrors CLI-driven actions in real time
+- No write capability
+
+SwarmUI behavior is validated under TEST_PLAN UI/CLI convergence criteria.
+
+---
+
+## Alpha Release Bundle
+
+Produced **only after all TEST_PLAN gates pass**.
+
+cohesix-alpha-/
+├── bin/
+├── image/
+├── qemu/
+├── scripts/
+├── ui/
+│   └── swarmui/
+├── docs/
+│   ├── QUICKSTART.md
+│   └── (as-built snapshots)
+└── VERSION.txt
+└── LICENSE.txt
+Bundle contents, integrity, and runnability are validated under TEST_PLAN *Packaging* phase.
+
+---
+
+## QUICKSTART.md
+
+The Quickstart MUST reference:
+- TEST_PLAN phases at a high level
+- What has already been verified
+- What the user is expected to run vs observe
+
+It must not introduce new testing procedures outside the Test Plan.
+
+---
+
+## Definition of Done (Authoritative)
+
+Milestone 20h is **Complete** if and only if:
+
+1. Milestone 20g is complete per `docs/BUILD_PLAN.md`.
+2. All applicable phases in `docs/TEST_PLAN.md` PASS:
+   - Build Integrity
+   - CLI Semantics
+   - Role Enforcement
+   - Concurrency
+   - Regression
+   - Packaging
+3. Clean rebuild from scratch succeeds.
+4. Replay demo and Live Hive demo are both validated outcomes of the Test Plan.
+5. SwarmUI behavior (replay + live read-only) is consistent with CLI behavior.
+6. A third party can run the alpha using only:
+   - the release bundle
+   - `qemu/run.sh`
+   - `docs/QUICKSTART.md`
+
+If any Test Plan gate fails, this milestone remains **Incomplete**.
+
+---
+
+## Outcome
+
+After Milestone 20h:
+- Cohesix has a **test-plan-validated alpha**.
+- Demos are exciting *and* trustworthy.
+- There is one source of truth for correctness: `docs/TEST_PLAN.md`.
+- The system is ready for external evaluation without hand-holding.
+
 ----
 **Alpha Release 1 achieved here**
 ----
