@@ -1,7 +1,9 @@
 # Author: Lukas Bower
 /target
+/target.pre-clean
 /.target_check
 /out
+/out.pre-clean
 Cargo.lock
 .DS_Store
 /.vscode
