@@ -2342,7 +2342,7 @@ Add trace record/replay across `cohsh-core`, `cohsh`, SwarmUI, and coh-status to
 
 **Deliverables**
 - `cohsh-core` trace recorder/replayer for 9P frames + ACKs (`.trace` files) with size targets ≤ 1 MiB per 10 s of tail traffic.
-- `cohsh` CLI supports trace record/replay via `cohsh-core`; CLI usage is documented in `docs/USERLAND_AND_CLI.md` and referenced in `docs/TEST_PLAN.md`.
+- `cohsh` CLI supports `--record-trace <FILE>` and `--replay-trace <FILE>` via `cohsh-core`; CLI usage is documented in `docs/USERLAND_AND_CLI.md` and referenced in `docs/TEST_PLAN.md`.
 - SwarmUI “offline replay” mode consuming trace files; docs in `docs/TEST_PLAN.md`.
 - coh-status offline replay hook for field diagnostics.
 - SwarmUI frontend header includes the Cohesix SVG branding at the top of the shell.
@@ -2383,7 +2383,7 @@ Title/ID: m20g-cohsh-replay
 Goal: Wire cohsh CLI record/replay to cohsh-core trace format.
 Inputs: apps/cohsh/src/main.rs, apps/cohsh/src/lib.rs, tests/fixtures/transcripts/, docs/USERLAND_AND_CLI.md, docs/TEST_PLAN.md.
 Changes:
-  - apps/cohsh/src/main.rs — add trace record/replay CLI entry points using cohsh-core.
+  - apps/cohsh/src/main.rs — add `--record-trace` and `--replay-trace` CLI entry points using cohsh-core.
   - apps/cohsh/src/lib.rs — expose trace driver for CLI use.
   - apps/cohsh/tests/trace.rs — record/replay parity + tamper rejection.
 Commands:
@@ -2533,7 +2533,7 @@ Only after all **TEST_PLAN gates pass** may the following demo artifacts be fina
 - Canonical snapshot / trace generated under Milestone 20g.
 - Canonical trace is shipped in the alpha bundle under `traces/` with its hash for tamper checks.
 - Used by:
-  - CLI replay demo
+  - CLI replay demo (`cohsh --replay-trace <FILE>`)
   - SwarmUI Replay Mode
 - Replay produces byte-identical behavior across runs.
 
