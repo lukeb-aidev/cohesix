@@ -48,6 +48,7 @@ SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./swarmui
 ### Notes
 - Defaults to the TCP console transport; set `SWARMUI_TRANSPORT=9p` for Secure9P.
 - `SWARMUI_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`) supplies the console auth token.
+- SwarmUI allows CSP `script-src 'unsafe-eval'` to support PixiJS Live Hive rendering.
 - `--mint-ticket` uses `SWARMUI_TICKET_CONFIG`/`SWARMUI_TICKET_SECRET` (fallback to `COHSH_*`); the UI also offers a "Mint ticket" button.
 - `--replay` loads a snapshot from `$DATA_DIR/snapshots/` and forces offline mode.
 

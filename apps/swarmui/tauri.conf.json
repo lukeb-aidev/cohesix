@@ -23,7 +23,7 @@
       "identifier": "com.cohesix.swarmui"
     },
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'"
     },
     "allowlist": {
       "all": false

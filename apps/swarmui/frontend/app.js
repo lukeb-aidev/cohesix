@@ -178,9 +178,16 @@ document
 const hiveCanvas = document.getElementById("hive-canvas");
 const hiveStatus = document.getElementById("hive-status");
 const hivePressure = document.getElementById("hive-pressure");
-const hiveController = hiveCanvas
-  ? createHiveController(hiveCanvas, hiveStatus)
-  : null;
+let hiveController = null;
+let hiveInitError = null;
+if (hiveCanvas) {
+  try {
+    hiveController = createHiveController(hiveCanvas, hiveStatus);
+  } catch (err) {
+    hiveInitError = err;
+    setStatus("hive-status", `Hive renderer failed: ${err}`);
+  }
+}
 
 let hiveActive = false;
 let hivePollTimer = null;
@@ -233,6 +240,9 @@ const pollHive = async () => {
 
 const startHive = async () => {
   if (!hiveController) {
+    if (hiveInitError) {
+      setStatus("hive-status", `Hive renderer failed: ${hiveInitError}`);
+    }
     return;
   }
   const session = readSession();
