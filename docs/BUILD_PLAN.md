@@ -2338,21 +2338,23 @@ Deliverables:
 **Why now (compiler):** To stabilize UI regressions without live targets, we need deterministic trace capture and replay consistent with CLI/console semantics.
 
 **Goal**
-Add trace record/replay across `cohsh-core`, SwarmUI, and coh-status to enable deterministic UI testing.
+Add trace record/replay across `cohsh-core`, `cohsh`, SwarmUI, and coh-status to enable deterministic UI testing.
 
 **Deliverables**
 - `cohsh-core` trace recorder/replayer for 9P frames + ACKs (`.trace` files) with size targets ≤ 1 MiB per 10 s of tail traffic.
+- `cohsh` CLI supports trace record/replay via `cohsh-core`; CLI usage is documented in `docs/USERLAND_AND_CLI.md` and referenced in `docs/TEST_PLAN.md`.
 - SwarmUI “offline replay” mode consuming trace files; docs in `docs/TEST_PLAN.md`.
 - coh-status offline replay hook for field diagnostics.
 - SwarmUI frontend header includes the Cohesix SVG branding at the top of the shell.
 
 **Commands**
 - `cargo test -p cohsh-core --test trace`
+- `cargo test -p cohsh --test trace`
 - `cargo test -p swarmui --test trace`
 - `cargo test -p coh-status --test trace`
 
 **Checks (DoD)**
-- Replay reproduces identical telemetry curves and ACK sequences; diff harness reports zero delta.
+- Replay reproduces identical telemetry curves and ACK sequences across `cohsh`, SwarmUI, and coh-status; diff harness reports zero delta.
 - Abuse case: tampered trace (truncated or modified hash) is rejected with deterministic error and no UI state change.
 - UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
 All testing and verification for this milestone is governed by:
@@ -2376,6 +2378,20 @@ Checks:
   - Truncated or tampered trace rejected; valid trace replays byte-identical ACK/ERR.
 Deliverables:
   - Trace schema referenced in docs/TEST_PLAN.md via compiler snippet.
+
+Title/ID: m20g-cohsh-replay
+Goal: Wire cohsh CLI record/replay to cohsh-core trace format.
+Inputs: apps/cohsh/src/main.rs, apps/cohsh/src/lib.rs, tests/fixtures/transcripts/, docs/USERLAND_AND_CLI.md, docs/TEST_PLAN.md.
+Changes:
+  - apps/cohsh/src/main.rs — add trace record/replay CLI entry points using cohsh-core.
+  - apps/cohsh/src/lib.rs — expose trace driver for CLI use.
+  - apps/cohsh/tests/trace.rs — record/replay parity + tamper rejection.
+Commands:
+  - cargo test -p cohsh --test trace
+Checks:
+  - cohsh record/replay matches cohsh-core fixtures; tampered trace rejected deterministically.
+Deliverables:
+  - cohsh trace CLI documented; canonical trace capture path referenced in docs/TEST_PLAN.md.
 
 Title/ID: m20g-ui-replay
 Goal: Add offline replay to SwarmUI and coh-status for deterministic UI tests.
@@ -2515,6 +2531,7 @@ Only after all **TEST_PLAN gates pass** may the following demo artifacts be fina
 ### 1) Deterministic Replay Demo
 
 - Canonical snapshot / trace generated under Milestone 20g.
+- Canonical trace is shipped in the alpha bundle under `traces/` with its hash for tamper checks.
 - Used by:
   - CLI replay demo
   - SwarmUI Replay Mode
@@ -2548,7 +2565,7 @@ This demo proves:
 ### 3) SwarmUI — Dual-Mode Alpha
 
 **Replay Mode (default)**
-- Loads canonical snapshot
+- Loads canonical snapshot from `traces/`
 - Full timeline scrub (pause / rewind / step)
 - Deterministic visualization
 
@@ -2570,12 +2587,14 @@ cohesix-alpha-/
 ├── image/
 ├── qemu/
 ├── scripts/
+├── traces/
+│   └── (canonical .trace + hash)
 ├── ui/
 │   └── swarmui/
 ├── docs/
 │   ├── QUICKSTART.md
 │   └── (as-built snapshots)
-└── VERSION.txt
+├── VERSION.txt
 └── LICENSE.txt
 Bundle contents, integrity, and runnability are validated under TEST_PLAN *Packaging* phase.
 
@@ -2587,6 +2606,7 @@ The Quickstart MUST reference:
 - TEST_PLAN phases at a high level
 - What has already been verified
 - What the user is expected to run vs observe
+- Where the canonical trace lives in the bundle and the replay commands already defined in the Test Plan
 
 It must not introduce new testing procedures outside the Test Plan.
 
