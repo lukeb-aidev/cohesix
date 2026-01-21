@@ -7,10 +7,13 @@
 
 //! CLI entry point for the Cohesix shell prototype.
 
+use std::cell::RefCell;
 use std::env;
+use std::fs;
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 #[cfg(feature = "tcp")]
 use std::sync::atomic::AtomicU64;
@@ -24,6 +27,7 @@ use clap::{Parser, ValueEnum};
 use cohesix_ticket::Role;
 use env_logger::Env;
 use log::LevelFilter;
+use nine_door::NineDoor;
 
 #[cfg(feature = "tcp")]
 use cohsh::{
@@ -36,8 +40,16 @@ use cohsh::{
     default_policy_path, load_policy, validate_script, AutoAttach, NineDoorTransport,
     PolicyOverrides, QemuTransport, RoleArg, SessionPool, Shell, Transport, TransportFactory,
 };
+use cohsh::client::InProcessTransport;
+use cohsh::trace::{TraceAckMode, TraceShellTransport};
 #[cfg(feature = "tcp")]
 use cohsh::{PooledTcpTransport, SharedTcpTransport, TcpTransport, COHSH_TCP_PORT};
+use cohsh_core::command::MAX_LINE_LEN;
+use cohsh_core::trace::{
+    TraceLog, TraceLogBuilder, TraceLogBuilderRef, TracePolicy, TraceReplayTransport,
+    TraceTransportRecorder,
+};
+use cohsh::SECURE9P_MSIZE;
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum TransportKind {
@@ -66,6 +78,14 @@ struct Cli {
     /// Validate a script file without executing it.
     #[arg(long, value_name = "FILE", conflicts_with = "script")]
     check: Option<PathBuf>,
+
+    /// Record a Secure9P trace to the supplied path.
+    #[arg(long, value_name = "FILE", conflicts_with = "replay_trace")]
+    record_trace: Option<PathBuf>,
+
+    /// Replay a Secure9P trace from the supplied path.
+    #[arg(long, value_name = "FILE", conflicts_with = "record_trace")]
+    replay_trace: Option<PathBuf>,
 
     /// Path to the manifest-derived cohsh policy TOML.
     #[arg(long, value_name = "FILE")]
@@ -277,47 +297,105 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let trace_enabled = cli.record_trace.is_some() || cli.replay_trace.is_some();
+    if trace_enabled && !matches!(cli.transport, TransportKind::Mock) {
+        return Err(anyhow!(
+            "trace record/replay requires --transport mock"
+        ));
+    }
+    let trace_policy = TracePolicy::new(
+        policy.trace.max_bytes,
+        SECURE9P_MSIZE,
+        MAX_LINE_LEN as u32,
+    );
+    let mut trace_builder: Option<TraceLogBuilderRef> = None;
+
     let (transport, pool_factory): (Box<dyn Transport>, Option<Arc<dyn TransportFactory>>) =
-        match cli.transport {
-            TransportKind::Mock => {
-                let server = nine_door::NineDoor::new();
-                let pool_server = server.clone();
-                let factory = Arc::new(move || {
-                    Ok(Box::new(NineDoorTransport::new(pool_server.clone()))
-                        as Box<dyn Transport + Send>)
+        if trace_enabled {
+            let server = NineDoor::new();
+            if cli.record_trace.is_some() {
+                let builder = TraceLogBuilder::shared(trace_policy);
+                trace_builder = Some(Rc::clone(&builder));
+                let server_clone = server.clone();
+                let builder_clone = Rc::clone(&builder);
+                let factory = Box::new(move || {
+                    let connection = server_clone
+                        .connect()
+                        .context("open NineDoor session")?;
+                    let transport = InProcessTransport::new(connection);
+                    Ok(TraceTransportRecorder::new(
+                        transport,
+                        Rc::clone(&builder_clone),
+                    ))
                 });
-                (Box::new(NineDoorTransport::new(server)), Some(factory))
+                let transport = TraceShellTransport::new(factory, TraceAckMode::Record(builder), "trace-record");
+                (Box::new(transport), None)
+            } else {
+                let trace_path = cli
+                    .replay_trace
+                    .as_ref()
+                    .expect("trace replay path");
+                let payload = fs::read(trace_path)
+                    .with_context(|| format!("failed to read trace {}", trace_path.display()))?;
+                let trace = TraceLog::decode(&payload, trace_policy)?;
+                let expected = trace.ack_lines;
+                let frames = Rc::new(RefCell::new(Some(trace.frames)));
+                let factory = Box::new(move || {
+                    let frames = frames
+                        .borrow_mut()
+                        .take()
+                        .ok_or_else(|| anyhow!("trace replay already consumed"))?;
+                    Ok(TraceReplayTransport::new(frames))
+                });
+                let transport = TraceShellTransport::new(
+                    factory,
+                    TraceAckMode::Verify { expected, index: 0 },
+                    "trace-replay",
+                );
+                (Box::new(transport), None)
             }
-            TransportKind::Qemu => (
-                Box::new(QemuTransport::new(
-                    cli.qemu_bin.clone(),
-                    cli.qemu_out_dir.clone(),
-                    cli.qemu_gic_version.clone(),
-                    qemu_args,
-                )),
-                None,
-            ),
-            #[cfg(feature = "tcp")]
-            TransportKind::Tcp => {
-                let retry = policy.retry;
-                let heartbeat = policy.heartbeat;
-                let shared = Arc::new(Mutex::new(
-                    TcpTransport::new(tcp_host.clone(), tcp_port)
-                        .with_retry_policy(retry)
-                        .with_heartbeat_interval(Duration::from_millis(heartbeat.interval_ms))
-                        .with_auth_token(auth_token.clone())
-                        .with_tcp_debug(tcp_debug),
-                ));
-                let transport = Box::new(SharedTcpTransport::new(Arc::clone(&shared)));
-                let pool_shared = Arc::clone(&shared);
-                let pool_session_ids = Arc::new(AtomicU64::new(2));
-                let factory = Arc::new(move || {
-                    Ok(Box::new(PooledTcpTransport::new(
-                        Arc::clone(&pool_shared),
-                        Arc::clone(&pool_session_ids),
-                    )) as Box<dyn Transport + Send>)
-                });
-                (transport, Some(factory))
+        } else {
+            match cli.transport {
+                TransportKind::Mock => {
+                    let server = nine_door::NineDoor::new();
+                    let pool_server = server.clone();
+                    let factory = Arc::new(move || {
+                        Ok(Box::new(NineDoorTransport::new(pool_server.clone()))
+                            as Box<dyn Transport + Send>)
+                    });
+                    (Box::new(NineDoorTransport::new(server)), Some(factory))
+                }
+                TransportKind::Qemu => (
+                    Box::new(QemuTransport::new(
+                        cli.qemu_bin.clone(),
+                        cli.qemu_out_dir.clone(),
+                        cli.qemu_gic_version.clone(),
+                        qemu_args,
+                    )),
+                    None,
+                ),
+                #[cfg(feature = "tcp")]
+                TransportKind::Tcp => {
+                    let retry = policy.retry;
+                    let heartbeat = policy.heartbeat;
+                    let shared = Arc::new(Mutex::new(
+                        TcpTransport::new(tcp_host.clone(), tcp_port)
+                            .with_retry_policy(retry)
+                            .with_heartbeat_interval(Duration::from_millis(heartbeat.interval_ms))
+                            .with_auth_token(auth_token.clone())
+                            .with_tcp_debug(tcp_debug),
+                    ));
+                    let transport = Box::new(SharedTcpTransport::new(Arc::clone(&shared)));
+                    let pool_shared = Arc::clone(&shared);
+                    let pool_session_ids = Arc::new(AtomicU64::new(2));
+                    let factory = Arc::new(move || {
+                        Ok(Box::new(PooledTcpTransport::new(
+                            Arc::clone(&pool_shared),
+                            Arc::clone(&pool_session_ids),
+                        )) as Box<dyn Transport + Send>)
+                    });
+                    (transport, Some(factory))
+                }
             }
         };
     let mut shell = Shell::new(transport, writer);
@@ -331,7 +409,7 @@ fn main() -> Result<()> {
     }
     shell.write_line("Welcome to Cohesix. Type 'help' for commands.")?;
 
-    if let Some(script_path) = cli.script {
+    let run_result = if let Some(script_path) = cli.script {
         if let Some(role_arg) = cli.role {
             let role = Role::from(role_arg);
             shell.attach(role, cli.ticket.as_deref())?;
@@ -340,7 +418,7 @@ fn main() -> Result<()> {
         }
         let file = File::open(&script_path)
             .with_context(|| format!("failed to open script {script_path:?}"))?;
-        shell.run_script(BufReader::new(file))?;
+        shell.run_script(BufReader::new(file))
     } else {
         let auto_role = cli.role.map(Role::from);
         let auto_attach = auto_role.map(|role| AutoAttach {
@@ -362,7 +440,20 @@ fn main() -> Result<()> {
         if auto_attach.is_none() {
             shell.write_line("detached shell: run 'attach <role>' to connect")?;
         }
-        shell.repl_with_autologin(auto_attach)?;
+        shell.repl_with_autologin(auto_attach)
+    };
+
+    if run_result.is_ok() {
+        if let Some(trace_path) = cli.record_trace {
+            let builder = trace_builder
+                .as_ref()
+                .context("trace builder missing")?;
+            let log = builder.borrow().snapshot();
+            let payload = log.encode(trace_policy)?;
+            fs::write(&trace_path, payload)
+                .with_context(|| format!("failed to write trace {}", trace_path.display()))?;
+        }
     }
-    Ok(())
+
+    run_result
 }

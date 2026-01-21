@@ -15,6 +15,8 @@ pub mod command;
 pub mod docs;
 pub mod help;
 pub mod secure9p;
+/// Trace record/replay utilities for Secure9P frames and ACK lines.
+pub mod trace;
 pub mod ticket;
 pub mod verb;
 pub mod wire;
@@ -30,6 +32,10 @@ pub use secure9p::{ClientError as Secure9pError, Secure9pClient, Secure9pTranspo
 pub use ticket::{
     normalize_ticket, parse_role, proto_role_from_ticket, role_label, QueenTicketMode,
     RoleParseMode, TicketCheck, TicketError, TicketPolicy,
+};
+pub use trace::{
+    TraceError, TraceFrame, TraceLog, TraceLogBuilder, TraceLogBuilderRef, TracePolicy,
+    TraceReplayTransport, TraceTransportError, TraceTransportRecorder, TRACE_MAGIC, TRACE_VERSION,
 };
 pub use verb::{ConsoleVerb, VerbSpec, ALL_VERBS, VERB_SPECS, VERB_SPEC_COUNT};
 pub use wire::{

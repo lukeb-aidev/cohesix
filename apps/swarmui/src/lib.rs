@@ -16,7 +16,9 @@ pub use hive::{
     SwarmUiHiveAgent, SwarmUiHiveBatch, SwarmUiHiveBootstrap, SwarmUiHiveConfig,
     SwarmUiHiveEvent, SwarmUiHiveEventKind, SwarmUiHiveSnapshot,
 };
-pub use transport::{TcpTransport, TcpTransportError, TcpTransportFactory};
+pub use transport::{
+    TcpTransport, TcpTransportError, TcpTransportFactory, TraceTransportFactory,
+};
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -99,6 +101,8 @@ pub struct SwarmUiConfig {
     pub cache: SwarmUiCacheConfig,
     /// Hive rendering defaults.
     pub hive: SwarmUiHiveConfig,
+    /// Maximum trace replay size in bytes.
+    pub trace_max_bytes: usize,
     /// Offline mode (disables network access).
     pub offline: bool,
 }
@@ -135,6 +139,7 @@ impl SwarmUiConfig {
             paths,
             cache,
             hive,
+            trace_max_bytes: generated::SWARMUI_TRACE_MAX_BYTES as usize,
             offline: false,
         }
     }

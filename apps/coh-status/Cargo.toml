@@ -9,11 +9,11 @@ publish = false
 description = "Cohesix status tool (host-side)"
 
 [dependencies]
-
-[dev-dependencies]
 anyhow = { workspace = true }
 cohesix-ticket = { workspace = true }
 cohsh = { path = "../cohsh" }
 cohsh-core = { workspace = true }
+
+[dev-dependencies]
 nine-door = { path = "../nine-door" }
 secure9p-codec = { workspace = true }

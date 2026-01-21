@@ -24,6 +24,8 @@ pub struct CohshPolicy {
     pub retry: CohshRetryPolicy,
     /// Heartbeat cadence policy for transport keepalives.
     pub heartbeat: CohshHeartbeatPolicy,
+    /// Trace capture size limits.
+    pub trace: CohshTracePolicy,
 }
 
 impl CohshPolicy {
@@ -52,6 +54,9 @@ impl CohshPolicy {
             },
             heartbeat: CohshHeartbeatPolicy {
                 interval_ms: generated::COHSH_HEARTBEAT_INTERVAL_MS,
+            },
+            trace: CohshTracePolicy {
+                max_bytes: generated::COHSH_TRACE_MAX_BYTES,
             },
         }
     }
@@ -114,6 +119,13 @@ pub struct CohshHeartbeatPolicy {
     pub interval_ms: u64,
 }
 
+/// Trace capture limits for cohsh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CohshTracePolicy {
+    /// Maximum encoded trace size in bytes.
+    pub max_bytes: u32,
+}
+
 /// Optional overrides layered on top of the manifest-derived policy.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PolicyOverrides {
@@ -140,6 +152,7 @@ struct PolicyToml {
     cohsh: CohshTomlSection,
     retry: RetryTomlSection,
     heartbeat: HeartbeatTomlSection,
+    trace: TraceTomlSection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,6 +187,12 @@ struct RetryTomlSection {
 #[serde(deny_unknown_fields)]
 struct HeartbeatTomlSection {
     interval_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TraceTomlSection {
+    max_bytes: u32,
 }
 
 /// Return the default policy path under the repository root.
@@ -219,6 +238,9 @@ pub fn load_policy(path: &Path) -> Result<CohshPolicy> {
         heartbeat: CohshHeartbeatPolicy {
             interval_ms: parsed.heartbeat.interval_ms,
         },
+        trace: CohshTracePolicy {
+            max_bytes: parsed.trace.max_bytes,
+        },
     };
     validate_policy(&policy)?;
     Ok(policy)
@@ -255,6 +277,9 @@ fn validate_policy(policy: &CohshPolicy) -> Result<()> {
         return Err(anyhow!(
             "cohsh heartbeat interval_ms must be >= 1"
         ));
+    }
+    if policy.trace.max_bytes == 0 {
+        return Err(anyhow!("cohsh trace max_bytes must be > 0"));
     }
     Ok(())
 }

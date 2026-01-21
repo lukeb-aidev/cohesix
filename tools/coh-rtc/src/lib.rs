@@ -20,6 +20,7 @@ pub struct CompileOptions {
     pub observability_interfaces_snippet_out: PathBuf,
     pub observability_security_snippet_out: PathBuf,
     pub ticket_quotas_snippet_out: PathBuf,
+    pub trace_policy_snippet_out: PathBuf,
     pub cas_interfaces_snippet_out: PathBuf,
     pub cas_security_snippet_out: PathBuf,
     pub cbor_snippet_out: PathBuf,
@@ -89,6 +90,12 @@ pub fn default_ticket_quotas_snippet_path() -> PathBuf {
     Path::new("docs")
         .join("snippets")
         .join("ticket_quotas.md")
+}
+
+pub fn default_trace_policy_snippet_path() -> PathBuf {
+    Path::new("docs")
+        .join("snippets")
+        .join("trace_policy.md")
 }
 
 pub fn default_cas_interfaces_snippet_path() -> PathBuf {

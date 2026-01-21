@@ -137,7 +137,7 @@ impl<T: Secure9pTransport> CohClient<T> {
         fid
     }
 
-    fn negotiated_msize(&self) -> u32 {
+    pub(crate) fn negotiated_msize(&self) -> u32 {
         self.core.negotiated_msize()
     }
 

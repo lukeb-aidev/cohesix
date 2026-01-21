@@ -238,6 +238,7 @@ run_batch() {
         --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
         --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md" \
         --ticket-quotas-snippet "$PROJECT_ROOT/docs/snippets/ticket_quotas.md" \
+        --trace-policy-snippet "$PROJECT_ROOT/docs/snippets/trace_policy.md" \
         --cas-interfaces-snippet "$PROJECT_ROOT/docs/snippets/cas_interfaces.md" \
         --cas-security-snippet "$PROJECT_ROOT/docs/snippets/cas_security.md" \
         --cohsh-grammar-doc "$PROJECT_ROOT/docs/snippets/cohsh_grammar.md" \
@@ -343,6 +344,7 @@ cargo run -p coh-rtc -- \
     --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
     --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md" \
     --ticket-quotas-snippet "$PROJECT_ROOT/docs/snippets/ticket_quotas.md" \
+    --trace-policy-snippet "$PROJECT_ROOT/docs/snippets/trace_policy.md" \
     --cas-interfaces-snippet "$PROJECT_ROOT/docs/snippets/cas_interfaces.md" \
     --cas-security-snippet "$PROJECT_ROOT/docs/snippets/cas_security.md" \
     --cohsh-grammar-doc "$PROJECT_ROOT/docs/snippets/cohsh_grammar.md" \

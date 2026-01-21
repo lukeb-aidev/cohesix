@@ -543,7 +543,7 @@ main() {
     fi
 
     RTC_MANIFEST="${COH_RTC_MANIFEST:-$PROJECT_ROOT/configs/root_task.toml}"
-    log "Regenerating coh-rtc artefacts via: cargo run -p coh-rtc -- ${RTC_MANIFEST} --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cas-manifest-template out/cas_manifest_template.json --cli-script scripts/cohsh/boot_v0.coh --doc-snippet docs/snippets/root_task_manifest.md --observability-interfaces-snippet docs/snippets/observability_interfaces.md --observability-security-snippet docs/snippets/observability_security.md --ticket-quotas-snippet docs/snippets/ticket_quotas.md --cas-interfaces-snippet docs/snippets/cas_interfaces.md --cas-security-snippet docs/snippets/cas_security.md --cohsh-grammar-doc docs/snippets/cohsh_grammar.md --cohsh-ticket-policy-doc docs/snippets/cohsh_ticket_policy.md"
+    log "Regenerating coh-rtc artefacts via: cargo run -p coh-rtc -- ${RTC_MANIFEST} --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cas-manifest-template out/cas_manifest_template.json --cli-script scripts/cohsh/boot_v0.coh --doc-snippet docs/snippets/root_task_manifest.md --observability-interfaces-snippet docs/snippets/observability_interfaces.md --observability-security-snippet docs/snippets/observability_security.md --ticket-quotas-snippet docs/snippets/ticket_quotas.md --trace-policy-snippet docs/snippets/trace_policy.md --cas-interfaces-snippet docs/snippets/cas_interfaces.md --cas-security-snippet docs/snippets/cas_security.md --cohsh-grammar-doc docs/snippets/cohsh_grammar.md --cohsh-ticket-policy-doc docs/snippets/cohsh_ticket_policy.md"
     cargo run -p coh-rtc -- \
         "$RTC_MANIFEST" \
         --out "$PROJECT_ROOT/apps/root-task/src/generated" \
@@ -554,6 +554,7 @@ main() {
         --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
         --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md" \
         --ticket-quotas-snippet "$PROJECT_ROOT/docs/snippets/ticket_quotas.md" \
+        --trace-policy-snippet "$PROJECT_ROOT/docs/snippets/trace_policy.md" \
         --cas-interfaces-snippet "$PROJECT_ROOT/docs/snippets/cas_interfaces.md" \
         --cas-security-snippet "$PROJECT_ROOT/docs/snippets/cas_security.md" \
         --cohsh-grammar-doc "$PROJECT_ROOT/docs/snippets/cohsh_grammar.md" \

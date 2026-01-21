@@ -890,6 +890,10 @@ impl Manifest {
         if heartbeat.interval_ms == 0 {
             bail!("client_policies.heartbeat.interval_ms must be >= 1");
         }
+        let trace = &self.client_policies.trace;
+        if trace.max_bytes == 0 {
+            bail!("client_policies.trace.max_bytes must be > 0");
+        }
         Ok(())
     }
 
@@ -1517,6 +1521,7 @@ pub struct ClientPolicies {
     pub cohsh: CohshClientPolicy,
     pub retry: ClientRetryPolicy,
     pub heartbeat: ClientHeartbeatPolicy,
+    pub trace: ClientTracePolicy,
 }
 
 impl Default for ClientPolicies {
@@ -1525,6 +1530,7 @@ impl Default for ClientPolicies {
             cohsh: CohshClientPolicy::default(),
             retry: ClientRetryPolicy::default(),
             heartbeat: ClientHeartbeatPolicy::default(),
+            trace: ClientTracePolicy::default(),
         }
     }
 }
@@ -1708,6 +1714,18 @@ pub struct ClientHeartbeatPolicy {
 impl Default for ClientHeartbeatPolicy {
     fn default() -> Self {
         Self { interval_ms: 15000 }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ClientTracePolicy {
+    pub max_bytes: u32,
+}
+
+impl Default for ClientTracePolicy {
+    fn default() -> Self {
+        Self { max_bytes: 1_048_576 }
     }
 }
 

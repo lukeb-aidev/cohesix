@@ -15,13 +15,16 @@ use std::time::Duration;
 use tauri::State;
 
 use cohsh::COHSH_TCP_PORT;
+use cohsh_core::command::MAX_LINE_LEN;
+use cohsh_core::trace::{TraceLog, TracePolicy};
 use swarmui::{
     parse_role_label, SwarmUiBackend, SwarmUiConfig, SwarmUiConsoleBackend, SwarmUiTranscript,
-    TcpTransportFactory,
+    TcpTransportFactory, TraceTransportFactory,
 };
 
 enum SwarmUiService {
     Secure9p(SwarmUiBackend<TcpTransportFactory>),
+    Trace(SwarmUiBackend<TraceTransportFactory>),
     Console(SwarmUiConsoleBackend),
 }
 
@@ -29,6 +32,7 @@ impl SwarmUiService {
     fn attach(&mut self, role: cohesix_ticket::Role, ticket: Option<&str>) -> SwarmUiTranscript {
         match self {
             SwarmUiService::Secure9p(backend) => backend.attach(role, ticket),
+            SwarmUiService::Trace(backend) => backend.attach(role, ticket),
             SwarmUiService::Console(backend) => backend.attach(role, ticket),
         }
     }
@@ -36,6 +40,7 @@ impl SwarmUiService {
     fn set_offline(&mut self, offline: bool) {
         match self {
             SwarmUiService::Secure9p(backend) => backend.set_offline(offline),
+            SwarmUiService::Trace(backend) => backend.set_offline(offline),
             SwarmUiService::Console(backend) => backend.set_offline(offline),
         }
     }
@@ -48,6 +53,7 @@ impl SwarmUiService {
     ) -> SwarmUiTranscript {
         match self {
             SwarmUiService::Secure9p(backend) => backend.tail_telemetry(role, ticket, worker_id),
+            SwarmUiService::Trace(backend) => backend.tail_telemetry(role, ticket, worker_id),
             SwarmUiService::Console(backend) => backend.tail_telemetry(role, ticket, worker_id),
         }
     }
@@ -60,6 +66,7 @@ impl SwarmUiService {
     ) -> SwarmUiTranscript {
         match self {
             SwarmUiService::Secure9p(backend) => backend.list_namespace(role, ticket, path),
+            SwarmUiService::Trace(backend) => backend.list_namespace(role, ticket, path),
             SwarmUiService::Console(backend) => backend.list_namespace(role, ticket, path),
         }
     }
@@ -71,6 +78,7 @@ impl SwarmUiService {
     ) -> SwarmUiTranscript {
         match self {
             SwarmUiService::Secure9p(backend) => backend.fleet_snapshot(role, ticket),
+            SwarmUiService::Trace(backend) => backend.fleet_snapshot(role, ticket),
             SwarmUiService::Console(backend) => backend.fleet_snapshot(role, ticket),
         }
     }
@@ -83,6 +91,9 @@ impl SwarmUiService {
     ) -> Result<swarmui::SwarmUiHiveBootstrap, String> {
         match self {
             SwarmUiService::Secure9p(backend) => backend
+                .hive_bootstrap(role, ticket, snapshot_key)
+                .map_err(|err| err.to_string()),
+            SwarmUiService::Trace(backend) => backend
                 .hive_bootstrap(role, ticket, snapshot_key)
                 .map_err(|err| err.to_string()),
             SwarmUiService::Console(backend) => backend
@@ -100,6 +111,9 @@ impl SwarmUiService {
             SwarmUiService::Secure9p(backend) => backend
                 .hive_poll(role, ticket)
                 .map_err(|err| err.to_string()),
+            SwarmUiService::Trace(backend) => backend
+                .hive_poll(role, ticket)
+                .map_err(|err| err.to_string()),
             SwarmUiService::Console(backend) => backend
                 .hive_poll(role, ticket)
                 .map_err(|err| err.to_string()),
@@ -115,6 +129,9 @@ impl SwarmUiService {
             SwarmUiService::Secure9p(backend) => backend
                 .hive_reset(role, ticket)
                 .map_err(|err| err.to_string()),
+            SwarmUiService::Trace(backend) => backend
+                .hive_reset(role, ticket)
+                .map_err(|err| err.to_string()),
             SwarmUiService::Console(backend) => backend
                 .hive_reset(role, ticket)
                 .map_err(|err| err.to_string()),
@@ -124,6 +141,9 @@ impl SwarmUiService {
     fn load_hive_replay(&mut self, payload: &[u8]) -> Result<(), String> {
         match self {
             SwarmUiService::Secure9p(backend) => backend
+                .load_hive_replay(payload)
+                .map_err(|err| err.to_string()),
+            SwarmUiService::Trace(backend) => backend
                 .load_hive_replay(payload)
                 .map_err(|err| err.to_string()),
             SwarmUiService::Console(backend) => backend
@@ -239,9 +259,26 @@ fn parse_replay_path(args: &[String]) -> Option<PathBuf> {
     None
 }
 
+fn parse_trace_replay_path(args: &[String]) -> Option<PathBuf> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--replay-trace" {
+            return iter.next().map(PathBuf::from);
+        }
+        if let Some(value) = arg.strip_prefix("--replay-trace=") {
+            return Some(PathBuf::from(value));
+        }
+    }
+    None
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let replay_path = parse_replay_path(&args);
+    let trace_replay_path = parse_trace_replay_path(&args);
+    if replay_path.is_some() && trace_replay_path.is_some() {
+        panic!("cannot use --replay and --replay-trace together");
+    }
     let data_dir = tauri::api::path::data_dir().unwrap_or_else(|| std::env::temp_dir());
     let mut config = SwarmUiConfig::from_generated(data_dir.clone());
     if replay_path.is_some() {
@@ -257,28 +294,47 @@ fn main() {
         .trim()
         .to_ascii_lowercase();
     let timeout = Duration::from_secs(2);
-    let mut backend = match transport.as_str() {
-        "9p" | "secure9p" => {
-            let factory = TcpTransportFactory::new(
-                host,
-                port,
-                timeout,
-                swarmui::SECURE9P_MSIZE,
-            );
-            SwarmUiService::Secure9p(SwarmUiBackend::new(config, factory))
+    let mut backend = if let Some(path) = trace_replay_path.clone() {
+        let resolved = if path.is_relative() {
+            data_dir.join("traces").join(path)
+        } else {
+            path
+        };
+        let payload = fs::read(&resolved)
+            .unwrap_or_else(|err| panic!("failed to read trace {}: {err}", resolved.display()));
+        let policy = TracePolicy::new(
+            config.trace_max_bytes as u32,
+            swarmui::SECURE9P_MSIZE,
+            MAX_LINE_LEN as u32,
+        );
+        let trace = TraceLog::decode(&payload, policy)
+            .unwrap_or_else(|err| panic!("failed to decode trace: {err}"));
+        let factory = TraceTransportFactory::new(trace.frames);
+        SwarmUiService::Trace(SwarmUiBackend::new(config, factory))
+    } else {
+        match transport.as_str() {
+            "9p" | "secure9p" => {
+                let factory = TcpTransportFactory::new(
+                    host,
+                    port,
+                    timeout,
+                    swarmui::SECURE9P_MSIZE,
+                );
+                SwarmUiService::Secure9p(SwarmUiBackend::new(config, factory))
+            }
+            "console" | "tcp" => {
+                let auth_token = env::var("SWARMUI_AUTH_TOKEN")
+                    .or_else(|_| env::var("COHSH_AUTH_TOKEN"))
+                    .unwrap_or_else(|_| "changeme".to_owned());
+                SwarmUiService::Console(SwarmUiConsoleBackend::new(
+                    config,
+                    host,
+                    port,
+                    auth_token,
+                ))
+            }
+            other => panic!("unsupported SWARMUI_TRANSPORT '{other}' (use console or 9p)"),
         }
-        "console" | "tcp" => {
-            let auth_token = env::var("SWARMUI_AUTH_TOKEN")
-                .or_else(|_| env::var("COHSH_AUTH_TOKEN"))
-                .unwrap_or_else(|_| "changeme".to_owned());
-            SwarmUiService::Console(SwarmUiConsoleBackend::new(
-                config,
-                host,
-                port,
-                auth_token,
-            ))
-        }
-        other => panic!("unsupported SWARMUI_TRANSPORT '{other}' (use console or 9p)"),
     };
     if let Some(path) = replay_path {
         let resolved = if path.is_relative() {

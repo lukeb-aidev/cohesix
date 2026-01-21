@@ -19,6 +19,8 @@ pub mod policy;
 pub mod client;
 /// Queen control payload helpers for /queen/ctl.
 pub mod queen;
+/// Trace-aware transport helpers for cohsh.
+pub mod trace;
 mod session_pool;
 
 #[allow(clippy::all, dead_code)]
@@ -111,6 +113,8 @@ impl Session {
 }
 
 const ROOT_FID: u32 = 1;
+/// Manifest-derived Secure9P maximum message size.
+pub const SECURE9P_MSIZE: u32 = generated_client::SECURE9P_MSIZE;
 const MAX_SCRIPT_LINES: usize = 256;
 const MAX_SCRIPT_WAIT_MS: u64 = 2000;
 const MAX_SCRIPT_RESPONSES: usize = 8;
@@ -3542,7 +3546,7 @@ pub(crate) fn build_spawn_payload<'a>(
     }
 }
 
-fn parse_path(path: &str) -> Result<Vec<String>> {
+pub(crate) fn parse_path(path: &str) -> Result<Vec<String>> {
     if !path.starts_with('/') {
         return Err(anyhow!("paths must be absolute"));
     }

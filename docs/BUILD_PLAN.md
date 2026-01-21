@@ -77,7 +77,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [20e](#20e) | CLI/UI Convergence Tests | Complete |
 | [20f](#20f) | UI Security Hardening (Tickets & Quotas) | Complete |
 | [20f1](#20f1) | SwarmUI Host Tool Packaging + Tauri API Fix | Complete |
-| [20g](#20g) | Deterministic Snapshot & Replay (UI Testing) | Pending |
+| [20g](#20g) | Deterministic Snapshot & Replay (UI Testing) | Complete |
 | [20h](#20h) | Alpha Release Gate: As-Built Verification, Live Hive Demo, SwarmUI Replay, & Release Bundle | Pending |
 | [21](#21) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Pending |
@@ -2335,6 +2335,8 @@ Deliverables:
 ## Milestone 20g — Deterministic Snapshot & Replay (UI Testing) <a id="20g"></a> 
 [Milestones](#Milestones)
 
+**Status:** Complete — Trace record/replay fixtures and parity tests land across cohsh, SwarmUI, and coh-status; trace policy snippet and hashes align; SwarmUI header branding is live.
+
 **Why now (compiler):** To stabilize UI regressions without live targets, we need deterministic trace capture and replay consistent with CLI/console semantics.
 
 **Goal**
@@ -2368,7 +2370,7 @@ All testing and verification for this milestone is governed by:
 ```
 Title/ID: m20g-trace-core
 Goal: Implement trace recorder/replayer in cohsh-core with bounds.
-Inputs: crates/cohsh-core, tests/fixtures/transcripts/.
+Inputs: crates/cohsh-core, tests/fixtures/traces/, docs/TEST_PLAN.md.
 Changes:
   - crates/cohsh-core/src/trace.rs — bounded recorder/replayer with hash validation.
   - crates/cohsh-core/tests/trace.rs — tampered trace negative case.
@@ -2381,7 +2383,7 @@ Deliverables:
 
 Title/ID: m20g-cohsh-replay
 Goal: Wire cohsh CLI record/replay to cohsh-core trace format.
-Inputs: apps/cohsh/src/main.rs, apps/cohsh/src/lib.rs, tests/fixtures/transcripts/, docs/USERLAND_AND_CLI.md, docs/TEST_PLAN.md.
+Inputs: apps/cohsh/src/main.rs, apps/cohsh/src/lib.rs, apps/cohsh/src/trace.rs, tests/fixtures/traces/, tests/fixtures/transcripts/trace_v0/, docs/USERLAND_AND_CLI.md, docs/TEST_PLAN.md.
 Changes:
   - apps/cohsh/src/main.rs — add `--record-trace` and `--replay-trace` CLI entry points using cohsh-core.
   - apps/cohsh/src/lib.rs — expose trace driver for CLI use.
@@ -2395,17 +2397,20 @@ Deliverables:
 
 Title/ID: m20g-ui-replay
 Goal: Add offline replay to SwarmUI and coh-status for deterministic UI tests.
-Inputs: apps/swarmui/src/trace.rs, apps/coh-status/src/trace.rs, docs/TEST_PLAN.md.
+Inputs: apps/swarmui/src/transport.rs, apps/swarmui/src-tauri/main.rs, apps/swarmui/tests/trace.rs, apps/coh-status/src/lib.rs, apps/coh-status/tests/trace.rs, docs/TEST_PLAN.md.
 Changes:
-  - apps/swarmui/src/trace.rs — load/play trace, enforce size limits.
-  - apps/coh-status/src/trace.rs — same mechanics for field tool.
+  - apps/swarmui/src/transport.rs — trace transport factory for replay.
+  - apps/swarmui/src-tauri/main.rs — `--replay-trace` entry point and decoding.
+  - apps/swarmui/tests/trace.rs — trace replay transcript parity.
+  - apps/coh-status/src/lib.rs — trace replay client wrapper + policy.
+  - apps/coh-status/tests/trace.rs — trace replay transcript parity.
 Commands:
   - cargo test -p swarmui --test trace
   - cargo test -p coh-status --test trace
 Checks:
-  - Replay matches stored transcript; tampered trace rejected with ERR displayed to user.
+  - Replay matches stored trace_v0 transcripts; tampered trace rejected deterministically.
 Deliverables:
-  - Offline replay documentation and fixtures stored in tests/fixtures/transcripts/.
+  - Offline replay documentation; trace fixture in tests/fixtures/traces/trace_v0.trace and transcripts in tests/fixtures/transcripts/trace_v0/.
 
 Title/ID: m20g-swarmui-header
 Goal: Add Cohesix header branding to the SwarmUI shell.

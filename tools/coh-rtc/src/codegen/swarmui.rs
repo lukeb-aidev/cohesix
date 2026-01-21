@@ -164,6 +164,14 @@ fn render_defaults_toml(manifest: &Manifest, manifest_hash: &str) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     writeln!(contents, "namespace_roots = [{roots}]").ok();
+    writeln!(contents).ok();
+    writeln!(contents, "[trace]").ok();
+    writeln!(
+        contents,
+        "max_bytes = {}",
+        manifest.client_policies.trace.max_bytes
+    )
+    .ok();
     contents
 }
 
@@ -250,6 +258,12 @@ fn render_defaults_rust(manifest: &Manifest, manifest_hash: &str) -> String {
         contents,
         "pub const SWARMUI_HIVE_SNAPSHOT_MAX_EVENTS: u32 = {};",
         manifest.swarmui.hive.snapshot_max_events
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_TRACE_MAX_BYTES: u32 = {};",
+        manifest.client_policies.trace.max_bytes
     )
     .ok();
     writeln!(
@@ -372,6 +386,12 @@ fn render_defaults_doc(manifest: &Manifest, manifest_hash: &str, defaults_hash: 
         contents,
         "- `swarmui.paths.namespace_roots`: `{}`",
         manifest.swarmui.paths.namespace_roots.join(", ")
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `trace.max_bytes`: `{}`",
+        manifest.client_policies.trace.max_bytes
     )
     .ok();
     writeln!(contents).ok();

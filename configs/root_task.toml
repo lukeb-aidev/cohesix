@@ -121,6 +121,9 @@ timeout_ms = 5000
 [client_policies.heartbeat]
 interval_ms = 15000
 
+[client_policies.trace]
+max_bytes = 1048576
+
 [client_paths]
 queen_ctl = "/queen/ctl"
 log = "/log/queen.log"

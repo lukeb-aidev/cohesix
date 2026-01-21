@@ -23,6 +23,7 @@ doc_snippet="$work_dir/root_task_manifest.md"
 observability_interfaces="$work_dir/observability_interfaces.md"
 observability_security="$work_dir/observability_security.md"
 ticket_quotas="$work_dir/ticket_quotas.md"
+trace_policy="$work_dir/trace_policy.md"
 cas_interfaces="$work_dir/cas_interfaces.md"
 cas_security="$work_dir/cas_security.md"
 cohsh_policy="$work_dir/cohsh_policy.toml"
@@ -43,6 +44,7 @@ cargo run -p coh-rtc -- \
   --observability-interfaces-snippet "$observability_interfaces" \
   --observability-security-snippet "$observability_security" \
   --ticket-quotas-snippet "$ticket_quotas" \
+  --trace-policy-snippet "$trace_policy" \
   --cas-interfaces-snippet "$cas_interfaces" \
   --cas-security-snippet "$cas_security" \
   --cohsh-policy "$cohsh_policy" \
@@ -73,6 +75,7 @@ compare_file "$repo_root/docs/snippets/root_task_manifest.md" "$doc_snippet"
 compare_file "$repo_root/docs/snippets/observability_interfaces.md" "$observability_interfaces"
 compare_file "$repo_root/docs/snippets/observability_security.md" "$observability_security"
 compare_file "$repo_root/docs/snippets/ticket_quotas.md" "$ticket_quotas"
+compare_file "$repo_root/docs/snippets/trace_policy.md" "$trace_policy"
 compare_file "$repo_root/docs/snippets/cas_interfaces.md" "$cas_interfaces"
 compare_file "$repo_root/docs/snippets/cas_security.md" "$cas_security"
 compare_file "$repo_root/out/cohsh_policy.toml" "$cohsh_policy"

@@ -31,6 +31,7 @@ pub struct GeneratedArtifacts {
     pub observability_interfaces_snippet: PathBuf,
     pub observability_security_snippet: PathBuf,
     pub ticket_quotas_snippet: PathBuf,
+    pub trace_policy_snippet: PathBuf,
     pub cas_interfaces_snippet: PathBuf,
     pub cas_security_snippet: PathBuf,
     pub cbor_snippet: PathBuf,
@@ -51,7 +52,7 @@ pub struct GeneratedArtifacts {
 impl GeneratedArtifacts {
     pub fn summary(&self) -> String {
         format!(
-            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, obs_interfaces={}, obs_security={}, ticket_quotas={}, cas_interfaces={}, cas_security={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_client_rust={}, cohsh_client_doc={}, cohsh_grammar={}, cohsh_ticket_policy={}, swarmui_defaults={}, swarmui_hash={}, swarmui_rust={}, swarmui_doc={}",
+            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, obs_interfaces={}, obs_security={}, ticket_quotas={}, trace_policy={}, cas_interfaces={}, cas_security={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_client_rust={}, cohsh_client_doc={}, cohsh_grammar={}, cohsh_ticket_policy={}, swarmui_defaults={}, swarmui_hash={}, swarmui_rust={}, swarmui_doc={}",
             self.rust_dir.display(),
             self.manifest_json.display(),
             self.cas_manifest_template.display(),
@@ -61,6 +62,7 @@ impl GeneratedArtifacts {
             self.observability_interfaces_snippet.display(),
             self.observability_security_snippet.display(),
             self.ticket_quotas_snippet.display(),
+            self.trace_policy_snippet.display(),
             self.cas_interfaces_snippet.display(),
             self.cas_security_snippet.display(),
             self.cbor_snippet.display(),
@@ -114,6 +116,10 @@ pub fn emit_all(
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     if let Some(parent) = options.ticket_quotas_snippet_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.trace_policy_snippet_out.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
@@ -179,6 +185,7 @@ pub fn emit_all(
     docs::emit_observability_interfaces_snippet(docs, &options.observability_interfaces_snippet_out)?;
     docs::emit_observability_security_snippet(docs, &options.observability_security_snippet_out)?;
     docs::emit_ticket_quotas_snippet(docs, &options.ticket_quotas_snippet_out)?;
+    docs::emit_trace_policy_snippet(docs, &options.trace_policy_snippet_out)?;
     docs::emit_cas_interfaces_snippet(docs, &options.cas_interfaces_snippet_out)?;
     docs::emit_cas_security_snippet(docs, &options.cas_security_snippet_out)?;
     cbor::emit_cbor_snippet(&options.cbor_snippet_out)?;
@@ -241,6 +248,7 @@ pub fn emit_all(
         observability_interfaces_snippet: options.observability_interfaces_snippet_out.clone(),
         observability_security_snippet: options.observability_security_snippet_out.clone(),
         ticket_quotas_snippet: options.ticket_quotas_snippet_out.clone(),
+        trace_policy_snippet: options.trace_policy_snippet_out.clone(),
         cas_interfaces_snippet: options.cas_interfaces_snippet_out.clone(),
         cas_security_snippet: options.cas_security_snippet_out.clone(),
         cbor_snippet: options.cbor_snippet_out.clone(),

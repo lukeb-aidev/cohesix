@@ -264,7 +264,7 @@ pub struct AuditConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
-pub const MANIFEST_SHA256: &str = "0b887f3ed65c907434f2d0935f79dce99812ffd34941c8ce54a43aa6ee1734c6";
+pub const MANIFEST_SHA256: &str = "61c0fcf26398e77b38f9ea82dc2f1a619bd3151de43f90acab748b9a7dc88435";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

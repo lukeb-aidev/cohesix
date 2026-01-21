@@ -3,9 +3,14 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
+use cohsh_core::trace::{TraceFrame, TraceReplayTransport};
 use cohsh_core::Secure9pTransport;
+
+use crate::{SwarmUiError, SwarmUiTransportFactory};
 
 /// Errors returned by the SwarmUI TCP transport.
 #[derive(Debug)]
@@ -151,5 +156,36 @@ impl TcpTransportFactory {
     /// Build a new TCP transport.
     pub fn build(&self) -> Result<TcpTransport, TcpTransportError> {
         TcpTransport::connect(&self.host, self.port, self.timeout, self.max_frame_len)
+    }
+}
+
+/// Trace-backed Secure9P transport factory for offline replay.
+#[derive(Debug)]
+pub struct TraceTransportFactory {
+    frames: Arc<Vec<TraceFrame>>,
+    used: AtomicBool,
+}
+
+impl TraceTransportFactory {
+    /// Create a new trace transport factory.
+    #[must_use]
+    pub fn new(frames: Vec<TraceFrame>) -> Self {
+        Self {
+            frames: Arc::new(frames),
+            used: AtomicBool::new(false),
+        }
+    }
+}
+
+impl SwarmUiTransportFactory for TraceTransportFactory {
+    type Transport = TraceReplayTransport;
+
+    fn connect(&self) -> Result<Self::Transport, SwarmUiError> {
+        if self.used.swap(true, Ordering::SeqCst) {
+            return Err(SwarmUiError::Transport(
+                "trace replay already consumed".to_owned(),
+            ));
+        }
+        Ok(TraceReplayTransport::new((*self.frames).clone()))
     }
 }

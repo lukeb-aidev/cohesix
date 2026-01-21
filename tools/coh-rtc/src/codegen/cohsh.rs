@@ -187,6 +187,14 @@ fn render_policy_toml(manifest: &Manifest, manifest_hash: &str) -> String {
         manifest.client_policies.heartbeat.interval_ms
     )
     .ok();
+    writeln!(contents).ok();
+    writeln!(contents, "[trace]").ok();
+    writeln!(
+        contents,
+        "max_bytes = {}",
+        manifest.client_policies.trace.max_bytes
+    )
+    .ok();
     contents
 }
 
@@ -242,6 +250,12 @@ fn render_policy_doc(manifest: &Manifest, manifest_hash: &str, policy_hash: &str
         contents,
         "- `heartbeat.interval_ms`: `{}`",
         manifest.client_policies.heartbeat.interval_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `trace.max_bytes`: `{}`",
+        manifest.client_policies.trace.max_bytes
     )
     .ok();
     writeln!(contents).ok();
@@ -318,6 +332,12 @@ fn render_policy_rust(manifest: &Manifest, manifest_hash: &str, policy_hash: &st
         manifest.client_policies.heartbeat.interval_ms
     )
     .ok();
+    writeln!(
+        contents,
+        "pub const COHSH_TRACE_MAX_BYTES: u32 = {};",
+        manifest.client_policies.trace.max_bytes
+    )
+    .ok();
     contents
 }
 
@@ -347,6 +367,12 @@ fn render_client_rust(manifest: &Manifest, manifest_hash: &str) -> String {
         contents,
         "pub const SECURE9P_WALK_DEPTH: u8 = {};",
         manifest.secure9p.walk_depth
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const TRACE_MAX_BYTES: u32 = {};",
+        manifest.client_policies.trace.max_bytes
     )
     .ok();
     writeln!(
@@ -385,6 +411,12 @@ fn render_client_doc(manifest: &Manifest, manifest_hash: &str) -> String {
         contents,
         "- `secure9p.walk_depth`: `{}`",
         manifest.secure9p.walk_depth
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `trace.max_bytes`: `{}`",
+        manifest.client_policies.trace.max_bytes
     )
     .ok();
     writeln!(
