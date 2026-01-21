@@ -86,7 +86,7 @@ body {
   margin: 0 0 var(--space-2);
   text-transform: uppercase;
   letter-spacing: 0.28em;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-md);
   color: var(--color-ink-soft);
 }
 
