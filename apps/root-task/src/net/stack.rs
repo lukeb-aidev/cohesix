@@ -785,6 +785,7 @@ struct SessionState {
     last_flush_log_ms: u64,
     flush_blocked_since: Option<u64>,
     last_blocked_snapshot: Option<CohshBlockedSnapshot>,
+    flush_blocked_logged_preconnect: bool,
 }
 
 static SOCKET_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
@@ -1455,7 +1456,9 @@ impl<D: NetDevice> NetStack<D> {
 
     fn reset_session_state(&mut self) {
         self.auth_state = AuthState::Start;
+        let preconnect_logged = self.session_state.flush_blocked_logged_preconnect;
         self.session_state = SessionState::default();
+        self.session_state.flush_blocked_logged_preconnect = preconnect_logged;
         self.conn_bytes_read = 0;
         self.conn_bytes_written = 0;
         self.disconnect_requested = false;
@@ -3989,7 +3992,11 @@ impl<D: NetDevice> NetStack<D> {
         session_state: &SessionState,
         snapshot: CohshBlockedSnapshot,
         now_ms: u64,
+        preconnect: bool,
     ) -> bool {
+        if preconnect {
+            return !session_state.flush_blocked_logged_preconnect;
+        }
         let activity = session_state
             .last_blocked_snapshot
             .map_or(true, |prev| prev != snapshot);
@@ -4015,12 +4022,18 @@ impl<D: NetDevice> NetStack<D> {
             {
                 let queued = server.has_outbound() || outbound.has_pending();
                 if queued {
+                    let preconnect = !session_state.connect_reported;
                     let blocked_snapshot = CohshBlockedSnapshot {
                         tcp_state: socket.state(),
                         auth_state,
                         queued,
                     };
-                    if Self::should_log_flush_blocked(session_state, blocked_snapshot, now_ms) {
+                    if Self::should_log_flush_blocked(
+                        session_state,
+                        blocked_snapshot,
+                        now_ms,
+                        preconnect,
+                    ) {
                         let tcp_state = tcp_state_label(socket.state());
                         let send_queue = socket.send_queue();
                         let send_capacity = socket.send_capacity();
@@ -4036,6 +4049,9 @@ impl<D: NetDevice> NetStack<D> {
                         );
                         crate::debug_uart::debug_uart_line(message.as_str());
                         session_state.last_flush_log_ms = now_ms;
+                        if preconnect {
+                            session_state.flush_blocked_logged_preconnect = true;
+                        }
                     }
                     session_state.flush_blocked_since.get_or_insert(now_ms);
                     session_state.last_blocked_snapshot = Some(blocked_snapshot);
@@ -4065,7 +4081,8 @@ impl<D: NetDevice> NetStack<D> {
                 auth_state,
                 queued,
             };
-            if Self::should_log_flush_blocked(session_state, blocked_snapshot, now_ms) {
+            let preconnect = !session_state.connect_reported;
+            if Self::should_log_flush_blocked(session_state, blocked_snapshot, now_ms, preconnect) {
                 info!(
                     target: "cohsh-net",
                     "[cohsh-net] flush_outbound blocked state={:?} auth_state={:?} queued={}",
@@ -4074,6 +4091,9 @@ impl<D: NetDevice> NetStack<D> {
                     queued,
                 );
                 session_state.last_flush_log_ms = now_ms;
+                if preconnect {
+                    session_state.flush_blocked_logged_preconnect = true;
+                }
             }
             session_state.flush_blocked_since.get_or_insert(now_ms);
             session_state.last_blocked_snapshot = Some(blocked_snapshot);

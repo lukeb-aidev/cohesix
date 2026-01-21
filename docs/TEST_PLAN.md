@@ -18,7 +18,7 @@ Ensure cohsh and SwarmUI share console grammar parity, ticket quotas are enforce
 - `scripts/ci/check_test_plan.sh`
 - If IR or manifest changes: `cargo run -p coh-rtc` then `scripts/check-generated.sh`.
 - Ensure `SEL4_BUILD_DIR=$HOME/seL4/build`.
-- Before any QEMU TCP run, prompt the operator to start tcpdump and confirm the log path (example: `logs/tcpdump-new-20260121-140023.log`). Do not proceed until confirmed.
+- Before any QEMU TCP run, prompt the operator to start tcpdump and confirm the log path (example: `logs/tcpdump-new-YYYYMMDD-HHMMSS.log`). Record the exact path and reuse it in step 5. Do not proceed until confirmed.
 - Clear old regression logs if needed: `rm -rf out/regression-logs`.
 
 ## Execution order (Milestone 20g)
@@ -67,12 +67,13 @@ After a QEMU boot with TCP transport:
 ### 5) QEMU ↔ cohsh console correlation (manual)
 During the command-surface checklist, capture both sides and confirm there are no unexpected resets.
 - Confirm tcpdump capture is active for this run before comparing logs; if not, stop and ask the operator to restart with tcpdump enabled.
-- Capture cohsh output (example): `./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen | tee out/manual/cohsh-session.log`
-- Use the QEMU serial log from the same run (example): `out/cohesix/logs/qemu-live-*.log`
+- Capture cohsh output (example): `./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen 2>&1 | tee out/manual/cohsh-session.log`
+- Use the QEMU serial log from the same run; if QEMU output is only on the terminal, capture it (example): `scripts/cohesix-build-run.sh ... --transport tcp | tee out/manual/qemu-console.log`
+- Do not mix logs across runs; if any of the three logs (cohsh, QEMU, tcpdump) are missing, re-run the checklist.
 - Fail the run if any unexpected disconnects appear:
   - QEMU log: `rg -n "audit tcp\\.conn\\.close reason=error|audit tcp\\.send\\.partial|audit tcp\\.send\\.error|console\\.emit\\.failed" out/cohesix/logs/qemu-live-*.log`
   - cohsh log: `rg -n "\\[cohsh\\]\\[tcp\\] connection lost" out/manual/cohsh-session.log`
-- tcpdump: `rg -n "Flags \\[R\\]" logs/tcpdump-new-20260121-140023.log`
+- tcpdump: `rg -n "Flags \\[R\\]" <tcpdump-log-path>` (use the confirmed path from preflight)
 - Acceptable disconnects: explicit `quit` (reason=`quit`/`eof`) or pool bench with injected short writes. Anything else is a failure.
 - `audit tcp.flush.blocked` lines before any client connects are expected; do not treat them as failures.
 

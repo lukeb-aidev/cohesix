@@ -36,7 +36,15 @@ pub const CONSOLE_TCP_PORT: u16 = COHESIX_TCP_CONSOLE_PORT;
 /// Authentication token expected from TCP console clients.
 pub const AUTH_TOKEN: &str = "changeme";
 /// Idle timeout applied to authenticated TCP console sessions (milliseconds).
-pub const IDLE_TIMEOUT_MS: u64 = 5 * 60 * 1000;
+///
+/// When the kernel timer cannot use the architected counter (default in dev-virt),
+/// the dummy timebase advances once per poll and runs far faster than wall time.
+/// Use an extended timeout in that mode to prevent spurious disconnects.
+pub const IDLE_TIMEOUT_MS: u64 = if cfg!(feature = "timers-arch-counter") {
+    5 * 60 * 1000
+} else {
+    24 * 60 * 60 * 1000
+};
 /// Timeout applied to authentication attempts from newly connected clients.
 pub const AUTH_TIMEOUT_MS: u64 = 5 * 1000;
 
