@@ -28,6 +28,7 @@ Run in the order shown; all commands are macOS ARM64 compatible.
 ### 1) Host-only unit and integration tests
 - `cargo test -p cohsh-core`
 - `cargo test -p cohsh --test script_catalog`
+- `cargo test -p cohsh --test ticket_mint`
 - `cargo test -p cohsh --test transcripts`
 - `cargo test -p cohsh --test client_lib`
 - `cargo test -p coh-status --test transcript`

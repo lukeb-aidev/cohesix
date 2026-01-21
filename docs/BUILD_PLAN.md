@@ -2047,7 +2047,7 @@ Deliverables:
 ## Milestone 20f — UI Security Hardening (Tickets & Quotas) <a id="20f"></a> 
 [Milestones](#Milestones)
 
-**Status:** Complete — Ticket scopes/quotas are enforced; multi-worker cohsh parity, command surface checks, and deterministic regression batching validated.
+**Status:** Complete — Ticket scopes/quotas are enforced; multi-worker cohsh parity, command surface checks, and deterministic regression batching validated; host ticket mint one-shots shipped.
 
 **Why now (compiler):** With UI parity established, enforce least privilege and quotas to protect interactive sessions.
 
@@ -2061,6 +2061,7 @@ Lock UI/CLI security quotas and console grammar parity while proving cohsh works
 - Cohsh multi-worker regression coverage exercises spawn/tail/kill across multiple worker telemetry paths without ID drift.
 - `scripts/cohsh/run_regression_batch.sh` is a reliable manual compliance pack for this milestone (base + gated, deterministic worker-id scripts).
 - SwarmUI/CLI transcripts remain byte-stable against cohsh-core fixtures; no ACK/ERR/END drift.
+- Cohsh and SwarmUI add host-only ticket mint one-shots that do not alter console grammar.
 
 **Commands**
 - `cargo test -p nine-door --test ui_security`
@@ -2081,6 +2082,7 @@ Lock UI/CLI security quotas and console grammar parity while proving cohsh works
 - SwarmUI console transport passes transcript/security tests with no grammar drift.
 - Regression batch passes base + gated with deterministic worker-id scripts and archived logs.
 - UI/CLI/console equivalence preserved: ACK/ERR/END sequences remain byte-stable relative to the 7c baseline.
+- Cohsh `--mint-ticket` prints a worker/queen token; SwarmUI "Mint Ticket" button and `--mint-ticket` return the same token format and enforce worker subject requirements.
 
 **Compiler touchpoints**
 - `coh-rtc` emits ticket quota tables and hashes referenced by docs/SECURITY.md and docs/USERLAND_AND_CLI.md; regeneration guard enforces consistency.
@@ -2238,6 +2240,30 @@ Checks:
   - Regression pack passes unchanged.
 Deliverables:
   - Updated QEMU + cohsh logs validating interactive parity and SwarmUI stability.
+
+Title/ID: m20f-ticket-mint-oneshots
+Goal: Add host-only ticket mint one-shots to cohsh and SwarmUI without changing console grammar.
+Inputs: configs/root_task.toml, docs/WORKER_TICKETS.md, docs/HOST_TOOLS.md, docs/USERLAND_AND_CLI.md.
+Changes:
+  - apps/cohsh/src/main.rs — add `--mint-ticket` CLI path with config-backed secrets.
+  - apps/cohsh/src/ticket_mint.rs — shared ticket mint helper (config parsing, defaults, subject validation).
+  - apps/cohsh/tests/ticket_mint.rs — verify minted tickets decode with defaults and subject rules.
+  - apps/cohsh/Cargo.toml — add test dependency for ticket mint fixtures.
+  - apps/swarmui/src-tauri/main.rs — add `--mint-ticket` CLI path and Tauri command for UI button.
+  - apps/swarmui/frontend/index.html — add Mint Ticket controls.
+  - apps/swarmui/frontend/app.js — wire Mint Ticket button to backend.
+  - docs/WORKER_TICKETS.md — document cohsh/SwarmUI one-shot minting.
+  - docs/HOST_TOOLS.md — add CLI usage examples.
+  - docs/USERLAND_AND_CLI.md — document flags and env vars.
+  - docs/TEST_PLAN.md — add the ticket mint test step.
+Commands:
+  - cargo test -p cohsh --test ticket_mint
+  - cargo test -p swarmui --test security
+Checks:
+  - Worker roles require subject; queen subject optional.
+  - Minted ticket decodes with the role secret and includes default budgets.
+Deliverables:
+  - Cohsh/SwarmUI minting examples and updated docs.
 ```
 
 ---

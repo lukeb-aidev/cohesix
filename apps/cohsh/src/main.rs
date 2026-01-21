@@ -71,6 +71,27 @@ struct Cli {
     #[arg(long)]
     ticket: Option<String>,
 
+    /// Mint a capability ticket and exit without starting a shell.
+    #[arg(
+        long,
+        requires = "role",
+        conflicts_with = "ticket",
+        conflicts_with_all = ["script", "check", "record_trace", "replay_trace"]
+    )]
+    mint_ticket: bool,
+
+    /// Subject identity embedded in minted tickets (required for worker roles).
+    #[arg(long, requires = "mint_ticket")]
+    ticket_subject: Option<String>,
+
+    /// Path to configs/root_task.toml used to source ticket secrets when minting.
+    #[arg(long, value_name = "FILE", requires = "mint_ticket")]
+    ticket_config: Option<PathBuf>,
+
+    /// Override ticket secret when minting (skips config lookup).
+    #[arg(long, requires = "mint_ticket")]
+    ticket_secret: Option<String>,
+
     /// Execute commands from a script file instead of starting an interactive shell.
     #[arg(long)]
     script: Option<PathBuf>,
@@ -226,11 +247,60 @@ fn resolve_policy_path(cli_path: Option<PathBuf>) -> Result<PathBuf> {
     Ok(default_policy_path())
 }
 
+fn resolve_ticket_config(cli_path: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(path) = cli_path {
+        return Ok(path);
+    }
+    if let Ok(value) = env::var("COHSH_TICKET_CONFIG") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
+    Ok(PathBuf::from("configs/root_task.toml"))
+}
+
+fn resolve_ticket_secret(cli_secret: Option<String>) -> Result<Option<String>> {
+    if cli_secret.is_some() {
+        return Ok(cli_secret);
+    }
+    match env::var("COHSH_TICKET_SECRET") {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_owned()))
+            }
+        }
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(err) => Err(anyhow!("failed to read COHSH_TICKET_SECRET: {err}")),
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     init_logging(cli.verbose);
     let stdout = io::stdout();
     let writer = stdout.lock();
+
+    if cli.mint_ticket {
+        let role_arg = cli
+            .role
+            .ok_or_else(|| anyhow!("--mint-ticket requires --role"))?;
+        let role = Role::from(role_arg);
+        let request =
+            cohsh::ticket_mint::TicketMintRequest::new(role, cli.ticket_subject.as_deref(), None)?;
+        let token = if let Some(secret) = resolve_ticket_secret(cli.ticket_secret)? {
+            cohsh::ticket_mint::mint_ticket_from_secret(&request, secret.as_str())?
+        } else {
+            let config_path = resolve_ticket_config(cli.ticket_config)?;
+            cohsh::ticket_mint::mint_ticket_from_config(&request, config_path.as_path())?
+        };
+        println!("{token}");
+        return Ok(());
+    }
+
     let mut qemu_args = cli.qemu_args.clone();
     if let Ok(extra) = env::var("COHSH_QEMU_ARGS") {
         if !extra.trim().is_empty() {

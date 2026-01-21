@@ -20,11 +20,13 @@ Canonical operator shell for Cohesix. Attaches to the TCP console or Secure9P an
 ./cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337
 ./cohsh --transport tcp --role worker-heartbeat --ticket "$WORKER_TICKET"
 ./cohsh --transport tcp --script scripts/cohsh/boot_v0.coh
+./cohsh --mint-ticket --role worker-heartbeat --ticket-subject worker-1
 ```
 
 ### Notes
 - Worker roles require tickets; queen tickets are optional.
 - `--auth-token` (or `COHSH_AUTH_TOKEN`) is the TCP console auth token, separate from tickets.
+- `--mint-ticket` uses `configs/root_task.toml` by default; override with `--ticket-config`/`COHSH_TICKET_CONFIG` or `--ticket-secret`/`COHSH_TICKET_SECRET`.
 - Full grammar and command behavior live in `docs/USERLAND_AND_CLI.md`.
 
 ## swarmui
@@ -40,11 +42,13 @@ Desktop UI (Tauri) that renders the hive view and reuses cohsh-core semantics. I
 ./swarmui
 SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./swarmui
 ./swarmui --replay demo.cbor
+./swarmui --mint-ticket --role worker-heartbeat --ticket-subject worker-1
 ```
 
 ### Notes
 - Defaults to the TCP console transport; set `SWARMUI_TRANSPORT=9p` for Secure9P.
 - `SWARMUI_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`) supplies the console auth token.
+- `--mint-ticket` uses `SWARMUI_TICKET_CONFIG`/`SWARMUI_TICKET_SECRET` (fallback to `COHSH_*`); the UI also offers a "Mint ticket" button.
 - `--replay` loads a snapshot from `$DATA_DIR/snapshots/` and forces offline mode.
 
 ## cas-tool

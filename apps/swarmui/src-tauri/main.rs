@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use tauri::State;
 
+use cohsh::ticket_mint::{mint_ticket_from_config, mint_ticket_from_secret, TicketMintRequest};
 use cohsh::COHSH_TCP_PORT;
 use cohsh_core::command::MAX_LINE_LEN;
 use cohsh_core::trace::{TraceLog, TracePolicy};
@@ -157,6 +158,13 @@ struct AppState {
     backend: Mutex<SwarmUiService>,
 }
 
+struct MintArgs {
+    role: Option<String>,
+    subject: Option<String>,
+    config: Option<PathBuf>,
+    secret: Option<String>,
+}
+
 #[tauri::command]
 fn swarmui_connect(
     state: State<'_, AppState>,
@@ -246,6 +254,11 @@ fn swarmui_hive_reset(
     backend.hive_reset(role, ticket.as_deref())
 }
 
+#[tauri::command]
+fn swarmui_mint_ticket(role: String, subject: Option<String>) -> Result<String, String> {
+    mint_ticket_for_role(&role, subject.as_deref(), None, None)
+}
+
 fn parse_replay_path(args: &[String]) -> Option<PathBuf> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -272,10 +285,152 @@ fn parse_trace_replay_path(args: &[String]) -> Option<PathBuf> {
     None
 }
 
+fn parse_mint_args(args: &[String]) -> Option<MintArgs> {
+    let mut mint = false;
+    let mut role = None;
+    let mut subject = None;
+    let mut config = None;
+    let mut secret = None;
+    let mut iter = args.iter().peekable();
+    while let Some(arg) = iter.next() {
+        if arg == "--mint-ticket" {
+            mint = true;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--role=") {
+            role = Some(value.to_owned());
+            continue;
+        }
+        if arg == "--role" {
+            if let Some(value) = iter.next() {
+                role = Some(value.to_owned());
+            }
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--ticket-subject=") {
+            subject = Some(value.to_owned());
+            continue;
+        }
+        if arg == "--ticket-subject" {
+            if let Some(value) = iter.next() {
+                subject = Some(value.to_owned());
+            }
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--ticket-config=") {
+            config = Some(PathBuf::from(value));
+            continue;
+        }
+        if arg == "--ticket-config" {
+            if let Some(value) = iter.next() {
+                config = Some(PathBuf::from(value));
+            }
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--ticket-secret=") {
+            secret = Some(value.to_owned());
+            continue;
+        }
+        if arg == "--ticket-secret" {
+            if let Some(value) = iter.next() {
+                secret = Some(value.to_owned());
+            }
+        }
+    }
+    if mint {
+        Some(MintArgs {
+            role,
+            subject,
+            config,
+            secret,
+        })
+    } else {
+        None
+    }
+}
+
+fn resolve_ticket_config(cli_path: Option<PathBuf>) -> Result<PathBuf, String> {
+    if let Some(path) = cli_path {
+        return Ok(path);
+    }
+    if let Ok(value) = env::var("SWARMUI_TICKET_CONFIG")
+        .or_else(|_| env::var("COHSH_TICKET_CONFIG"))
+    {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
+    Ok(PathBuf::from("configs/root_task.toml"))
+}
+
+fn resolve_ticket_secret(cli_secret: Option<String>) -> Result<Option<String>, String> {
+    if cli_secret.is_some() {
+        return Ok(cli_secret);
+    }
+    match env::var("SWARMUI_TICKET_SECRET")
+        .or_else(|_| env::var("COHSH_TICKET_SECRET"))
+    {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_owned()))
+            }
+        }
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(err) => Err(format!("failed to read SWARMUI_TICKET_SECRET: {err}")),
+    }
+}
+
+fn mint_ticket_for_role(
+    role_label: &str,
+    subject: Option<&str>,
+    config: Option<PathBuf>,
+    secret: Option<String>,
+) -> Result<String, String> {
+    let role = parse_role_label(role_label).map_err(|err| err.to_string())?;
+    let request =
+        TicketMintRequest::new(role, subject, None).map_err(|err| err.to_string())?;
+    if let Some(secret) = resolve_ticket_secret(secret)? {
+        return mint_ticket_from_secret(&request, secret.as_str())
+            .map_err(|err| err.to_string());
+    }
+    let config_path = resolve_ticket_config(config)?;
+    mint_ticket_from_config(&request, config_path.as_path()).map_err(|err| err.to_string())
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
+    let mint_args = parse_mint_args(&args);
     let replay_path = parse_replay_path(&args);
     let trace_replay_path = parse_trace_replay_path(&args);
+    if let Some(mint_args) = mint_args {
+        if replay_path.is_some() || trace_replay_path.is_some() {
+            eprintln!("cannot use --mint-ticket with --replay or --replay-trace");
+            std::process::exit(2);
+        }
+        let role = mint_args
+            .role
+            .ok_or_else(|| "missing --role for --mint-ticket")
+            .unwrap_or_else(|err| {
+                eprintln!("{err}");
+                std::process::exit(2);
+            });
+        let token = mint_ticket_for_role(
+            &role,
+            mint_args.subject.as_deref(),
+            mint_args.config,
+            mint_args.secret,
+        )
+        .unwrap_or_else(|err| {
+            eprintln!("{err}");
+            std::process::exit(2);
+        });
+        println!("{token}");
+        return;
+    }
     if replay_path.is_some() && trace_replay_path.is_some() {
         panic!("cannot use --replay and --replay-trace together");
     }
@@ -363,6 +518,7 @@ fn main() {
             swarmui_hive_bootstrap,
             swarmui_hive_poll,
             swarmui_hive_reset,
+            swarmui_mint_ticket,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run SwarmUI");

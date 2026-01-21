@@ -68,7 +68,12 @@ fn mint_worker_heartbeat(secret: &str, subject: &str) -> Result<String, cohesix_
   --role worker-heartbeat --ticket "$WORKER_TICKET"
 ```
 
-## 5. Operational notes
+## 5. Host tooling shortcuts
+- `cohsh --mint-ticket --role worker-heartbeat --ticket-subject worker-1` prints a token and exits.
+- `swarmui --mint-ticket --role worker-heartbeat --ticket-subject worker-1` does the same; the UI also exposes a "Mint ticket" button.
+- Override secrets with `COHSH_TICKET_CONFIG` / `COHSH_TICKET_SECRET` or `SWARMUI_TICKET_CONFIG` / `SWARMUI_TICKET_SECRET` (fallback to `COHSH_*`).
+
+## 6. Operational notes
 - Worker tickets are mandatory for worker roles; queen tickets are optional.
 - Subject identity is required for worker roles and is used to build the attach identity.
 - Ticket length and quota limits are enforced by `cohsh` and NineDoor; ensure scopes/quotas stay within the manifest limits.

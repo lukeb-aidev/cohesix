@@ -40,6 +40,13 @@
             <option value="worker-bus">worker-bus</option>
             <option value="worker-lora">worker-lora</option>
           </select>
+          <label class="label" for="session-subject">Subject</label>
+          <input
+            id="session-subject"
+            class="input"
+            type="text"
+            placeholder="subject (required for worker tickets)"
+          />
           <label class="label" for="session-ticket">Ticket</label>
           <input
             id="session-ticket"
@@ -57,6 +64,11 @@
             <span data-icon="cloud-slash"></span>
             Offline mode
           </button>
+          <button id="mint-ticket" class="action">
+            <span data-icon="pulse"></span>
+            Mint ticket
+          </button>
+          <span class="badge ghost" id="mint-status">Ticket idle</span>
         </div>
       </header>
 

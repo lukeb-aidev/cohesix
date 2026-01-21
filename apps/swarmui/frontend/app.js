@@ -46,6 +46,12 @@ const readSession = () => {
   };
 };
 
+const readSubject = () => {
+  const raw = document.getElementById("session-subject")?.value || "";
+  const trimmed = raw.trim();
+  return trimmed.length ? trimmed : null;
+};
+
 const readWorkerId = () => {
   const raw = document.getElementById("worker-id")?.value || "worker-1";
   const trimmed = raw.trim();
@@ -93,6 +99,33 @@ offlineButton?.addEventListener("click", async () => {
     offlineButton.textContent = offlineEnabled ? "Online mode" : "Offline mode";
   }
   output("telemetry-output", offlineEnabled ? "OK OFFLINE" : "OK ONLINE");
+});
+
+document.getElementById("mint-ticket")?.addEventListener("click", async () => {
+  const session = readSession();
+  const subject = readSubject();
+  setStatus("mint-status", "Minting...");
+  const res = await invoke("swarmui_mint_ticket", {
+    role: session.role,
+    subject,
+  });
+  if (!res.ok) {
+    setStatus("mint-status", `Mint failed: ${res.error}`);
+    return;
+  }
+  const ticket =
+    typeof res.result === "string"
+      ? res.result.trim()
+      : String(res.result || "");
+  if (!ticket) {
+    setStatus("mint-status", "Mint failed: empty ticket");
+    return;
+  }
+  const ticketInput = document.getElementById("session-ticket");
+  if (ticketInput) {
+    ticketInput.value = ticket;
+  }
+  setStatus("mint-status", "Ticket minted");
 });
 
 document

@@ -21,6 +21,8 @@ pub mod client;
 pub mod queen;
 /// Trace-aware transport helpers for cohsh.
 pub mod trace;
+/// Host-side ticket minting helpers.
+pub mod ticket_mint;
 mod session_pool;
 
 #[allow(clippy::all, dead_code)]
