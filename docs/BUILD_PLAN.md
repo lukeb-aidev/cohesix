@@ -2222,7 +2222,7 @@ Goal: Ensure interactive cohsh commands and SwarmUI console sessions match scrip
 Inputs: apps/root-task/src/event/mod.rs, apps/root-task/src/net/stack.rs, apps/root-task/src/net/console_srv.rs, apps/cohsh/src/transport/tcp.rs, apps/swarmui/src/lib.rs, logs/cohsh-*.log.
 Changes:
   - apps/root-task/src/event/mod.rs — align CAT/TAIL streaming with pending stream handling and consistent END emission.
-  - apps/root-task/src/net/stack.rs — tune console send pacing/backpressure handling for stream output.
+  - apps/root-task/src/net/stack.rs — tune console send pacing/backpressure handling for stream output; rate-limit `tcp.flush.blocked` audit spam.
   - apps/root-task/src/net/console_srv.rs — preserve END delivery without reordering stream data lines.
   - apps/cohsh/src/transport/tcp.rs — harden console stream reads/reconnect logic and enforce exclusive console locking.
   - apps/swarmui/src/lib.rs — match SwarmUI console error handling to cohsh transport semantics.
@@ -2344,6 +2344,7 @@ Add trace record/replay across `cohsh-core`, SwarmUI, and coh-status to enable d
 - `cohsh-core` trace recorder/replayer for 9P frames + ACKs (`.trace` files) with size targets ≤ 1 MiB per 10 s of tail traffic.
 - SwarmUI “offline replay” mode consuming trace files; docs in `docs/TEST_PLAN.md`.
 - coh-status offline replay hook for field diagnostics.
+- SwarmUI frontend header includes the Cohesix SVG branding at the top of the shell.
 
 **Commands**
 - `cargo test -p cohsh-core --test trace`
@@ -2389,6 +2390,19 @@ Checks:
   - Replay matches stored transcript; tampered trace rejected with ERR displayed to user.
 Deliverables:
   - Offline replay documentation and fixtures stored in tests/fixtures/transcripts/.
+
+Title/ID: m20g-swarmui-header
+Goal: Add Cohesix header branding to the SwarmUI shell.
+Inputs: apps/swarmui/frontend/index.html, apps/swarmui/frontend/assets/icons/cohesix-header.svg, apps/swarmui/frontend/styles/.
+Changes:
+  - apps/swarmui/frontend/index.html — add Cohesix header at the top of the SwarmUI shell.
+  - apps/swarmui/frontend/styles/ — define header layout and spacing rules.
+Commands:
+  - cargo test -p swarmui
+Checks:
+  - Cohesix header renders at the top without disrupting layout or live hive rendering.
+Deliverables:
+  - SwarmUI displays the Cohesix header consistently across desktop and mobile sizes.
 ```
 
 ## Milestone 20h — Alpha Release Gate: As-Built Verification, Live Hive Demo, SwarmUI Replay, & Release Bundle <a id="20h"></a> 

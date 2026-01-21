@@ -4012,21 +4012,36 @@ impl<D: NetDevice> NetStack<D> {
     ) -> bool {
         if !socket.can_send() {
             #[cfg(feature = "cohesix-dev")]
-            if server.has_outbound() || outbound.has_pending() {
-                let tcp_state = tcp_state_label(socket.state());
-                let send_queue = socket.send_queue();
-                let send_capacity = socket.send_capacity();
-                let mut message: HeaplessString<128> = HeaplessString::new();
-                let _ = message.push_str("audit tcp.flush.blocked state=");
-                let _ = message.push_str(tcp_state);
-                let _ = write!(
-                    message,
-                    " queue={}/{} auth={:?}",
-                    send_queue,
-                    send_capacity,
-                    auth_state
-                );
-                crate::debug_uart::debug_uart_line(message.as_str());
+            {
+                let queued = server.has_outbound() || outbound.has_pending();
+                if queued {
+                    let blocked_snapshot = CohshBlockedSnapshot {
+                        tcp_state: socket.state(),
+                        auth_state,
+                        queued,
+                    };
+                    if Self::should_log_flush_blocked(session_state, blocked_snapshot, now_ms) {
+                        let tcp_state = tcp_state_label(socket.state());
+                        let send_queue = socket.send_queue();
+                        let send_capacity = socket.send_capacity();
+                        let mut message: HeaplessString<128> = HeaplessString::new();
+                        let _ = message.push_str("audit tcp.flush.blocked state=");
+                        let _ = message.push_str(tcp_state);
+                        let _ = write!(
+                            message,
+                            " queue={}/{} auth={:?}",
+                            send_queue,
+                            send_capacity,
+                            auth_state
+                        );
+                        crate::debug_uart::debug_uart_line(message.as_str());
+                        session_state.last_flush_log_ms = now_ms;
+                    }
+                    session_state.flush_blocked_since.get_or_insert(now_ms);
+                    session_state.last_blocked_snapshot = Some(blocked_snapshot);
+                    session_state.last_flush_state = Some(socket.state());
+                    session_state.last_flush_auth_state = Some(auth_state);
+                }
             }
             return false;
         }

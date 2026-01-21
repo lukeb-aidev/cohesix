@@ -2419,10 +2419,12 @@ where
                                                 entries.len()
                                             ));
                                             self.emit_ack_ok(verb_label, Some(detail.as_str()));
-                                            for entry in entries {
-                                                self.emit_console_line(entry.as_str());
-                                            }
-                                            self.consume_ticket_bandwidth(data_bytes);
+                                            self.pending_stream = Some(PendingStream {
+                                                lines: entries,
+                                                next_line: 0,
+                                                bandwidth_bytes: data_bytes,
+                                                cursor: None,
+                                            });
                                             self.stream_end_pending = true;
                                         }
                                     }

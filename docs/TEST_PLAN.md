@@ -17,7 +17,7 @@ Ensure cohsh and SwarmUI share console grammar parity, ticket quotas are enforce
 - `scripts/ci/check_test_plan.sh`
 - If IR or manifest changes: `cargo run -p coh-rtc` then `scripts/check-generated.sh`.
 - Ensure `SEL4_BUILD_DIR=$HOME/seL4/build`.
-- Capture live TCP console runs with `logs/tcpdump-new-20260120-210535.log`.
+- Before any QEMU TCP run, prompt the operator to start tcpdump and confirm the log path (example: `logs/tcpdump-new-20260121-112112.log`). Do not proceed until confirmed.
 - Clear old regression logs if needed: `rm -rf out/regression-logs`.
 
 ## Execution order (Milestone 20f)
@@ -45,6 +45,7 @@ Run in the order shown; all commands are macOS ARM64 compatible.
 - The batch runs base + gated scripts and archives logs to `out/regression-logs/<batch>/<script>.{qemu,out}.log`.
 - Worker-id dependent scripts are isolated into their own QEMU boots to keep deterministic `worker-1`/`worker-2` paths.
 - Override timeouts with `READY_TIMEOUT`, `PORT_TIMEOUT`, `QUIT_CLOSE_TIMEOUT` when needed.
+- For cold builds, set `READY_TIMEOUT=600` so the initial boot has enough time before the ready marker.
 
 ### 4) Cohsh command surface (manual checklist)
 After a QEMU boot with TCP transport:
@@ -53,12 +54,24 @@ After a QEMU boot with TCP transport:
 - CLI-local commands: `detach`, `pool bench <opts>`, `bind <src> <dst>` (expect `OK DETACH`, pool bench summary, and `OK BIND`).
 - Success criteria: no invalid UTF-8 frames, no reconnect loops, `OK/ERR/END` ordering stable.
 
-### 5) SwarmUI console grammar alignment
+### 5) QEMU ↔ cohsh console correlation (manual)
+During the command-surface checklist, capture both sides and confirm there are no unexpected resets.
+- Confirm tcpdump capture is active for this run before comparing logs; if not, stop and ask the operator to restart with tcpdump enabled.
+- Capture cohsh output (example): `./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen | tee out/manual/cohsh-session.log`
+- Use the QEMU serial log from the same run (example): `out/cohesix/logs/qemu-live-*.log`
+- Fail the run if any unexpected disconnects appear:
+  - QEMU log: `rg -n "audit tcp\\.conn\\.close reason=error|audit tcp\\.send\\.partial|audit tcp\\.send\\.error|console\\.emit\\.failed" out/cohesix/logs/qemu-live-*.log`
+  - cohsh log: `rg -n "\\[cohsh\\]\\[tcp\\] connection lost" out/manual/cohsh-session.log`
+  - tcpdump: `rg -n "Flags \\[R\\]" logs/tcpdump-new-20260121-112112.log`
+- Acceptable disconnects: explicit `quit` (reason=`quit`/`eof`) or pool bench with injected short writes. Anything else is a failure.
+- `audit tcp.flush.blocked` lines before any client connects are expected; do not treat them as failures.
+
+### 6) SwarmUI console grammar alignment
 - `cargo test -p swarmui --test transcript`
 - `cargo test -p swarmui --test security`
 - Manual smoke: run SwarmUI with console transport, connect to the queen session, confirm ACK/ERR/END lines match cohsh fixtures during tail/cat/spawn/kill flows.
 
-### 6) In-session selftests (manual, QEMU)
+### 7) In-session selftests (manual, QEMU)
 After a QEMU boot with TCP transport:
 - `./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen`
 - Run: `test --mode quick` during command surface, then run `test --mode full` in a fresh boot (before any worker spawns).
