@@ -12,25 +12,27 @@
   <body>
     <main class="shell">
       <header class="cohesix-banner">
-        <img
-          class="cohesix-banner__logo"
-          src="assets/icons/cohesix-header.svg"
-          alt="Cohesix"
-        />
-      </header>
-      <header class="topbar">
-        <div class="brand">
-          <p class="eyebrow">Cohesix SwarmUI</p>
-          <h1>Live Hive telemetry</h1>
-          <p class="lede">
-            GPU-first rendering of Secure9P activity. Rendering only, no new
-            verbs or transports.
-          </p>
+        <div class="banner-brand">
+          <img
+            class="cohesix-banner__logo"
+            src="assets/icons/cohesix-header.svg"
+            alt="Cohesix"
+          />
+          <div class="brand">
+            <p class="eyebrow">Cohesix SwarmUI</p>
+            <h1>Live Hive telemetry</h1>
+            <p class="lede">
+              GPU-first rendering of Secure9P activity. Rendering only, no new
+              verbs or transports.
+            </p>
+          </div>
         </div>
         <div class="status-bar">
           <span class="badge" id="hive-status">Hive idle</span>
           <span class="badge ghost" id="hive-pressure">Pressure 0% · backlog 0 · dropped 0</span>
         </div>
+      </header>
+      <header class="topbar">
         <div class="session-block">
           <label class="label" for="session-role">Role</label>
           <select id="session-role" class="select">
