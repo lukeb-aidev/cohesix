@@ -183,6 +183,7 @@ bundle_release() {
 
   mkdir -p \
     "${bundle_dir}/bin" \
+    "${bundle_dir}/configs" \
     "${bundle_dir}/image" \
     "${bundle_dir}/qemu" \
     "${bundle_dir}/scripts" \
@@ -196,6 +197,7 @@ bundle_release() {
   cp -p "${STAGING_DIR}/rootserver" "${bundle_dir}/image/rootserver"
   cp -p "${OUT_DIR}/cohesix-system.cpio" "${bundle_dir}/image/cohesix-system.cpio"
   cp -p "${STAGING_DIR}/cohesix/manifest.json" "${bundle_dir}/image/manifest.json"
+  cp -p "${ROOT_DIR}/configs/root_task.toml" "${bundle_dir}/configs/root_task.toml"
 
   if [[ -x "${ROOT_DIR}/scripts/lib/detect_gic_version.py" ]]; then
     GIC_CFG="${HOME}/seL4/build/kernel/gen_config/kernel/gen_config.h"
@@ -363,6 +365,7 @@ require_file "${STAGING_DIR}/cohesix/manifest.json"
 require_file "${ROOT_DIR}/docs/QUICKSTART.md"
 require_file "${ROOT_DIR}/README.md"
 require_file "${ROOT_DIR}/LICENSE.txt"
+require_file "${ROOT_DIR}/configs/root_task.toml"
 require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace"
 require_file "${ROOT_DIR}/scripts/setup_environment.sh"
 require_dir "${ROOT_DIR}/apps/swarmui/frontend"

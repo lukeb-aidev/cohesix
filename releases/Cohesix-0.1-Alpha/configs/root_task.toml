@@ -1,0 +1,223 @@
+# Author: Lukas Bower
+# Purpose: Define the root-task manifest consumed by coh-rtc.
+[meta]
+author = "Lukas Bower"
+purpose = "Root-task manifest input for coh-rtc."
+
+[root_task]
+schema = "1.5"
+
+[profile]
+name = "virt-aarch64"
+kernel = true
+
+[event_pump]
+tick_ms = 5
+
+[secure9p]
+msize = 8192
+walk_depth = 8
+tags_per_session = 16
+batch_frames = 1
+
+[secure9p.short_write]
+policy = "reject"
+
+[cas]
+enable = true
+
+[cas.store]
+chunk_bytes = 128
+
+[cas.delta]
+enable = true
+
+[cas.signing]
+required = true
+key_path = "resources/fixtures/cas_signing_key.hex"
+
+[cache]
+kernel_ops = true
+dma_clean = true
+dma_invalidate = true
+unify_instructions = false
+
+[features]
+net_console = true
+serial_console = true
+std_console = false
+std_host_tools = false
+
+[namespaces]
+role_isolation = true
+
+[sharding]
+enabled = true
+shard_bits = 8
+legacy_worker_alias = true
+
+[telemetry]
+ring_bytes_per_worker = 1024
+frame_schema = "legacy-plaintext"
+
+[telemetry.cursor]
+retain_on_boot = false
+
+[observability.proc_9p]
+sessions = true
+outstanding = true
+short_writes = true
+sessions_bytes = 8192
+outstanding_bytes = 128
+short_writes_bytes = 128
+
+[observability.proc_ingest]
+p50_ms = true
+p95_ms = true
+backpressure = true
+dropped = true
+queued = true
+watch = true
+p50_ms_bytes = 64
+p95_ms_bytes = 64
+backpressure_bytes = 64
+dropped_bytes = 64
+queued_bytes = 64
+watch_max_entries = 16
+watch_line_bytes = 192
+watch_min_interval_ms = 50
+latency_samples = 32
+latency_tolerance_ms = 5
+counter_tolerance = 1
+
+[ui_providers.proc_9p]
+sessions = true
+outstanding = true
+short_writes = true
+
+[ui_providers.proc_ingest]
+p50_ms = true
+p95_ms = true
+backpressure = true
+
+[ui_providers.policy_preflight]
+req = false
+diff = false
+
+[ui_providers.updates]
+manifest = true
+status = true
+
+[client_policies.cohsh.pool]
+control_sessions = 2
+telemetry_sessions = 4
+
+[client_policies.retry]
+max_attempts = 3
+backoff_ms = 200
+ceiling_ms = 2000
+timeout_ms = 5000
+
+[client_policies.heartbeat]
+interval_ms = 15000
+
+[client_policies.trace]
+max_bytes = 1048576
+
+[client_paths]
+queen_ctl = "/queen/ctl"
+log = "/log/queen.log"
+
+[swarmui]
+ticket_scope = "per-ticket"
+
+[swarmui.cache]
+enabled = false
+max_bytes = 262144
+ttl_s = 3600
+
+[swarmui.hive]
+frame_cap_fps = 60
+step_ms = 16
+lod_zoom_out = 0.7
+lod_zoom_in = 1.25
+lod_event_budget = 512
+snapshot_max_events = 4096
+
+[swarmui.paths]
+telemetry_root = "/worker"
+proc_ingest_root = "/proc/ingest"
+worker_root = "/worker"
+namespace_roots = ["/proc", "/queen", "/worker", "/log", "/gpu"]
+
+[ticket_limits]
+max_scopes = 8
+max_scope_path_len = 128
+max_scope_rate_per_s = 64
+bandwidth_bytes = 131072
+cursor_resumes = 16
+cursor_advances = 256
+
+[[tickets]]
+role = "queen"
+secret = "bootstrap"
+
+[[tickets]]
+role = "worker-heartbeat"
+secret = "worker"
+
+[[tickets]]
+role = "worker-gpu"
+secret = "worker-gpu"
+
+[[tickets]]
+role = "worker-bus"
+secret = "worker-bus"
+
+[[tickets]]
+role = "worker-lora"
+secret = "worker-lora"
+
+[sidecars.modbus]
+enable = false
+mount_at = "/bus"
+
+[sidecars.dnp3]
+enable = false
+mount_at = "/bus"
+
+[sidecars.lora]
+enable = false
+mount_at = "/lora"
+
+[ecosystem.host]
+enable = false
+providers = []
+mount_at = "/host"
+
+[ecosystem.audit]
+enable = false
+journal_max_bytes = 8192
+decisions_max_bytes = 4096
+replay_enable = false
+replay_max_entries = 64
+replay_ctl_max_bytes = 1024
+replay_status_max_bytes = 1024
+
+[ecosystem.policy]
+enable = false
+queue_max_entries = 32
+queue_max_bytes = 4096
+ctl_max_bytes = 2048
+status_max_bytes = 512
+
+[[ecosystem.policy.rules]]
+id = "queen-ctl"
+target = "/queen/ctl"
+
+[[ecosystem.policy.rules]]
+id = "systemd-restart"
+target = "/host/systemd/*/restart"
+
+[ecosystem.models]
+enable = false

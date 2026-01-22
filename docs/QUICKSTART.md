@@ -14,6 +14,7 @@ to the TCP console to drive and observe the system.
 ## Bundle layout
 - Bundles are host-OS specific; use the `-linux` tarball on Linux hosts.
 - `bin/` - host tools (`cohsh`, `swarmui`, `cas-tool`, `gpu-bridge-host`, `host-sidecar-bridge`).
+- `configs/` - manifest inputs for host tools (includes `root_task.toml` for ticket minting).
 - `image/` - prebuilt VM artifacts (elfloader, kernel, rootserver, CPIO, manifest).
 - `qemu/run.sh` - QEMU launcher for the bundled image.
 - `traces/` - canonical trace plus hash for deterministic replay.
@@ -37,6 +38,10 @@ Install or verify runtime dependencies (QEMU + SwarmUI runtime libs):
 On Ubuntu this uses `apt-get` (via `sudo` if needed). On macOS it uses Homebrew.
 
 ## Run the live hive demo (read-only UI)
+You need two terminals:
+- Terminal 1: QEMU (keeps the VM running).
+- Terminal 2: either `cohsh` or SwarmUI. Use one at a time; they should not be used simultaneously.
+
 1. Boot the VM:
    ```bash
    ./qemu/run.sh
@@ -51,16 +56,33 @@ On Ubuntu this uses `apt-get` (via `sudo` if needed). On macOS it uses Homebrew.
    - `help`
    - `spawn heartbeat ticks=100`
    - `tail /log/queen.log`
-4. Launch SwarmUI in live mode (observe only):
+4. Launch SwarmUI:
    ```bash
-   SWARMUI_TRANSPORT=console \
-   SWARMUI_9P_HOST=127.0.0.1 \
-   SWARMUI_9P_PORT=31337 \
-   SWARMUI_AUTH_TOKEN=changeme \
    ./bin/swarmui
    ```
 
 SwarmUI is observational in live mode; issue mutations only via cohsh.
+
+## cohsh command examples
+Examples for the built-in command surface (use in the cohsh prompt):
+- `help` — show the command list.
+- `attach queen` — attach to the queen role.
+- `login queen` — alias of attach.
+- `detach` — close the current session.
+- `tail /log/queen.log` — stream the queen log.
+- `log` — shorthand for `tail /log/queen.log`.
+- `ping` — report attachment status.
+- `test --mode quick` — run quick self-tests.
+- `pool bench --duration 2s --clients 4` — run a short pool benchmark.
+- `tcp-diag` — debug TCP connectivity without protocol traffic.
+- `ls /` — list root namespace entries.
+- `cat /log/queen.log` — read the queen log once.
+- `echo hello > /log/queen.log` — append a line to the log.
+- `spawn heartbeat ticks=100` — request a heartbeat worker.
+- `kill 1` — terminate worker id 1.
+- `bind /queen /host/queen` — bind a path.
+- `mount ninedoor /ninedoor` — mount the NineDoor namespace.
+- `quit` — exit cohsh.
 
 ## Run the deterministic replay demo
 Canonical trace location:
