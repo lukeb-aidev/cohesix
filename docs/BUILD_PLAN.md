@@ -2455,7 +2455,7 @@ Deliverables:
 ## Milestone 20h — Alpha Release Gate: As-Built Verification, Live Hive Demo, SwarmUI Replay, & Release Bundle <a id="20h"></a> 
 [Milestones](#Milestones)
 
-**Status:** In Progress — allow PixiJS renderer CSP (`unsafe-eval`) for Live Hive, surface renderer init failures in the UI, move the SwarmUI brand copy into the banner to reduce topbar congestion, and ensure the Hive render loop explicitly draws each frame.
+**Status:** In Progress — release bundles now ship `scripts/setup_environment.sh`, Linux host bundle emitted, Quickstart updated, and macOS/Ubuntu bundle runs verified; remaining work includes PixiJS renderer CSP (`unsafe-eval`) for Live Hive, renderer init failure surfacing, banner copy cleanup, and explicit frame draws.
 
 **Why now (compiler):**  
 Milestone 20g defines the point at which Cohesix becomes **control-plane complete and deterministic**. An alpha release is only valid if the **as-built system passes the full Test Plan**, from a clean checkout, with no hidden assumptions.

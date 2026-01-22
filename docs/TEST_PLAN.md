@@ -88,6 +88,35 @@ After a QEMU boot with TCP transport:
 - Run: `test --mode quick` during command surface, then run `test --mode full` in a fresh boot (before any worker spawns).
 - Selftest scripts live under `/proc/tests/` and must pass after console, namespace, or policy changes.
 
+## Release (Milestone 20h bundle validation)
+Run after steps 1-7. Validate each tarball in a clean temp directory. Follow the
+preflight tcpdump requirement for any QEMU TCP run and record the log path.
+
+### macOS 26.x bundle
+- Extract the bundle: `mkdir -p /tmp/cohesix-release && tar -xzf releases/Cohesix-0.1-Alpha.tar.gz -C /tmp/cohesix-release`
+- Enter the bundle: `cd /tmp/cohesix-release/Cohesix-0.1-Alpha`
+- Install runtime deps if missing: `./scripts/setup_environment.sh`
+- Trace replay (no QEMU needed): `./bin/cohsh --transport mock --replay-trace ./traces/trace_v0.trace`
+- Boot QEMU (use non-default UDP/SMOKE ports if needed): `TCP_PORT=31337 UDP_PORT=31348 SMOKE_PORT=31349 ./qemu/run.sh | tee qemu.log`
+- cohsh actions and capture output:
+  - `printf "help\nspawn heartbeat ticks=100\ntail /log/queen.log\nquit\n" | COHSH_AUTH_TOKEN=changeme ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen | tee cohsh.log`
+- SwarmUI live (observe only; run ~5s then stop): `SWARMUI_TRANSPORT=console SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 SWARMUI_AUTH_TOKEN=changeme ./bin/swarmui | tee swarmui-live.log`
+- SwarmUI replay (run ~5s then stop): `./bin/swarmui --replay-trace "$(pwd)/traces/trace_v0.trace" | tee swarmui-replay.log`
+- Stop QEMU after logs show stable output.
+
+### Ubuntu 24 (aarch64) bundle
+- Extract the bundle: `mkdir -p /tmp/cohesix-release && tar -xzf releases/Cohesix-0.1-Alpha-linux.tar.gz -C /tmp/cohesix-release`
+- Enter the bundle: `cd /tmp/cohesix-release/Cohesix-0.1-Alpha-linux`
+- Install runtime deps if missing: `./scripts/setup_environment.sh`
+- Ensure headless UI support: `sudo apt-get install -y xvfb` (if `xvfb-run` missing)
+- Trace replay (no QEMU needed): `./bin/cohsh --transport mock --replay-trace ./traces/trace_v0.trace`
+- Boot QEMU: `TCP_PORT=31337 UDP_PORT=31348 SMOKE_PORT=31349 ./qemu/run.sh | tee qemu.log`
+- cohsh actions (same as macOS):
+  - `printf "help\nspawn heartbeat ticks=100\ntail /log/queen.log\nquit\n" | COHSH_AUTH_TOKEN=changeme ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen | tee cohsh.log`
+- SwarmUI live (headless; run ~5s then stop): `SWARMUI_TRANSPORT=console SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 SWARMUI_AUTH_TOKEN=changeme xvfb-run -a ./bin/swarmui | tee swarmui-live.log`
+- SwarmUI replay (headless; run ~5s then stop): `xvfb-run -a ./bin/swarmui --replay-trace "$(pwd)/traces/trace_v0.trace" | tee swarmui-replay.log`
+- Stop QEMU after logs show stable output.
+
 ## Trace replay limits
 <!-- coh-rtc:trace-policy:start -->
 <!-- Author: Lukas Bower -->
