@@ -93,7 +93,7 @@ Run after steps 1-7. Validate each tarball in a clean temp directory. Follow the
 preflight tcpdump requirement for any QEMU TCP run and record the log path.
 
 ### macOS 26.x bundle
-- Extract the bundle: `mkdir -p /tmp/cohesix-release && tar -xzf releases/Cohesix-0.1-Alpha.tar.gz -C /tmp/cohesix-release`
+- Extract the bundle: `mkdir -p /tmp/cohesix-release && tar -xzf releases/Cohesix-0.1-Alpha-MacOS.tar.gz -C /tmp/cohesix-release`
 - Enter the bundle: `cd /tmp/cohesix-release/Cohesix-0.1-Alpha`
 - Install runtime deps if missing: `./scripts/setup_environment.sh`
 - Trace replay (no QEMU needed): `./bin/cohsh --transport mock --replay-trace ./traces/trace_v0.trace`

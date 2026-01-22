@@ -2630,8 +2630,8 @@ cohesix-alpha-/
 ├── VERSION.txt
 └── LICENSE.txt
 Bundle contents, integrity, and runnability are validated under TEST_PLAN *Packaging* phase.
-Release bundles are emitted per host OS; the Linux aarch64 bundle appends `-linux` to the release name
-and carries Linux host tools in `bin/`.
+Release bundles are emitted per host OS; the macOS tarball appends `-MacOS`, and the Linux aarch64
+bundle appends `-linux` to the release name and carries Linux host tools in `bin/`.
 
 ---
 

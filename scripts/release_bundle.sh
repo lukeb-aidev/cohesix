@@ -163,8 +163,9 @@ build_linux_host_tools() {
 bundle_release() {
   local bundle_name="$1"
   local host_tools_dir="$2"
+  local tarball_name="${3:-$bundle_name}"
   local bundle_dir="${RELEASES_DIR}/${bundle_name}"
-  local tarball="${RELEASES_DIR}/${bundle_name}.tar.gz"
+  local tarball="${RELEASES_DIR}/${tarball_name}.tar.gz"
 
   require_dir "$host_tools_dir"
   if ! compgen -G "${host_tools_dir}/*" >/dev/null; then
@@ -375,7 +376,7 @@ if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
 fi
 
 if [[ "$LINUX_ONLY" -ne 1 ]]; then
-  bundle_release "$RELEASE_NAME" "$DEFAULT_HOST_TOOLS_DIR"
+  bundle_release "$RELEASE_NAME" "$DEFAULT_HOST_TOOLS_DIR" "${RELEASE_NAME}-MacOS"
 fi
 
 if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
