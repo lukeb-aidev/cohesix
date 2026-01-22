@@ -273,7 +273,6 @@ PY
 
   DOCS_LIST=(
     "ARCHITECTURE.md"
-    "BOOT_REFERENCE.md"
     "GPU_NODES.md"
     "HOST_TOOLS.md"
     "INTERFACES.md"
