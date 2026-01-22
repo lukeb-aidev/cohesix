@@ -2361,7 +2361,7 @@ Deliverables:
 ## Milestone 20g — Deterministic Snapshot & Replay (UI Testing) <a id="20g"></a> 
 [Milestones](#Milestones)
 
-**Status:** Complete — Trace record/replay fixtures and parity tests land across cohsh, SwarmUI, and coh-status; trace policy snippet and hashes align; SwarmUI header branding is live.
+**Status:** Complete — Trace record/replay fixtures and parity tests land across cohsh, SwarmUI, and coh-status; trace policy snippet and hashes align; SwarmUI header branding is live; release bundle replay verified on macOS 26.x and Ubuntu 24 (cohsh + SwarmUI).
 
 **Why now (compiler):** To stabilize UI regressions without live targets, we need deterministic trace capture and replay consistent with CLI/console semantics.
 
@@ -2630,6 +2630,8 @@ cohesix-alpha-/
 ├── VERSION.txt
 └── LICENSE.txt
 Bundle contents, integrity, and runnability are validated under TEST_PLAN *Packaging* phase.
+Release bundles are emitted per host OS; the Linux aarch64 bundle appends `-linux` to the release name
+and carries Linux host tools in `bin/`.
 
 ---
 

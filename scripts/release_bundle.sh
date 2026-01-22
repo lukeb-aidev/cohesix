@@ -11,16 +11,28 @@ RELEASES_DIR="${ROOT_DIR}/releases"
 RELEASE_NAME="${RELEASE_NAME:-Cohesix-0.1-Alpha}"
 RELEASE_VERSION="${RELEASE_VERSION:-0.1.0-alpha1}"
 FORCE=0
+LINUX_BUNDLE=0
+LINUX_ONLY=0
+LINUX_HOST_TARGET="${LINUX_HOST_TARGET:-aarch64-unknown-linux-gnu}"
+LINUX_HOST_TOOLS_DIR="${LINUX_HOST_TOOLS_DIR:-}"
+HOST_TOOLS_PROFILE="${HOST_TOOLS_PROFILE:-release}"
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/release_bundle.sh [--name <release-name>] [--version <version>] [--force]
+Usage: scripts/release_bundle.sh [--name <release-name>] [--version <version>] [--force] [--linux] [--linux-only]
 
 Assembles a release bundle from out/cohesix into releases/<release-name> and
 creates releases/<release-name>.tar.gz.
 
+With --linux, also builds (or uses) Linux host tools and emits
+releases/<release-name>-linux.tar.gz. Use --linux-only to emit only the Linux bundle.
+
 Env overrides:
   RELEASE_NAME, RELEASE_VERSION
+  LINUX_HOST_TARGET (default: aarch64-unknown-linux-gnu)
+  LINUX_HOST_TOOLS_DIR (prebuilt host tools dir; if empty, build from source)
+  HOST_TOOLS_PROFILE (default: release)
+  ALLOW_CROSS_LINUX_HOST_TOOLS=1 (override host-target guard for cross builds)
 USAGE
 }
 
@@ -40,6 +52,15 @@ while [[ $# -gt 0 ]]; do
       FORCE=1
       shift
       ;;
+    --linux)
+      LINUX_BUNDLE=1
+      shift
+      ;;
+    --linux-only)
+      LINUX_BUNDLE=1
+      LINUX_ONLY=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -54,78 +75,138 @@ done
 
 OUT_DIR="${ROOT_DIR}/out/cohesix"
 STAGING_DIR="${OUT_DIR}/staging"
-BUNDLE_DIR="${RELEASES_DIR}/${RELEASE_NAME}"
-TARBALL="${RELEASES_DIR}/${RELEASE_NAME}.tar.gz"
+DEFAULT_HOST_TOOLS_DIR="${OUT_DIR}/host-tools"
+LINUX_HOST_TOOLS_DIR="${LINUX_HOST_TOOLS_DIR:-${OUT_DIR}/host-tools-linux}"
+
+fail() {
+  echo "$1" >&2
+  exit 1
+}
 
 require_file() {
   local path="$1"
   if [[ ! -f "$path" ]]; then
-    echo "Missing required file: $path" >&2
-    exit 1
+    fail "Missing required file: $path"
   fi
 }
 
 require_dir() {
   local path="$1"
   if [[ ! -d "$path" ]]; then
-    echo "Missing required directory: $path" >&2
-    exit 1
+    fail "Missing required directory: $path"
   fi
 }
 
-require_dir "$OUT_DIR"
-require_dir "${OUT_DIR}/host-tools"
-require_file "${STAGING_DIR}/elfloader"
-require_file "${STAGING_DIR}/kernel.elf"
-require_file "${STAGING_DIR}/rootserver"
-require_file "${OUT_DIR}/cohesix-system.cpio"
-require_file "${STAGING_DIR}/cohesix/manifest.json"
-require_file "${ROOT_DIR}/docs/QUICKSTART.md"
-require_file "${ROOT_DIR}/README.md"
-require_file "${ROOT_DIR}/LICENSE.txt"
-require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace"
-require_dir "${ROOT_DIR}/apps/swarmui/frontend"
-require_dir "${ROOT_DIR}/docs"
-require_dir "${ROOT_DIR}/scripts/cohsh"
+build_linux_host_tools() {
+  local target="$1"
+  local out_dir="$2"
+  local profile="$3"
 
-if [[ -e "$BUNDLE_DIR" || -e "$TARBALL" ]]; then
-  if [[ "$FORCE" -eq 1 ]]; then
-    rm -rf "$BUNDLE_DIR"
-    rm -f "$TARBALL"
-  else
-    echo "Release path already exists: $BUNDLE_DIR or $TARBALL" >&2
-    echo "Use --force to overwrite." >&2
-    exit 1
+  command -v cargo >/dev/null 2>&1 || fail "cargo is required to build Linux host tools"
+  command -v rustc >/dev/null 2>&1 || fail "rustc is required to build Linux host tools"
+
+  local host_triple
+  host_triple="$(rustc -vV | awk '/host:/ {print $2}')"
+  if [[ "$host_triple" != "$target" && "${ALLOW_CROSS_LINUX_HOST_TOOLS:-0}" -ne 1 ]]; then
+    fail "Host target ${host_triple} does not match ${target}; build on Linux ${target} or set ALLOW_CROSS_LINUX_HOST_TOOLS=1"
   fi
-fi
 
-mkdir -p \
-  "${BUNDLE_DIR}/bin" \
-  "${BUNDLE_DIR}/image" \
-  "${BUNDLE_DIR}/qemu" \
-  "${BUNDLE_DIR}/scripts" \
-  "${BUNDLE_DIR}/traces" \
-  "${BUNDLE_DIR}/ui/swarmui" \
-  "${BUNDLE_DIR}/docs"
+  local profile_args=()
+  local profile_dir="$profile"
+  case "$profile" in
+    release)
+      profile_args=(--release)
+      profile_dir="release"
+      ;;
+    dev|debug)
+      profile_dir="debug"
+      ;;
+    *)
+      profile_args=(--profile "$profile")
+      ;;
+  esac
 
-cp -p "${OUT_DIR}/host-tools/"* "${BUNDLE_DIR}/bin/"
-cp -p "${STAGING_DIR}/elfloader" "${BUNDLE_DIR}/image/elfloader"
-cp -p "${STAGING_DIR}/kernel.elf" "${BUNDLE_DIR}/image/kernel.elf"
-cp -p "${STAGING_DIR}/rootserver" "${BUNDLE_DIR}/image/rootserver"
-cp -p "${OUT_DIR}/cohesix-system.cpio" "${BUNDLE_DIR}/image/cohesix-system.cpio"
-cp -p "${STAGING_DIR}/cohesix/manifest.json" "${BUNDLE_DIR}/image/manifest.json"
+  local host_packages=(gpu-bridge-host host-sidecar-bridge cas-tool swarmui)
+  local build_args=(build)
+  if (( ${#profile_args[@]} > 0 )); then
+    build_args+=("${profile_args[@]}")
+  fi
+  build_args+=(--target "$target")
+  for pkg in "${host_packages[@]}"; do
+    build_args+=(-p "$pkg")
+  done
 
-if [[ -x "${ROOT_DIR}/scripts/lib/detect_gic_version.py" ]]; then
-  GIC_CFG="${HOME}/seL4/build/kernel/gen_config/kernel/gen_config.h"
-  if [[ -f "$GIC_CFG" ]]; then
-    GIC_VER="$("${ROOT_DIR}/scripts/lib/detect_gic_version.py" "$GIC_CFG" || true)"
-    if [[ -n "$GIC_VER" ]]; then
-      printf "%s\n" "$GIC_VER" > "${BUNDLE_DIR}/image/gic-version.txt"
+  echo "[release] Building Linux host tools via: cargo ${build_args[*]}"
+  cargo "${build_args[@]}"
+
+  local cohsh_args=(build)
+  if (( ${#profile_args[@]} > 0 )); then
+    cohsh_args+=("${profile_args[@]}")
+  fi
+  cohsh_args+=(--target "$target" -p cohsh --features tcp)
+
+  echo "[release] Building Linux cohsh via: cargo ${cohsh_args[*]}"
+  cargo "${cohsh_args[@]}"
+
+  local artifact_dir="target/$target/$profile_dir"
+  [[ -d "$artifact_dir" ]] || fail "Cargo artefact directory not found: $artifact_dir"
+
+  rm -rf "$out_dir"
+  mkdir -p "$out_dir"
+  for bin in cohsh "${host_packages[@]}"; do
+    local src="$artifact_dir/$bin"
+    [[ -f "$src" ]] || fail "Expected host tool not found: $src"
+    install -m 0755 "$src" "$out_dir/$bin"
+  done
+}
+
+bundle_release() {
+  local bundle_name="$1"
+  local host_tools_dir="$2"
+  local bundle_dir="${RELEASES_DIR}/${bundle_name}"
+  local tarball="${RELEASES_DIR}/${bundle_name}.tar.gz"
+
+  require_dir "$host_tools_dir"
+  if ! compgen -G "${host_tools_dir}/*" >/dev/null; then
+    fail "Host tools directory is empty: $host_tools_dir"
+  fi
+
+  if [[ -e "$bundle_dir" || -e "$tarball" ]]; then
+    if [[ "$FORCE" -eq 1 ]]; then
+      rm -rf "$bundle_dir"
+      rm -f "$tarball"
+    else
+      fail "Release path already exists: $bundle_dir or $tarball (use --force)"
     fi
   fi
-fi
 
-cat <<'EOF' > "${BUNDLE_DIR}/qemu/run.sh"
+  mkdir -p \
+    "${bundle_dir}/bin" \
+    "${bundle_dir}/image" \
+    "${bundle_dir}/qemu" \
+    "${bundle_dir}/scripts" \
+    "${bundle_dir}/traces" \
+    "${bundle_dir}/ui/swarmui" \
+    "${bundle_dir}/docs"
+
+  cp -p "${host_tools_dir}/"* "${bundle_dir}/bin/"
+  cp -p "${STAGING_DIR}/elfloader" "${bundle_dir}/image/elfloader"
+  cp -p "${STAGING_DIR}/kernel.elf" "${bundle_dir}/image/kernel.elf"
+  cp -p "${STAGING_DIR}/rootserver" "${bundle_dir}/image/rootserver"
+  cp -p "${OUT_DIR}/cohesix-system.cpio" "${bundle_dir}/image/cohesix-system.cpio"
+  cp -p "${STAGING_DIR}/cohesix/manifest.json" "${bundle_dir}/image/manifest.json"
+
+  if [[ -x "${ROOT_DIR}/scripts/lib/detect_gic_version.py" ]]; then
+    GIC_CFG="${HOME}/seL4/build/kernel/gen_config/kernel/gen_config.h"
+    if [[ -f "$GIC_CFG" ]]; then
+      GIC_VER="$("${ROOT_DIR}/scripts/lib/detect_gic_version.py" "$GIC_CFG" || true)"
+      if [[ -n "$GIC_VER" ]]; then
+        printf "%s\n" "$GIC_VER" > "${bundle_dir}/image/gic-version.txt"
+      fi
+    fi
+  fi
+
+  cat <<'EOF' > "${bundle_dir}/qemu/run.sh"
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -170,12 +251,14 @@ done
   -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-:31337,hostfwd=udp:127.0.0.1:${UDP_PORT}-:31338,hostfwd=tcp:127.0.0.1:${SMOKE_PORT}-:31339" \
   -device "virtio-net-device,netdev=net0,mac=52:55:00:d1:55:01,bus=virtio-mmio-bus.0"
 EOF
-chmod +x "${BUNDLE_DIR}/qemu/run.sh"
+  chmod +x "${bundle_dir}/qemu/run.sh"
 
-cp -R "${ROOT_DIR}/scripts/cohsh" "${BUNDLE_DIR}/scripts/"
+  cp -R "${ROOT_DIR}/scripts/cohsh" "${bundle_dir}/scripts/"
+  cp -p "${ROOT_DIR}/scripts/setup_environment.sh" "${bundle_dir}/scripts/setup_environment.sh"
+  chmod +x "${bundle_dir}/scripts/setup_environment.sh"
 
-cp -p "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace" "${BUNDLE_DIR}/traces/trace_v0.trace"
-RELEASE_NAME="$RELEASE_NAME" python3 - <<'PY'
+  cp -p "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace" "${bundle_dir}/traces/trace_v0.trace"
+  RELEASE_NAME="$bundle_name" python3 - <<'PY'
 import hashlib
 import os
 from pathlib import Path
@@ -186,33 +269,33 @@ digest = hashlib.sha256(trace.read_bytes()).hexdigest()
 (trace.parent / "trace_v0.trace.sha256").write_text(digest + "\n", encoding="utf-8")
 PY
 
-cp -R "${ROOT_DIR}/apps/swarmui/frontend/." "${BUNDLE_DIR}/ui/swarmui/"
+  cp -R "${ROOT_DIR}/apps/swarmui/frontend/." "${bundle_dir}/ui/swarmui/"
 
-DOCS_LIST=(
-  "ARCHITECTURE.md"
-  "BOOT_REFERENCE.md"
-  "GPU_NODES.md"
-  "HOST_TOOLS.md"
-  "INTERFACES.md"
-  "NETWORK_CONFIG.md"
-  "ROLES_AND_SCHEDULING.md"
-  "SECURE9P.md"
-  "SECURITY.md"
-  "USERLAND_AND_CLI.md"
-  "USE_CASES.md"
-  "WORKER_TICKETS.md"
-)
-for doc in "${DOCS_LIST[@]}"; do
-  require_file "${ROOT_DIR}/docs/${doc}"
-  cp -p "${ROOT_DIR}/docs/${doc}" "${BUNDLE_DIR}/docs/"
-done
+  DOCS_LIST=(
+    "ARCHITECTURE.md"
+    "BOOT_REFERENCE.md"
+    "GPU_NODES.md"
+    "HOST_TOOLS.md"
+    "INTERFACES.md"
+    "NETWORK_CONFIG.md"
+    "ROLES_AND_SCHEDULING.md"
+    "SECURE9P.md"
+    "SECURITY.md"
+    "USERLAND_AND_CLI.md"
+    "USE_CASES.md"
+    "WORKER_TICKETS.md"
+  )
+  for doc in "${DOCS_LIST[@]}"; do
+    require_file "${ROOT_DIR}/docs/${doc}"
+    cp -p "${ROOT_DIR}/docs/${doc}" "${bundle_dir}/docs/"
+  done
 
-cp -p "${ROOT_DIR}/docs/QUICKSTART.md" "${BUNDLE_DIR}/QUICKSTART.md"
-cp -p "${ROOT_DIR}/README.md" "${BUNDLE_DIR}/README.md"
-cp -p "${ROOT_DIR}/LICENSE.txt" "${BUNDLE_DIR}/LICENSE.txt"
-printf "%s\n" "${RELEASE_VERSION}" > "${BUNDLE_DIR}/VERSION.txt"
+  cp -p "${ROOT_DIR}/docs/QUICKSTART.md" "${bundle_dir}/QUICKSTART.md"
+  cp -p "${ROOT_DIR}/README.md" "${bundle_dir}/README.md"
+  cp -p "${ROOT_DIR}/LICENSE.txt" "${bundle_dir}/LICENSE.txt"
+  printf "%s\n" "${RELEASE_VERSION}" > "${bundle_dir}/VERSION.txt"
 
-BUNDLE_DIR="${BUNDLE_DIR}" python3 - <<'PY'
+  BUNDLE_DIR="${bundle_dir}" python3 - <<'PY'
 from pathlib import Path
 import os
 
@@ -265,7 +348,37 @@ if gpu_nodes.exists():
     gpu_nodes.write_text(text, encoding="utf-8")
 PY
 
-tar -C "${RELEASES_DIR}" -czf "${TARBALL}" "${RELEASE_NAME}"
+  tar -C "${RELEASES_DIR}" -czf "${tarball}" "${bundle_name}"
 
-echo "Release bundle ready: ${BUNDLE_DIR}"
-echo "Tarball: ${TARBALL}"
+  echo "Release bundle ready: ${bundle_dir}"
+  echo "Tarball: ${tarball}"
+}
+
+require_dir "$OUT_DIR"
+require_file "${STAGING_DIR}/elfloader"
+require_file "${STAGING_DIR}/kernel.elf"
+require_file "${STAGING_DIR}/rootserver"
+require_file "${OUT_DIR}/cohesix-system.cpio"
+require_file "${STAGING_DIR}/cohesix/manifest.json"
+require_file "${ROOT_DIR}/docs/QUICKSTART.md"
+require_file "${ROOT_DIR}/README.md"
+require_file "${ROOT_DIR}/LICENSE.txt"
+require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace"
+require_file "${ROOT_DIR}/scripts/setup_environment.sh"
+require_dir "${ROOT_DIR}/apps/swarmui/frontend"
+require_dir "${ROOT_DIR}/docs"
+require_dir "${ROOT_DIR}/scripts/cohsh"
+
+if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
+  if [[ ! -d "$LINUX_HOST_TOOLS_DIR" || -z "$(ls -A "$LINUX_HOST_TOOLS_DIR" 2>/dev/null)" ]]; then
+    build_linux_host_tools "$LINUX_HOST_TARGET" "$LINUX_HOST_TOOLS_DIR" "$HOST_TOOLS_PROFILE"
+  fi
+fi
+
+if [[ "$LINUX_ONLY" -ne 1 ]]; then
+  bundle_release "$RELEASE_NAME" "$DEFAULT_HOST_TOOLS_DIR"
+fi
+
+if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
+  bundle_release "${RELEASE_NAME}-linux" "$LINUX_HOST_TOOLS_DIR"
+fi

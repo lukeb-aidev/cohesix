@@ -12,6 +12,7 @@ roles (worker-heart for telemetry and worker-gpu for lease state), while host to
 to the TCP console to drive and observe the system.
 
 ## Bundle layout
+- Bundles are host-OS specific; use the `-linux` tarball on Linux hosts.
 - `bin/` - host tools (`cohsh`, `swarmui`, `cas-tool`, `gpu-bridge-host`, `host-sidecar-bridge`).
 - `image/` - prebuilt VM artifacts (elfloader, kernel, rootserver, CPIO, manifest).
 - `qemu/run.sh` - QEMU launcher for the bundled image.
@@ -28,6 +29,13 @@ to the TCP console to drive and observe the system.
 - `host-sidecar-bridge` - publish host providers into `/host` (optional).
 See `docs/HOST_TOOLS.md` for details.
 
+## Setup host runtime (required once per host)
+Install or verify runtime dependencies (QEMU + SwarmUI runtime libs):
+```bash
+./scripts/setup_environment.sh
+```
+On Ubuntu this uses `apt-get` (via `sudo` if needed). On macOS it uses Homebrew.
+
 ## Run the live hive demo (read-only UI)
 1. Boot the VM:
    ```bash
@@ -41,7 +49,7 @@ See `docs/HOST_TOOLS.md` for details.
    `COHSH_AUTH_TOKEN` or pass `--auth-token`.
 3. In cohsh, run a few actions (for example):
    - `help`
-   - `spawn`
+   - `spawn heartbeat ticks=100`
    - `tail /log/queen.log`
 4. Launch SwarmUI in live mode (observe only):
    ```bash
