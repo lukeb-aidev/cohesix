@@ -37,7 +37,7 @@ Install or verify runtime dependencies (QEMU + SwarmUI runtime libs):
 ```
 On Ubuntu this uses `apt-get` (via `sudo` if needed). On macOS it uses Homebrew.
 
-## Run the live hive demo (read-only UI)
+## Run the Live Hive demo 
 You need two terminals:
 - Terminal 1: QEMU (keeps the VM running).
   - Note: Qemu will show a serial terminal, used for core seL4 diagnostics. This is NOT the main user interface.
@@ -77,11 +77,15 @@ You need two terminals:
    ```bash
    ./bin/swarmui
    ```
-## Run the SwarmUI deterministic replay demo
+## Run the SwarmUI deterministic replay demos
 Quit SwarmUI
 
 ```bash
 ./bin/swarmui --replay-trace "$(pwd)/traces/trace_v0.trace"
+```
+
+```bash
+./bin/swarmui --replay "$(pwd)/traces/trace_v0.hive.cbor"
 ```
 
 SwarmUI auto-starts the Live Hive replay when `--replay-trace` is used — no Demo button required.
