@@ -127,6 +127,7 @@ build_linux_host_tools() {
   esac
 
   local host_packages=(gpu-bridge-host cas-tool swarmui)
+  local host_bins=(cohsh "${host_packages[@]}" host-sidecar-bridge)
   local build_args=(build)
   if (( ${#profile_args[@]} > 0 )); then
     build_args+=("${profile_args[@]}")
@@ -162,7 +163,7 @@ build_linux_host_tools() {
 
   rm -rf "$out_dir"
   mkdir -p "$out_dir"
-  for bin in cohsh "${host_packages[@]}"; do
+  for bin in "${host_bins[@]}"; do
     local src="$artifact_dir/$bin"
     [[ -f "$src" ]] || fail "Expected host tool not found: $src"
     install -m 0755 "$src" "$out_dir/$bin"
