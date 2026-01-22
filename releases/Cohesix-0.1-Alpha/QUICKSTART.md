@@ -30,32 +30,6 @@ to the TCP console to drive and observe the system.
 - `host-sidecar-bridge` - publish host providers into `/host` (optional).
 See `docs/HOST_TOOLS.md` for details.
 
-## Optional host tool demos
-These are safe demo commands to prove the host tooling works. Live uploads require QEMU to be running.
-
-### cas-tool (pack + upload)
-```bash
-./bin/cas-tool pack --epoch v1 --input ./traces/trace_v0.trace --out-dir ./out/cas/v1
-./bin/cas-tool upload --bundle ./out/cas/v1 --host 127.0.0.1 --port 31337 \
-  --auth-token changeme --ticket "$QUEEN_TICKET"
-```
-
-### gpu-bridge-host (mock list)
-```bash
-./bin/gpu-bridge-host --mock --list
-```
-NVML discovery requires rebuilding with `--features nvml`.
-
-### host-sidecar-bridge (mock + live)
-```bash
-./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider nvidia
-```
-Live publish over TCP (bundle includes TCP support):
-```bash
-./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
-```
-The `/host` namespace must be enabled in `configs/root_task.toml` for live publishing.
-
 ## Setup host runtime (required once per host)
 Install or verify runtime dependencies (QEMU + SwarmUI runtime libs):
 ```bash
@@ -63,7 +37,7 @@ Install or verify runtime dependencies (QEMU + SwarmUI runtime libs):
 ```
 On Ubuntu this uses `apt-get` (via `sudo` if needed). On macOS it uses Homebrew.
 
-## Run the live hive demo (read-only UI)
+## Run the Live Hive demo 
 You need two terminals:
 - Terminal 1: QEMU (keeps the VM running).
   - Note: Qemu will show a serial terminal, used for core seL4 diagnostics. This is NOT the main user interface.
@@ -103,11 +77,23 @@ You need two terminals:
    ```bash
    ./bin/swarmui
    ```
-## Run the SwarmUI deterministic replay demo
+   On headless Linux, use:
+   ```bash
+   xvfb-run -a ./bin/swarmui
+   ```
+## Run the SwarmUI deterministic replay demos
 Quit SwarmUI
 
 ```bash
 ./bin/swarmui --replay-trace "$(pwd)/traces/trace_v0.trace"
+```
+
+```bash
+./bin/swarmui --replay "$(pwd)/traces/trace_v0.hive.cbor"
+```
+Headless Linux replay:
+```bash
+xvfb-run -a ./bin/swarmui --replay-trace "$(pwd)/traces/trace_v0.trace"
 ```
 
 SwarmUI auto-starts the Live Hive replay when `--replay-trace` is used — no Demo button required.
@@ -124,6 +110,31 @@ Hive replay snapshot (used by SwarmUI for Live Hive visuals):
 - `traces/trace_v0.hive.cbor`
 - `traces/trace_v0.hive.cbor.sha256`
 
+## Optional host tool demos
+These are safe demo commands to prove the host tooling works. Live uploads require QEMU to be running.
+
+### cas-tool (pack + upload)
+```bash
+./bin/cas-tool pack --epoch v1 --input ./traces/trace_v0.trace --out-dir ./out/cas/v1
+./bin/cas-tool upload --bundle ./out/cas/v1 --host 127.0.0.1 --port 31337 \
+  --auth-token changeme --ticket "$QUEEN_TICKET"
+```
+
+### gpu-bridge-host (mock list)
+```bash
+./bin/gpu-bridge-host --mock --list
+```
+NVML discovery requires rebuilding with `--features nvml`.
+
+### host-sidecar-bridge (mock + live)
+```bash
+./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider nvidia
+```
+Live publish over TCP (bundle includes TCP support):
+```bash
+./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
+```
+The `/host` namespace must be enabled in `configs/root_task.toml` for live publishing.
 
 ## Ports and signals
 - TCP console: `127.0.0.1:31337`

@@ -77,6 +77,10 @@ You need two terminals:
    ```bash
    ./bin/swarmui
    ```
+   On headless Linux, use:
+   ```bash
+   xvfb-run -a ./bin/swarmui
+   ```
 ## Run the SwarmUI deterministic replay demos
 Quit SwarmUI
 
@@ -86,6 +90,10 @@ Quit SwarmUI
 
 ```bash
 ./bin/swarmui --replay "$(pwd)/traces/trace_v0.hive.cbor"
+```
+Headless Linux replay:
+```bash
+xvfb-run -a ./bin/swarmui --replay-trace "$(pwd)/traces/trace_v0.trace"
 ```
 
 SwarmUI auto-starts the Live Hive replay when `--replay-trace` is used — no Demo button required.
