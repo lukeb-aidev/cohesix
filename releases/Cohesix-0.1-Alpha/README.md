@@ -205,4 +205,4 @@ See below for detailed design, interfaces, and milestone tracking:
 ---
 
 ## Status
-See `docs/QUICKSTART.md` for how to run this bundle.
+See `QUICKSTART.md` for how to run this bundle.

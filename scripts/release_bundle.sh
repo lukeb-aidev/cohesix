@@ -18,7 +18,6 @@ Usage: scripts/release_bundle.sh [--name <release-name>] [--version <version>] [
 
 Assembles a release bundle from out/cohesix into releases/<release-name> and
 creates releases/<release-name>.tar.gz.
-Also refreshes the legacy flat layout under releases/.
 
 Env overrides:
   RELEASE_NAME, RELEASE_VERSION
@@ -196,7 +195,6 @@ DOCS_LIST=(
   "HOST_TOOLS.md"
   "INTERFACES.md"
   "NETWORK_CONFIG.md"
-  "QUICKSTART.md"
   "ROLES_AND_SCHEDULING.md"
   "SECURE9P.md"
   "SECURITY.md"
@@ -209,6 +207,7 @@ for doc in "${DOCS_LIST[@]}"; do
   cp -p "${ROOT_DIR}/docs/${doc}" "${BUNDLE_DIR}/docs/"
 done
 
+cp -p "${ROOT_DIR}/docs/QUICKSTART.md" "${BUNDLE_DIR}/QUICKSTART.md"
 cp -p "${ROOT_DIR}/README.md" "${BUNDLE_DIR}/README.md"
 cp -p "${ROOT_DIR}/LICENSE.txt" "${BUNDLE_DIR}/LICENSE.txt"
 printf "%s\n" "${RELEASE_VERSION}" > "${BUNDLE_DIR}/VERSION.txt"
@@ -230,6 +229,10 @@ if readme.exists():
         "## Status\n- [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) \n",
         "## Status\nSee `docs/QUICKSTART.md` for how to run this bundle.\n",
     )
+    readme.write_text(text, encoding="utf-8")
+
+    text = readme.read_text(encoding="utf-8")
+    text = text.replace("docs/QUICKSTART.md", "QUICKSTART.md")
     readme.write_text(text, encoding="utf-8")
 
 arch = bundle / "docs" / "ARCHITECTURE.md"
@@ -261,24 +264,6 @@ if gpu_nodes.exists():
     )
     gpu_nodes.write_text(text, encoding="utf-8")
 PY
-
-if [[ "${BUNDLE_DIR}" == "${RELEASES_DIR}" ]]; then
-  echo "Refusing to refresh flat layout: bundle dir equals releases root." >&2
-  exit 1
-fi
-
-FLAT_DIRS=(bin docs image qemu scripts traces ui)
-FLAT_FILES=(LICENSE.txt VERSION.txt README.md)
-
-for dir in "${FLAT_DIRS[@]}"; do
-  rm -rf "${RELEASES_DIR}/${dir}"
-  cp -R "${BUNDLE_DIR}/${dir}" "${RELEASES_DIR}/${dir}"
-done
-
-for file in "${FLAT_FILES[@]}"; do
-  rm -f "${RELEASES_DIR}/${file}"
-  cp -p "${BUNDLE_DIR}/${file}" "${RELEASES_DIR}/${file}"
-done
 
 tar -C "${RELEASES_DIR}" -czf "${TARBALL}" "${RELEASE_NAME}"
 
