@@ -1,0 +1,64 @@
+# Author: Lukas Bower
+# Purpose: CAS update roundtrip with resume, signatures, and delta replay.
+attach queen
+EXPECT OK
+
+# Base chunk upload with resume.
+echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA > /updates/100/chunks/b6ac3cc10386331c765f04f041c147d0f278f2aed8eaa021e2d0057fc6f6ff9e
+EXPECT OK
+cat /updates/100/chunks/b6ac3cc10386331c765f04f041c147d0f278f2aed8eaa021e2d0057fc6f6ff9e
+EXPECT ERR
+echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA > /updates/100/chunks/b6ac3cc10386331c765f04f041c147d0f278f2aed8eaa021e2d0057fc6f6ff9e
+EXPECT OK
+cat /updates/100/chunks/b6ac3cc10386331c765f04f041c147d0f278f2aed8eaa021e2d0057fc6f6ff9e
+EXPECT OK
+EXPECT SUBSTR data=b64:QUFB
+
+# Base manifest (signed).
+echo b64:iHdjb2hlc2l4LWNhcy9tYW5pZmVzdC12MWMxMDAYgBiAWCC2rDzBA4YzHHZfBPBBwUfQ8njyrtjqoCHi0AV/xvb/noFY > /updates/100/manifest.cbor
+EXPECT OK
+echo b64:ILasPMEDhjMcdl8E8EHBR9DyePKu2OqgIeLQBX/G9v+e9lhA0/pTLGggvKyIJWrubYvLArn3amDh5F69l1QB5HN2E4x/ > /updates/100/manifest.cbor
+EXPECT OK
+echo b64:jHteTYAevo4zucMQHXfA8daes6xX9hC3Kt6gtyjADQ== > /updates/100/manifest.cbor
+EXPECT OK
+cat /updates/100/manifest.cbor
+EXPECT OK
+EXPECT SUBSTR data=b64:iHdjb2hlc2l4
+cat /updates/100/status
+EXPECT OK
+EXPECT SUBSTR state=ready
+
+# Invalid signature manifest (negative case).
+echo b64:iHdjb2hlc2l4LWNhcy9tYW5pZmVzdC12MWMxMDIYgBiAWCC2rDzBA4YzHHZfBPBBwUfQ8njyrtjqoCHi0AV/xvb/noFY > /updates/102/manifest.cbor
+EXPECT OK
+echo b64:ILasPMEDhjMcdl8E8EHBR9DyePKu2OqgIeLQBX/G9v+e9lhAKW1ThuRm7TGsT/XrPbrjoqrQ/GsdrHLU2/OJYeozKgVw > /updates/102/manifest.cbor
+EXPECT OK
+echo b64:3l7hTUQoudN+LDUlI5DOfDOm/1RdrHxuuw0yRZDRDQ== > /updates/102/manifest.cbor
+EXPECT ERR
+
+# Delta chunk + manifest.
+echo BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB > /updates/101/chunks/7abaa701a6f4bb8d9ea3872a315597eb6f2ccfd03392d8d10560837f6136d06a
+EXPECT OK
+echo BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB > /updates/101/chunks/7abaa701a6f4bb8d9ea3872a315597eb6f2ccfd03392d8d10560837f6136d06a
+EXPECT OK
+cat /updates/101/chunks/7abaa701a6f4bb8d9ea3872a315597eb6f2ccfd03392d8d10560837f6136d06a
+EXPECT OK
+EXPECT SUBSTR data=b64:QkJC
+
+echo b64:iHdjb2hlc2l4LWNhcy9tYW5pZmVzdC12MWMxMDEYgBiAWCAMg+htUbu11Ev5wPuKDernKV2Q58XSibQxsJlty1ztEYFY > /updates/101/manifest.cbor
+EXPECT OK
+echo b64:IHq6pwGm9LuNnqOHKjFVl+tvLM/QM5LY0QVgg39hNtBqgmMxMDBYILasPMEDhjMcdl8E8EHBR9DyePKu2OqgIeLQBX/G > /updates/101/manifest.cbor
+EXPECT OK
+echo b64:9v+eWECcR3ei+RTL1eJYu0RUQ4tNOSn27OuCZsUHZh5mjppFsEtnSqqz7OKYGSNhMnTKoVXSpPXdVCyJHE8F0jsQuO0D > /updates/101/manifest.cbor
+EXPECT OK
+cat /updates/101/manifest.cbor
+EXPECT OK
+EXPECT SUBSTR data=b64:iHdjb2hlc2l4LWNh
+
+# Idempotent read after delta replay.
+cat /updates/100/chunks/b6ac3cc10386331c765f04f041c147d0f278f2aed8eaa021e2d0057fc6f6ff9e
+EXPECT OK
+EXPECT SUBSTR data=b64:QUFB
+cat /policy/preflight/req
+EXPECT ERR
+quit

@@ -80,6 +80,7 @@ export const createHiveController = (container, status) => {
         lastPollMode = lodMode;
       }
     }
+    renderer.draw();
     requestAnimationFrame(step);
   };
 
@@ -115,7 +116,7 @@ export const createHiveController = (container, status) => {
       }
       running = true;
       lastFrame = performance.now();
-      lastRender = lastFrame;
+      lastRender = 0;
       requestAnimationFrame(step);
     },
     stop: () => {

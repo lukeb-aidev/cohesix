@@ -178,14 +178,31 @@ document
 const hiveCanvas = document.getElementById("hive-canvas");
 const hiveStatus = document.getElementById("hive-status");
 const hivePressure = document.getElementById("hive-pressure");
+const hiveFallback = document.getElementById("hive-fallback");
 let hiveController = null;
 let hiveInitError = null;
+const setHiveFallback = (message) => {
+  if (!hiveFallback) {
+    return;
+  }
+  const trimmed = message ? String(message).trim() : "";
+  if (trimmed) {
+    hiveFallback.textContent = trimmed;
+    hiveFallback.classList.add("active");
+    return;
+  }
+  hiveFallback.textContent = "";
+  hiveFallback.classList.remove("active");
+};
 if (hiveCanvas) {
   try {
     hiveController = createHiveController(hiveCanvas, hiveStatus);
+    setHiveFallback("");
   } catch (err) {
     hiveInitError = err;
-    setStatus("hive-status", `Hive renderer failed: ${err}`);
+    const message = `Hive renderer failed: ${err}`;
+    setStatus("hive-status", message);
+    setHiveFallback(message);
   }
 }
 
@@ -241,10 +258,13 @@ const pollHive = async () => {
 const startHive = async () => {
   if (!hiveController) {
     if (hiveInitError) {
-      setStatus("hive-status", `Hive renderer failed: ${hiveInitError}`);
+      const message = `Hive renderer failed: ${hiveInitError}`;
+      setStatus("hive-status", message);
+      setHiveFallback(message);
     }
     return;
   }
+  setHiveFallback("");
   const session = readSession();
   const snapshotKey =
     document.getElementById("hive-snapshot-key")?.value?.trim() || "demo";

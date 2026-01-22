@@ -17,6 +17,28 @@
   display: block;
 }
 
+.hive-fallback {
+  position: absolute;
+  inset: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--color-border);
+  background: rgba(12, 18, 28, 0.75);
+  color: var(--color-ink-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-fast) ease;
+}
+
+.hive-fallback.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .hive-overlay {
   position: absolute;
   top: var(--space-3);

@@ -139,6 +139,9 @@ export class HiveRenderer {
     this.drawAgents(world, lodMode);
     this.drawPollen(world, lodMode);
     this.drawPulses(world);
+  }
+
+  draw() {
     this.app.renderer.render(this.app.stage);
   }
 

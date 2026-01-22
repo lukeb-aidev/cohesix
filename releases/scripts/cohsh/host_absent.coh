@@ -1,0 +1,8 @@
+# Author: Lukas Bower
+# Purpose: Confirm /host is absent when ecosystem.host.enable is false.
+attach queen
+EXPECT OK
+ls /host
+EXPECT ERR
+EXPECT SUBSTR invalid path
+quit
