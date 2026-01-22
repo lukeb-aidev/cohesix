@@ -13,6 +13,7 @@
     </td>
   </tr>
 </table>
+
 ## Why Cohesix?
 
 Cohesix explores a specific and deliberately narrow problem space: **how to build a small, auditable, and secure control plane for orchestrating distributed edge GPU systems**, without inheriting the complexity, opacity, and attack surface of general-purpose operating systems.
