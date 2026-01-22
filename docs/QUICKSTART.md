@@ -43,11 +43,11 @@ You need two terminals:
   - Note: Qemu will show a serial terminal, used for core seL4 diagnostics. This is NOT the main user interface.
 - Terminal 2: for either `cohsh` or SwarmUI. Use one at a time; they should not be used simultaneously.
 
-1. Boot the VM:
+1. In Terminal 1, Boot the VM:
    ```bash
    ./qemu/run.sh
    ```
-2. Connect with cohsh (control-plane actions are CLI-driven):
+2. In Terminal 2, connect with cohsh (control-plane actions are CLI-driven):
    ```bash
    ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
    ```
