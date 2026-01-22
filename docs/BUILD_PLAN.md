@@ -2729,7 +2729,7 @@ Provide a deterministic, bounded telemetry ingest surface where host tools can:
 ---
 
 ### Task Breakdown
-
+```
 Title/ID: m21a-telemetry-namespace
 Goal: Introduce a fixed telemetry namespace with OS-named segments.
 Inputs: docs/ARCHITECTURE.md, docs/INTERFACES.md, existing NineDoor providers.
@@ -2746,9 +2746,9 @@ Checks:
 	•	Segment files are append-only and OS-named.
 Deliverables:
 	•	Telemetry namespace live with no client-controlled naming.
+```
 
-
-
+```
 Title/ID: m21a-telemetry-create-ctl
 Goal: Implement severely limited “create” via control file.
 Inputs: docs/INTERFACES.md (new schema), existing append-only control patterns.
@@ -2764,9 +2764,9 @@ Checks:
 	•	Only ctl-based segment allocation is accepted.
 Deliverables:
 	•	OS-controlled segment allocation with deterministic responses.
+```
 
-
-
+```
 Title/ID: m21a-telemetry-quotas
 Goal: Enforce deterministic quotas and retention for telemetry segments.
 Inputs: configs/root_task.toml (new fields), coh-rtc validation rules.
@@ -2784,9 +2784,9 @@ Checks:
 	•	Quota exhaustion yields deterministic ERR or deterministic eviction.
 Deliverables:
 	•	Manifest-driven, bounded telemetry retention.
-
+```
 ---
-
+```
 Title/ID: m21a-telemetry-envelope
 
 Goal: Define and document the telemetry envelope format.
@@ -2800,9 +2800,9 @@ Checks:
 	•	Oversized records rejected deterministically.
 Deliverables:
 	•	Versioned, opaque telemetry envelope documented and enforced.
+```
 
-
-
+```
 Title/ID: m21a-cohsh-telemetry-push
 Goal: Add host-side telemetry push command to cohsh.
 Inputs: docs/USERLAND_AND_CLI.md, existing cohsh 9P write helpers.
@@ -2818,9 +2818,9 @@ Checks:
 	•	Oversized files fail locally with deterministic ERR.
 Deliverables:
 	•	Safe host-side telemetry injection command.
+```
 
-
-
+```
 Title/ID: m21a-telemetry-regression
 Goal: Lock behaviour with deterministic CLI regression.
 Inputs: scripts/cohsh/telemetry_push_create.coh.
@@ -2836,10 +2836,10 @@ Commands:
 Checks:
 	•	Script passes unchanged across runs.
 Deliverables:
-	•	Regression coverage preventing scope creep.
+	•	Regression coverage preventing scope
+```
 
-
-
+```
 Title/ID: m21a-docs-sync
 Goal: Update documentation to reflect as-built telemetry ingest.
 Inputs: docs/ARCHITECTURE.md, docs/USERLAND_AND_CLI.md, docs/INTERFACES.md.
@@ -2851,7 +2851,7 @@ Checks:
 	•	Docs match code behaviour exactly.
 Deliverables:
 	•	Docs-as-built alignment.
-
+```
 ---
 
 ### Checks (Definition of Done)
