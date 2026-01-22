@@ -79,7 +79,8 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [20f1](#20f1) | SwarmUI Host Tool Packaging + Tauri API Fix | Complete |
 | [20g](#20g) | Deterministic Snapshot & Replay (UI Testing) | Complete |
 | [20h](#20h) | Alpha Release Gate: As-Built Verification, Live Hive Demo, SwarmUI Replay, & Release Bundle | In Progress |
-| [21](#21) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
+| [21a](#21a) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
+| [21b](#21b) | Telemetry Ingest with OS-Named Segments (Severely Limited Create) | Pending |
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Pending |
 | [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Pending |
 | [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Pending |
@@ -2685,7 +2686,192 @@ After Milestone 20h:
 
 Next, Alpha Release 2 targets a plug-and-play operator experience immediately after Milestone 20.x. Milestones 21-24 define the Alpha track; the AWS AMI work follows as Milestone 25.
 
-## Milestone 21 — Alpha: Host Bridges (coh mount, coh gpu, coh telemetry pull) <a id="21"></a> 
+## Milestone 21a — Telemetry Ingest with OS-Named Segments (Severely Limited Create) <a id="21a"></a> 
+[Milestones](#Milestones)
+
+**Why now (compiler):**  
+Operators, demos, and UI testing need a safe way to inject telemetry from host tools without turning Cohesix into a general file transfer system. This milestone introduces a **Plan-9-style telemetry ingest path** that supports *severely constrained create*: the OS controls naming, retention, and quotas; clients can only append bounded records. This increases utility while preserving Cohesix’s control-plane boundary and minimal TCB.
+
+---
+
+### Goal
+
+Provide a deterministic, bounded telemetry ingest surface where host tools can:
+1. Request a new telemetry segment with **OS-assigned naming**, and  
+2. Append bounded telemetry records into that segment using existing Secure9P primitives.
+
+---
+
+### Non-Goals (Explicit)
+
+- No arbitrary file upload or “scp-like” behaviour  
+- No client-chosen filenames or paths  
+- No delete / remove / rename semantics  
+- No random writes or truncation  
+- No new in-VM TCP listeners beyond the existing console  
+- No schema-aware parsing of CSV / XML / JSON payloads  
+
+---
+
+### Deliverables
+
+- Fixed telemetry namespace under `/queen/telemetry/<device_id>/` with:
+  - `ctl` (append-only control)
+  - `seg/` (OS-named, append-only segments)
+  - `latest` (read-only pointer to the most recent segment)
+- OS-assigned segment creation via control file (no path-based create)
+- Hard quotas on segment count and bytes with deterministic refuse/evict behaviour
+- Bounded, versioned telemetry envelope (opaque payload)
+- `cohsh telemetry push` host command
+- CLI regression coverage added to the Regression Pack
+- Documentation updated to reflect **as-built** semantics
+
+---
+
+### Task Breakdown
+
+Title/ID: m21a-telemetry-namespace
+Goal: Introduce a fixed telemetry namespace with OS-named segments.
+Inputs: docs/ARCHITECTURE.md, docs/INTERFACES.md, existing NineDoor providers.
+Changes:
+	•	apps/nine-door/src/host/telemetry.rs — add provider for:
+/queen/telemetry/<device_id>/ctl
+/queen/telemetry/<device_id>/seg/<seg_id>
+/queen/telemetry/<device_id>/latest
+	•	apps/nine-door/src/host/namespace.rs — mount telemetry provider under /queen.
+Commands:
+	•	cargo test -p nine-door
+Checks:
+	•	Telemetry paths appear only when enabled.
+	•	Segment files are append-only and OS-named.
+Deliverables:
+	•	Telemetry namespace live with no client-controlled naming.
+
+
+
+Title/ID: m21a-telemetry-create-ctl
+Goal: Implement severely limited “create” via control file.
+Inputs: docs/INTERFACES.md (new schema), existing append-only control patterns.
+Changes:
+	•	apps/nine-door/src/host/telemetry.rs — handle ctl command:
+{“new”:“segment”,“mime”:””}
+	•	Emit deterministic ACK with assigned seg_id.
+	•	Update /latest pointer on successful creation.
+Commands:
+	•	cargo test -p nine-door –test telemetry_create
+Checks:
+	•	Client cannot create files by path.
+	•	Only ctl-based segment allocation is accepted.
+Deliverables:
+	•	OS-controlled segment allocation with deterministic responses.
+
+
+
+Title/ID: m21a-telemetry-quotas
+Goal: Enforce deterministic quotas and retention for telemetry segments.
+Inputs: configs/root_task.toml (new fields), coh-rtc validation rules.
+Changes:
+	•	tools/coh-rtc/src/ir.rs — add telemetry_ingest.* fields:
+max_segments_per_device
+max_bytes_per_segment
+max_total_bytes_per_device
+eviction_policy (refuse | evict_oldest)
+	•	apps/nine-door/src/host/telemetry.rs — enforce quotas and eviction.
+Commands:
+	•	cargo run -p coh-rtc – configs/root_task.toml
+	•	cargo test -p nine-door –test telemetry_quotas
+Checks:
+	•	Quota exhaustion yields deterministic ERR or deterministic eviction.
+Deliverables:
+	•	Manifest-driven, bounded telemetry retention.
+
+---
+
+Title/ID: m21a-telemetry-envelope
+
+Goal: Define and document the telemetry envelope format.
+Inputs: docs/INTERFACES.md.
+Changes:
+	•	docs/INTERFACES.md — add schema cohsh-telemetry-push/v1.
+	•	Enforce max_record_bytes (≤ 4096) server-side.
+Commands:
+	•	cargo test -p nine-door –test telemetry_envelope
+Checks:
+	•	Oversized records rejected deterministically.
+Deliverables:
+	•	Versioned, opaque telemetry envelope documented and enforced.
+
+
+
+Title/ID: m21a-cohsh-telemetry-push
+Goal: Add host-side telemetry push command to cohsh.
+Inputs: docs/USERLAND_AND_CLI.md, existing cohsh 9P write helpers.
+Changes:
+	•	apps/cohsh/src/lib.rs — add command:
+telemetry push <src_file> –device 
+	•	Enforce file size limits, extension allowlist, chunking, and fixed destination.
+	•	Resolve seg_id via ACK detail or /latest before appending.
+Commands:
+	•	cargo test -p cohsh
+Checks:
+	•	cohsh cannot write outside telemetry allowlist.
+	•	Oversized files fail locally with deterministic ERR.
+Deliverables:
+	•	Safe host-side telemetry injection command.
+
+
+
+Title/ID: m21a-telemetry-regression
+Goal: Lock behaviour with deterministic CLI regression.
+Inputs: scripts/cohsh/telemetry_push_create.coh.
+Changes:
+	•	scripts/cohsh/telemetry_push_create.coh — cover:
+create success
+push success
+oversize failure
+quota exhaustion behaviour
+	•	Add script to the Regression Pack.
+Commands:
+	•	cargo run -p cohsh –features tcp – –transport tcp –script scripts/cohsh/telemetry_push_create.coh
+Checks:
+	•	Script passes unchanged across runs.
+Deliverables:
+	•	Regression coverage preventing scope creep.
+
+
+
+Title/ID: m21a-docs-sync
+Goal: Update documentation to reflect as-built telemetry ingest.
+Inputs: docs/ARCHITECTURE.md, docs/USERLAND_AND_CLI.md, docs/INTERFACES.md.
+Changes:
+	•	Document telemetry namespace, quotas, and create semantics.
+Commands:
+	•	mdbook build docs (if configured)
+Checks:
+	•	Docs match code behaviour exactly.
+Deliverables:
+	•	Docs-as-built alignment.
+
+---
+
+### Checks (Definition of Done)
+
+- Telemetry segments are OS-named and append-only.
+- Clients cannot choose names or paths.
+- Quotas and eviction/refusal behaviour are deterministic.
+- No new in-VM network services are introduced.
+- Regression Pack passes unchanged.
+- Documentation reflects actual behaviour.
+
+---
+
+### Outcome
+
+After Milestone 21a, Cohesix supports **safe, Plan-9-style telemetry creation** with strict bounds and OS-owned lifecycle—improving utility for demos, UI testing, and early deployments without compromising the control-plane boundary.
+
+---
+
+## Milestone 21b — Alpha: Host Bridges (coh mount, coh gpu, coh telemetry pull) <a id="21b"></a> 
 [Milestones](#Milestones)
 
 **Why now (adoption):** After Milestone 20.x, we need plug-and-play host UX that integrates with existing CUDA/MIG workflows without new protocols or VM expansion.
@@ -2724,7 +2910,7 @@ Deliver filesystem-first host access, GPU lease UX, and pull-based telemetry exp
 
 **Task Breakdown**
 ```
-Title/ID: m21-coh-cli-skeleton
+Title/ID: m21b-coh-cli-skeleton
 Goal: Introduce coh host CLI with strict subcommand parsing and policy loading.
 Inputs: crates/cohsh-core, docs/USERLAND_AND_CLI.md, docs/INTERFACES.md.
 Changes:
@@ -2737,7 +2923,7 @@ Checks:
 Deliverables:
   - coh CLI skeleton and policy loader documented in docs/USERLAND_AND_CLI.md.
 
-Title/ID: m21-coh-mount
+Title/ID: m21b-coh-mount
 Goal: Implement Secure9P-backed FUSE mount with bounded operations.
 Inputs: secure9p-core, docs/SECURE9P.md.
 Changes:
@@ -2750,7 +2936,7 @@ Checks:
 Deliverables:
   - FUSE mount docs and regression fixtures.
 
-Title/ID: m21-coh-gpu-telemetry
+Title/ID: m21b-coh-gpu-telemetry
 Goal: Add coh gpu UX and telemetry pull with mock backend.
 Inputs: docs/GPU_NODES.md, docs/INTERFACES.md.
 Changes:
