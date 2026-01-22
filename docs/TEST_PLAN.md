@@ -6,118 +6,121 @@
 # Test Plan
 
 ## Purpose
-Ensure cohsh and SwarmUI share console grammar parity, ticket quotas are enforced, multi-worker flows are stable, and deterministic trace replay is verifiable for Milestone 20g.
+Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP console reliability and performance, deterministic replay, and every shipped host tool.
 
-## Scope (Milestone 20g goals)
-- Cohsh command surface works against queen and multiple workers without ACK/ERR/END drift.
-- `scripts/cohsh/run_regression_batch.sh` is the reliable manual compliance pack for BUILD_PLAN.md.
-- SwarmUI console transport matches cohsh grammar and transcript fixtures.
-- Trace record/replay fixtures are deterministic; replay parity holds across cohsh, SwarmUI, and coh-status.
+## Goals
+- QEMU boots the VM and exposes Secure9P/TCP console without protocol drift.
+- TCP console remains reliable under load (no unexpected disconnects/resets/partial writes).
+- Performance baselines are captured for TCP throughput/latency.
+- Host tools behave correctly: `cohsh`, `swarmui`, `cas-tool`, `gpu-bridge-host`, `host-sidecar-bridge`.
+- Deterministic replay passes for cohsh and SwarmUI (trace + hive snapshot).
+- Fixtures and manifests remain hash-consistent.
+
+## Scope
+- Source tree validation (macOS 26 ARM64 host).
+- Release bundle validation on macOS 26 and Ubuntu 24 aarch64.
+- Milestone-agnostic: run sections appropriate to the change set.
 
 ## Preflight and guardrails
 - `scripts/ci/check_test_plan.sh`
 - If IR or manifest changes: `cargo run -p coh-rtc` then `scripts/check-generated.sh`.
 - Ensure `SEL4_BUILD_DIR=$HOME/seL4/build`.
-- Before any QEMU TCP run, prompt the operator to start tcpdump and confirm the log path (example: `logs/tcpdump-new-YYYYMMDD-HHMMSS.log`). Record the exact path and reuse it in step 5. Do not proceed until confirmed.
-- Clear old regression logs if needed: `rm -rf out/regression-logs`.
+- Before any QEMU TCP run, start tcpdump and confirm the log path (example: `logs/tcpdump-new-YYYYMMDD-HHMMSS.log`). Use the same path in TCP correlation checks.
+- Headless Linux requires `xvfb-run` (`sudo apt-get install -y xvfb` if missing).
+- Ensure `/updates` and `/host` are enabled for host tool tests:
+  - `cas.enable = true` (and `ui_providers.updates.*` as needed)
+  - `ecosystem.host.enable = true` with providers set
+  - Re-run `coh-rtc` and `scripts/check-generated.sh` if toggled.
+- Clear old logs if needed: `rm -rf out/regression-logs logs`.
 
-## Execution order (Milestone 20g)
-Run in the order shown; all commands are macOS ARM64 compatible.
-- Milestone 20g requires steps 1 and 1b; steps 2–7 are the Milestone 20h release gate.
+## Execution order
+Run in order unless explicitly skipped with a recorded reason.
 
-### 1) Host-only unit and integration tests
+### 1) Artifact and fixture integrity
+- `scripts/ci/check_test_plan.sh`
+- If IR/manifest changed:
+  - `cargo run -p coh-rtc`
+  - `scripts/check-generated.sh`
+
+### 2) Host-side unit/integration tests (fast)
 - `cargo test -p cohsh-core`
-- `cargo test -p cohsh --test script_catalog`
 - `cargo test -p cohsh --test ticket_mint`
 - `cargo test -p cohsh --test transcripts`
-- `cargo test -p cohsh --test client_lib`
-- `cargo test -p coh-status --test transcript`
 - `cargo test -p swarmui --test transcript`
 - `cargo test -p swarmui --test security`
 - `cargo test -p nine-door --test ui_security`
-
-### 1b) Trace replay (Milestone 20g)
 - `cargo test -p cohsh-core --test trace`
 - `cargo test -p cohsh --test trace`
 - `cargo test -p swarmui --test trace`
-- `cargo test -p coh-status --test trace`
 - Fixture regen (only when needed):
   - `COHESIX_WRITE_TRACE=1 cargo test -p cohsh --test trace`
   - `COHESIX_WRITE_TRACE=1 cargo test -p swarmui --test trace`
 
-### 2) Convergence harness (Milestone 20e)
-- `scripts/regression/transcript_compare.sh`
-- `scripts/regression/client_vs_console.sh`
-- Timing tolerance is 50 ms (test harness tolerance, not a protocol contract).
-- Fixture normalization: transcripts include only `OK ...`, `ERR ...`, and `END`; `OK/ERR AUTH` lines are excluded.
-- Converge sequence: `help -> attach -> log -> spawn -> tail -> quit` with `spawn` executed via `/queen/ctl`.
+### 3) QEMU boot + TCP console baseline
+Start QEMU (source tree or bundle), then verify:
+- Capture QEMU serial to `logs/qemu-console.log` (example: `./qemu/run.sh | tee logs/qemu-console.log`).
+- `cohsh` (queen): `help`, `attach queen`, `log`, `tail /log/queen.log`, `ls /`,
+  `cat /log/queen.log`, `spawn heartbeat ticks=100`, `kill 1`, `ping`,
+  `tcp-diag`, `test --mode quick`, `test --mode full` (fresh boot), `quit`
+- Capture cohsh output to `logs/cohsh-session.log` (example: `... | tee logs/cohsh-session.log`).
+- Success criteria:
+  - No unexpected `ERR` lines or reconnect loops.
+  - ACK/ERR/END ordering stable.
 
-### 3) QEMU regression batch (manual compliance pack)
-- `scripts/cohsh/run_regression_batch.sh`
-- The batch runs base + gated scripts and archives logs to `out/regression-logs/<batch>/<script>.{qemu,out}.log`.
-- Worker-id dependent scripts are isolated into their own QEMU boots to keep deterministic `worker-1`/`worker-2` paths.
-- Override timeouts with `READY_TIMEOUT`, `PORT_TIMEOUT`, `QUIT_CLOSE_TIMEOUT` when needed.
-- For cold builds, set `READY_TIMEOUT=600` so the initial boot has enough time before the ready marker.
-
-### 4) Cohsh command surface (manual checklist)
-After a QEMU boot with TCP transport:
-- Attach as queen: `help`, `log`, `tail /log/queen.log`, `cat /log/queen.log`, `ls /`, `echo /log/queen.log`, `spawn`, `kill`, `ping`, `test --mode quick`, `pool bench <opts>`, `tcp-diag`, `bind <src> <dst>`, `mount <service> <path>`, `detach`, `quit` (quit last).
-- Multi-worker coverage (queen session): spawn two workers, tail `/shard/<label>/worker/<id>/telemetry` for each, and kill both without path errors.
-- CLI-local commands: `detach`, `pool bench <opts>`, `bind <src> <dst>` (expect `OK DETACH`, pool bench summary, and `OK BIND`).
-- Success criteria: no invalid UTF-8 frames, no reconnect loops, `OK/ERR/END` ordering stable.
-
-### 5) QEMU ↔ cohsh console correlation (manual)
-During the command-surface checklist, capture both sides and confirm there are no unexpected resets.
-- Confirm tcpdump capture is active for this run before comparing logs; if not, stop and ask the operator to restart with tcpdump enabled.
-- Capture cohsh output (example): `./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen 2>&1 | tee out/manual/cohsh-session.log`
-- Use the QEMU serial log from the same run; if QEMU output is only on the terminal, capture it (example): `scripts/cohesix-build-run.sh ... --transport tcp | tee out/manual/qemu-console.log`
-- Do not mix logs across runs; if any of the three logs (cohsh, QEMU, tcpdump) are missing, re-run the checklist.
-- Fail the run if any unexpected disconnects appear:
-  - QEMU log: `rg -n "audit tcp\\.conn\\.close reason=error|audit tcp\\.send\\.partial|audit tcp\\.send\\.error|console\\.emit\\.failed" out/cohesix/logs/qemu-live-*.log`
-  - cohsh log: `rg -n "\\[cohsh\\]\\[tcp\\] connection lost" out/manual/cohsh-session.log`
-- tcpdump: `rg -n "Flags \\[R\\]" <tcpdump-log-path>` (use the confirmed path from preflight)
-- Acceptable disconnects: explicit `quit` (reason=`quit`/`eof`) or pool bench with injected short writes. Anything else is a failure.
+### 4) TCP reliability & performance (QEMU)
+Run while QEMU is up:
+- Repeat `tcp-diag` 5–10 times and record results (example: `... | tee logs/tcp-diag.log`).
+- Run `pool bench --duration 30s --clients 8` and record throughput/latency (example: `... | tee logs/pool-bench.log`).
+- Reasonable acceptance:
+  - `tcp-diag` has zero failures.
+  - `pool bench` shows non-zero throughput and stable latency.
+  - Any >20% regression vs the last baseline on the same host is a defect to investigate.
+- Capture logs:
+  - cohsh: `logs/cohsh-session.log`
+  - QEMU serial: `logs/qemu-console.log`
+  - tcpdump: recorded tcpdump log path
+- Fail if any unexpected disconnects:
+  - QEMU log: `rg -n "audit tcp\\.conn\\.close reason=error|audit tcp\\.send\\.partial|audit tcp\\.send\\.error|console\\.emit\\.failed" logs/qemu-console.log`
+  - cohsh log: `rg -n "\\[cohsh\\]\\[tcp\\] connection lost" logs/cohsh-session.log`
+  - tcpdump: `rg -n "Flags \\[R\\]" <tcpdump-log-path>`
+- Acceptable disconnects: explicit `quit` or EOF; anything else is a defect.
 - `audit tcp.flush.blocked` lines before any client connects are expected; do not treat them as failures.
 
-### 6) SwarmUI console grammar alignment
-- `cargo test -p swarmui --test transcript`
-- `cargo test -p swarmui --test security`
-- Manual smoke: run SwarmUI with console transport, connect to the queen session, confirm ACK/ERR/END lines match cohsh fixtures during tail/cat/spawn/kill flows.
+### 5) Host tools integration (QEMU running)
+- QEMU log correlation (required):
+  - Record a short note per tool in `logs/host-tool-runs.md` with start/stop time and tool name.
+  - In the QEMU log, locate matching `audit tcp.conn.open`/`audit tcp.conn.close` lines for the same window.
+  - Verify the session ends cleanly (`reason=quit`/`eof`) and no TCP errors are present in that window.
+  - Use: `rg -n "audit tcp\\.conn\\.open|audit tcp\\.conn\\.close|audit tcp\\.send\\.partial|audit tcp\\.send\\.error|console\\.emit\\.failed" logs/qemu-console.log`
+- `cohsh` (already covered in Section 3).
+- `swarmui` live (observe only):
+  - macOS: `./bin/swarmui`
+  - headless Linux: `xvfb-run -a ./bin/swarmui`
+- `swarmui` replay:
+  - `./bin/swarmui --replay-trace "$(pwd)/traces/trace_v0.trace"`
+  - `./bin/swarmui --replay "$(pwd)/traces/trace_v0.hive.cbor"`
+  - headless Linux: prefix with `xvfb-run -a`
+- `cas-tool`:
+  - `./bin/cas-tool pack --epoch v1 --input ./traces/trace_v0.trace --out-dir ./out/cas/v1`
+  - `./bin/cas-tool upload --bundle ./out/cas/v1 --host 127.0.0.1 --port 31337 --auth-token changeme --ticket "$QUEEN_TICKET"`
+- `gpu-bridge-host`:
+  - `./bin/gpu-bridge-host --mock --list`
+  - Optional NVML: `./bin/gpu-bridge-host --list` (requires `--features nvml`)
+- `host-sidecar-bridge`:
+  - `./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider nvidia`
+  - `./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme` (requires `/host` enabled in `configs/root_task.toml`)
+- Deterministic replay via cohsh (no QEMU needed): `./bin/cohsh --transport mock --replay-trace ./traces/trace_v0.trace`
 
-### 7) In-session selftests (manual, QEMU)
-After a QEMU boot with TCP transport:
-- `./out/cohesix/host-tools/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen`
-- Run: `test --mode quick` during command surface, then run `test --mode full` in a fresh boot (before any worker spawns).
-- Selftest scripts live under `/proc/tests/` and must pass after console, namespace, or policy changes.
+### 6) Regression pack (full-stack, recommended before release)
+- `scripts/cohsh/run_regression_batch.sh`
+- The batch archives logs under `out/regression-logs/<batch>/<script>.{qemu,out}.log`.
+- Verify logs show no unexpected errors or disconnects.
 
-## Release (Milestone 20h bundle validation)
-Run after steps 1-7. Validate each tarball in a clean temp directory. Follow the
-preflight tcpdump requirement for any QEMU TCP run and record the log path.
-
-### macOS 26.x bundle
-- Extract the bundle: `mkdir -p /tmp/cohesix-release && tar -xzf releases/Cohesix-0.1-Alpha-MacOS.tar.gz -C /tmp/cohesix-release`
-- Enter the bundle: `cd /tmp/cohesix-release/Cohesix-0.1-Alpha`
-- Install runtime deps if missing: `./scripts/setup_environment.sh`
-- Trace replay (no QEMU needed): `./bin/cohsh --transport mock --replay-trace ./traces/trace_v0.trace`
-- Boot QEMU (use non-default UDP/SMOKE ports if needed): `TCP_PORT=31337 UDP_PORT=31348 SMOKE_PORT=31349 ./qemu/run.sh | tee qemu.log`
-- cohsh actions and capture output:
-  - `printf "help\nspawn heartbeat ticks=100\ntail /log/queen.log\nquit\n" | COHSH_AUTH_TOKEN=changeme ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen | tee cohsh.log`
-- SwarmUI live (observe only; run ~5s then stop): `SWARMUI_TRANSPORT=console SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 SWARMUI_AUTH_TOKEN=changeme ./bin/swarmui | tee swarmui-live.log`
-- SwarmUI replay (run ~5s then stop): `./bin/swarmui --replay-trace "$(pwd)/traces/trace_v0.trace" | tee swarmui-replay.log`
-- Stop QEMU after logs show stable output.
-
-### Ubuntu 24 (aarch64) bundle
-- Extract the bundle: `mkdir -p /tmp/cohesix-release && tar -xzf releases/Cohesix-0.1-Alpha-linux.tar.gz -C /tmp/cohesix-release`
-- Enter the bundle: `cd /tmp/cohesix-release/Cohesix-0.1-Alpha-linux`
-- Install runtime deps if missing: `./scripts/setup_environment.sh`
-- Ensure headless UI support: `sudo apt-get install -y xvfb` (if `xvfb-run` missing)
-- Trace replay (no QEMU needed): `./bin/cohsh --transport mock --replay-trace ./traces/trace_v0.trace`
-- Boot QEMU: `TCP_PORT=31337 UDP_PORT=31348 SMOKE_PORT=31349 ./qemu/run.sh | tee qemu.log`
-- cohsh actions (same as macOS):
-  - `printf "help\nspawn heartbeat ticks=100\ntail /log/queen.log\nquit\n" | COHSH_AUTH_TOKEN=changeme ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen | tee cohsh.log`
-- SwarmUI live (headless; run ~5s then stop): `SWARMUI_TRANSPORT=console SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 SWARMUI_AUTH_TOKEN=changeme xvfb-run -a ./bin/swarmui | tee swarmui-live.log`
-- SwarmUI replay (headless; run ~5s then stop): `xvfb-run -a ./bin/swarmui --replay-trace "$(pwd)/traces/trace_v0.trace" | tee swarmui-replay.log`
-- Stop QEMU after logs show stable output.
+### 7) Release bundle validation (macOS + Ubuntu)
+Run Sections 3–5 using the extracted bundle in a clean temp directory (not the repo checkout).
+- macOS bundle: `releases/Cohesix-0.1-Alpha-MacOS.tar.gz`
+- Ubuntu bundle: `releases/Cohesix-0.1-Alpha-linux.tar.gz`
+- Ensure headless Linux uses `xvfb-run` for SwarmUI.
 
 ## Trace replay limits
 <!-- coh-rtc:trace-policy:start -->
