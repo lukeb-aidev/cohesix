@@ -308,3 +308,16 @@ document.getElementById("hive-stop")?.addEventListener("click", stopHive);
 document
   .getElementById("hive-reset-view")
   ?.addEventListener("click", () => hiveController?.resetView());
+
+const autoStartHiveReplay = async () => {
+  const res = await invoke("swarmui_mode");
+  if (!res.ok) {
+    return;
+  }
+  if (res.result?.hive_replay) {
+    setStatus("hive-status", "Hive replay booting...");
+    await startHive();
+  }
+};
+
+autoStartHiveReplay();

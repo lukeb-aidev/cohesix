@@ -561,7 +561,7 @@ main() {
         --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md"
 
     SEL4_COMPONENT_PACKAGES=(nine-door worker-heart worker-gpu)
-    HOST_TOOL_PACKAGES=(gpu-bridge-host host-sidecar-bridge cas-tool)
+    HOST_TOOL_PACKAGES=(gpu-bridge-host cas-tool)
     if has_root_task_feature "cohesix-dev"; then
         HOST_TOOL_PACKAGES+=(swarmui)
     fi
@@ -576,6 +576,14 @@ main() {
 
     log "Building host tooling via: cargo ${HOST_BUILD_ARGS[*]}"
     cargo "${HOST_BUILD_ARGS[@]}"
+
+    HOST_SIDECAR_ARGS=(build)
+    if (( ${#PROFILE_ARGS[@]} > 0 )); then
+        HOST_SIDECAR_ARGS+=("${PROFILE_ARGS[@]}")
+    fi
+    HOST_SIDECAR_ARGS+=(-p host-sidecar-bridge --features tcp)
+    log "Building host-sidecar-bridge with TCP support via: cargo ${HOST_SIDECAR_ARGS[*]}"
+    cargo "${HOST_SIDECAR_ARGS[@]}"
 
     COHSH_BUILD_ARGS=(build)
     if (( ${#PROFILE_ARGS[@]} > 0 )); then

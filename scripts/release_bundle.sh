@@ -126,7 +126,7 @@ build_linux_host_tools() {
       ;;
   esac
 
-  local host_packages=(gpu-bridge-host host-sidecar-bridge cas-tool swarmui)
+  local host_packages=(gpu-bridge-host cas-tool swarmui)
   local build_args=(build)
   if (( ${#profile_args[@]} > 0 )); then
     build_args+=("${profile_args[@]}")
@@ -138,6 +138,15 @@ build_linux_host_tools() {
 
   echo "[release] Building Linux host tools via: cargo ${build_args[*]}"
   cargo "${build_args[@]}"
+
+  local sidecar_args=(build)
+  if (( ${#profile_args[@]} > 0 )); then
+    sidecar_args+=("${profile_args[@]}")
+  fi
+  sidecar_args+=(--target "$target" -p host-sidecar-bridge --features tcp)
+
+  echo "[release] Building Linux host-sidecar-bridge with TCP support via: cargo ${sidecar_args[*]}"
+  cargo "${sidecar_args[@]}"
 
   local cohsh_args=(build)
   if (( ${#profile_args[@]} > 0 )); then
@@ -261,6 +270,7 @@ EOF
   chmod +x "${bundle_dir}/scripts/setup_environment.sh"
 
   cp -p "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace" "${bundle_dir}/traces/trace_v0.trace"
+  cp -p "${ROOT_DIR}/tests/fixtures/traces/trace_v0.hive.cbor" "${bundle_dir}/traces/trace_v0.hive.cbor"
   RELEASE_NAME="$bundle_name" python3 - <<'PY'
 import hashlib
 import os
@@ -270,6 +280,9 @@ release = os.environ["RELEASE_NAME"]
 trace = Path("releases") / release / "traces" / "trace_v0.trace"
 digest = hashlib.sha256(trace.read_bytes()).hexdigest()
 (trace.parent / "trace_v0.trace.sha256").write_text(digest + "\n", encoding="utf-8")
+hive = Path("releases") / release / "traces" / "trace_v0.hive.cbor"
+hive_digest = hashlib.sha256(hive.read_bytes()).hexdigest()
+(hive.parent / "trace_v0.hive.cbor.sha256").write_text(hive_digest + "\n", encoding="utf-8")
 PY
 
   cp -R "${ROOT_DIR}/apps/swarmui/frontend/." "${bundle_dir}/ui/swarmui/"
@@ -367,6 +380,7 @@ require_file "${ROOT_DIR}/README.md"
 require_file "${ROOT_DIR}/LICENSE.txt"
 require_file "${ROOT_DIR}/configs/root_task.toml"
 require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace"
+require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.hive.cbor"
 require_file "${ROOT_DIR}/scripts/setup_environment.sh"
 require_dir "${ROOT_DIR}/apps/swarmui/frontend"
 require_dir "${ROOT_DIR}/docs"

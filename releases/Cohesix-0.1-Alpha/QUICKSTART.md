@@ -17,7 +17,7 @@ to the TCP console to drive and observe the system.
 - `configs/` - manifest inputs for host tools (includes `root_task.toml` for ticket minting).
 - `image/` - prebuilt VM artifacts (elfloader, kernel, rootserver, CPIO, manifest).
 - `qemu/run.sh` - QEMU launcher for the bundled image.
-- `traces/` - canonical trace plus hash for deterministic replay.
+- `traces/` - canonical trace + hive replay snapshot (and hashes) for deterministic replay.
 - `ui/swarmui/` - SwarmUI frontend assets.
 - `docs/` - background docs for curious readers (architecture, interfaces, roles).
 - `README.md` - high-level project overview.
@@ -30,6 +30,32 @@ to the TCP console to drive and observe the system.
 - `host-sidecar-bridge` - publish host providers into `/host` (optional).
 See `docs/HOST_TOOLS.md` for details.
 
+## Optional host tool demos
+These are safe demo commands to prove the host tooling works. Live uploads require QEMU to be running.
+
+### cas-tool (pack + upload)
+```bash
+./bin/cas-tool pack --epoch v1 --input ./traces/trace_v0.trace --out-dir ./out/cas/v1
+./bin/cas-tool upload --bundle ./out/cas/v1 --host 127.0.0.1 --port 31337 \
+  --auth-token changeme --ticket "$QUEEN_TICKET"
+```
+
+### gpu-bridge-host (mock list)
+```bash
+./bin/gpu-bridge-host --mock --list
+```
+NVML discovery requires rebuilding with `--features nvml`.
+
+### host-sidecar-bridge (mock + live)
+```bash
+./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider nvidia
+```
+Live publish over TCP (bundle includes TCP support):
+```bash
+./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
+```
+The `/host` namespace must be enabled in `configs/root_task.toml` for live publishing.
+
 ## Setup host runtime (required once per host)
 Install or verify runtime dependencies (QEMU + SwarmUI runtime libs):
 ```bash
@@ -40,7 +66,8 @@ On Ubuntu this uses `apt-get` (via `sudo` if needed). On macOS it uses Homebrew.
 ## Run the live hive demo (read-only UI)
 You need two terminals:
 - Terminal 1: QEMU (keeps the VM running).
-- Terminal 2: either `cohsh` or SwarmUI. Use one at a time; they should not be used simultaneously.
+  - Note: Qemu will show a serial terminal, used for core seL4 diagnostics. This is NOT the main user interface.
+- Terminal 2: for either `cohsh` or SwarmUI. Use one at a time; they should not be used simultaneously.
 
 1. Boot the VM:
    ```bash
@@ -52,19 +79,7 @@ You need two terminals:
    ```
    The default console auth token is `changeme`. If you see `ERR AUTH`, set
    `COHSH_AUTH_TOKEN` or pass `--auth-token`.
-3. In cohsh, run a few actions (for example):
-   - `help`
-   - `spawn heartbeat ticks=100`
-   - `tail /log/queen.log`
-4. Launch SwarmUI:
-   ```bash
-   ./bin/swarmui
-   ```
-
-SwarmUI is observational in live mode; issue mutations only via cohsh.
-
-## cohsh command examples
-Examples for the built-in command surface (use in the cohsh prompt):
+3. In cohsh, run a few actions:
 - `help` — show the command list.
 - `attach queen` — attach to the queen role.
 - `login queen` — alias of attach.
@@ -84,29 +99,33 @@ Examples for the built-in command surface (use in the cohsh prompt):
 - `mount ninedoor /ninedoor` — mount the NineDoor namespace.
 - `quit` — exit cohsh.
 
-## Run the deterministic replay demo
-Canonical trace location:
-- `traces/trace_v0.trace`
-- `traces/trace_v0.trace.sha256`
+4. Now, "quit" from cohsh and launch SwarmUI if you use Mac OS or Gnome:
+   ```bash
+   ./bin/swarmui
+   ```
+## Run the SwarmUI deterministic replay demo
+Quit SwarmUI
 
-Replay via cohsh (mock transport is required for trace replay):
-```bash
-./bin/cohsh --transport mock --replay-trace ./traces/trace_v0.trace
-```
-
-Replay via SwarmUI:
 ```bash
 ./bin/swarmui --replay-trace "$(pwd)/traces/trace_v0.trace"
 ```
 
-## Verification note
-Already verified for this bundle at a high level: Build Integrity, CLI Semantics, Role
-Enforcement, Concurrency, Regression, and Packaging (Cohesix Test Plan phases).
-You are expected to run the demo steps above and observe that SwarmUI matches cohsh output.
+SwarmUI auto-starts the Live Hive replay when `--replay-trace` is used — no Demo button required.
+The replay should show:
+- multiple agents (queen + heart/gpu workers) drifting in clusters,
+- pollen streams flowing toward the queen on telemetry bursts,
+- heat glows around active agents,
+- red error pulses when GPU/heartbeat faults occur.
+
+Canonical trace location:
+- `traces/trace_v0.trace`
+- `traces/trace_v0.trace.sha256`
+Hive replay snapshot (used by SwarmUI for Live Hive visuals):
+- `traces/trace_v0.hive.cbor`
+- `traces/trace_v0.hive.cbor.sha256`
+
 
 ## Ports and signals
 - TCP console: `127.0.0.1:31337`
 - UDP echo test: `127.0.0.1:31338`
 - TCP smoke test: `127.0.0.1:31339`
-
-The QEMU launcher prints the ready line and connection hints once the console is available.

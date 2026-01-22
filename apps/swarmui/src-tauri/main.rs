@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use serde::Serialize;
 use tauri::State;
 
 use cohsh::ticket_mint::{mint_ticket_from_config, mint_ticket_from_secret, TicketMintRequest};
@@ -156,6 +157,14 @@ impl SwarmUiService {
 
 struct AppState {
     backend: Mutex<SwarmUiService>,
+    mode: SwarmUiMode,
+}
+
+#[derive(Clone, Serialize)]
+struct SwarmUiMode {
+    trace_replay: bool,
+    hive_replay: bool,
+    offline: bool,
 }
 
 struct MintArgs {
@@ -257,6 +266,11 @@ fn swarmui_hive_reset(
 #[tauri::command]
 fn swarmui_mint_ticket(role: String, subject: Option<String>) -> Result<String, String> {
     mint_ticket_for_role(&role, subject.as_deref(), None, None)
+}
+
+#[tauri::command]
+fn swarmui_mode(state: State<'_, AppState>) -> SwarmUiMode {
+    state.mode.clone()
 }
 
 fn parse_replay_path(args: &[String]) -> Option<PathBuf> {
@@ -439,6 +453,8 @@ fn main() {
     if replay_path.is_some() {
         config.offline = true;
     }
+    let trace_replay = trace_replay_path.is_some();
+    let offline = config.offline;
     let host = env::var("SWARMUI_9P_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
     let port = env::var("SWARMUI_9P_PORT")
         .ok()
@@ -449,12 +465,14 @@ fn main() {
         .trim()
         .to_ascii_lowercase();
     let timeout = Duration::from_secs(2);
+    let mut trace_replay_resolved = None;
     let mut backend = if let Some(path) = trace_replay_path.clone() {
         let resolved = if path.is_relative() {
-            data_dir.join("traces").join(path)
+            data_dir.join("traces").join(&path)
         } else {
             path
         };
+        trace_replay_resolved = Some(resolved.clone());
         let payload = fs::read(&resolved)
             .unwrap_or_else(|err| panic!("failed to read trace {}: {err}", resolved.display()));
         let policy = TracePolicy::new(
@@ -491,6 +509,19 @@ fn main() {
             other => panic!("unsupported SWARMUI_TRANSPORT '{other}' (use console or 9p)"),
         }
     };
+    let mut hive_replay_loaded = false;
+    if let Some(resolved) = trace_replay_resolved.as_ref() {
+        let hive_path = resolved.with_extension("hive.cbor");
+        if hive_path.is_file() {
+            let payload = fs::read(&hive_path).unwrap_or_else(|err| {
+                panic!("failed to read hive replay {}: {err}", hive_path.display())
+            });
+            backend
+                .load_hive_replay(&payload)
+                .unwrap_or_else(|err| panic!("failed to load hive replay: {err}"));
+            hive_replay_loaded = true;
+        }
+    }
     if let Some(path) = replay_path {
         let resolved = if path.is_relative() {
             data_dir.join("snapshots").join(path)
@@ -502,9 +533,15 @@ fn main() {
         backend
             .load_hive_replay(&payload)
             .unwrap_or_else(|err| panic!("failed to load replay: {err}"));
+        hive_replay_loaded = true;
     }
     let state = AppState {
         backend: Mutex::new(backend),
+        mode: SwarmUiMode {
+            trace_replay,
+            hive_replay: hive_replay_loaded,
+            offline,
+        },
     };
 
     tauri::Builder::default()
@@ -519,6 +556,7 @@ fn main() {
             swarmui_hive_poll,
             swarmui_hive_reset,
             swarmui_mint_ticket,
+            swarmui_mode,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run SwarmUI");
