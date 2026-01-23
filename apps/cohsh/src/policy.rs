@@ -195,10 +195,25 @@ struct TraceTomlSection {
     max_bytes: u32,
 }
 
-/// Return the default policy path under the repository root.
+/// Return the default policy path under the working directory or bundle root.
 pub fn default_policy_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../out/cohsh_policy.toml")
+    if let Ok(cwd) = std::env::current_dir() {
+        let candidate = cwd.join("out/cohsh_policy.toml");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(bin_dir) = exe.parent() {
+            if let Some(root) = bin_dir.parent() {
+                let candidate = root.join("out/cohsh_policy.toml");
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out/cohsh_policy.toml")
 }
 
 /// Load and validate the cohsh policy from disk, enforcing hash alignment.

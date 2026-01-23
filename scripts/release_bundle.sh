@@ -195,6 +195,7 @@ bundle_release() {
     "${bundle_dir}/bin" \
     "${bundle_dir}/configs" \
     "${bundle_dir}/image" \
+    "${bundle_dir}/out" \
     "${bundle_dir}/qemu" \
     "${bundle_dir}/scripts" \
     "${bundle_dir}/traces" \
@@ -208,6 +209,9 @@ bundle_release() {
   cp -p "${OUT_DIR}/cohesix-system.cpio" "${bundle_dir}/image/cohesix-system.cpio"
   cp -p "${STAGING_DIR}/cohesix/manifest.json" "${bundle_dir}/image/manifest.json"
   cp -p "${ROOT_DIR}/configs/root_task.toml" "${bundle_dir}/configs/root_task.toml"
+  cp -p "${ROOT_DIR}/out/cas_manifest_template.json" "${bundle_dir}/out/cas_manifest_template.json"
+  cp -p "${ROOT_DIR}/out/cohsh_policy.toml" "${bundle_dir}/out/cohsh_policy.toml"
+  cp -p "${ROOT_DIR}/out/cohsh_policy.toml.sha256" "${bundle_dir}/out/cohsh_policy.toml.sha256"
 
   if [[ -x "${ROOT_DIR}/scripts/lib/detect_gic_version.py" ]]; then
     GIC_CFG="${HOME}/seL4/build/kernel/gen_config/kernel/gen_config.h"

@@ -43,11 +43,11 @@ You need two terminals:
   - Note: Qemu will show a serial terminal, used for core seL4 diagnostics. This is NOT the main user interface.
 - Terminal 2: for either `cohsh` or SwarmUI. Use one at a time; they should not be used simultaneously.
 
-1. Boot the VM:
+1. In Terminal 1, Boot the VM:
    ```bash
    ./qemu/run.sh
    ```
-2. Connect with cohsh (control-plane actions are CLI-driven):
+2. In Terminal 2, connect with cohsh (control-plane actions are CLI-driven):
    ```bash
    ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
    ```
@@ -55,20 +55,21 @@ You need two terminals:
    `COHSH_AUTH_TOKEN` or pass `--auth-token`.
 3. In cohsh, run a few actions:
 - `help` — show the command list.
-- `attach queen` — attach to the queen role.
-- `login queen` — alias of attach.
-- `detach` — close the current session.
+- `attach queen` — attach to the queen role (only if you started cohsh without `--role`).
+- `login queen` — alias of attach (same rule as above).
+- `detach` — close the current session (then use `attach` to reconnect).
 - `tail /log/queen.log` — stream the queen log.
 - `log` — shorthand for `tail /log/queen.log`.
 - `ping` — report attachment status.
 - `test --mode quick` — run quick self-tests.
-- `pool bench --duration 2s --clients 4` — run a short pool benchmark.
+- `pool bench path=/log/queen.log ops=200 batch=4 payload_bytes=64` — run a short pool benchmark.
 - `tcp-diag` — debug TCP connectivity without protocol traffic.
 - `ls /` — list root namespace entries.
 - `cat /log/queen.log` — read the queen log once.
 - `echo hello > /log/queen.log` — append a line to the log.
 - `spawn heartbeat ticks=100` — request a heartbeat worker.
-- `kill 1` — terminate worker id 1.
+- `ls /worker` — list current worker IDs (e.g., `worker-1` or `worker-2`).
+- `kill worker-1` — terminate the worker id you just listed (replace with the actual id).
 - `bind /queen /host/queen` — bind a path.
 - `mount ninedoor /ninedoor` — mount the NineDoor namespace.
 - `quit` — exit cohsh.
@@ -96,7 +97,7 @@ Headless Linux replay:
 xvfb-run -a ./bin/swarmui --replay-trace "$(pwd)/traces/trace_v0.trace"
 ```
 
-SwarmUI auto-starts the Live Hive replay when `--replay-trace` is used — no Demo button required.
+SwarmUI auto-starts the Live Hive replay when launched with `--replay-trace` or `--replay` — no Demo button required.
 The replay should show:
 - multiple agents (queen + heart/gpu workers) drifting in clusters,
 - pollen streams flowing toward the queen on telemetry bursts,
@@ -114,9 +115,20 @@ Hive replay snapshot (used by SwarmUI for Live Hive visuals):
 These are safe demo commands to prove the host tooling works. Live uploads require QEMU to be running.
 
 ### cas-tool (pack + upload)
+Requires a signing key and a payload size aligned to `cas.store.chunk_bytes` (128 bytes). Example:
 ```bash
-./bin/cas-tool pack --epoch v1 --input ./traces/trace_v0.trace --out-dir ./out/cas/v1
-./bin/cas-tool upload --bundle ./out/cas/v1 --host 127.0.0.1 --port 31337 \
+python3 - <<'PY'
+from pathlib import Path
+src = Path("traces/trace_v0.trace")
+dst = Path("out/cas/trace_v0.padded")
+data = src.read_bytes()
+pad = (-len(data)) % 128
+dst.write_bytes(data + b"\0" * pad)
+print(f"padded {len(data)} -> {len(data) + pad} bytes")
+PY
+./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 \
+  --signing-key <path>
+./bin/cas-tool upload --bundle ./out/cas/1 --host 127.0.0.1 --port 31337 \
   --auth-token changeme --ticket "$QUEEN_TICKET"
 ```
 

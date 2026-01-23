@@ -96,7 +96,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `61c0fcf26398e77b38f9ea82dc2f1a619bd3151de43f90acab748b9a7dc88435`
+- `manifest.sha256`: `02b6fc5fff3951a10b5b9cb2a97d4f145d805e3fc841d4d047b62c2ab447ef62`
 
 ### Namespace mounts (generated)
 - (none)
@@ -121,9 +121,10 @@
 - `sidecars.lora.adapters`: `(none)`
 
 ### Ecosystem section (generated)
-- `ecosystem.host.enable`: `false`
+- `ecosystem.host.enable`: `true`
 - `ecosystem.host.mount_at`: `/host`
-- `ecosystem.host.providers`: `(none)`
+- `ecosystem.host.providers`: `systemd`, `k8s`, `nvidia`
+- `/host` namespace mounted at `/host` when enabled.
 - `ecosystem.audit.enable`: `false`
 - `ecosystem.audit.journal_max_bytes`: `8192`
 - `ecosystem.audit.decisions_max_bytes`: `4096`
@@ -141,4 +142,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `61c0fcf26398e77b38f9ea82dc2f1a619bd3151de43f90acab748b9a7dc88435`)._
+_Generated from `configs/root_task.toml` (sha256: `02b6fc5fff3951a10b5b9cb2a97d4f145d805e3fc841d4d047b62c2ab447ef62`)._

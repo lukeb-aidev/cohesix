@@ -207,7 +207,8 @@ QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" \
     -kernel "$ELFLOADER" \
     -initrd "$ROOTFS_CPIO" \
     -device loader,file="$KERNEL",addr=0x70000000,force-raw=on \
-    -device loader,file="$ROOT_TASK",addr=0x80000000,force-raw=on)
+    -device loader,file="$ROOT_TASK",addr=0x80000000,force-raw=on \
+    -global virtio-mmio.force-legacy=off)
 
 if [[ -z "$TCP_PORT" ]]; then
     TCP_PORT="$DEFAULT_TCP_PORT"
@@ -220,7 +221,7 @@ fi
 
 NETWORK_ARGS=(
     -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT},hostfwd=tcp:127.0.0.1:${SELFTEST_TCP_PORT}-10.0.2.15:${SELFTEST_TCP_PORT}"
-    -device virtio-net-device,netdev=net0
+    -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0
 )
 log "Forwarding TCP console on 127.0.0.1:${TCP_PORT} (QEMU user networking)"
 log "Connect using: nc 127.0.0.1 ${TCP_PORT}"

@@ -511,19 +511,51 @@ impl NineDoorBridge {
             return Ok(());
         }
         if self.host.entry_value(path).is_some() {
-            self.log_host_write(path, None, HostWriteOutcome::Denied, None);
+            if !self.is_queen() {
+                self.log_host_write(path, None, HostWriteOutcome::Denied, None);
+                if self.audit.enabled {
+                    let role = self.role_label();
+                    let ticket = String::from(self.ticket_label());
+                    self.audit.record_control(
+                        path,
+                        payload,
+                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                        role,
+                        ticket.as_str(),
+                    )?;
+                }
+                return Err(NineDoorBridgeError::Permission);
+            }
+            let role = self.role_label();
+            let ticket = String::from(self.ticket_label());
+            let decision = self.apply_policy_gate(path)?;
+            match decision {
+                PolicyGateDecision::Denied(_) => {
+                    if self.audit.enabled {
+                        self.audit.record_control(
+                            path,
+                            payload,
+                            ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                            role,
+                            ticket.as_str(),
+                        )?;
+                    }
+                    return Err(NineDoorBridgeError::Permission);
+                }
+                PolicyGateDecision::Allowed(_) => {}
+            }
+            self.host.update_value(path, payload);
+            self.log_host_write(path, None, HostWriteOutcome::Allowed, Some(payload.len()));
             if self.audit.enabled {
-                let role = self.role_label();
-                let ticket = String::from(self.ticket_label());
                 self.audit.record_control(
                     path,
                     payload,
-                    ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                    ControlOutcome::ok(),
                     role,
                     ticket.as_str(),
                 )?;
             }
-            return Err(NineDoorBridgeError::Permission);
+            return Ok(());
         }
         if let Some(kind) = self.sidecars.kind_for_path(segments.as_slice()) {
             if !self.sidecar_allowed(kind, segments.as_slice(), SidecarAccess::Write) {

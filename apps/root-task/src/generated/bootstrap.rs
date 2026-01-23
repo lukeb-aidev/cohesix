@@ -9,7 +9,7 @@ use cohesix_ticket::Role;
 
 pub const TICKET_TABLE_SHA256: &str = "fd0ebff1d0b4cfcc2a03a1015578545dfa68f0240e782b60ad7956c2492972eb";
 pub const NAMESPACE_TABLE_SHA256: &str = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
-pub const AUDIT_TABLE_SHA256: &str = "b815bcc6b6024671c8b7061f1e1d028c132f830067fb20276b0ec10fd7d769b9";
+pub const AUDIT_TABLE_SHA256: &str = "deefd013d7b39e230f45e742d966eabba5340f1d6bcd5de6438da03058332498";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec { role: Role::Queen, secret: "bootstrap" },
@@ -308,10 +308,13 @@ pub const OBSERVABILITY_CONFIG: ObservabilityConfig = ObservabilityConfig { proc
 
 pub const UI_PROVIDER_CONFIG: UiProviderConfig = UiProviderConfig { proc_9p: UiProc9pConfig { sessions: true, outstanding: true, short_writes: true }, proc_ingest: UiProcIngestConfig { p50_ms: true, p95_ms: true, backpressure: true }, policy_preflight: UiPolicyPreflightConfig { req: false, diff: false }, updates: UiUpdatesConfig { manifest: true, status: true } };
 
-pub const HOST_PROVIDERS: [HostProvider; 0] = [
+pub const HOST_PROVIDERS: [HostProvider; 3] = [
+    HostProvider::Systemd,
+    HostProvider::K8s,
+    HostProvider::Nvidia,
 ];
 
-pub const HOST_CONFIG: HostConfig = HostConfig { enable: false, mount_at: "/host", providers: &HOST_PROVIDERS };
+pub const HOST_CONFIG: HostConfig = HostConfig { enable: true, mount_at: "/host", providers: &HOST_PROVIDERS };
 
 pub const MODBUS_ADAPTERS: [SidecarBusAdapter; 0] = [
 ];
@@ -346,7 +349,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = [
 pub const INITIAL_AUDIT_LINES: [&str; 23] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=61c0fcf26398e77b38f9ea82dc2f1a619bd3151de43f90acab748b9a7dc88435",
+    "manifest.sha256=02b6fc5fff3951a10b5b9cb2a97d4f145d805e3fc841d4d047b62c2ab447ef62",
     "manifest.tickets=5",
     "manifest.namespaces=0 role_isolation=true",
     "manifest.secure9p.msize=8192",

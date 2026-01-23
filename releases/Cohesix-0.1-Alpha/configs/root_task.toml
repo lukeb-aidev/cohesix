@@ -191,8 +191,8 @@ enable = false
 mount_at = "/lora"
 
 [ecosystem.host]
-enable = false
-providers = []
+enable = true
+providers = ["systemd", "k8s", "nvidia"]
 mount_at = "/host"
 
 [ecosystem.audit]
