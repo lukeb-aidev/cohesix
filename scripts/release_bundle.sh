@@ -197,6 +197,7 @@ bundle_release() {
     "${bundle_dir}/image" \
     "${bundle_dir}/out" \
     "${bundle_dir}/qemu" \
+    "${bundle_dir}/resources/fixtures" \
     "${bundle_dir}/scripts" \
     "${bundle_dir}/traces" \
     "${bundle_dir}/ui/swarmui" \
@@ -209,6 +210,7 @@ bundle_release() {
   cp -p "${OUT_DIR}/cohesix-system.cpio" "${bundle_dir}/image/cohesix-system.cpio"
   cp -p "${STAGING_DIR}/cohesix/manifest.json" "${bundle_dir}/image/manifest.json"
   cp -p "${ROOT_DIR}/configs/root_task.toml" "${bundle_dir}/configs/root_task.toml"
+  cp -p "${ROOT_DIR}/resources/fixtures/cas_signing_key.hex" "${bundle_dir}/resources/fixtures/cas_signing_key.hex"
   cp -p "${ROOT_DIR}/out/cas_manifest_template.json" "${bundle_dir}/out/cas_manifest_template.json"
   cp -p "${ROOT_DIR}/out/cohsh_policy.toml" "${bundle_dir}/out/cohsh_policy.toml"
   cp -p "${ROOT_DIR}/out/cohsh_policy.toml.sha256" "${bundle_dir}/out/cohsh_policy.toml.sha256"
@@ -312,6 +314,7 @@ PY
 
   cp -p "${ROOT_DIR}/docs/QUICKSTART.md" "${bundle_dir}/QUICKSTART.md"
   cp -p "${ROOT_DIR}/README.md" "${bundle_dir}/README.md"
+  cp -p "${ROOT_DIR}/releases/RELEASE_NOTES-${RELEASE_VERSION}.md" "${bundle_dir}/RELEASE_NOTES.md"
   cp -p "${ROOT_DIR}/LICENSE.txt" "${bundle_dir}/LICENSE.txt"
   printf "%s\n" "${RELEASE_VERSION}" > "${bundle_dir}/VERSION.txt"
 
@@ -383,7 +386,9 @@ require_file "${STAGING_DIR}/cohesix/manifest.json"
 require_file "${ROOT_DIR}/docs/QUICKSTART.md"
 require_file "${ROOT_DIR}/README.md"
 require_file "${ROOT_DIR}/LICENSE.txt"
+require_file "${ROOT_DIR}/releases/RELEASE_NOTES-${RELEASE_VERSION}.md"
 require_file "${ROOT_DIR}/configs/root_task.toml"
+require_file "${ROOT_DIR}/resources/fixtures/cas_signing_key.hex"
 require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace"
 require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.hive.cbor"
 require_file "${ROOT_DIR}/scripts/setup_environment.sh"
@@ -398,7 +403,7 @@ if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
 fi
 
 if [[ "$LINUX_ONLY" -ne 1 ]]; then
-  bundle_release "$RELEASE_NAME" "$DEFAULT_HOST_TOOLS_DIR" "${RELEASE_NAME}-MacOS"
+  bundle_release "${RELEASE_NAME}-MacOS" "$DEFAULT_HOST_TOOLS_DIR"
 fi
 
 if [[ "$LINUX_BUNDLE" -eq 1 ]]; then

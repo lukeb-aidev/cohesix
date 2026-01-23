@@ -53,9 +53,9 @@ const readSubject = () => {
 };
 
 const readWorkerId = () => {
-  const raw = document.getElementById("worker-id")?.value || "worker-1";
+  const raw = document.getElementById("worker-id")?.value || "";
   const trimmed = raw.trim();
-  return trimmed.length ? trimmed : "worker-1";
+  return trimmed.length ? trimmed : "";
 };
 
 const renderTranscript = (id, transcript) => {
@@ -133,10 +133,17 @@ document
   ?.addEventListener("click", async () => {
     const session = readSession();
     const workerId = readWorkerId();
+    if (!workerId) {
+      output(
+        "telemetry-output",
+        "ERR TAIL missing worker id (run ls /worker to list active workers)",
+      );
+      return;
+    }
     const res = await invoke("swarmui_tail_telemetry", {
       role: session.role,
       ticket: session.ticket,
-      worker_id: workerId,
+      workerId,
     });
     if (!res.ok) {
       output("telemetry-output", `ERR TAIL ${res.error}`);

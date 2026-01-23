@@ -8,8 +8,8 @@ use super::{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, Names
 use cohesix_ticket::Role;
 
 pub const TICKET_TABLE_SHA256: &str = "fd0ebff1d0b4cfcc2a03a1015578545dfa68f0240e782b60ad7956c2492972eb";
-pub const NAMESPACE_TABLE_SHA256: &str = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
-pub const AUDIT_TABLE_SHA256: &str = "deefd013d7b39e230f45e742d966eabba5340f1d6bcd5de6438da03058332498";
+pub const NAMESPACE_TABLE_SHA256: &str = "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
+pub const AUDIT_TABLE_SHA256: &str = "b9a21e5f066dd62b66b33d0509a841bf22c8dc72e2c1118f34b5fdc0bc4163d4";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec { role: Role::Queen, secret: "bootstrap" },
@@ -19,7 +19,8 @@ pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec { role: Role::WorkerLora, secret: "worker-lora" },
 ];
 
-pub const NAMESPACE_MOUNTS: [NamespaceMount; 0] = [
+pub const NAMESPACE_MOUNTS: [NamespaceMount; 1] = [
+    NamespaceMount { service: "logs", target: &["log"] },
 ];
 
 pub const CACHE_POLICY: CachePolicy = CachePolicy { kernel_ops: true, dma_clean: true, dma_invalidate: true, unify_instructions: false };
@@ -349,9 +350,9 @@ pub const EVENT_PUMP_FDS: [&str; 5] = [
 pub const INITIAL_AUDIT_LINES: [&str; 23] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=02b6fc5fff3951a10b5b9cb2a97d4f145d805e3fc841d4d047b62c2ab447ef62",
+    "manifest.sha256=a85a48e0ae0dc31764953465d2baaa63c0a61018a1b4dc5cfe6e0d313b2c9678",
     "manifest.tickets=5",
-    "manifest.namespaces=0 role_isolation=true",
+    "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
     "manifest.secure9p.walk_depth=8",
     "manifest.secure9p.tags_per_session=16",

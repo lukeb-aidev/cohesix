@@ -68,10 +68,10 @@ You need two terminals:
 - `cat /log/queen.log` — read the queen log once.
 - `echo hello > /log/queen.log` — append a line to the log.
 - `spawn heartbeat ticks=100` — request a heartbeat worker.
-- `ls /worker` — list current worker IDs (e.g., `worker-1` or `worker-2`).
-- `kill worker-1` — terminate the worker id you just listed (replace with the actual id).
+- `ls /worker` — list current worker IDs (do not assume `worker-1`; use what you see).
+- `kill worker-2` — terminate the worker id you just listed (replace with the actual id).
 - `bind /queen /host/queen` — bind a path.
-- `mount ninedoor /ninedoor` — mount the NineDoor namespace.
+- `mount logs /logs` — mount the log service namespace (alias to `/log`).
 - `quit` — exit cohsh.
 
 4. Now, "quit" from cohsh and launch SwarmUI if you use Mac OS or Gnome:
@@ -82,6 +82,7 @@ You need two terminals:
    ```bash
    xvfb-run -a ./bin/swarmui
    ```
+   In SwarmUI, use `ls /worker` in cohsh to find a worker id before clicking “Load telemetry”.
 ## Run the SwarmUI deterministic replay demos
 Quit SwarmUI
 
@@ -115,8 +116,10 @@ Hive replay snapshot (used by SwarmUI for Live Hive visuals):
 These are safe demo commands to prove the host tooling works. Live uploads require QEMU to be running.
 
 ### cas-tool (pack + upload)
-Requires a signing key and a payload size aligned to `cas.store.chunk_bytes` (128 bytes). Example:
+Requires a signing key (bundled at `resources/fixtures/cas_signing_key.hex`) and a payload size aligned to `cas.store.chunk_bytes` (128 bytes). Run the commands below from the bundle root (don’t paste the ``` lines into your shell):
 ```bash
+mkdir -p out/cas
+QUEEN_TICKET=$(./bin/cohsh --mint-ticket --role queen)
 python3 - <<'PY'
 from pathlib import Path
 src = Path("traces/trace_v0.trace")
@@ -126,9 +129,9 @@ pad = (-len(data)) % 128
 dst.write_bytes(data + b"\0" * pad)
 print(f"padded {len(data)} -> {len(data) + pad} bytes")
 PY
-./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 \
-  --signing-key <path>
-./bin/cas-tool upload --bundle ./out/cas/1 --host 127.0.0.1 --port 31337 \
+./bin/cas-tool pack --epoch 1 --input out/cas/trace_v0.padded --out-dir out/cas/1 \
+  --signing-key resources/fixtures/cas_signing_key.hex
+./bin/cas-tool upload --bundle out/cas/1 --host 127.0.0.1 --port 31337 \
   --auth-token changeme --ticket "$QUEEN_TICKET"
 ```
 

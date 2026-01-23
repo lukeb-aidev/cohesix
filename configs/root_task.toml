@@ -51,6 +51,10 @@ std_host_tools = false
 [namespaces]
 role_isolation = true
 
+[[namespaces.mounts]]
+service = "logs"
+target = ["log"]
+
 [sharding]
 enabled = true
 shard_bits = 8
