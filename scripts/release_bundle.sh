@@ -15,6 +15,11 @@ LINUX_BUNDLE=0
 LINUX_ONLY=0
 LINUX_HOST_TARGET="${LINUX_HOST_TARGET:-aarch64-unknown-linux-gnu}"
 LINUX_HOST_TOOLS_DIR="${LINUX_HOST_TOOLS_DIR:-}"
+LINUX_SYNC_HOST="${LINUX_SYNC_HOST:-}"
+LINUX_SYNC_USER="${LINUX_SYNC_USER:-ubuntu}"
+LINUX_SYNC_KEY="${LINUX_SYNC_KEY:-}"
+LINUX_SYNC_REMOTE_DIR="${LINUX_SYNC_REMOTE_DIR:-}"
+LINUX_SYNC_LOCAL_OUT="${LINUX_SYNC_LOCAL_OUT:-}"
 HOST_TOOLS_PROFILE="${HOST_TOOLS_PROFILE:-release}"
 
 usage() {
@@ -31,6 +36,11 @@ Env overrides:
   RELEASE_NAME, RELEASE_VERSION
   LINUX_HOST_TARGET (default: aarch64-unknown-linux-gnu)
   LINUX_HOST_TOOLS_DIR (prebuilt host tools dir; if empty, build from source)
+  LINUX_SYNC_HOST (if set, run scripts/linux_host_tools_sync.sh before bundling)
+  LINUX_SYNC_USER (default: ubuntu)
+  LINUX_SYNC_KEY (optional SSH key path)
+  LINUX_SYNC_REMOTE_DIR (optional remote work dir)
+  LINUX_SYNC_LOCAL_OUT (optional local host-tools dir)
   HOST_TOOLS_PROFILE (default: release)
   ALLOW_CROSS_LINUX_HOST_TOOLS=1 (override host-target guard for cross builds)
 USAGE
@@ -77,10 +87,22 @@ OUT_DIR="${ROOT_DIR}/out/cohesix"
 STAGING_DIR="${OUT_DIR}/staging"
 DEFAULT_HOST_TOOLS_DIR="${OUT_DIR}/host-tools"
 LINUX_HOST_TOOLS_DIR="${LINUX_HOST_TOOLS_DIR:-${OUT_DIR}/host-tools-linux}"
+MACOS_BUNDLE_NAME="${RELEASE_NAME}-MacOS"
+LINUX_BUNDLE_NAME="${RELEASE_NAME}-linux"
 
 fail() {
   echo "$1" >&2
   exit 1
+}
+
+purge_release_paths() {
+  local mac_dir="${RELEASES_DIR}/${MACOS_BUNDLE_NAME}"
+  local linux_dir="${RELEASES_DIR}/${LINUX_BUNDLE_NAME}"
+  local mac_tar="${RELEASES_DIR}/${MACOS_BUNDLE_NAME}.tar.gz"
+  local linux_tar="${RELEASES_DIR}/${LINUX_BUNDLE_NAME}.tar.gz"
+
+  rm -rf "$mac_dir" "$linux_dir"
+  rm -f "$mac_tar" "$linux_tar"
 }
 
 require_file() {
@@ -396,16 +418,38 @@ require_dir "${ROOT_DIR}/apps/swarmui/frontend"
 require_dir "${ROOT_DIR}/docs"
 require_dir "${ROOT_DIR}/scripts/cohsh"
 
+if [[ "$FORCE" -eq 1 ]]; then
+  purge_release_paths
+fi
+
 if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
+  if [[ -n "$LINUX_SYNC_HOST" ]]; then
+    echo "[release] Syncing Linux host tools via scripts/linux_host_tools_sync.sh"
+    sync_args=(--host "$LINUX_SYNC_HOST" --no-bundle)
+    if [[ -n "$LINUX_SYNC_USER" ]]; then
+      sync_args+=(--user "$LINUX_SYNC_USER")
+    fi
+    if [[ -n "$LINUX_SYNC_KEY" ]]; then
+      sync_args+=(--key "$LINUX_SYNC_KEY")
+    fi
+    if [[ -n "$LINUX_SYNC_REMOTE_DIR" ]]; then
+      sync_args+=(--remote-dir "$LINUX_SYNC_REMOTE_DIR")
+    fi
+    if [[ -n "$LINUX_SYNC_LOCAL_OUT" ]]; then
+      sync_args+=(--local-out "$LINUX_SYNC_LOCAL_OUT")
+      LINUX_HOST_TOOLS_DIR="$LINUX_SYNC_LOCAL_OUT"
+    fi
+    "${ROOT_DIR}/scripts/linux_host_tools_sync.sh" "${sync_args[@]}"
+  fi
   if [[ ! -d "$LINUX_HOST_TOOLS_DIR" || -z "$(ls -A "$LINUX_HOST_TOOLS_DIR" 2>/dev/null)" ]]; then
     build_linux_host_tools "$LINUX_HOST_TARGET" "$LINUX_HOST_TOOLS_DIR" "$HOST_TOOLS_PROFILE"
   fi
 fi
 
 if [[ "$LINUX_ONLY" -ne 1 ]]; then
-  bundle_release "${RELEASE_NAME}-MacOS" "$DEFAULT_HOST_TOOLS_DIR"
+  bundle_release "${MACOS_BUNDLE_NAME}" "$DEFAULT_HOST_TOOLS_DIR"
 fi
 
 if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
-  bundle_release "${RELEASE_NAME}-linux" "$LINUX_HOST_TOOLS_DIR"
+  bundle_release "${LINUX_BUNDLE_NAME}" "$LINUX_HOST_TOOLS_DIR"
 fi
