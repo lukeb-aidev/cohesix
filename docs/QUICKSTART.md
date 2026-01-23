@@ -130,9 +130,8 @@ Hive replay snapshot (used by SwarmUI for Live Hive visuals):
 These are safe demo commands to prove the host tooling works. Live uploads require QEMU to be running.
 
 ### cas-tool (pack + upload)
-```Note: CAS = Content‑Addressed Storage.
+Note: CAS = Content‑Addressed Storage.
 In Cohesix it’s the update mechanism where bundles are stored and referenced by a hash of their contents, so integrity is built‑in (the content defines the address). cas-tool prepares a signed, chunked bundle and uploads it to the /updates namespace so the queen can validate and apply it deterministically.
-```
 
 `cas-tool` requires a signing key (bundled at `resources/fixtures/cas_signing_key.hex`) and a payload size aligned to `cas.store.chunk_bytes` (128 bytes). Run the commands below from the bundle root (don’t paste the ``` lines into your shell):
 ```bash
