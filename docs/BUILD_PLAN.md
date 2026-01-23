@@ -78,7 +78,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [20f](#20f) | UI Security Hardening (Tickets & Quotas) | Complete |
 | [20f1](#20f1) | SwarmUI Host Tool Packaging + Tauri API Fix | Complete |
 | [20g](#20g) | Deterministic Snapshot & Replay (UI Testing) | Complete |
-| [20h](#20h) | Alpha Release Gate: As-Built Verification, Live Hive Demo, SwarmUI Replay, & Release Bundle | In Progress |
+| [20h](#20h) | Alpha Release Gate: As-Built Verification, Live Hive Demo, SwarmUI Replay, & Release Bundle | Complete |
 | [21a](#21a) | Telemetry Ingest with OS-Named Segments (Severely Limited Create) | Pending |
 | [21b](#21b) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Pending |
@@ -2456,7 +2456,7 @@ Deliverables:
 ## Milestone 20h — Alpha Release Gate: As-Built Verification, Live Hive Demo, SwarmUI Replay, & Release Bundle <a id="20h"></a> 
 [Milestones](#Milestones)
 
-**Status:** In Progress — release bundles now ship `scripts/setup_environment.sh`, Linux host bundle emitted, Quickstart updated, and macOS/Ubuntu bundle runs verified; remaining work includes PixiJS renderer CSP (`unsafe-eval`) for Live Hive, renderer init failure surfacing, banner copy cleanup, and explicit frame draws.
+**Status:** Complete — Test Plan gates executed (clean build + CLI + regression + packaging), Live Hive + replay demos validated, and macOS/Ubuntu release bundles verified end-to-end.
 
 **Why now (compiler):**  
 Milestone 20g defines the point at which Cohesix becomes **control-plane complete and deterministic**. An alpha release is only valid if the **as-built system passes the full Test Plan**, from a clean checkout, with no hidden assumptions.
