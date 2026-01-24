@@ -86,7 +86,7 @@ fn telemetry_ingest_allocates_segment_and_latest() {
     client.walk(1, 2, &ctl_path).expect("walk ctl");
     client.open(2, OpenMode::write_append()).expect("open ctl");
     client
-        .write(2, br#"{"new":"segment","mime":"text/plain"}\n"#)
+        .write(2, b"{\"new\":\"segment\",\"mime\":\"text/plain\"}\n")
         .expect("create segment");
     client.clunk(2).expect("clunk ctl");
 

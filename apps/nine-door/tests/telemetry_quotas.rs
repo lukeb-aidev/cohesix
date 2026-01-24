@@ -36,19 +36,23 @@ fn read_text(client: &mut InProcessConnection, fid: u32, path: &[String]) -> Str
     String::from_utf8(data).expect("utf8")
 }
 
-fn create_segment(client: &mut InProcessConnection, device_id: &str) -> String {
+fn create_segment(client: &mut InProcessConnection, device_id: &str, fid: u32) -> String {
     let ctl_path = vec![
         "queen".to_owned(),
         "telemetry".to_owned(),
         device_id.to_owned(),
         "ctl".to_owned(),
     ];
-    client.walk(1, 2, &ctl_path).expect("walk ctl");
-    client.open(2, OpenMode::write_append()).expect("open ctl");
+    let ctl_fid = fid;
+    let latest_fid = fid.saturating_add(1);
+    client.walk(1, ctl_fid, &ctl_path).expect("walk ctl");
     client
-        .write(2, br#"{"new":"segment","mime":"text/plain"}\n"#)
+        .open(ctl_fid, OpenMode::write_append())
+        .expect("open ctl");
+    client
+        .write(ctl_fid, b"{\"new\":\"segment\",\"mime\":\"text/plain\"}\n")
         .expect("create segment");
-    client.clunk(2).expect("clunk ctl");
+    client.clunk(ctl_fid).expect("clunk ctl");
 
     let latest_path = vec![
         "queen".to_owned(),
@@ -56,7 +60,9 @@ fn create_segment(client: &mut InProcessConnection, device_id: &str) -> String {
         device_id.to_owned(),
         "latest".to_owned(),
     ];
-    read_text(client, 3, &latest_path).trim().to_owned()
+    read_text(client, latest_fid, &latest_path)
+        .trim()
+        .to_owned()
 }
 
 #[test]
@@ -77,7 +83,9 @@ fn telemetry_ingest_refuses_segment_quota() {
     let mut client = attach_queen(&server);
 
     let device_id = "device-2";
-    let _first = create_segment(&mut client, device_id);
+    let mut next_fid = 2;
+    let _first = create_segment(&mut client, device_id, next_fid);
+    next_fid = next_fid.saturating_add(2);
 
     let ctl_path = vec![
         "queen".to_owned(),
@@ -85,11 +93,15 @@ fn telemetry_ingest_refuses_segment_quota() {
         device_id.to_owned(),
         "ctl".to_owned(),
     ];
-    client.walk(1, 4, &ctl_path).expect("walk ctl");
-    client.open(4, OpenMode::write_append()).expect("open ctl");
+    let ctl_fid = next_fid;
+    client.walk(1, ctl_fid, &ctl_path).expect("walk ctl");
+    client
+        .open(ctl_fid, OpenMode::write_append())
+        .expect("open ctl");
     let err = client
-        .write(4, br#"{"new":"segment","mime":"text/plain"}\n"#)
+        .write(ctl_fid, b"{\"new\":\"segment\",\"mime\":\"text/plain\"}\n")
         .expect_err("quota exceeded");
+    let _ = client.clunk(ctl_fid);
     match err {
         NineDoorError::Protocol { code, .. } => assert_eq!(code, ErrorCode::TooBig),
         other => panic!("unexpected error: {other:?}"),
@@ -114,9 +126,13 @@ fn telemetry_ingest_evicts_oldest_segment() {
     let mut client = attach_queen(&server);
 
     let device_id = "device-3";
-    let first = create_segment(&mut client, device_id);
-    let second = create_segment(&mut client, device_id);
-    let third = create_segment(&mut client, device_id);
+    let mut next_fid = 2;
+    let first = create_segment(&mut client, device_id, next_fid);
+    next_fid = next_fid.saturating_add(2);
+    let second = create_segment(&mut client, device_id, next_fid);
+    next_fid = next_fid.saturating_add(2);
+    let third = create_segment(&mut client, device_id, next_fid);
+    next_fid = next_fid.saturating_add(2);
 
     let seg_dir = vec![
         "queen".to_owned(),
@@ -124,7 +140,8 @@ fn telemetry_ingest_evicts_oldest_segment() {
         device_id.to_owned(),
         "seg".to_owned(),
     ];
-    let listing = read_text(&mut client, 4, &seg_dir);
+    let listing = read_text(&mut client, next_fid, &seg_dir);
+    next_fid = next_fid.saturating_add(1);
     assert!(!listing.contains(first.as_str()));
     assert!(listing.contains(second.as_str()));
     assert!(listing.contains(third.as_str()));
@@ -135,7 +152,7 @@ fn telemetry_ingest_evicts_oldest_segment() {
         device_id.to_owned(),
         "latest".to_owned(),
     ];
-    let latest = read_text(&mut client, 5, &latest_path);
+    let latest = read_text(&mut client, next_fid, &latest_path);
     assert_eq!(latest.trim(), third);
 }
 
@@ -157,8 +174,11 @@ fn telemetry_ingest_evicts_on_total_bytes() {
     let mut client = attach_queen(&server);
 
     let device_id = "device-4";
-    let seg_one = create_segment(&mut client, device_id);
-    let seg_two = create_segment(&mut client, device_id);
+    let mut next_fid = 2;
+    let seg_one = create_segment(&mut client, device_id, next_fid);
+    next_fid = next_fid.saturating_add(2);
+    let seg_two = create_segment(&mut client, device_id, next_fid);
+    next_fid = next_fid.saturating_add(2);
 
     let seg_one_path = vec![
         "queen".to_owned(),
@@ -167,12 +187,18 @@ fn telemetry_ingest_evicts_on_total_bytes() {
         "seg".to_owned(),
         seg_one.clone(),
     ];
-    client.walk(1, 6, &seg_one_path).expect("walk seg one");
-    client.open(6, OpenMode::write_append()).expect("open seg one");
+    let seg_one_fid = next_fid;
+    next_fid = next_fid.saturating_add(1);
     client
-        .write(6, b"1234567890abcdef")
+        .walk(1, seg_one_fid, &seg_one_path)
+        .expect("walk seg one");
+    client
+        .open(seg_one_fid, OpenMode::write_append())
+        .expect("open seg one");
+    client
+        .write(seg_one_fid, b"1234567890abcdef")
         .expect("write seg one");
-    client.clunk(6).expect("clunk seg one");
+    client.clunk(seg_one_fid).expect("clunk seg one");
 
     let seg_two_path = vec![
         "queen".to_owned(),
@@ -181,21 +207,37 @@ fn telemetry_ingest_evicts_on_total_bytes() {
         "seg".to_owned(),
         seg_two.clone(),
     ];
-    client.walk(1, 7, &seg_two_path).expect("walk seg two");
-    client.open(7, OpenMode::write_append()).expect("open seg two");
+    let seg_two_fid = next_fid;
+    next_fid = next_fid.saturating_add(1);
     client
-        .write(7, b"abcdefghijABCDEF")
+        .walk(1, seg_two_fid, &seg_two_path)
+        .expect("walk seg two");
+    client
+        .open(seg_two_fid, OpenMode::write_append())
+        .expect("open seg two");
+    client
+        .write(seg_two_fid, b"abcdefghijABCDEF")
         .expect("write seg two");
-    client.clunk(7).expect("clunk seg two");
+    client.clunk(seg_two_fid).expect("clunk seg two");
 
-    client.walk(1, 8, &seg_two_path).expect("walk seg two again");
-    client.open(8, OpenMode::write_append()).expect("open seg two again");
+    let seg_two_again_fid = next_fid;
+    next_fid = next_fid.saturating_add(1);
     client
-        .write(8, b"klmnopqrstUVWXy1")
+        .walk(1, seg_two_again_fid, &seg_two_path)
+        .expect("walk seg two again");
+    client
+        .open(seg_two_again_fid, OpenMode::write_append())
+        .expect("open seg two again");
+    client
+        .write(seg_two_again_fid, b"klmnopqrstUVWXy1")
         .expect("write seg two again");
-    client.clunk(8).expect("clunk seg two again");
+    client
+        .clunk(seg_two_again_fid)
+        .expect("clunk seg two again");
 
-    let err = client.walk(1, 9, &seg_one_path).expect_err("seg one evicted");
+    let err = client
+        .walk(1, next_fid, &seg_one_path)
+        .expect_err("seg one evicted");
     match err {
         NineDoorError::Protocol { code, .. } => assert_eq!(code, ErrorCode::NotFound),
         other => panic!("unexpected error: {other:?}"),

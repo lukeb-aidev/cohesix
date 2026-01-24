@@ -2619,7 +2619,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
             return Err(anyhow!("telemetry device id must not contain '/'"));
         }
         let _ = ensure_json_string(device_id, "telemetry device id")?;
-        let session = self.queen_session("telemetry push")?;
+        let session = self.queen_session("telemetry push")?.clone();
         let source = Path::new(src_path);
         let metadata = fs::metadata(source)
             .with_context(|| format!("telemetry push source not found: {src_path}"))?;
@@ -2652,7 +2652,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
         ensure_valid_path(&ctl_path)?;
         let ctl_payload = build_telemetry_ctl_payload(mime)?;
         self.transport
-            .write(session, &ctl_path, ctl_payload.as_bytes())?;
+            .write(&session, &ctl_path, ctl_payload.as_bytes())?;
         let ack_lines = self.transport.drain_acknowledgements();
         let seg_id = parse_seg_id_from_ack_lines(&ack_lines);
         let seg_id = if let Some(seg_id) = seg_id {
@@ -2660,7 +2660,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
         } else {
             let latest_path = format!("/queen/telemetry/{device_id}/latest");
             ensure_valid_path(&latest_path)?;
-            let latest_lines = self.transport.read(session, &latest_path)?;
+            let latest_lines = self.transport.read(&session, &latest_path)?;
             let _ = self.transport.drain_acknowledgements();
             latest_lines
                 .into_iter()
@@ -2672,7 +2672,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
         let seg_path = format!("/queen/telemetry/{device_id}/seg/{seg_id}");
         ensure_valid_path(&seg_path)?;
         if !records.is_empty() {
-            let written = self.transport.write_batch(session, &seg_path, &records)?;
+            let written = self
+                .transport
+                .write_batch(&session, &seg_path, &records)?;
             if written != records.len() {
                 return Err(anyhow!(
                     "telemetry push short write: expected {} records, wrote {}",

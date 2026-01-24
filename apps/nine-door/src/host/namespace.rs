@@ -1816,7 +1816,7 @@ impl Namespace {
             "ctl".to_owned(),
         ];
         {
-            let mut node = self.lookup_mut(&ctl_path)?;
+            let node = self.lookup_mut(&ctl_path)?;
             match node.node.kind_mut() {
                 NodeKind::File(FileNode::AppendOnly(buffer)) => buffer.extend_from_slice(data),
                 _ => {
@@ -1839,6 +1839,17 @@ impl Namespace {
                 continue;
             }
             let command = TelemetryCtlCommand::parse(trimmed)?;
+            if let Some(mime) = command.mime.as_deref() {
+                let mime = mime.trim();
+                if mime.is_empty()
+                    || mime.chars().any(|ch| ch == '\n' || ch == '\r' || ch == '\0')
+                {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "telemetry ctl mime is invalid",
+                    ));
+                }
+            }
             if command.new != "segment" {
                 return Err(NineDoorError::protocol(
                     ErrorCode::Invalid,
@@ -1881,15 +1892,12 @@ impl Namespace {
             "seg".to_owned(),
             seg_id.to_owned(),
         ];
+        let max_bytes_per_segment = self.telemetry_ingest.config().max_bytes_per_segment;
         let (expected_offset, remaining) = {
-            let mut node = self.lookup_mut(&seg_path)?;
+            let node = self.lookup_mut(&seg_path)?;
             match node.node.kind_mut() {
                 NodeKind::File(FileNode::AppendOnly(buffer)) => {
-                    let remaining = self
-                        .telemetry_ingest
-                        .config()
-                        .max_bytes_per_segment
-                        .saturating_sub(buffer.len());
+                    let remaining = max_bytes_per_segment.saturating_sub(buffer.len());
                     (buffer.len() as u64, remaining)
                 }
                 _ => {
@@ -1921,7 +1929,7 @@ impl Namespace {
         for evicted in &outcome.evicted {
             self.remove_telemetry_ingest_segment(device_id, evicted)?;
         }
-        let mut node = self.lookup_mut(&seg_path)?;
+        let node = self.lookup_mut(&seg_path)?;
         match node.node.kind_mut() {
             NodeKind::File(FileNode::AppendOnly(buffer)) => {
                 buffer.extend_from_slice(data);

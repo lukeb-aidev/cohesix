@@ -9,6 +9,7 @@
 Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP console reliability and performance, deterministic replay, and every shipped host tool.
 
 ## Goals
+- Pre-existing features continue to work; new features are validated against documented behaviour.
 - QEMU boots the VM and exposes Secure9P/TCP console without protocol drift.
 - TCP console remains reliable under load (no unexpected disconnects/resets/partial writes).
 - Performance baselines are captured for TCP throughput/latency.

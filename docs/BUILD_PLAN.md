@@ -79,7 +79,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [20f1](#20f1) | SwarmUI Host Tool Packaging + Tauri API Fix | Complete |
 | [20g](#20g) | Deterministic Snapshot & Replay (UI Testing) | Complete |
 | [20h](#20h) | Alpha Release Gate: As-Built Verification, Live Hive Demo, SwarmUI Replay, & Release Bundle | Complete |
-| [21a](#21a) | Telemetry Ingest with OS-Named Segments (Severely Limited Create) | Pending |
+| [21a](#21a) | Telemetry Ingest with OS-Named Segments (Severely Limited Create) | Complete |
 | [21b](#21b) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
 | [21c](#21c) | SwarmUI Interactive cohsh Terminal (Full Prompt UX) | Pending |
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Pending |

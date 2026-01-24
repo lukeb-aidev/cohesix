@@ -105,6 +105,7 @@ const OBSERVE_WATCH_LINE_BYTES: usize =
 const OBSERVE_WATCH_MIN_INTERVAL_MS: u64 =
     generated::OBSERVABILITY_CONFIG.proc_ingest.watch_min_interval_ms as u64;
 const SIDECAR_LOG_MAX_BYTES: usize = generated::SECURE9P_LIMITS.msize as usize;
+const TELEMETRY_INGEST_RECORD_MAX_BYTES: usize = 4096;
 
 const SELFTEST_QUICK_SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -129,6 +130,7 @@ pub struct NineDoorBridge {
     next_worker_id: u32,
     ui: generated::UiProviderConfig,
     telemetry: generated::TelemetryConfig,
+    telemetry_ingest: TelemetryIngestState,
     workers: HeaplessVec<WorkerTelemetry, MAX_WORKERS>,
     binds: HeaplessVec<BindEntry, MAX_BINDS>,
     host: HostState,
@@ -165,6 +167,186 @@ pub(crate) struct TelemetryTail {
     pub(crate) consumed_bytes: usize,
 }
 
+#[derive(Debug, Clone)]
+struct TelemetryIngestSegment {
+    id: String,
+    bytes: usize,
+    data: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct TelemetryIngestDevice {
+    next_id: u64,
+    total_bytes: usize,
+    latest: Option<String>,
+    segments: VecDeque<TelemetryIngestSegment>,
+}
+
+impl TelemetryIngestDevice {
+    fn new() -> Self {
+        Self {
+            next_id: 1,
+            total_bytes: 0,
+            latest: None,
+            segments: VecDeque::new(),
+        }
+    }
+
+    fn allocate_id(&mut self) -> String {
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        format!("seg-{:06}", id)
+    }
+}
+
+#[derive(Debug)]
+struct TelemetryIngestState {
+    config: generated::TelemetryIngestConfig,
+    devices: BTreeMap<String, TelemetryIngestDevice>,
+}
+
+impl TelemetryIngestState {
+    fn new() -> Self {
+        Self {
+            config: generated::telemetry_ingest_config(),
+            devices: BTreeMap::new(),
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.config.max_segments_per_device > 0
+            && self.config.max_bytes_per_segment > 0
+            && self.config.max_total_bytes_per_device > 0
+    }
+
+    fn ensure_device_mut(&mut self, device_id: &str) -> &mut TelemetryIngestDevice {
+        self.devices
+            .entry(device_id.to_owned())
+            .or_insert_with(TelemetryIngestDevice::new)
+    }
+
+    fn device(&self, device_id: &str) -> Option<&TelemetryIngestDevice> {
+        self.devices.get(device_id)
+    }
+
+    fn create_segment(&mut self, device_id: &str) -> Result<String, NineDoorBridgeError> {
+        if !self.enabled() {
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        let max_segments = self.config.max_segments_per_device as usize;
+        let eviction_policy = self.config.eviction_policy;
+        if max_segments == 0 {
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        let device = self.ensure_device_mut(device_id);
+        if device.segments.len().saturating_add(1) > max_segments {
+            match eviction_policy {
+                generated::TelemetryIngestEvictionPolicy::Refuse => {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                generated::TelemetryIngestEvictionPolicy::EvictOldest => {
+                    while device.segments.len().saturating_add(1) > max_segments {
+                        if let Some(segment) = device.segments.pop_front() {
+                            device.total_bytes = device.total_bytes.saturating_sub(segment.bytes);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        let seg_id = device.allocate_id();
+        device.latest = Some(seg_id.clone());
+        device.segments.push_back(TelemetryIngestSegment {
+            id: seg_id.clone(),
+            bytes: 0,
+            data: Vec::new(),
+        });
+        Ok(seg_id)
+    }
+
+    fn append_record(
+        &mut self,
+        device_id: &str,
+        seg_id: &str,
+        payload: &str,
+    ) -> Result<(), NineDoorBridgeError> {
+        if !self.enabled() {
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        let payload_bytes = payload.as_bytes();
+        let needs_newline = !payload_bytes.ends_with(b"\n");
+        let record_len = payload_bytes
+            .len()
+            .saturating_add(if needs_newline { 1 } else { 0 });
+        if record_len > TELEMETRY_INGEST_RECORD_MAX_BYTES {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        let max_segment_bytes = self.config.max_bytes_per_segment as usize;
+        let max_total_bytes = self.config.max_total_bytes_per_device as usize;
+        let eviction_policy = self.config.eviction_policy;
+        let device = self
+            .devices
+            .get_mut(device_id)
+            .ok_or(NineDoorBridgeError::InvalidPath)?;
+        let segment_bytes = device
+            .segments
+            .iter()
+            .find(|segment| segment.id == seg_id)
+            .map(|segment| segment.bytes)
+            .ok_or(NineDoorBridgeError::InvalidPath)?;
+        if segment_bytes.saturating_add(record_len) > max_segment_bytes {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        let total_after = device.total_bytes.saturating_add(record_len);
+        if total_after > max_total_bytes {
+            match eviction_policy {
+                generated::TelemetryIngestEvictionPolicy::Refuse => {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                generated::TelemetryIngestEvictionPolicy::EvictOldest => {
+                    let needed = total_after.saturating_sub(max_total_bytes);
+                    let mut freed = 0usize;
+                    let mut scan = 0usize;
+                    while freed < needed && scan < device.segments.len() {
+                        if device.segments.get(scan).map(|seg| seg.id.as_str()) == Some(seg_id) {
+                            scan = scan.saturating_add(1);
+                            continue;
+                        }
+                        if let Some(segment) = device.segments.remove(scan) {
+                            if device.latest.as_deref() == Some(segment.id.as_str()) {
+                                device.latest = device
+                                    .segments
+                                    .back()
+                                    .map(|seg| seg.id.clone());
+                            }
+                            device.total_bytes = device.total_bytes.saturating_sub(segment.bytes);
+                            freed = freed.saturating_add(segment.bytes);
+                            continue;
+                        }
+                        break;
+                    }
+                    if freed < needed {
+                        return Err(NineDoorBridgeError::BufferFull);
+                    }
+                }
+            }
+        }
+        let segment = device
+            .segments
+            .iter_mut()
+            .find(|segment| segment.id == seg_id)
+            .ok_or(NineDoorBridgeError::InvalidPath)?;
+        segment.data.extend_from_slice(payload_bytes);
+        if needs_newline {
+            segment.data.push(b'\n');
+        }
+        segment.bytes = segment.bytes.saturating_add(record_len);
+        device.total_bytes = device.total_bytes.saturating_add(record_len);
+        Ok(())
+    }
+}
+
 impl fmt::Display for NineDoorBridgeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -194,6 +376,7 @@ impl NineDoorBridge {
             next_worker_id: 1,
             ui: generated::ui_provider_config(),
             telemetry: generated::telemetry_config(),
+            telemetry_ingest: TelemetryIngestState::new(),
             workers: HeaplessVec::new(),
             binds: HeaplessVec::new(),
             host: HostState::new(),
@@ -458,6 +641,34 @@ impl NineDoorBridge {
             }
             return result;
         }
+        if let Some(device_id) = telemetry_ingest_ctl_device(path) {
+            if !self.telemetry_ingest.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            if !self.is_queen() {
+                return Err(NineDoorBridgeError::Permission);
+            }
+            parse_telemetry_ctl(payload)?;
+            self.telemetry_ingest.create_segment(device_id)?;
+            return Ok(());
+        }
+        if let Some((device_id, seg_id)) = telemetry_ingest_segment_path(path) {
+            if !self.telemetry_ingest.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            if !self.is_queen() {
+                return Err(NineDoorBridgeError::Permission);
+            }
+            self.telemetry_ingest
+                .append_record(device_id, seg_id, payload)?;
+            return Ok(());
+        }
+        if telemetry_ingest_latest_path(path).is_some() {
+            if !self.telemetry_ingest.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return Err(NineDoorBridgeError::Permission);
+        }
         if let Some(control) = self.host.control_label(path) {
             if !self.is_queen() {
                 self.log_host_write(path, Some(control), HostWriteOutcome::Denied, None);
@@ -649,6 +860,34 @@ impl NineDoorBridge {
                 return self.action_status_lines(action_id);
             }
         }
+        if let Some((device_id, seg_id)) = telemetry_ingest_segment_path(path) {
+            if !self.telemetry_ingest.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            let device = self
+                .telemetry_ingest
+                .device(device_id)
+                .ok_or(NineDoorBridgeError::InvalidPath)?;
+            let segment = device
+                .segments
+                .iter()
+                .find(|segment| segment.id == seg_id)
+                .ok_or(NineDoorBridgeError::InvalidPath)?;
+            return lines_from_bytes(segment.data.as_slice());
+        }
+        if let Some(device_id) = telemetry_ingest_latest_path(path) {
+            if !self.telemetry_ingest.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            let device = self
+                .telemetry_ingest
+                .device(device_id)
+                .ok_or(NineDoorBridgeError::InvalidPath)?;
+            if let Some(latest) = device.latest.as_deref() {
+                return lines_from_text(latest);
+            }
+            return Ok(HeaplessVec::new());
+        }
         if let Some(kind) = self.sidecars.kind_for_path(segments.as_slice()) {
             if !self.sidecar_allowed(kind, segments.as_slice(), SidecarAccess::Read) {
                 self.log_sidecar_denial(kind);
@@ -785,7 +1024,45 @@ impl NineDoorBridge {
             return self.observe.list_ingest();
         }
         if path == "/queen" {
-            return list_from_slice(&["ctl"]);
+            let mut output = HeaplessVec::new();
+            push_list_entry(&mut output, "ctl")?;
+            if self.telemetry_ingest.enabled() {
+                push_list_entry(&mut output, "telemetry")?;
+            }
+            return Ok(output);
+        }
+        if path == "/queen/telemetry" {
+            if !self.telemetry_ingest.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            let mut output = HeaplessVec::new();
+            for device_id in self.telemetry_ingest.devices.keys() {
+                push_list_entry(&mut output, device_id)?;
+            }
+            return Ok(output);
+        }
+        if let Some(device_id) = telemetry_ingest_device_root(path) {
+            if !self.telemetry_ingest.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            if self.telemetry_ingest.device(device_id).is_none() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return list_from_slice(&["ctl", "seg", "latest"]);
+        }
+        if let Some(device_id) = telemetry_ingest_seg_dir(path) {
+            if !self.telemetry_ingest.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            let device = self
+                .telemetry_ingest
+                .device(device_id)
+                .ok_or(NineDoorBridgeError::InvalidPath)?;
+            let mut output = HeaplessVec::new();
+            for segment in device.segments.iter() {
+                push_list_entry(&mut output, segment.id.as_str())?;
+            }
+            return Ok(output);
         }
         if path == "/trace" {
             return list_from_slice(&["ctl", "events"]);
@@ -4692,6 +4969,46 @@ fn log_policy_action(role: &str, ticket: &str, action: &PolicyAction) {
     log_buffer::append_log_line(line.as_str());
 }
 
+fn telemetry_ingest_ctl_device(path: &str) -> Option<&str> {
+    let segments = split_path_segments(path);
+    match segments.as_slice() {
+        ["queen", "telemetry", device_id, "ctl"] => Some(device_id),
+        _ => None,
+    }
+}
+
+fn telemetry_ingest_latest_path(path: &str) -> Option<&str> {
+    let segments = split_path_segments(path);
+    match segments.as_slice() {
+        ["queen", "telemetry", device_id, "latest"] => Some(device_id),
+        _ => None,
+    }
+}
+
+fn telemetry_ingest_segment_path(path: &str) -> Option<(&str, &str)> {
+    let segments = split_path_segments(path);
+    match segments.as_slice() {
+        ["queen", "telemetry", device_id, "seg", seg_id] => Some((device_id, seg_id)),
+        _ => None,
+    }
+}
+
+fn telemetry_ingest_device_root(path: &str) -> Option<&str> {
+    let segments = split_path_segments(path);
+    match segments.as_slice() {
+        ["queen", "telemetry", device_id] => Some(device_id),
+        _ => None,
+    }
+}
+
+fn telemetry_ingest_seg_dir(path: &str) -> Option<&str> {
+    let segments = split_path_segments(path);
+    match segments.as_slice() {
+        ["queen", "telemetry", device_id, "seg"] => Some(device_id),
+        _ => None,
+    }
+}
+
 fn parse_worker_telemetry_path(path: &str) -> Option<&str> {
     let segments = split_path_segments(path);
     let sharding = generated::sharding_config();
@@ -5055,6 +5372,15 @@ fn parse_queen_ctl(payload: &str) -> Result<QueenCtlCommand<'_>, NineDoorBridgeE
         return Ok(QueenCtlCommand::Mount { service, at });
     }
     Err(NineDoorBridgeError::InvalidPayload)
+}
+
+fn parse_telemetry_ctl(payload: &str) -> Result<(), NineDoorBridgeError> {
+    let command =
+        parse_json_string_field(payload, "new").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    if command != "segment" {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
 }
 
 fn parse_json_string_field<'a>(input: &'a str, key: &str) -> Option<&'a str> {
