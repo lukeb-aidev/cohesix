@@ -3068,6 +3068,47 @@ Define and enforce a **finite lifecycle state machine** for Cohesix nodes, expos
 - Every transition emits an audit record in `/log/queen.log` with old/new state and reason.
 - Tickets, telemetry ingest, worker authority, and host sidecar publishes are gated by lifecycle state.
 
+### Telemetry Spool Policy (Addendum to Milestones 21a & 25b)
+
+**Rationale:** Telemetry storage must be predictable under pressure. Operators must know *when*, *why*, and *how* data is retained or dropped. This addendum **aligns policy terminology** between 21a telemetry ingest quotas and the 25b persistent spool store; it does **not** retroactively change 21a's completed behavior.
+
+#### Policy surface (alignment)
+- **Telemetry ingest (21a):** keep `telemetry_ingest.eviction_policy` (`refuse` | `evict-oldest`) as the source of truth for per-device segment limits.
+- **Persistent spool (25b):** use `persistence.spool.mode` (`refuse` | `overwrite_acked`) and `persistence.spool.max_record_bytes` to mirror 21a's refusal/eviction semantics while remaining crash-safe.
+
+**Manifest example (bytes only)**
+```toml
+[telemetry_ingest]
+max_segments_per_device = 64
+max_bytes_per_segment = 262144
+max_total_bytes_per_device = 16777216
+eviction_policy = "refuse" # or "evict-oldest"
+
+[persistence.spool]
+max_bytes = 67108864
+max_record_bytes = 32768
+mode = "refuse" # or "overwrite_acked"
+```
+
+#### Operator visibility
+- `/proc/spool/status` MUST expose policy and pressure fields (used_bytes, max_bytes, records, dropped, pressure, mode, ack_cursor).
+- If additional nodes are required for UI providers, add `/proc/spool/policy` and `/proc/spool/pressure` **only** with corresponding updates to `ARCHITECTURE.md` and `INTERFACES.md`.
+
+#### CLI surface (host-only, target milestone 25b or later)
+- `cohsh telemetry status` — read spool/ingest status and render policy + pressure.
+- `cohsh telemetry explain` — summarize current policy and refusal/eviction outcomes.
+
+#### Mandatory regression cases
+- Quota exhaustion: `refuse` vs `evict-oldest` (21a) and `overwrite_acked` (25b).
+- Ack cursor behind overwrite window (25b).
+- Record-too-large rejection (25b).
+- Offline accumulation → online drain (21a + 25b).
+
+#### Invariants
+- All drops are auditable.
+- Backpressure is observable.
+- No data loss occurs without an explicit policy allowing it.
+
 ### Regression coverage
 - `scripts/cohsh/lifecycle_basic.coh`
 - `scripts/cohsh/lifecycle_drain_spool.coh`
@@ -3161,49 +3202,6 @@ Checks:
 Deliverables:
   - Failure modes and operator walkthrough docs committed and referenced.
 ```
-
----
-
-## Telemetry Spool Policy (Addendum to Milestones 21a & 25b)
-
-**Rationale:** Telemetry storage must be predictable under pressure. Operators must know *when*, *why*, and *how* data is retained or dropped. This addendum **aligns policy terminology** between 21a telemetry ingest quotas and the 25b persistent spool store; it does **not** retroactively change 21a's completed behavior.
-
-### Policy surface (alignment)
-- **Telemetry ingest (21a):** keep `telemetry_ingest.eviction_policy` (`refuse` | `evict-oldest`) as the source of truth for per-device segment limits.
-- **Persistent spool (25b):** use `persistence.spool.mode` (`refuse` | `overwrite_acked`) and `persistence.spool.max_record_bytes` to mirror 21a’s refusal/eviction semantics while remaining crash‑safe.
-
-**Manifest example (bytes only)**
-```toml
-[telemetry_ingest]
-max_segments_per_device = 64
-max_bytes_per_segment = 262144
-max_total_bytes_per_device = 16777216
-eviction_policy = "refuse" # or "evict-oldest"
-
-[persistence.spool]
-max_bytes = 67108864
-max_record_bytes = 32768
-mode = "refuse" # or "overwrite_acked"
-```
-
-### Operator visibility
-- `/proc/spool/status` MUST expose policy and pressure fields (used_bytes, max_bytes, records, dropped, pressure, mode, ack_cursor).
-- If additional nodes are required for UI providers, add `/proc/spool/policy` and `/proc/spool/pressure` **only** with corresponding updates to `ARCHITECTURE.md` and `INTERFACES.md`.
-
-### CLI surface (host-only, target milestone 25b or later)
-- `cohsh telemetry status` — read spool/ingest status and render policy + pressure.
-- `cohsh telemetry explain` — summarize current policy and refusal/eviction outcomes.
-
-### Mandatory regression cases
-- Quota exhaustion: `refuse` vs `evict-oldest` (21a) and `overwrite_acked` (25b).
-- Ack cursor behind overwrite window (25b).
-- Record-too-large rejection (25b).
-- Offline accumulation → online drain (21a + 25b).
-
-### Invariants
-- All drops are auditable.
-- Backpressure is observable.
-- No data loss occurs without an explicit policy allowing it.
 
 ---
 
