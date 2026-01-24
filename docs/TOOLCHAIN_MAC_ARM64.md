@@ -38,6 +38,8 @@ qemu-system-aarch64 --version | head -n1
   GIC revision to request from QEMU. Ensure the kernel configuration enables
   GICv3 when following the architecture plan; the script will fall back to
   `gic-version=2` only when the build explicitly disables v3 support.
+- QEMU launchers auto-select `hvf` on macOS (fallback to `tcg` if unavailable).
+  Override with `COHESIX_QEMU_ACCEL` or `QEMU_ACCEL` (for example, `COHESIX_QEMU_ACCEL=tcg`).
 
 ## 4. seL4 External Build (reference)
 1. Clone upstream seL4 and tool repo at compatible tags.

@@ -47,6 +47,8 @@ You need two terminals:
    ```bash
    ./qemu/run.sh
    ```
+   Note: QEMU auto-selects hardware acceleration (`hvf` on macOS, `kvm` on Linux when `/dev/kvm` is accessible),
+   falling back to `tcg` if unavailable. Override with `COHESIX_QEMU_ACCEL` or `QEMU_ACCEL`.
 2. In Terminal 2, connect with cohsh (control-plane actions are CLI-driven):
    ```bash
    ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
@@ -275,6 +277,5 @@ If a command exceeds these limits, the console returns `ERR ... reason=ELIMIT` (
   coh> tcp-diag
   coh> tcp-diag 31337
   ```
-
 
 

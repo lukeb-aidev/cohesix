@@ -151,6 +151,55 @@ detect_gic_version() {
     echo "$result"
 }
 
+detect_qemu_accel() {
+    local accel="${COHESIX_QEMU_ACCEL:-${QEMU_ACCEL:-}}"
+    if [[ -n "$accel" ]]; then
+        echo "$accel"
+        return
+    fi
+
+    local host_os
+    host_os="$(uname -s 2>/dev/null || true)"
+    case "$host_os" in
+        Darwin)
+            echo "hvf"
+            ;;
+        Linux)
+            if [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]; then
+                echo "kvm"
+            else
+                echo "tcg"
+            fi
+            ;;
+        *)
+            echo "tcg"
+            ;;
+    esac
+}
+
+qemu_accel_supported() {
+    local accel="$1"
+    local help
+    help="$("$QEMU_BIN" -accel help 2>/dev/null || true)"
+    if [[ -z "$help" ]]; then
+        return 0
+    fi
+    echo "$help" | grep -Eiq "(^|[ ,])${accel}([ ,]|$)"
+}
+
+resolve_qemu_accel() {
+    local accel
+    accel="$(detect_qemu_accel)"
+    if [[ -z "$accel" ]]; then
+        accel="tcg"
+    fi
+    if ! qemu_accel_supported "$accel"; then
+        log "Requested QEMU accelerator '$accel' not supported by $QEMU_BIN; falling back to tcg"
+        accel="tcg"
+    fi
+    echo "$accel"
+}
+
 for artefact in "$ELFLOADER" "$KERNEL" "$ROOT_TASK"; do
     if [[ ! -f "$artefact" ]]; then
         log "Artefact not found: $artefact"
@@ -196,8 +245,11 @@ log "Using QEMU binary: $QEMU_BIN ($QEMU_VERSION)"
 
 GIC_VER="$(detect_gic_version)"
 log "Auto-detected GIC version: gic-version=$GIC_VER"
+QEMU_ACCEL="$(resolve_qemu_accel)"
+log "Using QEMU accel: $QEMU_ACCEL"
 
-QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" \
+QEMU_ARGS=(-accel "$QEMU_ACCEL" \
+    -machine "virt,gic-version=${GIC_VER}" \
     -cpu cortex-a57 \
     -m 1024 \
     -smp 1 \

@@ -56,6 +56,68 @@ fail() {
     exit 1
 }
 
+qemu_args_have_accel() {
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == "-accel" ]]; then
+            return 0
+        fi
+        if [[ "$arg" == *"accel="* ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+detect_qemu_accel() {
+    local accel="${COHESIX_QEMU_ACCEL:-${QEMU_ACCEL:-}}"
+    if [[ -n "$accel" ]]; then
+        echo "$accel"
+        return
+    fi
+
+    local host_os
+    host_os="$(uname -s 2>/dev/null || true)"
+    case "$host_os" in
+        Darwin)
+            echo "hvf"
+            ;;
+        Linux)
+            if [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]; then
+                echo "kvm"
+            else
+                echo "tcg"
+            fi
+            ;;
+        *)
+            echo "tcg"
+            ;;
+    esac
+}
+
+qemu_accel_supported() {
+    local accel="$1"
+    local help
+    help="$("$QEMU_BIN" -accel help 2>/dev/null || true)"
+    if [[ -z "$help" ]]; then
+        return 0
+    fi
+    echo "$help" | grep -Eiq "(^|[ ,])${accel}([ ,]|$)"
+}
+
+resolve_qemu_accel() {
+    local accel
+    accel="$(detect_qemu_accel)"
+    if [[ -z "$accel" ]]; then
+        accel="tcg"
+    fi
+    if ! qemu_accel_supported "$accel"; then
+        log "Requested QEMU accelerator '$accel' not supported by $QEMU_BIN; falling back to tcg"
+        accel="tcg"
+    fi
+    echo "$accel"
+}
+
 append_root_task_feature() {
     local feature="$1"
     if [[ -z "$feature" ]]; then
@@ -315,6 +377,7 @@ main() {
     RUN_QEMU=1
     DIRECT_QEMU=0
     declare -a EXTRA_QEMU_ARGS=()
+    declare -a ACCEL_ARGS=()
     CLEAN_OUT_DIR=0
     DTB_OVERRIDE=""
     TRANSPORT="tcp"
@@ -516,6 +579,25 @@ main() {
     if command -v "$QEMU_BIN" >/dev/null 2>&1; then
         QEMU_VERSION="$($QEMU_BIN --version | head -n1)"
         log "Using QEMU binary: $QEMU_BIN ($QEMU_VERSION)"
+    fi
+
+    if ! qemu_args_have_accel "${EXTRA_QEMU_ARGS[@]}"; then
+        if [[ "$TRANSPORT" == "qemu" && -n "${COHSH_QEMU_ARGS:-}" ]]; then
+            read -r -a COHSH_QEMU_ARGS_ARR <<< "${COHSH_QEMU_ARGS}"
+            if qemu_args_have_accel "${COHSH_QEMU_ARGS_ARR[@]}"; then
+                log "QEMU accel override detected in COHSH_QEMU_ARGS; skipping auto accel selection"
+            else
+                QEMU_ACCEL="$(resolve_qemu_accel)"
+                ACCEL_ARGS=(-accel "$QEMU_ACCEL")
+                log "Using QEMU accel: $QEMU_ACCEL"
+            fi
+        else
+            QEMU_ACCEL="$(resolve_qemu_accel)"
+            ACCEL_ARGS=(-accel "$QEMU_ACCEL")
+            log "Using QEMU accel: $QEMU_ACCEL"
+        fi
+    else
+        log "QEMU accel overridden via extra QEMU args"
     fi
 
     ELFLOADER_PATH="$SEL4_BUILD_DIR/elfloader/elfloader"
@@ -778,7 +860,7 @@ PY
     log "Auto-detected GIC version: gic-version=$GIC_VER"
 
     # Serial output from the PL011 console and root-task logger is expected on stdio via -serial mon:stdio; keep this wiring intact when adjusting runtime flags.
-    BASE_QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
+    BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
         if [[ "$NET_BACKEND" == "virtio" ]]; then
@@ -854,6 +936,12 @@ PY
             --qemu-gic-version "$GIC_VER"
             --role queen
         )
+
+        if [[ ${#ACCEL_ARGS[@]} -gt 0 ]]; then
+            for arg in "${ACCEL_ARGS[@]}"; do
+                CLI_CMD+=(--qemu-arg "$arg")
+            done
+        fi
 
         if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
             for arg in "${EXTRA_QEMU_ARGS[@]}"; do

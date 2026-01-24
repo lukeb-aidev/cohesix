@@ -101,6 +101,8 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
 - `toolchain/setup_macos_arm64.sh` script checking for Homebrew dependencies, rustup, and QEMU - and installing if absent.
 - `scripts/qemu-run.sh` that boots seL4 with externally built `elfloader`, `kernel.elf`, also creates and uses `rootfs.cpio`.
+- QEMU launchers auto-select host acceleration (`hvf` on macOS, `kvm` on Linux when `/dev/kvm` is accessible), with
+  `COHESIX_QEMU_ACCEL`/`QEMU_ACCEL` overrides and fallback to `tcg`.
 - `scripts/ci/size_guard.sh` enforcing < 4 MiB CPIO payload.
 - Repository tree matches `docs/REPO_LAYOUT.md`, and architecture notes from `docs/ARCHITECTURE.md §1-§3` are captured in crate
   READMEs or module docs to prevent drift.
@@ -108,6 +110,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 **Checks**
 - `cargo check` succeeds for the workspace.
 - `qemu-system-aarch64 --version` reports the expected binary.
+- QEMU launchers log the selected accelerator and pass `-accel` with host-appropriate defaults or explicit overrides.
 - `scripts/ci/size_guard.sh out/rootfs.cpio` rejects oversized archives.
 
 ## Milestone 1 — Boot Banner, Timer, & First IPC <a id="1"></a> 

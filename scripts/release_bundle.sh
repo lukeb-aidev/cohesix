@@ -277,7 +277,60 @@ for path in "${ELFLOADER}" "${KERNEL}" "${ROOTSERVER}" "${CPIO}"; do
   fi
 done
 
+detect_qemu_accel() {
+  local accel="${COHESIX_QEMU_ACCEL:-${QEMU_ACCEL:-}}"
+  if [[ -n "$accel" ]]; then
+    echo "$accel"
+    return
+  fi
+
+  local host_os
+  host_os="$(uname -s 2>/dev/null || true)"
+  case "$host_os" in
+    Darwin)
+      echo "hvf"
+      ;;
+    Linux)
+      if [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]; then
+        echo "kvm"
+      else
+        echo "tcg"
+      fi
+      ;;
+    *)
+      echo "tcg"
+      ;;
+  esac
+}
+
+qemu_accel_supported() {
+  local accel="$1"
+  local help
+  help="$("${QEMU_BIN}" -accel help 2>/dev/null || true)"
+  if [[ -z "$help" ]]; then
+    return 0
+  fi
+  echo "$help" | grep -Eiq "(^|[ ,])${accel}([ ,]|$)"
+}
+
+resolve_qemu_accel() {
+  local accel
+  accel="$(detect_qemu_accel)"
+  if [[ -z "$accel" ]]; then
+    accel="tcg"
+  fi
+  if ! qemu_accel_supported "$accel"; then
+    echo "[qemu] Requested QEMU accelerator '$accel' not supported by ${QEMU_BIN}; falling back to tcg" >&2
+    accel="tcg"
+  fi
+  echo "$accel"
+}
+
+QEMU_ACCEL="$(resolve_qemu_accel)"
+echo "[qemu] Using QEMU accel: ${QEMU_ACCEL}"
+
 "${QEMU_BIN}" \
+  -accel "${QEMU_ACCEL}" \
   -machine "virt,gic-version=${GIC_VER}" \
   -cpu cortex-a57 \
   -m 1024 \
