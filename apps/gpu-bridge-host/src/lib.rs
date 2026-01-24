@@ -298,8 +298,8 @@ struct NvmlInventory;
 #[cfg(feature = "nvml")]
 impl Inventory for NvmlInventory {
     fn discover(&self) -> Result<Vec<GpuInfo>> {
-        use nvml_wrapper::NVML;
-        let nvml = NVML::init()?;
+        use nvml_wrapper::Nvml;
+        let nvml = Nvml::init()?;
         let device_count = nvml.device_count()?;
         let mut gpus = Vec::new();
         for index in 0..device_count {
