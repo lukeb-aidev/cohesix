@@ -81,10 +81,12 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [20h](#20h) | Alpha Release Gate: As-Built Verification, Live Hive Demo, SwarmUI Replay, & Release Bundle | Complete |
 | [21a](#21a) | Telemetry Ingest with OS-Named Segments (Severely Limited Create) | Pending |
 | [21b](#21b) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
+| [21c](#21c) | SwarmUI Interactive cohsh Terminal (Full Prompt UX) | Pending |
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Pending |
 | [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Pending |
 | [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Pending |
-| [25](#25) | UEFI Bare-Metal Boot & Device Identity | Pending |
+| [25a](#25a) | UEFI Bare-Metal Boot & Device Identity | Pending |
+| [25b](#25b) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [26](#26) | Edge Local Status (UEFI Host Tool) | Pending |
 | [27](#27) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
 
@@ -2684,7 +2686,7 @@ After Milestone 20h:
 **Alpha Release 1 achieved here**
 ----
 
-Next, Alpha Release 2 targets a plug-and-play operator experience immediately after Milestone 20.x. Milestones 21-24 define the Alpha track; the AWS AMI work follows as Milestone 25.
+Next, Alpha Release 2 targets a plug-and-play operator experience immediately after Milestone 20.x. Milestones 21-24 define the Alpha track; the AWS AMI work follows as Milestone 25a.
 
 ## Milestone 21a — Telemetry Ingest with OS-Named Segments (Severely Limited Create) <a id="21a"></a> 
 [Milestones](#Milestones)
@@ -2953,6 +2955,74 @@ Deliverables:
 
 ---
 
+## Milestone 21c — SwarmUI Interactive cohsh Terminal (Full Prompt UX) <a id="21c"></a> 
+[Milestones](#Milestones)
+
+**Why now (operator UX):** SwarmUI already embeds `cohsh-core` and speaks the TCP console. A full terminal prompt improves operator ergonomics without adding new verbs or protocols.
+
+**Goal**
+Add a cohesive, terminal‑grade command prompt inside SwarmUI that reuses existing console semantics and `cohsh-core` parsing.
+
+**Deliverables**
+- SwarmUI “Console” panel with command input, scrollback, and clear/stop controls.
+- Prompt supports multiline output, `OK/ERR/END` framing, and tail streams.
+- Single‑session multiplexing: the prompt reuses SwarmUI’s existing console session (no second client).
+- No new verbs, no new transports, and no VM changes.
+
+**Commands**
+- `cargo check -p swarmui`
+- `cargo test -p cohsh-core --test transcripts`
+
+**Checks (DoD)**
+- Prompt output matches `cohsh` transcript ordering (ACK/ERR/END) for `help → attach → log → spawn → tail → quit`.
+- Tail streams can be stopped without breaking the shared session.
+- Reconnect logic mirrors `cohsh` (connection loss surfaces clearly and resumes cleanly).
+- Console lock is enforced (SwarmUI prompt does not allow a second TCP client).
+- No new console verbs or transport semantics introduced.
+
+**Task Breakdown**
+```
+Title/ID: m21c-swarmui-console-ui
+Goal: Add a console panel with input, scrollback, and tail controls.
+Inputs: apps/swarmui/frontend, docs/USERLAND_AND_CLI.md.
+Changes:
+  - apps/swarmui/frontend/components/console.js — input + scrollback UI.
+  - apps/swarmui/frontend/styles/console.css — terminal styling.
+Commands:
+  - npm run lint (if configured) or cargo check -p swarmui
+Checks:
+  - Console renders without layout regressions; input accepts commands and displays output.
+Deliverables:
+  - SwarmUI console panel wired to the UI.
+
+Title/ID: m21c-swarmui-console-bridge
+Goal: Bridge console input/output through the existing SwarmUI session.
+Inputs: apps/swarmui/src-tauri/main.rs, crates/cohsh-core.
+Changes:
+  - apps/swarmui/src-tauri/main.rs — expose send-line + stream events for prompt output.
+  - apps/swarmui/src/lib.rs — reuse existing session; no new transport.
+Commands:
+  - cargo check -p swarmui
+Checks:
+  - Prompt uses the same TCP session; no parallel client sockets.
+Deliverables:
+  - Prompt input/output routed through existing console session.
+
+Title/ID: m21c-swarmui-console-parity
+Goal: Ensure prompt output ordering matches cohsh transcripts.
+Inputs: crates/cohsh-core/tests/transcripts.rs, docs/TEST_PLAN.md.
+Changes:
+  - apps/swarmui/tests/console_parity.rs — compare prompt output framing to cohsh transcripts.
+Commands:
+  - cargo test -p swarmui --test console_parity
+Checks:
+  - ACK/ERR/END sequences match cohsh fixtures for baseline verbs.
+Deliverables:
+  - Parity test ensuring terminal output consistency.
+```
+
+---
+
 ## Milestone 22 — Alpha: Runtime Convenience (coh run) + GPU Job Breadcrumbs  <a id="22"></a> 
 [Milestones](#Milestones)
 
@@ -3193,7 +3263,7 @@ Next, Alpha release 3 targets bare metal UEFI and AWS native boot via AMI.
 
 --
 
-## Milestone 25 — UEFI Bare-Metal Boot & Device Identity <a id="25"></a> 
+## Milestone 25a — UEFI Bare-Metal Boot & Device Identity <a id="25a"></a> 
 [Milestones](#Milestones)
 
 **Why now (context):**  
@@ -3204,7 +3274,7 @@ No networking, 9P semantics, or console behaviors may diverge between VM and UEF
 
 ---
 
-### Prerequisite (must be completed before Milestone 25)
+### Prerequisite (must be completed before Milestone 25a)
 **Upstream elfloader EFI support**
 - Confirm and enable upstream seL4 **elfloader EFI build** to produce a valid PE/COFF EFI executable (`elfloader.efi`) for aarch64.
 - The EFI-built elfloader must:
@@ -3283,7 +3353,7 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 
 ## Task Breakdown
 
-### Title/ID: m25-uefi-bootchain
+### Title/ID: m25a-uefi-bootchain
 **Goal:** Boot via UEFI → elfloader.efi → seL4; load manifest from ESP; emit stable fingerprint lines.  
 **Inputs:** EFI-built elfloader, `scripts/make_uefi_image.py`, `scripts/qemu-run.sh`, `configs/root_task.toml` (`profile.name`).  
 **Changes:**
@@ -3300,7 +3370,7 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 
 ---
 
-### Title/ID: m25-attestation
+### Title/ID: m25a-attestation
 **Goal:** Implement TPM/DICE identity sealing and export via `/proc/boot` with strict determinism.  
 **Inputs:** `apps/root-task/src/attest.rs`, `docs/SECURITY.md` (attestation section).  
 **Changes:**
@@ -3316,6 +3386,137 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 - VM vs hardware outputs compared; differences must be profile-gated.
 **Deliverables:**
 - Attestation evidence documented in `docs/SECURITY.md` and `docs/HARDWARE_BRINGUP.md`.
+
+---
+
+## Milestone 25b — UEFI On-Device Spool Stores + Settings Persistence <a id="25b"></a> 
+[Milestones](#Milestones)
+
+**Why now (resilience):** After UEFI boot + identity (25a), edge deployments need store/forward for telemetry and minimal settings that survive reboots and link outages without introducing a general filesystem or new protocols.
+
+**Non-negotiable constraints**
+- No changes to console grammar, 9P semantics, or TCP behavior vs VM unless profile‑gated and documented.
+- No POSIX VFS; no general filesystem.
+- Pure Rust userspace; no C‑FFI filesystems.
+- Persistence is exposed only through NineDoor nodes (file‑shaped, bounded).
+
+### Prerequisite
+- Milestone **25a** completed (UEFI boot chain + device identity).
+
+### Goal
+Provide **bounded, crash‑resilient on‑device persistence** for:
+1) telemetry store/forward (append‑only ring log), and  
+2) minimal settings (A/B committed pages),
+exposed through NineDoor without expanding the TCB.
+
+### Deliverables
+
+#### A) Storage plumbing (hardware + QEMU parity)
+- Block‑device abstraction in HAL (role‑selected devices, not model‑selected).
+- QEMU reference uses `virtio-blk`; hardware path is profile‑gated and documented.
+- Manifest gates for persistence features; no `std` dependencies.
+
+#### B) Telemetry spool store (append‑only ring log)
+- Backing: fixed‑size block region/partition.
+- Record format (versioned, bounded): `magic | version | kind | seq | ts | len | crc | payload`.
+- Crash rule: a record is valid only if header + checksum validate; partial tail records are ignored.
+- Bounded behavior:
+  - max record size and deterministic scan budget.
+  - explicit policy: **refuse when full** or **overwrite oldest only when acked**.
+- NineDoor exposure (names must align with `ARCHITECTURE.md`):
+  - `/proc/spool/status` (read‑only)
+  - `/proc/spool/append` (write‑only, one record per write)
+  - `/proc/spool/read` (bounded read stream)
+  - `/proc/spool/ack` (write‑only cursor advance)
+
+#### C) Settings store (A/B committed pages)
+- Two fixed pages/blocks with `generation + checksum`.
+- Update semantics: write inactive page fully, validate checksum, then commit by generation.
+- Bounded settings size; strict UTF‑8 validation and max key/value lengths (if KV).
+
+#### D) Identity binding
+- Spool/settings metadata binds to the **manifest fingerprint** from 25a (e.g., recorded in `/proc/boot`), without introducing new trust roots.
+
+#### E) Testing + regression hardening
+- Crash‑fault simulation tests for both stores (power loss at every write boundary).
+- Fuzz record decoder with strict size limits; reject malformed frames.
+- Golden fixture: known block image → expected `status/read/ack` behavior.
+- Regression pack additions:
+  - `scripts/cohsh/spool_roundtrip.coh`
+  - `scripts/cohsh/settings_roundtrip.coh`
+
+### Commands
+- `cargo test -p root-task`
+- `cargo test -p nine-door`
+- `cohsh --script scripts/cohsh/spool_roundtrip.coh`
+- `cohsh --script scripts/cohsh/settings_roundtrip.coh`
+
+### Checks (DoD)
+- Spool append/read/ack semantics are deterministic and bounded; invalid tail records after crash are ignored.
+- Store/forward works offline and resumes correctly after reboot.
+- Settings updates are atomic across power loss (A/B semantics).
+- No general filesystem or POSIX surface introduced.
+- VM vs UEFI semantics remain byte‑stable unless explicitly profile‑gated.
+- Regression pack passes unchanged; new tests are additive.
+
+### Compiler touchpoints
+- `coh-rtc` emits persistence limits (record size, max bytes, policy mode) into manifest IR; docs import the generated snippets.
+- Manifest validation rejects persistence when storage devices are missing or mis‑declared for the UEFI profile.
+
+### Task Breakdown
+```
+Title/ID: m25b-spool-core
+Goal: Implement append‑only spool store over bounded block device.
+Inputs: HAL block traits, docs/ARCHITECTURE.md, docs/INTERFACES.md.
+Changes:
+  - apps/root-task/src/storage/spool.rs — ring log + checksum validation.
+  - apps/root-task/src/hal/block.rs — block traits + role‑selected device binding.
+Commands:
+  - cargo test -p root-task --test spool
+Checks:
+  - Partial tail records are ignored; bounded scan time enforced.
+Deliverables:
+  - Spool store core with deterministic semantics.
+
+Title/ID: m25b-spool-namespace
+Goal: Expose spool nodes via NineDoor.
+Inputs: apps/nine-door, docs/INTERFACES.md.
+Changes:
+  - apps/nine-door/src/host/spool.rs — /proc/spool nodes.
+  - apps/nine-door/src/host/namespace.rs — mount spool provider.
+Commands:
+  - cargo test -p nine-door --test spool
+Checks:
+  - Append/read/ack paths enforce quotas and policy mode.
+Deliverables:
+  - Spool namespace documented and wired.
+
+Title/ID: m25b-settings-store
+Goal: Implement A/B settings persistence with atomic commit.
+Inputs: HAL block traits, docs/ARCHITECTURE.md.
+Changes:
+  - apps/root-task/src/storage/settings.rs — A/B pages + checksum.
+Commands:
+  - cargo test -p root-task --test settings
+Checks:
+  - Power‑loss simulations yield either old or new state, never corruption.
+Deliverables:
+  - Settings store with atomic semantics.
+
+Title/ID: m25b-spool-regressions
+Goal: Add deterministic regression scripts and fixtures.
+Inputs: scripts/cohsh/, tests/fixtures/.
+Changes:
+  - scripts/cohsh/spool_roundtrip.coh — append/read/ack sequence.
+  - scripts/cohsh/settings_roundtrip.coh — set/get + A/B markers.
+Commands:
+  - cohsh --script scripts/cohsh/spool_roundtrip.coh
+  - cohsh --script scripts/cohsh/settings_roundtrip.coh
+Checks:
+  - Scripts pass unchanged; transcripts stable.
+Deliverables:
+  - Regression fixtures committed and referenced in docs/TEST_PLAN.md.
+```
 
 ## Milestone 26 — Edge Local Status (UEFI Host Tool)  <a id="26"></a> 
 [Milestones](#Milestones)
