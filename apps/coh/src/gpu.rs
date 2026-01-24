@@ -125,9 +125,8 @@ pub fn lease<T: Secure9pTransport>(
     spawn_args.push(format!("mem_mb={}", args.mem_mb));
     spawn_args.push(format!("streams={}", args.streams));
     spawn_args.push(format!("ttl_s={}", args.ttl_s));
-    if let Some(priority) = args.priority {
-        spawn_args.push(format!("priority={priority}"));
-    }
+    let priority = args.priority.unwrap_or(0);
+    spawn_args.push(format!("priority={priority}"));
     if let Some(ttl) = args.budget_ttl_s {
         spawn_args.push(format!("budget_ttl_s={ttl}"));
     }
