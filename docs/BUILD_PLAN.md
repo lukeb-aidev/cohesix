@@ -2879,11 +2879,11 @@ After Milestone 21a, Cohesix supports **safe, Plan-9-style telemetry creation** 
 **Why now (adoption):** After Milestone 20.x, we need plug-and-play host UX that integrates with existing CUDA/MIG workflows without new protocols or VM expansion.
 
 **Goal**
-Deliver filesystem-first host access, GPU lease UX, and pull-based telemetry export while preserving Secure9P and console semantics.
+Deliver host-only mount views for Secure9P namespaces, GPU lease UX, and pull-based telemetry export while preserving Secure9P and console semantics (no new server-side filesystem behavior).
 
 **Deliverables**
 - `coh` host tool (single binary) with subcommands `mount`, `gpu`, and `telemetry pull`, built on `cohsh-core` transports and policy tables without introducing new verbs.
-- `coh mount` FUSE mount of Secure9P namespaces (for example `/mnt/coh`) with strict path validation, append-only enforcement, and fid lifecycle checks; never bypasses policy.
+- `coh mount` FUSE mount of Secure9P namespaces (for example `/mnt/coh`) with strict path validation, append-only enforcement, and fid lifecycle checks; never bypasses policy. The mount is a **client convenience view only** and does not add POSIX semantics to the system.
 - `coh gpu` discovery/status/lease UX with `--mock` backend for CI and non-NVIDIA hosts, plus NVML backend on Linux; MIG visibility only when defined in `docs/GPU_NODES.md`.
 - `coh telemetry pull` pulls bundles from `/queen/telemetry/*` into host storage; resumable and idempotent (no streaming).
 - Invariant envelope: `msize <= 8192`, walk depth <= 8, no `..`, ACK-before-side-effects, bounded work per command.
@@ -3113,6 +3113,7 @@ Provide `coh peft` commands that export LoRA jobs, import adapters, and atomical
 - `coh peft import` stages adapters into host storage and exposes them as `/gpu/models/available/<model_id>/manifest.toml` with hash/size/provenance checks.
 - `coh peft activate` swaps `/gpu/models/active` atomically; `coh peft rollback` reverts to the previous pointer with a documented recovery path.
 - No training in VM and no registry service; file-native only.
+- New namespaces (`/queen/export/*`, `/gpu/models/*`) have explicit NineDoor provider ownership and manifest gating; docs are updated before code depends on them.
 
 **Commands**
 - `cargo test -p coh --features mock --test peft`
@@ -3134,6 +3135,7 @@ Provide `coh peft` commands that export LoRA jobs, import adapters, and atomical
 **Compiler touchpoints**
 - `coh-rtc` emits LoRA job manifest schema, adapter provenance fields, and pointer-swap limits for `coh peft`.
 - Generated snippets refresh `docs/INTERFACES.md` and `docs/GPU_NODES.md` to keep schema alignment.
+- Manifest gating enumerates the new export/model namespaces and their provider ownership.
 
 **Task Breakdown**
 ```
@@ -3192,6 +3194,7 @@ Deliver the `cohesix` Python client, runnable examples, `coh doctor`, and Alpha 
 - Examples (fast, inspectable artifacts): CUDA lease+run, MIG lease+run (when available), PEFT export/import/activate/rollback, edge telemetry write + `coh telemetry pull`.
 - `coh doctor` subcommand for deterministic environment checks (tickets, mount capability, NVML or `--mock`, runtime prerequisites).
 - Alpha packaging and minimal quickstart docs for `coh` + `cohesix`.
+- Release bundle updated to include `coh`, `cohesix`, and the doctor/quickstart artifacts in the shipped tarballs.
 
 **Commands**
 - `cargo run -p coh --features mock -- doctor --mock`
@@ -3312,7 +3315,7 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
   - If attestation is enabled but unavailable, boot aborts deterministically with audited error and no partial state.
 
 - **Schema & validation**
-  - Manifest IR v1.4 uses `profile.name: uefi-aarch64`.
+- Manifest IR (current schema) uses `profile.name: uefi-aarch64`.
   - Hardware declarations under a gated section (e.g., `hw.devices[]` with UART, NET, TPM, RTC; `hw.secure_boot`; `hw.attestation`).
   - Validation enforces required bindings and TPM availability when attestation is enabled.
 
@@ -3526,6 +3529,9 @@ Deliverables:
 **Goal**
 Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection of boot/attest data over local (same-host) 9P/TCP where available.
 
+**Non-Goals**
+- Repo-wide SPDX/NOTICE header sweeps (track separately; not required for the status tool).
+
 **Deliverables**
 - `coh-status` binary reading `/proc/boot`, `/proc/attest/*`, `/worker/*/telemetry` via localhost 9P/TCP; offline-friendly.
 - TPM attestation check displaying manifest fingerprint and verifying against cached reference.
@@ -3575,25 +3581,6 @@ Checks:
 Deliverables:
   - Verified attestation workflow documented; regression outputs stored.
 
-Title/ID: m26-repo-headers
-Goal: Add SPDX/copyright/purpose headers and NOTICE for repository compliance.
-Inputs: AGENTS.md, README.md, docs/*.md, apps/**, crates/**, tools/**, tests/**.
-Changes:
-  - apps/** — add SPDX/copyright/purpose headers to Rust and Markdown files.
-  - crates/** — add SPDX/copyright/purpose headers to Rust and Markdown files.
-  - tools/** — add SPDX/copyright/purpose headers to Rust and Markdown files.
-  - tests/** — add SPDX/copyright/purpose headers to Rust files.
-  - docs/** — add SPDX/copyright/purpose headers to Markdown files.
-  - NOTICE.txt — add repository notice statement.
-Commands:
-  - rg --files -g '*.rs' apps crates tools tests
-  - rg --files -g '*.md' docs apps crates tools
-  - rg --files -g '*.md' .
-Checks:
-  - In-scope Rust and Markdown files contain copyright, SPDX, and Purpose headers.
-  - NOTICE.txt present at repo root.
-Deliverables:
-  - Header updates across Rust and Markdown files; NOTICE.txt added.
 ```
 
 ## Milestone 27 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)  <a id="27"></a> 
@@ -3603,22 +3590,24 @@ Deliverables:
 Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is a single signed EFI binary.
 
 **Goal**  
-Boot Cohesix directly from UEFI on AWS EC2 using an in-tree ENA NIC driver, deterministically bring up TCP, and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**.
+Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-task**, then bring up ENA networking in root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**.
 
 **Deliverables**
-- Signed `BOOTX64.EFI` / `BOOTAA64.EFI` containing:
-  - Cohesix runtime
-  - ENA driver (adminq + single TX/RX queue)
-  - Minimal DHCP/TCP stack
-  - TLS + 9P client
-- EFI System Partition layout and AMI registration tooling (`uefi` / `uefi-preferred`).
-- Diskless bootstrap path: ENA → DHCP → TCP → TLS → 9door mount.
-- Embedded, signed fabric bootstrap manifest (≥2 endpoints, root trust anchors).
+- EFI System Partition containing:
+  - `EFI/BOOT/BOOTAA64.EFI` (elfloader EFI)
+  - `kernel.elf`
+  - `rootfs.cpio`
+  - `manifest.json` and `manifest.sha256`
+  - embedded, signed fabric bootstrap manifest (≥2 endpoints, root trust anchors)
+- ENA driver (adminq + single TX/RX queue) in root-task.
+- Minimal DHCP/TCP/TLS client in root-task (post-seL4), no firmware networking.
+- Diskless bootstrap path **after seL4**: ENA → DHCP → TCP → TLS → 9door mount.
+- AMI registration tooling for Arm64 (`uefi` / `uefi-preferred`).
 - Documentation in `docs/AWS_AMI.md` covering boot path, failure modes, and recovery.
 
 **Commands**
-- `cargo build -p cohesix-efi --target x86_64-unknown-uefi`
-- `cargo build -p cohesix-efi --target aarch64-unknown-uefi`
+- `cargo build -p elfloader --target aarch64-unknown-uefi`
+- `python scripts/make_uefi_image.py --manifest out/manifests/root_task_resolved.json`
 - `scripts/aws/build-esp.sh`
 - `scripts/aws/register-ami.sh`
 - `scripts/aws/launch-smoke.sh`
@@ -3638,27 +3627,29 @@ Boot Cohesix directly from UEFI on AWS EC2 using an in-tree ENA NIC driver, dete
 
 **Task Breakdown**
 ```
-Title/ID: m27-efi-entry
-Goal: Establish UEFI entry path and EFI binary layout.
-Inputs: crates/cohesix-efi/, linker scripts.
+Title/ID: m27-uefi-esp
+Goal: Build an EFI System Partition for AWS Arm64 using elfloader + seL4 artifacts.
+Inputs: upstream elfloader EFI build, `scripts/make_uefi_image.py`, manifest outputs.
 Changes:
-- crates/cohesix-efi/src/efi.rs — UEFI init, memory map, ExitBootServices.
-- crates/cohesix-efi/linker.ld — single-binary layout.
+- `scripts/make_uefi_image.py` — build ESP with BOOTAA64.EFI, kernel, rootfs, manifest + hash.
+- `scripts/aws/build-esp.sh` — produce AMI-ready ESP image.
 Commands:
-- cargo build -p cohesix-efi –target *-unknown-uefi
+- cargo build -p elfloader --target aarch64-unknown-uefi
+- python scripts/make_uefi_image.py --manifest out/manifests/root_task_resolved.json
 Checks:
-- Binary loads via UEFI shell and transfers control to Cohesix main loop.
+- ESP boots to root-task via elfloader with deterministic serial output.
 Deliverables:
-- Documented ESP layout and build recipe.
+- Documented ESP layout and build recipe for Arm64.
 
 Title/ID: m27-ena-adminq
-Goal: Implement ENA PCIe discovery and admin queue.
-Inputs: crates/net-ena/.
+Goal: Implement ENA PCIe discovery and admin queue in root-task.
+Inputs: crates/net-ena/, root-task net integration.
 Changes:
 - crates/net-ena/src/pci.rs — PCIe enumeration, BAR mapping.
 - crates/net-ena/src/adminq.rs — admin queue + completion queue.
+- apps/root-task/src/net/ena.rs — ENA init wiring.
 Commands:
-- cargo test -p net-ena –test adminq
+- cargo test -p net-ena --test adminq
 Checks:
 - Feature negotiation succeeds with minimal feature set.
 Deliverables:
@@ -3666,37 +3657,40 @@ Deliverables:
 
 Title/ID: m27-ena-io
 Goal: Bring up minimal ENA dataplane.
-Inputs: crates/net-ena/, net stack abstractions.
+Inputs: crates/net-ena/, root-task net stack abstractions.
 Changes:
 - crates/net-ena/src/ioq.rs — single TX/RX SQ + CQ.
 - crates/net-ena/src/poll.rs — polling dataplane (no interrupts).
+- apps/root-task/src/net/mod.rs — integrate ENA dataplane into the runtime.
 Commands:
-- cargo test -p net-ena –test ioq
+- cargo test -p net-ena --test ioq
 Checks:
 - TX reclaim and RX refill invariants hold under sustained traffic.
 Deliverables:
 - Deterministic dataplane invariants documented.
 
 Title/ID: m27-net-bootstrap
-Goal: Network bootstrap to fabric.
-Inputs: crates/net/, crates/crypto/.
+Goal: Network bootstrap to fabric (post-seL4, in root-task).
+Inputs: crates/net/, crates/crypto/, apps/root-task.
 Changes:
 - crates/net/src/dhcp.rs — bounded DHCP client.
 - crates/net/src/tcp.rs — TCP bring-up for long-lived sessions.
 - crates/crypto/src/tls.rs — fabric-auth TLS handshake.
+- apps/root-task/src/net/bootstrap.rs — deterministic sequencing and retries.
 Commands:
-- cargo test -p net –tests
+- cargo test -p net --tests
 Checks:
-- Network reaches “fabric-ready” state within defined bounds.
+- Network reaches "fabric-ready" state within defined bounds.
 Deliverables:
 - Bootstrap timing guarantees recorded.
 
 Title/ID: m27-fabric-mount
-Goal: Mount 9door namespace and enter steady state.
-Inputs: crates/door9p/, crates/fabric/.
+Goal: Mount 9door namespace and enter steady state (post-seL4).
+Inputs: crates/door9p/, crates/fabric/, apps/root-task.
 Changes:
 - crates/door9p/src/client.rs — mount and session management.
 - crates/fabric/src/bootstrap.rs — signed manifest verification.
+- apps/root-task/src/net/mount.rs — mount orchestration and error handling.
 Commands:
 - cargo test -p door9p
 Checks:
