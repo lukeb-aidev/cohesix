@@ -130,9 +130,8 @@ Hive replay snapshot (used by SwarmUI for Live Hive visuals):
 These are safe demo commands to prove the host tooling works. Live uploads require QEMU to be running.
 
 ### cas-tool (pack + upload)
-```Note: CAS = Content‑Addressed Storage.
+Note: CAS = Content‑Addressed Storage.
 In Cohesix it’s the update mechanism where bundles are stored and referenced by a hash of their contents, so integrity is built‑in (the content defines the address). cas-tool prepares a signed, chunked bundle and uploads it to the /updates namespace so the queen can validate and apply it deterministically.
-```
 
 `cas-tool` requires a signing key (bundled at `resources/fixtures/cas_signing_key.hex`) and a payload size aligned to `cas.store.chunk_bytes` (128 bytes). Run the commands below from the bundle root (don’t paste the ``` lines into your shell):
 ```bash
@@ -192,4 +191,90 @@ You can mint a queen ticket from the host with:
 ```bash
 ./bin/cohsh --mint-ticket --role queen
 ```
+
+## cohsh user manual
+`cohsh` is the primary operator CLI. It connects to the TCP console, attaches to a role, and issues Secure9P-style commands.
+
+### cohsh in a nutshell
+`cohsh` is a thin, deterministic client for the NineDoor Secure9P control plane:
+- Every command maps to a bounded file operation (read/write/tail) in the `/` namespace.
+- The root-task emits `OK <VERB>` / `ERR <VERB>` acknowledgements; `cohsh` shows those verbatim.
+- No extra RPC or hidden APIs exist — all control flows through files, tickets, and the manifest-defined policy.
+
+### Quota checks (why you see `ELIMIT`)
+`cohsh` enforces ticket-scoped quotas in the root-task. Each attached session carries a ticket with:
+- **Scope** (which paths/verbs are permitted),
+- **Rate/bandwidth** limits (bytes/second, total bytes),
+- **Cursor bounds** for telemetry tails.
+
+If a command exceeds these limits, the console returns `ERR ... reason=ELIMIT` (quota) or `ERR ... reason=EPERM` (scope). Fixes are:
+- attach with a **queen** ticket (higher limits),
+- reduce the tail rate/size,
+- reattach to reset counters after a long session.
+
+### Tips & gotchas
+- Only one client at a time: `cohsh` and `swarmui` should not be attached simultaneously.
+- Worker IDs are dynamic: always `ls /worker` before `tail`/`kill`.
+- GPU spawns require `/gpu` entries: if `/gpu` is empty, run `./bin/gpu-bridge-host --mock --list` and retry.
+- `ELIMIT` errors on `tail` indicate ticket quota limits; reattach with a queen ticket or slow the tail.
+
+### Start and attach
+- Connect as queen (most common):
+  ```bash
+  ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
+  ```
+- Attach after startup:
+  ```text
+  coh> attach queen
+  ```
+- Use tickets when required:
+  ```bash
+  QUEEN_TICKET=$(./bin/cohsh --mint-ticket --role queen)
+  ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen --ticket "$QUEEN_TICKET"
+  ```
+
+### Navigate and inspect
+- List namespaces:
+  ```text
+  coh> ls /
+  coh> ls /worker
+  ```
+- Read a file once:
+  ```text
+  coh> cat /log/queen.log
+  ```
+- Stream a file:
+  ```text
+  coh> tail /log/queen.log
+  coh> tail /worker/<id>/telemetry
+  ```
+
+### Common control actions
+- Spawn heartbeat workers:
+  ```text
+  coh> spawn heartbeat ticks=100
+  coh> spawn heartbeat ticks=50 ttl_s=60 ops=500
+  ```
+- Spawn GPU workers (requires GPU bridge):
+  ```text
+  coh> spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=1 ttl_s=120
+  ```
+- Kill a worker:
+  ```text
+  coh> kill worker-<id>
+  ```
+
+### Self-tests and diagnostics
+- Quick vs full tests:
+  ```text
+  coh> test --mode quick
+  coh> test --mode full --timeout 120
+  ```
+- TCP health check:
+  ```text
+  coh> tcp-diag
+  coh> tcp-diag 31337
+  ```
+
+
 
