@@ -165,6 +165,30 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `telemetry_ingest.max_segments_per_device`: `{}`",
+            manifest.telemetry_ingest.max_segments_per_device
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `telemetry_ingest.max_bytes_per_segment`: `{}`",
+            manifest.telemetry_ingest.max_bytes_per_segment
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `telemetry_ingest.max_total_bytes_per_device`: `{}`",
+            manifest.telemetry_ingest.max_total_bytes_per_device
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `telemetry_ingest.eviction_policy`: `{}`",
+            format_ingest_eviction_policy(&manifest.telemetry_ingest.eviction_policy)
+        )
+        .ok();
+        writeln!(
+            schema_md,
             "- `observability.proc_9p.sessions`: `{}`",
             manifest.observability.proc_9p.sessions
         )
@@ -1400,6 +1424,15 @@ fn format_telemetry_schema(schema: &crate::ir::TelemetryFrameSchema) -> &'static
     match schema {
         crate::ir::TelemetryFrameSchema::LegacyPlaintext => "legacy-plaintext",
         crate::ir::TelemetryFrameSchema::CborV1 => "cbor-v1",
+    }
+}
+
+fn format_ingest_eviction_policy(
+    policy: &crate::ir::TelemetryIngestEvictionPolicy,
+) -> &'static str {
+    match policy {
+        crate::ir::TelemetryIngestEvictionPolicy::Refuse => "refuse",
+        crate::ir::TelemetryIngestEvictionPolicy::EvictOldest => "evict-oldest",
     }
 }
 

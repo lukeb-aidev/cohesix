@@ -2777,7 +2777,7 @@ Changes:
 max_segments_per_device
 max_bytes_per_segment
 max_total_bytes_per_device
-eviction_policy (refuse | evict_oldest)
+eviction_policy (refuse | evict-oldest)
 	•	apps/nine-door/src/host/telemetry.rs — enforce quotas and eviction.
 Commands:
 	•	cargo run -p coh-rtc – configs/root_task.toml
@@ -2873,7 +2873,7 @@ After Milestone 21a, Cohesix supports **safe, Plan-9-style telemetry creation** 
 
 ---
 
-## Milestone 21b — Alpha: Host Bridges (coh mount, coh gpu, coh telemetry pull) <a id="21b"></a> 
+## Milestone 21b — Host Bridges (coh mount, coh gpu, coh telemetry pull) <a id="21b"></a> 
 [Milestones](#Milestones)
 
 **Why now (adoption):** After Milestone 20.x, we need plug-and-play host UX that integrates with existing CUDA/MIG workflows without new protocols or VM expansion.
@@ -3023,7 +3023,7 @@ Deliverables:
 
 ---
 
-## Milestone 22 — Alpha: Runtime Convenience (coh run) + GPU Job Breadcrumbs  <a id="22"></a> 
+## Milestone 22 — Runtime Convenience (coh run) + GPU Job Breadcrumbs  <a id="22"></a> 
 [Milestones](#Milestones)
 
 **Why now (adoption):** Operators need a two-minute "lease -> run -> observe -> release" loop without introducing a runtime orchestrator.
@@ -3100,7 +3100,7 @@ Deliverables:
 
 ---
 
-## Milestone 23 — Alpha: PEFT/LoRA Lifecycle Glue (coh peft) <a id="23"></a> 
+## Milestone 23 — PEFT/LoRA Lifecycle Glue (coh peft) <a id="23"></a> 
 [Milestones](#Milestones)
 
 **Why now (adoption):** PEFT users need a file-native loop to export jobs, import adapters, and activate or rollback safely without a new control plane.
@@ -3181,7 +3181,7 @@ Deliverables:
 
 ---
 
-## Milestone 24 — Alpha: Python Client + Examples (cohesix) + Doctor + Release Cut <a id="24"></a> 
+## Milestone 24 — Python Client + Examples (cohesix) + Doctor + Release Cut <a id="24"></a> 
 [Milestones](#Milestones)
 
 **Why now (adoption):** A thin, non-authoritative Python layer and a setup doctor reduce friction for CUDA, PEFT, and edge users without altering the control plane.

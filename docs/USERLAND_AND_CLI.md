@@ -79,8 +79,8 @@ Manifest-derived policy defaults are emitted by `coh-rtc` into `out/cohsh_policy
 <!-- Purpose: Generated cohsh policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### cohsh client policy (generated)
-- `manifest.sha256`: `61c0fcf26398e77b38f9ea82dc2f1a619bd3151de43f90acab748b9a7dc88435`
-- `policy.sha256`: `d9c13967eec145935bbdcf7cadc71c41696295dd6b8484991609531b9560d3ee`
+- `manifest.sha256`: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`
+- `policy.sha256`: `c1e183f3447f311c443dc4e16087bd25ee9855b06fd6bb717435988edf7c24f7`
 - `cohsh.pool.control_sessions`: `2`
 - `cohsh.pool.telemetry_sessions`: `4`
 - `retry.max_attempts`: `3`
@@ -90,7 +90,7 @@ Manifest-derived policy defaults are emitted by `coh-rtc` into `out/cohsh_policy
 - `heartbeat.interval_ms`: `15000`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `61c0fcf26398e77b38f9ea82dc2f1a619bd3151de43f90acab748b9a7dc88435`)._
+_Generated from `configs/root_task.toml` (sha256: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`)._
 
 
 Manifest-derived CohClient defaults (paths and Secure9P bounds) are emitted by `coh-rtc`.
@@ -99,14 +99,18 @@ Manifest-derived CohClient defaults (paths and Secure9P bounds) are emitted by `
 <!-- Purpose: Generated cohsh client snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `61c0fcf26398e77b38f9ea82dc2f1a619bd3151de43f90acab748b9a7dc88435`
+- `manifest.sha256`: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
 - `trace.max_bytes`: `1048576`
 - `client_paths.queen_ctl`: `/queen/ctl`
 - `client_paths.log`: `/log/queen.log`
+- `telemetry_ingest.max_segments_per_device`: `4`
+- `telemetry_ingest.max_bytes_per_segment`: `32768`
+- `telemetry_ingest.max_total_bytes_per_device`: `131072`
+- `telemetry_ingest.eviction_policy`: `evict-oldest`
 
-_Generated from `configs/root_task.toml` (sha256: `61c0fcf26398e77b38f9ea82dc2f1a619bd3151de43f90acab748b9a7dc88435`)._
+_Generated from `configs/root_task.toml` (sha256: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`)._
 
 
 Shared console grammar and ticket policy are emitted by `coh-rtc` from `cohsh-core` so CLI and console stay aligned.
@@ -148,6 +152,9 @@ _Generated from cohsh-core verb specs (18 verbs)._
 _Generated from cohsh-core ticket policy._
 
 <!-- coh-rtc:ticket-quotas:start -->
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Generated ticket quota snippet consumed by docs/SECURITY.md and docs/USERLAND_AND_CLI.md. -->
+
 ### Ticket quota limits (generated)
 - `ticket_limits.max_scopes`: `8`
 - `ticket_limits.max_scope_path_len`: `128`
@@ -179,8 +186,8 @@ Manifest-derived SwarmUI defaults are emitted by `coh-rtc`.
 <!-- Purpose: Generated SwarmUI defaults snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### SwarmUI defaults (generated)
-- `manifest.sha256`: `61c0fcf26398e77b38f9ea82dc2f1a619bd3151de43f90acab748b9a7dc88435`
-- `swarmui.defaults.sha256`: `e38b9eca6dbd4dab1bad45ea9833c564a749b1790257c109e63b4b999d4637e9`
+- `manifest.sha256`: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`
+- `swarmui.defaults.sha256`: `9434866ec6914caccf33ada0c419aa98f299d3b1be4eababa327e6234fc2fe02`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
 - `swarmui.cache.max_bytes`: `262144`
@@ -197,7 +204,7 @@ Manifest-derived SwarmUI defaults are emitted by `coh-rtc`.
 - `swarmui.paths.namespace_roots`: `/proc, /queen, /worker, /log, /gpu`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `61c0fcf26398e77b38f9ea82dc2f1a619bd3151de43f90acab748b9a7dc88435`)._
+_Generated from `configs/root_task.toml` (sha256: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`)._
 <!-- coh-rtc:swarmui-defaults:end -->
 
 ### Interactive shell surface
@@ -225,6 +232,7 @@ Commands and status:
 - `kill <worker_id>` – queue a worker termination via `/queen/ctl`.
 - `bind <src> <dst>` – bind a canonical namespace path to a session-scoped mount point via `/queen/ctl`.
 - `mount <service> <path>` – mount a named service namespace via `/queen/ctl`.
+- `telemetry push <src_file> --device <id>` – request an OS-named segment under `/queen/telemetry/<device_id>/seg/` and append bounded telemetry records using `cohsh-telemetry-push/v1` envelopes (UTF-8, allowlisted extensions only; chunked to `max_record_bytes=4096` and `telemetry_ingest.max_bytes_per_segment`).
 - `quit` – prints `closing session` and exits the shell loop.【F:apps/cohsh/src/lib.rs†L1250-L1252】
 - Attachments are designed so a single queen session (interactive or scripted) can drive orchestration for many workers without switching tools.
 

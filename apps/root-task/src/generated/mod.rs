@@ -80,6 +80,20 @@ pub struct TelemetryConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub enum TelemetryIngestEvictionPolicy {
+    Refuse,
+    EvictOldest,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TelemetryIngestConfig {
+    pub max_segments_per_device: u32,
+    pub max_bytes_per_segment: u32,
+    pub max_total_bytes_per_device: u32,
+    pub eviction_policy: TelemetryIngestEvictionPolicy,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct CasConfig {
     pub enable: bool,
     pub chunk_bytes: u32,
@@ -264,7 +278,7 @@ pub struct AuditConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
-pub const MANIFEST_SHA256: &str = "a85a48e0ae0dc31764953465d2baaa63c0a61018a1b4dc5cfe6e0d313b2c9678";
+pub const MANIFEST_SHA256: &str = "ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
@@ -274,6 +288,7 @@ pub const TICKET_LIMITS: TicketLimits = bootstrap::TICKET_LIMITS;
 pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;
 pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();
 pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;
+pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = bootstrap::TELEMETRY_INGEST_CONFIG;
 pub const OBSERVABILITY_CONFIG: ObservabilityConfig = bootstrap::OBSERVABILITY_CONFIG;
 pub const UI_PROVIDER_CONFIG: UiProviderConfig = bootstrap::UI_PROVIDER_CONFIG;
 pub const CAS_CONFIG: CasConfig = bootstrap::CAS_CONFIG;
@@ -329,6 +344,10 @@ pub const fn shard_labels() -> &'static [&'static str] {
 
 pub const fn telemetry_config() -> TelemetryConfig {
     bootstrap::TELEMETRY_CONFIG
+}
+
+pub const fn telemetry_ingest_config() -> TelemetryIngestConfig {
+    bootstrap::TELEMETRY_INGEST_CONFIG
 }
 
 pub const fn observability_config() -> ObservabilityConfig {

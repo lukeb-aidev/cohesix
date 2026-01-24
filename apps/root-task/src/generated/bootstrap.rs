@@ -4,12 +4,12 @@
 
 #![allow(unused_imports)]
 
-use super::{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig};
+use super::{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig};
 use cohesix_ticket::Role;
 
 pub const TICKET_TABLE_SHA256: &str = "fd0ebff1d0b4cfcc2a03a1015578545dfa68f0240e782b60ad7956c2492972eb";
 pub const NAMESPACE_TABLE_SHA256: &str = "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
-pub const AUDIT_TABLE_SHA256: &str = "b9a21e5f066dd62b66b33d0509a841bf22c8dc72e2c1118f34b5fdc0bc4163d4";
+pub const AUDIT_TABLE_SHA256: &str = "6513d0cde95269336acd1725f116c3c7b2463fdf1388ebc38dd5c8a20039b8da";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec { role: Role::Queen, secret: "bootstrap" },
@@ -292,6 +292,8 @@ pub const SHARD_LABELS: [&str; 256] = [
 
 pub const TELEMETRY_CONFIG: TelemetryConfig = TelemetryConfig { ring_bytes_per_worker: 1024, frame_schema: TelemetryFrameSchema::LegacyPlaintext, cursor: TelemetryCursorConfig { retain_on_boot: false } };
 
+pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = TelemetryIngestConfig { max_segments_per_device: 4, max_bytes_per_segment: 32768, max_total_bytes_per_device: 131072, eviction_policy: TelemetryIngestEvictionPolicy::EvictOldest };
+
 pub const CAS_CONFIG: CasConfig = CasConfig { enable: true, chunk_bytes: 128, delta_enable: true, signing_required: true, signing_key: Some([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]), models_enabled: false };
 
 pub const PROC_9P_SESSIONS_BYTES: usize = 8192;
@@ -350,7 +352,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = [
 pub const INITIAL_AUDIT_LINES: [&str; 23] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=a85a48e0ae0dc31764953465d2baaa63c0a61018a1b4dc5cfe6e0d313b2c9678",
+    "manifest.sha256=ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

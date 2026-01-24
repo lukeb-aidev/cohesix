@@ -387,6 +387,30 @@ fn render_client_rust(manifest: &Manifest, manifest_hash: &str) -> String {
         manifest.client_paths.log
     )
     .ok();
+    writeln!(
+        contents,
+        "pub const TELEMETRY_INGEST_MAX_SEGMENTS_PER_DEVICE: u32 = {};",
+        manifest.telemetry_ingest.max_segments_per_device
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT: u32 = {};",
+        manifest.telemetry_ingest.max_bytes_per_segment
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const TELEMETRY_INGEST_MAX_TOTAL_BYTES_PER_DEVICE: u32 = {};",
+        manifest.telemetry_ingest.max_total_bytes_per_device
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const TELEMETRY_INGEST_EVICTION_POLICY: &str = \"{}\";",
+        format_ingest_eviction_policy(&manifest.telemetry_ingest.eviction_policy)
+    )
+    .ok();
     contents
 }
 
@@ -431,6 +455,30 @@ fn render_client_doc(manifest: &Manifest, manifest_hash: &str) -> String {
         manifest.client_paths.log
     )
     .ok();
+    writeln!(
+        contents,
+        "- `telemetry_ingest.max_segments_per_device`: `{}`",
+        manifest.telemetry_ingest.max_segments_per_device
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `telemetry_ingest.max_bytes_per_segment`: `{}`",
+        manifest.telemetry_ingest.max_bytes_per_segment
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `telemetry_ingest.max_total_bytes_per_device`: `{}`",
+        manifest.telemetry_ingest.max_total_bytes_per_device
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `telemetry_ingest.eviction_policy`: `{}`",
+        format_ingest_eviction_policy(&manifest.telemetry_ingest.eviction_policy)
+    )
+    .ok();
     writeln!(contents).ok();
     writeln!(
         contents,
@@ -439,4 +487,11 @@ fn render_client_doc(manifest: &Manifest, manifest_hash: &str) -> String {
     )
     .ok();
     contents
+}
+
+fn format_ingest_eviction_policy(policy: &crate::ir::TelemetryIngestEvictionPolicy) -> &'static str {
+    match policy {
+        crate::ir::TelemetryIngestEvictionPolicy::Refuse => "refuse",
+        crate::ir::TelemetryIngestEvictionPolicy::EvictOldest => "evict-oldest",
+    }
 }

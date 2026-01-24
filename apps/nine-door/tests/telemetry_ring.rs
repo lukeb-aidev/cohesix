@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use nine_door::{
     Clock, NineDoor, ShardLayout, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema,
-    TelemetryManifestStore,
+    TelemetryIngestConfig, TelemetryManifestStore,
 };
 
 const METRICS_ENV: &str = "COHESIX_LATENCY_METRICS_PATH";
@@ -75,6 +75,7 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
             clock.clone(),
             Default::default(),
             telemetry,
+            TelemetryIngestConfig::default(),
             manifest.clone(),
         );
         server.register_ticket_secret(Role::WorkerHeartbeat, "worker-secret");
@@ -140,6 +141,7 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
         clock.clone(),
         Default::default(),
         telemetry,
+        TelemetryIngestConfig::default(),
         manifest,
     );
     server.register_ticket_secret(Role::WorkerHeartbeat, "worker-secret");

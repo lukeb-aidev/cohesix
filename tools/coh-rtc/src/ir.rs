@@ -64,6 +64,8 @@ pub struct Manifest {
     #[serde(default)]
     pub telemetry: Telemetry,
     #[serde(default)]
+    pub telemetry_ingest: TelemetryIngest,
+    #[serde(default)]
     pub observability: Observability,
     #[serde(default)]
     pub ui_providers: UiProviders,
@@ -683,6 +685,30 @@ impl Manifest {
                 "telemetry rings {} bytes exceed event-pump budget {} bytes",
                 aggregate,
                 EVENT_PUMP_TELEMETRY_BUDGET_BYTES
+            );
+        }
+        self.validate_telemetry_ingest()?;
+        Ok(())
+    }
+
+    fn validate_telemetry_ingest(&self) -> Result<()> {
+        let ingest = &self.telemetry_ingest;
+        let zero_segments = ingest.max_segments_per_device == 0;
+        let zero_segment_bytes = ingest.max_bytes_per_segment == 0;
+        let zero_total_bytes = ingest.max_total_bytes_per_device == 0;
+        if zero_segments || zero_segment_bytes || zero_total_bytes {
+            if zero_segments && zero_segment_bytes && zero_total_bytes {
+                return Ok(());
+            }
+            bail!(
+                "telemetry_ingest.* must be all zero (disabled) or all non-zero (enabled)"
+            );
+        }
+        if ingest.max_total_bytes_per_device < ingest.max_bytes_per_segment {
+            bail!(
+                "telemetry_ingest.max_total_bytes_per_device {} must be >= max_bytes_per_segment {}",
+                ingest.max_total_bytes_per_device,
+                ingest.max_bytes_per_segment
             );
         }
         Ok(())
@@ -1343,6 +1369,26 @@ impl Default for Telemetry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
+pub struct TelemetryIngest {
+    pub max_segments_per_device: u32,
+    pub max_bytes_per_segment: u32,
+    pub max_total_bytes_per_device: u32,
+    pub eviction_policy: TelemetryIngestEvictionPolicy,
+}
+
+impl Default for TelemetryIngest {
+    fn default() -> Self {
+        Self {
+            max_segments_per_device: 4,
+            max_bytes_per_segment: 32 * 1024,
+            max_total_bytes_per_device: 128 * 1024,
+            eviction_policy: TelemetryIngestEvictionPolicy::EvictOldest,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
 pub struct Observability {
     pub proc_9p: Proc9pObservability,
     pub proc_ingest: ProcIngestObservability,
@@ -1799,6 +1845,13 @@ impl Default for TelemetryCursor {
 pub enum TelemetryFrameSchema {
     LegacyPlaintext,
     CborV1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TelemetryIngestEvictionPolicy {
+    Refuse,
+    EvictOldest,
 }
 
 impl Default for Ecosystem {

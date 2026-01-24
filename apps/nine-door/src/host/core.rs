@@ -45,7 +45,9 @@ use super::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 use super::observe::{ObserveConfig, ObserveState};
 use super::replay::ReplayState;
 use super::security::{CursorCheck, TicketDeny, TicketLimits, TicketUsage};
-use super::telemetry::{TelemetryAuditLevel, TelemetryConfig, TelemetryManifestStore};
+use super::telemetry::{
+    TelemetryAuditLevel, TelemetryConfig, TelemetryIngestConfig, TelemetryManifestStore,
+};
 use super::ui::{UiProviderConfig, UiVariant, UI_MAX_READ_BYTES};
 use super::{Clock, NineDoorError};
 
@@ -82,6 +84,7 @@ impl ServerCore {
         limits: SessionLimits,
         ticket_limits: TicketLimits,
         telemetry: TelemetryConfig,
+        telemetry_ingest: TelemetryIngestConfig,
         telemetry_manifest: TelemetryManifestStore,
         cas: CasConfig,
         shards: ShardLayout,
@@ -113,6 +116,7 @@ impl ServerCore {
         };
         let mut control = ControlPlane::new(
             telemetry,
+            telemetry_ingest,
             telemetry_manifest,
             cas,
             shards,
@@ -1772,6 +1776,7 @@ struct ControlPlane {
 impl ControlPlane {
     fn new(
         telemetry: TelemetryConfig,
+        telemetry_ingest: TelemetryIngestConfig,
         telemetry_manifest: TelemetryManifestStore,
         cas: CasConfig,
         shards: ShardLayout,
@@ -1788,6 +1793,7 @@ impl ControlPlane {
         Self {
             namespace: Namespace::new_with_telemetry_manifest_host_policy(
                 telemetry,
+                telemetry_ingest,
                 telemetry_manifest,
                 cas,
                 shards,

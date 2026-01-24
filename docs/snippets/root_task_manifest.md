@@ -27,6 +27,10 @@
 - `telemetry.ring_bytes_per_worker`: `1024`
 - `telemetry.frame_schema`: `legacy-plaintext`
 - `telemetry.cursor.retain_on_boot`: `false`
+- `telemetry_ingest.max_segments_per_device`: `4`
+- `telemetry_ingest.max_bytes_per_segment`: `32768`
+- `telemetry_ingest.max_total_bytes_per_device`: `131072`
+- `telemetry_ingest.eviction_policy`: `evict-oldest`
 - `observability.proc_9p.sessions`: `true`
 - `observability.proc_9p.outstanding`: `true`
 - `observability.proc_9p.short_writes`: `true`
@@ -96,7 +100,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `a85a48e0ae0dc31764953465d2baaa63c0a61018a1b4dc5cfe6e0d313b2c9678`
+- `manifest.sha256`: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -142,4 +146,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `a85a48e0ae0dc31764953465d2baaa63c0a61018a1b4dc5cfe6e0d313b2c9678`)._
+_Generated from `configs/root_task.toml` (sha256: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`)._

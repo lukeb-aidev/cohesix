@@ -97,6 +97,7 @@ fn script_feature_inventory_is_stable() {
         "CMD:ls".to_owned(),
         "CMD:quit".to_owned(),
         "CMD:spawn".to_owned(),
+        "CMD:telemetry".to_owned(),
         "CMD:tail".to_owned(),
         "EXPECT ERR".to_owned(),
         "EXPECT OK".to_owned(),
@@ -147,6 +148,8 @@ fn script_token_stream_is_stable() {
         "sidecar_integration.coh:4cb5dcf403712defa9016f4bcc4bf27b891df6a1dce646dc304acf4b5f7cad74"
             .to_owned(),
         "tcp_basic.coh:619970b6ff14332bbef80f704c117b4471653bb75f7a6187b27d93fbc16415a7"
+            .to_owned(),
+        "telemetry_push_create.coh:134b129ea4daf185563400d8149a3539d571cda9e41cbe3a43ced74878ae35fb"
             .to_owned(),
         "telemetry_ring.coh:2d33e86fd1619120f0bf26d45a7532bf03a57a10a532ea9841f1624bf98df351"
             .to_owned(),

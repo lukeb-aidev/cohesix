@@ -67,6 +67,12 @@ frame_schema = "legacy-plaintext"
 [telemetry.cursor]
 retain_on_boot = false
 
+[telemetry_ingest]
+max_segments_per_device = 4
+max_bytes_per_segment = 32768
+max_total_bytes_per_device = 131072
+eviction_policy = "evict-oldest"
+
 [observability.proc_9p]
 sessions = true
 outstanding = true

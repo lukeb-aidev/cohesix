@@ -4,7 +4,10 @@
 // Author: Lukas Bower
 
 pub mod cursor;
+pub mod ingest;
 pub mod ring;
+
+pub use ingest::{TelemetryIngestConfig, TelemetryIngestEvictionPolicy};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

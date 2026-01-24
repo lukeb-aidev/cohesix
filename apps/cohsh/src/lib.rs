@@ -45,10 +45,11 @@ pub use session_pool::{PoolKind, SessionPool, TransportFactory};
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
+use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 #[cfg(feature = "tcp")]
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -135,6 +136,21 @@ const TEST_DETAIL_MAX_CHARS: usize = 200;
 const TEST_MSIZE_SENTINEL: &str = "{{msize_overflow}}";
 const MAX_PATH_COMPONENTS: usize = 8;
 const CONSOLE_LINE_CAPACITY: usize = 256;
+const TELEMETRY_PUSH_SCHEMA: &str = "cohsh-telemetry-push/v1";
+const TELEMETRY_RECORD_MAX_BYTES: usize = 4096;
+const TELEMETRY_INGEST_MAX_SEGMENTS_PER_DEVICE: u32 =
+    generated_client::TELEMETRY_INGEST_MAX_SEGMENTS_PER_DEVICE;
+const TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT: usize =
+    generated_client::TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT as usize;
+const TELEMETRY_INGEST_MAX_TOTAL_BYTES_PER_DEVICE: u32 =
+    generated_client::TELEMETRY_INGEST_MAX_TOTAL_BYTES_PER_DEVICE;
+const TELEMETRY_PUSH_ALLOWED_EXTENSIONS: &[(&str, &str)] = &[
+    ("txt", "text/plain"),
+    ("log", "text/plain"),
+    ("json", "application/json"),
+    ("ndjson", "application/x-ndjson"),
+    ("csv", "text/csv"),
+];
 static POOL_BENCH_RUN: AtomicUsize = AtomicUsize::new(0);
 
 fn format_script_error(
@@ -1294,6 +1310,34 @@ struct PoolBenchConfig {
 }
 
 #[derive(Debug)]
+struct TelemetryPushArgs<'a> {
+    src_path: &'a str,
+    device_id: &'a str,
+}
+
+#[derive(Debug)]
+struct TelemetryPushSummary {
+    device_id: String,
+    seg_id: String,
+    records: usize,
+    bytes: usize,
+}
+
+#[derive(Serialize)]
+struct TelemetryPushEnvelope<'a> {
+    schema: &'static str,
+    seq: u64,
+    mime: &'a str,
+    payload: &'a str,
+}
+
+#[derive(Serialize)]
+struct TelemetryCtlCommand<'a> {
+    new: &'static str,
+    mime: &'a str,
+}
+
+#[derive(Debug)]
 struct CommandExecution {
     status: CommandStatus,
     transcript: CommandTranscript,
@@ -2165,6 +2209,45 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     }
                 }
             }
+            "telemetry" => {
+                let Some(subcommand) = parts.next() else {
+                    return CommandExecution::err(
+                        anyhow!("telemetry requires a subcommand"),
+                        transcript,
+                    );
+                };
+                match subcommand {
+                    "push" => {
+                        let args = match parse_telemetry_push_args(parts) {
+                            Ok(args) => args,
+                            Err(err) => return CommandExecution::err(err, transcript),
+                        };
+                        match self.telemetry_push(args.src_path, args.device_id) {
+                            Ok(summary) => {
+                                let detail = format!(
+                                    "action=push device={} seg_id={} records={} bytes={}",
+                                    summary.device_id, summary.seg_id, summary.records, summary.bytes
+                                );
+                                let ack = match render_telemetry_ack(AckStatus::Ok, &detail) {
+                                    Ok(ack) => ack,
+                                    Err(err) => return CommandExecution::err(err, transcript),
+                                };
+                                transcript.ack_lines.push(ack);
+                                Ok(CommandStatus::Continue)
+                            }
+                            Err(err) => {
+                                let detail =
+                                    format!("action=push device={} reason={err}", args.device_id);
+                                if let Ok(ack) = render_telemetry_ack(AckStatus::Err, &detail) {
+                                    transcript.ack_lines.push(ack);
+                                }
+                                Err(err)
+                            }
+                        }
+                    }
+                    other => Err(anyhow!("unknown telemetry subcommand '{other}'")),
+                }
+            }
             "spawn" => {
                 let Some(role) = parts.next() else {
                     return CommandExecution::err(anyhow!("spawn requires a role"), transcript);
@@ -2524,6 +2607,89 @@ impl<T: Transport, W: Write> Shell<T, W> {
         self.write_path(QUEEN_CTL_PATH, payload.as_bytes())
     }
 
+    fn telemetry_push(&mut self, src_path: &str, device_id: &str) -> Result<TelemetryPushSummary> {
+        if !telemetry_ingest_enabled() {
+            return Err(anyhow!("telemetry ingest is disabled in the manifest"));
+        }
+        let device_id = device_id.trim();
+        if device_id.is_empty() {
+            return Err(anyhow!("telemetry push requires a device id"));
+        }
+        if device_id.contains('/') {
+            return Err(anyhow!("telemetry device id must not contain '/'"));
+        }
+        let _ = ensure_json_string(device_id, "telemetry device id")?;
+        let session = self.queen_session("telemetry push")?;
+        let source = Path::new(src_path);
+        let metadata = fs::metadata(source)
+            .with_context(|| format!("telemetry push source not found: {src_path}"))?;
+        if !metadata.is_file() {
+            return Err(anyhow!("telemetry push source must be a file"));
+        }
+        if metadata.len() == 0 {
+            return Err(anyhow!("telemetry push source is empty"));
+        }
+        if metadata.len() as usize > TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT {
+            return Err(anyhow!(
+                "telemetry push source exceeds max_bytes_per_segment {} bytes",
+                TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT
+            ));
+        }
+        let mime = telemetry_mime_for_path(source)?;
+        let data = fs::read(source)
+            .with_context(|| format!("failed to read telemetry push source {src_path}"))?;
+        let text = std::str::from_utf8(&data)
+            .context("telemetry push source must be UTF-8 text")?;
+        let records = build_telemetry_records(text, mime)?;
+        let total_bytes: usize = records.iter().map(|record| record.len()).sum();
+        if total_bytes > TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT {
+            return Err(anyhow!(
+                "telemetry push payload exceeds max_bytes_per_segment {} bytes",
+                TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT
+            ));
+        }
+        let ctl_path = format!("/queen/telemetry/{device_id}/ctl");
+        ensure_valid_path(&ctl_path)?;
+        let ctl_payload = build_telemetry_ctl_payload(mime)?;
+        self.transport
+            .write(session, &ctl_path, ctl_payload.as_bytes())?;
+        let ack_lines = self.transport.drain_acknowledgements();
+        let seg_id = parse_seg_id_from_ack_lines(&ack_lines);
+        let seg_id = if let Some(seg_id) = seg_id {
+            seg_id
+        } else {
+            let latest_path = format!("/queen/telemetry/{device_id}/latest");
+            ensure_valid_path(&latest_path)?;
+            let latest_lines = self.transport.read(session, &latest_path)?;
+            let _ = self.transport.drain_acknowledgements();
+            latest_lines
+                .into_iter()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .map(|line| line.trim().to_owned())
+                .ok_or_else(|| anyhow!("telemetry push could not resolve latest segment id"))?
+        };
+        let seg_path = format!("/queen/telemetry/{device_id}/seg/{seg_id}");
+        ensure_valid_path(&seg_path)?;
+        if !records.is_empty() {
+            let written = self.transport.write_batch(session, &seg_path, &records)?;
+            if written != records.len() {
+                return Err(anyhow!(
+                    "telemetry push short write: expected {} records, wrote {}",
+                    records.len(),
+                    written
+                ));
+            }
+        }
+        let _ = self.transport.drain_acknowledgements();
+        Ok(TelemetryPushSummary {
+            device_id: device_id.to_owned(),
+            seg_id,
+            records: records.len(),
+            bytes: total_bytes,
+        })
+    }
+
     fn run_pool_bench(&mut self, config: PoolBenchConfig) -> Result<PoolBenchResult> {
         ensure_valid_path(&config.path)?;
         let session = self
@@ -2826,6 +2992,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line(console_lines[10])?;
                 self.write_line("  bind <src> <dst>             - Bind namespace path")?;
                 self.write_line("  mount <service> <path>       - Mount service namespace")?;
+                self.write_line(
+                    "  telemetry push <src> --device <id> - Push bounded telemetry segment",
+                )?;
                 self.write_line(console_lines[11])?;
                 Ok(CommandStatus::Continue)
             }
@@ -3005,6 +3174,40 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     format!("{{\"mount\":{{\"service\":\"{service}\",\"at\":\"{target}\"}}}}");
                 self.send_queen_ctl(&payload)?;
                 Ok(CommandStatus::Continue)
+            }
+            "telemetry" => {
+                let Some(subcommand) = parts.next() else {
+                    return Err(anyhow!("telemetry requires a subcommand"));
+                };
+                match subcommand {
+                    "push" => {
+                        let args = parse_telemetry_push_args(parts)?;
+                        match self.telemetry_push(args.src_path, args.device_id) {
+                            Ok(summary) => {
+                                let detail = format!(
+                                    "action=push device={} seg_id={} records={} bytes={}",
+                                    summary.device_id,
+                                    summary.seg_id,
+                                    summary.records,
+                                    summary.bytes
+                                );
+                                let ack = render_telemetry_ack(AckStatus::Ok, &detail)?;
+                                self.write_ack_line(&ack)?;
+                                Ok(CommandStatus::Continue)
+                            }
+                            Err(err) => {
+                                let detail = format!(
+                                    "action=push device={} reason={err}",
+                                    args.device_id
+                                );
+                                let ack = render_telemetry_ack(AckStatus::Err, &detail)?;
+                                self.write_ack_line(&ack)?;
+                                Err(err)
+                            }
+                        }
+                    }
+                    other => Err(anyhow!("unknown telemetry subcommand '{other}'")),
+                }
             }
             "cat" => {
                 let Some(path) = parts.next() else {
@@ -3573,6 +3776,139 @@ pub(crate) fn parse_path(path: &str) -> Result<Vec<String>> {
     Ok(components)
 }
 
+fn telemetry_ingest_enabled() -> bool {
+    TELEMETRY_INGEST_MAX_SEGMENTS_PER_DEVICE > 0
+        && TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT > 0
+        && TELEMETRY_INGEST_MAX_TOTAL_BYTES_PER_DEVICE > 0
+}
+
+fn telemetry_mime_for_path(path: &Path) -> Result<&'static str> {
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("telemetry push requires a file extension"))?;
+    for (allowed, mime) in TELEMETRY_PUSH_ALLOWED_EXTENSIONS {
+        if *allowed == ext {
+            return Ok(*mime);
+        }
+    }
+    let allowed = TELEMETRY_PUSH_ALLOWED_EXTENSIONS
+        .iter()
+        .map(|(ext, _)| *ext)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(anyhow!(
+        "telemetry push extension '{ext}' is not allowed (allowed: {allowed})"
+    ))
+}
+
+fn build_telemetry_ctl_payload(mime: &str) -> Result<String> {
+    let command = TelemetryCtlCommand { new: "segment", mime };
+    let mut payload =
+        serde_json::to_string(&command).context("telemetry control encode failed")?;
+    payload.push('\n');
+    Ok(payload)
+}
+
+fn build_telemetry_records(payload: &str, mime: &str) -> Result<Vec<Vec<u8>>> {
+    if payload.is_empty() {
+        return Err(anyhow!("telemetry push payload is empty"));
+    }
+    let mut remaining = payload;
+    let mut seq = 1u64;
+    let mut records = Vec::new();
+    while !remaining.is_empty() {
+        let payload_len = select_telemetry_payload_len(remaining, seq, mime)?;
+        if payload_len == 0 {
+            return Err(anyhow!(
+                "telemetry record exceeds max_record_bytes {}",
+                TELEMETRY_RECORD_MAX_BYTES
+            ));
+        }
+        let chunk = &remaining[..payload_len];
+        let record = build_telemetry_record(seq, mime, chunk)?;
+        if record.len() > TELEMETRY_RECORD_MAX_BYTES {
+            return Err(anyhow!(
+                "telemetry record exceeds max_record_bytes {}",
+                TELEMETRY_RECORD_MAX_BYTES
+            ));
+        }
+        records.push(record);
+        remaining = &remaining[payload_len..];
+        seq = seq.saturating_add(1);
+    }
+    Ok(records)
+}
+
+fn select_telemetry_payload_len(remaining: &str, seq: u64, mime: &str) -> Result<usize> {
+    let mut low = 0usize;
+    let mut high = remaining.len();
+    while low < high {
+        let mut mid = (low + high + 1) / 2;
+        while mid > 0 && !remaining.is_char_boundary(mid) {
+            mid = mid.saturating_sub(1);
+        }
+        let candidate = &remaining[..mid];
+        let record = build_telemetry_record(seq, mime, candidate)?;
+        if record.len() <= TELEMETRY_RECORD_MAX_BYTES {
+            low = mid;
+        } else {
+            high = mid.saturating_sub(1);
+        }
+    }
+    Ok(low)
+}
+
+fn build_telemetry_record(seq: u64, mime: &str, payload: &str) -> Result<Vec<u8>> {
+    let envelope = TelemetryPushEnvelope {
+        schema: TELEMETRY_PUSH_SCHEMA,
+        seq,
+        mime,
+        payload,
+    };
+    let mut encoded =
+        serde_json::to_string(&envelope).context("telemetry record encode failed")?;
+    encoded.push('\n');
+    Ok(encoded.into_bytes())
+}
+
+fn parse_seg_id_from_ack_lines(lines: &[String]) -> Option<String> {
+    for line in lines {
+        if let Some(parsed) = cohsh_core::wire::parse_ack(line) {
+            if let Some(detail) = parsed.detail {
+                if let Some(seg_id) = parse_seg_id_from_detail(detail) {
+                    return Some(seg_id);
+                }
+            }
+        }
+        if let Some(seg_id) = parse_seg_id_from_detail(line) {
+            return Some(seg_id);
+        }
+    }
+    None
+}
+
+fn parse_seg_id_from_detail(detail: &str) -> Option<String> {
+    detail
+        .split_whitespace()
+        .find_map(|token| token.strip_prefix("seg_id="))
+        .map(str::to_owned)
+}
+
+fn render_telemetry_ack(status: AckStatus, detail: &str) -> Result<String> {
+    let mut line = String::new();
+    let sanitized = detail.replace(['\r', '\n'], " ");
+    let ack = AckLine {
+        status,
+        verb: "TELEMETRY",
+        detail: Some(sanitized.as_str()),
+    };
+    render_ack(&mut line, &ack).context("telemetry ack render failed")?;
+    Ok(line)
+}
+
 fn parse_role(input: &str) -> Result<Role> {
     cohsh_core::parse_role(input, RoleParseMode::AllowWorkerAlias)
         .ok_or_else(|| anyhow!("unknown role '{input}'"))
@@ -3587,6 +3923,35 @@ fn parse_attach_args<'a>(cmd: &str, args: &'a [&'a str]) -> Result<(Role, Option
             "{cmd} takes at most two arguments: role and optional ticket"
         )),
     }
+}
+
+fn parse_telemetry_push_args<'a>(
+    args: impl Iterator<Item = &'a str>,
+) -> Result<TelemetryPushArgs<'a>> {
+    let mut iter = args.peekable();
+    let Some(src_path) = iter.next() else {
+        return Err(anyhow!("telemetry push requires <src_file>"));
+    };
+    if src_path.starts_with("--") {
+        return Err(anyhow!("telemetry push requires <src_file> before flags"));
+    }
+    let mut device_id = None;
+    while let Some(arg) = iter.next() {
+        if let Some(value) = arg.strip_prefix("--device=") {
+            device_id = Some(value);
+            continue;
+        }
+        if arg == "--device" {
+            let Some(value) = iter.next() else {
+                return Err(anyhow!("telemetry push requires --device <id>"));
+            };
+            device_id = Some(value);
+            continue;
+        }
+        return Err(anyhow!("telemetry push does not recognize '{arg}'"));
+    }
+    let device_id = device_id.ok_or_else(|| anyhow!("telemetry push requires --device <id>"))?;
+    Ok(TelemetryPushArgs { src_path, device_id })
 }
 
 #[cfg(test)]

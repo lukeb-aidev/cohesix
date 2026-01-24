@@ -9,9 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use gpu_bridge_host::{GpuModelCatalog, TelemetrySchema};
+use serde::Deserialize;
 use sidecar_bus::{LinkState, OfflineSpool, SpoolConfig, SpoolError};
 use sha2::{Digest, Sha256};
 use secure9p_codec::{ErrorCode, Qid, QidType, MAX_MSIZE};
+use secure9p_core::append_only_write_bounds;
 use trace_model::TraceLevel;
 use worker_lora::{DutyCycleConfig, DutyCycleGuard, TamperEntry, TamperLog, TamperReason};
 
@@ -20,7 +22,12 @@ use super::cas::{
 };
 use super::observe::ObserveConfig;
 use super::telemetry::{
-    TelemetryAudit, TelemetryAuditLevel, TelemetryConfig, TelemetryFile, TelemetryManifestStore,
+    ingest::{
+        TelemetryIngestError, TelemetryIngestErrorKind, TelemetryIngestState,
+        MAX_TELEMETRY_RECORD_BYTES,
+    },
+    TelemetryAudit, TelemetryAuditLevel, TelemetryConfig, TelemetryFile, TelemetryIngestConfig,
+    TelemetryManifestStore,
 };
 use super::tracefs::TraceFs;
 use super::ui::{match_ui_provider, UiProviderConfig, UiProviderKind, UiVariant};
@@ -38,6 +45,25 @@ const SELFTEST_NEGATIVE_SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../resources/proc_tests/selftest_negative.coh"
 ));
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TelemetryCtlCommand {
+    new: String,
+    #[serde(default)]
+    mime: Option<String>,
+}
+
+impl TelemetryCtlCommand {
+    fn parse(line: &str) -> Result<Self, NineDoorError> {
+        serde_json::from_str(line).map_err(|err| {
+            NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("invalid telemetry ctl command: {err}"),
+            )
+        })
+    }
+}
 
 /// Host providers that may be mirrored into `/host`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -519,6 +545,7 @@ pub struct Namespace {
     shards: ShardLayout,
     telemetry: TelemetryConfig,
     telemetry_manifest: TelemetryManifestStore,
+    telemetry_ingest: TelemetryIngestState,
     cas: CasStore,
     worker_ids: BTreeSet<String>,
     ui: UiProviderConfig,
@@ -555,6 +582,7 @@ impl Namespace {
     pub fn new_with_telemetry(telemetry: TelemetryConfig) -> Self {
         Self::new_with_telemetry_manifest_host_policy(
             telemetry,
+            TelemetryIngestConfig::default(),
             TelemetryManifestStore::default(),
             CasConfig::disabled(),
             ShardLayout::default(),
@@ -575,6 +603,7 @@ impl Namespace {
     ) -> Self {
         Self::new_with_telemetry_manifest_host_policy(
             telemetry,
+            TelemetryIngestConfig::default(),
             telemetry_manifest,
             CasConfig::disabled(),
             ShardLayout::default(),
@@ -590,6 +619,7 @@ impl Namespace {
     /// Construct the namespace with telemetry, manifest storage, host provider config, and policy.
     pub fn new_with_telemetry_manifest_host_policy(
         telemetry: TelemetryConfig,
+        telemetry_ingest: TelemetryIngestConfig,
         telemetry_manifest: TelemetryManifestStore,
         cas: CasConfig,
         shards: ShardLayout,
@@ -613,6 +643,7 @@ impl Namespace {
             shards,
             telemetry,
             telemetry_manifest,
+            telemetry_ingest: TelemetryIngestState::new(telemetry_ingest),
             cas: CasStore::new(cas),
             worker_ids: BTreeSet::new(),
             ui,
@@ -639,6 +670,7 @@ impl Namespace {
     ) -> Self {
         Self::new_with_telemetry_manifest_host_policy(
             telemetry,
+            TelemetryIngestConfig::default(),
             telemetry_manifest,
             CasConfig::disabled(),
             ShardLayout::default(),
@@ -852,6 +884,14 @@ impl Namespace {
         let retain_on_boot = self.telemetry.cursor.retain_on_boot;
         if let Some(count) = self.write_sidecar(path, offset, data)? {
             return Ok(count);
+        }
+        if self.telemetry_ingest.enabled() {
+            if let Some(device_id) = telemetry_ingest_ctl_device(path) {
+                return self.write_telemetry_ingest_ctl(device_id, data);
+            }
+            if let Some((device_id, seg_id)) = telemetry_ingest_segment_parts(path) {
+                return self.write_telemetry_ingest_segment(device_id, seg_id, offset, data);
+            }
         }
         let worker_id = self
             .shards
@@ -1109,6 +1149,7 @@ impl Namespace {
     /// Lookup a node by path.
     pub fn lookup(&mut self, path: &[String]) -> Result<NodeView<'_>, NineDoorError> {
         let resolved = self.resolve_path(path);
+        self.ensure_telemetry_ingest_path(&resolved)?;
         self.ensure_cas_path(&resolved)?;
         let mut node = &self.root;
         for component in &resolved {
@@ -1124,6 +1165,7 @@ impl Namespace {
 
     fn lookup_mut(&mut self, path: &[String]) -> Result<NodeViewMut<'_>, NineDoorError> {
         let resolved = self.resolve_path(path);
+        self.ensure_telemetry_ingest_path(&resolved)?;
         self.ensure_cas_path(&resolved)?;
         self.lookup_mut_raw(&resolved)
     }
@@ -1179,6 +1221,16 @@ impl Namespace {
             }
             _ => Ok(None),
         }
+    }
+
+    fn ensure_telemetry_ingest_path(&mut self, path: &[String]) -> Result<(), NineDoorError> {
+        if !self.telemetry_ingest.enabled() {
+            return Ok(());
+        }
+        if let Some(device_id) = telemetry_ingest_device_root(path) {
+            self.ensure_telemetry_ingest_device(device_id)?;
+        }
+        Ok(())
     }
 
     fn ensure_cas_path(&mut self, path: &[String]) -> Result<(), NineDoorError> {
@@ -1378,6 +1430,10 @@ impl Namespace {
         let queen_path = vec!["queen".to_owned()];
         self.ensure_append_only_file(&queen_path, "ctl", b"")
             .expect("create /queen/ctl");
+        if self.telemetry_ingest.enabled() {
+            self.ensure_dir(&queen_path, "telemetry")
+                .expect("create /queen/telemetry");
+        }
         if self.shards.is_enabled() {
             self.ensure_dir(&[], "shard").expect("create /shard");
             let shard_root = vec!["shard".to_owned()];
@@ -1671,6 +1727,211 @@ impl Namespace {
         let mut node = self.lookup_mut(parent)?;
         node.ensure_file(name, FileNode::AppendOnly(data.to_vec()));
         Ok(())
+    }
+
+    fn ensure_telemetry_ingest_device(&mut self, device_id: &str) -> Result<(), NineDoorError> {
+        if !self.telemetry_ingest.enabled() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::NotFound,
+                "telemetry ingest disabled",
+            ));
+        }
+        let queen_path = vec!["queen".to_owned()];
+        let telemetry_root = vec!["queen".to_owned(), "telemetry".to_owned()];
+        let device_path = vec![
+            "queen".to_owned(),
+            "telemetry".to_owned(),
+            device_id.to_owned(),
+        ];
+        self.ensure_dir_raw(&[], "queen")?;
+        self.ensure_dir_raw(&queen_path, "telemetry")?;
+        self.ensure_dir_raw(&telemetry_root, device_id)?;
+        self.ensure_file_raw(&device_path, "ctl", FileNode::AppendOnly(Vec::new()))?;
+        self.ensure_dir_raw(&device_path, "seg")?;
+        self.ensure_file_raw(&device_path, "latest", FileNode::ReadOnly(Vec::new()))?;
+        self.telemetry_ingest.ensure_device(device_id);
+        Ok(())
+    }
+
+    fn set_telemetry_ingest_latest(
+        &mut self,
+        device_id: &str,
+        seg_id: &str,
+    ) -> Result<(), NineDoorError> {
+        let device_path = vec![
+            "queen".to_owned(),
+            "telemetry".to_owned(),
+            device_id.to_owned(),
+        ];
+        let payload = format!("{seg_id}\n");
+        self.set_read_only_file(&device_path, "latest", payload.as_bytes())
+    }
+
+    fn ensure_telemetry_ingest_segment(
+        &mut self,
+        device_id: &str,
+        seg_id: &str,
+    ) -> Result<(), NineDoorError> {
+        let seg_root = vec![
+            "queen".to_owned(),
+            "telemetry".to_owned(),
+            device_id.to_owned(),
+            "seg".to_owned(),
+        ];
+        self.ensure_append_only_file(&seg_root, seg_id, b"")
+    }
+
+    fn remove_telemetry_ingest_segment(
+        &mut self,
+        device_id: &str,
+        seg_id: &str,
+    ) -> Result<(), NineDoorError> {
+        let seg_root = vec![
+            "queen".to_owned(),
+            "telemetry".to_owned(),
+            device_id.to_owned(),
+            "seg".to_owned(),
+        ];
+        let mut node = self.lookup_mut(&seg_root)?;
+        if node.remove_child(seg_id).is_some() {
+            Ok(())
+        } else {
+            Err(NineDoorError::protocol(
+                ErrorCode::NotFound,
+                format!("telemetry segment {seg_id} not found"),
+            ))
+        }
+    }
+
+    fn write_telemetry_ingest_ctl(
+        &mut self,
+        device_id: &str,
+        data: &[u8],
+    ) -> Result<u32, NineDoorError> {
+        self.ensure_telemetry_ingest_device(device_id)?;
+        let ctl_path = vec![
+            "queen".to_owned(),
+            "telemetry".to_owned(),
+            device_id.to_owned(),
+            "ctl".to_owned(),
+        ];
+        {
+            let mut node = self.lookup_mut(&ctl_path)?;
+            match node.node.kind_mut() {
+                NodeKind::File(FileNode::AppendOnly(buffer)) => buffer.extend_from_slice(data),
+                _ => {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Permission,
+                        "telemetry ctl is not append-only",
+                    ))
+                }
+            }
+        }
+        let text = std::str::from_utf8(data).map_err(|err| {
+            NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("telemetry ctl must be UTF-8: {err}"),
+            )
+        })?;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let command = TelemetryCtlCommand::parse(trimmed)?;
+            if command.new != "segment" {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    format!("unsupported telemetry ctl verb {}", command.new),
+                ));
+            }
+            let outcome = self
+                .telemetry_ingest
+                .create_segment(device_id)
+                .map_err(map_telemetry_ingest_error)?;
+            for seg_id in &outcome.evicted {
+                self.remove_telemetry_ingest_segment(device_id, seg_id)?;
+            }
+            self.ensure_telemetry_ingest_segment(device_id, &outcome.seg_id)?;
+            self.set_telemetry_ingest_latest(device_id, &outcome.seg_id)?;
+        }
+        Ok(data.len() as u32)
+    }
+
+    fn write_telemetry_ingest_segment(
+        &mut self,
+        device_id: &str,
+        seg_id: &str,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<u32, NineDoorError> {
+        if data.len() > MAX_TELEMETRY_RECORD_BYTES {
+            return Err(NineDoorError::protocol(
+                ErrorCode::TooBig,
+                format!(
+                    "telemetry record exceeds max_record_bytes {}",
+                    MAX_TELEMETRY_RECORD_BYTES
+                ),
+            ));
+        }
+        let seg_path = vec![
+            "queen".to_owned(),
+            "telemetry".to_owned(),
+            device_id.to_owned(),
+            "seg".to_owned(),
+            seg_id.to_owned(),
+        ];
+        let (expected_offset, remaining) = {
+            let mut node = self.lookup_mut(&seg_path)?;
+            match node.node.kind_mut() {
+                NodeKind::File(FileNode::AppendOnly(buffer)) => {
+                    let remaining = self
+                        .telemetry_ingest
+                        .config()
+                        .max_bytes_per_segment
+                        .saturating_sub(buffer.len());
+                    (buffer.len() as u64, remaining)
+                }
+                _ => {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Permission,
+                        format!("cannot write /{}", join_path(&seg_path)),
+                    ))
+                }
+            }
+        };
+        let provided_offset = if offset == u64::MAX { expected_offset } else { offset };
+        let bounds = append_only_write_bounds(expected_offset, provided_offset, remaining, data.len())
+            .map_err(|err| {
+                NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    format!("telemetry append offset rejected: {err}"),
+                )
+            })?;
+        if bounds.short {
+            return Err(NineDoorError::protocol(
+                ErrorCode::TooBig,
+                "telemetry segment quota exceeded",
+            ));
+        }
+        let outcome = self
+            .telemetry_ingest
+            .append_record(device_id, seg_id, data.len())
+            .map_err(map_telemetry_ingest_error)?;
+        for evicted in &outcome.evicted {
+            self.remove_telemetry_ingest_segment(device_id, evicted)?;
+        }
+        let mut node = self.lookup_mut(&seg_path)?;
+        match node.node.kind_mut() {
+            NodeKind::File(FileNode::AppendOnly(buffer)) => {
+                buffer.extend_from_slice(data);
+                Ok(data.len() as u32)
+            }
+            _ => Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                format!("cannot write /{}", join_path(&seg_path)),
+            )),
+        }
     }
 
     fn ensure_trace_control(&mut self, parent: &[String], name: &str) -> Result<(), NineDoorError> {
@@ -2751,6 +3012,54 @@ fn join_path(path: &[String]) -> String {
         String::new()
     } else {
         path.join("/")
+    }
+}
+
+fn map_telemetry_ingest_error(err: TelemetryIngestError) -> NineDoorError {
+    let code = match err.kind {
+        TelemetryIngestErrorKind::Disabled | TelemetryIngestErrorKind::SegmentMissing => {
+            ErrorCode::NotFound
+        }
+        TelemetryIngestErrorKind::QuotaExceeded => ErrorCode::TooBig,
+    };
+    NineDoorError::protocol(code, err.message)
+}
+
+fn telemetry_ingest_ctl_device(path: &[String]) -> Option<&str> {
+    match path {
+        [first, second, device_id, leaf]
+            if first == "queen" && second == "telemetry" && leaf == "ctl" =>
+        {
+            Some(device_id.as_str())
+        }
+        _ => None,
+    }
+}
+
+fn telemetry_ingest_segment_parts(path: &[String]) -> Option<(&str, &str)> {
+    match path {
+        [first, second, device_id, seg_dir, seg_id]
+            if first == "queen" && second == "telemetry" && seg_dir == "seg" =>
+        {
+            Some((device_id.as_str(), seg_id.as_str()))
+        }
+        _ => None,
+    }
+}
+
+fn telemetry_ingest_device_root(path: &[String]) -> Option<&str> {
+    match path {
+        [first, second, device_id] if first == "queen" && second == "telemetry" => {
+            Some(device_id.as_str())
+        }
+        [first, second, device_id, leaf]
+            if first == "queen"
+                && second == "telemetry"
+                && matches!(leaf.as_str(), "ctl" | "latest" | "seg") =>
+        {
+            Some(device_id.as_str())
+        }
+        _ => None,
     }
 }
 

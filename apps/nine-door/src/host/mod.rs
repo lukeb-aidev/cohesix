@@ -52,7 +52,8 @@ pub use self::observe::{ObserveConfig, ProcIngestConfig, Proc9pConfig};
 pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 pub use self::security::TicketLimits;
 pub use self::telemetry::{
-    TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryManifestStore,
+    TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig,
+    TelemetryIngestEvictionPolicy, TelemetryManifestStore,
 };
 pub use self::ui::{
     UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig,
@@ -135,6 +136,7 @@ impl NineDoor {
             Arc::new(SystemClock),
             SessionLimits::default(),
             TelemetryConfig::default(),
+            TelemetryIngestConfig::default(),
             TelemetryManifestStore::default(),
             CasConfig::disabled(),
             shards,
@@ -153,6 +155,7 @@ impl NineDoor {
             Arc::new(SystemClock),
             SessionLimits::default(),
             TelemetryConfig::default(),
+            TelemetryIngestConfig::default(),
             TelemetryManifestStore::default(),
             CasConfig::disabled(),
             ShardLayout::default(),
@@ -171,6 +174,7 @@ impl NineDoor {
             Arc::new(SystemClock),
             SessionLimits::default(),
             TelemetryConfig::default(),
+            TelemetryIngestConfig::default(),
             TelemetryManifestStore::default(),
             CasConfig::disabled(),
             ShardLayout::default(),
@@ -202,6 +206,7 @@ impl NineDoor {
             Arc::new(SystemClock),
             SessionLimits::default(),
             TelemetryConfig::default(),
+            TelemetryIngestConfig::default(),
             TelemetryManifestStore::default(),
             CasConfig::disabled(),
             ShardLayout::default(),
@@ -225,6 +230,7 @@ impl NineDoor {
             Arc::new(SystemClock),
             SessionLimits::default(),
             TelemetryConfig::default(),
+            TelemetryIngestConfig::default(),
             TelemetryManifestStore::default(),
             CasConfig::disabled(),
             ShardLayout::default(),
@@ -243,13 +249,19 @@ impl NineDoor {
             clock,
             SessionLimits::default(),
             TelemetryConfig::default(),
+            TelemetryIngestConfig::default(),
         )
     }
 
     /// Construct a server using the supplied clock and session limits.
     #[must_use]
     pub fn new_with_limits(clock: Arc<dyn Clock>, limits: SessionLimits) -> Self {
-        Self::new_with_limits_and_telemetry(clock, limits, TelemetryConfig::default())
+        Self::new_with_limits_and_telemetry(
+            clock,
+            limits,
+            TelemetryConfig::default(),
+            TelemetryIngestConfig::default(),
+        )
     }
 
     /// Construct a server using explicit telemetry configuration.
@@ -258,11 +270,13 @@ impl NineDoor {
         clock: Arc<dyn Clock>,
         limits: SessionLimits,
         telemetry: TelemetryConfig,
+        telemetry_ingest: TelemetryIngestConfig,
     ) -> Self {
         Self::new_with_limits_and_telemetry_manifest(
             clock,
             limits,
             telemetry,
+            telemetry_ingest,
             TelemetryManifestStore::default(),
         )
     }
@@ -273,12 +287,14 @@ impl NineDoor {
         clock: Arc<dyn Clock>,
         limits: SessionLimits,
         telemetry: TelemetryConfig,
+        telemetry_ingest: TelemetryIngestConfig,
         telemetry_manifest: TelemetryManifestStore,
     ) -> Self {
         Self::new_with_limits_telemetry_and_host(
             clock,
             limits,
             telemetry,
+            telemetry_ingest,
             telemetry_manifest,
             HostNamespaceConfig::disabled(),
         )
@@ -291,6 +307,7 @@ impl NineDoor {
             Arc::new(SystemClock),
             SessionLimits::default(),
             TelemetryConfig::default(),
+            TelemetryIngestConfig::default(),
             TelemetryManifestStore::default(),
             cas,
             ShardLayout::default(),
@@ -309,6 +326,7 @@ impl NineDoor {
             Arc::new(SystemClock),
             SessionLimits::default(),
             TelemetryConfig::default(),
+            TelemetryIngestConfig::default(),
             TelemetryManifestStore::default(),
             cas,
             ShardLayout::default(),
@@ -324,6 +342,7 @@ impl NineDoor {
         clock: Arc<dyn Clock>,
         limits: SessionLimits,
         telemetry: TelemetryConfig,
+        telemetry_ingest: TelemetryIngestConfig,
         telemetry_manifest: TelemetryManifestStore,
         host: HostNamespaceConfig,
     ) -> Self {
@@ -331,6 +350,7 @@ impl NineDoor {
             clock,
             limits,
             telemetry,
+            telemetry_ingest,
             telemetry_manifest,
             CasConfig::disabled(),
             ShardLayout::default(),
@@ -346,6 +366,7 @@ impl NineDoor {
         clock: Arc<dyn Clock>,
         limits: SessionLimits,
         telemetry: TelemetryConfig,
+        telemetry_ingest: TelemetryIngestConfig,
         telemetry_manifest: TelemetryManifestStore,
         cas: CasConfig,
         shards: ShardLayout,
@@ -361,6 +382,7 @@ impl NineDoor {
                 limits,
                 TicketLimits::default(),
                 telemetry,
+                telemetry_ingest,
                 telemetry_manifest.clone(),
                 cas,
                 shards,

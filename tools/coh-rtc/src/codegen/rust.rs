@@ -104,6 +104,20 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub enum TelemetryIngestEvictionPolicy {{")?;
+    writeln!(mod_contents, "    Refuse,")?;
+    writeln!(mod_contents, "    EvictOldest,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct TelemetryIngestConfig {{")?;
+    writeln!(mod_contents, "    pub max_segments_per_device: u32,")?;
+    writeln!(mod_contents, "    pub max_bytes_per_segment: u32,")?;
+    writeln!(mod_contents, "    pub max_total_bytes_per_device: u32,")?;
+    writeln!(mod_contents, "    pub eviction_policy: TelemetryIngestEvictionPolicy,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct CasConfig {{")?;
     writeln!(mod_contents, "    pub enable: bool,")?;
     writeln!(mod_contents, "    pub chunk_bytes: u32,")?;
@@ -298,6 +312,10 @@ pub fn emit_rust(
     writeln!(mod_contents, "pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;")?;
     writeln!(mod_contents, "pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();")?;
     writeln!(mod_contents, "pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;")?;
+    writeln!(
+        mod_contents,
+        "pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = bootstrap::TELEMETRY_INGEST_CONFIG;"
+    )?;
     writeln!(mod_contents, "pub const OBSERVABILITY_CONFIG: ObservabilityConfig = bootstrap::OBSERVABILITY_CONFIG;")?;
     writeln!(mod_contents, "pub const UI_PROVIDER_CONFIG: UiProviderConfig = bootstrap::UI_PROVIDER_CONFIG;")?;
     writeln!(mod_contents, "pub const CAS_CONFIG: CasConfig = bootstrap::CAS_CONFIG;")?;
@@ -353,6 +371,13 @@ pub fn emit_rust(
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn telemetry_config() -> TelemetryConfig {{")?;
     writeln!(mod_contents, "    bootstrap::TELEMETRY_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
+        "pub const fn telemetry_ingest_config() -> TelemetryIngestConfig {{"
+    )?;
+    writeln!(mod_contents, "    bootstrap::TELEMETRY_INGEST_CONFIG")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn observability_config() -> ObservabilityConfig {{")?;
@@ -427,7 +452,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -518,6 +543,14 @@ pub fn emit_rust(
         manifest.telemetry.ring_bytes_per_worker,
         telemetry_schema_to_rust(&manifest.telemetry.frame_schema),
         manifest.telemetry.cursor.retain_on_boot
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = TelemetryIngestConfig {{ max_segments_per_device: {}, max_bytes_per_segment: {}, max_total_bytes_per_device: {}, eviction_policy: {} }};\n",
+        manifest.telemetry_ingest.max_segments_per_device,
+        manifest.telemetry_ingest.max_bytes_per_segment,
+        manifest.telemetry_ingest.max_total_bytes_per_device,
+        ingest_eviction_policy_to_rust(&manifest.telemetry_ingest.eviction_policy)
     )?;
     writeln!(
         bootstrap_contents,
@@ -956,6 +989,17 @@ fn telemetry_schema_to_rust(schema: &crate::ir::TelemetryFrameSchema) -> &'stati
     match schema {
         crate::ir::TelemetryFrameSchema::LegacyPlaintext => "TelemetryFrameSchema::LegacyPlaintext",
         crate::ir::TelemetryFrameSchema::CborV1 => "TelemetryFrameSchema::CborV1",
+    }
+}
+
+fn ingest_eviction_policy_to_rust(
+    policy: &crate::ir::TelemetryIngestEvictionPolicy,
+) -> &'static str {
+    match policy {
+        crate::ir::TelemetryIngestEvictionPolicy::Refuse => "TelemetryIngestEvictionPolicy::Refuse",
+        crate::ir::TelemetryIngestEvictionPolicy::EvictOldest => {
+            "TelemetryIngestEvictionPolicy::EvictOldest"
+        }
     }
 }
 
