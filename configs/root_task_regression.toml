@@ -112,6 +112,17 @@ status = true
 control_sessions = 2
 telemetry_sessions = 4
 
+[client_policies.coh.mount]
+root = "/"
+allowlist = ["/proc", "/queen", "/worker", "/log", "/gpu", "/host"]
+
+[client_policies.coh.telemetry]
+root = "/queen/telemetry"
+max_devices = 32
+max_segments_per_device = 4
+max_bytes_per_segment = 32768
+max_total_bytes_per_device = 131072
+
 [client_policies.retry]
 max_attempts = 3
 backoff_ms = 200

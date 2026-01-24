@@ -66,6 +66,13 @@
 - `ui_providers.updates.status`: `true`
 - `client_policies.cohsh.pool.control_sessions`: `2`
 - `client_policies.cohsh.pool.telemetry_sessions`: `4`
+- `client_policies.coh.mount.root`: `/`
+- `client_policies.coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
+- `client_policies.coh.telemetry.root`: `/queen/telemetry`
+- `client_policies.coh.telemetry.max_devices`: `32`
+- `client_policies.coh.telemetry.max_segments_per_device`: `4`
+- `client_policies.coh.telemetry.max_bytes_per_segment`: `32768`
+- `client_policies.coh.telemetry.max_total_bytes_per_device`: `131072`
 - `client_policies.retry.max_attempts`: `3`
 - `client_policies.retry.backoff_ms`: `200`
 - `client_policies.retry.ceiling_ms`: `2000`
@@ -100,7 +107,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`
+- `manifest.sha256`: `aeacd14e34c15b39b879af95c0cc5c19de757d368702d1453024ce4cd910a8cb`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -146,4 +153,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`)._
+_Generated from `configs/root_task.toml` (sha256: `aeacd14e34c15b39b879af95c0cc5c19de757d368702d1453024ce4cd910a8cb`)._

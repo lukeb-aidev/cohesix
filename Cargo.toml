@@ -4,6 +4,7 @@
 members = [
     "apps/cohesix-proto",
     "apps/console-ack-wire",
+    "apps/coh",
     "apps/cohsh",
     "apps/coh-status",
     "apps/cas-tool",

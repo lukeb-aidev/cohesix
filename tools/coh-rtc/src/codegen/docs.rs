@@ -399,6 +399,48 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `client_policies.coh.mount.root`: `{}`",
+            manifest.client_policies.coh.mount.root
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.coh.mount.allowlist`: `{}`",
+            manifest.client_policies.coh.mount.allowlist.join(", ")
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.coh.telemetry.root`: `{}`",
+            manifest.client_policies.coh.telemetry.root
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.coh.telemetry.max_devices`: `{}`",
+            manifest.client_policies.coh.telemetry.max_devices
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.coh.telemetry.max_segments_per_device`: `{}`",
+            manifest.client_policies.coh.telemetry.max_segments_per_device
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.coh.telemetry.max_bytes_per_segment`: `{}`",
+            manifest.client_policies.coh.telemetry.max_bytes_per_segment
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.coh.telemetry.max_total_bytes_per_device`: `{}`",
+            manifest.client_policies.coh.telemetry.max_total_bytes_per_device
+        )
+        .ok();
+        writeln!(
+            schema_md,
             "- `client_policies.retry.max_attempts`: `{}`",
             manifest.client_policies.retry.max_attempts
         )

@@ -11,6 +11,7 @@ use coh_rtc::{
     default_cohsh_client_doc_path, default_cohsh_client_rust_path, default_cohsh_grammar_doc_path,
     default_cohsh_policy_doc_path, default_cohsh_policy_path, default_cohsh_policy_rust_path,
     default_cohsh_ticket_policy_doc_path,
+    default_coh_policy_doc_path, default_coh_policy_path, default_coh_policy_rust_path,
     default_doc_snippet_path, default_observability_interfaces_snippet_path,
     default_observability_security_snippet_path, default_ticket_quotas_snippet_path,
     default_trace_policy_snippet_path,
@@ -82,6 +83,15 @@ struct Args {
     /// Output path for the cohsh ticket policy doc snippet.
     #[arg(long, default_value_os_t = default_cohsh_ticket_policy_doc_path())]
     cohsh_ticket_policy_doc: PathBuf,
+    /// Output path for the coh policy TOML.
+    #[arg(long, default_value_os_t = default_coh_policy_path())]
+    coh_policy: PathBuf,
+    /// Output path for the coh policy Rust constants.
+    #[arg(long, default_value_os_t = default_coh_policy_rust_path())]
+    coh_policy_rust: PathBuf,
+    /// Output path for the coh policy doc snippet.
+    #[arg(long, default_value_os_t = default_coh_policy_doc_path())]
+    coh_policy_doc: PathBuf,
     /// Output path for the SwarmUI defaults TOML.
     #[arg(long, default_value_os_t = default_swarmui_defaults_path())]
     swarmui_defaults: PathBuf,
@@ -116,6 +126,9 @@ fn main() -> Result<()> {
         cohsh_client_doc_out: args.cohsh_client_doc,
         cohsh_grammar_doc_out: args.cohsh_grammar_doc,
         cohsh_ticket_policy_doc_out: args.cohsh_ticket_policy_doc,
+        coh_policy_out: args.coh_policy,
+        coh_policy_rust_out: args.coh_policy_rust,
+        coh_policy_doc_out: args.coh_policy_doc,
         swarmui_defaults_out: args.swarmui_defaults,
         swarmui_defaults_rust_out: args.swarmui_defaults_rust,
         swarmui_defaults_doc_out: args.swarmui_defaults_doc,

@@ -12,7 +12,7 @@ use cohesix_ticket::Role;
 use cohsh_core::{
     normalize_ticket, Secure9pClient, Secure9pError, Secure9pTransport, TicketPolicy,
 };
-use secure9p_codec::OpenMode;
+use secure9p_codec::{OpenMode, Qid};
 
 const ROOT_FID: u32 = 1;
 
@@ -41,6 +41,7 @@ pub struct CohClient<T: Secure9pTransport> {
     core: Secure9pClient<T>,
     next_fid: u32,
     walk_depth: usize,
+    root_qid: Qid,
 }
 
 impl<T: Secure9pTransport> CohClient<T> {
@@ -74,12 +75,14 @@ impl<T: Secure9pTransport> CohClient<T> {
             .claims
             .as_ref()
             .and_then(|claims| claims.subject.as_deref());
-        core.attach(ROOT_FID, role, identity, ticket_check.ticket)
+        let root_qid = core
+            .attach(ROOT_FID, role, identity, ticket_check.ticket)
             .map_err(|err| anyhow!("attach request failed: {err}"))?;
         Ok(Self {
             core,
             next_fid: ROOT_FID + 1,
             walk_depth: crate::generated_client::SECURE9P_WALK_DEPTH as usize,
+            root_qid,
         })
     }
 
@@ -98,6 +101,40 @@ impl<T: Secure9pTransport> CohClient<T> {
             let _ = self.core.clunk(fid);
         }
         open_result.map(|_| fid)
+    }
+
+    /// Walk to the supplied path, returning a fid and Qid without opening.
+    pub fn walk_qid(&mut self, path: &str) -> Result<(u32, Qid)> {
+        let components = self.parse_path(path)?;
+        let fid = self.allocate_fid();
+        let qid = if components.is_empty() {
+            self.core
+                .walk(ROOT_FID, fid, &components)
+                .map_err(|err| anyhow!("failed to walk to {path}: {err}"))?;
+            self.root_qid
+        } else {
+            let qids = self
+                .core
+                .walk(ROOT_FID, fid, &components)
+                .map_err(|err| anyhow!("failed to walk to {path}: {err}"))?;
+            qids.last()
+                .copied()
+                .ok_or_else(|| anyhow!("walk to {path} returned no qids"))?
+        };
+        Ok((fid, qid))
+    }
+
+    /// Walk and open the supplied path, returning the fid and Qid.
+    pub fn open_with_qid(&mut self, path: &str, mode: OpenMode) -> Result<(u32, Qid)> {
+        let (fid, _) = self.walk_qid(path)?;
+        let open_result = self
+            .core
+            .open(fid, mode)
+            .map_err(|err| anyhow!("failed to open {path}: {err}"));
+        if open_result.is_err() {
+            let _ = self.core.clunk(fid);
+        }
+        open_result.map(|(qid, _)| (fid, qid))
     }
 
     /// Read bytes from an open fid.
@@ -137,7 +174,9 @@ impl<T: Secure9pTransport> CohClient<T> {
         fid
     }
 
-    pub(crate) fn negotiated_msize(&self) -> u32 {
+    /// Return the negotiated Secure9P maximum message size.
+    #[must_use]
+    pub fn negotiated_msize(&self) -> u32 {
         self.core.negotiated_msize()
     }
 

@@ -5,6 +5,7 @@
 
 mod cas;
 mod cli;
+mod coh;
 mod cohsh;
 pub mod cbor;
 mod docs;
@@ -43,6 +44,10 @@ pub struct GeneratedArtifacts {
     pub cohsh_client_doc: PathBuf,
     pub cohsh_grammar_doc: PathBuf,
     pub cohsh_ticket_policy_doc: PathBuf,
+    pub coh_policy: PathBuf,
+    pub coh_policy_hash: PathBuf,
+    pub coh_policy_rust: PathBuf,
+    pub coh_policy_doc: PathBuf,
     pub swarmui_defaults: PathBuf,
     pub swarmui_defaults_hash: PathBuf,
     pub swarmui_defaults_rust: PathBuf,
@@ -52,7 +57,7 @@ pub struct GeneratedArtifacts {
 impl GeneratedArtifacts {
     pub fn summary(&self) -> String {
         format!(
-            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, obs_interfaces={}, obs_security={}, ticket_quotas={}, trace_policy={}, cas_interfaces={}, cas_security={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_client_rust={}, cohsh_client_doc={}, cohsh_grammar={}, cohsh_ticket_policy={}, swarmui_defaults={}, swarmui_hash={}, swarmui_rust={}, swarmui_doc={}",
+            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, obs_interfaces={}, obs_security={}, ticket_quotas={}, trace_policy={}, cas_interfaces={}, cas_security={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_client_rust={}, cohsh_client_doc={}, cohsh_grammar={}, cohsh_ticket_policy={}, coh_policy={}, coh_hash={}, coh_rust={}, coh_doc={}, swarmui_defaults={}, swarmui_hash={}, swarmui_rust={}, swarmui_doc={}",
             self.rust_dir.display(),
             self.manifest_json.display(),
             self.cas_manifest_template.display(),
@@ -74,6 +79,10 @@ impl GeneratedArtifacts {
             self.cohsh_client_doc.display(),
             self.cohsh_grammar_doc.display(),
             self.cohsh_ticket_policy_doc.display(),
+            self.coh_policy.display(),
+            self.coh_policy_hash.display(),
+            self.coh_policy_rust.display(),
+            self.coh_policy_doc.display(),
             self.swarmui_defaults.display(),
             self.swarmui_defaults_hash.display(),
             self.swarmui_defaults_rust.display(),
@@ -163,6 +172,18 @@ pub fn emit_all(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    if let Some(parent) = options.coh_policy_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.coh_policy_rust_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.coh_policy_doc_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
     if let Some(parent) = options.swarmui_defaults_out.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -195,6 +216,13 @@ pub fn emit_all(
         &options.cohsh_policy_out,
         &options.cohsh_policy_rust_out,
         &options.cohsh_policy_doc_out,
+    )?;
+    let coh_policy_artifacts = coh::emit_coh_policy(
+        manifest,
+        manifest_hash,
+        &options.coh_policy_out,
+        &options.coh_policy_rust_out,
+        &options.coh_policy_doc_out,
     )?;
     let cohsh_client_artifacts = cohsh::emit_cohsh_client(
         manifest,
@@ -260,6 +288,10 @@ pub fn emit_all(
         cohsh_client_doc: cohsh_client_artifacts.client_doc,
         cohsh_grammar_doc: cohsh_doc_artifacts.grammar_doc,
         cohsh_ticket_policy_doc: cohsh_doc_artifacts.ticket_policy_doc,
+        coh_policy: coh_policy_artifacts.policy_toml,
+        coh_policy_hash: coh_policy_artifacts.policy_hash,
+        coh_policy_rust: coh_policy_artifacts.policy_rust,
+        coh_policy_doc: coh_policy_artifacts.policy_doc,
         swarmui_defaults: swarmui_artifacts.defaults_toml,
         swarmui_defaults_hash: swarmui_artifacts.defaults_hash,
         swarmui_defaults_rust: swarmui_artifacts.defaults_rust,

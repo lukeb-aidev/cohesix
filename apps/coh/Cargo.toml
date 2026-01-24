@@ -1,0 +1,36 @@
+# Author: Lukas Bower
+# Purpose: Configure the Cohesix host bridge CLI crate.
+[package]
+name = "coh"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Cohesix host bridge CLI (mount, gpu, telemetry pull)"
+
+[features]
+default = []
+mock = []
+fuse = ["dep:fuser"]
+nvml = ["gpu-bridge-host/nvml"]
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+cohesix-net-constants = { workspace = true }
+cohesix-ticket = { workspace = true }
+cohsh = { path = "../cohsh" }
+cohsh-core = { workspace = true }
+secure9p-codec = { workspace = true }
+gpu-bridge-host = { path = "../gpu-bridge-host" }
+nine-door = { path = "../nine-door" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+toml = "0.8"
+fuser = { version = "0.15", optional = true }
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.12"

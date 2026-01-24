@@ -37,6 +37,8 @@ const SHARD_LABEL_BYTES: usize = 2;
 const SHARD_COUNT_DIGITS: usize = 3;
 const MAX_TICKET_SCOPES: u16 = 16;
 const MAX_TICKET_SCOPE_PATH_LEN: usize = 255;
+const MAX_COH_ALLOWLIST: usize = 16;
+const MAX_COH_TELEMETRY_DEVICES: u32 = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -920,12 +922,95 @@ impl Manifest {
         if trace.max_bytes == 0 {
             bail!("client_policies.trace.max_bytes must be > 0");
         }
+        self.validate_coh_policy()?;
         Ok(())
     }
 
     fn validate_client_paths(&self) -> Result<()> {
         self.validate_client_path("client_paths.queen_ctl", &self.client_paths.queen_ctl)?;
         self.validate_client_path("client_paths.log", &self.client_paths.log)?;
+        Ok(())
+    }
+
+    fn validate_coh_policy(&self) -> Result<()> {
+        let mount = &self.client_policies.coh.mount;
+        self.validate_coh_path("client_policies.coh.mount.root", &mount.root, true)?;
+        if mount.allowlist.is_empty() {
+            bail!("client_policies.coh.mount.allowlist must not be empty");
+        }
+        if mount.allowlist.len() > MAX_COH_ALLOWLIST {
+            bail!(
+                "client_policies.coh.mount.allowlist exceeds max entries {}",
+                MAX_COH_ALLOWLIST
+            );
+        }
+        for path in &mount.allowlist {
+            self.validate_coh_path("client_policies.coh.mount.allowlist", path, false)?;
+        }
+        let telemetry = &self.client_policies.coh.telemetry;
+        self.validate_coh_path("client_policies.coh.telemetry.root", &telemetry.root, false)?;
+        if telemetry.max_devices == 0 {
+            bail!("client_policies.coh.telemetry.max_devices must be >= 1");
+        }
+        if telemetry.max_devices > MAX_COH_TELEMETRY_DEVICES {
+            bail!(
+                "client_policies.coh.telemetry.max_devices {} exceeds max {}",
+                telemetry.max_devices,
+                MAX_COH_TELEMETRY_DEVICES
+            );
+        }
+        if telemetry.max_segments_per_device == 0
+            || telemetry.max_bytes_per_segment == 0
+            || telemetry.max_total_bytes_per_device == 0
+        {
+            bail!(
+                "client_policies.coh.telemetry.* must be >= 1 (segments, bytes per segment, total bytes)"
+            );
+        }
+        if telemetry.max_segments_per_device > self.telemetry_ingest.max_segments_per_device {
+            bail!(
+                "client_policies.coh.telemetry.max_segments_per_device {} exceeds telemetry_ingest.max_segments_per_device {}",
+                telemetry.max_segments_per_device,
+                self.telemetry_ingest.max_segments_per_device
+            );
+        }
+        if telemetry.max_bytes_per_segment > self.telemetry_ingest.max_bytes_per_segment {
+            bail!(
+                "client_policies.coh.telemetry.max_bytes_per_segment {} exceeds telemetry_ingest.max_bytes_per_segment {}",
+                telemetry.max_bytes_per_segment,
+                self.telemetry_ingest.max_bytes_per_segment
+            );
+        }
+        if telemetry.max_total_bytes_per_device > self.telemetry_ingest.max_total_bytes_per_device {
+            bail!(
+                "client_policies.coh.telemetry.max_total_bytes_per_device {} exceeds telemetry_ingest.max_total_bytes_per_device {}",
+                telemetry.max_total_bytes_per_device,
+                self.telemetry_ingest.max_total_bytes_per_device
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_coh_path(&self, label: &str, path: &str, allow_root: bool) -> Result<()> {
+        let trimmed = path.trim();
+        if !trimmed.starts_with('/') {
+            bail!("{label} must be an absolute path");
+        }
+        let components: Vec<&str> = trimmed.split('/').filter(|seg| !seg.is_empty()).collect();
+        if components.is_empty() && !allow_root {
+            bail!("{label} must not be root");
+        }
+        if components.len() > MAX_WALK_DEPTH {
+            bail!("{label} exceeds walk depth {}", MAX_WALK_DEPTH);
+        }
+        for component in components {
+            if component == ".." {
+                bail!("{label} contains disallowed '..'");
+            }
+            if component.is_empty() {
+                bail!("{label} contains empty path component");
+            }
+        }
         Ok(())
     }
 
@@ -1564,6 +1649,7 @@ impl Default for UiUpdates {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ClientPolicies {
+    pub coh: CohClientPolicy,
     pub cohsh: CohshClientPolicy,
     pub retry: ClientRetryPolicy,
     pub heartbeat: ClientHeartbeatPolicy,
@@ -1573,10 +1659,65 @@ pub struct ClientPolicies {
 impl Default for ClientPolicies {
     fn default() -> Self {
         Self {
+            coh: CohClientPolicy::default(),
             cohsh: CohshClientPolicy::default(),
             retry: ClientRetryPolicy::default(),
             heartbeat: ClientHeartbeatPolicy::default(),
             trace: ClientTracePolicy::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct CohClientPolicy {
+    pub mount: CohMountPolicy,
+    pub telemetry: CohTelemetryPolicy,
+}
+
+impl Default for CohClientPolicy {
+    fn default() -> Self {
+        Self {
+            mount: CohMountPolicy::default(),
+            telemetry: CohTelemetryPolicy::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CohMountPolicy {
+    pub root: String,
+    pub allowlist: Vec<String>,
+}
+
+impl Default for CohMountPolicy {
+    fn default() -> Self {
+        Self {
+            root: default_coh_mount_root(),
+            allowlist: default_coh_allowlist(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CohTelemetryPolicy {
+    pub root: String,
+    pub max_devices: u32,
+    pub max_segments_per_device: u32,
+    pub max_bytes_per_segment: u32,
+    pub max_total_bytes_per_device: u32,
+}
+
+impl Default for CohTelemetryPolicy {
+    fn default() -> Self {
+        Self {
+            root: default_coh_telemetry_root(),
+            max_devices: 32,
+            max_segments_per_device: 4,
+            max_bytes_per_segment: 32 * 1024,
+            max_total_bytes_per_device: 128 * 1024,
         }
     }
 }
@@ -1989,6 +2130,25 @@ impl Role {
 
 fn default_host_mount() -> String {
     "/host".to_owned()
+}
+
+fn default_coh_mount_root() -> String {
+    "/".to_owned()
+}
+
+fn default_coh_telemetry_root() -> String {
+    "/queen/telemetry".to_owned()
+}
+
+fn default_coh_allowlist() -> Vec<String> {
+    vec![
+        "/proc".to_owned(),
+        "/queen".to_owned(),
+        "/worker".to_owned(),
+        "/log".to_owned(),
+        "/gpu".to_owned(),
+        "/host".to_owned(),
+    ]
 }
 
 fn default_bus_mount() -> String {

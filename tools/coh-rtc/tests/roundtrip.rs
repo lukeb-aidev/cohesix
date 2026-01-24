@@ -39,6 +39,9 @@ fn manifest_codegen_is_deterministic() {
     let cohsh_client_doc = temp_dir.path().join("cohsh_client.md");
     let cohsh_grammar_doc = temp_dir.path().join("cohsh_grammar.md");
     let cohsh_ticket_policy_doc = temp_dir.path().join("cohsh_ticket_policy.md");
+    let coh_policy = temp_dir.path().join("coh_policy.toml");
+    let coh_policy_rust = temp_dir.path().join("coh_policy.rs");
+    let coh_policy_doc = temp_dir.path().join("coh_policy.md");
     let swarmui_defaults = temp_dir.path().join("swarmui_defaults.toml");
     let swarmui_defaults_rust = temp_dir.path().join("swarmui_defaults.rs");
     let swarmui_defaults_doc = temp_dir.path().join("swarmui_defaults.md");
@@ -63,6 +66,9 @@ fn manifest_codegen_is_deterministic() {
         cohsh_client_doc_out: cohsh_client_doc.clone(),
         cohsh_grammar_doc_out: cohsh_grammar_doc.clone(),
         cohsh_ticket_policy_doc_out: cohsh_ticket_policy_doc.clone(),
+        coh_policy_out: coh_policy.clone(),
+        coh_policy_rust_out: coh_policy_rust.clone(),
+        coh_policy_doc_out: coh_policy_doc.clone(),
         swarmui_defaults_out: swarmui_defaults.clone(),
         swarmui_defaults_rust_out: swarmui_defaults_rust.clone(),
         swarmui_defaults_doc_out: swarmui_defaults_doc.clone(),
@@ -87,6 +93,9 @@ fn manifest_codegen_is_deterministic() {
     let baseline_policy = fs::read(&cohsh_policy).expect("cohsh policy");
     let baseline_policy_rust = fs::read(&cohsh_policy_rust).expect("cohsh policy rust");
     let baseline_policy_doc = fs::read(&cohsh_policy_doc).expect("cohsh policy doc");
+    let baseline_coh_policy = fs::read(&coh_policy).expect("coh policy");
+    let baseline_coh_policy_rust = fs::read(&coh_policy_rust).expect("coh policy rust");
+    let baseline_coh_policy_doc = fs::read(&coh_policy_doc).expect("coh policy doc");
     let baseline_client_rust = fs::read(&cohsh_client_rust).expect("cohsh client rust");
     let baseline_client_doc = fs::read(&cohsh_client_doc).expect("cohsh client doc");
     let baseline_grammar_doc = fs::read(&cohsh_grammar_doc).expect("cohsh grammar doc");
@@ -118,6 +127,9 @@ fn manifest_codegen_is_deterministic() {
     let second_policy = fs::read(&cohsh_policy).expect("cohsh policy");
     let second_policy_rust = fs::read(&cohsh_policy_rust).expect("cohsh policy rust");
     let second_policy_doc = fs::read(&cohsh_policy_doc).expect("cohsh policy doc");
+    let second_coh_policy = fs::read(&coh_policy).expect("coh policy");
+    let second_coh_policy_rust = fs::read(&coh_policy_rust).expect("coh policy rust");
+    let second_coh_policy_doc = fs::read(&coh_policy_doc).expect("coh policy doc");
     let second_client_rust = fs::read(&cohsh_client_rust).expect("cohsh client rust");
     let second_client_doc = fs::read(&cohsh_client_doc).expect("cohsh client doc");
     let second_grammar_doc = fs::read(&cohsh_grammar_doc).expect("cohsh grammar doc");
@@ -143,6 +155,9 @@ fn manifest_codegen_is_deterministic() {
     assert_eq!(baseline_policy, second_policy);
     assert_eq!(baseline_policy_rust, second_policy_rust);
     assert_eq!(baseline_policy_doc, second_policy_doc);
+    assert_eq!(baseline_coh_policy, second_coh_policy);
+    assert_eq!(baseline_coh_policy_rust, second_coh_policy_rust);
+    assert_eq!(baseline_coh_policy_doc, second_coh_policy_doc);
     assert_eq!(baseline_client_rust, second_client_rust);
     assert_eq!(baseline_client_doc, second_client_doc);
     assert_eq!(baseline_grammar_doc, second_grammar_doc);
@@ -216,6 +231,9 @@ secret = "bootstrap"
         cohsh_client_doc_out: temp_dir.path().join("cohsh_client.md"),
         cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
         cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
+        coh_policy_out: temp_dir.path().join("coh_policy.toml"),
+        coh_policy_rust_out: temp_dir.path().join("coh_policy.rs"),
+        coh_policy_doc_out: temp_dir.path().join("coh_policy.md"),
         swarmui_defaults_out: temp_dir.path().join("swarmui_defaults.toml"),
         swarmui_defaults_rust_out: temp_dir.path().join("swarmui_defaults.rs"),
         swarmui_defaults_doc_out: temp_dir.path().join("swarmui_defaults.md"),
@@ -308,6 +326,9 @@ secret = "bootstrap"
         cohsh_client_doc_out: temp_dir.path().join("cohsh_client.md"),
         cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
         cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
+        coh_policy_out: temp_dir.path().join("coh_policy.toml"),
+        coh_policy_rust_out: temp_dir.path().join("coh_policy.rs"),
+        coh_policy_doc_out: temp_dir.path().join("coh_policy.md"),
         swarmui_defaults_out: temp_dir.path().join("swarmui_defaults.toml"),
         swarmui_defaults_rust_out: temp_dir.path().join("swarmui_defaults.rs"),
         swarmui_defaults_doc_out: temp_dir.path().join("swarmui_defaults.md"),
@@ -385,6 +406,9 @@ secret = "bootstrap"
         cohsh_client_doc_out: temp_dir.path().join("cohsh_client.md"),
         cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
         cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
+        coh_policy_out: temp_dir.path().join("coh_policy.toml"),
+        coh_policy_rust_out: temp_dir.path().join("coh_policy.rs"),
+        coh_policy_doc_out: temp_dir.path().join("coh_policy.md"),
         swarmui_defaults_out: temp_dir.path().join("swarmui_defaults.toml"),
         swarmui_defaults_rust_out: temp_dir.path().join("swarmui_defaults.rs"),
         swarmui_defaults_doc_out: temp_dir.path().join("swarmui_defaults.md"),
@@ -469,6 +493,9 @@ secret = "bootstrap"
         cohsh_client_doc_out: temp_dir.path().join("cohsh_client.md"),
         cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
         cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
+        coh_policy_out: temp_dir.path().join("coh_policy.toml"),
+        coh_policy_rust_out: temp_dir.path().join("coh_policy.rs"),
+        coh_policy_doc_out: temp_dir.path().join("coh_policy.md"),
         swarmui_defaults_out: temp_dir.path().join("swarmui_defaults.toml"),
         swarmui_defaults_rust_out: temp_dir.path().join("swarmui_defaults.rs"),
         swarmui_defaults_doc_out: temp_dir.path().join("swarmui_defaults.md"),
@@ -548,6 +575,9 @@ secret = "bootstrap"
         cohsh_client_doc_out: temp_dir.path().join("cohsh_client.md"),
         cohsh_grammar_doc_out: temp_dir.path().join("cohsh_grammar.md"),
         cohsh_ticket_policy_doc_out: temp_dir.path().join("cohsh_ticket_policy.md"),
+        coh_policy_out: temp_dir.path().join("coh_policy.toml"),
+        coh_policy_rust_out: temp_dir.path().join("coh_policy.rs"),
+        coh_policy_doc_out: temp_dir.path().join("coh_policy.md"),
         swarmui_defaults_out: temp_dir.path().join("swarmui_defaults.toml"),
         swarmui_defaults_rust_out: temp_dir.path().join("swarmui_defaults.rs"),
         swarmui_defaults_doc_out: temp_dir.path().join("swarmui_defaults.md"),
