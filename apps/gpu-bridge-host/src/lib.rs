@@ -298,20 +298,27 @@ struct NvmlInventory;
 #[cfg(feature = "nvml")]
 impl Inventory for NvmlInventory {
     fn discover(&self) -> Result<Vec<GpuInfo>> {
-        use nvml_wrapper::Nvml;
+        use nvml_wrapper::{cuda_driver_version_major, cuda_driver_version_minor, Nvml};
         let nvml = Nvml::init()?;
         let device_count = nvml.device_count()?;
+        let cuda_driver_version = nvml.sys_cuda_driver_version()?;
+        let runtime_version = format!(
+            "{}.{}",
+            cuda_driver_version_major(cuda_driver_version),
+            cuda_driver_version_minor(cuda_driver_version)
+        );
         let mut gpus = Vec::new();
         for index in 0..device_count {
             let device = nvml.device_by_index(index)?;
             let memory = device.memory_info()?;
+            let attributes = device.attributes()?;
             let info = GpuInfo {
                 id: format!("GPU-{index}"),
                 name: device.name()?.to_string(),
                 memory_mb: (memory.total / (1024 * 1024)) as u32,
-                sm_count: device.multiprocessor_count()? as u32,
+                sm_count: attributes.multiprocessor_count,
                 driver_version: nvml.sys_driver_version()?.to_string(),
-                runtime_version: nvml.sys_cuda_version()?.to_string(),
+                runtime_version: runtime_version.clone(),
             };
             gpus.push(info);
         }
