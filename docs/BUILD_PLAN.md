@@ -82,6 +82,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [21a](#21a) | Telemetry Ingest with OS-Named Segments (Severely Limited Create) | Complete |
 | [21b](#21b) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
 | [21c](#21c) | SwarmUI Interactive cohsh Terminal (Full Prompt UX) | Pending |
+| [21d](#21d) | Deterministic Node Lifecycle & Operator Control | Pending |
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Pending |
 | [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Pending |
 | [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Pending |
@@ -3020,6 +3021,189 @@ Checks:
 Deliverables:
   - Parity test ensuring terminal output consistency.
 ```
+
+---
+
+## Milestone 21d — Deterministic Node Lifecycle & Operator Control <a id="21d"></a> 
+[Milestones](#Milestones)
+
+**Why now (operator):** Cohesix nodes must behave predictably across power loss, network partitions, maintenance windows, and redeployments. Lifecycle semantics must be explicit, inspectable, and controllable — not inferred from side effects.
+
+**Goal**
+Define and enforce a **finite lifecycle state machine** for Cohesix nodes, exposed entirely via file-shaped control surfaces, with deterministic transitions and regression coverage.
+
+### Lifecycle states (normative)
+- `BOOTING`
+- `DEGRADED`
+- `ONLINE`
+- `DRAINING`
+- `QUIESCED`
+- `OFFLINE`
+
+### State definitions
+| State | Meaning |
+| --- | --- |
+| `BOOTING` | Root-task started, manifest loaded, identity pending. |
+| `DEGRADED` | Identity ok, but one or more required dependencies are missing (network, storage, sidecar, or policy gates). |
+| `ONLINE` | Full control-plane available; workers and telemetry allowed within policy bounds. |
+| `DRAINING` | No new work accepted; telemetry ingestion remains enabled. |
+| `QUIESCED` | All work drained; safe to reboot or power off. |
+| `OFFLINE` | Explicitly disabled or unrecoverable failure; control-plane actions denied. |
+
+### Control & observation (NineDoor)
+**Observability (read-only)**
+- `/proc/lifecycle/state`
+- `/proc/lifecycle/reason`
+- `/proc/lifecycle/since`
+
+**Control (append-only, queen-only)**
+- `/queen/lifecycle/ctl`
+
+**Supported control commands (append-only, single line)**
+`cordon`, `drain`, `resume`, `quiesce`, `reset`
+
+### Hard rules
+- Transitions are **explicit** and must occur only via `/queen/lifecycle/ctl` or deterministic system events enumerated in docs; no heuristic or hidden state changes.
+- Invalid transitions return deterministic `ERR` and emit audit entries.
+- Every transition emits an audit record in `/log/queen.log` with old/new state and reason.
+- Tickets, telemetry ingest, worker authority, and host sidecar publishes are gated by lifecycle state.
+
+### Regression coverage
+- `scripts/cohsh/lifecycle_basic.coh`
+- `scripts/cohsh/lifecycle_drain_spool.coh`
+- `scripts/cohsh/lifecycle_reboot_resume.coh`
+
+### Checks (DoD)
+- Lifecycle transitions are byte-stable across serial/TCP.
+- Telemetry is not lost during `DRAINING` (spool or queue behavior is deterministic).
+- `QUIESCED` guarantees zero outstanding leases.
+- Replay reproduces identical state transitions and audit lines.
+
+### Task Breakdown
+```
+Title/ID: m21d-lifecycle-state-machine
+Goal: Implement the node lifecycle state machine in root-task.
+Inputs: docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/ROLES_AND_SCHEDULING.md.
+Changes:
+  - apps/root-task/src/lifecycle.rs — state machine + transition validation.
+  - apps/root-task/src/lib.rs — hook lifecycle into boot + worker/ticket gating.
+Commands:
+  - cargo test -p root-task
+Checks:
+  - Invalid transitions return deterministic ERR with audit lines.
+Deliverables:
+  - Root-task lifecycle state machine with deterministic transitions.
+
+Title/ID: m21d-lifecycle-ir
+Goal: Add lifecycle policy fields to compiler IR and regenerate artifacts.
+Inputs: configs/root_task.toml, tools/coh-rtc, docs/ARCHITECTURE.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs — lifecycle policy fields (initial state, allowed auto transitions).
+  - configs/root_task.toml — lifecycle policy configuration.
+Commands:
+  - cargo run -p coh-rtc
+  - scripts/check-generated.sh
+Checks:
+  - Generated snippets update; invalid lifecycle policy is rejected.
+Deliverables:
+  - Manifest-backed lifecycle policy with validated defaults.
+
+Title/ID: m21d-lifecycle-namespace
+Goal: Expose lifecycle nodes via NineDoor and enforce permissions.
+Inputs: apps/nine-door, docs/INTERFACES.md.
+Changes:
+  - apps/nine-door/src/host/lifecycle.rs — /proc/lifecycle/* + /queen/lifecycle/ctl.
+  - apps/nine-door/src/host/namespace.rs — mount lifecycle provider.
+Commands:
+  - cargo test -p nine-door --test lifecycle
+Checks:
+  - `/proc/lifecycle/*` is read-only; `/queen/lifecycle/ctl` is queen-only append.
+Deliverables:
+  - Lifecycle nodes live with deterministic error semantics.
+
+Title/ID: m21d-cohsh-lifecycle
+Goal: Add cohsh lifecycle commands and update CLI docs.
+Inputs: docs/USERLAND_AND_CLI.md, docs/INTERFACES.md.
+Changes:
+  - apps/cohsh/src/lib.rs — add `lifecycle` commands (cordon/drain/resume/quiesce/reset).
+  - docs/USERLAND_AND_CLI.md — document lifecycle CLI surface and examples.
+Commands:
+  - cargo test -p cohsh
+Checks:
+  - CLI rejects invalid transitions locally with deterministic ERR.
+Deliverables:
+  - cohsh lifecycle commands with documented grammar.
+
+Title/ID: m21d-lifecycle-regressions
+Goal: Lock lifecycle behavior with deterministic regression scripts.
+Inputs: scripts/cohsh/.
+Changes:
+  - scripts/cohsh/lifecycle_basic.coh
+  - scripts/cohsh/lifecycle_drain_spool.coh
+  - scripts/cohsh/lifecycle_reboot_resume.coh
+Commands:
+  - cohsh --script scripts/cohsh/lifecycle_basic.coh
+Checks:
+  - Scripts pass unchanged; transcript ordering stable.
+Deliverables:
+  - Regression coverage for lifecycle transitions and gating.
+
+Title/ID: m21d-docs-failure-modes
+Goal: Add operator-facing failure semantics and walkthroughs.
+Inputs: docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/USERLAND_AND_CLI.md.
+Changes:
+  - docs/FAILURE_MODES.md — explicit failure behavior and recovery actions.
+  - docs/OPERATOR_WALKTHROUGH.md — end-to-end lifecycle narrative with artifacts.
+Commands:
+  - mdbook build docs (if configured)
+Checks:
+  - Docs describe as-built behavior and reference canonical interfaces.
+Deliverables:
+  - Failure modes and operator walkthrough docs committed and referenced.
+```
+
+---
+
+## Telemetry Spool Policy (Addendum to Milestones 21a & 25b)
+
+**Rationale:** Telemetry storage must be predictable under pressure. Operators must know *when*, *why*, and *how* data is retained or dropped. This addendum **aligns policy terminology** between 21a telemetry ingest quotas and the 25b persistent spool store; it does **not** retroactively change 21a's completed behavior.
+
+### Policy surface (alignment)
+- **Telemetry ingest (21a):** keep `telemetry_ingest.eviction_policy` (`refuse` | `evict-oldest`) as the source of truth for per-device segment limits.
+- **Persistent spool (25b):** use `persistence.spool.mode` (`refuse` | `overwrite_acked`) and `persistence.spool.max_record_bytes` to mirror 21a’s refusal/eviction semantics while remaining crash‑safe.
+
+**Manifest example (bytes only)**
+```toml
+[telemetry_ingest]
+max_segments_per_device = 64
+max_bytes_per_segment = 262144
+max_total_bytes_per_device = 16777216
+eviction_policy = "refuse" # or "evict-oldest"
+
+[persistence.spool]
+max_bytes = 67108864
+max_record_bytes = 32768
+mode = "refuse" # or "overwrite_acked"
+```
+
+### Operator visibility
+- `/proc/spool/status` MUST expose policy and pressure fields (used_bytes, max_bytes, records, dropped, pressure, mode, ack_cursor).
+- If additional nodes are required for UI providers, add `/proc/spool/policy` and `/proc/spool/pressure` **only** with corresponding updates to `ARCHITECTURE.md` and `INTERFACES.md`.
+
+### CLI surface (host-only, target milestone 25b or later)
+- `cohsh telemetry status` — read spool/ingest status and render policy + pressure.
+- `cohsh telemetry explain` — summarize current policy and refusal/eviction outcomes.
+
+### Mandatory regression cases
+- Quota exhaustion: `refuse` vs `evict-oldest` (21a) and `overwrite_acked` (25b).
+- Ack cursor behind overwrite window (25b).
+- Record-too-large rejection (25b).
+- Offline accumulation → online drain (21a + 25b).
+
+### Invariants
+- All drops are auditable.
+- Backpressure is observable.
+- No data loss occurs without an explicit policy allowing it.
 
 ---
 
