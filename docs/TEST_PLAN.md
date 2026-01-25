@@ -48,6 +48,7 @@ Run in order unless explicitly skipped with a recorded reason.
 - `cargo test -p cohsh --test ticket_mint`
 - `cargo test -p cohsh --test transcripts`
 - `cargo test -p swarmui --test transcript`
+- `cargo test -p swarmui --test console_parity`
 - `cargo test -p swarmui --test security`
 - `cargo test -p nine-door --test ui_security`
 - `cargo test -p nine-door --test telemetry_create`
@@ -102,9 +103,10 @@ Run while QEMU is up:
   - `./bin/coh gpu list --host 127.0.0.1 --port 31337`
   - `./bin/coh telemetry pull --host 127.0.0.1 --port 31337 --out ./out/telemetry`
   - Optional FUSE: `./bin/coh mount --host 127.0.0.1 --port 31337 --at /tmp/coh-mount` (requires `coh` built with `--features fuse`).
-- `swarmui` live (observe only):
+- `swarmui` live (console + observability; do not attach cohsh simultaneously):
   - macOS: `./bin/swarmui`
   - headless Linux: `xvfb-run -a ./bin/swarmui`
+  - SwarmUI console exposes the core console verbs; CLI-only commands remain in `cohsh`.
 - `swarmui` replay:
   - Source tree: `./bin/swarmui --replay-trace "$(pwd)/tests/fixtures/traces/trace_v0.trace"`
   - Release bundle: `./bin/swarmui --replay-trace "$(pwd)/traces/trace_v0.trace"`
@@ -133,7 +135,9 @@ Run while QEMU is up:
 - `host-sidecar-bridge`:
   - `./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider nvidia`
   - `./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme` (requires `/host` enabled in `configs/root_task.toml`)
-- Deterministic replay via cohsh (no QEMU needed): `./bin/cohsh --transport mock --replay-trace ./traces/trace_v0.trace`
+- Deterministic replay via cohsh (no QEMU needed):
+  - Source tree: `./bin/cohsh --transport mock --replay-trace ./tests/fixtures/traces/trace_v0.trace`
+  - Release bundle: `./bin/cohsh --transport mock --replay-trace ./traces/trace_v0.trace`
 
 ### 6) Regression pack (full-stack, recommended before release)
 - `scripts/cohsh/run_regression_batch.sh`
