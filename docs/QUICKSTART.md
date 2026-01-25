@@ -42,6 +42,9 @@ You need two terminals:
 - Terminal 1: QEMU (keeps the VM running).
   - Note: Qemu will show a serial terminal, used for core seL4 diagnostics. This is NOT intended to be the main user interface.
 - Terminal 2: for either `cohsh` or `swarmui`. Use one at a time; they should not be used simultaneously.
+- Command surface note (concise):
+  - SwarmUI console exposes only the core console verbs (`help`, `attach`, `detach`, `ping`, `log`, `tail`, `ls`, `cat`, `echo`, `spawn`, `kill`, `quit`).
+  - `cohsh` includes those plus CLI-only commands/options (for example `test --mode`, `pool bench`, `tcp-diag`, `--scripts`, `--mint-ticket`).
 
 1. In Terminal 1, Boot the VM:
    ```bash
@@ -277,5 +280,4 @@ If a command exceeds these limits, the console returns `ERR ... reason=ELIMIT` (
   coh> tcp-diag
   coh> tcp-diag 31337
   ```
-
 
