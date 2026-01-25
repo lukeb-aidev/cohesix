@@ -30,6 +30,10 @@ use crate::kernel::BootContext;
 use crate::net::DefaultNetStack as NetStack;
 use crate::platform::Platform;
 use crate::profile;
+#[cfg(feature = "kernel")]
+use crate::log_buffer;
+#[cfg(feature = "kernel")]
+use crate::lifecycle;
 use crate::sel4;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::serial::pl011::{Pl011, Pl011Mmio};
@@ -59,6 +63,11 @@ pub fn main(ctx: BootContext) -> ! {
     let uart_base = ctx.uart_mmio.as_ref().map(Pl011Mmio::vaddr);
 
     let mut audit = LoggerAudit;
+    #[cfg(feature = "kernel")]
+    {
+        let now_ms = crate::hal::timebase().now_ms();
+        let _ = lifecycle::init(now_ms);
+    }
     let serial = ctx
         .serial
         .borrow_mut()
@@ -126,6 +135,17 @@ pub fn main(ctx: BootContext) -> ! {
                 crate::net::CONSOLE_TCP_PORT
             );
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    {
+        let now_ms = crate::hal::timebase().now_ms();
+        let result = lifecycle::auto_boot_complete(now_ms);
+        let line = match result {
+            Ok(transition) => lifecycle::format_transition_log(&transition),
+            Err(err) => lifecycle::format_denied_log(lifecycle::state(), "auto-boot", err),
+        };
+        log_buffer::append_log_line(line.as_str());
     }
 
     #[cfg(all(feature = "serial-console", feature = "kernel"))]

@@ -195,6 +195,8 @@ impl AuditStore {
     ) -> Result<AuditAppendOutcome, NineDoorError> {
         let kind = if path == "/queen/ctl" {
             "queen-ctl"
+        } else if path == "/queen/lifecycle/ctl" {
+            "queen-lifecycle"
         } else {
             "host-control"
         };

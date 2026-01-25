@@ -261,6 +261,8 @@ See below for detailed design, interfaces, and milestone tracking:
 - [docs/SECURE9P.md](docs/SECURE9P.md)
 - [docs/ROLES_AND_SCHEDULING.md](docs/ROLES_AND_SCHEDULING.md)
 - [docs/GPU_NODES.md](docs/GPU_NODES.md)
+- [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)
+- [docs/OPERATOR_WALKTHROUGH.md](docs/OPERATOR_WALKTHROUGH.md)
 
 ---
 

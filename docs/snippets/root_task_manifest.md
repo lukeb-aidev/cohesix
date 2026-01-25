@@ -31,6 +31,8 @@
 - `telemetry_ingest.max_bytes_per_segment`: `32768`
 - `telemetry_ingest.max_total_bytes_per_device`: `131072`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
+- `lifecycle.initial_state`: `BOOTING`
+- `lifecycle.auto_transitions`: `BOOTING->ONLINE`
 - `observability.proc_9p.sessions`: `true`
 - `observability.proc_9p.outstanding`: `true`
 - `observability.proc_9p.short_writes`: `true`
@@ -79,6 +81,7 @@
 - `client_policies.retry.timeout_ms`: `5000`
 - `client_policies.heartbeat.interval_ms`: `15000`
 - `client_paths.queen_ctl`: `/queen/ctl`
+- `client_paths.queen_lifecycle_ctl`: `/queen/lifecycle/ctl`
 - `client_paths.log`: `/log/queen.log`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
@@ -107,7 +110,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `aeacd14e34c15b39b879af95c0cc5c19de757d368702d1453024ce4cd910a8cb`
+- `manifest.sha256`: `7ac2fcc56751bb4670a74fd0063bfc4993c18367450aca3961ab65ad7ad37634`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -153,4 +156,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `aeacd14e34c15b39b879af95c0cc5c19de757d368702d1453024ce4cd910a8cb`)._
+_Generated from `configs/root_task.toml` (sha256: `7ac2fcc56751bb4670a74fd0063bfc4993c18367450aca3961ab65ad7ad37634`)._

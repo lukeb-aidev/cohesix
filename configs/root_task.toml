@@ -73,6 +73,13 @@ max_bytes_per_segment = 32768
 max_total_bytes_per_device = 131072
 eviction_policy = "evict-oldest"
 
+[lifecycle]
+initial_state = "BOOTING"
+
+[[lifecycle.auto_transitions]]
+from = "BOOTING"
+to = "ONLINE"
+
 [observability.proc_9p]
 sessions = true
 outstanding = true
@@ -147,6 +154,7 @@ max_bytes = 1048576
 
 [client_paths]
 queen_ctl = "/queen/ctl"
+queen_lifecycle_ctl = "/queen/lifecycle/ctl"
 log = "/log/queen.log"
 
 [swarmui]

@@ -179,6 +179,27 @@ Path: `/queen/ctl` (append-only JSON lines)
 - Optional `priority` fields raise scheduling weight on the host bridge when multiple leases compete.
 - Operators typically exercise these verbs via `cohsh`, and any GUI client is expected to speak the same protocol.
 
+## 3a. Node Lifecycle Control
+Path: `/queen/lifecycle/ctl` (append-only, queen-only)
+```
+cordon
+drain
+resume
+quiesce
+reset
+```
+- Commands are single-line tokens; invalid transitions return deterministic `ERR`.
+- Every transition appends an audit line to `/log/queen.log`:
+  - `lifecycle transition old=<STATE> new=<STATE> reason=<reason>`
+- Denials are also logged:
+  - `lifecycle denied action=<cmd> state=<STATE> reason=<invalid-transition|outstanding-leases|invalid-command|gate-denied>`
+- Lifecycle gates apply to: worker attach, telemetry ingest, worker telemetry, GPU job submission, and host publishes.
+
+### Lifecycle observability (read-only)
+- `/proc/lifecycle/state`: `state=<BOOTING|DEGRADED|ONLINE|DRAINING|QUIESCED|OFFLINE>`
+- `/proc/lifecycle/reason`: `reason=<text>`
+- `/proc/lifecycle/since`: `since_ms=<u64>`
+
 ## 4. Worker Telemetry
 - Path (canonical): `/shard/<label>/worker/<id>/telemetry` (append-only, newline-delimited records).
 - Legacy alias (when enabled): `/worker/<id>/telemetry`.

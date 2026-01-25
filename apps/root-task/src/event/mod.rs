@@ -50,6 +50,8 @@ use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TIC
 use crate::debug_uart::debug_uart_str;
 #[cfg(feature = "kernel")]
 use crate::log_buffer;
+#[cfg(feature = "kernel")]
+use crate::lifecycle;
 #[cfg(feature = "net-console")]
 use crate::net::{
     ConsoleLine, NetConsoleDisconnectReason, NetConsoleEvent, NetDiagSnapshot, NetPoller,
@@ -3233,6 +3235,33 @@ where
             );
             return false;
         };
+
+        if !matches!(requested_role, Role::Queen) {
+            #[cfg(feature = "kernel")]
+            {
+                if !lifecycle::gate_allows(lifecycle::GATE_WORKER_ATTACH) {
+                    let state = lifecycle::state();
+                    let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+                    let _ = FmtWrite::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "lifecycle denied action={} state={} reason=gate-denied",
+                            lifecycle::GATE_WORKER_ATTACH.name,
+                            lifecycle::state_label(state)
+                        ),
+                    );
+                    log_buffer::append_log_line(line.as_str());
+                    self.audit.denied("attach denied by lifecycle");
+                    self.metrics.denied_commands += 1;
+                    let detail = format_message(format_args!(
+                        "reason=lifecycle-denied state={}",
+                        lifecycle::state_label(state)
+                    ));
+                    self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some(detail.as_str()));
+                    return false;
+                }
+            }
+        }
 
         let ticket_str = ticket.as_ref().map(|t| t.as_str());
         log::info!(

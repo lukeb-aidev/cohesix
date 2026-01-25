@@ -187,6 +187,31 @@ impl DocFragments {
             format_ingest_eviction_policy(&manifest.telemetry_ingest.eviction_policy)
         )
         .ok();
+        let auto_labels = if manifest.lifecycle.auto_transitions.is_empty() {
+            "(none)".to_owned()
+        } else {
+            manifest
+                .lifecycle
+                .auto_transitions
+                .iter()
+                .map(|transition| {
+                    format!("{}->{}", transition.from.as_str(), transition.to.as_str())
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        writeln!(
+            schema_md,
+            "- `lifecycle.initial_state`: `{}`",
+            manifest.lifecycle.initial_state.as_str()
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `lifecycle.auto_transitions`: `{}`",
+            auto_labels
+        )
+        .ok();
         writeln!(
             schema_md,
             "- `observability.proc_9p.sessions`: `{}`",
@@ -473,6 +498,12 @@ impl DocFragments {
             schema_md,
             "- `client_paths.queen_ctl`: `{}`",
             manifest.client_paths.queen_ctl
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_paths.queen_lifecycle_ctl`: `{}`",
+            manifest.client_paths.queen_lifecycle_ctl
         )
         .ok();
         writeln!(

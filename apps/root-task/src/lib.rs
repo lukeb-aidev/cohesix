@@ -109,6 +109,10 @@ pub mod readiness;
 /// Bounded log buffer backing /log/queen.log after console handoff.
 pub mod log_buffer;
 
+#[cfg(feature = "kernel")]
+/// Deterministic lifecycle state machine for operator control.
+pub mod lifecycle;
+
 /// IPC helpers that guard direct syscalls during early bring-up.
 pub mod ipc;
 

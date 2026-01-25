@@ -96,6 +96,50 @@ pub struct TransportMetrics {
     pub heartbeats: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LifecycleState {
+    Booting,
+    Degraded,
+    Online,
+    Draining,
+    Quiesced,
+    Offline,
+}
+
+impl LifecycleState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Booting => "BOOTING",
+            Self::Degraded => "DEGRADED",
+            Self::Online => "ONLINE",
+            Self::Draining => "DRAINING",
+            Self::Quiesced => "QUIESCED",
+            Self::Offline => "OFFLINE",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LifecycleCommand {
+    Cordon,
+    Drain,
+    Resume,
+    Quiesce,
+    Reset,
+}
+
+impl LifecycleCommand {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Cordon => "cordon",
+            Self::Drain => "drain",
+            Self::Resume => "resume",
+            Self::Quiesce => "quiesce",
+            Self::Reset => "reset",
+        }
+    }
+}
+
 impl Session {
     /// Construct a new session wrapper.
     pub fn new(id: SessionId, role: Role) -> Self {
@@ -122,10 +166,12 @@ const MAX_SCRIPT_LINES: usize = 256;
 const MAX_SCRIPT_WAIT_MS: u64 = 2000;
 const MAX_SCRIPT_RESPONSES: usize = 8;
 const QUEEN_CTL_PATH: &str = generated_client::CLIENT_QUEEN_CTL_PATH;
+const QUEEN_LIFECYCLE_CTL_PATH: &str = generated_client::CLIENT_QUEEN_LIFECYCLE_CTL_PATH;
 const QUEEN_LOG_PATH: &str = generated_client::CLIENT_LOG_PATH;
 const TEST_SCRIPT_QUICK_PATH: &str = "/proc/tests/selftest_quick.coh";
 const TEST_SCRIPT_FULL_PATH: &str = "/proc/tests/selftest_full.coh";
 const TEST_SCRIPT_NEGATIVE_PATH: &str = "/proc/tests/selftest_negative.coh";
+const PROC_LIFECYCLE_STATE_PATH: &str = "/proc/lifecycle/state";
 const DEFAULT_TEST_TIMEOUT_SECS: u64 = 30;
 const MAX_TEST_TIMEOUT_SECS: u64 = 120;
 const TEST_REPORT_VERSION: &str = "1";
@@ -2587,6 +2633,38 @@ impl<T: Transport, W: Write> Shell<T, W> {
         }
     }
 
+    fn read_lifecycle_state(&mut self, session: &Session) -> Result<LifecycleState> {
+        let lines = self.transport.read(session, PROC_LIFECYCLE_STATE_PATH)?;
+        let _ = self.transport.drain_acknowledgements();
+        for line in &lines {
+            if let Some(state) = parse_lifecycle_state_line(line) {
+                return Ok(state);
+            }
+        }
+        Err(anyhow!("lifecycle state not found at {PROC_LIFECYCLE_STATE_PATH}"))
+    }
+
+    fn lifecycle_ctl(&mut self, command: LifecycleCommand) -> Result<()> {
+        let session = self.queen_session("lifecycle")?.clone();
+        let state = self.read_lifecycle_state(&session)?;
+        if !lifecycle_command_allowed(state, command) {
+            let detail = format!(
+                "action={} state={} reason=invalid-transition",
+                command.as_str(),
+                state.as_str()
+            );
+            let ack = render_lifecycle_ack(AckStatus::Err, &detail)?;
+            self.write_ack_line(&ack)?;
+            return Err(anyhow!(
+                "lifecycle transition denied: state={} action={}",
+                state.as_str(),
+                command.as_str()
+            ));
+        }
+        let payload = format!("{}\n", command.as_str());
+        self.write_path(QUEEN_LIFECYCLE_CTL_PATH, payload.as_bytes())
+    }
+
     fn queen_session(&self, command: &str) -> Result<&Session> {
         let session = self
             .session
@@ -2995,6 +3073,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line("  bind <src> <dst>             - Bind namespace path")?;
                 self.write_line("  mount <service> <path>       - Mount service namespace")?;
                 self.write_line(
+                    "  lifecycle <cmd>              - Control node lifecycle (cordon/drain/resume/quiesce/reset)",
+                )?;
+                self.write_line(
                     "  telemetry push <src> --device <id> - Push bounded telemetry segment",
                 )?;
                 self.write_line(console_lines[11])?;
@@ -3175,6 +3256,21 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 let payload =
                     format!("{{\"mount\":{{\"service\":\"{service}\",\"at\":\"{target}\"}}}}");
                 self.send_queen_ctl(&payload)?;
+                Ok(CommandStatus::Continue)
+            }
+            "lifecycle" => {
+                let Some(subcommand) = parts.next() else {
+                    return Err(anyhow!(
+                        "lifecycle requires a command: cordon|drain|resume|quiesce|reset"
+                    ));
+                };
+                if parts.next().is_some() {
+                    return Err(anyhow!(
+                        "lifecycle takes exactly one argument: cordon|drain|resume|quiesce|reset"
+                    ));
+                }
+                let command = parse_lifecycle_command(subcommand)?;
+                self.lifecycle_ctl(command)?;
                 Ok(CommandStatus::Continue)
             }
             "telemetry" => {
@@ -3911,9 +4007,58 @@ fn render_telemetry_ack(status: AckStatus, detail: &str) -> Result<String> {
     Ok(line)
 }
 
+fn render_lifecycle_ack(status: AckStatus, detail: &str) -> Result<String> {
+    let mut line = String::new();
+    let sanitized = detail.replace(['\r', '\n'], " ");
+    let ack = AckLine {
+        status,
+        verb: "LIFECYCLE",
+        detail: Some(sanitized.as_str()),
+    };
+    render_ack(&mut line, &ack).context("lifecycle ack render failed")?;
+    Ok(line)
+}
+
 fn parse_role(input: &str) -> Result<Role> {
     cohsh_core::parse_role(input, RoleParseMode::AllowWorkerAlias)
         .ok_or_else(|| anyhow!("unknown role '{input}'"))
+}
+
+fn parse_lifecycle_command(input: &str) -> Result<LifecycleCommand> {
+    match input {
+        "cordon" => Ok(LifecycleCommand::Cordon),
+        "drain" => Ok(LifecycleCommand::Drain),
+        "resume" => Ok(LifecycleCommand::Resume),
+        "quiesce" => Ok(LifecycleCommand::Quiesce),
+        "reset" => Ok(LifecycleCommand::Reset),
+        other => Err(anyhow!("unknown lifecycle command '{other}'")),
+    }
+}
+
+fn parse_lifecycle_state_line(line: &str) -> Option<LifecycleState> {
+    let value = line.strip_prefix("state=")?;
+    match value.trim() {
+        "BOOTING" => Some(LifecycleState::Booting),
+        "DEGRADED" => Some(LifecycleState::Degraded),
+        "ONLINE" => Some(LifecycleState::Online),
+        "DRAINING" => Some(LifecycleState::Draining),
+        "QUIESCED" => Some(LifecycleState::Quiesced),
+        "OFFLINE" => Some(LifecycleState::Offline),
+        _ => None,
+    }
+}
+
+fn lifecycle_command_allowed(state: LifecycleState, command: LifecycleCommand) -> bool {
+    match command {
+        LifecycleCommand::Cordon => matches!(state, LifecycleState::Online | LifecycleState::Degraded),
+        LifecycleCommand::Drain => matches!(state, LifecycleState::Draining),
+        LifecycleCommand::Resume => !matches!(state, LifecycleState::Online),
+        LifecycleCommand::Quiesce => matches!(
+            state,
+            LifecycleState::Online | LifecycleState::Degraded | LifecycleState::Draining
+        ),
+        LifecycleCommand::Reset => !matches!(state, LifecycleState::Booting),
+    }
 }
 
 fn parse_attach_args<'a>(cmd: &str, args: &'a [&'a str]) -> Result<(Role, Option<&'a str>)> {

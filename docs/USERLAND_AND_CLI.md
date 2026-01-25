@@ -79,8 +79,8 @@ Manifest-derived policy defaults are emitted by `coh-rtc` into `out/cohsh_policy
 <!-- Purpose: Generated cohsh policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### cohsh client policy (generated)
-- `manifest.sha256`: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`
-- `policy.sha256`: `c1e183f3447f311c443dc4e16087bd25ee9855b06fd6bb717435988edf7c24f7`
+- `manifest.sha256`: `7ac2fcc56751bb4670a74fd0063bfc4993c18367450aca3961ab65ad7ad37634`
+- `policy.sha256`: `8471d59be109d1a787b39bccd396e4c2da30cc0af8421e249a78928cee1bbe52`
 - `cohsh.pool.control_sessions`: `2`
 - `cohsh.pool.telemetry_sessions`: `4`
 - `retry.max_attempts`: `3`
@@ -90,7 +90,7 @@ Manifest-derived policy defaults are emitted by `coh-rtc` into `out/cohsh_policy
 - `heartbeat.interval_ms`: `15000`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`)._
+_Generated from `configs/root_task.toml` (sha256: `7ac2fcc56751bb4670a74fd0063bfc4993c18367450aca3961ab65ad7ad37634`)._
 
 
 Manifest-derived CohClient defaults (paths and Secure9P bounds) are emitted by `coh-rtc`.
@@ -99,18 +99,19 @@ Manifest-derived CohClient defaults (paths and Secure9P bounds) are emitted by `
 <!-- Purpose: Generated cohsh client snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`
+- `manifest.sha256`: `7ac2fcc56751bb4670a74fd0063bfc4993c18367450aca3961ab65ad7ad37634`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
 - `trace.max_bytes`: `1048576`
 - `client_paths.queen_ctl`: `/queen/ctl`
+- `client_paths.queen_lifecycle_ctl`: `/queen/lifecycle/ctl`
 - `client_paths.log`: `/log/queen.log`
 - `telemetry_ingest.max_segments_per_device`: `4`
 - `telemetry_ingest.max_bytes_per_segment`: `32768`
 - `telemetry_ingest.max_total_bytes_per_device`: `131072`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 
-_Generated from `configs/root_task.toml` (sha256: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`)._
+_Generated from `configs/root_task.toml` (sha256: `7ac2fcc56751bb4670a74fd0063bfc4993c18367450aca3961ab65ad7ad37634`)._
 
 
 Shared console grammar and ticket policy are emitted by `coh-rtc` from `cohsh-core` so CLI and console stay aligned.
@@ -139,6 +140,11 @@ Shared console grammar and ticket policy are emitted by `coh-rtc` from `cohsh-co
 - `kill <worker>`
 
 _Generated from cohsh-core verb specs (18 verbs)._
+
+### Lifecycle control (cohsh)
+- `lifecycle <cordon|drain|resume|quiesce|reset>` — writes to `/queen/lifecycle/ctl`.
+- The CLI reads `/proc/lifecycle/state` and rejects invalid transitions locally with deterministic `ERR`.
+- Successful commands still flow through the append-only control file and emit `/log/queen.log` audit lines.
 
 
 <!-- Author: Lukas Bower -->
@@ -181,8 +187,8 @@ Manifest-derived coh policy defaults are emitted by `coh-rtc`.
 <!-- Purpose: Generated coh policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### coh policy defaults (generated)
-- `manifest.sha256`: `aeacd14e34c15b39b879af95c0cc5c19de757d368702d1453024ce4cd910a8cb`
-- `policy.sha256`: `35df2c524f27ce12f7417360e3f5e0e19fdf8241fd657e7619bf2c5d0223f1cb`
+- `manifest.sha256`: `7ac2fcc56751bb4670a74fd0063bfc4993c18367450aca3961ab65ad7ad37634`
+- `policy.sha256`: `82d58b9decba0256d723e5324cdb3cdd46a677b8af3f1c4ba1d26ca40a2df6f1`
 - `coh.mount.root`: `/`
 - `coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
 - `coh.telemetry.root`: `/queen/telemetry`
@@ -290,6 +296,7 @@ Connection handling (TCP transport):
 ## coh scripts (.coh)
 ### Purpose
 - `.coh` is a deterministic, line-oriented scripting format for running `cohsh` command sequences non-interactively (including `coh> test` regression suites) using the exact same command handlers as the interactive `coh>` prompt.
+- Lifecycle commands (`lifecycle cordon|drain|resume|quiesce|reset`) are valid script lines and apply the same local validation as interactive use.
 
 ### Non-goals
 - No general-purpose shell.

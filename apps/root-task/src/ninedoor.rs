@@ -11,6 +11,7 @@ extern crate alloc;
 use crate::bootstrap::{boot_tracer, log as boot_log, BootPhase};
 use crate::event::AuditSink;
 use crate::generated;
+use crate::lifecycle;
 use crate::log_buffer;
 use crate::observe::IngestSnapshot;
 use crate::serial::DEFAULT_LINE_CAPACITY;
@@ -52,6 +53,10 @@ const PROC_INGEST_BACKPRESSURE_PATH: &str = "/proc/ingest/backpressure";
 const PROC_INGEST_DROPPED_PATH: &str = "/proc/ingest/dropped";
 const PROC_INGEST_QUEUED_PATH: &str = "/proc/ingest/queued";
 const PROC_INGEST_WATCH_PATH: &str = "/proc/ingest/watch";
+const PROC_LIFECYCLE_ROOT_PATH: &str = "/proc/lifecycle";
+const PROC_LIFECYCLE_STATE_PATH: &str = "/proc/lifecycle/state";
+const PROC_LIFECYCLE_REASON_PATH: &str = "/proc/lifecycle/reason";
+const PROC_LIFECYCLE_SINCE_PATH: &str = "/proc/lifecycle/since";
 const BOOT_HEADER: &str = "Cohesix boot: root-task online";
 const MAX_STREAM_LINES: usize = log_buffer::LOG_SNAPSHOT_LINES;
 const MAX_WORKERS: usize = 8;
@@ -83,6 +88,8 @@ const AUDIT_EXPORT_PATH: &str = "/audit/export";
 const REPLAY_ROOT_PATH: &str = "/replay";
 const REPLAY_CTL_PATH: &str = "/replay/ctl";
 const REPLAY_STATUS_PATH: &str = "/replay/status";
+const QUEEN_LIFECYCLE_ROOT_PATH: &str = "/queen/lifecycle";
+const QUEEN_LIFECYCLE_CTL_PATH: &str = "/queen/lifecycle/ctl";
 const MAX_POLICY_PATH_COMPONENTS: usize = 8;
 const MAX_ACTION_ID_LEN: usize = 64;
 const SYSTEMD_UNITS: [&str; 2] = ["cohesix-agent.service", "ssh.service"];
@@ -614,6 +621,47 @@ impl NineDoorBridge {
                 return Ok(());
             }
         }
+        if path == QUEEN_LIFECYCLE_CTL_PATH {
+            if !self.is_queen() {
+                if self.audit.enabled {
+                    let role = self.role_label();
+                    let ticket = String::from(self.ticket_label());
+                    self.audit.record_control(
+                        path,
+                        payload,
+                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                        role,
+                        ticket.as_str(),
+                    )?;
+                }
+                return Err(NineDoorBridgeError::Permission);
+            }
+            let role = self.role_label();
+            let ticket = String::from(self.ticket_label());
+            let decision = self.apply_policy_gate(path)?;
+            match decision {
+                PolicyGateDecision::Denied(_) => {
+                    if self.audit.enabled {
+                        self.audit.record_control(
+                            path,
+                            payload,
+                            ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                            role,
+                            ticket.as_str(),
+                        )?;
+                    }
+                    return Err(NineDoorBridgeError::Permission);
+                }
+                PolicyGateDecision::Allowed(_) => {}
+            }
+            let result = self.handle_lifecycle_ctl(payload);
+            if self.audit.enabled {
+                let outcome = ControlOutcome::from_result(&result);
+                self.audit
+                    .record_control(path, payload, outcome, role, ticket.as_str())?;
+            }
+            return result;
+        }
         if path == QUEEN_CTL_PATH {
             let role = self.role_label();
             let ticket = String::from(self.ticket_label());
@@ -645,6 +693,7 @@ impl NineDoorBridge {
             if !self.telemetry_ingest.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
+            self.ensure_lifecycle_gate(lifecycle::GATE_TELEMETRY_INGEST)?;
             if !self.is_queen() {
                 return Err(NineDoorBridgeError::Permission);
             }
@@ -656,6 +705,7 @@ impl NineDoorBridge {
             if !self.telemetry_ingest.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
+            self.ensure_lifecycle_gate(lifecycle::GATE_TELEMETRY_INGEST)?;
             if !self.is_queen() {
                 return Err(NineDoorBridgeError::Permission);
             }
@@ -685,6 +735,7 @@ impl NineDoorBridge {
                 }
                 return Err(NineDoorBridgeError::Permission);
             }
+            self.ensure_lifecycle_gate(lifecycle::GATE_HOST_PUBLISH)?;
             let role = self.role_label();
             let ticket = String::from(self.ticket_label());
             let decision = self.apply_policy_gate(path)?;
@@ -737,6 +788,7 @@ impl NineDoorBridge {
                 }
                 return Err(NineDoorBridgeError::Permission);
             }
+            self.ensure_lifecycle_gate(lifecycle::GATE_HOST_PUBLISH)?;
             let role = self.role_label();
             let ticket = String::from(self.ticket_label());
             let decision = self.apply_policy_gate(path)?;
@@ -931,6 +983,30 @@ impl NineDoorBridge {
         if path == PROC_TESTS_NEGATIVE_PATH {
             return script_lines(SELFTEST_NEGATIVE_SCRIPT);
         }
+        if matches!(
+            path,
+            PROC_LIFECYCLE_STATE_PATH | PROC_LIFECYCLE_REASON_PATH | PROC_LIFECYCLE_SINCE_PATH
+        ) {
+            let snapshot = lifecycle::snapshot();
+            let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+            match path {
+                PROC_LIFECYCLE_STATE_PATH => {
+                    let _ = write!(
+                        line,
+                        "state={}",
+                        lifecycle::state_label(snapshot.state)
+                    );
+                }
+                PROC_LIFECYCLE_REASON_PATH => {
+                    let _ = write!(line, "reason={}", snapshot.reason.as_str());
+                }
+                PROC_LIFECYCLE_SINCE_PATH => {
+                    let _ = write!(line, "since_ms={}", snapshot.since_ms);
+                }
+                _ => {}
+            }
+            return lines_from_text(line.as_str());
+        }
         if let Some(result) = self.observe.ingest_lines(path) {
             return result;
         }
@@ -1008,10 +1084,14 @@ impl NineDoorBridge {
             let mut output = HeaplessVec::new();
             push_list_entry(&mut output, "boot")?;
             push_list_entry(&mut output, "tests")?;
+            push_list_entry(&mut output, "lifecycle")?;
             if self.observe.proc_ingest_enabled() {
                 push_list_entry(&mut output, "ingest")?;
             }
             return Ok(output);
+        }
+        if path == PROC_LIFECYCLE_ROOT_PATH {
+            return list_from_slice(&["state", "reason", "since"]);
         }
         if path == "/proc/tests" {
             return list_from_slice(&[
@@ -1026,10 +1106,14 @@ impl NineDoorBridge {
         if path == "/queen" {
             let mut output = HeaplessVec::new();
             push_list_entry(&mut output, "ctl")?;
+            push_list_entry(&mut output, "lifecycle")?;
             if self.telemetry_ingest.enabled() {
                 push_list_entry(&mut output, "telemetry")?;
             }
             return Ok(output);
+        }
+        if path == QUEEN_LIFECYCLE_ROOT_PATH {
+            return list_from_slice(&["ctl"]);
         }
         if path == "/queen/telemetry" {
             if !self.telemetry_ingest.enabled() {
@@ -1176,10 +1260,37 @@ impl NineDoorBridge {
     fn handle_queen_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
         let command = parse_queen_ctl(payload)?;
         match command {
-            QueenCtlCommand::Spawn(target) => self.spawn_worker(target),
+            QueenCtlCommand::Spawn(target) => {
+                self.ensure_lifecycle_gate(lifecycle::GATE_NEW_WORK)?;
+                self.spawn_worker(target)
+            }
             QueenCtlCommand::Kill(worker_id) => self.remove_worker(worker_id),
-            QueenCtlCommand::Bind { from, to } => self.bind_namespace(from, to),
-            QueenCtlCommand::Mount { service, at } => self.mount_namespace(service, at),
+            QueenCtlCommand::Bind { from, to } => {
+                self.ensure_lifecycle_gate(lifecycle::GATE_NEW_WORK)?;
+                self.bind_namespace(from, to)
+            }
+            QueenCtlCommand::Mount { service, at } => {
+                self.ensure_lifecycle_gate(lifecycle::GATE_NEW_WORK)?;
+                self.mount_namespace(service, at)
+            }
+        }
+    }
+
+    fn handle_lifecycle_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
+        let command = lifecycle::parse_command(payload).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+        let now_ms = crate::hal::timebase().now_ms();
+        let outstanding = self.workers.len();
+        match lifecycle::apply_command(command, now_ms, outstanding) {
+            Ok(transition) => {
+                let line = lifecycle::format_transition_log(&transition);
+                log_buffer::append_log_line(line.as_str());
+                Ok(())
+            }
+            Err(err) => {
+                let line = lifecycle::format_denied_log(lifecycle::state(), payload.trim(), err);
+                log_buffer::append_log_line(line.as_str());
+                Err(lifecycle_error_to_bridge(err))
+            }
         }
     }
 
@@ -1278,6 +1389,7 @@ impl NineDoorBridge {
         worker_id: &str,
         payload: &[u8],
     ) -> Result<(), NineDoorBridgeError> {
+        self.ensure_lifecycle_gate(lifecycle::GATE_WORKER_TELEMETRY)?;
         let worker = self
             .workers
             .iter_mut()
@@ -1355,6 +1467,30 @@ impl NineDoorBridge {
         let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
         let _ = write!(line, "sidecar-deny kind={} scope={}", kind.as_str(), scope);
         log_buffer::append_log_line(line.as_str());
+    }
+
+    fn log_lifecycle_gate_denial(&self, action: &str) {
+        let state = lifecycle::state();
+        let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let _ = write!(
+            line,
+            "lifecycle denied action={} state={} reason=gate-denied",
+            action,
+            lifecycle::state_label(state)
+        );
+        log_buffer::append_log_line(line.as_str());
+    }
+
+    fn ensure_lifecycle_gate(
+        &self,
+        gate: lifecycle::LifecycleGate,
+    ) -> Result<(), NineDoorBridgeError> {
+        if lifecycle::gate_allows(gate) {
+            Ok(())
+        } else {
+            self.log_lifecycle_gate_denial(gate.name);
+            Err(NineDoorBridgeError::Permission)
+        }
     }
 
     fn sidecar_allowed(&self, kind: SidecarKind, path: &[&str], access: SidecarAccess) -> bool {
@@ -5331,6 +5467,15 @@ fn error_code_for_audit(error: &NineDoorBridgeError) -> ErrorCode {
         NineDoorBridgeError::InvalidPayload
         | NineDoorBridgeError::Unsupported(_)
         | NineDoorBridgeError::AttachTimeout => ErrorCode::Invalid,
+    }
+}
+
+fn lifecycle_error_to_bridge(error: lifecycle::LifecycleError) -> NineDoorBridgeError {
+    match error {
+        lifecycle::LifecycleError::OutstandingLeases { .. } => NineDoorBridgeError::Permission,
+        lifecycle::LifecycleError::InvalidCommand
+        | lifecycle::LifecycleError::InvalidTransition
+        | lifecycle::LifecycleError::AutoTransitionDenied => NineDoorBridgeError::InvalidPayload,
     }
 }
 

@@ -39,6 +39,7 @@ const MAX_TICKET_SCOPES: u16 = 16;
 const MAX_TICKET_SCOPE_PATH_LEN: usize = 255;
 const MAX_COH_ALLOWLIST: usize = 16;
 const MAX_COH_TELEMETRY_DEVICES: u32 = 256;
+const MAX_LIFECYCLE_AUTO_TRANSITIONS: usize = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -67,6 +68,8 @@ pub struct Manifest {
     pub telemetry: Telemetry,
     #[serde(default)]
     pub telemetry_ingest: TelemetryIngest,
+    #[serde(default)]
+    pub lifecycle: LifecycleConfig,
     #[serde(default)]
     pub observability: Observability,
     #[serde(default)]
@@ -130,6 +133,7 @@ impl Manifest {
         self.validate_ecosystem()?;
         self.validate_sidecars()?;
         self.validate_telemetry()?;
+        self.validate_lifecycle()?;
         self.validate_observability()?;
         self.validate_ui_providers()?;
         self.validate_client_policies()?;
@@ -716,6 +720,45 @@ impl Manifest {
         Ok(())
     }
 
+    fn validate_lifecycle(&self) -> Result<()> {
+        let lifecycle = &self.lifecycle;
+        if lifecycle.auto_transitions.len() > MAX_LIFECYCLE_AUTO_TRANSITIONS {
+            bail!(
+                "lifecycle.auto_transitions exceeds max entries {}",
+                MAX_LIFECYCLE_AUTO_TRANSITIONS
+            );
+        }
+        let mut seen = BTreeSet::new();
+        for transition in &lifecycle.auto_transitions {
+            if transition.from == transition.to {
+                bail!(
+                    "lifecycle.auto_transitions contains no-op {} -> {}",
+                    transition.from.as_str(),
+                    transition.to.as_str()
+                );
+            }
+            if !matches!(
+                (transition.from, transition.to),
+                (LifecycleState::Booting, LifecycleState::Online)
+                    | (LifecycleState::Booting, LifecycleState::Degraded)
+            ) {
+                bail!(
+                    "lifecycle.auto_transitions contains unsupported {} -> {} (only BOOTING -> ONLINE/DEGRADED allowed)",
+                    transition.from.as_str(),
+                    transition.to.as_str()
+                );
+            }
+            if !seen.insert((transition.from, transition.to)) {
+                bail!(
+                    "lifecycle.auto_transitions contains duplicate {} -> {}",
+                    transition.from.as_str(),
+                    transition.to.as_str()
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn validate_observability(&self) -> Result<()> {
         let proc_9p = &self.observability.proc_9p;
         let shard_count = self.proc_9p_shard_count();
@@ -928,6 +971,10 @@ impl Manifest {
 
     fn validate_client_paths(&self) -> Result<()> {
         self.validate_client_path("client_paths.queen_ctl", &self.client_paths.queen_ctl)?;
+        self.validate_client_path(
+            "client_paths.queen_lifecycle_ctl",
+            &self.client_paths.queen_lifecycle_ctl,
+        )?;
         self.validate_client_path("client_paths.log", &self.client_paths.log)?;
         Ok(())
     }
@@ -1472,6 +1519,57 @@ impl Default for TelemetryIngest {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LifecycleState {
+    Booting,
+    Degraded,
+    Online,
+    Draining,
+    Quiesced,
+    Offline,
+}
+
+impl LifecycleState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LifecycleState::Booting => "BOOTING",
+            LifecycleState::Degraded => "DEGRADED",
+            LifecycleState::Online => "ONLINE",
+            LifecycleState::Draining => "DRAINING",
+            LifecycleState::Quiesced => "QUIESCED",
+            LifecycleState::Offline => "OFFLINE",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleAutoTransition {
+    pub from: LifecycleState,
+    pub to: LifecycleState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LifecycleConfig {
+    pub initial_state: LifecycleState,
+    #[serde(default)]
+    pub auto_transitions: Vec<LifecycleAutoTransition>,
+}
+
+impl Default for LifecycleConfig {
+    fn default() -> Self {
+        Self {
+            initial_state: LifecycleState::Booting,
+            auto_transitions: vec![LifecycleAutoTransition {
+                from: LifecycleState::Booting,
+                to: LifecycleState::Online,
+            }],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Observability {
@@ -1726,6 +1824,7 @@ impl Default for CohTelemetryPolicy {
 #[serde(deny_unknown_fields, default)]
 pub struct ClientPaths {
     pub queen_ctl: String,
+    pub queen_lifecycle_ctl: String,
     pub log: String,
 }
 
@@ -1733,6 +1832,7 @@ impl Default for ClientPaths {
     fn default() -> Self {
         Self {
             queen_ctl: "/queen/ctl".to_owned(),
+            queen_lifecycle_ctl: "/queen/lifecycle/ctl".to_owned(),
             log: "/log/queen.log".to_owned(),
         }
     }

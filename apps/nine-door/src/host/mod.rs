@@ -30,6 +30,7 @@ mod cas;
 mod audit;
 mod cbor;
 mod core;
+mod lifecycle;
 mod namespace;
 mod observe;
 mod pipeline;

@@ -82,7 +82,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [21a](#21a) | Telemetry Ingest with OS-Named Segments (Severely Limited Create) | Complete |
 | [21b](#21b) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Complete |
 | [21c](#21c) | SwarmUI Interactive cohsh Terminal (Full Prompt UX) | Complete |
-| [21d](#21d) | Deterministic Node Lifecycle & Operator Control | Pending |
+| [21d](#21d) | Deterministic Node Lifecycle & Operator Control | Complete |
 | [21e](#21e) | Rooted Authority, Cut Detection, Explicit Session Semantics, and Live Hive Visibility | Pending |
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Pending |
 | [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Pending |

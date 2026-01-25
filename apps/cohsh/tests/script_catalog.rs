@@ -92,6 +92,7 @@ fn script_feature_inventory_is_stable() {
         "CMD:echo".to_owned(),
         "CMD:help".to_owned(),
         "CMD:kill".to_owned(),
+        "CMD:lifecycle".to_owned(),
         "CMD:log".to_owned(),
         "CMD:pool".to_owned(),
         "CMD:ls".to_owned(),
@@ -129,9 +130,15 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "cas_roundtrip.coh:f6afb2dc79c414d04cc33f9a6d29da2f665959d2436c8d24baaa11f14b2ca98f"
             .to_owned(),
-        "host_absent.coh:2fa2a736b03716ca96080dc2be5d2bf59bb077f41c8ece646c86dcf3cd56901f"
+        "host_absent.coh:8383d43450ba4f1c14e70fc4da33c2c2f0a5843ee6e87b4efa95b2a42d56209a"
             .to_owned(),
         "host_sidecar_mock.coh:fb84eba9ddc95afeef925176261858934d2fb79294cd3da2ca83a4b41a48b921"
+            .to_owned(),
+        "lifecycle_basic.coh:0cf1a06fa6e52b5e1bc516d83d979559083b69d03af703bb83b90c1643ad0eff"
+            .to_owned(),
+        "lifecycle_drain_spool.coh:3d31fbdd784b5c59b3acfc7485261426f47cfeab8cc845263a23e3708772c6fe"
+            .to_owned(),
+        "lifecycle_reboot_resume.coh:45471021214d5945361560b849611cc115bf714ed97822d3b583ed2a191290c0"
             .to_owned(),
         "model_cas_bind.coh:56bb0c3908dc28d2f04381977d9dcaf9e98a179cca8904c88e9ee89a031c7311"
             .to_owned(),
@@ -149,7 +156,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "tcp_basic.coh:619970b6ff14332bbef80f704c117b4471653bb75f7a6187b27d93fbc16415a7"
             .to_owned(),
-        "telemetry_push_create.coh:134b129ea4daf185563400d8149a3539d571cda9e41cbe3a43ced74878ae35fb"
+        "telemetry_push_create.coh:9c4303824d27694869366c806c654482728cecf265c87d0de84f8598cd0e78a2"
             .to_owned(),
         "telemetry_ring.coh:2d33e86fd1619120f0bf26d45a7532bf03a57a10a532ea9841f1624bf98df351"
             .to_owned(),

@@ -1420,6 +1420,15 @@ impl Namespace {
             SELFTEST_NEGATIVE_SCRIPT.as_bytes(),
         )
         .expect("create /proc/tests/selftest_negative.coh");
+        self.ensure_dir(&proc_path, "lifecycle")
+            .expect("create /proc/lifecycle");
+        let lifecycle_path = vec!["proc".to_owned(), "lifecycle".to_owned()];
+        self.ensure_read_only_file(&lifecycle_path, "state", b"state=BOOTING")
+            .expect("create /proc/lifecycle/state");
+        self.ensure_read_only_file(&lifecycle_path, "reason", b"reason=boot")
+            .expect("create /proc/lifecycle/reason");
+        self.ensure_read_only_file(&lifecycle_path, "since", b"since_ms=0")
+            .expect("create /proc/lifecycle/since");
 
         self.ensure_dir(&[], "log").expect("create /log");
         let log_path = vec!["log".to_owned()];
@@ -1430,6 +1439,11 @@ impl Namespace {
         let queen_path = vec!["queen".to_owned()];
         self.ensure_append_only_file(&queen_path, "ctl", b"")
             .expect("create /queen/ctl");
+        self.ensure_dir(&queen_path, "lifecycle")
+            .expect("create /queen/lifecycle");
+        let lifecycle_root = vec!["queen".to_owned(), "lifecycle".to_owned()];
+        self.ensure_append_only_file(&lifecycle_root, "ctl", b"")
+            .expect("create /queen/lifecycle/ctl");
         if self.telemetry_ingest.enabled() {
             self.ensure_dir(&queen_path, "telemetry")
                 .expect("create /queen/telemetry");
@@ -2156,6 +2170,24 @@ impl Namespace {
     pub fn set_proc_ingest_watch_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
         let parent = vec!["proc".to_owned(), "ingest".to_owned()];
         self.set_append_only_file(&parent, "watch", data)
+    }
+
+    /// Replace the `/proc/lifecycle/state` contents.
+    pub fn set_proc_lifecycle_state_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "lifecycle".to_owned()];
+        self.set_read_only_file(&parent, "state", data)
+    }
+
+    /// Replace the `/proc/lifecycle/reason` contents.
+    pub fn set_proc_lifecycle_reason_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "lifecycle".to_owned()];
+        self.set_read_only_file(&parent, "reason", data)
+    }
+
+    /// Replace the `/proc/lifecycle/since` contents.
+    pub fn set_proc_lifecycle_since_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "lifecycle".to_owned()];
+        self.set_read_only_file(&parent, "since", data)
     }
 
     /// Replace the `/policy/preflight/req` contents.

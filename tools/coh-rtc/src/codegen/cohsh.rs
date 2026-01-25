@@ -383,6 +383,12 @@ fn render_client_rust(manifest: &Manifest, manifest_hash: &str) -> String {
     .ok();
     writeln!(
         contents,
+        "pub const CLIENT_QUEEN_LIFECYCLE_CTL_PATH: &str = {:?};",
+        manifest.client_paths.queen_lifecycle_ctl
+    )
+    .ok();
+    writeln!(
+        contents,
         "pub const CLIENT_LOG_PATH: &str = {:?};",
         manifest.client_paths.log
     )
@@ -447,6 +453,12 @@ fn render_client_doc(manifest: &Manifest, manifest_hash: &str) -> String {
         contents,
         "- `client_paths.queen_ctl`: `{}`",
         manifest.client_paths.queen_ctl
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `client_paths.queen_lifecycle_ctl`: `{}`",
+        manifest.client_paths.queen_lifecycle_ctl
     )
     .ok();
     writeln!(

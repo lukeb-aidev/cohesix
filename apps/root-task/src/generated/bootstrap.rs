@@ -4,12 +4,12 @@
 
 #![allow(unused_imports)]
 
-use super::{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig};
+use super::{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig};
 use cohesix_ticket::Role;
 
 pub const TICKET_TABLE_SHA256: &str = "fd0ebff1d0b4cfcc2a03a1015578545dfa68f0240e782b60ad7956c2492972eb";
 pub const NAMESPACE_TABLE_SHA256: &str = "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
-pub const AUDIT_TABLE_SHA256: &str = "d26e74ad25b9a136763ca99601cd15ffd1aed3378bd02255626d3e1b0c612e9c";
+pub const AUDIT_TABLE_SHA256: &str = "389a8beb41ba4b369875cf38787d505af33ab2a835df3927a7e323aa2d477f9c";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec { role: Role::Queen, secret: "bootstrap" },
@@ -294,6 +294,12 @@ pub const TELEMETRY_CONFIG: TelemetryConfig = TelemetryConfig { ring_bytes_per_w
 
 pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = TelemetryIngestConfig { max_segments_per_device: 4, max_bytes_per_segment: 32768, max_total_bytes_per_device: 131072, eviction_policy: TelemetryIngestEvictionPolicy::EvictOldest };
 
+pub const LIFECYCLE_AUTO_TRANSITIONS: [LifecycleAutoTransition; 1] = [
+    LifecycleAutoTransition { from: LifecycleState::Booting, to: LifecycleState::Online },
+];
+
+pub const LIFECYCLE_CONFIG: LifecycleConfig = LifecycleConfig { initial_state: LifecycleState::Booting, auto_transitions: &LIFECYCLE_AUTO_TRANSITIONS };
+
 pub const CAS_CONFIG: CasConfig = CasConfig { enable: true, chunk_bytes: 128, delta_enable: true, signing_required: true, signing_key: Some([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]), models_enabled: false };
 
 pub const PROC_9P_SESSIONS_BYTES: usize = 8192;
@@ -352,7 +358,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = [
 pub const INITIAL_AUDIT_LINES: [&str; 23] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=aeacd14e34c15b39b879af95c0cc5c19de757d368702d1453024ce4cd910a8cb",
+    "manifest.sha256=7ac2fcc56751bb4670a74fd0063bfc4993c18367450aca3961ab65ad7ad37634",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

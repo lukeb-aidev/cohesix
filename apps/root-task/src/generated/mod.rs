@@ -93,6 +93,28 @@ pub struct TelemetryIngestConfig {
     pub eviction_policy: TelemetryIngestEvictionPolicy,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LifecycleState {
+    Booting,
+    Degraded,
+    Online,
+    Draining,
+    Quiesced,
+    Offline,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LifecycleAutoTransition {
+    pub from: LifecycleState,
+    pub to: LifecycleState,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LifecycleConfig {
+    pub initial_state: LifecycleState,
+    pub auto_transitions: &'static [LifecycleAutoTransition],
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct CasConfig {
     pub enable: bool,
@@ -278,7 +300,7 @@ pub struct AuditConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
-pub const MANIFEST_SHA256: &str = "aeacd14e34c15b39b879af95c0cc5c19de757d368702d1453024ce4cd910a8cb";
+pub const MANIFEST_SHA256: &str = "7ac2fcc56751bb4670a74fd0063bfc4993c18367450aca3961ab65ad7ad37634";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
@@ -289,6 +311,7 @@ pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;
 pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();
 pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;
 pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = bootstrap::TELEMETRY_INGEST_CONFIG;
+pub const LIFECYCLE_CONFIG: LifecycleConfig = bootstrap::LIFECYCLE_CONFIG;
 pub const OBSERVABILITY_CONFIG: ObservabilityConfig = bootstrap::OBSERVABILITY_CONFIG;
 pub const UI_PROVIDER_CONFIG: UiProviderConfig = bootstrap::UI_PROVIDER_CONFIG;
 pub const CAS_CONFIG: CasConfig = bootstrap::CAS_CONFIG;
@@ -348,6 +371,10 @@ pub const fn telemetry_config() -> TelemetryConfig {
 
 pub const fn telemetry_ingest_config() -> TelemetryIngestConfig {
     bootstrap::TELEMETRY_INGEST_CONFIG
+}
+
+pub const fn lifecycle_config() -> LifecycleConfig {
+    bootstrap::LIFECYCLE_CONFIG
 }
 
 pub const fn observability_config() -> ObservabilityConfig {

@@ -117,6 +117,28 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub eviction_policy: TelemetryIngestEvictionPolicy,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum LifecycleState {{")?;
+    writeln!(mod_contents, "    Booting,")?;
+    writeln!(mod_contents, "    Degraded,")?;
+    writeln!(mod_contents, "    Online,")?;
+    writeln!(mod_contents, "    Draining,")?;
+    writeln!(mod_contents, "    Quiesced,")?;
+    writeln!(mod_contents, "    Offline,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct LifecycleAutoTransition {{")?;
+    writeln!(mod_contents, "    pub from: LifecycleState,")?;
+    writeln!(mod_contents, "    pub to: LifecycleState,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct LifecycleConfig {{")?;
+    writeln!(mod_contents, "    pub initial_state: LifecycleState,")?;
+    writeln!(mod_contents, "    pub auto_transitions: &'static [LifecycleAutoTransition],")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct CasConfig {{")?;
     writeln!(mod_contents, "    pub enable: bool,")?;
@@ -316,6 +338,10 @@ pub fn emit_rust(
         mod_contents,
         "pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = bootstrap::TELEMETRY_INGEST_CONFIG;"
     )?;
+    writeln!(
+        mod_contents,
+        "pub const LIFECYCLE_CONFIG: LifecycleConfig = bootstrap::LIFECYCLE_CONFIG;"
+    )?;
     writeln!(mod_contents, "pub const OBSERVABILITY_CONFIG: ObservabilityConfig = bootstrap::OBSERVABILITY_CONFIG;")?;
     writeln!(mod_contents, "pub const UI_PROVIDER_CONFIG: UiProviderConfig = bootstrap::UI_PROVIDER_CONFIG;")?;
     writeln!(mod_contents, "pub const CAS_CONFIG: CasConfig = bootstrap::CAS_CONFIG;")?;
@@ -378,6 +404,10 @@ pub fn emit_rust(
         "pub const fn telemetry_ingest_config() -> TelemetryIngestConfig {{"
     )?;
     writeln!(mod_contents, "    bootstrap::TELEMETRY_INGEST_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn lifecycle_config() -> LifecycleConfig {{")?;
+    writeln!(mod_contents, "    bootstrap::LIFECYCLE_CONFIG")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn observability_config() -> ObservabilityConfig {{")?;
@@ -452,7 +482,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -551,6 +581,25 @@ pub fn emit_rust(
         manifest.telemetry_ingest.max_bytes_per_segment,
         manifest.telemetry_ingest.max_total_bytes_per_device,
         ingest_eviction_policy_to_rust(&manifest.telemetry_ingest.eviction_policy)
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const LIFECYCLE_AUTO_TRANSITIONS: [LifecycleAutoTransition; {}] = [",
+        manifest.lifecycle.auto_transitions.len()
+    )?;
+    for transition in &manifest.lifecycle.auto_transitions {
+        writeln!(
+            bootstrap_contents,
+            "    LifecycleAutoTransition {{ from: {}, to: {} }},",
+            lifecycle_state_to_rust(transition.from),
+            lifecycle_state_to_rust(transition.to)
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const LIFECYCLE_CONFIG: LifecycleConfig = LifecycleConfig {{ initial_state: {}, auto_transitions: &LIFECYCLE_AUTO_TRANSITIONS }};\n",
+        lifecycle_state_to_rust(manifest.lifecycle.initial_state)
     )?;
     writeln!(
         bootstrap_contents,
@@ -989,6 +1038,17 @@ fn telemetry_schema_to_rust(schema: &crate::ir::TelemetryFrameSchema) -> &'stati
     match schema {
         crate::ir::TelemetryFrameSchema::LegacyPlaintext => "TelemetryFrameSchema::LegacyPlaintext",
         crate::ir::TelemetryFrameSchema::CborV1 => "TelemetryFrameSchema::CborV1",
+    }
+}
+
+fn lifecycle_state_to_rust(state: crate::ir::LifecycleState) -> &'static str {
+    match state {
+        crate::ir::LifecycleState::Booting => "LifecycleState::Booting",
+        crate::ir::LifecycleState::Degraded => "LifecycleState::Degraded",
+        crate::ir::LifecycleState::Online => "LifecycleState::Online",
+        crate::ir::LifecycleState::Draining => "LifecycleState::Draining",
+        crate::ir::LifecycleState::Quiesced => "LifecycleState::Quiesced",
+        crate::ir::LifecycleState::Offline => "LifecycleState::Offline",
     }
 }
 

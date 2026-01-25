@@ -31,6 +31,7 @@ use super::audit::{
     AuditConfig, AuditStore, ControlOutcome, PolicyActionDecision as AuditPolicyActionDecision,
     PolicyGateDecision as AuditPolicyGateDecision, ReplayWindowError,
 };
+use super::lifecycle;
 use super::CasConfig;
 use super::namespace::{
     AuditNamespaceConfig, HostNamespaceConfig, Namespace, PolicyNamespaceConfig, ReplayNamespaceConfig,
@@ -114,6 +115,7 @@ impl ServerCore {
         } else {
             ReplayNamespaceConfig::disabled()
         };
+        let now = clock.now();
         let mut control = ControlPlane::new(
             telemetry,
             telemetry_ingest,
@@ -129,11 +131,23 @@ impl ServerCore {
             audit_store,
             replay_namespace,
             replay_state,
+            now,
         );
         control
             .namespace_mut()
             .install_observability(observe.config())
             .expect("install /proc observability");
+        let _ = control.refresh_proc_lifecycle(now);
+        match control.auto_boot_complete(now) {
+            Ok(transition) => {
+                let _ = control.record_lifecycle_transition(&transition);
+                let _ = control.refresh_proc_lifecycle(now);
+            }
+            Err(err) => {
+                let state = control.lifecycle_state();
+                let _ = control.record_lifecycle_denied(state, "auto-boot", err);
+            }
+        }
         let mut core = Self {
             codec: Codec,
             control,
@@ -651,6 +665,12 @@ impl ServerCore {
             ));
         }
         let (role, identity) = parse_role_from_uname(uname)?;
+        if role != Role::Queen && !self.control.lifecycle_gate_allows(lifecycle::GATE_WORKER_ATTACH) {
+            let state = self.control.lifecycle_state();
+            self.control
+                .record_lifecycle_gate_denied(state, lifecycle::GATE_WORKER_ATTACH.name)?;
+            return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
+        }
         let ticket = ticket.trim();
         let mut ticket_payload = None;
         let mut identity = identity;
@@ -1363,7 +1383,10 @@ impl ServerCore {
                     if audit_enabled {
                         self.control
                             .record_decision_gate_denial(&path, &denial, role, ticket.as_deref())?;
-                        if is_queen_ctl_path(&path) || host_target.is_some() {
+                        if is_queen_ctl_path(&path)
+                            || is_queen_lifecycle_ctl_path(&path)
+                            || host_target.is_some()
+                        {
                             self.control.record_control_audit(
                                 path.as_slice(),
                                 data,
@@ -1377,16 +1400,41 @@ impl ServerCore {
                 }
             }
         }
+        if is_queen_lifecycle_ctl_path(&path) {
+            if role != Some(Role::Queen) {
+                if audit_enabled {
+                    self.control.record_control_audit(
+                        path.as_slice(),
+                        data,
+                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                        role,
+                        ticket.as_deref(),
+                    )?;
+                }
+                return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
+            }
+            let count = self.control.process_lifecycle_ctl_write(
+                offset,
+                data,
+                role,
+                ticket.as_deref(),
+                self.clock.now(),
+            )?;
+            self.consume_ticket_bandwidth(state, count as u64);
+            return Ok(ResponseBody::Write { count });
+        }
         let telemetry_write = worker_id
             .map(|id| is_worker_telemetry_path(&shards, &path, id))
             .unwrap_or(false);
         if telemetry_write {
+            self.control.ensure_lifecycle_gate(lifecycle::GATE_WORKER_TELEMETRY)?;
             if let Err(reason) = state.consume_tick() {
                 return Err(self.handle_budget_failure(session, state, reason));
             }
         }
         if let (Some(worker), Some(scope)) = (worker_id, gpu_scope) {
             if is_gpu_job_path(&path, scope) {
+                self.control.ensure_lifecycle_gate(lifecycle::GATE_WORKER_JOB)?;
                 let count = self.control.process_gpu_job(worker, scope, data)?;
                 self.consume_ticket_bandwidth(state, count as u64);
                 return Ok(ResponseBody::Write { count });
@@ -1427,6 +1475,7 @@ impl ServerCore {
                 count: data.len() as u32,
             })
         } else if let Some(target) = host_target {
+            self.control.ensure_lifecycle_gate(lifecycle::GATE_HOST_PUBLISH)?;
             let count = self
                 .control
                 .namespace_mut()
@@ -1450,6 +1499,9 @@ impl ServerCore {
             self.consume_ticket_bandwidth(state, count as u64);
             Ok(ResponseBody::Write { count })
         } else {
+            if is_telemetry_ingest_write_path(&path) {
+                self.control.ensure_lifecycle_gate(lifecycle::GATE_TELEMETRY_INGEST)?;
+            }
             let count = self
                 .control
                 .namespace_mut()
@@ -1768,6 +1820,7 @@ struct ControlPlane {
     services: HashMap<String, Vec<String>>,
     gpu_nodes: HashSet<String>,
     active_leases: HashMap<String, String>,
+    lifecycle: lifecycle::LifecycleStateMachine,
     policy: PolicyStore,
     audit: AuditStore,
     replay: ReplayState,
@@ -1789,6 +1842,7 @@ impl ControlPlane {
         audit: AuditStore,
         replay_namespace: ReplayNamespaceConfig,
         replay: ReplayState,
+        now: Instant,
     ) -> Self {
         Self {
             namespace: Namespace::new_with_telemetry_manifest_host_policy(
@@ -1810,6 +1864,7 @@ impl ControlPlane {
             services: HashMap::new(),
             gpu_nodes: HashSet::new(),
             active_leases: HashMap::new(),
+            lifecycle: lifecycle::LifecycleStateMachine::new(now),
             policy,
             audit,
             replay,
@@ -1854,6 +1909,85 @@ impl ControlPlane {
 
     fn replay_enabled(&self) -> bool {
         self.replay.enabled()
+    }
+
+    fn lifecycle_state(&self) -> lifecycle::LifecycleState {
+        self.lifecycle.state()
+    }
+
+    fn lifecycle_snapshot(&self, now: Instant) -> lifecycle::LifecycleSnapshot {
+        self.lifecycle.snapshot(now)
+    }
+
+    fn lifecycle_gate_allows(&self, gate: lifecycle::LifecycleGate) -> bool {
+        self.lifecycle.gate_allows(gate)
+    }
+
+    fn refresh_proc_lifecycle(&mut self, now: Instant) -> Result<(), NineDoorError> {
+        let snapshot = self.lifecycle_snapshot(now);
+        let state_line = format!("state={}", snapshot.state.as_str());
+        let reason_line = format!("reason={}", snapshot.reason);
+        let since_line = format!("since_ms={}", snapshot.since_ms);
+        self.namespace
+            .set_proc_lifecycle_state_payload(state_line.as_bytes())?;
+        self.namespace
+            .set_proc_lifecycle_reason_payload(reason_line.as_bytes())?;
+        self.namespace
+            .set_proc_lifecycle_since_payload(since_line.as_bytes())?;
+        Ok(())
+    }
+
+    fn auto_boot_complete(
+        &mut self,
+        now: Instant,
+    ) -> Result<lifecycle::LifecycleTransition, lifecycle::LifecycleError> {
+        self.lifecycle.auto_boot_complete(now)
+    }
+
+    fn apply_lifecycle_command(
+        &mut self,
+        command: lifecycle::LifecycleCommand,
+        now: Instant,
+        outstanding_leases: usize,
+    ) -> Result<lifecycle::LifecycleTransition, lifecycle::LifecycleError> {
+        self.lifecycle.apply_command(command, now, outstanding_leases)
+    }
+
+    fn record_lifecycle_transition(
+        &mut self,
+        transition: &lifecycle::LifecycleTransition,
+    ) -> Result<(), NineDoorError> {
+        let line = lifecycle::format_transition_log(transition);
+        self.append_queen_log(&line)
+    }
+
+    fn record_lifecycle_denied(
+        &mut self,
+        state: lifecycle::LifecycleState,
+        action: &str,
+        error: lifecycle::LifecycleError,
+    ) -> Result<(), NineDoorError> {
+        let line = lifecycle::format_denied_log(state, action, error);
+        self.append_queen_log(&line)
+    }
+
+    fn record_lifecycle_gate_denied(
+        &mut self,
+        state: lifecycle::LifecycleState,
+        action: &str,
+    ) -> Result<(), NineDoorError> {
+        let line = lifecycle::format_gate_denied_log(state, action);
+        self.append_queen_log(&line)
+    }
+
+    fn ensure_lifecycle_gate(&mut self, gate: lifecycle::LifecycleGate) -> Result<(), NineDoorError> {
+        if self.lifecycle_gate_allows(gate) {
+            Ok(())
+        } else {
+            let state = self.lifecycle_state();
+            self.record_lifecycle_gate_denied(state, gate.name)?;
+            Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"))
+        }
     }
 
     fn worker_record(&self, worker_id: &str) -> Option<&WorkerRecord> {
@@ -1925,6 +2059,7 @@ impl ControlPlane {
             };
             let outcome = match command {
                 QueenCommand::Spawn(spec) => {
+                    self.ensure_lifecycle_gate(lifecycle::GATE_NEW_WORK)?;
                     let result = self.spawn_worker(&spec).map(|worker_id| {
                         events.push(QueenEvent::Spawned(worker_id));
                     });
@@ -1943,6 +2078,7 @@ impl ControlPlane {
                     result
                 }
                 QueenCommand::Bind(command) => {
+                    self.ensure_lifecycle_gate(lifecycle::GATE_NEW_WORK)?;
                     let result = command.into_parts().and_then(|(from_raw, to_raw, source, mount)| {
                         if mount.is_empty() {
                             return Err(NineDoorError::protocol(
@@ -1966,6 +2102,7 @@ impl ControlPlane {
                     result
                 }
                 QueenCommand::Mount(command) => {
+                    self.ensure_lifecycle_gate(lifecycle::GATE_NEW_WORK)?;
                     let result = command.into_parts().and_then(|(service, at_raw, mount)| {
                         if mount.is_empty() {
                             return Err(NineDoorError::protocol(
@@ -2010,6 +2147,79 @@ impl ControlPlane {
             )?;
         }
         Ok(events)
+    }
+
+    fn process_lifecycle_ctl_write(
+        &mut self,
+        _offset: u64,
+        data: &[u8],
+        role: Option<Role>,
+        ticket: Option<&str>,
+        now: Instant,
+    ) -> Result<u32, NineDoorError> {
+        let ctl_path = vec![
+            "queen".to_owned(),
+            "lifecycle".to_owned(),
+            "ctl".to_owned(),
+        ];
+        self.namespace.write_append(&ctl_path, u64::MAX, data)?;
+        let text = str::from_utf8(data).map_err(|err| {
+            NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("lifecycle command must be UTF-8: {err}"),
+            )
+        })?;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let command = match lifecycle::parse_command(trimmed) {
+                Ok(command) => command,
+                Err(err) => {
+                    let state = self.lifecycle_state();
+                    self.record_lifecycle_denied(state, trimmed, err)?;
+                    let protocol = lifecycle_error_to_protocol(err);
+                    self.record_control_audit(
+                        ctl_path.as_slice(),
+                        trimmed.as_bytes(),
+                        ControlOutcome::from_error(&protocol),
+                        role,
+                        ticket,
+                    )?;
+                    return Err(protocol);
+                }
+            };
+            let outstanding = self.workers.len();
+            let result = self.apply_lifecycle_command(command, now, outstanding);
+            match result {
+                Ok(transition) => {
+                    self.record_lifecycle_transition(&transition)?;
+                    self.refresh_proc_lifecycle(now)?;
+                    self.record_control_audit(
+                        ctl_path.as_slice(),
+                        trimmed.as_bytes(),
+                        ControlOutcome::ok(),
+                        role,
+                        ticket,
+                    )?;
+                }
+                Err(err) => {
+                    let state = self.lifecycle_state();
+                    self.record_lifecycle_denied(state, trimmed, err)?;
+                    let protocol = lifecycle_error_to_protocol(err);
+                    self.record_control_audit(
+                        ctl_path.as_slice(),
+                        trimmed.as_bytes(),
+                        ControlOutcome::from_error(&protocol),
+                        role,
+                        ticket,
+                    )?;
+                    return Err(protocol);
+                }
+            }
+        }
+        Ok(data.len() as u32)
     }
 
     fn process_policy_ctl_write(
@@ -3503,6 +3713,25 @@ fn fid_insert_error(fid: u32, err: FidError) -> NineDoorError {
     }
 }
 
+fn lifecycle_error_to_protocol(error: lifecycle::LifecycleError) -> NineDoorError {
+    match error {
+        lifecycle::LifecycleError::OutstandingLeases { leases } => NineDoorError::protocol(
+            ErrorCode::Busy,
+            format!("lifecycle outstanding leases {leases}"),
+        ),
+        lifecycle::LifecycleError::InvalidCommand => {
+            NineDoorError::protocol(ErrorCode::Invalid, "invalid lifecycle command")
+        }
+        lifecycle::LifecycleError::InvalidTransition => {
+            NineDoorError::protocol(ErrorCode::Invalid, "invalid lifecycle transition")
+        }
+        lifecycle::LifecycleError::AutoTransitionDenied => NineDoorError::protocol(
+            ErrorCode::Invalid,
+            "lifecycle auto transition denied",
+        ),
+    }
+}
+
 fn is_worker_telemetry_path(shards: &ShardLayout, path: &[String], worker_id: &str) -> bool {
     shards.is_worker_telemetry_path(path, worker_id)
 }
@@ -3529,6 +3758,15 @@ fn is_gpu_ctl_path(path: &[String], scope: &str) -> bool {
 
 fn is_queen_ctl_path(path: &[String]) -> bool {
     matches!(path, [first, second] if first == "queen" && second == "ctl")
+}
+
+fn is_queen_lifecycle_ctl_path(path: &[String]) -> bool {
+    matches!(path, [first, second, third] if first == "queen" && second == "lifecycle" && third == "ctl")
+}
+
+fn is_telemetry_ingest_write_path(path: &[String]) -> bool {
+    matches!(path, [first, second, _, third] if first == "queen" && second == "telemetry" && third == "ctl")
+        || matches!(path, [first, second, _, third, _] if first == "queen" && second == "telemetry" && third == "seg")
 }
 
 fn is_policy_ctl_path(path: &[String]) -> bool {
