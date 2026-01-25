@@ -8,11 +8,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use cohsh::client::CohClient;
 use cohsh_core::wire::AckStatus;
-use cohsh_core::Secure9pTransport;
 
-use crate::{list_dir, read_file, validate_component, CohAudit, MAX_DIR_LIST_BYTES};
+use crate::{validate_component, CohAccess, CohAudit, MAX_DIR_LIST_BYTES};
 use crate::policy::{CohPolicy, CohTelemetryPolicy};
 
 /// Summary of a telemetry pull operation.
@@ -27,8 +25,8 @@ pub struct TelemetryPullSummary {
 }
 
 /// Pull telemetry segments from the queen ingest namespace into host storage.
-pub fn pull<T: Secure9pTransport>(
-    client: &mut CohClient<T>,
+pub fn pull<C: CohAccess>(
+    client: &mut C,
     policy: &CohPolicy,
     out_dir: &Path,
     audit: &mut CohAudit,
@@ -36,7 +34,7 @@ pub fn pull<T: Secure9pTransport>(
     fs::create_dir_all(out_dir)
         .with_context(|| format!("create telemetry output dir {}", out_dir.display()))?;
     let telemetry = &policy.telemetry;
-    let device_entries = list_dir(client, telemetry.root.as_str(), MAX_DIR_LIST_BYTES)?;
+    let device_entries = client.list_dir(telemetry.root.as_str(), MAX_DIR_LIST_BYTES)?;
     let detail = format!("path={}", telemetry.root);
     audit.push_ack(AckStatus::Ok, "LS", Some(detail.as_str()));
     if device_entries.len() > telemetry.max_devices as usize {
@@ -70,15 +68,15 @@ pub fn pull<T: Secure9pTransport>(
     Ok(summary)
 }
 
-fn pull_device<T: Secure9pTransport>(
-    client: &mut CohClient<T>,
+fn pull_device<C: CohAccess>(
+    client: &mut C,
     telemetry: &CohTelemetryPolicy,
     out_dir: &Path,
     device_id: &str,
     audit: &mut CohAudit,
 ) -> Result<(usize, usize)> {
     let seg_root = format!("{}/{device_id}/seg", telemetry.root);
-    let segments = list_dir(client, &seg_root, MAX_DIR_LIST_BYTES)?;
+    let segments = client.list_dir(&seg_root, MAX_DIR_LIST_BYTES)?;
     let detail = format!("path={seg_root}");
     audit.push_ack(AckStatus::Ok, "LS", Some(detail.as_str()));
     if segments.len() > telemetry.max_segments_per_device as usize {
@@ -94,8 +92,7 @@ fn pull_device<T: Secure9pTransport>(
     for seg_id in segments {
         validate_component(&seg_id)?;
         let seg_path = format!("{seg_root}/{seg_id}");
-        let payload = read_file(
-            client,
+        let payload = client.read_file(
             &seg_path,
             telemetry.max_bytes_per_segment as usize,
         )?;

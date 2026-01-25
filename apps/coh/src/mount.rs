@@ -21,6 +21,9 @@ use cohsh_core::Secure9pTransport;
 #[cfg(feature = "fuse")]
 use secure9p_codec::OpenMode;
 
+use crate::console::ConsoleSession;
+#[cfg(feature = "fuse")]
+use crate::CohAccess;
 #[cfg(feature = "fuse")]
 use crate::{list_dir, MAX_DIR_LIST_BYTES};
 use crate::MAX_PATH_COMPONENTS;
@@ -232,6 +235,35 @@ pub fn mount<T: Secure9pTransport + Send + 'static>(
     }
 }
 
+/// Start a FUSE mount backed by the TCP console transport.
+pub fn mount_console(
+    session: ConsoleSession,
+    policy: &CohPolicy,
+    at: &Path,
+) -> Result<()> {
+    #[cfg(feature = "fuse")]
+    {
+        let validator = MountValidator::from_policy(policy)?;
+        let filesystem = ConsoleFuse::new(session, validator);
+        let options = [
+            fuser::MountOption::FSName("coh".to_owned()),
+            fuser::MountOption::AutoUnmount,
+        ];
+        fuser::mount2(filesystem, at, &options)
+            .with_context(|| format!("mount {}", at.display()))?;
+        Ok(())
+    }
+    #[cfg(not(feature = "fuse"))]
+    {
+        let _ = session;
+        let _ = policy;
+        let _ = at;
+        Err(anyhow!(
+            "fuse support disabled; rebuild coh with --features fuse or use --mock"
+        ))
+    }
+}
+
 #[cfg(feature = "fuse")]
 struct CohFuse<T: Secure9pTransport> {
     client: Mutex<CohClient<T>>,
@@ -355,6 +387,7 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
         &mut self,
         _req: &fuser::Request<'_>,
         inode: u64,
+        _fh: Option<u64>,
         reply: fuser::ReplyAttr,
     ) {
         let entry = {
@@ -384,10 +417,6 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
                 return;
             }
         };
-        if offset == 0 {
-            reply.add(inode, 0, fuser::FileType::Directory, ".");
-            reply.add(ROOT_INODE, 1, fuser::FileType::Directory, "..");
-        }
         let entries = if path == "/" {
             match self.list_root_entries() {
                 Ok(entries) => entries,
@@ -413,31 +442,22 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
                 }
             }
         };
-        let mut index = 2;
+        let mut listing = Vec::with_capacity(entries.len().saturating_add(2));
+        listing.push((inode, fuser::FileType::Directory, ".".to_owned()));
+        listing.push((ROOT_INODE, fuser::FileType::Directory, "..".to_owned()));
         for entry in entries {
-            if (index as i64) < offset {
-                index += 1;
-                continue;
-            }
             let child_path = if path == "/" {
                 format!("/{entry}")
             } else {
                 format!("{path}/{entry}")
             };
-            let remote = match self.validator.resolve_remote(&child_path) {
+            let _remote = match self.validator.resolve_remote(&child_path) {
                 Ok(remote) => remote,
                 Err(_) => {
-                    index += 1;
                     continue;
                 }
             };
-            let is_dir = match self.stat_remote(&remote) {
-                Ok((_, is_dir)) => is_dir,
-                Err(_) => {
-                    index += 1;
-                    continue;
-                }
-            };
+            let is_dir = path == "/" && !self.validator.allow_all_under_root();
             let inode = {
                 let mut inodes = self.inodes.lock().expect("inode lock");
                 inodes.insert(&child_path, is_dir)
@@ -447,10 +467,13 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
             } else {
                 fuser::FileType::RegularFile
             };
-            if reply.add(inode, index, file_type, entry) {
+            listing.push((inode, file_type, entry));
+        }
+        let start = offset.max(0) as usize;
+        for (idx, (inode, file_type, name)) in listing.into_iter().enumerate().skip(start) {
+            if reply.add(inode, (idx + 1) as i64, file_type, name) {
                 break;
             }
-            index += 1;
         }
         reply.ok();
     }
@@ -524,6 +547,8 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
         fh: u64,
         offset: i64,
         size: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
         reply: fuser::ReplyData,
     ) {
         let handle = {
@@ -557,7 +582,9 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
         fh: u64,
         offset: i64,
         data: &[u8],
+        _write_flags: u32,
         _flags: i32,
+        _lock_owner: Option<u64>,
         reply: fuser::ReplyWrite,
     ) {
         let mut handles = self.handles.lock().expect("handle lock");
@@ -589,7 +616,7 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
         _inode: u64,
         fh: u64,
         _flags: i32,
-        _lock_owner: u64,
+        _lock_owner: Option<u64>,
         _flush: bool,
         reply: fuser::ReplyEmpty,
     ) {
@@ -603,6 +630,375 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
         }
         reply.ok();
     }
+}
+
+#[cfg(feature = "fuse")]
+struct ConsoleFuse {
+    client: Mutex<ConsoleSession>,
+    validator: MountValidator,
+    inodes: Mutex<InodeTable>,
+    handles: Mutex<HashMap<u64, ConsoleHandle>>,
+    next_handle: AtomicU64,
+}
+
+#[cfg(feature = "fuse")]
+impl ConsoleFuse {
+    fn new(session: ConsoleSession, validator: MountValidator) -> Self {
+        let mut inodes = InodeTable::new();
+        inodes.insert("/", true);
+        Self {
+            client: Mutex::new(session),
+            validator,
+            inodes: Mutex::new(inodes),
+            handles: Mutex::new(HashMap::new()),
+            next_handle: AtomicU64::new(1),
+        }
+    }
+
+    fn attr_for(inode: u64, is_dir: bool) -> fuser::FileAttr {
+        let now = SystemTime::now();
+        fuser::FileAttr {
+            ino: inode,
+            size: 0,
+            blocks: 0,
+            atime: now,
+            mtime: now,
+            ctime: now,
+            crtime: now,
+            kind: if is_dir {
+                fuser::FileType::Directory
+            } else {
+                fuser::FileType::RegularFile
+            },
+            perm: if is_dir { 0o755 } else { 0o644 },
+            nlink: 1,
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            flags: 0,
+            blksize: 512,
+        }
+    }
+
+    fn resolve_inode_path(&self, inode: u64) -> Option<String> {
+        let inodes = self.inodes.lock().expect("inode lock");
+        inodes.path_for(inode).map(|entry| entry.path.clone())
+    }
+
+    fn list_root_entries(&self) -> Result<Vec<String>> {
+        if self.validator.allow_all_under_root() {
+            let mut client = self.client.lock().expect("coh client lock");
+            let entries = client.list_dir(
+                self.validator.root(),
+                MAX_DIR_LIST_BYTES,
+            )?;
+            return Ok(entries);
+        }
+        Ok(self.validator.root_entries())
+    }
+
+    fn stat_remote(&self, remote: &str) -> Result<bool> {
+        let mut client = self.client.lock().expect("coh client lock");
+        if client.list_dir(remote, MAX_DIR_LIST_BYTES).is_ok() {
+            return Ok(true);
+        }
+        if client.read_file(remote, usize::MAX).is_ok() {
+            return Ok(false);
+        }
+        Err(anyhow!("path {remote} not found"))
+    }
+}
+
+#[cfg(feature = "fuse")]
+impl fuser::Filesystem for ConsoleFuse {
+    fn lookup(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        parent: u64,
+        name: &std::ffi::OsStr,
+        reply: fuser::ReplyEntry,
+    ) {
+        let parent_path = match self.resolve_inode_path(parent) {
+            Some(path) => path,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+        let name = name.to_string_lossy();
+        let child_path = if parent_path == "/" {
+            format!("/{name}")
+        } else {
+            format!("{parent_path}/{name}")
+        };
+        let remote = match self.validator.resolve_remote(&child_path) {
+            Ok(remote) => remote,
+            Err(_) => {
+                reply.error(libc::EACCES);
+                return;
+            }
+        };
+        let is_dir = match self.stat_remote(&remote) {
+            Ok(is_dir) => is_dir,
+            Err(_) => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+        let inode = {
+            let mut inodes = self.inodes.lock().expect("inode lock");
+            inodes.insert(&child_path, is_dir)
+        };
+        let attr = Self::attr_for(inode, is_dir);
+        reply.entry(&TTL, &attr, 0);
+    }
+
+    fn getattr(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        inode: u64,
+        _fh: Option<u64>,
+        reply: fuser::ReplyAttr,
+    ) {
+        let entry = {
+            let inodes = self.inodes.lock().expect("inode lock");
+            inodes.path_for(inode).cloned()
+        };
+        let Some(entry) = entry else {
+            reply.error(libc::ENOENT);
+            return;
+        };
+        let attr = Self::attr_for(inode, entry.is_dir);
+        reply.attr(&TTL, &attr);
+    }
+
+    fn readdir(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        inode: u64,
+        _fh: u64,
+        offset: i64,
+        mut reply: fuser::ReplyDirectory,
+    ) {
+        let path = match self.resolve_inode_path(inode) {
+            Some(path) => path,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+        let entries = if path == "/" {
+            match self.list_root_entries() {
+                Ok(entries) => entries,
+                Err(_) => {
+                    reply.error(libc::EIO);
+                    return;
+                }
+            }
+        } else {
+            let remote = match self.validator.resolve_remote(&path) {
+                Ok(remote) => remote,
+                Err(_) => {
+                    reply.error(libc::EACCES);
+                    return;
+                }
+            };
+            let mut client = self.client.lock().expect("coh client lock");
+            match client.list_dir(&remote, MAX_DIR_LIST_BYTES) {
+                Ok(entries) => entries,
+                Err(_) => {
+                    reply.error(libc::EIO);
+                    return;
+                }
+            }
+        };
+        let mut listing = Vec::with_capacity(entries.len().saturating_add(2));
+        listing.push((inode, fuser::FileType::Directory, ".".to_owned()));
+        listing.push((ROOT_INODE, fuser::FileType::Directory, "..".to_owned()));
+        for entry in entries {
+            let child_path = if path == "/" {
+                format!("/{entry}")
+            } else {
+                format!("{path}/{entry}")
+            };
+            let _remote = match self.validator.resolve_remote(&child_path) {
+                Ok(remote) => remote,
+                Err(_) => {
+                    continue;
+                }
+            };
+            let is_dir = path == "/" && !self.validator.allow_all_under_root();
+            let inode = {
+                let mut inodes = self.inodes.lock().expect("inode lock");
+                inodes.insert(&child_path, is_dir)
+            };
+            let file_type = if is_dir {
+                fuser::FileType::Directory
+            } else {
+                fuser::FileType::RegularFile
+            };
+            listing.push((inode, file_type, entry));
+        }
+        let start = offset.max(0) as usize;
+        for (idx, (inode, file_type, name)) in listing.into_iter().enumerate().skip(start) {
+            if reply.add(inode, (idx + 1) as i64, file_type, name) {
+                break;
+            }
+        }
+        reply.ok();
+    }
+
+    fn open(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        inode: u64,
+        flags: i32,
+        reply: fuser::ReplyOpen,
+    ) {
+        let path = match self.resolve_inode_path(inode) {
+            Some(path) => path,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+        let remote = match self.validator.resolve_remote(&path) {
+            Ok(remote) => remote,
+            Err(_) => {
+                reply.error(libc::EACCES);
+                return;
+            }
+        };
+        let is_dir = match self.stat_remote(&remote) {
+            Ok(is_dir) => is_dir,
+            Err(_) => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+        let write = flags & libc::O_ACCMODE != libc::O_RDONLY;
+        if is_dir && write {
+            reply.error(libc::EISDIR);
+            return;
+        }
+        let handle = self.next_handle.fetch_add(1, Ordering::Relaxed);
+        let file_handle = ConsoleHandle {
+            path: remote,
+            is_dir,
+            append_tracker: AppendOnlyTracker::new(),
+        };
+        self.handles
+            .lock()
+            .expect("handle lock")
+            .insert(handle, file_handle);
+        reply.opened(handle, 0);
+    }
+
+    fn read(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        _inode: u64,
+        fh: u64,
+        offset: i64,
+        size: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        reply: fuser::ReplyData,
+    ) {
+        let handle = {
+            let handles = self.handles.lock().expect("handle lock");
+            handles.get(&fh).cloned()
+        };
+        let Some(handle) = handle else {
+            reply.error(libc::EBADF);
+            return;
+        };
+        if offset < 0 {
+            reply.error(libc::EINVAL);
+            return;
+        }
+        let mut client = self.client.lock().expect("coh client lock");
+        let data: Vec<u8> = match client.read_file(&handle.path, MAX_DIR_LIST_BYTES) {
+            Ok(data) => data,
+            Err(_) => {
+                reply.error(libc::EIO);
+                return;
+            }
+        };
+        let offset = offset as usize;
+        if offset >= data.len() {
+            reply.data(&[]);
+            return;
+        }
+        let count = size.min(cohsh::SECURE9P_MSIZE) as usize;
+        let end = offset.saturating_add(count).min(data.len());
+        reply.data(&data[offset..end]);
+    }
+
+    fn write(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        _inode: u64,
+        fh: u64,
+        offset: i64,
+        data: &[u8],
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        reply: fuser::ReplyWrite,
+    ) {
+        let mut handles = self.handles.lock().expect("handle lock");
+        let handle = match handles.get_mut(&fh) {
+            Some(handle) => handle,
+            None => {
+                reply.error(libc::EBADF);
+                return;
+            }
+        };
+        if let Err(_) = handle.append_tracker.check_and_advance(offset, data.len()) {
+            reply.error(libc::EINVAL);
+            return;
+        }
+        let mut client = self.client.lock().expect("coh client lock");
+        let written: usize = match client.write_append(&handle.path, data) {
+            Ok(written) => written,
+            Err(_) => {
+                reply.error(libc::EIO);
+                return;
+            }
+        };
+        let written = written.min(u32::MAX as usize) as u32;
+        reply.written(written);
+    }
+
+    fn release(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        _inode: u64,
+        fh: u64,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        _flush: bool,
+        reply: fuser::ReplyEmpty,
+    ) {
+        let handle = {
+            let mut handles = self.handles.lock().expect("handle lock");
+            handles.remove(&fh)
+        };
+        if handle.is_none() {
+            reply.error(libc::EBADF);
+            return;
+        }
+        reply.ok();
+    }
+}
+
+#[cfg(feature = "fuse")]
+#[derive(Debug, Clone)]
+struct ConsoleHandle {
+    path: String,
+    is_dir: bool,
+    append_tracker: AppendOnlyTracker,
 }
 
 #[cfg(feature = "fuse")]
@@ -640,6 +1036,9 @@ impl InodeTable {
 
     fn insert(&mut self, path: &str, is_dir: bool) -> u64 {
         if let Some(existing) = self.by_path.get(path) {
+            if let Some(entry) = self.by_inode.get_mut(existing) {
+                entry.is_dir = is_dir;
+            }
             return *existing;
         }
         let inode = if path == "/" { ROOT_INODE } else { self.next_inode };

@@ -19,7 +19,7 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 cohesix-net-constants = { workspace = true }
 cohesix-ticket = { workspace = true }
-cohsh = { path = "../cohsh" }
+cohsh = { path = "../cohsh", features = ["tcp"] }
 cohsh-core = { workspace = true }
 secure9p-codec = { workspace = true }
 gpu-bridge-host = { path = "../gpu-bridge-host" }

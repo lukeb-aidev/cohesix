@@ -158,9 +158,9 @@ EOF
     sudo apt-get update -y
     sudo apt-get install -y libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev
   fi
-  if ! dpkg -s build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl >/dev/null 2>&1; then
+  if ! dpkg -s build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev >/dev/null 2>&1; then
     sudo apt-get update -y
-    sudo apt-get install -y build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl
+    sudo apt-get install -y build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev
   fi"
 
 printf "[sync] Ensuring Rust toolchain...\n"
@@ -173,11 +173,13 @@ run_ssh "source \$HOME/.cargo/env && cd '${REMOTE_DIR}' && \
   cargo build --release -p cas-tool && \
   cargo build --release -p host-sidecar-bridge --features tcp && \
   cargo build --release -p cohsh --features tcp && \
+  cargo build --release -p coh --features fuse,nvml && \
   RUSTFLAGS='-C debuginfo=0' cargo build --release -p swarmui"
 
 printf "[sync] Staging host tool binaries...\n"
 run_ssh "mkdir -p '${REMOTE_DIR}/out/host-tools-linux' && \
   install -m 0755 '${REMOTE_DIR}/target/release/cohsh' '${REMOTE_DIR}/out/host-tools-linux/' && \
+  install -m 0755 '${REMOTE_DIR}/target/release/coh' '${REMOTE_DIR}/out/host-tools-linux/' && \
   install -m 0755 '${REMOTE_DIR}/target/release/gpu-bridge-host' '${REMOTE_DIR}/out/host-tools-linux/' && \
   install -m 0755 '${REMOTE_DIR}/target/release/host-sidecar-bridge' '${REMOTE_DIR}/out/host-tools-linux/' && \
   install -m 0755 '${REMOTE_DIR}/target/release/cas-tool' '${REMOTE_DIR}/out/host-tools-linux/' && \

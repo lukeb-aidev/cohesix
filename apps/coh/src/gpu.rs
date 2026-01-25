@@ -5,13 +5,11 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{anyhow, Context, Result};
-use cohsh::client::CohClient;
 use cohsh::queen;
 use cohsh_core::wire::AckStatus;
-use cohsh_core::Secure9pTransport;
 use serde::Deserialize;
 
-use crate::{list_dir, read_file, write_append, CohAudit, MAX_DIR_LIST_BYTES};
+use crate::{CohAccess, CohAudit, MAX_DIR_LIST_BYTES};
 
 const GPU_ROOT: &str = "/gpu";
 const MAX_GPU_INFO_BYTES: usize = 16 * 1024;
@@ -48,11 +46,11 @@ pub struct GpuLeaseArgs {
 }
 
 /// List GPUs and append output lines to the audit transcript.
-pub fn list<T: Secure9pTransport>(
-    client: &mut CohClient<T>,
+pub fn list<C: CohAccess>(
+    client: &mut C,
     audit: &mut CohAudit,
 ) -> Result<()> {
-    let entries = list_dir(client, GPU_ROOT, MAX_DIR_LIST_BYTES)?;
+    let entries = client.list_dir(GPU_ROOT, MAX_DIR_LIST_BYTES)?;
     audit.push_ack(AckStatus::Ok, "LS", Some("path=/gpu"));
     let gpus = entries
         .into_iter()
@@ -64,7 +62,8 @@ pub fn list<T: Secure9pTransport>(
     }
     for gpu_id in gpus {
         let info_path = format!("/gpu/{gpu_id}/info");
-        let payload = read_file(client, &info_path, MAX_GPU_INFO_BYTES)
+        let payload = client
+            .read_file(&info_path, MAX_GPU_INFO_BYTES)
             .with_context(|| format!("read {info_path}"))?;
         let detail = format!("path={info_path}");
         audit.push_ack(AckStatus::Ok, "CAT", Some(detail.as_str()));
@@ -86,8 +85,8 @@ pub fn list<T: Secure9pTransport>(
 }
 
 /// Fetch the latest GPU status line.
-pub fn status<T: Secure9pTransport>(
-    client: &mut CohClient<T>,
+pub fn status<C: CohAccess>(
+    client: &mut C,
     audit: &mut CohAudit,
     gpu_id: &str,
 ) -> Result<()> {
@@ -95,7 +94,8 @@ pub fn status<T: Secure9pTransport>(
         return Err(anyhow!("gpu id must not be empty"));
     }
     let status_path = format!("/gpu/{gpu_id}/status");
-    let payload = read_file(client, &status_path, MAX_GPU_STATUS_BYTES)
+    let payload = client
+        .read_file(&status_path, MAX_GPU_STATUS_BYTES)
         .with_context(|| format!("read {status_path}"))?;
     let detail = format!("path={status_path}");
     audit.push_ack(AckStatus::Ok, "CAT", Some(detail.as_str()));
@@ -112,8 +112,8 @@ pub fn status<T: Secure9pTransport>(
 }
 
 /// Request a GPU lease via /queen/ctl.
-pub fn lease<T: Secure9pTransport>(
-    client: &mut CohClient<T>,
+pub fn lease<C: CohAccess>(
+    client: &mut C,
     audit: &mut CohAudit,
     args: &GpuLeaseArgs,
 ) -> Result<()> {
@@ -134,7 +134,7 @@ pub fn lease<T: Secure9pTransport>(
         spawn_args.push(format!("budget_ops={ops}"));
     }
     let payload = queen::spawn("gpu", spawn_args.iter().map(String::as_str))?;
-    let written = write_append(client, queen::queen_ctl_path(), payload.as_bytes())?;
+    let written = client.write_append(queen::queen_ctl_path(), payload.as_bytes())?;
     let detail = format!("path={} bytes={written}", queen::queen_ctl_path());
     audit.push_ack(AckStatus::Ok, "ECHO", Some(&detail));
     audit.push_line(format!(

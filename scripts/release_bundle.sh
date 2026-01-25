@@ -149,7 +149,7 @@ build_linux_host_tools() {
   esac
 
   local host_packages=(gpu-bridge-host cas-tool swarmui)
-  local host_bins=(cohsh "${host_packages[@]}" host-sidecar-bridge)
+  local host_bins=(cohsh coh "${host_packages[@]}" host-sidecar-bridge)
   local build_args=(build)
   if (( ${#profile_args[@]} > 0 )); then
     build_args+=("${profile_args[@]}")
@@ -179,6 +179,15 @@ build_linux_host_tools() {
 
   echo "[release] Building Linux cohsh via: cargo ${cohsh_args[*]}"
   cargo "${cohsh_args[@]}"
+
+  local coh_args=(build)
+  if (( ${#profile_args[@]} > 0 )); then
+    coh_args+=("${profile_args[@]}")
+  fi
+  coh_args+=(--target "$target" -p coh --features "fuse,nvml")
+
+  echo "[release] Building Linux coh via: cargo ${coh_args[*]}"
+  cargo "${coh_args[@]}"
 
   local artifact_dir="target/$target/$profile_dir"
   [[ -d "$artifact_dir" ]] || fail "Cargo artefact directory not found: $artifact_dir"
@@ -236,6 +245,8 @@ bundle_release() {
   cp -p "${ROOT_DIR}/out/cas_manifest_template.json" "${bundle_dir}/out/cas_manifest_template.json"
   cp -p "${ROOT_DIR}/out/cohsh_policy.toml" "${bundle_dir}/out/cohsh_policy.toml"
   cp -p "${ROOT_DIR}/out/cohsh_policy.toml.sha256" "${bundle_dir}/out/cohsh_policy.toml.sha256"
+  cp -p "${ROOT_DIR}/out/coh_policy.toml" "${bundle_dir}/out/coh_policy.toml"
+  cp -p "${ROOT_DIR}/out/coh_policy.toml.sha256" "${bundle_dir}/out/coh_policy.toml.sha256"
 
   if [[ -x "${ROOT_DIR}/scripts/lib/detect_gic_version.py" ]]; then
     GIC_CFG="${HOME}/seL4/build/kernel/gen_config/kernel/gen_config.h"
@@ -256,6 +267,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 IMAGE_DIR="${ROOT_DIR}/image"
 
 QEMU_BIN="${QEMU_BIN:-qemu-system-aarch64}"
+HOST_OS="$(uname -s 2>/dev/null || true)"
 TCP_PORT="${TCP_PORT:-31337}"
 UDP_PORT="${UDP_PORT:-31338}"
 SMOKE_PORT="${SMOKE_PORT:-31339}"
@@ -303,6 +315,10 @@ detect_qemu_accel() {
   esac
 }
 
+has_kvm_device() {
+  [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]
+}
+
 qemu_accel_supported() {
   local accel="$1"
   local help
@@ -318,6 +334,12 @@ resolve_qemu_accel() {
   accel="$(detect_qemu_accel)"
   if [[ -z "$accel" ]]; then
     accel="tcg"
+  fi
+  if [[ "$accel" == "kvm" && "$HOST_OS" == "Linux" ]]; then
+    if ! has_kvm_device; then
+      echo "[qemu] Requested QEMU accelerator 'kvm' but /dev/kvm is unavailable; falling back to tcg" >&2
+      accel="tcg"
+    fi
   fi
   if ! qemu_accel_supported "$accel"; then
     echo "[qemu] Requested QEMU accelerator '$accel' not supported by ${QEMU_BIN}; falling back to tcg" >&2
@@ -464,6 +486,8 @@ require_file "${ROOT_DIR}/LICENSE.txt"
 require_file "${ROOT_DIR}/releases/RELEASE_NOTES-${RELEASE_VERSION}.md"
 require_file "${ROOT_DIR}/configs/root_task.toml"
 require_file "${ROOT_DIR}/resources/fixtures/cas_signing_key.hex"
+require_file "${ROOT_DIR}/out/coh_policy.toml"
+require_file "${ROOT_DIR}/out/coh_policy.toml.sha256"
 require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace"
 require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.hive.cbor"
 require_file "${ROOT_DIR}/scripts/setup_environment.sh"

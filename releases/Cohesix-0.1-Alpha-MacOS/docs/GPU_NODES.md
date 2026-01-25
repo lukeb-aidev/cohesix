@@ -181,10 +181,12 @@ This step is important on Jetson:
 
 ## 4. Secure Uplink to the Queen  
 
-The Worker writes telemetry into the Queen namespace via Secure9P:
+The Worker writes telemetry into the Queen namespace via Secure9P using the OS-named ingest surface:
 
 /queen/telemetry/jetson-42/
-window_2025-01-08.cbor
+ctl
+seg/seg-000001
+latest
 
 Transport characteristics:
 - Secure9P over authenticated transport

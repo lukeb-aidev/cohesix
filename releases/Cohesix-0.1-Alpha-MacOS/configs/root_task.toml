@@ -67,6 +67,12 @@ frame_schema = "legacy-plaintext"
 [telemetry.cursor]
 retain_on_boot = false
 
+[telemetry_ingest]
+max_segments_per_device = 4
+max_bytes_per_segment = 32768
+max_total_bytes_per_device = 131072
+eviction_policy = "evict-oldest"
+
 [observability.proc_9p]
 sessions = true
 outstanding = true
@@ -115,6 +121,17 @@ status = true
 [client_policies.cohsh.pool]
 control_sessions = 2
 telemetry_sessions = 4
+
+[client_policies.coh.mount]
+root = "/"
+allowlist = ["/proc", "/queen", "/worker", "/log", "/gpu", "/host"]
+
+[client_policies.coh.telemetry]
+root = "/queen/telemetry"
+max_devices = 32
+max_segments_per_device = 4
+max_bytes_per_segment = 32768
+max_total_bytes_per_device = 131072
 
 [client_policies.retry]
 max_attempts = 3

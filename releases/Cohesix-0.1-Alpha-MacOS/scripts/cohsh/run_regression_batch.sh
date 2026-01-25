@@ -21,6 +21,7 @@ BASE_SCRIPTS=(
 
 BASE_TELEMETRY_SCRIPTS=(
     "telemetry_ring.coh"
+    "telemetry_push_create.coh"
 )
 
 BASE_SHARD_SCRIPTS=(
@@ -174,6 +175,9 @@ run_cohsh() {
             ;;
         telemetry_ring.coh)
             "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/telemetry_ring.coh
+            ;;
+        telemetry_push_create.coh)
+            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/telemetry_push_create.coh
             ;;
         shard_1k.coh)
             "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/shard_1k.coh

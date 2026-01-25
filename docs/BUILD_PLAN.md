@@ -80,14 +80,16 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [20g](#20g) | Deterministic Snapshot & Replay (UI Testing) | Complete |
 | [20h](#20h) | Alpha Release Gate: As-Built Verification, Live Hive Demo, SwarmUI Replay, & Release Bundle | Complete |
 | [21a](#21a) | Telemetry Ingest with OS-Named Segments (Severely Limited Create) | Complete |
-| [21b](#21b) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Pending |
+| [21b](#21b) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Complete |
 | [21c](#21c) | SwarmUI Interactive cohsh Terminal (Full Prompt UX) | Pending |
 | [21d](#21d) | Deterministic Node Lifecycle & Operator Control | Pending |
+| [21e](#21e) | Rooted Authority, Cut Detection, Explicit Session Semantics, and Live Hive Visibility | Pending |
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Pending |
 | [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Pending |
 | [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Pending |
 | [25a](#25a) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [25b](#25b) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
+| [25c](#25c) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Pending |
 | [26](#26) | Edge Local Status (UEFI Host Tool) | Pending |
 | [27](#27) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
 
@@ -3208,6 +3210,263 @@ Deliverables:
 
 ---
 
+## Milestone 21e — Rooted Authority, Cut Detection, Explicit Session Semantics, and Live Hive Visibility <a id="21e"></a> 
+[Milestones](#Milestones)
+
+**Why now (operator and systems):** Cohesix enforces strict Queen/Worker authority and bounded control, but operators need those guarantees to be visible and interpretable during live operation. This milestone strengthens control-plane semantics using rooted-network ideas and extends SwarmUI Live Hive to reflect these states explicitly. The goal is less ambiguity, not more intelligence.
+
+No new protocols, no consensus, no background convergence - only explicit state, refusal, and audit.
+
+## Goal
+1. Make root reachability and network cuts explicit and inspectable.
+2. Formalize session setup, drain, and teardown semantics.
+3. Surface back-pressure (busy, quota, cut, policy) as first-class signals.
+4. Ensure SwarmUI Live Hive visualizes these states so operators do not infer health incorrectly.
+
+## Non-Goals (Explicit)
+- No leader election or consensus protocols
+- No automatic failover or self-promotion
+- No hidden retries or background loops
+- No new transports or networking paths
+- No relaxation of Secure9P / NineDoor invariants
+- No changes to ACK/ERR grammar beyond reason tags
+
+## Deliverables
+
+### 1) Root Reachability and Cut Detection
+New read-only nodes (IR-gated, bounded):
+
+`/proc/root/reachable` (ro: `reachable=yes|no`)  
+`/proc/root/last_seen_ms` (ro: `last_seen_ms=<u64>`)  
+`/proc/root/cut_reason` (ro: `cut_reason=<none|network_unreachable|session_revoked|policy_denied|lifecycle_offline>`)
+
+**Rules**
+- Workers MUST NOT exercise authority when `/proc/root/reachable=no`.
+- Queen authority is never inferred or mirrored.
+- `last_seen_ms` updates on authenticated Queen activity.
+- `cut_reason=none` when `reachable=yes`; otherwise use deterministic priority: `lifecycle_offline` > `session_revoked` > `policy_denied` > `network_unreachable`.
+- Cut detection feeds lifecycle state transitions per Milestone 21d (explicit events only, no heuristics).
+
+---
+
+### 2) Explicit Session Semantics (Telephone-Exchange Model)
+Expose session lifecycle explicitly:
+
+`/proc/9p/session/active`  
+`/proc/9p/session/<id>/state`  
+`/proc/9p/session/<id>/since_ms`  
+`/proc/9p/session/<id>/owner`
+
+Session states:
+- `SETUP`
+- `ACTIVE`
+- `DRAINING`
+- `CLOSED`
+
+**Rules**
+- No implicit resurrection of sessions.
+- Revocation immediately transitions to `CLOSED`.
+- `DRAINING` forbids new control actions but allows telemetry completion.
+- `/proc/9p/sessions` remains unchanged; new per-session nodes are additive only.
+
+---
+
+### 3) Busy / Back-Pressure as First-Class Signals
+Standard refusal reason tags (console):
+- `ERR <verb> reason=busy`
+- `ERR <verb> reason=quota`
+- `ERR <verb> reason=cut`
+- `ERR <verb> reason=policy`
+
+NineDoor error codes remain within the existing error surface; no new error names are introduced.
+
+Pressure counters (IR-gated, bounded):
+
+`/proc/pressure/busy`  
+`/proc/pressure/quota`  
+`/proc/pressure/cut`  
+`/proc/pressure/policy`
+
+**Rules**
+- No automatic retries inside Cohesix.
+- All refusals are deterministic and audited.
+- Callers decide retry behavior.
+
+---
+
+### 4) SwarmUI Live Hive — Visualizing Authority and Pressure
+**Rationale:** Without visualization, correct behavior looks like failure. Live Hive must reflect authority, reachability, and contention so operators do not infer false health or blame the wrong layer.
+
+**Constraints**
+- No new protocols
+- No new data collection
+- Purely renders existing file-shaped state
+- Live Hive reads text nodes (no CBOR requirement)
+
+#### 4a) Root / Cut Status Badge
+Live Hive reads:
+- `/proc/root/reachable`
+- `/proc/root/cut_reason`
+
+UI:
+- Prominent `ROOT OK` or `CUT` badge per node
+- Cut reason displayed inline
+- Nodes in CUT state are visually distinct (no "healthy" styling)
+
+#### 4b) Session Indicator
+Live Hive reads:
+- `/proc/9p/session/active`
+- `/proc/9p/session/<id>/state`
+
+UI:
+- Session count per node
+- Highlight when sessions enter `DRAINING`
+- Summary only (no per-session deep UI)
+
+#### 4c) Back-Pressure Strip
+Live Hive reads:
+- `/proc/pressure/busy`
+- `/proc/pressure/quota`
+- `/proc/pressure/cut`
+- `/proc/pressure/policy`
+
+UI:
+- Small pressure indicators or counters
+- Makes contention visible instead of mysterious slowdown
+
+#### 4d) Error Classification
+Live Hive classifies ACK/ERR events:
+- Distinguish `reason=busy`, `reason=quota`, `reason=cut`, `reason=policy`
+- Display as categorized events, not generic failures
+
+---
+
+### 5) Audit and Replay Integration
+All new semantics:
+- Emit audit lines via existing AuditFS
+- Are replayable via ReplayFS
+- Produce byte-identical ACK/ERR sequences on replay
+
+## Files and Components Touched
+- `apps/root-task/` — root reachability state and refusal tagging
+- `apps/nine-door/` — session lifecycle tracking and `/proc/9p/session/*`
+- `apps/swarmui/` — Live Hive rendering of root, sessions, and pressure
+- `tools/coh-rtc/` — observability gates and bounds
+- `configs/root_task.toml`
+- `docs/ARCHITECTURE.md`
+- `docs/INTERFACES.md`
+- `docs/SECURITY.md`
+- `docs/USERLAND_AND_CLI.md`
+
+## Regression Coverage (Required)
+New scripts:
+- `scripts/cohsh/root_cut_basic.coh`
+- `scripts/cohsh/session_lifecycle.coh`
+- `scripts/cohsh/busy_backpressure.coh`
+
+Live Hive validation:
+- Visual state matches `/proc/*` values
+- Replay shows identical transitions and UI markers
+
+## Checks (Definition of Done)
+- Root cuts are explicit, auditable, and visible in Live Hive.
+- No worker acts under partition.
+- Session teardown is immediate and deterministic.
+- Back-pressure is visible and never silent.
+- Replay reproduces identical control outcomes.
+- No new transports or background logic introduced.
+- Regression Pack passes with additive coverage only.
+
+## Compiler touchpoints
+- `coh-rtc` emits observability gates and bounds for `/proc/root/*`, `/proc/9p/session/*`, and `/proc/pressure/*`.
+- Generated snippets update `docs/ARCHITECTURE.md` and `docs/INTERFACES.md`; drift fails CI.
+
+## Task Breakdown
+```
+Title/ID: m21e-root-reachability-ir
+Goal: Add root reachability and pressure nodes to IR and regenerate artifacts.
+Inputs: configs/root_task.toml, tools/coh-rtc, docs/ARCHITECTURE.md, docs/INTERFACES.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs — add /proc/root/* and /proc/pressure/* gates + bounds.
+  - configs/root_task.toml — manifest toggles and size limits.
+Commands:
+  - cargo run -p coh-rtc
+  - scripts/check-generated.sh
+Checks:
+  - Generated snippets list the new nodes with correct bounds.
+Deliverables:
+  - Regenerated snippets and manifest artifacts.
+
+Title/ID: m21e-root-reachability-runtime
+Goal: Track and expose root reachability and cut reason deterministically.
+Inputs: apps/root-task, docs/ROLES_AND_SCHEDULING.md.
+Changes:
+  - apps/root-task/src/lifecycle.rs — integrate cut reason updates.
+  - apps/root-task/src/observability.rs — emit /proc/root/* values.
+Commands:
+  - cargo test -p root-task
+Checks:
+  - reachable/cut_reason updates are deterministic and audited.
+Deliverables:
+  - Root reachability state wired to observability.
+
+Title/ID: m21e-session-semantics
+Goal: Expose per-session state for NineDoor sessions.
+Inputs: apps/nine-door, docs/INTERFACES.md.
+Changes:
+  - apps/nine-door/src/host/session.rs — state tracking + /proc/9p/session/*.
+  - apps/nine-door/src/host/namespace.rs — mount session provider.
+Commands:
+  - cargo test -p nine-door --test session_state
+Checks:
+  - Session transitions match SETUP/ACTIVE/DRAINING/CLOSED with stable output.
+Deliverables:
+  - Per-session observability nodes with deterministic state.
+
+Title/ID: m21e-pressure-refusal
+Goal: Standardize refusal reason tags and pressure counters.
+Inputs: apps/root-task, apps/nine-door, docs/SECURITY.md.
+Changes:
+  - apps/root-task/src/event/mod.rs — emit ERR reason tags (busy/quota/cut/policy).
+  - apps/nine-door/src/host/security.rs — increment /proc/pressure/* counters.
+Commands:
+  - cargo test -p root-task
+  - cargo test -p nine-door --test pressure_counters
+Checks:
+  - Refusals increment counters and emit reason tags without new error names.
+Deliverables:
+  - Deterministic refusal tagging and pressure counters.
+
+Title/ID: m21e-swarmui-livehive
+Goal: Render root, session, and pressure state in Live Hive.
+Inputs: apps/swarmui/frontend, apps/swarmui/src-tauri, docs/INTERFACES.md.
+Changes:
+  - apps/swarmui/frontend/hive/ — badges, counters, and session summary.
+  - apps/swarmui/src-tauri/ — read new /proc text nodes.
+Commands:
+  - cargo check -p swarmui
+Checks:
+  - Live Hive displays root/cut, sessions, and pressure when view is active.
+Deliverables:
+  - Live Hive visuals wired to text-based /proc nodes.
+
+Title/ID: m21e-regressions
+Goal: Lock behavior with deterministic regression scripts and UI replay.
+Inputs: scripts/cohsh/, docs/TEST_PLAN.md.
+Changes:
+  - scripts/cohsh/root_cut_basic.coh
+  - scripts/cohsh/session_lifecycle.coh
+  - scripts/cohsh/busy_backpressure.coh
+Commands:
+  - cohsh --script scripts/cohsh/root_cut_basic.coh
+Checks:
+  - Scripts pass unchanged; ACK/ERR ordering stable.
+Deliverables:
+  - Regression scripts for reachability, session lifecycle, and pressure.
+```
+
+---
+
 ## Milestone 22 — Runtime Convenience (coh run) + GPU Job Breadcrumbs  <a id="22"></a> 
 [Milestones](#Milestones)
 
@@ -3704,6 +3963,189 @@ Checks:
   - Scripts pass unchanged; transcripts stable.
 Deliverables:
   - Regression fixtures committed and referenced in docs/TEST_PLAN.md.
+```
+
+## Milestone 25c — SMP Utilization via Task Isolation (Multicore without Multithreading) <a id="25c"></a> 
+[Milestones](#Milestones)
+
+**Why now (platform and performance):** Cohesix targets modern aarch64 hardware where multicore CPUs are the norm. To scale throughput without sacrificing determinism, auditability, or TCB size, Cohesix must exploit seL4 SMP scheduling rather than introducing shared-memory multithreading. This milestone formalizes multicore usage through task isolation, sharding, and explicit authority boundaries.
+
+This is a performance and clarity milestone, not a feature expansion.
+
+## Goal
+Enable Cohesix to take advantage of multicore aarch64 CPUs by:
+1. Running multiple isolated seL4 tasks in parallel,
+2. Keeping authoritative state single-threaded and serial, and
+3. Scaling throughput through replication and partitioning, not threads.
+
+The result must preserve:
+- deterministic ACK/ERR ordering,
+- replayability,
+- bounded work per tick,
+- and a minimal trusted computing base.
+
+## Non-Goals (Explicit)
+- No POSIX threads or shared-memory multithreading
+- No async runtimes with implicit scheduling
+- No background work queues with unbounded growth
+- No relaxation of replay or audit guarantees
+- No changes to Secure9P / NineDoor semantics
+- No new protocols or transports
+
+## Design Principles (Normative)
+1. **Concurrency via isolation, not sharing**  
+   All parallelism is achieved by running separate seL4 tasks.
+2. **Single-threaded authority**  
+   All authoritative decisions (tickets, lifecycle, policy, replay) are serialized through a single authority task.
+3. **Parallelism at the edges**  
+   Parsing, IO, and provider logic may scale horizontally, but must request decisions from the authority task.
+4. **Explicit back-pressure**  
+   When the authority or a shard is saturated, callers receive deterministic `ERR <verb> reason=busy`, not hidden queuing.
+
+## Task-Level Parallelism Model
+
+### Core Roles (Illustrative)
+| Task | Responsibility | Parallelism Strategy |
+|----|---------------|----------------------|
+| `root-task` | Authority, lifecycle, policy | Single instance, serialized |
+| `nine-door` | Secure9P parsing and routing | Sharded per session or subtree |
+| `console-transport` | TCP/serial framing, auth | One task per transport |
+| Providers (`/log`, `/proc`, `/gpu`, `/host`) | Namespace backends | One task per provider |
+| Workers | Role-specific execution | One task per worker |
+
+Each task runs a single-threaded event loop. seL4 schedules tasks across available cores.
+
+## SMP Affinity and Partitioning
+### Affinity Guidelines
+- Authority task MAY be pinned to a single core for stability.
+- IO-heavy tasks MAY be pinned near device IRQ affinity.
+- Provider tasks MAY be distributed across remaining cores.
+
+Affinity is optional and platform-specific but must be:
+- declarative,
+- bounded,
+- and documented.
+
+## Authority Interaction Contract
+All non-authority tasks:
+- Submit requests to the authority task via IPC,
+- Receive explicit `OK` / `ERR` responses,
+- MUST NOT mutate authoritative state directly.
+
+If the authority task cannot accept work:
+- It responds with `ERR <verb> reason=busy`,
+- The refusal is audited and observable,
+- No retries occur inside the VM.
+
+## Determinism and Replay Guarantees
+- Authoritative decisions are totally ordered.
+- Parallel tasks must not reorder or speculate on outcomes.
+- Replay executes the same authority decisions in the same order, regardless of task scheduling or core count.
+- SMP must not introduce nondeterministic ACK/ERR sequences.
+
+## Implementation Touchpoints
+- `apps/root-task/`
+  - Explicit authority IPC surface
+  - Busy/back-pressure signaling
+- `apps/nine-door/`
+  - Optional sharding of protocol handling
+- `apps/console/`
+  - Transport isolation from authority logic
+- `docs/ARCHITECTURE.md`
+  - SMP model and invariants
+- `docs/SECURITY.md`
+  - Rationale for rejecting multithreading
+
+## Testing and Validation
+
+### Functional
+- All existing regression scripts must pass unchanged.
+- New SMP runs must produce byte-identical ACK/ERR sequences to single-core runs.
+
+### Stress
+- Saturate protocol handlers while authority remains correct.
+- Verify `ERR <verb> reason=busy` emission under load.
+- Confirm no state corruption or reordering.
+
+### Replay
+- Capture traces on multicore.
+- Replay on single-core QEMU and assert identical outcomes.
+
+## Checks (Definition of Done)
+- Cohesix runs correctly on multicore aarch64 under QEMU and hardware.
+- Parallel tasks execute on multiple cores without shared-memory races.
+- Authority logic remains single-threaded and replayable.
+- Back-pressure is explicit and observable.
+- No new threads, runtimes, or hidden queues introduced.
+- Documentation clearly explains the SMP model and its constraints.
+
+## Task Breakdown
+```
+Title/ID: m25c-smp-kernel-enable
+Goal: Enable seL4 SMP in the external kernel build and document requirements.
+Inputs: seL4/build, docs/ARCHITECTURE.md, docs/BUILD_PLAN.md.
+Changes:
+  - seL4/build/ — regenerate kernel artifacts with SMP enabled.
+  - docs/ARCHITECTURE.md — record SMP kernel requirements and QEMU CPU count.
+Commands:
+  - make -C seL4/build
+Checks:
+  - SMP-enabled kernel boots under QEMU with >1 core.
+Deliverables:
+  - SMP kernel artifacts and documented build requirements.
+
+Title/ID: m25c-authority-ipc
+Goal: Serialize authoritative decisions behind a single IPC surface.
+Inputs: apps/root-task, docs/ROLES_AND_SCHEDULING.md.
+Changes:
+  - apps/root-task/src/authority.rs — authority IPC entrypoint and queueing.
+  - apps/root-task/src/lib.rs — route all authority mutations through IPC.
+Commands:
+  - cargo test -p root-task
+Checks:
+  - Authority decisions are serialized and replay-stable.
+Deliverables:
+  - Single-threaded authority IPC with deterministic ordering.
+
+Title/ID: m25c-sharded-tasks
+Goal: Run IO, parsing, and providers in separate single-threaded seL4 tasks.
+Inputs: apps/nine-door, apps/console, apps/root-task.
+Changes:
+  - apps/root-task/src/spawn.rs — spawn NineDoor shards and provider tasks.
+  - apps/nine-door/src/lib.rs — shard-aware request handling.
+Commands:
+  - cargo check -p root-task
+  - cargo test -p nine-door --test sharding
+Checks:
+  - Shards execute in parallel without shared-memory coupling.
+Deliverables:
+  - Task-isolated protocol handling.
+
+Title/ID: m25c-affinity-ir
+Goal: Add optional affinity hints to IR and enforce bounds.
+Inputs: configs/root_task.toml, tools/coh-rtc, docs/ARCHITECTURE.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs — affinity hints and validation.
+  - configs/root_task.toml — optional affinity policy.
+Commands:
+  - cargo run -p coh-rtc
+  - scripts/check-generated.sh
+Checks:
+  - Invalid affinity configurations are rejected deterministically.
+Deliverables:
+  - Manifest-driven affinity policy (optional).
+
+Title/ID: m25c-smp-replay-regressions
+Goal: Prove SMP determinism vs single-core runs.
+Inputs: docs/TEST_PLAN.md, scripts/cohsh/.
+Changes:
+  - scripts/cohsh/smp_parity.coh — compare ACK/ERR sequences across core counts.
+Commands:
+  - cohsh --script scripts/cohsh/smp_parity.coh
+Checks:
+  - Multicore and single-core transcripts match byte-for-byte.
+Deliverables:
+  - SMP parity regression coverage.
 ```
 
 ## Milestone 26 — Edge Local Status (UEFI Host Tool)  <a id="26"></a> 

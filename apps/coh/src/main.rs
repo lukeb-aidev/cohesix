@@ -8,14 +8,13 @@
 //! CLI entry point for the Cohesix host bridge tool.
 
 use std::path::PathBuf;
-use std::thread;
-use std::time::Duration;
+use std::env;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
+use coh::console::ConsoleSession;
 use coh::{gpu, mount, telemetry, CohAudit};
 use coh::policy::{default_policy_path, load_policy, CohPolicy};
-use coh::transport::TcpTransport;
 use cohsh::client::{CohClient, InProcessTransport};
 use cohsh::RoleArg;
 use cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT;
@@ -60,6 +59,9 @@ struct ConnectArgs {
     /// Secure9P port.
     #[arg(long, default_value_t = COHESIX_TCP_CONSOLE_PORT, global = true)]
     port: u16,
+    /// TCP console auth token (default: changeme).
+    #[arg(long, global = true)]
+    auth_token: Option<String>,
     /// Use the in-process mock backend.
     #[arg(long, default_value_t = false, global = true)]
     mock: bool,
@@ -167,7 +169,7 @@ fn run_mount(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: MountAr
         emit_audit(audit);
         return Ok(());
     }
-    let client = match connect_tcp(&args.connect, policy, role, ticket) {
+    let client = match connect_console(&args.connect, policy, role, ticket) {
         Ok(client) => client,
         Err(err) => {
             let mut audit = CohAudit::new();
@@ -179,7 +181,7 @@ fn run_mount(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: MountAr
     };
     audit.push_ack(cohsh_core::wire::AckStatus::Ok, "MOUNT", Some("mode=fuse"));
     emit_audit(audit);
-    match mount::mount(client, policy, &args.at) {
+    match mount::mount_console(client, policy, &args.at) {
         Ok(()) => Ok(()),
         Err(err) => {
             let mut audit = CohAudit::new();
@@ -225,7 +227,7 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
         };
         handle_result(result, audit, "GPU")
     } else {
-        let mut client = match connect_tcp(&args.connect, policy, role, ticket) {
+        let mut client = match connect_console(&args.connect, policy, role, ticket) {
             Ok(client) => client,
             Err(err) => {
                 let mut audit = CohAudit::new();
@@ -290,7 +292,7 @@ fn run_telemetry(
             Err(err) => handle_result(Err(err), audit, "TELEMETRY"),
         }
     } else {
-        let mut client = match connect_tcp(&args.connect, policy, role, ticket) {
+        let mut client = match connect_console(&args.connect, policy, role, ticket) {
             Ok(client) => client,
             Err(err) => {
                 let mut audit = CohAudit::new();
@@ -364,41 +366,42 @@ fn connect_mock(
     Ok((server, client))
 }
 
-fn connect_tcp(
+fn resolve_auth_token(cli_token: Option<&str>) -> String {
+    if let Some(token) = cli_token {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_owned();
+        }
+    }
+    if let Ok(value) = env::var("COH_AUTH_TOKEN") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_owned();
+        }
+    }
+    if let Ok(value) = env::var("COHSH_AUTH_TOKEN") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_owned();
+        }
+    }
+    "changeme".to_owned()
+}
+
+fn connect_console(
     args: &ConnectArgs,
     policy: &CohPolicy,
     role: Role,
     ticket: Option<&str>,
-) -> Result<CohClient<TcpTransport>> {
-    let retry = policy.retry;
-    let timeout = Duration::from_millis(retry.timeout_ms);
-    let mut attempt = 0u8;
-    let mut backoff = retry.backoff_ms;
-    loop {
-        attempt = attempt.saturating_add(1);
-        match TcpTransport::connect(
-            &args.host,
-            args.port,
-            timeout,
-            cohsh::SECURE9P_MSIZE,
-        ) {
-            Ok(transport) => {
-                let client = CohClient::connect(transport, role, ticket)?;
-                return Ok(client);
-            }
-            Err(err) => {
-                if attempt >= retry.max_attempts {
-                    return Err(anyhow!(
-                        "failed to connect to {}:{} after {} attempts: {err}",
-                        args.host,
-                        args.port,
-                        retry.max_attempts
-                    ));
-                }
-                let sleep_ms = backoff.min(retry.ceiling_ms);
-                thread::sleep(Duration::from_millis(sleep_ms));
-                backoff = backoff.saturating_mul(2).min(retry.ceiling_ms);
-            }
-        }
-    }
+) -> Result<ConsoleSession> {
+    let auth_token = resolve_auth_token(args.auth_token.as_deref());
+    ConsoleSession::connect(
+        &args.host,
+        args.port,
+        auth_token.as_str(),
+        role,
+        ticket,
+        policy.retry,
+    )
+    .with_context(|| format!("failed to connect to {}:{}", args.host, args.port))
 }

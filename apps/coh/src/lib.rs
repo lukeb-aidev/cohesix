@@ -9,6 +9,8 @@
 
 /// GPU inventory and lease helpers.
 pub mod gpu;
+/// TCP console-backed helpers.
+pub mod console;
 /// Secure9P-backed mount adapter.
 pub mod mount;
 /// Manifest-derived policy loader.
@@ -161,4 +163,28 @@ pub(crate) fn validate_component(component: &str) -> Result<()> {
         return Err(anyhow!("path component contains NUL byte"));
     }
     Ok(())
+}
+
+/// Minimal file operations used by coh subcommands.
+pub trait CohAccess {
+    /// List directory entries at the supplied path.
+    fn list_dir(&mut self, path: &str, max_bytes: usize) -> Result<Vec<String>>;
+    /// Read an entire file into memory.
+    fn read_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>>;
+    /// Append payload bytes to a file.
+    fn write_append(&mut self, path: &str, payload: &[u8]) -> Result<usize>;
+}
+
+impl<T: Secure9pTransport> CohAccess for CohClient<T> {
+    fn list_dir(&mut self, path: &str, max_bytes: usize) -> Result<Vec<String>> {
+        list_dir(self, path, max_bytes)
+    }
+
+    fn read_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        read_file(self, path, max_bytes)
+    }
+
+    fn write_append(&mut self, path: &str, payload: &[u8]) -> Result<usize> {
+        write_append(self, path, payload)
+    }
 }

@@ -5,6 +5,7 @@
 
 set -euo pipefail
 SEL4_LD="${SEL4_LD:-}"
+declare -a EXTRA_QEMU_ARGS=()
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -95,6 +96,10 @@ detect_qemu_accel() {
     esac
 }
 
+has_kvm_device() {
+    [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]
+}
+
 qemu_accel_supported() {
     local accel="$1"
     local help
@@ -110,6 +115,12 @@ resolve_qemu_accel() {
     accel="$(detect_qemu_accel)"
     if [[ -z "$accel" ]]; then
         accel="tcg"
+    fi
+    if [[ "$accel" == "kvm" && "$HOST_OS" == "Linux" ]]; then
+        if ! has_kvm_device; then
+            log "Requested QEMU accelerator 'kvm' but /dev/kvm is unavailable; falling back to tcg"
+            accel="tcg"
+        fi
     fi
     if ! qemu_accel_supported "$accel"; then
         log "Requested QEMU accelerator '$accel' not supported by $QEMU_BIN; falling back to tcg"
@@ -581,7 +592,14 @@ main() {
         log "Using QEMU binary: $QEMU_BIN ($QEMU_VERSION)"
     fi
 
-    if ! qemu_args_have_accel "${EXTRA_QEMU_ARGS[@]}"; then
+    local extra_has_accel=0
+    if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
+        if qemu_args_have_accel "${EXTRA_QEMU_ARGS[@]}"; then
+            extra_has_accel=1
+        fi
+    fi
+
+    if [[ "$extra_has_accel" -eq 0 ]]; then
         if [[ "$TRANSPORT" == "qemu" && -n "${COHSH_QEMU_ARGS:-}" ]]; then
             read -r -a COHSH_QEMU_ARGS_ARR <<< "${COHSH_QEMU_ARGS}"
             if qemu_args_have_accel "${COHSH_QEMU_ARGS_ARR[@]}"; then

@@ -5,6 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOST_OS="$(uname -s 2>/dev/null || true)"
 
 log() {
     echo "[qemu-run] $*"
@@ -177,6 +178,10 @@ detect_qemu_accel() {
     esac
 }
 
+has_kvm_device() {
+    [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]
+}
+
 qemu_accel_supported() {
     local accel="$1"
     local help
@@ -192,6 +197,12 @@ resolve_qemu_accel() {
     accel="$(detect_qemu_accel)"
     if [[ -z "$accel" ]]; then
         accel="tcg"
+    fi
+    if [[ "$accel" == "kvm" && "$HOST_OS" == "Linux" ]]; then
+        if ! has_kvm_device; then
+            log "Requested QEMU accelerator 'kvm' but /dev/kvm is unavailable; falling back to tcg"
+            accel="tcg"
+        fi
     fi
     if ! qemu_accel_supported "$accel"; then
         log "Requested QEMU accelerator '$accel' not supported by $QEMU_BIN; falling back to tcg"
