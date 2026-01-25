@@ -204,6 +204,7 @@ Manifest-derived coh policy defaults are emitted by `coh-rtc`.
 - Console auth token uses `SWARMUI_AUTH_TOKEN` (fallback `COHSH_AUTH_TOKEN`, default `changeme`). No HTTP/REST dependencies.
 - SwarmUI enables CSP `script-src 'unsafe-eval'` to support the PixiJS Live Hive renderer.
 - Presentation-only frontend: no retries, caching policy, or background polling logic.
+- SwarmUI includes an interactive cohsh console panel that reuses the existing TCP console session (no new verbs or transports).
 - Offline mode reads cached CBOR snapshots from `$DATA_DIR/snapshots/` and never touches the network.
 - Trace replay uses `--replay-trace <file>` (relative paths resolved under `$DATA_DIR/traces/`).
 - `--mint-ticket` emits a host-side ticket and exits; accepts `--role`, `--ticket-subject`, `--ticket-config`, `--ticket-secret` (env `SWARMUI_TICKET_CONFIG` / `SWARMUI_TICKET_SECRET`, fallback to `COHSH_*`).

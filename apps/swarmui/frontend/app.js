@@ -1,3 +1,4 @@
+import { setupConsole } from "./components/console.js";
 import { hydrateIcons } from "./components/icon.js";
 import { createHiveController } from "./hive/index.js";
 
@@ -328,3 +329,4 @@ const autoStartHiveReplay = async () => {
 };
 
 autoStartHiveReplay();
+setupConsole(invoke);

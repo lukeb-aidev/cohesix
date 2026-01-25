@@ -16,6 +16,7 @@ use serde::Serialize;
 use tauri::State;
 
 use cohsh::ticket_mint::{mint_ticket_from_config, mint_ticket_from_secret, TicketMintRequest};
+use cohsh::TcpTransport as CohshTcpTransport;
 use cohsh::COHSH_TCP_PORT;
 use cohsh_core::command::MAX_LINE_LEN;
 use cohsh_core::trace::{TraceLog, TracePolicy};
@@ -27,7 +28,7 @@ use swarmui::{
 enum SwarmUiService {
     Secure9p(SwarmUiBackend<TcpTransportFactory>),
     Trace(SwarmUiBackend<TraceTransportFactory>),
-    Console(SwarmUiConsoleBackend),
+    Console(SwarmUiConsoleBackend<CohshTcpTransport>),
 }
 
 impl SwarmUiService {
@@ -153,6 +154,13 @@ impl SwarmUiService {
                 .map_err(|err| err.to_string()),
         }
     }
+
+    fn console_command(&mut self, line: &str) -> Result<SwarmUiTranscript, String> {
+        match self {
+            SwarmUiService::Console(backend) => Ok(backend.console_command(line)),
+            _ => Err("console prompt requires TCP console transport".to_owned()),
+        }
+    }
 }
 
 struct AppState {
@@ -226,6 +234,15 @@ fn swarmui_fleet_snapshot(
     let role = parse_role_label(&role).map_err(|err| err.to_string())?;
     let mut backend = state.backend.lock().map_err(|_| "state locked")?;
     Ok(backend.fleet_snapshot(role, ticket.as_deref()))
+}
+
+#[tauri::command]
+fn swarmui_console_command(
+    state: State<'_, AppState>,
+    line: String,
+) -> Result<SwarmUiTranscript, String> {
+    let mut backend = state.backend.lock().map_err(|_| "state locked")?;
+    backend.console_command(&line)
 }
 
 #[tauri::command]
@@ -552,6 +569,7 @@ fn main() {
             swarmui_tail_telemetry,
             swarmui_list_namespace,
             swarmui_fleet_snapshot,
+            swarmui_console_command,
             swarmui_hive_bootstrap,
             swarmui_hive_poll,
             swarmui_hive_reset,
