@@ -14,6 +14,8 @@
   </tr>
 </table>
 
+Releases are available in [releases/](releases/).
+
 ## Why Cohesix?
 
 Cohesix explores a specific and deliberately narrow problem space: **how to build a small, auditable, and secure control plane for orchestrating distributed edge GPU systems**, without inheriting the complexity, opacity, and attack surface of general-purpose operating systems.
@@ -188,9 +190,66 @@ flowchart LR
 
 ## Getting Started
 
-- Build and launch via `scripts/cohesix-build-run.sh`, pointing at your seL4 build and output directory. The script stages host tools alongside the VM image and enables the TCP console when `--transport tcp` is passed.
-- Terminal 1: run the script to start QEMU with `-serial mon:stdio` for the PL011 root console and TCP forwarding.
-- Terminal 2: from `out/cohesix/host-tools/`, connect using `./cohsh --transport tcp --tcp-port <port>`.
+### Option A: Run a pre-built release (fastest)
+Pre-built bundles are available in [releases/](releases/). Each bundle includes its own `QUICKSTART.md`.
+
+1. Extract the bundle for your OS (`*-MacOS` or `*-linux`).
+2. Install runtime dependencies (QEMU + SwarmUI libs):
+   ```bash
+   ./scripts/setup_environment.sh
+   ```
+3. Terminal 1: boot the VM:
+   ```bash
+   ./qemu/run.sh
+   ```
+4. Terminal 2: connect with `cohsh`:
+   ```bash
+   ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
+   ```
+5. Optional UI (Mac or Linux desktop):
+   ```bash
+   ./bin/swarmui
+   ```
+   Headless Linux: `xvfb-run -a ./bin/swarmui`
+
+---
+
+### Option B: Build from source (macOS or Linux)
+You need QEMU, Rust, Python 3, and an external seL4 build that produces `elfloader` and `kernel.elf`.
+
+**macOS 26 (Apple Silicon)**
+```bash
+./toolchain/setup_macos_arm64.sh
+source "$HOME/.cargo/env"
+```
+
+**Linux (Ubuntu 24 recommended)**
+```bash
+sudo apt-get update
+sudo apt-get install -y git cmake ninja-build clang llvm lld python3 python3-pip qemu-system-aarch64
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+source "$HOME/.cargo/env"
+```
+
+**Build and run (QEMU + TCP console)**
+1. Build seL4 externally (upstream) for `aarch64` + `qemu_arm_virt`. Place the build at `$HOME/seL4/build` or pass `--sel4-build` below.
+2. Terminal 1: build and boot:
+   ```bash
+   SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
+     --sel4-build "$HOME/seL4/build" \
+     --out-dir out/cohesix \
+     --profile release \
+     --root-task-features cohesix-dev \
+     --cargo-target aarch64-unknown-none \
+     --transport tcp
+   ```
+3. Terminal 2: connect with `cohsh`:
+   ```bash
+   cd out/cohesix/host-tools
+   ./cohsh --transport tcp --tcp-port 31337 --role queen
+   ```
+
+If you want a quicker on-ramp, use the pre-built bundles in [releases/](releases/) and follow their `QUICKSTART.md`.
 
 ---
 
