@@ -2191,7 +2191,7 @@ fn cache_key_for_path(prefix: &str, path: &str) -> String {
 
 fn console_help_lines() -> Vec<String> {
     vec![
-        "Cohesix command surface:".to_owned(),
+        "SwarmUI console commands:".to_owned(),
         "  help                         - Show this help message".to_owned(),
         "  attach <role> [ticket]       - Attach to a NineDoor session".to_owned(),
         "  login <role> [ticket]        - Alias for attach".to_owned(),
@@ -2204,7 +2204,8 @@ fn console_help_lines() -> Vec<String> {
         "  echo <text> > <path>         - Append to a file (adds newline)".to_owned(),
         "  spawn <role> [opts]          - Queue worker spawn command".to_owned(),
         "  kill <worker_id>             - Queue worker termination".to_owned(),
-        "  quit                         - Close the session and exit".to_owned(),
+        "  quit                         - Close the session".to_owned(),
+        "  Use cohsh for additional CLI commands (test, pool bench, tcp-diag).".to_owned(),
     ]
 }
 

@@ -2974,6 +2974,7 @@ Add a cohesive, terminal‑grade command prompt inside SwarmUI that reuses exist
 - Prompt supports multiline output, `OK/ERR/END` framing, and tail streams.
 - Single‑session multiplexing: the prompt reuses SwarmUI’s existing console session (no second client).
 - No new verbs, no new transports, and no VM changes.
+- SwarmUI help output lists only console commands and points to `cohsh` for additional CLI features.
 
 **Commands**
 - `cargo check -p swarmui`
