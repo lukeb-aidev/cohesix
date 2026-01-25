@@ -28,6 +28,8 @@ In practical terms, the project would not be feasible without extensive use of A
 
 Cohesix is intentionally opinionated. It treats **determinism, auditability, and security** as design inputs rather than constraints, and is willing to exclude large classes of features to preserve those properties.
 
+Cohesix has a strong **MLOps** fit: model lifecycle pointers, deterministic CAS updates, and bounded telemetry streams make training, rollout, and audit pipelines reproducible without introducing in-VM ML stacks.
+
 ---
 
 ### seL4 foundation
@@ -39,13 +41,13 @@ Cohesix runs on **[seL4](https://sel4.systems/)**, a high-assurance capability-b
 
 Cohesix is a **minimal orchestration operating system** for secure edge management, targeting a defined set of [use cases](docs/USE_CASES.md) around AI hives and distributed GPU workloads.
 
-Technically, Cohesix is a **pure Rust userspace** running on upstream **seL4** on `aarch64/virt` (GICv3). Userspace is shipped as a static CPIO boot payload containing the root task, the NineDoor Secure9P server, worker roles, and host-facing tools. 
+Technically, Cohesix is a **pure Rust userspace** running on upstream **seL4** on `aarch64/virt` (GICv3). Userspace is shipped as a static CPIO boot payload containing the root task, the NineDoor Secure9P server, and worker roles; host tools live outside the VM.
 
 Cohesix does **not include a traditional filesystem**; instead it exposes a **synthetic Secure9P namespace** where paths represent capability-scoped control and telemetry interfaces rather than persistent storage.
 
 Cohesix does not provide HTTPS or TLS. Instead, it relies on an **authenticated, encrypted private network** (e.g. VPN or overlay) for transport security, keeping the Cohesix TCB small and focused. See this [example](docs/NETWORK_CONFIG.md).
 
-All control and telemetry flows through Secure9P. There are **no ad-hoc RPC channels**, no background daemons, and no general in-VM networking services.
+All control and telemetry are file-shaped and exposed via Secure9P; the console mirrors those semantics. There are **no ad-hoc RPC channels**, no background daemons, and no general in-VM networking services.
 
 Operators interact with Cohesix through two consoles:
 - a local **PL011 UART console** for early bring-up and recovery, and  
@@ -230,6 +232,7 @@ sudo apt-get install -y git cmake ninja-build clang llvm lld python3 python3-pip
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 source "$HOME/.cargo/env"
 ```
+If you're on another Linux distro, install the same dependencies with your package manager (QEMU + build essentials + Rust).
 
 **Build and run (QEMU + TCP console)**
 1. Build seL4 externally (upstream) for `aarch64` + `qemu_arm_virt`. Place the build at `$HOME/seL4/build` or pass `--sel4-build` below.

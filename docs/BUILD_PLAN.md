@@ -90,6 +90,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25a](#25a) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [25b](#25b) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [25c](#25c) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Pending |
+| [25d](#25d) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [26](#26) | Edge Local Status (UEFI Host Tool) | Pending |
 | [27](#27) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
 
@@ -4149,6 +4150,196 @@ Deliverables:
   - SMP parity regression coverage.
 ```
 
+## Milestone 25d — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest <a id="25d"></a>
+[Milestones](#Milestones)
+
+**Why now (operator & adoption):**  
+By this stage Cohesix is architecturally complete, SMP-aware, and UEFI-capable. What remains is operability: giving operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols.
+
+This milestone delivers a small, opinionated set of host-side utilities that read existing file-shaped state and artifacts. They do not mutate system state, do not self-heal, and do not bypass policy.
+
+---
+
+## Goal
+Provide a coherent operator toolkit that:
+1. Explains current system state (`inspect`)
+2. Records and replays control-plane behavior (`trace`)
+3. Produces self-contained reproducibility artifacts (`bundle`)
+4. Compares system state and policy deterministically (`diff`)
+5. Verifies device identity and attestation evidence (`attest`)
+
+All tools must be:
+- host-side only
+- deterministic and scriptable
+- aligned with existing Secure9P / NineDoor surfaces
+- auditable and replay-compatible
+
+---
+
+## Non-Goals (Explicit)
+- No automatic remediation or self-healing
+- No in-VM UI or interactive tooling
+- No new protocols or transports
+- No mutation of authority, policy, or state
+- No dependency on POSIX filesystem semantics inside the VM
+
+---
+
+## Deliverables
+
+### 1) `coh inspect` — Correlated System Explanation
+
+**Purpose:**  
+Provide a correlated, human-readable explanation of the system’s current operational state.
+
+Reads (examples):
+
+`/proc/lifecycle/*`  
+`/proc/root/*`  
+`/proc/9p/session/*`  
+`/proc/pressure/*`  
+`/proc/spool/status`  
+`/proc/attest/*`
+
+Output characteristics:
+- Structured text (stable field ordering)
+- No “healthy/unhealthy” judgment
+- Explains why the system is in its current state
+- Zero side effects
+
+Exit codes:
+- `0` — state internally consistent
+- `>0` — invariant violation (corruption, impossible state)
+
+---
+
+### 2) `coh trace` — Deterministic Record & Replay
+
+**Purpose:**  
+Capture and replay control-plane behavior for debugging, testing, and UI validation.
+
+Capabilities:
+- Record Secure9P frames + ACK/ERR
+- Snapshot relevant `/proc/*` state at trace boundaries
+- Emit `.trace` artifacts with bounded size
+- Replay traces against:
+  - `cohsh`
+  - SwarmUI Live Hive
+
+Constraints:
+- No live mutation during replay
+- Byte-identical ACK/ERR ordering required
+
+---
+
+### 3) `coh bundle` — Reproducibility Pack
+
+**Purpose:**  
+Produce a single, self-contained artifact for bug reports, audits, and incident review.
+
+Bundle contents (bounded):
+- Manifest + resolved manifest hash
+- Serial log excerpt (if available from the host capture)
+- Trace files (if present)
+- `/proc` snapshots (inspect-equivalent)
+- Spool status summary
+- Attestation summary
+
+Output:
+- Deterministic directory or archive layout
+- No secrets unless explicitly authorized
+- Hash recorded and printed
+
+---
+
+### 4) `coh diff` — Deterministic Comparison
+
+**Purpose:**  
+Answer “what changed?” without guesswork.
+
+Supported comparisons:
+- Two live targets
+- Live target vs bundle
+- Two bundles
+
+Diff surfaces:
+- Namespace shape
+- Manifest-resolved limits
+- Policy rules
+- Lifecycle / root state
+- Attestation fingerprints
+
+Output:
+- Minimal, ordered diff
+- No semantic inference
+- Script-friendly format
+
+---
+
+### 5) `coh attest` — Identity & Evidence Verification
+
+**Purpose:**  
+Verify device identity and boot provenance.
+
+Capabilities:
+- Parse TPM / DICE evidence from `/proc/attest`
+- Verify manifest fingerprint binding
+- Validate against provided trust anchors
+- Emit clear PASS / FAIL + reason
+
+This command is binary by design and suitable for CI and compliance workflows.
+
+---
+
+## Implementation Scope
+- Host tools under `apps/coh/` (or equivalent)
+- Reuse existing parsing and transport crates
+- No changes to VM-side authority logic
+- Minimal, additive code only
+
+---
+
+## Documentation Updates
+- `docs/USERLAND_AND_CLI.md`
+  - Command reference
+  - Output guarantees
+- `docs/SECURITY.md`
+  - Operator tooling trust model
+- `docs/ARCHITECTURE.md`
+  - Operator interaction layer (read-only tools)
+
+---
+
+## Testing & Validation
+- Golden output fixtures for each command
+- Bundle → diff → inspect roundtrip tests
+- Trace capture + replay regression
+- Attestation positive and negative cases
+- Tools must operate correctly against:
+  - QEMU single-core
+  - QEMU multicore
+  - UEFI profile (where applicable)
+
+---
+
+## Checks (Definition of Done)
+- All tools produce deterministic output
+- No tool mutates system state
+- No new protocols introduced
+- Trace replay yields byte-identical ACK/ERR
+- Bundles are sufficient for offline diagnosis
+- Documentation reflects as-built behavior
+
+---
+
+## Outcome
+After Milestone 25d:
+- Cohesix is operable, not just correct
+- Incidents are explainable and reproducible
+- Operators can reason about state without guesswork
+- Support and integration costs drop sharply
+- The control plane remains small, auditable, and boring
+
 ## Milestone 26 — Edge Local Status (UEFI Host Tool)  <a id="26"></a> 
 [Milestones](#Milestones)
 
@@ -4230,6 +4421,7 @@ Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-t
 - ENA driver (adminq + single TX/RX queue) in root-task.
 - Minimal DHCP/TCP/TLS client in root-task (post-seL4), no firmware networking.
 - Diskless bootstrap path **after seL4**: ENA → DHCP → TCP → TLS → 9door mount.
+- Optional IMDSv2 bootstrap (instance identity + config) using a bounded, allowlisted HTTP client over the existing TCP stack. No listeners; no background refresh loop.
 - AMI registration tooling for Arm64 (`uefi` / `uefi-preferred`).
 - Documentation in `docs/AWS_AMI.md` covering boot path, failure modes, and recovery.
 
@@ -4244,6 +4436,7 @@ Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-t
 - EC2 instance boots directly into Cohesix with no intermediate OS.
 - ENA link comes up deterministically; DHCP lease acquired within bounded time.
 - 9door namespace mounts successfully and control plane is reachable.
+- IMDSv2 metadata fetch is optional and bounded; if unavailable or denied, boot continues safely with explicit diagnostics and no unbounded retries.
 - Power cycle returns to identical clean state (no persistence).
 - Failure cases (no fabric, auth failure, link down) halt safely with explicit console diagnostics.
 
@@ -4251,6 +4444,7 @@ Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-t
 - `coh-rtc` emits:
   - ENA queue bounds and bootstrap retry limits.
   - Fabric bootstrap manifest schema and signature requirements.
+  - IMDSv2 allowlist, max response bytes, and retry bounds (optional gate).
 - Regeneration guard verifies EFI binary hash against recorded compiler output.
 
 **Task Breakdown**
@@ -4311,6 +4505,20 @@ Checks:
 - Network reaches "fabric-ready" state within defined bounds.
 Deliverables:
 - Bootstrap timing guarantees recorded.
+
+Title/ID: m27-imdsv2-bootstrap
+Goal: Read bounded instance metadata (IMDSv2) and feed boot policy inputs.
+Inputs: crates/net/, apps/root-task, docs/AWS_AMI.md.
+Changes:
+- crates/net/src/http.rs — minimal HTTP request/response parsing (bounded, no chunked).
+- apps/root-task/src/net/imdsv2.rs — token fetch + allowlisted metadata queries.
+- apps/root-task/src/boot/policy.rs — consume optional IMDS fields (instance-id, region, az, tags if enabled).
+Commands:
+- cargo test -p net --tests
+Checks:
+- IMDSv2 is optional: absence, timeout, or denial does not block boot and emits deterministic diagnostics.
+Deliverables:
+- IMDSv2 bootstrap flow documented with explicit bounds and allowlist.
 
 Title/ID: m27-fabric-mount
 Goal: Mount 9door namespace and enter steady state (post-seL4).
