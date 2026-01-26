@@ -17,6 +17,8 @@ pub mod mount;
 pub mod policy;
 /// Telemetry pull helpers.
 pub mod telemetry;
+/// Runtime command wrapper helpers.
+pub mod run;
 /// TCP transport wrapper for Secure9P.
 pub mod transport;
 

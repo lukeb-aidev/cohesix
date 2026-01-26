@@ -13,7 +13,7 @@ use std::env;
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use coh::console::ConsoleSession;
-use coh::{gpu, mount, telemetry, CohAudit};
+use coh::{gpu, mount, run as coh_run, telemetry, CohAudit};
 use coh::policy::{default_policy_path, load_policy, CohPolicy};
 use cohsh::client::{CohClient, InProcessTransport};
 use cohsh::RoleArg;
@@ -47,6 +47,8 @@ enum Command {
     Mount(MountArgs),
     /// GPU discovery and lease operations.
     Gpu(GpuArgs),
+    /// Run a host command with lease validation and breadcrumb logging.
+    Run(RunArgs),
     /// Telemetry pull operations.
     Telemetry(TelemetryArgs),
 }
@@ -123,6 +125,18 @@ struct GpuLeaseArgs {
 }
 
 #[derive(Debug, Parser)]
+struct RunArgs {
+    #[command(flatten)]
+    connect: ConnectArgs,
+    /// GPU identifier.
+    #[arg(long)]
+    gpu: String,
+    /// Command to execute (pass after `--`).
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "CMD")]
+    command: Vec<String>,
+}
+
+#[derive(Debug, Parser)]
 struct TelemetryArgs {
     #[command(flatten)]
     connect: ConnectArgs,
@@ -144,6 +158,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Mount(args) => run_mount(role, cli.ticket.as_deref(), &policy, args),
         Command::Gpu(args) => run_gpu(role, cli.ticket.as_deref(), &policy, args),
+        Command::Run(args) => run_run(role, cli.ticket.as_deref(), &policy, args),
         Command::Telemetry(args) => run_telemetry(role, cli.ticket.as_deref(), &policy, args),
     }
 }
@@ -254,6 +269,45 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
             }
         };
         handle_result(result, audit, "GPU")
+    }
+}
+
+fn run_run(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: RunArgs) -> Result<()> {
+    let mut audit = CohAudit::new();
+    if args.connect.mock {
+        let (_server, mut client) = match connect_mock(role, ticket, true, false) {
+            Ok(value) => value,
+            Err(err) => {
+                let mut audit = CohAudit::new();
+                let detail = format!("reason={err}");
+                audit.push_ack(cohsh_core::wire::AckStatus::Err, "RUN", Some(detail.as_str()));
+                emit_audit(audit);
+                return Err(err);
+            }
+        };
+        let spec = coh_run::RunSpec {
+            gpu_id: args.gpu,
+            command: args.command,
+        };
+        let result = coh_run::execute(&mut client, policy, &mut audit, &spec);
+        handle_result(result, audit, "RUN")
+    } else {
+        let mut client = match connect_console(&args.connect, policy, role, ticket) {
+            Ok(client) => client,
+            Err(err) => {
+                let mut audit = CohAudit::new();
+                let detail = format!("reason={err}");
+                audit.push_ack(cohsh_core::wire::AckStatus::Err, "RUN", Some(detail.as_str()));
+                emit_audit(audit);
+                return Err(err);
+            }
+        };
+        let spec = coh_run::RunSpec {
+            gpu_id: args.gpu,
+            command: args.command,
+        };
+        let result = coh_run::execute(&mut client, policy, &mut audit, &spec);
+        handle_result(result, audit, "RUN")
     }
 }
 

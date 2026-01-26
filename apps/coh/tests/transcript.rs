@@ -10,6 +10,7 @@ mod transcript_support;
 use anyhow::{Context, Result};
 use coh::gpu;
 use coh::policy::CohPolicy;
+use coh::run::{self, RunSpec};
 use coh::telemetry;
 use coh::CohAudit;
 use cohsh::client::{CohClient, InProcessTransport};
@@ -20,6 +21,7 @@ use secure9p_codec::OpenMode;
 use tempfile::TempDir;
 
 const SCENARIO: &str = "converge_v0";
+const RUN_SCENARIO: &str = "run_demo_v0";
 
 #[test]
 fn coh_transcript_matches_fixture() -> Result<()> {
@@ -69,6 +71,55 @@ fn coh_transcript_matches_fixture() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn coh_run_transcript_matches_cohsh_baseline() -> Result<()> {
+    let server = NineDoor::new();
+    let bridge = auto_bridge(true)?;
+    let snapshot = bridge.serialise_namespace()?;
+    server.install_gpu_nodes(&snapshot)?;
+
+    let connection = server.connect().context("open NineDoor session")?;
+    let transport = InProcessTransport::new(connection);
+    let mut client = CohClient::connect(transport, Role::Queen, None)?;
+
+    let mut transcript = Vec::new();
+    let policy = CohPolicy::from_generated();
+
+    let lease_path = "/gpu/GPU-0/lease";
+    let active_lease = lease_entry("ACTIVE");
+    let written = write_append_len(&mut client, lease_path, active_lease.as_bytes())?;
+    let mut audit = CohAudit::new();
+    let detail = format!("path={lease_path} bytes={written}");
+    audit.push_ack(cohsh_core::wire::AckStatus::Ok, "ECHO", Some(detail.as_str()));
+    transcript.extend(audit.into_lines());
+
+    let spec = RunSpec {
+        gpu_id: "GPU-0".to_owned(),
+        command: vec!["echo".to_owned(), "ok".to_owned()],
+    };
+    let mut audit = CohAudit::new();
+    run::execute(&mut client, &policy, &mut audit, &spec)?;
+    transcript.extend(audit.into_lines());
+
+    let status_path = "/gpu/GPU-0/status";
+    let _ = read_all(&mut client, status_path)?;
+    let mut audit = CohAudit::new();
+    let detail = format!("path={status_path}");
+    audit.push_ack(cohsh_core::wire::AckStatus::Ok, "CAT", Some(detail.as_str()));
+    transcript.extend(audit.into_lines());
+
+    let released_lease = lease_entry("RELEASED");
+    let written = write_append_len(&mut client, lease_path, released_lease.as_bytes())?;
+    let mut audit = CohAudit::new();
+    let detail = format!("path={lease_path} bytes={written}");
+    audit.push_ack(cohsh_core::wire::AckStatus::Ok, "ECHO", Some(detail.as_str()));
+    transcript.extend(audit.into_lines());
+
+    transcript_support::compare_transcript("coh", RUN_SCENARIO, "cohsh.txt", &transcript);
+    transcript_support::write_timing("coh", RUN_SCENARIO, "transcript", 0);
+    Ok(())
+}
+
 fn seed_telemetry<T: cohsh_core::Secure9pTransport>(
     client: &mut CohClient<T>,
 ) -> Result<()> {
@@ -102,6 +153,26 @@ fn write_append<T: cohsh_core::Secure9pTransport>(
     Ok(())
 }
 
+fn write_append_len<T: cohsh_core::Secure9pTransport>(
+    client: &mut CohClient<T>,
+    path: &str,
+    payload: &[u8],
+) -> Result<usize> {
+    let fid = client.open(path, OpenMode::write_append())?;
+    let written = client.write(fid, u64::MAX, payload)?;
+    client.clunk(fid)?;
+    if written as usize != payload.len() {
+        anyhow::bail!("short write to {path}");
+    }
+    Ok(written as usize)
+}
+
+fn lease_entry(state: &str) -> String {
+    format!(
+        "{{\"schema\":\"gpu-lease/v1\",\"state\":\"{state}\",\"gpu_id\":\"GPU-0\",\"worker_id\":\"worker-1\",\"mem_mb\":1024,\"streams\":1,\"ttl_s\":60,\"priority\":1}}\n"
+    )
+}
+
 fn read_all<T: cohsh_core::Secure9pTransport>(
     client: &mut CohClient<T>,
     path: &str,
@@ -123,4 +194,3 @@ fn read_all<T: cohsh_core::Secure9pTransport>(
     client.clunk(fid)?;
     Ok(out)
 }
-

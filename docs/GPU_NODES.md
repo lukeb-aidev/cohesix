@@ -30,8 +30,8 @@ GPU workers (`worker-gpu`) are another worker type under the hive’s Queen, not
 |---------|----------------|
 | `/gpu/<id>/info` | Serialize GPU metadata (name, UUID, memory, SM count, driver/runtime versions). |
 | `/gpu/<id>/ctl` | Accept textual commands (`LEASE`, `RELEASE`, `PRIORITY <n>`, `RESET`) and return status lines mediated by the bridge host. |
-| `/gpu/<id>/lease` | Ticket/lease file gated by host policy; worker-gpu reads to learn active allocations and writes to request renewals. |
-| `/gpu/<id>/status` | Read-only view of utilisation and recent job summaries sourced from the host; append-only job lifecycle entries are included. |
+| `/gpu/<id>/lease` | Ticket/lease file gated by host policy; worker-gpu reads to learn active allocations and writes to request renewals. Append-only JSON lines use schema `gpu-lease/v1` (`state=ACTIVE|RELEASED`). |
+| `/gpu/<id>/status` | Read-only view of utilisation and recent job summaries sourced from the host; append-only job lifecycle entries and `gpu-breadcrumb/v1` host-run breadcrumbs are included. |
 
 ## 5. Lease Model
 ```rust
@@ -45,6 +45,7 @@ pub struct GpuLease {
 ```
 - Leases are tied to a worker ticket; revocation closes associated fids.
 - Host worker enforces TTL via timers; once expired, queued jobs are drained and subsequent writes receive `Permission`.
+- `/gpu/<id>/lease` appends JSON lines with schema `gpu-lease/v1` and fields: `schema`, `state`, `gpu_id`, `worker_id`, `mem_mb`, `streams`, `ttl_s`, `priority`. The latest `state=ACTIVE` line indicates the current lease.
 - The Queen uses `/queen/ctl` to create GPU workers and manage leases within the same hive orchestration model.
 
 ## 6. Job Descriptor Schema

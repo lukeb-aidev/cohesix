@@ -5,7 +5,10 @@
 #![forbid(unsafe_code)]
 
 use coh::mount::{AppendOnlyTracker, MountValidator};
-use coh::policy::{CohMountPolicy, CohPolicy, CohRetryPolicy, CohTelemetryPolicy};
+use coh::policy::{
+    CohBreadcrumbPolicy, CohLeasePolicy, CohMountPolicy, CohPolicy, CohRetryPolicy, CohRunPolicy,
+    CohTelemetryPolicy,
+};
 
 fn test_policy() -> CohPolicy {
     CohPolicy {
@@ -19,6 +22,18 @@ fn test_policy() -> CohPolicy {
             max_segments_per_device: 1,
             max_bytes_per_segment: 1024,
             max_total_bytes_per_device: 1024,
+        },
+        run: CohRunPolicy {
+            lease: CohLeasePolicy {
+                schema: "gpu-lease/v1".to_owned(),
+                active_state: "ACTIVE".to_owned(),
+                max_bytes: 256,
+            },
+            breadcrumb: CohBreadcrumbPolicy {
+                schema: "gpu-breadcrumb/v1".to_owned(),
+                max_line_bytes: 256,
+                max_command_bytes: 128,
+            },
         },
         retry: CohRetryPolicy {
             max_attempts: 1,
@@ -46,4 +61,3 @@ fn append_only_offsets_are_enforced() {
     assert!(tracker.check_and_advance(4, 4).is_err());
     tracker.check_and_advance(8, 4).expect("second append");
 }
-

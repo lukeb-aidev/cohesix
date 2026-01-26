@@ -22,6 +22,7 @@ cohesix-net-constants = { workspace = true }
 cohesix-proto = { workspace = true }
 secure9p-codec = { workspace = true }
 nine-door = { path = "../nine-door" }
+gpu-bridge-host = { path = "../gpu-bridge-host" }
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
 fs2 = "0.4"

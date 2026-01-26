@@ -12,6 +12,7 @@ use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::{BudgetSpec, Role, TicketKey, TicketToken, TicketVerb};
 use gpu_bridge_host::{status_entry, GpuNamespaceSnapshot};
 use log::{debug, info, trace};
+use serde::Serialize;
 use secure9p_codec::{
     Codec, ErrorCode, OpenMode, Qid, Request, RequestBody, Response, ResponseBody, SessionId,
     MAX_MSIZE, VERSION,
@@ -54,6 +55,47 @@ use super::ui::{UiProviderConfig, UiVariant, UI_MAX_READ_BYTES};
 use super::{Clock, NineDoorError};
 
 // New server core implementation and access policy are defined below.
+
+const GPU_LEASE_SCHEMA: &str = "gpu-lease/v1";
+const GPU_LEASE_STATE_ACTIVE: &str = "ACTIVE";
+const GPU_LEASE_STATE_RELEASED: &str = "RELEASED";
+
+#[derive(Serialize)]
+struct GpuLeaseEntry<'a> {
+    schema: &'a str,
+    state: &'a str,
+    gpu_id: &'a str,
+    worker_id: &'a str,
+    mem_mb: u32,
+    streams: u8,
+    ttl_s: u32,
+    priority: u8,
+}
+
+fn gpu_lease_entry_bytes(
+    lease: &WorkerGpuLease,
+    state: &'static str,
+) -> Result<Vec<u8>, NineDoorError> {
+    let entry = GpuLeaseEntry {
+        schema: GPU_LEASE_SCHEMA,
+        state,
+        gpu_id: lease.gpu_id.as_str(),
+        worker_id: lease.worker_id.as_str(),
+        mem_mb: lease.mem_mb,
+        streams: lease.streams,
+        ttl_s: lease.ttl_s,
+        priority: lease.priority,
+    };
+    let json = serde_json::to_string(&entry).map_err(|err| {
+        NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("gpu lease entry serialization failed: {err}"),
+        )
+    })?;
+    let mut bytes = json.into_bytes();
+    bytes.push(b'\n');
+    Ok(bytes)
+}
 
 /// Internal server state shared between connections.
 pub(crate) struct ServerCore {
@@ -2199,6 +2241,7 @@ impl ControlPlane {
                 &node.id,
                 node.info_payload.as_bytes(),
                 node.ctl_payload.as_bytes(),
+                node.lease_payload.as_bytes(),
                 node.status_payload.as_bytes(),
             )?;
             self.gpu_nodes.insert(node.id.clone());
@@ -2846,6 +2889,14 @@ impl ControlPlane {
                 )
                 .into_bytes();
                 self.namespace.write_append(&ctl_path, u64::MAX, &message)?;
+                let lease_path = vec![
+                    "gpu".to_owned(),
+                    lease.gpu_id.clone(),
+                    "lease".to_owned(),
+                ];
+                let lease_bytes = gpu_lease_entry_bytes(&lease, GPU_LEASE_STATE_ACTIVE)?;
+                self.namespace
+                    .write_append(&lease_path, u64::MAX, &lease_bytes)?;
                 self.log_event(
                     "worker",
                     TraceLevel::Info,
@@ -3085,6 +3136,14 @@ impl ControlPlane {
             let ctl_line = format!("RELEASE {worker_id} {reason}\n");
             self.namespace
                 .write_append(&ctl_path, u64::MAX, ctl_line.as_bytes())?;
+            let lease_path = vec![
+                "gpu".to_owned(),
+                gpu.lease.gpu_id.clone(),
+                "lease".to_owned(),
+            ];
+            let lease_bytes = gpu_lease_entry_bytes(&gpu.lease, GPU_LEASE_STATE_RELEASED)?;
+            self.namespace
+                .write_append(&lease_path, u64::MAX, &lease_bytes)?;
             let status = status_entry(worker_id, "LEASE-ENDED", reason);
             let mut status_bytes = status.into_bytes();
             status_bytes.push(b'\n');

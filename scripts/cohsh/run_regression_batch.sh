@@ -251,6 +251,7 @@ run_batch() {
         --cas-manifest-template "$PROJECT_ROOT/out/cas_manifest_template.json" \
         --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \
         --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md" \
+        --gpu-breadcrumbs-snippet "$PROJECT_ROOT/docs/snippets/gpu_breadcrumbs.md" \
         --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
         --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md" \
         --ticket-quotas-snippet "$PROJECT_ROOT/docs/snippets/ticket_quotas.md" \
@@ -357,6 +358,7 @@ cargo run -p coh-rtc -- \
     --cas-manifest-template "$PROJECT_ROOT/out/cas_manifest_template.json" \
     --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \
     --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md" \
+    --gpu-breadcrumbs-snippet "$PROJECT_ROOT/docs/snippets/gpu_breadcrumbs.md" \
     --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
     --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md" \
     --ticket-quotas-snippet "$PROJECT_ROOT/docs/snippets/ticket_quotas.md" \

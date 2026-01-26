@@ -118,6 +118,46 @@ fn render_policy_toml(manifest: &Manifest, manifest_hash: &str) -> String {
     )
     .ok();
     writeln!(contents).ok();
+    writeln!(contents, "[coh.run.lease]").ok();
+    writeln!(
+        contents,
+        "schema = \"{}\"",
+        manifest.client_policies.coh.run.lease.schema
+    )
+    .ok();
+    writeln!(
+        contents,
+        "active_state = \"{}\"",
+        manifest.client_policies.coh.run.lease.active_state
+    )
+    .ok();
+    writeln!(
+        contents,
+        "max_bytes = {}",
+        manifest.client_policies.coh.run.lease.max_bytes
+    )
+    .ok();
+    writeln!(contents).ok();
+    writeln!(contents, "[coh.run.breadcrumb]").ok();
+    writeln!(
+        contents,
+        "schema = \"{}\"",
+        manifest.client_policies.coh.run.breadcrumb.schema
+    )
+    .ok();
+    writeln!(
+        contents,
+        "max_line_bytes = {}",
+        manifest.client_policies.coh.run.breadcrumb.max_line_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "max_command_bytes = {}",
+        manifest.client_policies.coh.run.breadcrumb.max_command_bytes
+    )
+    .ok();
+    writeln!(contents).ok();
     writeln!(contents, "[retry]").ok();
     writeln!(
         contents,
@@ -202,6 +242,42 @@ fn render_policy_doc(manifest: &Manifest, manifest_hash: &str, policy_hash: &str
     .ok();
     writeln!(
         contents,
+        "- `coh.run.lease.schema`: `{}`",
+        manifest.client_policies.coh.run.lease.schema
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.run.lease.active_state`: `{}`",
+        manifest.client_policies.coh.run.lease.active_state
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.run.lease.max_bytes`: `{}`",
+        manifest.client_policies.coh.run.lease.max_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.run.breadcrumb.schema`: `{}`",
+        manifest.client_policies.coh.run.breadcrumb.schema
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.run.breadcrumb.max_line_bytes`: `{}`",
+        manifest.client_policies.coh.run.breadcrumb.max_line_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.run.breadcrumb.max_command_bytes`: `{}`",
+        manifest.client_policies.coh.run.breadcrumb.max_command_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
         "- `retry.max_attempts`: `{}`",
         manifest.client_policies.retry.max_attempts
     )
@@ -279,6 +355,43 @@ fn render_policy_rust(manifest: &Manifest, manifest_hash: &str, policy_hash: &st
         contents,
         "pub const COH_TELEMETRY_MAX_TOTAL_BYTES_PER_DEVICE: u32 = {};",
         manifest.client_policies.coh.telemetry.max_total_bytes_per_device
+    )
+    .ok();
+    writeln!(contents).ok();
+    writeln!(
+        contents,
+        "pub const COH_RUN_LEASE_SCHEMA: &str = \"{}\";",
+        manifest.client_policies.coh.run.lease.schema
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_RUN_LEASE_ACTIVE_STATE: &str = \"{}\";",
+        manifest.client_policies.coh.run.lease.active_state
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_RUN_LEASE_MAX_BYTES: u32 = {};",
+        manifest.client_policies.coh.run.lease.max_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_RUN_BREADCRUMB_SCHEMA: &str = \"{}\";",
+        manifest.client_policies.coh.run.breadcrumb.schema
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_RUN_BREADCRUMB_MAX_LINE_BYTES: u32 = {};",
+        manifest.client_policies.coh.run.breadcrumb.max_line_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_RUN_BREADCRUMB_MAX_COMMAND_BYTES: u32 = {};",
+        manifest.client_policies.coh.run.breadcrumb.max_command_bytes
     )
     .ok();
     writeln!(contents).ok();

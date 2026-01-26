@@ -5,7 +5,10 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{Context, Result};
-use coh::policy::{CohMountPolicy, CohPolicy, CohRetryPolicy, CohTelemetryPolicy};
+use coh::policy::{
+    CohBreadcrumbPolicy, CohLeasePolicy, CohMountPolicy, CohPolicy, CohRetryPolicy, CohRunPolicy,
+    CohTelemetryPolicy,
+};
 use coh::telemetry::pull;
 use coh::CohAudit;
 use cohsh::client::{CohClient, InProcessTransport};
@@ -26,6 +29,18 @@ fn base_policy() -> CohPolicy {
             max_segments_per_device: 4,
             max_bytes_per_segment: 64 * 1024,
             max_total_bytes_per_device: 256 * 1024,
+        },
+        run: CohRunPolicy {
+            lease: CohLeasePolicy {
+                schema: "gpu-lease/v1".to_owned(),
+                active_state: "ACTIVE".to_owned(),
+                max_bytes: 256,
+            },
+            breadcrumb: CohBreadcrumbPolicy {
+                schema: "gpu-breadcrumb/v1".to_owned(),
+                max_line_bytes: 256,
+                max_command_bytes: 128,
+            },
         },
         retry: CohRetryPolicy {
             max_attempts: 1,

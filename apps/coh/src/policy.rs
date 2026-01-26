@@ -23,6 +23,8 @@ pub struct CohPolicy {
     pub mount: CohMountPolicy,
     /// Telemetry pull bounds and paths.
     pub telemetry: CohTelemetryPolicy,
+    /// Runtime wrapper policy for coh run.
+    pub run: CohRunPolicy,
     /// Retry scheduling policy for transports.
     pub retry: CohRetryPolicy,
 }
@@ -58,6 +60,18 @@ impl CohPolicy {
                 max_bytes_per_segment: generated::COH_TELEMETRY_MAX_BYTES_PER_SEGMENT,
                 max_total_bytes_per_device: generated::COH_TELEMETRY_MAX_TOTAL_BYTES_PER_DEVICE,
             },
+            run: CohRunPolicy {
+                lease: CohLeasePolicy {
+                    schema: generated::COH_RUN_LEASE_SCHEMA.to_owned(),
+                    active_state: generated::COH_RUN_LEASE_ACTIVE_STATE.to_owned(),
+                    max_bytes: generated::COH_RUN_LEASE_MAX_BYTES,
+                },
+                breadcrumb: CohBreadcrumbPolicy {
+                    schema: generated::COH_RUN_BREADCRUMB_SCHEMA.to_owned(),
+                    max_line_bytes: generated::COH_RUN_BREADCRUMB_MAX_LINE_BYTES,
+                    max_command_bytes: generated::COH_RUN_BREADCRUMB_MAX_COMMAND_BYTES,
+                },
+            },
             retry: CohRetryPolicy {
                 max_attempts: generated::COH_RETRY_MAX_ATTEMPTS,
                 backoff_ms: generated::COH_RETRY_BACKOFF_MS,
@@ -92,6 +106,37 @@ pub struct CohTelemetryPolicy {
     pub max_total_bytes_per_device: u32,
 }
 
+/// Runtime wrapper policy for coh run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CohRunPolicy {
+    /// Lease validation defaults.
+    pub lease: CohLeasePolicy,
+    /// Breadcrumb emission limits.
+    pub breadcrumb: CohBreadcrumbPolicy,
+}
+
+/// Lease validation settings for coh run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CohLeasePolicy {
+    /// Lease schema identifier.
+    pub schema: String,
+    /// Active state string required in lease entries.
+    pub active_state: String,
+    /// Maximum bytes read from the lease file.
+    pub max_bytes: u32,
+}
+
+/// Breadcrumb emission settings for coh run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CohBreadcrumbPolicy {
+    /// Breadcrumb schema identifier.
+    pub schema: String,
+    /// Maximum bytes per breadcrumb line.
+    pub max_line_bytes: u32,
+    /// Maximum bytes of the command string.
+    pub max_command_bytes: u32,
+}
+
 /// Retry policy for transport operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CohRetryPolicy {
@@ -124,6 +169,7 @@ struct PolicyMeta {
 struct CohTomlSection {
     mount: MountTomlSection,
     telemetry: TelemetryTomlSection,
+    run: RunTomlSection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,6 +187,29 @@ struct TelemetryTomlSection {
     max_segments_per_device: u32,
     max_bytes_per_segment: u32,
     max_total_bytes_per_device: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunTomlSection {
+    lease: LeaseTomlSection,
+    breadcrumb: BreadcrumbTomlSection,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LeaseTomlSection {
+    schema: String,
+    active_state: String,
+    max_bytes: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BreadcrumbTomlSection {
+    schema: String,
+    max_line_bytes: u32,
+    max_command_bytes: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -209,6 +278,18 @@ pub fn load_policy(path: &Path) -> Result<CohPolicy> {
             max_bytes_per_segment: parsed.coh.telemetry.max_bytes_per_segment,
             max_total_bytes_per_device: parsed.coh.telemetry.max_total_bytes_per_device,
         },
+        run: CohRunPolicy {
+            lease: CohLeasePolicy {
+                schema: parsed.coh.run.lease.schema,
+                active_state: parsed.coh.run.lease.active_state,
+                max_bytes: parsed.coh.run.lease.max_bytes,
+            },
+            breadcrumb: CohBreadcrumbPolicy {
+                schema: parsed.coh.run.breadcrumb.schema,
+                max_line_bytes: parsed.coh.run.breadcrumb.max_line_bytes,
+                max_command_bytes: parsed.coh.run.breadcrumb.max_command_bytes,
+            },
+        },
         retry: CohRetryPolicy {
             max_attempts: parsed.retry.max_attempts,
             backoff_ms: parsed.retry.backoff_ms,
@@ -245,6 +326,35 @@ fn validate_policy(policy: &CohPolicy) -> Result<()> {
     if policy.telemetry.max_total_bytes_per_device == 0 {
         return Err(anyhow!(
             "coh.telemetry.max_total_bytes_per_device must be >= 1"
+        ));
+    }
+    if policy.run.lease.schema.trim().is_empty() {
+        return Err(anyhow!("coh.run.lease.schema must not be empty"));
+    }
+    if policy.run.lease.active_state.trim().is_empty() {
+        return Err(anyhow!("coh.run.lease.active_state must not be empty"));
+    }
+    if policy.run.lease.max_bytes == 0 {
+        return Err(anyhow!("coh.run.lease.max_bytes must be >= 1"));
+    }
+    if policy.run.breadcrumb.schema.trim().is_empty() {
+        return Err(anyhow!("coh.run.breadcrumb.schema must not be empty"));
+    }
+    if policy.run.breadcrumb.max_line_bytes == 0 {
+        return Err(anyhow!(
+            "coh.run.breadcrumb.max_line_bytes must be >= 1"
+        ));
+    }
+    if policy.run.breadcrumb.max_command_bytes == 0 {
+        return Err(anyhow!(
+            "coh.run.breadcrumb.max_command_bytes must be >= 1"
+        ));
+    }
+    if policy.run.breadcrumb.max_command_bytes > policy.run.breadcrumb.max_line_bytes {
+        return Err(anyhow!(
+            "coh.run.breadcrumb.max_command_bytes {} exceeds max_line_bytes {}",
+            policy.run.breadcrumb.max_command_bytes,
+            policy.run.breadcrumb.max_line_bytes
         ));
     }
     if policy.retry.max_attempts == 0 {

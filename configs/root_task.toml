@@ -168,6 +168,16 @@ max_segments_per_device = 4
 max_bytes_per_segment = 32768
 max_total_bytes_per_device = 131072
 
+[client_policies.coh.run.lease]
+schema = "gpu-lease/v1"
+active_state = "ACTIVE"
+max_bytes = 1024
+
+[client_policies.coh.run.breadcrumb]
+schema = "gpu-breadcrumb/v1"
+max_line_bytes = 512
+max_command_bytes = 256
+
 [client_policies.retry]
 max_attempts = 3
 backoff_ms = 200

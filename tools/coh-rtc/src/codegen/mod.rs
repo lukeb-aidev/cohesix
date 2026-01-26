@@ -29,6 +29,7 @@ pub struct GeneratedArtifacts {
     pub cas_manifest_template_hash: PathBuf,
     pub cli_script: PathBuf,
     pub doc_snippet: PathBuf,
+    pub gpu_breadcrumbs_snippet: PathBuf,
     pub observability_interfaces_snippet: PathBuf,
     pub observability_security_snippet: PathBuf,
     pub ticket_quotas_snippet: PathBuf,
@@ -57,13 +58,14 @@ pub struct GeneratedArtifacts {
 impl GeneratedArtifacts {
     pub fn summary(&self) -> String {
         format!(
-            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, obs_interfaces={}, obs_security={}, ticket_quotas={}, trace_policy={}, cas_interfaces={}, cas_security={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_client_rust={}, cohsh_client_doc={}, cohsh_grammar={}, cohsh_ticket_policy={}, coh_policy={}, coh_hash={}, coh_rust={}, coh_doc={}, swarmui_defaults={}, swarmui_hash={}, swarmui_rust={}, swarmui_doc={}",
+            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, gpu_breadcrumbs={}, obs_interfaces={}, obs_security={}, ticket_quotas={}, trace_policy={}, cas_interfaces={}, cas_security={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_client_rust={}, cohsh_client_doc={}, cohsh_grammar={}, cohsh_ticket_policy={}, coh_policy={}, coh_hash={}, coh_rust={}, coh_doc={}, swarmui_defaults={}, swarmui_hash={}, swarmui_rust={}, swarmui_doc={}",
             self.rust_dir.display(),
             self.manifest_json.display(),
             self.cas_manifest_template.display(),
             self.cas_manifest_template_hash.display(),
             self.cli_script.display(),
             self.doc_snippet.display(),
+            self.gpu_breadcrumbs_snippet.display(),
             self.observability_interfaces_snippet.display(),
             self.observability_security_snippet.display(),
             self.ticket_quotas_snippet.display(),
@@ -113,6 +115,10 @@ pub fn emit_all(
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     if let Some(parent) = options.doc_snippet_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.gpu_breadcrumbs_snippet_out.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
@@ -203,6 +209,7 @@ pub fn emit_all(
     let cas_artifacts = cas::emit_cas_template(&cas_template, &options.cas_manifest_template_out)?;
     cli::emit_cli_script(manifest, &options.cli_script_out)?;
     docs::emit_doc_snippet(manifest_hash, docs, &options.doc_snippet_out)?;
+    docs::emit_gpu_breadcrumbs_snippet(docs, &options.gpu_breadcrumbs_snippet_out)?;
     docs::emit_observability_interfaces_snippet(docs, &options.observability_interfaces_snippet_out)?;
     docs::emit_observability_security_snippet(docs, &options.observability_security_snippet_out)?;
     docs::emit_ticket_quotas_snippet(docs, &options.ticket_quotas_snippet_out)?;
@@ -273,6 +280,7 @@ pub fn emit_all(
         cas_manifest_template_hash: cas_artifacts.template_hash,
         cli_script: options.cli_script_out.clone(),
         doc_snippet: options.doc_snippet_out.clone(),
+        gpu_breadcrumbs_snippet: options.gpu_breadcrumbs_snippet_out.clone(),
         observability_interfaces_snippet: options.observability_interfaces_snippet_out.clone(),
         observability_security_snippet: options.observability_security_snippet_out.clone(),
         ticket_quotas_snippet: options.ticket_quotas_snippet_out.clone(),

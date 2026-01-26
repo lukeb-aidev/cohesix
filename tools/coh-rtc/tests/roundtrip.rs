@@ -26,6 +26,7 @@ fn manifest_codegen_is_deterministic() {
     let cas_manifest_template = temp_dir.path().join("cas_manifest_template.json");
     let cli_script = temp_dir.path().join("boot_v0.coh");
     let doc_snippet = temp_dir.path().join("snippet.md");
+    let gpu_breadcrumbs_snippet = temp_dir.path().join("gpu_breadcrumbs.md");
     let observability_interfaces_snippet = temp_dir.path().join("observability_interfaces.md");
     let observability_security_snippet = temp_dir.path().join("observability_security.md");
     let ticket_quotas_snippet = temp_dir.path().join("ticket_quotas.md");
@@ -53,6 +54,7 @@ fn manifest_codegen_is_deterministic() {
         cas_manifest_template_out: cas_manifest_template.clone(),
         cli_script_out: cli_script.clone(),
         doc_snippet_out: doc_snippet.clone(),
+        gpu_breadcrumbs_snippet_out: gpu_breadcrumbs_snippet.clone(),
         observability_interfaces_snippet_out: observability_interfaces_snippet.clone(),
         observability_security_snippet_out: observability_security_snippet.clone(),
         ticket_quotas_snippet_out: ticket_quotas_snippet.clone(),
@@ -214,6 +216,7 @@ secret = "bootstrap"
         cas_manifest_template_out: temp_dir.path().join("cas_manifest_template.json"),
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
+        gpu_breadcrumbs_snippet_out: temp_dir.path().join("gpu_breadcrumbs.md"),
         observability_interfaces_snippet_out: temp_dir
             .path()
             .join("observability_interfaces.md"),
@@ -309,6 +312,7 @@ secret = "bootstrap"
         cas_manifest_template_out: temp_dir.path().join("cas_manifest_template.json"),
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
+        gpu_breadcrumbs_snippet_out: temp_dir.path().join("gpu_breadcrumbs.md"),
         observability_interfaces_snippet_out: temp_dir
             .path()
             .join("observability_interfaces.md"),
@@ -389,6 +393,7 @@ secret = "bootstrap"
         cas_manifest_template_out: temp_dir.path().join("cas_manifest_template.json"),
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
+        gpu_breadcrumbs_snippet_out: temp_dir.path().join("gpu_breadcrumbs.md"),
         observability_interfaces_snippet_out: temp_dir
             .path()
             .join("observability_interfaces.md"),
@@ -476,6 +481,7 @@ secret = "bootstrap"
         cas_manifest_template_out: temp_dir.path().join("cas_manifest_template.json"),
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
+        gpu_breadcrumbs_snippet_out: temp_dir.path().join("gpu_breadcrumbs.md"),
         observability_interfaces_snippet_out: temp_dir
             .path()
             .join("observability_interfaces.md"),
@@ -558,6 +564,7 @@ secret = "bootstrap"
         cas_manifest_template_out: temp_dir.path().join("cas_manifest_template.json"),
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
+        gpu_breadcrumbs_snippet_out: temp_dir.path().join("gpu_breadcrumbs.md"),
         observability_interfaces_snippet_out: temp_dir
             .path()
             .join("observability_interfaces.md"),

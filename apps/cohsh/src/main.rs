@@ -26,6 +26,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Parser, ValueEnum};
 use cohesix_ticket::Role;
 use env_logger::Env;
+use gpu_bridge_host::auto_bridge;
 use log::LevelFilter;
 use nine_door::NineDoor;
 
@@ -147,6 +148,10 @@ struct Cli {
         arg(long, value_enum, default_value_t = TransportKind::Mock)
     )]
     transport: TransportKind,
+
+    /// Seed the mock transport with GPU namespaces.
+    #[arg(long, default_value_t = false)]
+    mock_seed_gpu: bool,
 
     /// Path to the QEMU binary when using the qemu transport.
     #[arg(long, default_value = "qemu-system-aarch64")]
@@ -278,6 +283,18 @@ fn resolve_ticket_secret(cli_secret: Option<String>) -> Result<Option<String>> {
     }
 }
 
+fn build_mock_server(seed_gpu: bool) -> Result<NineDoor> {
+    let server = NineDoor::new();
+    if seed_gpu {
+        let bridge = auto_bridge(true)?;
+        let snapshot = bridge.serialise_namespace()?;
+        server
+            .install_gpu_nodes(&snapshot)
+            .context("install mock gpu namespaces")?;
+    }
+    Ok(server)
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     init_logging(cli.verbose);
@@ -382,7 +399,7 @@ fn main() -> Result<()> {
 
     let (transport, pool_factory): (Box<dyn Transport>, Option<Arc<dyn TransportFactory>>) =
         if trace_enabled {
-            let server = NineDoor::new();
+            let server = build_mock_server(cli.mock_seed_gpu)?;
             if cli.record_trace.is_some() {
                 let builder = TraceLogBuilder::shared(trace_policy);
                 trace_builder = Some(Rc::clone(&builder));
@@ -427,7 +444,7 @@ fn main() -> Result<()> {
         } else {
             match cli.transport {
                 TransportKind::Mock => {
-                    let server = nine_door::NineDoor::new();
+                    let server = build_mock_server(cli.mock_seed_gpu)?;
                     let pool_server = server.clone();
                     let factory = Arc::new(move || {
                         Ok(Box::new(NineDoorTransport::new(pool_server.clone()))

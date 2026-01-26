@@ -3484,8 +3484,8 @@ Provide a `coh run` wrapper that validates leases, runs a user command, and reco
 
 **Commands**
 - `cargo test -p coh --features mock --test run`
-- `cargo run -p coh --features mock -- gpu lease --mock --gpu GPU-0 --mem-mb 4096 --ttl-s 60`
-- `cargo run -p coh --features mock -- run --mock --gpu GPU-0 -- echo ok`
+- `cargo test -p coh --features mock --test transcript`
+- `cargo run -p cohsh -- --transport mock --mock-seed-gpu --script scripts/cohsh/run_demo.coh`
 
 **Checks (DoD)**
 - Demo script proves "lease -> run -> observe -> release" in under two minutes using `--mock`.

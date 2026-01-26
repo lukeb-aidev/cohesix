@@ -12,7 +12,8 @@ use coh_rtc::{
     default_cohsh_policy_doc_path, default_cohsh_policy_path, default_cohsh_policy_rust_path,
     default_cohsh_ticket_policy_doc_path,
     default_coh_policy_doc_path, default_coh_policy_path, default_coh_policy_rust_path,
-    default_doc_snippet_path, default_observability_interfaces_snippet_path,
+    default_doc_snippet_path, default_gpu_breadcrumbs_snippet_path,
+    default_observability_interfaces_snippet_path,
     default_observability_security_snippet_path, default_ticket_quotas_snippet_path,
     default_trace_policy_snippet_path,
     CompileOptions,
@@ -41,6 +42,9 @@ struct Args {
     /// Output path for the manifest schema snippet.
     #[arg(long, default_value_os_t = default_doc_snippet_path())]
     doc_snippet: PathBuf,
+    /// Output path for the GPU breadcrumb schema snippet.
+    #[arg(long, default_value_os_t = default_gpu_breadcrumbs_snippet_path())]
+    gpu_breadcrumbs_snippet: PathBuf,
     /// Output path for the observability interfaces snippet.
     #[arg(long, default_value_os_t = default_observability_interfaces_snippet_path())]
     observability_interfaces_snippet: PathBuf,
@@ -112,6 +116,7 @@ fn main() -> Result<()> {
         cas_manifest_template_out: args.cas_manifest_template,
         cli_script_out: args.cli_script,
         doc_snippet_out: args.doc_snippet,
+        gpu_breadcrumbs_snippet_out: args.gpu_breadcrumbs_snippet,
         observability_interfaces_snippet_out: args.observability_interfaces_snippet,
         observability_security_snippet_out: args.observability_security_snippet,
         ticket_quotas_snippet_out: args.ticket_quotas_snippet,

@@ -42,6 +42,8 @@ const MAX_TICKET_SCOPES: u16 = 16;
 const MAX_TICKET_SCOPE_PATH_LEN: usize = 255;
 const MAX_COH_ALLOWLIST: usize = 16;
 const MAX_COH_TELEMETRY_DEVICES: u32 = 256;
+const MAX_COH_SCHEMA_LEN: usize = 64;
+const MAX_COH_LEASE_STATE_LEN: usize = 16;
 const MAX_LIFECYCLE_AUTO_TRANSITIONS: usize = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1132,6 +1134,66 @@ impl Manifest {
                 self.telemetry_ingest.max_total_bytes_per_device
             );
         }
+        let run = &self.client_policies.coh.run;
+        let lease = &run.lease;
+        if lease.schema.trim().is_empty() {
+            bail!("client_policies.coh.run.lease.schema must not be empty");
+        }
+        if lease.schema.len() > MAX_COH_SCHEMA_LEN {
+            bail!(
+                "client_policies.coh.run.lease.schema exceeds max len {}",
+                MAX_COH_SCHEMA_LEN
+            );
+        }
+        if lease.active_state.trim().is_empty() {
+            bail!("client_policies.coh.run.lease.active_state must not be empty");
+        }
+        if lease.active_state.len() > MAX_COH_LEASE_STATE_LEN {
+            bail!(
+                "client_policies.coh.run.lease.active_state exceeds max len {}",
+                MAX_COH_LEASE_STATE_LEN
+            );
+        }
+        if lease.max_bytes == 0 {
+            bail!("client_policies.coh.run.lease.max_bytes must be >= 1");
+        }
+        if lease.max_bytes > self.secure9p.msize {
+            bail!(
+                "client_policies.coh.run.lease.max_bytes {} exceeds secure9p.msize {}",
+                lease.max_bytes,
+                self.secure9p.msize
+            );
+        }
+        let breadcrumb = &run.breadcrumb;
+        if breadcrumb.schema.trim().is_empty() {
+            bail!("client_policies.coh.run.breadcrumb.schema must not be empty");
+        }
+        if breadcrumb.schema.len() > MAX_COH_SCHEMA_LEN {
+            bail!(
+                "client_policies.coh.run.breadcrumb.schema exceeds max len {}",
+                MAX_COH_SCHEMA_LEN
+            );
+        }
+        if breadcrumb.max_line_bytes == 0 {
+            bail!("client_policies.coh.run.breadcrumb.max_line_bytes must be >= 1");
+        }
+        if breadcrumb.max_line_bytes > self.secure9p.msize {
+            bail!(
+                "client_policies.coh.run.breadcrumb.max_line_bytes {} exceeds secure9p.msize {}",
+                breadcrumb.max_line_bytes,
+                self.secure9p.msize
+            );
+        }
+        if breadcrumb.max_command_bytes == 0 {
+            bail!("client_policies.coh.run.breadcrumb.max_command_bytes must be >= 1");
+        }
+        if breadcrumb.max_command_bytes > breadcrumb.max_line_bytes {
+            bail!(
+                "client_policies.coh.run.breadcrumb.max_command_bytes {} exceeds max_line_bytes {}",
+                breadcrumb.max_command_bytes,
+                breadcrumb.max_line_bytes
+            );
+        }
         Ok(())
     }
 
@@ -1954,6 +2016,7 @@ impl Default for ClientPolicies {
 pub struct CohClientPolicy {
     pub mount: CohMountPolicy,
     pub telemetry: CohTelemetryPolicy,
+    pub run: CohRunPolicy,
 }
 
 impl Default for CohClientPolicy {
@@ -1961,6 +2024,7 @@ impl Default for CohClientPolicy {
         Self {
             mount: CohMountPolicy::default(),
             telemetry: CohTelemetryPolicy::default(),
+            run: CohRunPolicy::default(),
         }
     }
 }
@@ -1999,6 +2063,58 @@ impl Default for CohTelemetryPolicy {
             max_segments_per_device: 4,
             max_bytes_per_segment: 32 * 1024,
             max_total_bytes_per_device: 128 * 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct CohRunPolicy {
+    pub lease: CohLeasePolicy,
+    pub breadcrumb: CohBreadcrumbPolicy,
+}
+
+impl Default for CohRunPolicy {
+    fn default() -> Self {
+        Self {
+            lease: CohLeasePolicy::default(),
+            breadcrumb: CohBreadcrumbPolicy::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CohLeasePolicy {
+    pub schema: String,
+    pub active_state: String,
+    pub max_bytes: u32,
+}
+
+impl Default for CohLeasePolicy {
+    fn default() -> Self {
+        Self {
+            schema: default_coh_lease_schema(),
+            active_state: default_coh_lease_active_state(),
+            max_bytes: 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CohBreadcrumbPolicy {
+    pub schema: String,
+    pub max_line_bytes: u32,
+    pub max_command_bytes: u32,
+}
+
+impl Default for CohBreadcrumbPolicy {
+    fn default() -> Self {
+        Self {
+            schema: default_coh_breadcrumb_schema(),
+            max_line_bytes: 512,
+            max_command_bytes: 256,
         }
     }
 }
@@ -2432,6 +2548,18 @@ fn default_coh_allowlist() -> Vec<String> {
         "/gpu".to_owned(),
         "/host".to_owned(),
     ]
+}
+
+fn default_coh_lease_schema() -> String {
+    "gpu-lease/v1".to_owned()
+}
+
+fn default_coh_lease_active_state() -> String {
+    "ACTIVE".to_owned()
+}
+
+fn default_coh_breadcrumb_schema() -> String {
+    "gpu-breadcrumb/v1".to_owned()
 }
 
 fn default_bus_mount() -> String {

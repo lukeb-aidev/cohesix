@@ -17,6 +17,7 @@ pub struct CompileOptions {
     pub cas_manifest_template_out: PathBuf,
     pub cli_script_out: PathBuf,
     pub doc_snippet_out: PathBuf,
+    pub gpu_breadcrumbs_snippet_out: PathBuf,
     pub observability_interfaces_snippet_out: PathBuf,
     pub observability_security_snippet_out: PathBuf,
     pub ticket_quotas_snippet_out: PathBuf,
@@ -61,6 +62,12 @@ pub fn compile(options: &CompileOptions) -> Result<codegen::GeneratedArtifacts> 
 
 pub fn default_doc_snippet_path() -> PathBuf {
     Path::new("docs").join("snippets").join("root_task_manifest.md")
+}
+
+pub fn default_gpu_breadcrumbs_snippet_path() -> PathBuf {
+    Path::new("docs")
+        .join("snippets")
+        .join("gpu_breadcrumbs.md")
 }
 
 pub fn default_cli_script_path() -> PathBuf {

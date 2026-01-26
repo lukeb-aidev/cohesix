@@ -55,6 +55,8 @@ pub struct GpuNamespace {
     pub info: GpuInfo,
     /// Initial control buffer contents.
     pub ctl_seed: String,
+    /// Initial lease buffer contents.
+    pub lease_seed: String,
     /// Initial status stream contents.
     pub status_seed: String,
 }
@@ -70,6 +72,12 @@ impl GpuNamespace {
     #[must_use]
     pub fn ctl_payload(&self) -> &str {
         &self.ctl_seed
+    }
+
+    /// Retrieve the initial lease payload.
+    #[must_use]
+    pub fn lease_payload(&self) -> &str {
+        &self.lease_seed
     }
 
     /// Retrieve the initial status payload.
@@ -370,6 +378,7 @@ impl GpuBridge {
             .into_iter()
             .map(|info| GpuNamespace {
                 ctl_seed: format!("LEASE {}\n", info.id),
+                lease_seed: String::new(),
                 status_seed: String::new(),
                 info,
             })
@@ -385,11 +394,13 @@ impl GpuBridge {
             .map(|namespace| {
                 let info_payload = namespace.info.to_info_payload();
                 let ctl_payload = namespace.ctl_seed;
+                let lease_payload = namespace.lease_seed;
                 let status_payload = namespace.status_seed;
                 Ok(SerialisedGpuNode {
                     id: namespace.info.id,
                     info_payload,
                     ctl_payload,
+                    lease_payload,
                     status_payload,
                 })
             })
@@ -453,6 +464,8 @@ pub struct SerialisedGpuNode {
     pub info_payload: String,
     /// Contents for `/gpu/<id>/ctl`.
     pub ctl_payload: String,
+    /// Contents for `/gpu/<id>/lease`.
+    pub lease_payload: String,
     /// Contents for `/gpu/<id>/status`.
     pub status_payload: String,
 }
@@ -488,6 +501,10 @@ pub fn namespace_to_json_pretty(snapshot: &GpuNamespaceSnapshot) -> String {
         out.push_str(&format!(
             "      \"ctl_payload\": \"{}\",\n",
             escape_json_string(&node.ctl_payload)
+        ));
+        out.push_str(&format!(
+            "      \"lease_payload\": \"{}\",\n",
+            escape_json_string(&node.lease_payload)
         ));
         out.push_str(&format!(
             "      \"status_payload\": \"{}\"\n",
@@ -598,6 +615,7 @@ mod tests {
                 id: "GPU-0".into(),
                 info_payload: "{\"id\":\"GPU-0\"}".into(),
                 ctl_payload: "LEASE GPU-0".into(),
+                lease_payload: "".into(),
                 status_payload: "ready".into(),
             }],
             models: GpuModelCatalog {
@@ -616,6 +634,7 @@ mod tests {
         );
         assert!(json.contains("\"active\": \"foo\""));
         assert!(json.contains("\"ctl_payload\": \"LEASE GPU-0\""));
+        assert!(json.contains("\"lease_payload\": \"\""));
     }
 
     #[test]

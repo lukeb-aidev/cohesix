@@ -2015,6 +2015,7 @@ impl Namespace {
         gpu_id: &str,
         info: &[u8],
         ctl: &[u8],
+        lease: &[u8],
         status: &[u8],
     ) -> Result<(), NineDoorError> {
         let root = vec!["gpu".to_owned()];
@@ -2022,6 +2023,7 @@ impl Namespace {
         self.ensure_dir(&root, gpu_id)?;
         self.set_read_only_file(&base, "info", info)?;
         self.set_append_only_file(&base, "ctl", ctl)?;
+        self.set_append_only_file(&base, "lease", lease)?;
         self.set_append_only_file(&base, "status", status)?;
         self.set_append_only_file(&base, "job", b"")?;
         Ok(())
