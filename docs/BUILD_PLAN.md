@@ -3555,7 +3555,7 @@ Deliverables:
 Provide `coh peft` commands that export LoRA jobs, import adapters, and atomically activate or rollback models.
 
 **Deliverables**
-- `coh peft export` pulls `/queen/export/lora_jobs/<job_id>/` into a host directory with manifest and provenance.
+- `coh peft export` pulls `/queen/export/lora_jobs/<job_id>/` (telemetry.cbor, base_model.ref, policy.toml) into a host directory; any new manifest/provenance file must be introduced via `coh-rtc` and documented in `docs/GPU_NODES.md` and `docs/INTERFACES.md` in the same change.
 - `coh peft import` stages adapters into host storage and exposes them as `/gpu/models/available/<model_id>/manifest.toml` with hash/size/provenance checks.
 - `coh peft activate` swaps `/gpu/models/active` atomically; `coh peft rollback` reverts to the previous pointer with a documented recovery path.
 - No training in VM and no registry service; file-native only.
@@ -3579,7 +3579,7 @@ Provide `coh peft` commands that export LoRA jobs, import adapters, and atomical
 - CI runs mock-mode tests on x86_64.
 
 **Compiler touchpoints**
-- `coh-rtc` emits LoRA job manifest schema, adapter provenance fields, and pointer-swap limits for `coh peft`.
+- `coh-rtc` emits any LoRA job schema/provenance fields (if/when added) and pointer-swap limits for `coh peft`.
 - Generated snippets refresh `docs/INTERFACES.md` and `docs/GPU_NODES.md` to keep schema alignment.
 - Manifest gating enumerates the new export/model namespaces and their provider ownership.
 
@@ -3746,10 +3746,11 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
   - Root-task remains the first user process post-kernel boot; root-task is never executed as an EFI application.
 
 - **UEFI image builder**
-  - `scripts/make_uefi_image.py` builds a reproducible FAT ESP containing:
+  - Introduce `scripts/uefi/esp-build.sh` to build a reproducible FAT ESP containing:
     - `EFI/BOOT/BOOTAA64.EFI` (elfloader EFI)
     - `kernel.elf`
-    - `rootfs.cpio`
+    - `rootserver` (root task ELF)
+    - optional `initrd.cpio`
     - `manifest.json` and `manifest.sha256`
     - optional `dtb/` assets (platform-specific)
   - Deterministic file ordering and hashes; build logs captured as CI artifacts.
@@ -3770,16 +3771,16 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
   - Measurements, manifest fingerprints, and bring-up notes captured in `docs/HARDWARE_BRINGUP.md` and aligned with `docs/SECURITY.md`.
 
 - **Automation & bring-up**
-  - `scripts/qemu-run.sh --uefi` using EDK2 pflash and the EFI-built elfloader.
+  - Introduce `scripts/uefi/qemu-uefi.sh` using EDK2 pflash and the EFI-built elfloader.
   - Optional host-only TPM emulation (e.g., `swtpm`) for QEMU testing.
   - Lab checklist for the reference dev board.
 
 ---
 
 ### Commands
-- `cargo build -p elfloader --target aarch64-unknown-uefi`
-- `python scripts/make_uefi_image.py --manifest out/manifests/root_task_resolved.json`
-- `scripts/qemu-run.sh --uefi --console serial --tcp-port 31337`
+- `cmake --build seL4/build --target elfloader.efi`
+- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
+- `scripts/uefi/qemu-uefi.sh --console serial --tcp-port 31337`
 - Physical hardware checklist: capture `/proc/boot`, compare manifest hash to CI baseline.
 
 ---
@@ -3804,14 +3805,14 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 
 ### Title/ID: m25a-uefi-bootchain
 **Goal:** Boot via UEFI → elfloader.efi → seL4; load manifest from ESP; emit stable fingerprint lines.  
-**Inputs:** EFI-built elfloader, `scripts/make_uefi_image.py`, `scripts/qemu-run.sh`, `configs/root_task.toml` (`profile.name`).  
+**Inputs:** EFI-built elfloader, `scripts/uefi/esp-build.sh`, `scripts/uefi/qemu-uefi.sh`, `configs/root_task.toml` (`profile.name`).  
 **Changes:**
-- `scripts/make_uefi_image.py` — build ESP with `BOOTAA64.EFI` (elfloader), kernel, rootfs, manifest + hash; deterministic logs.
-- `scripts/qemu-run.sh` — `--uefi` path using EDK2 pflash; keep `virt` machine for parity.
+- `scripts/uefi/esp-build.sh` — build ESP with `BOOTAA64.EFI` (elfloader), kernel, rootserver, optional initrd, manifest + hash; deterministic logs.
+- `scripts/uefi/qemu-uefi.sh` — UEFI QEMU path using EDK2 pflash; keep `virt` machine for parity.
 - `apps/root-task` — print manifest fingerprint in the same serial ordering as VM baseline.
 **Commands:**
-- `cargo build -p elfloader --target aarch64-unknown-uefi`
-- `python scripts/make_uefi_image.py --manifest out/manifests/root_task_resolved.json`
+- `cmake --build seL4/build --target elfloader.efi`
+- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
 **Checks:**
 - QEMU `--uefi` serial output matches VM ordering; missing/invalid manifest aborts before any ticket material.
 **Deliverables:**
@@ -3827,7 +3828,7 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 - `/proc/boot` — append evidence summary (hashes/IDs only; no secrets).
 - Host docs/scripts for optional QEMU TPM emulation.
 **Commands:**
-- `scripts/qemu-run.sh --uefi --console serial --tcp-port 31337`
+- `scripts/uefi/qemu-uefi.sh --console serial --tcp-port 31337`
 - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh`
 **Checks:**
 - Attestation failure aborts boot deterministically with audit.
@@ -4051,7 +4052,7 @@ If the authority task cannot accept work:
   - Busy/back-pressure signaling
 - `apps/nine-door/`
   - Optional sharding of protocol handling
-- `apps/console/`
+- `apps/root-task/src/net/console_srv.rs` and `apps/root-task/src/serial/`
   - Transport isolation from authority logic
 - `docs/ARCHITECTURE.md`
   - SMP model and invariants
@@ -4346,13 +4347,13 @@ After Milestone 25d:
 **Why now (compiler):** Field techs need offline status on edge devices using the same 9P grammar. Tool must respect UEFI profile and attestation outputs.
 
 **Goal**
-Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection of boot/attest data over local (same-host) 9P/TCP where available.
+Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection of boot/attest data using the existing TCP console transport (or offline trace replay), without adding any in-VM 9P/TCP listener.
 
 **Non-Goals**
 - Repo-wide SPDX/NOTICE header sweeps (track separately; not required for the status tool).
 
 **Deliverables**
-- `coh-status` binary reading `/proc/boot`, `/proc/attest/*`, `/worker/*/telemetry` via localhost 9P/TCP; offline-friendly.
+- `coh-status` binary reading `/proc/boot`, `/proc/attest/*`, `/worker/*/telemetry` via the existing TCP console transport; offline-friendly.
 - TPM attestation check displaying manifest fingerprint and verifying against cached reference.
 - Shared CBOR parsing code with SwarmUI to preserve grammar.
 
@@ -4406,16 +4407,17 @@ Deliverables:
 [Milestones](#Milestones)
 
 **Why now (platform):**  
-Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is a single signed EFI binary.
+Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is the read-only ESP image (UEFI loader + kernel + rootserver + manifest).
 
 **Goal**  
-Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-task**, then bring up ENA networking in root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**.
+Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-task**, then bring up ENA networking in root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**. The root-task acts as a 9P client over the existing TCP stack; no new in-VM listeners are introduced beyond the console.
 
 **Deliverables**
 - EFI System Partition containing:
   - `EFI/BOOT/BOOTAA64.EFI` (elfloader EFI)
   - `kernel.elf`
-  - `rootfs.cpio`
+  - `rootserver` (root task ELF)
+  - optional `initrd.cpio`
   - `manifest.json` and `manifest.sha256`
   - embedded, signed fabric bootstrap manifest (≥2 endpoints, root trust anchors)
 - ENA driver (adminq + single TX/RX queue) in root-task.
@@ -4426,8 +4428,8 @@ Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-t
 - Documentation in `docs/AWS_AMI.md` covering boot path, failure modes, and recovery.
 
 **Commands**
-- `cargo build -p elfloader --target aarch64-unknown-uefi`
-- `python scripts/make_uefi_image.py --manifest out/manifests/root_task_resolved.json`
+- `cmake --build seL4/build --target elfloader.efi`
+- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
 - `scripts/aws/build-esp.sh`
 - `scripts/aws/register-ami.sh`
 - `scripts/aws/launch-smoke.sh`
@@ -4451,13 +4453,13 @@ Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-t
 ```
 Title/ID: m27-uefi-esp
 Goal: Build an EFI System Partition for AWS Arm64 using elfloader + seL4 artifacts.
-Inputs: upstream elfloader EFI build, `scripts/make_uefi_image.py`, manifest outputs.
+Inputs: upstream elfloader EFI build, `scripts/uefi/esp-build.sh`, manifest outputs.
 Changes:
-- `scripts/make_uefi_image.py` — build ESP with BOOTAA64.EFI, kernel, rootfs, manifest + hash.
+- `scripts/uefi/esp-build.sh` — build ESP with BOOTAA64.EFI, kernel, rootserver, optional initrd, manifest + hash.
 - `scripts/aws/build-esp.sh` — produce AMI-ready ESP image.
 Commands:
-- cargo build -p elfloader --target aarch64-unknown-uefi
-- python scripts/make_uefi_image.py --manifest out/manifests/root_task_resolved.json
+- cmake --build seL4/build --target elfloader.efi
+- scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json
 Checks:
 - ESP boots to root-task via elfloader with deterministic serial output.
 Deliverables:
@@ -4465,13 +4467,13 @@ Deliverables:
 
 Title/ID: m27-ena-adminq
 Goal: Implement ENA PCIe discovery and admin queue in root-task.
-Inputs: crates/net-ena/, root-task net integration.
+Inputs: apps/root-task drivers, HAL PCI helpers, docs/AWS_AMI.md.
 Changes:
-- crates/net-ena/src/pci.rs — PCIe enumeration, BAR mapping.
-- crates/net-ena/src/adminq.rs — admin queue + completion queue.
+- apps/root-task/src/drivers/ena/pci.rs — PCIe enumeration, BAR mapping.
+- apps/root-task/src/drivers/ena/adminq.rs — admin queue + completion queue.
 - apps/root-task/src/net/ena.rs — ENA init wiring.
 Commands:
-- cargo test -p net-ena --test adminq
+- cargo test -p root-task --test ena_adminq
 Checks:
 - Feature negotiation succeeds with minimal feature set.
 Deliverables:
@@ -4479,13 +4481,13 @@ Deliverables:
 
 Title/ID: m27-ena-io
 Goal: Bring up minimal ENA dataplane.
-Inputs: crates/net-ena/, root-task net stack abstractions.
+Inputs: apps/root-task drivers, root-task net stack abstractions.
 Changes:
-- crates/net-ena/src/ioq.rs — single TX/RX SQ + CQ.
-- crates/net-ena/src/poll.rs — polling dataplane (no interrupts).
+- apps/root-task/src/drivers/ena/ioq.rs — single TX/RX SQ + CQ.
+- apps/root-task/src/drivers/ena/poll.rs — polling dataplane (no interrupts).
 - apps/root-task/src/net/mod.rs — integrate ENA dataplane into the runtime.
 Commands:
-- cargo test -p net-ena --test ioq
+- cargo test -p root-task --test ena_ioq
 Checks:
 - TX reclaim and RX refill invariants hold under sustained traffic.
 Deliverables:
@@ -4493,14 +4495,14 @@ Deliverables:
 
 Title/ID: m27-net-bootstrap
 Goal: Network bootstrap to fabric (post-seL4, in root-task).
-Inputs: crates/net/, crates/crypto/, apps/root-task.
+Inputs: apps/root-task net stack, TLS helpers, docs/AWS_AMI.md.
 Changes:
-- crates/net/src/dhcp.rs — bounded DHCP client.
-- crates/net/src/tcp.rs — TCP bring-up for long-lived sessions.
-- crates/crypto/src/tls.rs — fabric-auth TLS handshake.
+- apps/root-task/src/net/dhcp.rs — bounded DHCP client.
+- apps/root-task/src/net/tcp.rs — TCP bring-up for long-lived sessions.
+- apps/root-task/src/net/tls.rs — fabric-auth TLS handshake.
 - apps/root-task/src/net/bootstrap.rs — deterministic sequencing and retries.
 Commands:
-- cargo test -p net --tests
+- cargo test -p root-task --test net_bootstrap
 Checks:
 - Network reaches "fabric-ready" state within defined bounds.
 Deliverables:
@@ -4508,13 +4510,13 @@ Deliverables:
 
 Title/ID: m27-imdsv2-bootstrap
 Goal: Read bounded instance metadata (IMDSv2) and feed boot policy inputs.
-Inputs: crates/net/, apps/root-task, docs/AWS_AMI.md.
+Inputs: apps/root-task net stack, docs/AWS_AMI.md.
 Changes:
-- crates/net/src/http.rs — minimal HTTP request/response parsing (bounded, no chunked).
+- apps/root-task/src/net/http.rs — minimal HTTP request/response parsing (bounded, no chunked).
 - apps/root-task/src/net/imdsv2.rs — token fetch + allowlisted metadata queries.
 - apps/root-task/src/boot/policy.rs — consume optional IMDS fields (instance-id, region, az, tags if enabled).
 Commands:
-- cargo test -p net --tests
+- cargo test -p root-task --test imdsv2
 Checks:
 - IMDSv2 is optional: absence, timeout, or denial does not block boot and emits deterministic diagnostics.
 Deliverables:
@@ -4522,13 +4524,13 @@ Deliverables:
 
 Title/ID: m27-fabric-mount
 Goal: Mount 9door namespace and enter steady state (post-seL4).
-Inputs: crates/door9p/, crates/fabric/, apps/root-task.
+Inputs: root-task net stack, Secure9P client, docs/AWS_AMI.md.
 Changes:
-- crates/door9p/src/client.rs — mount and session management.
-- crates/fabric/src/bootstrap.rs — signed manifest verification.
+- apps/root-task/src/net/door9p_client.rs — minimal 9P client for fabric mounts.
+- apps/root-task/src/net/bootstrap.rs — signed manifest verification.
 - apps/root-task/src/net/mount.rs — mount orchestration and error handling.
 Commands:
-- cargo test -p door9p
+- cargo test -p root-task --test fabric_mount
 Checks:
 - Namespace mount is read/write correct; auth failures are terminal and explicit.
 Deliverables:

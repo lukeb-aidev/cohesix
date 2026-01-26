@@ -20,5 +20,7 @@ ESP/
   startup.nsh             # shell script invoking BOOTAA64.EFI
 ```
 
-Refer to `docs/BOOT_PATHS.md` plus the `esp-build.sh` helper script for
-assembly and packaging details.
+The repository does not currently ship a UEFI build/packaging helper; the
+authoritative plan for UEFI bring-up lives in `docs/BUILD_PLAN.md` (Milestone
+25a) and the current QEMU reference boot is documented in
+`docs/BOOT_REFERENCE.md`.
