@@ -19,15 +19,35 @@
             alt="Cohesix"
           />
           <div class="brand">
-            <p class="eyebrow">SwarmUI</p>
+            <p class="eyebrow">SWARMUI</p>
             <p class="lede">
               Live Hive telemetry and activity.
             </p>
           </div>
         </div>
         <div class="status-bar">
-          <span class="badge" id="hive-status">Hive idle</span>
-          <span class="badge ghost" id="hive-pressure">Pressure 0% · backlog 0 · dropped 0</span>
+          <div class="status-row summary">
+            <span class="badge" id="hive-status">Hive idle</span>
+            <span class="badge root ok" id="hive-root">ROOT OK</span>
+            <span class="badge ghost" id="hive-sessions">Sessions 0 · draining 0</span>
+          </div>
+          <div class="status-row pressure-summary">
+            <span class="badge ghost" id="hive-pressure">Pressure 0% · backlog 0 · dropped 0</span>
+          </div>
+          <div class="status-group" id="hive-pressure-strip">
+            <span class="status-label">Pressure</span>
+            <span class="chip" data-kind="busy">busy 0</span>
+            <span class="chip" data-kind="quota">quota 0</span>
+            <span class="chip" data-kind="cut">cut 0</span>
+            <span class="chip" data-kind="policy">policy 0</span>
+          </div>
+          <div class="status-group" id="hive-error-strip">
+            <span class="status-label">Errors</span>
+            <span class="chip" data-kind="busy">busy 0</span>
+            <span class="chip" data-kind="quota">quota 0</span>
+            <span class="chip" data-kind="cut">cut 0</span>
+            <span class="chip" data-kind="policy">policy 0</span>
+          </div>
         </div>
       </header>
       <header class="topbar">
