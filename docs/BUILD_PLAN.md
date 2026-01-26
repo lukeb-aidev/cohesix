@@ -84,7 +84,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [21c](#21c) | SwarmUI Interactive cohsh Terminal (Full Prompt UX) | Complete |
 | [21d](#21d) | Deterministic Node Lifecycle & Operator Control | Complete |
 | [21e](#21e) | Rooted Authority, Cut Detection, Explicit Session Semantics, and Live Hive Visibility | Complete |
-| [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Pending |
+| [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Complete |
 | [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Pending |
 | [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Pending |
 | [25a](#25a) | UEFI Bare-Metal Boot & Device Identity | Pending |
@@ -3471,6 +3471,8 @@ Deliverables:
 
 ## Milestone 22 — Runtime Convenience (coh run) + GPU Job Breadcrumbs  <a id="22"></a> 
 [Milestones](#Milestones)
+
+**Status:** Complete — coh run + breadcrumb schema, docs, and tests are in place; regression pack and full test plan (source + macOS/Ubuntu bundles) completed.
 
 **Why now (adoption):** Operators need a two-minute "lease -> run -> observe -> release" loop without introducing a runtime orchestrator.
 
