@@ -13,6 +13,9 @@ use crate::generated::{self, LifecycleState};
 
 const REASON_CAP: usize = 96;
 const LOG_LINE_CAP: usize = 160;
+const ROOT_FLAG_NETWORK: u8 = 1;
+const ROOT_FLAG_POLICY: u8 = 1 << 1;
+const ROOT_FLAG_REVOKED: u8 = 1 << 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LifecycleCommand {
@@ -43,6 +46,22 @@ pub struct LifecycleSnapshot {
     pub state: LifecycleState,
     pub reason: HeaplessString<REASON_CAP>,
     pub since_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RootCutReason {
+    None,
+    NetworkUnreachable,
+    SessionRevoked,
+    PolicyDenied,
+    LifecycleOffline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RootSnapshot {
+    pub reachable: bool,
+    pub last_seen_ms: u64,
+    pub cut_reason: RootCutReason,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -123,6 +142,9 @@ enum LifecycleReason {
 static LIFECYCLE_STATE: AtomicU8 = AtomicU8::new(LifecycleState::Booting as u8);
 static LIFECYCLE_REASON: AtomicU8 = AtomicU8::new(LifecycleReason::Boot as u8);
 static LIFECYCLE_SINCE_MS: AtomicU64 = AtomicU64::new(0);
+static ROOT_SESSION_ACTIVE: AtomicU8 = AtomicU8::new(0);
+static ROOT_LAST_SEEN_MS: AtomicU64 = AtomicU64::new(0);
+static ROOT_CUT_FLAGS: AtomicU8 = AtomicU8::new(0);
 
 pub fn init(now_ms: u64) -> LifecycleSnapshot {
     let config = generated::lifecycle_config();
@@ -146,6 +168,67 @@ pub fn snapshot() -> LifecycleSnapshot {
         state,
         reason: reason_buf,
         since_ms,
+    }
+}
+
+pub fn root_snapshot() -> RootSnapshot {
+    let lifecycle_state = state();
+    let session_active = ROOT_SESSION_ACTIVE.load(Ordering::SeqCst) != 0;
+    let last_seen_ms = ROOT_LAST_SEEN_MS.load(Ordering::SeqCst);
+    let flags = ROOT_CUT_FLAGS.load(Ordering::SeqCst);
+    let offline = matches!(lifecycle_state, LifecycleState::Offline);
+    let reachable = session_active && !offline;
+    let cut_reason = if reachable {
+        RootCutReason::None
+    } else if offline {
+        RootCutReason::LifecycleOffline
+    } else if flags & ROOT_FLAG_REVOKED != 0 {
+        RootCutReason::SessionRevoked
+    } else if flags & ROOT_FLAG_POLICY != 0 {
+        RootCutReason::PolicyDenied
+    } else if flags & ROOT_FLAG_NETWORK != 0 {
+        RootCutReason::NetworkUnreachable
+    } else {
+        RootCutReason::NetworkUnreachable
+    };
+    RootSnapshot {
+        reachable,
+        last_seen_ms,
+        cut_reason,
+    }
+}
+
+pub fn root_mark_session_active(now_ms: u64) {
+    ROOT_SESSION_ACTIVE.store(1, Ordering::SeqCst);
+    ROOT_LAST_SEEN_MS.store(now_ms, Ordering::SeqCst);
+    ROOT_CUT_FLAGS.store(0, Ordering::SeqCst);
+}
+
+pub fn root_record_activity(now_ms: u64) {
+    if ROOT_SESSION_ACTIVE.load(Ordering::SeqCst) != 0 {
+        ROOT_LAST_SEEN_MS.store(now_ms, Ordering::SeqCst);
+    }
+}
+
+pub fn root_mark_cut(reason: RootCutReason) {
+    ROOT_SESSION_ACTIVE.store(0, Ordering::SeqCst);
+    match reason {
+        RootCutReason::NetworkUnreachable => {
+            ROOT_CUT_FLAGS.fetch_or(ROOT_FLAG_NETWORK, Ordering::SeqCst);
+        }
+        RootCutReason::SessionRevoked => {
+            ROOT_CUT_FLAGS.fetch_or(ROOT_FLAG_REVOKED, Ordering::SeqCst);
+        }
+        RootCutReason::PolicyDenied => {
+            ROOT_CUT_FLAGS.fetch_or(ROOT_FLAG_POLICY, Ordering::SeqCst);
+        }
+        RootCutReason::LifecycleOffline | RootCutReason::None => {}
+    }
+}
+
+pub fn root_mark_policy_denied() {
+    if ROOT_SESSION_ACTIVE.load(Ordering::SeqCst) == 0 {
+        ROOT_CUT_FLAGS.fetch_or(ROOT_FLAG_POLICY, Ordering::SeqCst);
     }
 }
 
@@ -370,5 +453,15 @@ pub fn state_label(state: LifecycleState) -> &'static str {
         LifecycleState::Draining => "DRAINING",
         LifecycleState::Quiesced => "QUIESCED",
         LifecycleState::Offline => "OFFLINE",
+    }
+}
+
+pub fn root_cut_reason_label(reason: RootCutReason) -> &'static str {
+    match reason {
+        RootCutReason::None => "none",
+        RootCutReason::NetworkUnreachable => "network_unreachable",
+        RootCutReason::SessionRevoked => "session_revoked",
+        RootCutReason::PolicyDenied => "policy_denied",
+        RootCutReason::LifecycleOffline => "lifecycle_offline",
     }
 }

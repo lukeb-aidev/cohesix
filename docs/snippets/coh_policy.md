@@ -2,8 +2,8 @@
 <!-- Purpose: Generated coh policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### coh policy defaults (generated)
-- `manifest.sha256`: `7ac2fcc56751bb4670a74fd0063bfc4993c18367450aca3961ab65ad7ad37634`
-- `policy.sha256`: `82d58b9decba0256d723e5324cdb3cdd46a677b8af3f1c4ba1d26ca40a2df6f1`
+- `manifest.sha256`: `a40f87e1b0e148da7f7be9cab2a960bbb41cf9ef4e29e7c71c6847d92de9f509`
+- `policy.sha256`: `dd0ae4f9001bdb61aacba713605b5c5b7b7c6ffbfa988919563c8979185e6113`
 - `coh.mount.root`: `/`
 - `coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
 - `coh.telemetry.root`: `/queen/telemetry`

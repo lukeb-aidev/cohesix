@@ -185,10 +185,36 @@ document
 
 const hiveCanvas = document.getElementById("hive-canvas");
 const hiveStatus = document.getElementById("hive-status");
+const hiveRoot = document.getElementById("hive-root");
+const hiveSessions = document.getElementById("hive-sessions");
 const hivePressure = document.getElementById("hive-pressure");
+const hivePressureStrip = document.getElementById("hive-pressure-strip");
+const hiveErrorStrip = document.getElementById("hive-error-strip");
 const hiveFallback = document.getElementById("hive-fallback");
 let hiveController = null;
 let hiveInitError = null;
+
+const selectChips = (root) => {
+  const chips = {};
+  if (!root) {
+    return chips;
+  }
+  root.querySelectorAll("[data-kind]").forEach((node) => {
+    if (node.dataset.kind) {
+      chips[node.dataset.kind] = node;
+    }
+  });
+  return chips;
+};
+
+const pressureChips = selectChips(hivePressureStrip);
+const errorChips = selectChips(hiveErrorStrip);
+const errorCounts = {
+  busy: 0,
+  quota: 0,
+  cut: 0,
+  policy: 0,
+};
 const setHiveFallback = (message) => {
   if (!hiveFallback) {
     return;
@@ -229,6 +255,94 @@ const updateHivePressure = (batch) => {
   hivePressure.textContent = `Pressure ${(pressure * 100).toFixed(0)}% · backlog ${backlog} · dropped ${dropped}`;
 };
 
+const updateHiveRoot = (batch) => {
+  if (!hiveRoot) {
+    return;
+  }
+  const root = batch.root;
+  hiveRoot.classList.remove("ok", "cut", "unknown");
+  if (!root) {
+    hiveRoot.textContent = "ROOT ?";
+    hiveRoot.classList.add("unknown");
+    return;
+  }
+  if (root.reachable) {
+    hiveRoot.textContent = "ROOT OK";
+    hiveRoot.classList.add("ok");
+    hiveRoot.title = "Root reachable";
+  } else {
+    const reason = root.cut_reason || "unknown";
+    hiveRoot.textContent = `CUT ${reason}`;
+    hiveRoot.classList.add("cut");
+    hiveRoot.title = `Root cut: ${reason}`;
+  }
+};
+
+const updateHiveSessions = (batch) => {
+  if (!hiveSessions) {
+    return;
+  }
+  const sessions = batch.sessions;
+  hiveSessions.classList.remove("draining");
+  if (!sessions) {
+    hiveSessions.textContent = "Sessions ?";
+    return;
+  }
+  const active = sessions.active ?? 0;
+  const draining = sessions.draining ?? 0;
+  hiveSessions.textContent = `Sessions ${active} · draining ${draining}`;
+  if (draining > 0) {
+    hiveSessions.classList.add("draining");
+  }
+};
+
+const renderStripCounts = (chips, counts) => {
+  Object.entries(chips).forEach(([key, node]) => {
+    const value = counts[key] ?? 0;
+    node.textContent = `${key} ${value}`;
+    node.classList.toggle("active", value > 0);
+  });
+};
+
+const updateHivePressureCounters = (batch) => {
+  const counters = batch.pressure_counters;
+  if (!counters || Object.keys(pressureChips).length === 0) {
+    return;
+  }
+  renderStripCounts(pressureChips, {
+    busy: counters.busy ?? 0,
+    quota: counters.quota ?? 0,
+    cut: counters.cut ?? 0,
+    policy: counters.policy ?? 0,
+  });
+};
+
+const resetHiveErrors = () => {
+  errorCounts.busy = 0;
+  errorCounts.quota = 0;
+  errorCounts.cut = 0;
+  errorCounts.policy = 0;
+  if (Object.keys(errorChips).length > 0) {
+    renderStripCounts(errorChips, errorCounts);
+  }
+};
+
+const updateHiveErrors = (batch) => {
+  if (!batch.events || Object.keys(errorChips).length === 0) {
+    return;
+  }
+  for (const event of batch.events) {
+    if (event.kind !== "error") {
+      continue;
+    }
+    const reason = String(event.reason || "").toLowerCase();
+    if (reason in errorCounts) {
+      errorCounts[reason] += 1;
+    }
+  }
+  renderStripCounts(errorChips, errorCounts);
+};
+
 const stopHivePolling = () => {
   if (hivePollTimer) {
     clearTimeout(hivePollTimer);
@@ -255,6 +369,10 @@ const pollHive = async () => {
   }
   hiveController?.ingest(res.result);
   updateHivePressure(res.result);
+  updateHiveRoot(res.result);
+  updateHiveSessions(res.result);
+  updateHivePressureCounters(res.result);
+  updateHiveErrors(res.result);
   if (res.result.done) {
     hiveActive = false;
     stopHivePolling();
@@ -287,6 +405,7 @@ const startHive = async () => {
   }
   hiveController.bootstrap(res.result);
   hiveController.start();
+  resetHiveErrors();
   hiveActive = true;
   hivePollInterval = Math.max(
     120,
@@ -303,6 +422,7 @@ const stopHive = async () => {
   hiveActive = false;
   stopHivePolling();
   hiveController.stop();
+  resetHiveErrors();
   const session = readSession();
   await invoke("swarmui_hive_reset", {
     role: session.role,

@@ -14,7 +14,8 @@ mod transport;
 pub use cache::{CacheError, SnapshotCache, SnapshotRecord};
 pub use hive::{
     SwarmUiHiveAgent, SwarmUiHiveBatch, SwarmUiHiveBootstrap, SwarmUiHiveConfig,
-    SwarmUiHiveEvent, SwarmUiHiveEventKind, SwarmUiHiveSnapshot,
+    SwarmUiHiveEvent, SwarmUiHiveEventKind, SwarmUiHivePressureCounters, SwarmUiHiveRootStatus,
+    SwarmUiHiveSessionSummary, SwarmUiHiveSnapshot,
 };
 pub use transport::{
     TcpTransport, TcpTransportError, TcpTransportFactory, TraceTransportFactory,
@@ -788,11 +789,16 @@ where
         } else {
             backlog as f32 / hive_config.lod_event_budget as f32
         };
+        let dropped = state.dropped();
+        let (root, sessions, pressure_counters) = self.read_hive_status(role, ticket);
         Ok(SwarmUiHiveBatch {
             events,
             pressure,
             backlog,
-            dropped: state.dropped(),
+            dropped,
+            root,
+            sessions,
+            pressure_counters,
             done: false,
         })
     }
@@ -823,6 +829,88 @@ where
             let _ = session.client.clunk(fid);
         }
         Ok(())
+    }
+
+    fn read_hive_status(
+        &mut self,
+        role: Role,
+        ticket: Option<&str>,
+    ) -> (
+        Option<SwarmUiHiveRootStatus>,
+        Option<SwarmUiHiveSessionSummary>,
+        Option<SwarmUiHivePressureCounters>,
+    ) {
+        if self.config.offline {
+            return (None, None, None);
+        }
+        let session = match self.session_for(role, ticket) {
+            Ok(session) => session,
+            Err(_) => return (None, None, None),
+        };
+
+        let reachable_line = read_single_line(&mut session.client, "/proc/root/reachable");
+        let cut_line = read_single_line(&mut session.client, "/proc/root/cut_reason");
+        let reachable = reachable_line
+            .as_deref()
+            .and_then(|line| parse_kv_value(line, "reachable"))
+            .map(|value| value == "yes");
+        let cut_reason = cut_line
+            .as_deref()
+            .and_then(|line| parse_kv_value(line, "cut_reason"))
+            .unwrap_or("unknown")
+            .to_owned();
+        let root = reachable.map(|reachable| SwarmUiHiveRootStatus {
+            reachable,
+            cut_reason,
+        });
+
+        let session_line = read_single_line(&mut session.client, "/proc/9p/session/active");
+        let active = session_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "active"))
+            .unwrap_or(0);
+        let draining = session_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "draining"))
+            .unwrap_or(0);
+        let sessions = session_line.map(|_| SwarmUiHiveSessionSummary { active, draining });
+
+        let busy_line = read_single_line(&mut session.client, "/proc/pressure/busy");
+        let quota_line = read_single_line(&mut session.client, "/proc/pressure/quota");
+        let cut_line = read_single_line(&mut session.client, "/proc/pressure/cut");
+        let policy_line = read_single_line(&mut session.client, "/proc/pressure/policy");
+        let busy = busy_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "busy"))
+            .unwrap_or(0);
+        let quota = quota_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "quota"))
+            .unwrap_or(0);
+        let cut = cut_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "cut"))
+            .unwrap_or(0);
+        let policy = policy_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "policy"))
+            .unwrap_or(0);
+        let pressure_counters = if busy_line.is_some()
+            || quota_line.is_some()
+            || cut_line.is_some()
+            || policy_line.is_some()
+        {
+            Some(SwarmUiHivePressureCounters {
+                busy,
+                quota,
+                cut,
+                policy,
+            })
+        } else {
+            None
+        };
+
+        (root, sessions, pressure_counters)
     }
 
     /// Cache a CBOR snapshot payload.
@@ -1991,11 +2079,16 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         } else {
             backlog as f32 / hive_config.lod_event_budget as f32
         };
+        let dropped = state.dropped();
+        let (root, sessions, pressure_counters) = self.read_hive_status(role, ticket);
         Ok(SwarmUiHiveBatch {
             events,
             pressure,
             backlog,
-            dropped: state.dropped(),
+            dropped,
+            root,
+            sessions,
+            pressure_counters,
             done: false,
         })
     }
@@ -2090,6 +2183,130 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 ticket: ticket.map(str::to_owned),
             },
         }
+    }
+
+    fn read_hive_status(
+        &mut self,
+        role: Role,
+        ticket: Option<&str>,
+    ) -> (
+        Option<SwarmUiHiveRootStatus>,
+        Option<SwarmUiHiveSessionSummary>,
+        Option<SwarmUiHivePressureCounters>,
+    ) {
+        if self.config.offline {
+            return (None, None, None);
+        }
+        let session = match self.session_for(role, ticket) {
+            Ok(session) => session,
+            Err(_) => return (None, None, None),
+        };
+
+        let reachable_line = read_lines_console(
+            &mut self.transport,
+            &session.session,
+            "/proc/root/reachable",
+        )
+        .ok()
+        .and_then(|lines| lines.into_iter().next());
+        let cut_reason_line = read_lines_console(
+            &mut self.transport,
+            &session.session,
+            "/proc/root/cut_reason",
+        )
+        .ok()
+        .and_then(|lines| lines.into_iter().next());
+        let reachable = reachable_line
+            .as_deref()
+            .and_then(|line| parse_kv_value(line, "reachable"))
+            .map(|value| value == "yes");
+        let cut_reason = cut_reason_line
+            .as_deref()
+            .and_then(|line| parse_kv_value(line, "cut_reason"))
+            .unwrap_or("unknown")
+            .to_owned();
+        let root = reachable.map(|reachable| SwarmUiHiveRootStatus {
+            reachable,
+            cut_reason,
+        });
+
+        let session_line = read_lines_console(
+            &mut self.transport,
+            &session.session,
+            "/proc/9p/session/active",
+        )
+        .ok()
+        .and_then(|lines| lines.into_iter().next());
+        let active = session_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "active"))
+            .unwrap_or(0);
+        let draining = session_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "draining"))
+            .unwrap_or(0);
+        let sessions = session_line.map(|_| SwarmUiHiveSessionSummary { active, draining });
+
+        let busy_line = read_lines_console(
+            &mut self.transport,
+            &session.session,
+            "/proc/pressure/busy",
+        )
+        .ok()
+        .and_then(|lines| lines.into_iter().next());
+        let quota_line = read_lines_console(
+            &mut self.transport,
+            &session.session,
+            "/proc/pressure/quota",
+        )
+        .ok()
+        .and_then(|lines| lines.into_iter().next());
+        let cut_line = read_lines_console(
+            &mut self.transport,
+            &session.session,
+            "/proc/pressure/cut",
+        )
+        .ok()
+        .and_then(|lines| lines.into_iter().next());
+        let policy_line = read_lines_console(
+            &mut self.transport,
+            &session.session,
+            "/proc/pressure/policy",
+        )
+        .ok()
+        .and_then(|lines| lines.into_iter().next());
+        let busy = busy_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "busy"))
+            .unwrap_or(0);
+        let quota = quota_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "quota"))
+            .unwrap_or(0);
+        let cut = cut_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "cut"))
+            .unwrap_or(0);
+        let policy = policy_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "policy"))
+            .unwrap_or(0);
+        let pressure_counters = if busy_line.is_some()
+            || quota_line.is_some()
+            || cut_line.is_some()
+            || policy_line.is_some()
+        {
+            Some(SwarmUiHivePressureCounters {
+                busy,
+                quota,
+                cut,
+                policy,
+            })
+        } else {
+            None
+        };
+
+        (root, sessions, pressure_counters)
     }
 
     fn record_audit(&mut self, entry: String) {
@@ -2291,6 +2508,34 @@ fn read_lines<T: cohsh_core::Secure9pTransport>(
     let text = String::from_utf8(buffer)
         .map_err(|_| SwarmUiError::Transport("payload is not valid UTF-8".to_owned()))?;
     Ok(text.lines().map(|line| line.to_owned()).collect())
+}
+
+fn read_single_line<T: cohsh_core::Secure9pTransport>(
+    client: &mut CohClient<T>,
+    path: &str,
+) -> Option<String> {
+    read_lines(client, path).ok().and_then(|mut lines| {
+        if lines.is_empty() {
+            None
+        } else {
+            Some(lines.remove(0))
+        }
+    })
+}
+
+fn parse_kv_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    line.split_whitespace().find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        if k == key {
+            Some(v)
+        } else {
+            None
+        }
+    })
+}
+
+fn parse_kv_u64(line: &str, key: &str) -> Option<u64> {
+    parse_kv_value(line, key)?.parse::<u64>().ok()
 }
 
 fn read_lines_console<T: CohshTransport + ?Sized>(

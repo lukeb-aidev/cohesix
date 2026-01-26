@@ -14,8 +14,10 @@ use log::info;
 use super::cbor::{CborError, CborWriter};
 use super::pipeline::PipelineMetrics;
 use super::namespace::Namespace;
+use super::session::SessionPhase;
 use super::ui::{UiProviderConfig, UI_MAX_STREAM_BYTES};
 use crate::NineDoorError;
+use secure9p_codec::SessionId;
 
 /// Configuration for /proc/9p observability files.
 #[derive(Debug, Clone, Copy)]
@@ -37,6 +39,33 @@ pub struct Proc9pConfig {
 impl Proc9pConfig {
     pub(crate) fn enabled(self) -> bool {
         self.sessions || self.outstanding || self.short_writes
+    }
+}
+
+/// Configuration for `/proc/9p/session` observability files.
+#[derive(Debug, Clone, Copy)]
+pub struct Proc9pSessionConfig {
+    /// Enable `/proc/9p/session/active`.
+    pub active: bool,
+    /// Enable `/proc/9p/session/<id>/state`.
+    pub state: bool,
+    /// Enable `/proc/9p/session/<id>/since_ms`.
+    pub since_ms: bool,
+    /// Enable `/proc/9p/session/<id>/owner`.
+    pub owner: bool,
+    /// Maximum bytes for `/proc/9p/session/active` payload.
+    pub active_bytes: usize,
+    /// Maximum bytes for `/proc/9p/session/<id>/state` payload.
+    pub state_bytes: usize,
+    /// Maximum bytes for `/proc/9p/session/<id>/since_ms` payload.
+    pub since_ms_bytes: usize,
+    /// Maximum bytes for `/proc/9p/session/<id>/owner` payload.
+    pub owner_bytes: usize,
+}
+
+impl Proc9pSessionConfig {
+    pub(crate) fn enabled(self) -> bool {
+        self.active || self.state || self.since_ms || self.owner
     }
 }
 
@@ -90,19 +119,79 @@ impl ProcIngestConfig {
     }
 }
 
+/// Configuration for `/proc/root` observability files.
+#[derive(Debug, Clone, Copy)]
+pub struct ProcRootConfig {
+    /// Enable `/proc/root/reachable`.
+    pub reachable: bool,
+    /// Enable `/proc/root/last_seen_ms`.
+    pub last_seen_ms: bool,
+    /// Enable `/proc/root/cut_reason`.
+    pub cut_reason: bool,
+    /// Maximum bytes for `/proc/root/reachable` payload.
+    pub reachable_bytes: usize,
+    /// Maximum bytes for `/proc/root/last_seen_ms` payload.
+    pub last_seen_ms_bytes: usize,
+    /// Maximum bytes for `/proc/root/cut_reason` payload.
+    pub cut_reason_bytes: usize,
+}
+
+impl ProcRootConfig {
+    pub(crate) fn enabled(self) -> bool {
+        self.reachable || self.last_seen_ms || self.cut_reason
+    }
+}
+
+/// Configuration for `/proc/pressure` observability files.
+#[derive(Debug, Clone, Copy)]
+pub struct ProcPressureConfig {
+    /// Enable `/proc/pressure/busy`.
+    pub busy: bool,
+    /// Enable `/proc/pressure/quota`.
+    pub quota: bool,
+    /// Enable `/proc/pressure/cut`.
+    pub cut: bool,
+    /// Enable `/proc/pressure/policy`.
+    pub policy: bool,
+    /// Maximum bytes for `/proc/pressure/busy` payload.
+    pub busy_bytes: usize,
+    /// Maximum bytes for `/proc/pressure/quota` payload.
+    pub quota_bytes: usize,
+    /// Maximum bytes for `/proc/pressure/cut` payload.
+    pub cut_bytes: usize,
+    /// Maximum bytes for `/proc/pressure/policy` payload.
+    pub policy_bytes: usize,
+}
+
+impl ProcPressureConfig {
+    pub(crate) fn enabled(self) -> bool {
+        self.busy || self.quota || self.cut || self.policy
+    }
+}
+
 /// Top-level observability configuration for the NineDoor host.
 #[derive(Debug, Clone, Copy)]
 pub struct ObserveConfig {
     /// `/proc/9p` observability settings.
     pub proc_9p: Proc9pConfig,
+    /// `/proc/9p/session` observability settings.
+    pub proc_9p_session: Proc9pSessionConfig,
     /// `/proc/ingest` observability settings.
     pub proc_ingest: ProcIngestConfig,
+    /// `/proc/root` observability settings.
+    pub proc_root: ProcRootConfig,
+    /// `/proc/pressure` observability settings.
+    pub proc_pressure: ProcPressureConfig,
 }
 
 impl ObserveConfig {
     /// Return true when any /proc observability nodes are enabled.
     pub fn enabled(self) -> bool {
-        self.proc_9p.enabled() || self.proc_ingest.enabled()
+        self.proc_9p.enabled()
+            || self.proc_9p_session.enabled()
+            || self.proc_ingest.enabled()
+            || self.proc_root.enabled()
+            || self.proc_pressure.enabled()
     }
 }
 
@@ -116,6 +205,16 @@ impl Default for ObserveConfig {
                 sessions_bytes: 8192,
                 outstanding_bytes: 128,
                 short_writes_bytes: 128,
+            },
+            proc_9p_session: Proc9pSessionConfig {
+                active: true,
+                state: true,
+                since_ms: true,
+                owner: true,
+                active_bytes: 128,
+                state_bytes: 64,
+                since_ms_bytes: 64,
+                owner_bytes: 96,
             },
             proc_ingest: ProcIngestConfig {
                 p50_ms: true,
@@ -136,6 +235,24 @@ impl Default for ObserveConfig {
                 latency_tolerance_ms: 5,
                 counter_tolerance: 1,
             },
+            proc_root: ProcRootConfig {
+                reachable: true,
+                last_seen_ms: true,
+                cut_reason: true,
+                reachable_bytes: 32,
+                last_seen_ms_bytes: 64,
+                cut_reason_bytes: 64,
+            },
+            proc_pressure: ProcPressureConfig {
+                busy: true,
+                quota: true,
+                cut: true,
+                policy: true,
+                busy_bytes: 64,
+                quota_bytes: 64,
+                cut_bytes: 64,
+                policy_bytes: 64,
+            },
         }
     }
 }
@@ -147,6 +264,7 @@ pub struct ObserveState {
     ui: UiProviderConfig,
     start: Instant,
     ingest: IngestState,
+    pressure: PressureState,
 }
 
 impl ObserveState {
@@ -154,6 +272,7 @@ impl ObserveState {
     pub fn new(config: ObserveConfig, ui: UiProviderConfig, start: Instant) -> Self {
         Self {
             ingest: IngestState::new(config.proc_ingest),
+            pressure: PressureState::default(),
             config,
             ui,
             start,
@@ -163,6 +282,21 @@ impl ObserveState {
     /// Return the active observability configuration.
     pub fn config(&self) -> ObserveConfig {
         self.config
+    }
+
+    /// Convert a timestamp to milliseconds since the observability start.
+    pub fn elapsed_ms(&self, now: Instant) -> u64 {
+        now.duration_since(self.start).as_millis() as u64
+    }
+
+    /// Record a pressure event.
+    pub fn record_pressure(&mut self, kind: PressureKind) {
+        self.pressure.record(kind);
+    }
+
+    /// Snapshot current pressure counters.
+    pub fn pressure_snapshot(&self) -> PressureSnapshot {
+        self.pressure.snapshot()
     }
 
     /// Update /proc/9p/sessions with the supplied session counts.
@@ -208,6 +342,77 @@ impl ObserveState {
         )?;
         ensure_stream_len("proc/9p/sessions.cbor", cbor.len())?;
         namespace.set_proc_sessions_cbor_payload(&cbor)
+    }
+
+    /// Update `/proc/9p/session/active` with active/draining counts.
+    pub fn update_proc_9p_session_active(
+        &self,
+        namespace: &mut Namespace,
+        active: usize,
+        draining: usize,
+    ) -> Result<(), NineDoorError> {
+        if !self.config.proc_9p_session.active {
+            return Ok(());
+        }
+        let mut line = String::new();
+        let _ = writeln!(line, "active={} draining={}", active, draining);
+        ensure_len(
+            "proc/9p/session/active",
+            line.len(),
+            self.config.proc_9p_session.active_bytes,
+        )?;
+        ensure_stream_len("proc/9p/session/active", line.len())?;
+        namespace.set_proc_session_active_payload(line.as_bytes())
+    }
+
+    /// Update `/proc/9p/session/<id>/*` for the supplied session snapshot.
+    pub fn update_proc_9p_session_entry(
+        &self,
+        namespace: &mut Namespace,
+        session: SessionId,
+        phase: SessionPhase,
+        since_ms: u64,
+        owner: Option<&str>,
+    ) -> Result<(), NineDoorError> {
+        if !self.config.proc_9p_session.enabled() {
+            return Ok(());
+        }
+        namespace.ensure_proc_session_entry(session, self.config.proc_9p_session)?;
+        if self.config.proc_9p_session.state {
+            let mut line = String::new();
+            let _ = writeln!(line, "state={}", phase.as_str());
+            ensure_len(
+                "proc/9p/session/<id>/state",
+                line.len(),
+                self.config.proc_9p_session.state_bytes,
+            )?;
+            ensure_stream_len("proc/9p/session/<id>/state", line.len())?;
+            namespace.set_proc_session_state_payload(session, line.as_bytes())?;
+        }
+        if self.config.proc_9p_session.since_ms {
+            let mut line = String::new();
+            let _ = writeln!(line, "since_ms={since_ms}");
+            ensure_len(
+                "proc/9p/session/<id>/since_ms",
+                line.len(),
+                self.config.proc_9p_session.since_ms_bytes,
+            )?;
+            ensure_stream_len("proc/9p/session/<id>/since_ms", line.len())?;
+            namespace.set_proc_session_since_payload(session, line.as_bytes())?;
+        }
+        if self.config.proc_9p_session.owner {
+            let label = owner.unwrap_or("none");
+            let mut line = String::new();
+            let _ = writeln!(line, "owner={label}");
+            ensure_len(
+                "proc/9p/session/<id>/owner",
+                line.len(),
+                self.config.proc_9p_session.owner_bytes,
+            )?;
+            ensure_stream_len("proc/9p/session/<id>/owner", line.len())?;
+            namespace.set_proc_session_owner_payload(session, line.as_bytes())?;
+        }
+        Ok(())
     }
 
     /// Update /proc/9p metrics derived from pipeline state.
@@ -364,6 +569,151 @@ impl ObserveState {
             namespace.set_proc_ingest_watch_payload(payload.as_bytes())?;
         }
         Ok(())
+    }
+
+    /// Update `/proc/root/*` observability nodes.
+    pub fn update_proc_root(
+        &self,
+        namespace: &mut Namespace,
+        reachable: bool,
+        last_seen_ms: u64,
+        cut_reason: &str,
+    ) -> Result<(), NineDoorError> {
+        let config = self.config.proc_root;
+        if !config.enabled() {
+            return Ok(());
+        }
+        if config.reachable {
+            let mut line = String::new();
+            let value = if reachable { "yes" } else { "no" };
+            let _ = writeln!(line, "reachable={value}");
+            ensure_len("proc/root/reachable", line.len(), config.reachable_bytes)?;
+            ensure_stream_len("proc/root/reachable", line.len())?;
+            namespace.set_proc_root_reachable_payload(line.as_bytes())?;
+        }
+        if config.last_seen_ms {
+            let mut line = String::new();
+            let _ = writeln!(line, "last_seen_ms={last_seen_ms}");
+            ensure_len(
+                "proc/root/last_seen_ms",
+                line.len(),
+                config.last_seen_ms_bytes,
+            )?;
+            ensure_stream_len("proc/root/last_seen_ms", line.len())?;
+            namespace.set_proc_root_last_seen_payload(line.as_bytes())?;
+        }
+        if config.cut_reason {
+            let mut line = String::new();
+            let _ = writeln!(line, "cut_reason={cut_reason}");
+            ensure_len(
+                "proc/root/cut_reason",
+                line.len(),
+                config.cut_reason_bytes,
+            )?;
+            ensure_stream_len("proc/root/cut_reason", line.len())?;
+            namespace.set_proc_root_cut_reason_payload(line.as_bytes())?;
+        }
+        Ok(())
+    }
+
+    /// Update `/proc/pressure/*` observability nodes.
+    pub fn update_proc_pressure(&self, namespace: &mut Namespace) -> Result<(), NineDoorError> {
+        let config = self.config.proc_pressure;
+        if !config.enabled() {
+            return Ok(());
+        }
+        let snapshot = self.pressure.snapshot();
+        if config.busy {
+            let mut line = String::new();
+            let _ = writeln!(line, "busy={}", snapshot.busy);
+            ensure_len("proc/pressure/busy", line.len(), config.busy_bytes)?;
+            ensure_stream_len("proc/pressure/busy", line.len())?;
+            namespace.set_proc_pressure_busy_payload(line.as_bytes())?;
+        }
+        if config.quota {
+            let mut line = String::new();
+            let _ = writeln!(line, "quota={}", snapshot.quota);
+            ensure_len("proc/pressure/quota", line.len(), config.quota_bytes)?;
+            ensure_stream_len("proc/pressure/quota", line.len())?;
+            namespace.set_proc_pressure_quota_payload(line.as_bytes())?;
+        }
+        if config.cut {
+            let mut line = String::new();
+            let _ = writeln!(line, "cut={}", snapshot.cut);
+            ensure_len("proc/pressure/cut", line.len(), config.cut_bytes)?;
+            ensure_stream_len("proc/pressure/cut", line.len())?;
+            namespace.set_proc_pressure_cut_payload(line.as_bytes())?;
+        }
+        if config.policy {
+            let mut line = String::new();
+            let _ = writeln!(line, "policy={}", snapshot.policy);
+            ensure_len("proc/pressure/policy", line.len(), config.policy_bytes)?;
+            ensure_stream_len("proc/pressure/policy", line.len())?;
+            namespace.set_proc_pressure_policy_payload(line.as_bytes())?;
+        }
+        Ok(())
+    }
+}
+
+/// Pressure counter buckets for refusal tracking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PressureKind {
+    /// Queue or processing backpressure.
+    Busy,
+    /// Quota or rate limiting.
+    Quota,
+    /// Root or session cut.
+    Cut,
+    /// Policy-based refusal.
+    Policy,
+}
+
+/// Snapshot of pressure counters for `/proc/pressure/*`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PressureSnapshot {
+    /// Busy pressure events.
+    pub busy: u64,
+    /// Quota pressure events.
+    pub quota: u64,
+    /// Cut pressure events.
+    pub cut: u64,
+    /// Policy pressure events.
+    pub policy: u64,
+}
+
+#[derive(Debug, Default)]
+struct PressureState {
+    busy: u64,
+    quota: u64,
+    cut: u64,
+    policy: u64,
+}
+
+impl PressureState {
+    fn record(&mut self, kind: PressureKind) {
+        match kind {
+            PressureKind::Busy => {
+                self.busy = self.busy.saturating_add(1);
+            }
+            PressureKind::Quota => {
+                self.quota = self.quota.saturating_add(1);
+            }
+            PressureKind::Cut => {
+                self.cut = self.cut.saturating_add(1);
+            }
+            PressureKind::Policy => {
+                self.policy = self.policy.saturating_add(1);
+            }
+        }
+    }
+
+    fn snapshot(&self) -> PressureSnapshot {
+        PressureSnapshot {
+            busy: self.busy,
+            quota: self.quota,
+            cut: self.cut,
+            policy: self.policy,
+        }
     }
 }
 

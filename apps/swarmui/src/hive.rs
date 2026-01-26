@@ -62,12 +62,46 @@ pub struct SwarmUiHiveEvent {
     pub seq: u64,
     /// Event classification.
     pub kind: SwarmUiHiveEventKind,
+    /// Optional refusal reason tag for ERR lines.
+    #[serde(default)]
+    pub reason: Option<String>,
     /// Agent identifier that emitted the event.
     pub agent: String,
     /// Namespace path for the agent.
     pub namespace: String,
     /// Optional detail payload (truncated).
     pub detail: Option<String>,
+}
+
+/// Root reachability summary for Live Hive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmUiHiveRootStatus {
+    /// True when the queen/root is reachable.
+    pub reachable: bool,
+    /// Cut reason label when unreachable.
+    pub cut_reason: String,
+}
+
+/// Session summary for Live Hive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmUiHiveSessionSummary {
+    /// Active session count.
+    pub active: u64,
+    /// Draining session count.
+    pub draining: u64,
+}
+
+/// Pressure counters for Live Hive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmUiHivePressureCounters {
+    /// Busy/backpressure events.
+    pub busy: u64,
+    /// Quota-related refusals.
+    pub quota: u64,
+    /// Cut-related refusals.
+    pub cut: u64,
+    /// Policy-related refusals.
+    pub policy: u64,
 }
 
 /// Serialized snapshot used for replay and offline inspection.
@@ -146,6 +180,15 @@ pub struct SwarmUiHiveBatch {
     pub backlog: usize,
     /// Events dropped due to queue bounds.
     pub dropped: u64,
+    /// Root reachability status snapshot.
+    #[serde(default)]
+    pub root: Option<SwarmUiHiveRootStatus>,
+    /// Session summary snapshot.
+    #[serde(default)]
+    pub sessions: Option<SwarmUiHiveSessionSummary>,
+    /// Pressure counter snapshot.
+    #[serde(default)]
+    pub pressure_counters: Option<SwarmUiHivePressureCounters>,
     /// True when replay is complete.
     pub done: bool,
 }
@@ -207,6 +250,9 @@ impl HiveReplay {
             pressure,
             backlog,
             dropped: 0,
+            root: None,
+            sessions: None,
+            pressure_counters: None,
             done: self.cursor >= self.snapshot.events.len(),
         }
     }
@@ -422,10 +468,16 @@ pub(crate) fn parse_line_to_event_with_namespace(
     } else {
         SwarmUiHiveEventKind::Telemetry
     };
+    let reason = if matches!(kind, SwarmUiHiveEventKind::Error) {
+        parse_error_reason(trimmed)
+    } else {
+        None
+    };
     let detail = truncate_detail(trimmed);
     let event = SwarmUiHiveEvent {
         seq: *seq,
         kind,
+        reason,
         agent: agent.to_owned(),
         namespace: namespace.to_owned(),
         detail,
@@ -534,6 +586,19 @@ fn truncate_detail(line: &str) -> Option<String> {
         detail.truncate(HIVE_DETAIL_MAX);
     }
     Some(detail)
+}
+
+fn parse_error_reason(line: &str) -> Option<String> {
+    for part in line.split_whitespace() {
+        if let Some(value) = part.strip_prefix("reason=") {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            return Some(trimmed.to_owned());
+        }
+    }
+    None
 }
 
 fn decode_line(bytes: &[u8]) -> Result<String, SwarmUiError> {

@@ -83,7 +83,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [21b](#21b) | Host Bridges (coh mount, coh gpu, coh telemetry pull) | Complete |
 | [21c](#21c) | SwarmUI Interactive cohsh Terminal (Full Prompt UX) | Complete |
 | [21d](#21d) | Deterministic Node Lifecycle & Operator Control | Complete |
-| [21e](#21e) | Rooted Authority, Cut Detection, Explicit Session Semantics, and Live Hive Visibility | Pending |
+| [21e](#21e) | Rooted Authority, Cut Detection, Explicit Session Semantics, and Live Hive Visibility | Complete |
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Pending |
 | [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Pending |
 | [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Pending |

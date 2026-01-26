@@ -183,6 +183,7 @@ fn event(
         agent: agent.id.clone(),
         namespace: agent.namespace.clone(),
         detail: Some(detail.to_owned()),
+        reason: None,
     }
 }
 

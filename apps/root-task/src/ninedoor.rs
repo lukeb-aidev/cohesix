@@ -53,10 +53,22 @@ const PROC_INGEST_BACKPRESSURE_PATH: &str = "/proc/ingest/backpressure";
 const PROC_INGEST_DROPPED_PATH: &str = "/proc/ingest/dropped";
 const PROC_INGEST_QUEUED_PATH: &str = "/proc/ingest/queued";
 const PROC_INGEST_WATCH_PATH: &str = "/proc/ingest/watch";
+const PROC_9P_ROOT_PATH: &str = "/proc/9p";
+const PROC_9P_SESSION_ROOT_PATH: &str = "/proc/9p/session";
+const PROC_9P_SESSION_ACTIVE_PATH: &str = "/proc/9p/session/active";
 const PROC_LIFECYCLE_ROOT_PATH: &str = "/proc/lifecycle";
 const PROC_LIFECYCLE_STATE_PATH: &str = "/proc/lifecycle/state";
 const PROC_LIFECYCLE_REASON_PATH: &str = "/proc/lifecycle/reason";
 const PROC_LIFECYCLE_SINCE_PATH: &str = "/proc/lifecycle/since";
+const PROC_ROOT_ROOT_PATH: &str = "/proc/root";
+const PROC_ROOT_REACHABLE_PATH: &str = "/proc/root/reachable";
+const PROC_ROOT_LAST_SEEN_PATH: &str = "/proc/root/last_seen_ms";
+const PROC_ROOT_CUT_REASON_PATH: &str = "/proc/root/cut_reason";
+const PROC_PRESSURE_ROOT_PATH: &str = "/proc/pressure";
+const PROC_PRESSURE_BUSY_PATH: &str = "/proc/pressure/busy";
+const PROC_PRESSURE_QUOTA_PATH: &str = "/proc/pressure/quota";
+const PROC_PRESSURE_CUT_PATH: &str = "/proc/pressure/cut";
+const PROC_PRESSURE_POLICY_PATH: &str = "/proc/pressure/policy";
 const BOOT_HEADER: &str = "Cohesix boot: root-task online";
 const MAX_STREAM_LINES: usize = log_buffer::LOG_SNAPSHOT_LINES;
 const MAX_WORKERS: usize = 8;
@@ -111,6 +123,20 @@ const OBSERVE_WATCH_LINE_BYTES: usize =
     generated::OBSERVABILITY_CONFIG.proc_ingest.watch_line_bytes as usize;
 const OBSERVE_WATCH_MIN_INTERVAL_MS: u64 =
     generated::OBSERVABILITY_CONFIG.proc_ingest.watch_min_interval_ms as u64;
+const OBSERVE_ROOT_REACHABLE_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_root.reachable_bytes as usize;
+const OBSERVE_ROOT_LAST_SEEN_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_root.last_seen_ms_bytes as usize;
+const OBSERVE_ROOT_CUT_REASON_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_root.cut_reason_bytes as usize;
+const OBSERVE_PRESSURE_BUSY_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_pressure.busy_bytes as usize;
+const OBSERVE_PRESSURE_QUOTA_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_pressure.quota_bytes as usize;
+const OBSERVE_PRESSURE_CUT_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_pressure.cut_bytes as usize;
+const OBSERVE_PRESSURE_POLICY_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_pressure.policy_bytes as usize;
 const SIDECAR_LOG_MAX_BYTES: usize = generated::SECURE9P_LIMITS.msize as usize;
 const TELEMETRY_INGEST_RECORD_MAX_BYTES: usize = 4096;
 
@@ -1007,6 +1033,21 @@ impl NineDoorBridge {
             }
             return lines_from_text(line.as_str());
         }
+        if path == PROC_9P_SESSION_ACTIVE_PATH {
+            if !self.observe.proc_9p_session_enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+            let active = if self.attached { 1 } else { 0 };
+            let _ = write!(line, "active={} draining=0", active);
+            return lines_from_text(line.as_str());
+        }
+        if let Some(result) = self.observe.root_lines(path) {
+            return result;
+        }
+        if let Some(result) = self.observe.pressure_lines(path) {
+            return result;
+        }
         if let Some(result) = self.observe.ingest_lines(path) {
             return result;
         }
@@ -1085,13 +1126,37 @@ impl NineDoorBridge {
             push_list_entry(&mut output, "boot")?;
             push_list_entry(&mut output, "tests")?;
             push_list_entry(&mut output, "lifecycle")?;
+            if self.observe.proc_9p_session_enabled() {
+                push_list_entry(&mut output, "9p")?;
+            }
             if self.observe.proc_ingest_enabled() {
                 push_list_entry(&mut output, "ingest")?;
             }
+            if self.observe.proc_root_enabled() {
+                push_list_entry(&mut output, "root")?;
+            }
+            if self.observe.proc_pressure_enabled() {
+                push_list_entry(&mut output, "pressure")?;
+            }
             return Ok(output);
+        }
+        if path == PROC_9P_ROOT_PATH {
+            if !self.observe.proc_9p_session_enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return list_from_slice(&["session"]);
+        }
+        if path == PROC_9P_SESSION_ROOT_PATH {
+            if !self.observe.proc_9p_session_enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return list_from_slice(&["active"]);
         }
         if path == PROC_LIFECYCLE_ROOT_PATH {
             return list_from_slice(&["state", "reason", "since"]);
+        }
+        if path == PROC_ROOT_ROOT_PATH {
+            return self.observe.list_root();
         }
         if path == "/proc/tests" {
             return list_from_slice(&[
@@ -1102,6 +1167,9 @@ impl NineDoorBridge {
         }
         if path == PROC_INGEST_ROOT_PATH {
             return self.observe.list_ingest();
+        }
+        if path == PROC_PRESSURE_ROOT_PATH {
+            return self.observe.list_pressure();
         }
         if path == "/queen" {
             let mut output = HeaplessVec::new();
@@ -1691,6 +1759,9 @@ impl HostWriteOutcome {
 #[derive(Debug)]
 struct ObserveState {
     proc_ingest: generated::ProcIngestConfig,
+    proc_9p_session: generated::Proc9pSessionConfig,
+    proc_root: generated::ProcRootConfig,
+    proc_pressure: generated::ProcPressureConfig,
     snapshot: IngestSnapshot,
     watch: IngestWatch,
 }
@@ -1700,6 +1771,9 @@ impl ObserveState {
         let config = generated::observability_config();
         Self {
             proc_ingest: config.proc_ingest,
+            proc_9p_session: config.proc_9p_session,
+            proc_root: config.proc_root,
+            proc_pressure: config.proc_pressure,
             snapshot: IngestSnapshot::default(),
             watch: IngestWatch::new(),
         }
@@ -1712,6 +1786,24 @@ impl ObserveState {
             || self.proc_ingest.dropped
             || self.proc_ingest.queued
             || self.proc_ingest.watch
+    }
+
+    fn proc_root_enabled(&self) -> bool {
+        self.proc_root.reachable || self.proc_root.last_seen_ms || self.proc_root.cut_reason
+    }
+
+    fn proc_pressure_enabled(&self) -> bool {
+        self.proc_pressure.busy
+            || self.proc_pressure.quota
+            || self.proc_pressure.cut
+            || self.proc_pressure.policy
+    }
+
+    fn proc_9p_session_enabled(&self) -> bool {
+        self.proc_9p_session.active
+            || self.proc_9p_session.state
+            || self.proc_9p_session.since_ms
+            || self.proc_9p_session.owner
     }
 
     fn update_ingest_snapshot(&mut self, snapshot: IngestSnapshot) {
@@ -1746,6 +1838,58 @@ impl ObserveState {
                     .and_then(|line| lines_from_text(line.as_str())),
             ),
             PROC_INGEST_WATCH_PATH if self.proc_ingest.watch => Some(self.watch.lines()),
+            _ => None,
+        }
+    }
+
+    fn root_lines(
+        &self,
+        path: &str,
+    ) -> Option<
+        Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>,
+    > {
+        let snapshot = lifecycle::root_snapshot();
+        match path {
+            PROC_ROOT_REACHABLE_PATH if self.proc_root.reachable => Some(
+                render_root_reachable_line(snapshot)
+                    .and_then(|line| lines_from_text(line.as_str())),
+            ),
+            PROC_ROOT_LAST_SEEN_PATH if self.proc_root.last_seen_ms => Some(
+                render_root_last_seen_line(snapshot)
+                    .and_then(|line| lines_from_text(line.as_str())),
+            ),
+            PROC_ROOT_CUT_REASON_PATH if self.proc_root.cut_reason => Some(
+                render_root_cut_reason_line(snapshot)
+                    .and_then(|line| lines_from_text(line.as_str())),
+            ),
+            _ => None,
+        }
+    }
+
+    fn pressure_lines(
+        &self,
+        path: &str,
+    ) -> Option<
+        Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>,
+    > {
+        let snapshot = crate::observe::pressure_snapshot();
+        match path {
+            PROC_PRESSURE_BUSY_PATH if self.proc_pressure.busy => Some(
+                render_pressure_busy_line(snapshot)
+                    .and_then(|line| lines_from_text(line.as_str())),
+            ),
+            PROC_PRESSURE_QUOTA_PATH if self.proc_pressure.quota => Some(
+                render_pressure_quota_line(snapshot)
+                    .and_then(|line| lines_from_text(line.as_str())),
+            ),
+            PROC_PRESSURE_CUT_PATH if self.proc_pressure.cut => Some(
+                render_pressure_cut_line(snapshot)
+                    .and_then(|line| lines_from_text(line.as_str())),
+            ),
+            PROC_PRESSURE_POLICY_PATH if self.proc_pressure.policy => Some(
+                render_pressure_policy_line(snapshot)
+                    .and_then(|line| lines_from_text(line.as_str())),
+            ),
             _ => None,
         }
     }
@@ -1788,6 +1932,49 @@ impl ObserveState {
         }
         if self.proc_ingest.watch {
             push_list_entry(&mut output, "watch")?;
+        }
+        Ok(output)
+    }
+
+    fn list_root(
+        &self,
+    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+    {
+        if !self.proc_root_enabled() {
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        let mut output = HeaplessVec::new();
+        if self.proc_root.reachable {
+            push_list_entry(&mut output, "reachable")?;
+        }
+        if self.proc_root.last_seen_ms {
+            push_list_entry(&mut output, "last_seen_ms")?;
+        }
+        if self.proc_root.cut_reason {
+            push_list_entry(&mut output, "cut_reason")?;
+        }
+        Ok(output)
+    }
+
+    fn list_pressure(
+        &self,
+    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+    {
+        if !self.proc_pressure_enabled() {
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        let mut output = HeaplessVec::new();
+        if self.proc_pressure.busy {
+            push_list_entry(&mut output, "busy")?;
+        }
+        if self.proc_pressure.quota {
+            push_list_entry(&mut output, "quota")?;
+        }
+        if self.proc_pressure.cut {
+            push_list_entry(&mut output, "cut")?;
+        }
+        if self.proc_pressure.policy {
+            push_list_entry(&mut output, "policy")?;
         }
         Ok(output)
     }
@@ -4891,6 +5078,65 @@ fn render_queued_line(
     let mut line = HeaplessString::new();
     write!(line, "queued={}", snapshot.queued)
         .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
+}
+
+fn render_root_reachable_line(
+    snapshot: lifecycle::RootSnapshot,
+) -> Result<HeaplessString<OBSERVE_ROOT_REACHABLE_BYTES>, NineDoorBridgeError> {
+    let mut line = HeaplessString::new();
+    let value = if snapshot.reachable { "yes" } else { "no" };
+    write!(line, "reachable={value}").map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
+}
+
+fn render_root_last_seen_line(
+    snapshot: lifecycle::RootSnapshot,
+) -> Result<HeaplessString<OBSERVE_ROOT_LAST_SEEN_BYTES>, NineDoorBridgeError> {
+    let mut line = HeaplessString::new();
+    write!(line, "last_seen_ms={}", snapshot.last_seen_ms)
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
+}
+
+fn render_root_cut_reason_line(
+    snapshot: lifecycle::RootSnapshot,
+) -> Result<HeaplessString<OBSERVE_ROOT_CUT_REASON_BYTES>, NineDoorBridgeError> {
+    let mut line = HeaplessString::new();
+    let reason = lifecycle::root_cut_reason_label(snapshot.cut_reason);
+    write!(line, "cut_reason={reason}").map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
+}
+
+fn render_pressure_busy_line(
+    snapshot: crate::observe::PressureSnapshot,
+) -> Result<HeaplessString<OBSERVE_PRESSURE_BUSY_BYTES>, NineDoorBridgeError> {
+    let mut line = HeaplessString::new();
+    write!(line, "busy={}", snapshot.busy).map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
+}
+
+fn render_pressure_quota_line(
+    snapshot: crate::observe::PressureSnapshot,
+) -> Result<HeaplessString<OBSERVE_PRESSURE_QUOTA_BYTES>, NineDoorBridgeError> {
+    let mut line = HeaplessString::new();
+    write!(line, "quota={}", snapshot.quota).map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
+}
+
+fn render_pressure_cut_line(
+    snapshot: crate::observe::PressureSnapshot,
+) -> Result<HeaplessString<OBSERVE_PRESSURE_CUT_BYTES>, NineDoorBridgeError> {
+    let mut line = HeaplessString::new();
+    write!(line, "cut={}", snapshot.cut).map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
+}
+
+fn render_pressure_policy_line(
+    snapshot: crate::observe::PressureSnapshot,
+) -> Result<HeaplessString<OBSERVE_PRESSURE_POLICY_BYTES>, NineDoorBridgeError> {
+    let mut line = HeaplessString::new();
+    write!(line, "policy={}", snapshot.policy).map_err(|_| NineDoorBridgeError::BufferFull)?;
     Ok(line)
 }
 

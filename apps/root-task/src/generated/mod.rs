@@ -136,6 +136,18 @@ pub struct Proc9pConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct Proc9pSessionConfig {
+    pub active: bool,
+    pub state: bool,
+    pub since_ms: bool,
+    pub owner: bool,
+    pub active_bytes: u32,
+    pub state_bytes: u32,
+    pub since_ms_bytes: u32,
+    pub owner_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct ProcIngestConfig {
     pub p50_ms: bool,
     pub p95_ms: bool,
@@ -157,9 +169,34 @@ pub struct ProcIngestConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct ProcRootConfig {
+    pub reachable: bool,
+    pub last_seen_ms: bool,
+    pub cut_reason: bool,
+    pub reachable_bytes: u32,
+    pub last_seen_ms_bytes: u32,
+    pub cut_reason_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ProcPressureConfig {
+    pub busy: bool,
+    pub quota: bool,
+    pub cut: bool,
+    pub policy: bool,
+    pub busy_bytes: u32,
+    pub quota_bytes: u32,
+    pub cut_bytes: u32,
+    pub policy_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct ObservabilityConfig {
     pub proc_9p: Proc9pConfig,
+    pub proc_9p_session: Proc9pSessionConfig,
     pub proc_ingest: ProcIngestConfig,
+    pub proc_root: ProcRootConfig,
+    pub proc_pressure: ProcPressureConfig,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -300,7 +337,7 @@ pub struct AuditConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
-pub const MANIFEST_SHA256: &str = "7ac2fcc56751bb4670a74fd0063bfc4993c18367450aca3961ab65ad7ad37634";
+pub const MANIFEST_SHA256: &str = "a40f87e1b0e148da7f7be9cab2a960bbb41cf9ef4e29e7c71c6847d92de9f509";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

@@ -250,6 +250,54 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `observability.proc_9p_session.active`: `{}`",
+            manifest.observability.proc_9p_session.active
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_9p_session.state`: `{}`",
+            manifest.observability.proc_9p_session.state
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_9p_session.since_ms`: `{}`",
+            manifest.observability.proc_9p_session.since_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_9p_session.owner`: `{}`",
+            manifest.observability.proc_9p_session.owner
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_9p_session.active_bytes`: `{}`",
+            manifest.observability.proc_9p_session.active_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_9p_session.state_bytes`: `{}`",
+            manifest.observability.proc_9p_session.state_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_9p_session.since_ms_bytes`: `{}`",
+            manifest.observability.proc_9p_session.since_ms_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_9p_session.owner_bytes`: `{}`",
+            manifest.observability.proc_9p_session.owner_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
             "- `observability.proc_ingest.p50_ms`: `{}`",
             manifest.observability.proc_ingest.p50_ms
         )
@@ -348,6 +396,90 @@ impl DocFragments {
             schema_md,
             "- `observability.proc_ingest.counter_tolerance`: `{}`",
             manifest.observability.proc_ingest.counter_tolerance
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_root.reachable`: `{}`",
+            manifest.observability.proc_root.reachable
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_root.last_seen_ms`: `{}`",
+            manifest.observability.proc_root.last_seen_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_root.cut_reason`: `{}`",
+            manifest.observability.proc_root.cut_reason
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_root.reachable_bytes`: `{}`",
+            manifest.observability.proc_root.reachable_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_root.last_seen_ms_bytes`: `{}`",
+            manifest.observability.proc_root.last_seen_ms_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_root.cut_reason_bytes`: `{}`",
+            manifest.observability.proc_root.cut_reason_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_pressure.busy`: `{}`",
+            manifest.observability.proc_pressure.busy
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_pressure.quota`: `{}`",
+            manifest.observability.proc_pressure.quota
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_pressure.cut`: `{}`",
+            manifest.observability.proc_pressure.cut
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_pressure.policy`: `{}`",
+            manifest.observability.proc_pressure.policy
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_pressure.busy_bytes`: `{}`",
+            manifest.observability.proc_pressure.busy_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_pressure.quota_bytes`: `{}`",
+            manifest.observability.proc_pressure.quota_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_pressure.cut_bytes`: `{}`",
+            manifest.observability.proc_pressure.cut_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_pressure.policy_bytes`: `{}`",
+            manifest.observability.proc_pressure.policy_bytes
         )
         .ok();
         writeln!(
@@ -879,14 +1011,25 @@ impl DocFragments {
         writeln!(ecosystem_md, "- Nodes appear only when enabled.").ok();
 
         let proc_9p = &manifest.observability.proc_9p;
+        let proc_9p_session = &manifest.observability.proc_9p_session;
         let proc_ingest = &manifest.observability.proc_ingest;
+        let proc_root = &manifest.observability.proc_root;
+        let proc_pressure = &manifest.observability.proc_pressure;
         let proc_9p_enabled = proc_9p.sessions || proc_9p.outstanding || proc_9p.short_writes;
+        let proc_9p_session_enabled = proc_9p_session.active
+            || proc_9p_session.state
+            || proc_9p_session.since_ms
+            || proc_9p_session.owner;
         let proc_ingest_enabled = proc_ingest.p50_ms
             || proc_ingest.p95_ms
             || proc_ingest.backpressure
             || proc_ingest.dropped
             || proc_ingest.queued
             || proc_ingest.watch;
+        let proc_root_enabled =
+            proc_root.reachable || proc_root.last_seen_ms || proc_root.cut_reason;
+        let proc_pressure_enabled =
+            proc_pressure.busy || proc_pressure.quota || proc_pressure.cut || proc_pressure.policy;
 
         let mut observability_interfaces_md = String::new();
         writeln!(
@@ -894,7 +1037,12 @@ impl DocFragments {
             "### /proc observability nodes (generated)"
         )
         .ok();
-        if !proc_9p_enabled && !proc_ingest_enabled {
+        if !proc_9p_enabled
+            && !proc_9p_session_enabled
+            && !proc_ingest_enabled
+            && !proc_root_enabled
+            && !proc_pressure_enabled
+        {
             writeln!(observability_interfaces_md, "- (disabled)").ok();
         } else {
             if proc_9p.sessions {
@@ -918,6 +1066,38 @@ impl DocFragments {
                     observability_interfaces_md,
                     "- `/proc/9p/short_writes` (read-only, max {} bytes): `short_writes total=<u64> retries=<u64>`.",
                     proc_9p.short_writes_bytes
+                )
+                .ok();
+            }
+            if proc_9p_session.active {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/9p/session/active` (read-only, max {} bytes): `active=<u64> draining=<u64>`.",
+                    proc_9p_session.active_bytes
+                )
+                .ok();
+            }
+            if proc_9p_session.state {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/9p/session/<id>/state` (read-only, max {} bytes): `state=SETUP|ACTIVE|DRAINING|CLOSED`.",
+                    proc_9p_session.state_bytes
+                )
+                .ok();
+            }
+            if proc_9p_session.since_ms {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/9p/session/<id>/since_ms` (read-only, max {} bytes): `since_ms=<u64>`.",
+                    proc_9p_session.since_ms_bytes
+                )
+                .ok();
+            }
+            if proc_9p_session.owner {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/9p/session/<id>/owner` (read-only, max {} bytes): `owner=<identity>`.",
+                    proc_9p_session.owner_bytes
                 )
                 .ok();
             }
@@ -968,6 +1148,62 @@ impl DocFragments {
                     proc_ingest.watch_max_entries,
                     proc_ingest.watch_line_bytes,
                     proc_ingest.watch_min_interval_ms
+                )
+                .ok();
+            }
+            if proc_root.reachable {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/root/reachable` (read-only, max {} bytes): `reachable=yes|no`.",
+                    proc_root.reachable_bytes
+                )
+                .ok();
+            }
+            if proc_root.last_seen_ms {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/root/last_seen_ms` (read-only, max {} bytes): `last_seen_ms=<u64>`.",
+                    proc_root.last_seen_ms_bytes
+                )
+                .ok();
+            }
+            if proc_root.cut_reason {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/root/cut_reason` (read-only, max {} bytes): `cut_reason=<none|network_unreachable|session_revoked|policy_denied|lifecycle_offline>`.",
+                    proc_root.cut_reason_bytes
+                )
+                .ok();
+            }
+            if proc_pressure.busy {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/pressure/busy` (read-only, max {} bytes): `busy=<u64>`.",
+                    proc_pressure.busy_bytes
+                )
+                .ok();
+            }
+            if proc_pressure.quota {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/pressure/quota` (read-only, max {} bytes): `quota=<u64>`.",
+                    proc_pressure.quota_bytes
+                )
+                .ok();
+            }
+            if proc_pressure.cut {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/pressure/cut` (read-only, max {} bytes): `cut=<u64>`.",
+                    proc_pressure.cut_bytes
+                )
+                .ok();
+            }
+            if proc_pressure.policy {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/pressure/policy` (read-only, max {} bytes): `policy=<u64>`.",
+                    proc_pressure.policy_bytes
                 )
                 .ok();
             }

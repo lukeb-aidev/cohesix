@@ -88,6 +88,16 @@ sessions_bytes = 8192
 outstanding_bytes = 128
 short_writes_bytes = 128
 
+[observability.proc_9p_session]
+active = true
+state = true
+since_ms = true
+owner = true
+active_bytes = 128
+state_bytes = 64
+since_ms_bytes = 64
+owner_bytes = 96
+
 [observability.proc_ingest]
 p50_ms = true
 p95_ms = true
@@ -106,6 +116,24 @@ watch_min_interval_ms = 50
 latency_samples = 32
 latency_tolerance_ms = 5
 counter_tolerance = 1
+
+[observability.proc_root]
+reachable = true
+last_seen_ms = true
+cut_reason = true
+reachable_bytes = 32
+last_seen_ms_bytes = 64
+cut_reason_bytes = 64
+
+[observability.proc_pressure]
+busy = true
+quota = true
+cut = true
+policy = true
+busy_bytes = 64
+quota_bytes = 64
+cut_bytes = 64
+policy_bytes = 64
 
 [ui_providers.proc_9p]
 sessions = true

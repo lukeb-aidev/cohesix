@@ -14,6 +14,9 @@ BASE_SCRIPTS=(
     "9p_batch.coh"
     "host_absent.coh"
     "observe_watch.coh"
+    "root_cut_basic.coh"
+    "session_lifecycle.coh"
+    "busy_backpressure.coh"
     "cas_roundtrip.coh"
     "tcp_basic.coh"
     "session_pool.coh"
@@ -184,6 +187,15 @@ run_cohsh() {
             ;;
         observe_watch.coh)
             "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/observe_watch.coh
+            ;;
+        root_cut_basic.coh)
+            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/root_cut_basic.coh
+            ;;
+        session_lifecycle.coh)
+            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/session_lifecycle.coh
+            ;;
+        busy_backpressure.coh)
+            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/busy_backpressure.coh
             ;;
         cas_roundtrip.coh)
             "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/cas_roundtrip.coh

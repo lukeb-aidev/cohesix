@@ -38,6 +38,66 @@ use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+
+#[cfg(feature = "kernel")]
+use crate::lifecycle;
+
+#[cfg(not(feature = "kernel"))]
+mod lifecycle {
+    use crate::generated::LifecycleState;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum RootCutReason {
+        SessionRevoked,
+        NetworkUnreachable,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    pub struct Gate {
+        pub name: &'static str,
+    }
+
+    pub const GATE_WORKER_ATTACH: Gate = Gate {
+        name: "worker-attach",
+    };
+
+    #[derive(Clone, Copy, Debug)]
+    pub struct RootSnapshot {
+        pub reachable: bool,
+    }
+
+    #[inline]
+    pub fn root_snapshot() -> RootSnapshot {
+        RootSnapshot { reachable: true }
+    }
+
+    #[inline]
+    pub fn gate_allows(_: Gate) -> bool {
+        true
+    }
+
+    #[inline]
+    pub fn state() -> LifecycleState {
+        LifecycleState::Online
+    }
+
+    #[inline]
+    pub fn state_label(_state: LifecycleState) -> &'static str {
+        "ONLINE"
+    }
+
+    #[inline]
+    pub fn root_record_activity(_now_ms: u64) {}
+
+    #[inline]
+    pub fn root_mark_cut(_reason: RootCutReason) {}
+
+    #[inline]
+    pub fn root_mark_policy_denied() {}
+
+    #[inline]
+    pub fn root_mark_session_active(_now_ms: u64) {}
+}
 use cohesix_ticket::{Role, TicketClaims, TicketQuotas, TicketToken, TicketVerb};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use cohsh_core::{ConsoleVerb, RoleParseMode};
@@ -50,8 +110,6 @@ use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TIC
 use crate::debug_uart::debug_uart_str;
 #[cfg(feature = "kernel")]
 use crate::log_buffer;
-#[cfg(feature = "kernel")]
-use crate::lifecycle;
 #[cfg(feature = "net-console")]
 use crate::net::{
     ConsoleLine, NetConsoleDisconnectReason, NetConsoleEvent, NetDiagSnapshot, NetPoller,
@@ -59,6 +117,7 @@ use crate::net::{
 };
 #[cfg(feature = "net-console")]
 use crate::observe::IngestSnapshot;
+use crate::observe::PressureKind;
 #[cfg(feature = "kernel")]
 use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
 #[cfg(feature = "kernel")]
@@ -795,6 +854,34 @@ impl SessionRole {
             | Role::WorkerGpu
             | Role::WorkerBus
             | Role::WorkerLora => Some(Self::Worker),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RefusalReason {
+    Busy,
+    Quota,
+    Cut,
+    Policy,
+}
+
+impl RefusalReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            RefusalReason::Busy => "busy",
+            RefusalReason::Quota => "quota",
+            RefusalReason::Cut => "cut",
+            RefusalReason::Policy => "policy",
+        }
+    }
+
+    fn pressure_kind(self) -> PressureKind {
+        match self {
+            RefusalReason::Busy => PressureKind::Busy,
+            RefusalReason::Quota => PressureKind::Quota,
+            RefusalReason::Cut => PressureKind::Cut,
+            RefusalReason::Policy => PressureKind::Policy,
         }
     }
 }
@@ -1589,7 +1676,7 @@ where
             Ok(()) => self.emit_console_line(line.as_str()),
             Err(LineFormatError::Truncated) => {
                 self.audit.denied("console ack truncated");
-                self.emit_console_line("ERR PARSE reason=ack-truncated");
+                self.emit_console_line("ERR PARSE reason=policy detail=ack-truncated");
             }
         }
     }
@@ -1602,21 +1689,62 @@ where
         self.emit_ack(AckStatus::Err, verb, detail);
     }
 
+    fn emit_refusal(&mut self, verb: &str, reason: RefusalReason, detail: Option<&str>) {
+        let detail = match detail {
+            Some(detail) => format_message(format_args!("reason={} {}", reason.as_str(), detail)),
+            None => format_message(format_args!("reason={}", reason.as_str())),
+        };
+        self.emit_ack_err(verb, Some(detail.as_str()));
+        crate::observe::record_pressure(reason.pressure_kind());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn refusal_for_ninedoor_error(err: &NineDoorBridgeError) -> (RefusalReason, &'static str) {
+        match err {
+            NineDoorBridgeError::Unsupported(_) => (RefusalReason::Policy, "unsupported"),
+            NineDoorBridgeError::AttachTimeout => (RefusalReason::Busy, "attach-timeout"),
+            NineDoorBridgeError::InvalidPath => (RefusalReason::Policy, "invalid-path"),
+            NineDoorBridgeError::Permission => (RefusalReason::Policy, "denied"),
+            NineDoorBridgeError::BufferFull => (RefusalReason::Quota, "buffer-full"),
+            NineDoorBridgeError::InvalidPayload => (RefusalReason::Policy, "invalid-payload"),
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_ninedoor_refusal(
+        &mut self,
+        verb: &str,
+        path: Option<&str>,
+        err: &NineDoorBridgeError,
+    ) {
+        let (reason, detail_tag) = Self::refusal_for_ninedoor_error(err);
+        let detail = match path {
+            Some(path) => format_message(format_args!(
+                "detail={detail_tag} path={path} error={err}"
+            )),
+            None => format_message(format_args!("detail={detail_tag} error={err}")),
+        };
+        self.emit_refusal(verb, reason, Some(detail.as_str()));
+    }
+
     fn emit_auth_failure(&mut self, verb: &str) {
         self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
-        self.emit_ack_err(verb, Some("reason=unauthenticated"));
+        self.emit_refusal(verb, RefusalReason::Policy, Some("detail=unauthenticated"));
     }
 
     fn handle_console_error(&mut self, err: ConsoleError) {
         let message = format_message(format_args!("console error: {}", err));
         self.audit.info(message.as_str());
-        let detail = match err {
+        match err {
             ConsoleError::RateLimited(delay) => {
-                format_message(format_args!("reason=rate-limited delay_ms={delay}"))
+                let detail = format_message(format_args!("detail=rate-limited delay_ms={delay}"));
+                self.emit_refusal("PARSE", RefusalReason::Quota, Some(detail.as_str()));
             }
-            other => format_message(format_args!("reason={}", other)),
-        };
-        self.emit_ack_err("PARSE", Some(detail.as_str()));
+            other => {
+                let detail = format_message(format_args!("detail={}", other));
+                self.emit_refusal("PARSE", RefusalReason::Policy, Some(detail.as_str()));
+            }
+        }
         if self.parser.clear_buffer() {
             self.audit
                 .info("console: cleared partial input after parse error");
@@ -1728,6 +1856,9 @@ where
         #[cfg(feature = "kernel")]
         let mut forwarded = false;
         let verb_label = command.verb().ack_label();
+        if matches!(self.session, Some(SessionRole::Queen)) {
+            lifecycle::root_record_activity(self.now_ms);
+        }
         let audit_net = matches!(self.last_input_source, ConsoleInputSource::Net);
         let conn_id = if audit_net {
             self.active_tcp_conn_id()
@@ -1762,7 +1893,11 @@ where
                 } else {
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
-                    self.emit_ack_err(verb_label, Some("reason=unavailable"));
+                    self.emit_refusal(
+                        verb_label,
+                        RefusalReason::Policy,
+                        Some("detail=unavailable"),
+                    );
                 }
             }
             Command::Caps => {
@@ -1772,7 +1907,11 @@ where
                 } else {
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
-                    self.emit_ack_err(verb_label, Some("reason=unavailable"));
+                    self.emit_refusal(
+                        verb_label,
+                        RefusalReason::Policy,
+                        Some("detail=unavailable"),
+                    );
                 }
             }
             Command::Mem => {
@@ -1782,7 +1921,11 @@ where
                 } else {
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
-                    self.emit_ack_err(verb_label, Some("reason=unavailable"));
+                    self.emit_refusal(
+                        verb_label,
+                        RefusalReason::Policy,
+                        Some("detail=unavailable"),
+                    );
                 }
             }
             Command::CacheLog { count } => {
@@ -1798,7 +1941,11 @@ where
                     let _ = count;
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
-                    self.emit_ack_err(verb_label, Some("reason=unsupported"));
+                    self.emit_refusal(
+                        verb_label,
+                        RefusalReason::Policy,
+                        Some("detail=unsupported"),
+                    );
                 }
             }
             Command::Ping => {
@@ -1811,7 +1958,11 @@ where
                 self.audit.info("console: test rejected (host-only)");
                 self.metrics.denied_commands += 1;
                 cmd_status = "err";
-                self.emit_ack_err(verb_label, Some("reason=host-only"));
+                self.emit_refusal(
+                    verb_label,
+                    RefusalReason::Policy,
+                    Some("detail=host-only"),
+                );
             }
             Command::NetTest => {
                 #[cfg(feature = "net-console")]
@@ -1824,19 +1975,31 @@ where
                         } else {
                             self.metrics.denied_commands += 1;
                             cmd_status = "err";
-                            self.emit_ack_err(verb_label, Some("reason=unsupported"));
+                            self.emit_refusal(
+                                verb_label,
+                                RefusalReason::Policy,
+                                Some("detail=unsupported"),
+                            );
                         }
                     } else {
                         self.metrics.denied_commands += 1;
                         cmd_status = "err";
-                        self.emit_ack_err(verb_label, Some("reason=net-disabled"));
+                        self.emit_refusal(
+                            verb_label,
+                            RefusalReason::Policy,
+                            Some("detail=net-disabled"),
+                        );
                     }
                 }
                 #[cfg(not(feature = "net-console"))]
                 {
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
-                    self.emit_ack_err(verb_label, Some("reason=net-disabled"));
+                    self.emit_refusal(
+                        verb_label,
+                        RefusalReason::Policy,
+                        Some("detail=net-disabled"),
+                    );
                 }
             }
             Command::NetStats => {
@@ -1888,14 +2051,22 @@ where
                     } else {
                         self.metrics.denied_commands += 1;
                         cmd_status = "err";
-                        self.emit_ack_err(verb_label, Some("reason=net-disabled"));
+                        self.emit_refusal(
+                            verb_label,
+                            RefusalReason::Policy,
+                            Some("detail=net-disabled"),
+                        );
                     }
                 }
                 #[cfg(not(feature = "net-console"))]
                 {
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
-                    self.emit_ack_err(verb_label, Some("reason=net-disabled"));
+                    self.emit_refusal(
+                        verb_label,
+                        RefusalReason::Policy,
+                        Some("detail=net-disabled"),
+                    );
                 }
             }
             Command::Quit => {
@@ -1921,7 +2092,7 @@ where
                 }
             }
             Command::Tail { path } => {
-                if self.ensure_authenticated(SessionRole::Worker) {
+                if self.ensure_worker_session(verb_label) {
                     let path_str = path.as_str();
                     if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Read) {
                         self.record_ticket_denial(path_str, TicketVerb::Read, denial);
@@ -1982,9 +2153,6 @@ where
                                         }
                                     }
                                     Err(err) => {
-                                        let detail = format_message(format_args!(
-                                            "reason=ninedoor-error error={err}"
-                                        ));
                                         cmd_status = "err";
                                         let sid = self.session_id.unwrap_or(0);
                                         let err_msg = format_message(format_args!("{err}"));
@@ -1994,7 +2162,11 @@ where
                                             path_str,
                                             err_msg.as_str(),
                                         );
-                                        self.emit_ack_err(verb_label, Some(detail.as_str()));
+                                        self.emit_ninedoor_refusal(
+                                            verb_label,
+                                            Some(path_str),
+                                            &err,
+                                        );
                                     }
                                 }
                             }
@@ -2003,10 +2175,14 @@ where
                         if cmd_status != "err" && !path_supported {
                             cmd_status = "err";
                             let detail = format_message(format_args!(
-                                "reason=invalid-path path={}",
+                                "detail=invalid-path path={}",
                                 path_str
                             ));
-                            self.emit_ack_err(verb_label, Some(detail.as_str()));
+                            self.emit_refusal(
+                                verb_label,
+                                RefusalReason::Policy,
+                                Some(detail.as_str()),
+                            );
                         }
                         if cmd_status != "err" {
                             if let Err(denial) = self.check_ticket_bandwidth(stream_bytes) {
@@ -2071,11 +2247,10 @@ where
                     }
                 } else {
                     cmd_status = "err";
-                    self.emit_auth_failure(verb_label);
                 }
             }
             Command::Cat { path } => {
-                if self.ensure_authenticated(SessionRole::Worker) {
+                if self.ensure_worker_session(verb_label) {
                     let path_str = path.as_str();
                     if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Read) {
                         self.record_ticket_denial(path_str, TicketVerb::Read, denial);
@@ -2353,9 +2528,6 @@ where
                                         }
                                     }
                                     Err(err) => {
-                                        let detail = format_message(format_args!(
-                                            "reason=ninedoor-error error={err}"
-                                        ));
                                         cmd_status = "err";
                                         let sid = self.session_id.unwrap_or(0);
                                         let err_msg = format_message(format_args!("{err}"));
@@ -2365,27 +2537,38 @@ where
                                             path_str,
                                             err_msg.as_str(),
                                         );
-                                        self.emit_ack_err(verb_label, Some(detail.as_str()));
+                                        self.emit_ninedoor_refusal(
+                                            verb_label,
+                                            Some(path_str),
+                                            &err,
+                                        );
                                     }
                                 }
                             } else {
                                 cmd_status = "err";
-                                self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
+                                self.emit_refusal(
+                                    verb_label,
+                                    RefusalReason::Policy,
+                                    Some("detail=ninedoor-unavailable"),
+                                );
                             }
                         }
                         #[cfg(not(feature = "kernel"))]
                         {
                             cmd_status = "err";
-                            self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
+                            self.emit_refusal(
+                                verb_label,
+                                RefusalReason::Policy,
+                                Some("detail=ninedoor-unavailable"),
+                            );
                         }
                     }
                 } else {
                     cmd_status = "err";
-                    self.emit_auth_failure(verb_label);
                 }
             }
             Command::Ls { path } => {
-                if self.ensure_authenticated(SessionRole::Worker) {
+                if self.ensure_worker_session(verb_label) {
                     let path_str = path.as_str();
                     if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Read) {
                         self.record_ticket_denial(path_str, TicketVerb::Read, denial);
@@ -2431,9 +2614,6 @@ where
                                         }
                                     }
                                     Err(err) => {
-                                        let detail = format_message(format_args!(
-                                            "reason=ninedoor-error error={err}"
-                                        ));
                                         cmd_status = "err";
                                         let sid = self.session_id.unwrap_or(0);
                                         let err_msg = format_message(format_args!("{err}"));
@@ -2443,23 +2623,34 @@ where
                                             path_str,
                                             err_msg.as_str(),
                                         );
-                                        self.emit_ack_err(verb_label, Some(detail.as_str()));
+                                        self.emit_ninedoor_refusal(
+                                            verb_label,
+                                            Some(path_str),
+                                            &err,
+                                        );
                                     }
                                 }
                             } else {
                                 cmd_status = "err";
-                                self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
+                                self.emit_refusal(
+                                    verb_label,
+                                    RefusalReason::Policy,
+                                    Some("detail=ninedoor-unavailable"),
+                                );
                             }
                         }
                         #[cfg(not(feature = "kernel"))]
                         {
                             cmd_status = "err";
-                            self.emit_ack_err(verb_label, Some("reason=ninedoor-unavailable"));
+                            self.emit_refusal(
+                                verb_label,
+                                RefusalReason::Policy,
+                                Some("detail=ninedoor-unavailable"),
+                            );
                         }
                     }
                 } else {
                     cmd_status = "err";
-                    self.emit_auth_failure(verb_label);
                 }
             }
             Command::Log => {
@@ -2513,7 +2704,7 @@ where
                 }
             }
             Command::Echo { path, payload } => {
-                if self.ensure_authenticated(SessionRole::Worker) {
+                if self.ensure_worker_session(verb_label) {
                     let path_str = path.as_str();
                     let worker_restricted = matches!(self.session, Some(SessionRole::Worker))
                         && !(path_str.starts_with("/bus/") || path_str.starts_with("/lora/"));
@@ -2521,7 +2712,11 @@ where
                         self.metrics.denied_commands += 1;
                         self.audit.denied("echo denied");
                         cmd_status = "err";
-                        self.emit_ack_err(verb_label, Some("reason=denied"));
+                        self.emit_refusal(
+                            verb_label,
+                            RefusalReason::Policy,
+                            Some("detail=denied"),
+                        );
                     } else {
                         if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Write)
                         {
@@ -2556,9 +2751,6 @@ where
                                             self.consume_ticket_bandwidth(payload.len() as u64);
                                         }
                                         Err(err) => {
-                                            let detail = format_message(format_args!(
-                                                "reason=ninedoor-error error={err}"
-                                            ));
                                             cmd_status = "err";
                                             let sid = self.session_id.unwrap_or(0);
                                             let err_msg = format_message(format_args!("{err}"));
@@ -2568,30 +2760,35 @@ where
                                                 path.as_str(),
                                                 err_msg.as_str(),
                                             );
-                                            self.emit_ack_err(verb_label, Some(detail.as_str()));
+                                            self.emit_ninedoor_refusal(
+                                                verb_label,
+                                                Some(path_str),
+                                                &err,
+                                            );
                                         }
                                     }
                                 } else {
                                     cmd_status = "err";
-                                    self.emit_ack_err(
+                                    self.emit_refusal(
                                         verb_label,
-                                        Some("reason=ninedoor-unavailable"),
+                                        RefusalReason::Policy,
+                                        Some("detail=ninedoor-unavailable"),
                                     );
                                 }
                             }
                             #[cfg(not(feature = "kernel"))]
                             {
                                 cmd_status = "err";
-                                self.emit_ack_err(
+                                self.emit_refusal(
                                     verb_label,
-                                    Some("reason=ninedoor-unavailable"),
+                                    RefusalReason::Policy,
+                                    Some("detail=ninedoor-unavailable"),
                                 );
                             }
                         }
                     }
                 } else {
                     cmd_status = "err";
-                    self.emit_auth_failure(verb_label);
                 }
             }
             Command::Spawn(payload) => {
@@ -2823,18 +3020,25 @@ where
             CommandDispatchError::NineDoorUnavailable { verb } => {
                 self.audit.denied("ninedoor unavailable");
                 self.emit_console_line("ERR: NineDoor unavailable");
-                self.emit_ack_err(verb.ack_label(), Some("reason=ninedoor-unavailable"));
+                self.emit_refusal(
+                    verb.ack_label(),
+                    RefusalReason::Policy,
+                    Some("detail=ninedoor-unavailable"),
+                );
             }
             CommandDispatchError::UnsupportedForNineDoor { verb } => {
                 self.audit.denied("ninedoor unsupported command");
                 self.emit_console_line("ERR unsupported for NineDoor");
-                self.emit_ack_err(verb.ack_label(), Some("reason=unsupported"));
+                self.emit_refusal(
+                    verb.ack_label(),
+                    RefusalReason::Policy,
+                    Some("detail=unsupported"),
+                );
             }
             CommandDispatchError::Bridge { verb, source } => {
-                let detail = format_message(format_args!("reason=ninedoor-error error={source}"));
                 let audit_line = format_message(format_args!("ninedoor bridge error: {source}"));
                 self.audit.denied(audit_line.as_str());
-                self.emit_ack_err(verb.ack_label(), Some(detail.as_str()));
+                self.emit_ninedoor_refusal(verb.ack_label(), None, &source);
             }
         }
     }
@@ -2904,6 +3108,7 @@ where
         if self.session.is_none() && !self.tail_active {
             return;
         }
+        let was_queen = matches!(self.session, Some(SessionRole::Queen));
         let sid = self.session_id.unwrap_or(0);
         if self.tail_active {
             self.audit_tail_stop(sid, reason);
@@ -2928,6 +3133,15 @@ where
         #[cfg(feature = "kernel")]
         if let Some(bridge) = self.ninedoor.as_mut() {
             bridge.reset_session();
+        }
+        if was_queen {
+            let cut_reason = match reason {
+                "eof" | "error" => Some(lifecycle::RootCutReason::NetworkUnreachable),
+                _ => None,
+            };
+            if let Some(cut_reason) = cut_reason {
+                lifecycle::root_mark_cut(cut_reason);
+            }
         }
     }
 
@@ -3132,18 +3346,18 @@ where
     fn emit_ticket_denied(&mut self, verb: &str, path: Option<&str>, denial: TicketDeny) {
         self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
         self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
-        let reason = match denial {
-            TicketDeny::Scope => "EPERM",
+        let (reason, error) = match denial {
+            TicketDeny::Scope => (RefusalReason::Policy, "EPERM"),
             TicketDeny::Rate { .. }
             | TicketDeny::Bandwidth { .. }
             | TicketDeny::CursorResume { .. }
-            | TicketDeny::CursorAdvance { .. } => "ELIMIT",
+            | TicketDeny::CursorAdvance { .. } => (RefusalReason::Quota, "ELIMIT"),
         };
         let detail = match path {
-            Some(path) => format_message(format_args!("path={path} reason={reason}")),
-            None => format_message(format_args!("reason={reason}")),
+            Some(path) => format_message(format_args!("path={path} error={error}")),
+            None => format_message(format_args!("error={error}")),
         };
-        self.emit_ack_err(verb, Some(detail.as_str()));
+        self.emit_refusal(verb, reason, Some(detail.as_str()));
     }
 
     fn check_ticket_scope(&mut self, path: &str, verb: TicketVerb) -> Result<(), TicketDeny> {
@@ -3209,6 +3423,23 @@ where
         }
     }
 
+    fn ensure_worker_session(&mut self, verb: &str) -> bool {
+        if !self.ensure_authenticated(SessionRole::Worker) {
+            self.emit_auth_failure(verb);
+            return false;
+        }
+        #[cfg(feature = "kernel")]
+        {
+            if !lifecycle::root_snapshot().reachable {
+                self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+                self.audit.denied("worker command denied: root unreachable");
+                self.emit_refusal(verb, RefusalReason::Cut, Some("detail=root-unreachable"));
+                return false;
+            }
+        }
+        true
+    }
+
     #[inline(never)]
     fn handle_attach(
         &mut self,
@@ -3219,8 +3450,12 @@ where
             let message = format_message(format_args!("attach throttled ({} ms)", delay));
             self.audit.denied(message.as_str());
             self.metrics.denied_commands += 1;
-            let detail = format_message(format_args!("reason=throttled delay_ms={delay}"));
-            self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some(detail.as_str()));
+            let detail = format_message(format_args!("detail=throttled delay_ms={delay}"));
+            self.emit_refusal(
+                ConsoleVerb::Attach.ack_label(),
+                RefusalReason::Quota,
+                Some(detail.as_str()),
+            );
             return false;
         }
 
@@ -3229,9 +3464,10 @@ where
         else {
             self.audit.denied("attach: invalid role");
             self.metrics.denied_commands += 1;
-            self.emit_ack_err(
+            self.emit_refusal(
                 ConsoleVerb::Attach.ack_label(),
-                Some("reason=invalid-role"),
+                RefusalReason::Policy,
+                Some("detail=invalid-role"),
             );
             return false;
         };
@@ -3254,10 +3490,14 @@ where
                     self.audit.denied("attach denied by lifecycle");
                     self.metrics.denied_commands += 1;
                     let detail = format_message(format_args!(
-                        "reason=lifecycle-denied state={}",
+                        "detail=lifecycle-denied state={}",
                         lifecycle::state_label(state)
                     ));
-                    self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some(detail.as_str()));
+                    self.emit_refusal(
+                        ConsoleVerb::Attach.ack_label(),
+                        RefusalReason::Policy,
+                        Some(detail.as_str()),
+                    );
                     return false;
                 }
             }
@@ -3275,13 +3515,27 @@ where
             let message = format_message(format_args!("attach rate limited: {}", err));
             self.audit.denied(message.as_str());
             self.metrics.denied_commands += 1;
-            let detail = match err {
+            match err {
                 ConsoleError::RateLimited(delay) => {
-                    format_message(format_args!("reason=rate-limited delay_ms={delay}"))
+                    let detail = format_message(format_args!("detail=rate-limited delay_ms={delay}"));
+                    self.emit_refusal(
+                        ConsoleVerb::Attach.ack_label(),
+                        RefusalReason::Quota,
+                        Some(detail.as_str()),
+                    );
                 }
-                other => format_message(format_args!("reason={}", other)),
-            };
-            self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some(detail.as_str()));
+                other => {
+                    let detail = format_message(format_args!("detail={}", other));
+                    self.emit_refusal(
+                        ConsoleVerb::Attach.ack_label(),
+                        RefusalReason::Policy,
+                        Some(detail.as_str()),
+                    );
+                }
+            }
+            if matches!(requested_role, Role::Queen) {
+                lifecycle::root_mark_policy_denied();
+            }
             return false;
         }
 
@@ -3294,7 +3548,14 @@ where
                         self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
                         self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
                         self.record_ticket_claim_denial(requested_role, ticket, &err);
-                        self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some("reason=invalid-claims"));
+                        self.emit_refusal(
+                            ConsoleVerb::Attach.ack_label(),
+                            RefusalReason::Policy,
+                            Some("detail=invalid-claims"),
+                        );
+                        if matches!(requested_role, Role::Queen) {
+                            lifecycle::root_mark_policy_denied();
+                        }
                         return false;
                     }
                 };
@@ -3305,7 +3566,14 @@ where
                         self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
                         self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
                         self.record_ticket_expired(requested_role, ticket, &claims);
-                        self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some("reason=expired"));
+                        self.emit_refusal(
+                            ConsoleVerb::Attach.ack_label(),
+                            RefusalReason::Quota,
+                            Some("detail=expired"),
+                        );
+                        if matches!(requested_role, Role::Queen) {
+                            lifecycle::root_mark_policy_denied();
+                        }
                         return false;
                     }
                 }
@@ -3320,7 +3588,14 @@ where
                         self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
                         self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
                         self.record_ticket_claim_denial(requested_role, ticket, &err);
-                        self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some("reason=invalid-claims"));
+                        self.emit_refusal(
+                            ConsoleVerb::Attach.ack_label(),
+                            RefusalReason::Quota,
+                            Some("detail=invalid-claims"),
+                        );
+                        if matches!(requested_role, Role::Queen) {
+                            lifecycle::root_mark_policy_denied();
+                        }
                         return false;
                     }
                 }
@@ -3341,6 +3616,9 @@ where
             let role_label = cohsh_core::role_label(requested_role);
             let detail = format_message(format_args!("role={role_label}"));
             self.emit_ack_ok(ConsoleVerb::Attach.ack_label(), Some(detail.as_str()));
+            if matches!(requested_role, Role::Queen) {
+                lifecycle::root_mark_session_active(self.now_ms);
+            }
             log::info!(
                 target: "net-console",
                 "[net-console] auth: success; attaching session role={role_label}"
@@ -3360,7 +3638,14 @@ where
                 requested_role,
                 ticket_str.is_some()
             );
-            self.emit_ack_err(ConsoleVerb::Attach.ack_label(), Some("reason=denied"));
+            self.emit_refusal(
+                ConsoleVerb::Attach.ack_label(),
+                RefusalReason::Policy,
+                Some("detail=denied"),
+            );
+            if matches!(requested_role, Role::Queen) {
+                lifecycle::root_mark_policy_denied();
+            }
         }
         false
     }
@@ -3899,7 +4184,7 @@ mod tests {
         let transcript: Vec<u8> = tx.into_iter().collect();
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
-            rendered.contains("ERR LOG reason=unauthenticated"),
+            rendered.contains("ERR LOG reason=policy detail=unauthenticated"),
             "{rendered}"
         );
         assert!(rendered.contains("OK ATTACH role=queen"), "{rendered}");
@@ -4043,7 +4328,7 @@ mod tests {
         assert!(rendered.contains("END\r\n"), "{rendered}");
         assert!(rendered.contains("OK QUIT"), "{rendered}");
         assert!(
-            rendered.contains("ERR LOG reason=unauthenticated"),
+            rendered.contains("ERR LOG reason=policy detail=unauthenticated"),
             "{rendered}"
         );
     }

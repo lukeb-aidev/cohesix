@@ -30,6 +30,9 @@ const MAX_SIDECAR_ID_LEN: usize = 64;
 const MAX_SIDECAR_MOUNT_LEN: usize = 64;
 const MAX_SPOOL_ENTRIES: u16 = 256;
 const LORA_TAMPER_ENTRY_BYTES: u32 = 128;
+const MAX_ROOT_CUT_REASON_LEN: usize = "network_unreachable".len();
+const MAX_SESSION_STATE_LEN: usize = "DRAINING".len();
+const MAX_SESSION_OWNER_LEN: usize = 64;
 const MAX_U64_DIGITS: usize = 20;
 const MAX_U32_DIGITS: usize = 10;
 const MAX_U8_DIGITS: usize = 3;
@@ -787,6 +790,40 @@ impl Manifest {
             )?;
         }
 
+        let proc_9p_session = &self.observability.proc_9p_session;
+        if proc_9p_session.active {
+            let required = required_proc_9p_session_active_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_9p_session.active_bytes",
+                proc_9p_session.active_bytes,
+                required,
+            )?;
+        }
+        if proc_9p_session.state {
+            let required = required_proc_9p_session_state_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_9p_session.state_bytes",
+                proc_9p_session.state_bytes,
+                required,
+            )?;
+        }
+        if proc_9p_session.since_ms {
+            let required = required_proc_9p_session_since_ms_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_9p_session.since_ms_bytes",
+                proc_9p_session.since_ms_bytes,
+                required,
+            )?;
+        }
+        if proc_9p_session.owner {
+            let required = required_proc_9p_session_owner_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_9p_session.owner_bytes",
+                proc_9p_session.owner_bytes,
+                required,
+            )?;
+        }
+
         let proc_ingest = &self.observability.proc_ingest;
         let ingest_enabled = proc_ingest.p50_ms
             || proc_ingest.p95_ms
@@ -874,6 +911,66 @@ impl Manifest {
             ensure_buffer_bytes(
                 "observability.proc_ingest.watch_line_bytes",
                 proc_ingest.watch_line_bytes,
+                required,
+            )?;
+        }
+
+        let proc_root = &self.observability.proc_root;
+        if proc_root.reachable {
+            let required = required_proc_root_reachable_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_root.reachable_bytes",
+                proc_root.reachable_bytes,
+                required,
+            )?;
+        }
+        if proc_root.last_seen_ms {
+            let required = required_proc_root_last_seen_ms_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_root.last_seen_ms_bytes",
+                proc_root.last_seen_ms_bytes,
+                required,
+            )?;
+        }
+        if proc_root.cut_reason {
+            let required = required_proc_root_cut_reason_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_root.cut_reason_bytes",
+                proc_root.cut_reason_bytes,
+                required,
+            )?;
+        }
+
+        let proc_pressure = &self.observability.proc_pressure;
+        if proc_pressure.busy {
+            let required = required_proc_pressure_busy_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_pressure.busy_bytes",
+                proc_pressure.busy_bytes,
+                required,
+            )?;
+        }
+        if proc_pressure.quota {
+            let required = required_proc_pressure_quota_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_pressure.quota_bytes",
+                proc_pressure.quota_bytes,
+                required,
+            )?;
+        }
+        if proc_pressure.cut {
+            let required = required_proc_pressure_cut_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_pressure.cut_bytes",
+                proc_pressure.cut_bytes,
+                required,
+            )?;
+        }
+        if proc_pressure.policy {
+            let required = required_proc_pressure_policy_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_pressure.policy_bytes",
+                proc_pressure.policy_bytes,
                 required,
             )?;
         }
@@ -1574,14 +1671,20 @@ impl Default for LifecycleConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct Observability {
     pub proc_9p: Proc9pObservability,
+    pub proc_9p_session: Proc9pSessionObservability,
     pub proc_ingest: ProcIngestObservability,
+    pub proc_root: ProcRootObservability,
+    pub proc_pressure: ProcPressureObservability,
 }
 
 impl Default for Observability {
     fn default() -> Self {
         Self {
             proc_9p: Proc9pObservability::default(),
+            proc_9p_session: Proc9pSessionObservability::default(),
             proc_ingest: ProcIngestObservability::default(),
+            proc_root: ProcRootObservability::default(),
+            proc_pressure: ProcPressureObservability::default(),
         }
     }
 }
@@ -1606,6 +1709,34 @@ impl Default for Proc9pObservability {
             sessions_bytes: 1024,
             outstanding_bytes: 128,
             short_writes_bytes: 128,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Proc9pSessionObservability {
+    pub active: bool,
+    pub state: bool,
+    pub since_ms: bool,
+    pub owner: bool,
+    pub active_bytes: u32,
+    pub state_bytes: u32,
+    pub since_ms_bytes: u32,
+    pub owner_bytes: u32,
+}
+
+impl Default for Proc9pSessionObservability {
+    fn default() -> Self {
+        Self {
+            active: false,
+            state: false,
+            since_ms: false,
+            owner: false,
+            active_bytes: 128,
+            state_bytes: 64,
+            since_ms_bytes: 64,
+            owner_bytes: 96,
         }
     }
 }
@@ -1652,6 +1783,58 @@ impl Default for ProcIngestObservability {
             latency_samples: 16,
             latency_tolerance_ms: 5,
             counter_tolerance: 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProcRootObservability {
+    pub reachable: bool,
+    pub last_seen_ms: bool,
+    pub cut_reason: bool,
+    pub reachable_bytes: u32,
+    pub last_seen_ms_bytes: u32,
+    pub cut_reason_bytes: u32,
+}
+
+impl Default for ProcRootObservability {
+    fn default() -> Self {
+        Self {
+            reachable: false,
+            last_seen_ms: false,
+            cut_reason: false,
+            reachable_bytes: 32,
+            last_seen_ms_bytes: 64,
+            cut_reason_bytes: 64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProcPressureObservability {
+    pub busy: bool,
+    pub quota: bool,
+    pub cut: bool,
+    pub policy: bool,
+    pub busy_bytes: u32,
+    pub quota_bytes: u32,
+    pub cut_bytes: u32,
+    pub policy_bytes: u32,
+}
+
+impl Default for ProcPressureObservability {
+    fn default() -> Self {
+        Self {
+            busy: false,
+            quota: false,
+            cut: false,
+            policy: false,
+            busy_bytes: 64,
+            quota_bytes: 64,
+            cut_bytes: 64,
+            policy_bytes: 64,
         }
     }
 }
@@ -2296,6 +2479,22 @@ fn required_proc_9p_short_writes_bytes() -> usize {
     "short_writes total=".len() + MAX_U64_DIGITS + " retries=".len() + MAX_U64_DIGITS + 1
 }
 
+fn required_proc_9p_session_active_bytes() -> usize {
+    "active=".len() + MAX_U64_DIGITS + " draining=".len() + MAX_U64_DIGITS + 1
+}
+
+fn required_proc_9p_session_state_bytes() -> usize {
+    "state=".len() + MAX_SESSION_STATE_LEN + 1
+}
+
+fn required_proc_9p_session_since_ms_bytes() -> usize {
+    "since_ms=".len() + MAX_U64_DIGITS + 1
+}
+
+fn required_proc_9p_session_owner_bytes() -> usize {
+    "owner=".len() + MAX_SESSION_OWNER_LEN + 1
+}
+
 fn required_proc_ingest_p50_bytes() -> usize {
     "p50_ms=".len() + MAX_U32_DIGITS + 1
 }
@@ -2330,6 +2529,34 @@ fn required_proc_ingest_watch_line_bytes() -> usize {
         + " dropped=".len()
         + MAX_U64_DIGITS
         + 1
+}
+
+fn required_proc_root_reachable_bytes() -> usize {
+    "reachable=".len() + "yes".len() + 1
+}
+
+fn required_proc_root_last_seen_ms_bytes() -> usize {
+    "last_seen_ms=".len() + MAX_U64_DIGITS + 1
+}
+
+fn required_proc_root_cut_reason_bytes() -> usize {
+    "cut_reason=".len() + MAX_ROOT_CUT_REASON_LEN + 1
+}
+
+fn required_proc_pressure_busy_bytes() -> usize {
+    "busy=".len() + MAX_U64_DIGITS + 1
+}
+
+fn required_proc_pressure_quota_bytes() -> usize {
+    "quota=".len() + MAX_U64_DIGITS + 1
+}
+
+fn required_proc_pressure_cut_bytes() -> usize {
+    "cut=".len() + MAX_U64_DIGITS + 1
+}
+
+fn required_proc_pressure_policy_bytes() -> usize {
+    "policy=".len() + MAX_U64_DIGITS + 1
 }
 
 fn validate_policy_rule(rule: &PolicyRule) -> Result<()> {

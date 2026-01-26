@@ -160,6 +160,18 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct Proc9pSessionConfig {{")?;
+    writeln!(mod_contents, "    pub active: bool,")?;
+    writeln!(mod_contents, "    pub state: bool,")?;
+    writeln!(mod_contents, "    pub since_ms: bool,")?;
+    writeln!(mod_contents, "    pub owner: bool,")?;
+    writeln!(mod_contents, "    pub active_bytes: u32,")?;
+    writeln!(mod_contents, "    pub state_bytes: u32,")?;
+    writeln!(mod_contents, "    pub since_ms_bytes: u32,")?;
+    writeln!(mod_contents, "    pub owner_bytes: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct ProcIngestConfig {{")?;
     writeln!(mod_contents, "    pub p50_ms: bool,")?;
     writeln!(mod_contents, "    pub p95_ms: bool,")?;
@@ -181,9 +193,34 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct ProcRootConfig {{")?;
+    writeln!(mod_contents, "    pub reachable: bool,")?;
+    writeln!(mod_contents, "    pub last_seen_ms: bool,")?;
+    writeln!(mod_contents, "    pub cut_reason: bool,")?;
+    writeln!(mod_contents, "    pub reachable_bytes: u32,")?;
+    writeln!(mod_contents, "    pub last_seen_ms_bytes: u32,")?;
+    writeln!(mod_contents, "    pub cut_reason_bytes: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct ProcPressureConfig {{")?;
+    writeln!(mod_contents, "    pub busy: bool,")?;
+    writeln!(mod_contents, "    pub quota: bool,")?;
+    writeln!(mod_contents, "    pub cut: bool,")?;
+    writeln!(mod_contents, "    pub policy: bool,")?;
+    writeln!(mod_contents, "    pub busy_bytes: u32,")?;
+    writeln!(mod_contents, "    pub quota_bytes: u32,")?;
+    writeln!(mod_contents, "    pub cut_bytes: u32,")?;
+    writeln!(mod_contents, "    pub policy_bytes: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct ObservabilityConfig {{")?;
     writeln!(mod_contents, "    pub proc_9p: Proc9pConfig,")?;
+    writeln!(mod_contents, "    pub proc_9p_session: Proc9pSessionConfig,")?;
     writeln!(mod_contents, "    pub proc_ingest: ProcIngestConfig,")?;
+    writeln!(mod_contents, "    pub proc_root: ProcRootConfig,")?;
+    writeln!(mod_contents, "    pub proc_pressure: ProcPressureConfig,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -482,7 +519,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, ProcIngestConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcPressureConfig, ProcRootConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -628,6 +665,26 @@ pub fn emit_rust(
     )?;
     writeln!(
         bootstrap_contents,
+        "pub const PROC_9P_SESSION_ACTIVE_BYTES: usize = {};",
+        manifest.observability.proc_9p_session.active_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_9P_SESSION_STATE_BYTES: usize = {};",
+        manifest.observability.proc_9p_session.state_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_9P_SESSION_SINCE_MS_BYTES: usize = {};",
+        manifest.observability.proc_9p_session.since_ms_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_9P_SESSION_OWNER_BYTES: usize = {};",
+        manifest.observability.proc_9p_session.owner_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
         "pub const PROC_INGEST_P50_BYTES: usize = {};",
         manifest.observability.proc_ingest.p50_ms_bytes as usize
     )?;
@@ -668,13 +725,56 @@ pub fn emit_rust(
     )?;
     writeln!(
         bootstrap_contents,
-        "pub const OBSERVABILITY_CONFIG: ObservabilityConfig = ObservabilityConfig {{ proc_9p: Proc9pConfig {{ sessions: {}, outstanding: {}, short_writes: {}, sessions_bytes: {}, outstanding_bytes: {}, short_writes_bytes: {} }}, proc_ingest: ProcIngestConfig {{ p50_ms: {}, p95_ms: {}, backpressure: {}, dropped: {}, queued: {}, watch: {}, p50_ms_bytes: {}, p95_ms_bytes: {}, backpressure_bytes: {}, dropped_bytes: {}, queued_bytes: {}, watch_max_entries: {}, watch_line_bytes: {}, watch_min_interval_ms: {}, latency_samples: {}, latency_tolerance_ms: {}, counter_tolerance: {} }} }};\n",
+        "pub const PROC_ROOT_REACHABLE_BYTES: usize = {};",
+        manifest.observability.proc_root.reachable_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_ROOT_LAST_SEEN_MS_BYTES: usize = {};",
+        manifest.observability.proc_root.last_seen_ms_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_ROOT_CUT_REASON_BYTES: usize = {};",
+        manifest.observability.proc_root.cut_reason_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_PRESSURE_BUSY_BYTES: usize = {};",
+        manifest.observability.proc_pressure.busy_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_PRESSURE_QUOTA_BYTES: usize = {};",
+        manifest.observability.proc_pressure.quota_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_PRESSURE_CUT_BYTES: usize = {};",
+        manifest.observability.proc_pressure.cut_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_PRESSURE_POLICY_BYTES: usize = {};",
+        manifest.observability.proc_pressure.policy_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const OBSERVABILITY_CONFIG: ObservabilityConfig = ObservabilityConfig {{ proc_9p: Proc9pConfig {{ sessions: {}, outstanding: {}, short_writes: {}, sessions_bytes: {}, outstanding_bytes: {}, short_writes_bytes: {} }}, proc_9p_session: Proc9pSessionConfig {{ active: {}, state: {}, since_ms: {}, owner: {}, active_bytes: {}, state_bytes: {}, since_ms_bytes: {}, owner_bytes: {} }}, proc_ingest: ProcIngestConfig {{ p50_ms: {}, p95_ms: {}, backpressure: {}, dropped: {}, queued: {}, watch: {}, p50_ms_bytes: {}, p95_ms_bytes: {}, backpressure_bytes: {}, dropped_bytes: {}, queued_bytes: {}, watch_max_entries: {}, watch_line_bytes: {}, watch_min_interval_ms: {}, latency_samples: {}, latency_tolerance_ms: {}, counter_tolerance: {} }}, proc_root: ProcRootConfig {{ reachable: {}, last_seen_ms: {}, cut_reason: {}, reachable_bytes: {}, last_seen_ms_bytes: {}, cut_reason_bytes: {} }}, proc_pressure: ProcPressureConfig {{ busy: {}, quota: {}, cut: {}, policy: {}, busy_bytes: {}, quota_bytes: {}, cut_bytes: {}, policy_bytes: {} }} }};\n",
         manifest.observability.proc_9p.sessions,
         manifest.observability.proc_9p.outstanding,
         manifest.observability.proc_9p.short_writes,
         manifest.observability.proc_9p.sessions_bytes,
         manifest.observability.proc_9p.outstanding_bytes,
         manifest.observability.proc_9p.short_writes_bytes,
+        manifest.observability.proc_9p_session.active,
+        manifest.observability.proc_9p_session.state,
+        manifest.observability.proc_9p_session.since_ms,
+        manifest.observability.proc_9p_session.owner,
+        manifest.observability.proc_9p_session.active_bytes,
+        manifest.observability.proc_9p_session.state_bytes,
+        manifest.observability.proc_9p_session.since_ms_bytes,
+        manifest.observability.proc_9p_session.owner_bytes,
         manifest.observability.proc_ingest.p50_ms,
         manifest.observability.proc_ingest.p95_ms,
         manifest.observability.proc_ingest.backpressure,
@@ -691,7 +791,21 @@ pub fn emit_rust(
         manifest.observability.proc_ingest.watch_min_interval_ms,
         manifest.observability.proc_ingest.latency_samples,
         manifest.observability.proc_ingest.latency_tolerance_ms,
-        manifest.observability.proc_ingest.counter_tolerance
+        manifest.observability.proc_ingest.counter_tolerance,
+        manifest.observability.proc_root.reachable,
+        manifest.observability.proc_root.last_seen_ms,
+        manifest.observability.proc_root.cut_reason,
+        manifest.observability.proc_root.reachable_bytes,
+        manifest.observability.proc_root.last_seen_ms_bytes,
+        manifest.observability.proc_root.cut_reason_bytes,
+        manifest.observability.proc_pressure.busy,
+        manifest.observability.proc_pressure.quota,
+        manifest.observability.proc_pressure.cut,
+        manifest.observability.proc_pressure.policy,
+        manifest.observability.proc_pressure.busy_bytes,
+        manifest.observability.proc_pressure.quota_bytes,
+        manifest.observability.proc_pressure.cut_bytes,
+        manifest.observability.proc_pressure.policy_bytes
     )?;
     writeln!(
         bootstrap_contents,

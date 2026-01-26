@@ -35,6 +35,7 @@ mod namespace;
 mod observe;
 mod pipeline;
 mod policy;
+mod session;
 mod security;
 mod replay;
 mod telemetry;
@@ -49,7 +50,10 @@ pub use self::namespace::{
 };
 pub use self::audit::{AuditConfig, AuditLimits, ReplayConfig};
 pub use self::policy::{PolicyConfig, PolicyDecision, PolicyLimits, PolicyRuleSpec};
-pub use self::observe::{ObserveConfig, ProcIngestConfig, Proc9pConfig};
+pub use self::observe::{
+    ObserveConfig, ProcIngestConfig, Proc9pConfig, Proc9pSessionConfig, ProcPressureConfig,
+    ProcRootConfig,
+};
 pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 pub use self::security::TicketLimits;
 pub use self::telemetry::{
@@ -655,5 +659,13 @@ impl InProcessConnection {
     #[must_use]
     pub fn session_id(&self) -> SessionId {
         self.session
+    }
+}
+
+impl Drop for InProcessConnection {
+    fn drop(&mut self) {
+        if let Ok(mut core) = self.server.lock() {
+            core.close_session(self.session);
+        }
     }
 }

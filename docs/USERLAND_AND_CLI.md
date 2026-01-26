@@ -266,6 +266,7 @@ Commands and status:
 - `echo <text> > <path>` – append a newline-terminated payload to an absolute path via NineDoor.【F:apps/cohsh/src/lib.rs†L1211-L1222】【F:apps/cohsh/src/lib.rs†L1319-L1332】
 - `ls <path>` – list directory entries; entries are newline-delimited and returned in lexicographic order.
 - `cat <path>` – bounded read of file contents.
+  - Common observability reads: `/proc/root/*` (reachability/cut), `/proc/9p/session/active` (session summary), `/proc/pressure/*` (refusal counters), `/proc/ingest/*` (ingest stats).
 - `spawn <role> [opts]` – queue a worker spawn via `/queen/ctl` (e.g. `spawn heartbeat ticks=100`, `spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120`).
 - `kill <worker_id>` – queue a worker termination via `/queen/ctl`.
 - `bind <src> <dst>` – bind a canonical namespace path to a session-scoped mount point via `/queen/ctl`.
@@ -285,7 +286,7 @@ Connection handling (TCP transport):
 - Disconnects log `[cohsh][tcp] connection lost: …` and trigger reconnect attempts with incremental back-off, emitting `[cohsh][tcp] reconnect attempt #<n> …`. The shell remains usable in interactive mode; in `--script` mode errors propagate and stop the run.【F:apps/cohsh/src/transport/tcp.rs†L63-L73】
 
 ### Acknowledgements and heartbeats
-- The root-task event pump emits `OK <VERB> [detail]` or `ERR <VERB> reason=<cause>` for every console command, sharing one dispatcher across serial and TCP so both transports see the same lines before any payload (for example, `OK TAIL path=…` precedes streamed data).【F:apps/root-task/src/event/mod.rs†L1000-L1018】
+- The root-task event pump emits `OK <VERB> [detail]` or `ERR <VERB> reason=<busy|quota|cut|policy> [detail=<...>]` for every console command, sharing one dispatcher across serial and TCP so both transports see the same lines before any payload (for example, `OK TAIL path=…` precedes streamed data).【F:apps/root-task/src/event/mod.rs†L1000-L1018】
 - `PING` always yields `PONG` without affecting state, keeping automation healthy when idle, while TCP adds a 15-second heartbeat cadence on top of the shared grammar so the client can detect stalls without blocking serial progress.【F:apps/root-task/src/event/mod.rs†L1170-L1183】【F:apps/cohsh/src/transport/tcp.rs†L21-L24】
 - Interactive `cohsh` sessions send periodic silent `PING` keepalives while idle to avoid TCP console inactivity timeouts; acknowledgements are drained and not echoed at the prompt.【F:apps/cohsh/src/lib.rs†L1046-L1955】
 - `cohsh` parses acknowledgement lines using a shared helper, surfaces details inline with shell output, and preserves the order produced by the root-task dispatcher so scripted `attach`/`tail`/`log` flows match serial transcripts byte-for-byte.【F:apps/cohsh/src/proto.rs†L5-L44】【F:apps/cohsh/src/lib.rs†L1031-L1044】

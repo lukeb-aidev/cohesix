@@ -4,6 +4,8 @@
 // Author: Lukas Bower
 #![allow(dead_code)]
 
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use crate::generated;
 
 const LATENCY_SAMPLES: usize =
@@ -29,6 +31,53 @@ pub struct IngestMetrics {
     latency: LatencySamples,
     ui_reads: u64,
     ui_denies: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PressureKind {
+    Busy,
+    Quota,
+    Cut,
+    Policy,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PressureSnapshot {
+    pub busy: u64,
+    pub quota: u64,
+    pub cut: u64,
+    pub policy: u64,
+}
+
+static PRESSURE_BUSY: AtomicU64 = AtomicU64::new(0);
+static PRESSURE_QUOTA: AtomicU64 = AtomicU64::new(0);
+static PRESSURE_CUT: AtomicU64 = AtomicU64::new(0);
+static PRESSURE_POLICY: AtomicU64 = AtomicU64::new(0);
+
+pub fn record_pressure(kind: PressureKind) {
+    match kind {
+        PressureKind::Busy => {
+            PRESSURE_BUSY.fetch_add(1, Ordering::SeqCst);
+        }
+        PressureKind::Quota => {
+            PRESSURE_QUOTA.fetch_add(1, Ordering::SeqCst);
+        }
+        PressureKind::Cut => {
+            PRESSURE_CUT.fetch_add(1, Ordering::SeqCst);
+        }
+        PressureKind::Policy => {
+            PRESSURE_POLICY.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+pub fn pressure_snapshot() -> PressureSnapshot {
+    PressureSnapshot {
+        busy: PRESSURE_BUSY.load(Ordering::SeqCst),
+        quota: PRESSURE_QUOTA.load(Ordering::SeqCst),
+        cut: PRESSURE_CUT.load(Ordering::SeqCst),
+        policy: PRESSURE_POLICY.load(Ordering::SeqCst),
+    }
 }
 
 impl IngestMetrics {

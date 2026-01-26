@@ -244,5 +244,6 @@ fn hive_event(
         agent: agent.id.clone(),
         namespace: agent.namespace.clone(),
         detail: Some(detail.to_owned()),
+        reason: None,
     }
 }

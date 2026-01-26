@@ -12,7 +12,7 @@ use gpu_bridge_host::{GpuModelCatalog, TelemetrySchema};
 use serde::Deserialize;
 use sidecar_bus::{LinkState, OfflineSpool, SpoolConfig, SpoolError};
 use sha2::{Digest, Sha256};
-use secure9p_codec::{ErrorCode, Qid, QidType, MAX_MSIZE};
+use secure9p_codec::{ErrorCode, Qid, QidType, SessionId, MAX_MSIZE};
 use secure9p_core::append_only_write_bounds;
 use trace_model::TraceLevel;
 use worker_lora::{DutyCycleConfig, DutyCycleGuard, TamperEntry, TamperLog, TamperReason};
@@ -20,7 +20,7 @@ use worker_lora::{DutyCycleConfig, DutyCycleGuard, TamperEntry, TamperLog, Tampe
 use super::cas::{
     parse_sha256, validate_epoch, CasConfig, CasStore, ModelFileKind, UpdateStatusPayloads,
 };
-use super::observe::ObserveConfig;
+use super::observe::{ObserveConfig, Proc9pSessionConfig};
 use super::telemetry::{
     ingest::{
         TelemetryIngestError, TelemetryIngestErrorKind, TelemetryIngestState,
@@ -1503,7 +1503,7 @@ impl Namespace {
             return Ok(());
         }
         let proc_path = vec!["proc".to_owned()];
-        if config.proc_9p.enabled() {
+        if config.proc_9p.enabled() || config.proc_9p_session.enabled() {
             self.ensure_dir(&proc_path, "9p")?;
             let proc_9p_path = vec!["proc".to_owned(), "9p".to_owned()];
             if config.proc_9p.sessions && self.ui.proc_9p.sessions {
@@ -1517,6 +1517,13 @@ impl Namespace {
             if config.proc_9p.short_writes && self.ui.proc_9p.short_writes {
                 self.ensure_read_only_file(&proc_9p_path, "short_writes", b"")?;
                 self.ensure_read_only_file(&proc_9p_path, "short_writes.cbor", b"")?;
+            }
+            if config.proc_9p_session.enabled() {
+                self.ensure_dir(&proc_9p_path, "session")?;
+                let session_path = vec!["proc".to_owned(), "9p".to_owned(), "session".to_owned()];
+                if config.proc_9p_session.active {
+                    self.ensure_read_only_file(&session_path, "active", b"")?;
+                }
             }
         }
         if config.proc_ingest.enabled() {
@@ -1542,6 +1549,35 @@ impl Namespace {
             }
             if config.proc_ingest.watch {
                 self.ensure_append_only_file(&ingest_path, "watch", b"")?;
+            }
+        }
+        if config.proc_root.enabled() {
+            self.ensure_dir(&proc_path, "root")?;
+            let root_path = vec!["proc".to_owned(), "root".to_owned()];
+            if config.proc_root.reachable {
+                self.ensure_read_only_file(&root_path, "reachable", b"")?;
+            }
+            if config.proc_root.last_seen_ms {
+                self.ensure_read_only_file(&root_path, "last_seen_ms", b"")?;
+            }
+            if config.proc_root.cut_reason {
+                self.ensure_read_only_file(&root_path, "cut_reason", b"")?;
+            }
+        }
+        if config.proc_pressure.enabled() {
+            self.ensure_dir(&proc_path, "pressure")?;
+            let pressure_path = vec!["proc".to_owned(), "pressure".to_owned()];
+            if config.proc_pressure.busy {
+                self.ensure_read_only_file(&pressure_path, "busy", b"")?;
+            }
+            if config.proc_pressure.quota {
+                self.ensure_read_only_file(&pressure_path, "quota", b"")?;
+            }
+            if config.proc_pressure.cut {
+                self.ensure_read_only_file(&pressure_path, "cut", b"")?;
+            }
+            if config.proc_pressure.policy {
+                self.ensure_read_only_file(&pressure_path, "policy", b"")?;
             }
         }
         Ok(())
@@ -2094,6 +2130,87 @@ impl Namespace {
         self.set_read_only_file(&parent, "short_writes.cbor", data)
     }
 
+    /// Ensure `/proc/9p/session/<id>` nodes exist for the supplied session.
+    pub fn ensure_proc_session_entry(
+        &mut self,
+        session: SessionId,
+        config: Proc9pSessionConfig,
+    ) -> Result<(), NineDoorError> {
+        if !config.enabled() {
+            return Ok(());
+        }
+        let session_root = vec!["proc".to_owned(), "9p".to_owned(), "session".to_owned()];
+        let label = session.session().to_string();
+        self.ensure_dir(&session_root, &label)?;
+        let session_path = vec![
+            "proc".to_owned(),
+            "9p".to_owned(),
+            "session".to_owned(),
+            label,
+        ];
+        if config.state {
+            self.ensure_read_only_file(&session_path, "state", b"")?;
+        }
+        if config.since_ms {
+            self.ensure_read_only_file(&session_path, "since_ms", b"")?;
+        }
+        if config.owner {
+            self.ensure_read_only_file(&session_path, "owner", b"")?;
+        }
+        Ok(())
+    }
+
+    /// Replace the `/proc/9p/session/active` contents.
+    pub fn set_proc_session_active_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "9p".to_owned(), "session".to_owned()];
+        self.set_read_only_file(&parent, "active", data)
+    }
+
+    /// Replace the `/proc/9p/session/<id>/state` contents.
+    pub fn set_proc_session_state_payload(
+        &mut self,
+        session: SessionId,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        let parent = vec![
+            "proc".to_owned(),
+            "9p".to_owned(),
+            "session".to_owned(),
+            session.session().to_string(),
+        ];
+        self.set_read_only_file(&parent, "state", data)
+    }
+
+    /// Replace the `/proc/9p/session/<id>/since_ms` contents.
+    pub fn set_proc_session_since_payload(
+        &mut self,
+        session: SessionId,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        let parent = vec![
+            "proc".to_owned(),
+            "9p".to_owned(),
+            "session".to_owned(),
+            session.session().to_string(),
+        ];
+        self.set_read_only_file(&parent, "since_ms", data)
+    }
+
+    /// Replace the `/proc/9p/session/<id>/owner` contents.
+    pub fn set_proc_session_owner_payload(
+        &mut self,
+        session: SessionId,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        let parent = vec![
+            "proc".to_owned(),
+            "9p".to_owned(),
+            "session".to_owned(),
+            session.session().to_string(),
+        ];
+        self.set_read_only_file(&parent, "owner", data)
+    }
+
     /// Replace the `/proc/ingest/p50_ms` contents.
     pub fn set_proc_ingest_p50_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
         self.ensure_ui_provider_enabled(self.ui.proc_ingest.p50_ms, "proc/ingest/p50_ms")?;
@@ -2170,6 +2287,48 @@ impl Namespace {
     pub fn set_proc_ingest_watch_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
         let parent = vec!["proc".to_owned(), "ingest".to_owned()];
         self.set_append_only_file(&parent, "watch", data)
+    }
+
+    /// Replace the `/proc/root/reachable` contents.
+    pub fn set_proc_root_reachable_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "root".to_owned()];
+        self.set_read_only_file(&parent, "reachable", data)
+    }
+
+    /// Replace the `/proc/root/last_seen_ms` contents.
+    pub fn set_proc_root_last_seen_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "root".to_owned()];
+        self.set_read_only_file(&parent, "last_seen_ms", data)
+    }
+
+    /// Replace the `/proc/root/cut_reason` contents.
+    pub fn set_proc_root_cut_reason_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "root".to_owned()];
+        self.set_read_only_file(&parent, "cut_reason", data)
+    }
+
+    /// Replace the `/proc/pressure/busy` contents.
+    pub fn set_proc_pressure_busy_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "pressure".to_owned()];
+        self.set_read_only_file(&parent, "busy", data)
+    }
+
+    /// Replace the `/proc/pressure/quota` contents.
+    pub fn set_proc_pressure_quota_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "pressure".to_owned()];
+        self.set_read_only_file(&parent, "quota", data)
+    }
+
+    /// Replace the `/proc/pressure/cut` contents.
+    pub fn set_proc_pressure_cut_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "pressure".to_owned()];
+        self.set_read_only_file(&parent, "cut", data)
+    }
+
+    /// Replace the `/proc/pressure/policy` contents.
+    pub fn set_proc_pressure_policy_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "pressure".to_owned()];
+        self.set_read_only_file(&parent, "policy", data)
     }
 
     /// Replace the `/proc/lifecycle/state` contents.

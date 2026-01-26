@@ -43,7 +43,8 @@ use super::policy::{
 };
 use super::namespace::UiProviderInfo;
 use super::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
-use super::observe::{ObserveConfig, ObserveState};
+use super::observe::{ObserveConfig, ObserveState, PressureKind};
+use super::session::{SessionLifecycle, SessionPhase};
 use super::replay::ReplayState;
 use super::security::{CursorCheck, TicketDeny, TicketLimits, TicketUsage};
 use super::telemetry::{
@@ -60,6 +61,7 @@ pub(crate) struct ServerCore {
     control: ControlPlane,
     next_session: u64,
     sessions: HashMap<SessionId, SessionState>,
+    root: RootState,
     ticket_keys: HashMap<Role, TicketKey>,
     ticket_limits: TicketLimits,
     ticket_usage: HashMap<String, TicketUsage>,
@@ -153,6 +155,7 @@ impl ServerCore {
             control,
             next_session: 1,
             sessions: HashMap::new(),
+            root: RootState::new(),
             ticket_keys: HashMap::new(),
             ticket_limits,
             ticket_usage: HashMap::new(),
@@ -168,6 +171,9 @@ impl ServerCore {
             core.clock.now(),
             core.pipeline.metrics(),
         );
+        let _ = core.refresh_proc_sessions(None);
+        let _ = core.refresh_proc_root();
+        let _ = core.observe.update_proc_pressure(&mut core.control.namespace);
         let _ = core.control.refresh_policy_preflight();
         core
     }
@@ -178,33 +184,98 @@ impl ServerCore {
         let now = self.clock.now();
         self.sessions
             .insert(id, SessionState::new(now, self.limits));
+        let _ = self.refresh_proc_sessions(None);
         id
     }
 
-    fn refresh_proc_sessions(&mut self, current: Option<&SessionState>) -> Result<(), NineDoorError> {
+    pub(crate) fn close_session(&mut self, session: SessionId) {
+        let now = self.clock.now();
+        let mut root_cut = false;
+        if let Some(state) = self.sessions.get_mut(&session) {
+            root_cut = matches!(state.role(), Some(Role::Queen))
+                && matches!(
+                    state.session_phase(),
+                    SessionPhase::Active | SessionPhase::Draining
+                );
+            state.mark_closed(now);
+        }
+        if root_cut {
+            self.mark_root_cut(RootCutReason::NetworkUnreachable);
+        }
+        let _ = self.refresh_proc_sessions(None);
+    }
+
+    fn refresh_proc_sessions(
+        &mut self,
+        current: Option<(SessionId, &mut SessionState)>,
+    ) -> Result<(), NineDoorError> {
         let shards = *self.control.namespace().shard_layout();
         let mut shard_counts = vec![0usize; shards.shard_count()];
         let mut worker_sessions = 0usize;
-        for state in self.sessions.values() {
-            if let Some(worker_id) = state.worker_id() {
-                worker_sessions = worker_sessions.saturating_add(1);
-                let shard = shards.worker_shard(worker_id) as usize;
-                if let Some(entry) = shard_counts.get_mut(shard) {
-                    *entry = entry.saturating_add(1);
+        let mut total_sessions = 0usize;
+        let mut active_sessions = 0usize;
+        let mut draining_sessions = 0usize;
+        let now = self.clock.now();
+        let lifecycle_state = self.control.lifecycle_state();
+
+        for (session_id, state) in self.sessions.iter_mut() {
+            state.refresh_session_phase(lifecycle_state, now);
+            let phase = state.session_phase();
+            if phase != SessionPhase::Closed {
+                total_sessions = total_sessions.saturating_add(1);
+                if let Some(worker_id) = state.worker_id() {
+                    worker_sessions = worker_sessions.saturating_add(1);
+                    let shard = shards.worker_shard(worker_id) as usize;
+                    if let Some(entry) = shard_counts.get_mut(shard) {
+                        *entry = entry.saturating_add(1);
+                    }
                 }
             }
+            match phase {
+                SessionPhase::Active => active_sessions = active_sessions.saturating_add(1),
+                SessionPhase::Draining => draining_sessions = draining_sessions.saturating_add(1),
+                SessionPhase::Setup | SessionPhase::Closed => {}
+            }
+            let since_ms = state.session_since_ms(now);
+            let owner = state.session_owner();
+            self.observe.update_proc_9p_session_entry(
+                self.control.namespace_mut(),
+                *session_id,
+                state.session_phase(),
+                since_ms,
+                owner,
+            )?;
         }
-        let mut total_sessions = self.sessions.len();
-        if let Some(state) = current {
-            total_sessions = total_sessions.saturating_add(1);
-            if let Some(worker_id) = state.worker_id() {
-                worker_sessions = worker_sessions.saturating_add(1);
-                let shard = shards.worker_shard(worker_id) as usize;
-                if let Some(entry) = shard_counts.get_mut(shard) {
-                    *entry = entry.saturating_add(1);
+
+        if let Some((session_id, state)) = current {
+            state.refresh_session_phase(lifecycle_state, now);
+            let phase = state.session_phase();
+            if phase != SessionPhase::Closed {
+                total_sessions = total_sessions.saturating_add(1);
+                if let Some(worker_id) = state.worker_id() {
+                    worker_sessions = worker_sessions.saturating_add(1);
+                    let shard = shards.worker_shard(worker_id) as usize;
+                    if let Some(entry) = shard_counts.get_mut(shard) {
+                        *entry = entry.saturating_add(1);
+                    }
                 }
             }
+            match phase {
+                SessionPhase::Active => active_sessions = active_sessions.saturating_add(1),
+                SessionPhase::Draining => draining_sessions = draining_sessions.saturating_add(1),
+                SessionPhase::Setup | SessionPhase::Closed => {}
+            }
+            let since_ms = state.session_since_ms(now);
+            let owner = state.session_owner();
+            self.observe.update_proc_9p_session_entry(
+                self.control.namespace_mut(),
+                session_id,
+                state.session_phase(),
+                since_ms,
+                owner,
+            )?;
         }
+
         let shard_labels = shards.shard_labels();
         self.observe.update_sessions(
             self.control.namespace_mut(),
@@ -213,7 +284,59 @@ impl ServerCore {
             shards.shard_bits(),
             &shard_labels,
             &shard_counts,
+        )?;
+        self.observe.update_proc_9p_session_active(
+            self.control.namespace_mut(),
+            active_sessions,
+            draining_sessions,
         )
+    }
+
+    fn refresh_proc_root(&mut self) -> Result<(), NineDoorError> {
+        let snapshot = self.root.snapshot(self.control.lifecycle_state());
+        self.observe.update_proc_root(
+            self.control.namespace_mut(),
+            snapshot.reachable,
+            snapshot.last_seen_ms,
+            snapshot.cut_reason.as_str(),
+        )
+    }
+
+    fn mark_root_session_active(&mut self, now: Instant) {
+        let now_ms = self.observe.elapsed_ms(now);
+        self.root.mark_session_active(now_ms);
+        let _ = self.refresh_proc_root();
+    }
+
+    fn record_root_activity(&mut self, now: Instant) {
+        let now_ms = self.observe.elapsed_ms(now);
+        self.root.record_activity(now_ms);
+        let _ = self.refresh_proc_root();
+    }
+
+    fn mark_root_policy_denied(&mut self) {
+        self.root.mark_policy_denied();
+        let _ = self.refresh_proc_root();
+    }
+
+    fn mark_root_cut(&mut self, reason: RootCutReason) {
+        let was_last = self.root.active_sessions() == 1;
+        self.root.mark_cut(reason);
+        if was_last {
+            self.record_pressure(PressureKind::Cut);
+        }
+        let _ = self.refresh_proc_root();
+    }
+
+    fn mark_root_policy_if_queen(&mut self, role: Role) {
+        if role == Role::Queen {
+            self.mark_root_policy_denied();
+        }
+    }
+
+    fn record_pressure(&mut self, kind: PressureKind) {
+        self.observe.record_pressure(kind);
+        let _ = self.observe.update_proc_pressure(self.control.namespace_mut());
     }
 
     pub(crate) fn register_service(
@@ -307,6 +430,7 @@ impl ServerCore {
                     session.session()
                 );
                 self.pipeline.record_backpressure();
+                self.record_pressure(PressureKind::Busy);
                 responses[idx] = Some(ResponseBody::Error {
                     code: ErrorCode::Busy,
                     message: "queue depth exceeded".to_owned(),
@@ -334,6 +458,7 @@ impl ServerCore {
                             request.tag
                         );
                         self.pipeline.record_backpressure();
+                        self.record_pressure(PressureKind::Busy);
                         responses[idx] = Some(ResponseBody::Error {
                             code: ErrorCode::Busy,
                             message: "queue depth exceeded".to_owned(),
@@ -352,6 +477,7 @@ impl ServerCore {
                         session.session(),
                         request.tag
                     );
+                    self.record_pressure(PressureKind::Busy);
                     responses[idx] = Some(ResponseBody::Error {
                         code: ErrorCode::Busy,
                         message: "tag window exceeded".to_owned(),
@@ -447,6 +573,13 @@ impl ServerCore {
         state: &mut SessionState,
         request: &Request,
     ) -> Result<ResponseBody, NineDoorError> {
+        let now = self.clock.now();
+        state.refresh_session_phase(self.control.lifecycle_state(), now);
+        if matches!(state.role(), Some(Role::Queen))
+            && matches!(state.session_phase(), SessionPhase::Active | SessionPhase::Draining)
+        {
+            self.record_root_activity(now);
+        }
         let result = match &request.body {
             RequestBody::Version { msize, version } => {
                 info!(
@@ -508,7 +641,8 @@ impl ServerCore {
                     uname
                 );
                 state.auth_state = AuthState::AttachRequested;
-                let outcome = self.handle_attach(state, *fid, uname.as_str(), aname.as_str());
+                let outcome =
+                    self.handle_attach(session, state, *fid, uname.as_str(), aname.as_str());
                 if outcome.is_ok() {
                     state.auth_state = AuthState::Attached;
                     info!(
@@ -536,9 +670,9 @@ impl ServerCore {
                 );
                 state.ensure_attached()?;
                 if let Err(reason) = state.pre_operation(self.clock.now()) {
-                    Err(self.handle_budget_failure(session, state, reason))
+                    Err(self.handle_budget_failure(session, state, self.clock.now(), reason))
                 } else if let Err(reason) = state.consume_operation() {
-                    Err(self.handle_budget_failure(session, state, reason))
+                    Err(self.handle_budget_failure(session, state, self.clock.now(), reason))
                 } else {
                     self.handle_walk(state, *fid, *newfid, wnames)
                 }
@@ -553,9 +687,9 @@ impl ServerCore {
                 );
                 state.ensure_attached()?;
                 if let Err(reason) = state.pre_operation(self.clock.now()) {
-                    Err(self.handle_budget_failure(session, state, reason))
+                    Err(self.handle_budget_failure(session, state, self.clock.now(), reason))
                 } else if let Err(reason) = state.consume_operation() {
-                    Err(self.handle_budget_failure(session, state, reason))
+                    Err(self.handle_budget_failure(session, state, self.clock.now(), reason))
                 } else {
                     self.handle_open(state, *fid, *mode)
                 }
@@ -571,9 +705,9 @@ impl ServerCore {
                 );
                 state.ensure_attached()?;
                 if let Err(reason) = state.pre_operation(self.clock.now()) {
-                    Err(self.handle_budget_failure(session, state, reason))
+                    Err(self.handle_budget_failure(session, state, self.clock.now(), reason))
                 } else if let Err(reason) = state.consume_operation() {
-                    Err(self.handle_budget_failure(session, state, reason))
+                    Err(self.handle_budget_failure(session, state, self.clock.now(), reason))
                 } else {
                     self.handle_read(state, *fid, *offset, *count)
                 }
@@ -588,9 +722,9 @@ impl ServerCore {
                 );
                 state.ensure_attached()?;
                 if let Err(reason) = state.pre_operation(self.clock.now()) {
-                    Err(self.handle_budget_failure(session, state, reason))
+                    Err(self.handle_budget_failure(session, state, self.clock.now(), reason))
                 } else if let Err(reason) = state.consume_operation() {
-                    Err(self.handle_budget_failure(session, state, reason))
+                    Err(self.handle_budget_failure(session, state, self.clock.now(), reason))
                 } else {
                     self.handle_write(session, state, *fid, *offset, data)
                 }
@@ -653,6 +787,7 @@ impl ServerCore {
 
     fn handle_attach(
         &mut self,
+        session: SessionId,
         state: &mut SessionState,
         fid: u32,
         uname: &str,
@@ -665,6 +800,7 @@ impl ServerCore {
             ));
         }
         let (role, identity) = parse_role_from_uname(uname)?;
+        let now = self.clock.now();
         if role != Role::Queen && !self.control.lifecycle_gate_allows(lifecycle::GATE_WORKER_ATTACH) {
             let state = self.control.lifecycle_state();
             self.control
@@ -677,14 +813,31 @@ impl ServerCore {
         let mut budget_override = None;
         let mut ticket_claims = None;
         if !ticket.is_empty() {
-            let key = self
-                .ticket_keys
-                .get(&role)
-                .ok_or_else(|| NineDoorError::protocol(ErrorCode::Permission, "ticket rejected"))?;
-            let claims = TicketToken::decode(ticket, key).map_err(|err| {
-                NineDoorError::protocol(ErrorCode::Permission, format!("ticket invalid: {err}"))
-            })?;
+            let key = match self.ticket_keys.get(&role) {
+                Some(key) => key,
+                None => {
+                    self.record_pressure(PressureKind::Policy);
+                    self.mark_root_policy_if_queen(role);
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Permission,
+                        "ticket rejected",
+                    ));
+                }
+            };
+            let claims = match TicketToken::decode(ticket, key) {
+                Ok(claims) => claims,
+                Err(err) => {
+                    self.record_pressure(PressureKind::Policy);
+                    self.mark_root_policy_if_queen(role);
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Permission,
+                        format!("ticket invalid: {err}"),
+                    ));
+                }
+            };
             if claims.claims().role != role {
+                self.record_pressure(PressureKind::Policy);
+                self.mark_root_policy_if_queen(role);
                 return Err(NineDoorError::protocol(
                     ErrorCode::Permission,
                     "ticket role mismatch",
@@ -693,6 +846,8 @@ impl ServerCore {
             if let Some(subject) = claims.claims().subject.as_deref() {
                 match &identity {
                     Some(value) if value != subject => {
+                        self.record_pressure(PressureKind::Policy);
+                        self.mark_root_policy_if_queen(role);
                         return Err(NineDoorError::protocol(
                             ErrorCode::Permission,
                             "ticket subject mismatch",
@@ -709,12 +864,12 @@ impl ServerCore {
             ticket_claims = Some(claims_ref.clone());
             ticket_payload = Some(ticket.to_owned());
         } else if role != Role::Queen {
+            self.record_pressure(PressureKind::Policy);
             return Err(NineDoorError::protocol(
                 ErrorCode::Permission,
                 "ticket required for worker attach",
             ));
         }
-        let now = self.clock.now();
         if let Some(claims) = ticket_claims.as_mut() {
             if let Some(ttl_s) = claims.budget.ttl_s() {
                 let now_ms = unix_time_ms();
@@ -723,6 +878,7 @@ impl ServerCore {
                 if now_ms >= expires_at_ms {
                     self.record_ticket_expired(role, ticket, claims, now_ms)?;
                     self.pipeline.record_ui_deny();
+                    self.mark_root_policy_if_queen(role);
                     return Err(NineDoorError::protocol(
                         ErrorCode::Permission,
                         "ticket expired",
@@ -733,10 +889,17 @@ impl ServerCore {
                 claims.budget = claims.budget.with_ttl(Some(remaining_s));
                 budget_override = Some(claims.budget);
             }
-            let usage = TicketUsage::from_claims(claims, self.ticket_limits, now).map_err(|err| {
-                let _ = self.record_ticket_claim_denial(role, ticket, &err);
-                NineDoorError::protocol(ErrorCode::Permission, format!("ticket invalid: {err}"))
-            })?;
+            let usage = match TicketUsage::from_claims(claims, self.ticket_limits, now) {
+                Ok(usage) => usage,
+                Err(err) => {
+                    let _ = self.record_ticket_claim_denial(role, ticket, &err);
+                    self.mark_root_policy_if_queen(role);
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Permission,
+                        format!("ticket invalid: {err}"),
+                    ));
+                }
+            };
             if usage.has_enforcement() {
                 self.ticket_usage
                     .entry(ticket.to_owned())
@@ -850,8 +1013,11 @@ impl ServerCore {
         if let Err(err) = state.insert_fid(fid, Vec::new(), Vec::new(), qid) {
             return Err(fid_insert_error(fid, err));
         }
-        state.mark_attached();
-        self.refresh_proc_sessions(Some(state))?;
+        state.mark_attached(now, Some(uname.to_owned()));
+        if role == Role::Queen {
+            self.mark_root_session_active(now);
+        }
+        self.refresh_proc_sessions(Some((session, state)))?;
         Ok(ResponseBody::Attach { qid })
     }
 
@@ -1421,6 +1587,8 @@ impl ServerCore {
                 self.clock.now(),
             )?;
             self.consume_ticket_bandwidth(state, count as u64);
+            self.refresh_proc_sessions(Some((session, state)))?;
+            self.refresh_proc_root()?;
             return Ok(ResponseBody::Write { count });
         }
         let telemetry_write = worker_id
@@ -1429,7 +1597,7 @@ impl ServerCore {
         if telemetry_write {
             self.control.ensure_lifecycle_gate(lifecycle::GATE_WORKER_TELEMETRY)?;
             if let Err(reason) = state.consume_tick() {
-                return Err(self.handle_budget_failure(session, state, reason));
+                return Err(self.handle_budget_failure(session, state, self.clock.now(), reason));
             }
         }
         if let (Some(worker), Some(scope)) = (worker_id, gpu_scope) {
@@ -1553,23 +1721,29 @@ impl ServerCore {
     }
 
     fn revoke_worker_sessions(&mut self, worker_id: &str, reason: &str, skip: Option<SessionId>) {
+        let now = self.clock.now();
         for (session_id, state) in &mut self.sessions {
             if skip == Some(*session_id) {
                 continue;
             }
             if state.matches_worker(worker_id) {
-                state.mark_revoked(reason.to_string());
+                state.mark_revoked(now, reason.to_string());
             }
         }
+        let _ = self.refresh_proc_sessions(None);
     }
 
     fn handle_budget_failure(
         &mut self,
         session: SessionId,
         state: &mut SessionState,
+        now: Instant,
         reason: String,
     ) -> NineDoorError {
-        state.mark_revoked(reason.clone());
+        state.mark_revoked(now, reason.clone());
+        if matches!(state.role(), Some(Role::Queen)) {
+            self.mark_root_cut(RootCutReason::SessionRevoked);
+        }
         if let Some(worker_id) = state.worker_id().map(ToOwned::to_owned) {
             if self
                 .control
@@ -1579,6 +1753,7 @@ impl ServerCore {
                 self.revoke_worker_sessions(&worker_id, &reason, Some(session));
             }
         }
+        let _ = self.refresh_proc_sessions(Some((session, state)));
         NineDoorError::protocol(ErrorCode::Closed, reason)
     }
 
@@ -1615,6 +1790,7 @@ impl ServerCore {
         ticket: &str,
         err: &dyn std::fmt::Display,
     ) -> Result<(), NineDoorError> {
+        self.record_pressure(PressureKind::Policy);
         self.pipeline.record_ui_deny();
         let role_label = role_label(role);
         let message = format!(
@@ -1631,6 +1807,7 @@ impl ServerCore {
         claims: &cohesix_ticket::TicketClaims,
         now_ms: u64,
     ) -> Result<(), NineDoorError> {
+        self.record_pressure(PressureKind::Quota);
         let role_label = role_label(role);
         let ttl_s = claims.budget.ttl_s().unwrap_or(0);
         let message = format!(
@@ -1652,6 +1829,14 @@ impl ServerCore {
         role: Option<Role>,
         ticket: Option<&str>,
     ) -> Result<(), NineDoorError> {
+        let pressure = match denial {
+            TicketDeny::Scope => PressureKind::Policy,
+            TicketDeny::Rate { .. }
+            | TicketDeny::Bandwidth { .. }
+            | TicketDeny::CursorResume { .. }
+            | TicketDeny::CursorAdvance { .. } => PressureKind::Quota,
+        };
+        self.record_pressure(pressure);
         self.pipeline.record_ui_deny();
         let role_label = match role {
             Some(role) => role_label(role),
@@ -2965,10 +3150,126 @@ enum QueenEvent {
     },
 }
 
+const ROOT_FLAG_NETWORK: u8 = 1;
+const ROOT_FLAG_POLICY: u8 = 1 << 1;
+const ROOT_FLAG_REVOKED: u8 = 1 << 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RootCutReason {
+    None,
+    NetworkUnreachable,
+    SessionRevoked,
+    PolicyDenied,
+    LifecycleOffline,
+}
+
+impl RootCutReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            RootCutReason::None => "none",
+            RootCutReason::NetworkUnreachable => "network_unreachable",
+            RootCutReason::SessionRevoked => "session_revoked",
+            RootCutReason::PolicyDenied => "policy_denied",
+            RootCutReason::LifecycleOffline => "lifecycle_offline",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RootSnapshot {
+    reachable: bool,
+    last_seen_ms: u64,
+    cut_reason: RootCutReason,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RootState {
+    active_sessions: u32,
+    last_seen_ms: u64,
+    flags: u8,
+}
+
+impl RootState {
+    fn new() -> Self {
+        Self {
+            active_sessions: 0,
+            last_seen_ms: 0,
+            flags: 0,
+        }
+    }
+
+    fn mark_session_active(&mut self, now_ms: u64) {
+        self.active_sessions = self.active_sessions.saturating_add(1);
+        self.last_seen_ms = now_ms;
+        self.flags = 0;
+    }
+
+    fn record_activity(&mut self, now_ms: u64) {
+        if self.active_sessions > 0 {
+            self.last_seen_ms = now_ms;
+        }
+    }
+
+    fn mark_cut(&mut self, reason: RootCutReason) {
+        if self.active_sessions > 0 {
+            self.active_sessions = self.active_sessions.saturating_sub(1);
+        }
+        if self.active_sessions > 0 {
+            return;
+        }
+        match reason {
+            RootCutReason::NetworkUnreachable => {
+                self.flags |= ROOT_FLAG_NETWORK;
+            }
+            RootCutReason::SessionRevoked => {
+                self.flags |= ROOT_FLAG_REVOKED;
+            }
+            RootCutReason::PolicyDenied => {
+                self.flags |= ROOT_FLAG_POLICY;
+            }
+            RootCutReason::LifecycleOffline | RootCutReason::None => {}
+        }
+    }
+
+    fn mark_policy_denied(&mut self) {
+        if self.active_sessions == 0 {
+            self.flags |= ROOT_FLAG_POLICY;
+        }
+    }
+
+    fn active_sessions(&self) -> u32 {
+        self.active_sessions
+    }
+
+    fn snapshot(&self, lifecycle_state: lifecycle::LifecycleState) -> RootSnapshot {
+        let offline = matches!(lifecycle_state, lifecycle::LifecycleState::Offline);
+        let reachable = self.active_sessions > 0 && !offline;
+        let cut_reason = if reachable {
+            RootCutReason::None
+        } else if offline {
+            RootCutReason::LifecycleOffline
+        } else if self.flags & ROOT_FLAG_REVOKED != 0 {
+            RootCutReason::SessionRevoked
+        } else if self.flags & ROOT_FLAG_POLICY != 0 {
+            RootCutReason::PolicyDenied
+        } else if self.flags & ROOT_FLAG_NETWORK != 0 {
+            RootCutReason::NetworkUnreachable
+        } else {
+            RootCutReason::NetworkUnreachable
+        };
+        RootSnapshot {
+            reachable,
+            last_seen_ms: self.last_seen_ms,
+            cut_reason,
+        }
+    }
+}
+
 /// Tracks per-session state including budget counters.
 struct SessionState {
     msize: Option<u32>,
     attached: bool,
+    session: SessionLifecycle,
     fids: ShardedFidTable<FidState>,
     role: Option<Role>,
     worker_id: Option<String>,
@@ -2989,6 +3290,7 @@ impl SessionState {
         Self {
             msize: None,
             attached: false,
+            session: SessionLifecycle::new(now),
             fids: ShardedFidTable::default(),
             role: None,
             worker_id: None,
@@ -3017,8 +3319,14 @@ impl SessionState {
         self.msize.unwrap_or(MAX_MSIZE)
     }
 
-    fn mark_attached(&mut self) {
+    fn mark_attached(&mut self, now: Instant, owner: Option<String>) {
         self.attached = true;
+        self.session.mark_active(now, owner);
+    }
+
+    fn mark_closed(&mut self, now: Instant) {
+        self.attached = false;
+        self.session.mark_closed(now);
     }
 
     fn ensure_attached(&self) -> Result<(), NineDoorError> {
@@ -3108,6 +3416,22 @@ impl SessionState {
         self.ticket.as_deref()
     }
 
+    fn refresh_session_phase(&mut self, state: lifecycle::LifecycleState, now: Instant) {
+        self.session.refresh_for_lifecycle(state, now);
+    }
+
+    fn session_phase(&self) -> SessionPhase {
+        self.session.phase()
+    }
+
+    fn session_since_ms(&self, now: Instant) -> u64 {
+        self.session.since_ms(now)
+    }
+
+    fn session_owner(&self) -> Option<&str> {
+        self.session.owner()
+    }
+
     fn matches_worker(&self, worker_id: &str) -> bool {
         self.worker_id.as_deref() == Some(worker_id)
     }
@@ -3127,8 +3451,9 @@ impl SessionState {
         self.budget.evaluate(verdict)
     }
 
-    fn mark_revoked(&mut self, reason: String) {
+    fn mark_revoked(&mut self, now: Instant, reason: String) {
         self.budget.revoke(reason);
+        self.mark_closed(now);
     }
 
     fn apply_mount(
