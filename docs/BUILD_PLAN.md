@@ -86,7 +86,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [21e](#21e) | Rooted Authority, Cut Detection, Explicit Session Semantics, and Live Hive Visibility | Complete |
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Complete |
 | [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Complete |
-| [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Pending |
+| [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Complete |
 | [25a](#25a) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [25b](#25b) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [25c](#25c) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Pending |
@@ -3673,6 +3673,8 @@ Deliverables:
 ## Milestone 24 — Python Client + Examples (cohesix) + Doctor + Release Cut <a id="24"></a> 
 [Milestones](#Milestones)
 
+**Status:** Complete — cohesix Python client + examples, coh doctor, and alpha2 release bundles validated; regression pack and full test plan (source + macOS/Ubuntu bundles) completed.
+
 **Why now (adoption):** A thin, non-authoritative Python layer and a setup doctor reduce friction for CUDA, PEFT, and edge users without altering the control plane.
 
 **Goal**
@@ -3745,6 +3747,18 @@ Checks:
   - Doctor emits deterministic actionable output; packaging contains coh + cohesix.
 Deliverables:
   - Alpha quickstart docs and packaging notes.
+
+Title/ID: m24-swarmui-header-unify
+Goal: Unify SwarmUI header alignment and scale so the banner reads as a single product surface.
+Inputs: apps/swarmui/frontend/index.html, apps/swarmui/frontend/styles/layout.css.
+Changes:
+  - apps/swarmui/frontend/styles/layout.css — align banner grid, status rows, and header badge/chip sizing.
+Commands:
+  - npm run lint (if configured) or cargo check -p swarmui
+Checks:
+  - Header elements align cleanly at desktop and stack without overflow at 980px/720px breakpoints.
+Deliverables:
+  - Updated SwarmUI header styling.
 ```
 
 ----

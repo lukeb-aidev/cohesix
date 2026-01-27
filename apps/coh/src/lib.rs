@@ -9,6 +9,8 @@
 
 /// TCP console-backed helpers.
 pub mod console;
+/// Host environment doctor checks.
+pub mod doctor;
 /// GPU inventory and lease helpers.
 pub mod gpu;
 /// Secure9P-backed mount adapter.

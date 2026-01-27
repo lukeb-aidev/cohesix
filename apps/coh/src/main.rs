@@ -14,7 +14,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use coh::console::ConsoleSession;
 use coh::policy::{default_policy_path, load_policy, CohPolicy};
-use coh::{gpu, mount, peft, run as coh_run, telemetry, CohAudit};
+use coh::{doctor, gpu, mount, peft, run as coh_run, telemetry, CohAudit};
 use cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT;
 use cohesix_ticket::Role;
 use cohsh::client::{CohClient, InProcessTransport};
@@ -43,6 +43,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run deterministic environment checks.
+    Doctor(DoctorArgs),
     /// Mount a Secure9P namespace via FUSE.
     Mount(MountArgs),
     /// GPU discovery and lease operations.
@@ -69,6 +71,12 @@ struct ConnectArgs {
     /// Use the in-process mock backend.
     #[arg(long, default_value_t = false, global = true)]
     mock: bool,
+}
+
+#[derive(Debug, Parser)]
+struct DoctorArgs {
+    #[command(flatten)]
+    connect: ConnectArgs,
 }
 
 #[derive(Debug, Parser)]
@@ -209,14 +217,29 @@ enum TelemetryCommand {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let policy_path = resolve_policy_path(cli.policy)?;
-    let policy = load_policy(&policy_path)?;
     let role = Role::from(cli.role);
     match cli.command {
-        Command::Mount(args) => run_mount(role, cli.ticket.as_deref(), &policy, args),
-        Command::Gpu(args) => run_gpu(role, cli.ticket.as_deref(), &policy, args),
-        Command::Peft(args) => run_peft(role, cli.ticket.as_deref(), &policy, args),
-        Command::Run(args) => run_run(role, cli.ticket.as_deref(), &policy, args),
-        Command::Telemetry(args) => run_telemetry(role, cli.ticket.as_deref(), &policy, args),
+        Command::Doctor(args) => run_doctor(role, cli.ticket.as_deref(), &policy_path, args),
+        Command::Mount(args) => {
+            let policy = load_policy(&policy_path)?;
+            run_mount(role, cli.ticket.as_deref(), &policy, args)
+        }
+        Command::Gpu(args) => {
+            let policy = load_policy(&policy_path)?;
+            run_gpu(role, cli.ticket.as_deref(), &policy, args)
+        }
+        Command::Peft(args) => {
+            let policy = load_policy(&policy_path)?;
+            run_peft(role, cli.ticket.as_deref(), &policy, args)
+        }
+        Command::Run(args) => {
+            let policy = load_policy(&policy_path)?;
+            run_run(role, cli.ticket.as_deref(), &policy, args)
+        }
+        Command::Telemetry(args) => {
+            let policy = load_policy(&policy_path)?;
+            run_telemetry(role, cli.ticket.as_deref(), &policy, args)
+        }
     }
 }
 
@@ -231,6 +254,23 @@ fn resolve_policy_path(cli_path: Option<PathBuf>) -> Result<PathBuf> {
         }
     }
     Ok(default_policy_path())
+}
+
+fn run_doctor(
+    role: Role,
+    ticket: Option<&str>,
+    policy_path: &PathBuf,
+    args: DoctorArgs,
+) -> Result<()> {
+    let mut audit = CohAudit::new();
+    let config = doctor::DoctorConfig {
+        role,
+        ticket: ticket.map(|value| value.to_owned()),
+        policy_path: policy_path.to_path_buf(),
+        mock: args.connect.mock,
+    };
+    let result = doctor::run(config, &mut audit);
+    handle_result(result, audit, "DOCTOR")
 }
 
 fn run_mount(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: MountArgs) -> Result<()> {

@@ -8,6 +8,7 @@ pub mod cbor;
 mod cli;
 mod coh;
 mod cohsh;
+pub mod cohesix_py;
 mod docs;
 mod rust;
 mod swarmui;
@@ -37,6 +38,9 @@ pub struct GeneratedArtifacts {
     pub cas_interfaces_snippet: PathBuf,
     pub cas_security_snippet: PathBuf,
     pub cbor_snippet: PathBuf,
+    pub cohesix_py_defaults: PathBuf,
+    pub cohesix_py_defaults_doc: PathBuf,
+    pub coh_doctor_doc: PathBuf,
     pub cohsh_policy: PathBuf,
     pub cohsh_policy_hash: PathBuf,
     pub cohsh_policy_rust: PathBuf,
@@ -58,7 +62,7 @@ pub struct GeneratedArtifacts {
 impl GeneratedArtifacts {
     pub fn summary(&self) -> String {
         format!(
-            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, gpu_breadcrumbs={}, obs_interfaces={}, obs_security={}, ticket_quotas={}, trace_policy={}, cas_interfaces={}, cas_security={}, cbor={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_client_rust={}, cohsh_client_doc={}, cohsh_grammar={}, cohsh_ticket_policy={}, coh_policy={}, coh_hash={}, coh_rust={}, coh_doc={}, swarmui_defaults={}, swarmui_hash={}, swarmui_rust={}, swarmui_doc={}",
+            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, gpu_breadcrumbs={}, obs_interfaces={}, obs_security={}, ticket_quotas={}, trace_policy={}, cas_interfaces={}, cas_security={}, cbor={}, cohesix_py_defaults={}, cohesix_py_doc={}, coh_doctor_doc={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_client_rust={}, cohsh_client_doc={}, cohsh_grammar={}, cohsh_ticket_policy={}, coh_policy={}, coh_hash={}, coh_rust={}, coh_doc={}, swarmui_defaults={}, swarmui_hash={}, swarmui_rust={}, swarmui_doc={}",
             self.rust_dir.display(),
             self.manifest_json.display(),
             self.cas_manifest_template.display(),
@@ -73,6 +77,9 @@ impl GeneratedArtifacts {
             self.cas_interfaces_snippet.display(),
             self.cas_security_snippet.display(),
             self.cbor_snippet.display(),
+            self.cohesix_py_defaults.display(),
+            self.cohesix_py_defaults_doc.display(),
+            self.coh_doctor_doc.display(),
             self.cohsh_policy.display(),
             self.cohsh_policy_hash.display(),
             self.cohsh_policy_rust.display(),
@@ -99,6 +106,7 @@ pub fn emit_all(
     resolved_json: &[u8],
     options: &crate::CompileOptions,
     docs: &DocFragments,
+    py_defaults: &cohesix_py::CohesixPyDefaults,
 ) -> Result<GeneratedArtifacts> {
     fs::create_dir_all(&options.out_dir)
         .with_context(|| format!("failed to create {}", options.out_dir.display()))?;
@@ -147,6 +155,18 @@ pub fn emit_all(
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     if let Some(parent) = options.cbor_snippet_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.cohesix_py_defaults_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.cohesix_py_doc_out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if let Some(parent) = options.coh_doctor_doc_out.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
@@ -219,6 +239,9 @@ pub fn emit_all(
     docs::emit_trace_policy_snippet(docs, &options.trace_policy_snippet_out)?;
     docs::emit_cas_interfaces_snippet(docs, &options.cas_interfaces_snippet_out)?;
     docs::emit_cas_security_snippet(docs, &options.cas_security_snippet_out)?;
+    cohesix_py::emit_defaults(py_defaults, &options.cohesix_py_defaults_out)?;
+    docs::emit_cohesix_py_defaults_snippet(docs, &options.cohesix_py_doc_out)?;
+    docs::emit_coh_doctor_snippet(docs, &options.coh_doctor_doc_out)?;
     cbor::emit_cbor_snippet(&options.cbor_snippet_out)?;
     let cohsh_artifacts = cohsh::emit_cohsh_policy(
         manifest,
@@ -288,6 +311,9 @@ pub fn emit_all(
         cas_interfaces_snippet: options.cas_interfaces_snippet_out.clone(),
         cas_security_snippet: options.cas_security_snippet_out.clone(),
         cbor_snippet: options.cbor_snippet_out.clone(),
+        cohesix_py_defaults: options.cohesix_py_defaults_out.clone(),
+        cohesix_py_defaults_doc: options.cohesix_py_doc_out.clone(),
+        coh_doctor_doc: options.coh_doctor_doc_out.clone(),
         cohsh_policy: cohsh_artifacts.policy_toml,
         cohsh_policy_hash: cohsh_artifacts.policy_hash,
         cohsh_policy_rust: cohsh_artifacts.policy_rust,

@@ -25,6 +25,9 @@ pub struct CompileOptions {
     pub cas_interfaces_snippet_out: PathBuf,
     pub cas_security_snippet_out: PathBuf,
     pub cbor_snippet_out: PathBuf,
+    pub cohesix_py_defaults_out: PathBuf,
+    pub cohesix_py_doc_out: PathBuf,
+    pub coh_doctor_doc_out: PathBuf,
     pub cohsh_policy_out: PathBuf,
     pub cohsh_policy_rust_out: PathBuf,
     pub cohsh_policy_doc_out: PathBuf,
@@ -55,9 +58,17 @@ pub fn compile(options: &CompileOptions) -> Result<codegen::GeneratedArtifacts> 
     let resolved_json = ir::serialize_manifest(&manifest)?;
     let manifest_hash = codegen::hash_bytes(&resolved_json);
 
-    let docs = codegen::DocFragments::from_manifest(&manifest, &manifest_hash);
+    let py_defaults = codegen::cohesix_py::render_defaults(&manifest, &manifest_hash);
+    let docs = codegen::DocFragments::from_manifest(&manifest, &manifest_hash, &py_defaults);
 
-    codegen::emit_all(&manifest, &manifest_hash, &resolved_json, options, &docs)
+    codegen::emit_all(
+        &manifest,
+        &manifest_hash,
+        &resolved_json,
+        options,
+        &docs,
+        &py_defaults,
+    )
 }
 
 pub fn default_doc_snippet_path() -> PathBuf {
@@ -84,6 +95,25 @@ pub fn default_cbor_snippet_path() -> PathBuf {
     Path::new("docs")
         .join("snippets")
         .join("telemetry_cbor_schema.md")
+}
+
+pub fn default_cohesix_py_defaults_path() -> PathBuf {
+    Path::new("tools")
+        .join("cohesix-py")
+        .join("cohesix")
+        .join("generated.py")
+}
+
+pub fn default_cohesix_py_doc_path() -> PathBuf {
+    Path::new("docs")
+        .join("snippets")
+        .join("cohesix_py_defaults.md")
+}
+
+pub fn default_coh_doctor_doc_path() -> PathBuf {
+    Path::new("docs")
+        .join("snippets")
+        .join("coh_doctor_checks.md")
 }
 
 pub fn default_observability_interfaces_snippet_path() -> PathBuf {

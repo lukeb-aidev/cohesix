@@ -227,6 +227,7 @@ bundle_release() {
     "${bundle_dir}/configs" \
     "${bundle_dir}/image" \
     "${bundle_dir}/out" \
+    "${bundle_dir}/python" \
     "${bundle_dir}/qemu" \
     "${bundle_dir}/resources/fixtures" \
     "${bundle_dir}/scripts" \
@@ -390,6 +391,7 @@ hive_digest = hashlib.sha256(hive.read_bytes()).hexdigest()
 PY
 
   cp -R "${ROOT_DIR}/apps/swarmui/frontend/." "${bundle_dir}/ui/swarmui/"
+  cp -R "${ROOT_DIR}/tools/cohesix-py" "${bundle_dir}/python/cohesix-py"
 
   DOCS_LIST=(
     "ARCHITECTURE.md"

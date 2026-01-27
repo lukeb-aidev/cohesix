@@ -27,6 +27,9 @@ ticket_quotas="$work_dir/ticket_quotas.md"
 trace_policy="$work_dir/trace_policy.md"
 cas_interfaces="$work_dir/cas_interfaces.md"
 cas_security="$work_dir/cas_security.md"
+cohesix_py_defaults="$work_dir/cohesix_py_defaults.py"
+cohesix_py_doc="$work_dir/cohesix_py_defaults.md"
+coh_doctor_doc="$work_dir/coh_doctor_checks.md"
 cohsh_policy="$work_dir/cohsh_policy.toml"
 cohsh_policy_rust="$work_dir/cohsh_policy.rs"
 cohsh_policy_doc="$work_dir/cohsh_policy.md"
@@ -61,7 +64,10 @@ cargo run -p coh-rtc -- \
   --cohsh-ticket-policy-doc "$cohsh_ticket_policy_doc" \
   --coh-policy "$coh_policy" \
   --coh-policy-rust "$coh_policy_rust" \
-  --coh-policy-doc "$coh_policy_doc"
+  --coh-policy-doc "$coh_policy_doc" \
+  --cohesix-py-defaults "$cohesix_py_defaults" \
+  --cohesix-py-doc "$cohesix_py_doc" \
+  --coh-doctor-doc "$coh_doctor_doc"
 
 compare_file() {
   local expected="$1"
@@ -99,6 +105,9 @@ compare_file "$repo_root/out/coh_policy.toml" "$coh_policy"
 compare_file "$repo_root/out/coh_policy.toml.sha256" "${coh_policy}.sha256"
 compare_file "$repo_root/apps/coh/src/generated/policy.rs" "$coh_policy_rust"
 compare_file "$repo_root/docs/snippets/coh_policy.md" "$coh_policy_doc"
+compare_file "$repo_root/tools/cohesix-py/cohesix/generated.py" "$cohesix_py_defaults"
+compare_file "$repo_root/docs/snippets/cohesix_py_defaults.md" "$cohesix_py_doc"
+compare_file "$repo_root/docs/snippets/coh_doctor_checks.md" "$coh_doctor_doc"
 
 "$repo_root/scripts/ci/check_test_plan.sh"
 

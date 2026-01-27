@@ -59,6 +59,11 @@ Run in order unless explicitly skipped with a recorded reason.
 - `cargo test -p cohsh-core --test trace`
 - `cargo test -p cohsh --test trace`
 - `cargo test -p swarmui --test trace`
+- `cargo run -p coh --features mock -- doctor --mock`
+- `python -m pytest -k cohesix_parity`
+- `python tools/cohesix-py/examples/lease_run.py --mock`
+- `python tools/cohesix-py/examples/peft_roundtrip.py --mock`
+- `python tools/cohesix-py/examples/telemetry_write_pull.py --mock`
 - Fixture regen (only when needed):
   - `COHESIX_WRITE_TRACE=1 cargo test -p cohsh --test trace`
   - `COHESIX_WRITE_TRACE=1 cargo test -p swarmui --test trace`

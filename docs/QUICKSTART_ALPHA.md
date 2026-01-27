@@ -7,12 +7,11 @@
 The current alpha workflow is the QEMU-based bring-up documented in
 `docs/QUICKSTART.md` and `docs/USERLAND_AND_CLI.md`.
 
-## Not yet available
-The following alpha deliverables are **planned** but not implemented yet:
-- `coh doctor`
-- the `cohesix` Python client and examples
-- UEFI hardware bring-up
-- AWS AMI pipeline
+## Available now
+- `coh doctor` for deterministic host checks.
+- The `cohesix` Python client with runnable examples.
+- QEMU-based VM bring-up with coh/cohsh/swarmui host tooling.
 
-These items will be introduced in Milestones 24–27 per `docs/BUILD_PLAN.md` and
-only then will this document expand into a full alpha quickstart guide.
+## Not yet available
+- UEFI hardware bring-up.
+- AWS AMI pipeline.

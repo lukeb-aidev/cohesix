@@ -33,6 +33,9 @@ fn manifest_codegen_is_deterministic() {
     let cas_interfaces_snippet = temp_dir.path().join("cas_interfaces.md");
     let cas_security_snippet = temp_dir.path().join("cas_security.md");
     let cbor_snippet = temp_dir.path().join("telemetry_cbor.md");
+    let cohesix_py_defaults = temp_dir.path().join("cohesix_py_defaults.py");
+    let cohesix_py_doc = temp_dir.path().join("cohesix_py_defaults.md");
+    let coh_doctor_doc = temp_dir.path().join("coh_doctor_checks.md");
     let cohsh_policy = temp_dir.path().join("cohsh_policy.toml");
     let cohsh_policy_rust = temp_dir.path().join("cohsh_policy.rs");
     let cohsh_policy_doc = temp_dir.path().join("cohsh_policy.md");
@@ -61,6 +64,9 @@ fn manifest_codegen_is_deterministic() {
         cas_interfaces_snippet_out: cas_interfaces_snippet.clone(),
         cas_security_snippet_out: cas_security_snippet.clone(),
         cbor_snippet_out: cbor_snippet.clone(),
+        cohesix_py_defaults_out: cohesix_py_defaults.clone(),
+        cohesix_py_doc_out: cohesix_py_doc.clone(),
+        coh_doctor_doc_out: coh_doctor_doc.clone(),
         cohsh_policy_out: cohsh_policy.clone(),
         cohsh_policy_rust_out: cohsh_policy_rust.clone(),
         cohsh_policy_doc_out: cohsh_policy_doc.clone(),
@@ -91,6 +97,12 @@ fn manifest_codegen_is_deterministic() {
         fs::read(&cas_interfaces_snippet).expect("cas interfaces snippet");
     let baseline_cas_security = fs::read(&cas_security_snippet).expect("cas security snippet");
     let baseline_cbor = fs::read(&cbor_snippet).expect("cbor snippet");
+    let baseline_cohesix_py_defaults =
+        fs::read(&cohesix_py_defaults).expect("cohesix python defaults");
+    let baseline_cohesix_py_doc =
+        fs::read(&cohesix_py_doc).expect("cohesix python defaults doc");
+    let baseline_coh_doctor_doc =
+        fs::read(&coh_doctor_doc).expect("coh doctor doc");
     let baseline_policy = fs::read(&cohsh_policy).expect("cohsh policy");
     let baseline_policy_rust = fs::read(&cohsh_policy_rust).expect("cohsh policy rust");
     let baseline_policy_doc = fs::read(&cohsh_policy_doc).expect("cohsh policy doc");
@@ -121,6 +133,11 @@ fn manifest_codegen_is_deterministic() {
     let second_cas_interfaces = fs::read(&cas_interfaces_snippet).expect("cas interfaces snippet");
     let second_cas_security = fs::read(&cas_security_snippet).expect("cas security snippet");
     let second_cbor = fs::read(&cbor_snippet).expect("cbor snippet");
+    let second_cohesix_py_defaults =
+        fs::read(&cohesix_py_defaults).expect("cohesix python defaults");
+    let second_cohesix_py_doc =
+        fs::read(&cohesix_py_doc).expect("cohesix python defaults doc");
+    let second_coh_doctor_doc = fs::read(&coh_doctor_doc).expect("coh doctor doc");
     let second_policy = fs::read(&cohsh_policy).expect("cohsh policy");
     let second_policy_rust = fs::read(&cohsh_policy_rust).expect("cohsh policy rust");
     let second_policy_doc = fs::read(&cohsh_policy_doc).expect("cohsh policy doc");
@@ -148,6 +165,9 @@ fn manifest_codegen_is_deterministic() {
     assert_eq!(baseline_cas_interfaces, second_cas_interfaces);
     assert_eq!(baseline_cas_security, second_cas_security);
     assert_eq!(baseline_cbor, second_cbor);
+    assert_eq!(baseline_cohesix_py_defaults, second_cohesix_py_defaults);
+    assert_eq!(baseline_cohesix_py_doc, second_cohesix_py_doc);
+    assert_eq!(baseline_coh_doctor_doc, second_coh_doctor_doc);
     assert_eq!(baseline_policy, second_policy);
     assert_eq!(baseline_policy_rust, second_policy_rust);
     assert_eq!(baseline_policy_doc, second_policy_doc);
@@ -217,6 +237,9 @@ secret = "bootstrap"
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
+        cohesix_py_defaults_out: temp_dir.path().join("cohesix_py_defaults.py"),
+        cohesix_py_doc_out: temp_dir.path().join("cohesix_py_defaults.md"),
+        coh_doctor_doc_out: temp_dir.path().join("coh_doctor_checks.md"),
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
         cohsh_policy_doc_out: temp_dir.path().join("cohsh_policy.md"),
@@ -309,6 +332,9 @@ secret = "bootstrap"
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
+        cohesix_py_defaults_out: temp_dir.path().join("cohesix_py_defaults.py"),
+        cohesix_py_doc_out: temp_dir.path().join("cohesix_py_defaults.md"),
+        coh_doctor_doc_out: temp_dir.path().join("coh_doctor_checks.md"),
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
         cohsh_policy_doc_out: temp_dir.path().join("cohsh_policy.md"),
@@ -386,6 +412,9 @@ secret = "bootstrap"
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
+        cohesix_py_defaults_out: temp_dir.path().join("cohesix_py_defaults.py"),
+        cohesix_py_doc_out: temp_dir.path().join("cohesix_py_defaults.md"),
+        coh_doctor_doc_out: temp_dir.path().join("coh_doctor_checks.md"),
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
         cohsh_policy_doc_out: temp_dir.path().join("cohsh_policy.md"),
@@ -470,6 +499,9 @@ secret = "bootstrap"
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
+        cohesix_py_defaults_out: temp_dir.path().join("cohesix_py_defaults.py"),
+        cohesix_py_doc_out: temp_dir.path().join("cohesix_py_defaults.md"),
+        coh_doctor_doc_out: temp_dir.path().join("coh_doctor_checks.md"),
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
         cohsh_policy_doc_out: temp_dir.path().join("cohsh_policy.md"),
@@ -547,6 +579,9 @@ secret = "bootstrap"
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
+        cohesix_py_defaults_out: temp_dir.path().join("cohesix_py_defaults.py"),
+        cohesix_py_doc_out: temp_dir.path().join("cohesix_py_defaults.md"),
+        coh_doctor_doc_out: temp_dir.path().join("coh_doctor_checks.md"),
         cohsh_policy_out: temp_dir.path().join("cohsh_policy.toml"),
         cohsh_policy_rust_out: temp_dir.path().join("cohsh_policy.rs"),
         cohsh_policy_doc_out: temp_dir.path().join("cohsh_policy.md"),
