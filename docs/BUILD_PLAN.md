@@ -179,7 +179,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Writing kill removes worker directory and closes telemetry file.
 - Role isolation tests deny cross-role reads/writes.
 
-## Milestone 4 — Bind & Mount Namespaces <a id="24"></a> 
+## Milestone 4 — Bind & Mount Namespaces <a id="4"></a> 
 [Milestones](#Milestones)
 
 **Status:** Complete — Per-session mount tables are implemented; future changes must preserve established bind/mount semantics from `SECURE9P.md`.
