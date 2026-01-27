@@ -141,7 +141,7 @@ Run while QEMU is up:
   - `./bin/cas-tool upload --bundle ./out/cas/1 --host 127.0.0.1 --port 31337 --auth-token changeme --ticket "$QUEEN_TICKET"`
 - `gpu-bridge-host`:
   - `./bin/gpu-bridge-host --mock --list`
-  - Optional NVML: `./bin/gpu-bridge-host --list` (requires `--features nvml`)
+  - Optional NVML: `./bin/gpu-bridge-host --list` (enabled by default on Linux builds; omit NVML with `--no-default-features`)
 - `host-sidecar-bridge`:
   - `./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider nvidia`
   - `./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme` (requires `/host` enabled in `configs/root_task.toml`)

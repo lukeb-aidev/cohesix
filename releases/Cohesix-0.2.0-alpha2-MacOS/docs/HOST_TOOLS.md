@@ -114,7 +114,7 @@ Discover GPUs on the host (NVML or mock) and emit the `/gpu` namespace snapshot 
 
 ### Notes
 - `--list` prints JSON for host-side integration; it does not talk to the VM directly.
-- NVML discovery requires building with `--features nvml`.
+- NVML discovery is enabled by default on Linux builds; use `--no-default-features` to omit NVML.
 
 ## host-sidecar-bridge
 ### Purpose

@@ -224,7 +224,7 @@ What this does: pads the trace to the 128-byte CAS chunk size, packs it into a s
 ```bash
 ./bin/gpu-bridge-host --mock --list
 ```
-NVML discovery requires rebuilding with `--features nvml`.
+NVML discovery is enabled by default on Linux bundles; use `--no-default-features` to omit NVML.
 
 ### host-sidecar-bridge (mock + live)
 ```bash
