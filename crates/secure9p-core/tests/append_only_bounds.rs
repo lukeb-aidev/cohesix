@@ -3,9 +3,7 @@
 // Purpose: Validate append-only offset helpers for Secure9P providers.
 // Author: Lukas Bower
 
-use secure9p_core::{
-    append_only_read_bounds, append_only_write_bounds, AppendOnlyOffsetError,
-};
+use secure9p_core::{append_only_read_bounds, append_only_write_bounds, AppendOnlyOffsetError};
 
 #[test]
 fn read_bounds_detect_stale_offsets() {

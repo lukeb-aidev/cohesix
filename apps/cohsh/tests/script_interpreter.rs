@@ -217,9 +217,7 @@ fn script_allows_expect_after_err_ack() {
             .worker_telemetry_path("worker-0")
             .join("/")
     );
-    let script = format!(
-        "attach queen\nEXPECT OK\ncat {telemetry_path}\nEXPECT ERR\n"
-    );
+    let script = format!("attach queen\nEXPECT OK\ncat {telemetry_path}\nEXPECT ERR\n");
     shell
         .run_script(Cursor::new(script.as_bytes()))
         .expect("script should allow EXPECT after ERR ack");

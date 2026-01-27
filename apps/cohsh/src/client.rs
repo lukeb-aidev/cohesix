@@ -50,8 +50,8 @@ impl<T: Secure9pTransport> CohClient<T> {
         let mut core = Secure9pClient::new(transport);
         core.version(crate::generated_client::SECURE9P_MSIZE)
             .map_err(|err| anyhow!("version negotiation failed: {err}"))?;
-        let ticket_check = normalize_ticket(role, ticket, TicketPolicy::ninedoor()).map_err(|err| {
-            match err {
+        let ticket_check =
+            normalize_ticket(role, ticket, TicketPolicy::ninedoor()).map_err(|err| match err {
                 cohsh_core::TicketError::Missing => anyhow!(
                     "role {:?} requires a capability ticket containing an identity",
                     role
@@ -69,8 +69,7 @@ impl<T: Secure9pTransport> CohClient<T> {
                     "ticket is missing required subject identity for role {:?}",
                     role
                 ),
-            }
-        })?;
+            })?;
         let identity = ticket_check
             .claims
             .as_ref()
@@ -144,9 +143,7 @@ impl<T: Secure9pTransport> CohClient<T> {
 
     /// Write bytes to an open fid.
     pub fn write(&mut self, fid: u32, offset: u64, data: &[u8]) -> Result<u32> {
-        self.core
-            .write(fid, offset, data)
-            .map_err(map_core_error)
+        self.core.write(fid, offset, data).map_err(map_core_error)
     }
 
     /// Clunk the supplied fid.

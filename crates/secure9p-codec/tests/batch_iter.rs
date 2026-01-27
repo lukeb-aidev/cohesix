@@ -4,7 +4,7 @@
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 
-use secure9p_codec::{BatchIter, Codec, CodecError, Request, RequestBody, VERSION, MAX_MSIZE};
+use secure9p_codec::{BatchIter, Codec, CodecError, Request, RequestBody, MAX_MSIZE, VERSION};
 
 #[test]
 fn batch_iter_splits_frames() {

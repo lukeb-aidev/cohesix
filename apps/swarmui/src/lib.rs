@@ -13,30 +13,30 @@ mod transport;
 
 pub use cache::{CacheError, SnapshotCache, SnapshotRecord};
 pub use hive::{
-    SwarmUiHiveAgent, SwarmUiHiveBatch, SwarmUiHiveBootstrap, SwarmUiHiveConfig,
-    SwarmUiHiveEvent, SwarmUiHiveEventKind, SwarmUiHivePressureCounters, SwarmUiHiveRootStatus,
+    SwarmUiHiveAgent, SwarmUiHiveBatch, SwarmUiHiveBootstrap, SwarmUiHiveConfig, SwarmUiHiveEvent,
+    SwarmUiHiveEventKind, SwarmUiHivePressureCounters, SwarmUiHiveRootStatus,
     SwarmUiHiveSessionSummary, SwarmUiHiveSnapshot,
 };
-pub use transport::{
-    TcpTransport, TcpTransportError, TcpTransportFactory, TraceTransportFactory,
-};
+pub use transport::{TcpTransport, TcpTransportError, TcpTransportFactory, TraceTransportFactory};
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use cohesix_ticket::{Role, TicketClaims};
 use cohsh::client::{CohClient, TailEvent};
 use cohsh::queen;
 use cohsh::{
-    tcp_debug_enabled, CohshPolicy, Session as CohshSession,
-    TcpTransport as CohshTcpTransport, Transport as CohshTransport,
+    tcp_debug_enabled, CohshPolicy, Session as CohshSession, TcpTransport as CohshTcpTransport,
+    Transport as CohshTransport,
 };
-use cohsh_core::command::{Command as ConsoleCommand, ConsoleError, CommandParser, MAX_LINE_LEN};
+use cohsh_core::command::{Command as ConsoleCommand, CommandParser, ConsoleError, MAX_LINE_LEN};
 use cohsh_core::wire::{render_ack, AckLine, AckStatus, END_LINE};
-use cohsh_core::{normalize_ticket, parse_role, role_label, ConsoleVerb, RoleParseMode, TicketPolicy};
-use cohesix_ticket::{Role, TicketClaims};
-use serde::{Deserialize, Serialize};
+use cohsh_core::{
+    normalize_ticket, parse_role, role_label, ConsoleVerb, RoleParseMode, TicketPolicy,
+};
 use secure9p_codec::OpenMode;
+use serde::{Deserialize, Serialize};
 
 mod generated;
 
@@ -579,13 +579,7 @@ where
             ));
             return SwarmUiTranscript::err(lines);
         }
-        let roots = [
-            "p50_ms",
-            "p95_ms",
-            "backpressure",
-            "dropped",
-            "queued",
-        ];
+        let roots = ["p50_ms", "p95_ms", "backpressure", "dropped", "queued"];
         lines.push(render_ack_line(
             AckStatus::Ok,
             ConsoleVerb::Cat.ack_label(),
@@ -661,8 +655,7 @@ where
             let key = snapshot_key.unwrap_or("demo");
             let cache_key = cache_key_for_path(HIVE_CACHE_PREFIX, key);
             let record = self.cache_read(&cache_key)?;
-            let replay = hive::HiveReplay::decode(&record.payload)
-                .map_err(SwarmUiError::Hive)?;
+            let replay = hive::HiveReplay::decode(&record.payload).map_err(SwarmUiError::Hive)?;
             replay
                 .snapshot()
                 .validate(self.config.hive.snapshot_max_events as usize)
@@ -754,10 +747,7 @@ where
                 .hive
                 .lod_event_budget
                 .min(self.config.hive.snapshot_max_events) as usize;
-            return Ok(replay.next_batch(
-                max_events,
-                self.config.hive.lod_event_budget,
-            ));
+            return Ok(replay.next_batch(max_events, self.config.hive.lod_event_budget));
         }
         if self.config.offline {
             return Err(SwarmUiError::Offline);
@@ -804,11 +794,7 @@ where
     }
 
     /// Reset Live Hive session state and close any open telemetry cursors.
-    pub fn hive_reset(
-        &mut self,
-        role: Role,
-        ticket: Option<&str>,
-    ) -> Result<(), SwarmUiError> {
+    pub fn hive_reset(&mut self, role: Role, ticket: Option<&str>) -> Result<(), SwarmUiError> {
         if let Some(replay) = self.hive_replay.as_mut() {
             replay.reset();
             return Ok(());
@@ -914,26 +900,36 @@ where
     }
 
     /// Cache a CBOR snapshot payload.
-    pub fn cache_write(&mut self, key: &str, payload: &[u8]) -> Result<SnapshotRecord, SwarmUiError> {
+    pub fn cache_write(
+        &mut self,
+        key: &str,
+        payload: &[u8],
+    ) -> Result<SnapshotRecord, SwarmUiError> {
         if self.config.offline {
             return Err(SwarmUiError::Offline);
         }
-        let cache = self.cache.as_ref().ok_or_else(|| {
-            SwarmUiError::Cache(CacheError::Disabled)
-        })?;
+        let cache = self
+            .cache
+            .as_ref()
+            .ok_or_else(|| SwarmUiError::Cache(CacheError::Disabled))?;
         let record = cache.write(key, payload)?;
         Ok(record)
     }
 
     /// Read a cached CBOR snapshot payload.
     pub fn cache_read(&self, key: &str) -> Result<SnapshotRecord, SwarmUiError> {
-        let cache = self.cache.as_ref().ok_or_else(|| {
-            SwarmUiError::Cache(CacheError::Disabled)
-        })?;
+        let cache = self
+            .cache
+            .as_ref()
+            .ok_or_else(|| SwarmUiError::Cache(CacheError::Disabled))?;
         Ok(cache.read(key)?)
     }
 
-    fn session_for(&mut self, role: Role, ticket: Option<&str>) -> Result<&mut SwarmUiSession<F::Transport>, SwarmUiError> {
+    fn session_for(
+        &mut self,
+        role: Role,
+        ticket: Option<&str>,
+    ) -> Result<&mut SwarmUiSession<F::Transport>, SwarmUiError> {
         let key = self.session_key(role, ticket);
         if !self.sessions.contains_key(&key) {
             self.ensure_session(role, ticket)?;
@@ -945,14 +941,12 @@ where
 
     fn ensure_session(&mut self, role: Role, ticket: Option<&str>) -> Result<(), SwarmUiError> {
         let key = self.session_key(role, ticket);
-        let ticket_check = normalize_ticket(role, ticket, TicketPolicy::ninedoor()).map_err(|err| {
-            SwarmUiError::Ticket(map_ticket_error(role, err))
-        })?;
+        let ticket_check = normalize_ticket(role, ticket, TicketPolicy::ninedoor())
+            .map_err(|err| SwarmUiError::Ticket(map_ticket_error(role, err)))?;
         let claims = ticket_check.claims.clone();
         let transport = self.factory.connect()?;
-        let client = CohClient::connect(transport, role, ticket_check.ticket).map_err(|err| {
-            SwarmUiError::Transport(err.to_string())
-        })?;
+        let client = CohClient::connect(transport, role, ticket_check.ticket)
+            .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
         let session = SwarmUiSession {
             role,
             _ticket: ticket.map(str::to_owned),
@@ -1230,9 +1224,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 let payload = match normalize_payload_line(payload.as_str()) {
                     Ok(payload) => payload,
                     Err(err) => {
-                        return SwarmUiTranscript::err(vec![render_parse_error_text(
-                            err.as_str(),
-                        )]);
+                        return SwarmUiTranscript::err(vec![render_parse_error_text(err.as_str())]);
                     }
                 };
                 self.console_echo(path.as_str(), payload.as_bytes())
@@ -1582,9 +1574,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
     fn console_spawn(&mut self, payload: &str) -> SwarmUiTranscript {
         let mut parts = payload.split_whitespace();
         let Some(role) = parts.next() else {
-            return SwarmUiTranscript::err(vec![render_parse_error_text(
-                "spawn requires a role",
-            )]);
+            return SwarmUiTranscript::err(vec![render_parse_error_text("spawn requires a role")]);
         };
         let payload = match queen::spawn(role, parts) {
             Ok(payload) => trim_payload_newline(payload),
@@ -1758,17 +1748,17 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         }
         let cache_key = cache_key_for_path(NAMESPACE_CACHE_PREFIX, path);
         if self.config.offline {
-            let claims =
-                match validate_ticket_claims_with_policy(role, ticket, TicketPolicy::tcp()) {
-                    Ok(claims) => claims,
-                    Err(err) => {
-                        return SwarmUiTranscript::err(vec![render_ack_line(
-                            AckStatus::Err,
-                            ConsoleVerb::Ls.ack_label(),
-                            Some(format!("reason={err}").as_str()),
-                        )]);
-                    }
-                };
+            let claims = match validate_ticket_claims_with_policy(role, ticket, TicketPolicy::tcp())
+            {
+                Ok(claims) => claims,
+                Err(err) => {
+                    return SwarmUiTranscript::err(vec![render_ack_line(
+                        AckStatus::Err,
+                        ConsoleVerb::Ls.ack_label(),
+                        Some(format!("reason={err}").as_str()),
+                    )]);
+                }
+            };
             if let Err(err) = ensure_role_allowed(role, claims.as_ref(), path) {
                 return SwarmUiTranscript::err(vec![render_ack_line(
                     AckStatus::Err,
@@ -1826,17 +1816,17 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
     /// Read ingest providers to build a fleet snapshot (text output).
     pub fn fleet_snapshot(&mut self, role: Role, ticket: Option<&str>) -> SwarmUiTranscript {
         if self.config.offline {
-            let claims =
-                match validate_ticket_claims_with_policy(role, ticket, TicketPolicy::tcp()) {
-                    Ok(claims) => claims,
-                    Err(err) => {
-                        return SwarmUiTranscript::err(vec![render_ack_line(
-                            AckStatus::Err,
-                            ConsoleVerb::Cat.ack_label(),
-                            Some(format!("reason={err}").as_str()),
-                        )]);
-                    }
-                };
+            let claims = match validate_ticket_claims_with_policy(role, ticket, TicketPolicy::tcp())
+            {
+                Ok(claims) => claims,
+                Err(err) => {
+                    return SwarmUiTranscript::err(vec![render_ack_line(
+                        AckStatus::Err,
+                        ConsoleVerb::Cat.ack_label(),
+                        Some(format!("reason={err}").as_str()),
+                    )]);
+                }
+            };
             if role != Role::Queen {
                 let detail = format!("reason=permission");
                 return SwarmUiTranscript::err(vec![render_ack_line(
@@ -1876,13 +1866,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             ));
             return SwarmUiTranscript::err(lines);
         }
-        let roots = [
-            "p50_ms",
-            "p95_ms",
-            "backpressure",
-            "dropped",
-            "queued",
-        ];
+        let roots = ["p50_ms", "p95_ms", "backpressure", "dropped", "queued"];
         lines.push(render_ack_line(
             AckStatus::Ok,
             ConsoleVerb::Cat.ack_label(),
@@ -1958,8 +1942,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             let key = snapshot_key.unwrap_or("demo");
             let cache_key = cache_key_for_path(HIVE_CACHE_PREFIX, key);
             let record = self.cache_read(&cache_key)?;
-            let replay = hive::HiveReplay::decode(&record.payload)
-                .map_err(SwarmUiError::Hive)?;
+            let replay = hive::HiveReplay::decode(&record.payload).map_err(SwarmUiError::Hive)?;
             replay
                 .snapshot()
                 .validate(self.config.hive.snapshot_max_events as usize)
@@ -2044,10 +2027,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 .hive
                 .lod_event_budget
                 .min(self.config.hive.snapshot_max_events) as usize;
-            return Ok(replay.next_batch(
-                max_events,
-                self.config.hive.lod_event_budget,
-            ));
+            return Ok(replay.next_batch(max_events, self.config.hive.lod_event_budget));
         }
         if self.config.offline {
             return Err(SwarmUiError::Offline);
@@ -2094,11 +2074,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
     }
 
     /// Reset Live Hive session state and close any open telemetry cursors.
-    pub fn hive_reset(
-        &mut self,
-        role: Role,
-        ticket: Option<&str>,
-    ) -> Result<(), SwarmUiError> {
+    pub fn hive_reset(&mut self, role: Role, ticket: Option<&str>) -> Result<(), SwarmUiError> {
         if let Some(replay) = self.hive_replay.as_mut() {
             replay.reset();
             return Ok(());
@@ -2114,22 +2090,28 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
     }
 
     /// Cache a CBOR snapshot payload.
-    pub fn cache_write(&mut self, key: &str, payload: &[u8]) -> Result<SnapshotRecord, SwarmUiError> {
+    pub fn cache_write(
+        &mut self,
+        key: &str,
+        payload: &[u8],
+    ) -> Result<SnapshotRecord, SwarmUiError> {
         if self.config.offline {
             return Err(SwarmUiError::Offline);
         }
-        let cache = self.cache.as_ref().ok_or_else(|| {
-            SwarmUiError::Cache(CacheError::Disabled)
-        })?;
+        let cache = self
+            .cache
+            .as_ref()
+            .ok_or_else(|| SwarmUiError::Cache(CacheError::Disabled))?;
         let record = cache.write(key, payload)?;
         Ok(record)
     }
 
     /// Read a cached CBOR snapshot payload.
     pub fn cache_read(&self, key: &str) -> Result<SnapshotRecord, SwarmUiError> {
-        let cache = self.cache.as_ref().ok_or_else(|| {
-            SwarmUiError::Cache(CacheError::Disabled)
-        })?;
+        let cache = self
+            .cache
+            .as_ref()
+            .ok_or_else(|| SwarmUiError::Cache(CacheError::Disabled))?;
         Ok(cache.read(key)?)
     }
 
@@ -2156,11 +2138,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         let claims = ticket_check.claims.clone();
         let ticket_payload = ticket_check.ticket.map(str::to_owned);
         let needs_attach = self.session_role != Some(role)
-            || self
-                .session_ticket
-                .as_deref()
-                .map(|value| value.trim())
-                != ticket_check.ticket;
+            || self.session_ticket.as_deref().map(|value| value.trim()) != ticket_check.ticket;
         if needs_attach {
             let session = self
                 .transport
@@ -2247,13 +2225,10 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             .unwrap_or(0);
         let sessions = session_line.map(|_| SwarmUiHiveSessionSummary { active, draining });
 
-        let busy_line = read_lines_console(
-            &mut self.transport,
-            &session.session,
-            "/proc/pressure/busy",
-        )
-        .ok()
-        .and_then(|lines| lines.into_iter().next());
+        let busy_line =
+            read_lines_console(&mut self.transport, &session.session, "/proc/pressure/busy")
+                .ok()
+                .and_then(|lines| lines.into_iter().next());
         let quota_line = read_lines_console(
             &mut self.transport,
             &session.session,
@@ -2261,13 +2236,10 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         )
         .ok()
         .and_then(|lines| lines.into_iter().next());
-        let cut_line = read_lines_console(
-            &mut self.transport,
-            &session.session,
-            "/proc/pressure/cut",
-        )
-        .ok()
-        .and_then(|lines| lines.into_iter().next());
+        let cut_line =
+            read_lines_console(&mut self.transport, &session.session, "/proc/pressure/cut")
+                .ok()
+                .and_then(|lines| lines.into_iter().next());
         let policy_line = read_lines_console(
             &mut self.transport,
             &session.session,
@@ -2427,7 +2399,11 @@ fn console_help_lines() -> Vec<String> {
 }
 
 fn render_ack_line(status: AckStatus, verb: &str, detail: Option<&str>) -> String {
-    let ack = AckLine { status, verb, detail };
+    let ack = AckLine {
+        status,
+        verb,
+        detail,
+    };
     let mut line = String::new();
     render_ack(&mut line, &ack).expect("render ack");
     line
@@ -2613,7 +2589,12 @@ fn ensure_role_allowed(
     };
     let allowed = path == "/proc/boot"
         || path == "/log/queen.log"
-        || match path.trim_start_matches('/').split('/').collect::<Vec<_>>().as_slice() {
+        || match path
+            .trim_start_matches('/')
+            .split('/')
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
             ["worker", worker_id, "telemetry"] => *worker_id == subject,
             _ => false,
         };
@@ -2640,7 +2621,10 @@ fn map_ticket_error(role: Role, err: cohsh_core::TicketError) -> String {
             found, expected
         ),
         cohsh_core::TicketError::MissingSubject => {
-            format!("ticket is missing required subject identity for role {:?}", role)
+            format!(
+                "ticket is missing required subject identity for role {:?}",
+                role
+            )
         }
     }
 }

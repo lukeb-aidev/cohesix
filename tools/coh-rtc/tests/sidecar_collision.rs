@@ -101,8 +101,8 @@ spool = { max_entries = 1, max_bytes = 128 }
     let options = options_for_manifest(&temp_dir, manifest_path);
     compile(&options).expect("compile manifest");
 
-    let bootstrap = fs::read_to_string(options.out_dir.join("bootstrap.rs"))
-        .expect("read bootstrap.rs");
+    let bootstrap =
+        fs::read_to_string(options.out_dir.join("bootstrap.rs")).expect("read bootstrap.rs");
     let prefix_a = &hash_bytes("modbus:a:log".as_bytes())[0..8];
     let prefix_b = &hash_bytes("modbus:b:log".as_bytes())[0..8];
     let expected_a = format!("{prefix_a}-log");

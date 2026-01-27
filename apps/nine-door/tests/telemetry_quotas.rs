@@ -24,7 +24,9 @@ impl Clock for TestClock {
 fn attach_queen(server: &NineDoor) -> InProcessConnection {
     let mut client = server.connect().expect("connect");
     client.version(MAX_MSIZE).expect("version");
-    client.attach(1, cohesix_ticket::Role::Queen).expect("attach");
+    client
+        .attach(1, cohesix_ticket::Role::Queen)
+        .expect("attach");
     client
 }
 

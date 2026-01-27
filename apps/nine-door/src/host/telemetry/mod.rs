@@ -211,7 +211,11 @@ impl TelemetryFile {
         let mut cursor = TelemetryCursor::new(config.cursor.retain_on_boot, ring.capacity());
         if config.cursor.retain_on_boot {
             let bounds = ring.bounds();
-            cursor.restore_last_offset(manifest.cursor.last_offset, bounds.base_offset, bounds.next_offset);
+            cursor.restore_last_offset(
+                manifest.cursor.last_offset,
+                bounds.base_offset,
+                bounds.next_offset,
+            );
         }
         Some(Self {
             ring,
@@ -229,7 +233,11 @@ impl TelemetryFile {
     }
 
     /// Append telemetry bytes at the provided offset.
-    pub fn append(&mut self, offset: u64, data: &[u8]) -> Result<TelemetryAppendOutcome, TelemetryError> {
+    pub fn append(
+        &mut self,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<TelemetryAppendOutcome, TelemetryError> {
         if matches!(self.frame_schema, TelemetryFrameSchema::LegacyPlaintext)
             && std::str::from_utf8(data).is_err()
         {
@@ -243,7 +251,11 @@ impl TelemetryFile {
             });
         }
         let expected_offset = self.ring.bounds().next_offset;
-        let provided_offset = if offset == u64::MAX { expected_offset } else { offset };
+        let provided_offset = if offset == u64::MAX {
+            expected_offset
+        } else {
+            offset
+        };
         let bounds = append_only_write_bounds(
             expected_offset,
             provided_offset,
@@ -277,7 +289,10 @@ impl TelemetryFile {
             });
         }
         let outcome = self.ring.append(data).map_err(|err| match err {
-            RingWriteError::Oversize { requested, capacity } => TelemetryError {
+            RingWriteError::Oversize {
+                requested,
+                capacity,
+            } => TelemetryError {
                 message: format!("telemetry frame exceeds ring quota: {requested} > {capacity}"),
                 audit: Some(TelemetryAudit::new(
                     TelemetryAuditLevel::Warn,
@@ -304,7 +319,11 @@ impl TelemetryFile {
     }
 
     /// Read telemetry bytes from the supplied offset.
-    pub fn read(&mut self, offset: u64, count: u32) -> Result<TelemetryReadOutcome, TelemetryError> {
+    pub fn read(
+        &mut self,
+        offset: u64,
+        count: u32,
+    ) -> Result<TelemetryReadOutcome, TelemetryError> {
         let bounds = self.ring.bounds();
         let CursorResolution { offset, audit } = self
             .cursor

@@ -131,13 +131,11 @@ fn pooled_throughput_exceeds_baseline() {
     let factory = Arc::new({
         let writes = pooled_writes.clone();
         move || {
-            Ok(Box::new(SleepyTransport::new(delay, writes.clone()))
-                as Box<dyn Transport + Send>)
+            Ok(Box::new(SleepyTransport::new(delay, writes.clone())) as Box<dyn Transport + Send>)
         }
     });
     let pool = SessionPool::new(pool_size as u16, pool_size as u16, factory);
-    pool.attach(Role::Queen, None)
-        .expect("attach pool session");
+    pool.attach(Role::Queen, None).expect("attach pool session");
 
     let shared_ops = Arc::new(AtomicUsize::new(0));
     let pooled_successes = Arc::new(AtomicUsize::new(0));

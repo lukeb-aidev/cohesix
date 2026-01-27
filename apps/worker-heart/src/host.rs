@@ -13,9 +13,9 @@
 //! brought online.
 
 use anyhow::Result;
-use std::time::{SystemTime, UNIX_EPOCH};
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims};
 use secure9p_codec::SessionId;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Builder for configuring heartbeat workers before seL4 integration lands.
 #[derive(Debug, Clone)]

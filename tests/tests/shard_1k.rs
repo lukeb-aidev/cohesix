@@ -18,7 +18,10 @@ fn repo_root() -> PathBuf {
 }
 
 fn shard_script_path() -> PathBuf {
-    repo_root().join("scripts").join("cohsh").join("shard_1k.coh")
+    repo_root()
+        .join("scripts")
+        .join("cohsh")
+        .join("shard_1k.coh")
 }
 
 fn run_script(server: NineDoor) -> anyhow::Result<()> {
@@ -38,9 +41,6 @@ fn shard_script_rejects_legacy_alias_when_disabled() {
     let server = NineDoor::new_with_shard_layout(ShardLayout::enabled(8, false));
     let err = run_script(server).expect_err("legacy alias should fail when disabled");
     let message = err.to_string();
-    assert!(
-        message.contains("/worker/worker-1/telemetry"),
-        "{message}"
-    );
+    assert!(message.contains("/worker/worker-1/telemetry"), "{message}");
     assert!(message.contains("ERR"), "{message}");
 }

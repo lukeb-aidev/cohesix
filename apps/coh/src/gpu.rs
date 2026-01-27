@@ -46,10 +46,7 @@ pub struct GpuLeaseArgs {
 }
 
 /// List GPUs and append output lines to the audit transcript.
-pub fn list<C: CohAccess>(
-    client: &mut C,
-    audit: &mut CohAudit,
-) -> Result<()> {
+pub fn list<C: CohAccess>(client: &mut C, audit: &mut CohAudit) -> Result<()> {
     let entries = client.list_dir(GPU_ROOT, MAX_DIR_LIST_BYTES)?;
     audit.push_ack(AckStatus::Ok, "LS", Some("path=/gpu"));
     let gpus = entries
@@ -67,8 +64,8 @@ pub fn list<C: CohAccess>(
             .with_context(|| format!("read {info_path}"))?;
         let detail = format!("path={info_path}");
         audit.push_ack(AckStatus::Ok, "CAT", Some(detail.as_str()));
-        let info_text = std::str::from_utf8(&payload)
-            .with_context(|| format!("{info_path} is not UTF-8"))?;
+        let info_text =
+            std::str::from_utf8(&payload).with_context(|| format!("{info_path} is not UTF-8"))?;
         let info: GpuInfoPayload = serde_json::from_str(info_text)
             .with_context(|| format!("invalid gpu info JSON in {info_path}"))?;
         audit.push_line(format!(
@@ -85,11 +82,7 @@ pub fn list<C: CohAccess>(
 }
 
 /// Fetch the latest GPU status line.
-pub fn status<C: CohAccess>(
-    client: &mut C,
-    audit: &mut CohAudit,
-    gpu_id: &str,
-) -> Result<()> {
+pub fn status<C: CohAccess>(client: &mut C, audit: &mut CohAudit, gpu_id: &str) -> Result<()> {
     if gpu_id.trim().is_empty() {
         return Err(anyhow!("gpu id must not be empty"));
     }
@@ -99,8 +92,7 @@ pub fn status<C: CohAccess>(
         .with_context(|| format!("read {status_path}"))?;
     let detail = format!("path={status_path}");
     audit.push_ack(AckStatus::Ok, "CAT", Some(detail.as_str()));
-    let text = String::from_utf8(payload)
-        .with_context(|| format!("{status_path} is not UTF-8"))?;
+    let text = String::from_utf8(payload).with_context(|| format!("{status_path} is not UTF-8"))?;
     let line = text
         .lines()
         .map(str::trim)

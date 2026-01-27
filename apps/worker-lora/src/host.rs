@@ -7,11 +7,11 @@
 
 //! LoRa worker scaffolding with deterministic duty-cycle enforcement.
 
+use crate::{DutyCycleConfig, DutyCycleDecision, DutyCycleGuard, TamperEntry, TamperLog};
 use anyhow::{anyhow, Result};
-use std::time::{SystemTime, UNIX_EPOCH};
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims};
 use secure9p_codec::SessionId;
-use crate::{DutyCycleConfig, DutyCycleDecision, DutyCycleGuard, TamperEntry, TamperLog};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Paths exposed for a LoRa mount under `/lora`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,17 +151,17 @@ mod tests {
             window_ms: 100,
             max_payload_bytes: 32,
         };
-        let mut worker =
-            LoraWorker::new(SessionId::from_raw(1), "scope", "/lora", "lora-1", config, 4)
-                .expect("worker");
-        assert_eq!(
-            worker.attempt_tx(0, &[0u8; 4]),
-            DutyCycleDecision::Allowed
-        );
-        assert_eq!(
-            worker.attempt_tx(1, &[0u8; 4]),
-            DutyCycleDecision::Allowed
-        );
+        let mut worker = LoraWorker::new(
+            SessionId::from_raw(1),
+            "scope",
+            "/lora",
+            "lora-1",
+            config,
+            4,
+        )
+        .expect("worker");
+        assert_eq!(worker.attempt_tx(0, &[0u8; 4]), DutyCycleDecision::Allowed);
+        assert_eq!(worker.attempt_tx(1, &[0u8; 4]), DutyCycleDecision::Allowed);
         assert_eq!(
             worker.attempt_tx(2, &[0u8; 4]),
             DutyCycleDecision::Throttled
@@ -178,9 +178,15 @@ mod tests {
             window_ms: 200,
             max_payload_bytes: 4,
         };
-        let mut worker =
-            LoraWorker::new(SessionId::from_raw(2), "scope", "/lora", "lora-1", config, 2)
-                .expect("worker");
+        let mut worker = LoraWorker::new(
+            SessionId::from_raw(2),
+            "scope",
+            "/lora",
+            "lora-1",
+            config,
+            2,
+        )
+        .expect("worker");
         assert_eq!(
             worker.attempt_tx(10, &[0u8; 8]),
             DutyCycleDecision::Throttled
@@ -197,9 +203,15 @@ mod tests {
             window_ms: 100,
             max_payload_bytes: 16,
         };
-        let mut worker =
-            LoraWorker::new(SessionId::from_raw(3), "scope", "/lora", "lora-1", config, 4)
-                .expect("worker");
+        let mut worker = LoraWorker::new(
+            SessionId::from_raw(3),
+            "scope",
+            "/lora",
+            "lora-1",
+            config,
+            4,
+        )
+        .expect("worker");
         let mut throttled = 0usize;
         for tick in 0..20 {
             if worker.attempt_tx(tick, &[0u8; 5]) == DutyCycleDecision::Throttled {

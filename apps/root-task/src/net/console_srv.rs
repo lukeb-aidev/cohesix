@@ -575,11 +575,7 @@ impl TcpConsoleServer {
     }
 
     /// Forward buffered console lines to the provided visitor.
-    pub fn drain_console_lines(
-        &mut self,
-        now_ms: u64,
-        visitor: &mut dyn FnMut(ConsoleLine),
-    ) {
+    pub fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
         while let Some(line) = self.inbound.pop_front() {
             let latency = now_ms.saturating_sub(line.ingest_ms);
             self.ingest_metrics.record_latency_ms(latency);

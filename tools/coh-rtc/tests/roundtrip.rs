@@ -86,8 +86,7 @@ fn manifest_codegen_is_deterministic() {
         fs::read(&observability_interfaces_snippet).expect("observability interfaces snippet");
     let baseline_obs_security =
         fs::read(&observability_security_snippet).expect("observability security snippet");
-    let baseline_ticket_quotas =
-        fs::read(&ticket_quotas_snippet).expect("ticket quotas snippet");
+    let baseline_ticket_quotas = fs::read(&ticket_quotas_snippet).expect("ticket quotas snippet");
     let baseline_cas_interfaces =
         fs::read(&cas_interfaces_snippet).expect("cas interfaces snippet");
     let baseline_cas_security = fs::read(&cas_security_snippet).expect("cas security snippet");
@@ -101,10 +100,8 @@ fn manifest_codegen_is_deterministic() {
     let baseline_client_rust = fs::read(&cohsh_client_rust).expect("cohsh client rust");
     let baseline_client_doc = fs::read(&cohsh_client_doc).expect("cohsh client doc");
     let baseline_grammar_doc = fs::read(&cohsh_grammar_doc).expect("cohsh grammar doc");
-    let baseline_ticket_doc =
-        fs::read(&cohsh_ticket_policy_doc).expect("cohsh ticket policy doc");
-    let baseline_swarmui_defaults =
-        fs::read(&swarmui_defaults).expect("swarmui defaults");
+    let baseline_ticket_doc = fs::read(&cohsh_ticket_policy_doc).expect("cohsh ticket policy doc");
+    let baseline_swarmui_defaults = fs::read(&swarmui_defaults).expect("swarmui defaults");
     let baseline_swarmui_defaults_rust =
         fs::read(&swarmui_defaults_rust).expect("swarmui defaults rust");
     let baseline_swarmui_defaults_doc =
@@ -120,10 +117,8 @@ fn manifest_codegen_is_deterministic() {
         fs::read(&observability_interfaces_snippet).expect("observability interfaces snippet");
     let second_obs_security =
         fs::read(&observability_security_snippet).expect("observability security snippet");
-    let second_ticket_quotas =
-        fs::read(&ticket_quotas_snippet).expect("ticket quotas snippet");
-    let second_cas_interfaces =
-        fs::read(&cas_interfaces_snippet).expect("cas interfaces snippet");
+    let second_ticket_quotas = fs::read(&ticket_quotas_snippet).expect("ticket quotas snippet");
+    let second_cas_interfaces = fs::read(&cas_interfaces_snippet).expect("cas interfaces snippet");
     let second_cas_security = fs::read(&cas_security_snippet).expect("cas security snippet");
     let second_cbor = fs::read(&cbor_snippet).expect("cbor snippet");
     let second_policy = fs::read(&cohsh_policy).expect("cohsh policy");
@@ -135,8 +130,7 @@ fn manifest_codegen_is_deterministic() {
     let second_client_rust = fs::read(&cohsh_client_rust).expect("cohsh client rust");
     let second_client_doc = fs::read(&cohsh_client_doc).expect("cohsh client doc");
     let second_grammar_doc = fs::read(&cohsh_grammar_doc).expect("cohsh grammar doc");
-    let second_ticket_doc =
-        fs::read(&cohsh_ticket_policy_doc).expect("cohsh ticket policy doc");
+    let second_ticket_doc = fs::read(&cohsh_ticket_policy_doc).expect("cohsh ticket policy doc");
     let second_swarmui_defaults = fs::read(&swarmui_defaults).expect("swarmui defaults");
     let second_swarmui_defaults_rust =
         fs::read(&swarmui_defaults_rust).expect("swarmui defaults rust");
@@ -217,12 +211,8 @@ secret = "bootstrap"
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
         gpu_breadcrumbs_snippet_out: temp_dir.path().join("gpu_breadcrumbs.md"),
-        observability_interfaces_snippet_out: temp_dir
-            .path()
-            .join("observability_interfaces.md"),
-        observability_security_snippet_out: temp_dir
-            .path()
-            .join("observability_security.md"),
+        observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
+        observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
@@ -313,12 +303,8 @@ secret = "bootstrap"
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
         gpu_breadcrumbs_snippet_out: temp_dir.path().join("gpu_breadcrumbs.md"),
-        observability_interfaces_snippet_out: temp_dir
-            .path()
-            .join("observability_interfaces.md"),
-        observability_security_snippet_out: temp_dir
-            .path()
-            .join("observability_security.md"),
+        observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
+        observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
@@ -394,12 +380,8 @@ secret = "bootstrap"
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
         gpu_breadcrumbs_snippet_out: temp_dir.path().join("gpu_breadcrumbs.md"),
-        observability_interfaces_snippet_out: temp_dir
-            .path()
-            .join("observability_interfaces.md"),
-        observability_security_snippet_out: temp_dir
-            .path()
-            .join("observability_security.md"),
+        observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
+        observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
@@ -482,12 +464,8 @@ secret = "bootstrap"
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
         gpu_breadcrumbs_snippet_out: temp_dir.path().join("gpu_breadcrumbs.md"),
-        observability_interfaces_snippet_out: temp_dir
-            .path()
-            .join("observability_interfaces.md"),
-        observability_security_snippet_out: temp_dir
-            .path()
-            .join("observability_security.md"),
+        observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
+        observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
@@ -508,9 +486,7 @@ secret = "bootstrap"
     };
 
     let err = compile(&options).expect_err("manifest should be rejected");
-    assert!(err
-        .to_string()
-        .contains("references legacy /worker paths"));
+    assert!(err.to_string().contains("references legacy /worker paths"));
 }
 
 #[test]
@@ -565,12 +541,8 @@ secret = "bootstrap"
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
         gpu_breadcrumbs_snippet_out: temp_dir.path().join("gpu_breadcrumbs.md"),
-        observability_interfaces_snippet_out: temp_dir
-            .path()
-            .join("observability_interfaces.md"),
-        observability_security_snippet_out: temp_dir
-            .path()
-            .join("observability_security.md"),
+        observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
+        observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),

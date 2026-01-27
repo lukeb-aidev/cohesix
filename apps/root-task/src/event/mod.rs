@@ -99,8 +99,8 @@ mod lifecycle {
     pub fn root_mark_session_active(_now_ms: u64) {}
 }
 use cohesix_ticket::{Role, TicketClaims, TicketQuotas, TicketToken, TicketVerb};
-use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use cohsh_core::{ConsoleVerb, RoleParseMode};
+use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
 #[cfg(feature = "kernel")]
 use crate::bootstrap::log as boot_log;
@@ -115,13 +115,13 @@ use crate::net::{
     ConsoleLine, NetConsoleDisconnectReason, NetConsoleEvent, NetDiagSnapshot, NetPoller,
     NetTelemetry, CONSOLE_QUEUE_DEPTH, NET_DIAG, NET_DIAG_FEATURED,
 };
+#[cfg(feature = "kernel")]
+use crate::ninedoor::TelemetryTail;
+#[cfg(feature = "kernel")]
+use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
 #[cfg(feature = "net-console")]
 use crate::observe::IngestSnapshot;
 use crate::observe::PressureKind;
-#[cfg(feature = "kernel")]
-use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
-#[cfg(feature = "kernel")]
-use crate::ninedoor::TelemetryTail;
 #[cfg(feature = "kernel")]
 use crate::sel4;
 #[cfg(feature = "kernel")]
@@ -401,7 +401,9 @@ impl fmt::Display for TicketClaimError {
             TicketClaimError::ScopePath { path, max_len } => {
                 write!(f, "scope path '{path}' exceeds {max_len} bytes")
             }
-            TicketClaimError::ScopeRate { rate, max } => write!(f, "scope rate {rate} exceeds {max}"),
+            TicketClaimError::ScopeRate { rate, max } => {
+                write!(f, "scope rate {rate} exceeds {max}")
+            }
             TicketClaimError::Bandwidth { value, max } => {
                 write!(f, "bandwidth quota {value} exceeds {max}")
             }
@@ -419,14 +421,20 @@ impl fmt::Display for TicketClaimError {
 #[derive(Debug, Clone, Copy)]
 enum TicketDeny {
     Scope,
-    Rate { limit_per_s: u32 },
+    Rate {
+        limit_per_s: u32,
+    },
     Bandwidth {
         limit_bytes: u64,
         remaining_bytes: u64,
         requested_bytes: u64,
     },
-    CursorResume { limit: u32 },
-    CursorAdvance { limit: u32 },
+    CursorResume {
+        limit: u32,
+    },
+    CursorAdvance {
+        limit: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -850,10 +858,9 @@ impl SessionRole {
     fn from_role(role: Role) -> Option<Self> {
         match role {
             Role::Queen => Some(Self::Queen),
-            Role::WorkerHeartbeat
-            | Role::WorkerGpu
-            | Role::WorkerBus
-            | Role::WorkerLora => Some(Self::Worker),
+            Role::WorkerHeartbeat | Role::WorkerGpu | Role::WorkerBus | Role::WorkerLora => {
+                Some(Self::Worker)
+            }
         }
     }
 }
@@ -962,10 +969,7 @@ struct PendingCursor {
 #[cfg(feature = "kernel")]
 #[derive(Debug)]
 struct PendingStream {
-    lines: HeaplessVec<
-        HeaplessString<DEFAULT_LINE_CAPACITY>,
-        { log_buffer::LOG_SNAPSHOT_LINES },
-    >,
+    lines: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, { log_buffer::LOG_SNAPSHOT_LINES }>,
     next_line: usize,
     bandwidth_bytes: u64,
     cursor: Option<PendingCursor>,
@@ -1165,10 +1169,8 @@ where
             let activity = net.poll(self.now_ms);
             let telemetry = net.telemetry();
             let conn_id = net.active_console_conn_id();
-            let mut buffered: HeaplessVec<
-                ConsoleLine,
-                { CONSOLE_QUEUE_DEPTH },
-            > = HeaplessVec::new();
+            let mut buffered: HeaplessVec<ConsoleLine, { CONSOLE_QUEUE_DEPTH }> =
+                HeaplessVec::new();
             net.drain_console_lines(self.now_ms, &mut |line| {
                 let _ = buffered.push(line);
             });
@@ -1711,17 +1713,12 @@ where
     }
 
     #[cfg(feature = "kernel")]
-    fn emit_ninedoor_refusal(
-        &mut self,
-        verb: &str,
-        path: Option<&str>,
-        err: &NineDoorBridgeError,
-    ) {
+    fn emit_ninedoor_refusal(&mut self, verb: &str, path: Option<&str>, err: &NineDoorBridgeError) {
         let (reason, detail_tag) = Self::refusal_for_ninedoor_error(err);
         let detail = match path {
-            Some(path) => format_message(format_args!(
-                "detail={detail_tag} path={path} error={err}"
-            )),
+            Some(path) => {
+                format_message(format_args!("detail={detail_tag} path={path} error={err}"))
+            }
             None => format_message(format_args!("detail={detail_tag} error={err}")),
         };
         self.emit_refusal(verb, reason, Some(detail.as_str()));
@@ -1958,11 +1955,7 @@ where
                 self.audit.info("console: test rejected (host-only)");
                 self.metrics.denied_commands += 1;
                 cmd_status = "err";
-                self.emit_refusal(
-                    verb_label,
-                    RefusalReason::Policy,
-                    Some("detail=host-only"),
-                );
+                self.emit_refusal(verb_label, RefusalReason::Policy, Some("detail=host-only"));
             }
             Command::NetTest => {
                 #[cfg(feature = "net-console")]
@@ -2192,24 +2185,25 @@ where
                             } else {
                                 #[cfg(feature = "kernel")]
                                 if let Some(stream) = telemetry_stream {
-                                    let cursor_check =
-                                        match self.check_ticket_cursor(path_str, stream.start_offset) {
-                                            Ok(check) => check,
-                                            Err(denial) => {
-                                                self.record_ticket_denial(
-                                                    path_str,
-                                                    TicketVerb::Read,
-                                                    denial,
-                                                );
-                                                self.emit_ticket_denied(
-                                                    verb_label,
-                                                    Some(path_str),
-                                                    denial,
-                                                );
-                                                cmd_status = "err";
-                                                None
-                                            }
-                                        };
+                                    let cursor_check = match self
+                                        .check_ticket_cursor(path_str, stream.start_offset)
+                                    {
+                                        Ok(check) => check,
+                                        Err(denial) => {
+                                            self.record_ticket_denial(
+                                                path_str,
+                                                TicketVerb::Read,
+                                                denial,
+                                            );
+                                            self.emit_ticket_denied(
+                                                verb_label,
+                                                Some(path_str),
+                                                denial,
+                                            );
+                                            cmd_status = "err";
+                                            None
+                                        }
+                                    };
                                     if cmd_status != "err" {
                                         pending_stream = Some(PendingStream {
                                             lines: stream.lines,
@@ -2269,7 +2263,9 @@ where
                                             lines.iter().map(|line| line.len() as u64).sum();
                                         let log_path = path_str == "/log/queen.log";
                                         let stream_bytes = if log_path { 0 } else { data_bytes };
-                                        if let Err(denial) = self.check_ticket_bandwidth(stream_bytes) {
+                                        if let Err(denial) =
+                                            self.check_ticket_bandwidth(stream_bytes)
+                                        {
                                             self.record_ticket_denial(
                                                 path_str,
                                                 TicketVerb::Read,
@@ -2311,7 +2307,8 @@ where
                                                         log_buffer::snapshot_user_lines::<
                                                             DEFAULT_LINE_CAPACITY,
                                                             { log_buffer::LOG_USER_SNAPSHOT_LINES },
-                                                        >()
+                                                        >(
+                                                        )
                                                     } else {
                                                         HeaplessVec::new()
                                                     };
@@ -2325,7 +2322,10 @@ where
                                                     if log_path {
                                                         if user_lines.is_empty() {
                                                             for line in lines.iter() {
-                                                                if summary_refs.push(line.as_str()).is_err() {
+                                                                if summary_refs
+                                                                    .push(line.as_str())
+                                                                    .is_err()
+                                                                {
                                                                     break;
                                                                 }
                                                             }
@@ -2338,17 +2338,17 @@ where
                                                                     break;
                                                                 }
                                                             }
-                                                            let mut last_user_idx: Option<usize> = None;
+                                                            let mut last_user_idx: Option<usize> =
+                                                                None;
                                                             for (idx, line) in
                                                                 lines.iter().enumerate()
                                                             {
-                                                                if user_lines
-                                                                    .iter()
-                                                                    .any(|user_line| {
+                                                                if user_lines.iter().any(
+                                                                    |user_line| {
                                                                         user_line.as_str()
                                                                             == line.as_str()
-                                                                    })
-                                                                {
+                                                                    },
+                                                                ) {
                                                                     last_user_idx = Some(idx);
                                                                 }
                                                             }
@@ -2359,13 +2359,12 @@ where
                                                                 if line.as_str().starts_with('[') {
                                                                     continue;
                                                                 }
-                                                                if user_lines
-                                                                    .iter()
-                                                                    .any(|user_line| {
+                                                                if user_lines.iter().any(
+                                                                    |user_line| {
                                                                         user_line.as_str()
                                                                             == line.as_str()
-                                                                    })
-                                                                {
+                                                                    },
+                                                                ) {
                                                                     continue;
                                                                 }
                                                                 if summary_refs
@@ -2378,12 +2377,16 @@ where
                                                         }
                                                     } else {
                                                         for line in lines.iter() {
-                                                            if summary_refs.push(line.as_str()).is_err() {
+                                                            if summary_refs
+                                                                .push(line.as_str())
+                                                                .is_err()
+                                                            {
                                                                 break;
                                                             }
                                                         }
                                                     }
-                                                    let summary_lines: &[&str] = summary_refs.as_slice();
+                                                    let summary_lines: &[&str] =
+                                                        summary_refs.as_slice();
                                                     let mut summary: HeaplessString<128> =
                                                         HeaplessString::new();
                                                     let mut selected: HeaplessVec<
@@ -2406,7 +2409,8 @@ where
                                                             if line_len > max_line_len {
                                                                 continue;
                                                             }
-                                                            let sep = if total_len == 0 { 0 } else { 1 };
+                                                            let sep =
+                                                                if total_len == 0 { 0 } else { 1 };
                                                             if line_len
                                                                 .saturating_add(sep)
                                                                 .saturating_add(total_len)
@@ -2421,7 +2425,9 @@ where
                                                                 break;
                                                             }
                                                         }
-                                                        if !selected.is_empty() || !prefer_user_lines {
+                                                        if !selected.is_empty()
+                                                            || !prefer_user_lines
+                                                        {
                                                             break;
                                                         }
                                                         selected.clear();
@@ -2516,11 +2522,13 @@ where
                                                         lines,
                                                         next_line: 0,
                                                         bandwidth_bytes: stream_bytes,
-                                                        cursor: cursor_check.map(|check| PendingCursor {
-                                                            path_key: path_str.to_owned(),
-                                                            offset: 0,
-                                                            len: data_bytes as usize,
-                                                            check,
+                                                        cursor: cursor_check.map(|check| {
+                                                            PendingCursor {
+                                                                path_key: path_str.to_owned(),
+                                                                offset: 0,
+                                                                len: data_bytes as usize,
+                                                                check,
+                                                            }
                                                         }),
                                                     });
                                                 }
@@ -2585,7 +2593,8 @@ where
                                     Ok(entries) => {
                                         let data_bytes =
                                             entries.iter().map(|entry| entry.len() as u64).sum();
-                                        if let Err(denial) = self.check_ticket_bandwidth(data_bytes) {
+                                        if let Err(denial) = self.check_ticket_bandwidth(data_bytes)
+                                        {
                                             self.record_ticket_denial(
                                                 path_str,
                                                 TicketVerb::Read,
@@ -2712,14 +2721,9 @@ where
                         self.metrics.denied_commands += 1;
                         self.audit.denied("echo denied");
                         cmd_status = "err";
-                        self.emit_refusal(
-                            verb_label,
-                            RefusalReason::Policy,
-                            Some("detail=denied"),
-                        );
+                        self.emit_refusal(verb_label, RefusalReason::Policy, Some("detail=denied"));
                     } else {
-                        if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Write)
-                        {
+                        if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Write) {
                             self.record_ticket_denial(path_str, TicketVerb::Write, denial);
                             self.emit_ticket_denied(verb_label, Some(path_str), denial);
                             cmd_status = "err";
@@ -2793,15 +2797,12 @@ where
             }
             Command::Spawn(payload) => {
                 if self.ensure_authenticated(SessionRole::Queen) {
-                    if let Err(denial) =
-                        self.check_ticket_scope(QUEEN_CTL_PATH, TicketVerb::Write)
+                    if let Err(denial) = self.check_ticket_scope(QUEEN_CTL_PATH, TicketVerb::Write)
                     {
                         self.record_ticket_denial(QUEEN_CTL_PATH, TicketVerb::Write, denial);
                         self.emit_ticket_denied(verb_label, Some(QUEEN_CTL_PATH), denial);
                         cmd_status = "err";
-                    } else if let Err(denial) =
-                        self.check_ticket_bandwidth(payload.len() as u64)
-                    {
+                    } else if let Err(denial) = self.check_ticket_bandwidth(payload.len() as u64) {
                         self.record_ticket_denial(QUEEN_CTL_PATH, TicketVerb::Write, denial);
                         self.emit_ticket_denied(verb_label, Some(QUEEN_CTL_PATH), denial);
                         cmd_status = "err";
@@ -2825,10 +2826,8 @@ where
             }
             Command::Kill(ident) => {
                 if self.ensure_authenticated(SessionRole::Queen) {
-                    let payload_len =
-                        format!("{{\"kill\":\"{}\"}}", ident.as_str()).len() as u64;
-                    if let Err(denial) =
-                        self.check_ticket_scope(QUEEN_CTL_PATH, TicketVerb::Write)
+                    let payload_len = format!("{{\"kill\":\"{}\"}}", ident.as_str()).len() as u64;
+                    if let Err(denial) = self.check_ticket_scope(QUEEN_CTL_PATH, TicketVerb::Write)
                     {
                         self.record_ticket_denial(QUEEN_CTL_PATH, TicketVerb::Write, denial);
                         self.emit_ticket_denied(verb_label, Some(QUEEN_CTL_PATH), denial);
@@ -3386,7 +3385,11 @@ where
         }
     }
 
-    fn check_ticket_cursor(&self, path: &str, offset: u64) -> Result<Option<CursorCheck>, TicketDeny> {
+    fn check_ticket_cursor(
+        &self,
+        path: &str,
+        offset: u64,
+    ) -> Result<Option<CursorCheck>, TicketDeny> {
         if !is_telemetry_path(path) {
             return Ok(None);
         }
@@ -3517,7 +3520,8 @@ where
             self.metrics.denied_commands += 1;
             match err {
                 ConsoleError::RateLimited(delay) => {
-                    let detail = format_message(format_args!("detail=rate-limited delay_ms={delay}"));
+                    let detail =
+                        format_message(format_args!("detail=rate-limited delay_ms={delay}"));
                     self.emit_refusal(
                         ConsoleVerb::Attach.ack_label(),
                         RefusalReason::Quota,
@@ -3545,7 +3549,8 @@ where
                 let claims = match TicketToken::decode_unverified(ticket) {
                     Ok(claims) => claims,
                     Err(err) => {
-                        self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+                        self.metrics.denied_commands =
+                            self.metrics.denied_commands.saturating_add(1);
                         self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
                         self.record_ticket_claim_denial(requested_role, ticket, &err);
                         self.emit_refusal(
@@ -3563,7 +3568,8 @@ where
                     let ttl_ms = ttl_s.saturating_mul(1_000);
                     let expires_at_ms = claims.issued_at_ms.saturating_add(ttl_ms);
                     if self.now_ms >= expires_at_ms {
-                        self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+                        self.metrics.denied_commands =
+                            self.metrics.denied_commands.saturating_add(1);
                         self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
                         self.record_ticket_expired(requested_role, ticket, &claims);
                         self.emit_refusal(
@@ -3577,15 +3583,19 @@ where
                         return false;
                     }
                 }
-                match TicketUsage::from_claims(&claims, crate::generated::ticket_limits(), self.now_ms)
-                {
+                match TicketUsage::from_claims(
+                    &claims,
+                    crate::generated::ticket_limits(),
+                    self.now_ms,
+                ) {
                     Ok(usage) => {
                         if usage.has_enforcement() {
                             ticket_usage = Some(usage);
                         }
                     }
                     Err(err) => {
-                        self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+                        self.metrics.denied_commands =
+                            self.metrics.denied_commands.saturating_add(1);
                         self.metrics.ui_denies = self.metrics.ui_denies.saturating_add(1);
                         self.record_ticket_claim_denial(requested_role, ticket, &err);
                         self.emit_refusal(
@@ -3683,9 +3693,16 @@ where
 #[cfg(feature = "kernel")]
 #[derive(Debug)]
 pub(crate) enum CommandDispatchError {
-    NineDoorUnavailable { verb: ConsoleVerb },
-    UnsupportedForNineDoor { verb: ConsoleVerb },
-    Bridge { verb: ConsoleVerb, source: NineDoorBridgeError },
+    NineDoorUnavailable {
+        verb: ConsoleVerb,
+    },
+    UnsupportedForNineDoor {
+        verb: ConsoleVerb,
+    },
+    Bridge {
+        verb: ConsoleVerb,
+        source: NineDoorBridgeError,
+    },
 }
 
 #[cfg(not(feature = "kernel"))]
@@ -4107,11 +4124,7 @@ mod tests {
                 }
             }
 
-            fn drain_console_lines(
-                &mut self,
-                _now_ms: u64,
-                visitor: &mut dyn FnMut(ConsoleLine),
-            ) {
+            fn drain_console_lines(&mut self, _now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
                 while !self.lines.is_empty() {
                     let line = self.lines.remove(0);
                     visitor(line);

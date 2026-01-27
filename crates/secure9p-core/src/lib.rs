@@ -121,8 +121,12 @@ pub trait AccessPolicy {
     /// Validate a requested attach using the provided ticket claims.
     fn can_attach(&self, ticket: &TicketClaims) -> Result<(), AccessError>;
     /// Validate a requested open call.
-    fn can_open(&self, ticket: &TicketClaims, path: &str, mode: OpenMode)
-        -> Result<(), AccessError>;
+    fn can_open(
+        &self,
+        ticket: &TicketClaims,
+        path: &str,
+        mode: OpenMode,
+    ) -> Result<(), AccessError>;
     /// Validate a requested create call.
     fn can_create(&self, ticket: &TicketClaims, path: &str) -> Result<(), AccessError>;
 }

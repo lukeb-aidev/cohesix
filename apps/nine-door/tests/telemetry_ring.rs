@@ -104,9 +104,7 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
             .expect("attach worker");
 
         let telemetry_path = worker_telemetry_path("worker-1");
-        worker
-            .walk(1, 2, &telemetry_path)
-            .expect("walk telemetry");
+        worker.walk(1, 2, &telemetry_path).expect("walk telemetry");
         worker
             .open(2, OpenMode::write_append())
             .expect("open telemetry");
@@ -170,9 +168,7 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
         .expect("attach worker");
 
     let telemetry_path = worker_telemetry_path("worker-1");
-    worker
-        .walk(1, 2, &telemetry_path)
-        .expect("walk telemetry");
+    worker.walk(1, 2, &telemetry_path).expect("walk telemetry");
     worker
         .open(2, OpenMode::write_append())
         .expect("open telemetry");
@@ -226,8 +222,8 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
     let log_path = vec!["log".to_owned(), "queen.log".to_owned()];
     queen.walk(1, 4, &log_path).expect("walk log");
     queen.open(4, OpenMode::read_only()).expect("open log");
-    let log_text = String::from_utf8(queen.read(4, 0, MAX_MSIZE).expect("read log"))
-        .expect("log utf8");
+    let log_text =
+        String::from_utf8(queen.read(4, 0, MAX_MSIZE).expect("read log")).expect("log utf8");
     assert!(log_text.contains("telemetry quota reject"));
     assert!(log_text.contains("telemetry ring wrap"));
     assert!(log_text.contains("telemetry cursor rewind"));

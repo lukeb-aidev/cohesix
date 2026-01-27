@@ -24,7 +24,9 @@ impl Clock for TestClock {
 fn attach_queen(server: &NineDoor) -> InProcessConnection {
     let mut client = server.connect().expect("connect");
     client.version(MAX_MSIZE).expect("version");
-    client.attach(1, cohesix_ticket::Role::Queen).expect("attach");
+    client
+        .attach(1, cohesix_ticket::Role::Queen)
+        .expect("attach");
     client
 }
 
@@ -82,9 +84,7 @@ fn telemetry_ingest_rejects_oversize_record() {
         seg_id,
     ];
     client.walk(1, 4, &seg_path).expect("walk seg");
-    client
-        .open(4, OpenMode::write_append())
-        .expect("open seg");
+    client.open(4, OpenMode::write_append()).expect("open seg");
 
     let oversize = vec![b'X'; 4097];
     let err = client.write(4, &oversize).expect_err("reject oversize");

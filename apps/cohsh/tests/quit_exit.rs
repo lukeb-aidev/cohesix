@@ -30,9 +30,7 @@ fn quit_exits_cleanly() {
         "missing closing session: {stdout:?}"
     );
 
-    let welcome = stdout
-        .find("Welcome to Cohesix")
-        .expect("welcome missing");
+    let welcome = stdout.find("Welcome to Cohesix").expect("welcome missing");
     let detached = stdout
         .find("detached shell: run 'attach <role>' to connect")
         .expect("detached missing");

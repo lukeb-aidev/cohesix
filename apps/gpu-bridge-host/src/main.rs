@@ -11,8 +11,9 @@
 
 use anyhow::Result;
 use clap::{ArgAction, Parser};
+use std::path::PathBuf;
 
-use gpu_bridge_host::{auto_bridge, namespace_to_json_pretty, GpuNamespaceSnapshot};
+use gpu_bridge_host::{auto_bridge_with_registry, namespace_to_json_pretty, GpuNamespaceSnapshot};
 
 /// CLI arguments for the GPU bridge host tool.
 #[derive(Debug, Parser)]
@@ -21,6 +22,9 @@ struct Args {
     /// Use the deterministic mock backend instead of NVML.
     #[arg(long, action = ArgAction::SetTrue)]
     mock: bool,
+    /// Host registry root containing available model manifests.
+    #[arg(long, value_name = "DIR")]
+    registry: Option<PathBuf>,
     /// Print GPU namespace JSON to stdout.
     #[arg(long, action = ArgAction::SetTrue)]
     list: bool,
@@ -28,7 +32,7 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let bridge = auto_bridge(args.mock)?;
+    let bridge = auto_bridge_with_registry(args.mock, args.registry.as_deref())?;
     let namespace: GpuNamespaceSnapshot = bridge.serialise_namespace()?;
     if args.list {
         println!("{}", namespace_to_json_pretty(&namespace));

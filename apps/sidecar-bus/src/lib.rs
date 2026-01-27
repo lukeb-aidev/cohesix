@@ -429,17 +429,14 @@ mod tests {
             SpoolConfig::new(2, 8),
         );
         let mut adapter = BusAdapter::new(config);
-        assert_eq!(
-            adapter.enqueue(b"hi"),
-            Ok(SpoolResult::Queued { seq: 1 })
-        );
-        assert_eq!(
-            adapter.enqueue(b"ok"),
-            Ok(SpoolResult::Queued { seq: 2 })
-        );
+        assert_eq!(adapter.enqueue(b"hi"), Ok(SpoolResult::Queued { seq: 1 }));
+        assert_eq!(adapter.enqueue(b"ok"), Ok(SpoolResult::Queued { seq: 2 }));
         assert_eq!(adapter.enqueue(b"!"), Err(SpoolError::Full));
         let drained = adapter.drain_spool();
-        let payloads: Vec<&[u8]> = drained.iter().map(|frame| frame.payload.as_slice()).collect();
+        let payloads: Vec<&[u8]> = drained
+            .iter()
+            .map(|frame| frame.payload.as_slice())
+            .collect();
         assert_eq!(payloads, vec![b"hi".as_slice(), b"ok".as_slice()]);
     }
 

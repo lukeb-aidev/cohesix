@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use cohsh_core::wire::AckStatus;
 
-use crate::{validate_component, CohAccess, CohAudit, MAX_DIR_LIST_BYTES};
 use crate::policy::{CohPolicy, CohTelemetryPolicy};
+use crate::{validate_component, CohAccess, CohAudit, MAX_DIR_LIST_BYTES};
 
 /// Summary of a telemetry pull operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,13 +51,8 @@ pub fn pull<C: CohAccess>(
     };
     for device_id in device_entries {
         validate_component(&device_id)?;
-        let (device_summary, device_bytes) = pull_device(
-            client,
-            telemetry,
-            out_dir,
-            &device_id,
-            audit,
-        )?;
+        let (device_summary, device_bytes) =
+            pull_device(client, telemetry, out_dir, &device_id, audit)?;
         summary.devices += 1;
         summary.segments += device_summary;
         summary.bytes += device_bytes;
@@ -92,10 +87,7 @@ fn pull_device<C: CohAccess>(
     for seg_id in segments {
         validate_component(&seg_id)?;
         let seg_path = format!("{seg_root}/{seg_id}");
-        let payload = client.read_file(
-            &seg_path,
-            telemetry.max_bytes_per_segment as usize,
-        )?;
+        let payload = client.read_file(&seg_path, telemetry.max_bytes_per_segment as usize)?;
         let detail = format!("path={seg_path}");
         audit.push_ack(AckStatus::Ok, "CAT", Some(detail.as_str()));
         total_bytes = total_bytes.saturating_add(payload.len());
@@ -107,9 +99,7 @@ fn pull_device<C: CohAccess>(
                 device_id
             ));
         }
-        let relative = PathBuf::from(device_id)
-            .join("seg")
-            .join(&seg_id);
+        let relative = PathBuf::from(device_id).join("seg").join(&seg_id);
         let output_path = out_dir.join(&relative);
         write_segment(&output_path, &payload)?;
         audit.push_line(format!(

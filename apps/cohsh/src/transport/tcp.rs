@@ -198,7 +198,10 @@ impl ConsoleLock {
         let _ = file.set_len(0);
         let _ = writeln!(file, "pid={}", process::id());
         let _ = file.flush();
-        Ok(Some(Self { _file: file, _path: path }))
+        Ok(Some(Self {
+            _file: file,
+            _path: path,
+        }))
     }
 }
 
@@ -385,8 +388,7 @@ impl TcpTransport {
     pub fn with_retry_policy(mut self, policy: CohshRetryPolicy) -> Self {
         self.max_retries = policy.max_attempts as usize;
         self.retry_backoff = Duration::from_millis(policy.backoff_ms);
-        self.retry_ceiling =
-            Duration::from_millis(policy.ceiling_ms).max(self.retry_backoff);
+        self.retry_ceiling = Duration::from_millis(policy.ceiling_ms).max(self.retry_backoff);
         self.timeout = Duration::from_millis(policy.timeout_ms);
         self
     }
@@ -887,8 +889,8 @@ impl TcpTransport {
                                 self.telemetry.log_disconnect(&io::Error::new(
                                     io::ErrorKind::ConnectionReset,
                                     "connection closed by peer",
-                            ));
-                            return Ok(ReadStatus::Closed);
+                                ));
+                                return Ok(ReadStatus::Closed);
                             }
                             break;
                         }
@@ -1213,7 +1215,8 @@ impl TcpTransport {
             }
             cohsh_core::TicketError::RoleMismatch { expected, found } => anyhow!(
                 "ticket role {:?} does not match requested role {:?}",
-                found, expected
+                found,
+                expected
             ),
             cohsh_core::TicketError::MissingSubject => {
                 anyhow!("ticket for role {:?} must include a subject identity", role)
@@ -1826,8 +1829,8 @@ impl Transport for PooledTcpTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
     use std::io::Read;
+    use std::net::TcpListener;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1886,11 +1889,10 @@ mod tests {
             .is_none());
         assert!(TcpTransport::normalise_ticket(Role::WorkerHeartbeat, None).is_err());
         assert!(TcpTransport::normalise_ticket(Role::WorkerGpu, Some("  ")).is_err());
-        assert!(TcpTransport::normalise_ticket(
-            Role::WorkerHeartbeat,
-            Some(valid_token.as_str()),
-        )
-        .is_ok());
+        assert!(
+            TcpTransport::normalise_ticket(Role::WorkerHeartbeat, Some(valid_token.as_str()),)
+                .is_ok()
+        );
     }
 
     fn unix_time_ms() -> u64 {

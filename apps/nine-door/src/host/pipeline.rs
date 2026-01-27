@@ -100,11 +100,7 @@ impl Pipeline {
     }
 
     /// Write a batch of frames using the configured short-write policy.
-    pub fn write_batch(
-        &mut self,
-        writer: &mut impl Write,
-        frames: &[Vec<u8>],
-    ) -> io::Result<()> {
+    pub fn write_batch(&mut self, writer: &mut impl Write, frames: &[Vec<u8>]) -> io::Result<()> {
         for frame in frames {
             self.write_with_policy(writer, frame)?;
         }

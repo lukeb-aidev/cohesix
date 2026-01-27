@@ -166,8 +166,7 @@ pub fn normalize_ticket<'a>(
     match role {
         Role::Queen => match (trimmed, policy.queen_mode) {
             (Some(value), QueenTicketMode::Validate) => {
-                let claims =
-                    TicketToken::decode_unverified(value).map_err(TicketError::Invalid)?;
+                let claims = TicketToken::decode_unverified(value).map_err(TicketError::Invalid)?;
                 Ok(TicketCheck {
                     ticket: Some(value),
                     claims: Some(claims),
@@ -184,8 +183,7 @@ pub fn normalize_ticket<'a>(
         },
         Role::WorkerHeartbeat | Role::WorkerGpu | Role::WorkerBus | Role::WorkerLora => {
             let value = trimmed.ok_or(TicketError::Missing)?;
-            let claims =
-                TicketToken::decode_unverified(value).map_err(TicketError::Invalid)?;
+            let claims = TicketToken::decode_unverified(value).map_err(TicketError::Invalid)?;
             if claims.role != role {
                 return Err(TicketError::RoleMismatch {
                     expected: role,

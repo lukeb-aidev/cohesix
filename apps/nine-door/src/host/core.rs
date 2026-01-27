@@ -12,7 +12,6 @@ use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::{BudgetSpec, Role, TicketKey, TicketToken, TicketVerb};
 use gpu_bridge_host::{status_entry, GpuNamespaceSnapshot};
 use log::{debug, info, trace};
-use serde::Serialize;
 use secure9p_codec::{
     Codec, ErrorCode, OpenMode, Qid, Request, RequestBody, Response, ResponseBody, SessionId,
     MAX_MSIZE, VERSION,
@@ -20,38 +19,39 @@ use secure9p_codec::{
 use secure9p_core::{
     FidError, QueueDepth, QueueError, SessionLimits, ShardedFidTable, TagError, TagWindow,
 };
+use serde::Serialize;
 use trace_model::TraceLevel;
 use worker_gpu::{GpuLease as WorkerGpuLease, JobDescriptor};
 
+use super::audit::{
+    AuditConfig, AuditStore, ControlOutcome, PolicyActionDecision as AuditPolicyActionDecision,
+    PolicyGateDecision as AuditPolicyGateDecision, ReplayWindowError,
+};
 use super::control::{
     format_host_write_audit, format_policy_action_audit, format_policy_gate_allow,
     format_policy_gate_deny, host_write_target, BudgetCommand, HostWriteOutcome, HostWriteTarget,
     KillCommand, QueenCommand, SpawnCommand, SpawnTarget,
 };
-use super::audit::{
-    AuditConfig, AuditStore, ControlOutcome, PolicyActionDecision as AuditPolicyActionDecision,
-    PolicyGateDecision as AuditPolicyGateDecision, ReplayWindowError,
-};
 use super::lifecycle;
-use super::CasConfig;
+use super::namespace::UiProviderInfo;
 use super::namespace::{
-    AuditNamespaceConfig, HostNamespaceConfig, Namespace, PolicyNamespaceConfig, ReplayNamespaceConfig,
-    ShardLayout, SidecarKind, SidecarNamespaceConfig, SidecarScope,
+    AuditNamespaceConfig, HostNamespaceConfig, Namespace, PolicyNamespaceConfig,
+    ReplayNamespaceConfig, ShardLayout, SidecarKind, SidecarNamespaceConfig, SidecarScope,
 };
+use super::observe::{ObserveConfig, ObserveState, PressureKind};
+use super::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 use super::policy::{
     PolicyActionAudit, PolicyConfig, PolicyDecision, PolicyGateAllowance, PolicyGateDecision,
     PolicyGateDenial, PolicyPreflightPayloads, PolicyStore,
 };
-use super::namespace::UiProviderInfo;
-use super::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
-use super::observe::{ObserveConfig, ObserveState, PressureKind};
-use super::session::{SessionLifecycle, SessionPhase};
 use super::replay::ReplayState;
 use super::security::{CursorCheck, TicketDeny, TicketLimits, TicketUsage};
+use super::session::{SessionLifecycle, SessionPhase};
 use super::telemetry::{
     TelemetryAuditLevel, TelemetryConfig, TelemetryIngestConfig, TelemetryManifestStore,
 };
 use super::ui::{UiProviderConfig, UiVariant, UI_MAX_READ_BYTES};
+use super::CasConfig;
 use super::{Clock, NineDoorError};
 
 // New server core implementation and access policy are defined below.
@@ -205,9 +205,10 @@ impl ServerCore {
             limits,
             pipeline,
             observe,
-        }
-        ;
-        let _ = core.observe.update_proc_9p(&mut core.control.namespace, core.pipeline.metrics());
+        };
+        let _ = core
+            .observe
+            .update_proc_9p(&mut core.control.namespace, core.pipeline.metrics());
         let _ = core.observe.update_proc_ingest(
             &mut core.control.namespace,
             core.clock.now(),
@@ -215,7 +216,9 @@ impl ServerCore {
         );
         let _ = core.refresh_proc_sessions(None);
         let _ = core.refresh_proc_root();
-        let _ = core.observe.update_proc_pressure(&mut core.control.namespace);
+        let _ = core
+            .observe
+            .update_proc_pressure(&mut core.control.namespace);
         let _ = core.control.refresh_policy_preflight();
         core
     }
@@ -378,7 +381,9 @@ impl ServerCore {
 
     fn record_pressure(&mut self, kind: PressureKind) {
         self.observe.record_pressure(kind);
-        let _ = self.observe.update_proc_pressure(self.control.namespace_mut());
+        let _ = self
+            .observe
+            .update_proc_pressure(self.control.namespace_mut());
     }
 
     pub(crate) fn register_service(
@@ -398,6 +403,17 @@ impl ServerCore {
         topology: &GpuNamespaceSnapshot,
     ) -> Result<(), NineDoorError> {
         self.control.install_gpu_nodes(topology)
+    }
+
+    pub(crate) fn set_lora_export_job(
+        &mut self,
+        job_id: &str,
+        telemetry: &[u8],
+        base_model: &[u8],
+        policy: &[u8],
+    ) -> Result<(), NineDoorError> {
+        self.control
+            .set_lora_export_job(job_id, telemetry, base_model, policy)
     }
 
     pub(crate) fn register_ticket_secret(&mut self, role: Role, secret: &str) {
@@ -618,7 +634,10 @@ impl ServerCore {
         let now = self.clock.now();
         state.refresh_session_phase(self.control.lifecycle_state(), now);
         if matches!(state.role(), Some(Role::Queen))
-            && matches!(state.session_phase(), SessionPhase::Active | SessionPhase::Draining)
+            && matches!(
+                state.session_phase(),
+                SessionPhase::Active | SessionPhase::Draining
+            )
         {
             self.record_root_activity(now);
         }
@@ -843,7 +862,11 @@ impl ServerCore {
         }
         let (role, identity) = parse_role_from_uname(uname)?;
         let now = self.clock.now();
-        if role != Role::Queen && !self.control.lifecycle_gate_allows(lifecycle::GATE_WORKER_ATTACH) {
+        if role != Role::Queen
+            && !self
+                .control
+                .lifecycle_gate_allows(lifecycle::GATE_WORKER_ATTACH)
+        {
             let state = self.control.lifecycle_state();
             self.control
                 .record_lifecycle_gate_denied(state, lifecycle::GATE_WORKER_ATTACH.name)?;
@@ -943,9 +966,7 @@ impl ServerCore {
                 }
             };
             if usage.has_enforcement() {
-                self.ticket_usage
-                    .entry(ticket.to_owned())
-                    .or_insert(usage);
+                self.ticket_usage.entry(ticket.to_owned()).or_insert(usage);
             }
         }
         match role {
@@ -1151,13 +1172,7 @@ impl ServerCore {
                 ));
             }
         }
-        self.enforce_ticket_scope(
-            state,
-            &full_resolved,
-            TicketVerb::Read,
-            true,
-            false,
-        )?;
+        self.enforce_ticket_scope(state, &full_resolved, TicketVerb::Read, true, false)?;
         for component in wnames {
             view_path.push(component.clone());
             let resolved = state.resolve_view_path(&view_path);
@@ -1326,7 +1341,10 @@ impl ServerCore {
                 "fid is not append-only",
             ));
         }
-        if state.with_fid_mut(fid, |entry| entry.open_mode = Some(mode)).is_none() {
+        if state
+            .with_fid_mut(fid, |entry| entry.open_mode = Some(mode))
+            .is_none()
+        {
             return Err(NineDoorError::protocol(
                 ErrorCode::NotFound,
                 format!("fid {fid} not found"),
@@ -1427,10 +1445,7 @@ impl ServerCore {
                 self.check_ticket_cursor(state, key.as_str(), &path, TicketVerb::Read, offset)?;
             cursor_key = Some(key);
         }
-        let data = self
-            .control
-            .namespace_mut()
-            .read(&path, offset, count)?;
+        let data = self.control.namespace_mut().read(&path, offset, count)?;
         if let (Some(check), Some(key)) = (cursor_check, cursor_key) {
             self.record_ticket_cursor(state, key, offset, data.len(), check);
         }
@@ -1483,31 +1498,32 @@ impl ServerCore {
         let audit_enabled = self.control.audit_enabled();
         if audit_enabled && is_audit_journal_path(&path) {
             self.enforce_ticket_write_limits(state, &path, requested_bytes)?;
-            let count = self
-                .control
-                .process_audit_journal_write(offset, data, role, ticket.as_deref())?;
+            let count =
+                self.control
+                    .process_audit_journal_write(offset, data, role, ticket.as_deref())?;
             self.consume_ticket_bandwidth(state, count as u64);
             return Ok(ResponseBody::Write { count });
         }
         if audit_enabled && is_audit_decisions_path(&path) {
-            self.control.record_audit_denial("audit decisions write denied")?;
+            self.control
+                .record_audit_denial("audit decisions write denied")?;
             return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
         }
         if audit_enabled && is_audit_export_path(&path) {
-            self.control.record_audit_denial("audit export write denied")?;
+            self.control
+                .record_audit_denial("audit export write denied")?;
             return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
         }
         let replay_enabled = self.control.replay_enabled();
         if replay_enabled && is_replay_ctl_path(&path) {
             self.enforce_ticket_write_limits(state, &path, requested_bytes)?;
-            let count = self
-                .control
-                .process_replay_ctl_write(offset, data)?;
+            let count = self.control.process_replay_ctl_write(offset, data)?;
             self.consume_ticket_bandwidth(state, count as u64);
             return Ok(ResponseBody::Write { count });
         }
         if replay_enabled && is_replay_status_path(&path) {
-            self.control.record_audit_denial("replay status write denied")?;
+            self.control
+                .record_audit_denial("replay status write denied")?;
             return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
         }
         if policy_enabled && is_policy_ctl_path(&path) {
@@ -1523,7 +1539,8 @@ impl ServerCore {
                 self.control
                     .record_policy_action_audit(&action, role, ticket.as_deref())?;
                 if audit_enabled {
-                    self.control.record_decision_action(&action, role, ticket.as_deref())?;
+                    self.control
+                        .record_decision_action(&action, role, ticket.as_deref())?;
                 }
             }
             self.consume_ticket_bandwidth(state, count as u64);
@@ -1573,12 +1590,20 @@ impl ServerCore {
             match decision {
                 PolicyGateDecision::Allowed(allowance) => {
                     if matches!(allowance, PolicyGateAllowance::Action { .. }) {
-                        self.control
-                            .record_policy_gate_audit(&path, &allowance, role, ticket.as_deref())?;
+                        self.control.record_policy_gate_audit(
+                            &path,
+                            &allowance,
+                            role,
+                            ticket.as_deref(),
+                        )?;
                     }
                     if audit_enabled {
-                        self.control
-                            .record_decision_gate(&path, &allowance, role, ticket.as_deref())?;
+                        self.control.record_decision_gate(
+                            &path,
+                            &allowance,
+                            role,
+                            ticket.as_deref(),
+                        )?;
                     }
                 }
                 PolicyGateDecision::Denied(denial) => {
@@ -1589,8 +1614,12 @@ impl ServerCore {
                         ticket.as_deref(),
                     )?;
                     if audit_enabled {
-                        self.control
-                            .record_decision_gate_denial(&path, &denial, role, ticket.as_deref())?;
+                        self.control.record_decision_gate_denial(
+                            &path,
+                            &denial,
+                            role,
+                            ticket.as_deref(),
+                        )?;
                         if is_queen_ctl_path(&path)
                             || is_queen_lifecycle_ctl_path(&path)
                             || host_target.is_some()
@@ -1637,14 +1666,16 @@ impl ServerCore {
             .map(|id| is_worker_telemetry_path(&shards, &path, id))
             .unwrap_or(false);
         if telemetry_write {
-            self.control.ensure_lifecycle_gate(lifecycle::GATE_WORKER_TELEMETRY)?;
+            self.control
+                .ensure_lifecycle_gate(lifecycle::GATE_WORKER_TELEMETRY)?;
             if let Err(reason) = state.consume_tick() {
                 return Err(self.handle_budget_failure(session, state, self.clock.now(), reason));
             }
         }
         if let (Some(worker), Some(scope)) = (worker_id, gpu_scope) {
             if is_gpu_job_path(&path, scope) {
-                self.control.ensure_lifecycle_gate(lifecycle::GATE_WORKER_JOB)?;
+                self.control
+                    .ensure_lifecycle_gate(lifecycle::GATE_WORKER_JOB)?;
                 let count = self.control.process_gpu_job(worker, scope, data)?;
                 self.consume_ticket_bandwidth(state, count as u64);
                 return Ok(ResponseBody::Write { count });
@@ -1685,7 +1716,8 @@ impl ServerCore {
                 count: data.len() as u32,
             })
         } else if let Some(target) = host_target {
-            self.control.ensure_lifecycle_gate(lifecycle::GATE_HOST_PUBLISH)?;
+            self.control
+                .ensure_lifecycle_gate(lifecycle::GATE_HOST_PUBLISH)?;
             let count = self
                 .control
                 .namespace_mut()
@@ -1710,7 +1742,8 @@ impl ServerCore {
             Ok(ResponseBody::Write { count })
         } else {
             if is_telemetry_ingest_write_path(&path) {
-                self.control.ensure_lifecycle_gate(lifecycle::GATE_TELEMETRY_INGEST)?;
+                self.control
+                    .ensure_lifecycle_gate(lifecycle::GATE_TELEMETRY_INGEST)?;
             }
             let count = self
                 .control
@@ -1839,7 +1872,8 @@ impl ServerCore {
             "ui-ticket outcome=deny reason=invalid-claims role={} ticket={} detail={err}",
             role_label, ticket
         );
-        self.control.log_event("ui", TraceLevel::Warn, None, &message)
+        self.control
+            .log_event("ui", TraceLevel::Warn, None, &message)
     }
 
     fn record_ticket_expired(
@@ -1860,7 +1894,8 @@ impl ServerCore {
             ttl_s,
             now_ms
         );
-        self.control.log_event("ui", TraceLevel::Warn, None, &message)
+        self.control
+            .log_event("ui", TraceLevel::Warn, None, &message)
     }
 
     fn record_ticket_denial(
@@ -1919,7 +1954,8 @@ impl ServerCore {
                 message.push_str(&format!(" limit={limit}"));
             }
         }
-        self.control.log_event("ui", TraceLevel::Warn, None, &message)
+        self.control
+            .log_event("ui", TraceLevel::Warn, None, &message)
     }
 
     fn enforce_ticket_scope(
@@ -2177,7 +2213,8 @@ impl ControlPlane {
         now: Instant,
         outstanding_leases: usize,
     ) -> Result<lifecycle::LifecycleTransition, lifecycle::LifecycleError> {
-        self.lifecycle.apply_command(command, now, outstanding_leases)
+        self.lifecycle
+            .apply_command(command, now, outstanding_leases)
     }
 
     fn record_lifecycle_transition(
@@ -2207,7 +2244,10 @@ impl ControlPlane {
         self.append_queen_log(&line)
     }
 
-    fn ensure_lifecycle_gate(&mut self, gate: lifecycle::LifecycleGate) -> Result<(), NineDoorError> {
+    fn ensure_lifecycle_gate(
+        &mut self,
+        gate: lifecycle::LifecycleGate,
+    ) -> Result<(), NineDoorError> {
         if self.lifecycle_gate_allows(gate) {
             Ok(())
         } else {
@@ -2250,6 +2290,17 @@ impl ControlPlane {
         self.namespace
             .set_gpu_telemetry_schema(&topology.telemetry_schema)?;
         Ok(())
+    }
+
+    pub(crate) fn set_lora_export_job(
+        &mut self,
+        job_id: &str,
+        telemetry: &[u8],
+        base_model: &[u8],
+        policy: &[u8],
+    ) -> Result<(), NineDoorError> {
+        self.namespace
+            .set_lora_export_job(job_id, telemetry, base_model, policy)
     }
 
     fn process_queen_write(
@@ -2307,26 +2358,29 @@ impl ControlPlane {
                 }
                 QueenCommand::Bind(command) => {
                     self.ensure_lifecycle_gate(lifecycle::GATE_NEW_WORK)?;
-                    let result = command.into_parts().and_then(|(from_raw, to_raw, source, mount)| {
-                        if mount.is_empty() {
-                            return Err(NineDoorError::protocol(
-                                ErrorCode::Invalid,
-                                "bind target must not be root",
-                            ));
-                        }
-                        self.namespace.lookup(&source)?;
-                        self.log_event(
-                            "queen",
-                            TraceLevel::Info,
-                            None,
-                            &format!("bound {from_raw} -> {to_raw}"),
-                        )?;
-                        events.push(QueenEvent::Bound {
-                            target: source,
-                            mount,
-                        });
-                        Ok(())
-                    });
+                    let result =
+                        command
+                            .into_parts()
+                            .and_then(|(from_raw, to_raw, source, mount)| {
+                                if mount.is_empty() {
+                                    return Err(NineDoorError::protocol(
+                                        ErrorCode::Invalid,
+                                        "bind target must not be root",
+                                    ));
+                                }
+                                self.namespace.lookup(&source)?;
+                                self.log_event(
+                                    "queen",
+                                    TraceLevel::Info,
+                                    None,
+                                    &format!("bound {from_raw} -> {to_raw}"),
+                                )?;
+                                events.push(QueenEvent::Bound {
+                                    target: source,
+                                    mount,
+                                });
+                                Ok(())
+                            });
                     result
                 }
                 QueenCommand::Mount(command) => {
@@ -2385,11 +2439,7 @@ impl ControlPlane {
         ticket: Option<&str>,
         now: Instant,
     ) -> Result<u32, NineDoorError> {
-        let ctl_path = vec![
-            "queen".to_owned(),
-            "lifecycle".to_owned(),
-            "ctl".to_owned(),
-        ];
+        let ctl_path = vec!["queen".to_owned(), "lifecycle".to_owned(), "ctl".to_owned()];
         self.namespace.write_append(&ctl_path, u64::MAX, data)?;
         let text = str::from_utf8(data).map_err(|err| {
             NineDoorError::protocol(
@@ -2450,11 +2500,7 @@ impl ControlPlane {
         Ok(data.len() as u32)
     }
 
-    fn process_policy_ctl_write(
-        &mut self,
-        offset: u64,
-        data: &[u8],
-    ) -> Result<u32, NineDoorError> {
+    fn process_policy_ctl_write(&mut self, offset: u64, data: &[u8]) -> Result<u32, NineDoorError> {
         let outcome = self.policy.append_policy_ctl(offset, data)?;
         self.namespace
             .set_policy_ctl_payload(self.policy.ctl_log())?;
@@ -2599,13 +2645,9 @@ impl ControlPlane {
         }
         let path_label = format!("/{}", path.join("/"));
         let role_label = role.map(role_label);
-        let outcome = self.audit.record_control(
-            path_label.as_str(),
-            data,
-            outcome,
-            role_label,
-            ticket,
-        )?;
+        let outcome =
+            self.audit
+                .record_control(path_label.as_str(), data, outcome, role_label, ticket)?;
         self.namespace
             .set_audit_journal_payload(&self.audit.journal_payload())?;
         self.namespace
@@ -2889,11 +2931,7 @@ impl ControlPlane {
                 )
                 .into_bytes();
                 self.namespace.write_append(&ctl_path, u64::MAX, &message)?;
-                let lease_path = vec![
-                    "gpu".to_owned(),
-                    lease.gpu_id.clone(),
-                    "lease".to_owned(),
-                ];
+                let lease_path = vec!["gpu".to_owned(), lease.gpu_id.clone(), "lease".to_owned()];
                 let lease_bytes = gpu_lease_entry_bytes(&lease, GPU_LEASE_STATE_ACTIVE)?;
                 self.namespace
                     .write_append(&lease_path, u64::MAX, &lease_bytes)?;
@@ -4086,14 +4124,12 @@ fn min_budget_field(record: Option<u64>, override_budget: Option<u64>) -> Option
 
 fn fid_insert_error(fid: u32, err: FidError) -> NineDoorError {
     match err {
-        FidError::InUse => NineDoorError::protocol(
-            ErrorCode::Busy,
-            format!("fid {fid} already in use"),
-        ),
-        FidError::Retired => NineDoorError::protocol(
-            ErrorCode::Invalid,
-            format!("fid {fid} was clunked"),
-        ),
+        FidError::InUse => {
+            NineDoorError::protocol(ErrorCode::Busy, format!("fid {fid} already in use"))
+        }
+        FidError::Retired => {
+            NineDoorError::protocol(ErrorCode::Invalid, format!("fid {fid} was clunked"))
+        }
     }
 }
 
@@ -4109,10 +4145,9 @@ fn lifecycle_error_to_protocol(error: lifecycle::LifecycleError) -> NineDoorErro
         lifecycle::LifecycleError::InvalidTransition => {
             NineDoorError::protocol(ErrorCode::Invalid, "invalid lifecycle transition")
         }
-        lifecycle::LifecycleError::AutoTransitionDenied => NineDoorError::protocol(
-            ErrorCode::Invalid,
-            "lifecycle auto transition denied",
-        ),
+        lifecycle::LifecycleError::AutoTransitionDenied => {
+            NineDoorError::protocol(ErrorCode::Invalid, "lifecycle auto transition denied")
+        }
     }
 }
 

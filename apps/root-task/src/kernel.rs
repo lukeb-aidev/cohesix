@@ -55,9 +55,9 @@ use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, IpcDispatcher, TickEvent, TicketTable,
     TimerSource,
 };
+use crate::generated;
 use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
-use crate::generated;
 #[cfg(all(feature = "net-console", feature = "kernel"))]
 use crate::net::{DefaultNetStack as NetStack, NetPoller, CONSOLE_TCP_PORT, DEFAULT_NET_BACKEND};
 #[cfg(all(feature = "net-console", not(feature = "kernel")))]
@@ -2871,7 +2871,11 @@ fn bootstrap<P: Platform>(
         for spec in generated::ticket_inventory() {
             let _ = tickets.register(spec.role, spec.secret);
             let mut line = heapless::String::<96>::new();
-            let _ = write!(line, "[manifest] ticket role={:?} source=generated", spec.role);
+            let _ = write!(
+                line,
+                "[manifest] ticket role={:?} source=generated",
+                spec.role
+            );
             console.writeln_prefixed(line.as_str());
         }
 

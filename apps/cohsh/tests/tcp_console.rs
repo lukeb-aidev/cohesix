@@ -15,7 +15,9 @@ use cohsh::{TcpTransport, Transport};
 
 fn write_frame(stream: &mut std::net::TcpStream, line: &str) {
     let total_len = line.len().saturating_add(4) as u32;
-    stream.write_all(&total_len.to_le_bytes()).expect("write len");
+    stream
+        .write_all(&total_len.to_le_bytes())
+        .expect("write len");
     stream.write_all(line.as_bytes()).expect("write payload");
 }
 

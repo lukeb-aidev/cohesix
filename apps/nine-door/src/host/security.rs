@@ -385,7 +385,10 @@ fn split_scope_path(path: &str, max_len: u16) -> Result<Vec<String>, TicketClaim
     Ok(components)
 }
 
-fn resolve_quotas(quotas: TicketQuotas, limits: TicketLimits) -> Result<TicketQuotaState, TicketClaimError> {
+fn resolve_quotas(
+    quotas: TicketQuotas,
+    limits: TicketLimits,
+) -> Result<TicketQuotaState, TicketClaimError> {
     let bandwidth_limit = resolve_quota_u64(
         quotas.bandwidth_bytes,
         limits.bandwidth_bytes,

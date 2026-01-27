@@ -8,9 +8,9 @@
 //! Field bus worker scaffolding for host-mode tests and tooling.
 
 use anyhow::{anyhow, Result};
-use std::time::{SystemTime, UNIX_EPOCH};
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims};
 use secure9p_codec::SessionId;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Paths exposed for a bus mount under `/bus`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,8 +132,8 @@ mod tests {
 
     #[test]
     fn bus_worker_uses_scope_ticket() {
-        let worker = BusWorker::new(SessionId::from_raw(4), "scope-1", "/bus", "bus-1")
-            .expect("worker");
+        let worker =
+            BusWorker::new(SessionId::from_raw(4), "scope-1", "/bus", "bus-1").expect("worker");
         assert_eq!(worker.scope(), "scope-1");
         assert_eq!(worker.ticket().role, Role::WorkerBus);
         assert_eq!(worker.session(), SessionId::from_raw(4));

@@ -186,7 +186,6 @@ pub fn pin(
                 return Err(PinError::CacheFailure(err));
             }
         }
-
     }
 
     let mut ready = heapless::String::<192>::new();

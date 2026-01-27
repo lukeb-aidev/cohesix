@@ -19,10 +19,7 @@ fn repo_path(path: &str) -> PathBuf {
 }
 
 fn extract_snippet<'a>(contents: &'a str, start_marker: &str, end_marker: &str) -> &'a str {
-    let start = contents
-        .find(start_marker)
-        .expect("start marker missing")
-        + start_marker.len();
+    let start = contents.find(start_marker).expect("start marker missing") + start_marker.len();
     let end = contents[start..]
         .find(end_marker)
         .map(|idx| start + idx)

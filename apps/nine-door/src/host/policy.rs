@@ -7,9 +7,9 @@
 
 use std::fmt::Write as _;
 
-use serde::{Deserialize, Serialize};
 use secure9p_codec::ErrorCode;
 use secure9p_core::append_only_write_bounds;
+use serde::{Deserialize, Serialize};
 
 use super::cbor::{CborError, CborWriter};
 use super::ui::UI_MAX_STREAM_BYTES;
@@ -166,9 +166,17 @@ impl PolicyStore {
             }
         }
         let mut text = String::new();
-        let _ = writeln!(text, "req total={} queued={} consumed={}", total, queued, consumed);
+        let _ = writeln!(
+            text,
+            "req total={} queued={} consumed={}",
+            total, queued, consumed
+        );
         for action in &self.actions {
-            let state = if action.consumed { "consumed" } else { "queued" };
+            let state = if action.consumed {
+                "consumed"
+            } else {
+                "queued"
+            };
             let decision = policy_decision_label(action.decision);
             let _ = writeln!(
                 text,
@@ -187,7 +195,11 @@ impl PolicyStore {
     pub fn preflight_diff_payloads(&self) -> Result<PolicyPreflightPayloads, NineDoorError> {
         let mut unmatched = 0usize;
         for action in &self.actions {
-            if !self.rules.iter().any(|rule| rule.matches_path(&action.path)) {
+            if !self
+                .rules
+                .iter()
+                .any(|rule| rule.matches_path(&action.path))
+            {
                 unmatched = unmatched.saturating_add(1);
             }
         }
@@ -220,7 +232,13 @@ impl PolicyStore {
             );
         }
         ensure_stream_len("policy/preflight/diff", text.len())?;
-        let cbor = build_preflight_diff_cbor(self.rules.len(), self.actions.len(), unmatched, &self.rules, &rule_counts)?;
+        let cbor = build_preflight_diff_cbor(
+            self.rules.len(),
+            self.actions.len(),
+            unmatched,
+            &self.rules,
+            &rule_counts,
+        )?;
         Ok(PolicyPreflightPayloads {
             text: text.into_bytes(),
             cbor,
@@ -236,13 +254,7 @@ impl PolicyStore {
         validate_json_lines(data, "policy control")?;
         let max_len = self.config.limits().ctl_max_bytes;
         let current_len = self.ctl_log.len();
-        let appended = apply_append(
-            current_len,
-            offset,
-            max_len,
-            data.len(),
-            "policy control",
-        )?;
+        let appended = apply_append(current_len, offset, max_len, data.len(), "policy control")?;
         if appended.short {
             return Err(NineDoorError::protocol(
                 ErrorCode::TooBig,
@@ -311,11 +323,7 @@ impl PolicyStore {
         if !self.config.enabled_flag() {
             return PolicyGateDecision::Allowed(PolicyGateAllowance::Ungated);
         }
-        if !self
-            .rules
-            .iter()
-            .any(|rule| rule.matches_path(path))
-        {
+        if !self.rules.iter().any(|rule| rule.matches_path(path)) {
             return PolicyGateDecision::Allowed(PolicyGateAllowance::NotRequired);
         }
         if let Some(action) = self
@@ -325,10 +333,12 @@ impl PolicyStore {
         {
             action.consumed = true;
             let decision = match action.decision {
-                PolicyDecision::Approve => PolicyGateDecision::Allowed(PolicyGateAllowance::Action {
-                    id: action.id.clone(),
-                    target: action.target.clone(),
-                }),
+                PolicyDecision::Approve => {
+                    PolicyGateDecision::Allowed(PolicyGateAllowance::Action {
+                        id: action.id.clone(),
+                        target: action.target.clone(),
+                    })
+                }
                 PolicyDecision::Deny => PolicyGateDecision::Denied(PolicyGateDenial::Action {
                     id: action.id.clone(),
                     target: action.target.clone(),
@@ -478,19 +488,11 @@ impl PolicyAction {
             id: &self.id,
             target: &self.target,
             decision: self.decision,
-            state: if self.consumed {
-                "consumed"
-            } else {
-                "queued"
-            },
+            state: if self.consumed { "consumed" } else { "queued" },
         };
         let json = serde_json::to_vec(&status).unwrap_or_default();
         if json.len() > limits.status_max_bytes {
-            return format!(
-                "{{\"id\":\"{}\",\"state\":\"oversize\"}}",
-                self.id
-            )
-            .into_bytes();
+            return format!("{{\"id\":\"{}\",\"state\":\"oversize\"}}", self.id).into_bytes();
         }
         json
     }
@@ -562,7 +564,11 @@ fn build_preflight_req_cbor(
         .and_then(|_| writer.array(actions.len()))
         .map_err(|err| cbor_error("policy/preflight/req.cbor", err))?;
     for action in actions {
-        let state = if action.consumed { "consumed" } else { "queued" };
+        let state = if action.consumed {
+            "consumed"
+        } else {
+            "queued"
+        };
         let decision = policy_decision_label(action.decision);
         writer
             .map(4)
@@ -704,10 +710,7 @@ fn parse_action_lines(data: &[u8]) -> Result<Vec<ActionRequest>, NineDoorError> 
             continue;
         }
         let action: ActionRequest = serde_json::from_str(trimmed).map_err(|err| {
-            NineDoorError::protocol(
-                ErrorCode::Invalid,
-                format!("invalid action entry: {err}"),
-            )
+            NineDoorError::protocol(ErrorCode::Invalid, format!("invalid action entry: {err}"))
         })?;
         validate_action_id(&action.id)?;
         validate_action_target(&action.target)?;
@@ -720,10 +723,7 @@ fn ensure_stream_len(label: &str, len: usize) -> Result<(), NineDoorError> {
     if len > UI_MAX_STREAM_BYTES {
         return Err(NineDoorError::protocol(
             ErrorCode::TooBig,
-            format!(
-                "{label} output exceeds {} bytes",
-                UI_MAX_STREAM_BYTES
-            ),
+            format!("{label} output exceeds {} bytes", UI_MAX_STREAM_BYTES),
         ));
     }
     Ok(())
@@ -784,20 +784,14 @@ fn validate_action_target(target: &str) -> Result<(), NineDoorError> {
 
 fn ensure_utf8(data: &[u8], label: &str) -> Result<(), NineDoorError> {
     std::str::from_utf8(data).map_err(|err| {
-        NineDoorError::protocol(
-            ErrorCode::Invalid,
-            format!("{label} must be utf-8: {err}"),
-        )
+        NineDoorError::protocol(ErrorCode::Invalid, format!("{label} must be utf-8: {err}"))
     })?;
     Ok(())
 }
 
 fn validate_json_lines(data: &[u8], label: &str) -> Result<(), NineDoorError> {
     let text = std::str::from_utf8(data).map_err(|err| {
-        NineDoorError::protocol(
-            ErrorCode::Invalid,
-            format!("{label} must be utf-8: {err}"),
-        )
+        NineDoorError::protocol(ErrorCode::Invalid, format!("{label} must be utf-8: {err}"))
     })?;
     for line in text.lines() {
         let trimmed = line.trim();
@@ -805,10 +799,7 @@ fn validate_json_lines(data: &[u8], label: &str) -> Result<(), NineDoorError> {
             continue;
         }
         serde_json::from_str::<serde_json::Value>(trimmed).map_err(|err| {
-            NineDoorError::protocol(
-                ErrorCode::Invalid,
-                format!("invalid {label} entry: {err}"),
-            )
+            NineDoorError::protocol(ErrorCode::Invalid, format!("invalid {label} entry: {err}"))
         })?;
     }
     Ok(())

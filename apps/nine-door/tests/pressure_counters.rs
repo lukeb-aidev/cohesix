@@ -22,7 +22,9 @@ struct FixedClock {
 
 impl FixedClock {
     fn new() -> Self {
-        Self { now: Instant::now() }
+        Self {
+            now: Instant::now(),
+        }
     }
 }
 
@@ -142,7 +144,9 @@ fn pressure_counters_increment_on_refusals() {
         "lifecycle".to_owned(),
         "state".to_owned(),
     ];
-    let err = ticket_client.walk(1, 3, &deny_path).expect_err("scope deny");
+    let err = ticket_client
+        .walk(1, 3, &deny_path)
+        .expect_err("scope deny");
     match err {
         NineDoorError::Protocol { code, .. } => {
             assert_eq!(code, ErrorCode::Permission);

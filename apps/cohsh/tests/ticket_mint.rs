@@ -4,10 +4,10 @@
 // Author: Lukas Bower
 
 use anyhow::Result;
+use cohesix_ticket::{Role, TicketKey, TicketToken};
 use cohsh::ticket_mint::{
     default_budget_for_role, mint_ticket_from_config, mint_ticket_from_secret, TicketMintRequest,
 };
-use cohesix_ticket::{Role, TicketKey, TicketToken};
 use std::io::Write;
 
 #[test]
@@ -18,7 +18,10 @@ fn mint_ticket_from_secret_round_trips() -> Result<()> {
     let claims = decoded.claims();
     assert_eq!(claims.role, Role::WorkerHeartbeat);
     assert_eq!(claims.subject.as_deref(), Some("worker-1"));
-    assert_eq!(claims.budget, default_budget_for_role(Role::WorkerHeartbeat));
+    assert_eq!(
+        claims.budget,
+        default_budget_for_role(Role::WorkerHeartbeat)
+    );
     Ok(())
 }
 

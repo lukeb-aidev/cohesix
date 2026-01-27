@@ -35,7 +35,11 @@ fn attach_worker(server: &NineDoor, worker_id: &str) -> InProcessConnection {
         MountSpec::empty(),
         unix_time_ms(),
     );
-    let token = issuer.issue(claims).expect("issue").encode().expect("encode");
+    let token = issuer
+        .issue(claims)
+        .expect("issue")
+        .encode()
+        .expect("encode");
     let mut client = server.connect().expect("connect");
     client.version(MAX_MSIZE).expect("version");
     client
@@ -61,7 +65,12 @@ fn write_line(client: &mut InProcessConnection, fid: u32, path: &[String], paylo
 
 fn spawn_worker(client: &mut InProcessConnection) {
     let ctl_path = vec!["queen".to_owned(), "ctl".to_owned()];
-    write_line(client, 2, &ctl_path, "{\"spawn\":\"heartbeat\",\"ticks\":5}\n");
+    write_line(
+        client,
+        2,
+        &ctl_path,
+        "{\"spawn\":\"heartbeat\",\"ticks\":5}\n",
+    );
 }
 
 #[test]
@@ -69,9 +78,21 @@ fn lifecycle_proc_files_are_read_only() {
     let server = NineDoor::new();
     let mut client = attach_queen(&server);
     let targets = [
-        vec!["proc".to_owned(), "lifecycle".to_owned(), "state".to_owned()],
-        vec!["proc".to_owned(), "lifecycle".to_owned(), "reason".to_owned()],
-        vec!["proc".to_owned(), "lifecycle".to_owned(), "since".to_owned()],
+        vec![
+            "proc".to_owned(),
+            "lifecycle".to_owned(),
+            "state".to_owned(),
+        ],
+        vec![
+            "proc".to_owned(),
+            "lifecycle".to_owned(),
+            "reason".to_owned(),
+        ],
+        vec![
+            "proc".to_owned(),
+            "lifecycle".to_owned(),
+            "since".to_owned(),
+        ],
     ];
     for (idx, path) in targets.into_iter().enumerate() {
         client.walk(1, (idx + 2) as u32, &path).expect("walk");
@@ -89,7 +110,11 @@ fn lifecycle_proc_files_are_read_only() {
     let state = read_text(
         &mut client,
         10,
-        &vec!["proc".to_owned(), "lifecycle".to_owned(), "state".to_owned()],
+        &vec![
+            "proc".to_owned(),
+            "lifecycle".to_owned(),
+            "state".to_owned(),
+        ],
     );
     assert!(state.contains("state=ONLINE"));
 }
@@ -98,7 +123,11 @@ fn lifecycle_proc_files_are_read_only() {
 fn lifecycle_ctl_transitions_and_invalids() {
     let server = NineDoor::new();
     let mut client = attach_queen(&server);
-    let state_path = vec!["proc".to_owned(), "lifecycle".to_owned(), "state".to_owned()];
+    let state_path = vec![
+        "proc".to_owned(),
+        "lifecycle".to_owned(),
+        "state".to_owned(),
+    ];
     let ctl_path = vec!["queen".to_owned(), "lifecycle".to_owned(), "ctl".to_owned()];
 
     let state = read_text(&mut client, 2, &state_path);

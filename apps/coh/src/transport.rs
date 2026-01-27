@@ -39,7 +39,10 @@ impl std::fmt::Display for TcpTransportError {
                 write!(f, "invalid frame length {declared} (max {max})")
             }
             TcpTransportError::Truncated { declared, received } => {
-                write!(f, "truncated frame (declared {declared} bytes, got {received})")
+                write!(
+                    f,
+                    "truncated frame (declared {declared} bytes, got {received})"
+                )
             }
         }
     }
@@ -127,4 +130,3 @@ impl Secure9pTransport for TcpTransport {
         Ok(response)
     }
 }
-

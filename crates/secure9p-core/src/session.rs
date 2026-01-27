@@ -59,9 +59,7 @@ impl ShortWritePolicy {
                 if attempt >= DEFAULT_SHORT_WRITE_RETRIES {
                     return None;
                 }
-                let factor = 1u64
-                    .checked_shl(attempt as u32)
-                    .unwrap_or(u64::MAX);
+                let factor = 1u64.checked_shl(attempt as u32).unwrap_or(u64::MAX);
                 Some(DEFAULT_SHORT_WRITE_BACKOFF_MS.saturating_mul(factor))
             }
         }

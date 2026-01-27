@@ -10,11 +10,7 @@ use nine_door::{
 };
 use secure9p_codec::{ErrorCode, OpenMode, MAX_MSIZE};
 
-fn read_file(
-    client: &mut nine_door::InProcessConnection,
-    fid: u32,
-    path: &[String],
-) -> String {
+fn read_file(client: &mut nine_door::InProcessConnection, fid: u32, path: &[String]) -> String {
     client.walk(1, fid, path).expect("walk");
     client.open(fid, OpenMode::read_only()).expect("open");
     let data = client.read(fid, 0, MAX_MSIZE).expect("read");
@@ -24,11 +20,9 @@ fn read_file(
 
 #[test]
 fn policyfs_gate_requires_approval_and_consumes() {
-    let host_config = HostNamespaceConfig::enabled(
-        "/host",
-        &[HostProvider::Systemd, HostProvider::K8s],
-    )
-    .expect("host config");
+    let host_config =
+        HostNamespaceConfig::enabled("/host", &[HostProvider::Systemd, HostProvider::K8s])
+            .expect("host config");
     let rules = vec![
         PolicyRuleSpec {
             id: "queen-ctl".to_owned(),
@@ -50,7 +44,9 @@ fn policyfs_gate_requires_approval_and_consumes() {
 
     let mut client = server.connect().expect("connect");
     client.version(MAX_MSIZE).expect("version");
-    client.attach(1, cohesix_ticket::Role::Queen).expect("attach");
+    client
+        .attach(1, cohesix_ticket::Role::Queen)
+        .expect("attach");
 
     let rules_path = vec!["policy".to_owned(), "rules".to_owned()];
     let rules_text = read_file(&mut client, 2, &rules_path);
@@ -79,11 +75,11 @@ fn policyfs_gate_requires_approval_and_consumes() {
 
     let queue_path = vec!["actions".to_owned(), "queue".to_owned()];
     client.walk(1, 4, &queue_path).expect("walk queue");
-    client.open(4, OpenMode::write_append()).expect("open queue");
-    let approval = br#"{"id":"approval-1","target":"/host/systemd/cohesix-agent.service/restart","decision":"approve"}"#;
     client
-        .write(4, approval)
-        .expect("append approval");
+        .open(4, OpenMode::write_append())
+        .expect("open queue");
+    let approval = br#"{"id":"approval-1","target":"/host/systemd/cohesix-agent.service/restart","decision":"approve"}"#;
+    client.write(4, approval).expect("append approval");
     client.clunk(4).expect("clunk queue");
 
     let status_path = vec![
@@ -98,9 +94,7 @@ fn policyfs_gate_requires_approval_and_consumes() {
     client
         .open(6, OpenMode::write_append())
         .expect("open restart again");
-    client
-        .write(6, b"restart")
-        .expect("restart after approval");
+    client.write(6, b"restart").expect("restart after approval");
     client.clunk(6).expect("clunk restart");
 
     let status_text = read_file(&mut client, 7, &status_path);

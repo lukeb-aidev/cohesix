@@ -62,10 +62,7 @@ pub fn emit_cli_script(manifest: &Manifest, path: &Path) -> Result<()> {
         contents.push_str("# policy rules: (none)\n");
     } else {
         for rule in &policy.rules {
-            contents.push_str(&format!(
-                "# policy rule {} -> {}\n",
-                rule.id, rule.target
-            ));
+            contents.push_str(&format!("# policy rule {} -> {}\n", rule.id, rule.target));
         }
     }
     contents.push_str("log\nEXPECT OK\nWAIT 250\nquit\n");

@@ -6,13 +6,14 @@
 
 use anyhow::{Context, Result};
 use coh::policy::{
-    CohBreadcrumbPolicy, CohLeasePolicy, CohMountPolicy, CohPolicy, CohRetryPolicy, CohRunPolicy,
-    CohTelemetryPolicy,
+    CohBreadcrumbPolicy, CohLeasePolicy, CohMountPolicy, CohPeftActivatePolicy,
+    CohPeftExportPolicy, CohPeftImportPolicy, CohPeftPolicy, CohPolicy, CohRetryPolicy,
+    CohRunPolicy, CohTelemetryPolicy,
 };
 use coh::telemetry::pull;
 use coh::CohAudit;
-use cohsh::client::{CohClient, InProcessTransport};
 use cohesix_ticket::Role;
+use cohsh::client::{CohClient, InProcessTransport};
 use nine_door::NineDoor;
 use secure9p_codec::OpenMode;
 use tempfile::TempDir;
@@ -40,6 +41,25 @@ fn base_policy() -> CohPolicy {
                 schema: "gpu-breadcrumb/v1".to_owned(),
                 max_line_bytes: 256,
                 max_command_bytes: 128,
+            },
+        },
+        peft: CohPeftPolicy {
+            export: CohPeftExportPolicy {
+                root: "/queen/export/lora_jobs".to_owned(),
+                max_telemetry_bytes: 1024,
+                max_policy_bytes: 512,
+                max_base_model_bytes: 128,
+            },
+            import: CohPeftImportPolicy {
+                registry_root: "out/model_registry".to_owned(),
+                max_adapter_bytes: 2048,
+                max_lora_bytes: 512,
+                max_metrics_bytes: 512,
+                max_manifest_bytes: 512,
+            },
+            activate: CohPeftActivatePolicy {
+                max_model_id_bytes: 64,
+                max_state_bytes: 512,
             },
         },
         retry: CohRetryPolicy {
@@ -120,11 +140,7 @@ fn telemetry_pull_is_idempotent() -> Result<()> {
     let mut audit = CohAudit::new();
     pull(&mut client, &policy, temp.path(), &mut audit)?;
 
-    let output_path = temp
-        .path()
-        .join(device_id)
-        .join("seg")
-        .join(&seg_id);
+    let output_path = temp.path().join(device_id).join("seg").join(&seg_id);
     let stored = std::fs::read(&output_path).context("read output")?;
     assert_eq!(stored, payload.as_bytes());
 

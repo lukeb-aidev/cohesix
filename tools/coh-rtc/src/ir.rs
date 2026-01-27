@@ -44,6 +44,7 @@ const MAX_COH_ALLOWLIST: usize = 16;
 const MAX_COH_TELEMETRY_DEVICES: u32 = 256;
 const MAX_COH_SCHEMA_LEN: usize = 64;
 const MAX_COH_LEASE_STATE_LEN: usize = 16;
+const MAX_COH_PEFT_ID_LEN: u32 = 256;
 const MAX_LIFECYCLE_AUTO_TRANSITIONS: usize = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,8 +246,7 @@ impl Manifest {
         }
         for rule in &self.ecosystem.policy.rules {
             let target = rule.target.trim();
-            let components: Vec<&str> =
-                target.split('/').filter(|seg| !seg.is_empty()).collect();
+            let components: Vec<&str> = target.split('/').filter(|seg| !seg.is_empty()).collect();
             if matches!(components.first(), Some(component) if *component == "worker") {
                 bail!(
                     "ecosystem.policy.rules[].target references legacy /worker paths while sharding.legacy_worker_alias is false"
@@ -347,11 +347,7 @@ impl Manifest {
         Ok(())
     }
 
-    fn validate_sidecar_adapter(
-        &self,
-        label: &str,
-        adapter: &SidecarBusAdapter,
-    ) -> Result<()> {
+    fn validate_sidecar_adapter(&self, label: &str, adapter: &SidecarBusAdapter) -> Result<()> {
         self.validate_sidecar_id(&format!("{label}.adapters[].id"), &adapter.id)?;
         self.validate_sidecar_mount(&format!("{label}.adapters[].mount"), &adapter.mount)?;
         self.validate_sidecar_scope(&format!("{label}.adapters[].scope"), &adapter.scope)?;
@@ -711,9 +707,7 @@ impl Manifest {
             if zero_segments && zero_segment_bytes && zero_total_bytes {
                 return Ok(());
             }
-            bail!(
-                "telemetry_ingest.* must be all zero (disabled) or all non-zero (enabled)"
-            );
+            bail!("telemetry_ingest.* must be all zero (disabled) or all non-zero (enabled)");
         }
         if ingest.max_total_bytes_per_device < ingest.max_bytes_per_segment {
             bail!(
@@ -1194,6 +1188,65 @@ impl Manifest {
                 breadcrumb.max_line_bytes
             );
         }
+        let peft = &self.client_policies.coh.peft;
+        self.validate_coh_path(
+            "client_policies.coh.peft.export.root",
+            &peft.export.root,
+            false,
+        )?;
+        if peft.export.max_telemetry_bytes == 0 {
+            bail!("client_policies.coh.peft.export.max_telemetry_bytes must be >= 1");
+        }
+        if peft.export.max_telemetry_bytes > self.telemetry_ingest.max_total_bytes_per_device as u32
+        {
+            bail!(
+                "client_policies.coh.peft.export.max_telemetry_bytes {} exceeds telemetry_ingest.max_total_bytes_per_device {}",
+                peft.export.max_telemetry_bytes,
+                self.telemetry_ingest.max_total_bytes_per_device
+            );
+        }
+        if peft.export.max_policy_bytes == 0 {
+            bail!("client_policies.coh.peft.export.max_policy_bytes must be >= 1");
+        }
+        if peft.export.max_base_model_bytes == 0 {
+            bail!("client_policies.coh.peft.export.max_base_model_bytes must be >= 1");
+        }
+        self.validate_host_path(
+            "client_policies.coh.peft.import.registry_root",
+            &peft.import.registry_root,
+        )?;
+        if peft.import.max_adapter_bytes == 0 {
+            bail!("client_policies.coh.peft.import.max_adapter_bytes must be >= 1");
+        }
+        if peft.import.max_lora_bytes == 0 {
+            bail!("client_policies.coh.peft.import.max_lora_bytes must be >= 1");
+        }
+        if peft.import.max_metrics_bytes == 0 {
+            bail!("client_policies.coh.peft.import.max_metrics_bytes must be >= 1");
+        }
+        if peft.import.max_manifest_bytes == 0 {
+            bail!("client_policies.coh.peft.import.max_manifest_bytes must be >= 1");
+        }
+        if peft.activate.max_model_id_bytes == 0 {
+            bail!("client_policies.coh.peft.activate.max_model_id_bytes must be >= 1");
+        }
+        if peft.activate.max_model_id_bytes > MAX_COH_PEFT_ID_LEN {
+            bail!(
+                "client_policies.coh.peft.activate.max_model_id_bytes {} exceeds max {}",
+                peft.activate.max_model_id_bytes,
+                MAX_COH_PEFT_ID_LEN
+            );
+        }
+        if peft.activate.max_model_id_bytes.saturating_add(1) > self.secure9p.msize {
+            bail!(
+                "client_policies.coh.peft.activate.max_model_id_bytes {} exceeds secure9p.msize {}",
+                peft.activate.max_model_id_bytes,
+                self.secure9p.msize
+            );
+        }
+        if peft.activate.max_state_bytes == 0 {
+            bail!("client_policies.coh.peft.activate.max_state_bytes must be >= 1");
+        }
         Ok(())
     }
 
@@ -1215,6 +1268,26 @@ impl Manifest {
             }
             if component.is_empty() {
                 bail!("{label} contains empty path component");
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_host_path(&self, label: &str, path: &str) -> Result<()> {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            bail!("{label} must not be empty");
+        }
+        if trimmed.as_bytes().iter().any(|byte| *byte == 0) {
+            bail!("{label} contains NUL byte");
+        }
+        let components: Vec<&str> = trimmed.split('/').filter(|seg| !seg.is_empty()).collect();
+        if components.len() > MAX_WALK_DEPTH {
+            bail!("{label} exceeds max depth {}", MAX_WALK_DEPTH);
+        }
+        for component in components {
+            if component == "." || component == ".." {
+                bail!("{label} contains disallowed component '{component}'");
             }
         }
         Ok(())
@@ -1312,11 +1385,7 @@ impl Manifest {
                 self.secure9p.msize
             );
         }
-        let required = self
-            .cas
-            .store
-            .chunk_bytes
-            .saturating_mul(CAS_MAX_CHUNKS);
+        let required = self.cas.store.chunk_bytes.saturating_mul(CAS_MAX_CHUNKS);
         if required > EVENT_PUMP_CAS_BUDGET_BYTES {
             bail!(
                 "cas.store.chunk_bytes {} with max_chunks {} exceeds event-pump budget {}",
@@ -1337,13 +1406,16 @@ impl Manifest {
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| anyhow::anyhow!("cas.signing.key_path required when signing.required = true"))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("cas.signing.key_path required when signing.required = true")
+                })?;
             let resolved = resolve_manifest_relative_path(base_dir, key_path);
             let key_bytes = fs::read(&resolved).with_context(|| {
                 format!("failed to read cas signing key {}", resolved.display())
             })?;
-            let key_text = std::str::from_utf8(&key_bytes)
-                .with_context(|| format!("cas signing key {} is not valid UTF-8", resolved.display()))?;
+            let key_text = std::str::from_utf8(&key_bytes).with_context(|| {
+                format!("cas signing key {} is not valid UTF-8", resolved.display())
+            })?;
             let key_text = key_text.trim();
             if key_text.is_empty() {
                 bail!("cas signing key {} is empty", resolved.display());
@@ -2017,6 +2089,7 @@ pub struct CohClientPolicy {
     pub mount: CohMountPolicy,
     pub telemetry: CohTelemetryPolicy,
     pub run: CohRunPolicy,
+    pub peft: CohPeftPolicy,
 }
 
 impl Default for CohClientPolicy {
@@ -2025,6 +2098,7 @@ impl Default for CohClientPolicy {
             mount: CohMountPolicy::default(),
             telemetry: CohTelemetryPolicy::default(),
             run: CohRunPolicy::default(),
+            peft: CohPeftPolicy::default(),
         }
     }
 }
@@ -2079,6 +2153,82 @@ impl Default for CohRunPolicy {
         Self {
             lease: CohLeasePolicy::default(),
             breadcrumb: CohBreadcrumbPolicy::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct CohPeftPolicy {
+    pub export: CohPeftExportPolicy,
+    pub import: CohPeftImportPolicy,
+    pub activate: CohPeftActivatePolicy,
+}
+
+impl Default for CohPeftPolicy {
+    fn default() -> Self {
+        Self {
+            export: CohPeftExportPolicy::default(),
+            import: CohPeftImportPolicy::default(),
+            activate: CohPeftActivatePolicy::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CohPeftExportPolicy {
+    pub root: String,
+    pub max_telemetry_bytes: u32,
+    pub max_policy_bytes: u32,
+    pub max_base_model_bytes: u32,
+}
+
+impl Default for CohPeftExportPolicy {
+    fn default() -> Self {
+        Self {
+            root: default_coh_peft_export_root(),
+            max_telemetry_bytes: 128 * 1024,
+            max_policy_bytes: 8 * 1024,
+            max_base_model_bytes: 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CohPeftImportPolicy {
+    pub registry_root: String,
+    pub max_adapter_bytes: u64,
+    pub max_lora_bytes: u32,
+    pub max_metrics_bytes: u32,
+    pub max_manifest_bytes: u32,
+}
+
+impl Default for CohPeftImportPolicy {
+    fn default() -> Self {
+        Self {
+            registry_root: default_coh_peft_registry_root(),
+            max_adapter_bytes: 64 * 1024 * 1024,
+            max_lora_bytes: 64 * 1024,
+            max_metrics_bytes: 64 * 1024,
+            max_manifest_bytes: 8 * 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CohPeftActivatePolicy {
+    pub max_model_id_bytes: u32,
+    pub max_state_bytes: u32,
+}
+
+impl Default for CohPeftActivatePolicy {
+    fn default() -> Self {
+        Self {
+            max_model_id_bytes: 128,
+            max_state_bytes: 4096,
         }
     }
 }
@@ -2311,7 +2461,9 @@ pub struct ClientTracePolicy {
 
 impl Default for ClientTracePolicy {
     fn default() -> Self {
-        Self { max_bytes: 1_048_576 }
+        Self {
+            max_bytes: 1_048_576,
+        }
     }
 }
 
@@ -2570,11 +2722,17 @@ fn default_lora_mount() -> String {
     "/lora".to_owned()
 }
 
+fn default_coh_peft_export_root() -> String {
+    "/queen/export/lora_jobs".to_owned()
+}
+
+fn default_coh_peft_registry_root() -> String {
+    "out/model_registry".to_owned()
+}
+
 fn ensure_buffer_bytes(label: &str, value: u32, required: usize) -> Result<()> {
     if required > MAX_MSIZE as usize {
-        bail!(
-            "{label} requires at least {required} bytes which exceeds max {MAX_MSIZE}"
-        );
+        bail!("{label} requires at least {required} bytes which exceeds max {MAX_MSIZE}");
     }
     if value < required as u32 {
         bail!("{label} {value} is below required minimum {required}");

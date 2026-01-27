@@ -582,7 +582,11 @@ impl DocFragments {
         writeln!(
             schema_md,
             "- `client_policies.coh.telemetry.max_segments_per_device`: `{}`",
-            manifest.client_policies.coh.telemetry.max_segments_per_device
+            manifest
+                .client_policies
+                .coh
+                .telemetry
+                .max_segments_per_device
         )
         .ok();
         writeln!(
@@ -594,7 +598,11 @@ impl DocFragments {
         writeln!(
             schema_md,
             "- `client_policies.coh.telemetry.max_total_bytes_per_device`: `{}`",
-            manifest.client_policies.coh.telemetry.max_total_bytes_per_device
+            manifest
+                .client_policies
+                .coh
+                .telemetry
+                .max_total_bytes_per_device
         )
         .ok();
         writeln!(
@@ -1050,7 +1058,12 @@ impl DocFragments {
         writeln!(
             gpu_breadcrumbs_md,
             "- `coh.run.breadcrumb.max_command_bytes`: `{}`",
-            manifest.client_policies.coh.run.breadcrumb.max_command_bytes
+            manifest
+                .client_policies
+                .coh
+                .run
+                .breadcrumb
+                .max_command_bytes
         )
         .ok();
         writeln!(
@@ -1319,11 +1332,7 @@ impl DocFragments {
         .ok();
 
         let mut ticket_quotas_md = String::new();
-        writeln!(
-            ticket_quotas_md,
-            "### Ticket quota limits (generated)"
-        )
-        .ok();
+        writeln!(ticket_quotas_md, "### Ticket quota limits (generated)").ok();
         writeln!(
             ticket_quotas_md,
             "- `ticket_limits.max_scopes`: `{}`",
@@ -1466,11 +1475,7 @@ impl DocFragments {
         .ok();
 
         let mut cas_security_md = String::new();
-        writeln!(
-            cas_security_md,
-            "### CAS integrity stance (generated)"
-        )
-        .ok();
+        writeln!(cas_security_md, "### CAS integrity stance (generated)").ok();
         if !manifest.cas.enable {
             writeln!(cas_security_md, "- (disabled)").ok();
         } else {
@@ -1563,12 +1568,8 @@ pub fn emit_gpu_breadcrumbs_snippet(docs: &DocFragments, path: &Path) -> Result<
     )?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.gpu_breadcrumbs_md.trim_end())?;
-    fs::write(path, contents).with_context(|| {
-        format!(
-            "failed to write GPU breadcrumb snippet {}",
-            path.display()
-        )
-    })?;
+    fs::write(path, contents)
+        .with_context(|| format!("failed to write GPU breadcrumb snippet {}", path.display()))?;
     Ok(())
 }
 
@@ -1617,12 +1618,8 @@ pub fn emit_ticket_quotas_snippet(docs: &DocFragments, path: &Path) -> Result<()
     )?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.ticket_quotas_md.trim_end())?;
-    fs::write(path, contents).with_context(|| {
-        format!(
-            "failed to write ticket quota snippet {}",
-            path.display()
-        )
-    })?;
+    fs::write(path, contents)
+        .with_context(|| format!("failed to write ticket quota snippet {}", path.display()))?;
     Ok(())
 }
 
@@ -1635,12 +1632,8 @@ pub fn emit_trace_policy_snippet(docs: &DocFragments, path: &Path) -> Result<()>
     )?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.trace_policy_md.trim_end())?;
-    fs::write(path, contents).with_context(|| {
-        format!(
-            "failed to write trace policy snippet {}",
-            path.display()
-        )
-    })?;
+    fs::write(path, contents)
+        .with_context(|| format!("failed to write trace policy snippet {}", path.display()))?;
     Ok(())
 }
 
@@ -1653,12 +1646,8 @@ pub fn emit_cas_interfaces_snippet(docs: &DocFragments, path: &Path) -> Result<(
     )?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.cas_interfaces_md.trim_end())?;
-    fs::write(path, contents).with_context(|| {
-        format!(
-            "failed to write cas interfaces snippet {}",
-            path.display()
-        )
-    })?;
+    fs::write(path, contents)
+        .with_context(|| format!("failed to write cas interfaces snippet {}", path.display()))?;
     Ok(())
 }
 
@@ -1671,12 +1660,8 @@ pub fn emit_cas_security_snippet(docs: &DocFragments, path: &Path) -> Result<()>
     )?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.cas_security_md.trim_end())?;
-    fs::write(path, contents).with_context(|| {
-        format!(
-            "failed to write cas security snippet {}",
-            path.display()
-        )
-    })?;
+    fs::write(path, contents)
+        .with_context(|| format!("failed to write cas security snippet {}", path.display()))?;
     Ok(())
 }
 
@@ -1686,12 +1671,7 @@ fn render_sidecar_bus_section(
     used: &mut std::collections::BTreeSet<String>,
     output: &mut String,
 ) {
-    writeln!(
-        output,
-        "- `sidecars.{label}.enable`: `{}`",
-        config.enable
-    )
-    .ok();
+    writeln!(output, "- `sidecars.{label}.enable`: `{}`", config.enable).ok();
     writeln!(
         output,
         "- `sidecars.{label}.mount_at`: `{}`",
@@ -1725,12 +1705,7 @@ fn render_sidecar_lora_section(
     output: &mut String,
 ) {
     writeln!(output, "- `sidecars.lora.enable`: `{}`", config.enable).ok();
-    writeln!(
-        output,
-        "- `sidecars.lora.mount_at`: `{}`",
-        config.mount_at
-    )
-    .ok();
+    writeln!(output, "- `sidecars.lora.mount_at`: `{}`", config.mount_at).ok();
     if config.adapters.is_empty() {
         writeln!(output, "- `sidecars.lora.adapters`: `(none)`").ok();
     } else {

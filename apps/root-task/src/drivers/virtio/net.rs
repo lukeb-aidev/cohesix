@@ -12,18 +12,18 @@
 
 #[cfg(target_arch = "aarch64")]
 use core::arch::asm;
+use core::cell::Cell;
 use core::fmt::{self, Write as FmtWrite};
 #[cfg(feature = "net-backend-virtio")]
 use core::mem::MaybeUninit;
 use core::ops::Range;
 use core::ptr::read_unaligned;
 use core::ptr::{read_volatile, write_volatile, NonNull};
+#[cfg(not(target_arch = "aarch64"))]
+use core::sync::atomic::fence;
 use core::sync::atomic::{
     compiler_fence, AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering as AtomicOrdering,
 };
-use core::cell::Cell;
-#[cfg(not(target_arch = "aarch64"))]
-use core::sync::atomic::fence;
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, trace, warn};
@@ -48,8 +48,7 @@ use crate::net::{
 };
 use crate::net_consts::MAX_FRAME_LEN;
 use crate::sel4::{
-    seL4_CapInitThreadVSpace, DeviceFrame, RamFrame, BOOTINFO_WINDOW_GUARD,
-    DEVICE_VM_ATTRIBUTES,
+    seL4_CapInitThreadVSpace, DeviceFrame, RamFrame, BOOTINFO_WINDOW_GUARD, DEVICE_VM_ATTRIBUTES,
 };
 
 const FORENSICS: bool = true;
@@ -74,11 +73,9 @@ const VIRTQ_DIAG: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-tra
 const VIRTQ_DIAG_STRICT: bool = VIRTQ_DIAG && env_flag(option_env!("VIRTQ_DIAG_STRICT"));
 const VIRTQ_METADATA_UNCACHED: bool =
     VIRTQ_DIAG && env_flag(option_env!("VIRTQ_METADATA_UNCACHED"));
-const VIRTQ_METADATA_DEVICE: bool =
-    VIRTQ_DIAG && env_flag(option_env!("VIRTQ_METADATA_DEVICE"));
+const VIRTQ_METADATA_DEVICE: bool = VIRTQ_DIAG && env_flag(option_env!("VIRTQ_METADATA_DEVICE"));
 const VIRTQ_PROOF: bool = VIRTQ_DIAG && env_flag(option_env!("VIRTQ_PROOF"));
-const VIRTIO_MIN_TX_SELFTEST: bool =
-    VIRTQ_DIAG && env_flag(option_env!("VIRTIO_MIN_TX_SELFTEST"));
+const VIRTIO_MIN_TX_SELFTEST: bool = VIRTQ_DIAG && env_flag(option_env!("VIRTIO_MIN_TX_SELFTEST"));
 const VIRTIO_MIN_TX_LOOP: bool = VIRTQ_DIAG && env_flag(option_env!("VIRTIO_MIN_TX_LOOP"));
 const VIRTIO_TX_ROLLBACK_STRICT: bool =
     VIRTQ_DIAG && env_flag(option_env!("VIRTIO_TX_ROLLBACK_STRICT"));
@@ -317,7 +314,12 @@ fn virtq_diag_entry_index(queue_index: u32, entry: usize) -> Option<usize> {
     Some((queue_index as usize) * VIRTQ_DIAG_ENTRY_COUNT + entry)
 }
 
-fn virtq_diag_register(queue_index: u32, base_vaddr: usize, base_paddr: usize, layout: &VirtqLayout) {
+fn virtq_diag_register(
+    queue_index: u32,
+    base_vaddr: usize,
+    base_paddr: usize,
+    layout: &VirtqLayout,
+) {
     if !VIRTQ_DIAG {
         return;
     }
@@ -535,12 +537,18 @@ fn virtq_alias_audit_once(
         None
     };
 
-    let avail_ring_vaddr =
-        base_vaddr.saturating_add(layout.avail_offset).saturating_add(4 + slot_idx * 2);
-    let avail_ring_paddr =
-        base_paddr.saturating_add(layout.avail_offset).saturating_add(4 + slot_idx * 2);
-    let avail_idx_vaddr = base_vaddr.saturating_add(layout.avail_offset).saturating_add(2);
-    let avail_idx_paddr = base_paddr.saturating_add(layout.avail_offset).saturating_add(2);
+    let avail_ring_vaddr = base_vaddr
+        .saturating_add(layout.avail_offset)
+        .saturating_add(4 + slot_idx * 2);
+    let avail_ring_paddr = base_paddr
+        .saturating_add(layout.avail_offset)
+        .saturating_add(4 + slot_idx * 2);
+    let avail_idx_vaddr = base_vaddr
+        .saturating_add(layout.avail_offset)
+        .saturating_add(2);
+    let avail_idx_paddr = base_paddr
+        .saturating_add(layout.avail_offset)
+        .saturating_add(2);
     let range_start = core::cmp::min(avail_ring_vaddr, avail_idx_vaddr);
     let range_end = core::cmp::max(
         avail_ring_vaddr.saturating_add(core::mem::size_of::<u16>()),
@@ -2766,18 +2774,42 @@ impl VirtioNet {
             err
         })?;
         if VIRTQ_DIAG && !VIRTQ_WIRING_LOGGED.swap(true, AtomicOrdering::AcqRel) {
-            let rx_desc_vaddr = rx_queue.base_vaddr.saturating_add(rx_queue.layout.desc_offset);
-            let rx_avail_vaddr = rx_queue.base_vaddr.saturating_add(rx_queue.layout.avail_offset);
-            let rx_used_vaddr = rx_queue.base_vaddr.saturating_add(rx_queue.layout.used_offset);
-            let tx_desc_vaddr = tx_queue.base_vaddr.saturating_add(tx_queue.layout.desc_offset);
-            let tx_avail_vaddr = tx_queue.base_vaddr.saturating_add(tx_queue.layout.avail_offset);
-            let tx_used_vaddr = tx_queue.base_vaddr.saturating_add(tx_queue.layout.used_offset);
-            let rx_desc_paddr = rx_queue.base_paddr.saturating_add(rx_queue.layout.desc_offset);
-            let rx_avail_paddr = rx_queue.base_paddr.saturating_add(rx_queue.layout.avail_offset);
-            let rx_used_paddr = rx_queue.base_paddr.saturating_add(rx_queue.layout.used_offset);
-            let tx_desc_paddr = tx_queue.base_paddr.saturating_add(tx_queue.layout.desc_offset);
-            let tx_avail_paddr = tx_queue.base_paddr.saturating_add(tx_queue.layout.avail_offset);
-            let tx_used_paddr = tx_queue.base_paddr.saturating_add(tx_queue.layout.used_offset);
+            let rx_desc_vaddr = rx_queue
+                .base_vaddr
+                .saturating_add(rx_queue.layout.desc_offset);
+            let rx_avail_vaddr = rx_queue
+                .base_vaddr
+                .saturating_add(rx_queue.layout.avail_offset);
+            let rx_used_vaddr = rx_queue
+                .base_vaddr
+                .saturating_add(rx_queue.layout.used_offset);
+            let tx_desc_vaddr = tx_queue
+                .base_vaddr
+                .saturating_add(tx_queue.layout.desc_offset);
+            let tx_avail_vaddr = tx_queue
+                .base_vaddr
+                .saturating_add(tx_queue.layout.avail_offset);
+            let tx_used_vaddr = tx_queue
+                .base_vaddr
+                .saturating_add(tx_queue.layout.used_offset);
+            let rx_desc_paddr = rx_queue
+                .base_paddr
+                .saturating_add(rx_queue.layout.desc_offset);
+            let rx_avail_paddr = rx_queue
+                .base_paddr
+                .saturating_add(rx_queue.layout.avail_offset);
+            let rx_used_paddr = rx_queue
+                .base_paddr
+                .saturating_add(rx_queue.layout.used_offset);
+            let tx_desc_paddr = tx_queue
+                .base_paddr
+                .saturating_add(tx_queue.layout.desc_offset);
+            let tx_avail_paddr = tx_queue
+                .base_paddr
+                .saturating_add(tx_queue.layout.avail_offset);
+            let tx_used_paddr = tx_queue
+                .base_paddr
+                .saturating_add(tx_queue.layout.used_offset);
             info!(
                 target: "virtio-net",
                 "[virtio-net][queue-wire] rx desc vaddr=0x{rx_desc_vaddr:016x} paddr=0x{rx_desc_paddr:016x} avail vaddr=0x{rx_avail_vaddr:016x} paddr=0x{rx_avail_paddr:016x} used vaddr=0x{rx_used_vaddr:016x} paddr=0x{rx_used_paddr:016x}",
@@ -2790,10 +2822,8 @@ impl VirtioNet {
             let tx_vend = tx_queue.base_vaddr.saturating_add(tx_queue.base_len);
             let rx_pend = rx_queue.base_paddr.saturating_add(rx_queue.base_len);
             let tx_pend = tx_queue.base_paddr.saturating_add(tx_queue.base_len);
-            let vaddr_overlap =
-                rx_queue.base_vaddr < tx_vend && tx_queue.base_vaddr < rx_vend;
-            let paddr_overlap =
-                rx_queue.base_paddr < tx_pend && tx_queue.base_paddr < rx_pend;
+            let vaddr_overlap = rx_queue.base_vaddr < tx_vend && tx_queue.base_vaddr < rx_vend;
+            let paddr_overlap = rx_queue.base_paddr < tx_pend && tx_queue.base_paddr < rx_pend;
             if vaddr_overlap || paddr_overlap {
                 regs.set_status(STATUS_FAILED);
                 error!(
@@ -3213,7 +3243,12 @@ impl VirtioNet {
             };
             let mut used_id = 0u32;
             let mut used_len = 0u32;
-            if qsize != 0 && self.tx_queue.invalidate_used_elem_for_cpu(ring_slot).is_ok() {
+            if qsize != 0
+                && self
+                    .tx_queue
+                    .invalidate_used_elem_for_cpu(ring_slot)
+                    .is_ok()
+            {
                 virtq_used_load_barrier();
                 dma_load_barrier();
                 let used = self.tx_queue.used.as_ptr();
@@ -3396,8 +3431,10 @@ impl VirtioNet {
                 return false;
             }
             if NET_VIRTIO_TX_V2 {
-                let tracker_sum =
-                    self.tx_slots.free_count().saturating_add(self.tx_slots.in_flight());
+                let tracker_sum = self
+                    .tx_slots
+                    .free_count()
+                    .saturating_add(self.tx_slots.in_flight());
                 let mgr_sum = self
                     .tx_head_mgr
                     .free_len()
@@ -4102,8 +4139,14 @@ impl VirtioNet {
                     total_len = total_len,
                 );
             }
-            debug_assert!(total_len > 0, "tx publish guard: total_len must be non-zero");
-            debug_assert!(entry.last_addr != 0, "tx publish guard: addr must be non-zero");
+            debug_assert!(
+                total_len > 0,
+                "tx publish guard: total_len must be non-zero"
+            );
+            debug_assert!(
+                entry.last_addr != 0,
+                "tx publish guard: addr must be non-zero"
+            );
             debug_assert!(
                 guard_flags_next_ok,
                 "tx publish guard: NEXT must be clear and next==0"
@@ -4195,11 +4238,7 @@ impl VirtioNet {
             self.freeze_and_capture("tx_desc_rewrite_failed");
             return Err(TxPublishError::InvalidDescriptor);
         }
-        if VIRTQ_DIAG
-            && !self.tx_publish_desc_check_once
-            && avail_idx == 16
-            && publish_slot == 0
-        {
+        if VIRTQ_DIAG && !self.tx_publish_desc_check_once && avail_idx == 16 && publish_slot == 0 {
             self.tx_publish_desc_check_once = true;
             let desc_written = self.tx_queue.read_descriptor(written_desc_index);
             let desc0 = self.tx_queue.read_descriptor(0);
@@ -4250,7 +4289,8 @@ impl VirtioNet {
                 );
                 let _ = self.tx_head_mgr.cancel_publish(head_id);
                 self.cancel_tx_slot(head_id, "tx_publish_desc_check_failed");
-                self.last_error.get_or_insert("tx_publish_desc_check_failed");
+                self.last_error
+                    .get_or_insert("tx_publish_desc_check_failed");
                 return Err(TxPublishError::InvalidDescriptor);
             }
         }
@@ -4529,7 +4569,14 @@ impl VirtioNet {
                         None
                     },
                 );
-                self.record_tx_tripwire(TxTripwireKind::Publish, head_id, slot, used_idx, avail_idx, desc);
+                self.record_tx_tripwire(
+                    TxTripwireKind::Publish,
+                    head_id,
+                    slot,
+                    used_idx,
+                    avail_idx,
+                    desc,
+                );
             }
             return Err(());
         }
@@ -4639,12 +4686,10 @@ impl VirtioNet {
                 let avail_hdr = self.tx_queue.avail.as_ptr();
                 let used_idx = u16::from_le(unsafe { read_volatile(&(*used_hdr).idx) });
                 let avail_idx = u16::from_le(unsafe { read_volatile(&(*avail_hdr).idx) });
-                let avail_ptr =
-                    unsafe { (*avail_hdr).ring.as_ptr().add(truth_slot) as *const u16 };
+                let avail_ptr = unsafe { (*avail_hdr).ring.as_ptr().add(truth_slot) as *const u16 };
                 let avail_ring_slot = unsafe { u16::from_le(read_volatile(avail_ptr)) };
-                let used_ptr = unsafe {
-                    (*used_hdr).ring.as_ptr().add(truth_slot) as *const VirtqUsedElem
-                };
+                let used_ptr =
+                    unsafe { (*used_hdr).ring.as_ptr().add(truth_slot) as *const VirtqUsedElem };
                 let used_elem = unsafe { read_volatile(used_ptr) };
                 let used_id = u32::from_le(used_elem.id);
                 let used_len = u32::from_le(used_elem.len);
@@ -4686,8 +4731,12 @@ impl VirtioNet {
                     ring_slot_usize,
                 );
             }
-            let used_ptr =
-                unsafe { (*self.tx_queue.used.as_ptr()).ring.as_ptr().add(ring_slot_usize) };
+            let used_ptr = unsafe {
+                (*self.tx_queue.used.as_ptr())
+                    .ring
+                    .as_ptr()
+                    .add(ring_slot_usize)
+            };
             let used_elem = unsafe { read_volatile(used_ptr) };
             warn!(
                 target: "virtio-net",
@@ -4836,7 +4885,14 @@ impl VirtioNet {
                 );
             }
         }
-        self.record_tx_tripwire(TxTripwireKind::UsedMismatch, id, ring_slot, used_idx, avail_idx, desc);
+        self.record_tx_tripwire(
+            TxTripwireKind::UsedMismatch,
+            id,
+            ring_slot,
+            used_idx,
+            avail_idx,
+            desc,
+        );
         self.log_tx_avail_window(self.tx_queue.last_used, 4);
         true
     }
@@ -6488,11 +6544,7 @@ impl VirtioNet {
         }
         let (used_idx_after, avail_idx_after) = self.tx_queue.indices();
         if !progressed && used_idx_after != self.tx_queue.last_used {
-            self.log_tx_reclaim_stall(
-                used_idx_after,
-                avail_idx_after,
-                self.tx_queue.last_used,
-            );
+            self.log_tx_reclaim_stall(used_idx_after, avail_idx_after, self.tx_queue.last_used);
         }
         #[cfg(debug_assertions)]
         {
@@ -7260,14 +7312,23 @@ impl VirtioNet {
         let mut elem_id = 0u32;
         let mut elem_len = 0u32;
         let mut retry = false;
-        if self.tx_queue.invalidate_used_elem_for_cpu(ring_slot).is_ok() {
+        if self
+            .tx_queue
+            .invalidate_used_elem_for_cpu(ring_slot)
+            .is_ok()
+        {
             virtq_used_load_barrier();
             dma_load_barrier();
             let elem_ptr = unsafe { (*used).ring.as_ptr().add(ring_slot) as *const VirtqUsedElem };
             let elem = unsafe { read_volatile(elem_ptr) };
             elem_id = u32::from_le(elem.id);
             elem_len = u32::from_le(elem.len);
-            if elem_len == 0 && self.tx_queue.invalidate_used_elem_for_cpu(ring_slot).is_ok() {
+            if elem_len == 0
+                && self
+                    .tx_queue
+                    .invalidate_used_elem_for_cpu(ring_slot)
+                    .is_ok()
+            {
                 retry = true;
                 virtq_used_load_barrier();
                 dma_load_barrier();
@@ -7709,10 +7770,7 @@ impl VirtioNet {
         if !VIRTQ_DIAG {
             return;
         }
-        debug_assert_eq!(
-            queue, TX_QUEUE_INDEX,
-            "tx notify must target TX queue"
-        );
+        debug_assert_eq!(queue, TX_QUEUE_INDEX, "tx notify must target TX queue");
         if !TX_NOTIFY_DIAG_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             let (vaddr, paddr, offset) = self.regs.notify_register_info();
             info!(
@@ -10346,15 +10404,7 @@ impl VirtQueue {
             mode,
         );
         virtq_alias_audit_once(
-            index,
-            base_vaddr,
-            base_paddr,
-            queue_size,
-            &layout,
-            cacheable,
-            None,
-            None,
-            "setup",
+            index, base_vaddr, base_paddr, queue_size, &layout, cacheable, None, None, "setup",
         );
 
         Ok(Self {
@@ -11304,12 +11354,7 @@ fn dma_load_barrier() {
 
 #[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
-fn dma_clean(
-    ptr: *const u8,
-    len: usize,
-    _cacheable: bool,
-    _reason: &str,
-) -> Result<(), DmaError> {
+fn dma_clean(ptr: *const u8, len: usize, _cacheable: bool, _reason: &str) -> Result<(), DmaError> {
     #[cfg(test)]
     if let Some(hook) = *DMA_TEST_HOOK.lock() {
         hook(CacheOp::Clean, ptr as usize, len);
@@ -12014,11 +12059,7 @@ mod tx_tests {
             Some(reservation),
             "first take yields reservation"
         );
-        assert_eq!(
-            token.take_reservation(),
-            None,
-            "second take returns none"
-        );
+        assert_eq!(token.take_reservation(), None, "second take returns none");
     }
 
     #[test]
@@ -12064,9 +12105,7 @@ mod tx_tests {
         slots.complete(slot).expect("slot complete");
 
         let (slot_reuse, _, slot_gen_reuse) = slots.reserve_next().expect("slot reuse");
-        let head_reuse = heads
-            .alloc_specific(slot_reuse)
-            .expect("head reuse");
+        let head_reuse = heads.alloc_specific(slot_reuse).expect("head reuse");
         let head_gen_reuse = heads.generation(head_reuse).expect("head gen");
         let fresh = TxReservation {
             head_id: head_reuse,

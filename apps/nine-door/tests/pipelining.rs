@@ -10,8 +10,8 @@ use std::time::Instant;
 
 use cohesix_ticket::Role;
 use nine_door::{Clock, NineDoor, Pipeline, PipelineConfig};
-use secure9p_core::{SessionLimits, ShortWritePolicy};
 use secure9p_codec::{BatchIter, Codec, OpenMode, Request, RequestBody, ResponseBody, MAX_MSIZE};
+use secure9p_core::{SessionLimits, ShortWritePolicy};
 
 struct FixedClock {
     now: Instant,
@@ -19,7 +19,9 @@ struct FixedClock {
 
 impl FixedClock {
     fn new() -> Self {
-        Self { now: Instant::now() }
+        Self {
+            now: Instant::now(),
+        }
     }
 }
 

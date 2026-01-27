@@ -248,8 +248,10 @@ impl LifecycleStateMachine {
         if !command_allowed(from, command) {
             return Err(LifecycleError::InvalidTransition);
         }
-        if matches!(command, LifecycleCommand::Drain | LifecycleCommand::Quiesce | LifecycleCommand::Reset)
-            && outstanding_leases > 0
+        if matches!(
+            command,
+            LifecycleCommand::Drain | LifecycleCommand::Quiesce | LifecycleCommand::Reset
+        ) && outstanding_leases > 0
         {
             return Err(LifecycleError::OutstandingLeases {
                 leases: outstanding_leases,
@@ -263,7 +265,10 @@ impl LifecycleStateMachine {
     }
 
     /// Apply the default boot-complete auto transition.
-    pub fn auto_boot_complete(&mut self, now: Instant) -> Result<LifecycleTransition, LifecycleError> {
+    pub fn auto_boot_complete(
+        &mut self,
+        now: Instant,
+    ) -> Result<LifecycleTransition, LifecycleError> {
         self.apply_auto_transition(LifecycleState::Online, "boot-complete", now)
     }
 
@@ -377,7 +382,9 @@ fn command_target(command: LifecycleCommand) -> (LifecycleState, &'static str) {
 
 fn command_allowed(state: LifecycleState, command: LifecycleCommand) -> bool {
     match command {
-        LifecycleCommand::Cordon => matches!(state, LifecycleState::Online | LifecycleState::Degraded),
+        LifecycleCommand::Cordon => {
+            matches!(state, LifecycleState::Online | LifecycleState::Degraded)
+        }
         LifecycleCommand::Drain => matches!(state, LifecycleState::Draining),
         LifecycleCommand::Resume => !matches!(state, LifecycleState::Online),
         LifecycleCommand::Quiesce => matches!(
@@ -388,7 +395,11 @@ fn command_allowed(state: LifecycleState, command: LifecycleCommand) -> bool {
     }
 }
 
-fn auto_transition_allowed(config: &LifecycleConfig, from: LifecycleState, to: LifecycleState) -> bool {
+fn auto_transition_allowed(
+    config: &LifecycleConfig,
+    from: LifecycleState,
+    to: LifecycleState,
+) -> bool {
     config
         .auto_transitions
         .iter()

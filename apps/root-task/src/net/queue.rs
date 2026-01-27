@@ -432,10 +432,15 @@ impl NetStack {
         let _ = self.server.ingest(payload.as_slice(), 1);
     }
 
-    fn encode_frame<const N: usize>(line: &str, payload: &mut HeaplessVec<u8, N>) -> Result<(), ()> {
+    fn encode_frame<const N: usize>(
+        line: &str,
+        payload: &mut HeaplessVec<u8, N>,
+    ) -> Result<(), ()> {
         let total_len = line.len().saturating_add(4);
         let len: u32 = total_len.try_into().map_err(|_| ())?;
-        payload.extend_from_slice(&len.to_le_bytes()).map_err(|_| ())?;
+        payload
+            .extend_from_slice(&len.to_le_bytes())
+            .map_err(|_| ())?;
         payload.extend_from_slice(line.as_bytes()).map_err(|_| ())?;
         Ok(())
     }
@@ -458,11 +463,7 @@ impl NetPoller for NetStack {
         self.telemetry()
     }
 
-    fn drain_console_lines(
-        &mut self,
-        now_ms: u64,
-        visitor: &mut dyn FnMut(ConsoleLine),
-    ) {
+    fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
         self.server.drain_console_lines(now_ms, visitor);
     }
 
@@ -588,9 +589,8 @@ mod tests {
             "lines must not transmit before authentication"
         );
 
-        let auth_payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!(
-            "AUTH {AUTH_TOKEN}"
-        ));
+        let auth_payload =
+            frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("AUTH {AUTH_TOKEN}"));
         let event = stack.server.ingest(auth_payload.as_slice(), 1);
         assert_eq!(event, SessionEvent::Authenticated);
 
@@ -598,7 +598,9 @@ mod tests {
 
         let frame = handle.pop_tx().expect("frame not enqueued");
         let lines = decode_frames(frame.as_slice());
-        assert!(lines.iter().any(|line| line.as_str() == "OK TEST detail=42"));
+        assert!(lines
+            .iter()
+            .any(|line| line.as_str() == "OK TEST detail=42"));
 
         let ack = handle.pop_tx().expect("auth acknowledgement missing");
         let lines = decode_frames(ack.as_slice());
@@ -620,6 +622,8 @@ mod tests {
 
         let frame = handle.pop_tx().expect("auth failure frame missing");
         let lines = decode_frames(frame.as_slice());
-        assert!(lines.iter().any(|line| line.as_str().starts_with("ERR AUTH")));
+        assert!(lines
+            .iter()
+            .any(|line| line.as_str().starts_with("ERR AUTH")));
     }
 }

@@ -13,9 +13,17 @@
 
 use anyhow::{anyhow, ensure, Result};
 use std::fmt::Write;
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 const TELEMETRY_SCHEMA_VERSION: &str = "gpu-telemetry/v1";
 const MAX_TELEMETRY_BYTES: usize = 4096;
+const REGISTRY_ACTIVE_FILE: &str = "active";
+const REGISTRY_AVAILABLE_DIR: &str = "available";
+const REGISTRY_MANIFEST_FILE: &str = "manifest.toml";
+const MAX_REGISTRY_MANIFEST_BYTES: usize = 8 * 1024;
+const MAX_REGISTRY_ID_BYTES: usize = 128;
 
 /// Summary information about a GPU surfaced to the VM namespace.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -341,6 +349,7 @@ impl Inventory for NvmlInventory {
 /// Host bridge entry point.
 pub struct GpuBridge {
     inventory: Box<dyn Inventory + Send + Sync>,
+    model_registry: Option<PathBuf>,
 }
 
 /// Serialised GPU topology (nodes, models, telemetry schema).
@@ -359,6 +368,7 @@ impl GpuBridge {
     pub fn mock() -> Self {
         Self {
             inventory: Box::new(MockInventory),
+            model_registry: None,
         }
     }
 
@@ -368,7 +378,15 @@ impl GpuBridge {
     pub fn new_nvml() -> Self {
         Self {
             inventory: Box::new(NvmlInventory::default()),
+            model_registry: None,
         }
+    }
+
+    /// Attach a model registry root used to populate `/gpu/models/available`.
+    #[must_use]
+    pub fn with_registry_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.model_registry = Some(root.into());
+        self
     }
 
     /// Discover GPUs and build namespace descriptors.
@@ -413,10 +431,20 @@ impl GpuBridge {
     }
 
     fn build_model_catalog(&self) -> GpuModelCatalog {
-        let available = vec![
-            ModelManifest {
-                model_id: "vision-base-v1".into(),
-                manifest_toml: r#"
+        if let Some(root) = self.model_registry.as_ref() {
+            if let Ok(Some(catalog)) = load_registry_catalog(root) {
+                return catalog;
+            }
+        }
+        default_model_catalog()
+    }
+}
+
+fn default_model_catalog() -> GpuModelCatalog {
+    let available = vec![
+        ModelManifest {
+            model_id: "vision-base-v1".into(),
+            manifest_toml: r#"
 [model]
 id = "vision-base-v1"
 source = "s3://artifacts/models/vision-base-v1/"
@@ -427,12 +455,12 @@ tokens = 4096
 owner = "mlops"
 activation = "cold-reload"
 "#
-                .trim()
-                .to_string(),
-            },
-            ModelManifest {
-                model_id: "vision-lora-edge".into(),
-                manifest_toml: r#"
+            .trim()
+            .to_string(),
+        },
+        ModelManifest {
+            model_id: "vision-lora-edge".into(),
+            manifest_toml: r#"
 [model]
 id = "vision-lora-edge"
 base = "vision-base-v1"
@@ -444,15 +472,102 @@ tokens = 4096
 owner = "mlops"
 activation = "hot-swap"
 "#
-                .trim()
-                .to_string(),
-            },
-        ];
-        GpuModelCatalog {
-            active: "vision-lora-edge".into(),
-            available,
-        }
+            .trim()
+            .to_string(),
+        },
+    ];
+    GpuModelCatalog {
+        active: "vision-lora-edge".into(),
+        available,
     }
+}
+
+fn load_registry_catalog(root: &Path) -> Result<Option<GpuModelCatalog>> {
+    let available_root = root.join(REGISTRY_AVAILABLE_DIR);
+    if !available_root.is_dir() {
+        return Ok(None);
+    }
+    let mut manifests = Vec::new();
+    for entry in fs::read_dir(&available_root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let model_id = match path.file_name().and_then(|name| name.to_str()) {
+            Some(name) if !name.trim().is_empty() => name.to_owned(),
+            _ => continue,
+        };
+        let manifest_path = path.join(REGISTRY_MANIFEST_FILE);
+        if !manifest_path.is_file() {
+            continue;
+        }
+        let manifest_bytes = read_bounded_file(&manifest_path, MAX_REGISTRY_MANIFEST_BYTES)?;
+        let manifest_toml = String::from_utf8(manifest_bytes)
+            .map_err(|_| anyhow!("manifest.toml for {model_id} is not UTF-8"))?;
+        manifests.push(ModelManifest {
+            model_id,
+            manifest_toml,
+        });
+    }
+    if manifests.is_empty() {
+        return Ok(None);
+    }
+    manifests.sort_by(|a, b| a.model_id.cmp(&b.model_id));
+    let active_path = root.join(REGISTRY_ACTIVE_FILE);
+    let active = if active_path.is_file() {
+        read_first_line(&active_path, MAX_REGISTRY_ID_BYTES)
+            .unwrap_or_else(|_| manifests[0].model_id.clone())
+    } else {
+        manifests[0].model_id.clone()
+    };
+    let active = if manifests.iter().any(|manifest| manifest.model_id == active) {
+        active
+    } else {
+        manifests[0].model_id.clone()
+    };
+    Ok(Some(GpuModelCatalog {
+        available: manifests,
+        active,
+    }))
+}
+
+fn read_bounded_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>> {
+    let mut file = fs::File::open(path)?;
+    let mut buffer = Vec::new();
+    let mut tmp = [0u8; 4096];
+    loop {
+        let read = file.read(&mut tmp)?;
+        if read == 0 {
+            break;
+        }
+        if buffer.len().saturating_add(read) > max_bytes {
+            return Err(anyhow!(
+                "registry file {} exceeds max bytes {}",
+                path.display(),
+                max_bytes
+            ));
+        }
+        buffer.extend_from_slice(&tmp[..read]);
+    }
+    Ok(buffer)
+}
+
+fn read_first_line(path: &Path, max_len: usize) -> Result<String> {
+    let bytes = read_bounded_file(path, max_len + 1)?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| anyhow!("registry file {} is not UTF-8", path.display()))?;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("registry file {} is empty", path.display()))?;
+    ensure!(
+        line.len() <= max_len,
+        "registry value exceeds max length {}",
+        max_len
+    );
+    Ok(line.to_owned())
 }
 
 /// Serialised GPU node representation exported by the bridge.
@@ -577,6 +692,15 @@ pub fn auto_bridge(mock: bool) -> Result<GpuBridge> {
             ))
         }
     }
+}
+
+/// Build a bridge instance with an optional registry root override.
+pub fn auto_bridge_with_registry(mock: bool, registry_root: Option<&Path>) -> Result<GpuBridge> {
+    let bridge = auto_bridge(mock)?;
+    Ok(match registry_root {
+        Some(root) => bridge.with_registry_root(root.to_path_buf()),
+        None => bridge,
+    })
 }
 
 #[cfg(test)]

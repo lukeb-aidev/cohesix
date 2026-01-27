@@ -9,13 +9,13 @@ mod transcript_support;
 use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
+use cohesix_ticket::Role;
 use cohsh::client::{CohClient, InProcessTransport};
 use cohsh::queen;
 use cohsh::trace::{TraceAckMode, TraceShellTransport};
-use cohesix_ticket::Role;
 use nine_door::NineDoor;
 use secure9p_codec::OpenMode;
-use swarmui::{SwarmUiConsoleBackend, SwarmUiConfig};
+use swarmui::{SwarmUiConfig, SwarmUiConsoleBackend};
 
 const SCENARIO: &str = "converge_v0";
 const WORKER_ID: &str = "worker-1";
@@ -52,7 +52,9 @@ fn console_prompt_matches_cohsh_transcript() -> Result<()> {
     Ok(())
 }
 
-fn build_backend(server: &NineDoor) -> SwarmUiConsoleBackend<TraceShellTransport<InProcessTransport>> {
+fn build_backend(
+    server: &NineDoor,
+) -> SwarmUiConsoleBackend<TraceShellTransport<InProcessTransport>> {
     let data_dir = std::env::temp_dir();
     let config = SwarmUiConfig::from_generated(data_dir);
     let server = server.clone();

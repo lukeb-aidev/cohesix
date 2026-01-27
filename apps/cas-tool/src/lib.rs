@@ -88,12 +88,12 @@ pub fn load_template_config(path: &Path) -> Result<CasTemplateConfig> {
 
 /// Load an Ed25519 signing key from a hex file.
 pub fn load_signing_key(path: &Path) -> Result<[u8; 32]> {
-    let contents = fs::read(path).with_context(|| format!("read signing key {}", path.display()))?;
+    let contents =
+        fs::read(path).with_context(|| format!("read signing key {}", path.display()))?;
     let text = std::str::from_utf8(&contents)
         .with_context(|| format!("signing key {} is not utf-8", path.display()))?;
-    let raw = hex::decode(text.trim()).map_err(|err| {
-        anyhow::anyhow!("signing key {} must be hex: {err}", path.display())
-    })?;
+    let raw = hex::decode(text.trim())
+        .map_err(|err| anyhow::anyhow!("signing key {} must be hex: {err}", path.display()))?;
     if raw.len() != 32 {
         bail!(
             "signing key {} must be 32 bytes (got {})",
@@ -223,8 +223,9 @@ pub fn build_bundle(
         manifest.signature = Some(signature.to_bytes());
     }
 
-    let manifest_cbor =
-        manifest.encode_signed().map_err(|err| anyhow::anyhow!("encode manifest: {err}"))?;
+    let manifest_cbor = manifest
+        .encode_signed()
+        .map_err(|err| anyhow::anyhow!("encode manifest: {err}"))?;
 
     Ok(CasBundle {
         epoch: epoch.to_owned(),

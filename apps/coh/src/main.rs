@@ -7,18 +7,18 @@
 
 //! CLI entry point for the Cohesix host bridge tool.
 
-use std::path::PathBuf;
 use std::env;
+use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use coh::console::ConsoleSession;
-use coh::{gpu, mount, run as coh_run, telemetry, CohAudit};
 use coh::policy::{default_policy_path, load_policy, CohPolicy};
-use cohsh::client::{CohClient, InProcessTransport};
-use cohsh::RoleArg;
+use coh::{gpu, mount, peft, run as coh_run, telemetry, CohAudit};
 use cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT;
 use cohesix_ticket::Role;
+use cohsh::client::{CohClient, InProcessTransport};
+use cohsh::RoleArg;
 use gpu_bridge_host::auto_bridge;
 use nine_door::NineDoor;
 
@@ -47,6 +47,8 @@ enum Command {
     Mount(MountArgs),
     /// GPU discovery and lease operations.
     Gpu(GpuArgs),
+    /// PEFT/LoRA lifecycle operations.
+    Peft(PeftArgs),
     /// Run a host command with lease validation and breadcrumb logging.
     Run(RunArgs),
     /// Telemetry pull operations.
@@ -89,12 +91,59 @@ struct GpuArgs {
     command: GpuCommand,
 }
 
+#[derive(Debug, Parser)]
+struct PeftArgs {
+    #[command(flatten)]
+    connect: ConnectArgs,
+    #[command(subcommand)]
+    command: PeftCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum PeftCommand {
+    /// Export a LoRA job directory from /queen/export/lora_jobs.
+    Export {
+        #[arg(long)]
+        job: String,
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+    },
+    /// Import adapter artifacts into the host registry.
+    Import {
+        #[arg(long)]
+        model: String,
+        #[arg(long, value_name = "DIR")]
+        from: PathBuf,
+        #[arg(long)]
+        job: String,
+        #[arg(long, value_name = "DIR")]
+        export: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        registry: Option<PathBuf>,
+    },
+    /// Activate a model pointer.
+    Activate {
+        #[arg(long)]
+        model: String,
+        #[arg(long, value_name = "DIR")]
+        registry: Option<PathBuf>,
+    },
+    /// Roll back to the previous model pointer.
+    Rollback {
+        #[arg(long, value_name = "DIR")]
+        registry: Option<PathBuf>,
+    },
+}
+
 #[derive(Debug, Subcommand)]
 enum GpuCommand {
     /// List GPUs.
     List,
     /// Show GPU status.
-    Status { #[arg(long)] gpu: String },
+    Status {
+        #[arg(long)]
+        gpu: String,
+    },
     /// Request a GPU lease via /queen/ctl.
     Lease(GpuLeaseArgs),
 }
@@ -132,7 +181,11 @@ struct RunArgs {
     #[arg(long)]
     gpu: String,
     /// Command to execute (pass after `--`).
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "CMD")]
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        value_name = "CMD"
+    )]
     command: Vec<String>,
 }
 
@@ -147,7 +200,10 @@ struct TelemetryArgs {
 #[derive(Debug, Subcommand)]
 enum TelemetryCommand {
     /// Pull telemetry bundles from /queen/telemetry.
-    Pull { #[arg(long, value_name = "DIR")] out: PathBuf },
+    Pull {
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -158,6 +214,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Mount(args) => run_mount(role, cli.ticket.as_deref(), &policy, args),
         Command::Gpu(args) => run_gpu(role, cli.ticket.as_deref(), &policy, args),
+        Command::Peft(args) => run_peft(role, cli.ticket.as_deref(), &policy, args),
         Command::Run(args) => run_run(role, cli.ticket.as_deref(), &policy, args),
         Command::Telemetry(args) => run_telemetry(role, cli.ticket.as_deref(), &policy, args),
     }
@@ -189,7 +246,11 @@ fn run_mount(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: MountAr
         Err(err) => {
             let mut audit = CohAudit::new();
             let detail = format!("reason={err}");
-            audit.push_ack(cohsh_core::wire::AckStatus::Err, "MOUNT", Some(detail.as_str()));
+            audit.push_ack(
+                cohsh_core::wire::AckStatus::Err,
+                "MOUNT",
+                Some(detail.as_str()),
+            );
             emit_audit(audit);
             return Err(err);
         }
@@ -201,7 +262,11 @@ fn run_mount(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: MountAr
         Err(err) => {
             let mut audit = CohAudit::new();
             let detail = format!("reason={err}");
-            audit.push_ack(cohsh_core::wire::AckStatus::Err, "MOUNT", Some(detail.as_str()));
+            audit.push_ack(
+                cohsh_core::wire::AckStatus::Err,
+                "MOUNT",
+                Some(detail.as_str()),
+            );
             emit_audit(audit);
             Err(err)
         }
@@ -219,7 +284,11 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
             Err(err) => {
                 let mut audit = CohAudit::new();
                 let detail = format!("reason={err}");
-                audit.push_ack(cohsh_core::wire::AckStatus::Err, "GPU", Some(detail.as_str()));
+                audit.push_ack(
+                    cohsh_core::wire::AckStatus::Err,
+                    "GPU",
+                    Some(detail.as_str()),
+                );
                 emit_audit(audit);
                 return Err(err);
             }
@@ -247,7 +316,11 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
             Err(err) => {
                 let mut audit = CohAudit::new();
                 let detail = format!("reason={err}");
-                audit.push_ack(cohsh_core::wire::AckStatus::Err, "GPU", Some(detail.as_str()));
+                audit.push_ack(
+                    cohsh_core::wire::AckStatus::Err,
+                    "GPU",
+                    Some(detail.as_str()),
+                );
                 emit_audit(audit);
                 return Err(err);
             }
@@ -280,7 +353,11 @@ fn run_run(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: RunArgs) 
             Err(err) => {
                 let mut audit = CohAudit::new();
                 let detail = format!("reason={err}");
-                audit.push_ack(cohsh_core::wire::AckStatus::Err, "RUN", Some(detail.as_str()));
+                audit.push_ack(
+                    cohsh_core::wire::AckStatus::Err,
+                    "RUN",
+                    Some(detail.as_str()),
+                );
                 emit_audit(audit);
                 return Err(err);
             }
@@ -297,7 +374,11 @@ fn run_run(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: RunArgs) 
             Err(err) => {
                 let mut audit = CohAudit::new();
                 let detail = format!("reason={err}");
-                audit.push_ack(cohsh_core::wire::AckStatus::Err, "RUN", Some(detail.as_str()));
+                audit.push_ack(
+                    cohsh_core::wire::AckStatus::Err,
+                    "RUN",
+                    Some(detail.as_str()),
+                );
                 emit_audit(audit);
                 return Err(err);
             }
@@ -308,6 +389,172 @@ fn run_run(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: RunArgs) 
         };
         let result = coh_run::execute(&mut client, policy, &mut audit, &spec);
         handle_result(result, audit, "RUN")
+    }
+}
+
+fn run_peft(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: PeftArgs) -> Result<()> {
+    let mut audit = CohAudit::new();
+    match args.command {
+        PeftCommand::Export { job, out } => {
+            if args.connect.mock {
+                let (server, mut client) = match connect_mock(role, ticket, true, false) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let mut audit = CohAudit::new();
+                        let detail = format!("reason={err}");
+                        audit.push_ack(
+                            cohsh_core::wire::AckStatus::Err,
+                            "PEFT",
+                            Some(detail.as_str()),
+                        );
+                        emit_audit(audit);
+                        return Err(err);
+                    }
+                };
+                seed_peft_export_job(&server, &job)?;
+                let spec = peft::PeftExportSpec {
+                    job_id: job,
+                    out_dir: out,
+                };
+                let result = peft::export_job(&mut client, policy, &spec, &mut audit);
+                handle_result(result.map(|_| ()), audit, "PEFT")
+            } else {
+                let mut client = match connect_console(&args.connect, policy, role, ticket) {
+                    Ok(client) => client,
+                    Err(err) => {
+                        let mut audit = CohAudit::new();
+                        let detail = format!("reason={err}");
+                        audit.push_ack(
+                            cohsh_core::wire::AckStatus::Err,
+                            "PEFT",
+                            Some(detail.as_str()),
+                        );
+                        emit_audit(audit);
+                        return Err(err);
+                    }
+                };
+                let spec = peft::PeftExportSpec {
+                    job_id: job,
+                    out_dir: out,
+                };
+                let result = peft::export_job(&mut client, policy, &spec, &mut audit);
+                handle_result(result.map(|_| ()), audit, "PEFT")
+            }
+        }
+        PeftCommand::Import {
+            model,
+            from,
+            job,
+            export,
+            registry,
+        } => {
+            let registry_root =
+                registry.unwrap_or_else(|| PathBuf::from(&policy.peft.import.registry_root));
+            let spec = peft::PeftImportSpec {
+                model_id: model.clone(),
+                adapter_dir: from,
+                export_root: export,
+                job_id: job,
+                registry_root: registry_root.clone(),
+            };
+            let result = peft::import_adapter(policy, &spec, &mut audit);
+            if let Ok(summary) = &result {
+                audit.push_line(format!(
+                    "peft import model={} manifest={}",
+                    summary.model_id,
+                    summary.manifest_path.display()
+                ));
+            }
+            handle_result(result.map(|_| ()), audit, "PEFT")
+        }
+        PeftCommand::Activate { model, registry } => {
+            let registry_root =
+                registry.unwrap_or_else(|| PathBuf::from(&policy.peft.import.registry_root));
+            if args.connect.mock {
+                let (_server, mut client) = match connect_mock(role, ticket, true, false) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let mut audit = CohAudit::new();
+                        let detail = format!("reason={err}");
+                        audit.push_ack(
+                            cohsh_core::wire::AckStatus::Err,
+                            "PEFT",
+                            Some(detail.as_str()),
+                        );
+                        emit_audit(audit);
+                        return Err(err);
+                    }
+                };
+                let spec = peft::PeftActivateSpec {
+                    model_id: model,
+                    registry_root,
+                };
+                let result = peft::activate_model(&mut client, policy, &spec, &mut audit);
+                handle_result(result, audit, "PEFT")
+            } else {
+                let mut client = match connect_console(&args.connect, policy, role, ticket) {
+                    Ok(client) => client,
+                    Err(err) => {
+                        let mut audit = CohAudit::new();
+                        let detail = format!("reason={err}");
+                        audit.push_ack(
+                            cohsh_core::wire::AckStatus::Err,
+                            "PEFT",
+                            Some(detail.as_str()),
+                        );
+                        emit_audit(audit);
+                        return Err(err);
+                    }
+                };
+                let spec = peft::PeftActivateSpec {
+                    model_id: model,
+                    registry_root,
+                };
+                let result = peft::activate_model(&mut client, policy, &spec, &mut audit);
+                handle_result(result, audit, "PEFT")
+            }
+        }
+        PeftCommand::Rollback { registry } => {
+            let registry_root =
+                registry.unwrap_or_else(|| PathBuf::from(&policy.peft.import.registry_root));
+            if args.connect.mock {
+                let (_server, mut client) = match connect_mock(role, ticket, true, false) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let mut audit = CohAudit::new();
+                        let detail = format!("reason={err}");
+                        audit.push_ack(
+                            cohsh_core::wire::AckStatus::Err,
+                            "PEFT",
+                            Some(detail.as_str()),
+                        );
+                        emit_audit(audit);
+                        return Err(err);
+                    }
+                };
+                let spec = peft::PeftRollbackSpec { registry_root };
+                let result = peft::rollback_model(&mut client, policy, &spec, &mut audit);
+                handle_result(result, audit, "PEFT")
+            } else {
+                let mut client = match connect_console(&args.connect, policy, role, ticket) {
+                    Ok(client) => client,
+                    Err(err) => {
+                        let mut audit = CohAudit::new();
+                        let detail = format!("reason={err}");
+                        audit.push_ack(
+                            cohsh_core::wire::AckStatus::Err,
+                            "PEFT",
+                            Some(detail.as_str()),
+                        );
+                        emit_audit(audit);
+                        return Err(err);
+                    }
+                };
+                let spec = peft::PeftRollbackSpec { registry_root };
+                let result = peft::rollback_model(&mut client, policy, &spec, &mut audit);
+                handle_result(result, audit, "PEFT")
+            }
+        }
     }
 }
 
@@ -383,7 +630,11 @@ fn handle_result(result: Result<()>, mut audit: CohAudit, verb: &str) -> Result<
         }
         Err(err) => {
             let detail = format!("reason={err}");
-            audit.push_ack(cohsh_core::wire::AckStatus::Err, verb, Some(detail.as_str()));
+            audit.push_ack(
+                cohsh_core::wire::AckStatus::Err,
+                verb,
+                Some(detail.as_str()),
+            );
             emit_audit(audit);
             Err(err)
         }
@@ -458,4 +709,14 @@ fn connect_console(
         policy.retry,
     )
     .with_context(|| format!("failed to connect to {}:{}", args.host, args.port))
+}
+
+fn seed_peft_export_job(server: &NineDoor, job_id: &str) -> Result<()> {
+    let telemetry = b"telemetry-v1\\n";
+    let base_model = b"vision-base-v1\\n";
+    let policy = b"[policy]\\nname = \"default\"\\n";
+    server
+        .set_lora_export_job(job_id, telemetry, base_model, policy)
+        .context("seed mock peft export job")?;
+    Ok(())
 }

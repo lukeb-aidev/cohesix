@@ -8,8 +8,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::generated;
 
-const LATENCY_SAMPLES: usize =
-    generated::OBSERVABILITY_CONFIG.proc_ingest.latency_samples as usize;
+const LATENCY_SAMPLES: usize = generated::OBSERVABILITY_CONFIG.proc_ingest.latency_samples as usize;
 
 /// Snapshot of ingest observability metrics.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

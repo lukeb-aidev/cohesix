@@ -25,36 +25,36 @@ use secure9p_codec::{
 use secure9p_core::SessionLimits;
 use thiserror::Error;
 
-mod control;
-mod cas;
 mod audit;
+mod cas;
 mod cbor;
+mod control;
 mod core;
 mod lifecycle;
 mod namespace;
 mod observe;
 mod pipeline;
 mod policy;
-mod session;
-mod security;
 mod replay;
+mod security;
+mod session;
 mod telemetry;
 mod tracefs;
 mod ui;
 
-use self::core::{role_to_uname, ServerCore};
+pub use self::audit::{AuditConfig, AuditLimits, ReplayConfig};
 pub use self::cas::CasConfig;
+use self::core::{role_to_uname, ServerCore};
 pub use self::namespace::{
     HostNamespaceConfig, HostProvider, ShardLayout, SidecarBusAdapterConfig, SidecarBusConfig,
     SidecarLoraAdapterConfig, SidecarLoraConfig, SidecarNamespaceConfig,
 };
-pub use self::audit::{AuditConfig, AuditLimits, ReplayConfig};
-pub use self::policy::{PolicyConfig, PolicyDecision, PolicyLimits, PolicyRuleSpec};
 pub use self::observe::{
-    ObserveConfig, ProcIngestConfig, Proc9pConfig, Proc9pSessionConfig, ProcPressureConfig,
+    ObserveConfig, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcPressureConfig,
     ProcRootConfig,
 };
 pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
+pub use self::policy::{PolicyConfig, PolicyDecision, PolicyLimits, PolicyRuleSpec};
 pub use self::security::TicketLimits;
 pub use self::telemetry::{
     TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig,
@@ -444,6 +444,18 @@ impl NineDoor {
     pub fn install_gpu_nodes(&self, topology: &GpuNamespaceSnapshot) -> Result<(), NineDoorError> {
         let mut core = self.inner.lock().expect("poisoned nine-door lock");
         core.install_gpu_nodes(topology)
+    }
+
+    /// Install a LoRA export job under `/queen/export/lora_jobs/<job_id>`.
+    pub fn set_lora_export_job(
+        &self,
+        job_id: &str,
+        telemetry: &[u8],
+        base_model: &[u8],
+        policy: &[u8],
+    ) -> Result<(), NineDoorError> {
+        let mut core = self.inner.lock().expect("poisoned nine-door lock");
+        core.set_lora_export_job(job_id, telemetry, base_model, policy)
     }
 
     /// Fetch current Secure9P pipeline metrics.

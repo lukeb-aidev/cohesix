@@ -24,7 +24,9 @@ impl Clock for TestClock {
 fn attach_queen(server: &NineDoor) -> InProcessConnection {
     let mut client = server.connect().expect("connect");
     client.version(MAX_MSIZE).expect("version");
-    client.attach(1, cohesix_ticket::Role::Queen).expect("attach");
+    client
+        .attach(1, cohesix_ticket::Role::Queen)
+        .expect("attach");
     client
 }
 
@@ -116,7 +118,9 @@ fn telemetry_ingest_allocates_segment_and_latest() {
         "seg".to_owned(),
         "custom".to_owned(),
     ];
-    let err = client.walk(1, 5, &bad_seg).expect_err("reject client segment path");
+    let err = client
+        .walk(1, 5, &bad_seg)
+        .expect_err("reject client segment path");
     match err {
         NineDoorError::Protocol { code, .. } => assert_eq!(code, ErrorCode::NotFound),
         other => panic!("unexpected error: {other:?}"),

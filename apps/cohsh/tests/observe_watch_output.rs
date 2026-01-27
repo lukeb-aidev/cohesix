@@ -3,8 +3,8 @@
 // Purpose: Ensure tail output for /proc/ingest/watch is line-oriented and stable.
 // Author: Lukas Bower
 
-use cohsh::{NineDoorTransport, Shell};
 use cohesix_ticket::Role;
+use cohsh::{NineDoorTransport, Shell};
 use nine_door::NineDoor;
 
 #[test]

@@ -13,8 +13,8 @@ use tempfile::TempDir;
 
 use cohesix_ticket::Role;
 use swarmui::{
-    SwarmUiBackend, SwarmUiConfig, SwarmUiHiveAgent, SwarmUiHiveEvent,
-    SwarmUiHiveEventKind, SwarmUiHiveSnapshot, SwarmUiTransportFactory,
+    SwarmUiBackend, SwarmUiConfig, SwarmUiHiveAgent, SwarmUiHiveEvent, SwarmUiHiveEventKind,
+    SwarmUiHiveSnapshot, SwarmUiTransportFactory,
 };
 
 struct NoConnectFactory {

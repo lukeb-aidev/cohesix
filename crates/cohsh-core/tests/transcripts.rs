@@ -15,12 +15,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use cohesix_ticket::{
+    BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer, TicketKey, TicketToken,
+};
 use cohsh::queen;
-use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer, TicketKey, TicketToken};
+use cohsh_core::wire::{render_ack, AckLine, AckStatus};
 use cohsh_core::{
     parse_role, role_label, Command as ConsoleCommand, CommandParser, ConsoleError, RoleParseMode,
 };
-use cohsh_core::wire::{AckLine, AckStatus, render_ack};
 
 const BOOT_SCRIPT: &str = "scripts/cohsh/boot_v0.coh";
 const AUTH_TOKEN: &str = "changeme";
@@ -82,12 +84,13 @@ struct TicketValidator {
 
 impl TicketValidator {
     fn new() -> Self {
-        Self { records: Vec::new() }
+        Self {
+            records: Vec::new(),
+        }
     }
 
     fn register(&mut self, role: Role, secret: &str) {
-        self.records
-            .push((role, TicketKey::from_secret(secret)));
+        self.records.push((role, TicketKey::from_secret(secret)));
     }
 
     fn validate(&self, role: Role, ticket: Option<&str>) -> bool {
@@ -221,7 +224,11 @@ impl ConsoleHarness {
             }
             ConsoleCommand::Quit => {
                 let mut lines = Vec::new();
-                let count = if self.session.is_some() { self.ack_fanout } else { 1 };
+                let count = if self.session.is_some() {
+                    self.ack_fanout
+                } else {
+                    1
+                };
                 self.session = None;
                 for _ in 0..count {
                     lines.push(render_ack_line(AckStatus::Ok, verb_label, None));
@@ -328,7 +335,11 @@ fn tail_lines(path: &str) -> &'static [&'static str] {
 
 fn render_ack_line(status: AckStatus, verb: &str, detail: Option<&str>) -> String {
     let mut line = String::new();
-    let ack = AckLine { status, verb, detail };
+    let ack = AckLine {
+        status,
+        verb,
+        detail,
+    };
     render_ack(&mut line, &ack).expect("render ack");
     line
 }
@@ -508,17 +519,11 @@ fn run_core_transcript(ops: &[ScriptOp], harness: &mut ConsoleHarness) -> Vec<St
     transcript
 }
 
-fn run_tcp_transcript(
-    script_path: &Path,
-    harness: ConsoleHarness,
-) -> (Vec<String>, Option<u64>) {
+fn run_tcp_transcript(script_path: &Path, harness: ConsoleHarness) -> (Vec<String>, Option<u64>) {
     let (port, sent_lines, timing, handle) = spawn_tcp_server(harness);
     let _output = run_cohsh_tcp(script_path, port);
     let _ = handle.join();
-    let lines = sent_lines
-        .lock()
-        .expect("tcp transcript lock")
-        .clone();
+    let lines = sent_lines.lock().expect("tcp transcript lock").clone();
     let elapsed_ms = timing.lock().expect("tcp timing lock").take();
     (lines, elapsed_ms)
 }
@@ -647,8 +652,7 @@ fn transcripts_match_across_transports() {
     let boot_contents = fs::read_to_string(&boot_script_path).expect("read boot script");
     let boot_ops = parse_script(&boot_contents);
 
-    let invalid_worker_token =
-        issue_token(INVALID_SECRET, Role::WorkerHeartbeat, Some("worker-1"));
+    let invalid_worker_token = issue_token(INVALID_SECRET, Role::WorkerHeartbeat, Some("worker-1"));
     let abuse_contents = build_abuse_script(&invalid_worker_token);
     let abuse_ops = parse_script(&abuse_contents);
 
@@ -662,9 +666,7 @@ fn transcripts_match_across_transports() {
     }
     fs::write(&abuse_script_path, abuse_contents).expect("write abuse script");
 
-    let converge_script_path = transcripts_dir
-        .join(CONVERGE_SCENARIO)
-        .join("script.coh");
+    let converge_script_path = transcripts_dir.join(CONVERGE_SCENARIO).join("script.coh");
     if let Some(parent) = converge_script_path.parent() {
         fs::create_dir_all(parent).expect("create converge script dir");
     }
@@ -706,12 +708,24 @@ fn transcripts_match_across_transports() {
 
         let (tcp_lines, tcp_elapsed) = run_tcp_transcript(&scenario.script_path, tcp_harness);
 
-        let serial_path =
-            transcript_support::compare_transcript("cohsh-core", scenario.name, "serial.txt", &serial_lines);
-        let core_path =
-            transcript_support::compare_transcript("cohsh-core", scenario.name, "core.txt", &core_lines);
-        let tcp_path =
-            transcript_support::compare_transcript("cohsh-core", scenario.name, "tcp.txt", &tcp_lines);
+        let serial_path = transcript_support::compare_transcript(
+            "cohsh-core",
+            scenario.name,
+            "serial.txt",
+            &serial_lines,
+        );
+        let core_path = transcript_support::compare_transcript(
+            "cohsh-core",
+            scenario.name,
+            "core.txt",
+            &core_lines,
+        );
+        let tcp_path = transcript_support::compare_transcript(
+            "cohsh-core",
+            scenario.name,
+            "tcp.txt",
+            &tcp_lines,
+        );
 
         transcript_support::diff_files(&serial_path, &core_path)
             .unwrap_or_else(|diff| panic!("serial vs core drift:\n{diff}"));
@@ -719,12 +733,7 @@ fn transcripts_match_across_transports() {
             .unwrap_or_else(|diff| panic!("serial vs tcp drift:\n{diff}"));
 
         if scenario.name == CONVERGE_SCENARIO {
-            transcript_support::write_timing(
-                "cohsh-core",
-                scenario.name,
-                "serial",
-                serial_elapsed,
-            );
+            transcript_support::write_timing("cohsh-core", scenario.name, "serial", serial_elapsed);
             transcript_support::write_timing("cohsh-core", scenario.name, "core", core_elapsed);
             transcript_support::write_timing(
                 "cohsh-core",

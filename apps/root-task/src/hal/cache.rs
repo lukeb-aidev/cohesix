@@ -15,7 +15,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use heapless::{Deque, Vec};
 use log::{info, trace, warn, Level};
-use sel4_sys::{seL4_CPtr, seL4_Error, seL4_InvalidArgument, seL4_NoError, seL4_RangeError, seL4_Word};
+use sel4_sys::{
+    seL4_CPtr, seL4_Error, seL4_InvalidArgument, seL4_NoError, seL4_RangeError, seL4_Word,
+};
 use spin::Mutex;
 
 use crate::hal;
@@ -350,7 +352,13 @@ impl CacheMaintenance {
 
     /// Clean the data cache for the supplied range.
     pub fn clean(&self, vaddr: usize, len: usize) -> Result<(), CacheError> {
-        call_cache_op(CacheOpKind::Clean, self.vspace, vaddr, len, ARMVSPACE_CLEAN_LABEL)
+        call_cache_op(
+            CacheOpKind::Clean,
+            self.vspace,
+            vaddr,
+            len,
+            ARMVSPACE_CLEAN_LABEL,
+        )
     }
 
     /// Invalidate the data cache for the supplied range.
@@ -423,8 +431,10 @@ fn render_record_line(record: &CacheOpRecord) -> heapless::String<192> {
 
 fn render_summary_line(snapshot: &SummarySnapshot, ring_len: usize) -> heapless::String<256> {
     let mut line = heapless::String::<256>::new();
-    let total_ops =
-        snapshot.clean + snapshot.invalidate + snapshot.clean_invalidate + snapshot.unify_instruction;
+    let total_ops = snapshot.clean
+        + snapshot.invalidate
+        + snapshot.clean_invalidate
+        + snapshot.unify_instruction;
     let _ = write!(
         line,
         "[cache] summary window_ms={} ops={} clean={} invalidate={} clean_invalidate={} unify_instruction={} requested_bytes={} aligned_bytes={} max_aligned_len={} errors={} suppressed={} ring_size={}",
@@ -525,8 +535,8 @@ fn call_cache_op(
     }
     let (aligned_start, aligned_end) = range_for_cache(vaddr, len)?;
     let aligned_len = aligned_end.saturating_sub(aligned_start);
-    let start_word = seL4_Word::try_from(aligned_start)
-        .map_err(|_| CacheError::new(seL4_RangeError))?;
+    let start_word =
+        seL4_Word::try_from(aligned_start).map_err(|_| CacheError::new(seL4_RangeError))?;
     let end_word =
         seL4_Word::try_from(aligned_end).map_err(|_| CacheError::new(seL4_RangeError))?;
 

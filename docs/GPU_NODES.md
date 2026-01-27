@@ -219,6 +219,7 @@ base_model.ref
 policy.toml
 
 This directory is the **contract boundary** between Cohesix and ML tooling.
+Host operators pull this bundle via `coh peft export` before handing it to external training.
 
 ---
 

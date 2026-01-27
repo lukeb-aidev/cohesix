@@ -128,6 +128,8 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "boot_v0.coh:8cead851b286c62cde383098a2da802c78d7d324d792ed43bad880ed8cbea3e4"
             .to_owned(),
+        "busy_backpressure.coh:0bfb61ee8f7a5eb87b9401e6e85d197b6ea2e134cf0c3b1c940a09afec8f7cd6"
+            .to_owned(),
         "cas_roundtrip.coh:f6afb2dc79c414d04cc33f9a6d29da2f665959d2436c8d24baaa11f14b2ca98f"
             .to_owned(),
         "host_absent.coh:8383d43450ba4f1c14e70fc4da33c2c2f0a5843ee6e87b4efa95b2a42d56209a"
@@ -144,9 +146,17 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "observe_watch.coh:cb6ae987049eb345c4dd7501fc657bfe6bd99c6f235593a5aab82e85ce3d4a9e"
             .to_owned(),
+        "peft_roundtrip.coh:3657c33c1e8e8660fad19e774495622bbe7620bfe7da684f09ed75e25ca5bcea"
+            .to_owned(),
         "policy_gate.coh:6d7ad6b827641b2578843e3db0bedcd9ffcf911f48520a6e0478d468860f239f"
             .to_owned(),
         "replay_journal.coh:1ff3cc6ac006c47fe8a6f914fb5b079d352a41691c2b5da34cf6441fba4d5a8f"
+            .to_owned(),
+        "root_cut_basic.coh:13b16b64658f4042e13e69cadf7e8a51dae210a5f3e69f373dda08d819f59d8c"
+            .to_owned(),
+        "run_demo.coh:0ab45aa7b6b1446fa2d043ff70377bb86685120c5f09d26fe715f3fdd39ad4de"
+            .to_owned(),
+        "session_lifecycle.coh:6f80125a34b1b2bf7959f76615cf4cc349d1414957627310c238e9231623413b"
             .to_owned(),
         "session_pool.coh:ba523237c1933fbce09df879e871e4269013b74b5b8f8a046adbd2de00e7395e"
             .to_owned(),

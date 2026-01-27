@@ -61,7 +61,10 @@ pub struct RingReadOutcome {
 #[derive(Debug)]
 pub enum RingReadError {
     /// Requested offset is behind the ring window.
-    Stale { requested: u64, available_start: u64 },
+    Stale {
+        requested: u64,
+        available_start: u64,
+    },
 }
 
 impl TelemetryRing {
@@ -160,25 +163,21 @@ impl TelemetryRing {
     /// Read telemetry bytes at the supplied offset.
     pub fn read(&self, offset: u64, count: u32) -> Result<RingReadOutcome, RingReadError> {
         let bounds = self.bounds();
-        let read_bounds = append_only_read_bounds(
-            offset,
-            bounds.base_offset,
-            bounds.next_offset,
-            count,
-        )
-        .map_err(|err| match err {
-            AppendOnlyOffsetError::Stale {
-                requested,
-                available_start,
-            } => RingReadError::Stale {
-                requested,
-                available_start,
-            },
-            AppendOnlyOffsetError::Invalid { .. } => RingReadError::Stale {
-                requested: offset,
-                available_start: bounds.base_offset,
-            },
-        })?;
+        let read_bounds =
+            append_only_read_bounds(offset, bounds.base_offset, bounds.next_offset, count)
+                .map_err(|err| match err {
+                    AppendOnlyOffsetError::Stale {
+                        requested,
+                        available_start,
+                    } => RingReadError::Stale {
+                        requested,
+                        available_start,
+                    },
+                    AppendOnlyOffsetError::Invalid { .. } => RingReadError::Stale {
+                        requested: offset,
+                        available_start: bounds.base_offset,
+                    },
+                })?;
         if read_bounds.len == 0 {
             return Ok(RingReadOutcome { data: Vec::new() });
         }

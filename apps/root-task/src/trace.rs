@@ -398,18 +398,7 @@ mod tests {
         for (idx, tick) in ticks.iter().enumerate() {
             outputs[idx] = limiter.check(TestKind::Alpha, *tick);
         }
-        assert_eq!(
-            outputs,
-            [
-                Some(0),
-                None,
-                None,
-                Some(2),
-                None,
-                Some(1),
-                None
-            ]
-        );
+        assert_eq!(outputs, [Some(0), None, None, Some(2), None, Some(1), None]);
     }
 
     #[test]

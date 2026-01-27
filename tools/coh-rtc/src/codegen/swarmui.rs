@@ -95,12 +95,7 @@ fn render_defaults_toml(manifest: &Manifest, manifest_hash: &str) -> String {
     writeln!(contents).ok();
     writeln!(contents, "[swarmui.cache]").ok();
     writeln!(contents, "enabled = {}", manifest.swarmui.cache.enabled).ok();
-    writeln!(
-        contents,
-        "max_bytes = {}",
-        manifest.swarmui.cache.max_bytes
-    )
-    .ok();
+    writeln!(contents, "max_bytes = {}", manifest.swarmui.cache.max_bytes).ok();
     writeln!(contents, "ttl_s = {}", manifest.swarmui.cache.ttl_s).ok();
     writeln!(contents).ok();
     writeln!(contents, "[swarmui.hive]").ok();
@@ -187,7 +182,11 @@ fn render_defaults_rust(manifest: &Manifest, manifest_hash: &str) -> String {
     writeln!(contents).ok();
     writeln!(contents, "#![allow(dead_code)]").ok();
     writeln!(contents).ok();
-    writeln!(contents, "pub const MANIFEST_SHA256: &str = \"{manifest_hash}\";").ok();
+    writeln!(
+        contents,
+        "pub const MANIFEST_SHA256: &str = \"{manifest_hash}\";"
+    )
+    .ok();
     writeln!(
         contents,
         "pub const SECURE9P_MSIZE: u32 = {};",

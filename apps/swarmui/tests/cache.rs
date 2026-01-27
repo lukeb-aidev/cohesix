@@ -32,7 +32,11 @@ impl SwarmUiTransportFactory for NoConnectFactory {
 #[test]
 fn snapshot_cache_bounds_and_expiry() {
     let temp_dir = TempDir::new().expect("tempdir");
-    let cache = SnapshotCache::new(temp_dir.path().join("snapshots"), 128, Duration::from_millis(1));
+    let cache = SnapshotCache::new(
+        temp_dir.path().join("snapshots"),
+        128,
+        Duration::from_millis(1),
+    );
     let payload = vec![1u8, 2u8, 3u8, 4u8];
     let record = cache.write("fleet:ingest", &payload).expect("write");
     assert_eq!(record.payload, payload);
@@ -67,11 +71,18 @@ fn offline_mode_blocks_network_and_allows_cache_read() {
     assert!(!attach.ok);
     assert_eq!(backend.active_tails(), 0);
 
-    let write_err = backend.cache_write("fleet:offline", b"payload").unwrap_err();
-    assert_eq!(write_err.to_string(), "offline mode prohibits network access");
+    let write_err = backend
+        .cache_write("fleet:offline", b"payload")
+        .unwrap_err();
+    assert_eq!(
+        write_err.to_string(),
+        "offline mode prohibits network access"
+    );
 
     backend.set_offline(false);
-    backend.cache_write("fleet:offline", b"payload").expect("cache write");
+    backend
+        .cache_write("fleet:offline", b"payload")
+        .expect("cache write");
     backend.set_offline(true);
     let record = backend.cache_read("fleet:offline").expect("cache read");
     assert_eq!(record.payload, b"payload");

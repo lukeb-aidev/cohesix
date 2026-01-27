@@ -4,12 +4,10 @@
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 
-use cas_tool::{
-    build_bundle, chunk_payload, load_delta_base, write_bundle, CasTemplateConfig,
-};
+use cas_tool::{build_bundle, chunk_payload, load_delta_base, write_bundle, CasTemplateConfig};
 use ed25519_dalek::{Signature, SigningKey};
-use signature::Verifier;
 use sha2::{Digest, Sha256};
+use signature::Verifier;
 use tempfile::TempDir;
 
 fn template() -> CasTemplateConfig {
@@ -35,18 +33,12 @@ fn chunk_payload_hashes() {
 fn build_bundle_signs_manifest() {
     let payload = b"0123456789abcdef";
     let key_bytes = [9u8; 32];
-    let bundle = build_bundle("10", payload, &template(), None, Some(key_bytes))
-        .expect("build bundle");
-    let signature = bundle
-        .manifest
-        .signature
-        .expect("signature missing");
+    let bundle =
+        build_bundle("10", payload, &template(), None, Some(key_bytes)).expect("build bundle");
+    let signature = bundle.manifest.signature.expect("signature missing");
     let signing_key = SigningKey::from_bytes(&key_bytes);
     let verifying_key = signing_key.verifying_key();
-    let payload = bundle
-        .manifest
-        .signature_payload()
-        .expect("payload");
+    let payload = bundle.manifest.signature_payload().expect("payload");
     let signature = Signature::from_bytes(&signature);
     verifying_key
         .verify(&payload, &signature)
@@ -69,8 +61,8 @@ fn delta_bundle_hashes_with_base() {
     write_bundle(&base_bundle, &base_dir).expect("write base bundle");
 
     let base = load_delta_base(&base_dir).expect("load base");
-    let delta_bundle = build_bundle("101", delta_payload, &template, Some(base), None)
-        .expect("delta bundle");
+    let delta_bundle =
+        build_bundle("101", delta_payload, &template, Some(base), None).expect("delta bundle");
 
     let mut hasher = Sha256::new();
     hasher.update(base_payload);

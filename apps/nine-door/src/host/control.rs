@@ -69,9 +69,7 @@ pub fn host_write_target<'a>(
         [first, second, _, last] if first == "k8s" && second == "node" && last == "drain" => {
             Some(HostControlKind::K8sDrain.label())
         }
-        [first, second, _, last]
-            if first == "nvidia" && second == "gpu" && last == "power_cap" =>
-        {
+        [first, second, _, last] if first == "nvidia" && second == "gpu" && last == "power_cap" => {
             Some(HostControlKind::NvidiaPowerCap.label())
         }
         _ => None,

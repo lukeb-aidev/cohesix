@@ -8,12 +8,12 @@
 //! Cohesix status tool crate surface.
 
 use anyhow::{Context, Result};
+use cohesix_ticket::Role;
 use cohsh::client::CohClient;
 use cohsh::policy::CohshPolicy;
 use cohsh::SECURE9P_MSIZE;
 use cohsh_core::command::MAX_LINE_LEN;
-use cohsh_core::trace::{TraceLog, TraceReplayTransport, TracePolicy};
-use cohesix_ticket::Role;
+use cohsh_core::trace::{TraceLog, TracePolicy, TraceReplayTransport};
 
 /// Trace replay client wrapper for coh-status field diagnostics.
 pub struct TraceReplay {
@@ -40,9 +40,5 @@ impl TraceReplay {
 #[must_use]
 pub fn trace_policy() -> TracePolicy {
     let policy = CohshPolicy::from_generated();
-    TracePolicy::new(
-        policy.trace.max_bytes,
-        SECURE9P_MSIZE,
-        MAX_LINE_LEN as u32,
-    )
+    TracePolicy::new(policy.trace.max_bytes, SECURE9P_MSIZE, MAX_LINE_LEN as u32)
 }

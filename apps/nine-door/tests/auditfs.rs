@@ -39,11 +39,7 @@ fn write_with_offset(
     }
 }
 
-fn read_text(
-    client: &mut nine_door::InProcessConnection,
-    fid: u32,
-    path: &[String],
-) -> String {
+fn read_text(client: &mut nine_door::InProcessConnection, fid: u32, path: &[String]) -> String {
     client.walk(1, fid, path).expect("walk");
     client.open(fid, OpenMode::read_only()).expect("open");
     let data = client.read(fid, 0, MAX_MSIZE).expect("read");
@@ -72,11 +68,8 @@ fn auditfs_records_policy_actions_and_denies_writes() {
         },
         ReplayConfig::disabled(),
     );
-    let server = NineDoor::new_with_host_policy_audit_config(
-        HostNamespaceConfig::disabled(),
-        policy,
-        audit,
-    );
+    let server =
+        NineDoor::new_with_host_policy_audit_config(HostNamespaceConfig::disabled(), policy, audit);
 
     let mut client = server.connect().expect("connect");
     client.version(MAX_MSIZE).expect("version");
@@ -136,9 +129,7 @@ fn auditfs_enforces_append_only_and_truncates() {
 
     let payload_one = format!("{{\"event\":\"{}\"}}\n", "a".repeat(60));
     assert!(payload_one.len() < 128);
-    client
-        .write(2, payload_one.as_bytes())
-        .expect("append one");
+    client.write(2, payload_one.as_bytes()).expect("append one");
 
     let err = write_with_offset(&mut client, 2, 0, payload_one.as_bytes())
         .expect_err("random write rejected");
@@ -148,15 +139,12 @@ fn auditfs_enforces_append_only_and_truncates() {
     }
 
     let payload_two = format!("{{\"event\":\"{}\"}}\n", "b".repeat(60));
-    client
-        .write(2, payload_two.as_bytes())
-        .expect("append two");
+    client.write(2, payload_two.as_bytes()).expect("append two");
     client.clunk(2).expect("clunk journal");
 
     let export_path = vec!["audit".to_owned(), "export".to_owned()];
     let export_text = read_text(&mut client, 3, &export_path);
-    let export: serde_json::Value =
-        serde_json::from_str(export_text.trim()).expect("export json");
+    let export: serde_json::Value = serde_json::from_str(export_text.trim()).expect("export json");
     let base = export["journal_base"].as_u64().expect("journal_base");
     let next = export["journal_next"].as_u64().expect("journal_next");
     assert!(next > 0);

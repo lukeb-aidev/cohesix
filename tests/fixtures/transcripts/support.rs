@@ -14,7 +14,10 @@ pub fn repo_root() -> PathBuf {
 }
 
 pub fn fixtures_root() -> PathBuf {
-    repo_root().join("tests").join("fixtures").join("transcripts")
+    repo_root()
+        .join("tests")
+        .join("fixtures")
+        .join("transcripts")
 }
 
 pub fn target_root() -> PathBuf {
@@ -90,12 +93,7 @@ pub fn diff_files(expected: &Path, actual: &Path) -> Result<(), String> {
     Err(format!("{stdout}{stderr}"))
 }
 
-pub fn compare_transcript(
-    frontend: &str,
-    scenario: &str,
-    name: &str,
-    lines: &[String],
-) -> PathBuf {
+pub fn compare_transcript(frontend: &str, scenario: &str, name: &str, lines: &[String]) -> PathBuf {
     let normalized = normalize_lines(lines);
     let output_path = output_path(frontend, scenario, name);
     write_transcript(&output_path, &normalized);

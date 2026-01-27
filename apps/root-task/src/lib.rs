@@ -28,12 +28,12 @@ pub mod arch;
 pub mod audit;
 pub mod console;
 pub mod event;
+/// Compile-time feature manifest and guard rails.
+pub mod features;
 /// Observability metric helpers shared with the event pump.
 pub mod observe;
 /// Compile-time profile surface exposed to kernels and tests.
 pub mod profile;
-/// Compile-time feature manifest and guard rails.
-pub mod features;
 pub mod serial;
 
 #[cfg(feature = "net-console")]
@@ -62,7 +62,12 @@ pub mod built_info {
 #[cfg(feature = "kernel")]
 mod panic;
 
-#[cfg(any(feature = "kernel", feature = "bootstrap-trace", feature = "net-console", test))]
+#[cfg(any(
+    feature = "kernel",
+    feature = "bootstrap-trace",
+    feature = "net-console",
+    test
+))]
 /// seL4 bootstrap tracing primitives for debug logging.
 pub mod trace;
 

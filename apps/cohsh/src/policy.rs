@@ -12,7 +12,10 @@ use sha2::{Digest, Sha256};
 
 #[allow(clippy::all)]
 mod generated {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/generated/policy.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/generated/policy.rs"
+    ));
 }
 
 /// Cohsh client policy derived from the root-task manifest.
@@ -263,14 +266,10 @@ pub fn load_policy(path: &Path) -> Result<CohshPolicy> {
 
 fn validate_policy(policy: &CohshPolicy) -> Result<()> {
     if policy.pool.control_sessions == 0 {
-        return Err(anyhow!(
-            "cohsh pool control_sessions must be >= 1"
-        ));
+        return Err(anyhow!("cohsh pool control_sessions must be >= 1"));
     }
     if policy.pool.telemetry_sessions == 0 {
-        return Err(anyhow!(
-            "cohsh pool telemetry_sessions must be >= 1"
-        ));
+        return Err(anyhow!("cohsh pool telemetry_sessions must be >= 1"));
     }
     if policy.retry.max_attempts == 0 {
         return Err(anyhow!("cohsh retry max_attempts must be >= 1"));
@@ -289,9 +288,7 @@ fn validate_policy(policy: &CohshPolicy) -> Result<()> {
         return Err(anyhow!("cohsh retry timeout_ms must be >= 1"));
     }
     if policy.heartbeat.interval_ms == 0 {
-        return Err(anyhow!(
-            "cohsh heartbeat interval_ms must be >= 1"
-        ));
+        return Err(anyhow!("cohsh heartbeat interval_ms must be >= 1"));
     }
     if policy.trace.max_bytes == 0 {
         return Err(anyhow!("cohsh trace max_bytes must be > 0"));

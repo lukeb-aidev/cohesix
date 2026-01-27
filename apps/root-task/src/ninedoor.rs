@@ -25,17 +25,15 @@ use alloc::{
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohesix_cas::{CasManifest, CasManifestError, CAS_MANIFEST_SCHEMA};
 use cohesix_ticket::TicketToken;
-use ed25519_dalek::{Signature, SigningKey};
 use core::fmt::{self, Write};
 use core::str;
+use ed25519_dalek::{Signature, SigningKey};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
+use secure9p_codec::ErrorCode;
+use sha2::{Digest, Sha256};
 use sidecar_bus::{LinkState, OfflineSpool, SpoolConfig, SpoolError, SpoolFrame};
 use signature::Verifier;
-use sha2::{Digest, Sha256};
-use secure9p_codec::ErrorCode;
-use worker_lora::{
-    DutyCycleConfig, DutyCycleGuard, TamperEntry, TamperLog, TamperReason,
-};
+use worker_lora::{DutyCycleConfig, DutyCycleGuard, TamperEntry, TamperLog, TamperReason};
 
 const LOG_PATH: &str = "/log/queen.log";
 const QUEEN_CTL_PATH: &str = "/queen/ctl";
@@ -107,22 +105,23 @@ const MAX_ACTION_ID_LEN: usize = 64;
 const SYSTEMD_UNITS: [&str; 2] = ["cohesix-agent.service", "ssh.service"];
 const K8S_NODES: [&str; 1] = ["node-1"];
 const NVIDIA_GPUS: [&str; 1] = ["0"];
-const OBSERVE_P50_BYTES: usize =
-    generated::OBSERVABILITY_CONFIG.proc_ingest.p50_ms_bytes as usize;
-const OBSERVE_P95_BYTES: usize =
-    generated::OBSERVABILITY_CONFIG.proc_ingest.p95_ms_bytes as usize;
-const OBSERVE_BACKPRESSURE_BYTES: usize =
-    generated::OBSERVABILITY_CONFIG.proc_ingest.backpressure_bytes as usize;
+const OBSERVE_P50_BYTES: usize = generated::OBSERVABILITY_CONFIG.proc_ingest.p50_ms_bytes as usize;
+const OBSERVE_P95_BYTES: usize = generated::OBSERVABILITY_CONFIG.proc_ingest.p95_ms_bytes as usize;
+const OBSERVE_BACKPRESSURE_BYTES: usize = generated::OBSERVABILITY_CONFIG
+    .proc_ingest
+    .backpressure_bytes as usize;
 const OBSERVE_DROPPED_BYTES: usize =
     generated::OBSERVABILITY_CONFIG.proc_ingest.dropped_bytes as usize;
 const OBSERVE_QUEUED_BYTES: usize =
     generated::OBSERVABILITY_CONFIG.proc_ingest.queued_bytes as usize;
-const OBSERVE_WATCH_MAX_ENTRIES: usize =
-    generated::OBSERVABILITY_CONFIG.proc_ingest.watch_max_entries as usize;
+const OBSERVE_WATCH_MAX_ENTRIES: usize = generated::OBSERVABILITY_CONFIG
+    .proc_ingest
+    .watch_max_entries as usize;
 const OBSERVE_WATCH_LINE_BYTES: usize =
     generated::OBSERVABILITY_CONFIG.proc_ingest.watch_line_bytes as usize;
-const OBSERVE_WATCH_MIN_INTERVAL_MS: u64 =
-    generated::OBSERVABILITY_CONFIG.proc_ingest.watch_min_interval_ms as u64;
+const OBSERVE_WATCH_MIN_INTERVAL_MS: u64 = generated::OBSERVABILITY_CONFIG
+    .proc_ingest
+    .watch_min_interval_ms as u64;
 const OBSERVE_ROOT_REACHABLE_BYTES: usize =
     generated::OBSERVABILITY_CONFIG.proc_root.reachable_bytes as usize;
 const OBSERVE_ROOT_LAST_SEEN_BYTES: usize =
@@ -194,8 +193,7 @@ pub enum NineDoorBridgeError {
 
 #[derive(Debug)]
 pub(crate) struct TelemetryTail {
-    pub(crate) lines:
-        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    pub(crate) lines: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
     pub(crate) start_offset: u64,
     pub(crate) consumed_bytes: usize,
 }
@@ -348,10 +346,7 @@ impl TelemetryIngestState {
                         }
                         if let Some(segment) = device.segments.remove(scan) {
                             if device.latest.as_deref() == Some(segment.id.as_str()) {
-                                device.latest = device
-                                    .segments
-                                    .back()
-                                    .map(|seg| seg.id.clone());
+                                device.latest = device.segments.back().map(|seg| seg.id.clone());
                             }
                             device.total_bytes = device.total_bytes.saturating_sub(segment.bytes);
                             freed = freed.saturating_add(segment.bytes);
@@ -559,13 +554,8 @@ impl NineDoorBridge {
             let outcome = ControlOutcome::from_result(&result);
             let role = self.role_label();
             let ticket = String::from(self.ticket_label());
-            self.audit.record_control(
-                QUEEN_CTL_PATH,
-                payload,
-                outcome,
-                role,
-                ticket.as_str(),
-            )?;
+            self.audit
+                .record_control(QUEEN_CTL_PATH, payload, outcome, role, ticket.as_str())?;
         }
         result
     }
@@ -620,8 +610,7 @@ impl NineDoorBridge {
         }
         if self.replay.enabled {
             if path == REPLAY_CTL_PATH {
-                self.replay
-                    .handle_ctl(payload, &mut self.audit)?;
+                self.replay.handle_ctl(payload, &mut self.audit)?;
                 return Ok(());
             }
             if path == REPLAY_STATUS_PATH {
@@ -641,7 +630,8 @@ impl NineDoorBridge {
                     .append_action_queue(payload, role, ticket.as_str())?;
                 if self.audit.enabled {
                     for action in self.policy.actions.iter().skip(before) {
-                        self.audit.record_decision_action(action, role, ticket.as_str())?;
+                        self.audit
+                            .record_decision_action(action, role, ticket.as_str())?;
                     }
                 }
                 return Ok(());
@@ -862,9 +852,9 @@ impl NineDoorBridge {
         }
         let resolved = self.resolve_bound_path(path);
         let resolved_path = resolved.as_deref().unwrap_or(path);
-        if let Some(outcome) = self
-            .cas
-            .append_path(resolved_path, payload.as_bytes(), self.is_queen())?
+        if let Some(outcome) =
+            self.cas
+                .append_path(resolved_path, payload.as_bytes(), self.is_queen())?
         {
             return Ok(outcome);
         }
@@ -1017,11 +1007,7 @@ impl NineDoorBridge {
             let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
             match path {
                 PROC_LIFECYCLE_STATE_PATH => {
-                    let _ = write!(
-                        line,
-                        "state={}",
-                        lifecycle::state_label(snapshot.state)
-                    );
+                    let _ = write!(line, "state={}", lifecycle::state_label(snapshot.state));
                 }
                 PROC_LIFECYCLE_REASON_PATH => {
                     let _ = write!(line, "reason={}", snapshot.reason.as_str());
@@ -1345,7 +1331,8 @@ impl NineDoorBridge {
     }
 
     fn handle_lifecycle_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
-        let command = lifecycle::parse_command(payload).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+        let command =
+            lifecycle::parse_command(payload).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
         let now_ms = crate::hal::timebase().now_ms();
         let outstanding = self.workers.len();
         match lifecycle::apply_command(command, now_ms, outstanding) {
@@ -1463,7 +1450,10 @@ impl NineDoorBridge {
             .iter_mut()
             .find(|worker| worker.id.as_str() == worker_id)
             .ok_or(NineDoorBridgeError::InvalidPath)?;
-        if matches!(self.telemetry.frame_schema, generated::TelemetryFrameSchema::CborV1) {
+        if matches!(
+            self.telemetry.frame_schema,
+            generated::TelemetryFrameSchema::CborV1
+        ) {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
         match worker.ring.append(payload) {
@@ -1577,10 +1567,7 @@ impl NineDoorBridge {
         }
     }
 
-    fn apply_policy_gate(
-        &mut self,
-        path: &str,
-    ) -> Result<PolicyGateDecision, NineDoorBridgeError> {
+    fn apply_policy_gate(&mut self, path: &str) -> Result<PolicyGateDecision, NineDoorBridgeError> {
         let decision = self.policy.consume_gate(path);
         match &decision {
             PolicyGateDecision::Allowed(allowance) => {
@@ -1621,7 +1608,11 @@ impl NineDoorBridge {
             .find(|action| action.id == action_id)
             .ok_or(NineDoorBridgeError::InvalidPath)?;
         let decision = action.decision.as_str();
-        let state = if action.consumed { "consumed" } else { "queued" };
+        let state = if action.consumed {
+            "consumed"
+        } else {
+            "queued"
+        };
         let max_len = core::cmp::min(
             self.policy.limits.status_max_bytes as usize,
             DEFAULT_LINE_CAPACITY,
@@ -1630,9 +1621,7 @@ impl NineDoorBridge {
         let wrote = write!(
             line,
             "{{\"id\":\"{}\",\"decision\":\"{}\",\"state\":\"{}\"}}",
-            action.id,
-            decision,
-            state
+            action.id, decision, state
         )
         .is_ok();
         if !wrote || line.len() > max_len {
@@ -1726,9 +1715,7 @@ enum SessionRoleLabel {
 fn parse_session_role(role: &str) -> Option<SessionRoleLabel> {
     if role.eq_ignore_ascii_case("queen") {
         Some(SessionRoleLabel::Queen)
-    } else if role.eq_ignore_ascii_case("worker")
-        || role.eq_ignore_ascii_case("worker-heartbeat")
-    {
+    } else if role.eq_ignore_ascii_case("worker") || role.eq_ignore_ascii_case("worker-heartbeat") {
         Some(SessionRoleLabel::WorkerHeartbeat)
     } else if role.eq_ignore_ascii_case("worker-gpu") {
         Some(SessionRoleLabel::WorkerGpu)
@@ -1814,28 +1801,27 @@ impl ObserveState {
         &self,
         path: &str,
     ) -> Option<
-        Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>,
+        Result<
+            HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+            NineDoorBridgeError,
+        >,
     > {
         match path {
-            PROC_INGEST_P50_PATH if self.proc_ingest.p50_ms => Some(
-                render_p50_line(self.snapshot)
-                    .and_then(|line| lines_from_text(line.as_str())),
-            ),
-            PROC_INGEST_P95_PATH if self.proc_ingest.p95_ms => Some(
-                render_p95_line(self.snapshot)
-                    .and_then(|line| lines_from_text(line.as_str())),
-            ),
+            PROC_INGEST_P50_PATH if self.proc_ingest.p50_ms => {
+                Some(render_p50_line(self.snapshot).and_then(|line| lines_from_text(line.as_str())))
+            }
+            PROC_INGEST_P95_PATH if self.proc_ingest.p95_ms => {
+                Some(render_p95_line(self.snapshot).and_then(|line| lines_from_text(line.as_str())))
+            }
             PROC_INGEST_BACKPRESSURE_PATH if self.proc_ingest.backpressure => Some(
                 render_backpressure_line(self.snapshot)
                     .and_then(|line| lines_from_text(line.as_str())),
             ),
             PROC_INGEST_DROPPED_PATH if self.proc_ingest.dropped => Some(
-                render_dropped_line(self.snapshot)
-                    .and_then(|line| lines_from_text(line.as_str())),
+                render_dropped_line(self.snapshot).and_then(|line| lines_from_text(line.as_str())),
             ),
             PROC_INGEST_QUEUED_PATH if self.proc_ingest.queued => Some(
-                render_queued_line(self.snapshot)
-                    .and_then(|line| lines_from_text(line.as_str())),
+                render_queued_line(self.snapshot).and_then(|line| lines_from_text(line.as_str())),
             ),
             PROC_INGEST_WATCH_PATH if self.proc_ingest.watch => Some(self.watch.lines()),
             _ => None,
@@ -1846,7 +1832,10 @@ impl ObserveState {
         &self,
         path: &str,
     ) -> Option<
-        Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>,
+        Result<
+            HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+            NineDoorBridgeError,
+        >,
     > {
         let snapshot = lifecycle::root_snapshot();
         match path {
@@ -1870,21 +1859,22 @@ impl ObserveState {
         &self,
         path: &str,
     ) -> Option<
-        Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>,
+        Result<
+            HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+            NineDoorBridgeError,
+        >,
     > {
         let snapshot = crate::observe::pressure_snapshot();
         match path {
             PROC_PRESSURE_BUSY_PATH if self.proc_pressure.busy => Some(
-                render_pressure_busy_line(snapshot)
-                    .and_then(|line| lines_from_text(line.as_str())),
+                render_pressure_busy_line(snapshot).and_then(|line| lines_from_text(line.as_str())),
             ),
             PROC_PRESSURE_QUOTA_PATH if self.proc_pressure.quota => Some(
                 render_pressure_quota_line(snapshot)
                     .and_then(|line| lines_from_text(line.as_str())),
             ),
             PROC_PRESSURE_CUT_PATH if self.proc_pressure.cut => Some(
-                render_pressure_cut_line(snapshot)
-                    .and_then(|line| lines_from_text(line.as_str())),
+                render_pressure_cut_line(snapshot).and_then(|line| lines_from_text(line.as_str())),
             ),
             PROC_PRESSURE_POLICY_PATH if self.proc_pressure.policy => Some(
                 render_pressure_policy_line(snapshot)
@@ -1898,8 +1888,10 @@ impl ObserveState {
         &mut self,
         now_ms: u64,
         audit: &mut dyn AuditSink,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
         if !self.proc_ingest.watch {
             return Err(NineDoorBridgeError::InvalidPath);
         }
@@ -1909,8 +1901,10 @@ impl ObserveState {
 
     fn list_ingest(
         &self,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
         if !self.proc_ingest_enabled() {
             return Err(NineDoorBridgeError::InvalidPath);
         }
@@ -1938,8 +1932,10 @@ impl ObserveState {
 
     fn list_root(
         &self,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
         if !self.proc_root_enabled() {
             return Err(NineDoorBridgeError::InvalidPath);
         }
@@ -1958,8 +1954,10 @@ impl ObserveState {
 
     fn list_pressure(
         &self,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
         if !self.proc_pressure_enabled() {
             return Err(NineDoorBridgeError::InvalidPath);
         }
@@ -2037,8 +2035,10 @@ impl IngestWatch {
 
     fn lines(
         &self,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
         let mut output = HeaplessVec::new();
         for entry in self.entries.iter() {
             let mut line = HeaplessString::new();
@@ -2062,14 +2062,31 @@ enum ModelFileKind {
 #[derive(Debug, Clone)]
 enum CasPath {
     UpdatesRoot,
-    UpdateEpoch { epoch: String },
-    UpdateManifest { epoch: String },
-    UpdateStatus { epoch: String, cbor: bool },
-    UpdateChunks { epoch: String },
-    UpdateChunk { epoch: String, digest: [u8; 32] },
+    UpdateEpoch {
+        epoch: String,
+    },
+    UpdateManifest {
+        epoch: String,
+    },
+    UpdateStatus {
+        epoch: String,
+        cbor: bool,
+    },
+    UpdateChunks {
+        epoch: String,
+    },
+    UpdateChunk {
+        epoch: String,
+        digest: [u8; 32],
+    },
     ModelsRoot,
-    ModelRoot { digest: [u8; 32] },
-    ModelFile { digest: [u8; 32], kind: ModelFileKind },
+    ModelRoot {
+        digest: [u8; 32],
+    },
+    ModelFile {
+        digest: [u8; 32],
+        kind: ModelFileKind,
+    },
 }
 
 #[derive(Debug)]
@@ -2209,7 +2226,10 @@ impl CasState {
     }
 
     fn read_manifest(&self, epoch: &str) -> Result<Vec<u8>, NineDoorBridgeError> {
-        let bundle = self.updates.get(epoch).ok_or(NineDoorBridgeError::InvalidPath)?;
+        let bundle = self
+            .updates
+            .get(epoch)
+            .ok_or(NineDoorBridgeError::InvalidPath)?;
         let data = bundle
             .manifest_bytes
             .as_deref()
@@ -2218,7 +2238,10 @@ impl CasState {
     }
 
     fn read_chunk(&self, digest: &[u8; 32]) -> Result<Vec<u8>, NineDoorBridgeError> {
-        let data = self.chunks.get(digest).ok_or(NineDoorBridgeError::InvalidPath)?;
+        let data = self
+            .chunks
+            .get(digest)
+            .ok_or(NineDoorBridgeError::InvalidPath)?;
         Ok(data.clone())
     }
 
@@ -2227,7 +2250,10 @@ impl CasState {
         digest: &[u8; 32],
         kind: ModelFileKind,
     ) -> Result<Vec<u8>, NineDoorBridgeError> {
-        let model = self.models.get(digest).ok_or(NineDoorBridgeError::InvalidPath)?;
+        let model = self
+            .models
+            .get(digest)
+            .ok_or(NineDoorBridgeError::InvalidPath)?;
         match kind {
             ModelFileKind::Weights => self.read_chunk(digest),
             ModelFileKind::Schema => model
@@ -2337,19 +2363,13 @@ impl CasState {
             if provided_offset != expected_offset {
                 return Err(NineDoorBridgeError::InvalidPayload);
             }
-            let new_len = bundle
-                .manifest_pending
-                .len()
-                .saturating_add(payload.len());
+            let new_len = bundle.manifest_pending.len().saturating_add(payload.len());
             if new_len > CAS_MANIFEST_MAX_BYTES {
                 return Err(NineDoorBridgeError::BufferFull);
             }
             bundle.manifest_pending.extend_from_slice(&payload);
             match CasManifest::decode(&bundle.manifest_pending) {
-                Ok(manifest) => (
-                    Some(manifest),
-                    Some(bundle.manifest_pending.clone()),
-                ),
+                Ok(manifest) => (Some(manifest), Some(bundle.manifest_pending.clone())),
                 Err(CasManifestError::UnexpectedEof) => return Ok(data.len() as u32),
                 Err(_) => {
                     bundle.manifest_pending.clear();
@@ -2574,8 +2594,8 @@ impl CasState {
         if manifest.chunk_bytes as usize != self.chunk_bytes() {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
-        let expected_bytes = (manifest.chunks.len() as u64)
-            .saturating_mul(manifest.chunk_bytes as u64);
+        let expected_bytes =
+            (manifest.chunks.len() as u64).saturating_mul(manifest.chunk_bytes as u64);
         if manifest.payload_bytes != expected_bytes {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
@@ -2631,7 +2651,11 @@ impl CasState {
         if computed.as_slice() != manifest.payload_sha256 {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
-        let delta_label = if manifest.delta.is_some() { "delta" } else { "base" };
+        let delta_label = if manifest.delta.is_some() {
+            "delta"
+        } else {
+            "base"
+        };
         let payload_hex = hex::encode(manifest.payload_sha256);
         self.log_event(&format!(
             "cas-manifest accepted epoch={} kind={} payload_sha256={payload_hex} chunks={}",
@@ -2651,12 +2675,18 @@ impl CasState {
                 .and_then(|bundle| bundle.manifest.as_ref())
                 .ok_or(NineDoorBridgeError::InvalidPath)?;
             for digest in &base.chunks {
-                let chunk = self.chunks.get(digest).ok_or(NineDoorBridgeError::InvalidPath)?;
+                let chunk = self
+                    .chunks
+                    .get(digest)
+                    .ok_or(NineDoorBridgeError::InvalidPath)?;
                 payload.extend_from_slice(chunk);
             }
         }
         for digest in &manifest.chunks {
-            let chunk = self.chunks.get(digest).ok_or(NineDoorBridgeError::InvalidPath)?;
+            let chunk = self
+                .chunks
+                .get(digest)
+                .ok_or(NineDoorBridgeError::InvalidPath)?;
             payload.extend_from_slice(chunk);
         }
         Ok(payload)
@@ -2988,10 +3018,7 @@ impl HostState {
         self.providers.iter().any(|entry| *entry == provider)
     }
 
-    fn mount_parts_prefix(
-        &self,
-        parts: &HeaplessVec<&str, MAX_POLICY_PATH_COMPONENTS>,
-    ) -> bool {
+    fn mount_parts_prefix(&self, parts: &HeaplessVec<&str, MAX_POLICY_PATH_COMPONENTS>) -> bool {
         for (idx, part) in parts.iter().enumerate() {
             if self.mount_parts.get(idx).map(String::as_str) != Some(*part) {
                 return false;
@@ -3000,10 +3027,7 @@ impl HostState {
         true
     }
 
-    fn mount_parts_match(
-        &self,
-        parts: &HeaplessVec<&str, MAX_POLICY_PATH_COMPONENTS>,
-    ) -> bool {
+    fn mount_parts_match(&self, parts: &HeaplessVec<&str, MAX_POLICY_PATH_COMPONENTS>) -> bool {
         if parts.len() < self.mount_parts.len() {
             return false;
         }
@@ -3021,25 +3045,13 @@ impl HostState {
                 generated::HostProvider::Systemd => {
                     for unit in SYSTEMD_UNITS {
                         self.push_entry(&["systemd", unit, "status"], "active", None);
-                        self.push_entry(
-                            &["systemd", unit, "restart"],
-                            "",
-                            Some("systemd.restart"),
-                        );
+                        self.push_entry(&["systemd", unit, "restart"], "", Some("systemd.restart"));
                     }
                 }
                 generated::HostProvider::K8s => {
                     for node in K8S_NODES {
-                        self.push_entry(
-                            &["k8s", "node", node, "cordon"],
-                            "",
-                            Some("k8s.cordon"),
-                        );
-                        self.push_entry(
-                            &["k8s", "node", node, "drain"],
-                            "",
-                            Some("k8s.drain"),
-                        );
+                        self.push_entry(&["k8s", "node", node, "cordon"], "", Some("k8s.cordon"));
+                        self.push_entry(&["k8s", "node", node, "drain"], "", Some("k8s.drain"));
                     }
                 }
                 generated::HostProvider::Nvidia => {
@@ -3142,7 +3154,10 @@ impl SidecarState {
         &self,
         path: &[&str],
     ) -> Option<
-        Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>,
+        Result<
+            HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+            NineDoorBridgeError,
+        >,
     > {
         self.bus.list(path).or_else(|| self.lora.list(path))
     }
@@ -3151,11 +3166,7 @@ impl SidecarState {
         self.bus.read(path).or_else(|| self.lora.read(path))
     }
 
-    fn write(
-        &mut self,
-        path: &[&str],
-        payload: &[u8],
-    ) -> Result<Option<u32>, NineDoorBridgeError> {
+    fn write(&mut self, path: &[&str], payload: &[u8]) -> Result<Option<u32>, NineDoorBridgeError> {
         if let Some(count) = self.bus.write(path, payload, SIDECAR_LOG_MAX_BYTES)? {
             return Ok(Some(count));
         }
@@ -3220,7 +3231,10 @@ impl SidecarBusState {
         Self { adapters }
     }
 
-    fn push_adapters(adapters: &mut Vec<SidecarBusAdapterState>, config: generated::SidecarBusConfig) {
+    fn push_adapters(
+        adapters: &mut Vec<SidecarBusAdapterState>,
+        config: generated::SidecarBusConfig,
+    ) {
         if !config.enable {
             return;
         }
@@ -3288,7 +3302,10 @@ impl SidecarBusState {
         &self,
         path: &[&str],
     ) -> Option<
-        Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>,
+        Result<
+            HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+            NineDoorBridgeError,
+        >,
     > {
         if self.adapters.is_empty() {
             return None;
@@ -3310,7 +3327,13 @@ impl SidecarBusState {
         }
         for adapter in &self.adapters {
             if segments_equal(path, &adapter.mount_root) {
-                return Some(list_from_slice(&["ctl", "telemetry", "link", "replay", "spool"]));
+                return Some(list_from_slice(&[
+                    "ctl",
+                    "telemetry",
+                    "link",
+                    "replay",
+                    "spool",
+                ]));
             }
         }
         None
@@ -3323,7 +3346,9 @@ impl SidecarBusState {
             SidecarBusFile::Telemetry => Some(adapter.telemetry.clone()),
             SidecarBusFile::Link => Some(adapter.link.clone()),
             SidecarBusFile::Replay => Some(adapter.replay.clone()),
-            SidecarBusFile::Spool => Some(render_spool_status(&adapter.spool, SIDECAR_LOG_MAX_BYTES)),
+            SidecarBusFile::Spool => {
+                Some(render_spool_status(&adapter.spool, SIDECAR_LOG_MAX_BYTES))
+            }
         }
     }
 
@@ -3477,7 +3502,10 @@ impl SidecarLoraState {
                 ctl: Vec::new(),
             });
         }
-        Self { adapters, clock_ms: 0 }
+        Self {
+            adapters,
+            clock_ms: 0,
+        }
     }
 
     fn push_root_entries(
@@ -3524,7 +3552,10 @@ impl SidecarLoraState {
         &self,
         path: &[&str],
     ) -> Option<
-        Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>,
+        Result<
+            HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+            NineDoorBridgeError,
+        >,
     > {
         if self.adapters.is_empty() {
             return None;
@@ -3596,11 +3627,16 @@ impl SidecarLoraState {
                     }
                 }
             }
-            SidecarLoraFile::Telemetry | SidecarLoraFile::Tamper => Err(NineDoorBridgeError::Permission),
+            SidecarLoraFile::Telemetry | SidecarLoraFile::Tamper => {
+                Err(NineDoorBridgeError::Permission)
+            }
         }
     }
 
-    fn adapter_for_path(&self, path: &[&str]) -> Option<(&SidecarLoraAdapterState, SidecarLoraFile)> {
+    fn adapter_for_path(
+        &self,
+        path: &[&str],
+    ) -> Option<(&SidecarLoraAdapterState, SidecarLoraFile)> {
         self.adapters
             .iter()
             .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
@@ -3701,9 +3737,17 @@ impl PolicyState {
             }
         }
         let mut text = String::new();
-        let _ = writeln!(text, "req total={} queued={} consumed={}", total, queued, consumed);
+        let _ = writeln!(
+            text,
+            "req total={} queued={} consumed={}",
+            total, queued, consumed
+        );
         for action in &self.actions {
-            let state = if action.consumed { "consumed" } else { "queued" };
+            let state = if action.consumed {
+                "consumed"
+            } else {
+                "queued"
+            };
             let _ = writeln!(
                 text,
                 "req id={} target={} decision={} state={}",
@@ -3731,13 +3775,30 @@ impl PolicyState {
         }
         let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
         writer.map(4).map_err(cbor_error)?;
-        writer.text("total").and_then(|_| writer.unsigned(total as u64)).map_err(cbor_error)?;
-        writer.text("queued").and_then(|_| writer.unsigned(queued as u64)).map_err(cbor_error)?;
-        writer.text("consumed").and_then(|_| writer.unsigned(consumed as u64)).map_err(cbor_error)?;
-        writer.text("actions").and_then(|_| writer.array(self.actions.len())).map_err(cbor_error)?;
+        writer
+            .text("total")
+            .and_then(|_| writer.unsigned(total as u64))
+            .map_err(cbor_error)?;
+        writer
+            .text("queued")
+            .and_then(|_| writer.unsigned(queued as u64))
+            .map_err(cbor_error)?;
+        writer
+            .text("consumed")
+            .and_then(|_| writer.unsigned(consumed as u64))
+            .map_err(cbor_error)?;
+        writer
+            .text("actions")
+            .and_then(|_| writer.array(self.actions.len()))
+            .map_err(cbor_error)?;
         for action in &self.actions {
-            let state = if action.consumed { "consumed" } else { "queued" };
-            writer.map(4)
+            let state = if action.consumed {
+                "consumed"
+            } else {
+                "queued"
+            };
+            writer
+                .map(4)
                 .and_then(|_| writer.text("id"))
                 .and_then(|_| writer.text(&action.id))
                 .and_then(|_| writer.text("target"))
@@ -3820,12 +3881,25 @@ impl PolicyState {
         }
         let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
         writer.map(4).map_err(cbor_error)?;
-        writer.text("rules").and_then(|_| writer.unsigned(self.rules.len() as u64)).map_err(cbor_error)?;
-        writer.text("actions").and_then(|_| writer.unsigned(self.actions.len() as u64)).map_err(cbor_error)?;
-        writer.text("unmatched").and_then(|_| writer.unsigned(unmatched as u64)).map_err(cbor_error)?;
-        writer.text("entries").and_then(|_| writer.array(self.rules.len())).map_err(cbor_error)?;
+        writer
+            .text("rules")
+            .and_then(|_| writer.unsigned(self.rules.len() as u64))
+            .map_err(cbor_error)?;
+        writer
+            .text("actions")
+            .and_then(|_| writer.unsigned(self.actions.len() as u64))
+            .map_err(cbor_error)?;
+        writer
+            .text("unmatched")
+            .and_then(|_| writer.unsigned(unmatched as u64))
+            .map_err(cbor_error)?;
+        writer
+            .text("entries")
+            .and_then(|_| writer.array(self.rules.len()))
+            .map_err(cbor_error)?;
         for (rule, (queued, consumed)) in self.rules.iter().zip(rule_counts.iter()) {
-            writer.map(4)
+            writer
+                .map(4)
                 .and_then(|_| writer.text("id"))
                 .and_then(|_| writer.text(rule.id))
                 .and_then(|_| writer.text("target"))
@@ -3890,10 +3964,12 @@ impl PolicyState {
         {
             action.consumed = true;
             return match action.decision {
-                PolicyDecision::Approve => PolicyGateDecision::Allowed(PolicyGateAllowance::Action {
-                    id: action.id.clone(),
-                    target: action.target.clone(),
-                }),
+                PolicyDecision::Approve => {
+                    PolicyGateDecision::Allowed(PolicyGateAllowance::Action {
+                        id: action.id.clone(),
+                        target: action.target.clone(),
+                    })
+                }
                 PolicyDecision::Deny => PolicyGateDecision::Denied(PolicyGateDenial::Action {
                     id: action.id.clone(),
                     target: action.target.clone(),
@@ -4017,12 +4093,8 @@ impl AuditState {
             )
             .map_err(|_| NineDoorBridgeError::BufferFull)?;
         }
-        write!(
-            line,
-            ",\"role\":\"{}\",\"ticket\":\"{}\"}}",
-            role, ticket
-        )
-        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        write!(line, ",\"role\":\"{}\",\"ticket\":\"{}\"}}", role, ticket)
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
         let bytes = ensure_line_terminated(line.as_bytes());
         let replay_entry = Some(ReplayEntry::new(bytes.len() as u64, outcome.ack_line()));
         let outcome = self.append_journal_bytes(bytes, replay_entry)?;
@@ -4076,7 +4148,9 @@ impl AuditState {
             return Ok(());
         }
         let (id, target) = match allowance {
-            PolicyGateAllowance::Action { id, target } => (Some(id.as_str()), Some(target.as_str())),
+            PolicyGateAllowance::Action { id, target } => {
+                (Some(id.as_str()), Some(target.as_str()))
+            }
             PolicyGateAllowance::Ungated | PolicyGateAllowance::NotRequired => return Ok(()),
         };
         let seq = self.next_sequence();
@@ -4228,7 +4302,10 @@ impl AuditState {
         Ok(outcome)
     }
 
-    fn append_decisions(&mut self, payload: &[u8]) -> Result<AuditAppendOutcome, NineDoorBridgeError> {
+    fn append_decisions(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<AuditAppendOutcome, NineDoorBridgeError> {
         let bytes = ensure_line_terminated(payload);
         let outcome = self.decisions.append(bytes)?;
         self.refresh_export_snapshot();
@@ -4444,9 +4521,18 @@ struct ReplaySummary {
 
 #[derive(Debug)]
 enum ReplayWindowError {
-    Stale { requested: u64, available_start: u64 },
-    Future { requested: u64, available_end: u64 },
-    TooManyEntries { requested: usize, max: usize },
+    Stale {
+        requested: u64,
+        available_start: u64,
+    },
+    Future {
+        requested: u64,
+        available_end: u64,
+    },
+    TooManyEntries {
+        requested: usize,
+        max: usize,
+    },
 }
 
 impl ReplayWindowError {
@@ -4466,10 +4552,9 @@ impl ReplayWindowError {
                 "replay cursor beyond window requested={} window_end={}",
                 requested, available_end
             ),
-            ReplayWindowError::TooManyEntries { requested, max } => format!(
-                "replay exceeds max entries {} > {}",
-                requested, max
-            ),
+            ReplayWindowError::TooManyEntries { requested, max } => {
+                format!("replay exceeds max entries {} > {}", requested, max)
+            }
         }
     }
 }
@@ -4816,7 +4901,9 @@ fn worker_shard_label(worker_id: &str, sharding: generated::ShardingConfig) -> S
 }
 
 fn shard_label_known(label: &str) -> bool {
-    generated::shard_labels().iter().any(|entry| *entry == label)
+    generated::shard_labels()
+        .iter()
+        .any(|entry| *entry == label)
 }
 
 fn parse_shard_worker_root(path: &str) -> Option<(&str, bool)> {
@@ -4944,14 +5031,12 @@ fn build_update_status_text(
     let _ = writeln!(
         text,
         "status epoch={} state={}",
-        snapshot.epoch,
-        snapshot.state
+        snapshot.epoch, snapshot.state
     );
     let _ = writeln!(
         text,
         "manifest_bytes={} manifest_pending_bytes={}",
-        snapshot.manifest_bytes,
-        snapshot.manifest_pending_bytes
+        snapshot.manifest_bytes, snapshot.manifest_pending_bytes
     );
     let _ = writeln!(
         text,
@@ -4964,14 +5049,12 @@ fn build_update_status_text(
     let _ = writeln!(
         text,
         "payload_bytes={} payload_sha256={}",
-        snapshot.payload_bytes,
-        payload_sha
+        snapshot.payload_bytes, payload_sha
     );
     let _ = writeln!(
         text,
         "delta_base_epoch={} delta_base_sha256={}",
-        delta_epoch,
-        delta_sha
+        delta_epoch, delta_sha
     );
     ensure_ui_stream_len(text.len())?;
     Ok(text.into_bytes())
@@ -4982,8 +5065,14 @@ fn build_update_status_cbor(
 ) -> Result<Vec<u8>, NineDoorBridgeError> {
     let mut writer = CborWriter::new(UI_MAX_STREAM_BYTES);
     writer.map(11).map_err(cbor_error)?;
-    writer.text("epoch").and_then(|_| writer.text(snapshot.epoch.as_str())).map_err(cbor_error)?;
-    writer.text("state").and_then(|_| writer.text(snapshot.state)).map_err(cbor_error)?;
+    writer
+        .text("epoch")
+        .and_then(|_| writer.text(snapshot.epoch.as_str()))
+        .map_err(cbor_error)?;
+    writer
+        .text("state")
+        .and_then(|_| writer.text(snapshot.state))
+        .map_err(cbor_error)?;
     writer
         .text("manifest_bytes")
         .and_then(|_| writer.unsigned(snapshot.manifest_bytes as u64))
@@ -5021,17 +5110,19 @@ fn build_update_status_cbor(
         .map_err(cbor_error)?;
     writer
         .text("delta")
-        .and_then(|_| match (&snapshot.delta_base_epoch, snapshot.delta_base_sha256) {
-            (Some(epoch), Some(sha)) => {
-                writer.map(2)?;
-                writer.text("base_epoch")?;
-                writer.text(epoch.as_str())?;
-                writer.text("base_sha256")?;
-                writer.bytes(&sha)?;
-                Ok(())
-            }
-            _ => writer.null(),
-        })
+        .and_then(
+            |_| match (&snapshot.delta_base_epoch, snapshot.delta_base_sha256) {
+                (Some(epoch), Some(sha)) => {
+                    writer.map(2)?;
+                    writer.text("base_epoch")?;
+                    writer.text(epoch.as_str())?;
+                    writer.text("base_sha256")?;
+                    writer.bytes(&sha)?;
+                    Ok(())
+                }
+                _ => writer.null(),
+            },
+        )
         .map_err(cbor_error)?;
     Ok(writer.finish())
 }
@@ -5040,8 +5131,7 @@ fn render_p50_line(
     snapshot: IngestSnapshot,
 ) -> Result<HeaplessString<OBSERVE_P50_BYTES>, NineDoorBridgeError> {
     let mut line = HeaplessString::new();
-    write!(line, "p50_ms={}", snapshot.p50_ms)
-        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    write!(line, "p50_ms={}", snapshot.p50_ms).map_err(|_| NineDoorBridgeError::BufferFull)?;
     Ok(line)
 }
 
@@ -5049,8 +5139,7 @@ fn render_p95_line(
     snapshot: IngestSnapshot,
 ) -> Result<HeaplessString<OBSERVE_P95_BYTES>, NineDoorBridgeError> {
     let mut line = HeaplessString::new();
-    write!(line, "p95_ms={}", snapshot.p95_ms)
-        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    write!(line, "p95_ms={}", snapshot.p95_ms).map_err(|_| NineDoorBridgeError::BufferFull)?;
     Ok(line)
 }
 
@@ -5067,8 +5156,7 @@ fn render_dropped_line(
     snapshot: IngestSnapshot,
 ) -> Result<HeaplessString<OBSERVE_DROPPED_BYTES>, NineDoorBridgeError> {
     let mut line = HeaplessString::new();
-    write!(line, "dropped={}", snapshot.dropped)
-        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    write!(line, "dropped={}", snapshot.dropped).map_err(|_| NineDoorBridgeError::BufferFull)?;
     Ok(line)
 }
 
@@ -5076,8 +5164,7 @@ fn render_queued_line(
     snapshot: IngestSnapshot,
 ) -> Result<HeaplessString<OBSERVE_QUEUED_BYTES>, NineDoorBridgeError> {
     let mut line = HeaplessString::new();
-    write!(line, "queued={}", snapshot.queued)
-        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    write!(line, "queued={}", snapshot.queued).map_err(|_| NineDoorBridgeError::BufferFull)?;
     Ok(line)
 }
 
@@ -5226,8 +5313,7 @@ fn log_watch_throttle(audit: &mut dyn AuditSink, delay_ms: u64) {
     let _ = write!(
         line,
         "observe ingest.watch throttled delay_ms={} min_interval_ms={}",
-        delay_ms,
-        OBSERVE_WATCH_MIN_INTERVAL_MS
+        delay_ms, OBSERVE_WATCH_MIN_INTERVAL_MS
     );
     audit.info(line.as_str());
 }
@@ -5259,8 +5345,8 @@ fn parse_action_line(line: &str) -> Result<PolicyAction, NineDoorBridgeError> {
     let id = parse_json_string_field(line, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
     let target =
         parse_json_string_field(line, "target").ok_or(NineDoorBridgeError::InvalidPayload)?;
-    let decision = parse_json_string_field(line, "decision")
-        .ok_or(NineDoorBridgeError::InvalidPayload)?;
+    let decision =
+        parse_json_string_field(line, "decision").ok_or(NineDoorBridgeError::InvalidPayload)?;
     validate_action_id(id)?;
     validate_action_target(target)?;
     let target = normalize_path(target);
@@ -5324,9 +5410,7 @@ fn path_matches_pattern(pattern: &str, path: &str) -> bool {
     if pattern_segments.len() != path_segments.len() {
         return false;
     }
-    for (pattern_segment, path_segment) in
-        pattern_segments.iter().zip(path_segments.iter())
-    {
+    for (pattern_segment, path_segment) in pattern_segments.iter().zip(path_segments.iter()) {
         if *pattern_segment == "*" {
             continue;
         }
@@ -5756,8 +5840,8 @@ fn parse_queen_ctl(payload: &str) -> Result<QueenCtlCommand<'_>, NineDoorBridgeE
         return Ok(QueenCtlCommand::Bind { from, to });
     }
     if payload.contains("\"mount\"") {
-        let service =
-            parse_json_string_field(payload, "service").ok_or(NineDoorBridgeError::InvalidPayload)?;
+        let service = parse_json_string_field(payload, "service")
+            .ok_or(NineDoorBridgeError::InvalidPayload)?;
         let at =
             parse_json_string_field(payload, "at").ok_or(NineDoorBridgeError::InvalidPayload)?;
         return Ok(QueenCtlCommand::Mount { service, at });

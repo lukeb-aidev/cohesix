@@ -8,7 +8,7 @@ use std::fmt;
 
 use anyhow::{anyhow, Context, Result};
 use cohesix_ticket::Role;
-use cohsh_core::trace::{TraceLogBuilderRef, TraceError};
+use cohsh_core::trace::{TraceError, TraceLogBuilderRef};
 use cohsh_core::wire::{render_ack, AckLine, AckStatus};
 use cohsh_core::{role_label, ConsoleVerb, Secure9pTransport};
 use secure9p_codec::OpenMode;
@@ -114,7 +114,11 @@ impl<T: Secure9pTransport> TraceShellTransport<T> {
 
     fn push_ack(&mut self, status: AckStatus, verb: &str, detail: Option<&str>) -> Result<()> {
         let mut line = String::new();
-        let ack = AckLine { status, verb, detail };
+        let ack = AckLine {
+            status,
+            verb,
+            detail,
+        };
         render_ack(&mut line, &ack).map_err(|err| anyhow!("ack render failed: {err}"))?;
         self.ack_mode.record(&line)?;
         self.ack_lines.push_back(line);
@@ -195,7 +199,11 @@ impl<T: Secure9pTransport> Transport for TraceShellTransport<T> {
             .context("attach to a session before running ping")?;
         let fid = client.open("/", OpenMode::read_only())?;
         let _ = client.clunk(fid);
-        Ok(format!("attached as {:?} via {}", session.role(), self.label))
+        Ok(format!(
+            "attached as {:?} via {}",
+            session.role(),
+            self.label
+        ))
     }
 
     fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {

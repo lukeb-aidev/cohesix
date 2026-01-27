@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use cohesix_ticket::Role;
-use nine_door::{Clock, InProcessConnection, NineDoor};
 use log::{Level, LevelFilter, Log, Metadata, Record};
+use nine_door::{Clock, InProcessConnection, NineDoor};
 use secure9p_codec::{OpenMode, Request, RequestBody, MAX_MSIZE};
 use secure9p_core::{SessionLimits, ShortWritePolicy};
 
@@ -19,7 +19,9 @@ struct FixedClock {
 
 impl FixedClock {
     fn new() -> Self {
-        Self { now: Instant::now() }
+        Self {
+            now: Instant::now(),
+        }
     }
 }
 
@@ -41,15 +43,9 @@ fn setup_session(server: &NineDoor) -> InProcessConnection {
     client
 }
 
-fn read_proc_text(
-    client: &mut InProcessConnection,
-    path: &[&str],
-    fid: u32,
-) -> String {
+fn read_proc_text(client: &mut InProcessConnection, path: &[&str], fid: u32) -> String {
     let components = path.iter().map(|seg| seg.to_string()).collect::<Vec<_>>();
-    client
-        .walk(1, fid, &components)
-        .expect("walk proc path");
+    client.walk(1, fid, &components).expect("walk proc path");
     client
         .open(fid, OpenMode::read_only())
         .expect("open proc path");
@@ -141,17 +137,26 @@ fn proc_metrics_track_pipeline_state() {
     let ingest_p95 = read_proc_text(&mut client, &["proc", "ingest", "p95_ms"], 7);
     let ingest_queued = read_proc_text(&mut client, &["proc", "ingest", "queued"], 8);
 
-    assert_eq!(parse_kv(&outstanding, "current"), metrics.queue_depth as u64);
+    assert_eq!(
+        parse_kv(&outstanding, "current"),
+        metrics.queue_depth as u64
+    );
     assert_eq!(parse_kv(&outstanding, "limit"), metrics.queue_limit as u64);
     assert_eq!(parse_kv(&short_writes, "total"), metrics.short_writes);
-    assert_eq!(parse_kv(&short_writes, "retries"), metrics.short_write_retries);
+    assert_eq!(
+        parse_kv(&short_writes, "retries"),
+        metrics.short_write_retries
+    );
     assert_eq!(
         parse_kv(&ingest_backpressure, "backpressure"),
         metrics.backpressure_events
     );
     assert_eq!(parse_kv(&ingest_p50, "p50_ms"), 0);
     assert_eq!(parse_kv(&ingest_p95, "p95_ms"), 0);
-    assert_eq!(parse_kv(&ingest_queued, "queued"), metrics.queue_depth as u64);
+    assert_eq!(
+        parse_kv(&ingest_queued, "queued"),
+        metrics.queue_depth as u64
+    );
 }
 
 #[test]

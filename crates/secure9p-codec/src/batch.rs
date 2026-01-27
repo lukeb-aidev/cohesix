@@ -80,10 +80,7 @@ impl<'a> Iterator for BatchIter<'a> {
         );
         if let Some(max) = self.max_frame {
             if declared > max {
-                return Some(Err(CodecError::FrameTooLarge {
-                    declared,
-                    max,
-                }));
+                return Some(Err(CodecError::FrameTooLarge { declared, max }));
             }
         }
         let declared_usize: usize = match declared.try_into() {

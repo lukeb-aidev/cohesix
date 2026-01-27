@@ -579,9 +579,7 @@ fn parse_token(token: &str) -> Result<(Vec<u8>, [u8; 32]), TicketError> {
     let payload = token
         .strip_prefix(TICKET_PREFIX)
         .ok_or(TicketError::MissingPrefix)?;
-    let (payload_hex, mac_hex) = payload
-        .split_once('.')
-        .ok_or(TicketError::MalformedToken)?;
+    let (payload_hex, mac_hex) = payload.split_once('.').ok_or(TicketError::MalformedToken)?;
     let payload_bytes = hex::decode(payload_hex).map_err(|_| TicketError::MalformedToken)?;
     let mac_bytes = hex::decode(mac_hex).map_err(|_| TicketError::MalformedToken)?;
     if mac_bytes.len() != 32 {

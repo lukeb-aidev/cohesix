@@ -5,12 +5,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use serde::{Deserialize, Serialize};
 use secure9p_codec::ErrorCode;
 use secure9p_core::append_only_write_bounds;
+use serde::{Deserialize, Serialize};
 
-use crate::NineDoorError;
 use super::audit::{ReplayConfig, ReplaySummary};
+use crate::NineDoorError;
 
 /// Replay control command parsed from `/replay/ctl`.
 #[derive(Debug, Deserialize)]
@@ -54,11 +54,7 @@ impl ReplayState {
         &self.status
     }
 
-    pub fn append_ctl(
-        &mut self,
-        offset: u64,
-        data: &[u8],
-    ) -> Result<ReplayCommand, NineDoorError> {
+    pub fn append_ctl(&mut self, offset: u64, data: &[u8]) -> Result<ReplayCommand, NineDoorError> {
         let text = std::str::from_utf8(data).map_err(|err| {
             NineDoorError::protocol(
                 ErrorCode::Invalid,
@@ -77,12 +73,14 @@ impl ReplayState {
                     "replay control accepts one command per write",
                 ));
             }
-            parsed = Some(serde_json::from_str::<ReplayCommand>(trimmed).map_err(|err| {
-                NineDoorError::protocol(
-                    ErrorCode::Invalid,
-                    format!("invalid replay command: {err}"),
-                )
-            })?);
+            parsed = Some(
+                serde_json::from_str::<ReplayCommand>(trimmed).map_err(|err| {
+                    NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        format!("invalid replay command: {err}"),
+                    )
+                })?,
+            );
         }
         let command = parsed.ok_or_else(|| {
             NineDoorError::protocol(ErrorCode::Invalid, "replay control missing command")

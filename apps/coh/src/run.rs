@@ -72,10 +72,9 @@ pub fn execute<C: CohAccess>(
         .with_context(|| format!("read {lease_path}"))?;
     let detail = format!("path={lease_path}");
     audit.push_ack(AckStatus::Ok, "CAT", Some(detail.as_str()));
-    let lease_line = last_non_empty_line(&lease_bytes)
-        .with_context(|| format!("parse {lease_path}"))?;
-    let lease_line = lease_line
-        .ok_or_else(|| anyhow!("no active lease for gpu {gpu_id}"))?;
+    let lease_line =
+        last_non_empty_line(&lease_bytes).with_context(|| format!("parse {lease_path}"))?;
+    let lease_line = lease_line.ok_or_else(|| anyhow!("no active lease for gpu {gpu_id}"))?;
     let lease_entry = parse_lease_entry(&lease_line)?;
     validate_lease(&lease_entry, policy, gpu_id)?;
 

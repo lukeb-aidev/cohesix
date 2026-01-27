@@ -71,9 +71,7 @@ fn replayfs_replays_control_sequence_and_bounds() {
 
     let ctl_path = vec!["queen".to_owned(), "ctl".to_owned()];
     client.walk(1, 2, &ctl_path).expect("walk ctl");
-    client
-        .open(2, OpenMode::write_append())
-        .expect("open ctl");
+    client.open(2, OpenMode::write_append()).expect("open ctl");
     client
         .write(2, br#"{"spawn":"heartbeat","ticks":10}"#)
         .expect("spawn worker");
@@ -87,16 +85,12 @@ fn replayfs_replays_control_sequence_and_bounds() {
     client
         .open(3, OpenMode::write_append())
         .expect("open replay ctl");
-    client
-        .write(3, br#"{"from":0}"#)
-        .expect("replay from zero");
+    client.write(3, br#"{"from":0}"#).expect("replay from zero");
     client.clunk(3).expect("clunk replay ctl");
 
     let status_path = vec!["replay".to_owned(), "status".to_owned()];
     client.walk(1, 4, &status_path).expect("walk status");
-    client
-        .open(4, OpenMode::read_only())
-        .expect("open status");
+    client.open(4, OpenMode::read_only()).expect("open status");
     let status_data = client.read(4, 0, MAX_MSIZE).expect("read status");
     let status: serde_json::Value = serde_json::from_slice(&status_data).expect("status json");
     assert_eq!(status["state"], "ok");
@@ -108,8 +102,8 @@ fn replayfs_replays_control_sequence_and_bounds() {
     client
         .open(5, OpenMode::write_append())
         .expect("open replay ctl");
-    let err = write_with_offset(&mut client, 5, 0, br#"{"from":0}"#)
-        .expect_err("random write rejected");
+    let err =
+        write_with_offset(&mut client, 5, 0, br#"{"from":0}"#).expect_err("random write rejected");
     match err {
         NineDoorError::Protocol { code, .. } => assert_eq!(code, ErrorCode::Invalid),
         other => panic!("unexpected error: {other:?}"),
@@ -117,9 +111,7 @@ fn replayfs_replays_control_sequence_and_bounds() {
 
     let export_path = vec!["audit".to_owned(), "export".to_owned()];
     client.walk(1, 6, &export_path).expect("walk export");
-    client
-        .open(6, OpenMode::read_only())
-        .expect("open export");
+    client.open(6, OpenMode::read_only()).expect("open export");
     let export_data = client.read(6, 0, MAX_MSIZE).expect("read export");
     let export: serde_json::Value = serde_json::from_slice(&export_data).expect("export json");
     let next = export["journal_next"].as_u64().expect("journal_next");

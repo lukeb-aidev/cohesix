@@ -12,8 +12,8 @@ use std::time::Instant;
 use log::info;
 
 use super::cbor::{CborError, CborWriter};
-use super::pipeline::PipelineMetrics;
 use super::namespace::Namespace;
+use super::pipeline::PipelineMetrics;
 use super::session::SessionPhase;
 use super::ui::{UiProviderConfig, UI_MAX_STREAM_BYTES};
 use crate::NineDoorError;
@@ -110,12 +110,7 @@ pub struct ProcIngestConfig {
 
 impl ProcIngestConfig {
     pub(crate) fn enabled(self) -> bool {
-        self.p50_ms
-            || self.p95_ms
-            || self.backpressure
-            || self.dropped
-            || self.queued
-            || self.watch
+        self.p50_ms || self.p95_ms || self.backpressure || self.dropped || self.queued || self.watch
     }
 }
 
@@ -458,7 +453,8 @@ impl ObserveState {
             ensure_stream_len("proc/9p/short_writes", line.len())?;
             namespace.set_proc_short_writes_payload(line.as_bytes())?;
 
-            let cbor = build_proc_9p_short_writes_cbor(metrics.short_writes, metrics.short_write_retries)?;
+            let cbor =
+                build_proc_9p_short_writes_cbor(metrics.short_writes, metrics.short_write_retries)?;
             ensure_stream_len("proc/9p/short_writes.cbor", cbor.len())?;
             namespace.set_proc_short_writes_cbor_payload(&cbor)?;
         }
@@ -535,11 +531,7 @@ impl ObserveState {
         if config.dropped {
             let mut line = String::new();
             let _ = writeln!(line, "dropped={}", snapshot.dropped);
-            ensure_len(
-                "proc/ingest/dropped",
-                line.len(),
-                config.dropped_bytes,
-            )?;
+            ensure_len("proc/ingest/dropped", line.len(), config.dropped_bytes)?;
             namespace.set_proc_ingest_dropped_payload(line.as_bytes())?;
         }
         if config.queued {
@@ -605,11 +597,7 @@ impl ObserveState {
         if config.cut_reason {
             let mut line = String::new();
             let _ = writeln!(line, "cut_reason={cut_reason}");
-            ensure_len(
-                "proc/root/cut_reason",
-                line.len(),
-                config.cut_reason_bytes,
-            )?;
+            ensure_len("proc/root/cut_reason", line.len(), config.cut_reason_bytes)?;
             ensure_stream_len("proc/root/cut_reason", line.len())?;
             namespace.set_proc_root_cut_reason_payload(line.as_bytes())?;
         }
@@ -729,7 +717,11 @@ impl IngestState {
         Self {
             latency: LatencySamples::new(config.latency_samples),
             dropped: 0,
-            watch: WatchRing::new(config.watch_max_entries, config.watch_line_bytes, config.watch_min_interval_ms),
+            watch: WatchRing::new(
+                config.watch_max_entries,
+                config.watch_line_bytes,
+                config.watch_min_interval_ms,
+            ),
         }
     }
 
@@ -836,7 +828,9 @@ impl WatchRing {
         }
         if let Some(last) = self.last_emit_ms {
             if now_ms < last.saturating_add(self.min_interval_ms) {
-                let delay_ms = last.saturating_add(self.min_interval_ms).saturating_sub(now_ms);
+                let delay_ms = last
+                    .saturating_add(self.min_interval_ms)
+                    .saturating_sub(now_ms);
                 return WatchAppend::Throttled(delay_ms);
             }
         }
@@ -890,10 +884,7 @@ fn ensure_stream_len(label: &str, len: usize) -> Result<(), NineDoorError> {
     if len > UI_MAX_STREAM_BYTES {
         return Err(NineDoorError::protocol(
             secure9p_codec::ErrorCode::TooBig,
-            format!(
-                "{label} output exceeds {} bytes",
-                UI_MAX_STREAM_BYTES
-            ),
+            format!("{label} output exceeds {} bytes", UI_MAX_STREAM_BYTES),
         ));
     }
     Ok(())

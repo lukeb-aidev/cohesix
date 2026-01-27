@@ -12,36 +12,39 @@
 //! transport. The client prefixes transport acknowledgements with `[console]`
 //! so callers can distinguish remote answers from local UX noise.
 
-pub mod proto;
-/// Manifest-derived client policy helpers for cohsh.
-pub mod policy;
 /// Cohesix Secure9P client helpers.
 pub mod client;
+/// Manifest-derived client policy helpers for cohsh.
+pub mod policy;
+pub mod proto;
 /// Queen control payload helpers for /queen/ctl.
 pub mod queen;
-/// Trace-aware transport helpers for cohsh.
-pub mod trace;
+mod session_pool;
 /// Host-side ticket minting helpers.
 pub mod ticket_mint;
-mod session_pool;
+/// Trace-aware transport helpers for cohsh.
+pub mod trace;
 
 #[allow(clippy::all, dead_code)]
 mod generated_client {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/generated/client.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/generated/client.rs"
+    ));
 }
 
 #[cfg(feature = "tcp")]
 pub mod transport;
 
-#[cfg(feature = "tcp")]
-pub use transport::tcp::{tcp_debug_enabled, PooledTcpTransport, SharedTcpTransport, TcpTransport};
-#[cfg(feature = "tcp")]
-pub use transport::COHSH_TCP_PORT;
 pub use policy::{
     default_policy_path, load_policy, CohshHeartbeatPolicy, CohshPolicy, CohshPoolPolicy,
     CohshRetryPolicy, PolicyOverrides,
 };
 pub use session_pool::{PoolKind, SessionPool, TransportFactory};
+#[cfg(feature = "tcp")]
+pub use transport::tcp::{tcp_debug_enabled, PooledTcpTransport, SharedTcpTransport, TcpTransport};
+#[cfg(feature = "tcp")]
+pub use transport::COHSH_TCP_PORT;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
@@ -62,8 +65,8 @@ use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::Role;
-use cohsh_core::{normalize_ticket, role_label, ConsoleVerb, RoleParseMode, TicketPolicy};
 use cohsh_core::wire::{render_ack, AckLine, AckStatus};
+use cohsh_core::{normalize_ticket, role_label, ConsoleVerb, RoleParseMode, TicketPolicy};
 use log::info;
 use nine_door::{InProcessConnection, NineDoor};
 use secure9p_codec::{OpenMode, SessionId, MAX_MSIZE};
@@ -587,7 +590,11 @@ impl NineDoorTransport {
 
     fn push_ack(&mut self, status: AckStatus, verb: &str, detail: Option<&str>) {
         let mut line = String::new();
-        let ack = AckLine { status, verb, detail };
+        let ack = AckLine {
+            status,
+            verb,
+            detail,
+        };
         if render_ack(&mut line, &ack).is_ok() {
             self.ack_lines.push_back(line);
         }
@@ -638,8 +645,8 @@ impl Transport for NineDoorTransport {
         connection
             .version(MAX_MSIZE)
             .context("version negotiation failed")?;
-        let ticket_check = normalize_ticket(role, ticket, TicketPolicy::ninedoor()).map_err(|err| {
-            match err {
+        let ticket_check =
+            normalize_ticket(role, ticket, TicketPolicy::ninedoor()).map_err(|err| match err {
                 cohsh_core::TicketError::Missing => anyhow!(
                     "role {:?} requires a capability ticket containing an identity",
                     role
@@ -650,22 +657,26 @@ impl Transport for NineDoorTransport {
                 cohsh_core::TicketError::Invalid(inner) => anyhow!("invalid ticket: {inner}"),
                 cohsh_core::TicketError::RoleMismatch { expected, found } => anyhow!(
                     "ticket role {:?} does not match requested role {:?}",
-                    found, expected
+                    found,
+                    expected
                 ),
                 cohsh_core::TicketError::MissingSubject => anyhow!(
                     "ticket is missing required subject identity for role {:?}",
                     role
                 ),
-            }
-        })?;
+            })?;
         let mut subject = None;
         if let Some(claims) = ticket_check.claims.as_ref() {
             if let Some(value) = claims.subject.as_deref() {
                 subject = Some(value.to_string());
             }
         }
-        let attach_result =
-            connection.attach_with_identity(ROOT_FID, role, subject.as_deref(), ticket_check.ticket);
+        let attach_result = connection.attach_with_identity(
+            ROOT_FID,
+            role,
+            subject.as_deref(),
+            ticket_check.ticket,
+        );
         let attach_result = attach_result.context("attach request failed");
         if let Err(err) = attach_result {
             let detail = format!("reason={err}");
@@ -2272,7 +2283,10 @@ impl<T: Transport, W: Write> Shell<T, W> {
                             Ok(summary) => {
                                 let detail = format!(
                                     "action=push device={} seg_id={} records={} bytes={}",
-                                    summary.device_id, summary.seg_id, summary.records, summary.bytes
+                                    summary.device_id,
+                                    summary.seg_id,
+                                    summary.records,
+                                    summary.bytes
                                 );
                                 let ack = match render_telemetry_ack(AckStatus::Ok, &detail) {
                                     Ok(ack) => ack,
@@ -2641,7 +2655,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 return Ok(state);
             }
         }
-        Err(anyhow!("lifecycle state not found at {PROC_LIFECYCLE_STATE_PATH}"))
+        Err(anyhow!(
+            "lifecycle state not found at {PROC_LIFECYCLE_STATE_PATH}"
+        ))
     }
 
     fn lifecycle_ctl(&mut self, command: LifecycleCommand) -> Result<()> {
@@ -2716,8 +2732,8 @@ impl<T: Transport, W: Write> Shell<T, W> {
         let mime = telemetry_mime_for_path(source)?;
         let data = fs::read(source)
             .with_context(|| format!("failed to read telemetry push source {src_path}"))?;
-        let text = std::str::from_utf8(&data)
-            .context("telemetry push source must be UTF-8 text")?;
+        let text =
+            std::str::from_utf8(&data).context("telemetry push source must be UTF-8 text")?;
         let records = build_telemetry_records(text, mime)?;
         let total_bytes: usize = records.iter().map(|record| record.len()).sum();
         if total_bytes > TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT {
@@ -2750,9 +2766,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
         let seg_path = format!("/queen/telemetry/{device_id}/seg/{seg_id}");
         ensure_valid_path(&seg_path)?;
         if !records.is_empty() {
-            let written = self
-                .transport
-                .write_batch(&session, &seg_path, &records)?;
+            let written = self.transport.write_batch(&session, &seg_path, &records)?;
             if written != records.len() {
                 return Err(anyhow!(
                     "telemetry push short write: expected {} records, wrote {}",
@@ -3294,10 +3308,8 @@ impl<T: Transport, W: Write> Shell<T, W> {
                                 Ok(CommandStatus::Continue)
                             }
                             Err(err) => {
-                                let detail = format!(
-                                    "action=push device={} reason={err}",
-                                    args.device_id
-                                );
+                                let detail =
+                                    format!("action=push device={} reason={err}", args.device_id);
                                 let ack = render_telemetry_ack(AckStatus::Err, &detail)?;
                                 self.write_ack_line(&ack)?;
                                 Err(err)
@@ -3515,31 +3527,31 @@ fn parse_pool_bench_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<Pool
     let mut values = parse_kv_args(args)?;
     let path = take_required(&mut values, "path", |value| Ok(value.to_owned()))?;
     let ops = take_required(&mut values, "ops", |value| parse_number(value, "ops"))?;
-    let batch = take_optional(&mut values, "batch", |value| {
-        parse_number(value, "batch")
-    })?
-    .unwrap_or(1);
+    let batch =
+        take_optional(&mut values, "batch", |value| parse_number(value, "batch"))?.unwrap_or(1);
     let payload_prefix = values
         .remove("payload")
         .unwrap_or_else(|| "pool".to_owned());
-    let payload_bytes =
-        take_optional(&mut values, "payload_bytes", |value| parse_number(value, "payload_bytes"))?;
-    let kind = take_optional(&mut values, "kind", parse_pool_kind)?
-        .unwrap_or(PoolKind::Telemetry);
-    let delay_ms =
-        take_optional(&mut values, "delay_ms", |value| parse_number(value, "delay_ms"))?
-            .unwrap_or(0);
-    let inject_failures =
-        take_optional(&mut values, "inject_failures", |value| {
-            parse_number(value, "inject_failures")
-        })?
-        .unwrap_or(0);
-    let inject_bytes =
-        take_optional(&mut values, "inject_bytes", |value| parse_number(value, "inject_bytes"))?
-            .unwrap_or(8);
-    let exhaust =
-        take_optional(&mut values, "exhaust", |value| parse_number(value, "exhaust"))?
-            .unwrap_or(0);
+    let payload_bytes = take_optional(&mut values, "payload_bytes", |value| {
+        parse_number(value, "payload_bytes")
+    })?;
+    let kind = take_optional(&mut values, "kind", parse_pool_kind)?.unwrap_or(PoolKind::Telemetry);
+    let delay_ms = take_optional(&mut values, "delay_ms", |value| {
+        parse_number(value, "delay_ms")
+    })?
+    .unwrap_or(0);
+    let inject_failures = take_optional(&mut values, "inject_failures", |value| {
+        parse_number(value, "inject_failures")
+    })?
+    .unwrap_or(0);
+    let inject_bytes = take_optional(&mut values, "inject_bytes", |value| {
+        parse_number(value, "inject_bytes")
+    })?
+    .unwrap_or(8);
+    let exhaust = take_optional(&mut values, "exhaust", |value| {
+        parse_number(value, "exhaust")
+    })?
+    .unwrap_or(0);
     if let Some((key, _)) = values.iter().next() {
         return Err(anyhow!("unknown pool bench option '{key}'"));
     }
@@ -3903,9 +3915,11 @@ fn telemetry_mime_for_path(path: &Path) -> Result<&'static str> {
 }
 
 fn build_telemetry_ctl_payload(mime: &str) -> Result<String> {
-    let command = TelemetryCtlCommand { new: "segment", mime };
-    let mut payload =
-        serde_json::to_string(&command).context("telemetry control encode failed")?;
+    let command = TelemetryCtlCommand {
+        new: "segment",
+        mime,
+    };
+    let mut payload = serde_json::to_string(&command).context("telemetry control encode failed")?;
     payload.push('\n');
     Ok(payload)
 }
@@ -3966,8 +3980,7 @@ fn build_telemetry_record(seq: u64, mime: &str, payload: &str) -> Result<Vec<u8>
         mime,
         payload,
     };
-    let mut encoded =
-        serde_json::to_string(&envelope).context("telemetry record encode failed")?;
+    let mut encoded = serde_json::to_string(&envelope).context("telemetry record encode failed")?;
     encoded.push('\n');
     Ok(encoded.into_bytes())
 }
@@ -4050,7 +4063,9 @@ fn parse_lifecycle_state_line(line: &str) -> Option<LifecycleState> {
 
 fn lifecycle_command_allowed(state: LifecycleState, command: LifecycleCommand) -> bool {
     match command {
-        LifecycleCommand::Cordon => matches!(state, LifecycleState::Online | LifecycleState::Degraded),
+        LifecycleCommand::Cordon => {
+            matches!(state, LifecycleState::Online | LifecycleState::Degraded)
+        }
         LifecycleCommand::Drain => matches!(state, LifecycleState::Draining),
         LifecycleCommand::Resume => !matches!(state, LifecycleState::Online),
         LifecycleCommand::Quiesce => matches!(
@@ -4098,7 +4113,10 @@ fn parse_telemetry_push_args<'a>(
         return Err(anyhow!("telemetry push does not recognize '{arg}'"));
     }
     let device_id = device_id.ok_or_else(|| anyhow!("telemetry push requires --device <id>"))?;
-    Ok(TelemetryPushArgs { src_path, device_id })
+    Ok(TelemetryPushArgs {
+        src_path,
+        device_id,
+    })
 }
 
 #[cfg(test)]
@@ -4112,9 +4130,7 @@ mod tests {
         let buffer = Vec::new();
         let mut shell = Shell::new(transport, Cursor::new(buffer));
         shell.attach(Role::Queen, None).unwrap();
-        shell
-            .execute(&format!("tail {QUEEN_LOG_PATH}"))
-            .unwrap();
+        shell.execute(&format!("tail {QUEEN_LOG_PATH}")).unwrap();
         let (_transport, cursor) = shell.into_parts();
         let output = cursor.into_inner();
         let rendered = String::from_utf8(output).unwrap();

@@ -162,11 +162,7 @@ where
     }
 
     /// Open the fid using the provided mode.
-    pub fn open(
-        &mut self,
-        fid: u32,
-        mode: OpenMode,
-    ) -> Result<(Qid, u32), ClientError<T::Error>> {
+    pub fn open(&mut self, fid: u32, mode: OpenMode) -> Result<(Qid, u32), ClientError<T::Error>> {
         let response = self.transact(RequestBody::Open { fid, mode })?;
         let ResponseBody::Open { qid, iounit } = response else {
             return Err(ClientError::UnexpectedResponse("Ropen"));
@@ -221,10 +217,7 @@ where
         tag
     }
 
-    fn transact(
-        &mut self,
-        body: RequestBody,
-    ) -> Result<ResponseBody, ClientError<T::Error>> {
+    fn transact(&mut self, body: RequestBody) -> Result<ResponseBody, ClientError<T::Error>> {
         let tag = self.next_tag();
         let request = Request { tag, body };
         let encoded = self.codec.encode_request(&request)?;

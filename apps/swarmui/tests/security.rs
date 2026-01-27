@@ -4,14 +4,13 @@
 // Author: Lukas Bower
 
 use anyhow::Result;
-use cohsh::client::InProcessTransport;
 use cohesix_ticket::{
-    BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer, TicketQuotas, TicketScope,
-    TicketVerb,
+    BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer, TicketQuotas, TicketScope, TicketVerb,
 };
+use cohsh::client::InProcessTransport;
 use nine_door::NineDoor;
-use swarmui::{SwarmUiBackend, SwarmUiConfig, SwarmUiTransportFactory};
 use std::time::{SystemTime, UNIX_EPOCH};
+use swarmui::{SwarmUiBackend, SwarmUiConfig, SwarmUiTransportFactory};
 
 struct InProcessFactory {
     server: NineDoor,

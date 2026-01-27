@@ -9,8 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use cohsh::client::CohClient;
 use cohsh::{Session, Transport};
 use cohsh_core::Secure9pTransport;
-use serde::{Deserialize, Serialize};
 use secure9p_codec::OpenMode;
+use serde::{Deserialize, Serialize};
 
 use crate::{SwarmUiError, SwarmUiTranscript};
 
@@ -119,10 +119,7 @@ pub struct SwarmUiHiveSnapshot {
 
 impl SwarmUiHiveSnapshot {
     /// Build a snapshot from a transcript payload.
-    pub fn from_transcript(
-        agent: &SwarmUiHiveAgent,
-        transcript: &SwarmUiTranscript,
-    ) -> Self {
+    pub fn from_transcript(agent: &SwarmUiHiveAgent, transcript: &SwarmUiTranscript) -> Self {
         let mut seq = 0u64;
         let mut events = Vec::new();
         for line in &transcript.lines {
@@ -147,10 +144,7 @@ impl SwarmUiHiveSnapshot {
             ));
         }
         if self.events.len() > max_events {
-            return Err(format!(
-                "hive snapshot exceeds max events ({})",
-                max_events
-            ));
+            return Err(format!("hive snapshot exceeds max events ({})", max_events));
         }
         Ok(())
     }
@@ -201,7 +195,10 @@ pub(crate) struct HiveReplay {
 
 impl HiveReplay {
     pub(crate) fn new(snapshot: SwarmUiHiveSnapshot) -> Self {
-        Self { snapshot, cursor: 0 }
+        Self {
+            snapshot,
+            cursor: 0,
+        }
     }
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, String> {
@@ -217,11 +214,16 @@ impl HiveReplay {
             namespace: "/worker/worker-replay".to_owned(),
         };
         Ok(Self::new(SwarmUiHiveSnapshot::from_transcript(
-            &agent, &transcript,
+            &agent,
+            &transcript,
         )))
     }
 
-    pub(crate) fn bootstrap(&self, config: SwarmUiHiveConfig, roots: Vec<String>) -> SwarmUiHiveBootstrap {
+    pub(crate) fn bootstrap(
+        &self,
+        config: SwarmUiHiveConfig,
+        roots: Vec<String>,
+    ) -> SwarmUiHiveBootstrap {
         SwarmUiHiveBootstrap {
             agents: self.snapshot.agents.clone(),
             namespace_roots: roots,
@@ -313,12 +315,7 @@ impl HiveSessionState {
                 }
             };
             cursor.fill_pending(client, msize, budget)?;
-            let consumed = cursor.drain_events(
-                worker_root,
-                &mut self.seq,
-                &mut self.queue,
-                budget,
-            );
+            let consumed = cursor.drain_events(worker_root, &mut self.seq, &mut self.queue, budget);
             budget = budget.saturating_sub(consumed);
             self.trim_queue(max_queue);
         }
@@ -422,12 +419,9 @@ impl HiveTelemetryCursor {
             let Some(line) = self.pending.pop_front() else {
                 break;
             };
-            if let Some(event) = parse_line_to_event_with_namespace(
-                &self.worker_id,
-                &namespace,
-                &line,
-                seq,
-            ) {
+            if let Some(event) =
+                parse_line_to_event_with_namespace(&self.worker_id, &namespace, &line, seq)
+            {
                 queue.push_back(event);
                 consumed = consumed.saturating_add(1);
             }
@@ -446,7 +440,11 @@ impl HiveTelemetryCursor {
     }
 }
 
-fn parse_line_to_event(agent: &SwarmUiHiveAgent, line: &str, seq: &mut u64) -> Option<SwarmUiHiveEvent> {
+fn parse_line_to_event(
+    agent: &SwarmUiHiveAgent,
+    line: &str,
+    seq: &mut u64,
+) -> Option<SwarmUiHiveEvent> {
     parse_line_to_event_with_namespace(&agent.id, &agent.namespace, line, seq)
 }
 

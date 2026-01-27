@@ -9,11 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use gpu_bridge_host::{GpuModelCatalog, TelemetrySchema};
-use serde::Deserialize;
-use sidecar_bus::{LinkState, OfflineSpool, SpoolConfig, SpoolError};
-use sha2::{Digest, Sha256};
 use secure9p_codec::{ErrorCode, Qid, QidType, SessionId, MAX_MSIZE};
 use secure9p_core::append_only_write_bounds;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+use sidecar_bus::{LinkState, OfflineSpool, SpoolConfig, SpoolError};
 use trace_model::TraceLevel;
 use worker_lora::{DutyCycleConfig, DutyCycleGuard, TamperEntry, TamperLog, TamperReason};
 
@@ -703,7 +703,9 @@ impl Namespace {
             UiProviderKind::ProcIngestP50 => self.ui.proc_ingest.p50_ms,
             UiProviderKind::ProcIngestP95 => self.ui.proc_ingest.p95_ms,
             UiProviderKind::ProcIngestBackpressure => self.ui.proc_ingest.backpressure,
-            UiProviderKind::PolicyPreflightReq => self.ui.policy_preflight.req && self.policy.enabled,
+            UiProviderKind::PolicyPreflightReq => {
+                self.ui.policy_preflight.req && self.policy.enabled
+            }
             UiProviderKind::PolicyPreflightDiff => {
                 self.ui.policy_preflight.diff && self.policy.enabled
             }
@@ -778,7 +780,10 @@ impl Namespace {
             TaskTrace(String),
             CasManifest(String),
             CasChunk([u8; 32]),
-            CasModel { digest: [u8; 32], kind: ModelFileKind },
+            CasModel {
+                digest: [u8; 32],
+                kind: ModelFileKind,
+            },
         }
 
         let retain_on_boot = self.telemetry.cursor.retain_on_boot;
@@ -877,8 +882,14 @@ impl Namespace {
         enum WriteAction {
             Result(Result<u32, NineDoorError>),
             CasManifest(String),
-            CasChunk { epoch: String, digest: [u8; 32] },
-            CasModel { digest: [u8; 32], kind: ModelFileKind },
+            CasChunk {
+                epoch: String,
+                digest: [u8; 32],
+            },
+            CasModel {
+                digest: [u8; 32],
+                kind: ModelFileKind,
+            },
         }
 
         let retain_on_boot = self.telemetry.cursor.retain_on_boot;
@@ -929,23 +940,23 @@ impl Namespace {
                         WriteAction::Result(Err(NineDoorError::protocol(code, err.message)))
                     }
                 },
-                NodeKind::File(FileNode::ReadOnly(_)) => WriteAction::Result(Err(
-                    NineDoorError::protocol(
+                NodeKind::File(FileNode::ReadOnly(_)) => {
+                    WriteAction::Result(Err(NineDoorError::protocol(
                         ErrorCode::Permission,
                         format!("cannot write read-only file /{}", join_path(path)),
-                    ),
-                )),
+                    )))
+                }
                 NodeKind::File(FileNode::TraceControl) => {
                     WriteAction::Result(self.trace.write_ctl(data))
                 }
                 NodeKind::File(FileNode::TraceEvents)
                 | NodeKind::File(FileNode::KernelMessages)
-                | NodeKind::File(FileNode::TaskTrace(_)) => WriteAction::Result(Err(
-                    NineDoorError::protocol(
+                | NodeKind::File(FileNode::TaskTrace(_)) => {
+                    WriteAction::Result(Err(NineDoorError::protocol(
                         ErrorCode::Permission,
                         format!("cannot write read-only file /{}", join_path(path)),
-                    ),
-                )),
+                    )))
+                }
                 NodeKind::File(FileNode::CasManifest { epoch }) => {
                     WriteAction::CasManifest(epoch.clone())
                 }
@@ -1025,7 +1036,10 @@ impl Namespace {
         data: &[u8],
     ) -> Result<Option<u32>, NineDoorError> {
         let max_log_bytes = MAX_MSIZE as usize;
-        if let Some(count) = self.sidecar_modbus.write(path, offset, data, max_log_bytes)? {
+        if let Some(count) = self
+            .sidecar_modbus
+            .write(path, offset, data, max_log_bytes)?
+        {
             return Ok(Some(count));
         }
         if let Some(count) = self.sidecar_dnp3.write(path, offset, data, max_log_bytes)? {
@@ -1447,6 +1461,11 @@ impl Namespace {
         if self.telemetry_ingest.enabled() {
             self.ensure_dir(&queen_path, "telemetry")
                 .expect("create /queen/telemetry");
+            self.ensure_dir(&queen_path, "export")
+                .expect("create /queen/export");
+            let export_root = vec!["queen".to_owned(), "export".to_owned()];
+            self.ensure_dir(&export_root, "lora_jobs")
+                .expect("create /queen/export/lora_jobs");
         }
         if self.shards.is_enabled() {
             self.ensure_dir(&[], "shard").expect("create /shard");
@@ -1459,7 +1478,8 @@ impl Namespace {
                     .expect("create /shard/<id>/worker");
             }
             if self.shards.legacy_worker_alias_enabled() {
-                self.ensure_dir(&[], "worker").expect("create /worker alias");
+                self.ensure_dir(&[], "worker")
+                    .expect("create /worker alias");
             }
         } else {
             self.ensure_dir(&[], "worker").expect("create /worker");
@@ -1484,16 +1504,13 @@ impl Namespace {
             self.bootstrap_host().expect("create /host namespace");
         }
         if self.policy.enabled {
-            self.bootstrap_policy()
-                .expect("create /policy namespace");
+            self.bootstrap_policy().expect("create /policy namespace");
         }
         if self.audit.enabled {
-            self.bootstrap_audit()
-                .expect("create /audit namespace");
+            self.bootstrap_audit().expect("create /audit namespace");
         }
         if self.replay.enabled {
-            self.bootstrap_replay()
-                .expect("create /replay namespace");
+            self.bootstrap_replay().expect("create /replay namespace");
         }
     }
 
@@ -1892,7 +1909,9 @@ impl Namespace {
             if let Some(mime) = command.mime.as_deref() {
                 let mime = mime.trim();
                 if mime.is_empty()
-                    || mime.chars().any(|ch| ch == '\n' || ch == '\r' || ch == '\0')
+                    || mime
+                        .chars()
+                        .any(|ch| ch == '\n' || ch == '\r' || ch == '\0')
                 {
                     return Err(NineDoorError::protocol(
                         ErrorCode::Invalid,
@@ -1958,14 +1977,19 @@ impl Namespace {
                 }
             }
         };
-        let provided_offset = if offset == u64::MAX { expected_offset } else { offset };
-        let bounds = append_only_write_bounds(expected_offset, provided_offset, remaining, data.len())
-            .map_err(|err| {
-                NineDoorError::protocol(
-                    ErrorCode::Invalid,
-                    format!("telemetry append offset rejected: {err}"),
-                )
-            })?;
+        let provided_offset = if offset == u64::MAX {
+            expected_offset
+        } else {
+            offset
+        };
+        let bounds =
+            append_only_write_bounds(expected_offset, provided_offset, remaining, data.len())
+                .map_err(|err| {
+                    NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        format!("telemetry append offset rejected: {err}"),
+                    )
+                })?;
         if bounds.short {
             return Err(NineDoorError::protocol(
                 ErrorCode::TooBig,
@@ -2062,6 +2086,40 @@ impl Namespace {
         Ok(())
     }
 
+    /// Replace or create a LoRA export job under `/queen/export/lora_jobs/<job_id>`.
+    pub fn set_lora_export_job(
+        &mut self,
+        job_id: &str,
+        telemetry: &[u8],
+        base_model: &[u8],
+        policy: &[u8],
+    ) -> Result<(), NineDoorError> {
+        if !self.telemetry_ingest.enabled() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::NotFound,
+                "queen export disabled",
+            ));
+        }
+        let export_root = vec!["queen".to_owned(), "export".to_owned()];
+        self.ensure_dir_raw(&export_root, "lora_jobs")?;
+        let jobs_root = vec![
+            "queen".to_owned(),
+            "export".to_owned(),
+            "lora_jobs".to_owned(),
+        ];
+        self.ensure_dir_raw(&jobs_root, job_id)?;
+        let job_root = vec![
+            "queen".to_owned(),
+            "export".to_owned(),
+            "lora_jobs".to_owned(),
+            job_id.to_owned(),
+        ];
+        self.set_read_only_file(&job_root, "telemetry.cbor", telemetry)?;
+        self.set_read_only_file(&job_root, "base_model.ref", base_model)?;
+        self.set_read_only_file(&job_root, "policy.toml", policy)?;
+        Ok(())
+    }
+
     /// Install the telemetry schema descriptor under `/gpu/telemetry/schema.json`.
     pub fn set_gpu_telemetry_schema(
         &mut self,
@@ -2107,10 +2165,7 @@ impl Namespace {
 
     /// Replace the `/proc/9p/outstanding.cbor` contents.
     pub fn set_proc_outstanding_cbor_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
-        self.ensure_ui_provider_enabled(
-            self.ui.proc_9p.outstanding,
-            "proc/9p/outstanding.cbor",
-        )?;
+        self.ensure_ui_provider_enabled(self.ui.proc_9p.outstanding, "proc/9p/outstanding.cbor")?;
         let parent = vec!["proc".to_owned(), "9p".to_owned()];
         self.set_read_only_file(&parent, "outstanding.cbor", data)
     }
@@ -2124,10 +2179,7 @@ impl Namespace {
 
     /// Replace the `/proc/9p/short_writes.cbor` contents.
     pub fn set_proc_short_writes_cbor_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
-        self.ensure_ui_provider_enabled(
-            self.ui.proc_9p.short_writes,
-            "proc/9p/short_writes.cbor",
-        )?;
+        self.ensure_ui_provider_enabled(self.ui.proc_9p.short_writes, "proc/9p/short_writes.cbor")?;
         let parent = vec!["proc".to_owned(), "9p".to_owned()];
         self.set_read_only_file(&parent, "short_writes.cbor", data)
     }
@@ -2222,10 +2274,7 @@ impl Namespace {
 
     /// Replace the `/proc/ingest/p50_ms.cbor` contents.
     pub fn set_proc_ingest_p50_cbor_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
-        self.ensure_ui_provider_enabled(
-            self.ui.proc_ingest.p50_ms,
-            "proc/ingest/p50_ms.cbor",
-        )?;
+        self.ensure_ui_provider_enabled(self.ui.proc_ingest.p50_ms, "proc/ingest/p50_ms.cbor")?;
         let parent = vec!["proc".to_owned(), "ingest".to_owned()];
         self.set_read_only_file(&parent, "p50_ms.cbor", data)
     }
@@ -2239,10 +2288,7 @@ impl Namespace {
 
     /// Replace the `/proc/ingest/p95_ms.cbor` contents.
     pub fn set_proc_ingest_p95_cbor_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
-        self.ensure_ui_provider_enabled(
-            self.ui.proc_ingest.p95_ms,
-            "proc/ingest/p95_ms.cbor",
-        )?;
+        self.ensure_ui_provider_enabled(self.ui.proc_ingest.p95_ms, "proc/ingest/p95_ms.cbor")?;
         let parent = vec!["proc".to_owned(), "ingest".to_owned()];
         self.set_read_only_file(&parent, "p95_ms.cbor", data)
     }
@@ -2363,10 +2409,7 @@ impl Namespace {
         &mut self,
         data: &[u8],
     ) -> Result<(), NineDoorError> {
-        self.ensure_ui_provider_enabled(
-            self.ui.policy_preflight.req,
-            "policy/preflight/req.cbor",
-        )?;
+        self.ensure_ui_provider_enabled(self.ui.policy_preflight.req, "policy/preflight/req.cbor")?;
         let parent = vec!["policy".to_owned(), "preflight".to_owned()];
         self.set_read_only_file(&parent, "req.cbor", data)
     }
@@ -2425,11 +2468,7 @@ impl Namespace {
         Ok(())
     }
 
-    fn ensure_ui_provider_enabled(
-        &self,
-        enabled: bool,
-        label: &str,
-    ) -> Result<(), NineDoorError> {
+    fn ensure_ui_provider_enabled(&self, enabled: bool, label: &str) -> Result<(), NineDoorError> {
         if !enabled {
             return Err(NineDoorError::protocol(
                 ErrorCode::NotFound,
@@ -2620,7 +2659,10 @@ impl SidecarBusState {
         })
     }
 
-    fn adapter_for_path(&self, path: &[String]) -> Option<(&SidecarBusAdapterState, SidecarBusFile)> {
+    fn adapter_for_path(
+        &self,
+        path: &[String],
+    ) -> Option<(&SidecarBusAdapterState, SidecarBusFile)> {
         self.adapters
             .iter()
             .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
@@ -2691,7 +2733,9 @@ impl SidecarBusState {
             }
             SidecarBusFile::Link => {
                 let text = std::str::from_utf8(data)
-                    .map_err(|_| NineDoorError::protocol(ErrorCode::Invalid, "invalid link payload"))?
+                    .map_err(|_| {
+                        NineDoorError::protocol(ErrorCode::Invalid, "invalid link payload")
+                    })?
                     .trim();
                 match text {
                     "online" => adapter.link_state = LinkState::Online,
@@ -2726,12 +2770,7 @@ impl SidecarBusState {
             SidecarBusFile::Replay => {
                 let snapshot = adapter.spool.snapshot();
                 let total_bytes: usize = snapshot.iter().map(|frame| frame.payload.len()).sum();
-                if adapter
-                    .telemetry
-                    .len()
-                    .saturating_add(total_bytes)
-                    > max_log_bytes
-                {
+                if adapter.telemetry.len().saturating_add(total_bytes) > max_log_bytes {
                     return Err(NineDoorError::protocol(
                         ErrorCode::TooBig,
                         "sidecar telemetry buffer full",
@@ -2969,14 +3008,31 @@ impl SidecarLoraState {
 #[derive(Debug, Clone)]
 enum CasPath {
     UpdatesRoot,
-    UpdateEpoch { epoch: String },
-    UpdateManifest { epoch: String },
-    UpdateStatus { epoch: String, _variant: UiVariant },
-    UpdateChunks { epoch: String },
-    UpdateChunk { epoch: String, digest: [u8; 32] },
+    UpdateEpoch {
+        epoch: String,
+    },
+    UpdateManifest {
+        epoch: String,
+    },
+    UpdateStatus {
+        epoch: String,
+        _variant: UiVariant,
+    },
+    UpdateChunks {
+        epoch: String,
+    },
+    UpdateChunk {
+        epoch: String,
+        digest: [u8; 32],
+    },
     ModelsRoot,
-    ModelRoot { digest: [u8; 32] },
-    ModelFile { digest: [u8; 32], _kind: ModelFileKind },
+    ModelRoot {
+        digest: [u8; 32],
+    },
+    ModelFile {
+        digest: [u8; 32],
+        _kind: ModelFileKind,
+    },
 }
 
 fn parse_cas_path(path: &[String]) -> Result<Option<CasPath>, NineDoorError> {
@@ -3151,9 +3207,17 @@ enum FileNode {
     TraceEvents,
     KernelMessages,
     TaskTrace(String),
-    CasManifest { epoch: String },
-    CasChunk { epoch: String, digest: [u8; 32] },
-    CasModel { digest: [u8; 32], kind: ModelFileKind },
+    CasManifest {
+        epoch: String,
+    },
+    CasChunk {
+        epoch: String,
+        digest: [u8; 32],
+    },
+    CasModel {
+        digest: [u8; 32],
+        kind: ModelFileKind,
+    },
 }
 
 /// Borrowed node view used by callers.

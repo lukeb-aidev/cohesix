@@ -4,10 +4,10 @@
 // Author: Lukas Bower
 
 mod cas;
+pub mod cbor;
 mod cli;
 mod coh;
 mod cohsh;
-pub mod cbor;
 mod docs;
 mod rust;
 mod swarmui;
@@ -210,7 +210,10 @@ pub fn emit_all(
     cli::emit_cli_script(manifest, &options.cli_script_out)?;
     docs::emit_doc_snippet(manifest_hash, docs, &options.doc_snippet_out)?;
     docs::emit_gpu_breadcrumbs_snippet(docs, &options.gpu_breadcrumbs_snippet_out)?;
-    docs::emit_observability_interfaces_snippet(docs, &options.observability_interfaces_snippet_out)?;
+    docs::emit_observability_interfaces_snippet(
+        docs,
+        &options.observability_interfaces_snippet_out,
+    )?;
     docs::emit_observability_security_snippet(docs, &options.observability_security_snippet_out)?;
     docs::emit_ticket_quotas_snippet(docs, &options.ticket_quotas_snippet_out)?;
     docs::emit_trace_policy_snippet(docs, &options.trace_policy_snippet_out)?;
@@ -256,9 +259,7 @@ pub fn emit_all(
         )
     })?;
 
-    let hash_path = options
-        .manifest_out
-        .with_extension("json.sha256");
+    let hash_path = options.manifest_out.with_extension("json.sha256");
     let hash_contents = format!(
         "# Author: Lukas Bower\n# Purpose: SHA-256 fingerprint for root_task_resolved.json.\n{}  {}\n",
         manifest_hash,
@@ -268,9 +269,8 @@ pub fn emit_all(
             .and_then(|name| name.to_str())
             .unwrap_or("root_task_resolved.json")
     );
-    fs::write(&hash_path, hash_contents).with_context(|| {
-        format!("failed to write manifest hash {}", hash_path.display())
-    })?;
+    fs::write(&hash_path, hash_contents)
+        .with_context(|| format!("failed to write manifest hash {}", hash_path.display()))?;
 
     Ok(GeneratedArtifacts {
         rust_dir: options.out_dir.clone(),
@@ -315,7 +315,6 @@ pub fn hash_bytes(bytes: &[u8]) -> String {
 }
 
 pub fn hash_path(path: &Path) -> Result<String> {
-    let contents = fs::read(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let contents = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     Ok(hash_bytes(&contents))
 }

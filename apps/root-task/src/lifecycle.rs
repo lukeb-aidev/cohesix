@@ -269,8 +269,10 @@ pub fn apply_command(
     if !command_allowed(from, command) {
         return Err(LifecycleError::InvalidTransition);
     }
-    if matches!(command, LifecycleCommand::Drain | LifecycleCommand::Quiesce | LifecycleCommand::Reset)
-        && outstanding_leases > 0
+    if matches!(
+        command,
+        LifecycleCommand::Drain | LifecycleCommand::Quiesce | LifecycleCommand::Reset
+    ) && outstanding_leases > 0
     {
         return Err(LifecycleError::OutstandingLeases {
             leases: outstanding_leases,
@@ -297,7 +299,11 @@ pub fn apply_auto_transition(
         return Err(LifecycleError::AutoTransitionDenied);
     }
     store_state(target, now_ms, reason_from_str(reason));
-    Ok(LifecycleTransition { from, to: target, reason })
+    Ok(LifecycleTransition {
+        from,
+        to: target,
+        reason,
+    })
 }
 
 pub fn gate_allows(gate: LifecycleGate) -> bool {
@@ -424,11 +430,16 @@ fn command_target(command: LifecycleCommand) -> (LifecycleState, &'static str) {
 
 fn command_allowed(state: LifecycleState, command: LifecycleCommand) -> bool {
     match command {
-        LifecycleCommand::Cordon => matches!(state, LifecycleState::Online | LifecycleState::Degraded),
+        LifecycleCommand::Cordon => {
+            matches!(state, LifecycleState::Online | LifecycleState::Degraded)
+        }
         LifecycleCommand::Drain => matches!(state, LifecycleState::Draining),
         LifecycleCommand::Resume => !matches!(state, LifecycleState::Online),
         LifecycleCommand::Quiesce => {
-            matches!(state, LifecycleState::Online | LifecycleState::Degraded | LifecycleState::Draining)
+            matches!(
+                state,
+                LifecycleState::Online | LifecycleState::Degraded | LifecycleState::Draining
+            )
         }
         LifecycleCommand::Reset => !matches!(state, LifecycleState::Booting),
     }

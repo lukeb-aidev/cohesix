@@ -14,9 +14,9 @@ use std::fs::File;
 use std::io::{self, BufReader};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
 #[cfg(feature = "tcp")]
 use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 #[cfg(feature = "tcp")]
 use std::sync::Mutex;
 #[cfg(feature = "tcp")]
@@ -30,19 +30,20 @@ use gpu_bridge_host::auto_bridge;
 use log::LevelFilter;
 use nine_door::NineDoor;
 
+use cohsh::client::InProcessTransport;
+use cohsh::trace::{TraceAckMode, TraceShellTransport};
+use cohsh::SECURE9P_MSIZE;
 #[cfg(feature = "tcp")]
 use cohsh::{
     default_policy_path, load_policy, tcp_debug_enabled, validate_script, AutoAttach,
-    NineDoorTransport, PolicyOverrides, QemuTransport, RoleArg, SessionPool, Shell,
-    Transport, TransportFactory,
+    NineDoorTransport, PolicyOverrides, QemuTransport, RoleArg, SessionPool, Shell, Transport,
+    TransportFactory,
 };
 #[cfg(not(feature = "tcp"))]
 use cohsh::{
     default_policy_path, load_policy, validate_script, AutoAttach, NineDoorTransport,
     PolicyOverrides, QemuTransport, RoleArg, SessionPool, Shell, Transport, TransportFactory,
 };
-use cohsh::client::InProcessTransport;
-use cohsh::trace::{TraceAckMode, TraceShellTransport};
 #[cfg(feature = "tcp")]
 use cohsh::{PooledTcpTransport, SharedTcpTransport, TcpTransport, COHSH_TCP_PORT};
 use cohsh_core::command::MAX_LINE_LEN;
@@ -50,7 +51,6 @@ use cohsh_core::trace::{
     TraceLog, TraceLogBuilder, TraceLogBuilderRef, TracePolicy, TraceReplayTransport,
     TraceTransportRecorder,
 };
-use cohsh::SECURE9P_MSIZE;
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum TransportKind {
@@ -386,15 +386,10 @@ fn main() -> Result<()> {
 
     let trace_enabled = cli.record_trace.is_some() || cli.replay_trace.is_some();
     if trace_enabled && !matches!(cli.transport, TransportKind::Mock) {
-        return Err(anyhow!(
-            "trace record/replay requires --transport mock"
-        ));
+        return Err(anyhow!("trace record/replay requires --transport mock"));
     }
-    let trace_policy = TracePolicy::new(
-        policy.trace.max_bytes,
-        SECURE9P_MSIZE,
-        MAX_LINE_LEN as u32,
-    );
+    let trace_policy =
+        TracePolicy::new(policy.trace.max_bytes, SECURE9P_MSIZE, MAX_LINE_LEN as u32);
     let mut trace_builder: Option<TraceLogBuilderRef> = None;
 
     let (transport, pool_factory): (Box<dyn Transport>, Option<Arc<dyn TransportFactory>>) =
@@ -406,22 +401,21 @@ fn main() -> Result<()> {
                 let server_clone = server.clone();
                 let builder_clone = Rc::clone(&builder);
                 let factory = Box::new(move || {
-                    let connection = server_clone
-                        .connect()
-                        .context("open NineDoor session")?;
+                    let connection = server_clone.connect().context("open NineDoor session")?;
                     let transport = InProcessTransport::new(connection);
                     Ok(TraceTransportRecorder::new(
                         transport,
                         Rc::clone(&builder_clone),
                     ))
                 });
-                let transport = TraceShellTransport::new(factory, TraceAckMode::Record(builder), "trace-record");
+                let transport = TraceShellTransport::new(
+                    factory,
+                    TraceAckMode::Record(builder),
+                    "trace-record",
+                );
                 (Box::new(transport), None)
             } else {
-                let trace_path = cli
-                    .replay_trace
-                    .as_ref()
-                    .expect("trace replay path");
+                let trace_path = cli.replay_trace.as_ref().expect("trace replay path");
                 let payload = fs::read(trace_path)
                     .with_context(|| format!("failed to read trace {}", trace_path.display()))?;
                 let trace = TraceLog::decode(&payload, trace_policy)?;
@@ -532,9 +526,7 @@ fn main() -> Result<()> {
 
     if run_result.is_ok() {
         if let Some(trace_path) = cli.record_trace {
-            let builder = trace_builder
-                .as_ref()
-                .context("trace builder missing")?;
+            let builder = trace_builder.as_ref().context("trace builder missing")?;
             let log = builder.borrow().snapshot();
             let payload = log.encode(trace_policy)?;
             fs::write(&trace_path, payload)

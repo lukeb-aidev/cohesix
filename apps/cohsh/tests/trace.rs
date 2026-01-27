@@ -14,6 +14,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
+use cohesix_ticket::Role;
 use cohsh::client::{CohClient, InProcessTransport};
 use cohsh::policy::CohshPolicy;
 use cohsh::trace::{TraceAckMode, TraceShellTransport};
@@ -26,7 +27,6 @@ use cohsh_core::trace::{
 };
 use cohsh_core::wire::{render_ack, AckLine, AckStatus};
 use cohsh_core::{role_label, ConsoleVerb};
-use cohesix_ticket::Role;
 use nine_door::NineDoor;
 use secure9p_codec::OpenMode;
 
@@ -98,7 +98,11 @@ fn record_trace(server: &NineDoor) -> Result<(TraceLog, Vec<String>)> {
             Rc::clone(&builder_for_transport),
         ))
     });
-    let mut transport = TraceShellTransport::new(factory, TraceAckMode::Record(builder_for_ack), "trace-record");
+    let mut transport = TraceShellTransport::new(
+        factory,
+        TraceAckMode::Record(builder_for_ack),
+        "trace-record",
+    );
 
     let mut transcript = Vec::new();
     let session = transport.attach(Role::Queen, None)?;
@@ -156,7 +160,11 @@ fn seed_worker(server: &NineDoor) -> Result<()> {
     let transport = InProcessTransport::new(connection);
     let mut client = CohClient::connect(transport, Role::Queen, None)?;
     let payload = cohsh::queen::spawn("heartbeat", ["ticks=4"].iter().copied())?;
-    write_payload(&mut client, cohsh::queen::queen_ctl_path(), payload.as_bytes())?;
+    write_payload(
+        &mut client,
+        cohsh::queen::queen_ctl_path(),
+        payload.as_bytes(),
+    )?;
     let telemetry_path = telemetry_path();
     write_payload(&mut client, &telemetry_path, b"tick 1\n")?;
     write_payload(&mut client, &telemetry_path, b"tick 2\n")?;
@@ -207,8 +215,7 @@ fn load_trace_fixture() -> Result<Vec<u8>> {
         }
         fs::write(&trace_path, &payload).context("write trace fixture")?;
     }
-    fs::read(&trace_path)
-        .with_context(|| format!("read trace fixture {}", trace_path.display()))
+    fs::read(&trace_path).with_context(|| format!("read trace fixture {}", trace_path.display()))
 }
 
 fn trace_fixture_lock() -> &'static Mutex<()> {
@@ -230,14 +237,30 @@ fn expected_ack_lines() -> Vec<String> {
     let list_detail = format!("path={}", LIST_PATH);
     let tail_detail = format!("path={}", telemetry_path());
     vec![
-        render_ack_line(AckStatus::Ok, ConsoleVerb::Attach.ack_label(), Some(attach_detail.as_str())),
-        render_ack_line(AckStatus::Ok, ConsoleVerb::Ls.ack_label(), Some(list_detail.as_str())),
-        render_ack_line(AckStatus::Ok, ConsoleVerb::Tail.ack_label(), Some(tail_detail.as_str())),
+        render_ack_line(
+            AckStatus::Ok,
+            ConsoleVerb::Attach.ack_label(),
+            Some(attach_detail.as_str()),
+        ),
+        render_ack_line(
+            AckStatus::Ok,
+            ConsoleVerb::Ls.ack_label(),
+            Some(list_detail.as_str()),
+        ),
+        render_ack_line(
+            AckStatus::Ok,
+            ConsoleVerb::Tail.ack_label(),
+            Some(tail_detail.as_str()),
+        ),
     ]
 }
 
 fn render_ack_line(status: AckStatus, verb: &str, detail: Option<&str>) -> String {
-    let ack = AckLine { status, verb, detail };
+    let ack = AckLine {
+        status,
+        verb,
+        detail,
+    };
     let mut line = String::new();
     render_ack(&mut line, &ack).expect("render ack line");
     line

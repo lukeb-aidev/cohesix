@@ -188,15 +188,12 @@ impl CasStore {
                 format!("update epoch {epoch} not found"),
             )
         })?;
-        let data = bundle
-            .manifest_bytes
-            .as_deref()
-            .ok_or_else(|| {
-                NineDoorError::protocol(
-                    ErrorCode::NotFound,
-                    format!("update manifest {epoch} not committed"),
-                )
-            })?;
+        let data = bundle.manifest_bytes.as_deref().ok_or_else(|| {
+            NineDoorError::protocol(
+                ErrorCode::NotFound,
+                format!("update manifest {epoch} not committed"),
+            )
+        })?;
         Ok(read_slice(data, offset, count))
     }
 
@@ -272,10 +269,7 @@ impl CasStore {
         self.ensure_epoch(epoch)?;
         let payload = decode_payload(data)?;
         let expected_offset = {
-            let bundle = self
-                .updates
-                .get(epoch)
-                .expect("update bundle must exist");
+            let bundle = self.updates.get(epoch).expect("update bundle must exist");
             if bundle.manifest_bytes.is_some() {
                 return Err(NineDoorError::protocol(
                     ErrorCode::Permission,
@@ -312,10 +306,7 @@ impl CasStore {
             bundle.manifest_pending.extend_from_slice(&payload);
         }
         let pending_snapshot = {
-            let bundle = self
-                .updates
-                .get(epoch)
-                .expect("update bundle must exist");
+            let bundle = self.updates.get(epoch).expect("update bundle must exist");
             bundle.manifest_pending.clone()
         };
         match CasManifest::decode(&pending_snapshot) {
@@ -612,8 +603,8 @@ impl CasStore {
                 "manifest chunk_bytes mismatch",
             ));
         }
-        let expected_bytes = (manifest.chunks.len() as u64)
-            .saturating_mul(manifest.chunk_bytes as u64);
+        let expected_bytes =
+            (manifest.chunks.len() as u64).saturating_mul(manifest.chunk_bytes as u64);
         if manifest.payload_bytes != expected_bytes {
             return Err(NineDoorError::protocol(
                 ErrorCode::Invalid,
@@ -633,12 +624,16 @@ impl CasStore {
                     "delta manifests disabled",
                 ));
             }
-            let base = self.updates.get(&delta.base_epoch).and_then(|bundle| bundle.manifest.as_ref()).ok_or_else(|| {
-                NineDoorError::protocol(
-                    ErrorCode::NotFound,
-                    format!("delta base epoch {} missing", delta.base_epoch),
-                )
-            })?;
+            let base = self
+                .updates
+                .get(&delta.base_epoch)
+                .and_then(|bundle| bundle.manifest.as_ref())
+                .ok_or_else(|| {
+                    NineDoorError::protocol(
+                        ErrorCode::NotFound,
+                        format!("delta base epoch {} missing", delta.base_epoch),
+                    )
+                })?;
             if base.delta.is_some() {
                 return Err(NineDoorError::protocol(
                     ErrorCode::Invalid,
@@ -670,10 +665,8 @@ impl CasStore {
                 )));
                 NineDoorError::protocol(ErrorCode::Permission, "signing key missing")
             })?;
-            let verifying_key =
-                VerifyingKey::from_bytes(key).map_err(|_| {
-                    NineDoorError::protocol(ErrorCode::Invalid, "signing key invalid")
-                })?;
+            let verifying_key = VerifyingKey::from_bytes(key)
+                .map_err(|_| NineDoorError::protocol(ErrorCode::Invalid, "signing key invalid"))?;
             let payload = manifest.signature_payload().map_err(|err| {
                 NineDoorError::protocol(
                     ErrorCode::Invalid,
@@ -700,7 +693,11 @@ impl CasStore {
                 "manifest payload hash mismatch",
             ));
         }
-        let delta_label = if manifest.delta.is_some() { "delta" } else { "base" };
+        let delta_label = if manifest.delta.is_some() {
+            "delta"
+        } else {
+            "base"
+        };
         let payload_hex = hex::encode(manifest.payload_sha256);
         self.events.push_back(CasEvent::info(format!(
             "cas-manifest accepted epoch={} kind={} payload_sha256={payload_hex} chunks={}",
@@ -958,9 +955,9 @@ impl CasStore {
 pub fn decode_payload(data: &[u8]) -> Result<Vec<u8>, NineDoorError> {
     let trimmed = trim_payload(data);
     if let Some(encoded) = trimmed.strip_prefix(b"b64:") {
-        return BASE64_STANDARD.decode(encoded).map_err(|_| {
-            NineDoorError::protocol(ErrorCode::Invalid, "base64 decode failed")
-        });
+        return BASE64_STANDARD
+            .decode(encoded)
+            .map_err(|_| NineDoorError::protocol(ErrorCode::Invalid, "base64 decode failed"));
     }
     Ok(trimmed.to_vec())
 }
@@ -978,14 +975,12 @@ fn build_update_status_text(snapshot: &UpdateStatusSnapshot) -> Result<Vec<u8>, 
     let _ = writeln!(
         text,
         "status epoch={} state={}",
-        snapshot.epoch,
-        snapshot.state
+        snapshot.epoch, snapshot.state
     );
     let _ = writeln!(
         text,
         "manifest_bytes={} manifest_pending_bytes={}",
-        snapshot.manifest_bytes,
-        snapshot.manifest_pending_bytes
+        snapshot.manifest_bytes, snapshot.manifest_pending_bytes
     );
     let _ = writeln!(
         text,
@@ -998,14 +993,12 @@ fn build_update_status_text(snapshot: &UpdateStatusSnapshot) -> Result<Vec<u8>, 
     let _ = writeln!(
         text,
         "payload_bytes={} payload_sha256={}",
-        snapshot.payload_bytes,
-        payload_sha
+        snapshot.payload_bytes, payload_sha
     );
     let _ = writeln!(
         text,
         "delta_base_epoch={} delta_base_sha256={}",
-        delta_epoch,
-        delta_sha
+        delta_epoch, delta_sha
     );
     ensure_stream_len("updates/<epoch>/status", text.len())?;
     Ok(text.into_bytes())
@@ -1061,17 +1054,19 @@ fn build_update_status_cbor(snapshot: &UpdateStatusSnapshot) -> Result<Vec<u8>, 
         .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
     writer
         .text("delta")
-        .and_then(|_| match (&snapshot.delta_base_epoch, snapshot.delta_base_sha256) {
-            (Some(epoch), Some(sha)) => {
-                writer.map(2)?;
-                writer.text("base_epoch")?;
-                writer.text(epoch)?;
-                writer.text("base_sha256")?;
-                writer.bytes(&sha)?;
-                Ok(())
-            }
-            _ => writer.null(),
-        })
+        .and_then(
+            |_| match (&snapshot.delta_base_epoch, snapshot.delta_base_sha256) {
+                (Some(epoch), Some(sha)) => {
+                    writer.map(2)?;
+                    writer.text("base_epoch")?;
+                    writer.text(epoch)?;
+                    writer.text("base_sha256")?;
+                    writer.bytes(&sha)?;
+                    Ok(())
+                }
+                _ => writer.null(),
+            },
+        )
         .map_err(|err| cbor_error("updates/<epoch>/status.cbor", err))?;
     Ok(writer.into_bytes())
 }
@@ -1080,10 +1075,7 @@ fn ensure_stream_len(label: &str, len: usize) -> Result<(), NineDoorError> {
     if len > UI_MAX_STREAM_BYTES {
         return Err(NineDoorError::protocol(
             ErrorCode::TooBig,
-            format!(
-                "{label} output exceeds {} bytes",
-                UI_MAX_STREAM_BYTES
-            ),
+            format!("{label} output exceeds {} bytes", UI_MAX_STREAM_BYTES),
         ));
     }
     Ok(())
@@ -1134,9 +1126,8 @@ pub fn parse_sha256(hex_str: &str) -> Result<[u8; 32], NineDoorError> {
         ));
     }
     let mut out = [0u8; 32];
-    hex::decode_to_slice(hex_str.as_bytes(), &mut out).map_err(|_| {
-        NineDoorError::protocol(ErrorCode::Invalid, "invalid sha256 digest")
-    })?;
+    hex::decode_to_slice(hex_str.as_bytes(), &mut out)
+        .map_err(|_| NineDoorError::protocol(ErrorCode::Invalid, "invalid sha256 digest"))?;
     Ok(out)
 }
 

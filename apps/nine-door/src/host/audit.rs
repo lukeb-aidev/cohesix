@@ -7,9 +7,9 @@
 
 use std::collections::VecDeque;
 
-use serde::Serialize;
 use secure9p_codec::ErrorCode;
 use secure9p_core::append_only_write_bounds;
+use serde::Serialize;
 
 use crate::NineDoorError;
 
@@ -212,10 +212,7 @@ impl AuditStore {
             ticket: ticket.unwrap_or("none"),
         };
         let bytes = encode_json_line(&entry)?;
-        let replay_entry = Some(ReplayEntry::new(
-            bytes.len() as u64,
-            outcome.ack_line(),
-        ));
+        let replay_entry = Some(ReplayEntry::new(bytes.len() as u64, outcome.ack_line()));
         let append = self.append_journal(u64::MAX, &bytes, replay_entry)?;
         Ok(append)
     }
@@ -534,9 +531,18 @@ pub struct ReplaySummary {
 
 /// Errors when a replay cursor is outside the retained window.
 pub enum ReplayWindowError {
-    Stale { requested: u64, available_start: u64 },
-    Future { requested: u64, available_end: u64 },
-    TooManyEntries { requested: usize, max: usize },
+    Stale {
+        requested: u64,
+        available_start: u64,
+    },
+    Future {
+        requested: u64,
+        available_end: u64,
+    },
+    TooManyEntries {
+        requested: usize,
+        max: usize,
+    },
 }
 
 /// Append outcome including any truncation details.
@@ -603,11 +609,10 @@ impl BoundedLog {
         }
         let offset_start = self.next_offset;
         let offset_end = offset_start.saturating_add(bytes.len() as u64);
-        self.entries.push_back(LogEntry {
-            bytes,
-            offset_end,
-        });
-        self.total_bytes = self.total_bytes.saturating_add(self.entries.back().unwrap().bytes.len());
+        self.entries.push_back(LogEntry { bytes, offset_end });
+        self.total_bytes = self
+            .total_bytes
+            .saturating_add(self.entries.back().unwrap().bytes.len());
         self.next_offset = offset_end;
         Ok(AuditAppendOutcome {
             count: (offset_end - offset_start) as u32,
@@ -650,10 +655,7 @@ impl ReplayEntry {
 
 fn ensure_json_lines(data: &[u8], label: &str) -> Result<(), NineDoorError> {
     let text = std::str::from_utf8(data).map_err(|err| {
-        NineDoorError::protocol(
-            ErrorCode::Invalid,
-            format!("{label} must be utf-8: {err}"),
-        )
+        NineDoorError::protocol(ErrorCode::Invalid, format!("{label} must be utf-8: {err}"))
     })?;
     for line in text.lines() {
         let trimmed = line.trim();
@@ -661,10 +663,7 @@ fn ensure_json_lines(data: &[u8], label: &str) -> Result<(), NineDoorError> {
             continue;
         }
         serde_json::from_str::<serde_json::Value>(trimmed).map_err(|err| {
-            NineDoorError::protocol(
-                ErrorCode::Invalid,
-                format!("invalid {label} entry: {err}"),
-            )
+            NineDoorError::protocol(ErrorCode::Invalid, format!("invalid {label} entry: {err}"))
         })?;
     }
     Ok(())

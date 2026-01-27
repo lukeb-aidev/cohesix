@@ -23,7 +23,10 @@ fn tag_window_enforces_capacity() {
 #[test]
 fn short_write_policy_backoff_is_bounded() {
     let policy = ShortWritePolicy::Retry;
-    assert_eq!(policy.retry_delay_ms(0), Some(DEFAULT_SHORT_WRITE_BACKOFF_MS));
+    assert_eq!(
+        policy.retry_delay_ms(0),
+        Some(DEFAULT_SHORT_WRITE_BACKOFF_MS)
+    );
     assert_eq!(
         policy.retry_delay_ms(1),
         Some(DEFAULT_SHORT_WRITE_BACKOFF_MS * 2)

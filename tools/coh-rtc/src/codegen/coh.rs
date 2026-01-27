@@ -47,12 +47,20 @@ pub fn emit_coh_policy(
     })?;
 
     let policy_doc = render_policy_doc(manifest, manifest_hash, &policy_hash_value);
-    fs::write(policy_doc_out, policy_doc)
-        .with_context(|| format!("failed to write coh policy doc {}", policy_doc_out.display()))?;
+    fs::write(policy_doc_out, policy_doc).with_context(|| {
+        format!(
+            "failed to write coh policy doc {}",
+            policy_doc_out.display()
+        )
+    })?;
 
     let policy_rust = render_policy_rust(manifest, manifest_hash, &policy_hash_value);
-    fs::write(policy_rust_out, policy_rust)
-        .with_context(|| format!("failed to write coh policy rust {}", policy_rust_out.display()))?;
+    fs::write(policy_rust_out, policy_rust).with_context(|| {
+        format!(
+            "failed to write coh policy rust {}",
+            policy_rust_out.display()
+        )
+    })?;
 
     Ok(CohPolicyArtifacts {
         policy_toml: policy_out.to_path_buf(),
@@ -74,9 +82,21 @@ fn render_policy_toml(manifest: &Manifest, manifest_hash: &str) -> String {
     writeln!(contents, "manifest_sha256 = \"{}\"", manifest_hash).ok();
     writeln!(contents).ok();
     writeln!(contents, "[coh.mount]").ok();
-    writeln!(contents, "root = \"{}\"", manifest.client_policies.coh.mount.root).ok();
+    writeln!(
+        contents,
+        "root = \"{}\"",
+        manifest.client_policies.coh.mount.root
+    )
+    .ok();
     writeln!(contents, "allowlist = [").ok();
-    for (idx, entry) in manifest.client_policies.coh.mount.allowlist.iter().enumerate() {
+    for (idx, entry) in manifest
+        .client_policies
+        .coh
+        .mount
+        .allowlist
+        .iter()
+        .enumerate()
+    {
         let suffix = if idx + 1 == manifest.client_policies.coh.mount.allowlist.len() {
             ""
         } else {
@@ -102,7 +122,11 @@ fn render_policy_toml(manifest: &Manifest, manifest_hash: &str) -> String {
     writeln!(
         contents,
         "max_segments_per_device = {}",
-        manifest.client_policies.coh.telemetry.max_segments_per_device
+        manifest
+            .client_policies
+            .coh
+            .telemetry
+            .max_segments_per_device
     )
     .ok();
     writeln!(
@@ -114,7 +138,11 @@ fn render_policy_toml(manifest: &Manifest, manifest_hash: &str) -> String {
     writeln!(
         contents,
         "max_total_bytes_per_device = {}",
-        manifest.client_policies.coh.telemetry.max_total_bytes_per_device
+        manifest
+            .client_policies
+            .coh
+            .telemetry
+            .max_total_bytes_per_device
     )
     .ok();
     writeln!(contents).ok();
@@ -154,7 +182,94 @@ fn render_policy_toml(manifest: &Manifest, manifest_hash: &str) -> String {
     writeln!(
         contents,
         "max_command_bytes = {}",
-        manifest.client_policies.coh.run.breadcrumb.max_command_bytes
+        manifest
+            .client_policies
+            .coh
+            .run
+            .breadcrumb
+            .max_command_bytes
+    )
+    .ok();
+    writeln!(contents).ok();
+    writeln!(contents, "[coh.peft.export]").ok();
+    writeln!(
+        contents,
+        "root = \"{}\"",
+        manifest.client_policies.coh.peft.export.root
+    )
+    .ok();
+    writeln!(
+        contents,
+        "max_telemetry_bytes = {}",
+        manifest.client_policies.coh.peft.export.max_telemetry_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "max_policy_bytes = {}",
+        manifest.client_policies.coh.peft.export.max_policy_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "max_base_model_bytes = {}",
+        manifest
+            .client_policies
+            .coh
+            .peft
+            .export
+            .max_base_model_bytes
+    )
+    .ok();
+    writeln!(contents).ok();
+    writeln!(contents, "[coh.peft.import]").ok();
+    writeln!(
+        contents,
+        "registry_root = \"{}\"",
+        manifest.client_policies.coh.peft.import.registry_root
+    )
+    .ok();
+    writeln!(
+        contents,
+        "max_adapter_bytes = {}",
+        manifest.client_policies.coh.peft.import.max_adapter_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "max_lora_bytes = {}",
+        manifest.client_policies.coh.peft.import.max_lora_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "max_metrics_bytes = {}",
+        manifest.client_policies.coh.peft.import.max_metrics_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "max_manifest_bytes = {}",
+        manifest.client_policies.coh.peft.import.max_manifest_bytes
+    )
+    .ok();
+    writeln!(contents).ok();
+    writeln!(contents, "[coh.peft.activate]").ok();
+    writeln!(
+        contents,
+        "max_model_id_bytes = {}",
+        manifest
+            .client_policies
+            .coh
+            .peft
+            .activate
+            .max_model_id_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "max_state_bytes = {}",
+        manifest.client_policies.coh.peft.activate.max_state_bytes
     )
     .ok();
     writeln!(contents).ok();
@@ -225,7 +340,11 @@ fn render_policy_doc(manifest: &Manifest, manifest_hash: &str, policy_hash: &str
     writeln!(
         contents,
         "- `coh.telemetry.max_segments_per_device`: `{}`",
-        manifest.client_policies.coh.telemetry.max_segments_per_device
+        manifest
+            .client_policies
+            .coh
+            .telemetry
+            .max_segments_per_device
     )
     .ok();
     writeln!(
@@ -237,7 +356,11 @@ fn render_policy_doc(manifest: &Manifest, manifest_hash: &str, policy_hash: &str
     writeln!(
         contents,
         "- `coh.telemetry.max_total_bytes_per_device`: `{}`",
-        manifest.client_policies.coh.telemetry.max_total_bytes_per_device
+        manifest
+            .client_policies
+            .coh
+            .telemetry
+            .max_total_bytes_per_device
     )
     .ok();
     writeln!(
@@ -273,7 +396,88 @@ fn render_policy_doc(manifest: &Manifest, manifest_hash: &str, policy_hash: &str
     writeln!(
         contents,
         "- `coh.run.breadcrumb.max_command_bytes`: `{}`",
-        manifest.client_policies.coh.run.breadcrumb.max_command_bytes
+        manifest
+            .client_policies
+            .coh
+            .run
+            .breadcrumb
+            .max_command_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.peft.export.root`: `{}`",
+        manifest.client_policies.coh.peft.export.root
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.peft.export.max_telemetry_bytes`: `{}`",
+        manifest.client_policies.coh.peft.export.max_telemetry_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.peft.export.max_policy_bytes`: `{}`",
+        manifest.client_policies.coh.peft.export.max_policy_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.peft.export.max_base_model_bytes`: `{}`",
+        manifest
+            .client_policies
+            .coh
+            .peft
+            .export
+            .max_base_model_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.peft.import.registry_root`: `{}`",
+        manifest.client_policies.coh.peft.import.registry_root
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.peft.import.max_adapter_bytes`: `{}`",
+        manifest.client_policies.coh.peft.import.max_adapter_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.peft.import.max_lora_bytes`: `{}`",
+        manifest.client_policies.coh.peft.import.max_lora_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.peft.import.max_metrics_bytes`: `{}`",
+        manifest.client_policies.coh.peft.import.max_metrics_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.peft.import.max_manifest_bytes`: `{}`",
+        manifest.client_policies.coh.peft.import.max_manifest_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.peft.activate.max_model_id_bytes`: `{}`",
+        manifest
+            .client_policies
+            .coh
+            .peft
+            .activate
+            .max_model_id_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.peft.activate.max_state_bytes`: `{}`",
+        manifest.client_policies.coh.peft.activate.max_state_bytes
     )
     .ok();
     writeln!(
@@ -312,8 +516,18 @@ fn render_policy_rust(manifest: &Manifest, manifest_hash: &str, policy_hash: &st
     .ok();
     writeln!(contents, "// @generated by coh-rtc; do not edit.").ok();
     writeln!(contents).ok();
-    writeln!(contents, "pub const MANIFEST_SHA256: &str = \"{}\";", manifest_hash).ok();
-    writeln!(contents, "pub const POLICY_SHA256: &str = \"{}\";", policy_hash).ok();
+    writeln!(
+        contents,
+        "pub const MANIFEST_SHA256: &str = \"{}\";",
+        manifest_hash
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const POLICY_SHA256: &str = \"{}\";",
+        policy_hash
+    )
+    .ok();
     writeln!(contents).ok();
     writeln!(
         contents,
@@ -342,7 +556,11 @@ fn render_policy_rust(manifest: &Manifest, manifest_hash: &str, policy_hash: &st
     writeln!(
         contents,
         "pub const COH_TELEMETRY_MAX_SEGMENTS_PER_DEVICE: u32 = {};",
-        manifest.client_policies.coh.telemetry.max_segments_per_device
+        manifest
+            .client_policies
+            .coh
+            .telemetry
+            .max_segments_per_device
     )
     .ok();
     writeln!(
@@ -354,7 +572,11 @@ fn render_policy_rust(manifest: &Manifest, manifest_hash: &str, policy_hash: &st
     writeln!(
         contents,
         "pub const COH_TELEMETRY_MAX_TOTAL_BYTES_PER_DEVICE: u32 = {};",
-        manifest.client_policies.coh.telemetry.max_total_bytes_per_device
+        manifest
+            .client_policies
+            .coh
+            .telemetry
+            .max_total_bytes_per_device
     )
     .ok();
     writeln!(contents).ok();
@@ -391,7 +613,89 @@ fn render_policy_rust(manifest: &Manifest, manifest_hash: &str, policy_hash: &st
     writeln!(
         contents,
         "pub const COH_RUN_BREADCRUMB_MAX_COMMAND_BYTES: u32 = {};",
-        manifest.client_policies.coh.run.breadcrumb.max_command_bytes
+        manifest
+            .client_policies
+            .coh
+            .run
+            .breadcrumb
+            .max_command_bytes
+    )
+    .ok();
+    writeln!(contents).ok();
+    writeln!(
+        contents,
+        "pub const COH_PEFT_EXPORT_ROOT: &str = \"{}\";",
+        manifest.client_policies.coh.peft.export.root
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_PEFT_EXPORT_MAX_TELEMETRY_BYTES: u32 = {};",
+        manifest.client_policies.coh.peft.export.max_telemetry_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_PEFT_EXPORT_MAX_POLICY_BYTES: u32 = {};",
+        manifest.client_policies.coh.peft.export.max_policy_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_PEFT_EXPORT_MAX_BASE_MODEL_BYTES: u32 = {};",
+        manifest
+            .client_policies
+            .coh
+            .peft
+            .export
+            .max_base_model_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_PEFT_IMPORT_REGISTRY_ROOT: &str = \"{}\";",
+        manifest.client_policies.coh.peft.import.registry_root
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_PEFT_IMPORT_MAX_ADAPTER_BYTES: u64 = {};",
+        manifest.client_policies.coh.peft.import.max_adapter_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_PEFT_IMPORT_MAX_LORA_BYTES: u32 = {};",
+        manifest.client_policies.coh.peft.import.max_lora_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_PEFT_IMPORT_MAX_METRICS_BYTES: u32 = {};",
+        manifest.client_policies.coh.peft.import.max_metrics_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_PEFT_IMPORT_MAX_MANIFEST_BYTES: u32 = {};",
+        manifest.client_policies.coh.peft.import.max_manifest_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_PEFT_ACTIVATE_MAX_MODEL_ID_BYTES: u32 = {};",
+        manifest
+            .client_policies
+            .coh
+            .peft
+            .activate
+            .max_model_id_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_PEFT_ACTIVATE_MAX_STATE_BYTES: u32 = {};",
+        manifest.client_policies.coh.peft.activate.max_state_bytes
     )
     .ok();
     writeln!(contents).ok();

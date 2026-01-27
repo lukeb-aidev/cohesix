@@ -9,11 +9,11 @@ mod transcript_support;
 use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
+use cohesix_ticket::Role;
 use cohsh::client::{CohClient, InProcessTransport, TailEvent};
 use cohsh::queen;
 use cohsh_core::wire::{render_ack, AckLine, AckStatus, END_LINE};
 use cohsh_core::{role_label, ConsoleVerb};
-use cohesix_ticket::Role;
 use nine_door::NineDoor;
 use secure9p_codec::OpenMode;
 
@@ -143,7 +143,11 @@ fn write_payload<T: cohsh_core::Secure9pTransport>(
 }
 
 fn render_ack_line(status: AckStatus, verb: &str, detail: Option<&str>) -> String {
-    let ack = AckLine { status, verb, detail };
+    let ack = AckLine {
+        status,
+        verb,
+        detail,
+    };
     let mut line = String::new();
     render_ack(&mut line, &ack).expect("render ack line");
     line

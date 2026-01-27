@@ -26,14 +26,14 @@ use crate::event::{
 };
 use crate::ipc;
 use crate::kernel::BootContext;
+#[cfg(feature = "kernel")]
+use crate::lifecycle;
+#[cfg(feature = "kernel")]
+use crate::log_buffer;
 #[cfg(feature = "net-console")]
 use crate::net::DefaultNetStack as NetStack;
 use crate::platform::Platform;
 use crate::profile;
-#[cfg(feature = "kernel")]
-use crate::log_buffer;
-#[cfg(feature = "kernel")]
-use crate::lifecycle;
 use crate::sel4;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::serial::pl011::{Pl011, Pl011Mmio};

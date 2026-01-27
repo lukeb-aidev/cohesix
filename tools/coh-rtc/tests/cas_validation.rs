@@ -59,12 +59,8 @@ fn compile_error(manifest: &str) -> String {
         cli_script_out: temp_dir.path().join("boot_v0.coh"),
         doc_snippet_out: temp_dir.path().join("snippet.md"),
         gpu_breadcrumbs_snippet_out: temp_dir.path().join("gpu_breadcrumbs.md"),
-        observability_interfaces_snippet_out: temp_dir
-            .path()
-            .join("observability_interfaces.md"),
-        observability_security_snippet_out: temp_dir
-            .path()
-            .join("observability_security.md"),
+        observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
+        observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),

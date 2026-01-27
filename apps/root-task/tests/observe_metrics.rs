@@ -56,11 +56,7 @@ fn ingest_metrics_updates_without_allocations() {
     metrics.record_drop();
     let snapshot = metrics.snapshot(3);
 
-    assert_eq!(
-        alloc_count(),
-        0,
-        "ingest metrics allocated on hot path"
-    );
+    assert_eq!(alloc_count(), 0, "ingest metrics allocated on hot path");
     assert_eq!(snapshot.backpressure, 1);
     assert_eq!(snapshot.dropped, 1);
     assert_eq!(snapshot.queued, 3);

@@ -5,8 +5,8 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{anyhow, Context, Result};
-use cohsh::{CohshRetryPolicy, Session, TcpTransport, Transport};
 use cohesix_ticket::Role;
+use cohsh::{CohshRetryPolicy, Session, TcpTransport, Transport};
 
 use crate::policy::CohRetryPolicy;
 use crate::CohAccess;
@@ -68,9 +68,7 @@ impl CohAccess for ConsoleSession {
         let entries = entries?;
         let bytes = entries.iter().map(|entry| entry.len()).sum::<usize>();
         if bytes > max_bytes {
-            return Err(anyhow!(
-                "read {path} exceeds max bytes {max_bytes}"
-            ));
+            return Err(anyhow!("read {path} exceeds max bytes {max_bytes}"));
         }
         Ok(entries)
     }
@@ -81,9 +79,7 @@ impl CohAccess for ConsoleSession {
         let lines = lines?;
         let payload = Self::join_lines(&lines);
         if payload.len() > max_bytes {
-            return Err(anyhow!(
-                "read {path} exceeds max bytes {max_bytes}"
-            ));
+            return Err(anyhow!("read {path} exceeds max bytes {max_bytes}"));
         }
         Ok(payload)
     }

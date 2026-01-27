@@ -18,7 +18,9 @@ struct FixedClock {
 
 impl FixedClock {
     fn new() -> Self {
-        Self { now: Instant::now() }
+        Self {
+            now: Instant::now(),
+        }
     }
 }
 

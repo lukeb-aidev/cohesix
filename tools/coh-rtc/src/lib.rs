@@ -61,7 +61,9 @@ pub fn compile(options: &CompileOptions) -> Result<codegen::GeneratedArtifacts> 
 }
 
 pub fn default_doc_snippet_path() -> PathBuf {
-    Path::new("docs").join("snippets").join("root_task_manifest.md")
+    Path::new("docs")
+        .join("snippets")
+        .join("root_task_manifest.md")
 }
 
 pub fn default_gpu_breadcrumbs_snippet_path() -> PathBuf {
@@ -97,27 +99,19 @@ pub fn default_observability_security_snippet_path() -> PathBuf {
 }
 
 pub fn default_ticket_quotas_snippet_path() -> PathBuf {
-    Path::new("docs")
-        .join("snippets")
-        .join("ticket_quotas.md")
+    Path::new("docs").join("snippets").join("ticket_quotas.md")
 }
 
 pub fn default_trace_policy_snippet_path() -> PathBuf {
-    Path::new("docs")
-        .join("snippets")
-        .join("trace_policy.md")
+    Path::new("docs").join("snippets").join("trace_policy.md")
 }
 
 pub fn default_cas_interfaces_snippet_path() -> PathBuf {
-    Path::new("docs")
-        .join("snippets")
-        .join("cas_interfaces.md")
+    Path::new("docs").join("snippets").join("cas_interfaces.md")
 }
 
 pub fn default_cas_security_snippet_path() -> PathBuf {
-    Path::new("docs")
-        .join("snippets")
-        .join("cas_security.md")
+    Path::new("docs").join("snippets").join("cas_security.md")
 }
 
 pub fn default_cohsh_policy_path() -> PathBuf {
@@ -133,9 +127,7 @@ pub fn default_cohsh_policy_rust_path() -> PathBuf {
 }
 
 pub fn default_cohsh_policy_doc_path() -> PathBuf {
-    Path::new("docs")
-        .join("snippets")
-        .join("cohsh_policy.md")
+    Path::new("docs").join("snippets").join("cohsh_policy.md")
 }
 
 pub fn default_cohsh_client_rust_path() -> PathBuf {
@@ -147,15 +139,11 @@ pub fn default_cohsh_client_rust_path() -> PathBuf {
 }
 
 pub fn default_cohsh_client_doc_path() -> PathBuf {
-    Path::new("docs")
-        .join("snippets")
-        .join("cohsh_client.md")
+    Path::new("docs").join("snippets").join("cohsh_client.md")
 }
 
 pub fn default_cohsh_grammar_doc_path() -> PathBuf {
-    Path::new("docs")
-        .join("snippets")
-        .join("cohsh_grammar.md")
+    Path::new("docs").join("snippets").join("cohsh_grammar.md")
 }
 
 pub fn default_cohsh_ticket_policy_doc_path() -> PathBuf {
@@ -177,9 +165,7 @@ pub fn default_coh_policy_rust_path() -> PathBuf {
 }
 
 pub fn default_coh_policy_doc_path() -> PathBuf {
-    Path::new("docs")
-        .join("snippets")
-        .join("coh_policy.md")
+    Path::new("docs").join("snippets").join("coh_policy.md")
 }
 
 pub fn default_swarmui_defaults_path() -> PathBuf {

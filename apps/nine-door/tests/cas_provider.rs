@@ -14,7 +14,9 @@ use signature::Signer;
 fn attach_queen(server: &NineDoor) -> InProcessConnection {
     let mut client = server.connect().expect("create session");
     client.version(MAX_MSIZE).expect("version handshake");
-    client.attach(1, cohesix_ticket::Role::Queen).expect("attach queen");
+    client
+        .attach(1, cohesix_ticket::Role::Queen)
+        .expect("attach queen");
     client
 }
 
@@ -65,9 +67,7 @@ fn cas_upload_and_read_roundtrip() {
     write_path(&mut client, 3, &manifest_path, &manifest_cbor).expect("upload manifest");
 
     client.walk(1, 4, &chunk_path).expect("walk chunk");
-    client
-        .open(4, OpenMode::read_only())
-        .expect("open chunk");
+    client.open(4, OpenMode::read_only()).expect("open chunk");
     let read_back = client.read(4, 0, MAX_MSIZE).expect("read chunk");
     assert_eq!(read_back, payload);
 }
@@ -112,8 +112,8 @@ fn cas_missing_signature_rejected() {
         "100".to_owned(),
         "manifest.cbor".to_owned(),
     ];
-    let err = write_path(&mut client, 3, &manifest_path, &manifest_cbor)
-        .expect_err("manifest rejected");
+    let err =
+        write_path(&mut client, 3, &manifest_path, &manifest_cbor).expect_err("manifest rejected");
     match err {
         NineDoorError::Protocol { code, .. } => assert_eq!(code, ErrorCode::Permission),
         other => panic!("unexpected error: {other:?}"),
@@ -138,8 +138,7 @@ fn cas_hash_mismatch_rejected() {
         "chunks".to_owned(),
         chunk_hex,
     ];
-    let err = write_path(&mut client, 2, &chunk_path, payload)
-        .expect_err("chunk rejected");
+    let err = write_path(&mut client, 2, &chunk_path, payload).expect_err("chunk rejected");
     match err {
         NineDoorError::Protocol { code, .. } => assert_eq!(code, ErrorCode::Invalid),
         other => panic!("unexpected error: {other:?}"),
@@ -167,9 +166,7 @@ fn build_signed_manifest(
         signature: None,
     };
     let signing_key = SigningKey::from_bytes(key_bytes);
-    let payload = manifest
-        .signature_payload()
-        .expect("signing payload");
+    let payload = manifest.signature_payload().expect("signing payload");
     let signature: Signature = signing_key.sign(&payload);
     manifest.signature = Some(signature.to_bytes());
     manifest

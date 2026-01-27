@@ -60,8 +60,12 @@ pub fn emit_cohsh_policy(
     })?;
 
     let policy_doc = render_policy_doc(manifest, manifest_hash, &policy_hash_value);
-    fs::write(policy_doc_out, policy_doc)
-        .with_context(|| format!("failed to write cohsh policy doc {}", policy_doc_out.display()))?;
+    fs::write(policy_doc_out, policy_doc).with_context(|| {
+        format!(
+            "failed to write cohsh policy doc {}",
+            policy_doc_out.display()
+        )
+    })?;
 
     let policy_rust = render_policy_rust(manifest, manifest_hash, &policy_hash_value);
     fs::write(policy_rust_out, policy_rust).with_context(|| {
@@ -107,13 +111,14 @@ pub fn emit_cohsh_client(
     })
 }
 
-pub fn emit_cohsh_docs(
-    grammar_out: &Path,
-    ticket_policy_out: &Path,
-) -> Result<CohshDocArtifacts> {
+pub fn emit_cohsh_docs(grammar_out: &Path, ticket_policy_out: &Path) -> Result<CohshDocArtifacts> {
     let grammar_doc = render_console_grammar_doc();
-    fs::write(grammar_out, grammar_doc)
-        .with_context(|| format!("failed to write cohsh grammar doc {}", grammar_out.display()))?;
+    fs::write(grammar_out, grammar_doc).with_context(|| {
+        format!(
+            "failed to write cohsh grammar doc {}",
+            grammar_out.display()
+        )
+    })?;
 
     let ticket_policy_doc = render_ticket_policy_doc();
     fs::write(ticket_policy_out, ticket_policy_doc).with_context(|| {
@@ -501,7 +506,9 @@ fn render_client_doc(manifest: &Manifest, manifest_hash: &str) -> String {
     contents
 }
 
-fn format_ingest_eviction_policy(policy: &crate::ir::TelemetryIngestEvictionPolicy) -> &'static str {
+fn format_ingest_eviction_policy(
+    policy: &crate::ir::TelemetryIngestEvictionPolicy,
+) -> &'static str {
     match policy {
         crate::ir::TelemetryIngestEvictionPolicy::Refuse => "refuse",
         crate::ir::TelemetryIngestEvictionPolicy::EvictOldest => "evict-oldest",

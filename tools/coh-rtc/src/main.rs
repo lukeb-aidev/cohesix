@@ -8,17 +8,14 @@ use clap::Parser;
 use coh_rtc::{
     compile, default_cas_interfaces_snippet_path, default_cas_manifest_template_path,
     default_cas_security_snippet_path, default_cbor_snippet_path, default_cli_script_path,
+    default_coh_policy_doc_path, default_coh_policy_path, default_coh_policy_rust_path,
     default_cohsh_client_doc_path, default_cohsh_client_rust_path, default_cohsh_grammar_doc_path,
     default_cohsh_policy_doc_path, default_cohsh_policy_path, default_cohsh_policy_rust_path,
-    default_cohsh_ticket_policy_doc_path,
-    default_coh_policy_doc_path, default_coh_policy_path, default_coh_policy_rust_path,
-    default_doc_snippet_path, default_gpu_breadcrumbs_snippet_path,
-    default_observability_interfaces_snippet_path,
-    default_observability_security_snippet_path, default_ticket_quotas_snippet_path,
-    default_trace_policy_snippet_path,
-    CompileOptions,
-    default_swarmui_defaults_doc_path, default_swarmui_defaults_path,
-    default_swarmui_defaults_rust_path,
+    default_cohsh_ticket_policy_doc_path, default_doc_snippet_path,
+    default_gpu_breadcrumbs_snippet_path, default_observability_interfaces_snippet_path,
+    default_observability_security_snippet_path, default_swarmui_defaults_doc_path,
+    default_swarmui_defaults_path, default_swarmui_defaults_rust_path,
+    default_ticket_quotas_snippet_path, default_trace_policy_snippet_path, CompileOptions,
 };
 use std::path::PathBuf;
 

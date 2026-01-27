@@ -12,11 +12,11 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use coh_status::{trace_policy, TraceReplay};
+use cohesix_ticket::Role;
 use cohsh::client::{CohClient, TailEvent};
 use cohsh::SECURE9P_MSIZE;
 use cohsh_core::wire::{render_ack, AckLine, AckStatus, END_LINE};
 use cohsh_core::{role_label, ConsoleVerb};
-use cohesix_ticket::Role;
 use secure9p_codec::OpenMode;
 
 const SCENARIO: &str = "trace_v0";
@@ -118,7 +118,11 @@ fn load_trace_fixture() -> Result<Vec<u8>> {
 }
 
 fn render_ack_line(status: AckStatus, verb: &str, detail: Option<&str>) -> String {
-    let ack = AckLine { status, verb, detail };
+    let ack = AckLine {
+        status,
+        verb,
+        detail,
+    };
     let mut line = String::new();
     render_ack(&mut line, &ack).expect("render ack line");
     line

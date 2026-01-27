@@ -104,9 +104,8 @@ pub fn emit_cas_template(template: &CasTemplate, path: &Path) -> Result<CasArtif
             .and_then(|name| name.to_str())
             .unwrap_or("cas_manifest_template.json")
     );
-    fs::write(&hash_path, hash_contents).with_context(|| {
-        format!("failed to write cas template hash {}", hash_path.display())
-    })?;
+    fs::write(&hash_path, hash_contents)
+        .with_context(|| format!("failed to write cas template hash {}", hash_path.display()))?;
     Ok(CasArtifacts {
         template_json: path.to_path_buf(),
         template_hash: hash_path,

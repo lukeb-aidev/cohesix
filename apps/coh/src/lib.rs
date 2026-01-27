@@ -7,18 +7,20 @@
 
 //! Shared helpers for the Cohesix host bridge CLI.
 
-/// GPU inventory and lease helpers.
-pub mod gpu;
 /// TCP console-backed helpers.
 pub mod console;
+/// GPU inventory and lease helpers.
+pub mod gpu;
 /// Secure9P-backed mount adapter.
 pub mod mount;
+/// PEFT/LoRA lifecycle helpers.
+pub mod peft;
 /// Manifest-derived policy loader.
 pub mod policy;
-/// Telemetry pull helpers.
-pub mod telemetry;
 /// Runtime command wrapper helpers.
 pub mod run;
+/// Telemetry pull helpers.
+pub mod telemetry;
 /// TCP transport wrapper for Secure9P.
 pub mod transport;
 
@@ -70,7 +72,11 @@ impl CohAudit {
 }
 
 pub(crate) fn render_ack_line(status: AckStatus, verb: &str, detail: Option<&str>) -> String {
-    let ack = AckLine { status, verb, detail };
+    let ack = AckLine {
+        status,
+        verb,
+        detail,
+    };
     let mut line = String::new();
     render_ack(&mut line, &ack).expect("render ack line");
     line
@@ -96,9 +102,7 @@ pub(crate) fn read_file<T: Secure9pTransport>(
         }
         if buffer.len().saturating_add(chunk.len()) > max_bytes {
             let _ = client.clunk(fid);
-            return Err(anyhow!(
-                "read {path} exceeds max bytes {max_bytes}"
-            ));
+            return Err(anyhow!("read {path} exceeds max bytes {max_bytes}"));
         }
         buffer.extend_from_slice(&chunk);
         offset = offset

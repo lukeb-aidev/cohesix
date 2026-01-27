@@ -15,9 +15,9 @@ pub mod command;
 pub mod docs;
 pub mod help;
 pub mod secure9p;
+pub mod ticket;
 /// Trace record/replay utilities for Secure9P frames and ACK lines.
 pub mod trace;
-pub mod ticket;
 pub mod verb;
 pub mod wire;
 

@@ -11,8 +11,8 @@ use cohesix_ticket::Role;
 use cohsh::client::{CohClient, InProcessTransport, TailEvent};
 use cohsh::queen;
 use cohsh::{NineDoorTransport, Session, Transport};
-use cohsh_core::{parse_role, role_label, ConsoleVerb, RoleParseMode};
 use cohsh_core::wire::{render_ack, AckLine, AckStatus, END_LINE};
+use cohsh_core::{parse_role, role_label, ConsoleVerb, RoleParseMode};
 use nine_door::NineDoor;
 use secure9p_codec::OpenMode;
 
@@ -20,7 +20,10 @@ const QUEEN_LOG_PATH: &str = "/log/queen.log";
 
 #[test]
 fn client_replay_matches_console() -> Result<()> {
-    let script_path = repo_root().join("scripts").join("cohsh").join("session_pool.coh");
+    let script_path = repo_root()
+        .join("scripts")
+        .join("cohsh")
+        .join("session_pool.coh");
     let contents = fs::read_to_string(&script_path)
         .with_context(|| format!("read script {}", script_path.display()))?;
     let commands = parse_replay_commands(&contents)?;
@@ -33,7 +36,8 @@ fn client_replay_matches_console() -> Result<()> {
     let client_path = write_transcript(&transcripts_root, "client.txt", &client_lines)?;
 
     assert_eq!(
-        console_lines, client_lines,
+        console_lines,
+        client_lines,
         "console vs client transcript mismatch: {} vs {}",
         console_path.display(),
         client_path.display()
@@ -279,8 +283,7 @@ fn parse_role_arg(input: Option<&String>) -> Result<Role> {
     let Some(value) = input else {
         return Err(anyhow!("attach requires a role"));
     };
-    parse_role(value, RoleParseMode::Strict)
-        .ok_or_else(|| anyhow!("unknown role '{value}'"))
+    parse_role(value, RoleParseMode::Strict).ok_or_else(|| anyhow!("unknown role '{value}'"))
 }
 
 fn is_abuse_path(path: &str) -> bool {
@@ -288,7 +291,11 @@ fn is_abuse_path(path: &str) -> bool {
 }
 
 fn render_ack_line(status: AckStatus, verb: &str, detail: Option<&str>) -> String {
-    let ack = AckLine { status, verb, detail };
+    let ack = AckLine {
+        status,
+        verb,
+        detail,
+    };
     let mut line = String::new();
     render_ack(&mut line, &ack).expect("render ack line");
     line

@@ -229,6 +229,13 @@ reset
   - `eviction_policy` (`refuse` | `evict-oldest`)
 - Max record size: 4096 bytes; each append is treated as one telemetry record.
 
+### Queen LoRA export (read-only)
+- Path: `/queen/export/lora_jobs/<job_id>/`
+  - `telemetry.cbor` — CBOR telemetry bundle (bounded).
+  - `base_model.ref` — base model identifier (single line).
+  - `policy.toml` — export policy snapshot (TOML).
+- Export directories are created by the Queen when telemetry gates pass and remain read-only to clients.
+
 ### Telemetry ingest envelope (cohsh-telemetry-push/v1)
 `cohsh telemetry push` emits UTF-8 JSON lines, one per append:
 ```json

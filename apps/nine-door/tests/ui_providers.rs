@@ -16,9 +16,7 @@ const ROOT_FID: u32 = 1;
 fn attach_queen(server: &NineDoor) -> InProcessConnection {
     let mut client = server.connect().expect("create session");
     client.version(MAX_MSIZE).expect("version handshake");
-    client
-        .attach(ROOT_FID, Role::Queen)
-        .expect("attach queen");
+    client.attach(ROOT_FID, Role::Queen).expect("attach queen");
     client
 }
 
@@ -84,9 +82,7 @@ fn ui_provider_cursor_resume_and_eof() {
     let mut offset = 0u64;
     let mut total = 0usize;
     loop {
-        let chunk = client
-            .read(2, offset, MAX_MSIZE)
-            .expect("read diff chunk");
+        let chunk = client.read(2, offset, MAX_MSIZE).expect("read diff chunk");
         if chunk.is_empty() {
             break;
         }

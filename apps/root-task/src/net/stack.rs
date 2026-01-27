@@ -51,7 +51,6 @@ use super::{
     NetStage, NetTelemetry, DEFAULT_NET_BACKEND, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
     NET_DIAG, NET_STAGE,
 };
-use crate::observe::IngestSnapshot;
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 use crate::debug::maybe_report_str_write;
 #[cfg(not(feature = "net-backend-virtio"))]
@@ -59,6 +58,7 @@ use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
 #[cfg(feature = "net-backend-virtio")]
 use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNetStatic};
 use crate::hal::{HalError, Hardware};
+use crate::observe::IngestSnapshot;
 use crate::readiness;
 use crate::sel4::BOOTINFO_WINDOW_GUARD;
 use crate::serial::DEFAULT_LINE_CAPACITY;
@@ -1483,9 +1483,7 @@ impl<D: NetDevice> NetStack<D> {
                     NET_DIAG.record_listener_bound();
                 }
                 Err(err) => {
-                    warn!(
-                        "[net-console] failed to re-listen after close: {err}"
-                    );
+                    warn!("[net-console] failed to re-listen after close: {err}");
                 }
             }
         }
@@ -2945,9 +2943,7 @@ impl<D: NetDevice> NetStack<D> {
                                 if payload.starts_with(b"OK AUTH") {
                                     info!("[net-selftest] console listener selftest auth OK");
                                 } else if payload.starts_with(b"ERR AUTH") {
-                                    warn!(
-                                        "[net-selftest] console listener selftest auth rejected"
-                                    );
+                                    warn!("[net-selftest] console listener selftest auth rejected");
                                 }
                             }
                         }
@@ -3653,9 +3649,7 @@ impl<D: NetDevice> NetStack<D> {
                     }
                 }
             }
-            if self.session_active
-                && socket.state() == TcpState::Established
-                && !socket.may_recv()
+            if self.session_active && socket.state() == TcpState::Established && !socket.may_recv()
             {
                 Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 self.outbound.reset();
@@ -4043,9 +4037,7 @@ impl<D: NetDevice> NetStack<D> {
                         let _ = write!(
                             message,
                             " queue={}/{} auth={:?}",
-                            send_queue,
-                            send_capacity,
-                            auth_state
+                            send_queue, send_capacity, auth_state
                         );
                         crate::debug_uart::debug_uart_line(message.as_str());
                         session_state.last_flush_log_ms = now_ms;
@@ -4122,7 +4114,8 @@ impl<D: NetDevice> NetStack<D> {
                 server.push_outbound_front(line);
                 break;
             }
-            if sent_frames >= MAX_CONSOLE_FRAMES_PER_POLL || sent_bytes >= MAX_CONSOLE_BYTES_PER_POLL
+            if sent_frames >= MAX_CONSOLE_FRAMES_PER_POLL
+                || sent_bytes >= MAX_CONSOLE_BYTES_PER_POLL
             {
                 server.push_outbound_front(line);
                 break;
@@ -4141,7 +4134,9 @@ impl<D: NetDevice> NetStack<D> {
                     break;
                 }
             };
-            if frame.extend_from_slice(&total_len_u32.to_le_bytes()).is_err()
+            if frame
+                .extend_from_slice(&total_len_u32.to_le_bytes())
+                .is_err()
                 || frame.extend_from_slice(line.as_bytes()).is_err()
             {
                 server.push_outbound_front(line);
@@ -4396,11 +4391,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.counters
     }
 
-    fn drain_console_lines(
-        &mut self,
-        now_ms: u64,
-        visitor: &mut dyn FnMut(ConsoleLine),
-    ) {
+    fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
         if let Some((snapshot, reason)) = readiness::gate() {
             if !self.session_state.not_ready_logged {
                 self.session_state.not_ready_logged = true;
@@ -4449,10 +4440,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             let _ = write!(
                 message,
                 " queue={}/{} active={} conn_id={:?}",
-                send_queue,
-                send_capacity,
-                self.session_active,
-                self.active_client_id
+                send_queue, send_capacity, self.session_active, self.active_client_id
             );
             crate::debug_uart::debug_uart_line(message.as_str());
         }

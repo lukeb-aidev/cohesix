@@ -384,8 +384,8 @@ fn resolve_ticket_config(cli_path: Option<PathBuf>) -> Result<PathBuf, String> {
     if let Some(path) = cli_path {
         return Ok(path);
     }
-    if let Ok(value) = env::var("SWARMUI_TICKET_CONFIG")
-        .or_else(|_| env::var("COHSH_TICKET_CONFIG"))
+    if let Ok(value) =
+        env::var("SWARMUI_TICKET_CONFIG").or_else(|_| env::var("COHSH_TICKET_CONFIG"))
     {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
@@ -399,9 +399,7 @@ fn resolve_ticket_secret(cli_secret: Option<String>) -> Result<Option<String>, S
     if cli_secret.is_some() {
         return Ok(cli_secret);
     }
-    match env::var("SWARMUI_TICKET_SECRET")
-        .or_else(|_| env::var("COHSH_TICKET_SECRET"))
-    {
+    match env::var("SWARMUI_TICKET_SECRET").or_else(|_| env::var("COHSH_TICKET_SECRET")) {
         Ok(value) => {
             let trimmed = value.trim();
             if trimmed.is_empty() {
@@ -422,11 +420,9 @@ fn mint_ticket_for_role(
     secret: Option<String>,
 ) -> Result<String, String> {
     let role = parse_role_label(role_label).map_err(|err| err.to_string())?;
-    let request =
-        TicketMintRequest::new(role, subject, None).map_err(|err| err.to_string())?;
+    let request = TicketMintRequest::new(role, subject, None).map_err(|err| err.to_string())?;
     if let Some(secret) = resolve_ticket_secret(secret)? {
-        return mint_ticket_from_secret(&request, secret.as_str())
-            .map_err(|err| err.to_string());
+        return mint_ticket_from_secret(&request, secret.as_str()).map_err(|err| err.to_string());
     }
     let config_path = resolve_ticket_config(config)?;
     mint_ticket_from_config(&request, config_path.as_path()).map_err(|err| err.to_string())
@@ -504,24 +500,15 @@ fn main() {
     } else {
         match transport.as_str() {
             "9p" | "secure9p" => {
-                let factory = TcpTransportFactory::new(
-                    host,
-                    port,
-                    timeout,
-                    swarmui::SECURE9P_MSIZE,
-                );
+                let factory =
+                    TcpTransportFactory::new(host, port, timeout, swarmui::SECURE9P_MSIZE);
                 SwarmUiService::Secure9p(SwarmUiBackend::new(config, factory))
             }
             "console" | "tcp" => {
                 let auth_token = env::var("SWARMUI_AUTH_TOKEN")
                     .or_else(|_| env::var("COHSH_AUTH_TOKEN"))
                     .unwrap_or_else(|_| "changeme".to_owned());
-                SwarmUiService::Console(SwarmUiConsoleBackend::new(
-                    config,
-                    host,
-                    port,
-                    auth_token,
-                ))
+                SwarmUiService::Console(SwarmUiConsoleBackend::new(config, host, port, auth_token))
             }
             other => panic!("unsupported SWARMUI_TRANSPORT '{other}' (use console or 9p)"),
         }

@@ -5,7 +5,6 @@
 #![cfg(feature = "net-console")]
 
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
-use std::time::{SystemTime, UNIX_EPOCH};
 use root_task::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 use root_task::net::{NetStack, CONSOLE_QUEUE_DEPTH, CONSOLE_TCP_PORT};
 use root_task::serial::{
@@ -13,6 +12,7 @@ use root_task::serial::{
     DEFAULT_TX_CAPACITY,
 };
 use smoltcp::wire::Ipv4Address;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 struct MonotonicTimer {
     tick: u64,
@@ -170,7 +170,9 @@ fn network_lines_round_trip_acknowledgements() {
     assert_eq!(auth_lines, vec!["OK AUTH".to_string()]);
     let attach = handle.pop_tx().expect("attach acknowledgement missing");
     let attach_lines = decode_frame_lines(attach.as_slice());
-    assert!(attach_lines.iter().any(|line| line.starts_with("OK ATTACH")));
+    assert!(attach_lines
+        .iter()
+        .any(|line| line.starts_with("OK ATTACH")));
     let log = handle.pop_tx().expect("log acknowledgement missing");
     let log_lines = decode_frame_lines(log.as_slice());
     assert_eq!(log_lines, vec!["OK LOG".to_string()]);
@@ -278,7 +280,9 @@ fn attach_with_bad_ticket_is_rejected() {
     assert_eq!(auth_lines, vec!["OK AUTH".to_string()]);
     let attach = handle.pop_tx().expect("attach acknowledgement missing");
     let attach_lines = decode_frame_lines(attach.as_slice());
-    assert!(attach_lines.iter().any(|line| line.starts_with("ERR ATTACH")));
+    assert!(attach_lines
+        .iter()
+        .any(|line| line.starts_with("ERR ATTACH")));
     assert!(pump.metrics().denied_commands >= 1 || !audit.denials.is_empty());
 }
 
@@ -498,7 +502,9 @@ fn pump_survives_force_reset() {
         .pop_tx()
         .expect("attach acknowledgement missing after reset");
     let attach_lines = decode_frame_lines(attach.as_slice());
-    assert!(attach_lines.iter().any(|line| line.starts_with("OK ATTACH")));
+    assert!(attach_lines
+        .iter()
+        .any(|line| line.starts_with("OK ATTACH")));
     let tail = handle
         .pop_tx()
         .expect("tail acknowledgement missing after reset");

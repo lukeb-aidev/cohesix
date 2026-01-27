@@ -9,8 +9,8 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
-use cohsh_core::{parse_role, RoleParseMode};
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
+use cohsh_core::{parse_role, RoleParseMode};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -55,7 +55,9 @@ pub fn default_budget_for_role(role: Role) -> BudgetSpec {
     match role {
         Role::Queen => BudgetSpec::unbounded(),
         Role::WorkerGpu => BudgetSpec::default_gpu(),
-        Role::WorkerHeartbeat | Role::WorkerBus | Role::WorkerLora => BudgetSpec::default_heartbeat(),
+        Role::WorkerHeartbeat | Role::WorkerBus | Role::WorkerLora => {
+            BudgetSpec::default_heartbeat()
+        }
     }
 }
 
@@ -77,27 +79,16 @@ pub fn mint_ticket_from_secret(request: &TicketMintRequest, secret: &str) -> Res
 }
 
 /// Mint a ticket using the role secret from the provided root_task.toml.
-pub fn mint_ticket_from_config(
-    request: &TicketMintRequest,
-    config_path: &Path,
-) -> Result<String> {
+pub fn mint_ticket_from_config(request: &TicketMintRequest, config_path: &Path) -> Result<String> {
     let secret = load_ticket_secret(config_path, request.role)?;
     mint_ticket_from_secret(request, secret.as_str())
 }
 
 fn load_ticket_secret(config_path: &Path, role: Role) -> Result<String> {
-    let payload = fs::read_to_string(config_path).with_context(|| {
-        format!(
-            "failed to read ticket config {}",
-            config_path.display()
-        )
-    })?;
-    let config: TicketConfig = toml::from_str(&payload).with_context(|| {
-        format!(
-            "failed to parse ticket config {}",
-            config_path.display()
-        )
-    })?;
+    let payload = fs::read_to_string(config_path)
+        .with_context(|| format!("failed to read ticket config {}", config_path.display()))?;
+    let config: TicketConfig = toml::from_str(&payload)
+        .with_context(|| format!("failed to parse ticket config {}", config_path.display()))?;
     for entry in config.tickets {
         let parsed = parse_role(entry.role.as_str(), RoleParseMode::Strict);
         if parsed == Some(role) {

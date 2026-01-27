@@ -507,10 +507,7 @@ impl OutboundCoalescer {
             if payload.len().saturating_add(required) > MAX_PAYLOAD {
                 break;
             }
-            let total_len: u32 = line_len
-                .saturating_add(4)
-                .try_into()
-                .unwrap_or(u32::MAX);
+            let total_len: u32 = line_len.saturating_add(4).try_into().unwrap_or(u32::MAX);
             if payload.extend_from_slice(&total_len.to_le_bytes()).is_err() {
                 break;
             }

@@ -133,7 +133,10 @@ impl TelemetryIngestState {
             .or_insert_with(TelemetryDeviceState::new);
     }
 
-    pub fn create_segment(&mut self, device_id: &str) -> Result<TelemetryCreateOutcome, TelemetryIngestError> {
+    pub fn create_segment(
+        &mut self,
+        device_id: &str,
+    ) -> Result<TelemetryCreateOutcome, TelemetryIngestError> {
         if !self.config.enabled() {
             return Err(TelemetryIngestError {
                 kind: TelemetryIngestErrorKind::Disabled,
@@ -192,10 +195,13 @@ impl TelemetryIngestState {
                 message: "telemetry ingest is disabled".to_owned(),
             });
         }
-        let device = self.devices.get_mut(device_id).ok_or_else(|| TelemetryIngestError {
-            kind: TelemetryIngestErrorKind::SegmentMissing,
-            message: format!("telemetry device {device_id} not found"),
-        })?;
+        let device = self
+            .devices
+            .get_mut(device_id)
+            .ok_or_else(|| TelemetryIngestError {
+                kind: TelemetryIngestErrorKind::SegmentMissing,
+                message: format!("telemetry device {device_id} not found"),
+            })?;
         let segment_bytes = match device
             .segments
             .iter()
@@ -262,5 +268,4 @@ impl TelemetryIngestState {
         }
         Ok(TelemetryAppendOutcome { evicted })
     }
-
 }

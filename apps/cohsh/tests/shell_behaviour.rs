@@ -5,8 +5,8 @@
 
 use std::io::Cursor;
 
-use cohsh::{NineDoorTransport, Shell};
 use cohesix_ticket::Role;
+use cohsh::{NineDoorTransport, Shell};
 
 #[test]
 fn queen_commands_require_session() {

@@ -106,13 +106,7 @@ fn expired_ticket_replay_is_deterministic() {
     let now_ms = unix_time_ms();
     let issued_at_ms = now_ms.saturating_sub(2_000);
     let budget = BudgetSpec::unbounded().with_ttl(Some(1));
-    let claims = TicketClaims::new(
-        Role::Queen,
-        budget,
-        None,
-        MountSpec::empty(),
-        issued_at_ms,
-    );
+    let claims = TicketClaims::new(Role::Queen, budget, None, MountSpec::empty(), issued_at_ms);
     let token = TicketIssuer::new(QUEEN_SECRET)
         .issue(claims)
         .unwrap()

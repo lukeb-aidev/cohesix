@@ -267,7 +267,10 @@ impl<'a> Decoder<'a> {
     }
 
     fn peek_type(&self) -> Result<CborType, CasManifestError> {
-        let byte = *self.data.get(self.pos).ok_or(CasManifestError::UnexpectedEof)?;
+        let byte = *self
+            .data
+            .get(self.pos)
+            .ok_or(CasManifestError::UnexpectedEof)?;
         match byte {
             0xf6 => Ok(CborType::Null),
             _ => {
@@ -284,7 +287,10 @@ impl<'a> Decoder<'a> {
     }
 
     fn read_byte(&mut self) -> Result<u8, CasManifestError> {
-        let byte = *self.data.get(self.pos).ok_or(CasManifestError::UnexpectedEof)?;
+        let byte = *self
+            .data
+            .get(self.pos)
+            .ok_or(CasManifestError::UnexpectedEof)?;
         self.pos = self.pos.saturating_add(1);
         Ok(byte)
     }

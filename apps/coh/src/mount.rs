@@ -22,12 +22,12 @@ use cohsh_core::Secure9pTransport;
 use secure9p_codec::OpenMode;
 
 use crate::console::ConsoleSession;
+use crate::policy::CohPolicy;
 #[cfg(feature = "fuse")]
 use crate::CohAccess;
+use crate::MAX_PATH_COMPONENTS;
 #[cfg(feature = "fuse")]
 use crate::{list_dir, MAX_DIR_LIST_BYTES};
-use crate::MAX_PATH_COMPONENTS;
-use crate::policy::CohPolicy;
 
 #[cfg(feature = "fuse")]
 const ROOT_INODE: u64 = 1;
@@ -125,9 +125,9 @@ impl MountValidator {
         if self.allow_all_under_root {
             return remote.starts_with(&format!("{}/", self.root));
         }
-        self.allowlist.iter().any(|entry| {
-            remote == entry || remote.starts_with(&format!("{entry}/"))
-        })
+        self.allowlist
+            .iter()
+            .any(|entry| remote == entry || remote.starts_with(&format!("{entry}/")))
     }
 
     /// Return the entries permitted under the mount root.
@@ -236,11 +236,7 @@ pub fn mount<T: Secure9pTransport + Send + 'static>(
 }
 
 /// Start a FUSE mount backed by the TCP console transport.
-pub fn mount_console(
-    session: ConsoleSession,
-    policy: &CohPolicy,
-    at: &Path,
-) -> Result<()> {
+pub fn mount_console(session: ConsoleSession, policy: &CohPolicy, at: &Path) -> Result<()> {
     #[cfg(feature = "fuse")]
     {
         let validator = MountValidator::from_policy(policy)?;
@@ -328,11 +324,7 @@ impl<T: Secure9pTransport> CohFuse<T> {
     fn list_root_entries(&self) -> Result<Vec<String>> {
         if self.validator.allow_all_under_root() {
             let mut client = self.client.lock().expect("coh client lock");
-            let entries = list_dir(
-                &mut *client,
-                self.validator.root(),
-                MAX_DIR_LIST_BYTES,
-            )?;
+            let entries = list_dir(&mut *client, self.validator.root(), MAX_DIR_LIST_BYTES)?;
             return Ok(entries);
         }
         Ok(self.validator.root_entries())
@@ -478,13 +470,7 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
         reply.ok();
     }
 
-    fn open(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        inode: u64,
-        flags: i32,
-        reply: fuser::ReplyOpen,
-    ) {
+    fn open(&mut self, _req: &fuser::Request<'_>, inode: u64, flags: i32, reply: fuser::ReplyOpen) {
         let path = match self.resolve_inode_path(inode) {
             Some(path) => path,
             None => {
@@ -688,10 +674,7 @@ impl ConsoleFuse {
     fn list_root_entries(&self) -> Result<Vec<String>> {
         if self.validator.allow_all_under_root() {
             let mut client = self.client.lock().expect("coh client lock");
-            let entries = client.list_dir(
-                self.validator.root(),
-                MAX_DIR_LIST_BYTES,
-            )?;
+            let entries = client.list_dir(self.validator.root(), MAX_DIR_LIST_BYTES)?;
             return Ok(entries);
         }
         Ok(self.validator.root_entries())
@@ -848,13 +831,7 @@ impl fuser::Filesystem for ConsoleFuse {
         reply.ok();
     }
 
-    fn open(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        inode: u64,
-        flags: i32,
-        reply: fuser::ReplyOpen,
-    ) {
+    fn open(&mut self, _req: &fuser::Request<'_>, inode: u64, flags: i32, reply: fuser::ReplyOpen) {
         let path = match self.resolve_inode_path(inode) {
             Some(path) => path,
             None => {
@@ -1041,7 +1018,11 @@ impl InodeTable {
             }
             return *existing;
         }
-        let inode = if path == "/" { ROOT_INODE } else { self.next_inode };
+        let inode = if path == "/" {
+            ROOT_INODE
+        } else {
+            self.next_inode
+        };
         if inode == self.next_inode {
             self.next_inode = self.next_inode.saturating_add(1);
         }

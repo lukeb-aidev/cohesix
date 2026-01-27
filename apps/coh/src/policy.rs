@@ -13,7 +13,10 @@ use sha2::{Digest, Sha256};
 
 #[allow(clippy::all)]
 mod generated {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/generated/policy.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/generated/policy.rs"
+    ));
 }
 
 /// Coh host policy derived from the root-task manifest.
@@ -25,6 +28,8 @@ pub struct CohPolicy {
     pub telemetry: CohTelemetryPolicy,
     /// Runtime wrapper policy for coh run.
     pub run: CohRunPolicy,
+    /// PEFT/LoRA import/export policy.
+    pub peft: CohPeftPolicy,
     /// Retry scheduling policy for transports.
     pub retry: CohRetryPolicy,
 }
@@ -72,6 +77,25 @@ impl CohPolicy {
                     max_command_bytes: generated::COH_RUN_BREADCRUMB_MAX_COMMAND_BYTES,
                 },
             },
+            peft: CohPeftPolicy {
+                export: CohPeftExportPolicy {
+                    root: generated::COH_PEFT_EXPORT_ROOT.to_owned(),
+                    max_telemetry_bytes: generated::COH_PEFT_EXPORT_MAX_TELEMETRY_BYTES,
+                    max_policy_bytes: generated::COH_PEFT_EXPORT_MAX_POLICY_BYTES,
+                    max_base_model_bytes: generated::COH_PEFT_EXPORT_MAX_BASE_MODEL_BYTES,
+                },
+                import: CohPeftImportPolicy {
+                    registry_root: generated::COH_PEFT_IMPORT_REGISTRY_ROOT.to_owned(),
+                    max_adapter_bytes: generated::COH_PEFT_IMPORT_MAX_ADAPTER_BYTES,
+                    max_lora_bytes: generated::COH_PEFT_IMPORT_MAX_LORA_BYTES,
+                    max_metrics_bytes: generated::COH_PEFT_IMPORT_MAX_METRICS_BYTES,
+                    max_manifest_bytes: generated::COH_PEFT_IMPORT_MAX_MANIFEST_BYTES,
+                },
+                activate: CohPeftActivatePolicy {
+                    max_model_id_bytes: generated::COH_PEFT_ACTIVATE_MAX_MODEL_ID_BYTES,
+                    max_state_bytes: generated::COH_PEFT_ACTIVATE_MAX_STATE_BYTES,
+                },
+            },
             retry: CohRetryPolicy {
                 max_attempts: generated::COH_RETRY_MAX_ATTEMPTS,
                 backoff_ms: generated::COH_RETRY_BACKOFF_MS,
@@ -113,6 +137,54 @@ pub struct CohRunPolicy {
     pub lease: CohLeasePolicy,
     /// Breadcrumb emission limits.
     pub breadcrumb: CohBreadcrumbPolicy,
+}
+
+/// PEFT/LoRA policy for export/import/activation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CohPeftPolicy {
+    /// Export policy.
+    pub export: CohPeftExportPolicy,
+    /// Import policy.
+    pub import: CohPeftImportPolicy,
+    /// Activation policy.
+    pub activate: CohPeftActivatePolicy,
+}
+
+/// PEFT export bounds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CohPeftExportPolicy {
+    /// Root path containing LoRA export jobs.
+    pub root: String,
+    /// Maximum bytes allowed for telemetry payloads.
+    pub max_telemetry_bytes: u32,
+    /// Maximum bytes allowed for policy payloads.
+    pub max_policy_bytes: u32,
+    /// Maximum bytes allowed for base model refs.
+    pub max_base_model_bytes: u32,
+}
+
+/// PEFT import bounds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CohPeftImportPolicy {
+    /// Host-side registry root for imported adapters.
+    pub registry_root: String,
+    /// Maximum adapter payload bytes.
+    pub max_adapter_bytes: u64,
+    /// Maximum bytes for lora.json metadata.
+    pub max_lora_bytes: u32,
+    /// Maximum bytes for metrics metadata.
+    pub max_metrics_bytes: u32,
+    /// Maximum bytes for generated manifest.
+    pub max_manifest_bytes: u32,
+}
+
+/// PEFT activation bounds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CohPeftActivatePolicy {
+    /// Maximum bytes for model identifiers.
+    pub max_model_id_bytes: u32,
+    /// Maximum bytes for persisted activation state.
+    pub max_state_bytes: u32,
 }
 
 /// Lease validation settings for coh run.
@@ -170,6 +242,7 @@ struct CohTomlSection {
     mount: MountTomlSection,
     telemetry: TelemetryTomlSection,
     run: RunTomlSection,
+    peft: PeftTomlSection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,6 +267,40 @@ struct TelemetryTomlSection {
 struct RunTomlSection {
     lease: LeaseTomlSection,
     breadcrumb: BreadcrumbTomlSection,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PeftTomlSection {
+    export: PeftExportTomlSection,
+    import: PeftImportTomlSection,
+    activate: PeftActivateTomlSection,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PeftExportTomlSection {
+    root: String,
+    max_telemetry_bytes: u32,
+    max_policy_bytes: u32,
+    max_base_model_bytes: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PeftImportTomlSection {
+    registry_root: String,
+    max_adapter_bytes: u64,
+    max_lora_bytes: u32,
+    max_metrics_bytes: u32,
+    max_manifest_bytes: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PeftActivateTomlSection {
+    max_model_id_bytes: u32,
+    max_state_bytes: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -245,8 +352,8 @@ pub fn default_policy_path() -> PathBuf {
 
 /// Load and validate the coh policy from disk, enforcing hash alignment.
 pub fn load_policy(path: &Path) -> Result<CohPolicy> {
-    let contents = fs::read(path)
-        .with_context(|| format!("failed to read coh policy {}", path.display()))?;
+    let contents =
+        fs::read(path).with_context(|| format!("failed to read coh policy {}", path.display()))?;
     let hash = hash_bytes(&contents);
     if hash != CohPolicy::policy_hash() {
         return Err(anyhow!(
@@ -290,6 +397,25 @@ pub fn load_policy(path: &Path) -> Result<CohPolicy> {
                 max_command_bytes: parsed.coh.run.breadcrumb.max_command_bytes,
             },
         },
+        peft: CohPeftPolicy {
+            export: CohPeftExportPolicy {
+                root: parsed.coh.peft.export.root,
+                max_telemetry_bytes: parsed.coh.peft.export.max_telemetry_bytes,
+                max_policy_bytes: parsed.coh.peft.export.max_policy_bytes,
+                max_base_model_bytes: parsed.coh.peft.export.max_base_model_bytes,
+            },
+            import: CohPeftImportPolicy {
+                registry_root: parsed.coh.peft.import.registry_root,
+                max_adapter_bytes: parsed.coh.peft.import.max_adapter_bytes,
+                max_lora_bytes: parsed.coh.peft.import.max_lora_bytes,
+                max_metrics_bytes: parsed.coh.peft.import.max_metrics_bytes,
+                max_manifest_bytes: parsed.coh.peft.import.max_manifest_bytes,
+            },
+            activate: CohPeftActivatePolicy {
+                max_model_id_bytes: parsed.coh.peft.activate.max_model_id_bytes,
+                max_state_bytes: parsed.coh.peft.activate.max_state_bytes,
+            },
+        },
         retry: CohRetryPolicy {
             max_attempts: parsed.retry.max_attempts,
             backoff_ms: parsed.retry.backoff_ms,
@@ -319,9 +445,7 @@ fn validate_policy(policy: &CohPolicy) -> Result<()> {
         ));
     }
     if policy.telemetry.max_bytes_per_segment == 0 {
-        return Err(anyhow!(
-            "coh.telemetry.max_bytes_per_segment must be >= 1"
-        ));
+        return Err(anyhow!("coh.telemetry.max_bytes_per_segment must be >= 1"));
     }
     if policy.telemetry.max_total_bytes_per_device == 0 {
         return Err(anyhow!(
@@ -341,14 +465,10 @@ fn validate_policy(policy: &CohPolicy) -> Result<()> {
         return Err(anyhow!("coh.run.breadcrumb.schema must not be empty"));
     }
     if policy.run.breadcrumb.max_line_bytes == 0 {
-        return Err(anyhow!(
-            "coh.run.breadcrumb.max_line_bytes must be >= 1"
-        ));
+        return Err(anyhow!("coh.run.breadcrumb.max_line_bytes must be >= 1"));
     }
     if policy.run.breadcrumb.max_command_bytes == 0 {
-        return Err(anyhow!(
-            "coh.run.breadcrumb.max_command_bytes must be >= 1"
-        ));
+        return Err(anyhow!("coh.run.breadcrumb.max_command_bytes must be >= 1"));
     }
     if policy.run.breadcrumb.max_command_bytes > policy.run.breadcrumb.max_line_bytes {
         return Err(anyhow!(
@@ -356,6 +476,45 @@ fn validate_policy(policy: &CohPolicy) -> Result<()> {
             policy.run.breadcrumb.max_command_bytes,
             policy.run.breadcrumb.max_line_bytes
         ));
+    }
+    validate_path("coh.peft.export.root", &policy.peft.export.root, false)?;
+    if policy.peft.export.max_telemetry_bytes == 0 {
+        return Err(anyhow!("coh.peft.export.max_telemetry_bytes must be >= 1"));
+    }
+    if policy.peft.export.max_telemetry_bytes > policy.telemetry.max_total_bytes_per_device {
+        return Err(anyhow!(
+            "coh.peft.export.max_telemetry_bytes {} exceeds coh.telemetry.max_total_bytes_per_device {}",
+            policy.peft.export.max_telemetry_bytes,
+            policy.telemetry.max_total_bytes_per_device
+        ));
+    }
+    if policy.peft.export.max_policy_bytes == 0 {
+        return Err(anyhow!("coh.peft.export.max_policy_bytes must be >= 1"));
+    }
+    if policy.peft.export.max_base_model_bytes == 0 {
+        return Err(anyhow!("coh.peft.export.max_base_model_bytes must be >= 1"));
+    }
+    validate_host_path(
+        "coh.peft.import.registry_root",
+        policy.peft.import.registry_root.as_str(),
+    )?;
+    if policy.peft.import.max_adapter_bytes == 0 {
+        return Err(anyhow!("coh.peft.import.max_adapter_bytes must be >= 1"));
+    }
+    if policy.peft.import.max_lora_bytes == 0 {
+        return Err(anyhow!("coh.peft.import.max_lora_bytes must be >= 1"));
+    }
+    if policy.peft.import.max_metrics_bytes == 0 {
+        return Err(anyhow!("coh.peft.import.max_metrics_bytes must be >= 1"));
+    }
+    if policy.peft.import.max_manifest_bytes == 0 {
+        return Err(anyhow!("coh.peft.import.max_manifest_bytes must be >= 1"));
+    }
+    if policy.peft.activate.max_model_id_bytes == 0 {
+        return Err(anyhow!("coh.peft.activate.max_model_id_bytes must be >= 1"));
+    }
+    if policy.peft.activate.max_state_bytes == 0 {
+        return Err(anyhow!("coh.peft.activate.max_state_bytes must be >= 1"));
     }
     if policy.retry.max_attempts == 0 {
         return Err(anyhow!("coh retry max_attempts must be >= 1"));
@@ -396,6 +555,30 @@ fn validate_path(label: &str, value: &str, allow_root: bool) -> Result<()> {
         }
         if component.as_bytes().iter().any(|byte| *byte == 0) {
             return Err(anyhow!("{label} contains NUL byte"));
+        }
+        depth += 1;
+        if depth > crate::MAX_PATH_COMPONENTS {
+            return Err(anyhow!(
+                "{label} exceeds max depth {}",
+                crate::MAX_PATH_COMPONENTS
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_host_path(label: &str, value: &str) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("{label} must not be empty"));
+    }
+    if trimmed.as_bytes().iter().any(|byte| *byte == 0) {
+        return Err(anyhow!("{label} contains NUL byte"));
+    }
+    let mut depth = 0usize;
+    for component in trimmed.split('/').filter(|seg| !seg.is_empty()) {
+        if component == "." || component == ".." {
+            return Err(anyhow!("{label} contains invalid component '{component}'"));
         }
         depth += 1;
         if depth > crate::MAX_PATH_COMPONENTS {

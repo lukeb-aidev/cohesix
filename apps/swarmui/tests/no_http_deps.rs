@@ -19,12 +19,9 @@ fn swarmui_has_no_http_deps() {
         "cargo metadata failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let metadata: Value =
-        serde_json::from_slice(&output.stdout).expect("parse cargo metadata");
+    let metadata: Value = serde_json::from_slice(&output.stdout).expect("parse cargo metadata");
 
-    let packages = metadata["packages"]
-        .as_array()
-        .expect("metadata packages");
+    let packages = metadata["packages"].as_array().expect("metadata packages");
     let resolve = metadata["resolve"]["nodes"]
         .as_array()
         .expect("metadata resolve nodes");

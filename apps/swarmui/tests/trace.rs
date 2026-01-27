@@ -11,12 +11,12 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
+use cohesix_ticket::Role;
 use cohsh_core::command::MAX_LINE_LEN;
 use cohsh_core::trace::{TraceError, TraceLog, TracePolicy};
-use cohesix_ticket::Role;
 use swarmui::{
-    SwarmUiBackend, SwarmUiConfig, SwarmUiHiveAgent, SwarmUiHiveEvent,
-    SwarmUiHiveEventKind, SwarmUiHiveSnapshot, TraceTransportFactory,
+    SwarmUiBackend, SwarmUiConfig, SwarmUiHiveAgent, SwarmUiHiveEvent, SwarmUiHiveEventKind,
+    SwarmUiHiveSnapshot, TraceTransportFactory,
 };
 
 const TRACE_ENV: &str = "COHESIX_WRITE_TRACE";
@@ -105,8 +105,7 @@ fn trace_fixture_path() -> PathBuf {
 
 fn load_trace_fixture() -> Result<Vec<u8>> {
     let trace_path = trace_fixture_path();
-    fs::read(&trace_path)
-        .with_context(|| format!("read trace fixture {}", trace_path.display()))
+    fs::read(&trace_path).with_context(|| format!("read trace fixture {}", trace_path.display()))
 }
 
 fn trace_hive_fixture_path() -> PathBuf {

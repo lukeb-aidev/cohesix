@@ -15,8 +15,8 @@ pub use diag::{NetDiagSnapshot, NET_DIAG, NET_DIAG_FEATURED};
 
 use core::ops::Range;
 
-use crate::serial::DEFAULT_LINE_CAPACITY;
 use crate::observe::IngestSnapshot;
+use crate::serial::DEFAULT_LINE_CAPACITY;
 #[cfg(all(feature = "net", feature = "kernel"))]
 pub mod outbound;
 pub use cohesix_net_constants::{COHESIX_TCP_CONSOLE_PORT, COHSH_TCP_PORT, TCP_CONSOLE_PORT};
@@ -391,11 +391,7 @@ pub trait NetPoller {
     }
 
     /// Drain any pending console lines produced by TCP listeners.
-    fn drain_console_lines(
-        &mut self,
-        now_ms: u64,
-        visitor: &mut dyn FnMut(ConsoleLine),
-    );
+    fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine));
 
     /// Queue a console line for transmission to remote clients.
     fn send_console_line(&mut self, line: &str) -> bool;

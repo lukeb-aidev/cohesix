@@ -2,8 +2,8 @@
 <!-- Purpose: Generated coh policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### coh policy defaults (generated)
-- `manifest.sha256`: `64db592b11e02d32cb7f68f5fa77ca5d5a63f7b4e3ebda7e403a4379af96f5b8`
-- `policy.sha256`: `65aae5a9d42154ca5780f7391a0f0226378686a28557f196e5ef31ba075b4264`
+- `manifest.sha256`: `dbb26505c014d77a48d9d1487a8cddce63ff9dabaa24e9a997eb53f2bf8859e5`
+- `policy.sha256`: `4fc30dd48e53b26b2e9b8f9427e1d73a02d64c8918a12abe0b68583019640190`
 - `coh.mount.root`: `/`
 - `coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
 - `coh.telemetry.root`: `/queen/telemetry`
@@ -17,6 +17,17 @@
 - `coh.run.breadcrumb.schema`: `gpu-breadcrumb/v1`
 - `coh.run.breadcrumb.max_line_bytes`: `512`
 - `coh.run.breadcrumb.max_command_bytes`: `256`
+- `coh.peft.export.root`: `/queen/export/lora_jobs`
+- `coh.peft.export.max_telemetry_bytes`: `131072`
+- `coh.peft.export.max_policy_bytes`: `8192`
+- `coh.peft.export.max_base_model_bytes`: `1024`
+- `coh.peft.import.registry_root`: `out/model_registry`
+- `coh.peft.import.max_adapter_bytes`: `67108864`
+- `coh.peft.import.max_lora_bytes`: `65536`
+- `coh.peft.import.max_metrics_bytes`: `65536`
+- `coh.peft.import.max_manifest_bytes`: `8192`
+- `coh.peft.activate.max_model_id_bytes`: `128`
+- `coh.peft.activate.max_state_bytes`: `4096`
 - `retry.max_attempts`: `3`
 - `retry.backoff_ms`: `200`
 - `retry.ceiling_ms`: `2000`

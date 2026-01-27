@@ -389,8 +389,8 @@ fn parse_line_inner(line: &str) -> Result<Command, ConsoleError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec::Vec;
     use crate::verb::ALL_VERBS;
+    use alloc::vec::Vec;
 
     fn heapless_str<const N: usize>(value: &str) -> heapless::String<N> {
         let mut buf = heapless::String::new();

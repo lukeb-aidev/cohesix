@@ -24,10 +24,7 @@ fn interfaces_cbor_snippet_matches_codegen() {
 
     let start_marker = "<!-- coh-rtc:telemetry-cbor:start -->";
     let end_marker = "<!-- coh-rtc:telemetry-cbor:end -->";
-    let start = contents
-        .find(start_marker)
-        .expect("start marker missing")
-        + start_marker.len();
+    let start = contents.find(start_marker).expect("start marker missing") + start_marker.len();
     let end = contents[start..]
         .find(end_marker)
         .map(|idx| start + idx)

@@ -104,8 +104,10 @@ impl TraceLog {
             });
         }
 
-        let frame_count = u32::try_from(self.frames.len()).map_err(|_| TraceError::LengthOverflow)?;
-        let ack_count = u32::try_from(self.ack_lines.len()).map_err(|_| TraceError::LengthOverflow)?;
+        let frame_count =
+            u32::try_from(self.frames.len()).map_err(|_| TraceError::LengthOverflow)?;
+        let ack_count =
+            u32::try_from(self.ack_lines.len()).map_err(|_| TraceError::LengthOverflow)?;
 
         let mut out = Vec::with_capacity(total);
         out.extend_from_slice(TRACE_MAGIC);
@@ -175,7 +177,8 @@ impl TraceLog {
         let mut frames = Vec::with_capacity(frame_count);
         for _ in 0..frame_count {
             let request_len = read_u32(payload, &mut offset)?;
-            let request_len = usize::try_from(request_len).map_err(|_| TraceError::LengthOverflow)?;
+            let request_len =
+                usize::try_from(request_len).map_err(|_| TraceError::LengthOverflow)?;
             if request_len > max_frame {
                 return Err(TraceError::FrameTooLarge {
                     len: request_len,
@@ -184,7 +187,8 @@ impl TraceLog {
             }
             let request = read_bytes(payload, &mut offset, request_len)?;
             let response_len = read_u32(payload, &mut offset)?;
-            let response_len = usize::try_from(response_len).map_err(|_| TraceError::LengthOverflow)?;
+            let response_len =
+                usize::try_from(response_len).map_err(|_| TraceError::LengthOverflow)?;
             if response_len > max_frame {
                 return Err(TraceError::FrameTooLarge {
                     len: response_len,
