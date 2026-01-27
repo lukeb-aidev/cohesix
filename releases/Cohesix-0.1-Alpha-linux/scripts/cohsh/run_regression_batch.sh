@@ -14,6 +14,9 @@ BASE_SCRIPTS=(
     "9p_batch.coh"
     "host_absent.coh"
     "observe_watch.coh"
+    "root_cut_basic.coh"
+    "session_lifecycle.coh"
+    "busy_backpressure.coh"
     "cas_roundtrip.coh"
     "tcp_basic.coh"
     "session_pool.coh"
@@ -185,6 +188,15 @@ run_cohsh() {
         observe_watch.coh)
             "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/observe_watch.coh
             ;;
+        root_cut_basic.coh)
+            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/root_cut_basic.coh
+            ;;
+        session_lifecycle.coh)
+            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/session_lifecycle.coh
+            ;;
+        busy_backpressure.coh)
+            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/busy_backpressure.coh
+            ;;
         cas_roundtrip.coh)
             "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/cas_roundtrip.coh
             ;;
@@ -239,6 +251,7 @@ run_batch() {
         --cas-manifest-template "$PROJECT_ROOT/out/cas_manifest_template.json" \
         --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \
         --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md" \
+        --gpu-breadcrumbs-snippet "$PROJECT_ROOT/docs/snippets/gpu_breadcrumbs.md" \
         --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
         --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md" \
         --ticket-quotas-snippet "$PROJECT_ROOT/docs/snippets/ticket_quotas.md" \
@@ -345,6 +358,7 @@ cargo run -p coh-rtc -- \
     --cas-manifest-template "$PROJECT_ROOT/out/cas_manifest_template.json" \
     --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \
     --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md" \
+    --gpu-breadcrumbs-snippet "$PROJECT_ROOT/docs/snippets/gpu_breadcrumbs.md" \
     --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
     --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md" \
     --ticket-quotas-snippet "$PROJECT_ROOT/docs/snippets/ticket_quotas.md" \

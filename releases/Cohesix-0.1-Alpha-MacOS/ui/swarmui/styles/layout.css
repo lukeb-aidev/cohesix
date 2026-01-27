@@ -30,7 +30,7 @@ body {
 .cohesix-banner {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(260px, 2.2fr) minmax(200px, 1fr);
+  grid-template-columns: minmax(260px, 1fr) minmax(320px, 2fr);
   gap: var(--space-5);
   align-items: center;
   padding: var(--space-4) var(--space-5);
@@ -46,8 +46,9 @@ body {
 
 .banner-brand {
   display: flex;
-  align-items: center;
-  gap: var(--space-5);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
   min-width: 0;
 }
 
@@ -61,12 +62,19 @@ body {
 }
 
 .cohesix-banner__logo {
-  height: clamp(72px, 12vw, 140px);
-  width: auto;
+  width: clamp(240px, 32vw, 420px);
+  height: auto;
   max-width: 100%;
   display: block;
   flex-shrink: 0;
   filter: drop-shadow(0 12px 24px rgba(11, 15, 18, 0.4));
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
 }
 
 .topbar {
@@ -83,29 +91,72 @@ body {
 }
 
 .eyebrow {
-  margin: 0 0 var(--space-2);
+  margin: 0;
   text-transform: uppercase;
-  letter-spacing: 0.28em;
-  font-size: var(--font-size-md);
+  letter-spacing: 0.32em;
+  font-size: var(--font-size-sm);
   color: var(--color-ink-soft);
 }
 
 .lede {
   margin: 0;
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm);
   color: var(--color-ink-soft);
-  max-width: calc(var(--space-6) * 13);
+  max-width: 32ch;
 }
 
 .status-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  grid-template-areas:
+    "summary pressure"
+    "pressure-summary errors";
+  gap: var(--space-3) var(--space-4);
+  align-items: center;
+  width: 100%;
+}
+
+.status-row {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: var(--space-2);
-  align-items: flex-start;
+  align-items: center;
+}
+
+.status-row.summary {
+  grid-area: summary;
+}
+
+.status-row.pressure-summary {
+  grid-area: pressure-summary;
+}
+
+.status-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+#hive-pressure-strip {
+  grid-area: pressure;
+}
+
+#hive-error-strip {
+  grid-area: errors;
+}
+
+.status-label {
+  flex-basis: 100%;
+  display: block;
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--color-ink-soft);
 }
 
 .cohesix-banner .status-bar {
-  justify-self: end;
+  justify-self: stretch;
 }
 
 .badge {
@@ -117,6 +168,33 @@ body {
   color: var(--color-ink);
 }
 
+.badge.root {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.badge.root.ok {
+  border-color: var(--color-ack);
+  color: var(--color-ack);
+  background: rgba(118, 226, 168, 0.12);
+}
+
+.badge.root.cut {
+  border-color: var(--color-err);
+  color: var(--color-err);
+  background: rgba(255, 107, 107, 0.12);
+}
+
+.badge.root.unknown {
+  border-color: var(--palette-slate);
+  color: var(--color-ink-soft);
+}
+
+.badge.draining {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
 .badge.ghost {
   background: var(--color-surface-2);
   color: var(--color-ink-soft);
@@ -125,6 +203,42 @@ body {
 .badge.soft {
   border-style: dashed;
   font-size: var(--font-size-xs);
+}
+
+.chip {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--color-ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.chip.active {
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.chip[data-kind="busy"] {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.chip[data-kind="quota"] {
+  border-color: var(--palette-azure);
+  color: var(--palette-azure);
+}
+
+.chip[data-kind="cut"] {
+  border-color: var(--color-err);
+  color: var(--color-err);
+}
+
+.chip[data-kind="policy"] {
+  border-color: var(--palette-cyan);
+  color: var(--palette-cyan);
 }
 
 .session-block {
@@ -307,13 +421,25 @@ body {
   }
 
   .banner-brand {
-    flex-direction: column;
+    align-items: center;
     text-align: center;
   }
 
   .cohesix-banner .status-bar {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "summary"
+      "pressure-summary"
+      "pressure"
+      "errors";
     align-items: center;
+    justify-items: center;
     justify-self: center;
+  }
+
+  .status-row,
+  .status-group {
+    justify-content: center;
   }
 
   .topbar {

@@ -105,6 +105,11 @@ const MAX_ACTION_ID_LEN: usize = 64;
 const SYSTEMD_UNITS: [&str; 2] = ["cohesix-agent.service", "ssh.service"];
 const K8S_NODES: [&str; 1] = ["node-1"];
 const NVIDIA_GPUS: [&str; 1] = ["0"];
+const GPU_LEASE_SCHEMA: &str = "gpu-lease/v1";
+const GPU_LEASE_ACTIVE_STATE: &str = "ACTIVE";
+const GPU_CTL_MAX_BYTES: u32 = 1024;
+const GPU_LEASE_MAX_BYTES: u32 = 1024;
+const GPU_STATUS_MAX_BYTES: u32 = UI_MAX_STREAM_BYTES as u32;
 const OBSERVE_P50_BYTES: usize = generated::OBSERVABILITY_CONFIG.proc_ingest.p50_ms_bytes as usize;
 const OBSERVE_P95_BYTES: usize = generated::OBSERVABILITY_CONFIG.proc_ingest.p95_ms_bytes as usize;
 const OBSERVE_BACKPRESSURE_BYTES: usize = generated::OBSERVABILITY_CONFIG
@@ -166,6 +171,7 @@ pub struct NineDoorBridge {
     workers: HeaplessVec<WorkerTelemetry, MAX_WORKERS>,
     binds: HeaplessVec<BindEntry, MAX_BINDS>,
     host: HostState,
+    gpu: GpuState,
     sidecars: SidecarState,
     policy: PolicyState,
     audit: AuditState,
@@ -396,6 +402,8 @@ impl NineDoorBridge {
         {
             boot_log::notify_bridge_created();
         }
+        let host = HostState::new();
+        let gpu = GpuState::new(host.enabled && host.has_provider(generated::HostProvider::Nvidia));
         Self {
             attached: false,
             session_role: None,
@@ -407,7 +415,8 @@ impl NineDoorBridge {
             telemetry_ingest: TelemetryIngestState::new(),
             workers: HeaplessVec::new(),
             binds: HeaplessVec::new(),
-            host: HostState::new(),
+            host,
+            gpu,
             sidecars: SidecarState::new(),
             policy: PolicyState::new(),
             audit: AuditState::new(generated::audit_config()),
@@ -735,6 +744,36 @@ impl NineDoorBridge {
             }
             return Err(NineDoorBridgeError::Permission);
         }
+        if let ["gpu", gpu_id, leaf] = segments.as_slice() {
+            if !self.gpu.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            if !self.is_queen()
+                && !matches!(self.session_role, Some(SessionRoleLabel::WorkerGpu))
+            {
+                return Err(NineDoorBridgeError::Permission);
+            }
+            let ctl_max = self.gpu.ctl_max_bytes;
+            let lease_max = self.gpu.lease_max_bytes;
+            let status_max = self.gpu.status_max_bytes;
+            let entry = self
+                .gpu
+                .entry_mut(gpu_id)
+                .ok_or(NineDoorBridgeError::InvalidPath)?;
+            match *leaf {
+                "ctl" => append_log_bytes(&mut entry.ctl_log, payload, ctl_max)?,
+                "lease" => {
+                    validate_json_envelope(payload)?;
+                    append_log_bytes(&mut entry.lease_log, payload, lease_max)?
+                }
+                "status" => {
+                    validate_json_envelope(payload)?;
+                    append_log_bytes(&mut entry.status_log, payload, status_max)?
+                }
+                _ => return Err(NineDoorBridgeError::InvalidPath),
+            }
+            return Ok(());
+        }
         if let Some(control) = self.host.control_label(path) {
             if !self.is_queen() {
                 self.log_host_write(path, Some(control), HostWriteOutcome::Denied, None);
@@ -927,6 +966,22 @@ impl NineDoorBridge {
             if let Some(action_id) = parse_action_status_path(path) {
                 return self.action_status_lines(action_id);
             }
+        }
+        if let ["gpu", gpu_id, leaf] = segments.as_slice() {
+            if !self.gpu.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            let entry = self
+                .gpu
+                .entry(gpu_id)
+                .ok_or(NineDoorBridgeError::InvalidPath)?;
+            return match *leaf {
+                "info" => lines_from_text(entry.info_payload.as_str()),
+                "ctl" => lines_from_bytes(entry.ctl_log.as_slice()),
+                "lease" => lines_from_bytes(entry.lease_log.as_slice()),
+                "status" => lines_from_bytes(entry.status_log.as_slice()),
+                _ => Err(NineDoorBridgeError::InvalidPath),
+            };
         }
         if let Some((device_id, seg_id)) = telemetry_ingest_segment_path(path) {
             if !self.telemetry_ingest.enabled() {
@@ -1205,8 +1260,24 @@ impl NineDoorBridge {
         if path == "/trace" {
             return list_from_slice(&["ctl", "events"]);
         }
-        if path == "/gpu" {
-            return Ok(HeaplessVec::new());
+        if segments.as_slice() == ["gpu"] {
+            if !self.gpu.enabled() {
+                return Ok(HeaplessVec::new());
+            }
+            let mut output = HeaplessVec::new();
+            for entry in self.gpu.entries.iter() {
+                push_list_entry(&mut output, entry.id.as_str())?;
+            }
+            return Ok(output);
+        }
+        if let ["gpu", gpu_id] = segments.as_slice() {
+            if !self.gpu.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            if self.gpu.entry(gpu_id).is_none() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return list_from_slice(&["info", "ctl", "lease", "status"]);
         }
         if path == "/worker" {
             if sharding.enabled && !legacy_worker_alias_enabled(sharding) {
@@ -1316,7 +1387,10 @@ impl NineDoorBridge {
         match command {
             QueenCtlCommand::Spawn(target) => {
                 self.ensure_lifecycle_gate(lifecycle::GATE_NEW_WORK)?;
-                self.spawn_worker(target)
+                match target {
+                    SpawnTarget::Gpu => self.spawn_gpu_from_ctl(payload),
+                    _ => self.spawn_worker(target),
+                }
             }
             QueenCtlCommand::Kill(worker_id) => self.remove_worker(worker_id),
             QueenCtlCommand::Bind { from, to } => {
@@ -1328,6 +1402,63 @@ impl NineDoorBridge {
                 self.mount_namespace(service, at)
             }
         }
+    }
+
+    fn spawn_gpu_from_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
+        if !self.gpu.enabled() {
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        if self.workers.is_full() {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        let gpu_id =
+            parse_json_string_field(payload, "gpu_id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+        let mem_mb = u32::try_from(
+            parse_json_u64_field(payload, "mem_mb").ok_or(NineDoorBridgeError::InvalidPayload)?,
+        )
+        .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+        let streams = u8::try_from(
+            parse_json_u64_field(payload, "streams").ok_or(NineDoorBridgeError::InvalidPayload)?,
+        )
+        .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+        let ttl_s = u32::try_from(
+            parse_json_u64_field(payload, "ttl_s").ok_or(NineDoorBridgeError::InvalidPayload)?,
+        )
+        .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+        let priority = u8::try_from(parse_json_u64_field(payload, "priority").unwrap_or(0))
+            .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+        if mem_mb == 0 || streams == 0 || ttl_s == 0 {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        if self.gpu.entry(gpu_id).is_none() {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        let worker_id = self.next_worker_id;
+        let worker_label = format!("worker-{worker_id}");
+        let line = format!(
+            "{{\"schema\":\"{}\",\"state\":\"{}\",\"gpu_id\":\"{}\",\"worker_id\":\"{}\",\"mem_mb\":{mem_mb},\"streams\":{streams},\"ttl_s\":{ttl_s},\"priority\":{priority}}}",
+            GPU_LEASE_SCHEMA,
+            GPU_LEASE_ACTIVE_STATE,
+            escape_json_string(gpu_id),
+            escape_json_string(worker_label.as_str())
+        );
+        let lease_max = self.gpu.lease_max_bytes;
+        let before_len = {
+            let entry = self
+                .gpu
+                .entry_mut(gpu_id)
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let before_len = entry.lease_log.len();
+            append_log_bytes(&mut entry.lease_log, &line, lease_max)?;
+            before_len
+        };
+        if let Err(err) = self.spawn_worker(SpawnTarget::Gpu) {
+            if let Some(entry) = self.gpu.entry_mut(gpu_id) {
+                entry.lease_log.truncate(before_len);
+            }
+            return Err(err);
+        }
+        Ok(())
     }
 
     fn handle_lifecycle_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
@@ -3078,6 +3209,92 @@ impl HostState {
             control,
         });
     }
+}
+
+#[derive(Debug)]
+struct GpuEntry {
+    id: String,
+    info_payload: String,
+    ctl_log: Vec<u8>,
+    lease_log: Vec<u8>,
+    status_log: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct GpuState {
+    enabled: bool,
+    ctl_max_bytes: u32,
+    lease_max_bytes: u32,
+    status_max_bytes: u32,
+    entries: Vec<GpuEntry>,
+}
+
+impl GpuState {
+    fn new(enabled: bool) -> Self {
+        let mut entries = Vec::new();
+        if enabled {
+            let specs = [
+                ("GPU-0", "Mock 4090", 24_576_u32, 144_u32),
+                ("GPU-1", "Mock 4060", 8_192_u32, 64_u32),
+            ];
+            for (id, name, memory_mb, sm_count) in specs {
+                let info_payload = render_gpu_info_payload(
+                    id,
+                    name,
+                    memory_mb,
+                    sm_count,
+                    "555.0",
+                    "12.4",
+                );
+                let ctl_log = format!("LEASE {id}\n").into_bytes();
+                entries.push(GpuEntry {
+                    id: id.to_owned(),
+                    info_payload,
+                    ctl_log,
+                    lease_log: Vec::new(),
+                    status_log: Vec::new(),
+                });
+            }
+        }
+        Self {
+            enabled,
+            ctl_max_bytes: GPU_CTL_MAX_BYTES,
+            lease_max_bytes: GPU_LEASE_MAX_BYTES,
+            status_max_bytes: GPU_STATUS_MAX_BYTES,
+            entries,
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled && !self.entries.is_empty()
+    }
+
+    fn entry(&self, id: &str) -> Option<&GpuEntry> {
+        self.entries.iter().find(|entry| entry.id == id)
+    }
+
+    fn entry_mut(&mut self, id: &str) -> Option<&mut GpuEntry> {
+        self.entries.iter_mut().find(|entry| entry.id == id)
+    }
+}
+
+fn render_gpu_info_payload(
+    id: &str,
+    name: &str,
+    memory_mb: u32,
+    sm_count: u32,
+    driver_version: &str,
+    runtime_version: &str,
+) -> String {
+    format!(
+        "{{\n    \"id\": \"{}\",\n    \"name\": \"{}\",\n    \"memory_mb\": {},\n    \"sm_count\": {},\n    \"driver_version\": \"{}\",\n    \"runtime_version\": \"{}\"\n}}",
+        escape_json_string(id),
+        escape_json_string(name),
+        memory_mb,
+        sm_count,
+        escape_json_string(driver_version),
+        escape_json_string(runtime_version)
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

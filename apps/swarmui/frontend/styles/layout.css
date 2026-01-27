@@ -147,6 +147,8 @@ body {
 }
 
 .status-label {
+  flex-basis: 100%;
+  display: block;
   font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.18em;
@@ -208,7 +210,7 @@ body {
   background: var(--color-surface-2);
   padding: var(--space-1) var(--space-2);
   border-radius: 999px;
-  font-size: var(--font-size-xs);
+  font-size: 10px;
   color: var(--color-ink-soft);
   text-transform: uppercase;
   letter-spacing: 0.06em;

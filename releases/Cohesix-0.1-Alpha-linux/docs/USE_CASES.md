@@ -14,6 +14,7 @@ This document enumerates concrete, high‑value **use cases** for Cohesix across
 - **Tiny TCB + deterministic envelope:** upstream seL4 with pure Rust userspace, no POSIX/libc stacks, no in-VM GPU stacks; memory and I/O are bounded and deterministic.
 - **Coexists with existing ecosystems:** host-side sidecars mirror namespaces (Kubernetes, CUDA/NVML, OT protocols, storage, model registries) over 9P so Cohesix stays the boundary orchestrator, not a general OS.
 - **LoRA / PEFT feedback loops without in-VM ML:** model lifecycle pointers (e.g. `/gpu/models/active`) and schema-tagged, bounded telemetry make edge feedback ingestible by external training farms without expanding the VM’s TCB.
+- **MLOps-first control plane:** deterministic model lifecycle pointers, CAS updates, and telemetry snapshots make training, rollout, and audit pipelines reproducible without adding in-VM ML stacks.
 - **Cohesix is not:**
   - a Linux replacement
   - an in-VM container runtime

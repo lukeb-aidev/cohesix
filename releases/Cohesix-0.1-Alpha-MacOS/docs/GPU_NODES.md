@@ -30,8 +30,8 @@ GPU workers (`worker-gpu`) are another worker type under the hive’s Queen, not
 |---------|----------------|
 | `/gpu/<id>/info` | Serialize GPU metadata (name, UUID, memory, SM count, driver/runtime versions). |
 | `/gpu/<id>/ctl` | Accept textual commands (`LEASE`, `RELEASE`, `PRIORITY <n>`, `RESET`) and return status lines mediated by the bridge host. |
-| `/gpu/<id>/lease` | Ticket/lease file gated by host policy; worker-gpu reads to learn active allocations and writes to request renewals. |
-| `/gpu/<id>/status` | Read-only view of utilisation and recent job summaries sourced from the host; append-only job lifecycle entries are included. |
+| `/gpu/<id>/lease` | Ticket/lease file gated by host policy; worker-gpu reads to learn active allocations and writes to request renewals. Append-only JSON lines use schema `gpu-lease/v1` (`state=ACTIVE|RELEASED`). |
+| `/gpu/<id>/status` | Read-only view of utilisation and recent job summaries sourced from the host; append-only job lifecycle entries and `gpu-breadcrumb/v1` host-run breadcrumbs are included. |
 
 ## 5. Lease Model
 ```rust
@@ -45,6 +45,7 @@ pub struct GpuLease {
 ```
 - Leases are tied to a worker ticket; revocation closes associated fids.
 - Host worker enforces TTL via timers; once expired, queued jobs are drained and subsequent writes receive `Permission`.
+- `/gpu/<id>/lease` appends JSON lines with schema `gpu-lease/v1` and fields: `schema`, `state`, `gpu_id`, `worker_id`, `mem_mb`, `streams`, `ttl_s`, `priority`. The latest `state=ACTIVE` line indicates the current lease.
 - The Queen uses `/queen/ctl` to create GPU workers and manage leases within the same hive orchestration model.
 
 ## 6. Job Descriptor Schema
@@ -68,6 +69,7 @@ GPU workers do not schedule hardware directly; they receive tickets and leases f
 
 ## 7. Simulation Path (for CI & macOS)
 - `gpu-bridge-host --mock --list` emits deterministic namespace descriptors consumed by NineDoor via `install_gpu_nodes`.
+- In `dev-virt` QEMU runs without a host bridge, the root-task seeds mock `/gpu/<id>` entries (GPU-0/GPU-1) with `info`, `lease`, and `status` to satisfy CLI demos; `/gpu/models` and `/gpu/telemetry` remain host-mirrored only.
 - `info` returns synthetic GPU entries, `job` triggers precomputed status sequences.
 - Enables continuous validation of control plane without real hardware.
 - CLI/GUI clients submit GPU jobs via the same verbs exposed through `cohsh` and Secure9P; no separate ad-hoc GPU control protocol exists inside the Cohesix instance.
@@ -218,6 +220,7 @@ base_model.ref
 policy.toml
 
 This directory is the **contract boundary** between Cohesix and ML tooling.
+Host operators pull this bundle via `coh peft export` before handing it to external training.
 
 ---
 

@@ -85,7 +85,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [21d](#21d) | Deterministic Node Lifecycle & Operator Control | Complete |
 | [21e](#21e) | Rooted Authority, Cut Detection, Explicit Session Semantics, and Live Hive Visibility | Complete |
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Complete |
-| [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Pending |
+| [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Complete |
 | [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Pending |
 | [25a](#25a) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [25b](#25b) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
@@ -3551,6 +3551,8 @@ Deliverables:
 ## Milestone 23 — PEFT/LoRA Lifecycle Glue (coh peft) <a id="23"></a> 
 [Milestones](#Milestones)
 
+**Status:** Complete — PEFT lifecycle flows, dev-virt GPU mock entries, SwarmUI replay/path/layout fixes, regression pack, and full test plan (source + macOS/Ubuntu bundles) validated.
+
 **Why now (adoption):** PEFT users need a file-native loop to export jobs, import adapters, and activate or rollback safely without a new control plane.
 
 **Goal**
@@ -3562,6 +3564,9 @@ Provide `coh peft` commands that export LoRA jobs, import adapters, and atomical
 - `coh peft activate` swaps `/gpu/models/active` atomically; `coh peft rollback` reverts to the previous pointer with a documented recovery path.
 - No training in VM and no registry service; file-native only.
 - New namespaces (`/queen/export/*`, `/gpu/models/*`) have explicit NineDoor provider ownership and manifest gating; docs are updated before code depends on them.
+- `dev-virt` QEMU runs without a host GPU bridge expose mock `/gpu/<id>/{info,ctl,lease,status}` entries for CLI demos (GPU-0/GPU-1); `/gpu/models` remains host-mirrored only.
+- SwarmUI replay flags (`--replay-trace`, `--replay`) accept absolute or relative paths so release bundles can replay fixtures without path assumptions.
+- SwarmUI pressure/error labels break to their own line and chips render slightly smaller for readability.
 
 **Commands**
 - `cargo test -p coh --features mock --test peft`
@@ -3625,6 +3630,42 @@ Checks:
   - Transcript diff zero; rollback emits deterministic ACK/ERR ordering.
 Deliverables:
   - Regression fixtures stored and referenced in docs.
+
+Title/ID: m23-dev-virt-gpu-mock
+Goal: Provide mock `/gpu` entries for CLI demos in dev-virt.
+Inputs: docs/GPU_NODES.md, docs/INTERFACES.md.
+Changes:
+  - apps/root-task/src/ninedoor.rs — seed mock `/gpu/<id>` entries and bounded logs when no host GPU bridge is present.
+Commands:
+  - cargo run -p cohsh --features mock -- --transport tcp --host 127.0.0.1 --port 31337 --script resources/proc_tests/selftest_quick.coh
+Checks:
+  - `coh gpu list` returns mock GPU-0/GPU-1 and reads `/gpu/<id>/info` without errors.
+Deliverables:
+  - Mock `/gpu` entries documented in GPU/NineDoor interface docs.
+
+Title/ID: m23-swarmui-replay-path
+Goal: Normalize SwarmUI replay paths for release bundle replay.
+Inputs: docs/TEST_PLAN.md, release bundle layout.
+Changes:
+  - apps/swarmui/src-tauri/main.rs — resolve replay paths as absolute when provided relative inputs.
+Commands:
+  - cargo test -p swarmui --test trace
+Checks:
+  - `swarmui --replay-trace <relative path>` and `swarmui --replay <relative path>` work from bundle root.
+Deliverables:
+  - Replay instructions remain consistent in docs/TEST_PLAN.md.
+
+Title/ID: m23-swarmui-pressure-layout
+Goal: Improve SwarmUI pressure/error strip readability.
+Inputs: apps/swarmui/frontend/index.html, apps/swarmui/frontend/styles/layout.css.
+Changes:
+  - apps/swarmui/frontend/styles/layout.css — line-break pressure/error labels and shrink status chips slightly.
+Commands:
+  - cargo test -p swarmui --test console_parity
+Checks:
+  - Pressure and error labels render above chips; chip text remains legible.
+Deliverables:
+  - UI layout changes tracked in the milestone.
 ```
 
 ---

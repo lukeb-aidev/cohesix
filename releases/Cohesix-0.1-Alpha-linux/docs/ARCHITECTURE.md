@@ -34,12 +34,22 @@
 - `telemetry_ingest.max_bytes_per_segment`: `32768`
 - `telemetry_ingest.max_total_bytes_per_device`: `131072`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
+- `lifecycle.initial_state`: `BOOTING`
+- `lifecycle.auto_transitions`: `BOOTING->ONLINE`
 - `observability.proc_9p.sessions`: `true`
 - `observability.proc_9p.outstanding`: `true`
 - `observability.proc_9p.short_writes`: `true`
 - `observability.proc_9p.sessions_bytes`: `8192`
 - `observability.proc_9p.outstanding_bytes`: `128`
 - `observability.proc_9p.short_writes_bytes`: `128`
+- `observability.proc_9p_session.active`: `true`
+- `observability.proc_9p_session.state`: `true`
+- `observability.proc_9p_session.since_ms`: `true`
+- `observability.proc_9p_session.owner`: `true`
+- `observability.proc_9p_session.active_bytes`: `128`
+- `observability.proc_9p_session.state_bytes`: `64`
+- `observability.proc_9p_session.since_ms_bytes`: `64`
+- `observability.proc_9p_session.owner_bytes`: `96`
 - `observability.proc_ingest.p50_ms`: `true`
 - `observability.proc_ingest.p95_ms`: `true`
 - `observability.proc_ingest.backpressure`: `true`
@@ -57,6 +67,20 @@
 - `observability.proc_ingest.latency_samples`: `32`
 - `observability.proc_ingest.latency_tolerance_ms`: `5`
 - `observability.proc_ingest.counter_tolerance`: `1`
+- `observability.proc_root.reachable`: `true`
+- `observability.proc_root.last_seen_ms`: `true`
+- `observability.proc_root.cut_reason`: `true`
+- `observability.proc_root.reachable_bytes`: `32`
+- `observability.proc_root.last_seen_ms_bytes`: `64`
+- `observability.proc_root.cut_reason_bytes`: `64`
+- `observability.proc_pressure.busy`: `true`
+- `observability.proc_pressure.quota`: `true`
+- `observability.proc_pressure.cut`: `true`
+- `observability.proc_pressure.policy`: `true`
+- `observability.proc_pressure.busy_bytes`: `64`
+- `observability.proc_pressure.quota_bytes`: `64`
+- `observability.proc_pressure.cut_bytes`: `64`
+- `observability.proc_pressure.policy_bytes`: `64`
 - `ui_providers.proc_9p.sessions`: `true`
 - `ui_providers.proc_9p.outstanding`: `true`
 - `ui_providers.proc_9p.short_writes`: `true`
@@ -69,12 +93,20 @@
 - `ui_providers.updates.status`: `true`
 - `client_policies.cohsh.pool.control_sessions`: `2`
 - `client_policies.cohsh.pool.telemetry_sessions`: `4`
+- `client_policies.coh.mount.root`: `/`
+- `client_policies.coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
+- `client_policies.coh.telemetry.root`: `/queen/telemetry`
+- `client_policies.coh.telemetry.max_devices`: `32`
+- `client_policies.coh.telemetry.max_segments_per_device`: `4`
+- `client_policies.coh.telemetry.max_bytes_per_segment`: `32768`
+- `client_policies.coh.telemetry.max_total_bytes_per_device`: `131072`
 - `client_policies.retry.max_attempts`: `3`
 - `client_policies.retry.backoff_ms`: `200`
 - `client_policies.retry.ceiling_ms`: `2000`
 - `client_policies.retry.timeout_ms`: `5000`
 - `client_policies.heartbeat.interval_ms`: `15000`
 - `client_paths.queen_ctl`: `/queen/ctl`
+- `client_paths.queen_lifecycle_ctl`: `/queen/lifecycle/ctl`
 - `client_paths.log`: `/log/queen.log`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
@@ -103,7 +135,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`
+- `manifest.sha256`: `a40f87e1b0e148da7f7be9cab2a960bbb41cf9ef4e29e7c71c6847d92de9f509`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -149,4 +181,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `ea6ca43101b547b7730d1b706dc19d88ee08e9d428d9e8d5e411b459afa2c547`)._
+_Generated from `configs/root_task.toml` (sha256: `a40f87e1b0e148da7f7be9cab2a960bbb41cf9ef4e29e7c71c6847d92de9f509`)._

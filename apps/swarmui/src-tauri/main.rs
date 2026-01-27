@@ -8,7 +8,7 @@
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -316,6 +316,23 @@ fn parse_trace_replay_path(args: &[String]) -> Option<PathBuf> {
     None
 }
 
+fn resolve_replay_path(path: &Path, data_dir: &Path, subdir: &str) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    if let Ok(cwd) = env::current_dir() {
+        let candidate = cwd.join(path);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    let data_candidate = data_dir.join(subdir).join(path);
+    if data_candidate.is_file() {
+        return data_candidate;
+    }
+    data_candidate
+}
+
 fn parse_mint_args(args: &[String]) -> Option<MintArgs> {
     let mut mint = false;
     let mut role = None;
@@ -480,11 +497,7 @@ fn main() {
     let timeout = Duration::from_secs(2);
     let mut trace_replay_resolved = None;
     let mut backend = if let Some(path) = trace_replay_path.clone() {
-        let resolved = if path.is_relative() {
-            data_dir.join("traces").join(&path)
-        } else {
-            path
-        };
+        let resolved = resolve_replay_path(&path, &data_dir, "traces");
         trace_replay_resolved = Some(resolved.clone());
         let payload = fs::read(&resolved)
             .unwrap_or_else(|err| panic!("failed to read trace {}: {err}", resolved.display()));
@@ -527,11 +540,7 @@ fn main() {
         }
     }
     if let Some(path) = replay_path {
-        let resolved = if path.is_relative() {
-            data_dir.join("snapshots").join(path)
-        } else {
-            path
-        };
+        let resolved = resolve_replay_path(&path, &data_dir, "snapshots");
         let payload = fs::read(&resolved)
             .unwrap_or_else(|err| panic!("failed to read replay {}: {err}", resolved.display()));
         backend

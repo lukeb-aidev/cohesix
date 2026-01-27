@@ -42,6 +42,9 @@ You need two terminals:
 - Terminal 1: QEMU (keeps the VM running).
   - Note: Qemu will show a serial terminal, used for core seL4 diagnostics. This is NOT intended to be the main user interface.
 - Terminal 2: for either `cohsh` or `swarmui`. Use one at a time; they should not be used simultaneously.
+- Command surface note (concise):
+  - SwarmUI is read-only; use `cohsh` for any control actions or CLI-only commands.
+  - `cohsh` includes the full console verbs plus CLI-only commands/options (for example `test --mode`, `pool bench`, `tcp-diag`, `--script`, `--mint-ticket`).
 
 1. In Terminal 1, Boot the VM:
    ```bash
@@ -98,7 +101,7 @@ Other optional args you can try:
    ```bash
    xvfb-run -a ./bin/swarmui
    ```
-   In SwarmUI, use `ls /worker` in cohsh to find a worker id before clicking “Load telemetry”. Spawn multiple
+   In SwarmUI, use `ls /worker` in cohsh to find a worker id before clicking “Load telemetry”. Spawn multiple workers if you want more activity.
 ## Run the SwarmUI deterministic replay demos
 Quit SwarmUI
 
@@ -179,7 +182,7 @@ The `/host` namespace must be enabled in `configs/root_task.toml` for live publi
 ## Root console note
 The serial root console (`cohesix>`) uses the same verb grammar as `cohsh`, but it does **not** parse `key=value` shorthand. 
 
-When testing `sawrmui`, you can use the root concole to spawn more workers and expand the hive, which should be refelcted in the Live Hive view.
+When testing `swarmui`, you can use the root console to spawn more workers and expand the hive, which should be reflected in the Live Hive view.
 
 `cohesix>` expects the raw JSON payloads used by NineDoor. For example, `spawn heartbeat ticks=25 ops=555` works in `cohsh`, but on the root console you must send:
 ```text
@@ -277,5 +280,3 @@ If a command exceeds these limits, the console returns `ERR ... reason=ELIMIT` (
   coh> tcp-diag
   coh> tcp-diag 31337
   ```
-
-

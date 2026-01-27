@@ -1,0 +1,15 @@
+# Author: Lukas Bower
+# Purpose: Ensure telemetry ingest remains available during DRAINING.
+attach queen
+EXPECT OK
+echo '{"new":"segment","mime":"text/plain"}' > /queen/telemetry/dev-1/ctl
+EXPECT OK
+echo drain-prep > /queen/telemetry/dev-1/seg/seg-000001
+EXPECT OK
+lifecycle cordon
+EXPECT OK
+echo '{"new":"segment","mime":"text/plain"}' > /queen/telemetry/dev-1/ctl
+EXPECT OK
+echo drain-live > /queen/telemetry/dev-1/seg/seg-000002
+EXPECT OK
+quit

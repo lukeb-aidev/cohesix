@@ -69,6 +69,7 @@ GPU workers do not schedule hardware directly; they receive tickets and leases f
 
 ## 7. Simulation Path (for CI & macOS)
 - `gpu-bridge-host --mock --list` emits deterministic namespace descriptors consumed by NineDoor via `install_gpu_nodes`.
+- In `dev-virt` QEMU runs without a host bridge, the root-task seeds mock `/gpu/<id>` entries (GPU-0/GPU-1) with `info`, `lease`, and `status` to satisfy CLI demos; `/gpu/models` and `/gpu/telemetry` remain host-mirrored only.
 - `info` returns synthetic GPU entries, `job` triggers precomputed status sequences.
 - Enables continuous validation of control plane without real hardware.
 - CLI/GUI clients submit GPU jobs via the same verbs exposed through `cohsh` and Secure9P; no separate ad-hoc GPU control protocol exists inside the Cohesix instance.

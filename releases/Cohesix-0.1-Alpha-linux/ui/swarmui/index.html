@@ -19,15 +19,35 @@
             alt="Cohesix"
           />
           <div class="brand">
-            <p class="eyebrow">SwarmUI</p>
+            <p class="eyebrow">SWARMUI</p>
             <p class="lede">
               Live Hive telemetry and activity.
             </p>
           </div>
         </div>
         <div class="status-bar">
-          <span class="badge" id="hive-status">Hive idle</span>
-          <span class="badge ghost" id="hive-pressure">Pressure 0% · backlog 0 · dropped 0</span>
+          <div class="status-row summary">
+            <span class="badge" id="hive-status">Hive idle</span>
+            <span class="badge root ok" id="hive-root">ROOT OK</span>
+            <span class="badge ghost" id="hive-sessions">Sessions 0 · draining 0</span>
+          </div>
+          <div class="status-row pressure-summary">
+            <span class="badge ghost" id="hive-pressure">Pressure 0% · backlog 0 · dropped 0</span>
+          </div>
+          <div class="status-group" id="hive-pressure-strip">
+            <span class="status-label">Pressure</span>
+            <span class="chip" data-kind="busy">busy 0</span>
+            <span class="chip" data-kind="quota">quota 0</span>
+            <span class="chip" data-kind="cut">cut 0</span>
+            <span class="chip" data-kind="policy">policy 0</span>
+          </div>
+          <div class="status-group" id="hive-error-strip">
+            <span class="status-label">Errors</span>
+            <span class="chip" data-kind="busy">busy 0</span>
+            <span class="chip" data-kind="quota">quota 0</span>
+            <span class="chip" data-kind="cut">cut 0</span>
+            <span class="chip" data-kind="policy">policy 0</span>
+          </div>
         </div>
       </header>
       <header class="topbar">
@@ -187,6 +207,47 @@
               <button id="load-namespace" class="action">
                 <span data-icon="folder-open"></span>
                 List entries
+              </button>
+            </footer>
+          </article>
+
+          <article class="panel wide console-panel">
+            <header class="panel-header">
+              <div>
+                <h2>Console</h2>
+                <p>Interactive cohsh prompt over the shared TCP console session.</p>
+              </div>
+              <div class="console-actions">
+                <button id="console-clear" class="action ghost">Clear</button>
+                <button id="console-stop" class="action">
+                  <span data-icon="stop"></span>
+                  Stop
+                </button>
+              </div>
+            </header>
+            <div class="panel-body console-body">
+              <div
+                class="console-output mono"
+                id="console-output"
+                role="log"
+                aria-live="polite"
+              >
+                <p class="placeholder">Console idle.</p>
+              </div>
+            </div>
+            <footer class="panel-footer console-footer">
+              <div class="console-input">
+                <span class="console-prompt">coh&gt;</span>
+                <input
+                  id="console-input"
+                  class="input mono"
+                  type="text"
+                  placeholder="help · attach queen · log · tail /log/queen.log"
+                />
+              </div>
+              <button id="console-send" class="action primary">
+                <span data-icon="play"></span>
+                Send
               </button>
             </footer>
           </article>
