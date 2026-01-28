@@ -3772,7 +3772,7 @@ Deliverables:
 **Constraints**
 - No code changes; demo uses release bundle binaries and existing scripts only.
 - SwarmUI is the primary surface. Use `cohsh` only when a required action is not available in SwarmUI, and quit SwarmUI before launching `cohsh` (per `docs/QUICKSTART.md`).
-- Queen VM runs on the Mac host. G5g and Jetson run host tools only (no Cohesix VM on those nodes).
+- Queen VM runs on the Mac host. Jetson runs a Cohesix Worker VM; G5g runs host tools only.
 - All ML/inference stays host-side; no CUDA/NVML in the VM.
 - All actions use documented Secure9P/console commands and namespaces; no ad-hoc RPC.
 
@@ -3782,7 +3782,7 @@ Deliverables:
 - `docs/GPU_NODES.md`
 
 **VM placement note**
-- This demo uses host tools only on G5g/Jetson and does **not** exercise the Worker VM path described in `docs/GPU_NODES.md`. If you need worker role isolation, on-device telemetry forwarding, or `/worker/<id>` semantics on Jetson, run a Worker VM there instead.
+- This demo **does** exercise the Worker VM path described in `docs/GPU_NODES.md`. It aligns with the edge flow in `docs/NETWORK_CONFIG.md` (Jetson outbound connectivity, role-scoped tickets).
 
 **Runbook (documented commands only; SwarmUI-first)**
 0) Framing line: “Cohesix is not an ML system. It is a control-plane OS that decides when learning can change a system.”
@@ -3790,19 +3790,31 @@ Deliverables:
 2) Boot queen (QEMU) on the Mac host: `./qemu/run.sh`.
 3) Launch SwarmUI on the Mac host first (observational): `./bin/swarmui`.
    - Live Hive is read-only and reflects sessions/pressure/root-cut and worker activity.
-   - Use the embedded Cohesix console prompt in SwarmUI for core verbs (demo it explicitly).
+   - Use the embedded Cohesix console prompt in SwarmUI for core verbs (demo it explicitly):
+     - `help`
+     - `ping`
+     - `attach queen`
    - SwarmUI’s embedded console supports core verbs only; CLI-only commands must use `cohsh`.
 4) When a required action is not available in SwarmUI, quit SwarmUI and switch to cohsh:
    - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337` (use `127.0.0.1` when on the Mac host)
    - `attach queen`
    - `cat /proc/lifecycle/state` (optionally `/proc/lifecycle/reason`, `/proc/lifecycle/since`)
-5) Keep Live Hive active (optional): `spawn heartbeat ticks=100`.
-6) Telemetry ingest (queen surface; OS-named segments):
+5) Bring up the Jetson Worker VM (architecture-complete path):
+   - Boot the Jetson worker VM using the same release bundle runner (on the Jetson host):
+     - `./qemu/run.sh`
+   - Mint a worker ticket on the queen host (Mac) and pass it to Jetson:
+     - `./bin/cohsh --mint-ticket --role worker-heartbeat --ticket-subject jetson-1`
+     - (Alternative) `./bin/swarmui --mint-ticket --role worker-heartbeat --ticket-subject jetson-1`
+   - On Jetson, attach as the worker role over TCP (outbound only per `docs/NETWORK_CONFIG.md`):
+     - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337 --role worker-heartbeat --ticket "$WORKER_TICKET"`
+   - In the Queen view (SwarmUI or cohsh), confirm workers appear under `/worker` before proceeding.
+6) Keep Live Hive active (optional): `spawn heartbeat ticks=100`.
+7) Telemetry ingest (queen surface; OS-named segments):
    - `telemetry push demo/telemetry/demo.txt --device device-1`
    - or (per walkthrough) `echo '{"new":"segment","mime":"text/plain"}' > /queen/telemetry/dev-1/ctl` then append to `/queen/telemetry/dev-1/seg/seg-000001`
-7) Quit cohsh; relaunch SwarmUI to observe effects: `./bin/swarmui`.
-8) External PEFT (out-of-band): run training off-plane; produce adapter artifacts under `demo/peft_adapter/`.
-9) Import + activate (host tool; no in-VM ML):
+8) Quit cohsh; relaunch SwarmUI to observe effects: `./bin/swarmui`.
+9) External PEFT (out-of-band): run training off-plane; produce adapter artifacts under `demo/peft_adapter/`.
+10) Import + activate (host tool; no in-VM ML):
    - Ensure `/gpu/models/*` exists via `./bin/gpu-bridge-host --mock --list` when no real bridge is available.
    - Live export (requires existing job under `/queen/export/lora_jobs/job_0001/`):
      - `./bin/coh --host <queen-host> --port 31337 peft export --job job_0001 --out demo/peft_export`
@@ -3812,8 +3824,8 @@ Deliverables:
    - `./bin/coh --host <queen-host> --port 31337 peft activate --model qwen-edge-v1 --registry demo/peft_registry`
    - Adapter inputs: `demo/peft_adapter/adapter.safetensors`, `demo/peft_adapter/lora.json`, `demo/peft_adapter/metrics.json`.
    - Verify pointer via cohsh after closing SwarmUI: `ls /gpu/models/available` and `cat /gpu/models/active`
-10) Rollback: `./bin/coh --host <queen-host> --port 31337 peft rollback --registry demo/peft_registry`
-11) Optional lifecycle control (only when no outstanding leases/workers):
+11) Rollback: `./bin/coh --host <queen-host> --port 31337 peft rollback --registry demo/peft_registry`
+12) Optional lifecycle control (only when no outstanding leases/workers):
    - `ls /worker` (ensure empty) and confirm no active leases.
    - `lifecycle cordon`, `lifecycle drain`, `lifecycle resume`.
 
