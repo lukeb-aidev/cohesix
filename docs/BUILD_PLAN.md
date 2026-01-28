@@ -3765,6 +3765,67 @@ Deliverables:
 **Alpha Release 2 achieved here**
 ----
 
+## Activity — Operator-First Demo (Post-M24, No Code Changes)
+
+**Purpose:** Demonstrate Cohesix as an operator-first control plane using shipped behavior only.
+
+**Constraints**
+- No code changes; demo uses release bundle binaries and existing scripts only.
+- SwarmUI is the primary surface. Use `cohsh` only when a required action is not available in SwarmUI, and quit SwarmUI before launching `cohsh` (per `docs/QUICKSTART.md`).
+- Queen VM runs on the Mac host. G5g and Jetson run host tools only (no Cohesix VM on those nodes).
+- All ML/inference stays host-side; no CUDA/NVML in the VM.
+- All actions use documented Secure9P/console commands and namespaces; no ad-hoc RPC.
+
+**Inputs**
+- `docs/QUICKSTART.md`
+- `docs/OPERATOR_WALKTHROUGH.md`
+- `docs/GPU_NODES.md`
+
+**VM placement note**
+- This demo uses host tools only on G5g/Jetson and does **not** exercise the Worker VM path described in `docs/GPU_NODES.md`. If you need worker role isolation, on-device telemetry forwarding, or `/worker/<id>` semantics on Jetson, run a Worker VM there instead.
+
+**Runbook (documented commands only; SwarmUI-first)**
+0) Framing line: “Cohesix is not an ML system. It is a control-plane OS that decides when learning can change a system.”
+1) Host readiness on the Mac queen host: `./bin/coh doctor --mock` (omit `--mock` to validate NVML/QEMU on a configured host).
+2) Boot queen (QEMU) on the Mac host: `./qemu/run.sh`.
+3) Launch SwarmUI on the Mac host first (observational): `./bin/swarmui`.
+   - Live Hive is read-only and reflects sessions/pressure/root-cut and worker activity.
+   - Use the embedded Cohesix console prompt in SwarmUI for core verbs (demo it explicitly).
+   - SwarmUI’s embedded console supports core verbs only; CLI-only commands must use `cohsh`.
+4) When a required action is not available in SwarmUI, quit SwarmUI and switch to cohsh:
+   - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337` (use `127.0.0.1` when on the Mac host)
+   - `attach queen`
+   - `cat /proc/lifecycle/state` (optionally `/proc/lifecycle/reason`, `/proc/lifecycle/since`)
+5) Keep Live Hive active (optional): `spawn heartbeat ticks=100`.
+6) Telemetry ingest (queen surface; OS-named segments):
+   - `telemetry push demo/telemetry/demo.txt --device device-1`
+   - or (per walkthrough) `echo '{"new":"segment","mime":"text/plain"}' > /queen/telemetry/dev-1/ctl` then append to `/queen/telemetry/dev-1/seg/seg-000001`
+7) Quit cohsh; relaunch SwarmUI to observe effects: `./bin/swarmui`.
+8) External PEFT (out-of-band): run training off-plane; produce adapter artifacts under `demo/peft_adapter/`.
+9) Import + activate (host tool; no in-VM ML):
+   - Ensure `/gpu/models/*` exists via `./bin/gpu-bridge-host --mock --list` when no real bridge is available.
+   - Live export (requires existing job under `/queen/export/lora_jobs/job_0001/`):
+     - `./bin/coh --host <queen-host> --port 31337 peft export --job job_0001 --out demo/peft_export`
+   - Demo-only export (no VM interaction; uses local mock):
+     - `./bin/coh peft export --mock --job job_0001 --out demo/peft_export`
+   - `./bin/coh --host <queen-host> --port 31337 peft import --model qwen-edge-v1 --from demo/peft_adapter --job job_0001 --export demo/peft_export --registry demo/peft_registry`
+   - `./bin/coh --host <queen-host> --port 31337 peft activate --model qwen-edge-v1 --registry demo/peft_registry`
+   - Adapter inputs: `demo/peft_adapter/adapter.safetensors`, `demo/peft_adapter/lora.json`, `demo/peft_adapter/metrics.json`.
+   - Verify pointer via cohsh after closing SwarmUI: `ls /gpu/models/available` and `cat /gpu/models/active`
+10) Rollback: `./bin/coh --host <queen-host> --port 31337 peft rollback --registry demo/peft_registry`
+11) Optional lifecycle control (only when no outstanding leases/workers):
+   - `ls /worker` (ensure empty) and confirm no active leases.
+   - `lifecycle cordon`, `lifecycle drain`, `lifecycle resume`.
+
+**Checks**
+- `coh doctor` passes; QEMU boot ok; cohsh attaches and lifecycle reads return expected values.
+- Telemetry segments appear under `/queen/telemetry/<device>/seg/`; ACK/ERR ordering remains deterministic.
+- PEFT import/activate/rollback update `/gpu/models/available` and `/gpu/models/active` per docs.
+- No concurrent cohsh + SwarmUI usage; no new semantics introduced.
+
+**Deliverables**
+- Demo runbook, `demo/demo_runbook.coh`, and demo assets under `demo/` (no code or release artifact changes).
+
 Next, Alpha release 3 targets bare metal UEFI and AWS native boot via AMI.
 
 --

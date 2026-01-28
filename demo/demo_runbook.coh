@@ -1,0 +1,5 @@
+attach queen
+cat /proc/lifecycle/state
+spawn heartbeat ticks=100
+telemetry push demo/telemetry/demo.txt --device device-1
+quit
