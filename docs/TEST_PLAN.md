@@ -159,6 +159,7 @@ Run Sections 3–5 using the extracted bundle in a clean temp directory (not the
 - macOS bundle: `releases/Cohesix-0.1-Alpha-MacOS.tar.gz`
 - Ubuntu bundle: `releases/Cohesix-0.1-Alpha-linux.tar.gz`
 - Ensure headless Linux uses `xvfb-run` for SwarmUI.
+- The release bundle includes `tests/fixtures/transcripts` for running `python -m pytest -k cohesix_parity`.
 
 ## Trace replay limits
 <!-- coh-rtc:trace-policy:start -->

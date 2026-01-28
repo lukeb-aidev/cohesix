@@ -376,6 +376,8 @@ EOF
 
   cp -p "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace" "${bundle_dir}/traces/trace_v0.trace"
   cp -p "${ROOT_DIR}/tests/fixtures/traces/trace_v0.hive.cbor" "${bundle_dir}/traces/trace_v0.hive.cbor"
+  mkdir -p "${bundle_dir}/tests/fixtures"
+  cp -R "${ROOT_DIR}/tests/fixtures/transcripts" "${bundle_dir}/tests/fixtures/"
   RELEASE_NAME="$bundle_name" python3 - <<'PY'
 import hashlib
 import os
