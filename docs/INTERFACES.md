@@ -173,7 +173,7 @@ Path: `/queen/ctl` (append-only JSON lines)
 {"mount":{"service":"gpu-bridge","at":"/gpu"}}
 {"spawn":"gpu","lease":{"gpu_id":"GPU-0","mem_mb":4096,"streams":2,"ttl_s":120}}
 ```
-- Lines must parse as UTF-8 JSON; unknown fields logged and ignored.
+- Lines must parse as UTF-8 JSON; unknown fields are rejected with deterministic `ERR` (schema is strict).
 - `spawn:"gpu"` queues a lease request for the host GPU bridge; if the bridge is unavailable the command returns `Error::Busy`.
 - GPU spawns require the host bridge to publish `/gpu/<id>` entries via `install_gpu_nodes`; lease issuance is mirrored to `/log/queen.log` and `/gpu/<id>/ctl`.
 - Optional `priority` fields raise scheduling weight on the host bridge when multiple leases compete.
