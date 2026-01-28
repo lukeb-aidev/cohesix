@@ -23,6 +23,14 @@ This document enumerates concrete, high‑value **use cases** for Cohesix across
 
 ---
 
+## Strategic Fits (Beyond “Control Plane”)
+These are high‑level arenas where Cohesix’s file‑shaped authority and deterministic bounds are the core value, not general compute.
+- **Change‑authority substrate:** treat *state transitions* as auditable, reversible files; suited to regulated or safety‑critical environments.
+- **Governed edge AI:** model activation, rollback, and provenance are first‑class operations without embedding ML stacks in the VM.
+- **Disconnected or hostile networks:** deterministic, append‑only state survives intermittent links and allows replay/audit.
+- **Cross‑ecosystem governance:** overlay Kubernetes/systemd/GPU ecosystems without replacing them, preserving a tiny TCB.
+- **Audit‑first infrastructure:** policy gates and append‑only logs are native, not bolt‑on.
+
 ## Edge & Industrial
 
 ### 1) Smart‑factory / Industrial IoT gateway
