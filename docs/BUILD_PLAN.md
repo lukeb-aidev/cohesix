@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+h<!-- Copyright © 2025 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Track Cohesix milestones, deliverables, and completion criteria for ARM64 Pure Rust userspace builds. -->
 <!-- Author: Lukas Bower -->
@@ -3851,9 +3851,11 @@ Deliverables:
 **Deliverables**
 - Demo runbook, `demo/demo_runbook.coh`, and demo assets under `demo/` (no code or release artifact changes).
 
+---
+
 Next, Alpha release 3 targets bare metal UEFI and AWS native boot via AMI.
 
---
+---
 
 ## Milestone 25a — UEFI Bare-Metal Boot & Device Identity <a id="25a"></a> 
 [Milestones](#Milestones)
