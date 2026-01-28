@@ -30,7 +30,7 @@ to the TCP console to drive and observe the system.
 - `swarmui` - UI for replay or live observation with an embedded console panel (core verbs only).
 - `cas-tool` - package and upload bundles to the `/updates` namespace (optional).
 - `gpu-bridge-host` - host GPU discovery for the `/gpu` namespace (optional).
-- `host-sidecar-bridge` - publish host providers into `/host` (optional).
+- `host-sidecar-bridge` - publish **mock** host providers into `/host` for policy/CI validation (optional).
 See `docs/HOST_TOOLS.md` for details.
 
 ## Alpha2 highlights (milestones 21a-24)
@@ -58,6 +58,7 @@ python3 python/cohesix-py/examples/lease_run.py --mock
 python3 python/cohesix-py/examples/peft_roundtrip.py --mock
 python3 python/cohesix-py/examples/telemetry_write_pull.py --mock
 ```
+Note: in the source tree, the Python client lives under `tools/cohesix-py` instead of `python/cohesix-py`.
 
 ## Run the Live Hive demo 
 You need two terminals:
@@ -226,15 +227,15 @@ What this does: pads the trace to the 128-byte CAS chunk size, packs it into a s
 ```
 NVML discovery is enabled by default on Linux bundles; use `--no-default-features` to omit NVML.
 
-### host-sidecar-bridge (mock + live)
+### host-sidecar-bridge (mock publishing)
 ```bash
 ./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider nvidia
 ```
-Live publish over TCP (bundle includes TCP support):
+Publish mock provider data over TCP (bundle includes TCP support):
 ```bash
 ./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
 ```
-The `/host` namespace must be enabled in `configs/root_task.toml` for live publishing.
+The `/host` namespace must be enabled in `configs/root_task.toml`.
 
 ## Ports and signals
 - TCP console: `127.0.0.1:31337`

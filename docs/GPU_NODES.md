@@ -313,10 +313,10 @@ To deploy this at scale, only a few thin adapters are needed:
   - Loads LoRA adapters via TensorRT / PyTorch
 
 ### Cloud-side
-- `lora-farm-exporter`
-  - Reads `/queen/export/lora_jobs/*`
-  - Launches PEFT jobs
-  - Writes results into the host-side model registry that backs `/gpu/models/available/*`
+- `coh peft` (host tool)
+  - `coh peft export` pulls `/queen/export/lora_jobs/*` into host storage
+  - External PEFT job runs out-of-band (HF/Slurm/K8s)
+  - `coh peft import` stages adapters into the registry backing `/gpu/models/available/*`
 
 Everything else already exists in the protocol.
 

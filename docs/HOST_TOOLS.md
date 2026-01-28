@@ -118,7 +118,7 @@ Discover GPUs on the host (NVML or mock) and emit the `/gpu` namespace snapshot 
 
 ## host-sidecar-bridge
 ### Purpose
-Publish host-side providers into `/host` (systemd, k8s, nvidia, jetson, net) via Secure9P.
+Publish **mock** host-side providers into `/host` (systemd, k8s, nvidia, jetson, net) via Secure9P for policy/CI validation.
 
 ### Location
 - Source: `apps/host-sidecar-bridge`
@@ -194,7 +194,7 @@ Why this matters: proves adapters are managed as auditable artifacts with revers
 ```
 
 ### 5) Host sidecar publishing + policy validation
-Goal: project host providers into `/host` and observe via CLI/UI.
+Goal: project **mock** host providers into `/host` and observe via CLI/UI.
 Why this matters: today this is primarily a **mock harness** to validate `/host` gating, queen‑only controls, and audit logging. It proves the control surface without requiring live systemd/k8s/NVML integrations.
 ```bash
 ./qemu/run.sh
