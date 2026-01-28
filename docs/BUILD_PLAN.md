@@ -3767,7 +3767,11 @@ Deliverables:
 
 ## Activity — Operator-First Demo (Post-M24, No Code Changes)
 
-**Purpose:** Demonstrate Cohesix as an operator-first control plane using shipped behavior only.
+**Purpose:** Demonstrate Cohesix as an operator-first control plane using shipped behavior only, with host tools as the primary action surface and SwarmUI as the trustable lens.
+
+**Why host tools (sell the why)**
+- They prove the control plane is real infrastructure: leases, telemetry, and PEFT flows are all file-driven and auditable.
+- They let operators act without UI magic while SwarmUI verifies what actually happened.
 
 **Constraints**
 - No code changes; demo uses release bundle binaries and existing scripts only.
@@ -3795,7 +3799,7 @@ Deliverables:
      - `ping`
      - `attach queen`
    - SwarmUI’s embedded console supports core verbs only; CLI-only commands must use `cohsh`.
-4) When a required action is not available in SwarmUI, quit SwarmUI and switch to cohsh:
+4) When a required action is not available in SwarmUI, quit SwarmUI and switch to cohsh (host tools drive the story):
    - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337` (use `127.0.0.1` when on the Mac host)
    - `attach queen`
    - `cat /proc/lifecycle/state` (optionally `/proc/lifecycle/reason`, `/proc/lifecycle/since`)
@@ -3809,12 +3813,21 @@ Deliverables:
      - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337 --role worker-heartbeat --ticket "$WORKER_TICKET"`
    - In the Queen view (SwarmUI or cohsh), confirm workers appear under `/worker` before proceeding.
 6) Keep Live Hive active (optional): `spawn heartbeat ticks=100`.
-7) Telemetry ingest (queen surface; OS-named segments):
+7) Host tools prove control-plane surface (Mac or G5g, host tools only):
+   - GPU surface (mock or live):
+     - `./bin/gpu-bridge-host --mock --list`
+     - `./bin/coh --host <queen-host> --port 31337 gpu list`
+     - `./bin/coh --host <queen-host> --port 31337 gpu lease --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60`
+   - Runtime breadcrumbs:
+     - `./bin/coh --host <queen-host> --port 31337 run --gpu GPU-0 -- echo ok`
+   - Telemetry export (pull):
+     - `./bin/coh --host <queen-host> --port 31337 telemetry pull --out demo/telemetry/pull`
+8) Telemetry ingest (queen surface; OS-named segments):
    - `telemetry push demo/telemetry/demo.txt --device device-1`
    - or (per walkthrough) `echo '{"new":"segment","mime":"text/plain"}' > /queen/telemetry/dev-1/ctl` then append to `/queen/telemetry/dev-1/seg/seg-000001`
-8) Quit cohsh; relaunch SwarmUI to observe effects: `./bin/swarmui`.
-9) External PEFT (out-of-band): run training off-plane; produce adapter artifacts under `demo/peft_adapter/`.
-10) Import + activate (host tool; no in-VM ML):
+9) Quit cohsh; relaunch SwarmUI to observe effects: `./bin/swarmui`.
+10) External PEFT (out-of-band): run training off-plane; produce adapter artifacts under `demo/peft_adapter/`.
+11) Import + activate (host tool; no in-VM ML):
    - Ensure `/gpu/models/*` exists via `./bin/gpu-bridge-host --mock --list` when no real bridge is available.
    - Live export (requires existing job under `/queen/export/lora_jobs/job_0001/`):
      - `./bin/coh --host <queen-host> --port 31337 peft export --job job_0001 --out demo/peft_export`
@@ -3824,8 +3837,8 @@ Deliverables:
    - `./bin/coh --host <queen-host> --port 31337 peft activate --model qwen-edge-v1 --registry demo/peft_registry`
    - Adapter inputs: `demo/peft_adapter/adapter.safetensors`, `demo/peft_adapter/lora.json`, `demo/peft_adapter/metrics.json`.
    - Verify pointer via cohsh after closing SwarmUI: `ls /gpu/models/available` and `cat /gpu/models/active`
-11) Rollback: `./bin/coh --host <queen-host> --port 31337 peft rollback --registry demo/peft_registry`
-12) Optional lifecycle control (only when no outstanding leases/workers):
+12) Rollback: `./bin/coh --host <queen-host> --port 31337 peft rollback --registry demo/peft_registry`
+13) Optional lifecycle control (only when no outstanding leases/workers):
    - `ls /worker` (ensure empty) and confirm no active leases.
    - `lifecycle cordon`, `lifecycle drain`, `lifecycle resume`.
 
