@@ -133,3 +133,97 @@ Publish host-side providers into `/host` (systemd, k8s, nvidia, jetson, net) via
 ### Notes
 - Live TCP publishing requires building with `--features tcp` (otherwise use `--mock`).
 - The `/host` namespace must be enabled in `configs/root_task.toml`.
+
+---
+
+## Using Host Tools Together
+These workflows show how the tools complement each other without introducing new semantics. Each example uses the shipped commands only.
+
+### 1) Live Hive operator flow (Queen + UI + CLI)
+Goal: show a live Queen with SwarmUI as the trustable lens, and `cohsh` as the action surface.
+Why this matters: proves the UI is observational only while the authoritative control plane remains the CLI and file-shaped paths.
+```bash
+./qemu/run.sh
+./swarmui
+```
+Quit SwarmUI before switching to `cohsh`:
+```bash
+./cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337
+```
+In `cohsh`:
+```
+attach queen
+cat /proc/lifecycle/state
+spawn heartbeat ticks=100
+```
+Quit `cohsh`, relaunch SwarmUI to observe the worker activity.
+
+### 2) GPU surface + lease + breadcrumbs (host tools only)
+Goal: prove the GPU namespace and bounded runtime breadcrumbs.
+Why this matters: shows GPU access is host-side and lease‑gated, and that runtime actions are logged in `/gpu/<id>/status`.
+```bash
+./qemu/run.sh
+./gpu-bridge-host --list   # NVML discovery on Linux
+./coh --host 127.0.0.1 --port 31337 gpu list
+./coh --host 127.0.0.1 --port 31337 gpu lease --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60
+./coh --host 127.0.0.1 --port 31337 run --gpu GPU-0 -- echo ok
+```
+Note: if `/gpu` is empty, confirm the host GPU bridge integration is running and the snapshot shows devices.
+
+### 3) Telemetry ingress + pull (operator + host bridge)
+Goal: write telemetry to the Queen’s ingest surface and pull the bundles.
+Why this matters: demonstrates the append‑only ingest surface and bounded export without introducing any new protocol.
+```bash
+./qemu/run.sh
+./cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen \
+  telemetry push demo/telemetry/demo.txt --device device-1
+./coh --host 127.0.0.1 --port 31337 telemetry pull --out ./out/telemetry/pull
+```
+
+### 4) PEFT lifecycle loop (export → import → activate → rollback)
+Goal: show auditable adapter handling with host tooling.
+Why this matters: proves adapters are managed as auditable artifacts with reversible activation.
+```bash
+./qemu/run.sh
+./gpu-bridge-host --mock --list
+./coh peft export --mock --job job_0001 --out demo/peft_export
+./coh --host 127.0.0.1 --port 31337 peft import --model demo-model \
+  --from demo/peft_adapter --job job_0001 --export demo/peft_export --registry demo/peft_registry
+./coh --host 127.0.0.1 --port 31337 peft activate --model demo-model --registry demo/peft_registry
+./coh --host 127.0.0.1 --port 31337 peft rollback --registry demo/peft_registry
+```
+
+### 5) Host sidecar publishing + policy validation
+Goal: project host providers into `/host` and observe via CLI/UI.
+Why this matters: today this is primarily a **mock harness** to validate `/host` gating, queen‑only controls, and audit logging. It proves the control surface without requiring live systemd/k8s/NVML integrations.
+```bash
+./qemu/run.sh
+./host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme \
+  --provider systemd --provider k8s --provider nvidia
+./cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337
+```
+In `cohsh`:
+```
+attach queen
+ls /host
+```
+Quit `cohsh`, open SwarmUI to observe the live hive alongside host provider activity.
+
+Note: `host-sidecar-bridge` currently publishes deterministic mock values for the selected providers. For live NVIDIA data, use `gpu-bridge-host` and `/gpu/*`.
+
+### 6) CAS update bundle demo (pack + upload + verify)
+Goal: show content-addressed update flows with deterministic upload paths.
+Why this matters: proves update artifacts are signed, chunked, and uploaded through the same audited console path.
+```bash
+./qemu/run.sh
+QUEEN_TICKET=$(./cohsh --mint-ticket --role queen)
+./cas-tool pack --epoch 1 --input demo/telemetry/demo.txt --out-dir out/cas/1 \
+  --signing-key resources/fixtures/cas_signing_key.hex
+./cas-tool upload --bundle out/cas/1 --host 127.0.0.1 --port 31337 \
+  --auth-token changeme --ticket "$QUEEN_TICKET"
+```
+In `cohsh` (optional):
+```
+attach queen
+ls /updates
+```
