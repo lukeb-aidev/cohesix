@@ -15,6 +15,11 @@
 </table>
 
 Releases are available in [releases/](releases/).
+Tested platforms:
+- Apple Silicon M-series (macOS 26 host)
+- AWS g5g.xlarge (NVIDIA T4G)
+- AWS t4g.small (arm64 build host)
+- NVIDIA JetPack 6.2.1
 
 ## Why Cohesix?
 
@@ -189,6 +194,11 @@ flowchart LR
 - **secure9p-codec / secure9p-core / secure9p-transport** — Secure9P codec, core policy hooks, and transport adapters for host tools.
 
 ---
+
+SwarmUI is the host-side desktop UI for Cohesix. It renders Live Hive telemetry and replays, and it reuses the same console/Secure9P transports and core verbs as `cohsh` via an embedded console panel.
+
+**Figure 2** SwarmUI replay (Live Hive telemetry visualization)
+![SwarmUI replay screenshot](docs/swarmui-replay.png)
 
 ## Getting Started
 
