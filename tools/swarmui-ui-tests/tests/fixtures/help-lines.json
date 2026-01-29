@@ -1,0 +1,17 @@
+[
+  "SwarmUI console commands:",
+  "  help                         - Show this help message",
+  "  attach <role> [ticket]       - Attach to a NineDoor session",
+  "  login <role> [ticket]        - Alias for attach",
+  "  detach                       - Close the current session",
+  "  tail <path>                  - Stream a file via NineDoor",
+  "  log                          - Tail /log/queen.log",
+  "  ping                         - Report attachment status for health checks",
+  "  ls <path>                    - Enumerate directory entries",
+  "  cat <path>                   - Read file contents",
+  "  echo <text> > <path>         - Append to a file (adds newline)",
+  "  spawn <role> [opts]          - Queue worker spawn command",
+  "  kill <worker_id>             - Queue worker termination",
+  "  quit                         - Close the session",
+  "  Use cohsh for additional CLI commands (test, pool bench, tcp-diag)."
+]

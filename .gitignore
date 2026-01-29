@@ -11,3 +11,6 @@ Cargo.lock
 __pycache__/
 *.pyc
 .venv/
+node_modules/
+playwright-report/
+test-results/

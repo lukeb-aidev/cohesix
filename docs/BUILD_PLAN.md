@@ -3853,6 +3853,64 @@ Deliverables:
 
 ---
 
+## Activity — SwarmUI UI Presentation Regression (Post-M24, Playwright)
+
+**Purpose:** Add a UI-only regression layer for SwarmUI rendering, wiring, and transcript parity without changing control-plane behavior.
+
+**Constraints**
+- UI-only: no new verbs, no new protocols, no control-plane assertions.
+- Replay-first determinism (UI must be driven from fixtures).
+- Tests target the **latest SwarmUI release bundle** assets; no source-only assumptions.
+- No SwarmUI runtime changes; no NineDoor/console semantics changes.
+- Use Playwright (Node LTS) and keep browser binaries out of the repo.
+
+**Inputs**
+- Release bundle under `releases/` (latest macOS bundle).
+- `tests/fixtures/traces/trace_v0.trace` and `tests/fixtures/traces/trace_v0.hive.cbor`.
+- `docs/TEST_PLAN.md` (additive section).
+
+**Commands**
+- `cd tools/swarmui-ui-tests`
+- `npm ci`
+- `npx playwright install webkit`
+- `SWARMUI_RELEASE_DIR=../releases/<latest> npm test`
+
+**Checks**
+- UI tests pass in replay mode without flake.
+- Snapshot comparisons are deterministic and stable.
+- Console transcript assertions match expected `OK/ERR/END` grammar.
+- No changes to SwarmUI runtime logic or transport semantics.
+
+**Deliverables**
+- Playwright harness under `tools/swarmui-ui-tests/`.
+- `docs/TEST_PLAN.md` updated with the SwarmUI Playwright section.
+- Baseline screenshot snapshots committed.
+
+---
+
+## Activity — Warning Cleanup (Post-M24, No Behavior Changes)
+
+**Purpose:** Remove compiler warnings without altering behavior or interfaces.
+
+**Constraints**
+- Warning-only cleanup; no behavioral or API changes.
+- No changes to control-plane semantics or test fixtures.
+
+**Inputs**
+- `cargo check` output from macOS ARM64.
+
+**Commands**
+- `cargo check`
+
+**Checks**
+- No new warnings introduced.
+- Existing tests and fixtures remain unchanged.
+
+**Deliverables**
+- Warning cleanups committed with no behavior changes.
+
+---
+
 Next, Alpha release 3 targets bare metal UEFI and AWS native boot via AMI.
 
 ---

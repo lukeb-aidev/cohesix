@@ -149,6 +149,46 @@ Run while QEMU is up:
   - Source tree: `./bin/cohsh --transport mock --replay-trace ./tests/fixtures/traces/trace_v0.trace`
   - Release bundle: `./bin/cohsh --transport mock --replay-trace ./traces/trace_v0.trace`
 
+### UI Presentation Layer — SwarmUI (Playwright)
+
+**Additive UI-only layer.** Playwright tests **DO NOT** assert control-plane correctness and **MUST NOT** introduce new verbs, protocols, or semantics. They validate presentation (rendering, wiring, and transcript parity) using deterministic replay fixtures.
+
+#### 1) Scope
+- Covers: SwarmUI launch, DOM wiring, canvas presence, deterministic replay rendering, and embedded `>coh` console transcript output.
+- Excludes: control-plane logic, NineDoor semantics, ticket validation correctness, and any non-UI behavior already covered by `.coh` scripts or regression pack.
+
+#### 2) Modes
+- **Replay mode (required, gating):** UI is driven from trace/snapshot fixtures and deterministic transcript outputs.
+- **Live mode (optional, smoke only):** non-gating checks for basic launch and visibility; no protocol assertions.
+
+#### 3) Test Categories
+- Launch + smoke (UI loads and renders key panels).
+- Replay visual regression (screenshot baseline).
+- Interactive `>coh` prompt (type commands, assert transcript lines).
+- Failure UI (auth error, disconnected state) as UI-only states.
+
+#### 4) Determinism Rules
+- Replay-first: all UI assertions are driven from replay fixtures.
+- No timing-based assertions; rely on DOM readiness and transcript completion.
+- Transcript-based assertions only (match `OK`, `ERR`, `END` and static help lines).
+
+#### 5) CI Positioning
+- Runs **after** `.coh` scripts and the regression pack.
+- **Blocking:** replay-mode UI tests (snapshot + transcript parity).
+- **Warn-only:** live-mode smoke checks.
+
+**Playwright commands (macOS ARM64):**
+- `cd tools/swarmui-ui-tests`
+- `npm ci`
+- `npx playwright install webkit`
+- `SWARMUI_RELEASE_DIR=../releases/<latest> npm test`
+- Update snapshots only when UI changes are intended: `npm run test:update`
+
+**Notes**
+- The Playwright harness targets the **latest SwarmUI release bundle** UI assets under `releases/`.
+- The harness injects a deterministic Tauri `invoke` mock for UI-only replay and transcript assertions; it does not exercise control-plane behavior.
+- Browser binaries are installed into the user Playwright cache (not committed).
+
 ### 6) Regression pack (full-stack, recommended before release)
 - `scripts/cohsh/run_regression_batch.sh`
 - The batch archives logs under `out/regression-logs/<batch>/<script>.{qemu,out}.log`.
