@@ -11,8 +11,11 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+/// Activate and rollback helpers for PEFT models.
 pub mod activate;
+/// Export helpers for PEFT jobs.
 pub mod export;
+/// Import helpers for PEFT adapters.
 pub mod import;
 
 pub use activate::{activate_model, rollback_model, PeftActivateSpec, PeftRollbackSpec};

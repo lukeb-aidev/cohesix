@@ -9,6 +9,7 @@ use std::time::Instant;
 
 /// Lifecycle states exposed via /proc/lifecycle/state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum LifecycleState {
     /// Root-task started, manifest loaded, identity pending.
     Booting,

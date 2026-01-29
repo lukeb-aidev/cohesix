@@ -37,6 +37,7 @@ struct LeaseEntry {
     mem_mb: u32,
     streams: u8,
     ttl_s: u32,
+    #[allow(dead_code)]
     priority: u8,
 }
 

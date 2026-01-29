@@ -290,6 +290,7 @@ impl ObserveState {
     }
 
     /// Snapshot current pressure counters.
+    #[allow(dead_code)]
     pub fn pressure_snapshot(&self) -> PressureSnapshot {
         self.pressure.snapshot()
     }
