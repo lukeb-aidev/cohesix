@@ -1,4 +1,4 @@
-h<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2025 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Track Cohesix milestones, deliverables, and completion criteria for ARM64 Pure Rust userspace builds. -->
 <!-- Author: Lukas Bower -->
