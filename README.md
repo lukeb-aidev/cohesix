@@ -25,11 +25,8 @@ Tested platforms:
 
 Cohesix explores a specific and deliberately narrow problem space: **how to build a small, auditable, and secure control plane for orchestrating distributed edge GPU systems**, without inheriting the complexity, opacity, and attack surface of general-purpose operating systems.
 
-The project is informed by earlier work in film and broadcast technology, where hardware and software stacks were often pushed beyond their intended limits - and reliability, timing, and control mattered more than convenience. Some of that work involved custom operating systems and tightly constrained runtime environments. Cohesix revisits those ideas with modern tools and a stronger formal foundation.
-
-Cohesix is a **research operating system**, but its motivation is practical rather than academic. Writing an OS is intentionally difficult; the point here is to test whether a **formally grounded microkernel**, a **file-shaped control plane**, and a **strictly bounded userspace** can support real edge-orchestration workloads in hostile and unreliable environments.
-
-In practical terms, the project would not be feasible without extensive use of AI agents. They are used throughout development for architecture review, design iteration, code synthesis, debugging assistance, and documentation refinement - enabling work of this scope despite limited free time.
+Cohesix is a **research operating system** with practical goals: to test whether a **formally grounded microkernel**, a **file-shaped control plane**, and a **strictly bounded userspace** can handle real edge-orchestration workloads in hostile and unreliable environments. The project is informed by earlier work in film and broadcast systems where reliability, timing, and control mattered more than convenience.
+In practical terms, the project would not be feasible without extensive use of AI agents for architecture review, design iteration, code synthesis, debugging assistance, and documentation refinement.
 
 Cohesix is intentionally opinionated. It treats **determinism, auditability, and security** as design inputs rather than constraints, and is willing to exclude large classes of features to preserve those properties.
 
@@ -58,9 +55,7 @@ Operators interact with Cohesix through two consoles:
 - a local **PL011 UART console** for early bring-up and recovery, and  
 - a **remote TCP console** consumed by the `cohsh` shell, which mirrors serial semantics and provides the primary operational interface from Unix-like hosts.
 
-The intended deployment target is **physical ARM64 hardware booted via UEFI**. Today, QEMU `aarch64/virt` is used for bring-up, CI, and testing, with the expectation that QEMU behaviour closely mirrors the eventual hardware profiles.
-
-Cohesix is **not** a general-purpose operating system and is not intended to replace Linux or POSIX environments. It deliberately avoids POSIX semantics, libc, dynamic linking, and in-VM hardware stacks in order to keep the system small, analyzable, and resistant to accidental complexity.
+The intended deployment target is **physical ARM64 hardware booted via UEFI**. Today, QEMU `aarch64/virt` is used for bring-up, CI, and testing, with the expectation that QEMU behaviour closely mirrors the eventual hardware profiles. Cohesix is **not** a general-purpose operating system and deliberately avoids POSIX semantics, libc, dynamic linking, and in-VM hardware stacks to keep the system small and analyzable.
 
 In short, Cohesix treats **orchestration itself as an operating-system problem**, with authority, lifecycle, and failure handling as first-class concerns.
 
@@ -261,8 +256,6 @@ If you're on another Linux distro, install the same dependencies with your packa
    cd out/cohesix/host-tools
    ./cohsh --transport tcp --tcp-port 31337 --role queen
    ```
-
-If you want a quicker on-ramp, use the pre-built bundles in [releases/](releases/) and follow their `QUICKSTART.md`.
 
 ---
 
