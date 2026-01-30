@@ -50,6 +50,7 @@ These artifacts define kernel-level truth. Code must align with them exactly.
      - include required tests;
      - update documentation where behavior or interfaces change.
    - Partial or speculative changes are not permitted.
+   - Any code changes to `releases/` **MUST** increment the **minor** version number (e.g., `0.2.0-alpha2` → `0.3.0-alpha2`) and the change **MUST** be reflected in the release directory name and tarball name.
 
 5. **Tiny TCB**
    - No POSIX emulation layers.

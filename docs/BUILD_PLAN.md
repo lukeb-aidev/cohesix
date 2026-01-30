@@ -3846,10 +3846,14 @@ Deliverables:
    - On Jetson, attach as the worker role over TCP (outbound only per `docs/NETWORK_CONFIG.md`):
      - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337 --role worker-heartbeat --ticket "$WORKER_TICKET"`
    - In the Queen view (SwarmUI or cohsh), confirm workers appear under `/worker` before proceeding.
+   - If `/worker` is empty, request a queen-side heartbeat spawn to seed a visible worker entry, then re-check:
+     - `spawn heartbeat ticks=100`
+     - `ls /worker`
 6) Keep Live Hive active (optional): `spawn heartbeat ticks=100`.
 7) Host tools prove control-plane surface (Mac or G5g, host tools only):
    - GPU surface (mock or live):
      - `./bin/gpu-bridge-host --mock --list`
+     - If a host GPU bridge is already wired into the VM (pre-existing integration), `./bin/coh --host <queen-host> --port 31337 gpu list` should reflect live devices. If not, the dev-virt `/gpu` entries remain mock and PEFT steps must use `--mock`.
      - `./bin/coh --host <queen-host> --port 31337 gpu list`
      - `./bin/coh --host <queen-host> --port 31337 gpu lease --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60`
    - Runtime breadcrumbs:
@@ -3867,8 +3871,12 @@ Deliverables:
      - `./bin/coh --host <queen-host> --port 31337 peft export --job job_0001 --out demo/peft_export`
    - Demo-only export (no VM interaction; uses local mock):
      - `./bin/coh peft export --mock --job job_0001 --out demo/peft_export`
-   - `./bin/coh --host <queen-host> --port 31337 peft import --model qwen-edge-v1 --from demo/peft_adapter --job job_0001 --export demo/peft_export --registry demo/peft_registry`
-   - `./bin/coh --host <queen-host> --port 31337 peft activate --model qwen-edge-v1 --registry demo/peft_registry`
+   - If `/gpu/models/*` is not present in the VM (no bridge wiring), use mock mode for import/activate:
+     - `./bin/coh peft --mock import --model qwen-edge-v1 --from demo/peft_adapter --job job_0001 --export demo/peft_export --registry demo/peft_registry`
+     - `./bin/coh peft --mock activate --model qwen-edge-v1 --registry demo/peft_registry`
+   - Otherwise, use live import/activate against the queen host:
+     - `./bin/coh --host <queen-host> --port 31337 peft import --model qwen-edge-v1 --from demo/peft_adapter --job job_0001 --export demo/peft_export --registry demo/peft_registry`
+     - `./bin/coh --host <queen-host> --port 31337 peft activate --model qwen-edge-v1 --registry demo/peft_registry`
    - Adapter inputs: `demo/peft_adapter/adapter.safetensors`, `demo/peft_adapter/lora.json`, `demo/peft_adapter/metrics.json`.
    - Verify pointer via cohsh after closing SwarmUI: `ls /gpu/models/available` and `cat /gpu/models/active`
 12) Rollback: `./bin/coh --host <queen-host> --port 31337 peft rollback --registry demo/peft_registry`
