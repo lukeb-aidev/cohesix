@@ -32,6 +32,7 @@ members = [
     "crates/sel4-sys",
     "crates/net-constants",
     "tools/coh-rtc",
+    "tools/security-nist",
     "tests",
 ]
 resolver = "2"

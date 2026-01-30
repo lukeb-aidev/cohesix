@@ -110,5 +110,8 @@ compare_file "$repo_root/docs/snippets/cohesix_py_defaults.md" "$cohesix_py_doc"
 compare_file "$repo_root/docs/snippets/coh_doctor_checks.md" "$coh_doctor_doc"
 
 "$repo_root/scripts/ci/check_test_plan.sh"
+if [[ -f "$repo_root/scripts/ci/security_nist.sh" ]]; then
+  "$repo_root/scripts/ci/security_nist.sh"
+fi
 
 printf "coh-rtc outputs match committed artefacts.\n"

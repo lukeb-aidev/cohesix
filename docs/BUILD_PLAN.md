@@ -3765,6 +3765,36 @@ Deliverables:
 **Alpha Release 2 achieved here**
 ----
 
+## Activity — Security Evidence Demo (Post-M24, NIST 800-53 LOW)
+
+**Purpose:** Demonstrate the evidence-based NIST 800-53 LOW mapping for Cohesix using the machine-checkable registry and guard scripts; no runtime behavior changes.
+
+**Constraints**
+- No code changes; run the demo against the current repo state and artifacts.
+- Evidence is repo-local; no external URLs.
+- This is a mapping + evidence guard, not a compliance claim.
+
+**Inputs**
+- `docs/SECURITY_NIST_800_53.md`
+- `docs/nist/controls.toml`
+- `tests/security/nist_evidence_smoke.sh`
+
+**Runbook (host only)**
+1) Validate registry and evidence links:
+   - `cargo run -p security-nist -- check`
+2) Generate the markdown summary table:
+   - `cargo run -p security-nist -- report-md`
+3) Assert documentation invariants:
+   - `bash tests/security/nist_evidence_smoke.sh`
+
+**Checks**
+- `security-nist -- check` returns success with zero errors.
+- `docs/nist/REPORT.md` is generated and reflects the registry.
+- Smoke evidence script passes (Secure9P bounds, ACK/ERR ordering, role isolation).
+
+**Deliverables**
+- `docs/nist/REPORT.md` regenerated on demand from the registry.
+
 ## Activity — Operator-First Demo (Post-M24, No Code Changes)
 
 **Purpose:** Demonstrate Cohesix as an operator-first control plane using shipped behavior only, with host tools as the primary action surface and SwarmUI as the trustable lens.

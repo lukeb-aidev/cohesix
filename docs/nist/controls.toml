@@ -1,0 +1,256 @@
+[[control]]
+id = "AC-1"
+title = "Access Control Policy and Procedures"
+family = "AC"
+status = "Implemented"
+rationale = "Access control policy is defined in Secure9P and role/mount documentation."
+evidence = [
+  { type = "doc", ref = "docs/SECURE9P.md", note = "AccessPolicy hooks and mandatory defenses." },
+  { type = "doc", ref = "docs/ROLES_AND_SCHEDULING.md", note = "Role namespaces and ticket lifecycle." },
+  { type = "script", ref = "tests/security/nist_evidence_smoke.sh", note = "Asserts Secure9P bounds and role isolation are documented." }
+]
+
+[[control]]
+id = "AC-2"
+title = "Account Management"
+family = "AC"
+status = "NA"
+rationale = "No local accounts; access uses role-scoped tickets minted by root-task/host tooling."
+
+[[control]]
+id = "AC-3"
+title = "Access Enforcement"
+family = "AC"
+status = "Implemented"
+rationale = "Secure9P AccessPolicy enforces role-scoped namespace access before provider logic."
+evidence = [
+  { type = "doc", ref = "docs/SECURE9P.md", note = "AccessPolicy hooks and path validation." },
+  { type = "doc", ref = "docs/ROLES_AND_SCHEDULING.md", note = "Role namespaces and mount scoping." },
+  { type = "script", ref = "tests/security/nist_evidence_smoke.sh", note = "Checks role isolation and Secure9P bounds documentation." }
+]
+
+[[control]]
+id = "AC-5"
+title = "Separation of Duties"
+family = "AC"
+status = "Implemented"
+rationale = "Queen orchestration and worker telemetry roles are separated by namespaces and tickets."
+evidence = [
+  { type = "doc", ref = "docs/ROLES_AND_SCHEDULING.md", note = "Distinct queen and worker capabilities and namespaces." },
+  { type = "doc", ref = "docs/INTERFACES.md", note = "Role-specific control surfaces and mounts." },
+  { type = "script", ref = "tests/security/nist_evidence_smoke.sh", note = "Confirms role isolation is documented." }
+]
+
+[[control]]
+id = "AC-6"
+title = "Least Privilege"
+family = "AC"
+status = "Implemented"
+rationale = "Role-scoped mounts and ticket claims restrict each session to the minimum namespace view."
+evidence = [
+  { type = "doc", ref = "docs/ROLES_AND_SCHEDULING.md", note = "Worker views limited to boot, telemetry, and logs." },
+  { type = "doc", ref = "docs/SECURE9P.md", note = "AccessPolicy enforces role-based mounts." },
+  { type = "script", ref = "tests/security/nist_evidence_smoke.sh", note = "Asserts role isolation documentation." }
+]
+
+[[control]]
+id = "AC-7"
+title = "Unsuccessful Logon Attempts"
+family = "AC"
+status = "Implemented"
+rationale = "Console authentication failures are rate-limited with deterministic cooldown."
+evidence = [
+  { type = "doc", ref = "docs/SECURITY.md", note = "Leaky-bucket rate limiting for auth failures." },
+  { type = "script", ref = "tests/security/nist_evidence_smoke.sh", note = "Checks rate limiting is documented." }
+]
+
+[[control]]
+id = "AC-17"
+title = "Remote Access"
+family = "AC"
+status = "Implemented"
+rationale = "Remote access is limited to the authenticated TCP console transport on the host boundary."
+evidence = [
+  { type = "doc", ref = "docs/SECURITY.md", note = "TCP console threat model and constraints." },
+  { type = "doc", ref = "docs/USERLAND_AND_CLI.md", note = "TCP transport and cohsh usage." },
+  { type = "log_fixture", ref = "tests/fixtures/transcripts/boot_v0/tcp.txt", note = "Console attach/ack transcript over TCP." }
+]
+
+[[control]]
+id = "AU-2"
+title = "Audit Events"
+family = "AU"
+status = "Implemented"
+rationale = "Security-relevant actions emit audit lines to /log/queen.log."
+evidence = [
+  { type = "doc", ref = "docs/SECURITY.md", note = "Audit lines emitted for denials and attach attempts." },
+  { type = "doc", ref = "docs/INTERFACES.md", note = "Control paths and audit expectations." },
+  { type = "script", ref = "tests/security/nist_evidence_smoke.sh", note = "Checks audit documentation is present." }
+]
+
+[[control]]
+id = "AU-3"
+title = "Content of Audit Records"
+family = "AU"
+status = "Implemented"
+rationale = "Audit lines include reason tokens and bounded detail fields."
+evidence = [
+  { type = "doc", ref = "docs/SECURITY.md", note = "Audit lines include reason tags and details." },
+  { type = "doc", ref = "docs/INTERFACES.md", note = "ERR reason categories documented." },
+  { type = "script", ref = "tests/security/nist_evidence_smoke.sh", note = "Checks reason tagging documentation." }
+]
+
+[[control]]
+id = "AU-6"
+title = "Audit Review, Analysis, and Reporting"
+family = "AU"
+status = "Planned"
+rationale = "Operator review workflow for audit logs is not yet formalized."
+
+[[control]]
+id = "AU-12"
+title = "Audit Generation"
+family = "AU"
+status = "Implemented"
+rationale = "Event pump and control paths generate audit lines deterministically."
+evidence = [
+  { type = "doc", ref = "docs/SECURITY.md", note = "Event pump emits audit records." },
+  { type = "doc", ref = "docs/INTERFACES.md", note = "Lifecycle/audit messages documented." },
+  { type = "script", ref = "tests/security/nist_evidence_smoke.sh", note = "Checks audit generation documentation." }
+]
+
+[[control]]
+id = "CM-2"
+title = "Baseline Configuration"
+family = "CM"
+status = "Implemented"
+rationale = "Root-task manifest defines the baseline configuration and generated outputs are checked."
+evidence = [
+  { type = "code", ref = "configs/root_task.toml", note = "Canonical manifest inputs." },
+  { type = "doc", ref = "docs/ARCHITECTURE.md", note = "Generated manifest snippet captured in docs." },
+  { type = "script", ref = "scripts/check-generated.sh", note = "Guards against drift in generated artifacts." }
+]
+
+[[control]]
+id = "CM-3"
+title = "Configuration Change Control"
+family = "CM"
+status = "Planned"
+rationale = "Formal change control workflow is not yet defined for configuration updates."
+
+[[control]]
+id = "CM-6"
+title = "Configuration Settings"
+family = "CM"
+status = "Implemented"
+rationale = "Security-relevant settings (bounds, quotas) are manifest-defined and documented."
+evidence = [
+  { type = "code", ref = "configs/root_task.toml", note = "Secure9P bounds and quotas." },
+  { type = "doc", ref = "docs/SECURE9P.md", note = "Bounds and validation rules documented." },
+  { type = "script", ref = "tests/security/nist_evidence_smoke.sh", note = "Checks Secure9P bounds documentation." }
+]
+
+[[control]]
+id = "CM-7"
+title = "Least Functionality"
+family = "CM"
+status = "Implemented"
+rationale = "In-VM services are minimal; only the authenticated console is permitted as a TCP listener."
+evidence = [
+  { type = "doc", ref = "AGENTS.md", note = "Console-only TCP listener and no POSIX guidance." },
+  { type = "doc", ref = "docs/SECURITY.md", note = "Console is the only in-VM network entry point." },
+  { type = "script", ref = "tests/security/nist_evidence_smoke.sh", note = "Checks console-only TCP listener guidance." }
+]
+
+[[control]]
+id = "IA-2"
+title = "Identification and Authentication (Organizational Users)"
+family = "IA"
+status = "Implemented"
+rationale = "Attach requires role selection and worker tickets; claims are verified on attach."
+evidence = [
+  { type = "doc", ref = "docs/INTERFACES.md", note = "Attach flow and ticket usage." },
+  { type = "doc", ref = "docs/USERLAND_AND_CLI.md", note = "Attach grammar and ticket policy." },
+  { type = "script", ref = "tests/security/nist_evidence_smoke.sh", note = "Checks attach grammar is documented." }
+]
+
+[[control]]
+id = "IA-5"
+title = "Authenticator Management"
+family = "IA"
+status = "Planned"
+rationale = "Ticket rotation and lifecycle management policies are not yet formalized."
+
+[[control]]
+id = "IA-8"
+title = "Identification and Authentication (Non-Organizational Users)"
+family = "IA"
+status = "NA"
+rationale = "No public/unauthenticated user access is supported."
+
+[[control]]
+id = "SC-5"
+title = "Denial of Service Protection"
+family = "SC"
+status = "Implemented"
+rationale = "Frame-size bounds, walk limits, and rate limiting constrain resource exhaustion."
+evidence = [
+  { type = "doc", ref = "docs/SECURE9P.md", note = "Secure9P bounds and validation rules." },
+  { type = "doc", ref = "docs/SECURITY.md", note = "Console rate limiting and bounded buffers." },
+  { type = "script", ref = "tests/security/nist_evidence_smoke.sh", note = "Checks bounds and rate limiting documentation." }
+]
+
+[[control]]
+id = "SC-7"
+title = "Boundary Protection"
+family = "SC"
+status = "Inherited"
+rationale = "Boundary protection relies on the host network boundary and upstream seL4 isolation."
+evidence = [
+  { type = "doc", ref = "docs/SECURITY.md", note = "Host/VM boundary and console-only networking notes." }
+]
+
+[[control]]
+id = "SC-8"
+title = "Transmission Confidentiality and Integrity"
+family = "SC"
+status = "Inherited"
+rationale = "Confidentiality/integrity for transport is provided by host VPN/TLS outside the VM."
+evidence = [
+  { type = "doc", ref = "docs/SECURITY_NIST_800_53.md", note = "Assumptions call out host-terminated TLS/VPN." }
+]
+
+[[control]]
+id = "SC-12"
+title = "Cryptographic Key Establishment and Management"
+family = "SC"
+status = "Planned"
+rationale = "Key establishment for external transports is handled outside the VM and not yet formalized here."
+
+[[control]]
+id = "SC-28"
+title = "Protection of Information at Rest"
+family = "SC"
+status = "NA"
+rationale = "The VM maintains no persistent storage; state is in-memory or host-side."
+
+[[control]]
+id = "SI-2"
+title = "Flaw Remediation"
+family = "SI"
+status = "Planned"
+rationale = "A formal remediation and patch cadence is not yet defined in the repo."
+
+[[control]]
+id = "SI-3"
+title = "Malicious Code Protection"
+family = "SI"
+status = "NA"
+rationale = "No code download, web stack, or arbitrary execution surfaces exist in the VM."
+
+[[control]]
+id = "SI-7"
+title = "Software, Firmware, and Information Integrity"
+family = "SI"
+status = "Planned"
+rationale = "Additional integrity verification beyond existing CAS signatures is not yet scoped."
