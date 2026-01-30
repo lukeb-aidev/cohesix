@@ -16,10 +16,10 @@
 
 Releases are available in [releases/](releases/).
 Tested platforms:
-- Apple Silicon M-series (macOS 26 host)
-- AWS g5g.xlarge (NVIDIA T4G)
+- Apple Silicon M-series (macOS 26 host, Queen VM + host tools)
+- AWS g5g.xlarge (host tools only)
 - AWS t4g.small (arm64 build host)
-- NVIDIA JetPack 6.2.1
+- NVIDIA JetPack 6.2.1 (worker VM path)
 
 ## Why Cohesix?
 
@@ -110,7 +110,7 @@ flowchart LR
   subgraph HOST["Host (outside Cohesix VM/TCB)"]
     OP["Operator or Automation"]:::ext
     COHSH["cohsh (host-only)<br/>Canonical shell<br/>transport tcp<br/>role and ticket attach"]:::hosttool
-    GUI["Future GUI or Dashboard (host-only)<br/>Speaks cohsh protocol"]:::hosttool
+    GUI["SwarmUI (host-only)<br/>Speaks cohsh protocol"]:::hosttool
     WIRE["secure9p-codec/core/transport (host)<br/>bounded framing<br/>TCP transport adapter"]:::hostlib
     GPUB["gpu-bridge-host (host)<br/>CUDA and NVML here<br/>lease enforcement<br/>mirrors gpu namespace"]:::hosttool
   end
@@ -213,6 +213,7 @@ Pre-built bundles are available in [releases/](releases/). Each bundle includes 
    ```bash
    ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
    ```
+   For non-local use, tunnel this TCP console over a VPN/overlay (no TLS inside the VM).
 5. Optional UI (Mac or Linux desktop):
    ```bash
    ./bin/swarmui

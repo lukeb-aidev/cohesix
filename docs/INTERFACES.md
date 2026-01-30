@@ -209,7 +209,7 @@ reset
   - `telemetry.ring_bytes_per_worker` caps the per-worker append-only ring.
   - `telemetry.cursor.retain_on_boot` preserves or resets cursor state after reboot.
   - `telemetry.frame_schema` gates legacy plain-text vs CBOR framing.
-- GPU telemetry schema (Milestone 6a):
+- GPU telemetry schema (Milestone 6a; LoRA here refers to model adapters, not LoRa radio):
   - Descriptor: `/gpu/telemetry/schema.json` (read-only, versioned)
   - Records must include `schema_version`, `device_id`, `model_id`, `time_window`, `token_count`, `latency_histogram`.
   - Optional fields: `lora_id`, `confidence`, `entropy`, `drift`, `feedback_flags`.
