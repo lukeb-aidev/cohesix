@@ -3767,6 +3767,8 @@ Deliverables:
 
 ## Activity — Security Evidence Demo (Post-M24, NIST 800-53 LOW)
 
+**Status:** Complete.
+
 **Purpose:** Demonstrate the evidence-based NIST 800-53 LOW mapping for Cohesix using the machine-checkable registry and guard scripts; no runtime behavior changes.
 
 **Constraints**
@@ -3796,6 +3798,8 @@ Deliverables:
 - `docs/nist/REPORT.md` regenerated on demand from the registry.
 
 ## Activity — Operator-First Demo (Post-M24, No Code Changes)
+
+**Status:** Complete.
 
 **Purpose:** Demonstrate Cohesix as an operator-first control plane using shipped behavior only, with host tools as the primary action surface and SwarmUI as the trustable lens.
 
@@ -3885,6 +3889,8 @@ Deliverables:
 
 ## Activity — SwarmUI UI Presentation Regression (Post-M24, Playwright)
 
+**Status:** Complete.
+
 **Purpose:** Add a UI-only regression layer for SwarmUI rendering, wiring, and transcript parity without changing control-plane behavior.
 
 **Constraints**
@@ -3919,6 +3925,8 @@ Deliverables:
 ---
 
 ## Activity — Warning Cleanup (Post-M24, No Behavior Changes)
+
+**Status:** Complete.
 
 **Purpose:** Remove compiler warnings without altering behavior or interfaces.
 
