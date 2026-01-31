@@ -1,4 +1,0 @@
-OK ATTACH role=queen
-OK LS path=/worker
-OK TAIL path=/worker/worker-1/telemetry
-END

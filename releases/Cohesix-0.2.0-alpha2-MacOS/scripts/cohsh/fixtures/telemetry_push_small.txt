@@ -1,2 +1,0 @@
-telemetry demo line 1
-telemetry demo line 2
