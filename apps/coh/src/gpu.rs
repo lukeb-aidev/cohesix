@@ -51,7 +51,7 @@ pub fn list<C: CohAccess>(client: &mut C, audit: &mut CohAudit) -> Result<()> {
     audit.push_ack(AckStatus::Ok, "LS", Some("path=/gpu"));
     let gpus = entries
         .into_iter()
-        .filter(|entry| entry != "models" && entry != "telemetry")
+        .filter(|entry| entry != "models" && entry != "telemetry" && entry != "bridge")
         .collect::<Vec<_>>();
     if gpus.is_empty() {
         audit.push_line("gpu: none".to_owned());

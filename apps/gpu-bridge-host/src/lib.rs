@@ -14,6 +14,7 @@
 use anyhow::{anyhow, ensure, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohsh_core::MAX_ECHO_LEN;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
 use std::fs;
@@ -733,6 +734,179 @@ pub fn build_publish_lines_with_limit(
     }
     lines.push("end".to_owned());
     Ok(GpuBridgePublish { bytes, sha256, lines })
+}
+
+/// Parse a wire-format GPU namespace snapshot.
+pub fn parse_wire_snapshot(bytes: &[u8]) -> Result<GpuNamespaceSnapshot> {
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| anyhow!("wire payload must be UTF-8 text"))?;
+    let mut schema_seen = false;
+    let mut nodes = Vec::new();
+    let mut models = Vec::new();
+    let mut active: Option<String> = None;
+    let mut telemetry_schema: Option<TelemetrySchema> = None;
+    let mut ended = false;
+
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if ended {
+            return Err(anyhow!("wire payload contains data after end marker"));
+        }
+        if line == "end" {
+            ended = true;
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let keyword = parts.next().ok_or_else(|| anyhow!("wire line missing keyword"))?;
+        match keyword {
+            "schema" => {
+                let schema = parts.next().ok_or_else(|| anyhow!("schema missing value"))?;
+                if schema != GPU_BRIDGE_WIRE_SCHEMA {
+                    return Err(anyhow!("unsupported wire schema: {schema}"));
+                }
+                if parts.next().is_some() {
+                    return Err(anyhow!("schema line has unexpected tokens"));
+                }
+                schema_seen = true;
+            }
+            "node" => {
+                let mut id = None;
+                let mut info = None;
+                let mut ctl = None;
+                let mut lease = None;
+                let mut status = None;
+                for part in parts {
+                    let (key, value) = part
+                        .split_once('=')
+                        .ok_or_else(|| anyhow!("node field missing '=': {part}"))?;
+                    match key {
+                        "id" => id = Some(value),
+                        "info" => info = Some(value),
+                        "ctl" => ctl = Some(value),
+                        "lease" => lease = Some(value),
+                        "status" => status = Some(value),
+                        _ => return Err(anyhow!("unsupported node field: {key}")),
+                    }
+                }
+                let id = id.ok_or_else(|| anyhow!("node id missing"))?;
+                let info_payload = decode_b64_string("node info", info)?;
+                let ctl_payload = decode_b64_string("node ctl", ctl)?;
+                let lease_payload = decode_b64_string("node lease", lease)?;
+                let status_payload = decode_b64_string("node status", status)?;
+                nodes.push(SerialisedGpuNode {
+                    id: id.to_owned(),
+                    info_payload,
+                    ctl_payload,
+                    lease_payload,
+                    status_payload,
+                });
+            }
+            "model" => {
+                let mut id = None;
+                let mut manifest = None;
+                for part in parts {
+                    let (key, value) = part
+                        .split_once('=')
+                        .ok_or_else(|| anyhow!("model field missing '=': {part}"))?;
+                    match key {
+                        "id" => id = Some(value),
+                        "manifest" => manifest = Some(value),
+                        _ => return Err(anyhow!("unsupported model field: {key}")),
+                    }
+                }
+                let id = id.ok_or_else(|| anyhow!("model id missing"))?;
+                let manifest_toml = decode_b64_string("model manifest", manifest)?;
+                models.push(ModelManifest {
+                    model_id: id.to_owned(),
+                    manifest_toml,
+                });
+            }
+            "active" => {
+                let mut id = None;
+                for part in parts {
+                    let (key, value) = part
+                        .split_once('=')
+                        .ok_or_else(|| anyhow!("active field missing '=': {part}"))?;
+                    match key {
+                        "id" => id = Some(value),
+                        _ => return Err(anyhow!("unsupported active field: {key}")),
+                    }
+                }
+                let id = id.ok_or_else(|| anyhow!("active id missing"))?;
+                active = Some(id.to_owned());
+            }
+            "telemetry" => {
+                let mut schema = None;
+                for part in parts {
+                    let (key, value) = part
+                        .split_once('=')
+                        .ok_or_else(|| anyhow!("telemetry field missing '=': {part}"))?;
+                    match key {
+                        "schema" => schema = Some(value),
+                        _ => return Err(anyhow!("unsupported telemetry field: {key}")),
+                    }
+                }
+                let schema_b64 = schema.ok_or_else(|| anyhow!("telemetry schema missing"))?;
+                let schema_json = decode_b64_string("telemetry schema", Some(schema_b64))?;
+                telemetry_schema = Some(parse_telemetry_schema(&schema_json)?);
+            }
+            _ => return Err(anyhow!("unsupported wire line: {keyword}")),
+        }
+    }
+
+    if !schema_seen {
+        return Err(anyhow!("wire payload missing schema line"));
+    }
+    if !ended {
+        return Err(anyhow!("wire payload missing end marker"));
+    }
+    let active = active.ok_or_else(|| anyhow!("wire payload missing active model id"))?;
+    if !models.is_empty() && !models.iter().any(|entry| entry.model_id == active) {
+        return Err(anyhow!("active model id not found in available catalog"));
+    }
+    let telemetry_schema =
+        telemetry_schema.ok_or_else(|| anyhow!("wire payload missing telemetry schema"))?;
+    Ok(GpuNamespaceSnapshot {
+        nodes,
+        models: GpuModelCatalog { available: models, active },
+        telemetry_schema,
+    })
+}
+
+fn decode_b64_string(label: &str, value: Option<&str>) -> Result<String> {
+    let value = value.ok_or_else(|| anyhow!("{label} missing"))?;
+    let bytes = BASE64_STANDARD
+        .decode(value.as_bytes())
+        .map_err(|_| anyhow!("{label} is not valid base64"))?;
+    String::from_utf8(bytes).map_err(|_| anyhow!("{label} is not UTF-8"))
+}
+
+#[derive(Debug, Deserialize)]
+struct TelemetrySchemaJson {
+    schema_version: String,
+    max_record_bytes: usize,
+    required_fields: Vec<String>,
+    optional_fields: Vec<String>,
+}
+
+fn parse_telemetry_schema(payload: &str) -> Result<TelemetrySchema> {
+    let schema: TelemetrySchemaJson =
+        serde_json::from_str(payload).map_err(|err| anyhow!("telemetry schema json: {err}"))?;
+    if schema.schema_version.is_empty() {
+        return Err(anyhow!("telemetry schema version missing"));
+    }
+    if schema.max_record_bytes == 0 {
+        return Err(anyhow!("telemetry schema max_record_bytes must be > 0"));
+    }
+    Ok(TelemetrySchema {
+        version: schema.schema_version,
+        max_record_bytes: schema.max_record_bytes,
+        required_fields: schema.required_fields,
+        optional_fields: schema.optional_fields,
+    })
 }
 
 fn escape_json_string(input: &str) -> String {

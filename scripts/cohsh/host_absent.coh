@@ -5,5 +5,5 @@ EXPECT OK
 ls /host
 EXPECT OK
 EXPECT SUBSTR path=/host
-EXPECT SUBSTR entries=3
+EXPECT SUBSTR entries=4
 quit

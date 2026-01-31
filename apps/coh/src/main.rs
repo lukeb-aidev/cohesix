@@ -19,7 +19,7 @@ use cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT;
 use cohesix_ticket::Role;
 use cohsh::client::{CohClient, InProcessTransport};
 use cohsh::RoleArg;
-use gpu_bridge_host::auto_bridge;
+use gpu_bridge_host::{auto_bridge, auto_bridge_with_registry, build_publish_lines};
 use nine_door::NineDoor;
 
 #[derive(Debug, Parser)]
@@ -128,6 +128,9 @@ enum PeftCommand {
         export: PathBuf,
         #[arg(long, value_name = "DIR")]
         registry: Option<PathBuf>,
+        /// Publish the updated GPU model registry into /gpu/models (live VM only).
+        #[arg(long, alias = "refresh-gpu-models")]
+        publish: bool,
     },
     /// Activate a model pointer.
     Activate {
@@ -487,6 +490,7 @@ fn run_peft(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: PeftArgs
             job,
             export,
             registry,
+            publish,
         } => {
             let registry_root =
                 registry.unwrap_or_else(|| PathBuf::from(&policy.peft.import.registry_root));
@@ -497,7 +501,28 @@ fn run_peft(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: PeftArgs
                 job_id: job,
                 registry_root: registry_root.clone(),
             };
-            let result = peft::import_adapter(policy, &spec, &mut audit);
+            let result = peft::import_adapter(policy, &spec, &mut audit).and_then(|summary| {
+                if publish {
+                    if args.connect.mock {
+                        let (_server, mut client) = connect_mock(role, ticket, true, false)?;
+                        publish_gpu_registry(
+                            &mut client,
+                            Some(&registry_root),
+                            args.connect.mock,
+                            &mut audit,
+                        )?;
+                    } else {
+                        let mut client = connect_console(&args.connect, policy, role, ticket)?;
+                        publish_gpu_registry(
+                            &mut client,
+                            Some(&registry_root),
+                            args.connect.mock,
+                            &mut audit,
+                        )?;
+                    }
+                }
+                Ok(summary)
+            });
             if let Ok(summary) = &result {
                 audit.push_line(format!(
                     "peft import model={} manifest={}",
@@ -749,6 +774,28 @@ fn connect_console(
         policy.retry,
     )
     .with_context(|| format!("failed to connect to {}:{}", args.host, args.port))
+}
+
+fn publish_gpu_registry<C: coh::CohAccess>(
+    client: &mut C,
+    registry_root: Option<&PathBuf>,
+    mock: bool,
+    audit: &mut CohAudit,
+) -> Result<()> {
+    let bridge = auto_bridge_with_registry(mock, registry_root.map(|path| path.as_path()))?;
+    let snapshot = bridge.serialise_namespace()?;
+    let publish = build_publish_lines(&snapshot)?;
+    let path = "/gpu/bridge/ctl";
+    for line in &publish.lines {
+        client.write_append(path, line.as_bytes())?;
+    }
+    let detail = format!(
+        "path={path} bytes={} sha256={}",
+        publish.bytes.len(),
+        publish.sha256
+    );
+    audit.push_ack(cohsh_core::wire::AckStatus::Ok, "ECHO", Some(detail.as_str()));
+    Ok(())
 }
 
 fn seed_peft_export_job(server: &NineDoor, job_id: &str) -> Result<()> {

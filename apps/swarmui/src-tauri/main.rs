@@ -109,16 +109,17 @@ impl SwarmUiService {
         &mut self,
         role: cohesix_ticket::Role,
         ticket: Option<&str>,
+        detail_agent: Option<&str>,
     ) -> Result<swarmui::SwarmUiHiveBatch, String> {
         match self {
             SwarmUiService::Secure9p(backend) => backend
-                .hive_poll(role, ticket)
+                .hive_poll(role, ticket, detail_agent)
                 .map_err(|err| err.to_string()),
             SwarmUiService::Trace(backend) => backend
-                .hive_poll(role, ticket)
+                .hive_poll(role, ticket, detail_agent)
                 .map_err(|err| err.to_string()),
             SwarmUiService::Console(backend) => backend
-                .hive_poll(role, ticket)
+                .hive_poll(role, ticket, detail_agent)
                 .map_err(|err| err.to_string()),
         }
     }
@@ -263,10 +264,11 @@ fn swarmui_hive_poll(
     state: State<'_, AppState>,
     role: String,
     ticket: Option<String>,
+    detail_agent: Option<String>,
 ) -> Result<swarmui::SwarmUiHiveBatch, String> {
     let role = parse_role_label(&role).map_err(|err| err.to_string())?;
     let mut backend = state.backend.lock().map_err(|_| "state locked")?;
-    backend.hive_poll(role, ticket.as_deref())
+    backend.hive_poll(role, ticket.as_deref(), detail_agent.as_deref())
 }
 
 #[tauri::command]

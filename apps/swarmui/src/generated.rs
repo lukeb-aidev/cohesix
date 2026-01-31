@@ -4,7 +4,7 @@
 
 #![allow(dead_code)]
 
-pub const MANIFEST_SHA256: &str = "dbb26505c014d77a48d9d1487a8cddce63ff9dabaa24e9a997eb53f2bf8859e5";
+pub const MANIFEST_SHA256: &str = "3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af";
 pub const SECURE9P_MSIZE: u32 = 8192;
 pub const SECURE9P_WALK_DEPTH: u8 = 8;
 pub const SWARMUI_TICKET_SCOPE: &str = "per-ticket";
@@ -17,6 +17,10 @@ pub const SWARMUI_HIVE_LOD_ZOOM_OUT: f32 = 0.7;
 pub const SWARMUI_HIVE_LOD_ZOOM_IN: f32 = 1.25;
 pub const SWARMUI_HIVE_LOD_EVENT_BUDGET: u32 = 512;
 pub const SWARMUI_HIVE_SNAPSHOT_MAX_EVENTS: u32 = 4096;
+pub const SWARMUI_HIVE_OVERLAY_LINES: u16 = 3;
+pub const SWARMUI_HIVE_DETAIL_LINES: u16 = 50;
+pub const SWARMUI_HIVE_LINE_CAP_BYTES: u32 = 160;
+pub const SWARMUI_HIVE_PER_WORKER_BYTES: u32 = 2048;
 pub const SWARMUI_TRACE_MAX_BYTES: u32 = 1048576;
 pub const SWARMUI_TELEMETRY_ROOT: &str = "/worker";
 pub const SWARMUI_PROC_INGEST_ROOT: &str = "/proc/ingest";

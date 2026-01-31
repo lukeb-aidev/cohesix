@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --font-ui: "Inter", "Helvetica Neue", sans-serif;
   --font-mono: "JetBrains Mono", "Menlo", monospace;
   --font-size-xs: 11px;

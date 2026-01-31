@@ -330,6 +330,60 @@ fn queen_spawns_gpu_worker_and_runs_job() {
 }
 
 #[test]
+fn gpu_bridge_publish_installs_models_and_schema() {
+    let server = NineDoor::new();
+    let mut queen = attach_queen(&server);
+    let bridge = gpu_bridge_host::GpuBridge::mock();
+    let snapshot = bridge.serialise_namespace().expect("serialise namespace");
+    let publish = gpu_bridge_host::build_publish_lines(&snapshot).expect("build publish lines");
+
+    let ctl_path = vec!["gpu".to_owned(), "bridge".to_owned(), "ctl".to_owned()];
+    queen.walk(1, 2, &ctl_path).expect("walk /gpu/bridge/ctl");
+    queen
+        .open(2, OpenMode::write_append())
+        .expect("open /gpu/bridge/ctl");
+    for line in &publish.lines {
+        let payload = format!("{line}\n");
+        queen
+            .write(2, payload.as_bytes())
+            .expect("write gpu bridge payload");
+    }
+    queen.clunk(2).expect("clunk bridge ctl");
+
+    let active_path = vec!["gpu".to_owned(), "models".to_owned(), "active".to_owned()];
+    let active = read_text(&mut queen, 3, &active_path);
+    assert!(
+        active.contains(snapshot.models.active.as_str()),
+        "active model not found: {active}"
+    );
+
+    let model_id = snapshot
+        .models
+        .available
+        .first()
+        .expect("available model")
+        .model_id
+        .as_str();
+    let manifest_path = vec![
+        "gpu".to_owned(),
+        "models".to_owned(),
+        "available".to_owned(),
+        model_id.to_owned(),
+        "manifest.toml".to_owned(),
+    ];
+    let manifest = read_text(&mut queen, 4, &manifest_path);
+    assert!(manifest.contains("model"), "manifest missing content");
+
+    let schema_path = vec![
+        "gpu".to_owned(),
+        "telemetry".to_owned(),
+        "schema.json".to_owned(),
+    ];
+    let schema = read_text(&mut queen, 5, &schema_path);
+    assert!(schema.contains("\"schema_version\""));
+}
+
+#[test]
 fn gpu_job_write_requires_utf8() {
     let server = NineDoor::new();
     server.register_ticket_secret(Role::WorkerGpu, "gpu-secret");
@@ -515,6 +569,16 @@ fn open_gpu_job_file(client: &mut InProcessConnection, fid: u32, gpu_id: &str) {
     client
         .open(fid, OpenMode::write_append())
         .expect("open gpu job file");
+}
+
+fn read_text(client: &mut InProcessConnection, fid: u32, path: &[String]) -> String {
+    client.walk(1, fid, path).expect("walk path");
+    client
+        .open(fid, OpenMode::read_only())
+        .expect("open path");
+    let data = client.read(fid, 0, MAX_MSIZE).expect("read path");
+    client.clunk(fid).expect("clunk path");
+    String::from_utf8(data).expect("utf8")
 }
 
 fn read_all(client: &mut InProcessConnection, path: &[String]) -> String {

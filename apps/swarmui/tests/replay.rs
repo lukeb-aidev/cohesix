@@ -101,7 +101,7 @@ fn replay_digest(payload: &[u8]) -> Result<u64> {
     backend.hive_bootstrap(Role::Queen, None, None)?;
     let mut events = Vec::new();
     loop {
-        let batch = backend.hive_poll(Role::Queen, None)?;
+        let batch = backend.hive_poll(Role::Queen, None, None)?;
         events.extend(batch.events);
         if batch.done {
             break;

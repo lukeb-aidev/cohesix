@@ -110,6 +110,14 @@ const GPU_LEASE_ACTIVE_STATE: &str = "ACTIVE";
 const GPU_CTL_MAX_BYTES: u32 = 1024;
 const GPU_LEASE_MAX_BYTES: u32 = 1024;
 const GPU_STATUS_MAX_BYTES: u32 = UI_MAX_STREAM_BYTES as u32;
+const GPU_BRIDGE_CTL_MAX_BYTES: u32 = 128 * 1024;
+const GPU_BRIDGE_STATUS_MAX_BYTES: usize = 512;
+const GPU_BRIDGE_MAX_BYTES: usize = 128 * 1024;
+const GPU_BRIDGE_WIRE_SCHEMA: &str = "gpu-bridge-snapshot/v1";
+const GPU_MODELS_ACTIVE_MAX_BYTES: u32 = 4096;
+const GPU_MODEL_MANIFEST_MAX_BYTES: usize = 8 * 1024;
+const GPU_MODEL_ID_MAX_BYTES: usize = 128;
+const GPU_TELEMETRY_SCHEMA_MAX_BYTES: usize = 4096;
 const OBSERVE_P50_BYTES: usize = generated::OBSERVABILITY_CONFIG.proc_ingest.p50_ms_bytes as usize;
 const OBSERVE_P95_BYTES: usize = generated::OBSERVABILITY_CONFIG.proc_ingest.p95_ms_bytes as usize;
 const OBSERVE_BACKPRESSURE_BYTES: usize = generated::OBSERVABILITY_CONFIG
@@ -744,6 +752,38 @@ impl NineDoorBridge {
             }
             return Err(NineDoorBridgeError::Permission);
         }
+        if segments.as_slice() == ["gpu", "bridge", "ctl"] {
+            if !self.gpu.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            if !self.is_queen() {
+                return Err(NineDoorBridgeError::Permission);
+            }
+            self.ensure_lifecycle_gate(lifecycle::GATE_HOST_PUBLISH)?;
+            let trimmed = trim_payload(payload.as_bytes());
+            let text =
+                core::str::from_utf8(trimmed).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            self.gpu.handle_bridge_payload(text)?;
+            return Ok(());
+        }
+        if segments.as_slice() == ["gpu", "models", "active"] {
+            if !self.gpu.enabled() || !self.gpu.models_ready() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            if !self.is_queen() {
+                return Err(NineDoorBridgeError::Permission);
+            }
+            let trimmed = trim_payload(payload.as_bytes());
+            let text =
+                core::str::from_utf8(trimmed).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            validate_model_id(text)?;
+            append_log_bytes(
+                &mut self.gpu.models_active_log,
+                text,
+                GPU_MODELS_ACTIVE_MAX_BYTES,
+            )?;
+            return Ok(());
+        }
         if let ["gpu", gpu_id, leaf] = segments.as_slice() {
             if !self.gpu.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
@@ -966,6 +1006,44 @@ impl NineDoorBridge {
             if let Some(action_id) = parse_action_status_path(path) {
                 return self.action_status_lines(action_id);
             }
+        }
+        if segments.as_slice() == ["gpu", "bridge", "ctl"] {
+            if !self.gpu.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return lines_from_bytes(self.gpu.bridge.ctl_log.as_slice());
+        }
+        if segments.as_slice() == ["gpu", "bridge", "status"] {
+            if !self.gpu.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return lines_from_bytes(self.gpu.bridge.status.as_slice());
+        }
+        if segments.as_slice() == ["gpu", "models", "active"] {
+            if !self.gpu.enabled() || !self.gpu.models_ready() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return lines_from_bytes(self.gpu.models_active_log.as_slice());
+        }
+        if let ["gpu", "models", "available", model_id, "manifest.toml"] = segments.as_slice() {
+            if !self.gpu.enabled() || !self.gpu.models_ready() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            if let Some(entry) = self
+                .gpu
+                .models
+                .iter()
+                .find(|entry| entry.model_id == *model_id)
+            {
+                return lines_from_text(entry.manifest_toml.as_str());
+            }
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        if segments.as_slice() == ["gpu", "telemetry", "schema.json"] {
+            if !self.gpu.enabled() || !self.gpu.telemetry_ready() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return lines_from_bytes(self.gpu.telemetry_schema.as_slice());
         }
         if let ["gpu", gpu_id, leaf] = segments.as_slice() {
             if !self.gpu.enabled() {
@@ -1265,10 +1343,59 @@ impl NineDoorBridge {
                 return Ok(HeaplessVec::new());
             }
             let mut output = HeaplessVec::new();
+            push_list_entry(&mut output, "bridge")?;
+            if self.gpu.models_ready() {
+                push_list_entry(&mut output, "models")?;
+            }
+            if self.gpu.telemetry_ready() {
+                push_list_entry(&mut output, "telemetry")?;
+            }
             for entry in self.gpu.entries.iter() {
                 push_list_entry(&mut output, entry.id.as_str())?;
             }
             return Ok(output);
+        }
+        if segments.as_slice() == ["gpu", "bridge"] {
+            if !self.gpu.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return list_from_slice(&["ctl", "status"]);
+        }
+        if segments.as_slice() == ["gpu", "models"] {
+            if !self.gpu.enabled() || !self.gpu.models_ready() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return list_from_slice(&["available", "active"]);
+        }
+        if segments.as_slice() == ["gpu", "models", "available"] {
+            if !self.gpu.enabled() || !self.gpu.models_ready() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            let mut output = HeaplessVec::new();
+            for model in &self.gpu.models {
+                push_list_entry(&mut output, model.model_id.as_str())?;
+            }
+            return Ok(output);
+        }
+        if let ["gpu", "models", "available", model_id] = segments.as_slice() {
+            if !self.gpu.enabled() || !self.gpu.models_ready() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            if self
+                .gpu
+                .models
+                .iter()
+                .any(|entry| entry.model_id == *model_id)
+            {
+                return list_from_slice(&["manifest.toml"]);
+            }
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        if segments.as_slice() == ["gpu", "telemetry"] {
+            if !self.gpu.enabled() || !self.gpu.telemetry_ready() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return list_from_slice(&["schema.json"]);
         }
         if let ["gpu", gpu_id] = segments.as_slice() {
             if !self.gpu.enabled() {
@@ -3092,7 +3219,10 @@ impl HostState {
                 if self.has_provider(generated::HostProvider::K8s)
                     && K8S_NODES.iter().any(|entry| entry == node) =>
             {
-                list_from_slice(&["cordon", "drain"]).ok()
+                list_from_slice(&["status", "cordon", "drain"]).ok()
+            }
+            ["docker"] if self.has_provider(generated::HostProvider::Docker) => {
+                list_from_slice(&["status"]).ok()
             }
             ["nvidia"] if self.has_provider(generated::HostProvider::Nvidia) => {
                 list_from_slice(&["gpu"]).ok()
@@ -3181,9 +3311,13 @@ impl HostState {
                 }
                 generated::HostProvider::K8s => {
                     for node in K8S_NODES {
+                        self.push_entry(&["k8s", "node", node, "status"], "unknown", None);
                         self.push_entry(&["k8s", "node", node, "cordon"], "", Some("k8s.cordon"));
                         self.push_entry(&["k8s", "node", node, "drain"], "", Some("k8s.drain"));
                     }
+                }
+                generated::HostProvider::Docker => {
+                    self.push_entry(&["docker", "status"], "unknown", None);
                 }
                 generated::HostProvider::Nvidia => {
                     for gpu in NVIDIA_GPUS {
@@ -3221,12 +3355,55 @@ struct GpuEntry {
 }
 
 #[derive(Debug)]
+struct GpuModelManifest {
+    model_id: String,
+    manifest_toml: String,
+}
+
+#[derive(Debug)]
+struct GpuBridgePending {
+    expected_bytes: usize,
+    expected_sha256: [u8; 32],
+    encoded: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct GpuBridgeState {
+    ctl_log: Vec<u8>,
+    status: Vec<u8>,
+    pending: Option<GpuBridgePending>,
+}
+
+#[derive(Debug)]
+struct GpuBridgeSnapshot {
+    entries: Vec<GpuEntry>,
+    models: Vec<GpuModelManifest>,
+    active: String,
+    telemetry_schema: Vec<u8>,
+}
+
+#[derive(Debug)]
+enum GpuBridgeUpdate {
+    None,
+    Started { bytes: usize },
+    Complete {
+        bytes: usize,
+        sha256: String,
+        snapshot: GpuBridgeSnapshot,
+    },
+}
+
+#[derive(Debug)]
 struct GpuState {
     enabled: bool,
     ctl_max_bytes: u32,
     lease_max_bytes: u32,
     status_max_bytes: u32,
     entries: Vec<GpuEntry>,
+    models: Vec<GpuModelManifest>,
+    models_active_log: Vec<u8>,
+    telemetry_schema: Vec<u8>,
+    bridge: GpuBridgeState,
 }
 
 impl GpuState {
@@ -3262,11 +3439,23 @@ impl GpuState {
             lease_max_bytes: GPU_LEASE_MAX_BYTES,
             status_max_bytes: GPU_STATUS_MAX_BYTES,
             entries,
+            models: Vec::new(),
+            models_active_log: Vec::new(),
+            telemetry_schema: Vec::new(),
+            bridge: GpuBridgeState {
+                ctl_log: Vec::new(),
+                status: if enabled {
+                    b"state=idle\n".to_vec()
+                } else {
+                    Vec::new()
+                },
+                pending: None,
+            },
         }
     }
 
     fn enabled(&self) -> bool {
-        self.enabled && !self.entries.is_empty()
+        self.enabled
     }
 
     fn entry(&self, id: &str) -> Option<&GpuEntry> {
@@ -3275,6 +3464,141 @@ impl GpuState {
 
     fn entry_mut(&mut self, id: &str) -> Option<&mut GpuEntry> {
         self.entries.iter_mut().find(|entry| entry.id == id)
+    }
+
+    fn models_ready(&self) -> bool {
+        !self.models.is_empty() || !self.models_active_log.is_empty()
+    }
+
+    fn telemetry_ready(&self) -> bool {
+        !self.telemetry_schema.is_empty()
+    }
+
+    fn handle_bridge_payload(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
+        for line in payload.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.starts_with("begin") {
+                self.bridge.ctl_log.clear();
+                self.bridge.pending = None;
+            }
+            append_log_bytes(&mut self.bridge.ctl_log, trimmed, GPU_BRIDGE_CTL_MAX_BYTES)?;
+            match self.handle_bridge_line(trimmed) {
+                Ok(GpuBridgeUpdate::None) => {}
+                Ok(GpuBridgeUpdate::Started { bytes }) => {
+                    self.set_bridge_status(&format!("state=receiving bytes={bytes}"))?;
+                }
+                Ok(GpuBridgeUpdate::Complete {
+                    bytes,
+                    sha256,
+                    snapshot,
+                }) => {
+                    self.apply_bridge_snapshot(snapshot)?;
+                    self.set_bridge_status(&format!(
+                        "state=ok bytes={bytes} sha256={sha256}"
+                    ))?;
+                }
+                Err(err) => {
+                    let _ = self.set_bridge_status("state=err");
+                    return Err(err);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_bridge_line(&mut self, line: &str) -> Result<GpuBridgeUpdate, NineDoorBridgeError> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(GpuBridgeUpdate::None);
+        }
+        if let Some(rest) = trimmed.strip_prefix("begin") {
+            let (expected_bytes, expected_sha256) = parse_gpu_bridge_begin(rest)?;
+            if expected_bytes > GPU_BRIDGE_MAX_BYTES {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            self.bridge.pending = Some(GpuBridgePending {
+                expected_bytes,
+                expected_sha256,
+                encoded: Vec::new(),
+            });
+            return Ok(GpuBridgeUpdate::Started {
+                bytes: expected_bytes,
+            });
+        }
+        if trimmed == "end" {
+            let pending = self
+                .bridge
+                .pending
+                .take()
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let decoded = BASE64_STANDARD
+                .decode(&pending.encoded)
+                .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            if decoded.len() != pending.expected_bytes {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            let mut hasher = Sha256::new();
+            hasher.update(&decoded);
+            let digest = hasher.finalize();
+            if digest.as_slice() != pending.expected_sha256 {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            let sha256 = hex::encode(digest);
+            let snapshot = parse_gpu_bridge_wire(&decoded)?;
+            return Ok(GpuBridgeUpdate::Complete {
+                bytes: pending.expected_bytes,
+                sha256,
+                snapshot,
+            });
+        }
+        if let Some(rest) = trimmed.strip_prefix("b64:") {
+            let pending = self
+                .bridge
+                .pending
+                .as_mut()
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let expected_len =
+                base64_encoded_len(pending.expected_bytes).ok_or(NineDoorBridgeError::InvalidPayload)?;
+            if pending.encoded.len().saturating_add(rest.len()) > expected_len {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            pending.encoded.extend_from_slice(rest.as_bytes());
+            return Ok(GpuBridgeUpdate::None);
+        }
+        Err(NineDoorBridgeError::InvalidPayload)
+    }
+
+    fn apply_bridge_snapshot(&mut self, snapshot: GpuBridgeSnapshot) -> Result<(), NineDoorBridgeError> {
+        let active_line = format!("{}\n", snapshot.active);
+        if active_line.len() > GPU_MODELS_ACTIVE_MAX_BYTES as usize {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        if snapshot.telemetry_schema.len() > GPU_TELEMETRY_SCHEMA_MAX_BYTES {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        self.entries = snapshot.entries;
+        self.models = snapshot.models;
+        self.models_active_log = active_line.into_bytes();
+        self.telemetry_schema = snapshot.telemetry_schema;
+        Ok(())
+    }
+
+    fn set_bridge_status(&mut self, line: &str) -> Result<(), NineDoorBridgeError> {
+        let mut payload = String::from(line);
+        if !payload.ends_with('\n') {
+            payload.push('\n');
+        }
+        if payload.len() > GPU_BRIDGE_STATUS_MAX_BYTES {
+            payload.truncate(GPU_BRIDGE_STATUS_MAX_BYTES);
+            if !payload.ends_with('\n') {
+                payload.push('\n');
+            }
+        }
+        self.bridge.status = payload.into_bytes();
+        Ok(())
     }
 }
 
@@ -3295,6 +3619,211 @@ fn render_gpu_info_payload(
         escape_json_string(driver_version),
         escape_json_string(runtime_version)
     )
+}
+
+fn parse_gpu_bridge_begin(payload: &str) -> Result<(usize, [u8; 32]), NineDoorBridgeError> {
+    let mut bytes = None;
+    let mut sha256 = None;
+    for part in payload.split_whitespace() {
+        let (key, value) = part
+            .split_once('=')
+            .ok_or(NineDoorBridgeError::InvalidPayload)?;
+        match key {
+            "bytes" => {
+                let parsed = value.parse::<usize>().map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+                if parsed == 0 {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                bytes = Some(parsed);
+            }
+            "sha256" => sha256 = Some(value),
+            _ => return Err(NineDoorBridgeError::InvalidPayload),
+        }
+    }
+    let bytes = bytes.ok_or(NineDoorBridgeError::InvalidPayload)?;
+    let sha256 = sha256.ok_or(NineDoorBridgeError::InvalidPayload)?;
+    let sha256 = parse_sha256(sha256)?;
+    Ok((bytes, sha256))
+}
+
+fn base64_encoded_len(bytes: usize) -> Option<usize> {
+    let blocks = bytes / 3;
+    let rem = bytes % 3;
+    let base = blocks.checked_mul(4)?;
+    let extra = if rem == 0 { 0 } else { 4 };
+    base.checked_add(extra)
+}
+
+fn parse_gpu_bridge_wire(bytes: &[u8]) -> Result<GpuBridgeSnapshot, NineDoorBridgeError> {
+    let text = core::str::from_utf8(bytes).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    let mut schema_seen = false;
+    let mut entries = Vec::new();
+    let mut models = Vec::new();
+    let mut active: Option<String> = None;
+    let mut telemetry_schema: Option<Vec<u8>> = None;
+    let mut ended = false;
+
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if ended {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        if line == "end" {
+            ended = true;
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let keyword = parts.next().ok_or(NineDoorBridgeError::InvalidPayload)?;
+        match keyword {
+            "schema" => {
+                let schema = parts.next().ok_or(NineDoorBridgeError::InvalidPayload)?;
+                if schema != GPU_BRIDGE_WIRE_SCHEMA {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                if parts.next().is_some() {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                schema_seen = true;
+            }
+            "node" => {
+                let mut id = None;
+                let mut info = None;
+                let mut ctl = None;
+                let mut lease = None;
+                let mut status = None;
+                for part in parts {
+                    let (key, value) = part
+                        .split_once('=')
+                        .ok_or(NineDoorBridgeError::InvalidPayload)?;
+                    match key {
+                        "id" => id = Some(value),
+                        "info" => info = Some(value),
+                        "ctl" => ctl = Some(value),
+                        "lease" => lease = Some(value),
+                        "status" => status = Some(value),
+                        _ => return Err(NineDoorBridgeError::InvalidPayload),
+                    }
+                }
+                let id = id.ok_or(NineDoorBridgeError::InvalidPayload)?;
+                validate_gpu_id(id)?;
+                let info_payload = decode_gpu_bridge_string(info)?;
+                let ctl_log = decode_gpu_bridge_bytes(ctl)?;
+                let lease_log = decode_gpu_bridge_bytes(lease)?;
+                let status_log = decode_gpu_bridge_bytes(status)?;
+                entries.push(GpuEntry {
+                    id: id.to_owned(),
+                    info_payload,
+                    ctl_log,
+                    lease_log,
+                    status_log,
+                });
+            }
+            "model" => {
+                let mut id = None;
+                let mut manifest = None;
+                for part in parts {
+                    let (key, value) = part
+                        .split_once('=')
+                        .ok_or(NineDoorBridgeError::InvalidPayload)?;
+                    match key {
+                        "id" => id = Some(value),
+                        "manifest" => manifest = Some(value),
+                        _ => return Err(NineDoorBridgeError::InvalidPayload),
+                    }
+                }
+                let id = id.ok_or(NineDoorBridgeError::InvalidPayload)?;
+                validate_model_id(id)?;
+                let manifest_toml = decode_gpu_bridge_string(manifest)?;
+                if manifest_toml.len() > GPU_MODEL_MANIFEST_MAX_BYTES {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                models.push(GpuModelManifest {
+                    model_id: id.to_owned(),
+                    manifest_toml,
+                });
+            }
+            "active" => {
+                let mut id = None;
+                for part in parts {
+                    let (key, value) = part
+                        .split_once('=')
+                        .ok_or(NineDoorBridgeError::InvalidPayload)?;
+                    match key {
+                        "id" => id = Some(value),
+                        _ => return Err(NineDoorBridgeError::InvalidPayload),
+                    }
+                }
+                let id = id.ok_or(NineDoorBridgeError::InvalidPayload)?;
+                validate_model_id(id)?;
+                active = Some(id.to_owned());
+            }
+            "telemetry" => {
+                let mut schema = None;
+                for part in parts {
+                    let (key, value) = part
+                        .split_once('=')
+                        .ok_or(NineDoorBridgeError::InvalidPayload)?;
+                    match key {
+                        "schema" => schema = Some(value),
+                        _ => return Err(NineDoorBridgeError::InvalidPayload),
+                    }
+                }
+                let schema = decode_gpu_bridge_bytes(schema)?;
+                if schema.len() > GPU_TELEMETRY_SCHEMA_MAX_BYTES {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                telemetry_schema = Some(schema);
+            }
+            _ => return Err(NineDoorBridgeError::InvalidPayload),
+        }
+    }
+
+    if !schema_seen || !ended {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    let active = active.ok_or(NineDoorBridgeError::InvalidPayload)?;
+    let telemetry_schema = telemetry_schema.ok_or(NineDoorBridgeError::InvalidPayload)?;
+    Ok(GpuBridgeSnapshot {
+        entries,
+        models,
+        active,
+        telemetry_schema,
+    })
+}
+
+fn decode_gpu_bridge_string(value: Option<&str>) -> Result<String, NineDoorBridgeError> {
+    let bytes = decode_gpu_bridge_bytes(value)?;
+    String::from_utf8(bytes).map_err(|_| NineDoorBridgeError::InvalidPayload)
+}
+
+fn decode_gpu_bridge_bytes(value: Option<&str>) -> Result<Vec<u8>, NineDoorBridgeError> {
+    let value = value.ok_or(NineDoorBridgeError::InvalidPayload)?;
+    BASE64_STANDARD
+        .decode(value.as_bytes())
+        .map_err(|_| NineDoorBridgeError::InvalidPayload)
+}
+
+fn validate_gpu_id(value: &str) -> Result<(), NineDoorBridgeError> {
+    if value.is_empty() || value.len() > MAX_WORKER_ID_LEN {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    if value == "." || value == ".." || value.contains('/') {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
+}
+
+fn validate_model_id(value: &str) -> Result<(), NineDoorBridgeError> {
+    if value.is_empty() || value.len() > GPU_MODEL_ID_MAX_BYTES {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    if value == "." || value == ".." || value.contains('/') {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5014,6 +5543,7 @@ fn host_provider_label(provider: generated::HostProvider) -> &'static str {
     match provider {
         generated::HostProvider::Systemd => "systemd",
         generated::HostProvider::K8s => "k8s",
+        generated::HostProvider::Docker => "docker",
         generated::HostProvider::Nvidia => "nvidia",
         generated::HostProvider::Jetson => "jetson",
         generated::HostProvider::Net => "net",

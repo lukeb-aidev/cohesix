@@ -189,11 +189,12 @@ flowchart LR
 - **worker-gpu** — VM-resident stub handling GPU lease state and telemetry hooks; never touches hardware.
 - **cohsh** — Host-only CLI and canonical shell for the hive; GUI tooling is expected to speak the same protocol.
 - **gpu-bridge-host** — Host-side process that discovers or mocks GPUs, enforces leases, and mirrors `/gpu/<id>/` into the VM.
+- **host-sidecar-bridge** — Host-side publisher for `/host` providers (systemd, k8s, docker, nvidia) using existing Secure9P semantics.
 - **secure9p-codec / secure9p-core / secure9p-transport** — Secure9P codec, core policy hooks, and transport adapters for host tools.
 
 ---
 
-SwarmUI is the host-side desktop UI for Cohesix. It renders Live Hive telemetry and replays, and it reuses the same console/Secure9P transports and core verbs as `cohsh` via an embedded console panel.
+SwarmUI is the host-side desktop UI for Cohesix. It renders Live Hive telemetry and replays (including bounded per-worker text overlays and a detail panel), and it reuses the same console/Secure9P transports and core verbs as `cohsh` via an embedded console panel.
 
 **Figure 2** SwarmUI replay (Live Hive telemetry visualization)
 ![SwarmUI replay screenshot](docs/swarmui-replay.png)

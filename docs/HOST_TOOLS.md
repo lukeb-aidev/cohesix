@@ -45,6 +45,8 @@ Host bridge for mount, GPU leases, telemetry pulls, runtime breadcrumbs, PEFT li
 ./coh run --host 127.0.0.1 --port 31337 --gpu GPU-0 -- echo ok
 ./coh telemetry pull --host 127.0.0.1 --port 31337 --out ./out/telemetry
 ./coh peft export --host 127.0.0.1 --port 31337 --job job_8932 --out ./out/export
+./coh peft import --host 127.0.0.1 --port 31337 --publish --model demo-model \
+  --from demo/peft_adapter --job job_8932 --export ./out/export --registry ./out/model_registry
 ```
 
 ### Notes
@@ -110,15 +112,21 @@ Discover GPUs on the host (NVML or mock) and emit the `/gpu` namespace snapshot 
 ```bash
 ./gpu-bridge-host --mock --list
 ./gpu-bridge-host --list
+./gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
+./gpu-bridge-host --publish --interval-ms 1000 --registry demo/peft_registry
 ```
 
 ### Notes
 - `--list` prints JSON for host-side integration; it does not talk to the VM directly.
+- `--publish` streams bounded snapshots to `/gpu/bridge/ctl` over the TCP console (queen role).
+- `--interval-ms` repeats publish in a loop; omit to send a single snapshot.
+- `--registry` points at a host model registry root to populate `/gpu/models`.
+- `--ticket` is optional (queen ticket when required); auth token uses `--auth-token`, `COH_AUTH_TOKEN`, or `COHSH_AUTH_TOKEN`.
 - NVML discovery is enabled by default on Linux builds; use `--no-default-features` to omit NVML.
 
 ## host-sidecar-bridge
 ### Purpose
-Publish **mock** host-side providers into `/host` (systemd, k8s, nvidia, jetson, net) via Secure9P for policy/CI validation.
+Publish host-side providers into `/host` (systemd, k8s, docker, nvidia, jetson, net) via Secure9P for policy/CI validation and live telemetry snapshots.
 
 ### Location
 - Source: `apps/host-sidecar-bridge`
@@ -126,13 +134,17 @@ Publish **mock** host-side providers into `/host` (systemd, k8s, nvidia, jetson,
 
 ### Usage
 ```bash
-./host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider nvidia
+./host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider docker --provider nvidia
 ./host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
+./host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --watch
+./host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme \
+  --provider systemd --provider k8s --provider docker --provider nvidia --watch
 ```
 
 ### Notes
 - Live TCP publishing requires building with `--features tcp` (otherwise use `--mock`).
 - The `/host` namespace must be enabled in `configs/root_task.toml`.
+- `--watch` polls providers continuously using manifest-backed polling defaults (override with `--policy`).
 
 ---
 
@@ -188,18 +200,18 @@ Why this matters: proves adapters are managed as auditable artifacts with revers
 ./gpu-bridge-host --mock --list
 ./coh peft export --mock --job job_0001 --out demo/peft_export
 ./coh --host 127.0.0.1 --port 31337 peft import --model demo-model \
-  --from demo/peft_adapter --job job_0001 --export demo/peft_export --registry demo/peft_registry
+  --from demo/peft_adapter --job job_0001 --export demo/peft_export --registry demo/peft_registry --publish
 ./coh --host 127.0.0.1 --port 31337 peft activate --model demo-model --registry demo/peft_registry
 ./coh --host 127.0.0.1 --port 31337 peft rollback --registry demo/peft_registry
 ```
 
 ### 5) Host sidecar publishing + policy validation
-Goal: project **mock** host providers into `/host` and observe via CLI/UI.
-Why this matters: today this is primarily a **mock harness** to validate `/host` gating, queen‑only controls, and audit logging. It proves the control surface without requiring live systemd/k8s/NVML integrations.
+Goal: project host providers into `/host` and observe via CLI/UI.
+Why this matters: validates `/host` gating, queen‑only controls, and audit logging with either mock or live snapshots.
 ```bash
 ./qemu/run.sh
 ./host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme \
-  --provider systemd --provider k8s --provider nvidia
+  --provider systemd --provider k8s --provider docker --provider nvidia --watch
 ./cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337
 ```
 In `cohsh`:
@@ -209,7 +221,7 @@ ls /host
 ```
 Quit `cohsh`, open SwarmUI to observe the live hive alongside host provider activity.
 
-Note: `host-sidecar-bridge` currently publishes deterministic mock values for the selected providers. For live NVIDIA data, use `gpu-bridge-host` and `/gpu/*`.
+Note: if live provider commands (systemctl/kubectl/docker/nvidia-smi) are unavailable, status lines report `state=unknown reason=<...>`.
 
 ### 6) CAS update bundle demo (pack + upload + verify)
 Goal: show content-addressed update flows with deterministic upload paths.

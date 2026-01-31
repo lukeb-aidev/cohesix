@@ -90,6 +90,13 @@
 - `ui_providers.updates.status`: `true`
 - `client_policies.cohsh.pool.control_sessions`: `2`
 - `client_policies.cohsh.pool.telemetry_sessions`: `4`
+- `client_policies.cohsh.tail.poll_ms_default`: `1000`
+- `client_policies.cohsh.tail.poll_ms_min`: `250`
+- `client_policies.cohsh.tail.poll_ms_max`: `10000`
+- `client_policies.cohsh.host_telemetry.nvidia_poll_ms`: `1000`
+- `client_policies.cohsh.host_telemetry.systemd_poll_ms`: `2000`
+- `client_policies.cohsh.host_telemetry.docker_poll_ms`: `2000`
+- `client_policies.cohsh.host_telemetry.k8s_poll_ms`: `5000`
 - `client_policies.coh.mount.root`: `/`
 - `client_policies.coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
 - `client_policies.coh.telemetry.root`: `/queen/telemetry`
@@ -115,6 +122,10 @@
 - `swarmui.hive.lod_zoom_in`: `1.25`
 - `swarmui.hive.lod_event_budget`: `512`
 - `swarmui.hive.snapshot_max_events`: `4096`
+- `swarmui.hive.overlay_lines`: `3`
+- `swarmui.hive.detail_lines`: `50`
+- `swarmui.hive.line_cap_bytes`: `160`
+- `swarmui.hive.per_worker_bytes`: `2048`
 - `swarmui.paths.telemetry_root`: `/worker`
 - `swarmui.paths.proc_ingest_root`: `/proc/ingest`
 - `swarmui.paths.worker_root`: `/worker`
@@ -132,7 +143,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `dbb26505c014d77a48d9d1487a8cddce63ff9dabaa24e9a997eb53f2bf8859e5`
+- `manifest.sha256`: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -159,7 +170,7 @@
 ### Ecosystem section (generated)
 - `ecosystem.host.enable`: `true`
 - `ecosystem.host.mount_at`: `/host`
-- `ecosystem.host.providers`: `systemd`, `k8s`, `nvidia`
+- `ecosystem.host.providers`: `systemd`, `k8s`, `docker`, `nvidia`
 - `/host` namespace mounted at `/host` when enabled.
 - `ecosystem.audit.enable`: `false`
 - `ecosystem.audit.journal_max_bytes`: `8192`
@@ -178,4 +189,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `dbb26505c014d77a48d9d1487a8cddce63ff9dabaa24e9a997eb53f2bf8859e5`)._
+_Generated from `configs/root_task.toml` (sha256: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`)._

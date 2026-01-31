@@ -15,6 +15,8 @@ pub mod command;
 pub mod docs;
 pub mod help;
 pub mod secure9p;
+/// Tail polling policy and bounded telemetry buffers.
+pub mod tail;
 pub mod ticket;
 /// Trace record/replay utilities for Secure9P frames and ACK lines.
 pub mod trace;
@@ -29,6 +31,7 @@ pub use command::{
     MAX_LINE_LEN, MAX_PATH_LEN, MAX_ROLE_LEN, MAX_TICKET_LEN,
 };
 pub use secure9p::{ClientError as Secure9pError, Secure9pClient, Secure9pTransport};
+pub use tail::{BoundedLineBuffer, TailPollPolicy, TailPoller};
 pub use ticket::{
     normalize_ticket, parse_role, proto_role_from_ticket, role_label, QueenTicketMode,
     RoleParseMode, TicketCheck, TicketError, TicketPolicy,

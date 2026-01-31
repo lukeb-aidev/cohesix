@@ -8,9 +8,11 @@ use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::{BudgetSpec, Role, TicketKey, TicketToken, TicketVerb};
 use gpu_bridge_host::{status_entry, GpuNamespaceSnapshot};
+use sha2::{Digest, Sha256};
 use log::{debug, info, trace};
 use secure9p_codec::{
     Codec, ErrorCode, OpenMode, Qid, Request, RequestBody, Response, ResponseBody, SessionId,
@@ -59,6 +61,8 @@ use super::{Clock, NineDoorError};
 const GPU_LEASE_SCHEMA: &str = "gpu-lease/v1";
 const GPU_LEASE_STATE_ACTIVE: &str = "ACTIVE";
 const GPU_LEASE_STATE_RELEASED: &str = "RELEASED";
+const GPU_BRIDGE_MAX_BYTES: usize = 128 * 1024;
+const GPU_BRIDGE_STATUS_MAX_BYTES: usize = 512;
 
 #[derive(Serialize)]
 struct GpuLeaseEntry<'a> {
@@ -1662,6 +1666,13 @@ impl ServerCore {
             self.refresh_proc_root()?;
             return Ok(ResponseBody::Write { count });
         }
+        if is_gpu_bridge_ctl_path(&path) {
+            self.control
+                .ensure_lifecycle_gate(lifecycle::GATE_HOST_PUBLISH)?;
+            let count = self.control.process_gpu_bridge_ctl_write(offset, data)?;
+            self.consume_ticket_bandwidth(state, count as u64);
+            return Ok(ResponseBody::Write { count });
+        }
         let telemetry_write = worker_id
             .map(|id| is_worker_telemetry_path(&shards, &path, id))
             .unwrap_or(false);
@@ -2075,6 +2086,120 @@ impl ServerCore {
     }
 }
 
+#[derive(Debug)]
+struct GpuBridgePending {
+    expected_bytes: usize,
+    expected_sha256: [u8; 32],
+    encoded: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct GpuBridgeReceiver {
+    max_bytes: usize,
+    pending: Option<GpuBridgePending>,
+}
+
+#[derive(Debug)]
+enum GpuBridgeUpdate {
+    None,
+    Started { bytes: usize },
+    Complete {
+        bytes: usize,
+        sha256: String,
+        snapshot: GpuNamespaceSnapshot,
+    },
+}
+
+impl GpuBridgeReceiver {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            max_bytes,
+            pending: None,
+        }
+    }
+
+    fn handle_line(&mut self, line: &str) -> Result<GpuBridgeUpdate, NineDoorError> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(GpuBridgeUpdate::None);
+        }
+        if let Some(rest) = trimmed.strip_prefix("begin") {
+            let (expected_bytes, expected_sha256) = parse_gpu_bridge_begin(rest)?;
+            if expected_bytes > self.max_bytes {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    format!("gpu bridge payload too large: {expected_bytes}"),
+                ));
+            }
+            self.pending = Some(GpuBridgePending {
+                expected_bytes,
+                expected_sha256,
+                encoded: Vec::new(),
+            });
+            return Ok(GpuBridgeUpdate::Started {
+                bytes: expected_bytes,
+            });
+        }
+        if trimmed == "end" {
+            let pending = self.pending.take().ok_or_else(|| {
+                NineDoorError::protocol(ErrorCode::Invalid, "gpu bridge end without begin")
+            })?;
+            let decoded = BASE64_STANDARD
+                .decode(&pending.encoded)
+                .map_err(|_| {
+                    NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "gpu bridge base64 decode failed",
+                    )
+                })?;
+            if decoded.len() != pending.expected_bytes {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    "gpu bridge payload size mismatch",
+                ));
+            }
+            let mut hasher = Sha256::new();
+            hasher.update(&decoded);
+            let digest = hasher.finalize();
+            if digest.as_slice() != pending.expected_sha256 {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    "gpu bridge sha256 mismatch",
+                ));
+            }
+            let sha256 = hex::encode(digest);
+            let snapshot = gpu_bridge_host::parse_wire_snapshot(&decoded).map_err(|err| {
+                NineDoorError::protocol(ErrorCode::Invalid, format!("gpu bridge snapshot: {err}"))
+            })?;
+            return Ok(GpuBridgeUpdate::Complete {
+                bytes: pending.expected_bytes,
+                sha256,
+                snapshot,
+            });
+        }
+        if let Some(rest) = trimmed.strip_prefix("b64:") {
+            let pending = self.pending.as_mut().ok_or_else(|| {
+                NineDoorError::protocol(ErrorCode::Invalid, "gpu bridge data without begin")
+            })?;
+            let expected_len = base64_encoded_len(pending.expected_bytes).ok_or_else(|| {
+                NineDoorError::protocol(ErrorCode::Invalid, "gpu bridge size overflow")
+            })?;
+            if pending.encoded.len().saturating_add(rest.len()) > expected_len {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    "gpu bridge base64 exceeds expected length",
+                ));
+            }
+            pending.encoded.extend_from_slice(rest.as_bytes());
+            return Ok(GpuBridgeUpdate::None);
+        }
+        Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            "gpu bridge line not recognised",
+        ))
+    }
+}
+
 struct ControlPlane {
     namespace: Namespace,
     workers: HashMap<String, WorkerRecord>,
@@ -2083,6 +2208,7 @@ struct ControlPlane {
     services: HashMap<String, Vec<String>>,
     gpu_nodes: HashSet<String>,
     active_leases: HashMap<String, String>,
+    gpu_bridge: GpuBridgeReceiver,
     lifecycle: lifecycle::LifecycleStateMachine,
     policy: PolicyStore,
     audit: AuditStore,
@@ -2127,6 +2253,7 @@ impl ControlPlane {
             services: HashMap::new(),
             gpu_nodes: HashSet::new(),
             active_leases: HashMap::new(),
+            gpu_bridge: GpuBridgeReceiver::new(GPU_BRIDGE_MAX_BYTES),
             lifecycle: lifecycle::LifecycleStateMachine::new(now),
             policy,
             audit,
@@ -2290,6 +2417,63 @@ impl ControlPlane {
         self.namespace
             .set_gpu_telemetry_schema(&topology.telemetry_schema)?;
         Ok(())
+    }
+
+    fn process_gpu_bridge_ctl_write(
+        &mut self,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<u32, NineDoorError> {
+        let ctl_path = vec!["gpu".to_owned(), "bridge".to_owned(), "ctl".to_owned()];
+        let count = self.namespace.write_append(&ctl_path, offset, data)?;
+        let text = std::str::from_utf8(data).map_err(|err| {
+            NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("gpu bridge payload must be UTF-8: {err}"),
+            )
+        })?;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            match self.gpu_bridge.handle_line(trimmed) {
+                Ok(GpuBridgeUpdate::None) => {}
+                Ok(GpuBridgeUpdate::Started { bytes }) => {
+                    self.set_gpu_bridge_status(&format!("state=receiving bytes={bytes}"))?;
+                }
+                Ok(GpuBridgeUpdate::Complete {
+                    bytes,
+                    sha256,
+                    snapshot,
+                }) => {
+                    self.install_gpu_nodes(&snapshot)?;
+                    self.set_gpu_bridge_status(&format!(
+                        "state=ok bytes={bytes} sha256={sha256}"
+                    ))?;
+                }
+                Err(err) => {
+                    let reason = gpu_bridge_error_message(&err);
+                    let _ = self.set_gpu_bridge_status(&format!("state=err reason={reason}"));
+                    return Err(err);
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    fn set_gpu_bridge_status(&mut self, line: &str) -> Result<(), NineDoorError> {
+        let mut payload = line.to_owned();
+        if !payload.ends_with('\n') {
+            payload.push('\n');
+        }
+        if payload.len() > GPU_BRIDGE_STATUS_MAX_BYTES {
+            payload.truncate(GPU_BRIDGE_STATUS_MAX_BYTES);
+            if !payload.ends_with('\n') {
+                payload.push('\n');
+            }
+        }
+        self.namespace.set_gpu_bridge_status(payload.as_bytes())
     }
 
     pub(crate) fn set_lora_export_job(
@@ -3429,6 +3613,8 @@ impl SessionState {
     fn ensure_attached(&self) -> Result<(), NineDoorError> {
         if self.attached {
             Ok(())
+        } else if let Some(reason) = self.budget.revoked.clone() {
+            Err(NineDoorError::protocol(ErrorCode::Closed, reason))
         } else {
             Err(NineDoorError::protocol(
                 ErrorCode::Invalid,
@@ -4175,6 +4361,13 @@ fn is_gpu_ctl_path(path: &[String], scope: &str) -> bool {
         if first == "gpu" && second == scope && third == "ctl")
 }
 
+fn is_gpu_bridge_ctl_path(path: &[String]) -> bool {
+    matches!(
+        path,
+        [first, second, third] if first == "gpu" && second == "bridge" && third == "ctl"
+    )
+}
+
 fn is_queen_ctl_path(path: &[String]) -> bool {
     matches!(path, [first, second] if first == "queen" && second == "ctl")
 }
@@ -4373,6 +4566,74 @@ pub(crate) fn role_to_uname(role: Role, identity: Option<&str>) -> Result<String
                 })?;
             Ok(format!("{}:{id}", proto_role_label(ProtoRole::LoraWorker)))
         }
+    }
+}
+
+fn parse_gpu_bridge_begin(payload: &str) -> Result<(usize, [u8; 32]), NineDoorError> {
+    let mut bytes = None;
+    let mut sha256 = None;
+    for part in payload.split_whitespace() {
+        let (key, value) = part.split_once('=').ok_or_else(|| {
+            NineDoorError::protocol(ErrorCode::Invalid, "gpu bridge begin missing '='")
+        })?;
+        match key {
+            "bytes" => {
+                let parsed = value.parse::<usize>().map_err(|_| {
+                    NineDoorError::protocol(ErrorCode::Invalid, "gpu bridge bytes invalid")
+                })?;
+                if parsed == 0 {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "gpu bridge bytes must be > 0",
+                    ));
+                }
+                bytes = Some(parsed);
+            }
+            "sha256" => sha256 = Some(value),
+            _ => {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    "gpu bridge begin has unknown fields",
+                ))
+            }
+        }
+    }
+    let bytes = bytes.ok_or_else(|| {
+        NineDoorError::protocol(ErrorCode::Invalid, "gpu bridge begin missing bytes")
+    })?;
+    let sha256 = sha256.ok_or_else(|| {
+        NineDoorError::protocol(ErrorCode::Invalid, "gpu bridge begin missing sha256")
+    })?;
+    let sha256 = parse_sha256_hex(sha256)?;
+    Ok((bytes, sha256))
+}
+
+fn base64_encoded_len(bytes: usize) -> Option<usize> {
+    let blocks = bytes / 3;
+    let rem = bytes % 3;
+    let base = blocks.checked_mul(4)?;
+    let extra = if rem == 0 { 0 } else { 4 };
+    base.checked_add(extra)
+}
+
+fn parse_sha256_hex(value: &str) -> Result<[u8; 32], NineDoorError> {
+    if value.len() != 64 || !value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            "gpu bridge sha256 invalid",
+        ));
+    }
+    let mut out = [0u8; 32];
+    hex::decode_to_slice(value.as_bytes(), &mut out).map_err(|_| {
+        NineDoorError::protocol(ErrorCode::Invalid, "gpu bridge sha256 decode failed")
+    })?;
+    Ok(out)
+}
+
+fn gpu_bridge_error_message(err: &NineDoorError) -> String {
+    match err {
+        NineDoorError::Protocol { message, .. } => message.clone(),
+        _ => err.to_string(),
     }
 }
 

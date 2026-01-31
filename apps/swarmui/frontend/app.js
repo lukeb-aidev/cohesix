@@ -191,6 +191,10 @@ const hivePressure = document.getElementById("hive-pressure");
 const hivePressureStrip = document.getElementById("hive-pressure-strip");
 const hiveErrorStrip = document.getElementById("hive-error-strip");
 const hiveFallback = document.getElementById("hive-fallback");
+const hiveOverlays = document.getElementById("hive-overlays");
+const hiveDetailTitle = document.getElementById("hive-detail-title");
+const hiveDetailLines = document.getElementById("hive-detail-lines");
+const hiveDetailClear = document.getElementById("hive-detail-clear");
 let hiveController = null;
 let hiveInitError = null;
 
@@ -244,6 +248,82 @@ let hiveActive = false;
 let hivePollTimer = null;
 let hivePollInFlight = false;
 let hivePollInterval = 300;
+let hiveDetailAgent = null;
+
+const resetHiveDetail = () => {
+  hiveDetailAgent = null;
+  if (hiveDetailTitle) {
+    hiveDetailTitle.textContent = "Select worker";
+  }
+  if (hiveDetailLines) {
+    hiveDetailLines.innerHTML = '<p class="placeholder">No telemetry loaded.</p>';
+  }
+};
+
+const setDetailAgent = (agent) => {
+  hiveDetailAgent = agent;
+  if (hiveDetailTitle) {
+    hiveDetailTitle.textContent = agent || "Select worker";
+  }
+};
+
+const renderHiveOverlays = (batch) => {
+  if (!hiveOverlays) {
+    return;
+  }
+  const overlays = Array.isArray(batch.overlays) ? batch.overlays : [];
+  hiveOverlays.innerHTML = "";
+  if (!overlays.length) {
+    hiveOverlays.innerHTML = '<p class="placeholder">Awaiting telemetry.</p>';
+    return;
+  }
+  overlays.forEach((overlay) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "hive-telemetry__card";
+    if (overlay.agent === hiveDetailAgent) {
+      card.classList.add("selected");
+    }
+    card.dataset.agent = overlay.agent;
+    const header = document.createElement("div");
+    header.className = "hive-telemetry__agent";
+    header.textContent = overlay.agent;
+    const lines = document.createElement("div");
+    lines.className = "hive-telemetry__lines";
+    lines.textContent = Array.isArray(overlay.lines) ? overlay.lines.join("\n") : "";
+    card.appendChild(header);
+    card.appendChild(lines);
+    card.addEventListener("click", () => {
+      setDetailAgent(overlay.agent);
+    });
+    hiveOverlays.appendChild(card);
+  });
+};
+
+const renderHiveDetail = (batch) => {
+  if (!hiveDetailLines) {
+    return;
+  }
+  const detail = batch.detail;
+  if (detail && Array.isArray(detail.lines) && detail.lines.length) {
+    if (hiveDetailTitle) {
+      hiveDetailTitle.textContent = detail.agent;
+    }
+    hiveDetailLines.textContent = detail.lines.join("\n");
+    return;
+  }
+  if (!hiveDetailAgent) {
+    hiveDetailLines.innerHTML = '<p class="placeholder">Select a worker to view details.</p>';
+  } else {
+    hiveDetailLines.innerHTML = '<p class="placeholder">No telemetry yet.</p>';
+  }
+};
+
+if (hiveDetailClear) {
+  hiveDetailClear.addEventListener("click", () => {
+    resetHiveDetail();
+  });
+}
 
 const updateHivePressure = (batch) => {
   if (!hivePressure) {
@@ -359,6 +439,7 @@ const pollHive = async () => {
   const res = await invoke("swarmui_hive_poll", {
     role: session.role,
     ticket: session.ticket,
+    detail_agent: hiveDetailAgent,
   });
   hivePollInFlight = false;
   if (!res.ok) {
@@ -373,6 +454,8 @@ const pollHive = async () => {
   updateHiveSessions(res.result);
   updateHivePressureCounters(res.result);
   updateHiveErrors(res.result);
+  renderHiveOverlays(res.result);
+  renderHiveDetail(res.result);
   if (res.result.done) {
     hiveActive = false;
     stopHivePolling();
@@ -406,6 +489,8 @@ const startHive = async () => {
   hiveController.bootstrap(res.result);
   hiveController.start();
   resetHiveErrors();
+  resetHiveDetail();
+  renderHiveOverlays({ overlays: [] });
   hiveActive = true;
   hivePollInterval = Math.max(
     120,
@@ -423,6 +508,8 @@ const stopHive = async () => {
   stopHivePolling();
   hiveController.stop();
   resetHiveErrors();
+  resetHiveDetail();
+  renderHiveOverlays({ overlays: [] });
   const session = readSession();
   await invoke("swarmui_hive_reset", {
     role: session.role,

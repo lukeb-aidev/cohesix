@@ -400,6 +400,14 @@ body {
   font-size: var(--font-size-sm);
 }
 
+.select option,
+select option,
+.select optgroup,
+select optgroup {
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
 .field {
   display: flex;
   flex-direction: column;

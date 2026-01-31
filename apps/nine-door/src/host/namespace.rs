@@ -72,6 +72,8 @@ pub enum HostProvider {
     Systemd,
     /// Kubernetes provider nodes.
     K8s,
+    /// Docker provider nodes.
+    Docker,
     /// NVIDIA GPU provider nodes.
     Nvidia,
     /// Jetson provider nodes.
@@ -86,6 +88,7 @@ impl HostProvider {
         match self {
             HostProvider::Systemd => "systemd",
             HostProvider::K8s => "k8s",
+            HostProvider::Docker => "docker",
             HostProvider::Nvidia => "nvidia",
             HostProvider::Jetson => "jetson",
             HostProvider::Net => "net",
@@ -1491,6 +1494,7 @@ impl Namespace {
             }
         }
         self.ensure_dir(&[], "gpu").expect("create /gpu");
+        self.ensure_gpu_bridge().expect("create /gpu/bridge");
         self.ensure_dir(&[], "trace").expect("create /trace");
         let trace_path = vec!["trace".to_owned()];
         self.ensure_trace_control(&trace_path, "ctl")
@@ -1618,6 +1622,7 @@ impl Namespace {
             match provider {
                 HostProvider::Systemd => self.install_host_systemd(&host_root)?,
                 HostProvider::K8s => self.install_host_k8s(&host_root)?,
+                HostProvider::Docker => self.install_host_docker(&host_root)?,
                 HostProvider::Nvidia => self.install_host_nvidia(&host_root)?,
                 HostProvider::Jetson => self.ensure_dir(&host_root, "jetson")?,
                 HostProvider::Net => self.ensure_dir(&host_root, "net")?,
@@ -1709,9 +1714,21 @@ impl Namespace {
                 path.push(node.to_owned());
                 path
             };
+            self.ensure_append_only_file(&node_path, "status", b"unknown")?;
             self.ensure_append_only_file(&node_path, "cordon", b"")?;
             self.ensure_append_only_file(&node_path, "drain", b"")?;
         }
+        Ok(())
+    }
+
+    fn install_host_docker(&mut self, host_root: &[String]) -> Result<(), NineDoorError> {
+        self.ensure_dir(host_root, "docker")?;
+        let docker_root = {
+            let mut path = host_root.to_vec();
+            path.push("docker".to_owned());
+            path
+        };
+        self.ensure_append_only_file(&docker_root, "status", b"unknown")?;
         Ok(())
     }
 
@@ -1740,6 +1757,21 @@ impl Namespace {
             self.ensure_append_only_file(&gpu_path, "thermal", b"42C")?;
         }
         Ok(())
+    }
+
+    fn ensure_gpu_bridge(&mut self) -> Result<(), NineDoorError> {
+        let gpu_root = vec!["gpu".to_owned()];
+        self.ensure_dir(&gpu_root, "bridge")?;
+        let bridge_root = vec!["gpu".to_owned(), "bridge".to_owned()];
+        self.ensure_append_only_file(&bridge_root, "ctl", b"")?;
+        self.ensure_read_only_file(&bridge_root, "status", b"state=idle\n")?;
+        Ok(())
+    }
+
+    /// Replace the `/gpu/bridge/status` payload.
+    pub fn set_gpu_bridge_status(&mut self, payload: &[u8]) -> Result<(), NineDoorError> {
+        let bridge_root = vec!["gpu".to_owned(), "bridge".to_owned()];
+        self.set_read_only_file(&bridge_root, "status", payload)
     }
 
     fn ensure_dir_path(&mut self, path: &[String]) -> Result<(), NineDoorError> {

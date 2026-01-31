@@ -14,7 +14,8 @@ mod transport;
 pub use cache::{CacheError, SnapshotCache, SnapshotRecord};
 pub use hive::{
     SwarmUiHiveAgent, SwarmUiHiveBatch, SwarmUiHiveBootstrap, SwarmUiHiveConfig, SwarmUiHiveEvent,
-    SwarmUiHiveEventKind, SwarmUiHivePressureCounters, SwarmUiHiveRootStatus,
+    SwarmUiHiveDetail, SwarmUiHiveEventKind, SwarmUiHiveOverlay, SwarmUiHivePressureCounters,
+    SwarmUiHiveRootStatus,
     SwarmUiHiveSessionSummary, SwarmUiHiveSnapshot,
 };
 pub use transport::{TcpTransport, TcpTransportError, TcpTransportFactory, TraceTransportFactory};
@@ -33,7 +34,8 @@ use cohsh::{
 use cohsh_core::command::{Command as ConsoleCommand, CommandParser, ConsoleError, MAX_LINE_LEN};
 use cohsh_core::wire::{render_ack, AckLine, AckStatus, END_LINE};
 use cohsh_core::{
-    normalize_ticket, parse_role, role_label, ConsoleVerb, RoleParseMode, TicketPolicy,
+    normalize_ticket, parse_role, role_label, ConsoleVerb, RoleParseMode, TailPollPolicy,
+    TicketPolicy,
 };
 use secure9p_codec::OpenMode;
 use serde::{Deserialize, Serialize};
@@ -136,6 +138,10 @@ impl SwarmUiConfig {
             lod_zoom_in: generated::SWARMUI_HIVE_LOD_ZOOM_IN,
             lod_event_budget: generated::SWARMUI_HIVE_LOD_EVENT_BUDGET,
             snapshot_max_events: generated::SWARMUI_HIVE_SNAPSHOT_MAX_EVENTS,
+            overlay_lines: generated::SWARMUI_HIVE_OVERLAY_LINES,
+            detail_lines: generated::SWARMUI_HIVE_DETAIL_LINES,
+            line_cap_bytes: generated::SWARMUI_HIVE_LINE_CAP_BYTES,
+            per_worker_bytes: generated::SWARMUI_HIVE_PER_WORKER_BYTES,
         };
         Self {
             data_dir,
@@ -146,6 +152,15 @@ impl SwarmUiConfig {
             trace_max_bytes: generated::SWARMUI_TRACE_MAX_BYTES as usize,
             offline: false,
         }
+    }
+}
+
+fn tail_policy_from_generated() -> TailPollPolicy {
+    let policy = CohshPolicy::from_generated();
+    TailPollPolicy {
+        poll_ms_default: policy.tail.poll_ms_default,
+        poll_ms_min: policy.tail.poll_ms_min,
+        poll_ms_max: policy.tail.poll_ms_max,
     }
 }
 
@@ -254,6 +269,7 @@ where
     hive_replay: Option<hive::HiveReplay>,
     audit: VecDeque<String>,
     active_tails: usize,
+    tail_policy: TailPollPolicy,
     cache: Option<SnapshotCache>,
 }
 
@@ -263,6 +279,7 @@ where
 {
     /// Construct a new SwarmUI backend using the supplied config and transport factory.
     pub fn new(config: SwarmUiConfig, factory: F) -> Self {
+        let tail_policy = tail_policy_from_generated();
         let cache = if config.cache.enabled {
             Some(SnapshotCache::new(
                 config.data_dir.join("snapshots"),
@@ -280,6 +297,7 @@ where
             hive_replay: None,
             audit: VecDeque::new(),
             active_tails: 0,
+            tail_policy,
             cache,
         }
     }
@@ -723,8 +741,10 @@ where
             });
         }
 
-        self.hive_states
-            .insert(key, hive::HiveSessionState::new(workers));
+        self.hive_states.insert(
+            key,
+            hive::HiveSessionState::new(workers, self.tail_policy),
+        );
         self.hive_replay = None;
 
         Ok(SwarmUiHiveBootstrap {
@@ -740,6 +760,7 @@ where
         &mut self,
         role: Role,
         ticket: Option<&str>,
+        detail_agent: Option<&str>,
     ) -> Result<SwarmUiHiveBatch, SwarmUiError> {
         if let Some(replay) = self.hive_replay.as_mut() {
             let max_events = self
@@ -773,6 +794,8 @@ where
         let state = self.hive_states.get_mut(&key).expect("hive state");
         let max_events = hive_config.lod_event_budget as usize;
         let events = state.drain(max_events);
+        let overlays = state.overlays(hive_config.overlay_lines as usize);
+        let detail = state.detail(detail_agent, hive_config.detail_lines as usize);
         let backlog = state.queue_len();
         let pressure = if hive_config.lod_event_budget == 0 {
             0.0
@@ -789,6 +812,8 @@ where
             root,
             sessions,
             pressure_counters,
+            overlays,
+            detail,
             done: false,
         })
     }
@@ -1060,6 +1085,7 @@ pub struct SwarmUiConsoleBackend<T: CohshTransport> {
     hive_replay: Option<hive::HiveReplay>,
     audit: VecDeque<String>,
     active_tails: usize,
+    tail_policy: TailPollPolicy,
     cache: Option<SnapshotCache>,
 }
 
@@ -1084,6 +1110,7 @@ impl SwarmUiConsoleBackend<CohshTcpTransport> {
 impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
     /// Construct a SwarmUI console backend from an existing transport.
     pub fn with_transport(config: SwarmUiConfig, transport: T) -> Self {
+        let tail_policy = tail_policy_from_generated();
         let cache = if config.cache.enabled {
             Some(SnapshotCache::new(
                 config.data_dir.join("snapshots"),
@@ -1104,6 +1131,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             hive_replay: None,
             audit: VecDeque::new(),
             active_tails: 0,
+            tail_policy,
             cache,
         }
     }
@@ -2003,8 +2031,10 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             });
         }
 
-        self.hive_states
-            .insert(key, hive::ConsoleHiveSessionState::new(workers));
+        self.hive_states.insert(
+            key,
+            hive::ConsoleHiveSessionState::new(workers, self.tail_policy),
+        );
         self.hive_replay = None;
 
         Ok(SwarmUiHiveBootstrap {
@@ -2020,6 +2050,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         &mut self,
         role: Role,
         ticket: Option<&str>,
+        detail_agent: Option<&str>,
     ) -> Result<SwarmUiHiveBatch, SwarmUiError> {
         if let Some(replay) = self.hive_replay.as_mut() {
             let max_events = self
@@ -2053,6 +2084,8 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         let state = self.hive_states.get_mut(&key).expect("hive state");
         let max_events = hive_config.lod_event_budget as usize;
         let events = state.drain(max_events);
+        let overlays = state.overlays(hive_config.overlay_lines as usize);
+        let detail = state.detail(detail_agent, hive_config.detail_lines as usize);
         let backlog = state.queue_len();
         let pressure = if hive_config.lod_event_budget == 0 {
             0.0
@@ -2069,6 +2102,8 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             root,
             sessions,
             pressure_counters,
+            overlays,
+            detail,
             done: false,
         })
     }

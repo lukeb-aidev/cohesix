@@ -178,13 +178,42 @@
               </button>
             </header>
             <div class="panel-body hive-body">
-              <div id="hive-canvas" class="hive-canvas">
-                <div class="hive-fallback" id="hive-fallback" role="status" aria-live="polite"></div>
+              <div class="hive-stage">
+                <div id="hive-canvas" class="hive-canvas">
+                  <div
+                    class="hive-fallback"
+                    id="hive-fallback"
+                    role="status"
+                    aria-live="polite"
+                  ></div>
+                </div>
+                <div class="hive-overlay mono">
+                  <span class="badge soft">Zoom with trackpad / scroll</span>
+                  <span class="badge soft">Drag to pan</span>
+                </div>
               </div>
-              <div class="hive-overlay mono">
-                <span class="badge soft">Zoom with trackpad / scroll</span>
-                <span class="badge soft">Drag to pan</span>
-              </div>
+              <aside class="hive-telemetry mono" id="hive-telemetry">
+                <header class="hive-telemetry__header">
+                  <div>
+                    <p class="eyebrow">Live Hive Text</p>
+                    <p class="lede">Bounded telemetry overlays per worker.</p>
+                  </div>
+                  <button id="hive-detail-clear" class="action ghost">
+                    Clear
+                  </button>
+                </header>
+                <div class="hive-telemetry__overlays" id="hive-overlays">
+                  <p class="placeholder">Awaiting telemetry.</p>
+                </div>
+                <div class="hive-telemetry__detail">
+                  <div class="hive-telemetry__detail-header">
+                    <span class="label" id="hive-detail-title">Select worker</span>
+                  </div>
+                  <div class="hive-telemetry__detail-lines" id="hive-detail-lines">
+                    <p class="placeholder">No telemetry loaded.</p>
+                  </div>
+                </div>
+              </aside>
             </div>
           </article>
 
