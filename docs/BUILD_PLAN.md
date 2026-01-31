@@ -3936,7 +3936,7 @@ Deliverables:
 **Constraints**
 - No code changes; demo uses release bundle binaries and existing scripts only.
 - SwarmUI is the primary surface. Use `cohsh` only when a required action is not available in SwarmUI, and quit SwarmUI before launching `cohsh` (per `docs/QUICKSTART.md`).
-- Queen VM runs on the Mac host. Jetson runs a Cohesix Worker VM; G5g runs host tools only.
+- Due to Mac port forwarding issues, run Queen and Worker VMs on Linux hosts for this demo. G5g runs host tools only.
 - All ML/inference stays host-side; no CUDA/NVML in the VM.
 - All actions use documented Secure9P/console commands and namespaces; no ad-hoc RPC.
 - Live GPU bridge publish must be active for non-mock PEFT flows; the demo is blocked if `/gpu/models` is not exposed.
@@ -3952,8 +3952,8 @@ Deliverables:
 **Runbook (documented commands only; SwarmUI-first)**
 0) Framing line: “Cohesix is not an ML system. It is a control-plane OS that decides when learning can change a system.”
 1) Host readiness on the Mac queen host: `./bin/coh doctor --mock` (omit `--mock` to validate NVML/QEMU on a configured host).
-2) Boot queen (QEMU) on the Mac host: `./qemu/run.sh`.
-3) Launch SwarmUI on the Mac host first (observational): `./bin/swarmui`.
+2) Boot queen (QEMU) on a Linux host: `./qemu/run.sh`.
+3) Launch SwarmUI on the same Linux host first (observational): `./bin/swarmui`.
    - Live Hive is read-only and reflects sessions/pressure/root-cut and worker activity.
    - Use the embedded Cohesix console prompt in SwarmUI for core verbs (demo it explicitly):
      - `help`
@@ -3961,13 +3961,13 @@ Deliverables:
      - `attach queen`
    - SwarmUI’s embedded console supports core verbs only; CLI-only commands must use `cohsh`.
 4) When a required action is not available in SwarmUI, quit SwarmUI and switch to cohsh (host tools drive the story):
-   - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337` (use `127.0.0.1` when on the Mac host)
+   - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337`
    - `attach queen`
    - `cat /proc/lifecycle/state` (optionally `/proc/lifecycle/reason`, `/proc/lifecycle/since`)
-5) Bring up the Jetson Worker VM (architecture-complete path):
+5) Bring up the Jetson Worker VM on a Linux host (architecture-complete path):
    - Boot the Jetson worker VM using the same release bundle runner (on the Jetson host):
      - `./qemu/run.sh`
-   - Mint a worker ticket on the queen host (Mac) and pass it to Jetson:
+   - Mint a worker ticket on the queen host (Linux) and pass it to Jetson:
      - `./bin/cohsh --mint-ticket --role worker-heartbeat --ticket-subject jetson-1`
      - (Alternative) `./bin/swarmui --mint-ticket --role worker-heartbeat --ticket-subject jetson-1`
    - On Jetson, attach as the worker role over TCP (outbound only per `docs/NETWORK_CONFIG.md`):
@@ -3977,7 +3977,7 @@ Deliverables:
      - `spawn heartbeat ticks=100`
      - `ls /worker`
 6) Keep Live Hive active (optional): `spawn heartbeat ticks=100`.
-7) Host tools prove control-plane surface (Mac or G5g, host tools only):
+7) Host tools prove control-plane surface (Linux queen host or G5g, host tools only):
    - Live GPU bridge publish (required for `/gpu/models` and PEFT):
      - `./bin/gpu-bridge-host --publish --tcp-host <queen-host> --tcp-port 31337 --auth-token changeme --interval-ms 1000 --registry demo/peft_registry`
      - Optional sanity: `./bin/gpu-bridge-host --list`
