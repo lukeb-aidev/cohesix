@@ -4022,6 +4022,76 @@ Deliverables:
 
 ---
 
+## Activity — LeJEPA Cloud/Edge Demo (Post-M24b, No Code Changes)
+
+**Status:** Draft.
+
+**Purpose:** Demonstrate LeJEPA’s heuristics-free training flow on g5g (ViT-S/16) with an edge-aligned ViT-Ti/16 deployment on Jetson, using Cohesix’s live GPU bridge publish + PEFT import/activate to close the loop without introducing new protocols.
+
+**Constraints**
+- No code changes; demo uses existing release bundle binaries and current repo artifacts only.
+- All training/inference remains host-side; no CUDA/NVML in the VM.
+- Live GPU bridge publish is required; the demo is blocked if `/gpu/models` is not visible.
+- Use existing Secure9P/console semantics only; no ad-hoc RPC.
+- SwarmUI must not run concurrently with cohsh (quit SwarmUI before cohsh).
+
+**Inputs**
+- Models (already installed via Hugging Face):
+  - g5g: `/home/models/vit-s16` (WinKawaks/vit-small-patch16-224)
+  - Jetson: `/mnt/nvme/models/vit-ti16` (WinKawaks/vit-tiny-patch16-224)
+- `docs/GPU_NODES.md`, `docs/HOST_TOOLS.md`, `docs/OPERATOR_WALKTHROUGH.md`
+- Release bundle binaries on Mac (Queen host), Jetson (Worker VM), and g5g (host tools)
+
+**Runbook (documented commands only)**
+0) Verify model dirs (host-side only):
+   - g5g: `ls /home/models/vit-s16`
+   - Jetson: `ls /mnt/nvme/models/vit-ti16`
+1) Boot Queen on Mac: `./qemu/run.sh`
+2) Launch SwarmUI on Mac: `./bin/swarmui`
+   - Use the embedded console for `help`, `ping`, `attach queen`.
+3) Start Live GPU Bridge publish on g5g (host tools only):
+   - `./bin/gpu-bridge-host --publish --tcp-host <queen-host> --tcp-port 31337 --interval-ms 1000 --registry /home/models/peft_registry`
+   - Sanity: `./bin/coh --host <queen-host> --port 31337 gpu list`
+   - Confirm `/gpu/models` is visible (quit SwarmUI first if using cohsh):
+     - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337`
+     - `ls /gpu/models`
+     - `ls /gpu/telemetry`
+4) Bring up Jetson Worker VM (edge path):
+   - Boot worker VM on Jetson: `./qemu/run.sh`
+   - Mint ticket on Queen host (Mac):
+     - `./bin/cohsh --mint-ticket --role worker-heartbeat --ticket-subject jetson-1`
+   - Attach from Jetson (outbound only):
+     - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337 --role worker-heartbeat --ticket "$WORKER_TICKET"`
+   - Verify worker presence on Queen:
+     - `ls /worker` (or `/shard/<label>/worker` if sharding enabled)
+5) LeJEPA training (host-side, outside Cohesix):
+   - Run your LeJEPA training harness on g5g using `/home/models/vit-s16` as the base.
+   - Emit bounded telemetry records that conform to `gpu-telemetry/v1` via the bridge (no schema changes).
+   - Produce adapter artifacts into `/home/models/lejepa/adapter/` (e.g., `adapter.safetensors`, `lora.json`, `metrics.json`).
+6) Import + publish adapter (live refresh into `/gpu/models`):
+   - `./bin/coh --host <queen-host> --port 31337 peft import --publish --model lejepa-edge-v1 --from /home/models/lejepa/adapter --registry /home/models/peft_registry`
+   - `./bin/coh --host <queen-host> --port 31337 peft activate --model lejepa-edge-v1 --registry /home/models/peft_registry`
+   - Verify pointer (quit SwarmUI before cohsh):
+     - `ls /gpu/models/available`
+     - `cat /gpu/models/active`
+7) Observe Live Hive overlays (SwarmUI):
+   - Relaunch SwarmUI and confirm telemetry text overlays + details panel show bounded lines.
+   - Confirm the active model id appears in the worker telemetry stream (per existing schema/labels).
+8) Edge validation (Jetson host-side inference):
+   - Load `/mnt/nvme/models/vit-ti16` and apply the newly published adapter (host-side only).
+   - Confirm telemetry continues to flow into `/gpu/telemetry` and `/queen/telemetry`.
+
+**Checks**
+- `/gpu/models` is visible after publish and contains `lejepa-edge-v1`.
+- `peft import` and `peft activate` update `/gpu/models/available` and `/gpu/models/active`.
+- Live Hive overlays show bounded telemetry lines (no UI polling logic).
+- All training/inference remains host-side; no in-VM GPU or new RPC.
+
+**Deliverables**
+- Demo notes and artifacts under `demo/` (no code changes, no release bundle changes).
+
+---
+
 ## Activity — SwarmUI UI Presentation Regression (Post-M24, Playwright)
 
 **Status:** Complete.
