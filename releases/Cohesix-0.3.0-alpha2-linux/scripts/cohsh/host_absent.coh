@@ -1,0 +1,9 @@
+# Author: Lukas Bower
+# Purpose: Confirm /host entries are available when ecosystem.host.enable is true.
+attach queen
+EXPECT OK
+ls /host
+EXPECT OK
+EXPECT SUBSTR path=/host
+EXPECT SUBSTR entries=4
+quit

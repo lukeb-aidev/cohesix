@@ -87,7 +87,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Complete |
 | [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Complete |
 | [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Complete |
-| [24b](#24b) | Live GPU Bridge Wiring + PEFT Live Flow + Live Hive Telemetry Text | Pending |
+| [24b](#24b) | Live GPU Bridge Wiring + PEFT Live Flow + Live Hive Telemetry Text | Complete |
 | [25a](#25a) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [25b](#25b) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [25c](#25c) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Pending |
@@ -3765,7 +3765,7 @@ Deliverables:
 ## Milestone 24b — Live GPU Bridge Wiring + PEFT Live Flow + Live Hive Telemetry Text <a id="24b"></a> 
 [Milestones](#Milestones)
 
-**Status:** Pending — non-mock PEFT flows remain blocked because `/gpu/models` is not published in the live VM; host telemetry remains mock-only; Live Hive lacks bounded telemetry text overlays.
+**Status:** Complete — live `/gpu/models` publish verified, non-mock PEFT flow unblocked, Live Hive telemetry text overlays validated.
 
 **Why now (adoption):** Operators can’t complete a non-mock PEFT flow because the live VM still does not expose `/gpu/models/*`. The Queen currently returns `ERR LS reason=policy detail=invalid-path` on `/gpu/models`, so `coh peft import --host ...` has nowhere to publish the registry. This milestone wires the host GPU bridge into the live namespace and adds bounded telemetry text in Live Hive without introducing new protocols.
 
@@ -4024,7 +4024,7 @@ Deliverables:
 
 ## Activity — LeJEPA Cloud/Edge Demo (Post-M24b, No Code Changes)
 
-**Status:** Draft.
+**Status:** Complete.
 
 **Purpose:** Demonstrate LeJEPA’s heuristics-free training flow on g5g (ViT-S/16) with an edge-aligned ViT-Ti/16 deployment on Jetson, using Cohesix’s live GPU bridge publish + PEFT import/activate to close the loop without introducing new protocols.
 

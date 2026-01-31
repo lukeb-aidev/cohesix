@@ -1,0 +1,197 @@
+<!-- Copyright © 2025 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Describe the Cohesix system architecture, component responsibilities, and boundary constraints. -->
+<!-- Author: Lukas Bower -->
+
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Generated manifest snippet consumed by docs/ARCHITECTURE.md. -->
+
+### Root-task manifest schema (generated)
+- `meta.author`: `Lukas Bower`
+- `meta.purpose`: `Root-task manifest input for coh-rtc.`
+- `root_task.schema`: `1.5`
+- `profile.name`: `virt-aarch64`
+- `profile.kernel`: `true`
+- `event_pump.tick_ms`: `5`
+- `secure9p.msize`: `8192`
+- `secure9p.walk_depth`: `8`
+- `secure9p.tags_per_session`: `16`
+- `secure9p.batch_frames`: `1`
+- `secure9p.short_write.policy`: `reject`
+- `ticket_limits.max_scopes`: `8`
+- `ticket_limits.max_scope_path_len`: `128`
+- `ticket_limits.max_scope_rate_per_s`: `64`
+- `ticket_limits.bandwidth_bytes`: `131072`
+- `ticket_limits.cursor_resumes`: `16`
+- `ticket_limits.cursor_advances`: `256`
+- `cas.enable`: `true`
+- `cas.store.chunk_bytes`: `128`
+- `cas.delta.enable`: `true`
+- `cas.signing.required`: `true`
+- `cas.signing.key_path`: `resources/fixtures/cas_signing_key.hex`
+- `telemetry.ring_bytes_per_worker`: `1024`
+- `telemetry.frame_schema`: `legacy-plaintext`
+- `telemetry.cursor.retain_on_boot`: `false`
+- `telemetry_ingest.max_segments_per_device`: `4`
+- `telemetry_ingest.max_bytes_per_segment`: `32768`
+- `telemetry_ingest.max_total_bytes_per_device`: `131072`
+- `telemetry_ingest.eviction_policy`: `evict-oldest`
+- `lifecycle.initial_state`: `BOOTING`
+- `lifecycle.auto_transitions`: `BOOTING->ONLINE`
+- `observability.proc_9p.sessions`: `true`
+- `observability.proc_9p.outstanding`: `true`
+- `observability.proc_9p.short_writes`: `true`
+- `observability.proc_9p.sessions_bytes`: `8192`
+- `observability.proc_9p.outstanding_bytes`: `128`
+- `observability.proc_9p.short_writes_bytes`: `128`
+- `observability.proc_9p_session.active`: `true`
+- `observability.proc_9p_session.state`: `true`
+- `observability.proc_9p_session.since_ms`: `true`
+- `observability.proc_9p_session.owner`: `true`
+- `observability.proc_9p_session.active_bytes`: `128`
+- `observability.proc_9p_session.state_bytes`: `64`
+- `observability.proc_9p_session.since_ms_bytes`: `64`
+- `observability.proc_9p_session.owner_bytes`: `96`
+- `observability.proc_ingest.p50_ms`: `true`
+- `observability.proc_ingest.p95_ms`: `true`
+- `observability.proc_ingest.backpressure`: `true`
+- `observability.proc_ingest.dropped`: `true`
+- `observability.proc_ingest.queued`: `true`
+- `observability.proc_ingest.watch`: `true`
+- `observability.proc_ingest.p50_ms_bytes`: `64`
+- `observability.proc_ingest.p95_ms_bytes`: `64`
+- `observability.proc_ingest.backpressure_bytes`: `64`
+- `observability.proc_ingest.dropped_bytes`: `64`
+- `observability.proc_ingest.queued_bytes`: `64`
+- `observability.proc_ingest.watch_max_entries`: `16`
+- `observability.proc_ingest.watch_line_bytes`: `192`
+- `observability.proc_ingest.watch_min_interval_ms`: `50`
+- `observability.proc_ingest.latency_samples`: `32`
+- `observability.proc_ingest.latency_tolerance_ms`: `5`
+- `observability.proc_ingest.counter_tolerance`: `1`
+- `observability.proc_root.reachable`: `true`
+- `observability.proc_root.last_seen_ms`: `true`
+- `observability.proc_root.cut_reason`: `true`
+- `observability.proc_root.reachable_bytes`: `32`
+- `observability.proc_root.last_seen_ms_bytes`: `64`
+- `observability.proc_root.cut_reason_bytes`: `64`
+- `observability.proc_pressure.busy`: `true`
+- `observability.proc_pressure.quota`: `true`
+- `observability.proc_pressure.cut`: `true`
+- `observability.proc_pressure.policy`: `true`
+- `observability.proc_pressure.busy_bytes`: `64`
+- `observability.proc_pressure.quota_bytes`: `64`
+- `observability.proc_pressure.cut_bytes`: `64`
+- `observability.proc_pressure.policy_bytes`: `64`
+- `ui_providers.proc_9p.sessions`: `true`
+- `ui_providers.proc_9p.outstanding`: `true`
+- `ui_providers.proc_9p.short_writes`: `true`
+- `ui_providers.proc_ingest.p50_ms`: `true`
+- `ui_providers.proc_ingest.p95_ms`: `true`
+- `ui_providers.proc_ingest.backpressure`: `true`
+- `ui_providers.policy_preflight.req`: `false`
+- `ui_providers.policy_preflight.diff`: `false`
+- `ui_providers.updates.manifest`: `true`
+- `ui_providers.updates.status`: `true`
+- `client_policies.cohsh.pool.control_sessions`: `2`
+- `client_policies.cohsh.pool.telemetry_sessions`: `4`
+- `client_policies.cohsh.tail.poll_ms_default`: `1000`
+- `client_policies.cohsh.tail.poll_ms_min`: `250`
+- `client_policies.cohsh.tail.poll_ms_max`: `10000`
+- `client_policies.cohsh.host_telemetry.nvidia_poll_ms`: `1000`
+- `client_policies.cohsh.host_telemetry.systemd_poll_ms`: `2000`
+- `client_policies.cohsh.host_telemetry.docker_poll_ms`: `2000`
+- `client_policies.cohsh.host_telemetry.k8s_poll_ms`: `5000`
+- `client_policies.coh.mount.root`: `/`
+- `client_policies.coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
+- `client_policies.coh.telemetry.root`: `/queen/telemetry`
+- `client_policies.coh.telemetry.max_devices`: `32`
+- `client_policies.coh.telemetry.max_segments_per_device`: `4`
+- `client_policies.coh.telemetry.max_bytes_per_segment`: `32768`
+- `client_policies.coh.telemetry.max_total_bytes_per_device`: `131072`
+- `client_policies.retry.max_attempts`: `3`
+- `client_policies.retry.backoff_ms`: `200`
+- `client_policies.retry.ceiling_ms`: `2000`
+- `client_policies.retry.timeout_ms`: `5000`
+- `client_policies.heartbeat.interval_ms`: `15000`
+- `client_paths.queen_ctl`: `/queen/ctl`
+- `client_paths.queen_lifecycle_ctl`: `/queen/lifecycle/ctl`
+- `client_paths.log`: `/log/queen.log`
+- `swarmui.ticket_scope`: `per-ticket`
+- `swarmui.cache.enabled`: `false`
+- `swarmui.cache.max_bytes`: `262144`
+- `swarmui.cache.ttl_s`: `3600`
+- `swarmui.hive.frame_cap_fps`: `60`
+- `swarmui.hive.step_ms`: `16`
+- `swarmui.hive.lod_zoom_out`: `0.7`
+- `swarmui.hive.lod_zoom_in`: `1.25`
+- `swarmui.hive.lod_event_budget`: `512`
+- `swarmui.hive.snapshot_max_events`: `4096`
+- `swarmui.hive.overlay_lines`: `3`
+- `swarmui.hive.detail_lines`: `50`
+- `swarmui.hive.line_cap_bytes`: `160`
+- `swarmui.hive.per_worker_bytes`: `2048`
+- `swarmui.paths.telemetry_root`: `/worker`
+- `swarmui.paths.proc_ingest_root`: `/proc/ingest`
+- `swarmui.paths.worker_root`: `/worker`
+- `swarmui.paths.namespace_roots`: `/proc, /queen, /worker, /log, /gpu`
+- `cache.kernel_ops`: `true`
+- `cache.dma_clean`: `true`
+- `cache.dma_invalidate`: `true`
+- `cache.unify_instructions`: `false`
+- `features.net_console`: `true`
+- `features.serial_console`: `true`
+- `features.std_console`: `false`
+- `features.std_host_tools`: `false`
+- `namespaces.role_isolation`: `true`
+- `sharding.enabled`: `true`
+- `sharding.shard_bits`: `8`
+- `sharding.legacy_worker_alias`: `true`
+- `tickets`: 5 entries
+- `manifest.sha256`: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`
+
+### Namespace mounts (generated)
+- service `logs` → `/log`
+
+### Sharded worker namespace (generated)
+- `sharding.enabled`: `true`
+- `sharding.shard_bits`: `8`
+- `sharding.legacy_worker_alias`: `true`
+- shard labels: `00..ff` (count: 256)
+- canonical worker path: `/shard/<label>/worker/<id>/telemetry`
+- legacy alias: `/worker/<id>/telemetry`
+
+### Sidecars section (generated)
+- `sidecars.modbus.enable`: `false`
+- `sidecars.modbus.mount_at`: `/bus`
+- `sidecars.modbus.adapters`: `(none)`
+- `sidecars.dnp3.enable`: `false`
+- `sidecars.dnp3.mount_at`: `/bus`
+- `sidecars.dnp3.adapters`: `(none)`
+- `sidecars.lora.enable`: `false`
+- `sidecars.lora.mount_at`: `/lora`
+- `sidecars.lora.adapters`: `(none)`
+
+### Ecosystem section (generated)
+- `ecosystem.host.enable`: `true`
+- `ecosystem.host.mount_at`: `/host`
+- `ecosystem.host.providers`: `systemd`, `k8s`, `docker`, `nvidia`
+- `/host` namespace mounted at `/host` when enabled.
+- `ecosystem.audit.enable`: `false`
+- `ecosystem.audit.journal_max_bytes`: `8192`
+- `ecosystem.audit.decisions_max_bytes`: `4096`
+- `ecosystem.audit.replay_enable`: `false`
+- `ecosystem.audit.replay_max_entries`: `64`
+- `ecosystem.audit.replay_ctl_max_bytes`: `1024`
+- `ecosystem.audit.replay_status_max_bytes`: `1024`
+- `ecosystem.policy.enable`: `false`
+- `ecosystem.policy.queue_max_entries`: `32`
+- `ecosystem.policy.queue_max_bytes`: `4096`
+- `ecosystem.policy.ctl_max_bytes`: `2048`
+- `ecosystem.policy.status_max_bytes`: `512`
+- `ecosystem.policy.rules`: `queen-ctl` → `/queen/ctl`
+- `ecosystem.policy.rules`: `systemd-restart` → `/host/systemd/*/restart`
+- `ecosystem.models.enable`: `false`
+- Nodes appear only when enabled.
+
+_Generated from `configs/root_task.toml` (sha256: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`)._

@@ -1,0 +1,26 @@
+# Author: Lukas Bower
+# Purpose: Exercise telemetry ingest create, push, oversize rejection, and eviction behaviour.
+attach queen
+telemetry push scripts/cohsh/fixtures/telemetry_push_small.txt --device telemetry-demo
+EXPECT OK
+EXPECT SUBSTR seg_id=seg-000001
+cat /queen/telemetry/telemetry-demo/latest
+EXPECT SUBSTR seg-000001
+telemetry push scripts/cohsh/fixtures/telemetry_push_small.txt --device telemetry-demo
+EXPECT OK
+EXPECT SUBSTR seg_id=seg-000002
+telemetry push scripts/cohsh/fixtures/telemetry_push_small.txt --device telemetry-demo
+EXPECT OK
+EXPECT SUBSTR seg_id=seg-000003
+telemetry push scripts/cohsh/fixtures/telemetry_push_small.txt --device telemetry-demo
+EXPECT OK
+EXPECT SUBSTR seg_id=seg-000004
+telemetry push scripts/cohsh/fixtures/telemetry_push_small.txt --device telemetry-demo
+EXPECT OK
+EXPECT SUBSTR seg_id=seg-000005
+cat /queen/telemetry/telemetry-demo/seg/seg-000001
+EXPECT ERR
+telemetry push scripts/cohsh/fixtures/telemetry_push_oversize.txt --device telemetry-demo
+EXPECT ERR
+EXPECT SUBSTR max_bytes_per_segment
+quit
