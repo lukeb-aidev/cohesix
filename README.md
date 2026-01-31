@@ -15,11 +15,14 @@
 </table>
 
 Releases are available in [releases/](releases/).
-Tested platforms:
+**Tested platforms**:
 - Apple Silicon M-series (macOS 26 host, Queen VM + host tools)
 - AWS g5g.xlarge (host tools only)
 - AWS t4g.small (arm64 build host)
 - NVIDIA JetPack 6.2.1 (worker VM path)
+
+**Models Tested**:
+- HuggingFaceTB/SmolVLM-500M-Instruct
 
 ## Why Cohesix?
 
@@ -56,8 +59,6 @@ Operators interact with Cohesix through two consoles:
 - a **remote TCP console** consumed by the `cohsh` shell, which mirrors serial semantics and provides the primary operational interface from Unix-like hosts.
 
 The intended deployment target is **physical ARM64 hardware booted via UEFI**. Today, QEMU `aarch64/virt` is used for bring-up, CI, and testing, with the expectation that QEMU behaviour closely mirrors the eventual hardware profiles. Cohesix is **not** a general-purpose operating system and deliberately avoids POSIX semantics, libc, dynamic linking, and in-VM hardware stacks to keep the system small and analyzable.
-
-**Models Tested:** HuggingFaceTB/SmolVLM-500M-Instruct
 
 In short, Cohesix treats **orchestration itself as an operating-system problem**, with authority, lifecycle, and failure handling as first-class concerns.
 
