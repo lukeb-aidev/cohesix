@@ -29,8 +29,8 @@ to the TCP console to drive and observe the system.
 - `cohesix` (Python) - thin client with mock and TCP backends; examples under `python/cohesix-py/examples/`.
 - `swarmui` - UI for replay or live observation with an embedded console panel (core verbs only).
 - `cas-tool` - package and upload bundles to the `/updates` namespace (optional).
-- `gpu-bridge-host` - host GPU discovery for the `/gpu` namespace (optional).
-- `host-sidecar-bridge` - publish **mock** host providers into `/host` for policy/CI validation (optional).
+- `gpu-bridge-host` - host GPU discovery + live `/gpu/models` publish for the `/gpu` namespace (optional).
+- `host-sidecar-bridge` - publish mock or live host providers into `/host` for policy/CI validation and telemetry snapshots (optional).
 See `docs/HOST_TOOLS.md` for details.
 
 ## 0.3.0 highlights (milestones 21a-24b)
@@ -115,6 +115,7 @@ Spawn notes:
   - ops=<n> — operation budget (budget)
 - GPU spawns require a lease spec: `gpu_id`, `mem_mb`, `streams`, `ttl_s`. Optional: `priority`, `budget_ttl_s`, `budget_ops`.
 - If `/gpu` is empty, run the host GPU bridge (`./bin/gpu-bridge-host --mock --list`) and try again.
+- For non-mock PEFT flows, use a live publish (`./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme`) so `/gpu/models` is visible.
 
 Other optional args you can try:
 - `test --mode full --timeout 120` — full self-tests with a longer timeout.
@@ -232,19 +233,23 @@ PY
 ```
 What this does: pads the trace to the 128-byte CAS chunk size, packs it into a signed update bundle (epoch 1), then uploads it to the queen’s `/updates` namespace over the TCP console using your minted queen ticket.
 
-### gpu-bridge-host (mock list)
+### gpu-bridge-host (mock list + live publish)
 ```bash
 ./bin/gpu-bridge-host --mock --list
+./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
 ```
 NVML discovery is enabled by default on Linux bundles; use `--no-default-features` to omit NVML.
+Note: `/gpu/models` and `/gpu/telemetry/schema.json` appear only after a live publish.
 
-### host-sidecar-bridge (mock publishing)
+### host-sidecar-bridge (mock + live publishing)
 ```bash
 ./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider nvidia
 ```
 Publish mock provider data over TCP (bundle includes TCP support):
 ```bash
 ./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
+./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --watch \
+  --provider systemd --provider k8s --provider docker --provider nvidia
 ```
 The `/host` namespace must be enabled in `configs/root_task.toml`.
 
