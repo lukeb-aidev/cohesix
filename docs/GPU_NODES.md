@@ -18,6 +18,18 @@ GPU workers (`worker-gpu`) are another worker type under the hive’s Queen, not
   - WorkerGpu reads `/gpu/models/active` and annotates telemetry with `model_id` / `lora_id` but cannot upload artefacts.
   - `/gpu/models` is published into the live VM by the host GPU bridge via `/gpu/bridge/ctl`; it is absent until the publish step completes.
 
+### Live publish sequence
+```mermaid
+sequenceDiagram
+  participant Host as gpu-bridge-host
+  participant Queen as Queen/NineDoor
+  participant VM as /gpu namespace
+  Host->>Queen: append snapshot (begin/b64/end) to /gpu/bridge/ctl
+  Queen->>VM: install /gpu/<id>/* nodes
+  Queen->>VM: install /gpu/models/* + /gpu/telemetry/schema.json
+  Note over VM: /gpu/models is absent until publish succeeds
+```
+
 ## 3. Host GPU Worker Architecture
 - **Process**: Rust binary running on macOS or a Linux edge node, outside the Cohesix instance, paired with the GPU bridge host.
 - **Responsibilities**:

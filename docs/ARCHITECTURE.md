@@ -195,3 +195,38 @@
 - Nodes appear only when enabled.
 
 _Generated from `configs/root_task.toml` (sha256: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`)._
+
+## Live GPU publish + PEFT refresh (Milestone 24b)
+The live publish path keeps `/gpu/models/*` and `/gpu/telemetry/schema.json` out of the VM until the host bridge pushes a bounded snapshot. PEFT import optionally refreshes the live model registry immediately after updating the host registry.
+
+```mermaid
+flowchart LR
+  subgraph Host
+    GBH[gpu-bridge-host]
+    COH[coh peft import]
+    REG[host model registry]
+  end
+  subgraph VM
+    ND[NineDoor /gpu/bridge/ctl]
+    GPU[/gpu/<id>/*]
+    MODELS[/gpu/models/*]
+    SCHEMA[/gpu/telemetry/schema.json]
+  end
+  REG -->|writes| COH
+  COH -->|--publish/--refresh-gpu-models| GBH
+  GBH -->|bounded snapshot| ND
+  ND --> GPU
+  ND --> MODELS
+  ND --> SCHEMA
+```
+
+## Live Hive telemetry path (Milestone 24b)
+Live Hive renders only what the backend tailers ingest. Polling bounds and line caps live in `cohsh-core`, not in the UI.
+
+```mermaid
+flowchart LR
+  W[worker telemetry file\n/shard/<label>/worker/<id>/telemetry] --> TAIL[cohsh-core tailer]
+  TAIL --> BUF[bounded line buffers]
+  BUF --> UI[SwarmUI Live Hive overlays + detail panel]
+  UI -->|read-only| PROC[/proc/root/*, /proc/pressure/*, /proc/9p/session/active]
+```

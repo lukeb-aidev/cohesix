@@ -80,6 +80,7 @@ python3 -m pytest -k cohesix_parity tools/cohesix-py/tests/test_parity.py
 ## Troubleshooting
 - `ERR AUTH`: set `COHSH_AUTH_TOKEN` (or `--auth-token` equivalents) to match the Queen.
 - Empty `/gpu`: ensure the host GPU bridge integration is running; use `./bin/gpu-bridge-host --mock --list` for mock demos.
+- Non-mock PEFT flows require `/gpu/models` to be visible; run `./bin/gpu-bridge-host --publish ...` or `coh peft import --publish` to refresh the live registry.
 - `--mock` is the fastest path for demos and CI; live runs require a running Queen VM.
 
 ## Real-world use cases (examples)
