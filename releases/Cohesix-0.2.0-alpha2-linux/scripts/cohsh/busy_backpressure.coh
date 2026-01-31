@@ -1,0 +1,18 @@
+# Author: Lukas Bower
+# Purpose: Validate /proc/pressure nodes are exposed for back-pressure visibility.
+attach queen
+EXPECT OK
+cat /proc/pressure/busy
+EXPECT OK
+EXPECT SUBSTR path=/proc/pressure/busy
+cat /proc/pressure/quota
+EXPECT OK
+EXPECT SUBSTR path=/proc/pressure/quota
+cat /proc/pressure/cut
+EXPECT OK
+EXPECT SUBSTR path=/proc/pressure/cut
+cat /proc/pressure/policy
+EXPECT OK
+EXPECT SUBSTR path=/proc/pressure/policy
+quit
+EXPECT OK

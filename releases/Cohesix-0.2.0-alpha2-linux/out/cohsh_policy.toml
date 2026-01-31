@@ -1,0 +1,20 @@
+# Author: Lukas Bower
+# Purpose: Generated cohsh client policy derived from configs/root_task.toml.
+[meta]
+manifest_sha256 = "dbb26505c014d77a48d9d1487a8cddce63ff9dabaa24e9a997eb53f2bf8859e5"
+
+[cohsh.pool]
+control_sessions = 2
+telemetry_sessions = 4
+
+[retry]
+max_attempts = 3
+backoff_ms = 200
+ceiling_ms = 2000
+timeout_ms = 5000
+
+[heartbeat]
+interval_ms = 15000
+
+[trace]
+max_bytes = 1048576
