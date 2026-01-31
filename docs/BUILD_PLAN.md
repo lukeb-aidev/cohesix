@@ -4034,6 +4034,7 @@ Deliverables:
 - Live GPU bridge publish is required; the demo is blocked if `/gpu/models` is not visible.
 - Use existing Secure9P/console semantics only; no ad-hoc RPC.
 - SwarmUI must not run concurrently with cohsh (quit SwarmUI before cohsh).
+- Due to Mac port forwarding issues, run Queen and Worker VMs on Linux hosts for this demo.
 
 **Inputs**
 - Models (already installed via Hugging Face):
@@ -4046,8 +4047,8 @@ Deliverables:
 0) Verify model dirs (host-side only):
    - g5g: `ls /home/models/vit-s16`
    - Jetson: `ls /mnt/nvme/models/vit-ti16`
-1) Boot Queen on Mac: `./qemu/run.sh`
-2) Launch SwarmUI on Mac: `./bin/swarmui`
+1) Boot Queen on a Linux host: `./qemu/run.sh`
+2) Launch SwarmUI on the same Linux host: `./bin/swarmui`
    - Use the embedded console for `help`, `ping`, `attach queen`.
 3) Start Live GPU Bridge publish on g5g (host tools only):
    - `./bin/gpu-bridge-host --publish --tcp-host <queen-host> --tcp-port 31337 --interval-ms 1000 --registry /home/models/peft_registry`
