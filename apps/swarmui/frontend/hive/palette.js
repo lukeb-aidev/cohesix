@@ -8,5 +8,11 @@ export const buildHivePalette = (tokens) => ({
   heat: hexToNumber(tokens.colors.heat),
   cluster: hexToNumber(tokens.colors.cluster),
   flow: hexToNumber(tokens.colors.flow),
+  queen: hexToNumber(tokens.colors.queen),
+  worker: hexToNumber(tokens.colors.worker),
+  workerHeart: hexToNumber(tokens.colors.workerHeart),
+  workerGpu: hexToNumber(tokens.colors.workerGpu),
+  workerLora: hexToNumber(tokens.colors.workerLora),
+  workerBus: hexToNumber(tokens.colors.workerBus),
   label: hexToNumber(tokens.colors.label),
 });

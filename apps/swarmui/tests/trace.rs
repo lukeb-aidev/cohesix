@@ -125,42 +125,42 @@ fn trace_hive_snapshot() -> SwarmUiHiveSnapshot {
     let workers = vec![
         SwarmUiHiveAgent {
             id: "worker-heart-1".to_owned(),
-            role: "worker".to_owned(),
+            role: "worker-heartbeat".to_owned(),
             namespace: "/worker/worker-heart-1".to_owned(),
         },
         SwarmUiHiveAgent {
             id: "worker-heart-2".to_owned(),
-            role: "worker".to_owned(),
+            role: "worker-heartbeat".to_owned(),
             namespace: "/worker/worker-heart-2".to_owned(),
         },
         SwarmUiHiveAgent {
             id: "worker-heart-3".to_owned(),
-            role: "worker".to_owned(),
+            role: "worker-heartbeat".to_owned(),
             namespace: "/worker/worker-heart-3".to_owned(),
         },
         SwarmUiHiveAgent {
             id: "worker-gpu-1".to_owned(),
-            role: "worker".to_owned(),
+            role: "worker-gpu".to_owned(),
             namespace: "/worker/worker-gpu-1".to_owned(),
         },
         SwarmUiHiveAgent {
             id: "worker-gpu-2".to_owned(),
-            role: "worker".to_owned(),
+            role: "worker-gpu".to_owned(),
             namespace: "/worker/worker-gpu-2".to_owned(),
         },
         SwarmUiHiveAgent {
             id: "worker-gpu-3".to_owned(),
-            role: "worker".to_owned(),
+            role: "worker-gpu".to_owned(),
             namespace: "/worker/worker-gpu-3".to_owned(),
         },
         SwarmUiHiveAgent {
             id: "worker-heart-4".to_owned(),
-            role: "worker".to_owned(),
+            role: "worker-heartbeat".to_owned(),
             namespace: "/worker/worker-heart-4".to_owned(),
         },
         SwarmUiHiveAgent {
             id: "worker-heart-5".to_owned(),
-            role: "worker".to_owned(),
+            role: "worker-heartbeat".to_owned(),
             namespace: "/worker/worker-heart-5".to_owned(),
         },
     ];
@@ -241,6 +241,7 @@ fn hive_event(
         seq,
         kind,
         agent: agent.id.clone(),
+        role: Some(agent.role.clone()),
         namespace: agent.namespace.clone(),
         detail: Some(detail.to_owned()),
         reason: None,

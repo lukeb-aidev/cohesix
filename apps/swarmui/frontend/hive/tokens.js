@@ -57,6 +57,12 @@ export const readHiveTokens = (root = document.documentElement) => {
       heat: cssColor(readCssVar(root, "--color-hive-heat"), "#53e3c2"),
       cluster: cssColor(readCssVar(root, "--color-hive-cluster"), "#55607a"),
       flow: cssColor(readCssVar(root, "--color-hive-flow"), "#6dd7c2"),
+      queen: cssColor(readCssVar(root, "--color-hive-queen"), "#76e2a8"),
+      worker: cssColor(readCssVar(root, "--color-hive-worker"), "#55607a"),
+      workerHeart: cssColor(readCssVar(root, "--color-hive-worker-heart"), "#7ea7ff"),
+      workerGpu: cssColor(readCssVar(root, "--color-hive-worker-gpu"), "#f0a257"),
+      workerLora: cssColor(readCssVar(root, "--color-hive-worker-lora"), "#5fd3c7"),
+      workerBus: cssColor(readCssVar(root, "--color-hive-worker-bus"), "#ff6b6b"),
       label: cssColor(readCssVar(root, "--color-ink-soft"), "#b7bcc9"),
     },
   };

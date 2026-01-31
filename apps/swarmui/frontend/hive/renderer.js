@@ -25,19 +25,22 @@ const ensureSprite = (map, id, factory, layer) => {
 };
 
 export class HiveRenderer {
-  constructor(container, tokens, style, onClusterToggle) {
+  constructor(container, tokens, style, onClusterToggle, onAgentSelect) {
     this.container = container;
     this.tokens = tokens;
     this.style = style;
     this.palette = buildHivePalette(tokens);
     this.onClusterToggle = onClusterToggle;
+    this.onAgentSelect = onAgentSelect;
     this.view = { zoom: 1, panX: 0, panY: 0 };
     this.agentSprites = new Map();
     this.glowSprites = new Map();
+    this.agentLabels = new Map();
     this.clusterNodes = new Map();
     this.pollenPool = [];
     this.pulsePool = [];
     this.flowPool = [];
+    this.selectedAgent = null;
     this.app = new PIXI.Application({
       backgroundAlpha: 0,
       antialias: true,
@@ -52,6 +55,7 @@ export class HiveRenderer {
     this.clusterLayer = new PIXI.Container();
     this.heatLayer = new PIXI.Container();
     this.agentLayer = new PIXI.Container();
+    this.labelLayer = new PIXI.Container();
     this.pollenLayer = new PIXI.Container();
     this.pulseLayer = new PIXI.Container();
     this.root.addChild(this.flowLayer);
@@ -59,6 +63,7 @@ export class HiveRenderer {
     this.root.addChild(this.clusterLayer);
     this.root.addChild(this.pollenLayer);
     this.root.addChild(this.agentLayer);
+    this.root.addChild(this.labelLayer);
     this.root.addChild(this.pulseLayer);
     this.app.stage.addChild(this.root);
     this.agentTexture = this.buildCircleTexture(this.style.agentRadius);
@@ -69,8 +74,10 @@ export class HiveRenderer {
       this.style.flowBlobRadius,
       this.style.flowBlobInnerAlpha,
     );
+    this.needsResize = true;
     this.attachInteraction();
-    this.resize();
+    this.attachResizeObserver();
+    this.resizeIfNeeded();
   }
 
   buildCircleTexture(radius) {
@@ -116,11 +123,34 @@ export class HiveRenderer {
     });
   }
 
-  resize() {
+  attachResizeObserver() {
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", () => {
+        this.needsResize = true;
+      });
+      return;
+    }
+    this.resizeObserver = new ResizeObserver(() => {
+      this.needsResize = true;
+    });
+    this.resizeObserver.observe(this.container);
+  }
+
+  resizeIfNeeded() {
+    if (!this.needsResize) {
+      return;
+    }
     const rect = this.container.getBoundingClientRect();
-    this.width = rect.width;
-    this.height = rect.height;
+    const width = Math.max(1, Math.floor(rect.width));
+    const height = Math.max(1, Math.floor(rect.height));
+    if (this.width === width && this.height === height) {
+      this.needsResize = false;
+      return;
+    }
+    this.width = width;
+    this.height = height;
     this.app.renderer.resize(this.width, this.height);
+    this.needsResize = false;
   }
 
   resetView() {
@@ -130,7 +160,7 @@ export class HiveRenderer {
   }
 
   render(world, lodMode) {
-    this.resize();
+    this.resizeIfNeeded();
     this.root.position.set(this.width / 2 + this.view.panX, this.height / 2 + this.view.panY);
     this.root.scale.set(this.view.zoom);
     world.setBounds(this.width, this.height);
@@ -238,16 +268,42 @@ export class HiveRenderer {
     }
   }
 
+  roleTint(role) {
+    switch (String(role || "").toLowerCase()) {
+      case "queen":
+        return this.palette.queen;
+      case "worker-gpu":
+        return this.palette.workerGpu;
+      case "worker-lora":
+        return this.palette.workerLora;
+      case "worker-bus":
+        return this.palette.workerBus;
+      case "worker-heartbeat":
+      case "worker-heart":
+        return this.palette.workerHeart;
+      default:
+        return this.palette.worker;
+    }
+  }
+
+  setSelectedAgent(agentId) {
+    this.selectedAgent = agentId;
+  }
+
   drawAgents(world, lodMode) {
     const showAgents = lodMode === "detail" || lodMode === "balanced";
+    const existing = new Set();
     for (const [id, agent] of world.agents.entries()) {
+      existing.add(id);
       const cluster = world.clusters.get(agent.cluster);
       const collapsed = cluster && cluster.collapsed && agent.role !== "queen";
       if ((!showAgents && agent.role !== "queen") || collapsed) {
         const sprite = this.agentSprites.get(id);
         const glow = this.glowSprites.get(id);
+        const label = this.agentLabels.get(id);
         if (sprite) sprite.visible = false;
         if (glow) glow.visible = false;
+        if (label) label.visible = false;
         continue;
       }
       const position = world.positionForAgent(agent);
@@ -257,6 +313,13 @@ export class HiveRenderer {
         () => {
           const s = new PIXI.Sprite(this.agentTexture);
           s.anchor.set(0.5);
+          s.eventMode = "static";
+          s.cursor = "pointer";
+          s.on("pointertap", () => {
+            if (this.onAgentSelect) {
+              this.onAgentSelect(id);
+            }
+          });
           return s;
         },
         this.agentLayer,
@@ -275,21 +338,73 @@ export class HiveRenderer {
       sprite.visible = true;
       glow.visible = true;
       sprite.position.set(position.x, position.y);
+      const roleTint = this.roleTint(agent.role);
+      sprite.eventMode = agent.role === "queen" ? "none" : "static";
+      sprite.cursor = agent.role === "queen" ? "default" : "pointer";
       sprite.tint = agent.error > this.style.errorTintThreshold
         ? this.palette.error
-        : this.palette.agent;
+        : roleTint;
       const scale = this.style.agentScaleBase + agent.heat * this.style.agentScaleHeat;
-      sprite.scale.set(scale);
+      const selectedScale = id === this.selectedAgent ? 1.1 : 1.0;
+      sprite.scale.set(scale * selectedScale);
       glow.position.set(position.x, position.y);
       glow.tint = agent.error > this.style.errorGlowThreshold
         ? this.palette.error
-        : this.palette.heat;
+        : roleTint;
       glow.alpha = clamp(
         agent.heat + agent.error * this.style.glowErrorBoost,
         this.style.glowAlphaMin,
         this.style.glowAlphaMax,
       );
       glow.scale.set(this.style.glowScaleBase + agent.heat * this.style.glowScaleHeat);
+      if (agent.role !== "queen") {
+        const label = ensureSprite(
+          this.agentLabels,
+          id,
+          () => {
+            const text = new PIXI.Text("", {
+              fontFamily: this.style.labelFont,
+              fontSize: this.style.agentLabelSize,
+              fill: this.palette.label,
+            });
+            text.anchor.set(0.5);
+            return text;
+          },
+          this.labelLayer,
+        );
+        label.visible = true;
+        label.text = agent.labelIndex ? String(agent.labelIndex) : "";
+        label.position.set(
+          position.x + this.style.agentLabelOffset,
+          position.y - this.style.agentLabelOffset,
+        );
+      } else {
+        const label = this.agentLabels.get(id);
+        if (label) {
+          label.visible = false;
+        }
+      }
+    }
+    for (const [id, sprite] of this.agentSprites.entries()) {
+      if (!existing.has(id)) {
+        this.agentLayer.removeChild(sprite);
+        sprite.destroy();
+        this.agentSprites.delete(id);
+      }
+    }
+    for (const [id, glow] of this.glowSprites.entries()) {
+      if (!existing.has(id)) {
+        this.heatLayer.removeChild(glow);
+        glow.destroy();
+        this.glowSprites.delete(id);
+      }
+    }
+    for (const [id, label] of this.agentLabels.entries()) {
+      if (!existing.has(id)) {
+        this.labelLayer.removeChild(label);
+        label.destroy();
+        this.agentLabels.delete(id);
+      }
     }
   }
 
@@ -341,7 +456,51 @@ export class HiveRenderer {
   }
 
   destroy() {
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+    }
     this.app.destroy(true, { children: true });
+  }
+
+  getAgentScreenPositions() {
+    const rect = this.app.view.getBoundingClientRect();
+    const positions = [];
+    for (const [id, sprite] of this.agentSprites.entries()) {
+      if (!sprite.visible) {
+        continue;
+      }
+      const pos = sprite.getGlobalPosition();
+      positions.push({
+        id,
+        x: rect.left + pos.x,
+        y: rect.top + pos.y,
+      });
+    }
+    return positions;
+  }
+
+  getAgentStates() {
+    const states = [];
+    for (const [id, sprite] of this.agentSprites.entries()) {
+      states.push({
+        id,
+        visible: sprite.visible,
+        tint: sprite.tint,
+      });
+    }
+    return states;
+  }
+
+  getAgentLabels() {
+    const labels = [];
+    for (const [id, label] of this.agentLabels.entries()) {
+      labels.push({
+        id,
+        visible: label.visible,
+        text: label.text,
+      });
+    }
+    return labels;
   }
 }
 

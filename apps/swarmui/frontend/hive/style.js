@@ -1,6 +1,8 @@
 export const buildHiveStyle = (tokens) => {
   const flowBlobRadius = Math.max(6, tokens.sizes.flow * 6);
   const flowBlobSpacing = Math.max(8, flowBlobRadius * 1.6);
+  const agentLabelSize = Math.max(10, tokens.sizes.agent + 1);
+  const agentLabelOffset = Math.max(8, tokens.sizes.agent + 4);
   return {
     agentRadius: tokens.sizes.agent,
     glowRadius: tokens.sizes.glow,
@@ -39,6 +41,8 @@ export const buildHiveStyle = (tokens) => {
     clusterAlphaCollapsed: 0.24,
     clusterLabelOffset: 10,
     clusterLabelSize: 12,
+    agentLabelSize,
+    agentLabelOffset,
     agentScaleBase: 0.7,
     agentScaleHeat: 0.6,
     glowScaleBase: 0.6,

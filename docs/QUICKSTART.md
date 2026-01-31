@@ -33,10 +33,11 @@ to the TCP console to drive and observe the system.
 - `host-sidecar-bridge` - publish **mock** host providers into `/host` for policy/CI validation (optional).
 See `docs/HOST_TOOLS.md` for details.
 
-## Alpha2 highlights (milestones 21a-24)
+## 0.3.0 highlights (milestones 21a-24b)
 - Telemetry ingest with OS-named segments: `cohsh telemetry push` + `coh telemetry pull`.
 - Host bridge `coh` for Secure9P mount, GPU lease/status, and telemetry export (no new VM semantics).
 - SwarmUI Live Hive visibility + embedded console panel that reuses the existing TCP session.
+- Live Hive UX polish: worker labels, role color-coding, click-to-select details panel, and bounded overlays.
 - Lifecycle controls (`cohsh lifecycle`) plus `/proc/lifecycle/*` and `/proc/root/*` cut signals.
 - `coh run` command that records bounded GPU breadcrumb entries under `/gpu/<id>/status`.
 - `coh peft` export/import/activate/rollback flows (LoRA lifecycle glue).
@@ -60,7 +61,7 @@ python3 python/cohesix-py/examples/telemetry_write_pull.py --mock
 ```
 Note: in the source tree, the Python client lives under `tools/cohesix-py` instead of `python/cohesix-py`.
 
-## Run the Live Hive demo 
+## Run the Live Hive demo
 You need two terminals:
 - Terminal 1: QEMU (keeps the VM running).
   - Note: Qemu will show a serial terminal, used for core seL4 diagnostics. This is NOT intended to be the main user interface.
@@ -128,7 +129,17 @@ Other optional args you can try:
    ```bash
    xvfb-run -a ./bin/swarmui
    ```
-   In SwarmUI, use `ls /worker` in cohsh to find a worker id before clicking “Load telemetry”. Spawn multiple workers if you want more activity.
+   In SwarmUI, click **Connect** → **Hive Start**. Worker dots show numeric labels and role colors; click a dot to populate the detail panel.
+5. If Live Hive shows "No telemetry yet", quit SwarmUI and seed a line into a worker ring:
+   ```bash
+   ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen <<'COH'
+   attach queen
+   ls /worker
+   echo heartbeat-demo > /worker/worker-1/telemetry
+   tail /worker/worker-1/telemetry
+   COH
+   ```
+   Relaunch SwarmUI to observe overlays and details.
 ## Run the SwarmUI deterministic replay demos
 Quit SwarmUI
 

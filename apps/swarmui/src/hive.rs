@@ -75,6 +75,9 @@ pub struct SwarmUiHiveEvent {
     pub reason: Option<String>,
     /// Agent identifier that emitted the event.
     pub agent: String,
+    /// Optional role label associated with the agent.
+    #[serde(default)]
+    pub role: Option<String>,
     /// Namespace path for the agent.
     pub namespace: String,
     /// Optional detail payload (truncated).
@@ -306,6 +309,7 @@ impl HiveReplay {
 #[derive(Debug)]
 pub(crate) struct HiveSessionState {
     workers: Vec<String>,
+    roles: HashMap<String, String>,
     cursors: HashMap<String, HiveTelemetryCursor>,
     buffers: HashMap<String, BoundedLineBuffer>,
     tail_policy: TailPollPolicy,
@@ -315,9 +319,14 @@ pub(crate) struct HiveSessionState {
 }
 
 impl HiveSessionState {
-    pub(crate) fn new(workers: Vec<String>, tail_policy: TailPollPolicy) -> Self {
+    pub(crate) fn new(
+        workers: Vec<String>,
+        roles: HashMap<String, String>,
+        tail_policy: TailPollPolicy,
+    ) -> Self {
         Self {
             workers,
+            roles,
             cursors: HashMap::new(),
             buffers: HashMap::new(),
             tail_policy,
@@ -368,12 +377,17 @@ impl HiveSessionState {
                 .buffers
                 .remove(&worker_id)
                 .unwrap_or_else(|| BoundedLineBuffer::new(detail_lines, per_worker, line_cap));
+            let role = self
+                .roles
+                .get(&worker_id)
+                .map(|value| value.as_str());
             let consumed = cursor.drain_events(
                 worker_root,
                 &mut self.seq,
                 &mut self.queue,
                 budget,
                 &mut buffer,
+                role,
                 config.line_cap_bytes as usize,
             );
             self.buffers.insert(worker_id.clone(), buffer);
@@ -514,6 +528,7 @@ impl HiveTelemetryCursor {
         queue: &mut VecDeque<SwarmUiHiveEvent>,
         budget: usize,
         buffer: &mut BoundedLineBuffer,
+        role: Option<&str>,
         line_cap_bytes: usize,
     ) -> usize {
         let mut consumed = 0usize;
@@ -529,6 +544,7 @@ impl HiveTelemetryCursor {
             if let Some(event) = parse_line_to_event_with_namespace(
                 &self.worker_id,
                 &namespace,
+                role,
                 normalized,
                 seq,
                 line_cap_bytes,
@@ -557,12 +573,20 @@ fn parse_line_to_event(
     seq: &mut u64,
     line_cap_bytes: usize,
 ) -> Option<SwarmUiHiveEvent> {
-    parse_line_to_event_with_namespace(&agent.id, &agent.namespace, line, seq, line_cap_bytes)
+    parse_line_to_event_with_namespace(
+        &agent.id,
+        &agent.namespace,
+        Some(agent.role.as_str()),
+        line,
+        seq,
+        line_cap_bytes,
+    )
 }
 
 pub(crate) fn parse_line_to_event_with_namespace(
     agent: &str,
     namespace: &str,
+    role: Option<&str>,
     line: &str,
     seq: &mut u64,
     line_cap_bytes: usize,
@@ -590,6 +614,7 @@ pub(crate) fn parse_line_to_event_with_namespace(
         kind,
         reason,
         agent: agent.to_owned(),
+        role: role.map(|value| value.to_owned()),
         namespace: namespace.to_owned(),
         detail,
     };
@@ -600,6 +625,7 @@ pub(crate) fn parse_line_to_event_with_namespace(
 #[derive(Debug)]
 pub(crate) struct ConsoleHiveSessionState {
     workers: Vec<String>,
+    roles: HashMap<String, String>,
     queue: VecDeque<SwarmUiHiveEvent>,
     buffers: HashMap<String, BoundedLineBuffer>,
     pollers: HashMap<String, TailPoller>,
@@ -609,9 +635,14 @@ pub(crate) struct ConsoleHiveSessionState {
 }
 
 impl ConsoleHiveSessionState {
-    pub(crate) fn new(workers: Vec<String>, tail_policy: TailPollPolicy) -> Self {
+    pub(crate) fn new(
+        workers: Vec<String>,
+        roles: HashMap<String, String>,
+        tail_policy: TailPollPolicy,
+    ) -> Self {
         Self {
             workers,
+            roles,
             queue: VecDeque::new(),
             buffers: HashMap::new(),
             pollers: HashMap::new(),
@@ -657,6 +688,10 @@ impl ConsoleHiveSessionState {
                 .buffers
                 .remove(&worker_id)
                 .unwrap_or_else(|| BoundedLineBuffer::new(detail_lines, per_worker, line_cap));
+            let role = self
+                .roles
+                .get(&worker_id)
+                .map(|value| value.as_str());
             for line in lines {
                 if budget == 0 {
                     break;
@@ -668,6 +703,7 @@ impl ConsoleHiveSessionState {
                 if let Some(event) = parse_line_to_event_with_namespace(
                     &worker_id,
                     &namespace,
+                    role,
                     normalized,
                     &mut self.seq,
                     config.line_cap_bytes as usize,
@@ -751,6 +787,26 @@ impl ConsoleHiveSessionState {
             self.dropped = self.dropped.saturating_add(1);
         }
     }
+}
+
+pub(crate) fn role_for_agent_id(id: &str) -> &str {
+    if id.eq_ignore_ascii_case("queen") {
+        return "queen";
+    }
+    let lower = id.to_ascii_lowercase();
+    if lower.starts_with("worker-gpu") {
+        return "worker-gpu";
+    }
+    if lower.starts_with("worker-lora") {
+        return "worker-lora";
+    }
+    if lower.starts_with("worker-bus") {
+        return "worker-bus";
+    }
+    if lower.starts_with("worker-heartbeat") || lower.starts_with("worker-heart") {
+        return "worker-heartbeat";
+    }
+    "worker"
 }
 
 fn truncate_detail(line: &str, line_cap_bytes: usize) -> Option<String> {

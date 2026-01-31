@@ -20,7 +20,7 @@ pub use hive::{
 };
 pub use transport::{TcpTransport, TcpTransportError, TcpTransportFactory, TraceTransportFactory};
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -713,19 +713,35 @@ where
             fids = state.take_fids();
         }
 
-        let workers = {
-            let session = self.session_for(role, ticket)?;
-            for fid in fids {
-                let _ = session.client.clunk(fid);
-            }
-            if role == Role::Queen {
-                let mut workers = list_workers(&mut session.client, &worker_root)?;
-                workers.sort();
-                workers
-            } else {
-                vec![subject.expect("subject already validated")]
-            }
+        let session = self.session_for(role, ticket)?;
+        for fid in fids {
+            let _ = session.client.clunk(fid);
+        }
+        let workers = if role == Role::Queen {
+            let mut workers = list_workers(&mut session.client, &worker_root)?;
+            workers.sort();
+            workers
+        } else {
+            vec![subject.expect("subject already validated")]
         };
+        let gpu_workers = if role == Role::Queen {
+            discover_gpu_workers(&mut session.client)?
+        } else {
+            HashSet::new()
+        };
+        let mut roles = HashMap::new();
+        for worker in &workers {
+            let inferred = hive::role_for_agent_id(worker);
+            let role = if inferred == "worker" {
+                DEFAULT_WORKER_ROLE
+            } else {
+                inferred
+            };
+            roles.insert(worker.clone(), role.to_owned());
+        }
+        for worker in gpu_workers {
+            roles.insert(worker, "worker-gpu".to_owned());
+        }
 
         let mut agents = Vec::new();
         agents.push(SwarmUiHiveAgent {
@@ -736,14 +752,17 @@ where
         for worker in &workers {
             agents.push(SwarmUiHiveAgent {
                 id: worker.to_owned(),
-                role: "worker".to_owned(),
+                role: roles
+                    .get(worker)
+                    .cloned()
+                    .unwrap_or_else(|| DEFAULT_WORKER_ROLE.to_owned()),
                 namespace: format!("{}/{}", worker_root, worker),
             });
         }
 
         self.hive_states.insert(
             key,
-            hive::HiveSessionState::new(workers, self.tail_policy),
+            hive::HiveSessionState::new(workers, roles, self.tail_policy),
         );
         self.hive_replay = None;
 
@@ -2005,17 +2024,33 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             Some(subject.to_owned())
         };
 
-        let workers = {
-            let session = self.session_for(role, ticket)?;
-            if role == Role::Queen {
-                let mut workers =
-                    list_workers_console(&mut self.transport, &session.session, &worker_root)?;
-                workers.sort();
-                workers
-            } else {
-                vec![subject.expect("subject already validated")]
-            }
+        let session = self.session_for(role, ticket)?;
+        let workers = if role == Role::Queen {
+            let mut workers =
+                list_workers_console(&mut self.transport, &session.session, &worker_root)?;
+            workers.sort();
+            workers
+        } else {
+            vec![subject.expect("subject already validated")]
         };
+        let gpu_workers = if role == Role::Queen {
+            discover_gpu_workers_console(&mut self.transport, &session.session)?
+        } else {
+            HashSet::new()
+        };
+        let mut roles = HashMap::new();
+        for worker in &workers {
+            let inferred = hive::role_for_agent_id(worker);
+            let role = if inferred == "worker" {
+                DEFAULT_WORKER_ROLE
+            } else {
+                inferred
+            };
+            roles.insert(worker.clone(), role.to_owned());
+        }
+        for worker in gpu_workers {
+            roles.insert(worker, "worker-gpu".to_owned());
+        }
 
         let mut agents = Vec::new();
         agents.push(SwarmUiHiveAgent {
@@ -2026,14 +2061,17 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         for worker in &workers {
             agents.push(SwarmUiHiveAgent {
                 id: worker.to_owned(),
-                role: "worker".to_owned(),
+                role: roles
+                    .get(worker)
+                    .cloned()
+                    .unwrap_or_else(|| DEFAULT_WORKER_ROLE.to_owned()),
                 namespace: format!("{}/{}", worker_root, worker),
             });
         }
 
         self.hive_states.insert(
             key,
-            hive::ConsoleHiveSessionState::new(workers, self.tail_policy),
+            hive::ConsoleHiveSessionState::new(workers, roles, self.tail_policy),
         );
         self.hive_replay = None;
 
@@ -2589,6 +2627,45 @@ fn list_workers<T: cohsh_core::Secure9pTransport>(
     Ok(workers)
 }
 
+const DEFAULT_WORKER_ROLE: &str = "worker-heartbeat";
+
+fn parse_worker_id_from_lease(line: &str) -> Option<String> {
+    let needle = "\"worker_id\":\"";
+    let start = line.find(needle)? + needle.len();
+    let rest = &line[start..];
+    let end = rest.find('"')?;
+    let value = &rest[..end];
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_owned())
+    }
+}
+
+fn discover_gpu_workers<T: cohsh_core::Secure9pTransport>(
+    client: &mut CohClient<T>,
+) -> Result<HashSet<String>, SwarmUiError> {
+    let mut workers = HashSet::new();
+    let entries = match read_lines(client, "/gpu") {
+        Ok(entries) => entries,
+        Err(_) => return Ok(workers),
+    };
+    for entry in entries {
+        let trimmed = entry.trim();
+        if !trimmed.starts_with("GPU-") {
+            continue;
+        }
+        let path = format!("/gpu/{trimmed}/lease");
+        let lines = read_lines(client, &path)?;
+        for line in lines {
+            if let Some(worker_id) = parse_worker_id_from_lease(&line) {
+                workers.insert(worker_id);
+            }
+        }
+    }
+    Ok(workers)
+}
+
 fn list_workers_console<T: CohshTransport + ?Sized>(
     transport: &mut T,
     session: &CohshSession,
@@ -2602,6 +2679,31 @@ fn list_workers_console<T: CohshTransport + ?Sized>(
             continue;
         }
         workers.push(trimmed.to_owned());
+    }
+    Ok(workers)
+}
+
+fn discover_gpu_workers_console<T: CohshTransport + ?Sized>(
+    transport: &mut T,
+    session: &CohshSession,
+) -> Result<HashSet<String>, SwarmUiError> {
+    let mut workers = HashSet::new();
+    let entries = match list_entries_console(transport, session, "/gpu") {
+        Ok(entries) => entries,
+        Err(_) => return Ok(workers),
+    };
+    for entry in entries {
+        let trimmed = entry.trim();
+        if !trimmed.starts_with("GPU-") {
+            continue;
+        }
+        let path = format!("/gpu/{trimmed}/lease");
+        let lines = read_lines_console(transport, session, &path)?;
+        for line in lines {
+            if let Some(worker_id) = parse_worker_id_from_lease(&line) {
+                workers.insert(worker_id);
+            }
+        }
     }
     Ok(workers)
 }

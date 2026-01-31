@@ -7,7 +7,7 @@ const repoRoot = path.resolve(__dirname, "..", "..", "..");
 const defaultReleaseDir = path.join(
   repoRoot,
   "releases",
-  "Cohesix-0.2.0-alpha2-MacOS"
+  "Cohesix-0.3.0-alpha2-MacOS"
 );
 const releaseDir = process.env.SWARMUI_RELEASE_DIR
   ? path.resolve(process.env.SWARMUI_RELEASE_DIR)
@@ -28,9 +28,24 @@ const hiveBootstrap = {
   },
   agents: [
     {
-      id: "worker-1",
-      namespace: "/worker/worker-1",
+      id: "worker-heart-1",
+      namespace: "/worker/worker-heart-1",
       role: "worker-heartbeat"
+    },
+    {
+      id: "worker-gpu-1",
+      namespace: "/worker/worker-gpu-1",
+      role: "worker-gpu"
+    },
+    {
+      id: "worker-lora-1",
+      namespace: "/worker/worker-lora-1",
+      role: "worker-lora"
+    },
+    {
+      id: "worker-bus-1",
+      namespace: "/worker/worker-bus-1",
+      role: "worker-bus"
     }
   ]
 };
@@ -45,12 +60,31 @@ const hiveBatch = {
   events: [
     {
       kind: "telemetry",
-      agent: "worker-1",
-      namespace: "/worker/worker-1",
+      agent: "worker-heart-1",
+      namespace: "/worker/worker-heart-1",
+      role: "worker-heartbeat",
+      reason: null
+    },
+    {
+      kind: "telemetry",
+      agent: "worker-gpu-1",
+      namespace: "/worker/worker-gpu-1",
+      role: "worker-gpu",
       reason: null
     }
   ],
-  done: true
+  overlays: [
+    {
+      agent: "worker-heart-1",
+      lines: ["tick 1", "tick 2"]
+    },
+    {
+      agent: "worker-gpu-1",
+      lines: ["gpu ok", "lease ok"]
+    }
+  ],
+  detail: null,
+  done: false
 };
 
 const ensureReleaseBundle = () => {
@@ -117,14 +151,22 @@ const startStaticServer = () =>
 const installTauriMock = async (page) => {
   await page.addInitScript(
     ({ helpLines, hiveBootstrap, hiveBatch }) => {
-      const respond = async (cmd) => {
+      const respond = async (cmd, payload) => {
         switch (cmd) {
           case "swarmui_mode":
             return { trace_replay: true, hive_replay: true };
           case "swarmui_hive_bootstrap":
             return hiveBootstrap;
           case "swarmui_hive_poll":
-            return hiveBatch;
+            return {
+              ...hiveBatch,
+              detail: payload?.detail_agent
+                ? {
+                    agent: payload.detail_agent,
+                    lines: [`detail for ${payload.detail_agent}`, "line 2"]
+                  }
+                : null
+            };
           case "swarmui_console_command":
             return { lines: helpLines };
           case "swarmui_connect":
@@ -187,6 +229,38 @@ test("Hive canvas renders in replay mode", async ({ page }) => {
   await expect(page.locator("#hive-status")).not.toContainText("idle");
   const canvas = page.locator("#hive-canvas canvas");
   await expect(canvas).toHaveCount(1);
+});
+
+test("Live Hive labels enumerate workers", async ({ page }) => {
+  await page.waitForTimeout(200);
+  const labels = await page.evaluate(() =>
+    window.__SWARMUI_HIVE_DEBUG.getAgentLabels()
+  );
+  const visible = labels.filter((label) => label.visible);
+  expect(visible.length).toBeGreaterThan(0);
+  visible.forEach((label) => {
+    expect(label.text).toMatch(/^\d+$/);
+  });
+});
+
+test("Live Hive dots are clickable", async ({ page }) => {
+  await page.waitForTimeout(200);
+  const positions = await page.evaluate(() =>
+    window.__SWARMUI_HIVE_DEBUG.getAgentScreenPositions()
+  );
+  const target = positions.find((item) => item.id === "worker-gpu-1");
+  expect(target).toBeTruthy();
+  await page.mouse.click(target.x, target.y);
+  await expect(page.locator("#hive-detail-title")).toContainText("worker-gpu-1");
+});
+
+test("Live Hive performance harness stays responsive", async ({ page }) => {
+  await page.waitForTimeout(600);
+  const metrics = await page.evaluate(() =>
+    window.__SWARMUI_HIVE_DEBUG.getMetrics()
+  );
+  expect(metrics.renders).toBeGreaterThan(10);
+  expect(metrics.pending).toBeLessThan(1024);
 });
 
 test("Embedded coh prompt accepts input", async ({ page }) => {

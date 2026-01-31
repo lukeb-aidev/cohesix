@@ -147,12 +147,12 @@ fn demo_snapshot() -> SwarmUiHiveSnapshot {
     };
     let worker = SwarmUiHiveAgent {
         id: "worker-1".to_owned(),
-        role: "worker".to_owned(),
+        role: "worker-heartbeat".to_owned(),
         namespace: "/worker/worker-1".to_owned(),
     };
     let gpu = SwarmUiHiveAgent {
         id: "worker-gpu-1".to_owned(),
-        role: "worker".to_owned(),
+        role: "worker-gpu".to_owned(),
         namespace: "/worker/worker-gpu-1".to_owned(),
     };
     let events = vec![
@@ -181,6 +181,7 @@ fn event(
         seq,
         kind,
         agent: agent.id.clone(),
+        role: Some(agent.role.clone()),
         namespace: agent.namespace.clone(),
         detail: Some(detail.to_owned()),
         reason: None,

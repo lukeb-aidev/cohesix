@@ -88,6 +88,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Complete |
 | [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Complete |
 | [24b](#24b) | Live GPU Bridge Wiring + PEFT Live Flow + Live Hive Telemetry Text | Complete |
+| [24b1](#24b1) | Live Hive UX Patch: Performance, Labels, Clickability, Telemetry Harness | Pending |
 | [25a](#25a) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [25b](#25b) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [25c](#25c) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Pending |
@@ -3890,6 +3891,96 @@ Deliverables:
 ----
 **Alpha Release 2 achieved here**
 ----
+
+## Milestone 24b1 — Live Hive UX Patch: Performance, Labels, Clickability, Telemetry Harness <a id="24b1"></a>
+[Milestones](#Milestones)
+
+**Status:** Pending — Live Hive is sluggish, worker selection lacks clear identity, and telemetry visibility is unreliable.
+
+**Why now (adoption):** Operators cannot trust Live Hive when it is slow and ambiguous. The UI must remain responsive, worker dots must be identifiable at a glance, and clicking a worker must deterministically reveal telemetry. This patch is a focused UX + telemetry correctness fix, not a new protocol or capability change.
+
+**Goal**
+Diagnose and fix Live Hive slowness, add worker labels and type color-coding, guarantee clickability with tests, and add a deterministic performance + telemetry harness.
+
+**Deliverables**
+- Root-cause analysis of Live Hive slowness (profiling notes + findings captured in docs).
+- Worker dots show a short numeric label (stable per worker id) in the Hive view.
+- Worker dots are color-coded by role/type (worker-heartbeat, worker-gpu, worker-lora, worker-bus).
+- Click selection is reliable and verified by an automated UI test.
+- A performance + telemetry harness that validates:
+  - UI remains responsive under N workers and M telemetry lines.
+  - Telemetry lines appear when a worker is selected.
+- Documentation updates: `docs/TEST_PLAN.md` and `docs/INTERFACES.md` updated with the new UI and test expectations.
+
+**Commands**
+- `cargo test -p swarmui --test console_parity`
+- `cd tools/swarmui-ui-tests && npm test`
+- `scripts/cohsh/run_regression_batch.sh`
+
+**Checks (DoD)**
+- Live Hive remains responsive at N=8 workers and 2 KiB per-worker telemetry text budget.
+- Each worker dot renders a numeric label and role-specific color.
+- Clicking a worker reliably selects it and reveals telemetry in the details panel.
+- Playwright test asserts that clicking a worker changes the selected worker and loads telemetry text.
+- Performance harness reports within thresholds: 60 FPS target with < 16 ms avg frame time (or explicit measured threshold captured in test output).
+- No new protocols or console grammar changes.
+
+**Task Breakdown**
+```
+Title/ID: m24b1-hive-perf-diagnose
+Goal: Identify and fix the root cause of Live Hive slowness without changing protocols.
+Inputs: apps/swarmui, crates/cohsh-core, docs/INTERFACES.md.
+Changes:
+  - apps/swarmui/ — profiling instrumentation + performance fixes (render loop, data diffs, throttling).
+  - docs/INTERFACES.md — record any clarified UI constraints or telemetry rendering rules.
+Commands:
+  - cargo test -p swarmui --test console_parity
+Checks:
+  - UI remains responsive with 8 workers and active telemetry tails.
+Deliverables:
+  - Performance fix + recorded diagnosis summary.
+
+Title/ID: m24b1-hive-labels-colors
+Goal: Add worker labels and role-based color-coding to Live Hive.
+Inputs: apps/swarmui, docs/INTERFACES.md.
+Changes:
+  - apps/swarmui/ — render numeric labels near worker dots; add role palette mapping.
+  - docs/INTERFACES.md — document label format + role color scheme.
+Commands:
+  - cargo test -p swarmui --test console_parity
+Checks:
+  - Each worker dot has a stable numeric label; colors reflect worker role.
+Deliverables:
+  - Labeled and color-coded Live Hive nodes.
+
+Title/ID: m24b1-hive-clickability
+Goal: Guarantee worker dots are clickable and selection is deterministic.
+Inputs: tools/swarmui-ui-tests, apps/swarmui.
+Changes:
+  - tools/swarmui-ui-tests/ — add Playwright test for worker selection.
+  - apps/swarmui/ — ensure click targets map to selection state.
+Commands:
+  - cd tools/swarmui-ui-tests
+  - npm test
+Checks:
+  - Playwright validates click selection updates the details panel.
+Deliverables:
+  - UI clickability test and stable selection behavior.
+
+Title/ID: m24b1-hive-perf-telemetry-harness
+Goal: Add a deterministic harness that checks performance and telemetry visibility.
+Inputs: tools/swarmui-ui-tests, docs/TEST_PLAN.md.
+Changes:
+  - tools/swarmui-ui-tests/ — add perf + telemetry fixtures + thresholds.
+  - docs/TEST_PLAN.md — add the harness run steps and expected thresholds.
+Commands:
+  - cd tools/swarmui-ui-tests
+  - npm test
+Checks:
+  - Telemetry lines appear after selection; perf thresholds met.
+Deliverables:
+  - Performance + telemetry harness and Test Plan update.
+```
 
 ## Activity — Security Evidence Demo (Post-M24, NIST 800-53 LOW)
 

@@ -21,6 +21,8 @@ Canonical operator shell for Cohesix. Attaches to the TCP console (or an in-proc
 ./cohsh --transport tcp --role worker-heartbeat --ticket "$WORKER_TICKET"
 ./cohsh --transport tcp --script scripts/cohsh/boot_v0.coh
 ./cohsh --mint-ticket --role worker-heartbeat --ticket-subject worker-1
+./cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen \
+  telemetry push demo/telemetry/demo.txt --device device-1
 ```
 
 ### Notes
@@ -47,11 +49,16 @@ Host bridge for mount, GPU leases, telemetry pulls, runtime breadcrumbs, PEFT li
 ./coh peft export --host 127.0.0.1 --port 31337 --job job_8932 --out ./out/export
 ./coh peft import --host 127.0.0.1 --port 31337 --publish --model demo-model \
   --from demo/peft_adapter --job job_8932 --export ./out/export --registry ./out/model_registry
+./coh peft import --host 127.0.0.1 --port 31337 --refresh-gpu-models --model demo-model \
+  --from demo/peft_adapter --job job_8932 --export ./out/export --registry ./out/model_registry
+./coh peft activate --host 127.0.0.1 --port 31337 --model demo-model --registry ./out/model_registry
+./coh peft rollback --host 127.0.0.1 --port 31337 --registry ./out/model_registry
 ```
 
 ### Notes
 - `coh doctor` validates tickets, mount capability, NVML (unless `--mock`), and runtime prerequisites.
 - Policy enforcement is manifest-driven; `COH_POLICY` (or `out/coh_policy.toml`) must hash-match compiled defaults.
+- `peft import --publish` and `peft import --refresh-gpu-models` refresh `/gpu/models` in the live VM so non-mock flows can proceed.
 
 ## swarmui
 ### Purpose
@@ -78,6 +85,7 @@ SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./swarmui
 - `--mint-ticket` uses `SWARMUI_TICKET_CONFIG`/`SWARMUI_TICKET_SECRET` (fallback to `COHSH_*`); the UI also offers a "Mint ticket" button.
 - `--replay` loads a snapshot from `$DATA_DIR/snapshots/` (relative paths) and forces offline mode.
 - `--replay-trace` loads a trace from `$DATA_DIR/traces/` (relative paths) and auto-loads a sibling `*.hive.cbor` if present.
+- Live Hive overlays and the details panel are driven by `cohsh-core` tailing; no UI-owned polling logic is introduced.
 
 ## cas-tool
 ### Purpose
@@ -123,6 +131,7 @@ Discover GPUs on the host (NVML or mock) and emit the `/gpu` namespace snapshot 
 - `--registry` points at a host model registry root to populate `/gpu/models`.
 - `--ticket` is optional (queen ticket when required); auth token uses `--auth-token`, `COH_AUTH_TOKEN`, or `COHSH_AUTH_TOKEN`.
 - NVML discovery is enabled by default on Linux builds; use `--no-default-features` to omit NVML.
+- Live publish installs `/gpu/<id>/*`, `/gpu/models/*`, and `/gpu/telemetry/schema.json` inside the VM.
 
 ## host-sidecar-bridge
 ### Purpose
@@ -145,6 +154,7 @@ Publish host-side providers into `/host` (systemd, k8s, docker, nvidia, jetson, 
 - Live TCP publishing requires building with `--features tcp` (otherwise use `--mock`).
 - The `/host` namespace must be enabled in `configs/root_task.toml`.
 - `--watch` polls providers continuously using manifest-backed polling defaults (override with `--policy`).
+- Live defaults: NVML 1000 ms, systemd 2000 ms, docker 2000 ms, k8s 5000 ms (manifest-backed).
 
 ---
 

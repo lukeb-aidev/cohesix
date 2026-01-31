@@ -197,6 +197,7 @@ const hiveDetailLines = document.getElementById("hive-detail-lines");
 const hiveDetailClear = document.getElementById("hive-detail-clear");
 let hiveController = null;
 let hiveInitError = null;
+let lastHiveBatch = null;
 
 const selectChips = (root) => {
   const chips = {};
@@ -234,7 +235,11 @@ const setHiveFallback = (message) => {
 };
 if (hiveCanvas) {
   try {
-    hiveController = createHiveController(hiveCanvas, hiveStatus);
+    hiveController = createHiveController(hiveCanvas, hiveStatus, {
+      onAgentSelect: (agentId) => {
+        selectHiveAgent(agentId, true);
+      },
+    });
     setHiveFallback("");
   } catch (err) {
     hiveInitError = err;
@@ -267,6 +272,24 @@ const setDetailAgent = (agent) => {
   }
 };
 
+function selectHiveAgent(agentId, fromHive = false) {
+  if (!agentId) {
+    return;
+  }
+  setDetailAgent(agentId);
+  if (!fromHive) {
+    hiveController?.selectAgent(agentId);
+  }
+  if (lastHiveBatch) {
+    renderHiveOverlays(lastHiveBatch);
+  }
+  renderHiveDetail({ detail: null });
+  if (hiveActive && !hivePollInFlight) {
+    stopHivePolling();
+    pollHive();
+  }
+}
+
 const renderHiveOverlays = (batch) => {
   if (!hiveOverlays) {
     return;
@@ -294,7 +317,7 @@ const renderHiveOverlays = (batch) => {
     card.appendChild(header);
     card.appendChild(lines);
     card.addEventListener("click", () => {
-      setDetailAgent(overlay.agent);
+      selectHiveAgent(overlay.agent);
     });
     hiveOverlays.appendChild(card);
   });
@@ -448,6 +471,7 @@ const pollHive = async () => {
     stopHivePolling();
     return;
   }
+  lastHiveBatch = res.result;
   hiveController?.ingest(res.result);
   updateHivePressure(res.result);
   updateHiveRoot(res.result);
@@ -491,6 +515,7 @@ const startHive = async () => {
   resetHiveErrors();
   resetHiveDetail();
   renderHiveOverlays({ overlays: [] });
+  lastHiveBatch = null;
   hiveActive = true;
   hivePollInterval = Math.max(
     120,

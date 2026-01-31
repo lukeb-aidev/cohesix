@@ -41,6 +41,12 @@
   --color-hive-heat: var(--palette-mint);
   --color-hive-cluster: var(--palette-slate);
   --color-hive-flow: var(--palette-cyan);
+  --color-hive-queen: var(--palette-mint);
+  --color-hive-worker: var(--palette-slate);
+  --color-hive-worker-heart: var(--palette-azure);
+  --color-hive-worker-gpu: var(--palette-ember);
+  --color-hive-worker-lora: var(--palette-cyan);
+  --color-hive-worker-bus: var(--palette-rose);
   --hive-agent-size: 10px;
   --hive-agent-glow: 26px;
   --hive-pollen-size: 4px;

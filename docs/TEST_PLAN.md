@@ -124,6 +124,13 @@ Run while QEMU is up:
 - `swarmui` live (console + observability; do not attach cohsh simultaneously):
   - macOS: `./bin/swarmui`
   - headless Linux: `xvfb-run -a ./bin/swarmui`
+  - Live telemetry (required for milestone-flagged UI changes):
+    - Preconditions: Queen session reachable, workers emitting telemetry, and no parallel `cohsh` session attached.
+    - In SwarmUI: set role `queen` + ticket, click **Connect**, then **Hive Start**.
+    - Click a worker dot; confirm the detail panel updates within 1–2 poll intervals.
+    - Click a telemetry overlay card; confirm the dot selection updates and the detail panel matches the card agent.
+    - Confirm overlays show recent lines (no empty state) for at least one worker.
+    - Record the result in `logs/host-tool-runs.md` with timestamps.
   - SwarmUI console exposes the core console verbs; CLI-only commands remain in `cohsh`.
 - `swarmui` replay:
   - Source tree: `./bin/swarmui --replay-trace "$(pwd)/tests/fixtures/traces/trace_v0.trace"`
@@ -174,16 +181,18 @@ Run while QEMU is up:
 - Launch + smoke (UI loads and renders key panels).
 - Replay visual regression (screenshot baseline).
 - Interactive `>coh` prompt (type commands, assert transcript lines).
+- Live Hive UX (labels, role colors, and dot selection wiring).
+- Live Hive performance harness (bounded render cadence and backlog checks).
 - Failure UI (auth error, disconnected state) as UI-only states.
 
 #### 4) Determinism Rules
 - Replay-first: all UI assertions are driven from replay fixtures.
-- No timing-based assertions; rely on DOM readiness and transcript completion.
+- Avoid unbounded timing-based assertions; use explicit replay fixtures and the Live Hive metrics harness for bounded render/backlog checks.
 - Transcript-based assertions only (match `OK`, `ERR`, `END` and static help lines).
 
 #### 5) CI Positioning
 - Runs **after** `.coh` scripts and the regression pack.
-- **Blocking:** replay-mode UI tests (snapshot + transcript parity).
+- **Blocking (mandatory):** replay-mode UI tests (snapshot + transcript parity + Live Hive UX + performance harness).
 - **Warn-only:** live-mode smoke checks.
 
 **Playwright commands (macOS ARM64):**
@@ -196,6 +205,7 @@ Run while QEMU is up:
 **Notes**
 - The Playwright harness targets the **latest SwarmUI release bundle** UI assets under `releases/`.
 - The harness injects a deterministic Tauri `invoke` mock for UI-only replay and transcript assertions; it does not exercise control-plane behavior.
+- The Live Hive performance harness reads `window.__SWARMUI_HIVE_DEBUG.getMetrics()` and should remain bounded under replay fixtures.
 - Browser binaries are installed into the user Playwright cache (not committed).
 
 ### 6) Regression pack (full-stack, recommended before release)

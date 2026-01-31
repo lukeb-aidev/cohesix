@@ -25,12 +25,26 @@ const clusterKeyFromNamespace = (namespace) => {
   return parts[0];
 };
 
+const parseWorkerIndex = (id) => {
+  const dash = id.lastIndexOf("-");
+  if (dash === -1 || dash === id.length - 1) {
+    return null;
+  }
+  const suffix = id.slice(dash + 1);
+  if (!/^\d+$/.test(suffix)) {
+    return null;
+  }
+  const value = Number.parseInt(suffix, 10);
+  return Number.isFinite(value) ? value : null;
+};
+
 export class HiveWorld {
   constructor(style) {
     this.style = style;
     this.time = 0;
     this.bounds = { width: 900, height: 600 };
     this.agents = new Map();
+    this.labelDirty = false;
     this.pollen = [];
     this.pulses = [];
     this.flows = new Map();
@@ -51,6 +65,9 @@ export class HiveWorld {
         existing.namespace = namespace;
         existing.cluster = clusterKeyFromNamespace(namespace);
       }
+      if (role) {
+        existing.role = role;
+      }
       return existing;
     }
     const seed = hashString(id);
@@ -67,9 +84,11 @@ export class HiveWorld {
       anchor,
       heat: 0,
       error: 0,
+      labelIndex: null,
     };
     this.agents.set(id, agent);
     this.registerCluster(agent.cluster, id);
+    this.labelDirty = true;
     return agent;
   }
 
@@ -191,7 +210,38 @@ export class HiveWorld {
       pulse.age += dt;
       return pulse.age < pulse.life;
     });
+    if (this.labelDirty) {
+      this.refreshLabels();
+    }
     this.updateClusters();
+  }
+
+  refreshLabels() {
+    const ordered = Array.from(this.agents.values())
+      .filter((agent) => agent.role !== "queen")
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const used = new Set();
+    ordered.forEach((agent) => {
+      const index = parseWorkerIndex(agent.id);
+      if (index !== null) {
+        agent.labelIndex = index;
+        used.add(index);
+      } else {
+        agent.labelIndex = null;
+      }
+    });
+    let nextIndex = 1;
+    ordered.forEach((agent, idx) => {
+      if (agent.labelIndex !== null) {
+        return;
+      }
+      while (used.has(nextIndex)) {
+        nextIndex += 1;
+      }
+      agent.labelIndex = nextIndex;
+      used.add(nextIndex);
+    });
+    this.labelDirty = false;
   }
 
   updateClusters() {

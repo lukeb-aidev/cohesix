@@ -5,7 +5,7 @@ export const applyHiveEvents = (world, events, options) => {
   const spawnParticles = options?.spawnParticles ?? true;
   const intensity = clamp(1 - pressure * 0.4, 0.35, 1);
   for (const event of events) {
-    const agent = world.ensureAgent(event.agent, event.namespace);
+    const agent = world.ensureAgent(event.agent, event.namespace, event.role);
     if (event.kind === "error") {
       world.emitError(agent);
     } else {

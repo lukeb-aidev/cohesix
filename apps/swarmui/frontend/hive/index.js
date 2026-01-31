@@ -14,15 +14,38 @@ const defaultConfig = {
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
-export const createHiveController = (container, status) => {
+export const createHiveController = (container, status, options = {}) => {
   const tokens = readHiveTokens();
   const style = buildHiveStyle(tokens);
   let world = new HiveWorld(style);
-  let renderer = new HiveRenderer(container, tokens, style, (clusterId) => {
-    world.toggleCluster(clusterId);
-  });
+  const metrics = {
+    frames: 0,
+    renders: 0,
+    pending: 0,
+    lastRenderAt: 0,
+    lastFrameAt: 0,
+  };
+  const onAgentSelect = options.onAgentSelect;
+  const selectAgent = (agentId) => {
+    renderer.setSelectedAgent(agentId);
+    if (onAgentSelect) {
+      onAgentSelect(agentId);
+    }
+  };
+  let renderer = new HiveRenderer(
+    container,
+    tokens,
+    style,
+    (clusterId) => {
+      world.toggleCluster(clusterId);
+    },
+    (agentId) => {
+      selectAgent(agentId);
+    },
+  );
   let config = { ...defaultConfig };
   let pending = [];
+  let pendingCursor = 0;
   let pressure = 0;
   let running = false;
   let lastFrame = 0;
@@ -56,6 +79,8 @@ export const createHiveController = (container, status) => {
     }
     const delta = clamp((time - lastFrame) / 1000, 0, 0.25);
     lastFrame = time;
+    metrics.frames += 1;
+    metrics.lastFrameAt = time;
     accumulator += delta;
     const stepSeconds = config.step_ms / 1000;
     const lodMode = computeLod();
@@ -63,7 +88,18 @@ export const createHiveController = (container, status) => {
     while (accumulator >= stepSeconds) {
       accumulator -= stepSeconds;
       const budget = config.lod_event_budget;
-      const batch = pending.splice(0, budget);
+      const end = Math.min(pendingCursor + budget, pending.length);
+      const batch = pendingCursor < pending.length
+        ? pending.slice(pendingCursor, end)
+        : [];
+      pendingCursor = end;
+      if (pendingCursor >= pending.length) {
+        pending = [];
+        pendingCursor = 0;
+      } else if (pendingCursor > 4096) {
+        pending = pending.slice(pendingCursor);
+        pendingCursor = 0;
+      }
       if (batch.length) {
         applyHiveEvents(world, batch, {
           pressure,
@@ -74,22 +110,37 @@ export const createHiveController = (container, status) => {
     }
     if (time - lastRender >= frameInterval) {
       renderer.render(world, lodMode);
+      metrics.renders += 1;
+      metrics.lastRenderAt = time;
       lastRender = time;
       if (lodMode !== lastPollMode) {
         updateStatus(`Hive ${lodMode}`);
         lastPollMode = lodMode;
       }
     }
+    metrics.pending = pending.length - pendingCursor;
     renderer.draw();
     requestAnimationFrame(step);
   };
 
   const reset = () => {
     pending = [];
+    pendingCursor = 0;
     pressure = 0;
     world = new HiveWorld(style);
     renderer.resetView();
+    renderer.setSelectedAgent(null);
   };
+
+  if (typeof window !== "undefined") {
+    window.__SWARMUI_HIVE_DEBUG = {
+      getAgentScreenPositions: () => renderer.getAgentScreenPositions(),
+      getAgentStates: () => renderer.getAgentStates(),
+      getAgentLabels: () => renderer.getAgentLabels(),
+      getMetrics: () => ({ ...metrics }),
+      selectAgent: (agentId) => selectAgent(agentId),
+    };
+  }
 
   return {
     bootstrap: (bootstrap) => {
@@ -122,8 +173,10 @@ export const createHiveController = (container, status) => {
     stop: () => {
       running = false;
       pending = [];
+      pendingCursor = 0;
     },
     resetView: () => renderer.resetView(),
+    selectAgent: (agentId) => selectAgent(agentId),
     destroy: () => renderer.destroy(),
   };
 };
