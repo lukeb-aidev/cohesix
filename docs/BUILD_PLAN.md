@@ -87,6 +87,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [22](#22) | Runtime Convenience (coh run) + GPU Job Breadcrumbs | Complete |
 | [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Complete |
 | [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Complete |
+| [24b](#24b) | Live GPU Bridge Wiring + PEFT Live Flow + Live Hive Telemetry Text | Pending |
 | [25a](#25a) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [25b](#25b) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [25c](#25c) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Pending |
@@ -3761,6 +3762,131 @@ Deliverables:
   - Updated SwarmUI header styling.
 ```
 
+## Milestone 24b — Live GPU Bridge Wiring + PEFT Live Flow + Live Hive Telemetry Text <a id="24b"></a> 
+[Milestones](#Milestones)
+
+**Status:** Pending — non-mock PEFT flows remain blocked because `/gpu/models` is not published in the live VM; host telemetry remains mock-only; Live Hive lacks bounded telemetry text overlays.
+
+**Why now (adoption):** Operators can’t complete a non-mock PEFT flow because the live VM still does not expose `/gpu/models/*`. The Queen currently returns `ERR LS reason=policy detail=invalid-path` on `/gpu/models`, so `coh peft import --host ...` has nowhere to publish the registry. This milestone wires the host GPU bridge into the live namespace and adds bounded telemetry text in Live Hive without introducing new protocols.
+
+**Goal**
+Enable a non-mock PEFT flow by publishing live `/gpu/models` and `/gpu/telemetry` into the VM, extend Live Hive with bounded telemetry text overlays + details panel, and enforce per-path polling defaults for cohsh/SwarmUI.
+
+**Deliverables**
+- Live GPU bridge publish path that installs `/gpu/<id>`, `/gpu/models/*`, and `/gpu/telemetry/schema.json` inside the live VM using existing Secure9P file semantics (no new RPC services).
+- `gpu-bridge-host` gains live publish mode (`--publish`, `--interval-ms`, TCP config flags) that pushes bounded `GpuNamespaceSnapshot` payloads to the Queen.
+- `coh peft import` supports a live refresh step (`--publish`/`--refresh-gpu-models`) so the host registry is mirrored into `/gpu/models/available/*` and `/gpu/models/active`.
+- Live host telemetry adapters for `systemd`, `k8s`, `docker`, and `nvidia` (NVML) publish read-only snapshots under `/host/*` (no new control semantics).
+- Live Hive renders per-worker text overlays (last N lines) plus a selectable details panel; truncation/polling logic lives in `cohsh-core` only.
+- Real-world telemetry defaults (manifest-backed):
+  - Tail poll default: 1000 ms; min 250 ms; max 10_000 ms.
+  - NVML status poll: 1000 ms; systemd: 2000 ms; docker: 2000 ms; k8s: 5000 ms.
+  - Live Hive overlay: N=3 lines, details panel M=50 lines, line cap 160 bytes, per-worker text budget 2 KiB.
+  - PEFT/LoRA telemetry window: 1s (`time_window` label `ms:<start>-<end>`); `lora_id` required for LoRA records.
+- Documentation updates (as-built): `docs/TEST_PLAN.md`, `docs/HOST_TOOLS.md`, `docs/GPU_NODES.md`, `docs/INTERFACES.md`, `docs/USERLAND_AND_CLI.md`, `docs/ARCHITECTURE.md`, and `README.md` where behavior is surfaced.
+
+**Commands**
+- `cargo run -p coh-rtc`
+- `scripts/check-generated.sh`
+- `cargo test -p gpu-bridge-host`
+- `cargo test -p host-sidecar-bridge`
+- `cargo test -p cohsh-core`
+- `cargo test -p swarmui --test console_parity`
+- `scripts/cohsh/run_regression_batch.sh`
+- `scripts/release_bundle.sh --name Cohesix-0.3.0-alpha2 --version 0.3.0-alpha2 --force`
+
+**Checks (DoD)**
+- Live Queen returns a non-error for `ls /gpu/models` after the GPU bridge publish step; `/gpu/telemetry/schema.json` is readable.
+- Non-mock PEFT flow succeeds end-to-end:
+  - `coh peft import --host ... --publish` installs `manifest.toml` under `/gpu/models/available/<model_id>/`.
+  - `coh peft activate --host ...` updates `/gpu/models/active`.
+  - `coh peft export --host ...` reads `/queen/export/lora_jobs/<job_id>/telemetry.cbor` within configured bounds.
+- Live Hive text overlays and details panel render bounded telemetry lines without UI-owned polling logic.
+- Per-path polling respects min/max bounds; defaults match the values above.
+- `docs/TEST_PLAN.md` includes a non-mock PEFT flow section and live telemetry checks; new steps pass on macOS 26 and Ubuntu 24 bundles.
+- `docs/HOST_TOOLS.md` and `docs/GPU_NODES.md` document the live publish flow and required commands.
+- Regression pack runs unchanged; output drift fails.
+- After Test Plan gates pass, release bundle minor version increments (e.g., `Cohesix-0.2.0-alpha2` → `Cohesix-0.3.0-alpha2`), with directory and tarball names updated.
+
+**Compiler touchpoints**
+- `coh-rtc` emits telemetry polling defaults and Live Hive text budgets into manifest-backed snippets.
+- Any new `/gpu/bridge/*` nodes and provider ownership are represented in IR and docs snippets.
+
+**Task Breakdown**
+```
+Title/ID: m24b-gpu-bridge-publish
+Goal: Enable live GPU bridge publishing of `/gpu/models` and telemetry schema into a running Queen.
+Inputs: apps/gpu-bridge-host, apps/nine-door, docs/GPU_NODES.md.
+Changes:
+  - apps/gpu-bridge-host/src/main.rs — add `--publish`, `--interval-ms`, TCP config flags; serialize bounded snapshots.
+  - apps/nine-door/src/host/core.rs — accept snapshot payloads and update `/gpu` namespace deterministically.
+  - docs/GPU_NODES.md — document live publish flow and error semantics.
+Commands:
+  - cargo test -p gpu-bridge-host
+  - cargo test -p nine-door --test integration
+Checks:
+  - Live `ls /gpu/models` succeeds after publish; invalid payloads return deterministic ERR.
+Deliverables:
+  - Live GPU bridge publish path + updated GPU docs.
+
+Title/ID: m24b-peft-live-flow
+Goal: Unblock non-mock PEFT import/activate by refreshing `/gpu/models` after registry updates.
+Inputs: apps/coh/, docs/USERLAND_AND_CLI.md, docs/HOST_TOOLS.md.
+Changes:
+  - apps/coh/src/main.rs — add `--publish`/`--refresh-gpu-models` option for `peft import`.
+  - docs/USERLAND_AND_CLI.md — document live PEFT flow and required commands.
+  - docs/HOST_TOOLS.md — update PEFT examples to include live publish.
+Commands:
+  - cargo test -p coh --features nvml
+Checks:
+  - `coh peft import --host ... --publish` yields `/gpu/models/available/<model_id>/manifest.toml` in the VM.
+Deliverables:
+  - Live PEFT flow documented and validated.
+
+Title/ID: m24b-host-telemetry-live
+Goal: Provide live host telemetry providers for systemd/k8s/docker/NVML.
+Inputs: apps/host-sidecar-bridge, docs/INTERFACES.md, docs/ARCHITECTURE.md.
+Changes:
+  - apps/host-sidecar-bridge/ — add live adapters and bounded snapshot formatting.
+  - docs/INTERFACES.md — document `/host/*/status` line formats.
+  - docs/ARCHITECTURE.md — record telemetry polling defaults.
+Commands:
+  - cargo test -p host-sidecar-bridge
+Checks:
+  - Live publish works over TCP; mock path remains deterministic.
+Deliverables:
+  - Live host telemetry adapters + updated docs.
+
+Title/ID: m24b-live-hive-text
+Goal: Render bounded telemetry text overlays and a details panel in Live Hive using cohsh-core tails.
+Inputs: crates/cohsh-core, apps/swarmui, docs/INTERFACES.md.
+Changes:
+  - crates/cohsh-core/ — add tail polling policy and line budget enforcement.
+  - apps/swarmui/ — render overlays + details panel; no UI polling logic.
+  - docs/INTERFACES.md — Live Hive text overlay rules.
+Commands:
+  - cargo test -p cohsh-core
+  - cargo test -p swarmui --test console_parity
+Checks:
+  - Overlay shows last N lines; details panel shows last M; line truncation enforced.
+Deliverables:
+  - Live Hive text overlay + deterministic bounds.
+
+Title/ID: m24b-test-plan-release
+Goal: Update Test Plan and cut a new release bundle after gates pass.
+Inputs: docs/TEST_PLAN.md, scripts/release_bundle.sh, releases/.
+Changes:
+  - docs/TEST_PLAN.md — add non-mock PEFT flow + live telemetry checks.
+  - releases/ — bump minor version bundle and tarball names.
+Commands:
+  - scripts/cohsh/run_regression_batch.sh
+  - scripts/release_bundle.sh --name Cohesix-0.3.0-alpha2 --version 0.3.0-alpha2 --force
+Checks:
+  - Test Plan additions pass on macOS 26 and Ubuntu 24 bundles.
+Deliverables:
+  - Updated Test Plan and new release bundle.
+```
+
 ----
 **Alpha Release 2 achieved here**
 ----
@@ -3813,6 +3939,7 @@ Deliverables:
 - Queen VM runs on the Mac host. Jetson runs a Cohesix Worker VM; G5g runs host tools only.
 - All ML/inference stays host-side; no CUDA/NVML in the VM.
 - All actions use documented Secure9P/console commands and namespaces; no ad-hoc RPC.
+- Live GPU bridge publish must be active for non-mock PEFT flows; the demo is blocked if `/gpu/models` is not exposed.
 
 **Inputs**
 - `docs/QUICKSTART.md`
@@ -3851,9 +3978,10 @@ Deliverables:
      - `ls /worker`
 6) Keep Live Hive active (optional): `spawn heartbeat ticks=100`.
 7) Host tools prove control-plane surface (Mac or G5g, host tools only):
-   - GPU surface (mock or live):
-     - `./bin/gpu-bridge-host --mock --list`
-     - If a host GPU bridge is already wired into the VM (pre-existing integration), `./bin/coh --host <queen-host> --port 31337 gpu list` should reflect live devices. If not, the dev-virt `/gpu` entries remain mock and PEFT steps must use `--mock`.
+   - Live GPU bridge publish (required for `/gpu/models` and PEFT):
+     - `./bin/gpu-bridge-host --publish --tcp-host <queen-host> --tcp-port 31337 --auth-token changeme --interval-ms 1000 --registry demo/peft_registry`
+     - Optional sanity: `./bin/gpu-bridge-host --list`
+   - GPU surface (live):
      - `./bin/coh --host <queen-host> --port 31337 gpu list`
      - `./bin/coh --host <queen-host> --port 31337 gpu lease --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60`
    - Runtime breadcrumbs:
@@ -3864,18 +3992,15 @@ Deliverables:
    - `telemetry push demo/telemetry/demo.txt --device device-1`
    - or (per walkthrough) `echo '{"new":"segment","mime":"text/plain"}' > /queen/telemetry/dev-1/ctl` then append to `/queen/telemetry/dev-1/seg/seg-000001`
 9) Quit cohsh; relaunch SwarmUI to observe effects: `./bin/swarmui`.
+   - Live Hive shows bounded telemetry text overlays (last N lines) and a details panel for a selected worker/source.
 10) External PEFT (out-of-band): run training off-plane; produce adapter artifacts under `demo/peft_adapter/`.
 11) Import + activate (host tool; no in-VM ML):
-   - Ensure `/gpu/models/*` exists via `./bin/gpu-bridge-host --mock --list` when no real bridge is available.
+   - Verify `/gpu/models` is visible (live publish in step 7 must be running).
    - Live export (requires existing job under `/queen/export/lora_jobs/job_0001/`):
      - `./bin/coh --host <queen-host> --port 31337 peft export --job job_0001 --out demo/peft_export`
-   - Demo-only export (no VM interaction; uses local mock):
-     - `./bin/coh peft export --mock --job job_0001 --out demo/peft_export`
-   - If `/gpu/models/*` is not present in the VM (no bridge wiring), use mock mode for import/activate:
-     - `./bin/coh peft --mock import --model qwen-edge-v1 --from demo/peft_adapter --job job_0001 --export demo/peft_export --registry demo/peft_registry`
-     - `./bin/coh peft --mock activate --model qwen-edge-v1 --registry demo/peft_registry`
-   - Otherwise, use live import/activate against the queen host:
-     - `./bin/coh --host <queen-host> --port 31337 peft import --model qwen-edge-v1 --from demo/peft_adapter --job job_0001 --export demo/peft_export --registry demo/peft_registry`
+   - Live import + publish (refresh `/gpu/models` immediately after registry update):
+     - `./bin/coh --host <queen-host> --port 31337 peft import --publish --model qwen-edge-v1 --from demo/peft_adapter --job job_0001 --export demo/peft_export --registry demo/peft_registry`
+   - Live activate:
      - `./bin/coh --host <queen-host> --port 31337 peft activate --model qwen-edge-v1 --registry demo/peft_registry`
    - Adapter inputs: `demo/peft_adapter/adapter.safetensors`, `demo/peft_adapter/lora.json`, `demo/peft_adapter/metrics.json`.
    - Verify pointer via cohsh after closing SwarmUI: `ls /gpu/models/available` and `cat /gpu/models/active`
@@ -3887,7 +4012,9 @@ Deliverables:
 **Checks**
 - `coh doctor` passes; QEMU boot ok; cohsh attaches and lifecycle reads return expected values.
 - Telemetry segments appear under `/queen/telemetry/<device>/seg/`; ACK/ERR ordering remains deterministic.
+- Live GPU bridge publish keeps `/gpu/models` visible without policy errors.
 - PEFT import/activate/rollback update `/gpu/models/available` and `/gpu/models/active` per docs.
+- Live Hive telemetry text overlays and details panel render bounded lines from live tails.
 - No concurrent cohsh + SwarmUI usage; no new semantics introduced.
 
 **Deliverables**

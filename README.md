@@ -57,6 +57,8 @@ Operators interact with Cohesix through two consoles:
 
 The intended deployment target is **physical ARM64 hardware booted via UEFI**. Today, QEMU `aarch64/virt` is used for bring-up, CI, and testing, with the expectation that QEMU behaviour closely mirrors the eventual hardware profiles. Cohesix is **not** a general-purpose operating system and deliberately avoids POSIX semantics, libc, dynamic linking, and in-VM hardware stacks to keep the system small and analyzable.
 
+**Models Tested:** HuggingFaceTB/SmolVLM-500M-Instruct
+
 In short, Cohesix treats **orchestration itself as an operating-system problem**, with authority, lifecycle, and failure handling as first-class concerns.
 
 ---
