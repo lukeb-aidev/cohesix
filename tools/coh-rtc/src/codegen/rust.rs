@@ -279,6 +279,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "pub enum HostProvider {{")?;
     writeln!(mod_contents, "    Systemd,")?;
     writeln!(mod_contents, "    K8s,")?;
+    writeln!(mod_contents, "    Docker,")?;
     writeln!(mod_contents, "    Nvidia,")?;
     writeln!(mod_contents, "    Jetson,")?;
     writeln!(mod_contents, "    Net,")?;
@@ -1182,6 +1183,7 @@ fn host_provider_to_rust(provider: &HostProvider) -> &'static str {
     match provider {
         HostProvider::Systemd => "HostProvider::Systemd",
         HostProvider::K8s => "HostProvider::K8s",
+        HostProvider::Docker => "HostProvider::Docker",
         HostProvider::Nvidia => "HostProvider::Nvidia",
         HostProvider::Jetson => "HostProvider::Jetson",
         HostProvider::Net => "HostProvider::Net",

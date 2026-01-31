@@ -157,6 +157,17 @@ status = true
 control_sessions = 2
 telemetry_sessions = 4
 
+[client_policies.cohsh.tail]
+poll_ms_default = 1000
+poll_ms_min = 250
+poll_ms_max = 10000
+
+[client_policies.cohsh.host_telemetry]
+nvidia_poll_ms = 1000
+systemd_poll_ms = 2000
+docker_poll_ms = 2000
+k8s_poll_ms = 5000
+
 [client_policies.coh.mount]
 root = "/"
 allowlist = ["/proc", "/queen", "/worker", "/log", "/gpu", "/host"]
@@ -227,6 +238,10 @@ lod_zoom_out = 0.7
 lod_zoom_in = 1.25
 lod_event_budget = 512
 snapshot_max_events = 4096
+overlay_lines = 3
+detail_lines = 50
+line_cap_bytes = 160
+per_worker_bytes = 2048
 
 [swarmui.paths]
 telemetry_root = "/worker"
@@ -276,7 +291,7 @@ mount_at = "/lora"
 
 [ecosystem.host]
 enable = true
-providers = ["systemd", "k8s", "nvidia"]
+providers = ["systemd", "k8s", "docker", "nvidia"]
 mount_at = "/host"
 
 [ecosystem.audit]

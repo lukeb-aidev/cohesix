@@ -159,6 +159,52 @@ fn render_policy_toml(manifest: &Manifest, manifest_hash: &str) -> String {
     )
     .ok();
     writeln!(contents).ok();
+    writeln!(contents, "[cohsh.tail]").ok();
+    writeln!(
+        contents,
+        "poll_ms_default = {}",
+        manifest.client_policies.cohsh.tail.poll_ms_default
+    )
+    .ok();
+    writeln!(
+        contents,
+        "poll_ms_min = {}",
+        manifest.client_policies.cohsh.tail.poll_ms_min
+    )
+    .ok();
+    writeln!(
+        contents,
+        "poll_ms_max = {}",
+        manifest.client_policies.cohsh.tail.poll_ms_max
+    )
+    .ok();
+    writeln!(contents).ok();
+    writeln!(contents, "[cohsh.host_telemetry]").ok();
+    writeln!(
+        contents,
+        "nvidia_poll_ms = {}",
+        manifest.client_policies.cohsh.host_telemetry.nvidia_poll_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "systemd_poll_ms = {}",
+        manifest.client_policies.cohsh.host_telemetry.systemd_poll_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "docker_poll_ms = {}",
+        manifest.client_policies.cohsh.host_telemetry.docker_poll_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "k8s_poll_ms = {}",
+        manifest.client_policies.cohsh.host_telemetry.k8s_poll_ms
+    )
+    .ok();
+    writeln!(contents).ok();
     writeln!(contents, "[retry]").ok();
     writeln!(
         contents,
@@ -225,6 +271,48 @@ fn render_policy_doc(manifest: &Manifest, manifest_hash: &str, policy_hash: &str
         contents,
         "- `cohsh.pool.telemetry_sessions`: `{}`",
         manifest.client_policies.cohsh.pool.telemetry_sessions
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `cohsh.tail.poll_ms_default`: `{}`",
+        manifest.client_policies.cohsh.tail.poll_ms_default
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `cohsh.tail.poll_ms_min`: `{}`",
+        manifest.client_policies.cohsh.tail.poll_ms_min
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `cohsh.tail.poll_ms_max`: `{}`",
+        manifest.client_policies.cohsh.tail.poll_ms_max
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `cohsh.host_telemetry.nvidia_poll_ms`: `{}`",
+        manifest.client_policies.cohsh.host_telemetry.nvidia_poll_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `cohsh.host_telemetry.systemd_poll_ms`: `{}`",
+        manifest.client_policies.cohsh.host_telemetry.systemd_poll_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `cohsh.host_telemetry.docker_poll_ms`: `{}`",
+        manifest.client_policies.cohsh.host_telemetry.docker_poll_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `cohsh.host_telemetry.k8s_poll_ms`: `{}`",
+        manifest.client_policies.cohsh.host_telemetry.k8s_poll_ms
     )
     .ok();
     writeln!(
@@ -305,6 +393,48 @@ fn render_policy_rust(manifest: &Manifest, manifest_hash: &str, policy_hash: &st
         contents,
         "pub const COHSH_POOL_TELEMETRY_SESSIONS: u16 = {};",
         manifest.client_policies.cohsh.pool.telemetry_sessions
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COHSH_TAIL_POLL_MS_DEFAULT: u64 = {};",
+        manifest.client_policies.cohsh.tail.poll_ms_default
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COHSH_TAIL_POLL_MS_MIN: u64 = {};",
+        manifest.client_policies.cohsh.tail.poll_ms_min
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COHSH_TAIL_POLL_MS_MAX: u64 = {};",
+        manifest.client_policies.cohsh.tail.poll_ms_max
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COHSH_HOST_TELEMETRY_NVIDIA_POLL_MS: u64 = {};",
+        manifest.client_policies.cohsh.host_telemetry.nvidia_poll_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COHSH_HOST_TELEMETRY_SYSTEMD_POLL_MS: u64 = {};",
+        manifest.client_policies.cohsh.host_telemetry.systemd_poll_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COHSH_HOST_TELEMETRY_DOCKER_POLL_MS: u64 = {};",
+        manifest.client_policies.cohsh.host_telemetry.docker_poll_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COHSH_HOST_TELEMETRY_K8S_POLL_MS: u64 = {};",
+        manifest.client_policies.cohsh.host_telemetry.k8s_poll_ms
     )
     .ok();
     writeln!(

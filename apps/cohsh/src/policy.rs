@@ -23,6 +23,10 @@ mod generated {
 pub struct CohshPolicy {
     /// Session pool sizing policy.
     pub pool: CohshPoolPolicy,
+    /// Tail polling policy for repeated telemetry reads.
+    pub tail: CohshTailPolicy,
+    /// Host telemetry polling defaults for sidecar bridges.
+    pub host_telemetry: CohshHostTelemetryPolicy,
     /// Retry scheduling policy for transport operations.
     pub retry: CohshRetryPolicy,
     /// Heartbeat cadence policy for transport keepalives.
@@ -48,6 +52,17 @@ impl CohshPolicy {
             pool: CohshPoolPolicy {
                 control_sessions: generated::COHSH_POOL_CONTROL_SESSIONS,
                 telemetry_sessions: generated::COHSH_POOL_TELEMETRY_SESSIONS,
+            },
+            tail: CohshTailPolicy {
+                poll_ms_default: generated::COHSH_TAIL_POLL_MS_DEFAULT,
+                poll_ms_min: generated::COHSH_TAIL_POLL_MS_MIN,
+                poll_ms_max: generated::COHSH_TAIL_POLL_MS_MAX,
+            },
+            host_telemetry: CohshHostTelemetryPolicy {
+                nvidia_poll_ms: generated::COHSH_HOST_TELEMETRY_NVIDIA_POLL_MS,
+                systemd_poll_ms: generated::COHSH_HOST_TELEMETRY_SYSTEMD_POLL_MS,
+                docker_poll_ms: generated::COHSH_HOST_TELEMETRY_DOCKER_POLL_MS,
+                k8s_poll_ms: generated::COHSH_HOST_TELEMETRY_K8S_POLL_MS,
             },
             retry: CohshRetryPolicy {
                 max_attempts: generated::COHSH_RETRY_MAX_ATTEMPTS,
@@ -100,6 +115,30 @@ pub struct CohshPoolPolicy {
     pub control_sessions: u16,
     /// Number of pooled telemetry sessions.
     pub telemetry_sessions: u16,
+}
+
+/// Tail polling policy for cohsh/shell clients.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CohshTailPolicy {
+    /// Default polling interval in milliseconds.
+    pub poll_ms_default: u64,
+    /// Minimum polling interval in milliseconds.
+    pub poll_ms_min: u64,
+    /// Maximum polling interval in milliseconds.
+    pub poll_ms_max: u64,
+}
+
+/// Host telemetry poll cadence for sidecar adapters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CohshHostTelemetryPolicy {
+    /// Poll interval for NVML/NVIDIA status updates in milliseconds.
+    pub nvidia_poll_ms: u64,
+    /// Poll interval for systemd status updates in milliseconds.
+    pub systemd_poll_ms: u64,
+    /// Poll interval for Docker status updates in milliseconds.
+    pub docker_poll_ms: u64,
+    /// Poll interval for Kubernetes status updates in milliseconds.
+    pub k8s_poll_ms: u64,
 }
 
 /// Retry scheduling policy for cohsh transports.
@@ -168,6 +207,8 @@ struct PolicyMeta {
 #[serde(deny_unknown_fields)]
 struct CohshTomlSection {
     pool: PoolTomlSection,
+    tail: TailTomlSection,
+    host_telemetry: HostTelemetryTomlSection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,6 +216,23 @@ struct CohshTomlSection {
 struct PoolTomlSection {
     control_sessions: u16,
     telemetry_sessions: u16,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TailTomlSection {
+    poll_ms_default: u64,
+    poll_ms_min: u64,
+    poll_ms_max: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostTelemetryTomlSection {
+    nvidia_poll_ms: u64,
+    systemd_poll_ms: u64,
+    docker_poll_ms: u64,
+    k8s_poll_ms: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -247,6 +305,17 @@ pub fn load_policy(path: &Path) -> Result<CohshPolicy> {
             control_sessions: parsed.cohsh.pool.control_sessions,
             telemetry_sessions: parsed.cohsh.pool.telemetry_sessions,
         },
+        tail: CohshTailPolicy {
+            poll_ms_default: parsed.cohsh.tail.poll_ms_default,
+            poll_ms_min: parsed.cohsh.tail.poll_ms_min,
+            poll_ms_max: parsed.cohsh.tail.poll_ms_max,
+        },
+        host_telemetry: CohshHostTelemetryPolicy {
+            nvidia_poll_ms: parsed.cohsh.host_telemetry.nvidia_poll_ms,
+            systemd_poll_ms: parsed.cohsh.host_telemetry.systemd_poll_ms,
+            docker_poll_ms: parsed.cohsh.host_telemetry.docker_poll_ms,
+            k8s_poll_ms: parsed.cohsh.host_telemetry.k8s_poll_ms,
+        },
         retry: CohshRetryPolicy {
             max_attempts: parsed.retry.max_attempts,
             backoff_ms: parsed.retry.backoff_ms,
@@ -270,6 +339,44 @@ fn validate_policy(policy: &CohshPolicy) -> Result<()> {
     }
     if policy.pool.telemetry_sessions == 0 {
         return Err(anyhow!("cohsh pool telemetry_sessions must be >= 1"));
+    }
+    if policy.tail.poll_ms_min == 0 {
+        return Err(anyhow!("cohsh tail poll_ms_min must be >= 1"));
+    }
+    if policy.tail.poll_ms_max < policy.tail.poll_ms_min {
+        return Err(anyhow!(
+            "cohsh tail poll_ms_max {} must be >= poll_ms_min {}",
+            policy.tail.poll_ms_max,
+            policy.tail.poll_ms_min
+        ));
+    }
+    if policy.tail.poll_ms_default < policy.tail.poll_ms_min
+        || policy.tail.poll_ms_default > policy.tail.poll_ms_max
+    {
+        return Err(anyhow!(
+            "cohsh tail poll_ms_default {} must be within {}..={}",
+            policy.tail.poll_ms_default,
+            policy.tail.poll_ms_min,
+            policy.tail.poll_ms_max
+        ));
+    }
+    if policy.host_telemetry.nvidia_poll_ms == 0 {
+        return Err(anyhow!(
+            "cohsh host_telemetry nvidia_poll_ms must be >= 1"
+        ));
+    }
+    if policy.host_telemetry.systemd_poll_ms == 0 {
+        return Err(anyhow!(
+            "cohsh host_telemetry systemd_poll_ms must be >= 1"
+        ));
+    }
+    if policy.host_telemetry.docker_poll_ms == 0 {
+        return Err(anyhow!(
+            "cohsh host_telemetry docker_poll_ms must be >= 1"
+        ));
+    }
+    if policy.host_telemetry.k8s_poll_ms == 0 {
+        return Err(anyhow!("cohsh host_telemetry k8s_poll_ms must be >= 1"));
     }
     if policy.retry.max_attempts == 0 {
         return Err(anyhow!("cohsh retry max_attempts must be >= 1"));

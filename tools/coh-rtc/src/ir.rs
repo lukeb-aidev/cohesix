@@ -4,6 +4,7 @@
 // Author: Lukas Bower
 
 use anyhow::{bail, Context, Result};
+use cohsh_core::MAX_LINE_LEN;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
@@ -1033,6 +1034,38 @@ impl Manifest {
         if pool.telemetry_sessions == 0 {
             bail!("client_policies.cohsh.pool.telemetry_sessions must be >= 1");
         }
+        let tail = &self.client_policies.cohsh.tail;
+        if tail.poll_ms_min == 0 {
+            bail!("client_policies.cohsh.tail.poll_ms_min must be >= 1");
+        }
+        if tail.poll_ms_max < tail.poll_ms_min {
+            bail!(
+                "client_policies.cohsh.tail.poll_ms_max {} must be >= poll_ms_min {}",
+                tail.poll_ms_max,
+                tail.poll_ms_min
+            );
+        }
+        if tail.poll_ms_default < tail.poll_ms_min || tail.poll_ms_default > tail.poll_ms_max {
+            bail!(
+                "client_policies.cohsh.tail.poll_ms_default {} must be within {}..={}",
+                tail.poll_ms_default,
+                tail.poll_ms_min,
+                tail.poll_ms_max
+            );
+        }
+        let host_telemetry = &self.client_policies.cohsh.host_telemetry;
+        if host_telemetry.nvidia_poll_ms == 0 {
+            bail!("client_policies.cohsh.host_telemetry.nvidia_poll_ms must be >= 1");
+        }
+        if host_telemetry.systemd_poll_ms == 0 {
+            bail!("client_policies.cohsh.host_telemetry.systemd_poll_ms must be >= 1");
+        }
+        if host_telemetry.docker_poll_ms == 0 {
+            bail!("client_policies.cohsh.host_telemetry.docker_poll_ms must be >= 1");
+        }
+        if host_telemetry.k8s_poll_ms == 0 {
+            bail!("client_policies.cohsh.host_telemetry.k8s_poll_ms must be >= 1");
+        }
         let retry = &self.client_policies.retry;
         if retry.max_attempts == 0 {
             bail!("client_policies.retry.max_attempts must be >= 1");
@@ -1319,6 +1352,31 @@ impl Manifest {
         }
         if hive.snapshot_max_events == 0 {
             bail!("swarmui.hive.snapshot_max_events must be > 0");
+        }
+        if hive.overlay_lines == 0 {
+            bail!("swarmui.hive.overlay_lines must be > 0");
+        }
+        if hive.detail_lines == 0 {
+            bail!("swarmui.hive.detail_lines must be > 0");
+        }
+        if hive.detail_lines < hive.overlay_lines {
+            bail!("swarmui.hive.detail_lines must be >= overlay_lines");
+        }
+        if hive.line_cap_bytes == 0 {
+            bail!("swarmui.hive.line_cap_bytes must be > 0");
+        }
+        if hive.line_cap_bytes as usize > MAX_LINE_LEN {
+            bail!(
+                "swarmui.hive.line_cap_bytes {} exceeds max {}",
+                hive.line_cap_bytes,
+                MAX_LINE_LEN
+            );
+        }
+        if hive.per_worker_bytes == 0 {
+            bail!("swarmui.hive.per_worker_bytes must be > 0");
+        }
+        if hive.per_worker_bytes < hive.line_cap_bytes {
+            bail!("swarmui.hive.per_worker_bytes must be >= line_cap_bytes");
         }
         self.validate_client_path(
             "swarmui.paths.telemetry_root",
@@ -2350,6 +2408,10 @@ pub struct SwarmUiHiveConfig {
     pub lod_zoom_in: f32,
     pub lod_event_budget: u32,
     pub snapshot_max_events: u32,
+    pub overlay_lines: u16,
+    pub detail_lines: u16,
+    pub line_cap_bytes: u32,
+    pub per_worker_bytes: u32,
 }
 
 impl Default for SwarmUiHiveConfig {
@@ -2361,6 +2423,10 @@ impl Default for SwarmUiHiveConfig {
             lod_zoom_in: 1.25,
             lod_event_budget: 512,
             snapshot_max_events: 4096,
+            overlay_lines: 3,
+            detail_lines: 50,
+            line_cap_bytes: 160,
+            per_worker_bytes: 2048,
         }
     }
 }
@@ -2395,12 +2461,54 @@ impl Default for SwarmUiPathsConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct CohshClientPolicy {
     pub pool: CohshPoolPolicy,
+    pub tail: CohshTailPolicy,
+    pub host_telemetry: CohshHostTelemetryPolicy,
 }
 
 impl Default for CohshClientPolicy {
     fn default() -> Self {
         Self {
             pool: CohshPoolPolicy::default(),
+            tail: CohshTailPolicy::default(),
+            host_telemetry: CohshHostTelemetryPolicy::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CohshTailPolicy {
+    pub poll_ms_default: u64,
+    pub poll_ms_min: u64,
+    pub poll_ms_max: u64,
+}
+
+impl Default for CohshTailPolicy {
+    fn default() -> Self {
+        Self {
+            poll_ms_default: 1000,
+            poll_ms_min: 250,
+            poll_ms_max: 10_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CohshHostTelemetryPolicy {
+    pub nvidia_poll_ms: u64,
+    pub systemd_poll_ms: u64,
+    pub docker_poll_ms: u64,
+    pub k8s_poll_ms: u64,
+}
+
+impl Default for CohshHostTelemetryPolicy {
+    fn default() -> Self {
+        Self {
+            nvidia_poll_ms: 1000,
+            systemd_poll_ms: 2000,
+            docker_poll_ms: 2000,
+            k8s_poll_ms: 5000,
         }
     }
 }
@@ -2582,6 +2690,7 @@ impl Default for EcosystemHost {
 pub enum HostProvider {
     Systemd,
     K8s,
+    Docker,
     Nvidia,
     Jetson,
     Net,

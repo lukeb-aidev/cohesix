@@ -12,6 +12,9 @@
 //! discovery through `nvml-wrapper`.
 
 use anyhow::{anyhow, ensure, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use cohsh_core::MAX_ECHO_LEN;
+use sha2::{Digest, Sha256};
 use std::fmt::Write;
 use std::fs;
 use std::io::Read;
@@ -24,6 +27,8 @@ const REGISTRY_AVAILABLE_DIR: &str = "available";
 const REGISTRY_MANIFEST_FILE: &str = "manifest.toml";
 const MAX_REGISTRY_MANIFEST_BYTES: usize = 8 * 1024;
 const MAX_REGISTRY_ID_BYTES: usize = 128;
+const GPU_BRIDGE_WIRE_SCHEMA: &str = "gpu-bridge-snapshot/v1";
+const GPU_BRIDGE_B64_PREFIX: &str = "b64:";
 
 /// Summary information about a GPU surfaced to the VM namespace.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -656,6 +661,78 @@ pub fn namespace_to_json_pretty(snapshot: &GpuNamespaceSnapshot) -> String {
     ));
     out.push('}');
     out
+}
+
+/// Snapshot publish envelope for `/gpu/bridge/ctl`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuBridgePublish {
+    /// Wire-format snapshot bytes.
+    pub bytes: Vec<u8>,
+    /// SHA-256 of the wire payload.
+    pub sha256: String,
+    /// Line payloads (each <= max echo len) to send to `/gpu/bridge/ctl`.
+    pub lines: Vec<String>,
+}
+
+/// Format a namespace snapshot as a compact wire payload for publish.
+#[must_use]
+pub fn namespace_to_wire(snapshot: &GpuNamespaceSnapshot) -> Vec<u8> {
+    let mut out = String::new();
+    let _ = writeln!(out, "schema {GPU_BRIDGE_WIRE_SCHEMA}");
+    for node in &snapshot.nodes {
+        let info = BASE64_STANDARD.encode(node.info_payload.as_bytes());
+        let ctl = BASE64_STANDARD.encode(node.ctl_payload.as_bytes());
+        let lease = BASE64_STANDARD.encode(node.lease_payload.as_bytes());
+        let status = BASE64_STANDARD.encode(node.status_payload.as_bytes());
+        let _ = writeln!(
+            out,
+            "node id={} info={} ctl={} lease={} status={}",
+            node.id, info, ctl, lease, status
+        );
+    }
+    for manifest in &snapshot.models.available {
+        let manifest_b64 = BASE64_STANDARD.encode(manifest.manifest_toml.as_bytes());
+        let _ = writeln!(
+            out,
+            "model id={} manifest={}",
+            manifest.model_id, manifest_b64
+        );
+    }
+    let _ = writeln!(out, "active id={}", snapshot.models.active);
+    let schema_b64 = BASE64_STANDARD.encode(snapshot.telemetry_schema.descriptor_json().as_bytes());
+    let _ = writeln!(out, "telemetry schema={schema_b64}");
+    let _ = writeln!(out, "end");
+    out.into_bytes()
+}
+
+/// Build publish lines for `/gpu/bridge/ctl` using the default echo limit.
+pub fn build_publish_lines(snapshot: &GpuNamespaceSnapshot) -> Result<GpuBridgePublish> {
+    build_publish_lines_with_limit(snapshot, MAX_ECHO_LEN)
+}
+
+/// Build publish lines for `/gpu/bridge/ctl` with a custom echo payload limit.
+pub fn build_publish_lines_with_limit(
+    snapshot: &GpuNamespaceSnapshot,
+    max_echo_len: usize,
+) -> Result<GpuBridgePublish> {
+    ensure!(max_echo_len >= 8, "max echo len too small");
+    let bytes = namespace_to_wire(snapshot);
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let sha256 = hex::encode(hasher.finalize());
+    let mut lines = Vec::new();
+    lines.push(format!("begin bytes={} sha256={}", bytes.len(), sha256));
+
+    let encoded = BASE64_STANDARD.encode(&bytes);
+    let chunk_len = ((max_echo_len.saturating_sub(GPU_BRIDGE_B64_PREFIX.len())) / 4) * 4;
+    ensure!(chunk_len >= 4, "max echo len too small for base64 chunks");
+    for chunk in encoded.as_bytes().chunks(chunk_len) {
+        let chunk_str = core::str::from_utf8(chunk)
+            .map_err(|_| anyhow!("base64 chunk is not valid UTF-8"))?;
+        lines.push(format!("{GPU_BRIDGE_B64_PREFIX}{chunk_str}"));
+    }
+    lines.push("end".to_owned());
+    Ok(GpuBridgePublish { bytes, sha256, lines })
 }
 
 fn escape_json_string(input: &str) -> String {

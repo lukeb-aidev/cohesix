@@ -130,6 +130,30 @@ fn render_defaults_toml(manifest: &Manifest, manifest_hash: &str) -> String {
         manifest.swarmui.hive.snapshot_max_events
     )
     .ok();
+    writeln!(
+        contents,
+        "overlay_lines = {}",
+        manifest.swarmui.hive.overlay_lines
+    )
+    .ok();
+    writeln!(
+        contents,
+        "detail_lines = {}",
+        manifest.swarmui.hive.detail_lines
+    )
+    .ok();
+    writeln!(
+        contents,
+        "line_cap_bytes = {}",
+        manifest.swarmui.hive.line_cap_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "per_worker_bytes = {}",
+        manifest.swarmui.hive.per_worker_bytes
+    )
+    .ok();
     writeln!(contents).ok();
     writeln!(contents, "[swarmui.paths]").ok();
     writeln!(
@@ -261,6 +285,30 @@ fn render_defaults_rust(manifest: &Manifest, manifest_hash: &str) -> String {
     .ok();
     writeln!(
         contents,
+        "pub const SWARMUI_HIVE_OVERLAY_LINES: u16 = {};",
+        manifest.swarmui.hive.overlay_lines
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_HIVE_DETAIL_LINES: u16 = {};",
+        manifest.swarmui.hive.detail_lines
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_HIVE_LINE_CAP_BYTES: u32 = {};",
+        manifest.swarmui.hive.line_cap_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_HIVE_PER_WORKER_BYTES: u32 = {};",
+        manifest.swarmui.hive.per_worker_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
         "pub const SWARMUI_TRACE_MAX_BYTES: u32 = {};",
         manifest.client_policies.trace.max_bytes
     )
@@ -361,6 +409,30 @@ fn render_defaults_doc(manifest: &Manifest, manifest_hash: &str, defaults_hash: 
         contents,
         "- `swarmui.hive.snapshot_max_events`: `{}`",
         manifest.swarmui.hive.snapshot_max_events
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.overlay_lines`: `{}`",
+        manifest.swarmui.hive.overlay_lines
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.detail_lines`: `{}`",
+        manifest.swarmui.hive.detail_lines
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.line_cap_bytes`: `{}`",
+        manifest.swarmui.hive.line_cap_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.per_worker_bytes`: `{}`",
+        manifest.swarmui.hive.per_worker_bytes
     )
     .ok();
     writeln!(

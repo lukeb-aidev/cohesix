@@ -9,6 +9,10 @@ publish = false
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
+cohsh-core = { workspace = true }
 nvml-wrapper = { version = "0.11.0", optional = true }
 
 [features]

@@ -75,6 +75,7 @@ fn format_provider(provider: &crate::ir::HostProvider) -> &'static str {
     match provider {
         crate::ir::HostProvider::Systemd => "systemd",
         crate::ir::HostProvider::K8s => "k8s",
+        crate::ir::HostProvider::Docker => "docker",
         crate::ir::HostProvider::Nvidia => "nvidia",
         crate::ir::HostProvider::Jetson => "jetson",
         crate::ir::HostProvider::Net => "net",

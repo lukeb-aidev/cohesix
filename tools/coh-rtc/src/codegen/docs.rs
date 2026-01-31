@@ -563,6 +563,48 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `client_policies.cohsh.tail.poll_ms_default`: `{}`",
+            manifest.client_policies.cohsh.tail.poll_ms_default
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.cohsh.tail.poll_ms_min`: `{}`",
+            manifest.client_policies.cohsh.tail.poll_ms_min
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.cohsh.tail.poll_ms_max`: `{}`",
+            manifest.client_policies.cohsh.tail.poll_ms_max
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.cohsh.host_telemetry.nvidia_poll_ms`: `{}`",
+            manifest.client_policies.cohsh.host_telemetry.nvidia_poll_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.cohsh.host_telemetry.systemd_poll_ms`: `{}`",
+            manifest.client_policies.cohsh.host_telemetry.systemd_poll_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.cohsh.host_telemetry.docker_poll_ms`: `{}`",
+            manifest.client_policies.cohsh.host_telemetry.docker_poll_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_policies.cohsh.host_telemetry.k8s_poll_ms`: `{}`",
+            manifest.client_policies.cohsh.host_telemetry.k8s_poll_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
             "- `client_policies.coh.mount.root`: `{}`",
             manifest.client_policies.coh.mount.root
         )
@@ -717,6 +759,30 @@ impl DocFragments {
             schema_md,
             "- `swarmui.hive.snapshot_max_events`: `{}`",
             manifest.swarmui.hive.snapshot_max_events
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.hive.overlay_lines`: `{}`",
+            manifest.swarmui.hive.overlay_lines
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.hive.detail_lines`: `{}`",
+            manifest.swarmui.hive.detail_lines
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.hive.line_cap_bytes`: `{}`",
+            manifest.swarmui.hive.line_cap_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `swarmui.hive.per_worker_bytes`: `{}`",
+            manifest.swarmui.hive.per_worker_bytes
         )
         .ok();
         writeln!(
@@ -1966,6 +2032,7 @@ fn format_provider(provider: &crate::ir::HostProvider) -> &'static str {
     match provider {
         crate::ir::HostProvider::Systemd => "systemd",
         crate::ir::HostProvider::K8s => "k8s",
+        crate::ir::HostProvider::Docker => "docker",
         crate::ir::HostProvider::Nvidia => "nvidia",
         crate::ir::HostProvider::Jetson => "jetson",
         crate::ir::HostProvider::Net => "net",
