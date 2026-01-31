@@ -23,6 +23,8 @@ Releases are available in [releases/](releases/).
 
 **Models Tested**:
 - HuggingFaceTB/SmolVLM-500M-Instruct
+- WinKawaks/vit-small-patch16-224 (ViT-S/16)
+- WinKawaks/vit-tiny-patch16-224 (ViT-Ti/16)
 
 ## Why Cohesix?
 
