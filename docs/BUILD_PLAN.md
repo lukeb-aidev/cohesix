@@ -3985,6 +3985,182 @@ Checks:
 Deliverables:
   - Performance + telemetry harness and Test Plan update.
 ```
+## Milestone 24c — Authoritative Scheduling Grammar + REST Gateway + Scheduler/Lease Observability <a id="24c"></a>
+[Milestones](#Milestones)
+
+**Status:** Pending.
+
+**Why now (adoption):** Operators want frictionless API access without weakening Cohesix’s authority model. This milestone adds VM‑authoritative scheduling/lease/policy/export control grammar, a host‑only REST gateway that is a strict projection of file/console semantics, and read‑only `/proc` observability surfaced in Live Hive.
+
+**Goal**
+Add additive, non‑breaking control grammar for:
+- Lease renewal/preemption + quotas
+- Declarative VM scheduling queue
+- Policy apply/rollback enforcement
+- Export scheduling / data‑diode controls
+
+Expose the new control surfaces through a host‑only REST gateway (OpenAPI 3.1), add Python REST backend parity, and render read‑only scheduler + lease panels in SwarmUI using new `/proc` nodes.
+
+**Deliverables**
+- New append‑only control files (strict JSONL schemas, bounded):
+  - `/queen/lease/ctl` — lease quotas/renew/preempt
+  - `/queen/schedule/ctl` — scheduling queue
+  - `/queen/export/ctl` — export windows
+  - `/policy/ctl` — apply/rollback schema
+- Manifest‑gated bounds for new control files and `/proc` nodes (IR‑driven via `coh-rtc`).
+- New `/proc` nodes (read‑only, bounded):
+  - `/proc/schedule/summary` + `/proc/schedule/queue`
+  - `/proc/lease/summary` + `/proc/lease/active` + `/proc/lease/preemptions`
+- Host‑only REST gateway + OpenAPI 3.1 spec + Swagger UI.
+- Python REST backend with parity tests.
+- SwarmUI read‑only panels: Scheduler Queue and Lease/Preemption Timeline.
+- Docs updates: `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, `docs/USERLAND_AND_CLI.md`,
+  `docs/HOST_TOOLS.md`, `docs/QUICKSTART.md`, `docs/PYTHON_SUPPORT.md`, `docs/TEST_PLAN.md`.
+
+**Commands**
+- `cargo run -p coh-rtc`
+- `scripts/check-generated.sh`
+- `cargo test -p nine-door --test schedule_create`
+- `cargo test -p nine-door --test schedule_bounds`
+- `cargo test -p nine-door --test lease_bounds`
+- `cargo test -p nine-door --test policy_ctl`
+- `cargo test -p nine-door --test export_ctl`
+- `cargo test -p cohsh-core`
+- `cargo test -p cohsh --test transcripts`
+- `cargo test -p swarmui --test console_parity`
+- `cd tools/swarmui-ui-tests && npm test`
+- `cargo test -p hive-gateway`
+- `python -m pytest -k cohesix_parity`
+- `scripts/cohsh/run_regression_batch.sh`
+
+**Checks (DoD)**
+- New control files accept valid JSONL and reject invalid fields with deterministic `ERR`.
+- New `/proc` nodes respect manifest bounds and render deterministic, line‑oriented output.
+- REST gateway returns OK/ERR/END‑equivalent responses and enforces manifest bounds.
+- Python REST backend matches cohsh semantics in parity tests.
+- SwarmUI panels render queue + lease state from `/proc` without adding any control verbs.
+- Regression pack passes with updated fixtures; no ACK/ERR/END drift outside new fixtures.
+
+**Task Breakdown**
+```
+Title/ID: m24c-grammar-manifest
+Goal: Add manifest gates + bounds for new control files and `/proc` nodes.
+Inputs: configs/root_task.toml, tools/coh-rtc, docs/INTERFACES.md.
+Changes:
+  - configs/root_task.toml — add scheduler/lease/export/policy gates + size bounds.
+  - tools/coh-rtc — emit generated bounds for new control and `/proc` nodes.
+Commands:
+  - cargo run -p coh-rtc
+  - scripts/check-generated.sh
+Checks:
+  - Generated outputs hash-match; bounds appear in snippets.
+Deliverables:
+  - IR-driven gates and bounds for new control files and `/proc` nodes.
+
+Title/ID: m24c-grammar-runtime
+Goal: Implement VM/NineDoor handling of new control files with strict JSONL validation + audit lines.
+Inputs: apps/root-task/src/ninedoor.rs, apps/nine-door, docs/INTERFACES.md.
+Changes:
+  - apps/root-task/src/ninedoor.rs — handlers for `/queen/lease/ctl`, `/queen/schedule/ctl`,
+    `/queen/export/ctl`, `/policy/ctl`.
+  - apps/nine-door/ — host-mode providers for the same paths.
+  - docs/INTERFACES.md — document schemas + error semantics.
+  - docs/ARCHITECTURE.md — update control surfaces/data flows.
+Commands:
+  - cargo test -p nine-door --test schedule_create
+  - cargo test -p nine-door --test schedule_bounds
+  - cargo test -p nine-door --test lease_bounds
+  - cargo test -p nine-door --test policy_ctl
+  - cargo test -p nine-door --test export_ctl
+Checks:
+  - Valid lines accepted; invalid lines rejected deterministically; audit lines emitted.
+Deliverables:
+  - Authoritative scheduling/lease/policy/export grammar in VM and host NineDoor.
+
+Title/ID: m24c-proc-observability
+Goal: Add read-only `/proc` nodes for schedule + lease observability (bounded).
+Inputs: apps/root-task, docs/INTERFACES.md.
+Changes:
+  - apps/root-task — `/proc/schedule/*` and `/proc/lease/*` providers.
+  - docs/INTERFACES.md — new `/proc` node formats.
+Commands:
+  - cargo test -p nine-door --test schedule_bounds
+  - cargo test -p nine-door --test lease_bounds
+Checks:
+  - `/proc` nodes respect manifest byte/line limits and stable formatting.
+Deliverables:
+  - Read-only schedule/lease observability nodes.
+
+Title/ID: m24c-swarmui-scheduler-lease-panels
+Goal: Add read-only Live Hive panels for scheduler queue and lease/preemption timeline.
+Inputs: apps/swarmui, tools/swarmui-ui-tests, docs/INTERFACES.md.
+Changes:
+  - apps/swarmui/ — panels that read `/proc/schedule/*` and `/proc/lease/*`.
+  - tools/swarmui-ui-tests/ — replay fixtures + Playwright checks for panel wiring.
+  - docs/INTERFACES.md — UI expectations (read-only).
+Commands:
+  - cargo test -p swarmui --test console_parity
+  - cd tools/swarmui-ui-tests
+  - npm test
+Checks:
+  - Panels render bounded content and update on replay fixtures.
+Deliverables:
+  - Read-only SwarmUI panels for schedule and lease state.
+
+Title/ID: m24c-host-rest-gateway
+Goal: Provide host-only REST gateway mapping 1:1 to file/console semantics.
+Inputs: crates/cohsh-core, docs/HOST_TOOLS.md.
+Changes:
+  - apps/hive-gateway/ — new host tool (REST server + OpenAPI 3.1 + Swagger UI).
+  - docs/HOST_TOOLS.md — add gateway usage + auth/ticket guidance.
+  - docs/HOST_API.md — OpenAPI spec + examples.
+Commands:
+  - cargo test -p hive-gateway
+Checks:
+  - REST responses mirror OK/ERR/END; no new semantics.
+Deliverables:
+  - REST gateway + OpenAPI spec.
+
+Title/ID: m24c-python-rest-backend
+Goal: Add REST backend to cohesix-py with parity coverage.
+Inputs: tools/cohesix-py, docs/PYTHON_SUPPORT.md.
+Changes:
+  - tools/cohesix-py/cohesix/backends.py — RestBackend.
+  - tools/cohesix-py/tests/test_parity.py — REST parity fixtures.
+  - docs/PYTHON_SUPPORT.md — REST usage docs.
+Commands:
+  - python -m pytest -k cohesix_parity
+Checks:
+  - REST backend matches cohsh semantics.
+Deliverables:
+  - REST backend + parity tests.
+
+Title/ID: m24c-docs-quickstart-testplan
+Goal: Update Quickstart and Test Plan for REST gateway + new control grammar.
+Inputs: docs/QUICKSTART.md, docs/TEST_PLAN.md, docs/USERLAND_AND_CLI.md.
+Changes:
+  - docs/QUICKSTART.md — REST gateway quickstart (mock + live QEMU).
+  - docs/TEST_PLAN.md — add schedule/lease/export/policy checks + REST gateway tests.
+  - docs/USERLAND_AND_CLI.md — document new control files (`echo` JSONL).
+Commands:
+  - scripts/ci/check_test_plan.sh
+Checks:
+  - Quickstart steps run on macOS 26 + QEMU.
+Deliverables:
+  - Updated docs for frictionless adoption.
+
+Title/ID: m24c-regression-pack
+Goal: Add fixtures and run the regression pack unchanged.
+Inputs: scripts/cohsh/run_regression_batch.sh, tests/fixtures/*.
+Changes:
+  - tests/fixtures/ — add schedule/lease/export/policy fixtures.
+Commands:
+  - scripts/cohsh/run_regression_batch.sh
+Checks:
+  - No ACK/ERR/END drift outside updated fixtures.
+Deliverables:
+  - Updated fixtures and regression evidence.
+```
 ----
 **Release 0.3.0 alpha**
 ----
