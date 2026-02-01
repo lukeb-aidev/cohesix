@@ -207,20 +207,20 @@ The live publish path keeps `/gpu/models/*` and `/gpu/telemetry/schema.json` out
 
 ```mermaid
 flowchart LR
-  subgraph Host
-    GBH[gpu-bridge-host]
-    COH[coh peft import]
-    REG[host model registry]
+  subgraph Host["Host"]
+    GBH["gpu-bridge-host"]
+    COH["coh peft import"]
+    REG["host model registry"]
   end
-  subgraph VM
-    ND[NineDoor /gpu/bridge/ctl]
-    GPU[/gpu/<id>/*]
-    MODELS[/gpu/models/*]
-    SCHEMA[/gpu/telemetry/schema.json]
+  subgraph VM["VM"]
+    ND["NineDoor /gpu/bridge/ctl"]
+    GPU["/gpu/<id>/*"]
+    MODELS["/gpu/models/*"]
+    SCHEMA["/gpu/telemetry/schema.json"]
   end
   REG -->|writes| COH
-  COH -->|--publish/--refresh-gpu-models| GBH
-  GBH -->|bounded snapshot| ND
+  COH -->|"--publish/--refresh-gpu-models"| GBH
+  GBH -->|"bounded snapshot"| ND
   ND --> GPU
   ND --> MODELS
   ND --> SCHEMA
