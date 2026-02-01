@@ -2692,7 +2692,7 @@ After Milestone 20h:
 - The system is ready for external evaluation without hand-holding.
 
 ----
-**Alpha Release 1 achieved here**
+**Release 0.1.0 alpha**
 ----
 
 Next, Alpha Release 2 targets a plug-and-play operator experience immediately after Milestone 20.x. Milestones 21-24 define the Alpha track; the AWS AMI work follows as Milestone 25a.
@@ -3889,7 +3889,7 @@ Deliverables:
 ```
 
 ----
-**Alpha Release 2 achieved here**
+**Release 0.2.0 alpha**
 ----
 
 ## Milestone 24b1 — Live Hive UX Patch: Performance, Labels, Clickability, Telemetry Harness <a id="24b1"></a>
@@ -3981,7 +3981,13 @@ Checks:
 Deliverables:
   - Performance + telemetry harness and Test Plan update.
 ```
+----
+**Release 0.3.0 alpha**
+----
 
+----
+**Tracked Activities**
+----
 ## Activity — Security Evidence Demo (Post-M24, NIST 800-53 LOW)
 
 **Status:** Complete.
