@@ -241,17 +241,16 @@ What this does: pads the trace to the 128-byte CAS chunk size, packs it into a s
 NVML discovery is enabled by default on Linux bundles; use `--no-default-features` to omit NVML.
 Note: `/gpu/models` and `/gpu/telemetry/schema.json` appear only after a live publish.
 
-### host-sidecar-bridge (mock + live publishing)
+### host-sidecar-bridge
 ```bash
 ./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider nvidia
 ```
-Publish mock provider data over TCP (bundle includes TCP support):
+Publish live NVidia, systemd, k8s, and/or Docker telemetry:
 ```bash
 ./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
 ./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --watch \
   --provider systemd --provider k8s --provider docker --provider nvidia
 ```
-The `/host` namespace must be enabled in `configs/root_task.toml`.
 
 ## Ports and signals
 - TCP console: `127.0.0.1:31337`
