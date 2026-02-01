@@ -283,7 +283,7 @@ function selectHiveAgent(agentId, fromHive = false) {
   if (lastHiveBatch) {
     renderHiveOverlays(lastHiveBatch);
   }
-  renderHiveDetail({ detail: null });
+  renderHiveDetail(lastHiveBatch || { detail: null });
   if (hiveActive && !hivePollInFlight) {
     stopHivePolling();
     pollHive();
@@ -334,6 +334,16 @@ const renderHiveDetail = (batch) => {
     }
     hiveDetailLines.textContent = detail.lines.join("\n");
     return;
+  }
+  if (hiveDetailAgent && Array.isArray(batch.overlays)) {
+    const match = batch.overlays.find((overlay) => overlay.agent === hiveDetailAgent);
+    if (match && Array.isArray(match.lines) && match.lines.length) {
+      if (hiveDetailTitle) {
+        hiveDetailTitle.textContent = match.agent;
+      }
+      hiveDetailLines.textContent = match.lines.join("\n");
+      return;
+    }
   }
   if (!hiveDetailAgent) {
     hiveDetailLines.innerHTML = '<p class="placeholder">Select a worker to view details.</p>';
