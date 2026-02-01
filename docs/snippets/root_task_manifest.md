@@ -90,8 +90,8 @@
 - `ui_providers.updates.status`: `true`
 - `client_policies.cohsh.pool.control_sessions`: `2`
 - `client_policies.cohsh.pool.telemetry_sessions`: `4`
-- `client_policies.cohsh.tail.poll_ms_default`: `1000`
-- `client_policies.cohsh.tail.poll_ms_min`: `250`
+- `client_policies.cohsh.tail.poll_ms_default`: `1500`
+- `client_policies.cohsh.tail.poll_ms_min`: `500`
 - `client_policies.cohsh.tail.poll_ms_max`: `10000`
 - `client_policies.cohsh.host_telemetry.nvidia_poll_ms`: `1000`
 - `client_policies.cohsh.host_telemetry.systemd_poll_ms`: `2000`
@@ -116,7 +116,7 @@
 - `swarmui.cache.enabled`: `false`
 - `swarmui.cache.max_bytes`: `262144`
 - `swarmui.cache.ttl_s`: `3600`
-- `swarmui.hive.frame_cap_fps`: `60`
+- `swarmui.hive.frame_cap_fps`: `30`
 - `swarmui.hive.step_ms`: `16`
 - `swarmui.hive.lod_zoom_out`: `0.7`
 - `swarmui.hive.lod_zoom_in`: `1.25`
@@ -143,7 +143,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`
+- `manifest.sha256`: `3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -189,4 +189,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`)._
+_Generated from `configs/root_task.toml` (sha256: `3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb`)._

@@ -158,8 +158,8 @@ control_sessions = 2
 telemetry_sessions = 4
 
 [client_policies.cohsh.tail]
-poll_ms_default = 1000
-poll_ms_min = 250
+poll_ms_default = 1500
+poll_ms_min = 500
 poll_ms_max = 10000
 
 [client_policies.cohsh.host_telemetry]
@@ -232,7 +232,7 @@ max_bytes = 262144
 ttl_s = 3600
 
 [swarmui.hive]
-frame_cap_fps = 60
+frame_cap_fps = 30
 step_ms = 16
 lod_zoom_out = 0.7
 lod_zoom_in = 1.25

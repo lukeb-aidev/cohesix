@@ -3,7 +3,7 @@
 # Purpose: Provide manifest-derived defaults for the Cohesix Python client.
 
 DEFAULTS = {
-    "manifest_sha256": "3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af",
+    "manifest_sha256": "3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb",
     "secure9p": {"msize": 8192, "walk_depth": 8},
     "console": {
         "max_line_len": 256,

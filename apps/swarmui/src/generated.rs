@@ -4,14 +4,14 @@
 
 #![allow(dead_code)]
 
-pub const MANIFEST_SHA256: &str = "3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af";
+pub const MANIFEST_SHA256: &str = "3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb";
 pub const SECURE9P_MSIZE: u32 = 8192;
 pub const SECURE9P_WALK_DEPTH: u8 = 8;
 pub const SWARMUI_TICKET_SCOPE: &str = "per-ticket";
 pub const SWARMUI_CACHE_ENABLED: bool = false;
 pub const SWARMUI_CACHE_MAX_BYTES: u32 = 262144;
 pub const SWARMUI_CACHE_TTL_SECS: u64 = 3600;
-pub const SWARMUI_HIVE_FRAME_CAP_FPS: u16 = 60;
+pub const SWARMUI_HIVE_FRAME_CAP_FPS: u16 = 30;
 pub const SWARMUI_HIVE_STEP_MS: u16 = 16;
 pub const SWARMUI_HIVE_LOD_ZOOM_OUT: f32 = 0.7;
 pub const SWARMUI_HIVE_LOD_ZOOM_IN: f32 = 1.25;

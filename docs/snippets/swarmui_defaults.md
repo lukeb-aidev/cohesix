@@ -2,13 +2,13 @@
 <!-- Purpose: Generated SwarmUI defaults snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### SwarmUI defaults (generated)
-- `manifest.sha256`: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`
-- `swarmui.defaults.sha256`: `0d80431371a0132a5fa0c6b13c0039ce0f89b06fd108e095b60fa018b10f39ed`
+- `manifest.sha256`: `3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb`
+- `swarmui.defaults.sha256`: `165b6d096da3df93d85341075161b6222dca47a54a10f86bd99ebe51d0c6c5aa`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
 - `swarmui.cache.max_bytes`: `262144`
 - `swarmui.cache.ttl_s`: `3600`
-- `swarmui.hive.frame_cap_fps`: `60`
+- `swarmui.hive.frame_cap_fps`: `30`
 - `swarmui.hive.step_ms`: `16`
 - `swarmui.hive.lod_zoom_out`: `0.7`
 - `swarmui.hive.lod_zoom_in`: `1.25`
@@ -24,4 +24,4 @@
 - `swarmui.paths.namespace_roots`: `/proc, /queen, /worker, /log, /gpu`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`)._
+_Generated from `configs/root_task.toml` (sha256: `3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb`)._
