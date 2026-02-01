@@ -13,7 +13,8 @@
     </td>
   </tr>
 </table>
-Open-source releases are available in [releases/](releases/) .
+
+Open-source releases are available in [releases/](releases/).
 
 **Tested platforms**:
 - Apple Silicon M-series (macOS 26 host, Queen VM + host tools)
