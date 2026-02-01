@@ -88,7 +88,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [23](#23) | PEFT/LoRA Lifecycle Glue (coh peft) | Complete |
 | [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Complete |
 | [24b](#24b) | Live GPU Bridge Wiring + PEFT Live Flow + Live Hive Telemetry Text | Complete |
-| [24b1](#24b1) | Live Hive UX Patch: Performance, Labels, Clickability, Telemetry Harness | Pending |
+| [24b1](#24b1) | Live Hive UX Patch: Performance, Labels, Clickability, Telemetry Harness | Complete |
 | [25a](#25a) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [25b](#25b) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [25c](#25c) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Pending |
@@ -3899,7 +3899,7 @@ Deliverables:
 ## Milestone 24b1 — Live Hive UX Patch: Performance, Labels, Clickability, Telemetry Harness <a id="24b1"></a>
 [Milestones](#Milestones)
 
-**Status:** Pending — Live Hive is sluggish, worker selection lacks clear identity, and telemetry visibility is unreliable.
+**Status:** Complete — Live Hive responsiveness, labeling, clickability, and telemetry harness are in place and verified.
 
 **Why now (adoption):** Operators cannot trust Live Hive when it is slow and ambiguous. The UI must remain responsive, worker dots must be identifiable at a glance, and clicking a worker must deterministically reveal telemetry. This patch is a focused UX + telemetry correctness fix, not a new protocol or capability change.
 
