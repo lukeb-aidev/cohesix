@@ -73,7 +73,7 @@ Cohesix is deliberately influenced by **[Plan 9 from Bell Labs](https://en.wikip
 ### What Cohesix inherits
 
 **File-shaped control surfaces**  
-Cohesix exposes control and observation as file operations. Paths such as `/queen/ctl`, `/worker/<id>/telemetry`, `/log/*`, and `/gpu/<id>/*` are interfaces, not storage. This yields diffable state, append-only audit logs, and a uniform operator surface.
+Cohesix exposes control and observation as file operations. Paths such as `/queen/ctl`, `/worker/<id>/telemetry`, `/log/*`, `/gpu/<id>/*`, and `/gpu/models/*` are interfaces, not storage. This yields diffable state, append-only audit logs, and a uniform operator surface.
 
 **Namespaces as authority boundaries**  
 Like Plan 9’s per-process namespaces, Cohesix uses **per-session, role-scoped namespaces**. A namespace is not global truth; it is a capability-filtered view of the system. Authority is defined by which paths are visible and writable.
@@ -117,7 +117,7 @@ flowchart LR
     COHSH["cohsh (host-only)<br/>Canonical shell<br/>transport tcp<br/>role and ticket attach"]:::hosttool
     GUI["SwarmUI (host-only)<br/>Speaks cohsh protocol"]:::hosttool
     WIRE["secure9p-codec/core/transport (host)<br/>bounded framing<br/>TCP transport adapter"]:::hostlib
-    GPUB["gpu-bridge-host (host)<br/>CUDA and NVML here<br/>lease enforcement<br/>mirrors gpu namespace"]:::hosttool
+    GPUB["gpu-bridge-host (host)<br/>CUDA and NVML here<br/>lease enforcement<br/>publishes gpu + models"]:::hosttool
   end
 
   subgraph TARGET["Target (QEMU aarch64 virt today; UEFI ARM64 later)"]
@@ -144,6 +144,7 @@ flowchart LR
     WORKTEL["Path: /worker/ID/telemetry<br/>append-only telemetry"]:::path
     LOGS["Path: /log/*<br/>append-only streams"]:::path
     GPUFS["Path: /gpu/ID<br/>info ctl job status<br/>host-mirrored providers"]:::path
+    GPUMODELS["Path: /gpu/models<br/>available + active pointers<br/>host-published registry"]:::path
   end
 
   SEL4 --> RT
@@ -161,6 +162,7 @@ flowchart LR
   ND --> WORKTEL
   ND --> LOGS
   ND --> GPUFS
+  ND --> GPUMODELS
 
   Q -->|Secure9P ops| ND
   WH -->|Secure9P ops| ND
@@ -171,6 +173,7 @@ flowchart LR
   GPUB --> WIRE
   WIRE -->|Secure9P transport host-only| ND
   GPUB --> GPUFS
+  GPUB --> GPUMODELS
 
   classDef kernel fill:#eeeeee,stroke:#555555,stroke-width:1px;
   classDef vm fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
@@ -190,8 +193,8 @@ flowchart LR
 - **worker-heart** — Minimal worker emitting heartbeat telemetry into `/worker/<id>/telemetry`.
 - **worker-gpu** — VM-resident stub handling GPU lease state and telemetry hooks; never touches hardware.
 - **cohsh** — Host-only CLI and canonical shell for the hive; GUI tooling is expected to speak the same protocol.
-- **gpu-bridge-host** — Host-side process that discovers or mocks GPUs, enforces leases, and mirrors `/gpu/<id>/` into the VM.
-- **host-sidecar-bridge** — Host-side publisher for `/host` providers (systemd, k8s, docker, nvidia) using existing Secure9P semantics.
+- **gpu-bridge-host** — Host-side process that discovers or mocks GPUs, enforces leases, and publishes `/gpu/<id>/`, `/gpu/models/*`, and `/gpu/telemetry/schema.json` into the VM.
+- **host-sidecar-bridge** — Host-side publisher for `/host` providers (systemd, k8s, docker, nvidia) using existing Secure9P semantics and manifest-backed polling defaults.
 - **secure9p-codec / secure9p-core / secure9p-transport** — Secure9P codec, core policy hooks, and transport adapters for host tools.
 
 ---
@@ -220,7 +223,11 @@ Pre-built bundles are available in [releases/](releases/). Each bundle includes 
    ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
    ```
    For non-local use, tunnel this TCP console over a VPN/overlay (no TLS inside the VM).
-5. Optional UI (Mac or Linux desktop):
+5. If you plan to run non-mock PEFT flows, publish the live GPU registry so `/gpu/models` is visible:
+   ```bash
+   ./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
+   ```
+6. Optional UI (Mac or Linux desktop):
    ```bash
    ./bin/swarmui
    ```
