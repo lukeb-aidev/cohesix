@@ -231,10 +231,10 @@ Live Hive renders only what the backend tailers ingest. Polling bounds and line 
 
 ```mermaid
 flowchart LR
-  W[worker telemetry file\n/shard/<label>/worker/<id>/telemetry] --> TAIL[cohsh-core tailer]
-  TAIL --> BUF[bounded line buffers]
-  BUF --> UI[SwarmUI Live Hive overlays + detail panel]
-  UI -->|read-only| PROC[/proc/root/*, /proc/pressure/*, /proc/9p/session/active]
+  W["worker telemetry file\n/shard/<label>/worker/<id>/telemetry"] --> TAIL["cohsh-core tailer"]
+  TAIL --> BUF["bounded line buffers"]
+  BUF --> UI["SwarmUI Live Hive overlays + detail panel"]
+  UI -->|"read-only"| PROC["/proc/root/*, /proc/pressure/*, /proc/9p/session/active"]
 ```
 
 ## 12. References
