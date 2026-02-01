@@ -1800,7 +1800,9 @@ Checks:
 Deliverables:
 - Updated docs/INTERFACES.md with SwarmUI consumption guidance and non-goals.
 ```
+
 **Status:** Complete — SwarmUI desktop is wired to cohsh-core with ticket-scoped sessions, transcript parity tests, bounded offline cache, and no-HTTP dependency enforcement; regression pack remains green.
+
 ---
 ## Milestone 20d — SwarmUI Live Hive Rendering (PixiJS, GPU-First) <a id="20d"></a> 
 [Milestones](#Milestones)
@@ -1991,7 +1993,9 @@ Checks:
 Deliverables:
 - Single source-of-truth design tokens referenced in docs/INTERFACES.md.
 ```
+
 **Status:** Complete — Live Hive PixiJS rendering is wired with deterministic replay fixtures, compiler-emitted hive defaults, and documented design tokens; regression pack is green.
+
 ---
 
 ## Milestone 20e — CLI/UI Convergence Tests <a id="20e"></a> 
