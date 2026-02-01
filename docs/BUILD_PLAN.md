@@ -4256,7 +4256,7 @@ Deliverables:
 
 ---
 
-Next, Alpha release 3 targets bare metal UEFI and AWS native boot via AMI.
+The next Alpha release targets bare metal UEFI and AWS native boot via AMI.
 
 ---
 
