@@ -3986,6 +3986,11 @@ Checks:
 Deliverables:
   - Performance + telemetry harness and Test Plan update.
 ```
+
+----
+**Release 0.3.0 alpha**
+----
+
 ## Milestone 24c — Authoritative Scheduling Grammar + REST Gateway + Scheduler/Lease Observability <a id="24c"></a>
 [Milestones](#Milestones)
 
@@ -4163,7 +4168,7 @@ Deliverables:
   - Updated fixtures and regression evidence.
 ```
 ----
-**Release 0.3.0 alpha**
+**Release 0.4.0 alpha**
 ----
 
 ----
