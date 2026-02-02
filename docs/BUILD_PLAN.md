@@ -89,6 +89,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Complete |
 | [24b](#24b) | Live GPU Bridge Wiring + PEFT Live Flow + Live Hive Telemetry Text | Complete |
 | [24b1](#24b1) | Live Hive UX Patch: Performance, Labels, Clickability, Telemetry Harness | Complete |
+| [24c](#24c) | Authoritative Scheduling Grammar + REST Gateway + Scheduler/Lease Observability | Pending |
 | [25a](#25a) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [25b](#25b) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [25c](#25c) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Pending |
