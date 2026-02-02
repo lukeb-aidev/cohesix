@@ -4005,7 +4005,7 @@ Add additive, non‑breaking control grammar for:
 - Policy apply/rollback enforcement
 - Export scheduling / data‑diode controls
 
-Expose the new control surfaces through a host‑only REST gateway (OpenAPI 3.1), add Python REST backend parity, and render read‑only scheduler + lease panels in SwarmUI using new `/proc` nodes.
+Expose the new control surfaces through a host‑only REST gateway (OpenAPI 3.1), add Python REST backend parity, render read‑only scheduler + lease panels in SwarmUI using new `/proc` nodes, and support running the REST gateway as a systemd service on Linux with automatic reconnect to the Cohesix TCP console.
 
 **Deliverables**
 - New append‑only control files (strict JSONL schemas, bounded):
@@ -4018,6 +4018,7 @@ Expose the new control surfaces through a host‑only REST gateway (OpenAPI 3.1)
   - `/proc/schedule/summary` + `/proc/schedule/queue`
   - `/proc/lease/summary` + `/proc/lease/active` + `/proc/lease/preemptions`
 - Host‑only REST gateway + OpenAPI 3.1 spec + Swagger UI.
+- Linux systemd service unit for the REST gateway with restart/reconnect behavior.
 - Python REST backend with parity tests.
 - SwarmUI read‑only panels: Scheduler Queue and Lease/Preemption Timeline.
 - Docs updates: `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, `docs/USERLAND_AND_CLI.md`,
@@ -4045,6 +4046,8 @@ Expose the new control surfaces through a host‑only REST gateway (OpenAPI 3.1)
 - REST gateway returns OK/ERR/END‑equivalent responses and enforces manifest bounds.
 - Python REST backend matches cohsh semantics in parity tests.
 - SwarmUI panels render queue + lease state from `/proc` without adding any control verbs.
+- REST gateway can be run under systemd on Linux, and auto‑reconnects to the Cohesix console after a QEMU restart.
+- `docs/TEST_PLAN.md` is updated and its new steps are completed as part of DoD for this milestone.
 - Regression pack passes with updated fixtures; no ACK/ERR/END drift outside new fixtures.
 
 **Task Breakdown**
@@ -4114,18 +4117,20 @@ Deliverables:
   - Read-only SwarmUI panels for schedule and lease state.
 
 Title/ID: m24c-host-rest-gateway
-Goal: Provide host-only REST gateway mapping 1:1 to file/console semantics.
+Goal: Provide host-only REST gateway mapping 1:1 to file/console semantics with systemd service support and reconnect behavior.
 Inputs: crates/cohsh-core, docs/HOST_TOOLS.md.
 Changes:
   - apps/hive-gateway/ — new host tool (REST server + OpenAPI 3.1 + Swagger UI).
   - docs/HOST_TOOLS.md — add gateway usage + auth/ticket guidance.
   - docs/HOST_API.md — OpenAPI spec + examples.
+  - systemd unit file (Linux) — run gateway as a service with restart policy and env overrides.
 Commands:
   - cargo test -p hive-gateway
 Checks:
   - REST responses mirror OK/ERR/END; no new semantics.
+  - Systemd unit reconnects to QEMU after console disconnect.
 Deliverables:
-  - REST gateway + OpenAPI spec.
+  - REST gateway + OpenAPI spec + systemd service unit.
 
 Title/ID: m24c-python-rest-backend
 Goal: Add REST backend to cohesix-py with parity coverage.
@@ -4146,12 +4151,13 @@ Goal: Update Quickstart and Test Plan for REST gateway + new control grammar.
 Inputs: docs/QUICKSTART.md, docs/TEST_PLAN.md, docs/USERLAND_AND_CLI.md.
 Changes:
   - docs/QUICKSTART.md — REST gateway quickstart (mock + live QEMU).
-  - docs/TEST_PLAN.md — add schedule/lease/export/policy checks + REST gateway tests.
+  - docs/TEST_PLAN.md — add schedule/lease/export/policy checks + REST gateway tests (including systemd service + reconnect).
   - docs/USERLAND_AND_CLI.md — document new control files (`echo` JSONL).
 Commands:
   - scripts/ci/check_test_plan.sh
 Checks:
   - Quickstart steps run on macOS 26 + QEMU.
+  - New Test Plan steps executed and recorded as part of DoD.
 Deliverables:
   - Updated docs for frictionless adoption.
 

@@ -63,6 +63,7 @@ Run in order unless explicitly skipped with a recorded reason.
 - `cargo test -p cohsh --test trace`
 - `cargo test -p swarmui --test trace`
 - `cargo run -p coh --features mock -- doctor --mock`
+- `cargo test -p hive-gateway`
 - `python -m pytest -k cohesix_parity`
 - `python tools/cohesix-py/examples/lease_run.py --mock`
 - `python tools/cohesix-py/examples/peft_roundtrip.py --mock`
@@ -161,6 +162,25 @@ Run while QEMU is up:
 - `host-sidecar-bridge`:
   - `./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider docker --provider nvidia`
   - `./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --watch` (requires `/host` enabled in `configs/root_task.toml`)
+- `hive-gateway` (REST gateway, Linux/systemd required for this section):
+  - Install unit + env file (examples):
+    - `sudo cp resources/systemd/hive-gateway.service /etc/systemd/system/`
+    - `sudo tee /etc/cohesix/hive-gateway.env >/dev/null <<'EOF'`
+    - `COH_TCP_HOST=127.0.0.1`
+    - `COH_TCP_PORT=31337`
+    - `COH_AUTH_TOKEN=changeme`
+    - `COH_ROLE=queen`
+    - `COH_TICKET=`
+    - `HIVE_GATEWAY_BIND=127.0.0.1:8080`
+    - `EOF`
+  - `sudo systemctl daemon-reload`
+  - `sudo systemctl enable --now hive-gateway`
+  - Validate REST responds: `curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .`
+  - Restart QEMU and confirm auto-reconnect:
+    - stop QEMU, wait 5–10s, restart QEMU
+    - `journalctl -u hive-gateway -n 200 --no-pager | rg -n "reconnect|connected|disconnected"`
+    - Re-run: `curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .`
+  - `sudo systemctl stop hive-gateway`
 - Deterministic replay via cohsh (no QEMU needed):
   - Source tree: `./bin/cohsh --transport mock --replay-trace ./tests/fixtures/traces/trace_v0.trace`
   - Release bundle: `./bin/cohsh --transport mock --replay-trace ./traces/trace_v0.trace`
