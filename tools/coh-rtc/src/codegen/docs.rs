@@ -221,6 +221,60 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `control_plane.schedule.enable`: `{}`",
+            manifest.control_plane.schedule.enable
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `control_plane.schedule.queue_max_entries`: `{}`",
+            manifest.control_plane.schedule.queue_max_entries
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `control_plane.schedule.ctl_max_bytes`: `{}`",
+            manifest.control_plane.schedule.ctl_max_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `control_plane.lease.enable`: `{}`",
+            manifest.control_plane.lease.enable
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `control_plane.lease.active_max_entries`: `{}`",
+            manifest.control_plane.lease.active_max_entries
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `control_plane.lease.preemptions_max_entries`: `{}`",
+            manifest.control_plane.lease.preemptions_max_entries
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `control_plane.lease.ctl_max_bytes`: `{}`",
+            manifest.control_plane.lease.ctl_max_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `control_plane.export.enable`: `{}`",
+            manifest.control_plane.export.enable
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `control_plane.export.ctl_max_bytes`: `{}`",
+            manifest.control_plane.export.ctl_max_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
             "- `observability.proc_9p.sessions`: `{}`",
             manifest.observability.proc_9p.sessions
         )
@@ -491,6 +545,66 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `observability.proc_schedule.summary`: `{}`",
+            manifest.observability.proc_schedule.summary
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_schedule.queue`: `{}`",
+            manifest.observability.proc_schedule.queue
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_schedule.summary_bytes`: `{}`",
+            manifest.observability.proc_schedule.summary_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_schedule.queue_bytes`: `{}`",
+            manifest.observability.proc_schedule.queue_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_lease.summary`: `{}`",
+            manifest.observability.proc_lease.summary
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_lease.active`: `{}`",
+            manifest.observability.proc_lease.active
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_lease.preemptions`: `{}`",
+            manifest.observability.proc_lease.preemptions
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_lease.summary_bytes`: `{}`",
+            manifest.observability.proc_lease.summary_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_lease.active_bytes`: `{}`",
+            manifest.observability.proc_lease.active_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `observability.proc_lease.preemptions_bytes`: `{}`",
+            manifest.observability.proc_lease.preemptions_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
             "- `ui_providers.proc_9p.sessions`: `{}`",
             manifest.ui_providers.proc_9p.sessions
         )
@@ -693,6 +807,30 @@ impl DocFragments {
             schema_md,
             "- `client_paths.queen_lifecycle_ctl`: `{}`",
             manifest.client_paths.queen_lifecycle_ctl
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_paths.queen_schedule_ctl`: `{}`",
+            manifest.client_paths.queen_schedule_ctl
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_paths.queen_lease_ctl`: `{}`",
+            manifest.client_paths.queen_lease_ctl
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_paths.queen_export_ctl`: `{}`",
+            manifest.client_paths.queen_export_ctl
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `client_paths.policy_ctl`: `{}`",
+            manifest.client_paths.policy_ctl
         )
         .ok();
         writeln!(
@@ -1160,6 +1298,8 @@ impl DocFragments {
         let proc_ingest = &manifest.observability.proc_ingest;
         let proc_root = &manifest.observability.proc_root;
         let proc_pressure = &manifest.observability.proc_pressure;
+        let proc_schedule = &manifest.observability.proc_schedule;
+        let proc_lease = &manifest.observability.proc_lease;
         let proc_9p_enabled = proc_9p.sessions || proc_9p.outstanding || proc_9p.short_writes;
         let proc_9p_session_enabled = proc_9p_session.active
             || proc_9p_session.state
@@ -1175,6 +1315,9 @@ impl DocFragments {
             proc_root.reachable || proc_root.last_seen_ms || proc_root.cut_reason;
         let proc_pressure_enabled =
             proc_pressure.busy || proc_pressure.quota || proc_pressure.cut || proc_pressure.policy;
+        let proc_schedule_enabled = proc_schedule.summary || proc_schedule.queue;
+        let proc_lease_enabled =
+            proc_lease.summary || proc_lease.active || proc_lease.preemptions;
 
         let mut observability_interfaces_md = String::new();
         writeln!(
@@ -1187,6 +1330,8 @@ impl DocFragments {
             && !proc_ingest_enabled
             && !proc_root_enabled
             && !proc_pressure_enabled
+            && !proc_schedule_enabled
+            && !proc_lease_enabled
         {
             writeln!(observability_interfaces_md, "- (disabled)").ok();
         } else {
@@ -1349,6 +1494,46 @@ impl DocFragments {
                     observability_interfaces_md,
                     "- `/proc/pressure/policy` (read-only, max {} bytes): `policy=<u64>`.",
                     proc_pressure.policy_bytes
+                )
+                .ok();
+            }
+            if proc_schedule.summary {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/schedule/summary` (read-only, max {} bytes): `queue=<u64> dequeued=<u64> dropped=<u64> max_entries=<u32>`.",
+                    proc_schedule.summary_bytes
+                )
+                .ok();
+            }
+            if proc_schedule.queue {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/schedule/queue` (read-only, max {} bytes): `id=<id> role=<role> priority=<u32> ticks=<u32> budget_ms=<u32> seq=<u64>`.",
+                    proc_schedule.queue_bytes
+                )
+                .ok();
+            }
+            if proc_lease.summary {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/lease/summary` (read-only, max {} bytes): `active=<u64> preemptions=<u64> quotas=<u64> max_active=<u32> max_preemptions=<u32>`.",
+                    proc_lease.summary_bytes
+                )
+                .ok();
+            }
+            if proc_lease.active {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/lease/active` (read-only, max {} bytes): `id=<id> subject=<subject> resource=<resource> ttl_s=<u32> priority=<u32> state=<STATE> seq=<u64>`.",
+                    proc_lease.active_bytes
+                )
+                .ok();
+            }
+            if proc_lease.preemptions {
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/lease/preemptions` (read-only, max {} bytes): `id=<id> subject=<subject> resource=<resource> reason=<reason> seq=<u64>`.",
+                    proc_lease.preemptions_bytes
                 )
                 .ok();
             }

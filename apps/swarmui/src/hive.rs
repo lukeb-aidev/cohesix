@@ -133,6 +133,110 @@ pub struct SwarmUiHivePressureCounters {
     pub policy: u64,
 }
 
+/// Scheduler summary counters for Live Hive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmUiHiveScheduleSummary {
+    /// Queued entries.
+    pub queue: u64,
+    /// Dequeued entries.
+    pub dequeued: u64,
+    /// Dropped entries.
+    pub dropped: u64,
+    /// Max queue entries.
+    pub max_entries: u64,
+}
+
+/// Scheduler queue entry for Live Hive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmUiHiveScheduleEntry {
+    /// Schedule identifier.
+    pub id: String,
+    /// Target role label.
+    pub role: String,
+    /// Priority value.
+    pub priority: u32,
+    /// Tick budget.
+    pub ticks: u32,
+    /// Millisecond budget.
+    pub budget_ms: u32,
+    /// Sequence identifier.
+    pub seq: u64,
+}
+
+/// Scheduler snapshot for Live Hive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmUiHiveScheduleSnapshot {
+    /// Optional summary line.
+    #[serde(default)]
+    pub summary: Option<SwarmUiHiveScheduleSummary>,
+    /// Queue entries.
+    #[serde(default)]
+    pub queue: Vec<SwarmUiHiveScheduleEntry>,
+}
+
+/// Lease summary counters for Live Hive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmUiHiveLeaseSummary {
+    /// Active lease count.
+    pub active: u64,
+    /// Preemption count.
+    pub preemptions: u64,
+    /// Quota count.
+    pub quotas: u64,
+    /// Max active entries.
+    pub max_active: u64,
+    /// Max preemptions entries.
+    pub max_preemptions: u64,
+}
+
+/// Active lease entry for Live Hive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmUiHiveLeaseEntry {
+    /// Lease identifier.
+    pub id: String,
+    /// Subject identifier.
+    pub subject: String,
+    /// Resource identifier.
+    pub resource: String,
+    /// Lease TTL in seconds.
+    pub ttl_s: u32,
+    /// Priority value.
+    pub priority: u32,
+    /// Lease state label.
+    pub state: String,
+    /// Sequence identifier.
+    pub seq: u64,
+}
+
+/// Lease preemption entry for Live Hive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmUiHiveLeasePreemption {
+    /// Lease identifier.
+    pub id: String,
+    /// Subject identifier.
+    pub subject: String,
+    /// Resource identifier.
+    pub resource: String,
+    /// Preemption reason label.
+    pub reason: String,
+    /// Sequence identifier.
+    pub seq: u64,
+}
+
+/// Lease snapshot for Live Hive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmUiHiveLeaseSnapshot {
+    /// Optional summary line.
+    #[serde(default)]
+    pub summary: Option<SwarmUiHiveLeaseSummary>,
+    /// Active leases.
+    #[serde(default)]
+    pub active: Vec<SwarmUiHiveLeaseEntry>,
+    /// Lease preemptions.
+    #[serde(default)]
+    pub preemptions: Vec<SwarmUiHiveLeasePreemption>,
+}
+
 /// Serialized snapshot used for replay and offline inspection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmUiHiveSnapshot {
@@ -213,6 +317,12 @@ pub struct SwarmUiHiveBatch {
     /// Pressure counter snapshot.
     #[serde(default)]
     pub pressure_counters: Option<SwarmUiHivePressureCounters>,
+    /// Scheduler snapshot.
+    #[serde(default)]
+    pub schedule: Option<SwarmUiHiveScheduleSnapshot>,
+    /// Lease snapshot.
+    #[serde(default)]
+    pub lease: Option<SwarmUiHiveLeaseSnapshot>,
     /// Per-agent overlay lines.
     #[serde(default)]
     pub overlays: Vec<SwarmUiHiveOverlay>,
@@ -291,6 +401,8 @@ impl HiveReplay {
             root: None,
             sessions: None,
             pressure_counters: None,
+            schedule: None,
+            lease: None,
             overlays: Vec::new(),
             detail: None,
             done: self.cursor >= self.snapshot.events.len(),

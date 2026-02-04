@@ -1,0 +1,23 @@
+# Author: Lukas Bower
+# Purpose: Configure the Cohesix host-only REST gateway crate.
+[package]
+name = "hive-gateway"
+version = "0.1.0"
+edition = "2021"
+description = "Cohesix host-only REST gateway"
+license = "MIT"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+cohesix-net-constants = { workspace = true }
+cohesix-ticket = { workspace = true }
+cohsh = { path = "../cohsh", features = ["tcp"] }
+cohsh-core = { workspace = true }
+nine-door = { path = "../nine-door" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = "0.7"
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

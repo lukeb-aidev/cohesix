@@ -164,6 +164,48 @@ impl ProcPressureConfig {
     }
 }
 
+/// Configuration for `/proc/schedule` observability files.
+#[derive(Debug, Clone, Copy)]
+pub struct ProcScheduleConfig {
+    /// Enable `/proc/schedule/summary`.
+    pub summary: bool,
+    /// Enable `/proc/schedule/queue`.
+    pub queue: bool,
+    /// Maximum bytes for `/proc/schedule/summary` payload.
+    pub summary_bytes: usize,
+    /// Maximum bytes for `/proc/schedule/queue` payload.
+    pub queue_bytes: usize,
+}
+
+impl ProcScheduleConfig {
+    pub(crate) fn enabled(self) -> bool {
+        self.summary || self.queue
+    }
+}
+
+/// Configuration for `/proc/lease` observability files.
+#[derive(Debug, Clone, Copy)]
+pub struct ProcLeaseConfig {
+    /// Enable `/proc/lease/summary`.
+    pub summary: bool,
+    /// Enable `/proc/lease/active`.
+    pub active: bool,
+    /// Enable `/proc/lease/preemptions`.
+    pub preemptions: bool,
+    /// Maximum bytes for `/proc/lease/summary` payload.
+    pub summary_bytes: usize,
+    /// Maximum bytes for `/proc/lease/active` payload.
+    pub active_bytes: usize,
+    /// Maximum bytes for `/proc/lease/preemptions` payload.
+    pub preemptions_bytes: usize,
+}
+
+impl ProcLeaseConfig {
+    pub(crate) fn enabled(self) -> bool {
+        self.summary || self.active || self.preemptions
+    }
+}
+
 /// Top-level observability configuration for the NineDoor host.
 #[derive(Debug, Clone, Copy)]
 pub struct ObserveConfig {
@@ -177,6 +219,10 @@ pub struct ObserveConfig {
     pub proc_root: ProcRootConfig,
     /// `/proc/pressure` observability settings.
     pub proc_pressure: ProcPressureConfig,
+    /// `/proc/schedule` observability settings.
+    pub proc_schedule: ProcScheduleConfig,
+    /// `/proc/lease` observability settings.
+    pub proc_lease: ProcLeaseConfig,
 }
 
 impl ObserveConfig {
@@ -187,6 +233,8 @@ impl ObserveConfig {
             || self.proc_ingest.enabled()
             || self.proc_root.enabled()
             || self.proc_pressure.enabled()
+            || self.proc_schedule.enabled()
+            || self.proc_lease.enabled()
     }
 }
 
@@ -247,6 +295,20 @@ impl Default for ObserveConfig {
                 quota_bytes: 64,
                 cut_bytes: 64,
                 policy_bytes: 64,
+            },
+            proc_schedule: ProcScheduleConfig {
+                summary: true,
+                queue: true,
+                summary_bytes: 128,
+                queue_bytes: 256,
+            },
+            proc_lease: ProcLeaseConfig {
+                summary: true,
+                active: true,
+                preemptions: true,
+                summary_bytes: 128,
+                active_bytes: 256,
+                preemptions_bytes: 256,
             },
         }
     }

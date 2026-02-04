@@ -1,5 +1,6 @@
 attach queen
 cat /proc/lifecycle/state
+echo {"id":"spawn-1","target":"/queen/ctl","decision":"approve"} > /actions/queue
 spawn heartbeat ticks=100
 telemetry push demo/telemetry/demo.txt --device device-1
 quit

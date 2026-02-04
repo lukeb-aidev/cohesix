@@ -146,12 +146,16 @@ SwarmUI is read-only and must not run concurrently with `cohsh`.
    ```
 2. Click **Connect** -> **Hive Start**.
 3. If you see "No telemetry yet", quit SwarmUI and seed a line:
+   - If `/worker` is empty, approve and spawn a heartbeat first, then re-run `ls /worker`:
+     - `echo {"id":"spawn-1","target":"/queen/ctl","decision":"approve"} > /actions/queue`
+     - `spawn heartbeat ticks=100`
    ```bash
    ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen <<'COH'
    attach queen
    ls /worker
+   # Replace worker-1 with the actual worker id from the ls output.
    echo heartbeat-demo > /worker/worker-1/telemetry
-   tail /worker/worker-1/telemetry
+   cat /worker/worker-1/telemetry
    COH
    ```
 4. Relaunch SwarmUI and select a worker dot to view the bounded overlay + detail panel.

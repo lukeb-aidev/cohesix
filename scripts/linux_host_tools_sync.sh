@@ -183,7 +183,8 @@ run_ssh "mkdir -p '${REMOTE_DIR}/out/host-tools-linux' && \
   install -m 0755 '${REMOTE_DIR}/target/release/gpu-bridge-host' '${REMOTE_DIR}/out/host-tools-linux/' && \
   install -m 0755 '${REMOTE_DIR}/target/release/host-sidecar-bridge' '${REMOTE_DIR}/out/host-tools-linux/' && \
   install -m 0755 '${REMOTE_DIR}/target/release/cas-tool' '${REMOTE_DIR}/out/host-tools-linux/' && \
-  install -m 0755 '${REMOTE_DIR}/target/release/swarmui' '${REMOTE_DIR}/out/host-tools-linux/'"
+  install -m 0755 '${REMOTE_DIR}/target/release/swarmui' '${REMOTE_DIR}/out/host-tools-linux/' && \
+  install -m 0755 '${REMOTE_DIR}/target/release/hive-gateway' '${REMOTE_DIR}/out/host-tools-linux/'"
 
 printf "[sync] Packing host tools for transfer...\n"
 run_ssh "tar -C '${REMOTE_DIR}/out' -czf '${REMOTE_TOOLS_TARBALL}' host-tools-linux"

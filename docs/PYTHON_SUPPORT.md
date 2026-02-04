@@ -20,6 +20,7 @@ mirrors the same verbs, bounds, and error rules enforced by `cohsh` and Secure9P
 ## Backends
 - **TcpBackend**: connects to the TCP console (`AUTH` + `ATTACH`), issues console verbs.
 - **FilesystemBackend**: operates on a mounted Secure9P namespace (via `coh mount`).
+- **RestBackend**: uses the `hive-gateway` REST projection (host-only).
 - **MockBackend**: deterministic in-memory filesystem for tests/examples.
 
 ## Install (source tree)
@@ -53,6 +54,18 @@ python3 tools/cohesix-py/examples/lease_run.py \
   --tcp-host 127.0.0.1 --tcp-port 31337
 ```
 If your console auth token is not the default, set `COHSH_AUTH_TOKEN` before running.
+
+## REST backend (hive-gateway)
+1) Start the REST gateway on the host (see `docs/HOST_API.md`):
+```bash
+COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \\
+  COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \\
+  ./bin/hive-gateway
+```
+2) Point a Python example at the gateway:
+```bash
+python3 tools/cohesix-py/examples/lease_run.py --rest http://127.0.0.1:8080
+```
 
 ## Filesystem backend (Secure9P mount)
 1) Mount the namespace on the host (requires `coh mount`):

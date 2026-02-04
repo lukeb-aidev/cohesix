@@ -2,16 +2,20 @@
 <!-- Purpose: Generated cohsh client snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb`
+- `manifest.sha256`: `7d6b2ecf259049c1e431a37e693118b9bccc05395e374934f3dc6837d1004c1f`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
 - `trace.max_bytes`: `1048576`
 - `client_paths.queen_ctl`: `/queen/ctl`
 - `client_paths.queen_lifecycle_ctl`: `/queen/lifecycle/ctl`
+- `client_paths.queen_schedule_ctl`: `/queen/schedule/ctl`
+- `client_paths.queen_lease_ctl`: `/queen/lease/ctl`
+- `client_paths.queen_export_ctl`: `/queen/export/ctl`
+- `client_paths.policy_ctl`: `/policy/ctl`
 - `client_paths.log`: `/log/queen.log`
 - `telemetry_ingest.max_segments_per_device`: `4`
 - `telemetry_ingest.max_bytes_per_segment`: `32768`
 - `telemetry_ingest.max_total_bytes_per_device`: `131072`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 
-_Generated from `configs/root_task.toml` (sha256: `3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb`)._
+_Generated from `configs/root_task.toml` (sha256: `7d6b2ecf259049c1e431a37e693118b9bccc05395e374934f3dc6837d1004c1f`)._

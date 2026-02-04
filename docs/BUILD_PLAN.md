@@ -4263,9 +4263,12 @@ Deliverables:
      - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337 --role worker-heartbeat --ticket "$WORKER_TICKET"`
    - In the Queen view (SwarmUI or cohsh), confirm workers appear under `/worker` before proceeding.
    - If `/worker` is empty, request a queen-side heartbeat spawn to seed a visible worker entry, then re-check:
+     - `echo {"id":"spawn-1","target":"/queen/ctl","decision":"approve"} > /actions/queue`
      - `spawn heartbeat ticks=100`
      - `ls /worker`
-6) Keep Live Hive active (optional): `spawn heartbeat ticks=100`.
+6) Keep Live Hive active (optional):
+   - `echo {"id":"spawn-2","target":"/queen/ctl","decision":"approve"} > /actions/queue`
+   - `spawn heartbeat ticks=100`.
 7) Host tools prove control-plane surface (Linux queen host or G5g, host tools only):
    - Live GPU bridge publish (required for `/gpu/models` and PEFT):
      - `./bin/gpu-bridge-host --publish --tcp-host <queen-host> --tcp-port 31337 --auth-token changeme --interval-ms 1000 --registry demo/peft_registry`
@@ -4285,6 +4288,8 @@ Deliverables:
 10) External PEFT (out-of-band): run training off-plane; produce adapter artifacts under `demo/peft_adapter/`.
 11) Import + activate (host tool; no in-VM ML):
    - Verify `/gpu/models` is visible (live publish in step 7 must be running).
+   - If the model already exists (previous demo run), remove it from the host registry before importing:
+     - `rm -rf demo/peft_registry/available/qwen-edge-v1`
    - Live export (requires existing job under `/queen/export/lora_jobs/job_0001/`):
      - `./bin/coh --host <queen-host> --port 31337 peft export --job job_0001 --out demo/peft_export`
    - Live import + publish (refresh `/gpu/models` immediately after registry update):
@@ -4359,7 +4364,9 @@ Deliverables:
    - Emit bounded telemetry records that conform to `gpu-telemetry/v1` via the bridge (no schema changes).
    - Produce adapter artifacts into `/home/models/lejepa/adapter/` (e.g., `adapter.safetensors`, `lora.json`, `metrics.json`).
 6) Import + publish adapter (live refresh into `/gpu/models`):
-   - `./bin/coh --host <queen-host> --port 31337 peft import --publish --model lejepa-edge-v1 --from /home/models/lejepa/adapter --registry /home/models/peft_registry`
+   - If the model already exists (previous demo run), remove it from the host registry before importing:
+     - `rm -rf /home/models/peft_registry/available/lejepa-edge-v1`
+   - `./bin/coh --host <queen-host> --port 31337 peft import --publish --model lejepa-edge-v1 --from /home/models/lejepa/adapter --job job_0002 --export /home/models/lejepa/export --registry /home/models/peft_registry`
    - `./bin/coh --host <queen-host> --port 31337 peft activate --model lejepa-edge-v1 --registry /home/models/peft_registry`
    - Verify pointer (quit SwarmUI before cohsh):
      - `ls /gpu/models/available`

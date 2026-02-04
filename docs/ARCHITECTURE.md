@@ -32,14 +32,14 @@ Non-goals:
 - `NineDoor` (`apps/nine-door`): Secure9P server for host builds and in-process tests. On seL4, `apps/root-task/src/ninedoor.rs` provides `NineDoorBridge`, a namespace/control shim used by the console path.
 - Secure9P core (`crates/secure9p-*`): 9P2000.L codec and session logic used by NineDoor, `cohsh`, and `coh`.
 - Worker crates (`apps/worker-heart`, `apps/worker-gpu`, `apps/worker-bus`, `apps/worker-lora`): role-specific binaries; orchestration is file-driven via `/queen/ctl` and role-scoped mounts.
-- Host tools: `cohsh` CLI (`apps/cohsh`), `coh` host bridge (`apps/coh`), `swarmui` UI (`apps/swarmui`), `gpu-bridge-host`, `host-sidecar-bridge`, and `cas-tool`.
+- Host tools: `cohsh` CLI (`apps/cohsh`), `coh` host bridge (`apps/coh`), `swarmui` UI (`apps/swarmui`), `hive-gateway` REST gateway, `gpu-bridge-host`, `host-sidecar-bridge`, and `cas-tool`.
 - Manifest compiler: `tools/coh-rtc` generates root-task tables, policies, and docs snippets from `configs/root_task.toml` into `apps/root-task/src/generated`, `out/manifests/`, and `docs/snippets/`.
 
 ## 4. Control Surfaces
 ### Secure9P namespace (NineDoor)
 - Protocol: 9P2000.L only; ops include `version`, `attach`, `walk`, `open`, `read`, `write`, `clunk`, `stat`. `remove` is disabled.
 - Bounds: `msize <= 8192`, walk depth <= 8, UTF-8 only, no `..`; walks validate each component and reject invalid or oversized segments.
-- Append-only semantics apply to control and stream files (`/queen/ctl`, `/queen/lifecycle/ctl`, `/gpu/bridge/ctl`, `/log/*`, `/queen/telemetry/*`, telemetry, policy/audit sinks).
+- Append-only semantics apply to control and stream files (`/queen/ctl`, `/queen/lifecycle/ctl`, `/queen/schedule/ctl`, `/queen/lease/ctl`, `/queen/export/ctl`, `/policy/ctl`, `/gpu/bridge/ctl`, `/log/*`, `/queen/telemetry/*`, telemetry, policy/audit sinks).
 - The path layout and constraints are shared between the host NineDoor server and the in-VM console bridge; host-only providers may be absent in the seL4 build.
 
 ### Console surfaces
@@ -53,6 +53,7 @@ Non-goals:
 - `cohsh` is the canonical operator client. It speaks Secure9P for in-process/host NineDoor sessions and the console grammar over TCP for QEMU/VM sessions.
 - `coh` is the host bridge for GPU leases, telemetry pulls, and PEFT lifecycle; it reuses the same console grammar and manifests.
 - `swarmui` is observational only and reuses `cohsh-core` tailers; it does not add verbs or protocols.
+- `hive-gateway` is a host-only REST projection of `LS`/`CAT`/`ECHO` with manifest-derived bounds; it never introduces new control semantics.
 - `gpu-bridge-host` and `host-sidecar-bridge` publish provider data into `/gpu/*` and `/host/*` via Secure9P; they never run inside the VM.
 - `cas-tool` uploads CAS bundles via append-only `/updates/*` flows over the TCP console.
 
@@ -89,7 +90,7 @@ Mount and bind semantics:
 
 ## 7. Key Invariants (Red Lines)
 - Secure9P: 9P2000.L only; `msize <= 8192`; walk depth <= 8; UTF-8 paths; no `..`; no fid reuse after `clunk`; `remove` disabled.
-- Append-only: `/queen/ctl`, `/queen/lifecycle/ctl`, `/log/*`, telemetry, policy/audit sinks, `/gpu/bridge/ctl`, and `/queen/telemetry/*` ignore offsets and reject writes that break bounds.
+- Append-only: `/queen/ctl`, `/queen/lifecycle/ctl`, `/queen/schedule/ctl`, `/queen/lease/ctl`, `/queen/export/ctl`, `/policy/ctl`, `/log/*`, telemetry, policy/audit sinks, `/gpu/bridge/ctl`, and `/queen/telemetry/*` ignore offsets and reject writes that break bounds.
 - Only TCP listener inside the VM is the authenticated root-task console.
 - Rootfs CPIO remains < 4 MiB (`scripts/ci/size_guard.sh`).
 - VM artifacts remain `no_std`; no POSIX or libc-style emulation layers.
@@ -99,13 +100,14 @@ Mount and bind semantics:
 ## 8. Data Flows
 - **Orchestration:** Queen appends JSON lines to `/queen/ctl`; NineDoor validates and the root task updates worker state, bind tables, and audits to `/log/queen.log`.
 - **Lifecycle:** Queen appends to `/queen/lifecycle/ctl`; `/proc/lifecycle/*` exposes state, reason, and since-ms.
+- **Scheduling/Leases/Export:** Queen appends JSONL to `/queen/schedule/ctl`, `/queen/lease/ctl`, and `/queen/export/ctl`; `/proc/schedule/*` and `/proc/lease/*` expose bounded read-only snapshots.
 - **Telemetry (worker):** Workers append newline-delimited records to `/shard/<label>/worker/<id>/telemetry`; ring sizes and schema selection are manifest-driven (`telemetry.ring_bytes_per_worker`, `telemetry.frame_schema`).
 - **Telemetry ingest (host push):** Host tools append bounded envelopes to `/queen/telemetry/<device_id>/`; quotas and eviction are manifest-driven (`telemetry_ingest.*`), and `/proc/ingest/*` reports ingest health.
 - **Logging:** All roles read `/log/queen.log`; only queen/host tools append.
-- **Observability:** `/proc/boot` exposes manifest fingerprints; `/proc/tests/*` carries regression scripts; `/proc/9p/*`, `/proc/root/*`, `/proc/pressure/*`, and `/proc/ingest/*` surface session and ingest stats when enabled.
+- **Observability:** `/proc/boot` exposes manifest fingerprints; `/proc/tests/*` carries regression scripts; `/proc/9p/*`, `/proc/root/*`, `/proc/pressure/*`, `/proc/ingest/*`, `/proc/schedule/*`, and `/proc/lease/*` surface bounded stats when enabled.
 - **GPU:** Host GPU bridge publishes `/gpu/<id>/*`, `/gpu/models/*`, and `/gpu/telemetry/schema.json` via `/gpu/bridge/ctl`; worker-gpu reads `info/status` and appends to `job/ctl` within ticket scope.
 - **Host sidecars:** `/host/*` is present only when enabled in the manifest; providers are published by `host-sidecar-bridge`.
-- **Policy/Audit/Replay:** `/policy`, `/actions`, `/audit`, `/replay` appear only when enabled in the manifest; writes are append-only and audited.
+- **Policy/Audit/Replay:** `/policy`, `/actions`, `/audit`, `/replay` appear only when enabled in the manifest; `/policy/ctl` drives apply/rollback and `/actions/queue` carries approvals/denials; writes are append-only and audited.
 - **CAS / Models:** `/updates/*` and `/models/*` are available when CAS and model registry gates are enabled (`cas.enable`, `ecosystem.models.enable`).
 
 ## 9. Security Posture
@@ -119,6 +121,7 @@ Mount and bind semantics:
 - **Bring-up:** Use the PL011 serial console for bootinfo and capability checks; use `cohsh --transport tcp` for authenticated remote workflows.
 - **Queen control:** `cohsh` appends to `/queen/ctl` and `/queen/lifecycle/ctl`, then tails `/log/queen.log` or worker telemetry files.
 - **GPU publish + leases:** Use `gpu-bridge-host --publish` (or `coh peft import --publish`) to refresh `/gpu/*`, then `coh gpu lease/run` for host-side GPU workflows.
+- **REST access:** `hive-gateway` exposes a host-only HTTP projection of `LS`/`CAT`/`ECHO` for automation; bounds and semantics match the console/file grammar.
 - **Self-test:** `coh> test` executes the preinstalled `/proc/tests/*.coh` scripts; it is the canonical regression gate for console and Secure9P behavior.
 - **Regression pack:** `scripts/cohsh/run_regression_batch.sh` runs the full `.coh` suite across base and gated manifests using QEMU.
 
@@ -296,6 +299,15 @@ The following block is generated by `coh-rtc` and mirrored from `docs/snippets/r
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 - `lifecycle.initial_state`: `BOOTING`
 - `lifecycle.auto_transitions`: `BOOTING->ONLINE`
+- `control_plane.schedule.enable`: `true`
+- `control_plane.schedule.queue_max_entries`: `64`
+- `control_plane.schedule.ctl_max_bytes`: `8192`
+- `control_plane.lease.enable`: `true`
+- `control_plane.lease.active_max_entries`: `64`
+- `control_plane.lease.preemptions_max_entries`: `64`
+- `control_plane.lease.ctl_max_bytes`: `8192`
+- `control_plane.export.enable`: `true`
+- `control_plane.export.ctl_max_bytes`: `2048`
 - `observability.proc_9p.sessions`: `true`
 - `observability.proc_9p.outstanding`: `true`
 - `observability.proc_9p.short_writes`: `true`
@@ -341,6 +353,16 @@ The following block is generated by `coh-rtc` and mirrored from `docs/snippets/r
 - `observability.proc_pressure.quota_bytes`: `64`
 - `observability.proc_pressure.cut_bytes`: `64`
 - `observability.proc_pressure.policy_bytes`: `64`
+- `observability.proc_schedule.summary`: `true`
+- `observability.proc_schedule.queue`: `true`
+- `observability.proc_schedule.summary_bytes`: `128`
+- `observability.proc_schedule.queue_bytes`: `256`
+- `observability.proc_lease.summary`: `true`
+- `observability.proc_lease.active`: `true`
+- `observability.proc_lease.preemptions`: `true`
+- `observability.proc_lease.summary_bytes`: `160`
+- `observability.proc_lease.active_bytes`: `256`
+- `observability.proc_lease.preemptions_bytes`: `256`
 - `ui_providers.proc_9p.sessions`: `true`
 - `ui_providers.proc_9p.outstanding`: `true`
 - `ui_providers.proc_9p.short_writes`: `true`
@@ -374,6 +396,10 @@ The following block is generated by `coh-rtc` and mirrored from `docs/snippets/r
 - `client_policies.heartbeat.interval_ms`: `15000`
 - `client_paths.queen_ctl`: `/queen/ctl`
 - `client_paths.queen_lifecycle_ctl`: `/queen/lifecycle/ctl`
+- `client_paths.queen_schedule_ctl`: `/queen/schedule/ctl`
+- `client_paths.queen_lease_ctl`: `/queen/lease/ctl`
+- `client_paths.queen_export_ctl`: `/queen/export/ctl`
+- `client_paths.policy_ctl`: `/policy/ctl`
 - `client_paths.log`: `/log/queen.log`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
@@ -406,7 +432,7 @@ The following block is generated by `coh-rtc` and mirrored from `docs/snippets/r
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb`
+- `manifest.sha256`: `7d6b2ecf259049c1e431a37e693118b9bccc05395e374934f3dc6837d1004c1f`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -442,7 +468,7 @@ The following block is generated by `coh-rtc` and mirrored from `docs/snippets/r
 - `ecosystem.audit.replay_max_entries`: `64`
 - `ecosystem.audit.replay_ctl_max_bytes`: `1024`
 - `ecosystem.audit.replay_status_max_bytes`: `1024`
-- `ecosystem.policy.enable`: `false`
+- `ecosystem.policy.enable`: `true`
 - `ecosystem.policy.queue_max_entries`: `32`
 - `ecosystem.policy.queue_max_bytes`: `4096`
 - `ecosystem.policy.ctl_max_bytes`: `2048`
@@ -452,4 +478,4 @@ The following block is generated by `coh-rtc` and mirrored from `docs/snippets/r
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb`)._
+_Generated from `configs/root_task.toml` (sha256: `7d6b2ecf259049c1e431a37e693118b9bccc05395e374934f3dc6837d1004c1f`)._

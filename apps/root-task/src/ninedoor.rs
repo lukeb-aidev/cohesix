@@ -37,6 +37,12 @@ use worker_lora::{DutyCycleConfig, DutyCycleGuard, TamperEntry, TamperLog, Tampe
 
 const LOG_PATH: &str = "/log/queen.log";
 const QUEEN_CTL_PATH: &str = "/queen/ctl";
+const QUEEN_SCHEDULE_ROOT_PATH: &str = "/queen/schedule";
+const QUEEN_SCHEDULE_CTL_PATH: &str = "/queen/schedule/ctl";
+const QUEEN_LEASE_ROOT_PATH: &str = "/queen/lease";
+const QUEEN_LEASE_CTL_PATH: &str = "/queen/lease/ctl";
+const QUEEN_EXPORT_ROOT_PATH: &str = "/queen/export";
+const QUEEN_EXPORT_CTL_PATH: &str = "/queen/export/ctl";
 const BUS_ROOT_PATH: &str = "/bus";
 const LORA_ROOT_PATH: &str = "/lora";
 const PROC_BOOT_PATH: &str = "/proc/boot";
@@ -67,6 +73,13 @@ const PROC_PRESSURE_BUSY_PATH: &str = "/proc/pressure/busy";
 const PROC_PRESSURE_QUOTA_PATH: &str = "/proc/pressure/quota";
 const PROC_PRESSURE_CUT_PATH: &str = "/proc/pressure/cut";
 const PROC_PRESSURE_POLICY_PATH: &str = "/proc/pressure/policy";
+const PROC_SCHEDULE_ROOT_PATH: &str = "/proc/schedule";
+const PROC_SCHEDULE_SUMMARY_PATH: &str = "/proc/schedule/summary";
+const PROC_SCHEDULE_QUEUE_PATH: &str = "/proc/schedule/queue";
+const PROC_LEASE_ROOT_PATH: &str = "/proc/lease";
+const PROC_LEASE_SUMMARY_PATH: &str = "/proc/lease/summary";
+const PROC_LEASE_ACTIVE_PATH: &str = "/proc/lease/active";
+const PROC_LEASE_PREEMPTIONS_PATH: &str = "/proc/lease/preemptions";
 const BOOT_HEADER: &str = "Cohesix boot: root-task online";
 const MAX_STREAM_LINES: usize = log_buffer::LOG_SNAPSHOT_LINES;
 const MAX_WORKERS: usize = 8;
@@ -102,11 +115,20 @@ const QUEEN_LIFECYCLE_ROOT_PATH: &str = "/queen/lifecycle";
 const QUEEN_LIFECYCLE_CTL_PATH: &str = "/queen/lifecycle/ctl";
 const MAX_POLICY_PATH_COMPONENTS: usize = 8;
 const MAX_ACTION_ID_LEN: usize = 64;
+const MAX_SCHEDULE_ID_LEN: usize = 64;
+const MAX_SCHEDULE_ROLE_LEN: usize = 16;
+const MAX_LEASE_ID_LEN: usize = 32;
+const MAX_LEASE_SUBJECT_LEN: usize = 32;
+const MAX_LEASE_RESOURCE_LEN: usize = 48;
+const MAX_LEASE_REASON_LEN: usize = 24;
+const MAX_POLICY_REV_ID_LEN: usize = 64;
+const MAX_EXPORT_ID_LEN: usize = 64;
 const SYSTEMD_UNITS: [&str; 2] = ["cohesix-agent.service", "ssh.service"];
 const K8S_NODES: [&str; 1] = ["node-1"];
 const NVIDIA_GPUS: [&str; 1] = ["0"];
 const GPU_LEASE_SCHEMA: &str = "gpu-lease/v1";
 const GPU_LEASE_ACTIVE_STATE: &str = "ACTIVE";
+const LEASE_STATE_ACTIVE: &str = "ACTIVE";
 const GPU_CTL_MAX_BYTES: u32 = 1024;
 const GPU_LEASE_MAX_BYTES: u32 = 1024;
 const GPU_STATUS_MAX_BYTES: u32 = UI_MAX_STREAM_BYTES as u32;
@@ -149,6 +171,16 @@ const OBSERVE_PRESSURE_CUT_BYTES: usize =
     generated::OBSERVABILITY_CONFIG.proc_pressure.cut_bytes as usize;
 const OBSERVE_PRESSURE_POLICY_BYTES: usize =
     generated::OBSERVABILITY_CONFIG.proc_pressure.policy_bytes as usize;
+const OBSERVE_SCHEDULE_SUMMARY_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_schedule.summary_bytes as usize;
+const OBSERVE_SCHEDULE_QUEUE_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_schedule.queue_bytes as usize;
+const OBSERVE_LEASE_SUMMARY_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_lease.summary_bytes as usize;
+const OBSERVE_LEASE_ACTIVE_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_lease.active_bytes as usize;
+const OBSERVE_LEASE_PREEMPTIONS_BYTES: usize =
+    generated::OBSERVABILITY_CONFIG.proc_lease.preemptions_bytes as usize;
 const SIDECAR_LOG_MAX_BYTES: usize = generated::SECURE9P_LIMITS.msize as usize;
 const TELEMETRY_INGEST_RECORD_MAX_BYTES: usize = 4096;
 
@@ -182,6 +214,9 @@ pub struct NineDoorBridge {
     gpu: GpuState,
     sidecars: SidecarState,
     policy: PolicyState,
+    schedule: ScheduleState,
+    lease: LeaseState,
+    export: ExportState,
     audit: AuditState,
     replay: ReplayState,
     observe: ObserveState,
@@ -410,6 +445,8 @@ impl NineDoorBridge {
         {
             boot_log::notify_bridge_created();
         }
+        let control_plane = generated::control_plane_config();
+        let observability = generated::observability_config();
         let host = HostState::new();
         let gpu = GpuState::new(host.enabled && host.has_provider(generated::HostProvider::Nvidia));
         Self {
@@ -427,6 +464,9 @@ impl NineDoorBridge {
             gpu,
             sidecars: SidecarState::new(),
             policy: PolicyState::new(),
+            schedule: ScheduleState::new(control_plane.schedule, observability.proc_schedule),
+            lease: LeaseState::new(control_plane.lease, observability.proc_lease),
+            export: ExportState::new(control_plane.export),
             audit: AuditState::new(generated::audit_config()),
             replay: ReplayState::new(generated::audit_config()),
             observe: ObserveState::new(),
@@ -653,6 +693,138 @@ impl NineDoorBridge {
                 }
                 return Ok(());
             }
+        }
+        if path == QUEEN_SCHEDULE_CTL_PATH {
+            if !self.schedule.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            if !self.is_queen() {
+                if self.audit.enabled {
+                    let role = self.role_label();
+                    let ticket = String::from(self.ticket_label());
+                    self.audit.record_control(
+                        path,
+                        payload,
+                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                        role,
+                        ticket.as_str(),
+                    )?;
+                }
+                return Err(NineDoorBridgeError::Permission);
+            }
+            let role = self.role_label();
+            let ticket = String::from(self.ticket_label());
+            let decision = self.apply_policy_gate(path)?;
+            match decision {
+                PolicyGateDecision::Denied(_) => {
+                    if self.audit.enabled {
+                        self.audit.record_control(
+                            path,
+                            payload,
+                            ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                            role,
+                            ticket.as_str(),
+                        )?;
+                    }
+                    return Err(NineDoorBridgeError::Permission);
+                }
+                PolicyGateDecision::Allowed(_) => {}
+            }
+            let result = self.schedule.append_ctl(payload);
+            if self.audit.enabled {
+                let outcome = ControlOutcome::from_result(&result);
+                self.audit
+                    .record_control(path, payload, outcome, role, ticket.as_str())?;
+            }
+            return result;
+        }
+        if path == QUEEN_LEASE_CTL_PATH {
+            if !self.lease.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            if !self.is_queen() {
+                if self.audit.enabled {
+                    let role = self.role_label();
+                    let ticket = String::from(self.ticket_label());
+                    self.audit.record_control(
+                        path,
+                        payload,
+                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                        role,
+                        ticket.as_str(),
+                    )?;
+                }
+                return Err(NineDoorBridgeError::Permission);
+            }
+            let role = self.role_label();
+            let ticket = String::from(self.ticket_label());
+            let decision = self.apply_policy_gate(path)?;
+            match decision {
+                PolicyGateDecision::Denied(_) => {
+                    if self.audit.enabled {
+                        self.audit.record_control(
+                            path,
+                            payload,
+                            ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                            role,
+                            ticket.as_str(),
+                        )?;
+                    }
+                    return Err(NineDoorBridgeError::Permission);
+                }
+                PolicyGateDecision::Allowed(_) => {}
+            }
+            let result = self.lease.append_ctl(payload);
+            if self.audit.enabled {
+                let outcome = ControlOutcome::from_result(&result);
+                self.audit
+                    .record_control(path, payload, outcome, role, ticket.as_str())?;
+            }
+            return result;
+        }
+        if path == QUEEN_EXPORT_CTL_PATH {
+            if !self.export.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            if !self.is_queen() {
+                if self.audit.enabled {
+                    let role = self.role_label();
+                    let ticket = String::from(self.ticket_label());
+                    self.audit.record_control(
+                        path,
+                        payload,
+                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                        role,
+                        ticket.as_str(),
+                    )?;
+                }
+                return Err(NineDoorBridgeError::Permission);
+            }
+            let role = self.role_label();
+            let ticket = String::from(self.ticket_label());
+            let decision = self.apply_policy_gate(path)?;
+            match decision {
+                PolicyGateDecision::Denied(_) => {
+                    if self.audit.enabled {
+                        self.audit.record_control(
+                            path,
+                            payload,
+                            ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                            role,
+                            ticket.as_str(),
+                        )?;
+                    }
+                    return Err(NineDoorBridgeError::Permission);
+                }
+                PolicyGateDecision::Allowed(_) => {}
+            }
+            let result = self.export.append_ctl(payload);
+            if self.audit.enabled {
+                let outcome = ControlOutcome::from_result(&result);
+                self.audit
+                    .record_control(path, payload, outcome, role, ticket.as_str())?;
+            }
+            return result;
         }
         if path == QUEEN_LIFECYCLE_CTL_PATH {
             if !self.is_queen() {
@@ -1007,6 +1179,34 @@ impl NineDoorBridge {
                 return self.action_status_lines(action_id);
             }
         }
+        if self.schedule.enabled() && path == QUEEN_SCHEDULE_CTL_PATH {
+            return lines_from_bytes(self.schedule.ctl_log());
+        }
+        if self.lease.enabled() && path == QUEEN_LEASE_CTL_PATH {
+            return lines_from_bytes(self.lease.ctl_log());
+        }
+        if self.export.enabled() && path == QUEEN_EXPORT_CTL_PATH {
+            return lines_from_bytes(self.export.ctl_log());
+        }
+        if self.schedule.proc_enabled() {
+            if path == PROC_SCHEDULE_SUMMARY_PATH {
+                return self.schedule.summary_lines();
+            }
+            if path == PROC_SCHEDULE_QUEUE_PATH {
+                return self.schedule.queue_lines();
+            }
+        }
+        if self.lease.proc_enabled() {
+            if path == PROC_LEASE_SUMMARY_PATH {
+                return self.lease.summary_lines();
+            }
+            if path == PROC_LEASE_ACTIVE_PATH {
+                return self.lease.active_lines();
+            }
+            if path == PROC_LEASE_PREEMPTIONS_PATH {
+                return self.lease.preemptions_lines();
+            }
+        }
         if segments.as_slice() == ["gpu", "bridge", "ctl"] {
             if !self.gpu.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
@@ -1257,6 +1457,12 @@ impl NineDoorBridge {
             if self.observe.proc_pressure_enabled() {
                 push_list_entry(&mut output, "pressure")?;
             }
+            if self.schedule.proc_enabled() {
+                push_list_entry(&mut output, "schedule")?;
+            }
+            if self.lease.proc_enabled() {
+                push_list_entry(&mut output, "lease")?;
+            }
             return Ok(output);
         }
         if path == PROC_9P_ROOT_PATH {
@@ -1290,10 +1496,31 @@ impl NineDoorBridge {
         if path == PROC_PRESSURE_ROOT_PATH {
             return self.observe.list_pressure();
         }
+        if path == PROC_SCHEDULE_ROOT_PATH {
+            if !self.schedule.proc_enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return self.schedule.list_proc();
+        }
+        if path == PROC_LEASE_ROOT_PATH {
+            if !self.lease.proc_enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return self.lease.list_proc();
+        }
         if path == "/queen" {
             let mut output = HeaplessVec::new();
             push_list_entry(&mut output, "ctl")?;
             push_list_entry(&mut output, "lifecycle")?;
+            if self.schedule.enabled() {
+                push_list_entry(&mut output, "schedule")?;
+            }
+            if self.lease.enabled() {
+                push_list_entry(&mut output, "lease")?;
+            }
+            if self.export.enabled() {
+                push_list_entry(&mut output, "export")?;
+            }
             if self.telemetry_ingest.enabled() {
                 push_list_entry(&mut output, "telemetry")?;
             }
@@ -1301,6 +1528,30 @@ impl NineDoorBridge {
         }
         if path == QUEEN_LIFECYCLE_ROOT_PATH {
             return list_from_slice(&["ctl"]);
+        }
+        if path == QUEEN_SCHEDULE_ROOT_PATH {
+            if !self.schedule.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return list_from_slice(&["ctl"]);
+        }
+        if path == QUEEN_LEASE_ROOT_PATH {
+            if !self.lease.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return list_from_slice(&["ctl"]);
+        }
+        if path == QUEEN_EXPORT_ROOT_PATH {
+            if !self.export.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return list_from_slice(&["ctl", "lora_jobs"]);
+        }
+        if path == "/queen/export/lora_jobs" {
+            if !self.export.enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            return Ok(HeaplessVec::new());
         }
         if path == "/queen/telemetry" {
             if !self.telemetry_ingest.enabled() {
@@ -4433,6 +4684,12 @@ struct PolicyAction {
     consumed: bool,
 }
 
+#[derive(Debug, Clone)]
+struct PolicyRevision {
+    id: String,
+    sha256: String,
+}
+
 #[derive(Debug)]
 struct PolicyState {
     enabled: bool,
@@ -4442,6 +4699,8 @@ struct PolicyState {
     ctl_log: Vec<u8>,
     queue_log: Vec<u8>,
     actions: Vec<PolicyAction>,
+    current: Option<PolicyRevision>,
+    previous: Option<PolicyRevision>,
 }
 
 impl PolicyState {
@@ -4455,6 +4714,8 @@ impl PolicyState {
             ctl_log: Vec::new(),
             queue_log: Vec::new(),
             actions: Vec::new(),
+            current: None,
+            previous: None,
         }
     }
 
@@ -4660,8 +4921,27 @@ impl PolicyState {
     }
 
     fn append_policy_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
-        validate_json_envelope(payload)?;
-        append_log_bytes(&mut self.ctl_log, payload, self.limits.ctl_max_bytes)
+        let command = parse_policy_ctl(payload)?;
+        let (next_current, next_previous) = match command {
+            PolicyCtlCommand::Apply { id, sha256 } => {
+                let next = PolicyRevision { id, sha256 };
+                (Some(next), self.current.clone())
+            }
+            PolicyCtlCommand::Rollback { id } => {
+                let current = self
+                    .current
+                    .as_ref()
+                    .ok_or(NineDoorBridgeError::InvalidPayload)?;
+                if current.id != id {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                (self.previous.clone(), None)
+            }
+        };
+        append_log_bytes(&mut self.ctl_log, payload, self.limits.ctl_max_bytes)?;
+        self.current = next_current;
+        self.previous = next_previous;
+        Ok(())
     }
 
     fn append_action_queue(
@@ -4743,6 +5023,495 @@ enum PolicyGateAllowance {
 enum PolicyGateDenial {
     Missing,
     Action { id: String, target: String },
+}
+
+#[derive(Debug)]
+struct ScheduleEntry {
+    id: String,
+    role: String,
+    priority: u32,
+    ticks: u32,
+    budget_ms: u32,
+    seq: u64,
+}
+
+#[derive(Debug)]
+struct ScheduleState {
+    enabled: bool,
+    queue_max_entries: usize,
+    ctl_max_bytes: u32,
+    ctl_log: Vec<u8>,
+    queue: VecDeque<ScheduleEntry>,
+    dequeued: u64,
+    dropped: u64,
+    next_seq: u64,
+    proc_summary: bool,
+    proc_queue: bool,
+    proc_summary_bytes: usize,
+    proc_queue_bytes: usize,
+}
+
+impl ScheduleState {
+    fn new(
+        control: generated::ScheduleControlConfig,
+        observability: generated::ProcScheduleConfig,
+    ) -> Self {
+        Self {
+            enabled: control.enable,
+            queue_max_entries: control.queue_max_entries as usize,
+            ctl_max_bytes: control.ctl_max_bytes,
+            ctl_log: Vec::new(),
+            queue: VecDeque::new(),
+            dequeued: 0,
+            dropped: 0,
+            next_seq: 1,
+            proc_summary: observability.summary,
+            proc_queue: observability.queue,
+            proc_summary_bytes: observability.summary_bytes as usize,
+            proc_queue_bytes: observability.queue_bytes as usize,
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn proc_enabled(&self) -> bool {
+        self.proc_summary || self.proc_queue
+    }
+
+    fn ctl_log(&self) -> &[u8] {
+        &self.ctl_log
+    }
+
+    fn list_proc(
+        &self,
+    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+    {
+        let mut output = HeaplessVec::new();
+        if self.proc_summary {
+            push_list_entry(&mut output, "summary")?;
+        }
+        if self.proc_queue {
+            push_list_entry(&mut output, "queue")?;
+        }
+        Ok(output)
+    }
+
+    fn append_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
+        if !self.enabled {
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        let request = parse_schedule_ctl(payload)?;
+        if self.queue_max_entries == 0 {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        if self.queue.len() >= self.queue_max_entries {
+            self.dropped = self.dropped.saturating_add(1);
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        if self.queue.iter().any(|entry| entry.id == request.id) {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        append_log_bytes(&mut self.ctl_log, payload, self.ctl_max_bytes)?;
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.saturating_add(1);
+        self.queue.push_back(ScheduleEntry {
+            id: request.id,
+            role: request.role,
+            priority: request.priority,
+            ticks: request.ticks,
+            budget_ms: request.budget_ms,
+            seq,
+        });
+        Ok(())
+    }
+
+    fn summary_lines(
+        &self,
+    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+    {
+        let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let _ = write!(
+            line,
+            "queue={} dequeued={} dropped={} max_entries={}",
+            self.queue.len(),
+            self.dequeued,
+            self.dropped,
+            self.queue_max_entries
+        );
+        if line.len() > self.proc_summary_bytes || line.len() > OBSERVE_SCHEDULE_SUMMARY_BYTES {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        lines_from_text(line.as_str())
+    }
+
+    fn queue_lines(
+        &self,
+    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+    {
+        let mut out = String::new();
+        for entry in &self.queue {
+            let line = format!(
+                "id={} role={} priority={} ticks={} budget_ms={} seq={}\n",
+                entry.id, entry.role, entry.priority, entry.ticks, entry.budget_ms, entry.seq
+            );
+            if line.len() > DEFAULT_LINE_CAPACITY {
+                return Err(NineDoorBridgeError::BufferFull);
+            }
+            if !push_bounded_line(&mut out, &line, self.proc_queue_bytes) {
+                break;
+            }
+        }
+        lines_from_bytes(out.as_bytes())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LeaseEntry {
+    id: String,
+    subject: String,
+    resource: String,
+    ttl_s: u32,
+    priority: u32,
+    state: &'static str,
+    seq: u64,
+}
+
+#[derive(Debug, Clone)]
+struct LeasePreemption {
+    id: String,
+    subject: String,
+    resource: String,
+    reason: String,
+    seq: u64,
+}
+
+#[derive(Debug, Clone)]
+struct LeaseQuota {
+    subject: String,
+    resource: String,
+    max_active: u32,
+    max_preemptions: u32,
+}
+
+#[derive(Debug)]
+struct LeaseState {
+    enabled: bool,
+    active_max_entries: usize,
+    preemptions_max_entries: usize,
+    ctl_max_bytes: u32,
+    ctl_log: Vec<u8>,
+    active: Vec<LeaseEntry>,
+    preemptions: Vec<LeasePreemption>,
+    quotas: Vec<LeaseQuota>,
+    next_seq: u64,
+    proc_summary: bool,
+    proc_active: bool,
+    proc_preemptions: bool,
+    proc_summary_bytes: usize,
+    proc_active_bytes: usize,
+    proc_preemptions_bytes: usize,
+}
+
+impl LeaseState {
+    fn new(
+        control: generated::LeaseControlConfig,
+        observability: generated::ProcLeaseConfig,
+    ) -> Self {
+        Self {
+            enabled: control.enable,
+            active_max_entries: control.active_max_entries as usize,
+            preemptions_max_entries: control.preemptions_max_entries as usize,
+            ctl_max_bytes: control.ctl_max_bytes,
+            ctl_log: Vec::new(),
+            active: Vec::new(),
+            preemptions: Vec::new(),
+            quotas: Vec::new(),
+            next_seq: 1,
+            proc_summary: observability.summary,
+            proc_active: observability.active,
+            proc_preemptions: observability.preemptions,
+            proc_summary_bytes: observability.summary_bytes as usize,
+            proc_active_bytes: observability.active_bytes as usize,
+            proc_preemptions_bytes: observability.preemptions_bytes as usize,
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn proc_enabled(&self) -> bool {
+        self.proc_summary || self.proc_active || self.proc_preemptions
+    }
+
+    fn ctl_log(&self) -> &[u8] {
+        &self.ctl_log
+    }
+
+    fn list_proc(
+        &self,
+    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+    {
+        let mut output = HeaplessVec::new();
+        if self.proc_summary {
+            push_list_entry(&mut output, "summary")?;
+        }
+        if self.proc_active {
+            push_list_entry(&mut output, "active")?;
+        }
+        if self.proc_preemptions {
+            push_list_entry(&mut output, "preemptions")?;
+        }
+        Ok(output)
+    }
+
+    fn append_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
+        if !self.enabled {
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        let command = parse_lease_ctl(payload)?;
+        match command {
+            LeaseCtlCommand::Grant {
+                id,
+                subject,
+                resource,
+                ttl_s,
+                priority,
+            } => {
+                if self.active_max_entries == 0 {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                if self.active.len() >= self.active_max_entries {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                if self.active.iter().any(|entry| entry.id == id) {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                append_log_bytes(&mut self.ctl_log, payload, self.ctl_max_bytes)?;
+                let seq = self.next_seq;
+                self.next_seq = self.next_seq.saturating_add(1);
+                self.active.push(LeaseEntry {
+                    id,
+                    subject,
+                    resource,
+                    ttl_s,
+                    priority,
+                    state: LEASE_STATE_ACTIVE,
+                    seq,
+                });
+            }
+            LeaseCtlCommand::Renew {
+                id,
+                ttl_s,
+                priority,
+            } => {
+                let entry = self
+                    .active
+                    .iter_mut()
+                    .find(|entry| entry.id == id)
+                    .ok_or(NineDoorBridgeError::InvalidPayload)?;
+                append_log_bytes(&mut self.ctl_log, payload, self.ctl_max_bytes)?;
+                let seq = self.next_seq;
+                self.next_seq = self.next_seq.saturating_add(1);
+                entry.ttl_s = ttl_s;
+                entry.priority = priority;
+                entry.seq = seq;
+            }
+            LeaseCtlCommand::Preempt { id, reason } => {
+                let position = self
+                    .active
+                    .iter()
+                    .position(|entry| entry.id == id)
+                    .ok_or(NineDoorBridgeError::InvalidPayload)?;
+                if self.preemptions_max_entries == 0
+                    || self.preemptions.len() >= self.preemptions_max_entries
+                {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                append_log_bytes(&mut self.ctl_log, payload, self.ctl_max_bytes)?;
+                let entry = self.active.swap_remove(position);
+                let seq = self.next_seq;
+                self.next_seq = self.next_seq.saturating_add(1);
+                self.preemptions.push(LeasePreemption {
+                    id: entry.id,
+                    subject: entry.subject,
+                    resource: entry.resource,
+                    reason,
+                    seq,
+                });
+            }
+            LeaseCtlCommand::Quota {
+                subject,
+                resource,
+                max_active,
+                max_preemptions,
+            } => {
+                if self.active_max_entries == 0 {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                let quota_len = self.quotas.len();
+                let existing = self
+                    .quotas
+                    .iter_mut()
+                    .find(|entry| entry.subject == subject && entry.resource == resource);
+                if existing.is_none() && quota_len >= self.active_max_entries {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                append_log_bytes(&mut self.ctl_log, payload, self.ctl_max_bytes)?;
+                if let Some(entry) = existing {
+                    entry.max_active = max_active;
+                    entry.max_preemptions = max_preemptions;
+                } else {
+                    self.quotas.push(LeaseQuota {
+                        subject,
+                        resource,
+                        max_active,
+                        max_preemptions,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn summary_lines(
+        &self,
+    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+    {
+        let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let _ = write!(
+            line,
+            "active={} preemptions={} quotas={} max_active={} max_preemptions={}",
+            self.active.len(),
+            self.preemptions.len(),
+            self.quotas.len(),
+            self.active_max_entries,
+            self.preemptions_max_entries
+        );
+        if line.len() > self.proc_summary_bytes || line.len() > OBSERVE_LEASE_SUMMARY_BYTES {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        lines_from_text(line.as_str())
+    }
+
+    fn active_lines(
+        &self,
+    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+    {
+        let mut out = String::new();
+        for entry in &self.active {
+            let line = format!(
+                "id={} subject={} resource={} ttl_s={} priority={} state={} seq={}\n",
+                entry.id,
+                entry.subject,
+                entry.resource,
+                entry.ttl_s,
+                entry.priority,
+                entry.state,
+                entry.seq
+            );
+            if line.len() > DEFAULT_LINE_CAPACITY {
+                return Err(NineDoorBridgeError::BufferFull);
+            }
+            if !push_bounded_line(&mut out, &line, self.proc_active_bytes) {
+                break;
+            }
+        }
+        lines_from_bytes(out.as_bytes())
+    }
+
+    fn preemptions_lines(
+        &self,
+    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+    {
+        let mut out = String::new();
+        for entry in &self.preemptions {
+            let line = format!(
+                "id={} subject={} resource={} reason={} seq={}\n",
+                entry.id, entry.subject, entry.resource, entry.reason, entry.seq
+            );
+            if line.len() > DEFAULT_LINE_CAPACITY {
+                return Err(NineDoorBridgeError::BufferFull);
+            }
+            if !push_bounded_line(&mut out, &line, self.proc_preemptions_bytes) {
+                break;
+            }
+        }
+        lines_from_bytes(out.as_bytes())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ExportWindow {
+    id: String,
+    ttl_s: u32,
+    seq: u64,
+}
+
+#[derive(Debug)]
+struct ExportState {
+    enabled: bool,
+    ctl_max_bytes: u32,
+    ctl_log: Vec<u8>,
+    windows: Vec<ExportWindow>,
+    next_seq: u64,
+}
+
+impl ExportState {
+    fn new(control: generated::ExportControlConfig) -> Self {
+        Self {
+            enabled: control.enable,
+            ctl_max_bytes: control.ctl_max_bytes,
+            ctl_log: Vec::new(),
+            windows: Vec::new(),
+            next_seq: 1,
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn ctl_log(&self) -> &[u8] {
+        &self.ctl_log
+    }
+
+    fn append_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
+        if !self.enabled {
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        let command = parse_export_ctl(payload)?;
+        match command {
+            ExportCtlCommand::Open { id, ttl_s } => {
+                let existing = self.windows.iter().position(|entry| entry.id == id);
+                if existing.is_none() && self.windows.len() >= MAX_STREAM_LINES {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                append_log_bytes(&mut self.ctl_log, payload, self.ctl_max_bytes)?;
+                let seq = self.next_seq;
+                self.next_seq = self.next_seq.saturating_add(1);
+                if let Some(index) = existing {
+                    let entry = &mut self.windows[index];
+                    entry.ttl_s = ttl_s;
+                    entry.seq = seq;
+                } else {
+                    self.windows.push(ExportWindow { id, ttl_s, seq });
+                }
+            }
+            ExportCtlCommand::Close { id, reason: _ } => {
+                let position = self
+                    .windows
+                    .iter()
+                    .position(|entry| entry.id == id)
+                    .ok_or(NineDoorBridgeError::InvalidPayload)?;
+                append_log_bytes(&mut self.ctl_log, payload, self.ctl_max_bytes)?;
+                let _ = self.windows.swap_remove(position);
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -6076,6 +6845,349 @@ fn validate_json_envelope(payload: &str) -> Result<(), NineDoorBridgeError> {
     Ok(())
 }
 
+fn validate_json_keys(payload: &str, allowed: &[&str]) -> Result<(), NineDoorBridgeError> {
+    let trimmed = payload.trim();
+    validate_json_envelope(trimmed)?;
+    let bytes = trimmed.as_bytes();
+    let mut depth = 0usize;
+    let mut idx = 0usize;
+    let mut seen: Vec<&str> = Vec::new();
+    while idx < bytes.len() {
+        match bytes[idx] {
+            b'{' => {
+                depth = depth.saturating_add(1);
+                if depth > 1 {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+            }
+            b'}' => {
+                if depth == 0 {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                depth = depth.saturating_sub(1);
+            }
+            b'[' | b']' => {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            b'"' => {
+                let start = idx + 1;
+                let mut end = start;
+                let mut escape = false;
+                while end < bytes.len() {
+                    let byte = bytes[end];
+                    if escape {
+                        escape = false;
+                        end = end.saturating_add(1);
+                        continue;
+                    }
+                    if byte == b'\\' {
+                        escape = true;
+                        end = end.saturating_add(1);
+                        continue;
+                    }
+                    if byte == b'"' {
+                        break;
+                    }
+                    end = end.saturating_add(1);
+                }
+                if end >= bytes.len() {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                let key = &trimmed[start..end];
+                let prev = prev_non_ws(bytes, idx);
+                let next = next_non_ws(bytes, end + 1);
+                if depth == 1 && matches!(prev, Some(b'{') | Some(b',')) && next == Some(b':') {
+                    if !allowed.iter().any(|entry| *entry == key) {
+                        return Err(NineDoorBridgeError::InvalidPayload);
+                    }
+                    if seen.iter().any(|entry| *entry == key) {
+                        return Err(NineDoorBridgeError::InvalidPayload);
+                    }
+                    seen.push(key);
+                }
+                idx = end.saturating_add(1);
+                continue;
+            }
+            _ => {}
+        }
+        idx = idx.saturating_add(1);
+    }
+    if depth != 0 {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
+}
+
+fn prev_non_ws(bytes: &[u8], idx: usize) -> Option<u8> {
+    if idx == 0 {
+        return None;
+    }
+    let mut pos = idx;
+    while pos > 0 {
+        pos -= 1;
+        let byte = bytes[pos];
+        if !byte.is_ascii_whitespace() {
+            return Some(byte);
+        }
+    }
+    None
+}
+
+fn next_non_ws(bytes: &[u8], idx: usize) -> Option<u8> {
+    let mut pos = idx;
+    while pos < bytes.len() {
+        let byte = bytes[pos];
+        if !byte.is_ascii_whitespace() {
+            return Some(byte);
+        }
+        pos += 1;
+    }
+    None
+}
+
+#[derive(Debug)]
+struct ScheduleRequest {
+    id: String,
+    role: String,
+    priority: u32,
+    ticks: u32,
+    budget_ms: u32,
+}
+
+#[derive(Debug)]
+enum LeaseCtlCommand {
+    Grant {
+        id: String,
+        subject: String,
+        resource: String,
+        ttl_s: u32,
+        priority: u32,
+    },
+    Renew {
+        id: String,
+        ttl_s: u32,
+        priority: u32,
+    },
+    Preempt {
+        id: String,
+        reason: String,
+    },
+    Quota {
+        subject: String,
+        resource: String,
+        max_active: u32,
+        max_preemptions: u32,
+    },
+}
+
+#[derive(Debug)]
+enum ExportCtlCommand {
+    Open { id: String, ttl_s: u32 },
+    Close { id: String, reason: String },
+}
+
+#[derive(Debug)]
+enum PolicyCtlCommand {
+    Apply { id: String, sha256: String },
+    Rollback { id: String },
+}
+
+fn parse_schedule_ctl(payload: &str) -> Result<ScheduleRequest, NineDoorBridgeError> {
+    validate_json_keys(
+        payload,
+        &["id", "role", "priority", "ticks", "budget_ms"],
+    )?;
+    let id = parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    let role =
+        parse_json_string_field(payload, "role").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    let priority =
+        parse_json_u64_field(payload, "priority").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    let ticks =
+        parse_json_u64_field(payload, "ticks").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    let budget_ms =
+        parse_json_u64_field(payload, "budget_ms").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    validate_schedule_id(id)?;
+    validate_schedule_role(role)?;
+    let priority = u32::try_from(priority).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    let ticks = u32::try_from(ticks).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    let budget_ms = u32::try_from(budget_ms).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    if ticks == 0 || budget_ms == 0 {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(ScheduleRequest {
+        id: id.to_owned(),
+        role: role.to_owned(),
+        priority,
+        ticks,
+        budget_ms,
+    })
+}
+
+fn parse_lease_ctl(payload: &str) -> Result<LeaseCtlCommand, NineDoorBridgeError> {
+    let op = parse_json_string_field(payload, "op").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    match op {
+        "grant" => {
+            validate_json_keys(
+                payload,
+                &["op", "id", "subject", "resource", "ttl_s", "priority"],
+            )?;
+            let id =
+                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let subject = parse_json_string_field(payload, "subject")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let resource = parse_json_string_field(payload, "resource")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let ttl_s =
+                parse_json_u64_field(payload, "ttl_s").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let priority = parse_json_u64_field(payload, "priority")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            validate_lease_id(id)?;
+            validate_lease_subject(subject)?;
+            validate_lease_resource(resource)?;
+            let ttl_s = u32::try_from(ttl_s).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            let priority =
+                u32::try_from(priority).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            if ttl_s == 0 {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            Ok(LeaseCtlCommand::Grant {
+                id: id.to_owned(),
+                subject: subject.to_owned(),
+                resource: resource.to_owned(),
+                ttl_s,
+                priority,
+            })
+        }
+        "renew" => {
+            validate_json_keys(payload, &["op", "id", "ttl_s", "priority"])?;
+            let id =
+                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let ttl_s =
+                parse_json_u64_field(payload, "ttl_s").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let priority = parse_json_u64_field(payload, "priority")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            validate_lease_id(id)?;
+            let ttl_s = u32::try_from(ttl_s).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            let priority =
+                u32::try_from(priority).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            if ttl_s == 0 {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            Ok(LeaseCtlCommand::Renew {
+                id: id.to_owned(),
+                ttl_s,
+                priority,
+            })
+        }
+        "preempt" => {
+            validate_json_keys(payload, &["op", "id", "reason"])?;
+            let id =
+                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let reason = parse_json_string_field(payload, "reason")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            validate_lease_id(id)?;
+            validate_lease_reason(reason)?;
+            Ok(LeaseCtlCommand::Preempt {
+                id: id.to_owned(),
+                reason: reason.to_owned(),
+            })
+        }
+        "quota" => {
+            validate_json_keys(
+                payload,
+                &["op", "subject", "resource", "max_active", "max_preemptions"],
+            )?;
+            let subject = parse_json_string_field(payload, "subject")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let resource = parse_json_string_field(payload, "resource")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let max_active = parse_json_u64_field(payload, "max_active")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let max_preemptions = parse_json_u64_field(payload, "max_preemptions")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            validate_lease_subject(subject)?;
+            validate_lease_resource(resource)?;
+            let max_active =
+                u32::try_from(max_active).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            let max_preemptions =
+                u32::try_from(max_preemptions).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            if max_active == 0 || max_preemptions == 0 {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            Ok(LeaseCtlCommand::Quota {
+                subject: subject.to_owned(),
+                resource: resource.to_owned(),
+                max_active,
+                max_preemptions,
+            })
+        }
+        _ => Err(NineDoorBridgeError::InvalidPayload),
+    }
+}
+
+fn parse_export_ctl(payload: &str) -> Result<ExportCtlCommand, NineDoorBridgeError> {
+    let op = parse_json_string_field(payload, "op").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    match op {
+        "open" => {
+            validate_json_keys(payload, &["op", "id", "ttl_s"])?;
+            let id =
+                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let ttl_s =
+                parse_json_u64_field(payload, "ttl_s").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            validate_export_id(id)?;
+            let ttl_s = u32::try_from(ttl_s).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            if ttl_s == 0 {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            Ok(ExportCtlCommand::Open {
+                id: id.to_owned(),
+                ttl_s,
+            })
+        }
+        "close" => {
+            validate_json_keys(payload, &["op", "id", "reason"])?;
+            let id =
+                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let reason = parse_json_string_field(payload, "reason")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            validate_export_id(id)?;
+            validate_lease_reason(reason)?;
+            Ok(ExportCtlCommand::Close {
+                id: id.to_owned(),
+                reason: reason.to_owned(),
+            })
+        }
+        _ => Err(NineDoorBridgeError::InvalidPayload),
+    }
+}
+
+fn parse_policy_ctl(payload: &str) -> Result<PolicyCtlCommand, NineDoorBridgeError> {
+    let op = parse_json_string_field(payload, "op").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    match op {
+        "apply" => {
+            validate_json_keys(payload, &["op", "id", "sha256"])?;
+            let id =
+                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let sha256 = parse_json_string_field(payload, "sha256")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            validate_policy_revision_id(id)?;
+            validate_sha256_hex(sha256)?;
+            Ok(PolicyCtlCommand::Apply {
+                id: id.to_owned(),
+                sha256: sha256.to_owned(),
+            })
+        }
+        "rollback" => {
+            validate_json_keys(payload, &["op", "id"])?;
+            let id =
+                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            validate_policy_revision_id(id)?;
+            Ok(PolicyCtlCommand::Rollback { id: id.to_owned() })
+        }
+        _ => Err(NineDoorBridgeError::InvalidPayload),
+    }
+}
+
 fn parse_action_lines(payload: &str) -> Result<Vec<PolicyAction>, NineDoorBridgeError> {
     let mut actions = Vec::new();
     for line in payload.lines() {
@@ -6112,6 +7224,76 @@ fn parse_policy_decision(value: &str) -> Result<PolicyDecision, NineDoorBridgeEr
         "deny" => Ok(PolicyDecision::Deny),
         _ => Err(NineDoorBridgeError::InvalidPayload),
     }
+}
+
+fn validate_simple_token(value: &str, max_len: usize) -> Result<(), NineDoorBridgeError> {
+    if value.is_empty() || value.len() > max_len {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
+}
+
+fn validate_extended_token(value: &str, max_len: usize) -> Result<(), NineDoorBridgeError> {
+    if value.is_empty() || value.len() > max_len {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    if value == "." || value == ".." {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    if !value.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' || ch == ':'
+    }) {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
+}
+
+fn validate_schedule_id(id: &str) -> Result<(), NineDoorBridgeError> {
+    validate_simple_token(id, MAX_SCHEDULE_ID_LEN)
+}
+
+fn validate_schedule_role(role: &str) -> Result<(), NineDoorBridgeError> {
+    validate_simple_token(role, MAX_SCHEDULE_ROLE_LEN)
+}
+
+fn validate_lease_id(id: &str) -> Result<(), NineDoorBridgeError> {
+    validate_simple_token(id, MAX_LEASE_ID_LEN)
+}
+
+fn validate_lease_subject(subject: &str) -> Result<(), NineDoorBridgeError> {
+    validate_simple_token(subject, MAX_LEASE_SUBJECT_LEN)
+}
+
+fn validate_lease_resource(resource: &str) -> Result<(), NineDoorBridgeError> {
+    validate_extended_token(resource, MAX_LEASE_RESOURCE_LEN)
+}
+
+fn validate_lease_reason(reason: &str) -> Result<(), NineDoorBridgeError> {
+    validate_extended_token(reason, MAX_LEASE_REASON_LEN)
+}
+
+fn validate_policy_revision_id(id: &str) -> Result<(), NineDoorBridgeError> {
+    validate_simple_token(id, MAX_POLICY_REV_ID_LEN)
+}
+
+fn validate_export_id(id: &str) -> Result<(), NineDoorBridgeError> {
+    validate_simple_token(id, MAX_EXPORT_ID_LEN)
+}
+
+fn validate_sha256_hex(value: &str) -> Result<(), NineDoorBridgeError> {
+    if value.len() != 64 {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    if !value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
 }
 
 fn validate_action_id(id: &str) -> Result<(), NineDoorBridgeError> {

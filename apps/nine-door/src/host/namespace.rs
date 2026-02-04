@@ -1461,15 +1461,27 @@ impl Namespace {
         let lifecycle_root = vec!["queen".to_owned(), "lifecycle".to_owned()];
         self.ensure_append_only_file(&lifecycle_root, "ctl", b"")
             .expect("create /queen/lifecycle/ctl");
+        self.ensure_dir(&queen_path, "schedule")
+            .expect("create /queen/schedule");
+        let schedule_root = vec!["queen".to_owned(), "schedule".to_owned()];
+        self.ensure_append_only_file(&schedule_root, "ctl", b"")
+            .expect("create /queen/schedule/ctl");
+        self.ensure_dir(&queen_path, "lease")
+            .expect("create /queen/lease");
+        let lease_root = vec!["queen".to_owned(), "lease".to_owned()];
+        self.ensure_append_only_file(&lease_root, "ctl", b"")
+            .expect("create /queen/lease/ctl");
+        self.ensure_dir(&queen_path, "export")
+            .expect("create /queen/export");
+        let export_root = vec!["queen".to_owned(), "export".to_owned()];
+        self.ensure_append_only_file(&export_root, "ctl", b"")
+            .expect("create /queen/export/ctl");
         if self.telemetry_ingest.enabled() {
             self.ensure_dir(&queen_path, "telemetry")
                 .expect("create /queen/telemetry");
-            self.ensure_dir(&queen_path, "export")
-                .expect("create /queen/export");
-            let export_root = vec!["queen".to_owned(), "export".to_owned()];
-            self.ensure_dir(&export_root, "lora_jobs")
-                .expect("create /queen/export/lora_jobs");
         }
+        self.ensure_dir(&export_root, "lora_jobs")
+            .expect("create /queen/export/lora_jobs");
         if self.shards.is_enabled() {
             self.ensure_dir(&[], "shard").expect("create /shard");
             let shard_root = vec!["shard".to_owned()];
@@ -1599,6 +1611,29 @@ impl Namespace {
             }
             if config.proc_pressure.policy {
                 self.ensure_read_only_file(&pressure_path, "policy", b"")?;
+            }
+        }
+        if config.proc_schedule.enabled() {
+            self.ensure_dir(&proc_path, "schedule")?;
+            let schedule_path = vec!["proc".to_owned(), "schedule".to_owned()];
+            if config.proc_schedule.summary {
+                self.ensure_read_only_file(&schedule_path, "summary", b"")?;
+            }
+            if config.proc_schedule.queue {
+                self.ensure_read_only_file(&schedule_path, "queue", b"")?;
+            }
+        }
+        if config.proc_lease.enabled() {
+            self.ensure_dir(&proc_path, "lease")?;
+            let lease_path = vec!["proc".to_owned(), "lease".to_owned()];
+            if config.proc_lease.summary {
+                self.ensure_read_only_file(&lease_path, "summary", b"")?;
+            }
+            if config.proc_lease.active {
+                self.ensure_read_only_file(&lease_path, "active", b"")?;
+            }
+            if config.proc_lease.preemptions {
+                self.ensure_read_only_file(&lease_path, "preemptions", b"")?;
             }
         }
         Ok(())
@@ -2411,6 +2446,45 @@ impl Namespace {
         self.set_read_only_file(&parent, "policy", data)
     }
 
+    /// Replace the `/proc/schedule/summary` contents.
+    pub fn set_proc_schedule_summary_payload(
+        &mut self,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "schedule".to_owned()];
+        self.set_read_only_file(&parent, "summary", data)
+    }
+
+    /// Replace the `/proc/schedule/queue` contents.
+    pub fn set_proc_schedule_queue_payload(
+        &mut self,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "schedule".to_owned()];
+        self.set_read_only_file(&parent, "queue", data)
+    }
+
+    /// Replace the `/proc/lease/summary` contents.
+    pub fn set_proc_lease_summary_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "lease".to_owned()];
+        self.set_read_only_file(&parent, "summary", data)
+    }
+
+    /// Replace the `/proc/lease/active` contents.
+    pub fn set_proc_lease_active_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "lease".to_owned()];
+        self.set_read_only_file(&parent, "active", data)
+    }
+
+    /// Replace the `/proc/lease/preemptions` contents.
+    pub fn set_proc_lease_preemptions_payload(
+        &mut self,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "lease".to_owned()];
+        self.set_read_only_file(&parent, "preemptions", data)
+    }
+
     /// Replace the `/proc/lifecycle/state` contents.
     pub fn set_proc_lifecycle_state_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
         let parent = vec!["proc".to_owned(), "lifecycle".to_owned()];
@@ -2520,6 +2594,24 @@ impl Namespace {
         node.remove_child(name);
         node.ensure_file(name, FileNode::AppendOnly(data.to_vec()));
         Ok(())
+    }
+
+    /// Replace the `/queen/schedule/ctl` contents.
+    pub fn set_queen_schedule_ctl_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["queen".to_owned(), "schedule".to_owned()];
+        self.set_append_only_file(&parent, "ctl", data)
+    }
+
+    /// Replace the `/queen/lease/ctl` contents.
+    pub fn set_queen_lease_ctl_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["queen".to_owned(), "lease".to_owned()];
+        self.set_append_only_file(&parent, "ctl", data)
+    }
+
+    /// Replace the `/queen/export/ctl` contents.
+    pub fn set_queen_export_ctl_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
+        let parent = vec!["queen".to_owned(), "export".to_owned()];
+        self.set_append_only_file(&parent, "ctl", data)
     }
 
     /// Replace the `/policy/ctl` contents.

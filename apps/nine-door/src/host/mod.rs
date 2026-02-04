@@ -36,6 +36,7 @@ mod observe;
 mod pipeline;
 mod policy;
 mod replay;
+mod schedule;
 mod security;
 mod session;
 mod telemetry;
@@ -50,8 +51,8 @@ pub use self::namespace::{
     SidecarLoraAdapterConfig, SidecarLoraConfig, SidecarNamespaceConfig,
 };
 pub use self::observe::{
-    ObserveConfig, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcPressureConfig,
-    ProcRootConfig,
+    ObserveConfig, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig,
+    ProcPressureConfig, ProcRootConfig, ProcScheduleConfig,
 };
 pub use self::pipeline::{Pipeline, PipelineConfig, PipelineMetrics};
 pub use self::policy::{PolicyConfig, PolicyDecision, PolicyLimits, PolicyRuleSpec};

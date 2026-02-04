@@ -9,10 +9,46 @@ const defaultReleaseDir = path.join(
   "releases",
   "Cohesix-0.3.0-alpha2-MacOS"
 );
-const releaseDir = process.env.SWARMUI_RELEASE_DIR
-  ? path.resolve(process.env.SWARMUI_RELEASE_DIR)
-  : defaultReleaseDir;
-const uiRoot = path.join(releaseDir, "ui", "swarmui");
+const resolveReleaseDir = () => {
+  if (process.env.SWARMUI_RELEASE_DIR) {
+    return path.resolve(process.env.SWARMUI_RELEASE_DIR);
+  }
+  if (fs.existsSync(defaultReleaseDir)) {
+    return defaultReleaseDir;
+  }
+  const releasesRoot = path.join(repoRoot, "releases");
+  if (!fs.existsSync(releasesRoot)) {
+    return defaultReleaseDir;
+  }
+  const candidates = fs
+    .readdirSync(releasesRoot)
+    .map((entry) => path.join(releasesRoot, entry))
+    .filter((entry) => {
+      if (!entry.endsWith("-MacOS")) {
+        return false;
+      }
+      try {
+        return fs.statSync(entry).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+  if (!candidates.length) {
+    return defaultReleaseDir;
+  }
+  candidates.sort((a, b) => {
+    try {
+      return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+    } catch {
+      return 0;
+    }
+  });
+  return candidates[0];
+};
+const releaseDir = resolveReleaseDir();
+const uiRoot = process.env.SWARMUI_UI_ROOT
+  ? path.resolve(process.env.SWARMUI_UI_ROOT)
+  : path.join(releaseDir, "ui", "swarmui");
 
 const helpLinesPath = path.join(__dirname, "fixtures", "help-lines.json");
 const helpLines = JSON.parse(fs.readFileSync(helpLinesPath, "utf8"));
@@ -26,6 +62,7 @@ const hiveBootstrap = {
     lod_zoom_in: 1.25,
     lod_event_budget: 512
   },
+  namespace_roots: ["/proc", "/queen", "/worker", "/log", "/gpu"],
   agents: [
     {
       id: "worker-heart-1",
@@ -57,6 +94,50 @@ const hiveBatch = {
   root: { reachable: true, cut_reason: null },
   sessions: { active: 1, draining: 0 },
   pressure_counters: { busy: 0, quota: 0, cut: 0, policy: 0 },
+  schedule: {
+    summary: { queue: 2, dequeued: 7, dropped: 1, max_entries: 64 },
+    queue: [
+      {
+        id: "sched-1",
+        role: "worker-gpu",
+        priority: 5,
+        ticks: 3,
+        budget_ms: 120,
+        seq: 42
+      },
+      {
+        id: "sched-2",
+        role: "worker-heartbeat",
+        priority: 2,
+        ticks: 1,
+        budget_ms: 40,
+        seq: 43
+      }
+    ]
+  },
+  lease: {
+    summary: { active: 1, preemptions: 1, quotas: 2, max_active: 8, max_preemptions: 16 },
+    active: [
+      {
+        id: "lease-1",
+        subject: "queen",
+        resource: "gpu0",
+        ttl_s: 300,
+        priority: 5,
+        state: "active",
+        seq: 9
+      }
+    ],
+    preemptions: [
+      {
+        id: "lease-0",
+        subject: "worker-gpu-1",
+        resource: "gpu1",
+        reason: "timeout",
+        seq: 7
+      }
+    ]
+  },
   events: [
     {
       kind: "telemetry",
@@ -87,11 +168,11 @@ const hiveBatch = {
   done: false
 };
 
-const ensureReleaseBundle = () => {
+const ensureUiRoot = () => {
   const indexPath = path.join(uiRoot, "index.html");
   if (!fs.existsSync(indexPath)) {
     throw new Error(
-      `SwarmUI release UI not found at ${indexPath}. Set SWARMUI_RELEASE_DIR to the latest release bundle path.`
+      `SwarmUI UI root not found at ${indexPath}. Set SWARMUI_UI_ROOT (source UI) or SWARMUI_RELEASE_DIR (release bundle).`
     );
   }
 };
@@ -200,7 +281,7 @@ let serverHandle = null;
 let baseUrl = null;
 
 test.beforeAll(async () => {
-  ensureReleaseBundle();
+  ensureUiRoot();
   const { server, baseUrl: url } = await startStaticServer();
   serverHandle = server;
   baseUrl = url;
@@ -252,6 +333,18 @@ test("Live Hive dots are clickable", async ({ page }) => {
   expect(target).toBeTruthy();
   await page.mouse.click(target.x, target.y);
   await expect(page.locator("#hive-detail-title")).toContainText("worker-gpu-1");
+});
+
+test("Scheduler and lease panels render /proc data", async ({ page }) => {
+  await page.waitForTimeout(200);
+  await expect(page.locator("#hive-schedule-summary")).toContainText(
+    "Queue 2/64"
+  );
+  await expect(page.locator("#hive-schedule-queue")).toContainText("sched-1");
+  await expect(page.locator("#hive-schedule-queue")).toContainText("sched-2");
+  await expect(page.locator("#hive-lease-summary")).toContainText("Active 1/8");
+  await expect(page.locator("#hive-lease-active")).toContainText("lease-1");
+  await expect(page.locator("#hive-lease-preemptions")).toContainText("lease-0");
 });
 
 test("Live Hive performance harness stays responsive", async ({ page }) => {

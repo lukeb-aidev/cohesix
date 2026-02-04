@@ -524,8 +524,170 @@ fn render_client_rust(manifest: &Manifest, manifest_hash: &str) -> String {
     .ok();
     writeln!(
         contents,
+        "pub const CLIENT_QUEEN_SCHEDULE_CTL_PATH: &str = {:?};",
+        manifest.client_paths.queen_schedule_ctl
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const CLIENT_QUEEN_LEASE_CTL_PATH: &str = {:?};",
+        manifest.client_paths.queen_lease_ctl
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const CLIENT_QUEEN_EXPORT_CTL_PATH: &str = {:?};",
+        manifest.client_paths.queen_export_ctl
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const CLIENT_POLICY_CTL_PATH: &str = {:?};",
+        manifest.client_paths.policy_ctl
+    )
+    .ok();
+    writeln!(
+        contents,
         "pub const CLIENT_LOG_PATH: &str = {:?};",
         manifest.client_paths.log
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const CONTROL_SCHEDULE_QUEUE_MAX_ENTRIES: u32 = {};",
+        manifest.control_plane.schedule.queue_max_entries
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const CONTROL_SCHEDULE_ENABLED: bool = {};",
+        manifest.control_plane.schedule.enable
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const CONTROL_SCHEDULE_CTL_MAX_BYTES: u32 = {};",
+        manifest.control_plane.schedule.ctl_max_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const CONTROL_LEASE_ACTIVE_MAX_ENTRIES: u32 = {};",
+        manifest.control_plane.lease.active_max_entries
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const CONTROL_LEASE_ENABLED: bool = {};",
+        manifest.control_plane.lease.enable
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const CONTROL_LEASE_PREEMPTIONS_MAX_ENTRIES: u32 = {};",
+        manifest.control_plane.lease.preemptions_max_entries
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const CONTROL_LEASE_CTL_MAX_BYTES: u32 = {};",
+        manifest.control_plane.lease.ctl_max_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const CONTROL_EXPORT_ENABLED: bool = {};",
+        manifest.control_plane.export.enable
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const CONTROL_EXPORT_CTL_MAX_BYTES: u32 = {};",
+        manifest.control_plane.export.ctl_max_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const POLICY_ENABLED: bool = {};",
+        manifest.ecosystem.policy.enable
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const POLICY_CTL_MAX_BYTES: u32 = {};",
+        manifest.ecosystem.policy.ctl_max_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const POLICY_QUEUE_MAX_ENTRIES: u32 = {};",
+        manifest.ecosystem.policy.queue_max_entries
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const POLICY_QUEUE_MAX_BYTES: u32 = {};",
+        manifest.ecosystem.policy.queue_max_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const PROC_SCHEDULE_SUMMARY_BYTES: u32 = {};",
+        manifest.observability.proc_schedule.summary_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const PROC_SCHEDULE_SUMMARY_ENABLED: bool = {};",
+        manifest.observability.proc_schedule.summary
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const PROC_SCHEDULE_QUEUE_BYTES: u32 = {};",
+        manifest.observability.proc_schedule.queue_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const PROC_SCHEDULE_QUEUE_ENABLED: bool = {};",
+        manifest.observability.proc_schedule.queue
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const PROC_LEASE_SUMMARY_BYTES: u32 = {};",
+        manifest.observability.proc_lease.summary_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const PROC_LEASE_SUMMARY_ENABLED: bool = {};",
+        manifest.observability.proc_lease.summary
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const PROC_LEASE_ACTIVE_BYTES: u32 = {};",
+        manifest.observability.proc_lease.active_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const PROC_LEASE_ACTIVE_ENABLED: bool = {};",
+        manifest.observability.proc_lease.active
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const PROC_LEASE_PREEMPTIONS_BYTES: u32 = {};",
+        manifest.observability.proc_lease.preemptions_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const PROC_LEASE_PREEMPTIONS_ENABLED: bool = {};",
+        manifest.observability.proc_lease.preemptions
     )
     .ok();
     writeln!(
@@ -594,6 +756,30 @@ fn render_client_doc(manifest: &Manifest, manifest_hash: &str) -> String {
         contents,
         "- `client_paths.queen_lifecycle_ctl`: `{}`",
         manifest.client_paths.queen_lifecycle_ctl
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `client_paths.queen_schedule_ctl`: `{}`",
+        manifest.client_paths.queen_schedule_ctl
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `client_paths.queen_lease_ctl`: `{}`",
+        manifest.client_paths.queen_lease_ctl
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `client_paths.queen_export_ctl`: `{}`",
+        manifest.client_paths.queen_export_ctl
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `client_paths.policy_ctl`: `{}`",
+        manifest.client_paths.policy_ctl
     )
     .ok();
     writeln!(

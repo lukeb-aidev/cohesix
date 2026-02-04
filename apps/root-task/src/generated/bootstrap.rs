@@ -4,12 +4,12 @@
 
 #![allow(unused_imports)]
 
-use super::{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcPressureConfig, ProcRootConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig};
+use super::{AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostProvider, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig};
 use cohesix_ticket::Role;
 
 pub const TICKET_TABLE_SHA256: &str = "fd0ebff1d0b4cfcc2a03a1015578545dfa68f0240e782b60ad7956c2492972eb";
 pub const NAMESPACE_TABLE_SHA256: &str = "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
-pub const AUDIT_TABLE_SHA256: &str = "78714126eb2919bbf17c405503d0fee2186370978356018f4604a43082a0d139";
+pub const AUDIT_TABLE_SHA256: &str = "30314eab63161131a1fc5da0e983bb6f1c5cc58e8a8c15884341685502e4972e";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec { role: Role::Queen, secret: "bootstrap" },
@@ -300,6 +300,8 @@ pub const LIFECYCLE_AUTO_TRANSITIONS: [LifecycleAutoTransition; 1] = [
 
 pub const LIFECYCLE_CONFIG: LifecycleConfig = LifecycleConfig { initial_state: LifecycleState::Booting, auto_transitions: &LIFECYCLE_AUTO_TRANSITIONS };
 
+pub const CONTROL_PLANE_CONFIG: ControlPlaneConfig = ControlPlaneConfig { schedule: ScheduleControlConfig { enable: true, queue_max_entries: 64, ctl_max_bytes: 8192 }, lease: LeaseControlConfig { enable: true, active_max_entries: 64, preemptions_max_entries: 64, ctl_max_bytes: 8192 }, export: ExportControlConfig { enable: true, ctl_max_bytes: 2048 } };
+
 pub const CAS_CONFIG: CasConfig = CasConfig { enable: true, chunk_bytes: 128, delta_enable: true, signing_required: true, signing_key: Some([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]), models_enabled: false };
 
 pub const PROC_9P_SESSIONS_BYTES: usize = 8192;
@@ -324,7 +326,12 @@ pub const PROC_PRESSURE_BUSY_BYTES: usize = 64;
 pub const PROC_PRESSURE_QUOTA_BYTES: usize = 64;
 pub const PROC_PRESSURE_CUT_BYTES: usize = 64;
 pub const PROC_PRESSURE_POLICY_BYTES: usize = 64;
-pub const OBSERVABILITY_CONFIG: ObservabilityConfig = ObservabilityConfig { proc_9p: Proc9pConfig { sessions: true, outstanding: true, short_writes: true, sessions_bytes: 8192, outstanding_bytes: 128, short_writes_bytes: 128 }, proc_9p_session: Proc9pSessionConfig { active: true, state: true, since_ms: true, owner: true, active_bytes: 128, state_bytes: 64, since_ms_bytes: 64, owner_bytes: 96 }, proc_ingest: ProcIngestConfig { p50_ms: true, p95_ms: true, backpressure: true, dropped: true, queued: true, watch: true, p50_ms_bytes: 64, p95_ms_bytes: 64, backpressure_bytes: 64, dropped_bytes: 64, queued_bytes: 64, watch_max_entries: 16, watch_line_bytes: 192, watch_min_interval_ms: 50, latency_samples: 32, latency_tolerance_ms: 5, counter_tolerance: 1 }, proc_root: ProcRootConfig { reachable: true, last_seen_ms: true, cut_reason: true, reachable_bytes: 32, last_seen_ms_bytes: 64, cut_reason_bytes: 64 }, proc_pressure: ProcPressureConfig { busy: true, quota: true, cut: true, policy: true, busy_bytes: 64, quota_bytes: 64, cut_bytes: 64, policy_bytes: 64 } };
+pub const PROC_SCHEDULE_SUMMARY_BYTES: usize = 128;
+pub const PROC_SCHEDULE_QUEUE_BYTES: usize = 256;
+pub const PROC_LEASE_SUMMARY_BYTES: usize = 160;
+pub const PROC_LEASE_ACTIVE_BYTES: usize = 256;
+pub const PROC_LEASE_PREEMPTIONS_BYTES: usize = 256;
+pub const OBSERVABILITY_CONFIG: ObservabilityConfig = ObservabilityConfig { proc_9p: Proc9pConfig { sessions: true, outstanding: true, short_writes: true, sessions_bytes: 8192, outstanding_bytes: 128, short_writes_bytes: 128 }, proc_9p_session: Proc9pSessionConfig { active: true, state: true, since_ms: true, owner: true, active_bytes: 128, state_bytes: 64, since_ms_bytes: 64, owner_bytes: 96 }, proc_ingest: ProcIngestConfig { p50_ms: true, p95_ms: true, backpressure: true, dropped: true, queued: true, watch: true, p50_ms_bytes: 64, p95_ms_bytes: 64, backpressure_bytes: 64, dropped_bytes: 64, queued_bytes: 64, watch_max_entries: 16, watch_line_bytes: 192, watch_min_interval_ms: 50, latency_samples: 32, latency_tolerance_ms: 5, counter_tolerance: 1 }, proc_root: ProcRootConfig { reachable: true, last_seen_ms: true, cut_reason: true, reachable_bytes: 32, last_seen_ms_bytes: 64, cut_reason_bytes: 64 }, proc_pressure: ProcPressureConfig { busy: true, quota: true, cut: true, policy: true, busy_bytes: 64, quota_bytes: 64, cut_bytes: 64, policy_bytes: 64 }, proc_schedule: ProcScheduleConfig { summary: true, queue: true, summary_bytes: 128, queue_bytes: 256 }, proc_lease: ProcLeaseConfig { summary: true, active: true, preemptions: true, summary_bytes: 160, active_bytes: 256, preemptions_bytes: 256 } };
 
 pub const UI_PROVIDER_CONFIG: UiProviderConfig = UiProviderConfig { proc_9p: UiProc9pConfig { sessions: true, outstanding: true, short_writes: true }, proc_ingest: UiProcIngestConfig { p50_ms: true, p95_ms: true, backpressure: true }, policy_preflight: UiPolicyPreflightConfig { req: false, diff: false }, updates: UiUpdatesConfig { manifest: true, status: true } };
 
@@ -353,9 +360,9 @@ pub const POLICY_RULES: [PolicyRule; 2] = [
     PolicyRule { id: "systemd-restart", target: "/host/systemd/*/restart" },
 ];
 
-pub const POLICY_CONFIG: PolicyConfig = PolicyConfig { enable: false, limits: PolicyLimits { queue_max_entries: 32, queue_max_bytes: 4096, ctl_max_bytes: 2048, status_max_bytes: 512 }, rules: &POLICY_RULES };
+pub const POLICY_CONFIG: PolicyConfig = PolicyConfig { enable: true, limits: PolicyLimits { queue_max_entries: 32, queue_max_bytes: 4096, ctl_max_bytes: 2048, status_max_bytes: 512 }, rules: &POLICY_RULES };
 
-pub const POLICY_RULES_JSON: &str = "{\n  \"enabled\": false,\n  \"limits\": {\n    \"queue_max_entries\": 32,\n    \"queue_max_bytes\": 4096,\n    \"ctl_max_bytes\": 2048,\n    \"status_max_bytes\": 512\n  },\n  \"rules\": [\n    {\n      \"id\": \"queen-ctl\",\n      \"target\": \"/queen/ctl\"\n    },\n    {\n      \"id\": \"systemd-restart\",\n      \"target\": \"/host/systemd/*/restart\"\n    }\n  ]\n}";
+pub const POLICY_RULES_JSON: &str = "{\n  \"enabled\": true,\n  \"limits\": {\n    \"queue_max_entries\": 32,\n    \"queue_max_bytes\": 4096,\n    \"ctl_max_bytes\": 2048,\n    \"status_max_bytes\": 512\n  },\n  \"rules\": [\n    {\n      \"id\": \"queen-ctl\",\n      \"target\": \"/queen/ctl\"\n    },\n    {\n      \"id\": \"systemd-restart\",\n      \"target\": \"/host/systemd/*/restart\"\n    }\n  ]\n}";
 
 pub const AUDIT_CONFIG: AuditConfig = AuditConfig { enable: false, journal_max_bytes: 8192, decisions_max_bytes: 4096, replay_enable: false, replay_max_entries: 64, replay_ctl_max_bytes: 1024, replay_status_max_bytes: 1024 };
 
@@ -370,7 +377,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = [
 pub const INITIAL_AUDIT_LINES: [&str; 23] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb",
+    "manifest.sha256=7d6b2ecf259049c1e431a37e693118b9bccc05395e374934f3dc6837d1004c1f",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

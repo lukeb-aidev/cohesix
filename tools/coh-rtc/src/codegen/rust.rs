@@ -227,6 +227,52 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct ProcScheduleConfig {{")?;
+    writeln!(mod_contents, "    pub summary: bool,")?;
+    writeln!(mod_contents, "    pub queue: bool,")?;
+    writeln!(mod_contents, "    pub summary_bytes: u32,")?;
+    writeln!(mod_contents, "    pub queue_bytes: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct ProcLeaseConfig {{")?;
+    writeln!(mod_contents, "    pub summary: bool,")?;
+    writeln!(mod_contents, "    pub active: bool,")?;
+    writeln!(mod_contents, "    pub preemptions: bool,")?;
+    writeln!(mod_contents, "    pub summary_bytes: u32,")?;
+    writeln!(mod_contents, "    pub active_bytes: u32,")?;
+    writeln!(mod_contents, "    pub preemptions_bytes: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct ScheduleControlConfig {{")?;
+    writeln!(mod_contents, "    pub enable: bool,")?;
+    writeln!(mod_contents, "    pub queue_max_entries: u32,")?;
+    writeln!(mod_contents, "    pub ctl_max_bytes: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct LeaseControlConfig {{")?;
+    writeln!(mod_contents, "    pub enable: bool,")?;
+    writeln!(mod_contents, "    pub active_max_entries: u32,")?;
+    writeln!(mod_contents, "    pub preemptions_max_entries: u32,")?;
+    writeln!(mod_contents, "    pub ctl_max_bytes: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct ExportControlConfig {{")?;
+    writeln!(mod_contents, "    pub enable: bool,")?;
+    writeln!(mod_contents, "    pub ctl_max_bytes: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct ControlPlaneConfig {{")?;
+    writeln!(mod_contents, "    pub schedule: ScheduleControlConfig,")?;
+    writeln!(mod_contents, "    pub lease: LeaseControlConfig,")?;
+    writeln!(mod_contents, "    pub export: ExportControlConfig,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct ObservabilityConfig {{")?;
     writeln!(mod_contents, "    pub proc_9p: Proc9pConfig,")?;
     writeln!(
@@ -236,6 +282,8 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub proc_ingest: ProcIngestConfig,")?;
     writeln!(mod_contents, "    pub proc_root: ProcRootConfig,")?;
     writeln!(mod_contents, "    pub proc_pressure: ProcPressureConfig,")?;
+    writeln!(mod_contents, "    pub proc_schedule: ProcScheduleConfig,")?;
+    writeln!(mod_contents, "    pub proc_lease: ProcLeaseConfig,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -441,6 +489,10 @@ pub fn emit_rust(
     )?;
     writeln!(
         mod_contents,
+        "pub const CONTROL_PLANE_CONFIG: ControlPlaneConfig = bootstrap::CONTROL_PLANE_CONFIG;"
+    )?;
+    writeln!(
+        mod_contents,
         "pub const OBSERVABILITY_CONFIG: ObservabilityConfig = bootstrap::OBSERVABILITY_CONFIG;"
     )?;
     writeln!(
@@ -488,6 +540,26 @@ pub fn emit_rust(
     writeln!(
         mod_contents,
         "pub const PROC_INGEST_LATENCY_SAMPLES: usize = bootstrap::PROC_INGEST_LATENCY_SAMPLES;"
+    )?;
+    writeln!(
+        mod_contents,
+        "pub const PROC_SCHEDULE_SUMMARY_BYTES: usize = bootstrap::PROC_SCHEDULE_SUMMARY_BYTES;"
+    )?;
+    writeln!(
+        mod_contents,
+        "pub const PROC_SCHEDULE_QUEUE_BYTES: usize = bootstrap::PROC_SCHEDULE_QUEUE_BYTES;"
+    )?;
+    writeln!(
+        mod_contents,
+        "pub const PROC_LEASE_SUMMARY_BYTES: usize = bootstrap::PROC_LEASE_SUMMARY_BYTES;"
+    )?;
+    writeln!(
+        mod_contents,
+        "pub const PROC_LEASE_ACTIVE_BYTES: usize = bootstrap::PROC_LEASE_ACTIVE_BYTES;"
+    )?;
+    writeln!(
+        mod_contents,
+        "pub const PROC_LEASE_PREEMPTIONS_BYTES: usize = bootstrap::PROC_LEASE_PREEMPTIONS_BYTES;"
     )?;
     writeln!(
         mod_contents,
@@ -593,6 +665,13 @@ pub fn emit_rust(
     writeln!(mod_contents)?;
     writeln!(
         mod_contents,
+        "pub const fn control_plane_config() -> ControlPlaneConfig {{"
+    )?;
+    writeln!(mod_contents, "    bootstrap::CONTROL_PLANE_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
         "pub const fn observability_config() -> ObservabilityConfig {{"
     )?;
     writeln!(mod_contents, "    bootstrap::OBSERVABILITY_CONFIG")?;
@@ -692,7 +771,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AuditConfig, CachePolicy, CasConfig, HostConfig, HostProvider, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcPressureConfig, ProcRootConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostProvider, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -829,6 +908,19 @@ pub fn emit_rust(
     )?;
     writeln!(
         bootstrap_contents,
+        "pub const CONTROL_PLANE_CONFIG: ControlPlaneConfig = ControlPlaneConfig {{ schedule: ScheduleControlConfig {{ enable: {}, queue_max_entries: {}, ctl_max_bytes: {} }}, lease: LeaseControlConfig {{ enable: {}, active_max_entries: {}, preemptions_max_entries: {}, ctl_max_bytes: {} }}, export: ExportControlConfig {{ enable: {}, ctl_max_bytes: {} }} }};\n",
+        manifest.control_plane.schedule.enable,
+        manifest.control_plane.schedule.queue_max_entries,
+        manifest.control_plane.schedule.ctl_max_bytes,
+        manifest.control_plane.lease.enable,
+        manifest.control_plane.lease.active_max_entries,
+        manifest.control_plane.lease.preemptions_max_entries,
+        manifest.control_plane.lease.ctl_max_bytes,
+        manifest.control_plane.export.enable,
+        manifest.control_plane.export.ctl_max_bytes
+    )?;
+    writeln!(
+        bootstrap_contents,
         "pub const CAS_CONFIG: CasConfig = CasConfig {{ enable: {}, chunk_bytes: {}, delta_enable: {}, signing_required: {}, signing_key: {}, models_enabled: {} }};\n",
         manifest.cas.enable,
         manifest.cas.store.chunk_bytes,
@@ -949,7 +1041,32 @@ pub fn emit_rust(
     )?;
     writeln!(
         bootstrap_contents,
-        "pub const OBSERVABILITY_CONFIG: ObservabilityConfig = ObservabilityConfig {{ proc_9p: Proc9pConfig {{ sessions: {}, outstanding: {}, short_writes: {}, sessions_bytes: {}, outstanding_bytes: {}, short_writes_bytes: {} }}, proc_9p_session: Proc9pSessionConfig {{ active: {}, state: {}, since_ms: {}, owner: {}, active_bytes: {}, state_bytes: {}, since_ms_bytes: {}, owner_bytes: {} }}, proc_ingest: ProcIngestConfig {{ p50_ms: {}, p95_ms: {}, backpressure: {}, dropped: {}, queued: {}, watch: {}, p50_ms_bytes: {}, p95_ms_bytes: {}, backpressure_bytes: {}, dropped_bytes: {}, queued_bytes: {}, watch_max_entries: {}, watch_line_bytes: {}, watch_min_interval_ms: {}, latency_samples: {}, latency_tolerance_ms: {}, counter_tolerance: {} }}, proc_root: ProcRootConfig {{ reachable: {}, last_seen_ms: {}, cut_reason: {}, reachable_bytes: {}, last_seen_ms_bytes: {}, cut_reason_bytes: {} }}, proc_pressure: ProcPressureConfig {{ busy: {}, quota: {}, cut: {}, policy: {}, busy_bytes: {}, quota_bytes: {}, cut_bytes: {}, policy_bytes: {} }} }};\n",
+        "pub const PROC_SCHEDULE_SUMMARY_BYTES: usize = {};",
+        manifest.observability.proc_schedule.summary_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_SCHEDULE_QUEUE_BYTES: usize = {};",
+        manifest.observability.proc_schedule.queue_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_LEASE_SUMMARY_BYTES: usize = {};",
+        manifest.observability.proc_lease.summary_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_LEASE_ACTIVE_BYTES: usize = {};",
+        manifest.observability.proc_lease.active_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const PROC_LEASE_PREEMPTIONS_BYTES: usize = {};",
+        manifest.observability.proc_lease.preemptions_bytes as usize
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const OBSERVABILITY_CONFIG: ObservabilityConfig = ObservabilityConfig {{ proc_9p: Proc9pConfig {{ sessions: {}, outstanding: {}, short_writes: {}, sessions_bytes: {}, outstanding_bytes: {}, short_writes_bytes: {} }}, proc_9p_session: Proc9pSessionConfig {{ active: {}, state: {}, since_ms: {}, owner: {}, active_bytes: {}, state_bytes: {}, since_ms_bytes: {}, owner_bytes: {} }}, proc_ingest: ProcIngestConfig {{ p50_ms: {}, p95_ms: {}, backpressure: {}, dropped: {}, queued: {}, watch: {}, p50_ms_bytes: {}, p95_ms_bytes: {}, backpressure_bytes: {}, dropped_bytes: {}, queued_bytes: {}, watch_max_entries: {}, watch_line_bytes: {}, watch_min_interval_ms: {}, latency_samples: {}, latency_tolerance_ms: {}, counter_tolerance: {} }}, proc_root: ProcRootConfig {{ reachable: {}, last_seen_ms: {}, cut_reason: {}, reachable_bytes: {}, last_seen_ms_bytes: {}, cut_reason_bytes: {} }}, proc_pressure: ProcPressureConfig {{ busy: {}, quota: {}, cut: {}, policy: {}, busy_bytes: {}, quota_bytes: {}, cut_bytes: {}, policy_bytes: {} }}, proc_schedule: ProcScheduleConfig {{ summary: {}, queue: {}, summary_bytes: {}, queue_bytes: {} }}, proc_lease: ProcLeaseConfig {{ summary: {}, active: {}, preemptions: {}, summary_bytes: {}, active_bytes: {}, preemptions_bytes: {} }} }};\n",
         manifest.observability.proc_9p.sessions,
         manifest.observability.proc_9p.outstanding,
         manifest.observability.proc_9p.short_writes,
@@ -994,7 +1111,17 @@ pub fn emit_rust(
         manifest.observability.proc_pressure.busy_bytes,
         manifest.observability.proc_pressure.quota_bytes,
         manifest.observability.proc_pressure.cut_bytes,
-        manifest.observability.proc_pressure.policy_bytes
+        manifest.observability.proc_pressure.policy_bytes,
+        manifest.observability.proc_schedule.summary,
+        manifest.observability.proc_schedule.queue,
+        manifest.observability.proc_schedule.summary_bytes,
+        manifest.observability.proc_schedule.queue_bytes,
+        manifest.observability.proc_lease.summary,
+        manifest.observability.proc_lease.active,
+        manifest.observability.proc_lease.preemptions,
+        manifest.observability.proc_lease.summary_bytes,
+        manifest.observability.proc_lease.active_bytes,
+        manifest.observability.proc_lease.preemptions_bytes
     )?;
     writeln!(
         bootstrap_contents,

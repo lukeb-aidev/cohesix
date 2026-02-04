@@ -47,6 +47,15 @@ const MAX_COH_SCHEMA_LEN: usize = 64;
 const MAX_COH_LEASE_STATE_LEN: usize = 16;
 const MAX_COH_PEFT_ID_LEN: u32 = 256;
 const MAX_LIFECYCLE_AUTO_TRANSITIONS: usize = 8;
+const MAX_SCHEDULE_ID_LEN: usize = 64;
+const MAX_SCHEDULE_ROLE_LEN: usize = 16;
+const MAX_SCHEDULE_QUEUE_ENTRIES: u32 = 256;
+const MAX_LEASE_ID_LEN: usize = 32;
+const MAX_LEASE_SUBJECT_LEN: usize = 32;
+const MAX_LEASE_RESOURCE_LEN: usize = 48;
+const MAX_LEASE_REASON_LEN: usize = 24;
+const MAX_LEASE_ACTIVE_ENTRIES: u32 = 256;
+const MAX_LEASE_PREEMPTION_ENTRIES: u32 = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -77,6 +86,8 @@ pub struct Manifest {
     pub telemetry_ingest: TelemetryIngest,
     #[serde(default)]
     pub lifecycle: LifecycleConfig,
+    #[serde(default)]
+    pub control_plane: ControlPlaneConfig,
     #[serde(default)]
     pub observability: Observability,
     #[serde(default)]
@@ -141,6 +152,7 @@ impl Manifest {
         self.validate_sidecars()?;
         self.validate_telemetry()?;
         self.validate_lifecycle()?;
+        self.validate_control_plane()?;
         self.validate_observability()?;
         self.validate_ui_providers()?;
         self.validate_client_policies()?;
@@ -759,6 +771,96 @@ impl Manifest {
         Ok(())
     }
 
+    fn validate_control_plane(&self) -> Result<()> {
+        let msize = self.secure9p.msize;
+        let schedule = &self.control_plane.schedule;
+        if schedule.enable {
+            if schedule.queue_max_entries == 0 {
+                bail!("control_plane.schedule.queue_max_entries must be >= 1");
+            }
+            if schedule.queue_max_entries > MAX_SCHEDULE_QUEUE_ENTRIES {
+                bail!(
+                    "control_plane.schedule.queue_max_entries {} exceeds max {}",
+                    schedule.queue_max_entries,
+                    MAX_SCHEDULE_QUEUE_ENTRIES
+                );
+            }
+            if schedule.ctl_max_bytes == 0 {
+                bail!("control_plane.schedule.ctl_max_bytes must be >= 1");
+            }
+            if schedule.ctl_max_bytes > msize {
+                bail!(
+                    "control_plane.schedule.ctl_max_bytes {} exceeds secure9p.msize {}",
+                    schedule.ctl_max_bytes,
+                    msize
+                );
+            }
+        } else if schedule.queue_max_entries != 0 || schedule.ctl_max_bytes != 0 {
+            bail!(
+                "control_plane.schedule must set queue_max_entries and ctl_max_bytes to 0 when disabled"
+            );
+        }
+
+        let lease = &self.control_plane.lease;
+        if lease.enable {
+            if lease.active_max_entries == 0 {
+                bail!("control_plane.lease.active_max_entries must be >= 1");
+            }
+            if lease.active_max_entries > MAX_LEASE_ACTIVE_ENTRIES {
+                bail!(
+                    "control_plane.lease.active_max_entries {} exceeds max {}",
+                    lease.active_max_entries,
+                    MAX_LEASE_ACTIVE_ENTRIES
+                );
+            }
+            if lease.preemptions_max_entries == 0 {
+                bail!("control_plane.lease.preemptions_max_entries must be >= 1");
+            }
+            if lease.preemptions_max_entries > MAX_LEASE_PREEMPTION_ENTRIES {
+                bail!(
+                    "control_plane.lease.preemptions_max_entries {} exceeds max {}",
+                    lease.preemptions_max_entries,
+                    MAX_LEASE_PREEMPTION_ENTRIES
+                );
+            }
+            if lease.ctl_max_bytes == 0 {
+                bail!("control_plane.lease.ctl_max_bytes must be >= 1");
+            }
+            if lease.ctl_max_bytes > msize {
+                bail!(
+                    "control_plane.lease.ctl_max_bytes {} exceeds secure9p.msize {}",
+                    lease.ctl_max_bytes,
+                    msize
+                );
+            }
+        } else if lease.active_max_entries != 0
+            || lease.preemptions_max_entries != 0
+            || lease.ctl_max_bytes != 0
+        {
+            bail!(
+                "control_plane.lease must set active_max_entries, preemptions_max_entries, and ctl_max_bytes to 0 when disabled"
+            );
+        }
+
+        let export = &self.control_plane.export;
+        if export.enable {
+            if export.ctl_max_bytes == 0 {
+                bail!("control_plane.export.ctl_max_bytes must be >= 1");
+            }
+            if export.ctl_max_bytes > msize {
+                bail!(
+                    "control_plane.export.ctl_max_bytes {} exceeds secure9p.msize {}",
+                    export.ctl_max_bytes,
+                    msize
+                );
+            }
+        } else if export.ctl_max_bytes != 0 {
+            bail!("control_plane.export must set ctl_max_bytes to 0 when disabled");
+        }
+
+        Ok(())
+    }
+
     fn validate_observability(&self) -> Result<()> {
         let proc_9p = &self.observability.proc_9p;
         let shard_count = self.proc_9p_shard_count();
@@ -971,6 +1073,50 @@ impl Manifest {
                 required,
             )?;
         }
+
+        let proc_schedule = &self.observability.proc_schedule;
+        if proc_schedule.summary {
+            let required = required_proc_schedule_summary_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_schedule.summary_bytes",
+                proc_schedule.summary_bytes,
+                required,
+            )?;
+        }
+        if proc_schedule.queue {
+            let required = required_proc_schedule_queue_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_schedule.queue_bytes",
+                proc_schedule.queue_bytes,
+                required,
+            )?;
+        }
+
+        let proc_lease = &self.observability.proc_lease;
+        if proc_lease.summary {
+            let required = required_proc_lease_summary_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_lease.summary_bytes",
+                proc_lease.summary_bytes,
+                required,
+            )?;
+        }
+        if proc_lease.active {
+            let required = required_proc_lease_active_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_lease.active_bytes",
+                proc_lease.active_bytes,
+                required,
+            )?;
+        }
+        if proc_lease.preemptions {
+            let required = required_proc_lease_preemptions_bytes();
+            ensure_buffer_bytes(
+                "observability.proc_lease.preemptions_bytes",
+                proc_lease.preemptions_bytes,
+                required,
+            )?;
+        }
         Ok(())
     }
 
@@ -1101,6 +1247,19 @@ impl Manifest {
             "client_paths.queen_lifecycle_ctl",
             &self.client_paths.queen_lifecycle_ctl,
         )?;
+        self.validate_client_path(
+            "client_paths.queen_schedule_ctl",
+            &self.client_paths.queen_schedule_ctl,
+        )?;
+        self.validate_client_path(
+            "client_paths.queen_lease_ctl",
+            &self.client_paths.queen_lease_ctl,
+        )?;
+        self.validate_client_path(
+            "client_paths.queen_export_ctl",
+            &self.client_paths.queen_export_ctl,
+        )?;
+        self.validate_client_path("client_paths.policy_ctl", &self.client_paths.policy_ctl)?;
         self.validate_client_path("client_paths.log", &self.client_paths.log)?;
         Ok(())
     }
@@ -1861,12 +2020,86 @@ impl Default for LifecycleConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
+pub struct ControlPlaneConfig {
+    pub schedule: ScheduleControlConfig,
+    pub lease: LeaseControlConfig,
+    pub export: ExportControlConfig,
+}
+
+impl Default for ControlPlaneConfig {
+    fn default() -> Self {
+        Self {
+            schedule: ScheduleControlConfig::default(),
+            lease: LeaseControlConfig::default(),
+            export: ExportControlConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ScheduleControlConfig {
+    pub enable: bool,
+    pub queue_max_entries: u32,
+    pub ctl_max_bytes: u32,
+}
+
+impl Default for ScheduleControlConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            queue_max_entries: 0,
+            ctl_max_bytes: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LeaseControlConfig {
+    pub enable: bool,
+    pub active_max_entries: u32,
+    pub preemptions_max_entries: u32,
+    pub ctl_max_bytes: u32,
+}
+
+impl Default for LeaseControlConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            active_max_entries: 0,
+            preemptions_max_entries: 0,
+            ctl_max_bytes: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ExportControlConfig {
+    pub enable: bool,
+    pub ctl_max_bytes: u32,
+}
+
+impl Default for ExportControlConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            ctl_max_bytes: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
 pub struct Observability {
     pub proc_9p: Proc9pObservability,
     pub proc_9p_session: Proc9pSessionObservability,
     pub proc_ingest: ProcIngestObservability,
     pub proc_root: ProcRootObservability,
     pub proc_pressure: ProcPressureObservability,
+    pub proc_schedule: ProcScheduleObservability,
+    pub proc_lease: ProcLeaseObservability,
 }
 
 impl Default for Observability {
@@ -1877,6 +2110,8 @@ impl Default for Observability {
             proc_ingest: ProcIngestObservability::default(),
             proc_root: ProcRootObservability::default(),
             proc_pressure: ProcPressureObservability::default(),
+            proc_schedule: ProcScheduleObservability::default(),
+            proc_lease: ProcLeaseObservability::default(),
         }
     }
 }
@@ -2027,6 +2262,50 @@ impl Default for ProcPressureObservability {
             quota_bytes: 64,
             cut_bytes: 64,
             policy_bytes: 64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProcScheduleObservability {
+    pub summary: bool,
+    pub queue: bool,
+    pub summary_bytes: u32,
+    pub queue_bytes: u32,
+}
+
+impl Default for ProcScheduleObservability {
+    fn default() -> Self {
+        Self {
+            summary: false,
+            queue: false,
+            summary_bytes: 128,
+            queue_bytes: 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProcLeaseObservability {
+    pub summary: bool,
+    pub active: bool,
+    pub preemptions: bool,
+    pub summary_bytes: u32,
+    pub active_bytes: u32,
+    pub preemptions_bytes: u32,
+}
+
+impl Default for ProcLeaseObservability {
+    fn default() -> Self {
+        Self {
+            summary: false,
+            active: false,
+            preemptions: false,
+            summary_bytes: 128,
+            active_bytes: 1024,
+            preemptions_bytes: 1024,
         }
     }
 }
@@ -2332,6 +2611,10 @@ impl Default for CohBreadcrumbPolicy {
 pub struct ClientPaths {
     pub queen_ctl: String,
     pub queen_lifecycle_ctl: String,
+    pub queen_schedule_ctl: String,
+    pub queen_lease_ctl: String,
+    pub queen_export_ctl: String,
+    pub policy_ctl: String,
     pub log: String,
 }
 
@@ -2340,6 +2623,10 @@ impl Default for ClientPaths {
         Self {
             queen_ctl: "/queen/ctl".to_owned(),
             queen_lifecycle_ctl: "/queen/lifecycle/ctl".to_owned(),
+            queen_schedule_ctl: "/queen/schedule/ctl".to_owned(),
+            queen_lease_ctl: "/queen/lease/ctl".to_owned(),
+            queen_export_ctl: "/queen/export/ctl".to_owned(),
+            policy_ctl: "/policy/ctl".to_owned(),
             log: "/log/queen.log".to_owned(),
         }
     }
@@ -2952,6 +3239,80 @@ fn required_proc_pressure_cut_bytes() -> usize {
 
 fn required_proc_pressure_policy_bytes() -> usize {
     "policy=".len() + MAX_U64_DIGITS + 1
+}
+
+fn required_proc_schedule_summary_bytes() -> usize {
+    "queue=".len()
+        + MAX_U64_DIGITS
+        + " dequeued=".len()
+        + MAX_U64_DIGITS
+        + " dropped=".len()
+        + MAX_U64_DIGITS
+        + " max_entries=".len()
+        + MAX_U32_DIGITS
+        + 1
+}
+
+fn required_proc_schedule_queue_bytes() -> usize {
+    "id=".len()
+        + MAX_SCHEDULE_ID_LEN
+        + " role=".len()
+        + MAX_SCHEDULE_ROLE_LEN
+        + " priority=".len()
+        + MAX_U32_DIGITS
+        + " ticks=".len()
+        + MAX_U32_DIGITS
+        + " budget_ms=".len()
+        + MAX_U32_DIGITS
+        + " seq=".len()
+        + MAX_U64_DIGITS
+        + 1
+}
+
+fn required_proc_lease_summary_bytes() -> usize {
+    "active=".len()
+        + MAX_U64_DIGITS
+        + " preemptions=".len()
+        + MAX_U64_DIGITS
+        + " quotas=".len()
+        + MAX_U64_DIGITS
+        + " max_active=".len()
+        + MAX_U32_DIGITS
+        + " max_preemptions=".len()
+        + MAX_U32_DIGITS
+        + 1
+}
+
+fn required_proc_lease_active_bytes() -> usize {
+    "id=".len()
+        + MAX_LEASE_ID_LEN
+        + " subject=".len()
+        + MAX_LEASE_SUBJECT_LEN
+        + " resource=".len()
+        + MAX_LEASE_RESOURCE_LEN
+        + " ttl_s=".len()
+        + MAX_U32_DIGITS
+        + " priority=".len()
+        + MAX_U32_DIGITS
+        + " state=".len()
+        + MAX_COH_LEASE_STATE_LEN
+        + " seq=".len()
+        + MAX_U64_DIGITS
+        + 1
+}
+
+fn required_proc_lease_preemptions_bytes() -> usize {
+    "id=".len()
+        + MAX_LEASE_ID_LEN
+        + " subject=".len()
+        + MAX_LEASE_SUBJECT_LEN
+        + " resource=".len()
+        + MAX_LEASE_RESOURCE_LEN
+        + " reason=".len()
+        + MAX_LEASE_REASON_LEN
+        + " seq=".len()
+        + MAX_U64_DIGITS
+        + 1
 }
 
 fn validate_policy_rule(rule: &PolicyRule) -> Result<()> {

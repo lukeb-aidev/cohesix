@@ -14,9 +14,11 @@ mod transport;
 pub use cache::{CacheError, SnapshotCache, SnapshotRecord};
 pub use hive::{
     SwarmUiHiveAgent, SwarmUiHiveBatch, SwarmUiHiveBootstrap, SwarmUiHiveConfig, SwarmUiHiveEvent,
-    SwarmUiHiveDetail, SwarmUiHiveEventKind, SwarmUiHiveOverlay, SwarmUiHivePressureCounters,
-    SwarmUiHiveRootStatus,
-    SwarmUiHiveSessionSummary, SwarmUiHiveSnapshot,
+    SwarmUiHiveDetail, SwarmUiHiveEventKind, SwarmUiHiveLeaseEntry, SwarmUiHiveLeasePreemption,
+    SwarmUiHiveLeaseSnapshot, SwarmUiHiveLeaseSummary, SwarmUiHiveOverlay,
+    SwarmUiHivePressureCounters, SwarmUiHiveRootStatus, SwarmUiHiveScheduleEntry,
+    SwarmUiHiveScheduleSnapshot, SwarmUiHiveScheduleSummary, SwarmUiHiveSessionSummary,
+    SwarmUiHiveSnapshot,
 };
 pub use transport::{TcpTransport, TcpTransportError, TcpTransportFactory, TraceTransportFactory};
 
@@ -822,7 +824,8 @@ where
             backlog as f32 / hive_config.lod_event_budget as f32
         };
         let dropped = state.dropped();
-        let (root, sessions, pressure_counters) = self.read_hive_status(role, ticket);
+        let (root, sessions, pressure_counters, schedule, lease) =
+            self.read_hive_status(role, ticket);
         Ok(SwarmUiHiveBatch {
             events,
             pressure,
@@ -831,6 +834,8 @@ where
             root,
             sessions,
             pressure_counters,
+            schedule,
+            lease,
             overlays,
             detail,
             done: false,
@@ -869,13 +874,15 @@ where
         Option<SwarmUiHiveRootStatus>,
         Option<SwarmUiHiveSessionSummary>,
         Option<SwarmUiHivePressureCounters>,
+        Option<SwarmUiHiveScheduleSnapshot>,
+        Option<SwarmUiHiveLeaseSnapshot>,
     ) {
         if self.config.offline {
-            return (None, None, None);
+            return (None, None, None, None, None);
         }
         let session = match self.session_for(role, ticket) {
             Ok(session) => session,
-            Err(_) => return (None, None, None),
+            Err(_) => return (None, None, None, None, None),
         };
 
         let reachable_line = read_single_line(&mut session.client, "/proc/root/reachable");
@@ -940,7 +947,43 @@ where
             None
         };
 
-        (root, sessions, pressure_counters)
+        let schedule_summary_line =
+            read_single_line(&mut session.client, "/proc/schedule/summary");
+        let schedule_queue_lines = read_lines(&mut session.client, "/proc/schedule/queue")
+            .ok()
+            .unwrap_or_default();
+        let schedule = if schedule_summary_line.is_some() || !schedule_queue_lines.is_empty() {
+            Some(SwarmUiHiveScheduleSnapshot {
+                summary: schedule_summary_line
+                    .as_deref()
+                    .map(parse_schedule_summary),
+                queue: parse_schedule_queue(schedule_queue_lines),
+            })
+        } else {
+            None
+        };
+
+        let lease_summary_line = read_single_line(&mut session.client, "/proc/lease/summary");
+        let lease_active_lines = read_lines(&mut session.client, "/proc/lease/active")
+            .ok()
+            .unwrap_or_default();
+        let lease_preemptions_lines = read_lines(&mut session.client, "/proc/lease/preemptions")
+            .ok()
+            .unwrap_or_default();
+        let lease = if lease_summary_line.is_some()
+            || !lease_active_lines.is_empty()
+            || !lease_preemptions_lines.is_empty()
+        {
+            Some(SwarmUiHiveLeaseSnapshot {
+                summary: lease_summary_line.as_deref().map(parse_lease_summary),
+                active: parse_lease_active(lease_active_lines),
+                preemptions: parse_lease_preemptions(lease_preemptions_lines),
+            })
+        } else {
+            None
+        };
+
+        (root, sessions, pressure_counters, schedule, lease)
     }
 
     /// Cache a CBOR snapshot payload.
@@ -2131,7 +2174,8 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             backlog as f32 / hive_config.lod_event_budget as f32
         };
         let dropped = state.dropped();
-        let (root, sessions, pressure_counters) = self.read_hive_status(role, ticket);
+        let (root, sessions, pressure_counters, schedule, lease) =
+            self.read_hive_status(role, ticket);
         Ok(SwarmUiHiveBatch {
             events,
             pressure,
@@ -2140,6 +2184,8 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             root,
             sessions,
             pressure_counters,
+            schedule,
+            lease,
             overlays,
             detail,
             done: false,
@@ -2244,13 +2290,15 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         Option<SwarmUiHiveRootStatus>,
         Option<SwarmUiHiveSessionSummary>,
         Option<SwarmUiHivePressureCounters>,
+        Option<SwarmUiHiveScheduleSnapshot>,
+        Option<SwarmUiHiveLeaseSnapshot>,
     ) {
         if self.config.offline {
-            return (None, None, None);
+            return (None, None, None, None, None);
         }
         let session = match self.session_for(role, ticket) {
             Ok(session) => session,
-            Err(_) => return (None, None, None),
+            Err(_) => return (None, None, None, None, None),
         };
 
         let reachable_line = read_lines_console(
@@ -2351,7 +2399,63 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             None
         };
 
-        (root, sessions, pressure_counters)
+        let schedule_summary_line = read_lines_console(
+            &mut self.transport,
+            &session.session,
+            "/proc/schedule/summary",
+        )
+        .ok()
+        .and_then(|lines| lines.into_iter().next());
+        let schedule_queue_lines = read_lines_console(
+            &mut self.transport,
+            &session.session,
+            "/proc/schedule/queue",
+        )
+        .unwrap_or_default();
+        let schedule = if schedule_summary_line.is_some() || !schedule_queue_lines.is_empty() {
+            Some(SwarmUiHiveScheduleSnapshot {
+                summary: schedule_summary_line
+                    .as_deref()
+                    .map(parse_schedule_summary),
+                queue: parse_schedule_queue(schedule_queue_lines),
+            })
+        } else {
+            None
+        };
+
+        let lease_summary_line = read_lines_console(
+            &mut self.transport,
+            &session.session,
+            "/proc/lease/summary",
+        )
+        .ok()
+        .and_then(|lines| lines.into_iter().next());
+        let lease_active_lines = read_lines_console(
+            &mut self.transport,
+            &session.session,
+            "/proc/lease/active",
+        )
+        .unwrap_or_default();
+        let lease_preemptions_lines = read_lines_console(
+            &mut self.transport,
+            &session.session,
+            "/proc/lease/preemptions",
+        )
+        .unwrap_or_default();
+        let lease = if lease_summary_line.is_some()
+            || !lease_active_lines.is_empty()
+            || !lease_preemptions_lines.is_empty()
+        {
+            Some(SwarmUiHiveLeaseSnapshot {
+                summary: lease_summary_line.as_deref().map(parse_lease_summary),
+                active: parse_lease_active(lease_active_lines),
+                preemptions: parse_lease_preemptions(lease_preemptions_lines),
+            })
+        } else {
+            None
+        };
+
+        (root, sessions, pressure_counters, schedule, lease)
     }
 
     fn record_audit(&mut self, entry: String) {
@@ -2585,6 +2689,118 @@ fn parse_kv_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 
 fn parse_kv_u64(line: &str, key: &str) -> Option<u64> {
     parse_kv_value(line, key)?.parse::<u64>().ok()
+}
+
+fn parse_schedule_summary(line: &str) -> SwarmUiHiveScheduleSummary {
+    SwarmUiHiveScheduleSummary {
+        queue: parse_kv_u64(line, "queue").unwrap_or(0),
+        dequeued: parse_kv_u64(line, "dequeued").unwrap_or(0),
+        dropped: parse_kv_u64(line, "dropped").unwrap_or(0),
+        max_entries: parse_kv_u64(line, "max_entries").unwrap_or(0),
+    }
+}
+
+fn parse_schedule_queue(lines: Vec<String>) -> Vec<SwarmUiHiveScheduleEntry> {
+    let mut entries = Vec::new();
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(id) = parse_kv_value(trimmed, "id") else {
+            continue;
+        };
+        let Some(role) = parse_kv_value(trimmed, "role") else {
+            continue;
+        };
+        let priority = parse_kv_u64(trimmed, "priority").unwrap_or(0) as u32;
+        let ticks = parse_kv_u64(trimmed, "ticks").unwrap_or(0) as u32;
+        let budget_ms = parse_kv_u64(trimmed, "budget_ms").unwrap_or(0) as u32;
+        let seq = parse_kv_u64(trimmed, "seq").unwrap_or(0);
+        entries.push(SwarmUiHiveScheduleEntry {
+            id: id.to_owned(),
+            role: role.to_owned(),
+            priority,
+            ticks,
+            budget_ms,
+            seq,
+        });
+    }
+    entries
+}
+
+fn parse_lease_summary(line: &str) -> SwarmUiHiveLeaseSummary {
+    SwarmUiHiveLeaseSummary {
+        active: parse_kv_u64(line, "active").unwrap_or(0),
+        preemptions: parse_kv_u64(line, "preemptions").unwrap_or(0),
+        quotas: parse_kv_u64(line, "quotas").unwrap_or(0),
+        max_active: parse_kv_u64(line, "max_active").unwrap_or(0),
+        max_preemptions: parse_kv_u64(line, "max_preemptions").unwrap_or(0),
+    }
+}
+
+fn parse_lease_active(lines: Vec<String>) -> Vec<SwarmUiHiveLeaseEntry> {
+    let mut entries = Vec::new();
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(id) = parse_kv_value(trimmed, "id") else {
+            continue;
+        };
+        let Some(subject) = parse_kv_value(trimmed, "subject") else {
+            continue;
+        };
+        let Some(resource) = parse_kv_value(trimmed, "resource") else {
+            continue;
+        };
+        let state = parse_kv_value(trimmed, "state").unwrap_or("unknown");
+        let ttl_s = parse_kv_u64(trimmed, "ttl_s").unwrap_or(0) as u32;
+        let priority = parse_kv_u64(trimmed, "priority").unwrap_or(0) as u32;
+        let seq = parse_kv_u64(trimmed, "seq").unwrap_or(0);
+        entries.push(SwarmUiHiveLeaseEntry {
+            id: id.to_owned(),
+            subject: subject.to_owned(),
+            resource: resource.to_owned(),
+            ttl_s,
+            priority,
+            state: state.to_owned(),
+            seq,
+        });
+    }
+    entries
+}
+
+fn parse_lease_preemptions(lines: Vec<String>) -> Vec<SwarmUiHiveLeasePreemption> {
+    let mut entries = Vec::new();
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(id) = parse_kv_value(trimmed, "id") else {
+            continue;
+        };
+        let Some(subject) = parse_kv_value(trimmed, "subject") else {
+            continue;
+        };
+        let Some(resource) = parse_kv_value(trimmed, "resource") else {
+            continue;
+        };
+        let Some(reason) = parse_kv_value(trimmed, "reason") else {
+            continue;
+        };
+        let seq = parse_kv_u64(trimmed, "seq").unwrap_or(0);
+        entries.push(SwarmUiHiveLeasePreemption {
+            id: id.to_owned(),
+            subject: subject.to_owned(),
+            resource: resource.to_owned(),
+            reason: reason.to_owned(),
+            seq,
+        });
+    }
+    entries
 }
 
 fn read_lines_console<T: CohshTransport + ?Sized>(

@@ -48,6 +48,7 @@ Run in order unless explicitly skipped with a recorded reason.
 - `cargo test -p cohsh-core`
 - `cargo test -p cohsh --test ticket_mint`
 - `cargo test -p cohsh --test transcripts`
+- `cargo test -p cohsh --test control_plane`
 - `cargo test -p swarmui --test transcript`
 - `cargo test -p swarmui --test console_parity`
 - `cargo test -p swarmui --test security`
@@ -55,6 +56,11 @@ Run in order unless explicitly skipped with a recorded reason.
 - `cargo test -p nine-door --test ui_security`
 - `cargo test -p nine-door --test session_state`
 - `cargo test -p nine-door --test pressure_counters`
+- `cargo test -p nine-door --test schedule_create`
+- `cargo test -p nine-door --test schedule_bounds`
+- `cargo test -p nine-door --test lease_bounds`
+- `cargo test -p nine-door --test policy_ctl`
+- `cargo test -p nine-door --test export_ctl`
 - `cargo test -p nine-door --test telemetry_create`
 - `cargo test -p nine-door --test telemetry_quotas`
 - `cargo test -p nine-door --test telemetry_envelope`
@@ -77,8 +83,12 @@ Start QEMU (source tree or bundle), then verify:
 - Capture QEMU serial to `logs/qemu-console.log` (example: `./qemu/run.sh | tee logs/qemu-console.log`).
 - `cohsh` (queen): `help`, `attach queen` (skip if you launched cohsh with `--role`),
   `log`, `tail /log/queen.log`, `ls /`, `cat /log/queen.log`,
+  `test --mode quick`, `test --mode full` (fresh boot),
   `spawn heartbeat ticks=100`, `ls /worker`, `kill worker-<id>`, `ping`,
-  `tcp-diag`, `test --mode quick`, `test --mode full` (fresh boot), `quit`
+  `tcp-diag`, `quit`
+  - If policy gating is enabled (see `/policy/rules`), enqueue approvals before `spawn` and `kill`:
+    - `echo {"id":"spawn-1","target":"/queen/ctl","decision":"approve"} > /actions/queue`
+    - `echo {"id":"kill-1","target":"/queen/ctl","decision":"approve"} > /actions/queue`
 - Capture cohsh output to `logs/cohsh-session.log` (example: `... | tee logs/cohsh-session.log`).
 - Success criteria:
   - No unexpected `ERR` lines or reconnect loops.
@@ -110,6 +120,16 @@ Run while QEMU is up:
   - Verify the session ends cleanly (`reason=quit`/`eof`) and no TCP errors are present in that window.
   - Use: `rg -n "audit tcp\\.conn\\.open|audit tcp\\.conn\\.close|audit tcp\\.send\\.partial|audit tcp\\.send\\.error|console\\.emit\\.failed" logs/qemu-console.log`
 - `cohsh` (already covered in Section 3).
+- Control grammar sanity (requires `control_plane.*` + `/proc` observability enabled):
+  - `echo {"id":"sched-1","role":"worker-gpu","priority":2,"ticks":3,"budget_ms":120} > /queen/schedule/ctl`
+  - `cat /proc/schedule/summary` and `cat /proc/schedule/queue`
+  - `echo {"op":"grant","id":"lease-1","subject":"queen","resource":"gpu0","ttl_s":300,"priority":5} > /queen/lease/ctl`
+  - `echo {"op":"preempt","id":"lease-1","reason":"timeout"} > /queen/lease/ctl`
+  - `cat /proc/lease/summary`, `cat /proc/lease/active`, `cat /proc/lease/preemptions`
+  - `echo {"op":"open","id":"export-1","ttl_s":900} > /queen/export/ctl`
+  - `echo {"op":"close","id":"export-1","reason":"window-complete"} > /queen/export/ctl`
+  - `echo {"op":"apply","id":"rev-2026-02-03","sha256":"<64-hex>"} > /policy/ctl`
+  - `echo {"op":"rollback","id":"rev-2026-02-03"} > /policy/ctl`
 - `coh` (TCP console; requires `out/coh_policy.toml`):
   - `./bin/coh gpu list --host 127.0.0.1 --port 31337`
   - `./bin/coh gpu lease --host 127.0.0.1 --port 31337 --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60`
@@ -117,6 +137,8 @@ Run while QEMU is up:
   - `./bin/coh gpu status --host 127.0.0.1 --port 31337 --gpu GPU-0`
   - `./bin/coh telemetry pull --host 127.0.0.1 --port 31337 --out ./out/telemetry`
   - Live PEFT flow (requires live GPU bridge publish):
+    - Preflight: `./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen -c "ls /queen/export/lora_jobs"`
+      - If `/queen/export/lora_jobs` is missing in dev-virt, **skip live PEFT** and rely on the mock PEFT tests above (this indicates no export job was seeded in the VM).
     - `./bin/coh --host 127.0.0.1 --port 31337 peft export --job job_0001 --out ./out/peft_export`
     - `./bin/coh --host 127.0.0.1 --port 31337 peft import --publish --model demo-model --from demo/peft_adapter --job job_0001 --export ./out/peft_export --registry ./out/peft_registry`
     - `./bin/coh --host 127.0.0.1 --port 31337 peft activate --model demo-model --registry ./out/peft_registry`
@@ -159,6 +181,7 @@ Run while QEMU is up:
   - `./bin/gpu-bridge-host --mock --list`
   - Optional NVML: `./bin/gpu-bridge-host --list` (enabled by default on Linux builds; omit NVML with `--no-default-features`)
   - Live publish: `./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --interval-ms 1000 --registry demo/peft_registry`
+    - On macOS without NVML, use `--mock --publish` to avoid NVML load failures.
 - `host-sidecar-bridge`:
   - `./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider docker --provider nvidia`
   - `./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --watch` (requires `/host` enabled in `configs/root_task.toml`)
@@ -220,10 +243,11 @@ Run while QEMU is up:
 - `npm ci`
 - `npx playwright install webkit`
 - `SWARMUI_RELEASE_DIR=../releases/<latest> npm test`
+- Source UI (if release bundle not updated): `SWARMUI_UI_ROOT=../../apps/swarmui/frontend npm test`
 - Update snapshots only when UI changes are intended: `npm run test:update`
 
 **Notes**
-- The Playwright harness targets the **latest SwarmUI release bundle** UI assets under `releases/`.
+- The Playwright harness targets the **latest SwarmUI release bundle** UI assets under `releases/` unless `SWARMUI_UI_ROOT` is set.
 - The harness injects a deterministic Tauri `invoke` mock for UI-only replay and transcript assertions; it does not exercise control-plane behavior.
 - The Live Hive performance harness reads `window.__SWARMUI_HIVE_DEBUG.getMetrics()` and should remain bounded under replay fixtures.
 - Browser binaries are installed into the user Playwright cache (not committed).
@@ -256,7 +280,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `out/manifests/root_task_resolved.json` — `sha256:3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`
+- `out/manifests/root_task_resolved.json` — `sha256:7d6b2ecf259049c1e431a37e693118b9bccc05395e374934f3dc6837d1004c1f`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`
@@ -272,6 +296,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 - `tests/fixtures/transcripts/converge_v0/coh.txt` — `sha256:96b57611f848ef6f9691678df8b20f261dffd47db449cd63459f12f166c0f4a7`
 - `tests/fixtures/transcripts/converge_v0/swarmui.txt` — `sha256:dafd88f7d7e984454e12815ccffd203f98c446d0eb1e8a364d79805aa69de017`
 - `tests/fixtures/transcripts/converge_v0/coh-status.txt` — `sha256:dafd88f7d7e984454e12815ccffd203f98c446d0eb1e8a364d79805aa69de017`
+- `tests/fixtures/transcripts/control_plane_v0/cohsh.txt` — `sha256:f43434e6b3071753596e919021e573cb7f6a9831123769dd7cefb5b0c115c1ef`
 - `tests/fixtures/transcripts/run_demo_v0/cohsh.txt` — `sha256:d429aa09972892adaeabed60ef2a36e4fe366eb9e730a8467a85f27870957040`
 - `tests/fixtures/transcripts/peft_roundtrip_v0/cohsh.txt` — `sha256:a761096db1c412e8b775f3bdb78a9aec79b95ef787d0e933406d23c20285f7db`
 - `tests/fixtures/transcripts/trace_v0/cohsh.txt` — `sha256:56b97a2d8486ed783d7cb93d38ea67811d93df6efcc24d7ed97265a4df1b1c4f`
@@ -280,7 +305,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 
 ## Trace fixture hashes
 - `tests/fixtures/traces/trace_v0.trace` — `sha256:0f5a1935e973fbdb57e73a952b9cd02d1060086167efb4b9e79b28169f308561`
-- `tests/fixtures/traces/trace_v0.hive.cbor` — `sha256:a8fdea2740ecb4cd965ef675bb1f31019eaf8fe63ad83a31cb6971018892c8a0`
+- `tests/fixtures/traces/trace_v0.hive.cbor` — `sha256:977113ebcfad69272cbb15ddc57e7ce1ccd1df87baa6568704253cacc55e8e2d`
 
 ## Guard
 - `scripts/ci/check_test_plan.sh` verifies hashes above match on-disk fixtures and manifest fingerprints; `scripts/check-generated.sh` invokes it.

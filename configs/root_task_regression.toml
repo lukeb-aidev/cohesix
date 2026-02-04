@@ -63,6 +63,21 @@ frame_schema = "legacy-plaintext"
 [telemetry.cursor]
 retain_on_boot = false
 
+[control_plane.schedule]
+enable = true
+queue_max_entries = 64
+ctl_max_bytes = 8192
+
+[control_plane.lease]
+enable = true
+active_max_entries = 64
+preemptions_max_entries = 64
+ctl_max_bytes = 8192
+
+[control_plane.export]
+enable = true
+ctl_max_bytes = 2048
+
 [observability.proc_9p]
 sessions = true
 outstanding = true
@@ -89,6 +104,20 @@ watch_min_interval_ms = 50
 latency_samples = 32
 latency_tolerance_ms = 5
 counter_tolerance = 1
+
+[observability.proc_schedule]
+summary = true
+queue = true
+summary_bytes = 128
+queue_bytes = 256
+
+[observability.proc_lease]
+summary = true
+active = true
+preemptions = true
+summary_bytes = 160
+active_bytes = 256
+preemptions_bytes = 256
 
 [ui_providers.proc_9p]
 sessions = true
@@ -151,6 +180,11 @@ interval_ms = 15000
 
 [client_paths]
 queen_ctl = "/queen/ctl"
+queen_lifecycle_ctl = "/queen/lifecycle/ctl"
+queen_schedule_ctl = "/queen/schedule/ctl"
+queen_lease_ctl = "/queen/lease/ctl"
+queen_export_ctl = "/queen/export/ctl"
+policy_ctl = "/policy/ctl"
 log = "/log/queen.log"
 
 [swarmui]
@@ -168,6 +202,10 @@ lod_zoom_out = 0.7
 lod_zoom_in = 1.25
 lod_event_budget = 512
 snapshot_max_events = 4096
+overlay_lines = 3
+detail_lines = 50
+line_cap_bytes = 160
+per_worker_bytes = 2048
 
 [swarmui.paths]
 telemetry_root = "/worker"

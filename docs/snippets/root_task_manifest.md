@@ -33,6 +33,15 @@
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 - `lifecycle.initial_state`: `BOOTING`
 - `lifecycle.auto_transitions`: `BOOTING->ONLINE`
+- `control_plane.schedule.enable`: `true`
+- `control_plane.schedule.queue_max_entries`: `64`
+- `control_plane.schedule.ctl_max_bytes`: `8192`
+- `control_plane.lease.enable`: `true`
+- `control_plane.lease.active_max_entries`: `64`
+- `control_plane.lease.preemptions_max_entries`: `64`
+- `control_plane.lease.ctl_max_bytes`: `8192`
+- `control_plane.export.enable`: `true`
+- `control_plane.export.ctl_max_bytes`: `2048`
 - `observability.proc_9p.sessions`: `true`
 - `observability.proc_9p.outstanding`: `true`
 - `observability.proc_9p.short_writes`: `true`
@@ -78,6 +87,16 @@
 - `observability.proc_pressure.quota_bytes`: `64`
 - `observability.proc_pressure.cut_bytes`: `64`
 - `observability.proc_pressure.policy_bytes`: `64`
+- `observability.proc_schedule.summary`: `true`
+- `observability.proc_schedule.queue`: `true`
+- `observability.proc_schedule.summary_bytes`: `128`
+- `observability.proc_schedule.queue_bytes`: `256`
+- `observability.proc_lease.summary`: `true`
+- `observability.proc_lease.active`: `true`
+- `observability.proc_lease.preemptions`: `true`
+- `observability.proc_lease.summary_bytes`: `160`
+- `observability.proc_lease.active_bytes`: `256`
+- `observability.proc_lease.preemptions_bytes`: `256`
 - `ui_providers.proc_9p.sessions`: `true`
 - `ui_providers.proc_9p.outstanding`: `true`
 - `ui_providers.proc_9p.short_writes`: `true`
@@ -111,6 +130,10 @@
 - `client_policies.heartbeat.interval_ms`: `15000`
 - `client_paths.queen_ctl`: `/queen/ctl`
 - `client_paths.queen_lifecycle_ctl`: `/queen/lifecycle/ctl`
+- `client_paths.queen_schedule_ctl`: `/queen/schedule/ctl`
+- `client_paths.queen_lease_ctl`: `/queen/lease/ctl`
+- `client_paths.queen_export_ctl`: `/queen/export/ctl`
+- `client_paths.policy_ctl`: `/policy/ctl`
 - `client_paths.log`: `/log/queen.log`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
@@ -143,7 +166,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb`
+- `manifest.sha256`: `7d6b2ecf259049c1e431a37e693118b9bccc05395e374934f3dc6837d1004c1f`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -179,7 +202,7 @@
 - `ecosystem.audit.replay_max_entries`: `64`
 - `ecosystem.audit.replay_ctl_max_bytes`: `1024`
 - `ecosystem.audit.replay_status_max_bytes`: `1024`
-- `ecosystem.policy.enable`: `false`
+- `ecosystem.policy.enable`: `true`
 - `ecosystem.policy.queue_max_entries`: `32`
 - `ecosystem.policy.queue_max_bytes`: `4096`
 - `ecosystem.policy.ctl_max_bytes`: `2048`
@@ -189,4 +212,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb`)._
+_Generated from `configs/root_task.toml` (sha256: `7d6b2ecf259049c1e431a37e693118b9bccc05395e374934f3dc6837d1004c1f`)._

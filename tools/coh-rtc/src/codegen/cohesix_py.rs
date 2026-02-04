@@ -11,6 +11,14 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
+fn py_bool(value: bool) -> &'static str {
+    if value {
+        "True"
+    } else {
+        "False"
+    }
+}
+
 /// Maximum bytes allowed for a telemetry push record.
 pub const TELEMETRY_RECORD_MAX_BYTES: usize = 4096;
 /// Telemetry push schema label.
@@ -139,10 +147,164 @@ pub fn render_defaults(manifest: &Manifest, manifest_hash: &str) -> CohesixPyDef
     .ok();
     writeln!(
         contents,
+        "        \"queen_schedule_ctl\": \"{}\",",
+        escape_py_string(&manifest.client_paths.queen_schedule_ctl)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "        \"queen_lease_ctl\": \"{}\",",
+        escape_py_string(&manifest.client_paths.queen_lease_ctl)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "        \"queen_export_ctl\": \"{}\",",
+        escape_py_string(&manifest.client_paths.queen_export_ctl)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "        \"policy_ctl\": \"{}\",",
+        escape_py_string(&manifest.client_paths.policy_ctl)
+    )
+    .ok();
+    writeln!(
+        contents,
         "        \"log\": \"{}\",",
         escape_py_string(&manifest.client_paths.log)
     )
     .ok();
+    writeln!(contents, "    }},").ok();
+
+    writeln!(contents, "    \"control_plane\": {{").ok();
+    writeln!(contents, "        \"schedule\": {{").ok();
+    writeln!(
+        contents,
+        "            \"enable\": {},",
+        py_bool(manifest.control_plane.schedule.enable)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"queue_max_entries\": {},",
+        manifest.control_plane.schedule.queue_max_entries
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"ctl_max_bytes\": {},",
+        manifest.control_plane.schedule.ctl_max_bytes
+    )
+    .ok();
+    writeln!(contents, "        }},").ok();
+    writeln!(contents, "        \"lease\": {{").ok();
+    writeln!(
+        contents,
+        "            \"enable\": {},",
+        py_bool(manifest.control_plane.lease.enable)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"active_max_entries\": {},",
+        manifest.control_plane.lease.active_max_entries
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"preemptions_max_entries\": {},",
+        manifest.control_plane.lease.preemptions_max_entries
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"ctl_max_bytes\": {},",
+        manifest.control_plane.lease.ctl_max_bytes
+    )
+    .ok();
+    writeln!(contents, "        }},").ok();
+    writeln!(contents, "        \"export\": {{").ok();
+    writeln!(
+        contents,
+        "            \"enable\": {},",
+        py_bool(manifest.control_plane.export.enable)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"ctl_max_bytes\": {},",
+        manifest.control_plane.export.ctl_max_bytes
+    )
+    .ok();
+    writeln!(contents, "        }},").ok();
+    writeln!(contents, "    }},").ok();
+
+    writeln!(contents, "    \"observability\": {{").ok();
+    writeln!(contents, "        \"proc_schedule\": {{").ok();
+    writeln!(
+        contents,
+        "            \"summary\": {},",
+        py_bool(manifest.observability.proc_schedule.summary)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"queue\": {},",
+        py_bool(manifest.observability.proc_schedule.queue)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"summary_bytes\": {},",
+        manifest.observability.proc_schedule.summary_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"queue_bytes\": {},",
+        manifest.observability.proc_schedule.queue_bytes
+    )
+    .ok();
+    writeln!(contents, "        }},").ok();
+    writeln!(contents, "        \"proc_lease\": {{").ok();
+    writeln!(
+        contents,
+        "            \"summary\": {},",
+        py_bool(manifest.observability.proc_lease.summary)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"active\": {},",
+        py_bool(manifest.observability.proc_lease.active)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"preemptions\": {},",
+        py_bool(manifest.observability.proc_lease.preemptions)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"summary_bytes\": {},",
+        manifest.observability.proc_lease.summary_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"active_bytes\": {},",
+        manifest.observability.proc_lease.active_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "            \"preemptions_bytes\": {},",
+        manifest.observability.proc_lease.preemptions_bytes
+    )
+    .ok();
+    writeln!(contents, "        }},").ok();
     writeln!(contents, "    }},").ok();
 
     writeln!(contents, "    \"telemetry_ingest\": {{").ok();

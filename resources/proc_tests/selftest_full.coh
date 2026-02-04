@@ -15,11 +15,15 @@ EXPECT OK
 tail /log/queen.log
 EXPECT OK
 WAIT 200
+echo {"id":"selftest-approve-1","target":"/queen/ctl","decision":"approve"} > /actions/queue
+EXPECT OK
 spawn heartbeat ticks=2 ttl_s=30
 EXPECT OK
-tail /shard/13/worker/worker-1/telemetry
+tail /worker/worker-1/telemetry
 EXPECT OK
 WAIT 200
+echo {"id":"selftest-approve-2","target":"/queen/ctl","decision":"approve"} > /actions/queue
+EXPECT OK
 kill worker-1
 EXPECT OK
 quit

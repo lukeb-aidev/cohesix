@@ -1,0 +1,22 @@
+# Author: Lukas Bower
+# Purpose: Record control actions and verify deterministic replay.
+attach queen
+EXPECT OK
+cat /replay/status
+EXPECT OK
+EXPECT SUBSTR "state":"idle"
+echo cordon > /host/k8s/node/node-1/cordon
+EXPECT OK
+echo drain > /host/k8s/node/node-1/drain
+EXPECT OK
+cat /audit/export
+EXPECT OK
+echo '{"from":0}' > /replay/ctl
+EXPECT OK
+cat /replay/status
+EXPECT OK
+EXPECT SUBSTR "entries":2
+EXPECT SUBSTR sequence_fnv1a":"6df28b82c98d2471
+echo '{"from":999999}' > /replay/ctl
+EXPECT ERR
+quit

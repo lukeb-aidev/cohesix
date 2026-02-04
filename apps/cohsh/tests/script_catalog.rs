@@ -132,7 +132,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "cas_roundtrip.coh:f6afb2dc79c414d04cc33f9a6d29da2f665959d2436c8d24baaa11f14b2ca98f"
             .to_owned(),
-        "host_absent.coh:8383d43450ba4f1c14e70fc4da33c2c2f0a5843ee6e87b4efa95b2a42d56209a"
+        "host_absent.coh:6c69c9db1a503fed9fb69636c4028b26432711eb62054e0d115a0f1cb6e89354"
             .to_owned(),
         "host_sidecar_mock.coh:fb84eba9ddc95afeef925176261858934d2fb79294cd3da2ca83a4b41a48b921"
             .to_owned(),
@@ -160,7 +160,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "session_pool.coh:ba523237c1933fbce09df879e871e4269013b74b5b8f8a046adbd2de00e7395e"
             .to_owned(),
-        "shard_1k.coh:cfd52196045784457ead27ad44f224648ec8bd2af9834894ce7ee6781fbcf479"
+        "shard_1k.coh:e2bc812ad54129094db9cafbc5ed7d38fef0cf5fc24e0a993d73dcc2ef963cbd"
             .to_owned(),
         "sidecar_integration.coh:4cb5dcf403712defa9016f4bcc4bf27b891df6a1dce646dc304acf4b5f7cad74"
             .to_owned(),
@@ -168,7 +168,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "telemetry_push_create.coh:9c4303824d27694869366c806c654482728cecf265c87d0de84f8598cd0e78a2"
             .to_owned(),
-        "telemetry_ring.coh:2d33e86fd1619120f0bf26d45a7532bf03a57a10a532ea9841f1624bf98df351"
+        "telemetry_ring.coh:92ca2e5604e7b123e1aa026a2ca7b27fe6f914cc8cb280faff6189e6c35e1513"
             .to_owned(),
     ]);
     assert_eq!(results, expected);

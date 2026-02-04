@@ -148,7 +148,7 @@ build_linux_host_tools() {
       ;;
   esac
 
-  local host_packages=(gpu-bridge-host cas-tool swarmui)
+  local host_packages=(gpu-bridge-host cas-tool swarmui hive-gateway)
   local host_bins=(cohsh coh "${host_packages[@]}" host-sidecar-bridge)
   local build_args=(build)
   if (( ${#profile_args[@]} > 0 )); then

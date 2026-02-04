@@ -17,6 +17,7 @@ use crate::NineDoorError;
 
 const MAX_POLICY_PATH_COMPONENTS: usize = 8;
 const MAX_ACTION_ID_LEN: usize = 64;
+const MAX_POLICY_REV_ID_LEN: usize = 64;
 
 /// Manifest-derived policy configuration.
 #[derive(Debug, Clone)]
@@ -99,6 +100,8 @@ pub(crate) struct PolicyStore {
     ctl_log: Vec<u8>,
     queue_log: Vec<u8>,
     actions: Vec<PolicyAction>,
+    current: Option<PolicyRevision>,
+    previous: Option<PolicyRevision>,
 }
 
 /// Preflight payloads for policy UI providers.
@@ -125,6 +128,8 @@ impl PolicyStore {
             ctl_log: Vec::new(),
             queue_log: Vec::new(),
             actions: Vec::new(),
+            current: None,
+            previous: None,
         })
     }
 
@@ -250,8 +255,7 @@ impl PolicyStore {
         offset: u64,
         data: &[u8],
     ) -> Result<PolicyAppendOutcome, NineDoorError> {
-        ensure_utf8(data, "policy control payload")?;
-        validate_json_lines(data, "policy control")?;
+        let commands = parse_policy_ctl_lines(data)?;
         let max_len = self.config.limits().ctl_max_bytes;
         let current_len = self.ctl_log.len();
         let appended = apply_append(current_len, offset, max_len, data.len(), "policy control")?;
@@ -261,7 +265,36 @@ impl PolicyStore {
                 format!("policy control exceeds max bytes {}", max_len),
             ));
         }
+        let mut next_current = self.current.clone();
+        let mut next_previous = self.previous.clone();
+        for command in commands {
+            match command {
+                PolicyCtlCommand::Apply { id, sha256 } => {
+                    let next = PolicyRevision { id, sha256 };
+                    next_previous = next_current.take();
+                    next_current = Some(next);
+                }
+                PolicyCtlCommand::Rollback { id } => {
+                    let current = next_current.as_ref().ok_or_else(|| {
+                        NineDoorError::protocol(
+                            ErrorCode::Invalid,
+                            "policy rollback requires an active revision",
+                        )
+                    })?;
+                    if current.id != id {
+                        return Err(NineDoorError::protocol(
+                            ErrorCode::Invalid,
+                            "policy rollback id mismatch",
+                        ));
+                    }
+                    next_current = next_previous.take();
+                    next_previous = None;
+                }
+            }
+        }
         self.ctl_log.extend_from_slice(&data[..appended.len]);
+        self.current = next_current;
+        self.previous = next_previous;
         Ok(PolicyAppendOutcome {
             count: appended.len as u32,
         })
@@ -453,6 +486,13 @@ struct ActionRequest {
     decision: PolicyDecision,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
+enum PolicyCtlCommand {
+    Apply { id: String, sha256: String },
+    Rollback { id: String },
+}
+
 #[derive(Debug, Clone)]
 struct PolicyAction {
     id: String,
@@ -460,6 +500,12 @@ struct PolicyAction {
     decision: PolicyDecision,
     path: Vec<String>,
     consumed: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PolicyRevision {
+    id: String,
+    sha256: String,
 }
 
 impl PolicyAction {
@@ -719,6 +765,39 @@ fn parse_action_lines(data: &[u8]) -> Result<Vec<ActionRequest>, NineDoorError> 
     Ok(actions)
 }
 
+fn parse_policy_ctl_lines(data: &[u8]) -> Result<Vec<PolicyCtlCommand>, NineDoorError> {
+    let text = std::str::from_utf8(data).map_err(|err| {
+        NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("policy control must be utf-8: {err}"),
+        )
+    })?;
+    let mut commands = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let command: PolicyCtlCommand = serde_json::from_str(trimmed).map_err(|err| {
+            NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("invalid policy control entry: {err}"),
+            )
+        })?;
+        match &command {
+            PolicyCtlCommand::Apply { id, sha256 } => {
+                validate_policy_revision_id(id)?;
+                validate_sha256_hex(sha256)?;
+            }
+            PolicyCtlCommand::Rollback { id } => {
+                validate_policy_revision_id(id)?;
+            }
+        }
+        commands.push(command);
+    }
+    Ok(commands)
+}
+
 fn ensure_stream_len(label: &str, len: usize) -> Result<(), NineDoorError> {
     if len > UI_MAX_STREAM_BYTES {
         return Err(NineDoorError::protocol(
@@ -770,6 +849,47 @@ fn validate_action_id(id: &str) -> Result<(), NineDoorError> {
     Ok(())
 }
 
+fn validate_policy_revision_id(id: &str) -> Result<(), NineDoorError> {
+    if id.is_empty() {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            "policy revision id must not be empty",
+        ));
+    }
+    if id.len() > MAX_POLICY_REV_ID_LEN {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("policy revision id exceeds max length {}", MAX_POLICY_REV_ID_LEN),
+        ));
+    }
+    if !id
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            "policy revision id must be alphanumeric, '-' or '_'",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sha256_hex(value: &str) -> Result<(), NineDoorError> {
+    if value.len() != 64 {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            "policy sha256 must be 64 hex chars",
+        ));
+    }
+    if !value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            "policy sha256 must be hex",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_action_target(target: &str) -> Result<(), NineDoorError> {
     for component in target.split('/').filter(|segment| !segment.is_empty()) {
         if component == "*" {
@@ -786,22 +906,6 @@ fn ensure_utf8(data: &[u8], label: &str) -> Result<(), NineDoorError> {
     std::str::from_utf8(data).map_err(|err| {
         NineDoorError::protocol(ErrorCode::Invalid, format!("{label} must be utf-8: {err}"))
     })?;
-    Ok(())
-}
-
-fn validate_json_lines(data: &[u8], label: &str) -> Result<(), NineDoorError> {
-    let text = std::str::from_utf8(data).map_err(|err| {
-        NineDoorError::protocol(ErrorCode::Invalid, format!("{label} must be utf-8: {err}"))
-    })?;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        serde_json::from_str::<serde_json::Value>(trimmed).map_err(|err| {
-            NineDoorError::protocol(ErrorCode::Invalid, format!("invalid {label} entry: {err}"))
-        })?;
-    }
     Ok(())
 }
 

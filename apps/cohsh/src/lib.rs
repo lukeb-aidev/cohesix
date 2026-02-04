@@ -165,12 +165,77 @@ impl Session {
 const ROOT_FID: u32 = 1;
 /// Manifest-derived Secure9P maximum message size.
 pub const SECURE9P_MSIZE: u32 = generated_client::SECURE9P_MSIZE;
+/// Manifest-derived Secure9P walk depth.
+pub const SECURE9P_WALK_DEPTH: u8 = generated_client::SECURE9P_WALK_DEPTH;
+/// Manifest-derived control path for queen control.
+pub const CLIENT_QUEEN_CTL_PATH: &str = generated_client::CLIENT_QUEEN_CTL_PATH;
+/// Manifest-derived control path for queen lifecycle control.
+pub const CLIENT_QUEEN_LIFECYCLE_CTL_PATH: &str = generated_client::CLIENT_QUEEN_LIFECYCLE_CTL_PATH;
+/// Manifest-derived control path for scheduling queue control.
+pub const CLIENT_QUEEN_SCHEDULE_CTL_PATH: &str = generated_client::CLIENT_QUEEN_SCHEDULE_CTL_PATH;
+/// Manifest-derived control path for lease control.
+pub const CLIENT_QUEEN_LEASE_CTL_PATH: &str = generated_client::CLIENT_QUEEN_LEASE_CTL_PATH;
+/// Manifest-derived control path for export control.
+pub const CLIENT_QUEEN_EXPORT_CTL_PATH: &str = generated_client::CLIENT_QUEEN_EXPORT_CTL_PATH;
+/// Manifest-derived control path for policy control.
+pub const CLIENT_POLICY_CTL_PATH: &str = generated_client::CLIENT_POLICY_CTL_PATH;
+/// Manifest-derived control path for queen logs.
+pub const CLIENT_LOG_PATH: &str = generated_client::CLIENT_LOG_PATH;
+/// Manifest-derived schedule queue bounds.
+pub const CONTROL_SCHEDULE_QUEUE_MAX_ENTRIES: u32 =
+    generated_client::CONTROL_SCHEDULE_QUEUE_MAX_ENTRIES;
+/// Manifest-derived schedule enable flag.
+pub const CONTROL_SCHEDULE_ENABLED: bool = generated_client::CONTROL_SCHEDULE_ENABLED;
+/// Manifest-derived schedule control payload bound.
+pub const CONTROL_SCHEDULE_CTL_MAX_BYTES: u32 = generated_client::CONTROL_SCHEDULE_CTL_MAX_BYTES;
+/// Manifest-derived lease active bounds.
+pub const CONTROL_LEASE_ACTIVE_MAX_ENTRIES: u32 = generated_client::CONTROL_LEASE_ACTIVE_MAX_ENTRIES;
+/// Manifest-derived lease enable flag.
+pub const CONTROL_LEASE_ENABLED: bool = generated_client::CONTROL_LEASE_ENABLED;
+/// Manifest-derived lease preemptions bounds.
+pub const CONTROL_LEASE_PREEMPTIONS_MAX_ENTRIES: u32 =
+    generated_client::CONTROL_LEASE_PREEMPTIONS_MAX_ENTRIES;
+/// Manifest-derived lease control payload bound.
+pub const CONTROL_LEASE_CTL_MAX_BYTES: u32 = generated_client::CONTROL_LEASE_CTL_MAX_BYTES;
+/// Manifest-derived export enable flag.
+pub const CONTROL_EXPORT_ENABLED: bool = generated_client::CONTROL_EXPORT_ENABLED;
+/// Manifest-derived export control payload bound.
+pub const CONTROL_EXPORT_CTL_MAX_BYTES: u32 = generated_client::CONTROL_EXPORT_CTL_MAX_BYTES;
+/// Manifest-derived policy enable flag.
+pub const POLICY_ENABLED: bool = generated_client::POLICY_ENABLED;
+/// Manifest-derived policy control payload bound.
+pub const POLICY_CTL_MAX_BYTES: u32 = generated_client::POLICY_CTL_MAX_BYTES;
+/// Manifest-derived policy queue bounds.
+pub const POLICY_QUEUE_MAX_ENTRIES: u32 = generated_client::POLICY_QUEUE_MAX_ENTRIES;
+/// Manifest-derived policy queue byte bound.
+pub const POLICY_QUEUE_MAX_BYTES: u32 = generated_client::POLICY_QUEUE_MAX_BYTES;
+/// Manifest-derived /proc schedule summary bound.
+pub const PROC_SCHEDULE_SUMMARY_BYTES: u32 = generated_client::PROC_SCHEDULE_SUMMARY_BYTES;
+/// Manifest-derived /proc schedule summary enable flag.
+pub const PROC_SCHEDULE_SUMMARY_ENABLED: bool = generated_client::PROC_SCHEDULE_SUMMARY_ENABLED;
+/// Manifest-derived /proc schedule queue bound.
+pub const PROC_SCHEDULE_QUEUE_BYTES: u32 = generated_client::PROC_SCHEDULE_QUEUE_BYTES;
+/// Manifest-derived /proc schedule queue enable flag.
+pub const PROC_SCHEDULE_QUEUE_ENABLED: bool = generated_client::PROC_SCHEDULE_QUEUE_ENABLED;
+/// Manifest-derived /proc lease summary bound.
+pub const PROC_LEASE_SUMMARY_BYTES: u32 = generated_client::PROC_LEASE_SUMMARY_BYTES;
+/// Manifest-derived /proc lease summary enable flag.
+pub const PROC_LEASE_SUMMARY_ENABLED: bool = generated_client::PROC_LEASE_SUMMARY_ENABLED;
+/// Manifest-derived /proc lease active bound.
+pub const PROC_LEASE_ACTIVE_BYTES: u32 = generated_client::PROC_LEASE_ACTIVE_BYTES;
+/// Manifest-derived /proc lease active enable flag.
+pub const PROC_LEASE_ACTIVE_ENABLED: bool = generated_client::PROC_LEASE_ACTIVE_ENABLED;
+/// Manifest-derived /proc lease preemptions bound.
+pub const PROC_LEASE_PREEMPTIONS_BYTES: u32 = generated_client::PROC_LEASE_PREEMPTIONS_BYTES;
+/// Manifest-derived /proc lease preemptions enable flag.
+pub const PROC_LEASE_PREEMPTIONS_ENABLED: bool =
+    generated_client::PROC_LEASE_PREEMPTIONS_ENABLED;
 const MAX_SCRIPT_LINES: usize = 256;
 const MAX_SCRIPT_WAIT_MS: u64 = 2000;
 const MAX_SCRIPT_RESPONSES: usize = 8;
-const QUEEN_CTL_PATH: &str = generated_client::CLIENT_QUEEN_CTL_PATH;
-const QUEEN_LIFECYCLE_CTL_PATH: &str = generated_client::CLIENT_QUEEN_LIFECYCLE_CTL_PATH;
-const QUEEN_LOG_PATH: &str = generated_client::CLIENT_LOG_PATH;
+const QUEEN_CTL_PATH: &str = CLIENT_QUEEN_CTL_PATH;
+const QUEEN_LIFECYCLE_CTL_PATH: &str = CLIENT_QUEEN_LIFECYCLE_CTL_PATH;
+const QUEEN_LOG_PATH: &str = CLIENT_LOG_PATH;
 const TEST_SCRIPT_QUICK_PATH: &str = "/proc/tests/selftest_quick.coh";
 const TEST_SCRIPT_FULL_PATH: &str = "/proc/tests/selftest_full.coh";
 const TEST_SCRIPT_NEGATIVE_PATH: &str = "/proc/tests/selftest_negative.coh";

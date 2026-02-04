@@ -191,12 +191,60 @@ pub struct ProcPressureConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct ProcScheduleConfig {
+    pub summary: bool,
+    pub queue: bool,
+    pub summary_bytes: u32,
+    pub queue_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ProcLeaseConfig {
+    pub summary: bool,
+    pub active: bool,
+    pub preemptions: bool,
+    pub summary_bytes: u32,
+    pub active_bytes: u32,
+    pub preemptions_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ScheduleControlConfig {
+    pub enable: bool,
+    pub queue_max_entries: u32,
+    pub ctl_max_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LeaseControlConfig {
+    pub enable: bool,
+    pub active_max_entries: u32,
+    pub preemptions_max_entries: u32,
+    pub ctl_max_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ExportControlConfig {
+    pub enable: bool,
+    pub ctl_max_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ControlPlaneConfig {
+    pub schedule: ScheduleControlConfig,
+    pub lease: LeaseControlConfig,
+    pub export: ExportControlConfig,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct ObservabilityConfig {
     pub proc_9p: Proc9pConfig,
     pub proc_9p_session: Proc9pSessionConfig,
     pub proc_ingest: ProcIngestConfig,
     pub proc_root: ProcRootConfig,
     pub proc_pressure: ProcPressureConfig,
+    pub proc_schedule: ProcScheduleConfig,
+    pub proc_lease: ProcLeaseConfig,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -338,7 +386,7 @@ pub struct AuditConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
-pub const MANIFEST_SHA256: &str = "3b984b4251351d89b84de834244efa7e57cccef45983a3b0edc37b7b582b6ddb";
+pub const MANIFEST_SHA256: &str = "7d6b2ecf259049c1e431a37e693118b9bccc05395e374934f3dc6837d1004c1f";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
@@ -350,6 +398,7 @@ pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();
 pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;
 pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = bootstrap::TELEMETRY_INGEST_CONFIG;
 pub const LIFECYCLE_CONFIG: LifecycleConfig = bootstrap::LIFECYCLE_CONFIG;
+pub const CONTROL_PLANE_CONFIG: ControlPlaneConfig = bootstrap::CONTROL_PLANE_CONFIG;
 pub const OBSERVABILITY_CONFIG: ObservabilityConfig = bootstrap::OBSERVABILITY_CONFIG;
 pub const UI_PROVIDER_CONFIG: UiProviderConfig = bootstrap::UI_PROVIDER_CONFIG;
 pub const CAS_CONFIG: CasConfig = bootstrap::CAS_CONFIG;
@@ -364,6 +413,11 @@ pub const PROC_INGEST_QUEUED_BYTES: usize = bootstrap::PROC_INGEST_QUEUED_BYTES;
 pub const PROC_INGEST_WATCH_MAX_ENTRIES: usize = bootstrap::PROC_INGEST_WATCH_MAX_ENTRIES;
 pub const PROC_INGEST_WATCH_LINE_BYTES: usize = bootstrap::PROC_INGEST_WATCH_LINE_BYTES;
 pub const PROC_INGEST_LATENCY_SAMPLES: usize = bootstrap::PROC_INGEST_LATENCY_SAMPLES;
+pub const PROC_SCHEDULE_SUMMARY_BYTES: usize = bootstrap::PROC_SCHEDULE_SUMMARY_BYTES;
+pub const PROC_SCHEDULE_QUEUE_BYTES: usize = bootstrap::PROC_SCHEDULE_QUEUE_BYTES;
+pub const PROC_LEASE_SUMMARY_BYTES: usize = bootstrap::PROC_LEASE_SUMMARY_BYTES;
+pub const PROC_LEASE_ACTIVE_BYTES: usize = bootstrap::PROC_LEASE_ACTIVE_BYTES;
+pub const PROC_LEASE_PREEMPTIONS_BYTES: usize = bootstrap::PROC_LEASE_PREEMPTIONS_BYTES;
 pub const HOST_CONFIG: HostConfig = bootstrap::HOST_CONFIG;
 pub const SIDECAR_CONFIG: SidecarConfig = bootstrap::SIDECAR_CONFIG;
 pub const POLICY_CONFIG: PolicyConfig = bootstrap::POLICY_CONFIG;
@@ -413,6 +467,10 @@ pub const fn telemetry_ingest_config() -> TelemetryIngestConfig {
 
 pub const fn lifecycle_config() -> LifecycleConfig {
     bootstrap::LIFECYCLE_CONFIG
+}
+
+pub const fn control_plane_config() -> ControlPlaneConfig {
+    bootstrap::CONTROL_PLANE_CONFIG
 }
 
 pub const fn observability_config() -> ObservabilityConfig {

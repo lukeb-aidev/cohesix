@@ -47,6 +47,10 @@ use super::policy::{
     PolicyGateDenial, PolicyPreflightPayloads, PolicyStore,
 };
 use super::replay::ReplayState;
+use super::schedule::{
+    ExportControlConfig, ExportState, LeaseControlConfig, LeaseState, ScheduleControlConfig,
+    ScheduleState,
+};
 use super::security::{CursorCheck, TicketDeny, TicketLimits, TicketUsage};
 use super::session::{SessionLifecycle, SessionPhase};
 use super::telemetry::{
@@ -179,6 +183,7 @@ impl ServerCore {
             audit_store,
             replay_namespace,
             replay_state,
+            observe.config(),
             now,
         );
         control
@@ -186,6 +191,8 @@ impl ServerCore {
             .install_observability(observe.config())
             .expect("install /proc observability");
         let _ = control.refresh_proc_lifecycle(now);
+        let _ = control.refresh_proc_schedule();
+        let _ = control.refresh_proc_lease();
         match control.auto_boot_complete(now) {
             Ok(transition) => {
                 let _ = control.record_lifecycle_transition(&transition);
@@ -1626,6 +1633,9 @@ impl ServerCore {
                         )?;
                         if is_queen_ctl_path(&path)
                             || is_queen_lifecycle_ctl_path(&path)
+                            || is_queen_schedule_ctl_path(&path)
+                            || is_queen_lease_ctl_path(&path)
+                            || is_queen_export_ctl_path(&path)
                             || host_target.is_some()
                         {
                             self.control.record_control_audit(
@@ -1664,6 +1674,63 @@ impl ServerCore {
             self.consume_ticket_bandwidth(state, count as u64);
             self.refresh_proc_sessions(Some((session, state)))?;
             self.refresh_proc_root()?;
+            return Ok(ResponseBody::Write { count });
+        }
+        if is_queen_schedule_ctl_path(&path) {
+            if role != Some(Role::Queen) {
+                if audit_enabled {
+                    self.control.record_control_audit(
+                        path.as_slice(),
+                        data,
+                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                        role,
+                        ticket.as_deref(),
+                    )?;
+                }
+                return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
+            }
+            let count = self
+                .control
+                .process_schedule_ctl_write(data, role, ticket.as_deref())?;
+            self.consume_ticket_bandwidth(state, count as u64);
+            return Ok(ResponseBody::Write { count });
+        }
+        if is_queen_lease_ctl_path(&path) {
+            if role != Some(Role::Queen) {
+                if audit_enabled {
+                    self.control.record_control_audit(
+                        path.as_slice(),
+                        data,
+                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                        role,
+                        ticket.as_deref(),
+                    )?;
+                }
+                return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
+            }
+            let count = self
+                .control
+                .process_lease_ctl_write(data, role, ticket.as_deref())?;
+            self.consume_ticket_bandwidth(state, count as u64);
+            return Ok(ResponseBody::Write { count });
+        }
+        if is_queen_export_ctl_path(&path) {
+            if role != Some(Role::Queen) {
+                if audit_enabled {
+                    self.control.record_control_audit(
+                        path.as_slice(),
+                        data,
+                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                        role,
+                        ticket.as_deref(),
+                    )?;
+                }
+                return Err(NineDoorError::protocol(ErrorCode::Permission, "EPERM"));
+            }
+            let count = self
+                .control
+                .process_export_ctl_write(data, role, ticket.as_deref())?;
+            self.consume_ticket_bandwidth(state, count as u64);
             return Ok(ResponseBody::Write { count });
         }
         if is_gpu_bridge_ctl_path(&path) {
@@ -2209,6 +2276,9 @@ struct ControlPlane {
     gpu_nodes: HashSet<String>,
     active_leases: HashMap<String, String>,
     gpu_bridge: GpuBridgeReceiver,
+    schedule: ScheduleState,
+    lease: LeaseState,
+    export: ExportState,
     lifecycle: lifecycle::LifecycleStateMachine,
     policy: PolicyStore,
     audit: AuditStore,
@@ -2231,6 +2301,7 @@ impl ControlPlane {
         audit: AuditStore,
         replay_namespace: ReplayNamespaceConfig,
         replay: ReplayState,
+        observe: ObserveConfig,
         now: Instant,
     ) -> Self {
         Self {
@@ -2254,6 +2325,9 @@ impl ControlPlane {
             gpu_nodes: HashSet::new(),
             active_leases: HashMap::new(),
             gpu_bridge: GpuBridgeReceiver::new(GPU_BRIDGE_MAX_BYTES),
+            schedule: ScheduleState::new(ScheduleControlConfig::default(), observe.proc_schedule),
+            lease: LeaseState::new(LeaseControlConfig::default(), observe.proc_lease),
+            export: ExportState::new(ExportControlConfig::default()),
             lifecycle: lifecycle::LifecycleStateMachine::new(now),
             policy,
             audit,
@@ -2324,6 +2398,42 @@ impl ControlPlane {
             .set_proc_lifecycle_reason_payload(reason_line.as_bytes())?;
         self.namespace
             .set_proc_lifecycle_since_payload(since_line.as_bytes())?;
+        Ok(())
+    }
+
+    fn refresh_proc_schedule(&mut self) -> Result<(), NineDoorError> {
+        if !self.schedule.proc_enabled() {
+            return Ok(());
+        }
+        if self.schedule.proc_summary_enabled() {
+            let payload = self.schedule.summary_payload()?;
+            self.namespace
+                .set_proc_schedule_summary_payload(&payload)?;
+        }
+        if self.schedule.proc_queue_enabled() {
+            let payload = self.schedule.queue_payload()?;
+            self.namespace.set_proc_schedule_queue_payload(&payload)?;
+        }
+        Ok(())
+    }
+
+    fn refresh_proc_lease(&mut self) -> Result<(), NineDoorError> {
+        if !self.lease.proc_enabled() {
+            return Ok(());
+        }
+        if self.lease.proc_summary_enabled() {
+            let payload = self.lease.summary_payload()?;
+            self.namespace.set_proc_lease_summary_payload(&payload)?;
+        }
+        if self.lease.proc_active_enabled() {
+            let payload = self.lease.active_payload()?;
+            self.namespace.set_proc_lease_active_payload(&payload)?;
+        }
+        if self.lease.proc_preemptions_enabled() {
+            let payload = self.lease.preemptions_payload()?;
+            self.namespace
+                .set_proc_lease_preemptions_payload(&payload)?;
+        }
         Ok(())
     }
 
@@ -2613,6 +2723,189 @@ impl ControlPlane {
             )?;
         }
         Ok(events)
+    }
+
+    fn process_schedule_ctl_write(
+        &mut self,
+        data: &[u8],
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<u32, NineDoorError> {
+        let ctl_path = vec![
+            "queen".to_owned(),
+            "schedule".to_owned(),
+            "ctl".to_owned(),
+        ];
+        let text = str::from_utf8(data).map_err(|err| {
+            NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("schedule control must be utf-8: {err}"),
+            )
+        })?;
+        let mut dirty = false;
+        let mut saw_line = false;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            saw_line = true;
+            let result = self.schedule.append_line(trimmed);
+            let outcome = match &result {
+                Ok(()) => ControlOutcome::ok(),
+                Err(err) => ControlOutcome::from_error(err),
+            };
+            self.record_control_audit(
+                ctl_path.as_slice(),
+                trimmed.as_bytes(),
+                outcome,
+                role,
+                ticket,
+            )?;
+            match result {
+                Ok(()) => dirty = true,
+                Err(err) => {
+                    if dirty {
+                        self.namespace
+                            .set_queen_schedule_ctl_payload(self.schedule.ctl_log())?;
+                        self.refresh_proc_schedule()?;
+                    }
+                    return Err(err);
+                }
+            }
+        }
+        if !saw_line {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "schedule control requires at least one entry",
+            ));
+        }
+        if dirty {
+            self.namespace
+                .set_queen_schedule_ctl_payload(self.schedule.ctl_log())?;
+            self.refresh_proc_schedule()?;
+        }
+        Ok(data.len() as u32)
+    }
+
+    fn process_lease_ctl_write(
+        &mut self,
+        data: &[u8],
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<u32, NineDoorError> {
+        let ctl_path = vec!["queen".to_owned(), "lease".to_owned(), "ctl".to_owned()];
+        let text = str::from_utf8(data).map_err(|err| {
+            NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("lease control must be utf-8: {err}"),
+            )
+        })?;
+        let mut dirty = false;
+        let mut saw_line = false;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            saw_line = true;
+            let result = self.lease.append_line(trimmed);
+            let outcome = match &result {
+                Ok(()) => ControlOutcome::ok(),
+                Err(err) => ControlOutcome::from_error(err),
+            };
+            self.record_control_audit(
+                ctl_path.as_slice(),
+                trimmed.as_bytes(),
+                outcome,
+                role,
+                ticket,
+            )?;
+            match result {
+                Ok(()) => dirty = true,
+                Err(err) => {
+                    if dirty {
+                        self.namespace
+                            .set_queen_lease_ctl_payload(self.lease.ctl_log())?;
+                        self.refresh_proc_lease()?;
+                    }
+                    return Err(err);
+                }
+            }
+        }
+        if !saw_line {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "lease control requires at least one entry",
+            ));
+        }
+        if dirty {
+            self.namespace
+                .set_queen_lease_ctl_payload(self.lease.ctl_log())?;
+            self.refresh_proc_lease()?;
+        }
+        Ok(data.len() as u32)
+    }
+
+    fn process_export_ctl_write(
+        &mut self,
+        data: &[u8],
+        role: Option<Role>,
+        ticket: Option<&str>,
+    ) -> Result<u32, NineDoorError> {
+        let ctl_path = vec![
+            "queen".to_owned(),
+            "export".to_owned(),
+            "ctl".to_owned(),
+        ];
+        let text = str::from_utf8(data).map_err(|err| {
+            NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("export control must be utf-8: {err}"),
+            )
+        })?;
+        let mut dirty = false;
+        let mut saw_line = false;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            saw_line = true;
+            let result = self.export.append_line(trimmed);
+            let outcome = match &result {
+                Ok(()) => ControlOutcome::ok(),
+                Err(err) => ControlOutcome::from_error(err),
+            };
+            self.record_control_audit(
+                ctl_path.as_slice(),
+                trimmed.as_bytes(),
+                outcome,
+                role,
+                ticket,
+            )?;
+            match result {
+                Ok(()) => dirty = true,
+                Err(err) => {
+                    if dirty {
+                        self.namespace
+                            .set_queen_export_ctl_payload(self.export.ctl_log())?;
+                    }
+                    return Err(err);
+                }
+            }
+        }
+        if !saw_line {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "export control requires at least one entry",
+            ));
+        }
+        if dirty {
+            self.namespace
+                .set_queen_export_ctl_payload(self.export.ctl_log())?;
+        }
+        Ok(data.len() as u32)
     }
 
     fn process_lifecycle_ctl_write(
@@ -4374,6 +4667,27 @@ fn is_queen_ctl_path(path: &[String]) -> bool {
 
 fn is_queen_lifecycle_ctl_path(path: &[String]) -> bool {
     matches!(path, [first, second, third] if first == "queen" && second == "lifecycle" && third == "ctl")
+}
+
+fn is_queen_schedule_ctl_path(path: &[String]) -> bool {
+    matches!(
+        path,
+        [first, second, third] if first == "queen" && second == "schedule" && third == "ctl"
+    )
+}
+
+fn is_queen_lease_ctl_path(path: &[String]) -> bool {
+    matches!(
+        path,
+        [first, second, third] if first == "queen" && second == "lease" && third == "ctl"
+    )
+}
+
+fn is_queen_export_ctl_path(path: &[String]) -> bool {
+    matches!(
+        path,
+        [first, second, third] if first == "queen" && second == "export" && third == "ctl"
+    )
 }
 
 fn is_telemetry_ingest_write_path(path: &[String]) -> bool {

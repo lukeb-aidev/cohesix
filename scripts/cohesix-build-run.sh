@@ -736,7 +736,7 @@ main() {
     describe_file "Built root-task" "$SEL4_ARTIFACT_DIR/root-task"
 
     COMPONENT_BINS=(root-task nine-door worker-heart worker-gpu)
-    HOST_ONLY_BINS=(cohsh coh gpu-bridge-host host-sidecar-bridge cas-tool)
+    HOST_ONLY_BINS=(cohsh coh gpu-bridge-host host-sidecar-bridge cas-tool hive-gateway)
     if has_root_task_feature "cohesix-dev"; then
         HOST_ONLY_BINS+=(swarmui)
     fi

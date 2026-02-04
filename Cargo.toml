@@ -18,6 +18,7 @@ members = [
     "apps/sidecar-bus",
     "apps/gpu-bridge-host",
     "apps/host-sidecar-bridge",
+    "apps/hive-gateway",
     "crates/cohesix-cas",
     "crates/cohesix-ticket",
     "crates/cohsh-core",
