@@ -34,7 +34,7 @@ to the TCP console to drive and observe the system.
 - `host-sidecar-bridge` - publish mock or live host providers into `/host` for policy/CI validation and telemetry snapshots (optional).
 See `docs/HOST_TOOLS.md` for details.
 
-## 0.3.0 highlights (milestones 21a-24b)
+## 0.4.0-alpha highlights (milestones 21a-24c)
 - Telemetry ingest with OS-named segments: `cohsh telemetry push` + `coh telemetry pull`.
 - Host bridge `coh` for Secure9P mount, GPU lease/status, and telemetry export (no new VM semantics).
 - SwarmUI Live Hive visibility + embedded console panel that reuses the existing TCP session.
@@ -43,6 +43,8 @@ See `docs/HOST_TOOLS.md` for details.
 - `coh run` command that records bounded GPU breadcrumb entries under `/gpu/<id>/status`.
 - `coh peft` export/import/activate/rollback flows (LoRA lifecycle glue).
 - Cohesix Python client + examples and `coh doctor` for deterministic host checks.
+- Authoritative scheduling/lease/export/policy control files with `/proc` observability.
+- Host REST gateway (`hive-gateway`) projecting console/file semantics over HTTP.
 
 ## Setup host runtime (required once per host)
 Install or verify runtime dependencies (QEMU + SwarmUI runtime libs):
@@ -139,9 +141,9 @@ You need two terminals:
 - Terminal 1: QEMU (keeps the VM running).
   - Note: Qemu will show a serial terminal, used for core seL4 diagnostics. This is NOT intended to be the main user interface.
 - Terminal 2: for either `cohsh` or `swarmui`. Use one at a time; they should not be used simultaneously.
-- Command surface note (concise):
+- Console lock note:
   - SwarmUI includes a console panel for core verbs; use `cohsh` for CLI-only commands.
-  - `cohsh` includes the full console verbs plus CLI-only commands/options (for example `test --mode`, `pool bench`, `tcp-diag`, `--script`, `--mint-ticket`).
+  - Only one console client at a time: quit SwarmUI before attaching `cohsh`, and vice versa.
 
 1. In Terminal 1, Boot the VM:
    ```bash
@@ -155,34 +157,29 @@ You need two terminals:
    ```
    The default console auth token is `changeme`. If you see `ERR AUTH`, set
    `COHSH_AUTH_TOKEN` or pass `--auth-token`.
-3. In cohsh, run a few actions:
+3. In cohsh, run a few actions (core):
 - `help` — show the command list.
-- `attach queen` — attach to the queen role (only if you started cohsh without `--role`).
-- `login queen` — alias of attach (same rule as above).
-- `detach` — close the current session (then use `attach` to reconnect).
-- `tail /log/queen.log` — stream the queen log.
-- `log` — shorthand for `tail /log/queen.log`.
+- `ls /` — list root namespace entries.
+- `cat /log/queen.log` — read the queen log once.
+- `echo {"id":"spawn-1","target":"/queen/ctl","decision":"approve"} > /actions/queue` — approve one `/queen/ctl` action when policy gating is enabled.
+- `spawn heartbeat ticks=100` — request a heartbeat worker.
+- `ls /worker` — list current worker IDs (do not assume `worker-1`; use what you see).
+- `echo {"id":"kill-1","target":"/queen/ctl","decision":"approve"} > /actions/queue` — approve the kill if policy gating is enabled.
+- `kill worker-2` — terminate the worker id you just listed (replace with the actual id).
+- `quit` — exit cohsh.
+
+Optional extras:
+- `log` or `tail /log/queen.log` — stream the queen log.
 - `ping` — report attachment status.
 - `test --mode quick` — run quick self-tests.
 - `pool bench path=/log/queen.log ops=200 batch=4 payload_bytes=64` — run a short pool benchmark.
 - `tcp-diag` — debug TCP connectivity without protocol traffic.
-- `ls /` — list root namespace entries.
-- `cat /log/queen.log` — read the queen log once.
-- `echo hello > /log/queen.log` — append a line to the log.
-- `echo {"id":"spawn-1","target":"/queen/ctl","decision":"approve"} > /actions/queue` — approve one `/queen/ctl` action when policy gating is enabled.
-- `spawn heartbeat ticks=100` — request a heartbeat worker.
-- `echo {"id":"spawn-2","target":"/queen/ctl","decision":"approve"} > /actions/queue` — approve the GPU spawn if policy gating is enabled.
-- `spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=1 ttl_s=120` — request a GPU worker lease (see notes below).
-- `ls /worker` — list current worker IDs (do not assume `worker-1`; use what you see).
-- `echo {"id":"kill-1","target":"/queen/ctl","decision":"approve"} > /actions/queue` — approve the kill if policy gating is enabled.
-- `kill worker-2` — terminate the worker id you just listed (replace with the actual id).
 - `bind /queen /host/queen` — bind a path.
 - `mount logs /logs` — mount the log service namespace (alias to `/log`).
 - `cat /proc/lifecycle/state` — read the current lifecycle state.
 - `cat /proc/root/reachable` — confirm root reachability and cut signals.
 - `lifecycle cordon` — stop accepting new work.
 - `lifecycle resume` — return to ONLINE.
-- `quit` — exit cohsh.
 
 Spawn notes:
 - Supported roles are `heartbeat` (aliases: `worker`, `worker-heartbeat`) and `gpu` (alias: `worker-gpu`).
@@ -209,7 +206,7 @@ Other optional args you can try:
    xvfb-run -a ./bin/swarmui
    ```
    In SwarmUI, click **Connect** → **Hive Start**. Worker dots show numeric labels and role colors; click a dot to populate the detail panel.
-5. If Live Hive shows "No telemetry yet", quit SwarmUI and seed a line into a worker ring:
+5. If Live Hive shows "No telemetry yet", quit SwarmUI and seed a line into a worker ring (writes `/worker/<id>/telemetry`):
    ```bash
    ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen <<'COH'
    attach queen
