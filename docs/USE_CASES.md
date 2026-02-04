@@ -4,181 +4,218 @@
 <!-- Author: Lukas Bower -->
 # USE_CASES.md
 Author: Lukas Bower — October 15, 2025
+Revision: February 4, 2026
 
 ## Purpose
-This document enumerates concrete, high‑value **use cases** for Cohesix across sectors, highlighting why the platform is a fit, what (if anything) needs to be added, and any notable compliance or operational constraints.
+This document enumerates concrete, high-value use cases for Cohesix across sectors. It preserves technical specifics while adding business context so stakeholders can quickly assess fit, risk, and required integrations.
 
-## Differentiation Overview (Why Cohesix is different)
-- **Everything is a file, but secured:** the control plane is a Secure9P namespace, not agents, ad-hoc RPC, or in-VM HTTP. All verbs are file ops with AccessPolicy enforcement.
-- **Queen/Worker orchestration:** one Queen coordinating many Workers via explicit tickets, role budgets, and bounded resources; no hidden daemons.
-- **Tiny TCB + deterministic envelope:** upstream seL4 with pure Rust userspace, no POSIX/libc stacks, no in-VM GPU stacks; memory and I/O are bounded and deterministic.
-- **Coexists with existing ecosystems:** host-side sidecars mirror namespaces (Kubernetes, CUDA/NVML, OT protocols, storage, model registries) over 9P so Cohesix stays the boundary orchestrator, not a general OS.
-- **LoRA / PEFT feedback loops without in-VM ML:** model lifecycle pointers (e.g. `/gpu/models/active`) and schema-tagged, bounded telemetry make edge feedback ingestible by external training farms without expanding the VM’s TCB.
-- **MLOps-first control plane:** deterministic model lifecycle pointers, CAS updates, and telemetry snapshots make training, rollout, and audit pipelines reproducible without adding in-VM ML stacks.
-- **Cohesix is not:**
-  - a Linux replacement
-  - an in-VM container runtime
-  - an in-VM network appliance with ad-hoc daemons
-- **What you get:** auditability via append-only file semantics, capability scoping through tickets/leases, reproducible operations via CAS/policy-as-files, and resilience for low-trust endpoints (unreliable nets, air-gaps).
+## Executive Summary
+Cohesix is a control-plane operating system for secure orchestration and telemetry of edge GPU nodes. It exposes a Secure9P file namespace as the only control surface and keeps heavy ecosystems (Kubernetes, CUDA/NVML, OT protocols, model registries) on the host and outside the VM's trusted computing base. For business stakeholders, this means smaller audit scope, safer multi-tenant GPU sharing, and resilient operations in disconnected or hostile networks.
+
+## Positioning (Business + Technical)
+**Cohesix is:**
+- A hive-style control plane: one Queen coordinating many Workers via explicit tickets, roles, and budgets.
+- A deterministic, auditable boundary with append-only logs and telemetry, policy-as-files, and content-addressed updates.
+- A coexistence layer: host sidecars mirror external ecosystems into the namespace so the VM stays minimal.
+
+**Cohesix is not:**
+- A Linux replacement.
+- An in-VM container runtime.
+- An in-VM network appliance with ad-hoc daemons.
+
+## Business Outcomes
+- Audit-ready operations through append-only logs, content-addressed artifacts, and explicit policy gates.
+- Reduced risk and compliance scope via a tiny TCB (seL4 + pure Rust userspace, no POSIX/libc, no in-VM GPU stacks).
+- Resilient edge operations through deterministic resource bounds and replayable state.
+- Governed multi-tenancy with ticketed leases, bounded quotas, and explicit ownership.
+
+## Operating Model (As-Built)
+A Cohesix hive runs inside an seL4 VM on aarch64. The Queen (root-task + NineDoor) exposes `/queen`, `/proc`, `/log`, and sharded worker telemetry under `/shard/<label>/worker/<id>/telemetry`, with optional `/gpu`, `/host`, `/policy`, `/audit`, `/replay`, `/updates`, and `/models` namespaces when enabled by the manifest. Workers run as separate roles with bounded budgets. External ecosystems live on the host; host-side bridges publish `/host/*` and `/gpu/*` views into the namespace. QEMU `aarch64/virt` is the reference dev/CI environment, and UEFI ARM64 hardware is the target deployment profile.
+
+## Strategic Fit Patterns
+- Change-authority substrate for regulated or safety-critical environments.
+- Governed edge AI where model activation and rollback must be auditable.
+- Disconnected or hostile networks where state must survive link loss.
+- Cross-ecosystem governance without replacing Kubernetes/systemd/GPU stacks.
+- Audit-first infrastructure where policy gates and append-only logs are mandatory.
 
 ---
 
-## Strategic Fits (Beyond “Control Plane”)
-These are high‑level arenas where Cohesix’s file‑shaped authority and deterministic bounds are the core value, not general compute.
-- **Change‑authority substrate:** treat *state transitions* as auditable, reversible files; suited to regulated or safety‑critical environments.
-- **Governed edge AI:** model activation, rollback, and provenance are first‑class operations without embedding ML stacks in the VM.
-- **Disconnected or hostile networks:** deterministic, append‑only state survives intermittent links and allows replay/audit.
-- **Cross‑ecosystem governance:** overlay Kubernetes/systemd/GPU ecosystems without replacing them, preserving a tiny TCB.
-- **Audit‑first infrastructure:** policy gates and append‑only logs are native, not bolt‑on.
+## Use Case Catalog
 
-## Edge & Industrial
+### Edge and Industrial
 
-### 1) Smart‑factory / Industrial IoT gateway
-**Why Cohesix:** tiny TCB (seL4), strong isolation between PLC/robot cells, append‑only telemetry, offline‑first.  
-**Needs:** MODBUS/CAN sidecars; telemetry ring buffers + cursors; QUIC uplink (gateway/host).  
-**Constraints:** Deterministic timing, safety certification paths.
+### 1) Smart-factory / Industrial IoT gateway
+**Business outcome:** Segmented OT control with auditable change authority and minimal downtime.
+**Why Cohesix:** seL4 isolation, file-shaped control plane, deterministic telemetry and logs.
+**Integration:** MODBUS/CAN sidecars; host-side uplink for telemetry export.
+**Constraints:** deterministic timing, safety certification paths.
 
-### 2) Energy substation / Micro‑grid controller
-**Why:** deterministic scheduling, minimal attack surface at OT/IT boundary.  
-**Needs:** DNP3/IEC‑104 adapters; signed config updates; GPS/PTP time beacons.  
-**Constraints:** NERC/CIP, IEC 61850 contexts.
+### 2) Energy substation / Micro-grid controller
+**Business outcome:** Hardened OT/IT boundary with predictable behavior during incidents.
+**Why Cohesix:** deterministic scheduling, minimal attack surface, append-only audit logs.
+**Integration:** DNP3/IEC-104 adapters; signed config bundles; GPS/PTP time sources.
+**Constraints:** NERC/CIP, IEC 61850, local change control.
 
 ### 3) Retail / Computer-vision hub (store analytics)
-**Why:** private LAN for cameras/Jetsons; secure UEFI worker as the only WAN node; continuous improvement without shipping raw video upstream.  
-**Needs:** content-addressed model updates; CBOR telemetry; local summarization; LoRA-ready feedback telemetry.  
-**Constraints:** Privacy/PII handling at edge.
+**Business outcome:** Privacy-respecting analytics and faster model rollouts with lower WAN cost.
+**Why Cohesix:** host-side GPU stack, model pointers via `/gpu/models/active`, bounded telemetry.
+**Integration:** content-addressed model updates; local summarization; schema-tagged telemetry.
+**Constraints:** PII handling, retention windows.
 
-### 4) Logistics & ports (ALPR, container ID, crane safety)
-**Why:** harsh networks, need resilient telemetry & updates.
-**Needs:** durable disk spooling; batch uploads; ring buffers.
-**Constraints:** Physical security, RF noise.
-Hives with a single Queen orchestrate multiple workers across yard devices, commanded through `cohsh` or compatible clients on physical ARM64 hardware, with QEMU used during development to mirror deployment behaviour.
+### 4) Logistics and ports (ALPR, container ID, crane safety)
+**Business outcome:** Reliable telemetry and updates across harsh RF and intermittent links.
+**Why Cohesix:** offline-first logs, replayable state, strict capability scoping.
+**Integration:** durable disk spooling; batch upload sidecar.
+**Constraints:** physical security, RF noise.
 
-### 5) Telco MEC micro‑orchestrator
-**Why:** coordinate accelerators at cell sites; capability tickets; multi‑tenant scheduling.
-**Needs:** SR‑IOV/NIC telemetry sidecars; per‑tenant quotas; shard namespaces.
-**Constraints:** Carrier‑grade Ops, slice isolation.
-Each MEC node is a hive (one Queen, many workers and GPU workers) steered through `cohsh` or GUI tooling that reuses the same protocol, hosted on physical ARM64 hardware booted via UEFI; QEMU is reserved for dev/CI equivalence testing.
+### 5) Telco MEC micro-orchestrator
+**Business outcome:** Multi-tenant accelerator governance at cell sites with clear SLAs.
+**Why Cohesix:** ticketed leases, sharded namespaces, deterministic resource budgets.
+**Integration:** SR-IOV/NIC telemetry sidecars; per-tenant quota policies.
+**Constraints:** carrier-grade ops, slice isolation.
 
-### 6) Healthcare imaging edge → cloud PACS
-**Why:** minimize PHI footprint, deterministic control plane.  
-**Needs:** DICOM proxy; de‑identification; audit‑grade append logs.  
-**Constraints:** HIPAA/ISO 27001, locality of data.
+### 6) Healthcare imaging edge to cloud PACS
+**Business outcome:** Minimal PHI footprint with traceable access and transfers.
+**Why Cohesix:** append-only audit, policy gates, deterministic telemetry.
+**Integration:** DICOM proxy; de-identification pipeline; export gating.
+**Constraints:** HIPAA, ISO 27001, locality requirements.
 
 ### 7) Autonomous depots (AV/AGV fleets)
-**Why:** bandwidth-aware model deltas; offline autonomy; fleet-wide learning from local conditions.  
-**Needs:** CAS manifests; delta packs; multicast to many vehicles; schema-bounded telemetry suitable for PEFT aggregation.  
-**Constraints:** Safety, predictable update windows.
+**Business outcome:** Safe update windows and fleet learning without constant connectivity.
+**Why Cohesix:** content-addressed updates for deterministic version pinning and bounded telemetry envelopes.
+**Integration:** delta packs; multicast to many vehicles; PEFT-ready telemetry export.
+**Constraints:** safety certification, predictable maintenance windows.
 
 ### 8) Defense ISR kits / forward ops
-**Why:** seL4 assurance, LoRa for low‑bandwidth control.  
-**Needs:** LoRa scheduler; tamper logging; rapid key rolls.  
-**Constraints:** Export controls, contested networks.
+**Business outcome:** Trusted control under low bandwidth with tamper-evident logs.
+**Why Cohesix:** seL4 assurance, minimal TCB, file-scoped authority.
+**Integration:** LoRa or SATCOM schedulers; rapid key-rotation workflows.
+**Constraints:** export controls, contested networks.
 
-### 9) Smart‑city sensing (air/noise/traffic)
-**Why:** many cheap sensors behind a single secure gateway.  
-**Needs:** sensor bus sidecars (I2C/SPI); coarse summarization before uplink.  
-**Constraints:** Public data, OTA safety.
+### 9) Smart-city sensing (air/noise/traffic)
+**Business outcome:** Scalable governance of large sensor fleets with low operational cost.
+**Why Cohesix:** small footprint gateway with append-only telemetry.
+**Integration:** sensor-bus sidecars (I2C/SPI); coarse local summarization.
+**Constraints:** public data governance, OTA safety.
 
 ### 10) Broadcast/DOOH signage controller
-**Why:** signed content updates, simple auditable playback.
-**Needs:** CAS assets + schedule provider; proof‑of‑display receipts.
-**Constraints:** Bandwidth caps, SLA reporting.
-Each signage hub is a hive with one Queen orchestrating multiple workers, all commanded through `cohsh` or GUI clients that speak the same protocol on physical ARM64 hardware, validated during development on the QEMU reference board.
+**Business outcome:** Signed content delivery with proof-of-display and SLA reporting.
+**Why Cohesix:** content-addressed assets, policy gating, immutable audit trails.
+**Integration:** schedule provider; receipts pipeline; bandwidth-aware staging.
+**Constraints:** bandwidth caps, SLA reporting.
 
 ---
 
-## Security & Fintech
+### Security and Fintech
 
-### 11) HSM‑adjacent signing gateway
-**Why:** auditable control in front of HSMs/KMS/Enclaves.  
-**Needs:** sign/verify provider; rate/role caps; immutable logs.  
+### 11) HSM-adjacent signing gateway
+**Business outcome:** Auditable control over high-value signing operations.
+**Why Cohesix:** policy-as-files, role-scoped tickets, append-only logs.
+**Integration:** sign/verify provider; rate and role caps.
 **Constraints:** FIPS modes, key custody.
 
 ### 12) OT/IT segmentation appliance
-**Why:** formally small boundary device; tickets instead of VPN sprawl.  
-**Needs:** dual‑NIC profile; policy compiler → AccessPolicy; ring telemetry.  
-**Constraints:** Audits, change control.
+**Business outcome:** Replace VPN sprawl with time-boxed, least-privilege access.
+**Why Cohesix:** tiny boundary device, tickets/leases, deterministic audit logs.
+**Integration:** dual-NIC profile; AccessPolicy compiler; telemetry rings.
+**Constraints:** audits, change control.
 
 ---
 
-## Science & Remote Ops
+### Science and Remote Ops
 
-### 13) Environmental science stations (polar, offshore)
-**Why:** limited power/links; need store‑and‑forward.  
-**Needs:** delay‑tolerant queues; trickle CAS updates; clock beacons.  
-**Constraints:** Power budget, severe weather.
+### 13) Environmental science stations (polar/offshore)
+**Business outcome:** Store-and-forward data collection under power and link limits.
+**Why Cohesix:** deterministic envelopes, append-only queues, replayable state.
+**Integration:** delay-tolerant queues; trickle updates; clock beacons.
+**Constraints:** power budget, severe weather.
 
 ### 14) HAPS/satellite ground gateway
-**Why:** deterministic, low‑memory control processes.  
-**Needs:** CCSDS/TCP bridge; very high‑latency backpressure tuning.  
-**Constraints:** Link budgets, long RTTs.
+**Business outcome:** Predictable control-plane operations under long RTT.
+**Why Cohesix:** low-memory deterministic control processes.
+**Integration:** CCSDS/TCP bridge; high-latency backpressure tuning.
+**Constraints:** link budgets, long RTT.
 
 ---
 
-## Developer & Platform Tooling
+### Developer and Platform Tooling
 
-### 15) “Secure OTA lab” appliance
-**Why:** demonstrate signed content → staged apply → A/B rollback with attestation.
-**Needs:** golden‑image verifier; CLI scripts; dashboards.
+### 15) Secure OTA lab appliance
+**Business outcome:** Demonstrable, auditable update lifecycle and rollback readiness for stakeholders.
+**Why Cohesix:** content-addressed updates, policy gating, audit logs.
+**Integration:** golden-image verifier; host updater for rollbacks; CLI scripts; dashboards.
+**Constraints:** demo reproducibility, change control.
 
 ### 16) Classroom OS/security labs
-**Why:** small, readable microkernel userland; 9P surfaces ideal for labs.
-**Needs:** mock transports; fuzz harnesses; trace viewer.
+**Business outcome:** Teachable microkernel and secure control-plane workflows.
+**Why Cohesix:** small, readable userland; file-shaped APIs for labs.
+**Integration:** mock transports; fuzz harnesses; trace viewer.
+**Constraints:** safe sandboxing, repeatable fixtures.
 
 ---
 
-## Control‑plane & Operations
+### Control-plane and Operations
 
-### 17) Fleet policy “GitOps” boundary appliance (policy‑as‑files)
-**Why:** desired state lives as files; Queen applies policies across many workers; drift is diffable file state.
-**Needs:** policy provider (`/policy/...`), declarative apply/rollback via CAS, diff views, signed policy bundles.
-**Constraints:** change control, audit trails, segregation of duties.
+### 17) Fleet policy GitOps boundary (policy-as-files)
+**Business outcome:** Signed, reviewable policy changes with diffable drift.
+**Why Cohesix:** policy namespaces, audit trails, deterministic control.
+**Integration:** policy bundle pipeline; diff views; approval workflow.
+**Constraints:** segregation of duties, audit trails.
 
-### 18) Vendor remote maintenance for OT without VPN sprawl
-**Why:** per‑vendor tickets scoped to specific files/verbs; time‑boxed leases; everything logged append‑only.
-**Needs:** “maintenance window” lease files, per‑path AccessPolicy, session recording into `/log`.
-**Constraints:** compliance audits, strict least‑privilege, offline fallback.
+### 18) Vendor remote maintenance without VPN sprawl
+**Business outcome:** Time-boxed vendor access with complete traceability.
+**Why Cohesix:** scoped tickets, lease files, append-only session logs.
+**Integration:** maintenance window leases; per-path AccessPolicy; `/log` session recording.
+**Constraints:** compliance audits, least-privilege, offline fallback.
 
-### 19) Air‑gapped update ferry (sneakernet CAS)
-**Why:** portable media imports content‑addressed bundles; deterministic verification; Queen stages and applies across offline fleets.
-**Needs:** CAS import/export tooling, bundle manifests, staged apply, resumable chunk validation, “quarantine” namespace.
-**Constraints:** no WAN, strict provenance, operational simplicity.
+### 19) Air-gapped update ferry (removable media + `/updates`)
+**Business outcome:** Provenance-preserving updates without WAN connectivity.
+**Why Cohesix:** content-addressed bundles under `/updates`, deterministic verification, audit trails.
+**Integration:** host-side cas-tool ingestion from removable media; resumable chunk validation.
+**Constraints:** strict provenance, operational simplicity.
 
-### 20) GPU lease broker for multi‑tenant edge (host CUDA ecosystem intact)
-**Why:** GPU resources are leased via files (e.g., `/gpu/<id>/lease`); Queen arbitrates while CUDA/NVML stay on the host.
-**Needs:** stronger lease semantics, quota accounting, per‑tenant telemetry rings, eviction/renew flows, host GPU bridge sidecar.
-**Constraints:** fair sharing, noisy neighbors, operator clarity.
+### 20) GPU lease broker for multi-tenant edge (host CUDA intact)
+**Business outcome:** Fair, auditable sharing of accelerators across tenants.
+**Why Cohesix:** file-modeled leases, ticketed requests, host-enforced policy.
+**Integration:** quota accounting; eviction/renew flows; `gpu-bridge-host` governance rules.
+**Constraints:** noisy-neighbor control, operator clarity.
 
-### 21) Model governance + provenance at the edge (attested models)
-**Why:** models are content-addressed artifacts; deployments are file references with attestations; rollback is a pointer swap; learning loops remain auditable.  
-**Needs:** model registry sidecar; CAS + signatures; `/proc/boot` provenance exposure; policy gating (“only signed by X”); LoRA adapter lineage tracking.  
-**Constraints:** regulated AI, audit, privacy boundaries.
+### 21) Model governance and provenance at the edge (attested models)
+**Business outcome:** Controlled model rollout with auditable provenance.
+**Why Cohesix:** content-addressed models under `/models` and `/gpu/models`, policy gating, `/proc/boot` provenance.
+**Integration:** model registry sidecar; signature verification; LoRA lineage tracking.
+**Constraints:** regulated AI, privacy boundaries.
 
-### 22) Ransomware‑resistant “control‑plane safe mode” for edge fleets
-**Why:** Cohesix stays a minimal boundary to keep telemetry and remote control alive even if the host OS is degraded.
-**Needs:** read‑only recovery namespace, immutable logs, minimal “rescue” worker, out‑of‑band operator attach flows.
+### 22) Ransomware-resistant control-plane safe mode
+**Business outcome:** Maintain telemetry and remote control even if host OS degrades.
+**Why Cohesix:** minimal boundary, read-only recovery namespace, immutable logs.
+**Integration:** rescue worker profile; out-of-band operator attach flow.
 **Constraints:** incident response procedures, tamper evidence.
 
-### 23) High‑integrity event recorder / flight‑data recorder for robotics
-**Why:** append‑only, bounded ring buffers with deterministic scheduling enable blame‑free postmortems via file replay.
-**Needs:** ring buffers with cursors, timestamping, export pipeline sidecar, compression outside the TCB.
-**Constraints:** safety certification, storage bounds, retention.
+### 23) High-integrity event recorder for robotics
+**Business outcome:** Blame-free postmortems with deterministic replay.
+**Why Cohesix:** append-only rings, bounded scheduling, file-based replay.
+**Integration:** export pipeline sidecar; compression outside the TCB.
+**Constraints:** safety certification, retention limits.
 
-### 24) Edge “data diode” style telemetry gateway (one‑way‑ish)
-**Why:** enforce outbound‑only semantics using tickets/policies and append‑only exports to reduce inbound attack surface.
-**Needs:** strict AccessPolicy modes, export‑only provider, batching/backpressure tuning, optional physical link constraints.
-**Constraints:** regulated environments, reliability under packet loss.
+### 24) Edge data-diode style telemetry gateway (one-way-ish)
+**Business outcome:** Outbound-only telemetry posture with minimal inbound surface.
+**Why Cohesix:** policy-enforced file verbs, append-only exports.
+**Integration:** export-only providers; batching/backpressure tuning.
+**Constraints:** regulated environments, packet loss tolerance.
 
-### 25) Kubernetes coexistence: Cohesix as the secure out‑of‑band orchestrator
-**Why:** Kubernetes stays the workload plane while Cohesix is the control‑plane boundary exposing file APIs for lifecycle, telemetry, GPU leasing, and updates.
-**Needs:** Kubernetes sidecar bridge on the host mapping K8s operations into `/queen/...` and `/shard/...` (legacy `/worker/...` when enabled), identity mapping, RBAC→tickets.
-**Constraints:** avoid duplicating K8s; clear separation of responsibilities.
+### 25) Kubernetes coexistence: secure out-of-band orchestrator
+**Business outcome:** Governance layer for lifecycle, telemetry, and GPU leasing without replacing Kubernetes.
+**Why Cohesix:** file APIs for control-plane actions; host-side bridge maps K8s to `/queen` and `/shard`.
+**Integration:** identity mapping; RBAC-to-ticket translation.
+**Constraints:** clear separation of responsibilities.
 
-### 26) Edge learning feedback loop (LoRA / PEFT, control-plane only)
-**Why:** edge fleets generate valuable performance signals, but training must remain off-device and out of the TCB. Cohesix enables safe feedback without becoming an ML runtime.  
-**Needs:** schema-tagged, bounded telemetry; model lifecycle pointers (`/gpu/models/active`); export namespaces for external training farms.  
-**Constraints:** no gradients or raw data in the VM; deterministic bandwidth and storage envelopes; clear separation between control plane and training plane.
+### 26) Edge learning feedback loop (LoRA/PEFT, control-plane only)
+**Business outcome:** Safe performance feedback for centralized training.
+**Why Cohesix:** schema-tagged, bounded telemetry; model lifecycle pointers.
+**Integration:** export namespaces for training farms; privacy filters.
+**Constraints:** no gradients or raw data in the VM; deterministic bandwidth/storage envelopes.
 
 <!-- ========================================================= -->
 <!-- USE_CASES.md — Visuals (GitHub-compatible Mermaid)         -->
@@ -186,7 +223,7 @@ Each signage hub is a hive with one Queen orchestrating multiple workers, all co
 <!-- ========================================================= -->
 
 ## Diagrams
-**Figure 1** Edge “Hive” deployment (Smart factory / Retail CV hub / MEC node)
+**Figure 1** Edge hive deployment (Smart factory / Retail CV hub / MEC node)
 
 ```mermaid
 flowchart LR
@@ -228,11 +265,11 @@ flowchart LR
   Q -->|"lease + job via /gpu/*"| WG
   WG -->|"append job descriptors<br/>/gpu/<id>/job"| Q
 
-  GPU -->|"publishes provider nodes<br/>/gpu/<id>/{info,ctl,job,status}"| Q
+  GPU -->|"publishes provider nodes<br/>/gpu/<id>/*"| Q
   JET -->|"CUDA workloads<br/>host-side"| GPU
 
   Q -->|"append-only logs<br/>/log/*"| Q
-  Q -->|"batch export / uplink<br/>(QUIC/HTTP outside TCB)"| STORE
+  Q -->|"batch export / uplink<br/>(protocol outside TCB)"| STORE
   STORE -->|"durable batch upload"| CLOUD
 
   classDef queen fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
@@ -293,38 +330,31 @@ sequenceDiagram
     ND-->>Cohsh: Rerror Permission
   end
 ```
-**Figure 3:** Air-gapped update ferry (CAS bundles + staged apply + audit)
+
+**Figure 3:** Air-gapped update ferry (removable media + `/updates` + audit)
 
 ```mermaid
 flowchart LR
-  USB["Portable media<br/>(CAS bundles)"]:::ext
+  USB["Portable media<br/>(update bundles)"]:::ext
   subgraph HIVE["Air-gapped site: Cohesix Hive"]
     Q["Queen<br/>(root-task + NineDoor)"]:::queen
-    QUAR["/quarantine/*<br/>(import + verify)"]:::path
-    CAS["/cas/*<br/>(content-addressed store)"]:::path
-    STAGE["/staging/*<br/>(staged apply)"]:::path
-    APPLY["/queen/ctl<br/>apply/rollback verbs"]:::path
+    UPD["/updates/<epoch>/*<br/>(manifest + chunks)"]:::path
     LOG["/log/*<br/>append-only audit"]:::path
-    W["Workers"]:::worker
   end
   OPS["Operator<br/>cohsh"]:::ext
+  HOST["Host cas-tool"]:::sidecar
 
-  USB -->|"import bundle"| QUAR
-  OPS -->|"cohsh attach"| Q
-  OPS -->|"verify manifest<br/>hash + signature"| QUAR
-  QUAR -->|"accepted -> promote"| CAS
-  OPS -->|"stage pointer swap"| STAGE
-  OPS -->|"apply staged state<br/>via /queen/ctl"| APPLY
-  APPLY -->|"validated internal actions"| Q
-  Q -->|"restart/notify workers"| W
-  Q -->|"write audit trail"| LOG
-  STAGE -->|"rollback is pointer swap"| CAS
+  USB -->|"ingest bundle"| HOST
+  HOST -->|"write manifest + chunks"| UPD
+  OPS -->|"inspect status"| UPD
+  Q -->|"audit writes"| LOG
 
   classDef queen fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
-  classDef worker fill:#f0fdf4,stroke:#15803d,stroke-width:1px;
   classDef path fill:#f8fafc,stroke:#334155,stroke-dasharray: 4 3;
   classDef ext fill:#ffffff,stroke:#334155,stroke-width:1px;
+  classDef sidecar fill:#fff7ed,stroke:#c2410c,stroke-width:1px;
 ```
+
 **Figure 4:** GPU lease broker for multi-tenant edge (CUDA stays on host)
 
 ```mermaid
@@ -364,7 +394,8 @@ sequenceDiagram
   ND-->>Tenant: RWRITE
   GPUB->>GPU: append status OK or ERR
 ```
-**Figure 5:** Model governance + provenance at the edge (attested models)
+
+**Figure 5:** Model governance and provenance at the edge (attested models)
 
 ```mermaid
 flowchart LR
@@ -372,8 +403,8 @@ flowchart LR
   subgraph HIVE["Cohesix Hive"]
     Q["Queen<br/>(root-task + NineDoor)"]:::queen
     POL["/policy/*<br/>(only signed by X)<br/>allowlist/denylist"]:::path
-    CAS["/cas/models/*<br/>(content addressed)"]:::path
-    DEP["/deploy/model<br/>(pointer to CAS hash)"]:::path
+    MODELS["/models/*<br/>(content addressed)"]:::path
+    DEP["/gpu/models/active<br/>(pointer to model id)"]:::path
     BOOT["/proc/boot<br/>(provenance, measurements)"]:::path
     LOG["/log/*<br/>append-only audit"]:::path
     W["Workers consume model ref<br/>(no unsigned blobs)"]:::worker
@@ -381,13 +412,13 @@ flowchart LR
 
   OPS["Operator / CI<br/>cohsh"]:::ext
 
-  REG -->|"publish signed model<br/>into CAS"| CAS
+  REG -->|"publish signed model"| MODELS
   OPS -->|"update policy bundle"| POL
-  OPS -->|"set deployment pointer<br/>(hash reference)"| DEP
-  DEP -->|"validated by policy<br/>then applied"| Q
+  OPS -->|"set active model"| DEP
+  DEP -->|"validated by policy"| Q
   Q -->|"audit writes"| LOG
   Q -->|"expose boot + model provenance"| BOOT
-  W -->|"fetch by hash<br/>verify via policy"| CAS
+  W -->|"fetch by id<br/>verify via policy"| MODELS
 
   classDef queen fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
   classDef worker fill:#f0fdf4,stroke:#15803d,stroke-width:1px;
@@ -395,14 +426,20 @@ flowchart LR
   classDef path fill:#f8fafc,stroke:#334155,stroke-dasharray: 4 3;
   classDef ext fill:#ffffff,stroke:#334155,stroke-width:1px;
 ```
+
 ---
 
-## Cross‑cutting capabilities that unlock many use cases
-- **9P scalability upgrades:** pipelining, batching (framed CBOR), sharded namespaces, ring buffers with cursors, short‑write backpressure.
-- **Tickets & leases:** signed capability tokens with TTL/scopes/rate‑limits; revocation.
-- **Content‑addressed updates (CAS):** Merkle manifests, delta packs, resumable fetches.
-- **Edge identity:** UEFI Secure Boot + TPM attest for workers; device keys and enrollment.
-- **Policy‑as‑files:** signed bundles, diff/drift views, atomic apply/rollback via CAS and policy namespaces.
-- **Leases everywhere:** GPU allocations, maintenance windows, and export budgets modeled as explicit lease files with renew/evict flows.
-- **Air‑gap workflows:** import/export of CAS bundles with quarantine/verify stages and resumable validation for offline fleets.
-- **Bridge sidecars:** Kubernetes bridge, model registry bridge, OT maintenance bridges to mirror external ecosystems without expanding the TCB.
+## Platform Primitives and Typical Integrations
+**As-built primitives (current releases):**
+- Secure9P namespace with AccessPolicy gating, tickets/leases, and deterministic error semantics.
+- Queen/Worker roles with bounded budgets and sharded worker telemetry under `/shard/<label>/worker/<id>/telemetry`.
+- Content-addressed updates under `/updates/*` and model registry exposure under `/models/*` and `/gpu/models/*` (when enabled).
+- Policy, audit, and replay namespaces (`/policy`, `/actions`, `/audit`, `/replay`) with append-only logs.
+- Host bridge namespaces `/host/*` and `/gpu/*` for ecosystem coexistence.
+
+**Typical integrations (environment-specific):**
+- Protocol bridges (MODBUS, CAN, DNP3, IEC-104, DICOM, CCSDS).
+- Host-side uplinks for batch export and analytics ingestion (protocol outside the TCB).
+- Model registry, GPU bridge, and identity workflows on the host.
+- UEFI Secure Boot and TPM attestation for device identity on target hardware.
+- Operator tooling that speaks `cohsh` or the shared client library.
