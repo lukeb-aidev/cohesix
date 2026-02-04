@@ -92,7 +92,7 @@ COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \\
 curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 ```
 
-## Wow: REST control + observability in 90 seconds (Milestone 24c)
+## REST control + observability in 90 seconds (Milestone 24c)
 These examples show the new scheduling/lease/export/policy control grammar and `/proc` observability surfaced through the REST gateway.
 Keep QEMU + hive-gateway running from the previous section.
 
