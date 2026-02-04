@@ -283,6 +283,7 @@ See below for detailed design, interfaces, and milestone tracking:
 - [docs/ROLES_AND_SCHEDULING.md](docs/ROLES_AND_SCHEDULING.md)
 - [docs/GPU_NODES.md](docs/GPU_NODES.md)
 - [docs/HOST_TOOLS.md](docs/HOST_TOOLS.md)
+- [docs/API_GUIDELINES.md](docs/API_GUIDELINES.md)
 - [docs/PYTHON_SUPPORT.md](docs/PYTHON_SUPPORT.md)
 - [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)
 - [docs/OPERATOR_WALKTHROUGH.md](docs/OPERATOR_WALKTHROUGH.md)
