@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Document Cohesix Python client usage and backends. -->
 <!-- Author: Lukas Bower -->
-# Cohesix Python Support (Milestone 24)
+# Cohesix Python Support (Milestone 24c)
 
 The `cohesix` Python client is a **thin, non-authoritative** wrapper over existing Cohesix
 console and filesystem semantics. It **does not introduce new control-plane behavior**; it
@@ -74,7 +74,7 @@ python3 tools/cohesix-py/examples/lease_run.py --rest http://127.0.0.1:8080
 ```
 2) Use the filesystem backend against that mount:
 ```bash
-python3 tools/cohesix-py/examples/lease_run.py --fs-root /tmp/coh-mount
+python3 tools/cohesix-py/examples/lease_run.py --mount-root /tmp/coh-mount
 ```
 
 ## Bounds and defaults
@@ -131,7 +131,7 @@ Why this matters: confirms the Python client is a thin wrapper over the live con
 Goal: operate via a mounted Secure9P namespace without TCP in the workflow.
 ```bash
 ./bin/coh --host 127.0.0.1 --port 31337 mount --at /tmp/coh-mount
-python3 tools/cohesix-py/examples/lease_run.py --fs-root /tmp/coh-mount
+python3 tools/cohesix-py/examples/lease_run.py --mount-root /tmp/coh-mount
 ```
 Why this matters: keeps control‑plane access file‑shaped and auditable even in restricted environments.
 
