@@ -287,6 +287,7 @@ See below for detailed design, interfaces, and milestone tracking:
 - [docs/PYTHON_SUPPORT.md](docs/PYTHON_SUPPORT.md)
 - [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)
 - [docs/OPERATOR_WALKTHROUGH.md](docs/OPERATOR_WALKTHROUGH.md)
+- [docs/USE_CASES.md](docs/USE_CASE.md)
 
 ---
 
