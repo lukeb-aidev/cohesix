@@ -20,7 +20,7 @@ Open-source releases are available in [releases/](releases/).
 - Apple Silicon M-series (macOS 26 host, Queen VM + host tools)
 - AWS g5g.xlarge (Queen VM, host tools, GPU integration, API integration)
 - AWS t4g.small (arm64 build host)
-- NVIDIA JetPack 6.2.1 (worker VM path)
+- NVIDIA JetPack 6.2.1 (worker VM path, GPU integration)
 
 **Models Tested**:
 - HuggingFaceTB/SmolVLM-500M-Instruct
