@@ -256,8 +256,34 @@ These are safe demo commands to prove the host tooling works. Live uploads requi
 ./bin/coh telemetry --host 127.0.0.1 --port 31337 pull --out ./out/telemetry
 ./bin/coh mount --mock --at /tmp/coh-mount
 ```
-Note: live FUSE mounts require `coh` built with `--features fuse` and a running QEMU instance:
+Policy gates: if policy gating is enabled (see `/policy/rules`), any `coh` action that writes `/queen/ctl`
+(`coh gpu lease`, `coh run`, `coh peft ...`) requires an approval queued in `/actions/queue`. Otherwise you'll
+see `ERR ECHO reason=policy ... EPERM`. Queue an approval with `cohsh`, then re-run the `coh` command:
+```bash
+./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen <<'COH'
+echo {"id":"approve-1","target":"/queen/ctl","decision":"approve"} > /actions/queue
+COH
+```
+Note: the TCP console is single-client; exit `cohsh` before running `coh`.
+
+Mount behavior: `coh mount` starts a long-running FUSE process and stays in the foreground. Use a second
+terminal to access the mount, or run it in the background:
+```bash
+./bin/coh mount --host 127.0.0.1 --port 31337 --at /tmp/coh-mount > /tmp/coh-mount.log 2>&1 &
+```
+Unmount with `fusermount -u /tmp/coh-mount` (Linux) or `umount /tmp/coh-mount` (macOS).
+
+Note: live FUSE mounts require a running QEMU instance, a FUSE runtime, and `coh` built with `--features fuse`.
+In this alpha, only the Linux release bundle ships with FUSE enabled; on macOS build from source with
+`--features fuse` and install macFUSE.
 `./bin/coh mount --host 127.0.0.1 --port 31337 --at /tmp/coh-mount`
+
+GPU visibility: `coh gpu list`/`lease` only see GPUs after the host bridge publishes `/gpu` (live:
+`./bin/gpu-bridge-host --publish ...`; mock: `./bin/gpu-bridge-host --mock --list`).
+Host visibility: anything reading `/host/*` requires `host-sidecar-bridge` to be running and publishing providers.
+Mock vs live: `--mock` uses an in-process backend and ignores the VM; live commands require QEMU + the TCP console.
+Mixing mock and live in the same session commonly leads to empty views or unexpected failures.
+`coh run` requires an active lease in `/gpu/<id>/lease` and will refuse to execute without one.
 
 PEFT roundtrip (mock, no VM required):
 ```bash

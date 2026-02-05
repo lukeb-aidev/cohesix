@@ -9,7 +9,7 @@ Host tools run outside the VM and project the same file/console semantics the VM
 **Build + locations**
 - Source tree: `scripts/cohesix-build-run.sh` stages host binaries under `out/cohesix/host-tools/`. It builds `cohsh` and `host-sidecar-bridge` with TCP support, plus `coh`, `gpu-bridge-host`, `cas-tool`, `hive-gateway`, and (when `cohesix-dev` is enabled) `swarmui`.
 - Source tree (manual): `cargo build -p <tool>` produces `target/<profile>/<tool>`.
-- Release bundles: host tools live in `bin/` and are built with the features required for live workflows (`coh` with `fuse,nvml`; `cohsh` and `host-sidecar-bridge` with TCP).
+- Release bundles: host tools live in `bin/`. The Linux release bundle ships `coh` with `fuse,nvml`; the macOS bundle omits `fuse` (build from source with `--features fuse` + macFUSE for live mounts). `cohsh` and `host-sidecar-bridge` include TCP support.
 
 All examples below use `./bin/<tool>` as the bundle layout. In the source tree, replace `./bin` with `out/cohesix/host-tools` (staged) or `target/<profile>` (manual).
 
@@ -65,9 +65,15 @@ Host bridge for mount, GPU leases, telemetry pulls, runtime breadcrumbs, PEFT li
 
 ### Notes
 - `coh mount` uses FUSE for live mounts. Build with `--features fuse` and ensure a FUSE runtime is installed (macFUSE on macOS, libfuse on Linux). `--mock` skips the mount check.
+- `coh mount` is long-running and stays in the foreground to serve the mount. Use a second terminal for access or run it in the background (`... &`) and unmount with `fusermount -u` (Linux) or `umount` (macOS).
+- `coh gpu list`/`lease` only see GPUs after `/gpu` is published by `gpu-bridge-host` (live: `--publish`; mock: `--mock --list`).
+- Reading `/host/*` requires `host-sidecar-bridge` to be running and publishing providers.
+- Mock vs live: `--mock` uses an in-process backend and ignores the VM; live commands require QEMU + the TCP console. Mixing mock and live in the same session commonly leads to empty views or unexpected failures.
 - `coh gpu --nvml` seeds the mock backend from NVML and requires `--features nvml` (it is mutually exclusive with `--mock`).
 - `coh run` executes a host command locally after validating a lease and appends bounded breadcrumbs to `/gpu/<id>/status`.
+- `coh run` requires an active lease in `/gpu/<id>/lease` and will refuse to execute without one.
 - Policy enforcement is manifest-driven; `COH_POLICY` (or `out/coh_policy.toml`) must hash-match the compiled defaults.
+- If policy gating is enabled (see `/policy/rules`), writes to `/queen/ctl` require approvals queued in `/actions/queue`. `coh gpu lease`, `coh run`, and `coh peft ...` will fail with `ERR ECHO reason=policy ... EPERM` until an approval is queued.
 - Auth token fallback order is `--auth-token`, `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`.
 - `peft import --publish` (alias `--refresh-gpu-models`) refreshes `/gpu/models` in the live VM.
 
