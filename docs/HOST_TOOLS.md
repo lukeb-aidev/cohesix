@@ -283,3 +283,70 @@ In `cohsh` (optional):
 attach queen
 ls /updates
 ```
+
+### 7) Hive gateway monitoring + API control
+Goal: observe host telemetry (NVML-backed GPU snapshots plus systemd, k8s, and docker) over HTTP and submit control actions through the REST projection.
+Why this matters: demonstrates that monitoring and control stay aligned with the same file and console semantics.
+
+Real-world flow (snapshot + REST read):
+```bash
+./qemu/run.sh
+
+# Publish a one-shot NVML GPU snapshot into /gpu (do not keep this attached).
+./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
+
+# Publish a one-shot host telemetry snapshot into /host (do not keep this attached).
+./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme \
+  --provider systemd --provider k8s --provider docker --provider nvidia
+
+# Start the REST gateway (sole console client) and read the published snapshot.
+COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+  COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
+  ./bin/hive-gateway
+```
+In another terminal:
+```bash
+# List top-level providers under /host.
+curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/host' | jq .
+
+# Read systemd unit status (example unit).
+curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/host/systemd/cohesix-agent.service/status&max_bytes=256' | jq .
+
+# Read a Kubernetes node status (example node id).
+curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/host/k8s/node/node-1/status&max_bytes=256' | jq .
+
+# Read Docker and NVML provider status.
+curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/host/docker/status&max_bytes=256' | jq .
+curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/host/nvidia/gpu/0/status&max_bytes=256' | jq .
+
+# Read NVML-backed GPU info published by gpu-bridge-host.
+curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/gpu/GPU-0/info&max_bytes=2048' | jq .
+```
+
+Real-world API control (lease + schedule + policy):
+```bash
+# Enqueue a GPU worker schedule entry.
+curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
+  -H 'Content-Type: application/json' \
+  -d '{"path":"/queen/schedule/ctl","line":"{\"id\":\"sched-42\",\"role\":\"worker-gpu\",\"priority\":3,\"ticks\":5,\"budget_ms\":120}"}'
+
+# Grant and preempt a lease.
+curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
+  -H 'Content-Type: application/json' \
+  -d '{"path":"/queen/lease/ctl","line":"{\"op\":\"grant\",\"id\":\"lease-42\",\"subject\":\"queen\",\"resource\":\"gpu0\",\"ttl_s\":300,\"priority\":5}"}'
+curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
+  -H 'Content-Type: application/json' \
+  -d '{"path":"/queen/lease/ctl","line":"{\"op\":\"preempt\",\"id\":\"lease-42\",\"reason\":\"maintenance\"}"}'
+
+# Apply and roll back a policy revision.
+curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
+  -H 'Content-Type: application/json' \
+  -d '{"path":"/policy/ctl","line":"{\"op\":\"apply\",\"id\":\"rev-2026-02-05\",\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}"}'
+curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
+  -H 'Content-Type: application/json' \
+  -d '{"path":"/policy/ctl","line":"{\"op\":\"rollback\",\"id\":\"rev-2026-02-05\"}"}'
+```
+
+Notes:
+- The console is single-client. Use `host-sidecar-bridge` to publish snapshots, then exit it before running `hive-gateway`.
+- For continuous telemetry, re-run the snapshot publish on a timer or use `host-sidecar-bridge --watch` by itself and attach the gateway afterward.
