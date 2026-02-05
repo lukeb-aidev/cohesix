@@ -4,9 +4,36 @@
 <!-- Author: Lukas Bower -->
 # GPU Nodes — Out-of-VM Acceleration Strategy
 
+**At a glance**
+- All GPU discovery, scheduling, and execution happen **outside** the VM on the host.
+- The VM sees GPUs only through the `/gpu/*` namespace published by `gpu-bridge-host`.
+- `worker-gpu` reads tickets and leases; it never touches device nodes or CUDA/NVML.
+- `/gpu/models` and `/gpu/telemetry/schema.json` are **absent** until a publish completes.
+
+**Related docs**
+- `docs/INTERFACES.md` — canonical `/gpu/*` and `/queen/ctl` schemas.
+- `docs/ROLES_AND_SCHEDULING.md` — role-to-namespace rules.
+- `docs/HOST_TOOLS.md` — host bridge and publish workflows.
+- `docs/SECURE9P.md` — transport invariants and bounds.
+
 ## 1. Rationale
 CUDA/NVML stacks are large and platform-specific. Keeping them outside the seL4 guest (whether running on QEMU or physical UEFI hardware) preserves determinism and minimises the trusted computing base (TCB). The Cohesix instance interacts with GPUs exclusively through a capability-guarded 9P namespace mirrored by host workers.
 GPU workers (`worker-gpu`) are another worker type under the hive’s Queen, not standalone services.
+
+### Operational dependencies (live)
+- QEMU must be running and the TCP console reachable.
+- The host GPU bridge must publish snapshots to `/gpu/bridge/ctl`.
+- If policy gating is enabled, approvals may be required for `/queen/ctl` writes.
+- Lifecycle gates can deny host publishes when the system is not `ONLINE` or `DEGRADED`.
+
+Quick validation:
+```bash
+./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
+./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen <<'COH'
+ls /gpu
+cat /gpu/bridge/status
+COH
+```
 
 ## 2. Model Lifecycle Surfaces (Milestone 6a)
 - Namespace:
@@ -51,7 +78,7 @@ sequenceDiagram
 | `/gpu/telemetry/schema.json` | Telemetry schema descriptor (read-only). |
 
 Note:
-- `/gpu/models` and `/gpu/telemetry/schema.json` appear only after a host GPU bridge publish; before that `ls /gpu/models` returns `ERR LS reason=policy detail=invalid-path`.
+- `/gpu/models` and `/gpu/telemetry/schema.json` appear only after a host GPU bridge publish; before that `ls /gpu/models` returns `ERR` with `invalid-path`.
 
 ## 5. Lease Model
 ```rust

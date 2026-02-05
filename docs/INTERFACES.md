@@ -7,6 +7,36 @@
 
 The queen/worker verbs and `/queen/ctl` schema form the hive control API: one Queen instance uses these interfaces to control many workers over the shared Secure9P namespace.
 
+This document is **canonical** for control-plane interfaces. Snippets marked `coh-rtc` are generated from
+`configs/root_task.toml` and must not be edited by hand. If code diverges from this document, update IR,
+regenerate artifacts, and then update docs/tests in the same change.
+
+**Related docs**
+- `docs/SECURE9P.md` — transport invariants and AccessPolicy ordering.
+- `docs/ROLES_AND_SCHEDULING.md` — role-to-namespace rules.
+- `docs/HOST_TOOLS.md` — host tool semantics and interdependencies.
+- `docs/API_GUIDELINES.md` — REST gateway scope and mapping.
+- `docs/USERLAND_AND_CLI.md` — CLI grammar and bounds.
+
+**At a glance**
+- Control files: `/queen/ctl` (3), `/queen/*/ctl` (3a–3e), `/policy/ctl` (10).
+- Observability: `/proc/*` (6, 6a).
+- Host bridges: `/gpu/*` (7), `/host/*` (8).
+- Updates/models: `/updates/*`, `/models/*` (9).
+- Console protocol: `cohsh` framing and verbs (13).
+
+## 0. Stability & Versioning
+- Interface changes that alter console grammar, NineDoor error codes, or `/proc` formats are **breaking**.
+- Breaking changes require updated CLI fixtures, regenerated manifest artifacts, and a schema version bump.
+- Feature-gated paths may be absent if disabled in the manifest; missing paths should be treated as gate state,
+  not client bugs.
+
+Interface invariants:
+- All control writes are append-only; offsets are ignored or rejected for control files.
+- All reads are bounded by manifest limits; clients must request within the declared `max_bytes`/`msize` budget.
+- Paths and tokens are validated as UTF-8 with no NULs and no `..` traversal.
+- `ERR` responses are deterministic and must be treated as **no side effects** unless explicitly documented.
+
 **Figure 1.** Sequence diagram
 <!-- INTERFACES.md Sequence Diagram (COMPLETE + white background) -->
 ```mermaid
@@ -178,6 +208,7 @@ Path: `/queen/ctl` (append-only JSON lines)
 - GPU spawns require the host bridge to publish `/gpu/<id>` entries via `install_gpu_nodes`; lease issuance is mirrored to `/log/queen.log` and `/gpu/<id>/ctl`.
 - Optional `priority` fields raise scheduling weight on the host bridge when multiple leases compete.
 - Operators typically exercise these verbs via `cohsh`, and any GUI client is expected to speak the same protocol.
+- If policy gating is enabled (`/policy/rules` present), writes to `/queen/ctl` require approvals queued in `/actions/queue`.
 
 ## 3a. Node Lifecycle Control
 Path: `/queen/lifecycle/ctl` (append-only, queen-only)

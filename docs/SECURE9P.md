@@ -4,10 +4,27 @@
 <!-- Author: Lukas Bower -->
 # Secure9P Policy & Implementation Guide
 
+Secure9P is the **only control-plane IPC surface** in Cohesix. It implements a bounded 9P2000.L
+codec, a deterministic session engine, and transport adapters used by NineDoor. This guide
+defines the **non-negotiable invariants** and **ordering guarantees** the implementation must
+uphold so operator-facing tools (`cohsh`, `coh`, `hive-gateway`) remain protocol-faithful.
+
+**Related docs**
+- `docs/INTERFACES.md` — canonical schemas and path bounds.
+- `docs/ROLES_AND_SCHEDULING.md` — role-to-namespace rules.
+- `docs/ARCHITECTURE.md` — console and NineDoor flow.
+- `docs/USERLAND_AND_CLI.md` — command grammar and bounds.
+- `docs/HOST_TOOLS.md` — host tool semantics and interdependencies.
+
 ## 1. Scope
 Secure9P provides the 9P2000.L codec, core request dispatcher, and transport adapters used by NineDoor. It must remain usable in `no_std + alloc` environments and cannot depend on POSIX APIs.
 It is the sole control-plane IPC surface; the TCP console path reuses the same NineDoor framing with a minimal 9P-style `attach`/auth handshake (role, optional ticket, idle/auth timeouts, reconnect-friendly) layered alongside the always-on PL011 root console rather than replacing it. The TCP console uses Secure9P-style length-prefixed frames (4-byte little-endian length including the header) to carry each console line.
 Secure9P sessions present the per-hive and per-role view into the namespace so queen and worker mounts expose different slices of the hive.
+
+**Non-goals**
+- No POSIX facade or compatibility layer.
+- No in-VM TCP listeners other than the authenticated console.
+- No protocol extensions beyond 9P2000.L.
 
 ## 2. Layering
 ### Crate Structure
@@ -44,6 +61,14 @@ nine-door           // Filesystem providers, role enforcement, logging
 - Enforce manifest-driven tag windows and batch sizing: `secure9p.tags_per_session` caps in-flight tags, `secure9p.batch_frames` caps frames per batch, and the total bytes in a batch must not exceed the negotiated `msize`.
 - Attack surface constraints: fixed `msize` (≤ 8192) with no wildcard traversal; heap allocations are bounded by negotiated message sizes with no dynamic growth in the validator/dispatcher; walks validate every component (length, UTF-8, no `/` or `..`) and cap depth at 8; codec paths are deterministic and bounded; root-task event pump keeps dispatch non-blocking.
 
+**Validation order (must remain stable)**
+1. Frame length and `msize` guard.
+2. Codec decode + UTF-8 validation.
+3. Path normalisation + walk depth guard.
+4. AccessPolicy checks (role/ticket).
+5. Provider execution (filesystem semantics).
+6. Deterministic response encoding.
+
 ## 4. Access Policy Hooks
 ```rust
 pub trait AccessPolicy {
@@ -57,6 +82,10 @@ pub trait AccessPolicy {
 - Role-to-namespace rules follow `docs/ROLES_AND_SCHEDULING.md` (queen = full tree, worker-heartbeat = `/proc/boot`, `/shard/<label>/worker/<id>/telemetry`, `/log/queen.log` RO, worker-gpu future `/gpu/<lease>`), and capabilities are session-scoped tickets negotiated during `attach` (single attach per `cohsh` session with optional ticket injection before remaining bound to the resulting mounts). Legacy `/worker/<id>/telemetry` aliases are available only when `sharding.legacy_worker_alias = true`.
 - The AccessPolicy for queen versus worker roles enables the Queen’s ability to orchestrate many workers by controlling access to mount points and control files such as `/queen/ctl`, `/shard/<label>/worker/<id>/telemetry` (legacy `/worker/<id>/telemetry` when enabled), and `/gpu/*`.
 - AccessPolicy evaluation occurs after path validation and normalisation by secure9p-core; providers never receive unvalidated or unbounded paths.
+
+**Common refusal reasons**
+- `AccessError::Denied` -> `Rerror(EPERM)` for unauthorized path/mode.
+- `AccessError::Closed` -> `Rerror(Closed)` for revoked sessions.
 
 ## 5. Testing Matrix
 | Suite | Coverage |
@@ -77,10 +106,18 @@ pub trait AccessPolicy {
 - Pipelining metrics track queue depth, back-pressure refusals, and short-write retries; NineDoor surfaces these counters for `/proc/9p/*` providers in Milestone 10+.
 - Namespaces honour Secure9P invariants: `/queen/ctl` is append-only; `/log/*.log` entries are append-only files; `/proc` hosts `boot` plus per-worker trace files without write or traversal backdoors; `/shard/<label>/worker/<id>` directories expose append-only telemetry for the matching worker (legacy `/worker/<id>` when enabled); `/gpu/<id>/` nodes are published by the host bridge per `docs/GPU_NODES.md` and remain read/write only to authorised GPU roles. Walks never permit `..`, no implicit wildcards exist, and depth stays bounded by the codec guard.
 
-## 8. Cache-Safe DMA for NineDoor Surfaces
+## 8. Error Mapping (Operator Expectations)
+- `Rerror(TooBig)`: frame/batch exceeds negotiated `msize`.
+- `Rerror(Invalid)`: tag reuse or malformed request.
+- `Rerror(Busy)`: back-pressure due to batch or tag window limits.
+- `Rerror(Closed)`: session revoked or double-clunk.
+
+These map 1:1 to `cohsh`/`coh` errors; no hidden translation layer exists.
+
+## 9. Cache-Safe DMA for NineDoor Surfaces
 NineDoor exposes telemetry and GPU file surfaces that ultimately map onto shared DMA buffers. On AArch64, cache coherence for these shared regions must be enforced explicitly using the kernel VSpace cache operations (`Clean`, `Invalidate`, `CleanInvalidate`, `Unify Instruction`) so the host and VM observe deterministic data. The manifest cache fields (`cache.kernel_ops`, `cache.dma_clean`, `cache.dma_invalidate`, `cache.unify_instructions`) define the contract, and `coh-rtc` rejects configurations that request DMA cache maintenance without kernel cache ops enabled. Root-task emits audit lines around each DMA hand-off so cache flush/invalidate ordering is provable in serial logs without adding new protocols.
 
-## 9. Pipelining & Batching Controls
+## 10. Pipelining & Batching Controls
 - `secure9p.tags_per_session` bounds in-flight tags per session. Tag reuse before a response yields deterministic `Rerror(Invalid)` or `Rerror(Busy)` depending on the refusal class.
 - `secure9p.batch_frames` bounds the number of frames accepted per batch; batches above this limit return deterministic back-pressure `Rerror(Busy)` with an audit line.
 - Total batch bytes must stay ≤ negotiated `msize`; violations return `Rerror(TooBig)` without affecting single-request semantics.
@@ -89,7 +126,7 @@ NineDoor exposes telemetry and GPU file surfaces that ultimately map onto shared
   - `retry` — bounded exponential back-off using a fixed retry budget (currently 3 attempts with a 5ms base delay).
 - Queue depth limits are the minimum of `tags_per_session` and `batch_frames`, ensuring batching never exceeds manifest-controlled concurrency.
 
-## 10. Future Enhancements
+## 11. Future Enhancements
 - Opportunistic support for 9P lock extensions once namespace bind/mount stabilises.
 - Optional TLS termination in host tools prior to entering the development VM transport adapter; the same boundary applies when the transport targets physical hardware.
 - Status (Build Plan ≤7c): root and TCP consoles run concurrently; Secure9P namespaces and role-aware mounts are live; upcoming milestones will extend worker-side bind/mount, flesh out worker/GPU namespace detail, and wire GPU lease paths from host bridge into `/gpu/<id>`.

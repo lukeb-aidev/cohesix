@@ -28,6 +28,11 @@ This document is the adoption guide for Cohesix APIs introduced in Milestone 24c
 - Namespaces are manifest-gated; missing paths usually indicate a disabled feature gate rather than a client bug.
 - All control writes are append-only; retries must send a full JSON line, not partial fragments.
 
+## Auth and Role Context
+- The REST gateway attaches to the console using `COH_AUTH_TOKEN` and the role in `COH_ROLE` (typically `queen`).
+- REST clients inherit the gateway role’s namespace. There is no per-request ticket in the REST surface.
+- Policy gates still apply to REST writes; approvals must be queued in `/actions/queue` when required.
+
 ## API Surface Map
 | Surface | Endpoint or Path | Semantics |
 | --- | --- | --- |
