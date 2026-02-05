@@ -145,89 +145,6 @@ Discover GPUs on the host (NVML or mock) and emit the `/gpu` namespace snapshot 
 - `--interval-ms` repeats publish in a loop; omit to send a single snapshot.
 - `--registry` points at a host model registry root to populate `/gpu/models`.
 
-## Policy & Dependency Diagrams
-These diagrams summarize the policy gating and host-tool interdependencies that most often surprise new users.
-
-Figure 1: Policy-gated control writes (`/queen/ctl`)
-```mermaid
-flowchart TD
-  A["coh / cohsh / hive-gateway"] --> B["TCP console (single client)"]
-  B --> C["NineDoor Secure9P"]
-  C --> D{"Policy gating enabled?<br/>/policy/rules present"}
-  D -- "No" --> E["Write /queen/ctl accepted"]
-  D -- "Yes" --> F{"Approval queued?<br/>/actions/queue"}
-  F -- "No" --> G["ERR ECHO reason=policy (EPERM)"]
-  F -- "Yes" --> H["Write accepted<br/>approval consumed (audit if enabled)"]
-  H --> I["Queen applies action<br/>(spawn/lease/export/etc.)"]
-```
-
-Figure 2: Policy control apply/rollback (`/policy/ctl`)
-```mermaid
-flowchart TD
-  A["cohsh / hive-gateway / REST client"] --> B["ECHO /policy/ctl (apply/rollback)"]
-  B --> C["Policy control validation<br/>(bounds, schema, hash)"]
-  C --> D["Policy state updated"]
-  D --> E["/policy/preflight/* reflects queued/consumed approvals"]
-  D --> F["/proc/pressure/policy exposes pressure"]
-  D --> G["/policy/rules remains manifest-derived"]
-```
-
-Figure 3: GPU + host visibility dependencies (live vs mock)
-```mermaid
-flowchart TD
-  subgraph Live["Live (QEMU + TCP console)"]
-    L1["QEMU running (TCP console)"] --> L2["gpu-bridge-host --publish"]
-    L2 --> L3["/gpu namespace populated"]
-    L3 --> L4["coh gpu list/lease"]
-    L4 --> L5["coh run requires active lease<br/>/gpu/<id>/lease"]
-    L1 --> L6["host-sidecar-bridge --watch/--provider ..."]
-    L6 --> L7["/host namespace populated"]
-    L7 --> L8["cohsh / coh / hive-gateway reads /host/*"]
-  end
-  subgraph Mock["Mock (in-process backend)"]
-    M1["coh --mock / cohsh --transport mock"] --> M2["No QEMU or TCP console used"]
-    M2 --> M3["gpu-bridge-host --mock --list<br/>drives mock GPU data"]
-  end
-```
-
-## Glossary
-- `ACK/ERR/END`: Console response grammar. `ACK` = command accepted; `ERR` = refused with reason; `END` = end of a stream or listing.
-- `Actions Queue` (`/actions/queue`): Append-only approvals/denials that satisfy policy gating for control writes.
-- `Audit`: Optional policy/decision logging (when `/audit` is enabled).
-- `Auth Token`: Console authentication token (for example `COH_AUTH_TOKEN`). Distinct from role tickets.
-- `Backpressure`: Deterministic refusal when a bounded buffer or queue is full.
-- `Bounds`: Manifest-defined hard limits on bytes, entries, and walk depth enforced by NineDoor.
-- `Bridge` (host-side): Host tools that publish external state into the VM (`gpu-bridge-host`, `host-sidecar-bridge`).
-- `Console`: The single-client TCP control channel used by `cohsh`, `coh`, `hive-gateway`, `swarmui`.
-- `Control Write`: An `ECHO` to a control path (e.g., `/queen/ctl`, `/policy/ctl`) that triggers actions.
-- `Cohesix Hive`: Queen + workers model; queen orchestrates, workers emit telemetry or mirror GPU lease state.
-- `COH`: Host bridge CLI for GPU, telemetry, mounts, PEFT, and runtime checks.
-- `COHSH`: Operator shell for direct console control and scripting.
-- `Deterministic`: Behaviors are bounded and replayable; same input yields same output.
-- `ECHO`: Console write verb used for control files; append-only to control paths.
-- `EPERM`: Permission error; in Cohesix often means policy gate denied the write.
-- `FUSE`: Filesystem in Userspace; used by `coh mount` to expose Secure9P namespaces.
-- `GPU Lease`: A time-bounded claim on a GPU resource recorded under `/gpu/<id>/lease`.
-- `Host Providers`: Source of `/host/*` data (systemd, k8s, docker, nvidia) via `host-sidecar-bridge`.
-- `IR/Manifest`: The compiler-generated truth of system behavior (for example `root_task.toml`).
-- `Mock Mode`: In-process backend; no VM or TCP console required.
-- `Mount`: FUSE view of Secure9P paths; long-running process.
-- `NineDoor`: Userspace 9P server in the VM enforcing bounds and policy.
-- `Policy Gate`: Manifest-enabled rule set requiring approvals for sensitive writes.
-- `Policy Rules` (`/policy/rules`): Manifest-derived policy snapshot; read-only.
-- `Policy Control` (`/policy/ctl`): Append-only control file for apply/rollback.
-- `Policy Preflight` (`/policy/preflight/*`): Observability into queued vs consumed approvals.
-- `Pressure` (`/proc/pressure/*`): Read-only counters indicating resource pressure (policy queue, ingest, etc.).
-- `QEMU` (aarch64/virt): Reference dev/CI VM target.
-- `Role Ticket`: Role-scoped capability token minted for queen/worker roles.
-- `Secure9P`: File-shaped control plane; all interactions are paths and bounded reads/writes.
-- `Telemetry`: Append-only worker data stored under `/worker/*` or `/shard/*/worker/*`.
-- `Trace/Replay`: Deterministic logs and snapshots used for UI replay/testing.
-- `UI Providers`: Manifest-gated observability nodes under `/proc`.
-- `Worker` (heart/gpu): Child roles; heart emits telemetry, gpu mirrors lease state.
-- Auth token fallback order is `--auth-token`, `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`.
-- Live publish installs `/gpu/<id>/*`, `/gpu/models/*`, and `/gpu/telemetry/schema.json` inside the VM.
-
 ## host-sidecar-bridge
 ### Purpose
 Publish host-side providers into `/host` (systemd, k8s, docker, nvidia, jetson, net) via Secure9P for policy/CI validation and live telemetry snapshots.
@@ -437,3 +354,86 @@ curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
 Notes:
 - The console is single-client. Use `host-sidecar-bridge` to publish snapshots, then exit it before running `hive-gateway`.
 - For continuous telemetry, re-run the snapshot publish on a timer or use `host-sidecar-bridge --watch` by itself and attach the gateway afterward.
+
+## Policy & Dependency Diagrams
+These diagrams summarize the policy gating and host-tool interdependencies that most often surprise new users.
+
+Figure 1: Policy-gated control writes (`/queen/ctl`)
+```mermaid
+flowchart TD
+  A["coh / cohsh / hive-gateway"] --> B["TCP console (single client)"]
+  B --> C["NineDoor Secure9P"]
+  C --> D{"Policy gating enabled?<br/>/policy/rules present"}
+  D -- "No" --> E["Write /queen/ctl accepted"]
+  D -- "Yes" --> F{"Approval queued?<br/>/actions/queue"}
+  F -- "No" --> G["ERR ECHO reason=policy (EPERM)"]
+  F -- "Yes" --> H["Write accepted<br/>approval consumed (audit if enabled)"]
+  H --> I["Queen applies action<br/>(spawn/lease/export/etc.)"]
+```
+
+Figure 2: Policy control apply/rollback (`/policy/ctl`)
+```mermaid
+flowchart TD
+  A["cohsh / hive-gateway / REST client"] --> B["ECHO /policy/ctl (apply/rollback)"]
+  B --> C["Policy control validation<br/>(bounds, schema, hash)"]
+  C --> D["Policy state updated"]
+  D --> E["/policy/preflight/* reflects queued/consumed approvals"]
+  D --> F["/proc/pressure/policy exposes pressure"]
+  D --> G["/policy/rules remains manifest-derived"]
+```
+
+Figure 3: GPU + host visibility dependencies (live vs mock)
+```mermaid
+flowchart TD
+  subgraph Live["Live (QEMU + TCP console)"]
+    L1["QEMU running (TCP console)"] --> L2["gpu-bridge-host --publish"]
+    L2 --> L3["/gpu namespace populated"]
+    L3 --> L4["coh gpu list/lease"]
+    L4 --> L5["coh run requires active lease<br/>/gpu/<id>/lease"]
+    L1 --> L6["host-sidecar-bridge --watch/--provider ..."]
+    L6 --> L7["/host namespace populated"]
+    L7 --> L8["cohsh / coh / hive-gateway reads /host/*"]
+  end
+  subgraph Mock["Mock (in-process backend)"]
+    M1["coh --mock / cohsh --transport mock"] --> M2["No QEMU or TCP console used"]
+    M2 --> M3["gpu-bridge-host --mock --list<br/>drives mock GPU data"]
+  end
+```
+
+## Glossary
+- `ACK/ERR/END`: Console response grammar. `ACK` = command accepted; `ERR` = refused with reason; `END` = end of a stream or listing.
+- `Actions Queue` (`/actions/queue`): Append-only approvals/denials that satisfy policy gating for control writes.
+- `Audit`: Optional policy/decision logging (when `/audit` is enabled).
+- `Auth Token`: Console authentication token (for example `COH_AUTH_TOKEN`). Distinct from role tickets.
+- `Backpressure`: Deterministic refusal when a bounded buffer or queue is full.
+- `Bounds`: Manifest-defined hard limits on bytes, entries, and walk depth enforced by NineDoor.
+- `Bridge` (host-side): Host tools that publish external state into the VM (`gpu-bridge-host`, `host-sidecar-bridge`).
+- `Console`: The single-client TCP control channel used by `cohsh`, `coh`, `hive-gateway`, `swarmui`.
+- `Control Write`: An `ECHO` to a control path (e.g., `/queen/ctl`, `/policy/ctl`) that triggers actions.
+- `Cohesix Hive`: Queen + workers model; queen orchestrates, workers emit telemetry or mirror GPU lease state.
+- `COH`: Host bridge CLI for GPU, telemetry, mounts, PEFT, and runtime checks.
+- `COHSH`: Operator shell for direct console control and scripting.
+- `Deterministic`: Behaviors are bounded and replayable; same input yields same output.
+- `ECHO`: Console write verb used for control files; append-only to control paths.
+- `EPERM`: Permission error; in Cohesix often means policy gate denied the write.
+- `FUSE`: Filesystem in Userspace; used by `coh mount` to expose Secure9P namespaces.
+- `GPU Lease`: A time-bounded claim on a GPU resource recorded under `/gpu/<id>/lease`.
+- `Host Providers`: Source of `/host/*` data (systemd, k8s, docker, nvidia) via `host-sidecar-bridge`.
+- `IR/Manifest`: The compiler-generated truth of system behavior (for example `root_task.toml`).
+- `Mock Mode`: In-process backend; no VM or TCP console required.
+- `Mount`: FUSE view of Secure9P paths; long-running process.
+- `NineDoor`: Userspace 9P server in the VM enforcing bounds and policy.
+- `Policy Gate`: Manifest-enabled rule set requiring approvals for sensitive writes.
+- `Policy Rules` (`/policy/rules`): Manifest-derived policy snapshot; read-only.
+- `Policy Control` (`/policy/ctl`): Append-only control file for apply/rollback.
+- `Policy Preflight` (`/policy/preflight/*`): Observability into queued vs consumed approvals.
+- `Pressure` (`/proc/pressure/*`): Read-only counters indicating resource pressure (policy queue, ingest, etc.).
+- `QEMU` (aarch64/virt): Reference dev/CI VM target.
+- `Role Ticket`: Role-scoped capability token minted for queen/worker roles.
+- `Secure9P`: File-shaped control plane; all interactions are paths and bounded reads/writes.
+- `Telemetry`: Append-only worker data stored under `/worker/*` or `/shard/*/worker/*`.
+- `Trace/Replay`: Deterministic logs and snapshots used for UI replay/testing.
+- `UI Providers`: Manifest-gated observability nodes under `/proc`.
+- `Worker` (heart/gpu): Child roles; heart emits telemetry, gpu mirrors lease state.
+- Auth token fallback order is `--auth-token`, `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`.
+- Live publish installs `/gpu/<id>/*`, `/gpu/models/*`, and `/gpu/telemetry/schema.json` inside the VM.
