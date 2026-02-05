@@ -189,6 +189,42 @@ flowchart TD
     M2 --> M3["gpu-bridge-host --mock --list<br/>drives mock GPU data"]
   end
 ```
+
+## Glossary
+- `ACK/ERR/END`: Console response grammar. `ACK` = command accepted; `ERR` = refused with reason; `END` = end of a stream or listing.
+- `Actions Queue` (`/actions/queue`): Append-only approvals/denials that satisfy policy gating for control writes.
+- `Audit`: Optional policy/decision logging (when `/audit` is enabled).
+- `Auth Token`: Console authentication token (for example `COH_AUTH_TOKEN`). Distinct from role tickets.
+- `Backpressure`: Deterministic refusal when a bounded buffer or queue is full.
+- `Bounds`: Manifest-defined hard limits on bytes, entries, and walk depth enforced by NineDoor.
+- `Bridge` (host-side): Host tools that publish external state into the VM (`gpu-bridge-host`, `host-sidecar-bridge`).
+- `Console`: The single-client TCP control channel used by `cohsh`, `coh`, `hive-gateway`, `swarmui`.
+- `Control Write`: An `ECHO` to a control path (e.g., `/queen/ctl`, `/policy/ctl`) that triggers actions.
+- `Cohesix Hive`: Queen + workers model; queen orchestrates, workers emit telemetry or mirror GPU lease state.
+- `COH`: Host bridge CLI for GPU, telemetry, mounts, PEFT, and runtime checks.
+- `COHSH`: Operator shell for direct console control and scripting.
+- `Deterministic`: Behaviors are bounded and replayable; same input yields same output.
+- `ECHO`: Console write verb used for control files; append-only to control paths.
+- `EPERM`: Permission error; in Cohesix often means policy gate denied the write.
+- `FUSE`: Filesystem in Userspace; used by `coh mount` to expose Secure9P namespaces.
+- `GPU Lease`: A time-bounded claim on a GPU resource recorded under `/gpu/<id>/lease`.
+- `Host Providers`: Source of `/host/*` data (systemd, k8s, docker, nvidia) via `host-sidecar-bridge`.
+- `IR/Manifest`: The compiler-generated truth of system behavior (for example `root_task.toml`).
+- `Mock Mode`: In-process backend; no VM or TCP console required.
+- `Mount`: FUSE view of Secure9P paths; long-running process.
+- `NineDoor`: Userspace 9P server in the VM enforcing bounds and policy.
+- `Policy Gate`: Manifest-enabled rule set requiring approvals for sensitive writes.
+- `Policy Rules` (`/policy/rules`): Manifest-derived policy snapshot; read-only.
+- `Policy Control` (`/policy/ctl`): Append-only control file for apply/rollback.
+- `Policy Preflight` (`/policy/preflight/*`): Observability into queued vs consumed approvals.
+- `Pressure` (`/proc/pressure/*`): Read-only counters indicating resource pressure (policy queue, ingest, etc.).
+- `QEMU` (aarch64/virt): Reference dev/CI VM target.
+- `Role Ticket`: Role-scoped capability token minted for queen/worker roles.
+- `Secure9P`: File-shaped control plane; all interactions are paths and bounded reads/writes.
+- `Telemetry`: Append-only worker data stored under `/worker/*` or `/shard/*/worker/*`.
+- `Trace/Replay`: Deterministic logs and snapshots used for UI replay/testing.
+- `UI Providers`: Manifest-gated observability nodes under `/proc`.
+- `Worker` (heart/gpu): Child roles; heart emits telemetry, gpu mirrors lease state.
 - Auth token fallback order is `--auth-token`, `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`.
 - Live publish installs `/gpu/<id>/*`, `/gpu/models/*`, and `/gpu/telemetry/schema.json` inside the VM.
 
