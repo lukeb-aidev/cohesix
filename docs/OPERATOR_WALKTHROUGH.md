@@ -6,6 +6,29 @@
 
 This walkthrough follows the as-built lifecycle control surfaces exposed by NineDoor and `cohsh`,
 and includes Milestone 24b live GPU publish, PEFT flows, host-sidecar telemetry, and Live Hive text overlays.
+For host tool usage, interdependencies, and policy/mount details, see
+[HOST_TOOLS.md](HOST_TOOLS.md).
+
+## Assumptions and conventions
+- `coh>` indicates the `cohsh` prompt.
+- Only one console client at a time (quit SwarmUI or other tools before attaching `cohsh`).
+- Live examples assume QEMU is running and the TCP console is reachable at `127.0.0.1:31337`.
+- If policy gating is enabled (see `/policy/rules`), writes to `/queen/ctl` require approvals queued in `/actions/queue`.
+- `/gpu/*` appears only after `gpu-bridge-host --publish` runs; `/host/*` appears only after `host-sidecar-bridge` runs.
+- Mock mode commands (`--mock`) do not talk to the VM; do not mix mock and live in the same session.
+
+## 0) Preflight: verify console access (optional but recommended)
+Attach and verify the root namespace is reachable:
+```bash
+./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
+coh> ping
+coh> ls /
+```
+If policy gating is enabled, confirm rules and current pressure:
+```bash
+coh> cat /policy/rules
+coh> cat /proc/pressure/policy
+```
 
 ## 1) Attach a queen session
 ```bash
@@ -159,3 +182,12 @@ SwarmUI is read-only and must not run concurrently with `cohsh`.
    COH
    ```
 4. Relaunch SwarmUI and select a worker dot to view the bounded overlay + detail panel.
+
+---
+
+## Troubleshooting quick hits
+- `ERR ECHO reason=policy ... EPERM`: queue an approval in `/actions/queue`, then retry the control write.
+- `ERR AUTH` or `connection refused`: verify QEMU is running and the console port matches `127.0.0.1:31337`.
+- `cohsh` hangs or `coh` cannot connect: another console client is already attached.
+- `/gpu` empty: run `./bin/gpu-bridge-host --publish ...` (live) or `--mock --list` (mock).
+- `/host` empty: run `./bin/host-sidecar-bridge --watch --provider ...`.

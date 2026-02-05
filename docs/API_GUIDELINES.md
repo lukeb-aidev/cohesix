@@ -10,6 +10,11 @@ This document is the adoption guide for Cohesix APIs introduced in Milestone 24c
 - Host-only APIs that **project existing console and file semantics**.
 - OpenAPI 3.1 spec lives in `docs/HOST_API.md` and is served at `/v1/openapi.yaml`.
 - Python client is non-authoritative and supports TCP, filesystem, REST, and mock backends.
+- Host tool usage, interdependencies, and mount details live in `docs/HOST_TOOLS.md`.
+
+**Related operator docs**
+- `docs/HOST_TOOLS.md` — host tool semantics, policy gates, and mounts.
+- `docs/OPERATOR_WALKTHROUGH.md` — operator lifecycle and recovery flow.
 
 ## Principles (Non-Negotiable)
 - **Authority lives in the VM**. The REST gateway is a stateless projection of `LS`, `CAT`, and `ECHO`.
@@ -17,6 +22,11 @@ This document is the adoption guide for Cohesix APIs introduced in Milestone 24c
 - **Single-line JSONL**. Control surfaces accept one JSON object per line.
 - **No new semantics**. Clients may not introduce new verbs or change error behavior.
 - **Host-only**. No in-VM HTTP servers or extra listeners.
+
+## Compatibility and Scope (Milestone 24c)
+- This document describes the **Milestone 24c** REST surface and its canonical control/observability paths.
+- Namespaces are manifest-gated; missing paths usually indicate a disabled feature gate rather than a client bug.
+- All control writes are append-only; retries must send a full JSON line, not partial fragments.
 
 ## API Surface Map
 | Surface | Endpoint or Path | Semantics |
@@ -43,6 +53,16 @@ This document is the adoption guide for Cohesix APIs introduced in Milestone 24c
 
 Schemas and bounds are defined in `docs/INTERFACES.md`.
 
+## Policy and Approval Flow (REST or Console)
+Policy gating is manifest-enabled. When active, `/policy` and `/actions` appear and gated paths require approvals.
+
+- `/policy/rules` lists gate targets derived from the manifest.
+- `/actions/queue` is the approval/denial log (`id`, `target`, `decision`).
+- If a write targets `/queen/ctl` (or other gated paths), the request returns
+  `ERR ECHO reason=policy ... EPERM` until a matching approval exists.
+- Approvals are consumed deterministically on success; `/policy/preflight/*` and `/proc/pressure/policy`
+  provide observability into queued/consumed approvals and pressure.
+
 ## Use-Case Alignment (from `docs/USE_CASES.md`)
 | Use case | API capability |
 | --- | --- |
@@ -58,6 +78,10 @@ Schemas and bounds are defined in `docs/INTERFACES.md`.
 - **TCP console**: direct `cohsh`-compatible console semantics.
 - **Filesystem (Secure9P mount)**: file-shaped integration without HTTP.
 - **Mock backend**: deterministic development and CI without a VM.
+
+Notes:
+- The TCP console is single-client. If a tool already holds it, other TCP clients will block or fail.
+- The REST gateway itself uses the console, so do not run it concurrently with `cohsh` or `swarmui`.
 
 ## Golden Path (REST Adoption)
 These steps both **adopt** the API and **validate connectivity**.
@@ -162,6 +186,8 @@ If `/proc/lifecycle/state` is unavailable, use a read-only path that exists in y
 ## Troubleshooting
 - `ERR AUTH` or `ERR ATTACH` means the auth token, role, or ticket does not match the Queen.
 - Connection refused usually means the VM or gateway is not running.
+- `ERR ECHO reason=policy ... EPERM` means policy gating requires an approval in `/actions/queue`.
+- Gateway running but empty `/gpu` or `/host` paths means the host bridges are not publishing.
 - `path exceeds max length` or `path component '..' is not permitted` means you violated manifest bounds.
 - `read exceeds max bytes` means `max_bytes` is too large for the path or for its manifest limit.
 

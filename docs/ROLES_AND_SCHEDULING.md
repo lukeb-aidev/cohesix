@@ -4,6 +4,9 @@
 <!-- Author: Lukas Bower -->
 # Roles & Scheduling Policy
 
+For host tool usage, interdependencies, and policy/mount details, see
+[HOST_TOOLS.md](HOST_TOOLS.md).
+
 ## 1. Roles
 | Role | Capabilities | Namespace |
 |------|--------------|-----------|
@@ -30,7 +33,31 @@ Exactly one Queen exists per hive, but many worker instances (across worker-hear
 
 Attachments always arrive via NineDoor: queen mounts the full namespace, worker-heartbeat mounts only its telemetry and boot views, and worker-gpu attaches to the `/gpu/<id>/` subtrees exposed to its ticket. Ticket values (when present) select the role-specific namespace, and NineDoor aborts attaches on ticket mismatch, timeouts, or unsupported roles, leaving `cohsh` detached with an explicit error.
 
-## 3. Scheduling Strategy
+## 3. Policy and Control Surfaces (Milestones 21a-24c)
+Role orchestration is file-oriented: control actions are append-only writes to control files that the queen
+drives through `cohsh` or host tools. There is no ad-hoc RPC path.
+
+**Policy gating and approvals**
+- Policy gating is manifest-enabled. When active, `/policy` and `/actions` namespaces appear.
+- `/policy/rules` is the manifest-derived snapshot of gate targets.
+- `/actions/queue` is the approval/denial log. Each approval includes `id`, `target`, and `decision`.
+- If a control write targets a gated path (for example `/queen/ctl`), the write is denied with
+  `ERR ECHO reason=policy ... EPERM` until a matching approval is queued.
+- Approvals are consumed deterministically when accepted, and may be audited when `/audit` is enabled.
+
+**Control files and observability**
+- Scheduling control: `/queen/schedule/ctl` (append-only JSONL commands).
+- Lease control: `/queen/lease/ctl` (append-only JSONL commands).
+- Export control: `/queen/export/ctl` (append-only JSONL commands).
+- Policy control: `/policy/ctl` (apply/rollback JSONL commands).
+- Scheduling observability: `/proc/schedule/summary`, `/proc/schedule/queue`.
+- Lease observability: `/proc/lease/summary`, `/proc/lease/active`, `/proc/lease/preemptions`.
+- Policy observability: `/policy/preflight/*` and `/proc/pressure/policy`.
+
+These paths are manifest-gated and bounded. If a namespace is missing, check the manifest settings and
+whether the host-side publishers (for `/gpu` or `/host`) are running.
+
+## 4. Scheduling Strategy
 - **v0**: Round-robin over runnable endpoints with per-worker tick budgets (coarse-grained cooperative scheduling).
 - **v1**: Priority bands (`system`, `control`, `worker`) with budgeted quanta; queen/control tasks reside in higher band.
 - **GPU (future)**: Lease-enforced concurrency; GPU workers must honour host-provided stream counts.
@@ -39,7 +66,7 @@ Control flows are file-oriented (e.g., appends to `/queen/ctl`) instead of the d
 
 Scheduling contexts originate in root-task: initial SCs are held by root, carved out for NineDoor and per-worker threads, and reclaimed on revocation without altering seL4 SC semantics or time accounting.
 
-## 4. Budget Types
+## 5. Budget Types
 ```rust
 pub struct Budget {
     pub ticks: Option<u32>,     // scheduler quanta
@@ -50,20 +77,21 @@ pub struct Budget {
 - Budgets default to conservative limits; queen can request overrides but root task may clamp to policy maximums.
 - NineDoor decrements `ops` budgets per successful request; when depleted it signals root task for revocation.
 
-## 5. Revocation Flow
+## 6. Revocation Flow
 1. Budget exhaustion detected by NineDoor or root task watchdog.
 2. Root task sends `Revoke(ticket_id)` to NineDoor.
 3. NineDoor marks session closed, replies `Rerror(Closed)` on further operations, and appends revocation reason to `/log/queen.log`.
 4. Root task deallocates resources (TCB caps, scheduling context).
 
-## 6. Testing Expectations
+## 7. Testing Expectations
 - **Unit**: Role-path filter tests ensure workers cannot traverse outside assigned mounts. Budget counters validated with deterministic scenarios.
 - **Integration**: Scenario test spawns two heartbeat workers with different TTLs; verifies early expiry worker is revoked and log entry recorded.
 - **Fuzz**: Randomised spawn/kill command sequences ensure scheduler state remains consistent (no leaked caps).
 
-Cross-refs: see `SECURE9P.md` for namespace enforcement, `USERLAND_AND_CLI.md` for attach semantics, and `ARCHITECTURE.md` for the serial + TCP console model.
+Cross-refs: see `SECURE9P.md` for namespace enforcement, `USERLAND_AND_CLI.md` for attach semantics,
+`ARCHITECTURE.md` for console and control path semantics, and `HOST_TOOLS.md` for operator-facing workflows.
 
-## 7. Future Extensions
+## 8. Future Extensions
 - Role hierarchy for observers/auditors.
 - Quotas for memory/IPC buffers enforced via seL4 resource allocation APIs.
 - Worker-side cooperative yields signalled via `/shard/<label>/worker/<id>/yield` (legacy `/worker/<id>/yield` when enabled).
