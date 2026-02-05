@@ -144,6 +144,51 @@ Discover GPUs on the host (NVML or mock) and emit the `/gpu` namespace snapshot 
 - `--publish` streams bounded snapshots to `/gpu/bridge/ctl` over the TCP console (queen role).
 - `--interval-ms` repeats publish in a loop; omit to send a single snapshot.
 - `--registry` points at a host model registry root to populate `/gpu/models`.
+
+## Policy & Dependency Diagrams
+These diagrams summarize the policy gating and host-tool interdependencies that most often surprise new users.
+
+Figure 1: Policy-gated control writes (`/queen/ctl`)
+```mermaid
+flowchart TD
+  A["coh / cohsh / hive-gateway"] --> B["TCP console (single client)"]
+  B --> C["NineDoor Secure9P"]
+  C --> D{"Policy gating enabled?<br/>/policy/rules present"}
+  D -- "No" --> E["Write /queen/ctl accepted"]
+  D -- "Yes" --> F{"Approval queued?<br/>/actions/queue"}
+  F -- "No" --> G["ERR ECHO reason=policy (EPERM)"]
+  F -- "Yes" --> H["Write accepted<br/>approval consumed (audit if enabled)"]
+  H --> I["Queen applies action<br/>(spawn/lease/export/etc.)"]
+```
+
+Figure 2: Policy control apply/rollback (`/policy/ctl`)
+```mermaid
+flowchart TD
+  A["cohsh / hive-gateway / REST client"] --> B["ECHO /policy/ctl (apply/rollback)"]
+  B --> C["Policy control validation<br/>(bounds, schema, hash)"]
+  C --> D["Policy state updated"]
+  D --> E["/policy/preflight/* reflects queued/consumed approvals"]
+  D --> F["/proc/pressure/policy exposes pressure"]
+  D --> G["/policy/rules remains manifest-derived"]
+```
+
+Figure 3: GPU + host visibility dependencies (live vs mock)
+```mermaid
+flowchart TD
+  subgraph Live["Live (QEMU + TCP console)"]
+    L1["QEMU running (TCP console)"] --> L2["gpu-bridge-host --publish"]
+    L2 --> L3["/gpu namespace populated"]
+    L3 --> L4["coh gpu list/lease"]
+    L4 --> L5["coh run requires active lease<br/>/gpu/<id>/lease"]
+    L1 --> L6["host-sidecar-bridge --watch/--provider ..."]
+    L6 --> L7["/host namespace populated"]
+    L7 --> L8["cohsh / coh / hive-gateway reads /host/*"]
+  end
+  subgraph Mock["Mock (in-process backend)"]
+    M1["coh --mock / cohsh --transport mock"] --> M2["No QEMU or TCP console used"]
+    M2 --> M3["gpu-bridge-host --mock --list<br/>drives mock GPU data"]
+  end
+```
 - Auth token fallback order is `--auth-token`, `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`.
 - Live publish installs `/gpu/<id>/*`, `/gpu/models/*`, and `/gpu/telemetry/schema.json` inside the VM.
 
