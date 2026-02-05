@@ -16,56 +16,89 @@ mirrors the same verbs, bounds, and error rules enforced by `cohsh` and Secure9P
 ## Where it lives
 - **Source tree**: `tools/cohesix-py/`
 - **Release bundle**: `python/cohesix-py/` (see bundle `QUICKSTART.md`)
+- **Examples**: `tools/cohesix-py/examples/` (bundle: `python/cohesix-py/examples/`)
+
+Examples below use bundle paths (`./bin/<tool>`). In the source tree, replace `./bin` with `out/cohesix/host-tools` (staged) or `target/<profile>` (manual).
 
 ## Backends
-- **TcpBackend**: connects to the TCP console (`AUTH` + `ATTACH`), issues console verbs.
+- **TcpBackend**: connects to the TCP console (`AUTH` + `ATTACH`) and issues console verbs.
 - **FilesystemBackend**: operates on a mounted Secure9P namespace (via `coh mount`).
 - **RestBackend**: uses the `hive-gateway` REST projection (host-only).
 - **MockBackend**: deterministic in-memory filesystem for tests/examples.
 
-## Install (source tree)
+## Choosing a backend
+- Use **MockBackend** for CI, demos, and first-run validation.
+- Use **TcpBackend** for direct console access (same semantics as `cohsh`).
+- Use **FilesystemBackend** for air-gapped workflows that rely on a mounted Secure9P namespace.
+- Use **RestBackend** when you need HTTP access without adding new semantics.
+
+## Install
+Source tree (editable):
 ```bash
 python3 -m pip install -e tools/cohesix-py
 ```
+Release bundle:
+```bash
+python3 -m pip install ./python/cohesix-py
+```
+
+## Common example flags
+All bundled examples share the same backend arguments:
+- `--mock` and `--mock-root` (default mock root: `out/examples/mockfs`)
+- `--mount-root` (FilesystemBackend)
+- `--rest http://127.0.0.1:8080` (RestBackend)
+- `--tcp-host` and `--tcp-port` (TcpBackend)
+- `--auth-token` (defaults to `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`, then `changeme`)
+- `--role` and `--ticket`
+- `--timeout-s` and `--max-retries`
+- `--out` to override `out/examples/`
 
 ## Quickstart (mock mode)
-`--mock` runs the client against a deterministic in-memory backend. It is fast, requires no QEMU, and is ideal for CI and first‑run demos.
+`--mock` runs the client against a deterministic in-memory backend. It is fast, requires no QEMU, and is ideal for CI and first-run demos.
 ```bash
 python3 tools/cohesix-py/examples/lease_run.py --mock
 python3 tools/cohesix-py/examples/peft_roundtrip.py --mock
 python3 tools/cohesix-py/examples/telemetry_write_pull.py --mock
 ```
-Artifacts land under `out/examples/`.
+Artifacts land under `out/examples/` unless `--out` is provided.
 
 ## Live connection requirements (no `--mock`)
 To run against a live Queen, you need:
-- A running QEMU VM: `./qemu/run.sh`
-- A valid console auth token (default `changeme` or set `COHSH_AUTH_TOKEN`)
+- A running QEMU VM: `scripts/qemu-run.sh` (bundle: `./qemu/run.sh`)
+- A valid console auth token (default `changeme` or set `COHSH_AUTH_TOKEN` / `COH_AUTH_TOKEN`)
 - Any required host integrations (e.g., GPU bridge if using `/gpu`)
 
 ## Live TCP backend (Queen running)
-1) Boot the VM (Mac host):
+1) Boot the VM (Mac host, source tree):
 ```bash
-./qemu/run.sh
+scripts/qemu-run.sh
 ```
 2) Run a Python example against the TCP console:
 ```bash
 python3 tools/cohesix-py/examples/lease_run.py \
   --tcp-host 127.0.0.1 --tcp-port 31337
 ```
-If your console auth token is not the default, set `COHSH_AUTH_TOKEN` before running.
+If your console auth token is not the default, set `COH_AUTH_TOKEN` or pass `--auth-token`.
+
+Note: the TCP console is single-client. Do not attach `cohsh`, `swarmui`, or `hive-gateway` while using the TCP backend.
 
 ## REST backend (hive-gateway)
-1) Start the REST gateway on the host (see `docs/HOST_API.md`):
+1) Start the REST gateway on the host:
 ```bash
-COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \\
-  COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \\
+COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+  COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
   ./bin/hive-gateway
 ```
 2) Point a Python example at the gateway:
 ```bash
 python3 tools/cohesix-py/examples/lease_run.py --rest http://127.0.0.1:8080
 ```
+3) (Optional) Verify bounds:
+```bash
+curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
+```
+
+Note: the gateway is itself a console client; avoid attaching `cohsh` or `swarmui` at the same time.
 
 ## Filesystem backend (Secure9P mount)
 1) Mount the namespace on the host (requires `coh mount`):
@@ -77,12 +110,17 @@ python3 tools/cohesix-py/examples/lease_run.py --rest http://127.0.0.1:8080
 python3 tools/cohesix-py/examples/lease_run.py --mount-root /tmp/coh-mount
 ```
 
+Notes:
+- Live mounts require FUSE (`coh` built with `--features fuse` and a FUSE runtime installed).
+- The mount root is constrained by the manifest allowlist in `out/coh_policy.toml`.
+
 ## Bounds and defaults
-The client enforces manifest-derived defaults emitted by `coh-rtc` (see
-`docs/USERLAND_AND_CLI.md` → “Cohesix Python defaults”). These include:
+The client enforces manifest-derived defaults emitted by `coh-rtc` and embedded in `tools/cohesix-py/cohesix/generated.py`. These include:
 - `secure9p.msize`, walk depth, and console line/JSON limits
 - telemetry ingest caps
 - registry and path allowlists
+
+If the generated defaults drift from the manifest (`configs/root_task.toml` -> `coh-rtc`), the client will reject mismatched hashes.
 
 ## Tests (parity)
 The parity tests verify the Python client matches `cohsh` behavior byte-for-byte:
@@ -91,22 +129,24 @@ python3 -m pytest -k cohesix_parity tools/cohesix-py/tests/test_parity.py
 ```
 
 ## Troubleshooting
-- `ERR AUTH`: set `COHSH_AUTH_TOKEN` (or `--auth-token` equivalents) to match the Queen.
+- `ERR AUTH`: set `COH_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`) or pass `--auth-token`.
+- `ERR ATTACH`: your role requires a ticket; pass `--ticket` or mint one with `cohsh --mint-ticket`.
 - Empty `/gpu`: ensure the host GPU bridge integration is running; use `./bin/gpu-bridge-host --mock --list` for mock demos.
 - Non-mock PEFT flows require `/gpu/models` to be visible; run `./bin/gpu-bridge-host --publish ...` or `coh peft import --publish` to refresh the live registry.
-- `--mock` is the fastest path for demos and CI; live runs require a running Queen VM.
+- Filesystem backend mount errors: ensure FUSE is installed and `coh` was built with `--features fuse`.
+- REST errors: confirm `hive-gateway` is running and reachable at `/v1/meta/bounds`.
 
 ## Real-world use cases (examples)
 These examples assume a live Queen VM unless you explicitly add `--mock`.
 
-### 1) Edge telemetry ingestion → export bundle
+### 1) Edge telemetry ingestion -> export bundle
 Goal: push telemetry from edge hosts and pull a bounded export bundle for training.
 ```bash
 python3 tools/cohesix-py/examples/telemetry_write_pull.py --tcp-host 127.0.0.1 --tcp-port 31337
 ```
 Why this matters: proves append-only telemetry ingest and bounded export without adding new protocols.
 
-### 2) Lease → run → release automation
+### 2) Lease -> run -> release automation
 Goal: validate GPU lease behavior before a deployment.
 ```bash
 python3 tools/cohesix-py/examples/lease_run.py --tcp-host 127.0.0.1 --tcp-port 31337
@@ -127,16 +167,16 @@ python3 tools/cohesix-py/examples/lease_run.py --tcp-host 127.0.0.1 --tcp-port 3
 ```
 Why this matters: confirms the Python client is a thin wrapper over the live console, not a new control plane.
 
-### 5) Filesystem backend for air‑gapped automation
+### 5) Filesystem backend for air-gapped automation
 Goal: operate via a mounted Secure9P namespace without TCP in the workflow.
 ```bash
 ./bin/coh --host 127.0.0.1 --port 31337 mount --at /tmp/coh-mount
 python3 tools/cohesix-py/examples/lease_run.py --mount-root /tmp/coh-mount
 ```
-Why this matters: keeps control‑plane access file‑shaped and auditable even in restricted environments.
+Why this matters: keeps control-plane access file-shaped and auditable even in restricted environments.
 
 ## Design alignment
-This client exists to lower adoption friction while preserving Cohesix’s core guarantees:
+This client exists to lower adoption friction while preserving Cohesix's core guarantees:
 - no new protocols
 - no hidden control planes
 - deterministic, auditable behavior

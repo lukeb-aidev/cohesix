@@ -662,7 +662,7 @@ main() {
         --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md"
 
     SEL4_COMPONENT_PACKAGES=(nine-door worker-heart worker-gpu)
-    HOST_TOOL_PACKAGES=(gpu-bridge-host cas-tool coh)
+    HOST_TOOL_PACKAGES=(gpu-bridge-host cas-tool coh hive-gateway)
     if has_root_task_feature "cohesix-dev"; then
         HOST_TOOL_PACKAGES+=(swarmui)
     fi

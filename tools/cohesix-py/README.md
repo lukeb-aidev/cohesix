@@ -11,6 +11,7 @@ not introduce new control-plane behavior.
 ## Backends
 - `TcpBackend`: connects to the TCP console (`AUTH` + `ATTACH`) and issues `LS`/`CAT`/`ECHO`.
 - `FilesystemBackend`: operates on a mounted Secure9P namespace (via `coh mount`).
+- `RestBackend`: uses the host-only `hive-gateway` REST projection.
 - `MockBackend`: deterministic in-memory filesystem for tests and examples.
 
 ## Quick start
@@ -20,6 +21,8 @@ python3 tools/cohesix-py/examples/lease_run.py --mock
 python3 tools/cohesix-py/examples/peft_roundtrip.py --mock
 python3 tools/cohesix-py/examples/telemetry_write_pull.py --mock
 ```
+
+Examples accept shared backend flags (`--mock`, `--mount-root`, `--rest`, `--tcp-host`, `--tcp-port`, `--auth-token`, `--role`, `--ticket`).
 
 ## Notes
 - All limits are bounded and derived from `coh-rtc` generated defaults.
