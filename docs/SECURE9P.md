@@ -126,7 +126,3 @@ NineDoor exposes telemetry and GPU file surfaces that ultimately map onto shared
   - `retry` — bounded exponential back-off using a fixed retry budget (currently 3 attempts with a 5ms base delay).
 - Queue depth limits are the minimum of `tags_per_session` and `batch_frames`, ensuring batching never exceeds manifest-controlled concurrency.
 
-## 11. Future Enhancements
-- Opportunistic support for 9P lock extensions once namespace bind/mount stabilises.
-- Optional TLS termination in host tools prior to entering the development VM transport adapter; the same boundary applies when the transport targets physical hardware.
-- Status (Build Plan ≤7c): root and TCP consoles run concurrently; Secure9P namespaces and role-aware mounts are live; upcoming milestones will extend worker-side bind/mount, flesh out worker/GPU namespace detail, and wire GPU lease paths from host bridge into `/gpu/<id>`.
