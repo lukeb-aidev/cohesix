@@ -21,6 +21,10 @@ mod imp {
         pub fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Word;
 
         pub fn seL4_DebugPutChar(c: u8);
+
+        pub fn seL4_DebugDumpScheduler();
+
+        pub fn seL4_DebugDumpCPUInfo();
     }
 
     pub type seL4_VSpace = seL4_CPtr;
@@ -100,6 +104,52 @@ mod imp {
         );
 
         cap_word
+    }
+
+    #[export_name = "seL4_DebugDumpScheduler"]
+    pub unsafe extern "C" fn sel4_debug_dump_scheduler() {
+        let mut unused0 = 0;
+        let mut unused1 = 0;
+        let mut unused2 = 0;
+        let mut unused3 = 0;
+        let mut unused4 = 0;
+        let mut unused5 = 0;
+
+        arm_sys_send_recv(
+            seL4_Syscall_ID_seL4_SysDebugDumpScheduler as seL4_Word,
+            0,
+            &mut unused0,
+            0,
+            &mut unused1,
+            &mut unused2,
+            &mut unused3,
+            &mut unused4,
+            &mut unused5,
+            0,
+        );
+    }
+
+    #[export_name = "seL4_DebugDumpCPUInfo"]
+    pub unsafe extern "C" fn sel4_debug_dump_cpu_info() {
+        let mut unused0 = 0;
+        let mut unused1 = 0;
+        let mut unused2 = 0;
+        let mut unused3 = 0;
+        let mut unused4 = 0;
+        let mut unused5 = 0;
+
+        arm_sys_send_recv(
+            seL4_Syscall_ID_seL4_SysDebugDumpCPUInfo as seL4_Word,
+            0,
+            &mut unused0,
+            0,
+            &mut unused1,
+            &mut unused2,
+            &mut unused3,
+            &mut unused4,
+            &mut unused5,
+            0,
+        );
     }
 
     #[inline(always)]
@@ -1848,6 +1898,16 @@ mod imp {
 
     #[inline(always)]
     pub fn seL4_DebugPutChar(_c: u8) {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub fn seL4_DebugDumpScheduler() {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub fn seL4_DebugDumpCPUInfo() {
         unsupported();
     }
 

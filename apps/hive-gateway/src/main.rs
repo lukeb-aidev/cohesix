@@ -22,7 +22,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
 use cohsh::{
-    CohshPolicy, PoolKind, SessionPool, TransportFactory, CLIENT_LOG_PATH,
+    CohshPolicy, PoolKind, Session, SessionPool, TransportFactory, CLIENT_LOG_PATH,
     CLIENT_POLICY_CTL_PATH, CLIENT_QUEEN_CTL_PATH, CLIENT_QUEEN_EXPORT_CTL_PATH,
     CLIENT_QUEEN_LEASE_CTL_PATH, CLIENT_QUEEN_LIFECYCLE_CTL_PATH,
     CLIENT_QUEEN_SCHEDULE_CTL_PATH, CONTROL_EXPORT_CTL_MAX_BYTES, CONTROL_EXPORT_ENABLED,
@@ -566,6 +566,34 @@ async fn shutdown_signal(state: AppState) {
 }
 
 impl AppState {
+    fn with_pool<F, T>(&self, kind: PoolKind, action: F) -> Result<T>
+    where
+        F: FnOnce(&mut dyn cohsh::Transport, &Session) -> Result<T>,
+    {
+        self.ensure_connected()?;
+        let mut delay = Duration::from_millis(self.inner.policy.retry.backoff_ms);
+        let ceiling = Duration::from_millis(self.inner.policy.retry.ceiling_ms);
+        let shutdown = &self.inner.shutdown;
+        loop {
+            match self.inner.pool.checkout(kind) {
+                Ok(mut lease) => {
+                    let session = lease.session().clone();
+                    return action(lease.transport_mut(), &session);
+                }
+                Err(err) => {
+                    if !is_pool_exhausted(&err) {
+                        return Err(err);
+                    }
+                    if shutdown.load(Ordering::SeqCst) {
+                        return Err(err);
+                    }
+                    thread::sleep(delay);
+                    delay = next_delay(delay, ceiling);
+                }
+            }
+        }
+    }
+
     fn attach(&self) -> Result<()> {
         self.inner
             .pool
@@ -573,13 +601,10 @@ impl AppState {
     }
 
     fn ping(&self) -> Result<()> {
-        let mut lease = self.inner.pool.checkout(PoolKind::Control)?;
-        let session = lease.session().clone();
-        let _ = lease
-            .transport_mut()
-            .ping(&session)
-            .context("ping failed")?;
-        Ok(())
+        self.with_pool(PoolKind::Control, |transport: &mut dyn cohsh::Transport, session| {
+            transport.ping(session).context("ping failed")?;
+            Ok(())
+        })
     }
 
     fn is_connected(&self) -> bool {
@@ -613,36 +638,41 @@ impl AppState {
     }
 
     fn list(&self, path: &str) -> Result<Vec<String>> {
-        self.ensure_connected()?;
-        let mut lease = self.inner.pool.checkout(PoolKind::Telemetry)?;
-        let session = lease.session().clone();
-        lease.transport_mut().list(&session, path)
+        let path = path.to_owned();
+        self.with_pool(PoolKind::Telemetry, move |transport: &mut dyn cohsh::Transport, session| {
+            transport.list(session, &path)
+        })
     }
 
     fn read(&self, path: &str) -> Result<Vec<String>> {
-        self.ensure_connected()?;
-        let mut lease = self.inner.pool.checkout(PoolKind::Telemetry)?;
-        let session = lease.session().clone();
-        lease.transport_mut().read(&session, path)
+        let path = path.to_owned();
+        self.with_pool(PoolKind::Telemetry, move |transport: &mut dyn cohsh::Transport, session| {
+            transport.read(session, &path)
+        })
     }
 
     fn tail(&self, path: &str) -> Result<Vec<String>> {
-        self.ensure_connected()?;
-        let mut lease = self.inner.pool.checkout(PoolKind::Telemetry)?;
-        let session = lease.session().clone();
-        lease.transport_mut().tail(&session, path)
+        let path = path.to_owned();
+        self.with_pool(PoolKind::Telemetry, move |transport: &mut dyn cohsh::Transport, session| {
+            transport.tail(session, &path)
+        })
     }
 
     fn write(&self, path: &str, payload: &[u8]) -> Result<()> {
-        self.ensure_connected()?;
-        let mut lease = self.inner.pool.checkout(PoolKind::Control)?;
-        let session = lease.session().clone();
-        lease.transport_mut().write(&session, path, payload)
+        let path = path.to_owned();
+        let payload = payload.to_vec();
+        self.with_pool(PoolKind::Control, move |transport: &mut dyn cohsh::Transport, session| {
+            transport.write(session, &path, &payload)
+        })
     }
 
     fn bounds(&self) -> BoundsResponse {
         self.inner.bounds.clone()
     }
+}
+
+fn is_pool_exhausted(err: &anyhow::Error) -> bool {
+    err.to_string().contains("session pool exhausted")
 }
 
 async fn meta_bounds(State(state): State<AppState>) -> impl axum::response::IntoResponse {

@@ -45,6 +45,10 @@ const SELFTEST_NEGATIVE_SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../resources/proc_tests/selftest_negative.coh"
 ));
+const SELFTEST_SMP_SCRIPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../resources/proc_tests/selftest_smp.coh"
+));
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1437,6 +1441,12 @@ impl Namespace {
             SELFTEST_NEGATIVE_SCRIPT.as_bytes(),
         )
         .expect("create /proc/tests/selftest_negative.coh");
+        self.ensure_read_only_file(
+            &tests_path,
+            "selftest_smp.coh",
+            SELFTEST_SMP_SCRIPT.as_bytes(),
+        )
+        .expect("create /proc/tests/selftest_smp.coh");
         self.ensure_dir(&proc_path, "lifecycle")
             .expect("create /proc/lifecycle");
         let lifecycle_path = vec!["proc".to_owned(), "lifecycle".to_owned()];

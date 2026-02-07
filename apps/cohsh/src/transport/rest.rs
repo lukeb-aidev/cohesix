@@ -17,6 +17,16 @@ use crate::{CohshPolicy, Session, Transport, TransportMetrics};
 
 const DEFAULT_SESSION_ID: SessionId = SessionId::BOOTSTRAP;
 
+trait GatewayClientTail {
+    fn tail(&self, path: &str, max_bytes: u32) -> Result<Vec<String>>;
+}
+
+impl GatewayClientTail for GatewayClient {
+    fn tail(&self, path: &str, max_bytes: u32) -> Result<Vec<String>> {
+        self.read(path, max_bytes)
+    }
+}
+
 /// REST transport backed by the hive-gateway API.
 #[derive(Debug)]
 pub struct RestTransport {

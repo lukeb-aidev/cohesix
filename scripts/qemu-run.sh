@@ -42,6 +42,9 @@ Boot seL4 in QEMU using externally built artefacts while packaging the Cohesix
 root task into a CPIO archive. The script mirrors the expectations in
 `docs/BUILD_PLAN.md` Milestone 0 and assumes that all binaries have already been
 built for aarch64.
+
+Env overrides:
+  COHESIX_QEMU_SMP / QEMU_SMP (default: 1)
 USAGE
 }
 
@@ -55,6 +58,7 @@ DTB_OVERRIDE=""
 DEFAULT_TCP_PORT=31337
 TCP_PORT=""
 SELFTEST_TCP_PORT=31339
+QEMU_SMP="${COHESIX_QEMU_SMP:-${QEMU_SMP:-1}}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -263,7 +267,7 @@ QEMU_ARGS=(-accel "$QEMU_ACCEL" \
     -machine "virt,gic-version=${GIC_VER}" \
     -cpu cortex-a57 \
     -m 1024 \
-    -smp 1 \
+    -smp "$QEMU_SMP" \
     -serial stdio \
     -monitor none \
     -display none \
@@ -279,6 +283,11 @@ fi
 
 if ! [[ "$TCP_PORT" =~ ^[0-9]+$ ]]; then
     log "Invalid TCP port: $TCP_PORT"
+    exit 1
+fi
+
+if ! [[ "$QEMU_SMP" =~ ^[0-9]+$ ]] || [[ "$QEMU_SMP" -lt 1 ]]; then
+    log "Invalid QEMU_SMP (must be >= 1): $QEMU_SMP"
     exit 1
 fi
 

@@ -1,0 +1,32 @@
+# Author: Lukas Bower
+# Purpose: SMP selftest script to pressure multi-core scheduling.
+ping
+EXPECT OK
+cat /proc/boot
+EXPECT OK
+echo smp-load-start > /log/queen.log
+EXPECT OK
+echo {"id":"selftest-smp-approve-1","target":"/queen/ctl","decision":"approve"} > /actions/queue
+EXPECT OK
+spawn heartbeat ticks=8 ttl_s=30
+EXPECT OK
+echo {"id":"selftest-smp-approve-2","target":"/queen/ctl","decision":"approve"} > /actions/queue
+EXPECT OK
+spawn heartbeat ticks=8 ttl_s=30
+EXPECT OK
+tail /worker/worker-1/telemetry
+EXPECT OK
+tail /worker/worker-2/telemetry
+EXPECT OK
+WAIT 200
+cat /log/queen.log
+EXPECT OK
+echo {"id":"selftest-smp-approve-3","target":"/queen/ctl","decision":"approve"} > /actions/queue
+EXPECT OK
+kill worker-1
+EXPECT OK
+echo {"id":"selftest-smp-approve-4","target":"/queen/ctl","decision":"approve"} > /actions/queue
+EXPECT OK
+kill worker-2
+EXPECT OK
+quit

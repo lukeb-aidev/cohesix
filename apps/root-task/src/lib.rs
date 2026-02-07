@@ -26,6 +26,9 @@ pub mod arch;
 #[cfg(feature = "kernel")]
 /// Audit helpers for boot sequencing and readiness checkpoints.
 pub mod audit;
+#[cfg(feature = "kernel")]
+/// Authority queue for serializing control-plane mutations.
+pub mod authority;
 pub mod console;
 pub mod event;
 /// Compile-time feature manifest and guard rails.

@@ -40,6 +40,16 @@ pub struct SwarmUiHiveConfig {
     pub line_cap_bytes: u32,
     /// Maximum bytes retained per worker buffer.
     pub per_worker_bytes: u32,
+    /// Maximum pending telemetry lines retained per worker before dropping oldest.
+    pub pending_lines_per_worker: u16,
+    /// Maximum queued events retained before dropping oldest.
+    pub pending_event_cap: u32,
+    /// Maximum workers polled per ingest tick.
+    pub poll_workers_per_tick: u16,
+    /// Minimum milliseconds between status snapshot refreshes.
+    pub status_poll_ms: u32,
+    /// Pressure threshold for degraded rendering.
+    pub degrade_pressure: f32,
 }
 
 /// Descriptor for a hive agent (queen or worker).
@@ -418,6 +428,21 @@ impl HiveReplay {
     }
 }
 
+#[derive(Debug, Clone)]
+struct OverlayCache {
+    revision: u64,
+    lines: usize,
+    items: Vec<SwarmUiHiveOverlay>,
+}
+
+#[derive(Debug, Clone)]
+struct DetailCache {
+    revision: u64,
+    lines: usize,
+    agent: String,
+    detail: Option<SwarmUiHiveDetail>,
+}
+
 #[derive(Debug)]
 pub(crate) struct HiveSessionState {
     workers: Vec<String>,
@@ -428,6 +453,10 @@ pub(crate) struct HiveSessionState {
     queue: VecDeque<SwarmUiHiveEvent>,
     seq: u64,
     dropped: u64,
+    worker_cursor: usize,
+    buffers_revision: u64,
+    overlay_cache: Option<OverlayCache>,
+    detail_cache: Option<DetailCache>,
 }
 
 impl HiveSessionState {
@@ -445,6 +474,10 @@ impl HiveSessionState {
             queue: VecDeque::new(),
             seq: 0,
             dropped: 0,
+            worker_cursor: 0,
+            buffers_revision: 0,
+            overlay_cache: None,
+            detail_cache: None,
         }
     }
 
@@ -457,12 +490,21 @@ impl HiveSessionState {
     ) -> Result<(), SwarmUiError> {
         let now_ms = now_ms();
         let mut budget = config.lod_event_budget as usize;
-        let max_queue = config.snapshot_max_events as usize;
-        let workers = self.workers.clone();
-        for worker_id in workers {
-            if budget == 0 {
+        let max_queue = config.pending_event_cap as usize;
+        let worker_count = self.workers.len();
+        if worker_count == 0 {
+            return Ok(());
+        }
+        let pending_cap = config.pending_lines_per_worker as usize;
+        let max_workers = (config.poll_workers_per_tick as usize).min(worker_count);
+        let start_index = self.worker_cursor % worker_count;
+        let mut processed = 0usize;
+        for offset in 0..worker_count {
+            if processed >= max_workers || budget == 0 {
                 break;
             }
+            let idx = (start_index + offset) % worker_count;
+            let worker_id = self.workers[idx].clone();
             let cursor = match self.cursors.get_mut(&worker_id) {
                 Some(cursor) => cursor,
                 None => {
@@ -481,7 +523,7 @@ impl HiveSessionState {
                         })
                 }
             };
-            cursor.fill_pending(client, msize, budget, now_ms)?;
+            cursor.fill_pending(client, msize, budget, pending_cap, now_ms, &mut self.dropped)?;
             let detail_lines = config.detail_lines as usize;
             let line_cap = config.line_cap_bytes as usize;
             let per_worker = config.per_worker_bytes as usize;
@@ -493,7 +535,7 @@ impl HiveSessionState {
                 .roles
                 .get(&worker_id)
                 .map(|value| value.as_str());
-            let consumed = cursor.drain_events(
+            let (consumed, touched) = cursor.drain_events(
                 worker_root,
                 &mut self.seq,
                 &mut self.queue,
@@ -503,8 +545,15 @@ impl HiveSessionState {
                 config.line_cap_bytes as usize,
             );
             self.buffers.insert(worker_id.clone(), buffer);
+            if touched {
+                self.buffers_revision = self.buffers_revision.wrapping_add(1);
+            }
             budget = budget.saturating_sub(consumed);
             self.trim_queue(max_queue);
+            processed = processed.saturating_add(1);
+        }
+        if processed > 0 {
+            self.worker_cursor = (start_index + processed) % worker_count;
         }
         Ok(())
     }
@@ -536,6 +585,10 @@ impl HiveSessionState {
         self.queue.clear();
         self.seq = 0;
         self.dropped = 0;
+        self.worker_cursor = 0;
+        self.buffers_revision = 0;
+        self.overlay_cache = None;
+        self.detail_cache = None;
         fids
     }
 
@@ -549,36 +602,69 @@ impl HiveSessionState {
         }
     }
 
-    pub(crate) fn overlays(&self, overlay_lines: usize) -> Vec<SwarmUiHiveOverlay> {
+    pub(crate) fn overlays(&mut self, overlay_lines: usize) -> Vec<SwarmUiHiveOverlay> {
+        if let Some(cache) = &self.overlay_cache {
+            if cache.revision == self.buffers_revision && cache.lines == overlay_lines {
+                return cache.items.clone();
+            }
+        }
         let mut items = self
             .buffers
             .iter()
             .filter(|(_, buffer)| !buffer.is_empty())
             .collect::<Vec<_>>();
         items.sort_by_key(|(agent, _)| *agent);
-        items
+        let overlays = items
             .into_iter()
             .map(|(agent, buffer)| SwarmUiHiveOverlay {
                 agent: (*agent).to_owned(),
                 lines: buffer.tail(overlay_lines),
             })
-            .collect()
+            .collect::<Vec<_>>();
+        self.overlay_cache = Some(OverlayCache {
+            revision: self.buffers_revision,
+            lines: overlay_lines,
+            items: overlays.clone(),
+        });
+        overlays
     }
 
     pub(crate) fn detail(
-        &self,
+        &mut self,
         agent: Option<&str>,
         detail_lines: usize,
     ) -> Option<SwarmUiHiveDetail> {
         let agent = agent?;
+        if let Some(cache) = &self.detail_cache {
+            if cache.revision == self.buffers_revision
+                && cache.lines == detail_lines
+                && cache.agent == agent
+            {
+                return cache.detail.clone();
+            }
+        }
         let buffer = self.buffers.get(agent)?;
         if buffer.is_empty() {
+            self.detail_cache = Some(DetailCache {
+                revision: self.buffers_revision,
+                lines: detail_lines,
+                agent: agent.to_owned(),
+                detail: None,
+            });
             return None;
         }
-        Some(SwarmUiHiveDetail {
+        let detail = SwarmUiHiveDetail {
             agent: agent.to_owned(),
             lines: buffer.tail(detail_lines),
-        })
+        };
+        let detail_clone = detail.clone();
+        self.detail_cache = Some(DetailCache {
+            revision: self.buffers_revision,
+            lines: detail_lines,
+            agent: agent.to_owned(),
+            detail: Some(detail),
+        });
+        Some(detail_clone)
     }
 }
 
@@ -608,10 +694,12 @@ impl HiveTelemetryCursor {
         &mut self,
         client: &mut CohClient<T>,
         msize: u32,
-        budget: usize,
+        _budget: usize,
+        pending_cap: usize,
         now_ms: u64,
+        dropped: &mut u64,
     ) -> Result<(), SwarmUiError> {
-        if self.pending.len() >= budget {
+        if pending_cap == 0 || self.pending.len() >= pending_cap {
             return Ok(());
         }
         if !self.poller.should_poll(now_ms) {
@@ -629,7 +717,7 @@ impl HiveTelemetryCursor {
             .checked_add(chunk.len() as u64)
             .ok_or_else(|| SwarmUiError::Transport("telemetry offset overflow".to_owned()))?;
         self.buffer.extend_from_slice(&chunk);
-        self.extract_lines()?;
+        self.extract_lines(pending_cap, dropped)?;
         Ok(())
     }
 
@@ -642,8 +730,9 @@ impl HiveTelemetryCursor {
         buffer: &mut BoundedLineBuffer,
         role: Option<&str>,
         line_cap_bytes: usize,
-    ) -> usize {
+    ) -> (usize, bool) {
         let mut consumed = 0usize;
+        let mut touched = false;
         let namespace = format!("{worker_root}/{}/telemetry", self.worker_id);
         while consumed < budget {
             let Some(line) = self.pending.pop_front() else {
@@ -653,6 +742,7 @@ impl HiveTelemetryCursor {
                 continue;
             };
             buffer.push_line(normalized);
+            touched = true;
             if let Some(event) = parse_line_to_event_with_namespace(
                 &self.worker_id,
                 &namespace,
@@ -665,15 +755,29 @@ impl HiveTelemetryCursor {
                 consumed = consumed.saturating_add(1);
             }
         }
-        consumed
+        (consumed, touched)
     }
 
-    fn extract_lines(&mut self) -> Result<(), SwarmUiError> {
-        while let Some(pos) = self.buffer.iter().position(|byte| *byte == b'\n') {
-            let line_bytes: Vec<u8> = self.buffer.drain(..pos).collect();
-            let _ = self.buffer.drain(..1);
-            let line = decode_line(&line_bytes)?;
-            self.pending.push_back(line);
+    fn extract_lines(&mut self, pending_cap: usize, dropped: &mut u64) -> Result<(), SwarmUiError> {
+        let mut start = 0usize;
+        let mut idx = 0usize;
+        while idx < self.buffer.len() {
+            if self.buffer[idx] == b'\n' {
+                let line_bytes = &self.buffer[start..idx];
+                let line = decode_line(line_bytes)?;
+                self.pending.push_back(line);
+                if self.pending.len() > pending_cap {
+                    let _ = self.pending.pop_front();
+                    *dropped = dropped.saturating_add(1);
+                }
+                start = idx + 1;
+            }
+            idx += 1;
+        }
+        if start > 0 {
+            let remaining = self.buffer.len().saturating_sub(start);
+            self.buffer.copy_within(start.., 0);
+            self.buffer.truncate(remaining);
         }
         Ok(())
     }
@@ -744,6 +848,10 @@ pub(crate) struct ConsoleHiveSessionState {
     tail_policy: TailPollPolicy,
     seq: u64,
     dropped: u64,
+    worker_cursor: usize,
+    buffers_revision: u64,
+    overlay_cache: Option<OverlayCache>,
+    detail_cache: Option<DetailCache>,
 }
 
 impl ConsoleHiveSessionState {
@@ -761,6 +869,10 @@ impl ConsoleHiveSessionState {
             tail_policy,
             seq: 0,
             dropped: 0,
+            worker_cursor: 0,
+            buffers_revision: 0,
+            overlay_cache: None,
+            detail_cache: None,
         }
     }
 
@@ -773,25 +885,40 @@ impl ConsoleHiveSessionState {
     ) -> Result<(), SwarmUiError> {
         let now_ms = now_ms();
         let mut budget = config.lod_event_budget as usize;
-        let max_queue = config.snapshot_max_events as usize;
-        let workers = self.workers.clone();
-        for worker_id in workers {
-            if budget == 0 {
+        let max_queue = config.pending_event_cap as usize;
+        let worker_count = self.workers.len();
+        if worker_count == 0 {
+            return Ok(());
+        }
+        let pending_cap = config.pending_lines_per_worker as usize;
+        let max_workers = (config.poll_workers_per_tick as usize).min(worker_count);
+        let start_index = self.worker_cursor % worker_count;
+        let mut processed = 0usize;
+        for offset in 0..worker_count {
+            if processed >= max_workers || budget == 0 {
                 break;
             }
+            let idx = (start_index + offset) % worker_count;
+            let worker_id = self.workers[idx].clone();
             let poller = self
                 .pollers
                 .entry(worker_id.clone())
                 .or_insert_with(|| TailPoller::new(self.tail_policy, None));
             if !poller.should_poll(now_ms) {
+                processed = processed.saturating_add(1);
                 continue;
             }
             let path = format!("{worker_root}/{worker_id}/telemetry");
-            let lines = transport
+            let mut lines = transport
                 .tail(session, &path)
                 .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
             let _ = transport.drain_acknowledgements();
             poller.mark_polled(now_ms);
+            if pending_cap > 0 && lines.len() > pending_cap {
+                let keep_from = lines.len().saturating_sub(pending_cap);
+                lines = lines.split_off(keep_from);
+                self.dropped = self.dropped.saturating_add(keep_from as u64);
+            }
             let namespace = format!("{worker_root}/{worker_id}/telemetry");
             let detail_lines = config.detail_lines as usize;
             let line_cap = config.line_cap_bytes as usize;
@@ -804,6 +931,7 @@ impl ConsoleHiveSessionState {
                 .roles
                 .get(&worker_id)
                 .map(|value| value.as_str());
+            let mut touched = false;
             for line in lines {
                 if budget == 0 {
                     break;
@@ -812,6 +940,7 @@ impl ConsoleHiveSessionState {
                     continue;
                 };
                 buffer.push_line(normalized);
+                touched = true;
                 if let Some(event) = parse_line_to_event_with_namespace(
                     &worker_id,
                     &namespace,
@@ -825,7 +954,14 @@ impl ConsoleHiveSessionState {
                 }
             }
             self.buffers.insert(worker_id.clone(), buffer);
+            if touched {
+                self.buffers_revision = self.buffers_revision.wrapping_add(1);
+            }
             self.trim_queue(max_queue);
+            processed = processed.saturating_add(1);
+        }
+        if processed > 0 {
+            self.worker_cursor = (start_index + processed) % worker_count;
         }
         Ok(())
     }
@@ -856,38 +992,75 @@ impl ConsoleHiveSessionState {
         self.pollers.clear();
         self.seq = 0;
         self.dropped = 0;
+        self.worker_cursor = 0;
+        self.buffers_revision = 0;
+        self.overlay_cache = None;
+        self.detail_cache = None;
     }
 
-    pub(crate) fn overlays(&self, overlay_lines: usize) -> Vec<SwarmUiHiveOverlay> {
+    pub(crate) fn overlays(&mut self, overlay_lines: usize) -> Vec<SwarmUiHiveOverlay> {
+        if let Some(cache) = &self.overlay_cache {
+            if cache.revision == self.buffers_revision && cache.lines == overlay_lines {
+                return cache.items.clone();
+            }
+        }
         let mut items = self
             .buffers
             .iter()
             .filter(|(_, buffer)| !buffer.is_empty())
             .collect::<Vec<_>>();
         items.sort_by_key(|(agent, _)| *agent);
-        items
+        let overlays = items
             .into_iter()
             .map(|(agent, buffer)| SwarmUiHiveOverlay {
                 agent: (*agent).to_owned(),
                 lines: buffer.tail(overlay_lines),
             })
-            .collect()
+            .collect::<Vec<_>>();
+        self.overlay_cache = Some(OverlayCache {
+            revision: self.buffers_revision,
+            lines: overlay_lines,
+            items: overlays.clone(),
+        });
+        overlays
     }
 
     pub(crate) fn detail(
-        &self,
+        &mut self,
         agent: Option<&str>,
         detail_lines: usize,
     ) -> Option<SwarmUiHiveDetail> {
         let agent = agent?;
+        if let Some(cache) = &self.detail_cache {
+            if cache.revision == self.buffers_revision
+                && cache.lines == detail_lines
+                && cache.agent == agent
+            {
+                return cache.detail.clone();
+            }
+        }
         let buffer = self.buffers.get(agent)?;
         if buffer.is_empty() {
+            self.detail_cache = Some(DetailCache {
+                revision: self.buffers_revision,
+                lines: detail_lines,
+                agent: agent.to_owned(),
+                detail: None,
+            });
             return None;
         }
-        Some(SwarmUiHiveDetail {
+        let detail = SwarmUiHiveDetail {
             agent: agent.to_owned(),
             lines: buffer.tail(detail_lines),
-        })
+        };
+        let detail_clone = detail.clone();
+        self.detail_cache = Some(DetailCache {
+            revision: self.buffers_revision,
+            lines: detail_lines,
+            agent: agent.to_owned(),
+            detail: Some(detail),
+        });
+        Some(detail_clone)
     }
 
     fn trim_queue(&mut self, max_queue: usize) {

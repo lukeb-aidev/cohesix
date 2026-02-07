@@ -14,6 +14,8 @@ pub enum ConsoleVerb {
     BootInfo,
     /// `caps`
     Caps,
+    /// `smp`
+    Smp,
     /// `mem`
     Mem,
     /// `ping`
@@ -47,13 +49,14 @@ pub enum ConsoleVerb {
 }
 
 /// Number of console verbs known to the compiler.
-pub const VERB_SPEC_COUNT: usize = 18;
+pub const VERB_SPEC_COUNT: usize = 19;
 
 /// All console verbs in canonical order.
 pub const ALL_VERBS: [ConsoleVerb; VERB_SPEC_COUNT] = [
     ConsoleVerb::Help,
     ConsoleVerb::BootInfo,
     ConsoleVerb::Caps,
+    ConsoleVerb::Smp,
     ConsoleVerb::Mem,
     ConsoleVerb::Ping,
     ConsoleVerb::Test,
@@ -98,6 +101,11 @@ pub const VERB_SPECS: [VerbSpec; VERB_SPEC_COUNT] = [
         verb: ConsoleVerb::Caps,
         usage: "caps",
         example: "caps",
+    },
+    VerbSpec {
+        verb: ConsoleVerb::Smp,
+        usage: "smp",
+        example: "smp",
     },
     VerbSpec {
         verb: ConsoleVerb::Mem,
@@ -187,6 +195,7 @@ impl ConsoleVerb {
             Self::Help => "help",
             Self::BootInfo => "bi",
             Self::Caps => "caps",
+            Self::Smp => "smp",
             Self::Mem => "mem",
             Self::Ping => "ping",
             Self::Test => "test",
@@ -212,6 +221,7 @@ impl ConsoleVerb {
             Self::Help => "HELP",
             Self::BootInfo => "BOOTINFO",
             Self::Caps => "CAPS",
+            Self::Smp => "SMP",
             Self::Mem => "MEM",
             Self::Ping => "PING",
             Self::Test => "TEST",
@@ -239,6 +249,8 @@ impl ConsoleVerb {
             Some(Self::BootInfo)
         } else if token.eq_ignore_ascii_case("caps") {
             Some(Self::Caps)
+        } else if token.eq_ignore_ascii_case("smp") {
+            Some(Self::Smp)
         } else if token.eq_ignore_ascii_case("mem") {
             Some(Self::Mem)
         } else if token.eq_ignore_ascii_case("ping") {

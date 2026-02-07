@@ -10,6 +10,15 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+fn fmt_f32(value: f32) -> String {
+    let rendered = format!("{value:?}");
+    if rendered.contains('.') || rendered.contains('e') || rendered.contains('E') {
+        rendered
+    } else {
+        format!("{rendered}.0")
+    }
+}
+
 #[derive(Debug)]
 pub struct SwarmUiDefaultsArtifacts {
     pub defaults_toml: PathBuf,
@@ -109,13 +118,13 @@ fn render_defaults_toml(manifest: &Manifest, manifest_hash: &str) -> String {
     writeln!(
         contents,
         "lod_zoom_out = {}",
-        manifest.swarmui.hive.lod_zoom_out
+        fmt_f32(manifest.swarmui.hive.lod_zoom_out)
     )
     .ok();
     writeln!(
         contents,
         "lod_zoom_in = {}",
-        manifest.swarmui.hive.lod_zoom_in
+        fmt_f32(manifest.swarmui.hive.lod_zoom_in)
     )
     .ok();
     writeln!(
@@ -152,6 +161,36 @@ fn render_defaults_toml(manifest: &Manifest, manifest_hash: &str) -> String {
         contents,
         "per_worker_bytes = {}",
         manifest.swarmui.hive.per_worker_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pending_lines_per_worker = {}",
+        manifest.swarmui.hive.pending_lines_per_worker
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pending_event_cap = {}",
+        manifest.swarmui.hive.pending_event_cap
+    )
+    .ok();
+    writeln!(
+        contents,
+        "poll_workers_per_tick = {}",
+        manifest.swarmui.hive.poll_workers_per_tick
+    )
+    .ok();
+    writeln!(
+        contents,
+        "status_poll_ms = {}",
+        manifest.swarmui.hive.status_poll_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "degrade_pressure = {}",
+        fmt_f32(manifest.swarmui.hive.degrade_pressure)
     )
     .ok();
     writeln!(contents).ok();
@@ -262,13 +301,13 @@ fn render_defaults_rust(manifest: &Manifest, manifest_hash: &str) -> String {
     writeln!(
         contents,
         "pub const SWARMUI_HIVE_LOD_ZOOM_OUT: f32 = {};",
-        manifest.swarmui.hive.lod_zoom_out
+        fmt_f32(manifest.swarmui.hive.lod_zoom_out)
     )
     .ok();
     writeln!(
         contents,
         "pub const SWARMUI_HIVE_LOD_ZOOM_IN: f32 = {};",
-        manifest.swarmui.hive.lod_zoom_in
+        fmt_f32(manifest.swarmui.hive.lod_zoom_in)
     )
     .ok();
     writeln!(
@@ -305,6 +344,36 @@ fn render_defaults_rust(manifest: &Manifest, manifest_hash: &str) -> String {
         contents,
         "pub const SWARMUI_HIVE_PER_WORKER_BYTES: u32 = {};",
         manifest.swarmui.hive.per_worker_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_HIVE_PENDING_LINES_PER_WORKER: u16 = {};",
+        manifest.swarmui.hive.pending_lines_per_worker
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_HIVE_PENDING_EVENT_CAP: u32 = {};",
+        manifest.swarmui.hive.pending_event_cap
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_HIVE_POLL_WORKERS_PER_TICK: u16 = {};",
+        manifest.swarmui.hive.poll_workers_per_tick
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_HIVE_STATUS_POLL_MS: u32 = {};",
+        manifest.swarmui.hive.status_poll_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_HIVE_DEGRADE_PRESSURE: f32 = {};",
+        fmt_f32(manifest.swarmui.hive.degrade_pressure)
     )
     .ok();
     writeln!(
@@ -390,13 +459,13 @@ fn render_defaults_doc(manifest: &Manifest, manifest_hash: &str, defaults_hash: 
     writeln!(
         contents,
         "- `swarmui.hive.lod_zoom_out`: `{}`",
-        manifest.swarmui.hive.lod_zoom_out
+        fmt_f32(manifest.swarmui.hive.lod_zoom_out)
     )
     .ok();
     writeln!(
         contents,
         "- `swarmui.hive.lod_zoom_in`: `{}`",
-        manifest.swarmui.hive.lod_zoom_in
+        fmt_f32(manifest.swarmui.hive.lod_zoom_in)
     )
     .ok();
     writeln!(
@@ -433,6 +502,36 @@ fn render_defaults_doc(manifest: &Manifest, manifest_hash: &str, defaults_hash: 
         contents,
         "- `swarmui.hive.per_worker_bytes`: `{}`",
         manifest.swarmui.hive.per_worker_bytes
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.pending_lines_per_worker`: `{}`",
+        manifest.swarmui.hive.pending_lines_per_worker
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.pending_event_cap`: `{}`",
+        manifest.swarmui.hive.pending_event_cap
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.poll_workers_per_tick`: `{}`",
+        manifest.swarmui.hive.poll_workers_per_tick
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.status_poll_ms`: `{}`",
+        manifest.swarmui.hive.status_poll_ms
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.hive.degrade_pressure`: `{}`",
+        fmt_f32(manifest.swarmui.hive.degrade_pressure)
     )
     .ok();
     writeln!(

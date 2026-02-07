@@ -18,10 +18,10 @@ Usage: scripts/cohesix-build-run.sh [options] [-- <extra-qemu-args>]
 Build the Cohesix Rust workspace, assemble the seL4 payload CPIO archive, and
 boot the system under QEMU. The script expects an existing seL4 build tree that
 already produced `elfloader`, `kernel.elf`, and support artefacts. By default it
-looks for that tree at `$HOME/seL4/build`.
+looks for that tree at `$PROJECT_ROOT/seL4/SMP_build`.
 
 Options:
-  --sel4-build <dir>    Path to the seL4 build output (default: $HOME/seL4/build)
+  --sel4-build <dir>    Path to the seL4 build output (default: $PROJECT_ROOT/seL4/SMP_build)
   --out-dir <dir>       Directory for generated artefacts (default: out/cohesix)
   --clean               Remove existing contents of the output directory before building
   --profile <name>      Cargo profile to build (release|debug|custom; default: release)
@@ -45,6 +45,9 @@ Options:
 
 Any arguments following `--` are forwarded directly to QEMU (or passed through
 to cohsh via --qemu-arg when --transport qemu is selected).
+
+Env overrides:
+  COHESIX_QEMU_SMP / QEMU_SMP (default: 1)
 USAGE
 }
 
@@ -380,7 +383,7 @@ detect_gic_version() {
 }
 
 main() {
-    SEL4_BUILD_DIR="${SEL4_BUILD:-$HOME/seL4/build}"
+    SEL4_BUILD_DIR="${SEL4_BUILD:-$PROJECT_ROOT/seL4/SMP_build}"
     OUT_DIR="out/cohesix"
     PROFILE="release"
     CARGO_TARGET=""
@@ -399,6 +402,7 @@ main() {
     TCP_PORT="$HOST_CONSOLE_PORT"
     UDP_ECHO_PORT="$HOST_UDP_ECHO_PORT"
     TCP_SMOKE_PORT="$HOST_SMOKE_PORT"
+    QEMU_SMP="${COHESIX_QEMU_SMP:-${QEMU_SMP:-1}}"
     VIRTIO_MMIO_FORCE_LEGACY=${VIRTIO_MMIO_FORCE_LEGACY:-0}
     ROOT_TASK_FEATURES=""
     ROOT_TASK_FEATURES_OVERRIDE=0
@@ -555,6 +559,10 @@ main() {
 
     if [[ "$TRANSPORT" == "tcp" && "$TCP_PORT" -le 0 ]]; then
         fail "TCP port must be a positive integer"
+    fi
+
+    if ! [[ "$QEMU_SMP" =~ ^[0-9]+$ ]] || [[ "$QEMU_SMP" -lt 1 ]]; then
+        fail "QEMU_SMP must be a positive integer (got ${QEMU_SMP})"
     fi
 
     if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
@@ -879,7 +887,7 @@ PY
     log "Auto-detected GIC version: gic-version=$GIC_VER"
 
     # Serial output from the PL011 console and root-task logger is expected on stdio via -serial mon:stdio; keep this wiring intact when adjusting runtime flags.
-    BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
+    BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp "$QEMU_SMP" -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
         if [[ "$NET_BACKEND" == "virtio" ]]; then

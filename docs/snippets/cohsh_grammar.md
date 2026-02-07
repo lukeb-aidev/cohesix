@@ -5,6 +5,7 @@
 - `help`
 - `bi`
 - `caps`
+- `smp`
 - `mem`
 - `ping`
 - `test`
@@ -21,4 +22,4 @@
 - `spawn <payload>`
 - `kill <worker>`
 
-_Generated from cohsh-core verb specs (18 verbs)._
+_Generated from cohsh-core verb specs (19 verbs)._

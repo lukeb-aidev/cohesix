@@ -44,6 +44,7 @@ Use the root console for low-level validation (bootinfo, capability layout, unty
 - `help` – list available commands.【F:apps/root-task/src/console/mod.rs†L224-L233】
 - `bi` – bootinfo summary (node bits, empty window, IPC buffer if present).【F:apps/root-task/src/console/mod.rs†L234-L250】
 - `caps` – key capability slots (root CNode, endpoint, UART).【F:apps/root-task/src/console/mod.rs†L252-L263】
+- `smp` – dump SMP scheduler/CPU info in debug builds (prints `ERR reason=unsupported` otherwise).【F:apps/root-task/src/console/mod.rs†L265-L300】
 - `mem` – untyped cap counts with RAM vs device breakdown.【F:apps/root-task/src/console/mod.rs†L265-L283】
 - `ping` – replies `pong` as a liveness check.【F:apps/root-task/src/console/mod.rs†L285-L293】
 - `quit` – currently prints `quit not supported on root console`; the loop continues (no session exit).【F:apps/root-task/src/console/mod.rs†L285-L299】
@@ -57,6 +58,7 @@ Commands:
   help  - Show this help
   bi    - Show bootinfo summary
   caps  - Show capability slots
+  smp   - Show SMP scheduler/CPU info (debug builds only)
   mem   - Show untyped summary
   ping  - Respond with pong
   quit  - Exit the console session
@@ -391,7 +393,7 @@ Commands and status:
 - `detach` – close the current session without exiting the shell (required for multi-role scripts).【F:apps/cohsh/src/lib.rs†L1244-L1255】
 - `tail <path>` – stream a file; `log` tails `/log/queen.log`. Requires attachment.【F:apps/cohsh/src/lib.rs†L1170-L1179】
 - `ping` – reports attachment status; errors when detached or when given arguments.【F:apps/cohsh/src/lib.rs†L1181-L1194】
-- `test [--mode <quick|full>] [--json] [--timeout <s>] [--no-mutate]` – run the in-session self-tests sourced from `/proc/tests/` (default mode `quick`, default timeout 30s, hard cap 120s). `--no-mutate` skips spawn/kill steps. When `--json` is supplied, emit the stable schema described below.【F:apps/cohsh/src/lib.rs†L1512-L1763】
+- `test [--mode <quick|full|smp>] [--json] [--timeout <s>] [--no-mutate]` – run the in-session self-tests sourced from `/proc/tests/` (default mode `quick`, default timeout 30s, hard cap 120s). `--no-mutate` skips spawn/kill steps. When `--json` is supplied, emit the stable schema described below.【F:apps/cohsh/src/lib.rs†L1512-L1763】
   - Note: the bundled self-test scripts end with `quit`; interactive `cohsh` reattaches to the last session when possible, while `--script` runs remain detached and require a fresh `attach`.
 - `pool bench <k=v...>` – run the pooled throughput benchmark and retry/exhaustion checks; options include `path`, `ops`, `batch`, `payload`, `payload_bytes`, `delay_ms`, `inject_failures`, `inject_bytes`, `exhaust`, `kind`.
   - On TCP console transports, throughput is informational only; readback uses write acknowledgements (CAT is skipped) and line-length limits apply before `payload_bytes`.
@@ -478,6 +480,7 @@ For streaming commands, the “response line” is the initial acknowledgement l
 - `/proc/tests/selftest_quick.coh`
 - `/proc/tests/selftest_full.coh`
 - `/proc/tests/selftest_negative.coh`
+- `/proc/tests/selftest_smp.coh`
 - Operators must rerun this suite whenever console handling, Secure9P transport, namespace structure, or access policies change.
 
 ### `coh> test` JSON schema
@@ -530,14 +533,15 @@ This section covers the development harness for running Cohesix on QEMU; product
 ### Terminal 1 – build and boot under QEMU
 Run the build wrapper to compile components, stage host tools, and launch QEMU with PL011 serial plus a user-mode TCP forward to `127.0.0.1:<port>`:
 ```
-SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
-  --sel4-build "$HOME/seL4/build" \
+SEL4_BUILD_DIR="$PWD/seL4/SMP_build" ./scripts/cohesix-build-run.sh \
+  --sel4-build "$PWD/seL4/SMP_build" \
   --out-dir out/cohesix \
   --profile release \
   --root-task-features cohesix-dev \
   --cargo-target aarch64-unknown-none \
   --transport tcp
 ```
+Use `--sel4-build "$PWD/seL4/build"` to target the single-core baseline (keeps SMP artifacts separate).
 The script builds `root-task` with the serial and TCP console features, compiles NineDoor and workers, copies host tools (`cohsh`, `gpu-bridge-host`, `host-sidecar-bridge`) into `out/cohesix/host-tools/`, and assembles the CPIO payload.【F:scripts/cohesix-build-run.sh†L369-L454】【F:scripts/cohesix-build-run.sh†L402-L442】
 QEMU runs with `-serial mon:stdio` and a user-net device that forwards TCP/UDP ports 31337–31339 into the guest so the TCP console and self-tests are reachable from the host.【F:scripts/cohesix-build-run.sh†L518-L553】 The wrapper selects the NIC backend from the root-task features: `dev-virt` (via `cohesix-dev`) uses virtio-net by default, which adds `-global virtio-mmio.force-legacy=false` for the modern header; removing `net-backend-virtio` switches the wrapper to RTL8139 instead.【F:scripts/cohesix-build-run.sh†L518-L553】 The script prints the ready command for `cohsh` once QEMU is live.【F:scripts/cohesix-build-run.sh†L546-L553】 In deployment, the same console and `cohsh` flows apply to UEFI-booted ARM64 hardware without the VM wrapper.
 

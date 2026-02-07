@@ -2,8 +2,8 @@
 <!-- Purpose: Generated SwarmUI defaults snippet consumed by docs/USERLAND_AND_CLI.md. -->
 
 ### SwarmUI defaults (generated)
-- `manifest.sha256`: `7d6b2ecf259049c1e431a37e693118b9bccc05395e374934f3dc6837d1004c1f`
-- `swarmui.defaults.sha256`: `840f16192d1668c2a90b7819c84eead23239c08c81b70f5288cebe5fc0a4683b`
+- `manifest.sha256`: `2e64f09fb17eafce52fe3e7a29fa7eb11f2299022ca7d13eabf9b31c809b4234`
+- `swarmui.defaults.sha256`: `f59a808dc09a387029b8b54c29be9a746efdceb529f4f7fcf38110558a42f403`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
 - `swarmui.cache.max_bytes`: `262144`
@@ -18,10 +18,15 @@
 - `swarmui.hive.detail_lines`: `50`
 - `swarmui.hive.line_cap_bytes`: `160`
 - `swarmui.hive.per_worker_bytes`: `2048`
+- `swarmui.hive.pending_lines_per_worker`: `64`
+- `swarmui.hive.pending_event_cap`: `4096`
+- `swarmui.hive.poll_workers_per_tick`: `32`
+- `swarmui.hive.status_poll_ms`: `500`
+- `swarmui.hive.degrade_pressure`: `1.0`
 - `swarmui.paths.telemetry_root`: `/worker`
 - `swarmui.paths.proc_ingest_root`: `/proc/ingest`
 - `swarmui.paths.worker_root`: `/worker`
 - `swarmui.paths.namespace_roots`: `/proc, /queen, /worker, /log, /gpu`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `7d6b2ecf259049c1e431a37e693118b9bccc05395e374934f3dc6837d1004c1f`)._
+_Generated from `configs/root_task.toml` (sha256: `2e64f09fb17eafce52fe3e7a29fa7eb11f2299022ca7d13eabf9b31c809b4234`)._

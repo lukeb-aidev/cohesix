@@ -35,7 +35,7 @@ fn snapshot_cache_bounds_and_expiry() {
     let cache = SnapshotCache::new(
         temp_dir.path().join("snapshots"),
         128,
-        Duration::from_millis(1),
+        Duration::from_millis(25),
     );
     let payload = vec![1u8, 2u8, 3u8, 4u8];
     let record = cache.write("fleet:ingest", &payload).expect("write");
@@ -44,7 +44,7 @@ fn snapshot_cache_bounds_and_expiry() {
     let read = cache.read("fleet:ingest").expect("read");
     assert_eq!(read.payload, payload);
 
-    std::thread::sleep(Duration::from_millis(4));
+    std::thread::sleep(Duration::from_millis(60));
     let expired = cache.read("fleet:ingest").unwrap_err();
     assert!(matches!(expired, CacheError::Expired));
 

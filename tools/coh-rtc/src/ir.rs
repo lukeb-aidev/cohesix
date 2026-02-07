@@ -56,6 +56,7 @@ const MAX_LEASE_RESOURCE_LEN: usize = 48;
 const MAX_LEASE_REASON_LEN: usize = 24;
 const MAX_LEASE_ACTIVE_ENTRIES: u32 = 256;
 const MAX_LEASE_PREEMPTION_ENTRIES: u32 = 256;
+const MAX_AFFINITY_CORES: u8 = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,6 +160,7 @@ impl Manifest {
         self.validate_client_paths()?;
         self.validate_swarmui()?;
         self.validate_cas(base_dir)?;
+        self.validate_affinity()?;
         Ok(())
     }
 
@@ -192,6 +194,58 @@ impl Manifest {
             let key = (ticket.role.as_str(), ticket.secret.as_str());
             if !seen.insert(key) {
                 bail!("duplicate ticket entry for role {}", ticket.role.as_str());
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_affinity(&self) -> Result<()> {
+        let affinity = &self.root_task.affinity;
+        if affinity.max_cores == 0 {
+            bail!("root_task.affinity.max_cores must be >= 1");
+        }
+        if affinity.max_cores > MAX_AFFINITY_CORES {
+            bail!(
+                "root_task.affinity.max_cores {} exceeds max {}",
+                affinity.max_cores,
+                MAX_AFFINITY_CORES
+            );
+        }
+        let max_core = affinity.max_cores;
+        if let Some(core) = affinity.authority_core {
+            if core >= max_core {
+                bail!(
+                    "root_task.affinity.authority_core {} exceeds max_core {}",
+                    core,
+                    max_core
+                );
+            }
+        }
+        for &core in affinity.ninedoor_cores.iter() {
+            if core >= max_core {
+                bail!(
+                    "root_task.affinity.ninedoor_cores contains {} which exceeds max_core {}",
+                    core,
+                    max_core
+                );
+            }
+        }
+        for &core in affinity.provider_cores.iter() {
+            if core >= max_core {
+                bail!(
+                    "root_task.affinity.provider_cores contains {} which exceeds max_core {}",
+                    core,
+                    max_core
+                );
+            }
+        }
+        for &core in affinity.worker_cores.iter() {
+            if core >= max_core {
+                bail!(
+                    "root_task.affinity.worker_cores contains {} which exceeds max_core {}",
+                    core,
+                    max_core
+                );
             }
         }
         Ok(())
@@ -1537,6 +1591,24 @@ impl Manifest {
         if hive.per_worker_bytes < hive.line_cap_bytes {
             bail!("swarmui.hive.per_worker_bytes must be >= line_cap_bytes");
         }
+        if hive.pending_lines_per_worker == 0 {
+            bail!("swarmui.hive.pending_lines_per_worker must be > 0");
+        }
+        if hive.pending_event_cap == 0 {
+            bail!("swarmui.hive.pending_event_cap must be > 0");
+        }
+        if hive.pending_event_cap < hive.lod_event_budget {
+            bail!("swarmui.hive.pending_event_cap must be >= lod_event_budget");
+        }
+        if hive.poll_workers_per_tick == 0 {
+            bail!("swarmui.hive.poll_workers_per_tick must be > 0");
+        }
+        if hive.status_poll_ms == 0 {
+            bail!("swarmui.hive.status_poll_ms must be > 0");
+        }
+        if hive.degrade_pressure <= 0.0 {
+            bail!("swarmui.hive.degrade_pressure must be > 0");
+        }
         self.validate_client_path(
             "swarmui.paths.telemetry_root",
             &swarmui.paths.telemetry_root,
@@ -1656,6 +1728,32 @@ impl Manifest {
 #[serde(deny_unknown_fields)]
 pub struct RootTaskSection {
     pub schema: String,
+    #[serde(default)]
+    pub affinity: AffinityPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AffinityPolicy {
+    pub enabled: bool,
+    pub max_cores: u8,
+    pub authority_core: Option<u8>,
+    pub ninedoor_cores: Vec<u8>,
+    pub provider_cores: Vec<u8>,
+    pub worker_cores: Vec<u8>,
+}
+
+impl Default for AffinityPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_cores: 1,
+            authority_core: None,
+            ninedoor_cores: Vec::new(),
+            provider_cores: Vec::new(),
+            worker_cores: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2699,6 +2797,11 @@ pub struct SwarmUiHiveConfig {
     pub detail_lines: u16,
     pub line_cap_bytes: u32,
     pub per_worker_bytes: u32,
+    pub pending_lines_per_worker: u16,
+    pub pending_event_cap: u32,
+    pub poll_workers_per_tick: u16,
+    pub status_poll_ms: u32,
+    pub degrade_pressure: f32,
 }
 
 impl Default for SwarmUiHiveConfig {
@@ -2714,6 +2817,11 @@ impl Default for SwarmUiHiveConfig {
             detail_lines: 50,
             line_cap_bytes: 160,
             per_worker_bytes: 2048,
+            pending_lines_per_worker: 64,
+            pending_event_cap: 4096,
+            poll_workers_per_tick: 32,
+            status_poll_ms: 500,
+            degrade_pressure: 1.0,
         }
     }
 }

@@ -241,6 +241,7 @@ const QUEEN_LOG_PATH: &str = CLIENT_LOG_PATH;
 const TEST_SCRIPT_QUICK_PATH: &str = "/proc/tests/selftest_quick.coh";
 const TEST_SCRIPT_FULL_PATH: &str = "/proc/tests/selftest_full.coh";
 const TEST_SCRIPT_NEGATIVE_PATH: &str = "/proc/tests/selftest_negative.coh";
+const TEST_SCRIPT_SMP_PATH: &str = "/proc/tests/selftest_smp.coh";
 const PROC_LIFECYCLE_STATE_PATH: &str = "/proc/lifecycle/state";
 const DEFAULT_TEST_TIMEOUT_SECS: u64 = 30;
 const MAX_TEST_TIMEOUT_SECS: u64 = 120;
@@ -1376,6 +1377,7 @@ struct ScriptResponseLine {
 enum TestMode {
     Quick,
     Full,
+    Smp,
 }
 
 impl TestMode {
@@ -1383,6 +1385,7 @@ impl TestMode {
         match self {
             Self::Quick => "quick",
             Self::Full => "full",
+            Self::Smp => "smp",
         }
     }
 }
@@ -1413,6 +1416,7 @@ struct PoolBenchResult {
     baseline: PoolBenchSample,
     pooled: PoolBenchSample,
     retries: usize,
+    injected: usize,
     pool_exhausted: usize,
     failures: usize,
     observed: usize,
@@ -1859,6 +1863,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
         let script_paths = match options.mode {
             TestMode::Quick => [TEST_SCRIPT_NEGATIVE_PATH, TEST_SCRIPT_QUICK_PATH],
             TestMode::Full => [TEST_SCRIPT_NEGATIVE_PATH, TEST_SCRIPT_FULL_PATH],
+            TestMode::Smp => [TEST_SCRIPT_NEGATIVE_PATH, TEST_SCRIPT_SMP_PATH],
         };
 
         for path in script_paths {
@@ -2947,6 +2952,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
         let pooled_successes = Arc::new(AtomicUsize::new(0));
         let pooled_failures = Arc::new(AtomicUsize::new(0));
         let remaining_injects = Arc::new(AtomicUsize::new(config.inject_failures));
+        let injected_count = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::with_capacity(worker_count);
 
         for _ in 0..worker_count {
@@ -2963,6 +2969,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
             let successes = Arc::clone(&pooled_successes);
             let failures = Arc::clone(&pooled_failures);
             let shared_ops = Arc::clone(&shared_ops);
+            let injected_count = Arc::clone(&injected_count);
             handles.push(thread::spawn(move || -> Result<TransportMetrics> {
                 let mut lease = pool.checkout(kind)?;
                 loop {
@@ -3003,6 +3010,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         }
                     }
                     if injected {
+                        injected_count.fetch_add(1, Ordering::SeqCst);
                         info!("audit pool.inject.short_write bytes={inject_bytes}");
                     }
                     let session = lease.session().clone();
@@ -3045,24 +3053,25 @@ impl<T: Transport, W: Write> Shell<T, W> {
             pooled_failures = pooled_failures.saturating_add(pooled_errors.len());
         }
 
-        let read_lines = if tcp_endpoint {
-            None
-        } else {
+        let use_readback = !tcp_endpoint && self.transport.kind() != "rest";
+        let read_lines = if use_readback {
             match self.transport.read(session, config.path.as_str()) {
                 Ok(lines) => Some(lines),
                 Err(err) => {
                     return Err(err).with_context(|| format!("failed to read {}", config.path));
                 }
             }
+        } else {
+            None
         };
         let _ = self.transport.drain_acknowledgements();
-        let observed = if tcp_endpoint {
-            pooled_successes
-        } else {
+        let observed = if use_readback {
             read_lines
                 .as_ref()
                 .map(|lines| count_occurrences(lines, pooled_prefix.as_str()))
                 .unwrap_or(0)
+        } else {
+            pooled_successes
         };
         if tcp_endpoint && observed < config.ops {
             info!(
@@ -3074,11 +3083,13 @@ impl<T: Transport, W: Write> Shell<T, W> {
         let baseline_sample = build_sample(baseline_written, baseline_elapsed);
         let pooled_sample = build_sample(pooled_successes, pooled_elapsed);
         let retries = baseline_retries.saturating_add(pooled_retries);
+        let injected = injected_count.load(Ordering::SeqCst);
 
         Ok(PoolBenchResult {
             baseline: baseline_sample,
             pooled: pooled_sample,
             retries,
+            injected,
             pool_exhausted,
             failures: pooled_failures,
             observed,
@@ -3218,7 +3229,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                             result.pooled.ops_per_s > result.baseline.ops_per_s
                         };
                         let mut ok = result.failures == 0 && result.observed == result.expected;
-                        if config.inject_failures > 0 && result.retries == 0 {
+                        if config.inject_failures > 0 && result.injected > 0 && result.retries == 0 {
                             ok = false;
                         }
                         if config.exhaust > 0 && result.pool_exhausted == 0 {
@@ -3543,12 +3554,17 @@ fn parse_test_args<'a>(mut args: impl Iterator<Item = &'a str>) -> Result<TestOp
                     value
                 } else {
                     args.next()
-                        .ok_or_else(|| anyhow!("--mode requires quick or full"))?
+                        .ok_or_else(|| anyhow!("--mode requires quick, full, or smp"))?
                 };
                 mode = match value {
                     "quick" => TestMode::Quick,
                     "full" => TestMode::Full,
-                    _ => return Err(anyhow!("unsupported mode '{value}' (expected quick|full)")),
+                    "smp" => TestMode::Smp,
+                    _ => {
+                        return Err(anyhow!(
+                            "unsupported mode '{value}' (expected quick|full|smp)"
+                        ))
+                    }
                 };
             }
             _ if arg.starts_with("--timeout") => {

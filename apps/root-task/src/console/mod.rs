@@ -155,6 +155,20 @@ impl CohesixConsole {
         self.emit_line(line.as_str());
     }
 
+    fn print_smp(&mut self) {
+        #[cfg(all(feature = "kernel", sel4_config_debug_build))]
+        {
+            self.emit_line("[smp] debug scheduler dump begin");
+            unsafe {
+                sel4_sys::seL4_DebugDumpScheduler();
+                sel4_sys::seL4_DebugDumpCPUInfo();
+            }
+            self.emit_line("[smp] debug scheduler dump end");
+            return;
+        }
+        self.emit_line("ERR reason=unsupported");
+    }
+
     fn print_mem(&mut self) {
         let bi = self.bootinfo();
         let count = (bi.untyped.end - bi.untyped.start) as usize;
@@ -180,6 +194,7 @@ impl CohesixConsole {
             Command::Help => self.print_help(),
             Command::BootInfo => self.print_bootinfo(),
             Command::Caps => self.print_caps(),
+            Command::Smp => self.print_smp(),
             Command::Mem => self.print_mem(),
             Command::Ping => self.emit_line("pong"),
             Command::Test => self.emit_line("test not supported on root console"),

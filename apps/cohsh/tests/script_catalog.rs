@@ -96,6 +96,7 @@ fn script_feature_inventory_is_stable() {
         "CMD:log".to_owned(),
         "CMD:pool".to_owned(),
         "CMD:ls".to_owned(),
+        "CMD:ping".to_owned(),
         "CMD:quit".to_owned(),
         "CMD:spawn".to_owned(),
         "CMD:telemetry".to_owned(),
@@ -163,6 +164,8 @@ fn script_token_stream_is_stable() {
         "shard_1k.coh:e2bc812ad54129094db9cafbc5ed7d38fef0cf5fc24e0a993d73dcc2ef963cbd"
             .to_owned(),
         "sidecar_integration.coh:4cb5dcf403712defa9016f4bcc4bf27b891df6a1dce646dc304acf4b5f7cad74"
+            .to_owned(),
+        "smp_parity.coh:168c1785b657bd41644d1dd479619bac6f0ef6d82a9da774a4f7e08077420729"
             .to_owned(),
         "tcp_basic.coh:619970b6ff14332bbef80f704c117b4471653bb75f7a6187b27d93fbc16415a7"
             .to_owned(),

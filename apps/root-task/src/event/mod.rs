@@ -1504,6 +1504,7 @@ where
         self.emit_console_line("  help  - Show this help");
         self.emit_console_line("  bi    - Show bootinfo summary");
         self.emit_console_line("  caps  - Show capability slots");
+        self.emit_console_line("  smp   - Show SMP scheduler/CPU info (debug builds only)");
         self.emit_console_line("  mem   - Show untyped summary");
         self.emit_console_line("  ping  - Respond with pong");
         self.emit_console_line("  test  - Self-test (host-only; use cohsh)");
@@ -1517,6 +1518,7 @@ where
         self.emit_serial_line("  help  - Show this help");
         self.emit_serial_line("  bi    - Show bootinfo summary");
         self.emit_serial_line("  caps  - Show capability slots");
+        self.emit_serial_line("  smp   - Show SMP scheduler/CPU info (debug builds only)");
         self.emit_serial_line("  mem   - Show untyped summary");
         self.emit_serial_line("  ping  - Respond with pong");
         self.emit_serial_line("  test  - Self-test (host-only; use cohsh)");
@@ -1587,6 +1589,23 @@ where
     #[cfg(not(feature = "kernel"))]
     fn emit_caps(&mut self) -> bool {
         let _ = self;
+        false
+    }
+
+    #[cfg(all(feature = "kernel", sel4_config_debug_build))]
+    fn emit_smp(&mut self) -> bool {
+        self.emit_console_line("[smp] debug scheduler dump begin");
+        unsafe {
+            sel4_sys::seL4_DebugDumpScheduler();
+            sel4_sys::seL4_DebugDumpCPUInfo();
+        }
+        self.emit_console_line("[smp] debug scheduler dump end");
+        true
+    }
+
+    #[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]
+    fn emit_smp(&mut self) -> bool {
+        self.emit_console_line("ERR reason=unsupported");
         false
     }
 
@@ -1709,6 +1728,7 @@ where
             NineDoorBridgeError::Permission => (RefusalReason::Policy, "denied"),
             NineDoorBridgeError::BufferFull => (RefusalReason::Quota, "buffer-full"),
             NineDoorBridgeError::InvalidPayload => (RefusalReason::Policy, "invalid-payload"),
+            NineDoorBridgeError::Busy => (RefusalReason::Busy, "busy"),
         }
     }
 
@@ -1908,6 +1928,20 @@ where
                         verb_label,
                         RefusalReason::Policy,
                         Some("detail=unavailable"),
+                    );
+                }
+            }
+            Command::Smp => {
+                if self.emit_smp() {
+                    self.metrics.accepted_commands += 1;
+                    self.emit_ack_ok(verb_label, None);
+                } else {
+                    self.metrics.denied_commands += 1;
+                    cmd_status = "err";
+                    self.emit_refusal(
+                        verb_label,
+                        RefusalReason::Policy,
+                        Some("detail=unsupported"),
                     );
                 }
             }
@@ -2997,6 +3031,7 @@ where
             | Command::Quit
             | Command::BootInfo
             | Command::Caps
+            | Command::Smp
             | Command::Mem
             | Command::CacheLog { .. }
             | Command::Ping

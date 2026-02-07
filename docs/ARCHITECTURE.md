@@ -27,6 +27,12 @@ Non-goals:
 - The only in-VM TCP listener is the root-task console; all other TCP services remain host-only.
 - Device access (MMIO, DMA, cache ops) goes through the HAL; no direct MMIO outside HAL.
 
+## 2.1 SMP Execution Model (Task Isolation)
+- SMP is enabled only when the seL4 kernel is built with `SMP=ON` and `KernelMaxNumNodes >= 2`.
+- Cohesix uses **task isolation** (separate seL4 tasks) rather than shared-memory multithreading; authoritative state remains serialized.
+- For QEMU bring-up, set `COHESIX_QEMU_SMP` (or `QEMU_SMP`) to match `KernelMaxNumNodes` when running `scripts/qemu-run.sh` or `scripts/cohesix-build-run.sh`.
+- Optional affinity hints live in `root_task.affinity` inside `configs/root_task.toml`; all core indices must be `< max_cores`, and `max_cores` must match the kernel build’s node count when affinity is enabled.
+
 ## 3. Top-Level Architecture
 - `root-task` (`apps/root-task`): seL4 bootstrap, CSpace management, event pump, console (serial + TCP), ticket issuance, log buffer (`/log/queen.log`), HAL, and the in-VM NineDoor bridge.
 - `NineDoor` (`apps/nine-door`): Secure9P server for host builds and in-process tests. On seL4, `apps/root-task/src/ninedoor.rs` provides `NineDoorBridge`, a namespace/control shim used by the console path.

@@ -49,6 +49,8 @@ export class HiveWorld {
     this.pulses = [];
     this.flows = new Map();
     this.clusters = new Map();
+    this.maxPollenBase = style.maxPollen;
+    this.maxPulsesBase = style.maxPulses;
     this.maxPollen = style.maxPollen;
     this.maxPulses = style.maxPulses;
   }
@@ -56,6 +58,19 @@ export class HiveWorld {
   setBounds(width, height) {
     this.bounds.width = width;
     this.bounds.height = height;
+  }
+
+  setBudgets(pollenScale = 1, pulseScale = 1) {
+    const nextPollen = Math.max(0, Math.floor(this.maxPollenBase * pollenScale));
+    const nextPulses = Math.max(0, Math.floor(this.maxPulsesBase * pulseScale));
+    this.maxPollen = nextPollen;
+    this.maxPulses = nextPulses;
+    if (this.pollen.length > nextPollen) {
+      this.pollen.length = nextPollen;
+    }
+    if (this.pulses.length > nextPulses) {
+      this.pulses.length = nextPulses;
+    }
   }
 
   ensureAgent(id, namespace, role = "worker") {
@@ -85,11 +100,26 @@ export class HiveWorld {
       heat: 0,
       error: 0,
       labelIndex: null,
+      pos: { x: 0, y: 0 },
     };
     this.agents.set(id, agent);
     this.registerCluster(agent.cluster, id);
     this.labelDirty = true;
     return agent;
+  }
+
+  updatePositions() {
+    const { width, height } = this.bounds;
+    for (const agent of this.agents.values()) {
+      const anchorX = (agent.anchor.x - 0.5) * width * this.style.positionScale;
+      const anchorY = (agent.anchor.y - 0.5) * height * this.style.positionScale;
+      const wobble = this.style.driftAmplitude;
+      const phase = (agent.seed % 360) * (Math.PI / 180);
+      const wobbleX = Math.sin(this.time * this.style.driftRateX + phase) * wobble;
+      const wobbleY = Math.cos(this.time * this.style.driftRateY + phase) * wobble;
+      agent.pos.x = anchorX + wobbleX;
+      agent.pos.y = anchorY + wobbleY;
+    }
   }
 
   registerCluster(clusterId, agentId) {
@@ -171,6 +201,9 @@ export class HiveWorld {
   }
 
   positionForAgent(agent) {
+    if (agent.pos) {
+      return agent.pos;
+    }
     const { width, height } = this.bounds;
     const anchorX = (agent.anchor.x - 0.5) * width * this.style.positionScale;
     const anchorY = (agent.anchor.y - 0.5) * height * this.style.positionScale;
@@ -178,14 +211,13 @@ export class HiveWorld {
     const phase = (agent.seed % 360) * (Math.PI / 180);
     const wobbleX = Math.sin(this.time * this.style.driftRateX + phase) * wobble;
     const wobbleY = Math.cos(this.time * this.style.driftRateY + phase) * wobble;
-    return {
-      x: anchorX + wobbleX,
-      y: anchorY + wobbleY,
-    };
+    agent.pos = { x: anchorX + wobbleX, y: anchorY + wobbleY };
+    return agent.pos;
   }
 
   update(dt) {
     this.time += dt;
+    this.updatePositions();
     for (const agent of this.agents.values()) {
       agent.heat = clamp(agent.heat - dt * this.style.heatDecay, 0, 1);
       agent.error = clamp(agent.error - dt * this.style.errorDecay, 0, 1);
@@ -200,16 +232,32 @@ export class HiveWorld {
         this.flows.delete(key);
       }
     }
-    this.pollen = this.pollen.filter((particle) => {
+    let pollenWrite = 0;
+    for (let i = 0; i < this.pollen.length; i += 1) {
+      const particle = this.pollen[i];
       particle.age += dt;
       particle.x += particle.vx * dt;
       particle.y += particle.vy * dt;
-      return particle.age < particle.life;
-    });
-    this.pulses = this.pulses.filter((pulse) => {
+      if (particle.age < particle.life) {
+        if (pollenWrite !== i) {
+          this.pollen[pollenWrite] = particle;
+        }
+        pollenWrite += 1;
+      }
+    }
+    this.pollen.length = pollenWrite;
+    let pulseWrite = 0;
+    for (let i = 0; i < this.pulses.length; i += 1) {
+      const pulse = this.pulses[i];
       pulse.age += dt;
-      return pulse.age < pulse.life;
-    });
+      if (pulse.age < pulse.life) {
+        if (pulseWrite !== i) {
+          this.pulses[pulseWrite] = pulse;
+        }
+        pulseWrite += 1;
+      }
+    }
+    this.pulses.length = pulseWrite;
     if (this.labelDirty) {
       this.refreshLabels();
     }

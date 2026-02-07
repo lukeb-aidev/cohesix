@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Track Cohesix milestones, deliverables, and completion criteria for ARM64 Pure Rust userspace builds. -->
 <!-- Author: Lukas Bower -->
@@ -4598,6 +4598,7 @@ If the authority task cannot accept work:
 - Back-pressure is explicit and observable.
 - No new threads, runtimes, or hidden queues introduced.
 - `scripts/cohsh/REST_regression_batch.sh` passes unchanged with `hive-gateway` as the sole console client (concurrent REST runs).
+- `cohsh test --mode smp` completes without unexpected errors while the root console `smp` command reports activity (or deterministic `ERR reason=unsupported` on non-debug builds).
 - Root console `smp` command emits per-core scheduler/CPU metrics (or deterministic `ERR reason=unsupported` when debug syscalls are unavailable).
 - Documentation clearly explains the SMP model and its constraints.
 
@@ -4605,16 +4606,29 @@ If the authority task cannot accept work:
 ```
 Title/ID: m25c-smp-kernel-enable
 Goal: Enable seL4 SMP in the external kernel build and document requirements.
-Inputs: seL4/build, docs/ARCHITECTURE.md, docs/BUILD_PLAN.md.
+Inputs: ~/seL4/SMP_build, docs/ARCHITECTURE.md, docs/BUILD_PLAN.md.
 Changes:
-  - seL4/build/ — regenerate kernel artifacts with SMP enabled.
+  - ~/seL4/SMP_build/ — regenerate kernel artifacts with SMP enabled (do not touch ~/seL4/build).
   - docs/ARCHITECTURE.md — record SMP kernel requirements and QEMU CPU count.
 Commands:
-  - make -C seL4/build
+  - cmake --build ~/seL4/SMP_build
 Checks:
   - SMP-enabled kernel boots under QEMU with >1 core.
 Deliverables:
   - SMP kernel artifacts and documented build requirements.
+
+Title/ID: m25c-smp-build-mirror
+Goal: Mirror SMP build outputs into the repo and make SMP the default build path.
+Inputs: ~/seL4/SMP_build, seL4/SMP_build, scripts/cohesix-build-run.sh.
+Changes:
+  - seL4/SMP_build/ — copy SMP build outputs from ~/seL4/SMP_build (leave seL4/build untouched).
+  - scripts/cohesix-build-run.sh — default SEL4_BUILD_DIR to seL4/SMP_build; allow override to seL4/build.
+Commands:
+  - rsync -a ~/seL4/SMP_build/ seL4/SMP_build/
+Checks:
+  - `scripts/cohesix-build-run.sh` uses seL4/SMP_build by default; `--sel4-build seL4/build` overrides correctly.
+Deliverables:
+  - Repo-local SMP build outputs and updated build defaults.
 
 Title/ID: m25c-authority-ipc
 Goal: Serialize authoritative decisions behind a single IPC surface.
@@ -4669,6 +4683,23 @@ Checks:
 Deliverables:
   - SMP parity regression coverage.
 
+Title/ID: m25c-smp-cohsh-selftest
+Goal: Add `cohsh test --mode smp` to pressure SMP and surface activity for the `smp` console command.
+Inputs: apps/cohsh, apps/nine-door, resources/proc_tests, docs/USERLAND_AND_CLI.md, docs/TEST_PLAN.md.
+Changes:
+  - resources/proc_tests/selftest_smp.coh — SMP-oriented regression script.
+  - apps/nine-door/src/host/namespace.rs — expose `/proc/tests/selftest_smp.coh`.
+  - apps/cohsh/src/lib.rs — accept `test --mode smp` and map to the new script.
+  - docs/USERLAND_AND_CLI.md — document the new selftest script and mode.
+  - docs/TEST_PLAN.md — add `test --mode smp` to QEMU regression steps.
+Commands:
+  - cargo test -p cohsh
+Checks:
+  - `cohsh test --mode smp` completes without unexpected errors.
+  - Root console `smp` shows activity (or deterministic `ERR reason=unsupported` on non-debug builds).
+Deliverables:
+  - SMP selftest script and cohsh mode support.
+
 Title/ID: m25-smp-console-metrics
 Goal: Add a root console verb to emit per-core SMP metrics for seL4.
 Inputs: root console parser, seL4 debug syscall docs, docs/USERLAND_AND_CLI.md.
@@ -4696,6 +4727,29 @@ Checks:
   - `ERR ... reason=busy` appears only under saturation and is audited; ACK/ERR ordering remains deterministic.
 Deliverables:
   - REST multiplexer SMP stress harness and documented runbook.
+
+Title/ID: m25h-live-hive-turbo
+Goal: Deliver ≥100x Live Hive responsiveness by prioritizing fresh telemetry visibility, bounded aggregation, and adaptive rendering without changing protocol semantics.
+Inputs: apps/swarmui/src, apps/swarmui/frontend, tools/coh-rtc, docs/INTERFACES.md, docs/TEST_PLAN.md.
+Changes:
+  - apps/swarmui/src/hive.rs — O(1) telemetry line parsing, per-worker pending caps, fresh-only coalescing, round-robin worker sampling, overlay/detail caching.
+  - apps/swarmui/src/lib.rs — Live Hive polling uses freshness-first policy; status snapshots rate-limited behind IR-driven bounds.
+  - apps/swarmui/frontend/hive/index.js — ring-buffer ingestion, drop-oldest under pressure, index-range event application (no per-step slicing).
+  - apps/swarmui/frontend/hive/world.js — cache per-tick positions; in-place compaction for pollen/pulse particles.
+  - apps/swarmui/frontend/hive/renderer.js — adaptive resolution/AA/particle budgets under degraded mode.
+  - tools/coh-rtc/src/ir.rs + generated configs — manifest-backed Live Hive performance knobs (sample size, pending caps, degrade thresholds).
+  - docs/INTERFACES.md — document freshness-first Live Hive guarantees and aggregation bounds.
+  - docs/TEST_PLAN.md — add Live Hive performance regression harness (target freshness + frame budget).
+Commands:
+  - cargo run -p coh-rtc
+  - cargo test -p swarmui
+  - (SwarmUI UI regression) cd tools/swarmui-ui-tests && npm test
+Checks:
+  - Live Hive shows current telemetry within one poll under 3–100 workers with bounded backlog.
+  - Aggregation/caching preserves latest state while historical detail remains bounded and replay-safe.
+  - Renderer meets frame budget targets under load; degraded mode engages deterministically.
+Deliverables:
+  - Freshness-first Live Hive with documented bounds and ≥100x reduction in worst-case UI/ingest latency.
 ```
 ----
 **Release 0.5.0 alpha**

@@ -24,7 +24,7 @@ pub use transport::{TcpTransport, TcpTransportError, TcpTransportFactory, TraceT
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cohesix_ticket::{Role, TicketClaims};
 use cohsh::client::{CohClient, TailEvent};
@@ -144,6 +144,11 @@ impl SwarmUiConfig {
             detail_lines: generated::SWARMUI_HIVE_DETAIL_LINES,
             line_cap_bytes: generated::SWARMUI_HIVE_LINE_CAP_BYTES,
             per_worker_bytes: generated::SWARMUI_HIVE_PER_WORKER_BYTES,
+            pending_lines_per_worker: generated::SWARMUI_HIVE_PENDING_LINES_PER_WORKER,
+            pending_event_cap: generated::SWARMUI_HIVE_PENDING_EVENT_CAP,
+            poll_workers_per_tick: generated::SWARMUI_HIVE_POLL_WORKERS_PER_TICK,
+            status_poll_ms: generated::SWARMUI_HIVE_STATUS_POLL_MS,
+            degrade_pressure: generated::SWARMUI_HIVE_DEGRADE_PRESSURE,
         };
         Self {
             data_dir,
@@ -196,6 +201,16 @@ struct SwarmUiSession<T: cohsh_core::Secure9pTransport> {
     _ticket: Option<String>,
     claims: Option<TicketClaims>,
     client: CohClient<T>,
+}
+
+#[derive(Debug, Clone)]
+struct HiveStatusCache {
+    last_at: Instant,
+    root: Option<SwarmUiHiveRootStatus>,
+    sessions: Option<SwarmUiHiveSessionSummary>,
+    pressure_counters: Option<SwarmUiHivePressureCounters>,
+    schedule: Option<SwarmUiHiveScheduleSnapshot>,
+    lease: Option<SwarmUiHiveLeaseSnapshot>,
 }
 
 /// Errors surfaced by SwarmUI backend operations.
@@ -268,6 +283,7 @@ where
     factory: F,
     sessions: HashMap<SessionKey, SwarmUiSession<F::Transport>>,
     hive_states: HashMap<SessionKey, hive::HiveSessionState>,
+    hive_status_cache: HashMap<SessionKey, HiveStatusCache>,
     hive_replay: Option<hive::HiveReplay>,
     audit: VecDeque<String>,
     active_tails: usize,
@@ -296,6 +312,7 @@ where
             factory,
             sessions: HashMap::new(),
             hive_states: HashMap::new(),
+            hive_status_cache: HashMap::new(),
             hive_replay: None,
             audit: VecDeque::new(),
             active_tails: 0,
@@ -825,7 +842,7 @@ where
         };
         let dropped = state.dropped();
         let (root, sessions, pressure_counters, schedule, lease) =
-            self.read_hive_status(role, ticket);
+            self.read_hive_status_cached(role, ticket, hive_config.status_poll_ms);
         Ok(SwarmUiHiveBatch {
             events,
             pressure,
@@ -852,6 +869,7 @@ where
             return Ok(());
         }
         let key = self.session_key(role, ticket);
+        self.hive_status_cache.remove(&key);
         let mut fids = Vec::new();
         if let Some(mut state) = self.hive_states.remove(&key) {
             fids = state.take_fids();
@@ -864,6 +882,51 @@ where
             let _ = session.client.clunk(fid);
         }
         Ok(())
+    }
+
+    fn read_hive_status_cached(
+        &mut self,
+        role: Role,
+        ticket: Option<&str>,
+        min_interval_ms: u32,
+    ) -> (
+        Option<SwarmUiHiveRootStatus>,
+        Option<SwarmUiHiveSessionSummary>,
+        Option<SwarmUiHivePressureCounters>,
+        Option<SwarmUiHiveScheduleSnapshot>,
+        Option<SwarmUiHiveLeaseSnapshot>,
+    ) {
+        if self.config.offline {
+            return (None, None, None, None, None);
+        }
+        let key = self.session_key(role, ticket);
+        if min_interval_ms > 0 {
+            if let Some(cache) = self.hive_status_cache.get(&key) {
+                if cache.last_at.elapsed().as_millis() < min_interval_ms as u128 {
+                    return (
+                        cache.root.clone(),
+                        cache.sessions.clone(),
+                        cache.pressure_counters.clone(),
+                        cache.schedule.clone(),
+                        cache.lease.clone(),
+                    );
+                }
+            }
+        }
+        let (root, sessions, pressure_counters, schedule, lease) =
+            self.read_hive_status(role, ticket);
+        self.hive_status_cache.insert(
+            key,
+            HiveStatusCache {
+                last_at: Instant::now(),
+                root: root.clone(),
+                sessions: sessions.clone(),
+                pressure_counters: pressure_counters.clone(),
+                schedule: schedule.clone(),
+                lease: lease.clone(),
+            },
+        );
+        (root, sessions, pressure_counters, schedule, lease)
     }
 
     fn read_hive_status(
@@ -1144,6 +1207,7 @@ pub struct SwarmUiConsoleBackend<T: CohshTransport> {
     session_ticket: Option<String>,
     session_claims: Option<TicketClaims>,
     hive_states: HashMap<SessionKey, hive::ConsoleHiveSessionState>,
+    hive_status_cache: HashMap<SessionKey, HiveStatusCache>,
     hive_replay: Option<hive::HiveReplay>,
     audit: VecDeque<String>,
     active_tails: usize,
@@ -1190,6 +1254,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             session_ticket: None,
             session_claims: None,
             hive_states: HashMap::new(),
+            hive_status_cache: HashMap::new(),
             hive_replay: None,
             audit: VecDeque::new(),
             active_tails: 0,
@@ -1325,6 +1390,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             ConsoleCommand::Quit => self.console_quit(),
             ConsoleCommand::BootInfo
             | ConsoleCommand::Caps
+            | ConsoleCommand::Smp
             | ConsoleCommand::Mem
             | ConsoleCommand::Test
             | ConsoleCommand::NetTest
@@ -2202,6 +2268,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             return Ok(());
         }
         let key = self.session_key(role, ticket);
+        self.hive_status_cache.remove(&key);
         if let Some(mut state) = self.hive_states.remove(&key) {
             state.reset();
         }
@@ -2280,6 +2347,51 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 ticket: ticket.map(str::to_owned),
             },
         }
+    }
+
+    fn read_hive_status_cached(
+        &mut self,
+        role: Role,
+        ticket: Option<&str>,
+        min_interval_ms: u32,
+    ) -> (
+        Option<SwarmUiHiveRootStatus>,
+        Option<SwarmUiHiveSessionSummary>,
+        Option<SwarmUiHivePressureCounters>,
+        Option<SwarmUiHiveScheduleSnapshot>,
+        Option<SwarmUiHiveLeaseSnapshot>,
+    ) {
+        if self.config.offline {
+            return (None, None, None, None, None);
+        }
+        let key = self.session_key(role, ticket);
+        if min_interval_ms > 0 {
+            if let Some(cache) = self.hive_status_cache.get(&key) {
+                if cache.last_at.elapsed().as_millis() < min_interval_ms as u128 {
+                    return (
+                        cache.root.clone(),
+                        cache.sessions.clone(),
+                        cache.pressure_counters.clone(),
+                        cache.schedule.clone(),
+                        cache.lease.clone(),
+                    );
+                }
+            }
+        }
+        let (root, sessions, pressure_counters, schedule, lease) =
+            self.read_hive_status(role, ticket);
+        self.hive_status_cache.insert(
+            key,
+            HiveStatusCache {
+                last_at: Instant::now(),
+                root: root.clone(),
+                sessions: sessions.clone(),
+                pressure_counters: pressure_counters.clone(),
+                schedule: schedule.clone(),
+                lease: lease.clone(),
+            },
+        );
+        (root, sessions, pressure_counters, schedule, lease)
     }
 
     fn read_hive_status(

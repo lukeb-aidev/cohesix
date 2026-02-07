@@ -521,7 +521,11 @@ fn main() -> Result<()> {
                             "--transport rest requires --rest-url (or COHSH_REST_URL/COH_REST_URL/HIVE_GATEWAY_URL)"
                         )
                     })?;
-                    (Box::new(RestTransport::new(rest_url)), None)
+                    let pool_url = rest_url.clone();
+                    let factory = Arc::new(move || {
+                        Ok(Box::new(RestTransport::new(pool_url.clone())) as Box<dyn Transport + Send>)
+                    });
+                    (Box::new(RestTransport::new(rest_url)), Some(factory))
                 }
             }
         };

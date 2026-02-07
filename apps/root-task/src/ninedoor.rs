@@ -9,6 +9,7 @@
 extern crate alloc;
 
 use crate::bootstrap::{boot_tracer, log as boot_log, BootPhase};
+use crate::authority::{AuthorityError, AuthorityOp, AuthorityQueue};
 use crate::event::AuditSink;
 use crate::generated;
 use crate::lifecycle;
@@ -183,6 +184,7 @@ const OBSERVE_LEASE_PREEMPTIONS_BYTES: usize =
     generated::OBSERVABILITY_CONFIG.proc_lease.preemptions_bytes as usize;
 const SIDECAR_LOG_MAX_BYTES: usize = generated::SECURE9P_LIMITS.msize as usize;
 const TELEMETRY_INGEST_RECORD_MAX_BYTES: usize = 4096;
+const AUTHORITY_QUEUE_MAX: usize = 16;
 
 const SELFTEST_QUICK_SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -210,6 +212,7 @@ pub struct NineDoorBridge {
     telemetry_ingest: TelemetryIngestState,
     workers: HeaplessVec<WorkerTelemetry, MAX_WORKERS>,
     binds: HeaplessVec<BindEntry, MAX_BINDS>,
+    authority: AuthorityQueue,
     host: HostState,
     gpu: GpuState,
     sidecars: SidecarState,
@@ -238,6 +241,8 @@ pub enum NineDoorBridgeError {
     BufferFull,
     /// Payload contained invalid bytes or formatting.
     InvalidPayload,
+    /// Authority queue is saturated.
+    Busy,
 }
 
 #[derive(Debug)]
@@ -460,6 +465,7 @@ impl NineDoorBridge {
             telemetry_ingest: TelemetryIngestState::new(),
             workers: HeaplessVec::new(),
             binds: HeaplessVec::new(),
+            authority: AuthorityQueue::new(AUTHORITY_QUEUE_MAX),
             host,
             gpu,
             sidecars: SidecarState::new(),
@@ -481,6 +487,20 @@ impl NineDoorBridge {
         self.session_ticket = None;
         self.session_scope = None;
         self.binds.clear();
+    }
+
+    fn with_authority<T>(
+        &mut self,
+        op: AuthorityOp,
+        f: impl FnOnce(&mut Self) -> Result<T, NineDoorBridgeError>,
+    ) -> Result<T, NineDoorBridgeError> {
+        let token = match self.authority.enter(op) {
+            Ok(token) => token,
+            Err(AuthorityError::Busy) => return Err(NineDoorBridgeError::Busy),
+        };
+        let result = f(self);
+        self.authority.exit(token);
+        result
     }
 
     /// Returns `true` when the bridge has successfully attached to the host.
@@ -606,7 +626,9 @@ impl NineDoorBridge {
             // Truncated audit line is acceptable.
         }
         audit.info(message.as_str());
-        let result = self.handle_queen_ctl(payload);
+        let result = self.with_authority(AuthorityOp::QueenCtl, |bridge| {
+            bridge.handle_queen_ctl(payload)
+        });
         if self.audit.enabled {
             let outcome = ControlOutcome::from_result(&result);
             let role = self.role_label();
@@ -629,7 +651,9 @@ impl NineDoorBridge {
         }
         audit.info(message.as_str());
         let payload = format!("{{\"kill\":\"{}\"}}", escape_json_string(identifier));
-        let result = self.remove_worker(identifier);
+        let result = self.with_authority(AuthorityOp::QueenCtl, |bridge| {
+            bridge.remove_worker(identifier)
+        });
         if self.audit.enabled {
             let outcome = ControlOutcome::from_result(&result);
             let role = self.role_label();
@@ -676,49 +700,40 @@ impl NineDoorBridge {
         }
         if self.policy.enabled {
             if path == POLICY_CTL_PATH {
-                self.policy.append_policy_ctl(payload)?;
-                return Ok(());
+                return self.with_authority(AuthorityOp::PolicyCtl, |bridge| {
+                    bridge.policy.append_policy_ctl(payload)?;
+                    Ok(())
+                });
             }
             if path == ACTIONS_QUEUE_PATH {
-                let role = self.role_label();
-                let ticket = String::from(self.ticket_label());
-                let before = self.policy.actions.len();
-                self.policy
-                    .append_action_queue(payload, role, ticket.as_str())?;
-                if self.audit.enabled {
-                    for action in self.policy.actions.iter().skip(before) {
-                        self.audit
-                            .record_decision_action(action, role, ticket.as_str())?;
+                return self.with_authority(AuthorityOp::ActionsQueue, |bridge| {
+                    let role = bridge.role_label();
+                    let ticket = String::from(bridge.ticket_label());
+                    let before = bridge.policy.actions.len();
+                    bridge
+                        .policy
+                        .append_action_queue(payload, role, ticket.as_str())?;
+                    if bridge.audit.enabled {
+                        for action in bridge.policy.actions.iter().skip(before) {
+                            bridge
+                                .audit
+                                .record_decision_action(action, role, ticket.as_str())?;
+                        }
                     }
-                }
-                return Ok(());
+                    Ok(())
+                });
             }
         }
         if path == QUEEN_SCHEDULE_CTL_PATH {
-            if !self.schedule.enabled() {
-                return Err(NineDoorBridgeError::InvalidPath);
-            }
-            if !self.is_queen() {
-                if self.audit.enabled {
-                    let role = self.role_label();
-                    let ticket = String::from(self.ticket_label());
-                    self.audit.record_control(
-                        path,
-                        payload,
-                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
-                        role,
-                        ticket.as_str(),
-                    )?;
+            return self.with_authority(AuthorityOp::ScheduleCtl, |bridge| {
+                if !bridge.schedule.enabled() {
+                    return Err(NineDoorBridgeError::InvalidPath);
                 }
-                return Err(NineDoorBridgeError::Permission);
-            }
-            let role = self.role_label();
-            let ticket = String::from(self.ticket_label());
-            let decision = self.apply_policy_gate(path)?;
-            match decision {
-                PolicyGateDecision::Denied(_) => {
-                    if self.audit.enabled {
-                        self.audit.record_control(
+                if !bridge.is_queen() {
+                    if bridge.audit.enabled {
+                        let role = bridge.role_label();
+                        let ticket = String::from(bridge.ticket_label());
+                        bridge.audit.record_control(
                             path,
                             payload,
                             ControlOutcome::err(ErrorCode::Permission, "EPERM"),
@@ -728,41 +743,44 @@ impl NineDoorBridge {
                     }
                     return Err(NineDoorBridgeError::Permission);
                 }
-                PolicyGateDecision::Allowed(_) => {}
-            }
-            let result = self.schedule.append_ctl(payload);
-            if self.audit.enabled {
-                let outcome = ControlOutcome::from_result(&result);
-                self.audit
-                    .record_control(path, payload, outcome, role, ticket.as_str())?;
-            }
-            return result;
+                let role = bridge.role_label();
+                let ticket = String::from(bridge.ticket_label());
+                let decision = bridge.apply_policy_gate(path)?;
+                match decision {
+                    PolicyGateDecision::Denied(_) => {
+                        if bridge.audit.enabled {
+                            bridge.audit.record_control(
+                                path,
+                                payload,
+                                ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                                role,
+                                ticket.as_str(),
+                            )?;
+                        }
+                        return Err(NineDoorBridgeError::Permission);
+                    }
+                    PolicyGateDecision::Allowed(_) => {}
+                }
+                let result = bridge.schedule.append_ctl(payload);
+                if bridge.audit.enabled {
+                    let outcome = ControlOutcome::from_result(&result);
+                    bridge
+                        .audit
+                        .record_control(path, payload, outcome, role, ticket.as_str())?;
+                }
+                result
+            });
         }
         if path == QUEEN_LEASE_CTL_PATH {
-            if !self.lease.enabled() {
-                return Err(NineDoorBridgeError::InvalidPath);
-            }
-            if !self.is_queen() {
-                if self.audit.enabled {
-                    let role = self.role_label();
-                    let ticket = String::from(self.ticket_label());
-                    self.audit.record_control(
-                        path,
-                        payload,
-                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
-                        role,
-                        ticket.as_str(),
-                    )?;
+            return self.with_authority(AuthorityOp::LeaseCtl, |bridge| {
+                if !bridge.lease.enabled() {
+                    return Err(NineDoorBridgeError::InvalidPath);
                 }
-                return Err(NineDoorBridgeError::Permission);
-            }
-            let role = self.role_label();
-            let ticket = String::from(self.ticket_label());
-            let decision = self.apply_policy_gate(path)?;
-            match decision {
-                PolicyGateDecision::Denied(_) => {
-                    if self.audit.enabled {
-                        self.audit.record_control(
+                if !bridge.is_queen() {
+                    if bridge.audit.enabled {
+                        let role = bridge.role_label();
+                        let ticket = String::from(bridge.ticket_label());
+                        bridge.audit.record_control(
                             path,
                             payload,
                             ControlOutcome::err(ErrorCode::Permission, "EPERM"),
@@ -772,41 +790,44 @@ impl NineDoorBridge {
                     }
                     return Err(NineDoorBridgeError::Permission);
                 }
-                PolicyGateDecision::Allowed(_) => {}
-            }
-            let result = self.lease.append_ctl(payload);
-            if self.audit.enabled {
-                let outcome = ControlOutcome::from_result(&result);
-                self.audit
-                    .record_control(path, payload, outcome, role, ticket.as_str())?;
-            }
-            return result;
+                let role = bridge.role_label();
+                let ticket = String::from(bridge.ticket_label());
+                let decision = bridge.apply_policy_gate(path)?;
+                match decision {
+                    PolicyGateDecision::Denied(_) => {
+                        if bridge.audit.enabled {
+                            bridge.audit.record_control(
+                                path,
+                                payload,
+                                ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                                role,
+                                ticket.as_str(),
+                            )?;
+                        }
+                        return Err(NineDoorBridgeError::Permission);
+                    }
+                    PolicyGateDecision::Allowed(_) => {}
+                }
+                let result = bridge.lease.append_ctl(payload);
+                if bridge.audit.enabled {
+                    let outcome = ControlOutcome::from_result(&result);
+                    bridge
+                        .audit
+                        .record_control(path, payload, outcome, role, ticket.as_str())?;
+                }
+                result
+            });
         }
         if path == QUEEN_EXPORT_CTL_PATH {
-            if !self.export.enabled() {
-                return Err(NineDoorBridgeError::InvalidPath);
-            }
-            if !self.is_queen() {
-                if self.audit.enabled {
-                    let role = self.role_label();
-                    let ticket = String::from(self.ticket_label());
-                    self.audit.record_control(
-                        path,
-                        payload,
-                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
-                        role,
-                        ticket.as_str(),
-                    )?;
+            return self.with_authority(AuthorityOp::ExportCtl, |bridge| {
+                if !bridge.export.enabled() {
+                    return Err(NineDoorBridgeError::InvalidPath);
                 }
-                return Err(NineDoorBridgeError::Permission);
-            }
-            let role = self.role_label();
-            let ticket = String::from(self.ticket_label());
-            let decision = self.apply_policy_gate(path)?;
-            match decision {
-                PolicyGateDecision::Denied(_) => {
-                    if self.audit.enabled {
-                        self.audit.record_control(
+                if !bridge.is_queen() {
+                    if bridge.audit.enabled {
+                        let role = bridge.role_label();
+                        let ticket = String::from(bridge.ticket_label());
+                        bridge.audit.record_control(
                             path,
                             payload,
                             ControlOutcome::err(ErrorCode::Permission, "EPERM"),
@@ -816,38 +837,41 @@ impl NineDoorBridge {
                     }
                     return Err(NineDoorBridgeError::Permission);
                 }
-                PolicyGateDecision::Allowed(_) => {}
-            }
-            let result = self.export.append_ctl(payload);
-            if self.audit.enabled {
-                let outcome = ControlOutcome::from_result(&result);
-                self.audit
-                    .record_control(path, payload, outcome, role, ticket.as_str())?;
-            }
-            return result;
+                let role = bridge.role_label();
+                let ticket = String::from(bridge.ticket_label());
+                let decision = bridge.apply_policy_gate(path)?;
+                match decision {
+                    PolicyGateDecision::Denied(_) => {
+                        if bridge.audit.enabled {
+                            bridge.audit.record_control(
+                                path,
+                                payload,
+                                ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                                role,
+                                ticket.as_str(),
+                            )?;
+                        }
+                        return Err(NineDoorBridgeError::Permission);
+                    }
+                    PolicyGateDecision::Allowed(_) => {}
+                }
+                let result = bridge.export.append_ctl(payload);
+                if bridge.audit.enabled {
+                    let outcome = ControlOutcome::from_result(&result);
+                    bridge
+                        .audit
+                        .record_control(path, payload, outcome, role, ticket.as_str())?;
+                }
+                result
+            });
         }
         if path == QUEEN_LIFECYCLE_CTL_PATH {
-            if !self.is_queen() {
-                if self.audit.enabled {
-                    let role = self.role_label();
-                    let ticket = String::from(self.ticket_label());
-                    self.audit.record_control(
-                        path,
-                        payload,
-                        ControlOutcome::err(ErrorCode::Permission, "EPERM"),
-                        role,
-                        ticket.as_str(),
-                    )?;
-                }
-                return Err(NineDoorBridgeError::Permission);
-            }
-            let role = self.role_label();
-            let ticket = String::from(self.ticket_label());
-            let decision = self.apply_policy_gate(path)?;
-            match decision {
-                PolicyGateDecision::Denied(_) => {
-                    if self.audit.enabled {
-                        self.audit.record_control(
+            return self.with_authority(AuthorityOp::LifecycleCtl, |bridge| {
+                if !bridge.is_queen() {
+                    if bridge.audit.enabled {
+                        let role = bridge.role_label();
+                        let ticket = String::from(bridge.ticket_label());
+                        bridge.audit.record_control(
                             path,
                             payload,
                             ControlOutcome::err(ErrorCode::Permission, "EPERM"),
@@ -857,42 +881,63 @@ impl NineDoorBridge {
                     }
                     return Err(NineDoorBridgeError::Permission);
                 }
-                PolicyGateDecision::Allowed(_) => {}
-            }
-            let result = self.handle_lifecycle_ctl(payload);
-            if self.audit.enabled {
-                let outcome = ControlOutcome::from_result(&result);
-                self.audit
-                    .record_control(path, payload, outcome, role, ticket.as_str())?;
-            }
-            return result;
+                let role = bridge.role_label();
+                let ticket = String::from(bridge.ticket_label());
+                let decision = bridge.apply_policy_gate(path)?;
+                match decision {
+                    PolicyGateDecision::Denied(_) => {
+                        if bridge.audit.enabled {
+                            bridge.audit.record_control(
+                                path,
+                                payload,
+                                ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                                role,
+                                ticket.as_str(),
+                            )?;
+                        }
+                        return Err(NineDoorBridgeError::Permission);
+                    }
+                    PolicyGateDecision::Allowed(_) => {}
+                }
+                let result = bridge.handle_lifecycle_ctl(payload);
+                if bridge.audit.enabled {
+                    let outcome = ControlOutcome::from_result(&result);
+                    bridge
+                        .audit
+                        .record_control(path, payload, outcome, role, ticket.as_str())?;
+                }
+                result
+            });
         }
         if path == QUEEN_CTL_PATH {
-            let role = self.role_label();
-            let ticket = String::from(self.ticket_label());
-            let decision = self.apply_policy_gate(path)?;
-            match decision {
-                PolicyGateDecision::Denied(_) => {
-                    if self.audit.enabled {
-                        self.audit.record_control(
-                            path,
-                            payload,
-                            ControlOutcome::err(ErrorCode::Permission, "EPERM"),
-                            role,
-                            ticket.as_str(),
-                        )?;
+            return self.with_authority(AuthorityOp::QueenCtl, |bridge| {
+                let role = bridge.role_label();
+                let ticket = String::from(bridge.ticket_label());
+                let decision = bridge.apply_policy_gate(path)?;
+                match decision {
+                    PolicyGateDecision::Denied(_) => {
+                        if bridge.audit.enabled {
+                            bridge.audit.record_control(
+                                path,
+                                payload,
+                                ControlOutcome::err(ErrorCode::Permission, "EPERM"),
+                                role,
+                                ticket.as_str(),
+                            )?;
+                        }
+                        return Err(NineDoorBridgeError::Permission);
                     }
-                    return Err(NineDoorBridgeError::Permission);
+                    PolicyGateDecision::Allowed(_) => {}
                 }
-                PolicyGateDecision::Allowed(_) => {}
-            }
-            let result = self.handle_queen_ctl(payload);
-            if self.audit.enabled {
-                let outcome = ControlOutcome::from_result(&result);
-                self.audit
-                    .record_control(path, payload, outcome, role, ticket.as_str())?;
-            }
-            return result;
+                let result = bridge.handle_queen_ctl(payload);
+                if bridge.audit.enabled {
+                    let outcome = ControlOutcome::from_result(&result);
+                    bridge
+                        .audit
+                        .record_control(path, payload, outcome, role, ticket.as_str())?;
+                }
+                result
+            });
         }
         if let Some(device_id) = telemetry_ingest_ctl_device(path) {
             if !self.telemetry_ingest.enabled() {
@@ -7722,6 +7767,7 @@ fn error_code_for_audit(error: &NineDoorBridgeError) -> ErrorCode {
     match error {
         NineDoorBridgeError::Permission => ErrorCode::Permission,
         NineDoorBridgeError::InvalidPath => ErrorCode::NotFound,
+        NineDoorBridgeError::Busy => ErrorCode::Busy,
         NineDoorBridgeError::BufferFull => ErrorCode::TooBig,
         NineDoorBridgeError::InvalidPayload
         | NineDoorBridgeError::Unsupported(_)

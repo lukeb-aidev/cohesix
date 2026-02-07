@@ -1,0 +1,1 @@
+arm,armv8-timer;arm,cortex-a15-gic;arm,pl011;

@@ -53,6 +53,8 @@ export class HiveRenderer {
     this.pulsePool = [];
     this.flowPool = [];
     this.selectedAgent = null;
+    this.qualityMode = "detail";
+    this.resolutionScale = 1;
     this.app = new PIXI.Application({
       backgroundAlpha: 0,
       antialias: true,
@@ -182,6 +184,26 @@ export class HiveRenderer {
     this.view.zoom = 1;
     this.view.panX = 0;
     this.view.panY = 0;
+  }
+
+  setQuality(mode) {
+    if (this.qualityMode === mode) {
+      return;
+    }
+    this.qualityMode = mode;
+    const base = window.devicePixelRatio || 1;
+    const scale = mode === "degraded" ? 0.75 : 1;
+    const next = base * scale;
+    this.app.renderer.roundPixels = mode === "degraded";
+    if (this.app.renderer.resolution !== next) {
+      this.app.renderer.resolution = next;
+      if (this.app.renderer.plugins?.interaction) {
+        this.app.renderer.plugins.interaction.resolution = next;
+      }
+      if (this.width && this.height) {
+        this.app.renderer.resize(this.width, this.height);
+      }
+    }
   }
 
   render(world, lodMode) {

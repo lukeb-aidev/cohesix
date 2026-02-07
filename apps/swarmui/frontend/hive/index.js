@@ -1,4 +1,4 @@
-import { applyHiveEvents } from "../events.js";
+import { applyHiveEventsRange } from "../events.js";
 import { readHiveTokens } from "./tokens.js";
 import { buildHiveStyle } from "./style.js";
 import { HiveWorld } from "./world.js";
@@ -12,6 +12,8 @@ const defaultConfig = {
   lod_zoom_out: 0.7,
   lod_zoom_in: 1.25,
   lod_event_budget: 512,
+  pending_event_cap: 4096,
+  degrade_pressure: 1.0,
 };
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -24,6 +26,7 @@ export const createHiveController = (container, status, options = {}) => {
     frames: 0,
     renders: 0,
     pending: 0,
+    dropped: 0,
     lastRenderAt: 0,
     lastFrameAt: 0,
   };
@@ -47,13 +50,16 @@ export const createHiveController = (container, status, options = {}) => {
   );
   let config = { ...defaultConfig };
   let pending = [];
-  let pendingCursor = 0;
+  let pendingHead = 0;
+  let pendingSize = 0;
+  let pendingCap = 0;
   let pressure = 0;
   let running = false;
   let lastFrame = 0;
   let lastRender = 0;
   let accumulator = 0;
   let lastPollMode = "detail";
+  let lastQualityMode = "detail";
 
   const updateStatus = (text) => {
     if (status) {
@@ -61,9 +67,38 @@ export const createHiveController = (container, status, options = {}) => {
     }
   };
 
+  const resetPending = () => {
+    pendingCap = Math.max(1, config.pending_event_cap || 0);
+    pending = new Array(pendingCap);
+    pendingHead = 0;
+    pendingSize = 0;
+    metrics.pending = 0;
+    metrics.dropped = 0;
+  };
+
+  const enqueueEvent = (event) => {
+    if (!pendingCap) {
+      return;
+    }
+    if (pendingSize === pendingCap) {
+      pendingHead = (pendingHead + 1) % pendingCap;
+      pendingSize -= 1;
+      metrics.dropped += 1;
+    }
+    const idx = (pendingHead + pendingSize) % pendingCap;
+    pending[idx] = event;
+    pendingSize += 1;
+  };
+
+  const enqueueBatch = (events) => {
+    for (const event of events) {
+      enqueueEvent(event);
+    }
+  };
+
   const computeLod = () => {
     const zoom = renderer.view.zoom;
-    if (pressure > 1) {
+    if (pressure >= config.degrade_pressure) {
       return "degraded";
     }
     if (zoom < config.lod_zoom_out) {
@@ -86,7 +121,13 @@ export const createHiveController = (container, status, options = {}) => {
     accumulator += delta;
     const stepSeconds = config.step_ms / 1000;
     const lodMode = computeLod();
-    const targetFps = pressure > 1
+    if (lodMode !== lastQualityMode) {
+      renderer.setQuality(lodMode);
+      const particleScale = lodMode === "degraded" ? 0.4 : 1;
+      world.setBudgets(particleScale, particleScale);
+      lastQualityMode = lodMode;
+    }
+    const targetFps = pressure >= config.degrade_pressure
       ? Math.min(config.frame_cap_fps, config.frame_cap_fps_degraded)
       : config.frame_cap_fps;
     const frameInterval = 1000 / targetFps;
@@ -95,23 +136,14 @@ export const createHiveController = (container, status, options = {}) => {
       accumulator -= stepSeconds;
       steps += 1;
       const budget = config.lod_event_budget;
-      const end = Math.min(pendingCursor + budget, pending.length);
-      const batch = pendingCursor < pending.length
-        ? pending.slice(pendingCursor, end)
-        : [];
-      pendingCursor = end;
-      if (pendingCursor >= pending.length) {
-        pending = [];
-        pendingCursor = 0;
-      } else if (pendingCursor > 4096) {
-        pending = pending.slice(pendingCursor);
-        pendingCursor = 0;
-      }
-      if (batch.length) {
-        applyHiveEvents(world, batch, {
+      const count = Math.min(budget, pendingSize);
+      if (count > 0) {
+        applyHiveEventsRange(world, pending, pendingHead, count, pendingCap, {
           pressure,
-          spawnParticles: lodMode === "detail" && pressure < 1,
+          spawnParticles: lodMode === "detail" && pressure < config.degrade_pressure,
         });
+        pendingHead = (pendingHead + count) % pendingCap;
+        pendingSize -= count;
       }
       world.update(stepSeconds);
       if (steps >= config.max_steps_per_frame) {
@@ -131,7 +163,7 @@ export const createHiveController = (container, status, options = {}) => {
         lastPollMode = lodMode;
       }
     }
-    metrics.pending = pending.length - pendingCursor;
+    metrics.pending = pendingSize;
     if (didRender) {
       renderer.draw();
     }
@@ -139,12 +171,14 @@ export const createHiveController = (container, status, options = {}) => {
   };
 
   const reset = () => {
-    pending = [];
-    pendingCursor = 0;
     pressure = 0;
     world = new HiveWorld(style);
+    resetPending();
     renderer.resetView();
     renderer.setSelectedAgent(null);
+    renderer.setQuality("detail");
+    world.setBudgets(1, 1);
+    lastQualityMode = "detail";
   };
 
   if (typeof window !== "undefined") {
@@ -170,7 +204,7 @@ export const createHiveController = (container, status, options = {}) => {
     ingest: (batch) => {
       pressure = batch.pressure ?? 0;
       if (batch.events && batch.events.length) {
-        pending.push(...batch.events);
+        enqueueBatch(batch.events);
       }
       if (batch.done) {
         updateStatus("Hive replay complete");
@@ -187,8 +221,7 @@ export const createHiveController = (container, status, options = {}) => {
     },
     stop: () => {
       running = false;
-      pending = [];
-      pendingCursor = 0;
+      resetPending();
     },
     resetView: () => renderer.resetView(),
     selectAgent: (agentId) => selectAgent(agentId),

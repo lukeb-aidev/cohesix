@@ -63,7 +63,7 @@ fn swarmui_has_no_http_deps() {
         }
     }
 
-    let banned = [
+    let mut banned = vec![
         "actix-web",
         "axum",
         "hyper",
@@ -77,6 +77,9 @@ fn swarmui_has_no_http_deps() {
         "ureq",
         "warp",
     ];
+    if cfg!(feature = "rest") {
+        banned.retain(|name| *name != "ureq");
+    }
     let mut found = Vec::new();
     for name in banned {
         if names.contains(name) {
