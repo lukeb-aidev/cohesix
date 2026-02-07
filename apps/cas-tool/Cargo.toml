@@ -15,6 +15,7 @@ base64 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 cohesix-cas = { workspace = true }
+cohesix-rest = { path = "../../crates/cohesix-rest" }
 ed25519-dalek = { workspace = true }
 signature = { workspace = true }
 cohesix-ticket = { workspace = true }

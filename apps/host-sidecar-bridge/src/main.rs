@@ -10,18 +10,20 @@
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, ValueEnum};
 use cohsh::NineDoorTransport;
-#[cfg(feature = "tcp")]
+#[cfg(any(feature = "rest", feature = "tcp"))]
 use cohsh::{default_policy_path, load_policy, CohshPolicy, Transport};
 use host_sidecar_bridge::{default_providers, HostSidecarBridge};
 use nine_door::{HostNamespaceConfig, HostProvider, NineDoor};
 use std::path::PathBuf;
-#[cfg(feature = "tcp")]
+#[cfg(any(feature = "rest", feature = "tcp"))]
 use std::thread;
-#[cfg(feature = "tcp")]
+#[cfg(any(feature = "rest", feature = "tcp"))]
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "tcp")]
 use cohsh::TcpTransport;
+#[cfg(any(feature = "rest", feature = "tcp"))]
+use cohsh::RestTransport;
 
 /// CLI options for the host-sidecar bridge.
 #[derive(Debug, Parser)]
@@ -46,6 +48,10 @@ struct Args {
     /// Run continuously, polling providers on their configured interval.
     #[arg(long, action = ArgAction::SetTrue)]
     watch: bool,
+
+    /// REST gateway base URL for hive-gateway publish mode.
+    #[arg(long, value_name = "URL")]
+    rest_url: Option<String>,
 
     /// TCP host for a live NineDoor console (non-mock).
     #[cfg(feature = "tcp")]
@@ -108,6 +114,59 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Some(rest_url) = args.rest_url.as_deref() {
+        #[cfg(any(feature = "rest", feature = "tcp"))]
+        {
+            let mut transport = RestTransport::new(rest_url);
+            let session = bridge.attach(&mut transport)?;
+            let topology = bridge.discover_topology(&mut transport, &session);
+            if args.watch {
+                let policy = resolve_policy(args.policy.as_ref())?;
+                let mut schedules = build_schedules(bridge.providers(), &policy);
+                if schedules.is_empty() {
+                    anyhow::bail!("no live providers selected for watch mode");
+                }
+                loop {
+                    let now = Instant::now();
+                    let mut next_wake: Option<Instant> = None;
+                    for schedule in &mut schedules {
+                        if now >= schedule.next_due {
+                            bridge.publish_live_provider(
+                                &mut transport,
+                                &session,
+                                &topology,
+                                schedule.provider,
+                            )?;
+                            schedule.next_due = now.checked_add(schedule.interval).unwrap_or(now);
+                        }
+                        next_wake = Some(match next_wake {
+                            Some(current) => current.min(schedule.next_due),
+                            None => schedule.next_due,
+                        });
+                    }
+                    if let Some(next_due) = next_wake {
+                        let wait = next_due.saturating_duration_since(Instant::now());
+                        if !wait.is_zero() {
+                            thread::sleep(wait);
+                        }
+                    }
+                }
+            } else {
+                bridge
+                    .publish_live(&mut transport, &session, &topology)
+                    .context("publish provider data over rest")?;
+                let _ = transport.quit(&session);
+                println!("sidecar published providers at {}", bridge.mount());
+                return Ok(());
+            }
+        }
+        #[cfg(not(any(feature = "rest", feature = "tcp")))]
+        {
+            let _ = rest_url;
+            anyhow::bail!("rest transport disabled; rebuild with --features rest");
+        }
+    }
+
     #[cfg(feature = "tcp")]
     {
         let mut transport =
@@ -161,7 +220,7 @@ fn main() -> Result<()> {
     }
 }
 
-#[cfg(feature = "tcp")]
+#[cfg(any(feature = "rest", feature = "tcp"))]
 #[derive(Debug, Clone, Copy)]
 struct ProviderSchedule {
     provider: HostProvider,
@@ -169,7 +228,7 @@ struct ProviderSchedule {
     next_due: Instant,
 }
 
-#[cfg(feature = "tcp")]
+#[cfg(any(feature = "rest", feature = "tcp"))]
 fn resolve_policy(path: Option<&PathBuf>) -> Result<CohshPolicy> {
     let attempted = match path {
         Some(path) => load_policy(path).with_context(|| format!("load policy {}", path.display())),
@@ -187,7 +246,7 @@ fn resolve_policy(path: Option<&PathBuf>) -> Result<CohshPolicy> {
     }
 }
 
-#[cfg(feature = "tcp")]
+#[cfg(any(feature = "rest", feature = "tcp"))]
 fn build_schedules(providers: &[HostProvider], policy: &CohshPolicy) -> Vec<ProviderSchedule> {
     let mut schedules = Vec::new();
     let now = Instant::now();

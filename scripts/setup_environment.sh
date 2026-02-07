@@ -77,9 +77,8 @@ setup_ubuntu() {
   if [[ "${ID:-}" != "ubuntu" ]]; then
     fail "unsupported Linux distribution: ${ID:-unknown} (expected ubuntu)"
   fi
-  if [[ "${VERSION_ID:-}" != 24.* ]]; then
-    fail "unsupported Ubuntu version: ${VERSION_ID:-unknown} (expected 24.x)"
-  fi
+  local ubuntu_version="${VERSION_ID:-unknown}"
+  local allow_unsupported="${COHESIX_ALLOW_UNSUPPORTED_UBUNTU:-}"
 
   local -a missing=()
 
@@ -87,12 +86,47 @@ setup_ubuntu() {
     missing+=("qemu-system-aarch64")
   fi
 
-  local -a runtime_pkgs=(
-    "libwebkit2gtk-4.1-0"
-    "libjavascriptcoregtk-4.1-0"
-    "libayatana-appindicator3-1"
-    "librsvg2-2"
-  )
+  local -a runtime_pkgs=()
+  if [[ "$ubuntu_version" == 24.* ]]; then
+    runtime_pkgs+=(
+      "libwebkit2gtk-4.1-0"
+      "libjavascriptcoregtk-4.1-0"
+      "libayatana-appindicator3-1"
+      "librsvg2-2"
+    )
+  elif [[ "$ubuntu_version" == 22.04 ]]; then
+    runtime_pkgs+=(
+      "libwebkit2gtk-4.0-37"
+      "libjavascriptcoregtk-4.0-18"
+      "libayatana-appindicator3-1"
+      "librsvg2-2"
+    )
+  else
+    if [[ -z "$allow_unsupported" ]]; then
+      fail "unsupported Ubuntu version: ${ubuntu_version} (expected 24.x or 22.04). Set COHESIX_ALLOW_UNSUPPORTED_UBUNTU=1 to proceed."
+    fi
+    warn "unsupported Ubuntu version: ${ubuntu_version}; proceeding with best-effort package selection"
+    runtime_pkgs+=(
+      "libayatana-appindicator3-1"
+      "librsvg2-2"
+    )
+    local found_webkit=0
+    local -a webkit_candidates=(
+      "libwebkit2gtk-4.1-0"
+      "libjavascriptcoregtk-4.1-0"
+      "libwebkit2gtk-4.0-37"
+      "libjavascriptcoregtk-4.0-18"
+    )
+    for pkg in "${webkit_candidates[@]}"; do
+      if apt-cache show "$pkg" >/dev/null 2>&1; then
+        runtime_pkgs+=("$pkg")
+        found_webkit=1
+      fi
+    done
+    if [[ "$found_webkit" -eq 0 ]]; then
+      warn "webkit runtime packages not found in apt metadata; SwarmUI may not run until installed"
+    fi
+  fi
   for pkg in "${runtime_pkgs[@]}"; do
     if ! ensure_pkg_ubuntu "$pkg"; then
       missing+=("$pkg")

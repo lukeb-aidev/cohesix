@@ -13,8 +13,9 @@ name = "swarmui"
 path = "src-tauri/main.rs"
 
 [features]
-default = ["offline-cache"]
+default = ["offline-cache", "rest"]
 offline-cache = []
+rest = ["cohsh/rest"]
 
 [dependencies]
 cohsh = { path = "../cohsh", features = ["tcp"] }

@@ -44,11 +44,13 @@ Run in order unless explicitly skipped with a recorded reason.
 
 ### 2) Host-side unit/integration tests (fast)
 - `cargo test -p coh --features mock`
+- `cargo test -p cohesix-rest`
 - `cargo test -p gpu-bridge-host`
 - `cargo test -p cohsh-core`
 - `cargo test -p cohsh --test ticket_mint`
 - `cargo test -p cohsh --test transcripts`
 - `cargo test -p cohsh --test control_plane`
+- `cargo test -p cohsh` (REST transport is enabled by default; use `--no-default-features` to verify minimal builds)
 - `cargo test -p swarmui --test transcript`
 - `cargo test -p swarmui --test console_parity`
 - `cargo test -p swarmui --test security`
@@ -143,7 +145,7 @@ Run while QEMU is up:
     - `./bin/coh --host 127.0.0.1 --port 31337 peft import --publish --model demo-model --from demo/peft_adapter --job job_0001 --export ./out/peft_export --registry ./out/peft_registry`
     - `./bin/coh --host 127.0.0.1 --port 31337 peft activate --model demo-model --registry ./out/peft_registry`
     - Verify in `cohsh` (after closing SwarmUI): `ls /gpu/models/available` and `cat /gpu/models/active`
-  - Optional FUSE: `./bin/coh mount --host 127.0.0.1 --port 31337 --at /tmp/coh-mount` (requires `coh` built with `--features fuse`).
+  - Optional FUSE: `./bin/coh mount --host 127.0.0.1 --port 31337 --at /tmp/coh-mount` (requires FUSE runtime; build `coh` with FUSE enabled if you disabled default features).
 - `swarmui` live (console + observability; do not attach cohsh simultaneously):
   - macOS: `./bin/swarmui`
   - headless Linux: `xvfb-run -a ./bin/swarmui`
@@ -204,6 +206,50 @@ Run while QEMU is up:
     - `journalctl -u hive-gateway -n 200 --no-pager | rg -n "reconnect|connected|disconnected"`
     - Re-run: `curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .`
   - `sudo systemctl stop hive-gateway`
+- Multiplexer regression (REST gateway, QEMU running; `hive-gateway` is the sole console client):
+  - REST API smoke (manifest + namespace + log tail):
+    - `curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .`
+    - `curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/' | jq .`
+    - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/lifecycle/state&max_bytes=64' | jq .`
+    - `curl -sS 'http://127.0.0.1:8080/v1/fs/tail?path=/log/queen.log&max_bytes=512' | jq .`
+  - REST `/proc` bounds (schedule + lease):
+    - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/schedule/summary&max_bytes=160' | jq .`
+    - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/schedule/queue&max_bytes=512' | jq .`
+    - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/lease/summary&max_bytes=128' | jq .`
+    - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/lease/active&max_bytes=256' | jq .`
+  - Policy approval (only if `/policy/rules` exists):
+    - `curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo -H 'Content-Type: application/json' -d '{"path":"/actions/queue","line":"{\"id\":\"approve-rest-1\",\"target\":\"/queen/ctl\",\"decision\":\"approve\"}"}'`
+  - REST spawn (heartbeat) through the gateway:
+    - `curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo -H 'Content-Type: application/json' -d '{"path":"/queen/ctl","line":"{\"spawn\":\"heartbeat\",\"ticks\":120,\"budget\":{\"ttl_s\":300,\"ops\":500}}"}'`
+    - `curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/worker' | jq .`
+  - Host publishers over REST:
+    - `./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 --interval-ms 1000`
+    - `./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --watch --provider systemd --provider nvidia`
+    - Validate: `curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/gpu' | jq .` and `curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/host' | jq .`
+  - `coh` REST path coverage (queen role via gateway):
+    - `./bin/coh --rest-url http://127.0.0.1:8080 gpu list`
+    - `./bin/coh --rest-url http://127.0.0.1:8080 gpu lease --gpu GPU-0 --mem-mb 2048 --streams 1 --ttl-s 120`
+    - `./bin/coh --rest-url http://127.0.0.1:8080 run --gpu GPU-0 -- echo ok`
+    - `./bin/coh --rest-url http://127.0.0.1:8080 telemetry pull --out ./out/telemetry-rest`
+    - `./bin/coh --rest-url http://127.0.0.1:8080 peft export --job job_0001 --out ./out/peft_export_rest` (skip if no export job is seeded)
+    - `./bin/coh --rest-url http://127.0.0.1:8080 peft import --publish --model demo-model --from demo/peft_adapter --job job_0001 --export ./out/peft_export_rest --registry ./out/peft_registry_rest`
+    - `./bin/coh --rest-url http://127.0.0.1:8080 peft activate --model demo-model --registry ./out/peft_registry_rest`
+    - `./bin/coh --rest-url http://127.0.0.1:8080 peft rollback --registry ./out/peft_registry_rest`
+  - REST mount exclusivity:
+    - `./bin/coh --rest-url http://127.0.0.1:8080 mount --at /tmp/coh-mount-rest`
+    - In a second shell: `./bin/coh --rest-url http://127.0.0.1:8080 mount --at /tmp/coh-mount-rest-2` → must fail with an exclusive lock error.
+  - `cas-tool` REST upload:
+    - `./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 --signing-key ./resources/fixtures/cas_signing_key.hex`
+    - `./bin/cas-tool upload --bundle ./out/cas/1 --rest-url http://127.0.0.1:8080`
+  - `cohsh` REST CLI:
+    - `./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080`
+    - `attach queen`
+    - `cat /proc/schedule/summary`
+    - `cat /proc/lease/summary`
+  - SwarmUI via gateway (REST transport enabled by default):
+    - `SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 ./bin/swarmui`
+    - Confirm Live Hive view renders telemetry and the console panel accepts standard verbs.
+    - Open DevTools and run `window.__SWARMUI_HIVE_DEBUG.getMetrics()`; confirm renders advance and the UI stays responsive.
 - Deterministic replay via cohsh (no QEMU needed):
   - Source tree: `./bin/cohsh --transport mock --replay-trace ./tests/fixtures/traces/trace_v0.trace`
   - Release bundle: `./bin/cohsh --transport mock --replay-trace ./traces/trace_v0.trace`

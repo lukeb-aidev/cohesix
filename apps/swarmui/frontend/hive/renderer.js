@@ -24,6 +24,18 @@ const ensureSprite = (map, id, factory, layer) => {
   return sprite;
 };
 
+const createParticleLayer = (maxSize, options = {}) => {
+  const layer = new PIXI.ParticleContainer(maxSize, {
+    position: true,
+    scale: true,
+    alpha: true,
+    tint: true,
+    ...options,
+  });
+  layer.autoResize = true;
+  return layer;
+};
+
 export class HiveRenderer {
   constructor(container, tokens, style, onClusterToggle, onAgentSelect) {
     this.container = container;
@@ -51,13 +63,16 @@ export class HiveRenderer {
     container.innerHTML = "";
     container.appendChild(this.app.view);
     this.root = new PIXI.Container();
-    this.flowLayer = new PIXI.Container();
+    this.flowLayer = createParticleLayer(Math.max(512, this.style.flowBlobLimit * 64));
+    this.flowLayer.blendMode = PIXI.BLEND_MODES.ADD;
     this.clusterLayer = new PIXI.Container();
-    this.heatLayer = new PIXI.Container();
+    this.heatLayer = createParticleLayer(Math.max(512, this.style.flowBlobLimit * 16));
+    this.heatLayer.blendMode = PIXI.BLEND_MODES.ADD;
     this.agentLayer = new PIXI.Container();
     this.labelLayer = new PIXI.Container();
-    this.pollenLayer = new PIXI.Container();
-    this.pulseLayer = new PIXI.Container();
+    this.pollenLayer = createParticleLayer(this.style.maxPollen);
+    this.pulseLayer = createParticleLayer(this.style.maxPulses);
+    this.pulseLayer.blendMode = PIXI.BLEND_MODES.ADD;
     this.root.addChild(this.flowLayer);
     this.root.addChild(this.heatLayer);
     this.root.addChild(this.clusterLayer);
@@ -74,6 +89,8 @@ export class HiveRenderer {
       this.style.flowBlobRadius,
       this.style.flowBlobInnerAlpha,
     );
+    this.clusterTextureRadius = this.style.clusterRadiusMax;
+    this.clusterTexture = this.buildClusterTexture(this.clusterTextureRadius);
     this.needsResize = true;
     this.attachInteraction();
     this.attachResizeObserver();
@@ -83,6 +100,14 @@ export class HiveRenderer {
   buildCircleTexture(radius) {
     const g = new PIXI.Graphics();
     g.beginFill(0xffffff);
+    g.drawCircle(radius, radius, radius);
+    g.endFill();
+    return this.app.renderer.generateTexture(g);
+  }
+
+  buildClusterTexture(radius) {
+    const g = new PIXI.Graphics();
+    g.lineStyle(1, 0xffffff, 1);
     g.drawCircle(radius, radius, radius);
     g.endFill();
     return this.app.renderer.generateTexture(g);
@@ -203,7 +228,6 @@ export class HiveRenderer {
         const sprite = this.flowPool[used] || new PIXI.Sprite(this.flowTexture);
         if (!this.flowPool[used]) {
           sprite.anchor.set(0.5);
-          sprite.blendMode = PIXI.BLEND_MODES.ADD;
           this.flowPool[used] = sprite;
           this.flowLayer.addChild(sprite);
         }
@@ -226,9 +250,12 @@ export class HiveRenderer {
       existing.add(cluster.id);
       let node = this.clusterNodes.get(cluster.id);
       if (!node) {
-        const hull = new PIXI.Graphics();
+        const hull = new PIXI.Sprite(this.clusterTexture);
+        hull.anchor.set(0.5);
+        hull.tint = this.palette.cluster;
         hull.eventMode = "static";
         hull.cursor = "pointer";
+        hull.hitArea = new PIXI.Circle(0, 0, this.clusterTextureRadius);
         hull.on("pointertap", () => {
           if (this.onClusterToggle) {
             this.onClusterToggle(cluster.id);
@@ -247,13 +274,12 @@ export class HiveRenderer {
         node = { container, hull, label };
         this.clusterNodes.set(cluster.id, node);
       }
-      node.hull.clear();
       const alpha = cluster.collapsed
         ? this.style.clusterAlphaCollapsed
         : this.style.clusterAlpha;
-      node.hull.lineStyle(1, this.palette.cluster, alpha);
-      node.hull.drawCircle(cluster.center.x, cluster.center.y, cluster.radius);
-      node.label.text = cluster.id;
+      node.hull.alpha = alpha;
+      node.hull.position.set(cluster.center.x, cluster.center.y);
+      node.hull.scale.set(cluster.radius / this.clusterTextureRadius);
       node.label.position.set(
         cluster.center.x,
         cluster.center.y - cluster.radius - this.style.clusterLabelOffset,
@@ -330,7 +356,6 @@ export class HiveRenderer {
         () => {
           const s = new PIXI.Sprite(this.glowTexture);
           s.anchor.set(0.5);
-          s.blendMode = PIXI.BLEND_MODES.ADD;
           return s;
         },
         this.heatLayer,
@@ -339,18 +364,27 @@ export class HiveRenderer {
       glow.visible = true;
       sprite.position.set(position.x, position.y);
       const roleTint = this.roleTint(agent.role);
-      sprite.eventMode = agent.role === "queen" ? "none" : "static";
-      sprite.cursor = agent.role === "queen" ? "default" : "pointer";
-      sprite.tint = agent.error > this.style.errorTintThreshold
+      if (sprite.__cohRole !== agent.role) {
+        sprite.eventMode = agent.role === "queen" ? "none" : "static";
+        sprite.cursor = agent.role === "queen" ? "default" : "pointer";
+        sprite.__cohRole = agent.role;
+      }
+      const spriteTint = agent.error > this.style.errorTintThreshold
         ? this.palette.error
         : roleTint;
+      if (sprite.tint !== spriteTint) {
+        sprite.tint = spriteTint;
+      }
       const scale = this.style.agentScaleBase + agent.heat * this.style.agentScaleHeat;
       const selectedScale = id === this.selectedAgent ? 1.1 : 1.0;
       sprite.scale.set(scale * selectedScale);
       glow.position.set(position.x, position.y);
-      glow.tint = agent.error > this.style.errorGlowThreshold
+      const glowTint = agent.error > this.style.errorGlowThreshold
         ? this.palette.error
         : roleTint;
+      if (glow.tint !== glowTint) {
+        glow.tint = glowTint;
+      }
       glow.alpha = clamp(
         agent.heat + agent.error * this.style.glowErrorBoost,
         this.style.glowAlphaMin,
@@ -373,7 +407,10 @@ export class HiveRenderer {
           this.labelLayer,
         );
         label.visible = true;
-        label.text = agent.labelIndex ? String(agent.labelIndex) : "";
+        const labelText = agent.labelIndex ? String(agent.labelIndex) : "";
+        if (label.text !== labelText) {
+          label.text = labelText;
+        }
         label.position.set(
           position.x + this.style.agentLabelOffset,
           position.y - this.style.agentLabelOffset,
@@ -438,7 +475,6 @@ export class HiveRenderer {
       const sprite = this.pulsePool[idx] || new PIXI.Sprite(this.pulseTexture);
       if (!this.pulsePool[idx]) {
         sprite.anchor.set(0.5);
-        sprite.blendMode = PIXI.BLEND_MODES.ADD;
         this.pulsePool[idx] = sprite;
         this.pulseLayer.addChild(sprite);
       }

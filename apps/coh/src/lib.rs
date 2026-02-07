@@ -19,6 +19,8 @@ pub mod mount;
 pub mod peft;
 /// Manifest-derived policy loader.
 pub mod policy;
+/// REST-backed access helpers for hive-gateway.
+pub mod rest;
 /// Runtime command wrapper helpers.
 pub mod run;
 /// Telemetry pull helpers.

@@ -141,7 +141,7 @@ python3 tools/cohesix-py/examples/lease_run.py --mount-root /tmp/coh-mount
 ```
 
 Notes:
-- Live mounts require FUSE (`coh` built with `--features fuse` and a FUSE runtime installed).
+- Live mounts require FUSE (a FUSE runtime installed and `coh` built with FUSE enabled; default on Linux).
 - The mount root is constrained by the manifest allowlist in `out/coh_policy.toml`.
 - The mount process stays in the foreground; use a second terminal or run it in the background.
 
@@ -172,7 +172,7 @@ python3 -m pytest -k cohesix_parity tools/cohesix-py/tests/test_parity.py
 - `ERR ECHO reason=policy ... EPERM`: policy gating requires an approval in `/actions/queue`.
 - Empty `/gpu`: ensure the host GPU bridge integration is running; use `./bin/gpu-bridge-host --mock --list` for mock demos.
 - Non-mock PEFT flows require `/gpu/models` to be visible; run `./bin/gpu-bridge-host --publish ...` or `coh peft import --publish` to refresh the live registry.
-- Filesystem backend mount errors: ensure FUSE is installed and `coh` was built with `--features fuse`.
+- Filesystem backend mount errors: ensure FUSE is installed and `coh` was built with FUSE enabled.
 - REST errors: confirm `hive-gateway` is running and reachable at `/v1/meta/bounds`.
 
 ## Real-world use cases (examples)

@@ -52,6 +52,9 @@ fn tcp_script_executes_against_basic_server() {
                     write_frame(&mut stream, "queen boot");
                     write_frame(&mut stream, "heart line");
                     write_frame(&mut stream, "END");
+                } else if trimmed.eq_ignore_ascii_case("quit") {
+                    write_frame(&mut stream, "OK QUIT");
+                    break;
                 } else if trimmed == "PING" {
                     write_frame(&mut stream, "PONG");
                     write_frame(&mut stream, "OK PING reply=pong");

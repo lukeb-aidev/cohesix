@@ -245,6 +245,12 @@ struct CatQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct TailQuery {
+    path: String,
+    max_bytes: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
 struct EchoRequest {
     path: String,
     line: Option<String>,
@@ -305,6 +311,7 @@ async fn main() -> Result<()> {
         .route("/v1/meta/bounds", get(meta_bounds))
         .route("/v1/fs/ls", get(fs_ls))
         .route("/v1/fs/cat", get(fs_cat))
+        .route("/v1/fs/tail", get(fs_tail))
         .route("/v1/fs/echo", post(fs_echo))
         .route("/v1/openapi.yaml", get(openapi_yaml))
         .route("/docs", get(swagger_ui))
@@ -619,6 +626,13 @@ impl AppState {
         lease.transport_mut().read(&session, path)
     }
 
+    fn tail(&self, path: &str) -> Result<Vec<String>> {
+        self.ensure_connected()?;
+        let mut lease = self.inner.pool.checkout(PoolKind::Telemetry)?;
+        let session = lease.session().clone();
+        lease.transport_mut().tail(&session, path)
+    }
+
     fn write(&self, path: &str, payload: &[u8]) -> Result<()> {
         self.ensure_connected()?;
         let mut lease = self.inner.pool.checkout(PoolKind::Control)?;
@@ -655,6 +669,13 @@ async fn fs_cat(
     Query(query): Query<CatQuery>,
 ) -> impl axum::response::IntoResponse {
     handle_cat(state, query).await
+}
+
+async fn fs_tail(
+    State(state): State<AppState>,
+    Query(query): Query<TailQuery>,
+) -> impl axum::response::IntoResponse {
+    handle_tail(state, query).await
 }
 
 async fn fs_echo(
@@ -717,6 +738,55 @@ async fn handle_cat(state: AppState, query: CatQuery) -> impl axum::response::In
                     verb,
                     &query.path,
                     format!("read exceeded max_bytes {max_bytes}"),
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+            response_ok(verb, query.path, lines, Some(bytes))
+        }
+        Ok(Err(err)) => response_err(verb, &query.path, err.to_string(), StatusCode::SERVICE_UNAVAILABLE),
+        Err(err) => response_err(verb, &query.path, err.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+async fn handle_tail(state: AppState, query: TailQuery) -> impl axum::response::IntoResponse {
+    let verb = "TAIL";
+    if let Err(err) = validate_path(&query.path) {
+        return response_err(verb, &query.path, err, StatusCode::BAD_REQUEST);
+    }
+    if let Err(err) = validate_proc_enabled(&query.path, &state.bounds()) {
+        return response_err(verb, &query.path, err, StatusCode::BAD_REQUEST);
+    }
+    let max_bytes = match query.max_bytes {
+        Some(value) if value > 0 => value as usize,
+        _ => {
+            return response_err(
+                verb,
+                &query.path,
+                "max_bytes is required",
+                StatusCode::BAD_REQUEST,
+            )
+        }
+    };
+    if let Some(limit) = max_proc_bytes(&query.path, &state.bounds()) {
+        if max_bytes > limit {
+            return response_err(
+                verb,
+                &query.path,
+                format!("max_bytes {max_bytes} exceeds bound {limit}"),
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    }
+    let path = query.path.clone();
+    let result = tokio::task::spawn_blocking(move || state.tail(&path)).await;
+    match result {
+        Ok(Ok(lines)) => {
+            let bytes = lines.join("\n").as_bytes().len();
+            if bytes > max_bytes {
+                return response_err(
+                    verb,
+                    &query.path,
+                    format!("tail exceeded max_bytes {max_bytes}"),
                     StatusCode::BAD_REQUEST,
                 );
             }

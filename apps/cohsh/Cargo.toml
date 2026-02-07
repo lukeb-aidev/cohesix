@@ -8,10 +8,11 @@ description = "Cohesix shell prototype using the live NineDoor Secure9P transpor
 license = "MIT"
 
 [features]
-default = []
+default = ["tcp", "rest"]
 # TCP transport pulls in `std` networking and is opt-in so offline workflows
 # can build without socket dependencies.
 tcp = []
+rest = ["cohesix-rest"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -20,6 +21,7 @@ cohesix-ticket = { workspace = true }
 cohsh-core = { workspace = true }
 cohesix-net-constants = { workspace = true }
 cohesix-proto = { workspace = true }
+cohesix-rest = { path = "../../crates/cohesix-rest", optional = true }
 secure9p-codec = { workspace = true }
 nine-door = { path = "../nine-door" }
 gpu-bridge-host = { path = "../gpu-bridge-host" }

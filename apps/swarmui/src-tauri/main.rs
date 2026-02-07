@@ -18,6 +18,8 @@ use tauri::State;
 use cohsh::ticket_mint::{mint_ticket_from_config, mint_ticket_from_secret, TicketMintRequest};
 use cohsh::TcpTransport as CohshTcpTransport;
 use cohsh::COHSH_TCP_PORT;
+#[cfg(feature = "rest")]
+use cohsh::RestTransport as CohshRestTransport;
 use cohsh_core::command::MAX_LINE_LEN;
 use cohsh_core::trace::{TraceLog, TracePolicy};
 use swarmui::{
@@ -29,6 +31,8 @@ enum SwarmUiService {
     Secure9p(SwarmUiBackend<TcpTransportFactory>),
     Trace(SwarmUiBackend<TraceTransportFactory>),
     Console(SwarmUiConsoleBackend<CohshTcpTransport>),
+    #[cfg(feature = "rest")]
+    Rest(SwarmUiConsoleBackend<CohshRestTransport>),
 }
 
 impl SwarmUiService {
@@ -37,6 +41,8 @@ impl SwarmUiService {
             SwarmUiService::Secure9p(backend) => backend.attach(role, ticket),
             SwarmUiService::Trace(backend) => backend.attach(role, ticket),
             SwarmUiService::Console(backend) => backend.attach(role, ticket),
+            #[cfg(feature = "rest")]
+            SwarmUiService::Rest(backend) => backend.attach(role, ticket),
         }
     }
 
@@ -45,6 +51,8 @@ impl SwarmUiService {
             SwarmUiService::Secure9p(backend) => backend.set_offline(offline),
             SwarmUiService::Trace(backend) => backend.set_offline(offline),
             SwarmUiService::Console(backend) => backend.set_offline(offline),
+            #[cfg(feature = "rest")]
+            SwarmUiService::Rest(backend) => backend.set_offline(offline),
         }
     }
 
@@ -58,6 +66,8 @@ impl SwarmUiService {
             SwarmUiService::Secure9p(backend) => backend.tail_telemetry(role, ticket, worker_id),
             SwarmUiService::Trace(backend) => backend.tail_telemetry(role, ticket, worker_id),
             SwarmUiService::Console(backend) => backend.tail_telemetry(role, ticket, worker_id),
+            #[cfg(feature = "rest")]
+            SwarmUiService::Rest(backend) => backend.tail_telemetry(role, ticket, worker_id),
         }
     }
 
@@ -71,6 +81,8 @@ impl SwarmUiService {
             SwarmUiService::Secure9p(backend) => backend.list_namespace(role, ticket, path),
             SwarmUiService::Trace(backend) => backend.list_namespace(role, ticket, path),
             SwarmUiService::Console(backend) => backend.list_namespace(role, ticket, path),
+            #[cfg(feature = "rest")]
+            SwarmUiService::Rest(backend) => backend.list_namespace(role, ticket, path),
         }
     }
 
@@ -83,6 +95,8 @@ impl SwarmUiService {
             SwarmUiService::Secure9p(backend) => backend.fleet_snapshot(role, ticket),
             SwarmUiService::Trace(backend) => backend.fleet_snapshot(role, ticket),
             SwarmUiService::Console(backend) => backend.fleet_snapshot(role, ticket),
+            #[cfg(feature = "rest")]
+            SwarmUiService::Rest(backend) => backend.fleet_snapshot(role, ticket),
         }
     }
 
@@ -100,6 +114,10 @@ impl SwarmUiService {
                 .hive_bootstrap(role, ticket, snapshot_key)
                 .map_err(|err| err.to_string()),
             SwarmUiService::Console(backend) => backend
+                .hive_bootstrap(role, ticket, snapshot_key)
+                .map_err(|err| err.to_string()),
+            #[cfg(feature = "rest")]
+            SwarmUiService::Rest(backend) => backend
                 .hive_bootstrap(role, ticket, snapshot_key)
                 .map_err(|err| err.to_string()),
         }
@@ -121,6 +139,10 @@ impl SwarmUiService {
             SwarmUiService::Console(backend) => backend
                 .hive_poll(role, ticket, detail_agent)
                 .map_err(|err| err.to_string()),
+            #[cfg(feature = "rest")]
+            SwarmUiService::Rest(backend) => backend
+                .hive_poll(role, ticket, detail_agent)
+                .map_err(|err| err.to_string()),
         }
     }
 
@@ -139,6 +161,10 @@ impl SwarmUiService {
             SwarmUiService::Console(backend) => backend
                 .hive_reset(role, ticket)
                 .map_err(|err| err.to_string()),
+            #[cfg(feature = "rest")]
+            SwarmUiService::Rest(backend) => backend
+                .hive_reset(role, ticket)
+                .map_err(|err| err.to_string()),
         }
     }
 
@@ -153,13 +179,19 @@ impl SwarmUiService {
             SwarmUiService::Console(backend) => backend
                 .load_hive_replay(payload)
                 .map_err(|err| err.to_string()),
+            #[cfg(feature = "rest")]
+            SwarmUiService::Rest(backend) => backend
+                .load_hive_replay(payload)
+                .map_err(|err| err.to_string()),
         }
     }
 
     fn console_command(&mut self, line: &str) -> Result<SwarmUiTranscript, String> {
         match self {
             SwarmUiService::Console(backend) => Ok(backend.console_command(line)),
-            _ => Err("console prompt requires TCP console transport".to_owned()),
+            #[cfg(feature = "rest")]
+            SwarmUiService::Rest(backend) => Ok(backend.console_command(line)),
+            _ => Err("console prompt requires console or REST transport".to_owned()),
         }
     }
 }
@@ -525,7 +557,25 @@ fn main() {
                     .unwrap_or_else(|_| "changeme".to_owned());
                 SwarmUiService::Console(SwarmUiConsoleBackend::new(config, host, port, auth_token))
             }
-            other => panic!("unsupported SWARMUI_TRANSPORT '{other}' (use console or 9p)"),
+            "rest" | "gateway" => {
+                #[cfg(feature = "rest")]
+                {
+                    let rest_url = env::var("SWARMUI_REST_URL")
+                        .or_else(|_| env::var("COH_REST_URL"))
+                        .unwrap_or_else(|_| "http://127.0.0.1:8080".to_owned());
+                    let transport = CohshRestTransport::new(rest_url);
+                    SwarmUiService::Rest(SwarmUiConsoleBackend::with_transport(
+                        config, transport,
+                    ))
+                }
+                #[cfg(not(feature = "rest"))]
+                {
+                    panic!("SWARMUI_TRANSPORT=rest requires swarmui built with --features rest");
+                }
+            }
+            other => panic!(
+                "unsupported SWARMUI_TRANSPORT '{other}' (use console, 9p, or rest)"
+            ),
         }
     };
     let mut hive_replay_loaded = false;

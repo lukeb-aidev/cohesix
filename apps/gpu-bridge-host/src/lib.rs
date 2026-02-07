@@ -11,7 +11,7 @@
 //! `/gpu` mount. When built with the `nvml` feature the bridge performs real
 //! discovery through `nvml-wrapper`.
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohsh_core::MAX_ECHO_LEN;
 use serde::Deserialize;
@@ -287,6 +287,51 @@ trait Inventory {
     fn discover(&self) -> Result<Vec<GpuInfo>>;
 }
 
+/// Backend used to discover GPU inventory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InventoryBackend {
+    /// Deterministic mock inventory.
+    Mock,
+    /// NVML-backed inventory (dGPU hosts).
+    Nvml,
+    /// CUDA driver/runtime inventory (Jetson).
+    Cuda,
+}
+
+impl InventoryBackend {
+    /// Return the stable backend label.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Mock => "mock",
+            Self::Nvml => "nvml",
+            Self::Cuda => "cuda",
+        }
+    }
+}
+
+/// Report describing which backend produced the inventory.
+#[derive(Debug, Clone)]
+pub struct InventoryReport {
+    /// Backend that produced the inventory.
+    pub backend: InventoryBackend,
+    /// Primary backend that was attempted first, if a fallback was used.
+    pub fallback_from: Option<InventoryBackend>,
+    /// Reason for the fallback, if available.
+    pub fallback_reason: Option<String>,
+}
+
+struct InventoryCandidate {
+    backend: InventoryBackend,
+    inventory: Box<dyn Inventory + Send + Sync>,
+}
+
+impl InventoryCandidate {
+    fn new(backend: InventoryBackend, inventory: Box<dyn Inventory + Send + Sync>) -> Self {
+        Self { backend, inventory }
+    }
+}
+
 #[derive(Debug, Default)]
 struct MockInventory;
 
@@ -352,9 +397,49 @@ impl Inventory for NvmlInventory {
     }
 }
 
+#[cfg(feature = "cuda")]
+#[derive(Debug, Default)]
+struct CudaInventory;
+
+#[cfg(feature = "cuda")]
+impl Inventory for CudaInventory {
+    fn discover(&self) -> Result<Vec<GpuInfo>> {
+        let devices = host_cuda::enumerate_devices().context("cuda inventory")?;
+        if devices.is_empty() {
+            return Err(anyhow!("cuda returned no devices"));
+        }
+        let mut gpus = Vec::new();
+        for (index, device) in devices.into_iter().enumerate() {
+            let memory_mb = device.total_memory_bytes / (1024 * 1024);
+            let memory_mb = u32::try_from(memory_mb).with_context(|| {
+                format!("cuda memory bytes overflow for GPU-{index}: {}", device.total_memory_bytes)
+            })?;
+            let driver_version = if device.driver_version.trim().is_empty() {
+                "unknown".to_owned()
+            } else {
+                device.driver_version
+            };
+            let runtime_version = if device.runtime_version.trim().is_empty() {
+                "unknown".to_owned()
+            } else {
+                device.runtime_version
+            };
+            gpus.push(GpuInfo {
+                id: format!("GPU-{index}"),
+                name: device.name,
+                memory_mb,
+                sm_count: device.sm_count,
+                driver_version,
+                runtime_version,
+            });
+        }
+        Ok(gpus)
+    }
+}
+
 /// Host bridge entry point.
 pub struct GpuBridge {
-    inventory: Box<dyn Inventory + Send + Sync>,
+    inventories: Vec<InventoryCandidate>,
     model_registry: Option<PathBuf>,
 }
 
@@ -373,7 +458,10 @@ impl GpuBridge {
     /// Create a bridge using the mock inventory.
     pub fn mock() -> Self {
         Self {
-            inventory: Box::new(MockInventory),
+            inventories: vec![InventoryCandidate::new(
+                InventoryBackend::Mock,
+                Box::new(MockInventory),
+            )],
             model_registry: None,
         }
     }
@@ -383,7 +471,30 @@ impl GpuBridge {
     #[cfg(feature = "nvml")]
     pub fn new_nvml() -> Self {
         Self {
-            inventory: Box::new(NvmlInventory::default()),
+            inventories: vec![InventoryCandidate::new(
+                InventoryBackend::Nvml,
+                Box::new(NvmlInventory::default()),
+            )],
+            model_registry: None,
+        }
+    }
+
+    /// Create a bridge using the CUDA backend when the feature is enabled.
+    #[allow(clippy::new_without_default)]
+    #[cfg(feature = "cuda")]
+    pub fn new_cuda() -> Self {
+        Self {
+            inventories: vec![InventoryCandidate::new(
+                InventoryBackend::Cuda,
+                Box::new(CudaInventory::default()),
+            )],
+            model_registry: None,
+        }
+    }
+
+    fn from_candidates(candidates: Vec<InventoryCandidate>) -> Self {
+        Self {
+            inventories: candidates,
             model_registry: None,
         }
     }
@@ -395,9 +506,47 @@ impl GpuBridge {
         self
     }
 
+    fn discover_inventory(&self) -> Result<(Vec<GpuInfo>, InventoryReport)> {
+        let primary = self
+            .inventories
+            .first()
+            .map(|candidate| candidate.backend)
+            .ok_or_else(|| anyhow!("no GPU inventory backends configured"))?;
+        let mut first_error: Option<String> = None;
+        for (idx, candidate) in self.inventories.iter().enumerate() {
+            match candidate.inventory.discover() {
+                Ok(infos) => {
+                    let report = if idx == 0 {
+                        InventoryReport {
+                            backend: candidate.backend,
+                            fallback_from: None,
+                            fallback_reason: None,
+                        }
+                    } else {
+                        InventoryReport {
+                            backend: candidate.backend,
+                            fallback_from: Some(primary),
+                            fallback_reason: first_error,
+                        }
+                    };
+                    return Ok((infos, report));
+                }
+                Err(err) => {
+                    if first_error.is_none() {
+                        first_error = Some(err.to_string());
+                    }
+                    if idx + 1 == self.inventories.len() {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+        Err(anyhow!("no GPU inventory backends configured"))
+    }
+
     /// Discover GPUs and build namespace descriptors.
     pub fn build_namespace(&self) -> Result<Vec<GpuNamespace>> {
-        let infos = self.inventory.discover()?;
+        let (infos, _report) = self.discover_inventory()?;
         Ok(infos
             .into_iter()
             .map(|info| GpuNamespace {
@@ -409,11 +558,34 @@ impl GpuBridge {
             .collect())
     }
 
+    fn build_namespace_with_report(&self) -> Result<(Vec<GpuNamespace>, InventoryReport)> {
+        let (infos, report) = self.discover_inventory()?;
+        let namespaces = infos
+            .into_iter()
+            .map(|info| GpuNamespace {
+                ctl_seed: format!("LEASE {}\n", info.id),
+                lease_seed: String::new(),
+                status_seed: String::new(),
+                info,
+            })
+            .collect();
+        Ok((namespaces, report))
+    }
+
     /// Construct JSON payloads ready for NineDoor ingestion, including models and telemetry schema.
     pub fn serialise_namespace(&self) -> Result<GpuNamespaceSnapshot> {
+        self.serialise_namespace_with_report()
+            .map(|(snapshot, _report)| snapshot)
+    }
+
+    /// Construct JSON payloads ready for NineDoor ingestion, including models and telemetry schema.
+    pub fn serialise_namespace_with_report(
+        &self,
+    ) -> Result<(GpuNamespaceSnapshot, InventoryReport)> {
         let models = self.build_model_catalog();
         let telemetry_schema = TelemetrySchema::lora_v1();
-        self.build_namespace()?
+        let (namespaces, report) = self.build_namespace_with_report()?;
+        let nodes = namespaces
             .into_iter()
             .map(|namespace| {
                 let info_payload = namespace.info.to_info_payload();
@@ -428,12 +600,15 @@ impl GpuBridge {
                     status_payload,
                 })
             })
-            .collect::<Result<Vec<_>, _>>()
-            .map(|nodes| GpuNamespaceSnapshot {
+            .collect::<Result<Vec<_>>>()?;
+        Ok((
+            GpuNamespaceSnapshot {
                 nodes,
                 models,
                 telemetry_schema,
-            })
+            },
+            report,
+        ))
     }
 
     fn build_model_catalog(&self) -> GpuModelCatalog {
@@ -932,16 +1107,27 @@ pub fn auto_bridge(mock: bool) -> Result<GpuBridge> {
     if mock {
         Ok(GpuBridge::mock())
     } else {
+        let mut candidates = Vec::new();
         #[cfg(feature = "nvml")]
         {
-            Ok(GpuBridge::new_nvml())
+            candidates.push(InventoryCandidate::new(
+                InventoryBackend::Nvml,
+                Box::new(NvmlInventory::default()),
+            ));
         }
-        #[cfg(not(feature = "nvml"))]
+        #[cfg(feature = "cuda")]
         {
-            Err(anyhow!(
-                "nvml feature disabled; rebuild gpu-bridge-host with --features nvml or use --mock"
-            ))
+            candidates.push(InventoryCandidate::new(
+                InventoryBackend::Cuda,
+                Box::new(CudaInventory::default()),
+            ));
         }
+        if candidates.is_empty() {
+            return Err(anyhow!(
+                "GPU inventory backends disabled; rebuild gpu-bridge-host with --features nvml or cuda, or use --mock"
+            ));
+        }
+        Ok(GpuBridge::from_candidates(candidates))
     }
 }
 
@@ -966,6 +1152,14 @@ mod tests {
         assert!(snapshot.nodes[0].info_payload.contains("GPU-0"));
         assert_eq!(snapshot.models.active, "vision-lora-edge");
         assert_eq!(snapshot.telemetry_schema.version, TELEMETRY_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn mock_inventory_reports_backend() {
+        let bridge = GpuBridge::mock();
+        let (_snapshot, report) = bridge.serialise_namespace_with_report().unwrap();
+        assert_eq!(report.backend, InventoryBackend::Mock);
+        assert!(report.fallback_from.is_none());
     }
 
     #[test]

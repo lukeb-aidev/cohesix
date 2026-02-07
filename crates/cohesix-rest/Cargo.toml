@@ -1,0 +1,16 @@
+# Author: Lukas Bower
+# Purpose: Provide a small REST client for the Cohesix hive-gateway.
+[package]
+name = "cohesix-rest"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Cohesix hive-gateway REST client"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+ureq = { version = "2.9", features = ["json"] }
+urlencoding = "2.1"

@@ -8,8 +8,9 @@ description = "Host sidecar bridge that mirrors ecosystem providers into /host"
 license = "MIT"
 
 [features]
-default = []
-tcp = ["cohsh/tcp"]
+default = ["tcp", "rest"]
+tcp = ["cohsh/tcp", "cohsh/rest"]
+rest = ["cohsh/rest"]
 
 [dependencies]
 anyhow = { workspace = true }

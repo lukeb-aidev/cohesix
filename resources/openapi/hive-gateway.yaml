@@ -68,6 +68,34 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GatewayResponse"
+  /v1/fs/tail:
+    get:
+      summary: Tail file contents (TAIL).
+      parameters:
+        - in: query
+          name: path
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: max_bytes
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Tail operation response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "400":
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
   /v1/fs/echo:
     post:
       summary: Append a single line (ECHO).

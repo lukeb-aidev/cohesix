@@ -47,6 +47,7 @@
   coh-rtc/
 /crates/
   cohsh-core/
+  host-cuda/
 /apps/
   cohesix-proto/
   console-ack-wire/

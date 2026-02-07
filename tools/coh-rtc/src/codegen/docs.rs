@@ -1890,7 +1890,7 @@ impl DocFragments {
         .ok();
         writeln!(
             coh_doctor_checks_md,
-            "- `check=nvml` requires NVML when not `--mock`."
+            "- `check=nvml` prefers NVML when not `--mock`; Jetson-class NVML falls back to CUDA discovery."
         )
         .ok();
         writeln!(

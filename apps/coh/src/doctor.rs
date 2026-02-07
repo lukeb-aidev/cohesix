@@ -10,7 +10,7 @@ use std::process::Command;
 use anyhow::{anyhow, Context, Result};
 use cohesix_ticket::Role;
 use cohsh_core::{normalize_ticket, role_label, TicketPolicy};
-use gpu_bridge_host::auto_bridge;
+use gpu_bridge_host::{auto_bridge, InventoryBackend, InventoryReport};
 
 use crate::mount;
 use crate::policy::{load_policy, CohPolicy};
@@ -140,15 +140,13 @@ fn check_mount(policy: Option<&CohPolicy>, audit: &mut CohAudit, errors: &mut Ve
 }
 
 fn check_nvml(audit: &mut CohAudit, errors: &mut Vec<String>) {
-    match auto_bridge(false)
-        .and_then(|bridge| bridge.serialise_namespace())
-        .map(|_| ())
-    {
-        Ok(()) => {
+    match auto_bridge(false).and_then(|bridge| bridge.serialise_namespace_with_report()) {
+        Ok((_snapshot, report)) => {
+            let detail = nvml_detail(&report);
             audit.push_ack(
                 cohsh_core::wire::AckStatus::Ok,
                 "DOCTOR",
-                Some("check=nvml"),
+                Some(detail.as_str()),
             );
         }
         Err(err) => {
@@ -157,6 +155,25 @@ fn check_nvml(audit: &mut CohAudit, errors: &mut Vec<String>) {
             errors.push(err.to_string());
         }
     }
+}
+
+fn nvml_detail(report: &InventoryReport) -> String {
+    if report.fallback_from.is_none() && report.backend == InventoryBackend::Nvml {
+        return "check=nvml".to_owned();
+    }
+    if let Some(from) = report.fallback_from {
+        let reason = report
+            .fallback_reason
+            .as_deref()
+            .unwrap_or("unknown");
+        return format!(
+            "check=nvml status=degraded backend={} fallback_from={} reason={}",
+            report.backend.label(),
+            from.label(),
+            reason
+        );
+    }
+    format!("check=nvml backend={}", report.backend.label())
 }
 
 fn check_runtime(tool: &str, mock: bool, audit: &mut CohAudit, errors: &mut Vec<String>) {

@@ -9,16 +9,18 @@ publish = false
 description = "Cohesix host bridge CLI (mount, gpu, telemetry pull)"
 
 [features]
-default = []
+default = ["nvml", "cuda", "fuse"]
 mock = []
 fuse = ["dep:fuser"]
 nvml = ["gpu-bridge-host/nvml"]
+cuda = ["gpu-bridge-host/cuda"]
 
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
 cohesix-net-constants = { workspace = true }
 cohesix-ticket = { workspace = true }
+cohesix-rest = { path = "../../crates/cohesix-rest" }
 cohsh = { path = "../cohsh", features = ["tcp"] }
 cohsh-core = { workspace = true }
 secure9p-codec = { workspace = true }
@@ -31,6 +33,7 @@ hex = { workspace = true }
 toml = "0.8"
 fuser = { version = "0.15", optional = true }
 libc = "0.2"
+fs2 = "0.4"
 
 [dev-dependencies]
 tempfile = "3.12"

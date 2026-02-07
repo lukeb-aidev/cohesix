@@ -1,0 +1,11 @@
+# Author: Lukas Bower
+# Purpose: Provide a small CUDA probe crate for host GPU inventory.
+[package]
+name = "host-cuda"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+libloading = "0.8"

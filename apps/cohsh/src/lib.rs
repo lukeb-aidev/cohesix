@@ -33,7 +33,7 @@ mod generated_client {
     ));
 }
 
-#[cfg(feature = "tcp")]
+#[cfg(any(feature = "tcp", feature = "rest"))]
 pub mod transport;
 
 pub use policy::{
@@ -43,6 +43,8 @@ pub use policy::{
 pub use session_pool::{PoolKind, SessionPool, TransportFactory};
 #[cfg(feature = "tcp")]
 pub use transport::tcp::{tcp_debug_enabled, PooledTcpTransport, SharedTcpTransport, TcpTransport};
+#[cfg(feature = "rest")]
+pub use transport::rest::RestTransport;
 #[cfg(feature = "tcp")]
 pub use transport::COHSH_TCP_PORT;
 

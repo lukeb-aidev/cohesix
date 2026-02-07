@@ -40,11 +40,26 @@ curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
 curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/schedule/queue&max_bytes=256'
 ```
 
-**4) Apply policy revision**
+**4) Tail queen log**
+```
+curl -sS 'http://127.0.0.1:8080/v1/fs/tail?path=/log/queen.log&max_bytes=512'
+```
+
+**5) Apply policy revision**
 ```
 curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
   -H 'Content-Type: application/json' \
   -d '{"path":"/policy/ctl","line":"{\"op\":\"apply\",\"id\":\"rev-22\",\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}"}'
+```
+
+**6) Publish a GPU bridge snapshot (via host tool)**
+```
+./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080
+```
+
+**7) Read host provider status**
+```
+curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/host/systemd/status&max_bytes=256'
 ```
 
 ## Swagger UI
@@ -116,6 +131,34 @@ paths:
       responses:
         "200":
           description: Read operation response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "400":
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+  /v1/fs/tail:
+    get:
+      summary: Tail file contents (TAIL).
+      parameters:
+        - in: query
+          name: path
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: max_bytes
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Tail operation response.
           content:
             application/json:
               schema:

@@ -90,6 +90,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [24b](#24b) | Live GPU Bridge Wiring + PEFT Live Flow + Live Hive Telemetry Text | Complete |
 | [24b1](#24b1) | Live Hive UX Patch: Performance, Labels, Clickability, Telemetry Harness | Complete |
 | [24c](#24c) | Authoritative Scheduling Grammar + REST Gateway + Scheduler/Lease Observability | Pending |
+| [24d](#24d) | Jetson CUDA Host Support (NVML Fallback + Doctor) | Pending |
 | [25a](#25a) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [25b](#25b) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [25c](#25c) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Pending |
@@ -3994,7 +3995,7 @@ Deliverables:
 ## Milestone 24c — Authoritative Scheduling Grammar + REST Gateway + Scheduler/Lease Observability <a id="24c"></a>
 [Milestones](#Milestones)
 
-**Status:** Pending.
+**Status:** Complete.
 
 **Why now (adoption):** Operators want frictionless API access without weakening Cohesix’s authority model. This milestone adds VM‑authoritative scheduling/lease/policy/export control grammar, a host‑only REST gateway that is a strict projection of file/console semantics, and read‑only `/proc` observability surfaced in Live Hive.
 
@@ -4173,8 +4174,316 @@ Checks:
 Deliverables:
   - Updated fixtures and regression evidence.
 ```
+
 ----
 **Release 0.4.0 alpha**
+----
+
+## Milestone 24d — Jetson CUDA Host Support (NVML Fallback + Doctor) <a id="24d"></a>
+[Milestones](#Milestones)
+
+**Status:** Complete.
+
+**Why now (adoption):** Jetson Orin hosts ship NVML with feature gaps. Host tools must still publish `/gpu/*` and pass `coh doctor` without weakening lease semantics or requiring mock mode.
+
+**Goal**
+Enable CUDA-based GPU discovery by default in host tools, with a deterministic NVML→CUDA fallback for Jetson-class NVML limitations. `coh doctor` must always succeed on Jetson by falling back to CUDA APIs when NVML is feature-limited.
+
+**Deliverables**
+- CUDA inventory backend for `gpu-bridge-host` (driver/runtime APIs) with deterministic NVML→CUDA fallback.
+- CUDA support enabled by default in affected host tools (`gpu-bridge-host`, `coh`), while preserving NVML support for dGPU hosts.
+- `coh doctor` treats NVML “not supported/feature-limited” as non-fatal and falls back to CUDA; emits an explicit degraded status line.
+- Docs updates: `docs/HOST_TOOLS.md`, `docs/GPU_NODES.md`, `docs/USERLAND_AND_CLI.md` (Jetson guidance + backend behavior).
+- Host setup supports Ubuntu 22.04 and documents Python 3.11 venv usage in Quickstart (for Jetson-class hosts).
+
+**Commands**
+- `cargo test -p host-cuda`
+- `cargo test -p gpu-bridge-host`
+- `cargo test -p coh --test transcript`
+- `cargo test -p coh --test run`
+
+**Checks (DoD)**
+- On Jetson Orin (JP 6.2.1), `./bin/gpu-bridge-host --list` reports `memory_mb > 0`, `sm_count > 0`, and non-empty driver/runtime versions via CUDA.
+- On Jetson Orin, `./bin/coh doctor` succeeds without `--mock` and emits a CUDA fallback status line.
+- On dGPU hosts with NVML, `gpu-bridge-host` still uses NVML and returns unchanged inventory fields.
+- `/gpu/<id>/info` schema remains unchanged and leases continue to enforce `mem_mb` bounds.
+
+**Task Breakdown**
+```
+Title/ID: m24d-gpu-bridge-cuda
+Goal: Add CUDA inventory backend and deterministic NVML→CUDA fallback for GPU discovery.
+Inputs: apps/gpu-bridge-host/src/lib.rs, apps/gpu-bridge-host/Cargo.toml, docs/INTERFACES.md.
+Changes:
+  - crates/host-cuda/ — CUDA driver/runtime probe (host-only, unsafe isolated).
+  - apps/gpu-bridge-host/src/lib.rs — add CUDA inventory implementation and fallback logic.
+  - apps/gpu-bridge-host/Cargo.toml — enable CUDA support by default.
+  - docs/INTERFACES.md — document backend selection and Jetson behavior.
+  - docs/REPO_LAYOUT.md — document the new host CUDA crate.
+Commands:
+  - cargo test -p host-cuda
+  - cargo test -p gpu-bridge-host
+Checks:
+  - CUDA discovery succeeds on Jetson; NVML remains active on dGPU.
+Deliverables:
+  - CUDA-backed GPU discovery with deterministic fallback.
+
+Title/ID: m24d-coh-doctor-cuda
+Goal: Ensure `coh doctor` passes on Jetson by falling back to CUDA when NVML is feature-limited.
+Inputs: apps/coh/src/doctor.rs, apps/coh/Cargo.toml, docs/USERLAND_AND_CLI.md.
+Changes:
+  - apps/coh/src/doctor.rs — detect NVML limitations and fallback to CUDA APIs.
+  - apps/coh/Cargo.toml — enable CUDA support by default alongside NVML.
+  - docs/USERLAND_AND_CLI.md — document NVML fallback behavior.
+Commands:
+  - cargo test -p coh --test transcript
+Checks:
+  - `coh doctor` succeeds on Jetson without `--mock` and emits a degraded CUDA fallback line.
+Deliverables:
+  - Deterministic Jetson-friendly doctor checks.
+
+Title/ID: m24d-docs-host-tools
+Goal: Update host tool docs for Jetson CUDA discovery and fallback semantics.
+Inputs: docs/HOST_TOOLS.md, docs/GPU_NODES.md.
+Changes:
+  - docs/HOST_TOOLS.md — clarify CUDA-by-default behavior and NVML fallback.
+  - docs/GPU_NODES.md — describe Jetson inventory via CUDA APIs and limits.
+Commands:
+  - scripts/ci/check_test_plan.sh
+Checks:
+  - Docs accurately describe as-built host discovery behavior.
+Deliverables:
+  - Jetson-ready host tool documentation.
+
+Title/ID: m24d-host-setup-ubuntu
+Goal: Support Ubuntu 22.04 host setup and document Python 3.11 venv usage for Quickstart.
+Inputs: scripts/setup_environment.sh, docs/QUICKSTART.md.
+Changes:
+  - scripts/setup_environment.sh — allow Ubuntu 22.04; add explicit override for unsupported versions with best-effort package selection.
+  - docs/QUICKSTART.md — add non-mock `coh doctor` expectations (NVML vs Jetson) and document Python 3.11 venv path for cohesix-py.
+Commands:
+  - scripts/ci/check_test_plan.sh
+Checks:
+  - Quickstart steps are clear for Ubuntu 22.04 + Python 3.11 venv users.
+Deliverables:
+  - Jetson-friendly host setup and Quickstart guidance.
+
+Title/ID: m24d-coh-fuse-default
+Goal: Enable FUSE support by default for `coh` builds when a FUSE runtime is present.
+Inputs: apps/coh/Cargo.toml, docs/HOST_TOOLS.md, docs/QUICKSTART.md, docs/PYTHON_SUPPORT.md, docs/USERLAND_AND_CLI.md, docs/TEST_PLAN.md.
+Changes:
+  - apps/coh/Cargo.toml — include `fuse` in default features.
+  - docs/HOST_TOOLS.md — update default FUSE guidance.
+  - docs/QUICKSTART.md — document default FUSE behavior.
+  - docs/PYTHON_SUPPORT.md — align FUSE notes with defaults.
+  - docs/USERLAND_AND_CLI.md — clarify live mount prerequisites.
+  - docs/TEST_PLAN.md — update optional FUSE note.
+Commands:
+  - cargo check -p coh
+  - cargo test -p coh --test transcript
+  - cargo test -p coh --test run
+Checks:
+  - `coh doctor` passes the mount check when `/dev/fuse` is available.
+  - Docs reflect default FUSE behavior.
+Deliverables:
+  - Default FUSE-enabled `coh` builds with aligned documentation.
+
+Title/ID: m24d-toolchain-linux
+Goal: Provide a Linux toolchain bootstrap script aligned with Cohesix host tool requirements.
+Inputs: toolchain/setup_macos_arm64.sh, toolchain/setup_linux_arm64.sh.
+Changes:
+  - toolchain/setup_linux_arm64.sh — install build/runtime prerequisites, rustup, and QEMU checks for Ubuntu hosts.
+Commands:
+  - toolchain/setup_linux_arm64.sh
+Checks:
+  - Script installs required packages and reports tool versions.
+Deliverables:
+  - Linux toolchain setup script for host builds.
+```
+
+## Milestone 24e — REST Multiplexer Transports + SwarmUI Gateway Mode <a id="24e"></a>
+[Milestones](#Milestones)
+
+**Status:** Complete.
+
+**Why now (adoption):** Live multi-host publishing requires a single console client. We need host tools and SwarmUI to speak to the `hive-gateway` REST projection so multiple external workers can publish and observe without breaking the single-client console constraint.
+
+**Goal**
+Add REST-backed transports for host publishers (`gpu-bridge-host`, `host-sidecar-bridge`, `cas-tool`), `coh` (including a REST-backed mount mode), and SwarmUI so they can multiplex through `hive-gateway` while retaining all existing console and Secure9P features.
+
+**Deliverables**
+- REST client crate for hive-gateway (`/v1/fs/ls`, `/v1/fs/cat`, `/v1/fs/echo`).
+- `cohsh` REST transport implementing the existing transport trait (no new semantics).
+- `cohsh` CLI supports `--transport rest` with `--rest-url` (env: `COHSH_REST_URL`, `COH_REST_URL`, `HIVE_GATEWAY_URL`).
+- `gpu-bridge-host` publish via REST (`/gpu/bridge/ctl`) with `--rest-url`.
+- `host-sidecar-bridge` publish via REST (`/host/*`) with `--rest-url`.
+- `cas-tool` upload via REST (`/updates/*`) with `--rest-url`.
+- `coh` REST mode for `mount`, `gpu`, `telemetry pull`, `peft`, and `run` via `--rest-url` (REST mount is exclusive: one active mount per gateway URL).
+- REST transport clamps `/proc` reads to manifest bounds so SwarmUI shows schedule/lease data in REST mode.
+- SwarmUI transport option (`SWARMUI_TRANSPORT=rest|gateway`) that routes through hive-gateway and preserves all existing features in console/9p modes (REST transport is enabled by default; disable with `--no-default-features` if needed).
+- SwarmUI live hive PixiJS renderer remains responsive under load (particle containers + capped sim steps).
+- Docs updated for REST multiplexer usage and SwarmUI transport selection.
+- REST multiplexer is queen-role only; worker-role attach remains console/9P-only.
+
+**Commands**
+- `cargo check -p cohesix-rest`
+- `cargo test -p cohsh`
+- `cargo test -p gpu-bridge-host`
+- `cargo test -p host-sidecar-bridge`
+- `cargo test -p swarmui`
+
+**Checks (DoD)**
+- REST transport maps `LS`/`CAT`/`ECHO` to gateway responses with deterministic errors.
+- `cohsh --transport rest --rest-url` attaches and reads `/proc/schedule/*` + `/proc/lease/*` without max_bytes bound errors.
+- REST publish paths populate `/gpu/*` and `/host/*` without console attachment.
+- `cas-tool --rest-url` uploads CAS bundles via `/updates/*` without console attachment.
+- `coh mount --rest-url` mounts via gateway (queen-role only, append-only semantics preserved, single REST mount per gateway URL).
+- SwarmUI REST mode connects through hive-gateway and renders the same panels/features as console/9p modes (REST transport enabled by default).
+- SwarmUI live hive view remains responsive (no PixiJS stalls) with live multi-worker telemetry.
+- Multiplexer smoke coverage: `cohsh` REST attach/ping; `gpu-bridge-host --rest-url --publish`; `host-sidecar-bridge --rest-url --watch`; `cas-tool upload --rest-url`; `coh --rest-url` (`mount`, `gpu`, `telemetry pull`, `peft`, `run`); `SWARMUI_TRANSPORT=rest` with live hive view and console commands.
+- Docs describe REST multiplexer usage and transport selection clearly.
+
+**Task Breakdown**
+```
+Title/ID: m24e-rest-client
+Goal: Provide a shared hive-gateway REST client for host tools.
+Inputs: docs/HOST_API.md.
+Changes:
+  - crates/cohesix-rest/ — add GatewayClient + response models.
+  - Cargo.toml — add cohesix-rest to workspace.
+Commands:
+  - cargo check -p cohesix-rest
+Checks:
+  - REST client validates OK/ERR and preserves gateway error details.
+Deliverables:
+  - Shared REST client crate for host tools.
+
+Title/ID: m24e-cohsh-rest-transport
+Goal: Add a REST-backed transport that implements the cohsh Transport trait.
+Inputs: apps/cohsh/src/lib.rs, apps/cohsh/src/transport.
+Changes:
+  - apps/cohsh/src/transport/rest.rs — implement Transport over hive-gateway.
+  - apps/cohsh/src/transport/mod.rs — export rest transport.
+  - apps/cohsh/Cargo.toml — add cohesix-rest dependency/feature.
+Commands:
+  - cargo test -p cohsh
+Checks:
+  - Transport methods (`list`, `read`, `write`, `tail`) map to REST without changing semantics.
+Deliverables:
+  - REST transport available to host tools and SwarmUI.
+
+Title/ID: m24e-cohsh-rest-cli
+Goal: Expose REST transport selection in the cohsh CLI.
+Inputs: apps/cohsh/src/main.rs, docs/USERLAND_AND_CLI.md, docs/HOST_TOOLS.md.
+Changes:
+  - apps/cohsh/src/main.rs — add `--transport rest` + `--rest-url` resolution.
+  - docs/USERLAND_AND_CLI.md — document REST transport option for cohsh.
+  - docs/HOST_TOOLS.md — add cohsh REST example.
+Commands:
+  - cargo test -p cohsh
+Checks:
+  - `cohsh --transport rest --rest-url` connects to hive-gateway and supports core verbs.
+Deliverables:
+  - CLI access to REST multiplexer transport.
+
+Title/ID: m24e-rest-proc-bounds
+Goal: Clamp REST `/proc` reads to manifest bounds so SwarmUI shows schedule/lease data.
+Inputs: apps/cohsh/src/transport/rest.rs, docs/HOST_API.md.
+Changes:
+  - apps/cohsh/src/transport/rest.rs — enforce `/proc` read bounds via gateway metadata.
+Commands:
+  - cargo test -p cohsh
+Checks:
+  - REST reads for `/proc/schedule/*` and `/proc/lease/*` succeed with bounded `max_bytes`.
+Deliverables:
+  - SwarmUI REST schedule/lease visibility retained.
+
+Title/ID: m24e-bridge-rest-publish
+Goal: Allow host bridge publishers to use hive-gateway as a multiplexer.
+Inputs: apps/gpu-bridge-host/src/main.rs, apps/host-sidecar-bridge/src/main.rs.
+Changes:
+  - apps/gpu-bridge-host/src/main.rs — add `--rest-url` publish mode.
+  - apps/host-sidecar-bridge/src/main.rs — add `--rest-url` publish mode.
+  - apps/gpu-bridge-host/Cargo.toml — add cohesix-rest dependency.
+  - apps/host-sidecar-bridge/Cargo.toml — enable cohsh REST transport feature.
+Commands:
+  - cargo test -p gpu-bridge-host
+  - cargo test -p host-sidecar-bridge
+Checks:
+  - REST publish mode writes valid snapshot lines and respects bounds.
+Deliverables:
+  - REST-capable host publishers.
+
+Title/ID: m24e-cas-tool-rest
+Goal: Allow cas-tool to upload bundles through hive-gateway.
+Inputs: apps/cas-tool/src/main.rs, docs/HOST_API.md.
+Changes:
+  - apps/cas-tool/src/main.rs — add `--rest-url` upload mode.
+  - apps/cas-tool/Cargo.toml — add cohesix-rest dependency.
+Commands:
+  - cargo test -p cas-tool
+Checks:
+  - REST upload writes base64 chunks to `/updates/*` without console attachment.
+Deliverables:
+  - REST-capable cas-tool upload.
+
+Title/ID: m24e-coh-rest-mount
+Goal: Add REST-backed CohAccess for `coh` and support `coh mount --rest-url`.
+Inputs: apps/coh/src/main.rs, apps/coh/src/mount.rs, apps/coh/src/rest.rs.
+Changes:
+  - apps/coh/src/rest.rs — implement REST CohAccess.
+  - apps/coh/src/mount.rs — add REST-backed mount path.
+  - apps/coh/src/main.rs — add `--rest-url` handling for live operations.
+  - apps/coh/Cargo.toml — add cohesix-rest dependency.
+Commands:
+  - cargo test -p coh
+Checks:
+  - REST mount uses queen-role gateway, preserves append-only semantics, and enforces a single mount per gateway URL.
+Deliverables:
+  - `coh` REST mode including mount support.
+
+Title/ID: m24e-swarmui-rest-transport
+Goal: Add SwarmUI transport option that connects through hive-gateway.
+Inputs: apps/swarmui/src-tauri/main.rs, apps/swarmui/src/lib.rs.
+Changes:
+  - apps/swarmui/src-tauri/main.rs — support `SWARMUI_TRANSPORT=rest|gateway`.
+  - apps/swarmui/Cargo.toml — enable cohsh REST transport feature.
+Commands:
+  - cargo test -p swarmui
+Checks:
+  - SwarmUI REST mode renders existing panels and console commands without regressions (REST transport enabled by default).
+Deliverables:
+  - SwarmUI gateway mode for REST multiplexing.
+
+Title/ID: m24e-swarmui-pixi-perf
+Goal: Keep SwarmUI Live Hive responsive under multi-worker telemetry load.
+Inputs: apps/swarmui/frontend/hive/renderer.js, apps/swarmui/frontend/hive/index.js.
+Changes:
+  - apps/swarmui/frontend/hive/renderer.js — shift to particle containers + sprite-based clusters.
+  - apps/swarmui/frontend/hive/index.js — cap sim steps per frame + throttle render rate under pressure.
+Commands:
+  - cargo test -p swarmui
+Checks:
+  - Live Hive view remains responsive (no UI stalls) with active telemetry and multiple workers.
+Deliverables:
+  - PixiJS rendering optimizations for live mode.
+
+Title/ID: m24e-docs-rest-multiplexer
+Goal: Document REST multiplexer usage and SwarmUI transport selection.
+Inputs: docs/HOST_TOOLS.md, docs/API_GUIDELINES.md, docs/HOST_API.md, docs/USERLAND_AND_CLI.md.
+Changes:
+  - docs/HOST_TOOLS.md — add REST publish examples for host bridges and SwarmUI.
+  - docs/API_GUIDELINES.md — add transport guidance for REST multiplexer deployments.
+  - docs/HOST_API.md — add `/gpu/bridge/ctl` and `/host/*` REST examples.
+  - docs/USERLAND_AND_CLI.md — document SwarmUI transport options.
+Commands:
+  - scripts/ci/check_test_plan.sh
+Checks:
+  - Docs reflect as-built REST multiplexer behavior.
+Deliverables:
+  - Updated operator-facing documentation.
+```
+----
+**Release 0.5.0 alpha**
 ----
 
 ----

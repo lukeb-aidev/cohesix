@@ -7,4 +7,7 @@
 
 pub use cohesix_net_constants::COHSH_TCP_PORT;
 
+#[cfg(feature = "rest")]
+pub mod rest;
+#[cfg(feature = "tcp")]
 pub mod tcp;

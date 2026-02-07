@@ -31,6 +31,7 @@ This document is the adoption guide for Cohesix APIs introduced in Milestone 24c
 ## Auth and Role Context
 - The REST gateway attaches to the console using `COH_AUTH_TOKEN` and the role in `COH_ROLE` (typically `queen`).
 - REST clients inherit the gateway role’s namespace. There is no per-request ticket in the REST surface.
+- REST multiplexer deployments assume a queen-role gateway; worker-role attach remains console/9P-only.
 - Policy gates still apply to REST writes; approvals must be queued in `/actions/queue` when required.
 
 ## API Surface Map
@@ -79,14 +80,15 @@ Policy gating is manifest-enabled. When active, `/policy` and `/actions` appear 
 | Audit-first infrastructure | bounded `/proc` observability |
 
 ## Choose Your Transport
-- **REST gateway**: simplest for HTTP clients and OpenAPI tooling.
+- **REST gateway**: simplest for HTTP clients and OpenAPI tooling. When using it as a multiplexer, run `hive-gateway` as the sole console client and point host tools at it with `--rest-url` (or `COH_REST_URL`).
 - **TCP console**: direct `cohsh`-compatible console semantics.
 - **Filesystem (Secure9P mount)**: file-shaped integration without HTTP.
 - **Mock backend**: deterministic development and CI without a VM.
 
 Notes:
 - The TCP console is single-client. If a tool already holds it, other TCP clients will block or fail.
-- The REST gateway itself uses the console, so do not run it concurrently with `cohsh` or `swarmui`.
+- The REST gateway itself uses the console, so do not run it concurrently with `cohsh` or `swarmui` in console mode. Use `SWARMUI_TRANSPORT=rest` instead.
+- `coh mount --rest-url` is exclusive: only one REST mount per gateway URL.
 
 ## Golden Path (REST Adoption)
 These steps both **adopt** the API and **validate connectivity**.

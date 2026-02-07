@@ -9,12 +9,12 @@ Host tools run outside the VM and project the same file/console semantics the VM
 **Build + locations**
 - Source tree: `scripts/cohesix-build-run.sh` stages host binaries under `out/cohesix/host-tools/`. It builds `cohsh` and `host-sidecar-bridge` with TCP support, plus `coh`, `gpu-bridge-host`, `cas-tool`, `hive-gateway`, and (when `cohesix-dev` is enabled) `swarmui`.
 - Source tree (manual): `cargo build -p <tool>` produces `target/<profile>/<tool>`.
-- Release bundles: host tools live in `bin/`. The Linux release bundle ships `coh` with `fuse,nvml`; the macOS bundle omits `fuse` (build from source with `--features fuse` + macFUSE for live mounts). `cohsh` and `host-sidecar-bridge` include TCP support.
+- Release bundles: host tools live in `bin/`. The Linux release bundle ships `coh` with `fuse,nvml,cuda`; build with `--no-default-features` to skip FUSE when needed. `cohsh` and `host-sidecar-bridge` include TCP support.
 
 All examples below use `./bin/<tool>` as the bundle layout. In the source tree, replace `./bin` with `out/cohesix/host-tools` (staged) or `target/<profile>` (manual).
 
 **Console exclusivity**
-The TCP console is single-client. Only one of `cohsh`, `swarmui`, `hive-gateway`, `coh`, `gpu-bridge-host`, `host-sidecar-bridge`, `cas-tool`, or a Python `TcpBackend` should be attached at a time. `cohsh` enforces this with a lock file; set `COHSH_CONSOLE_LOCK=0` only if you understand the risk.
+The TCP console is single-client. Only one of `cohsh`, `swarmui`, `hive-gateway`, `coh`, `gpu-bridge-host`, `host-sidecar-bridge`, `cas-tool`, or a Python `TcpBackend` should be attached at a time. `cohsh` enforces this with a lock file; set `COHSH_CONSOLE_LOCK=0` only if you understand the risk. For multiplexed deployments, run `hive-gateway` as the sole console client and point host tools at it using REST (`--rest-url`, `COH_REST_URL`, or `SWARMUI_REST_URL`). `coh mount --rest-url` is limited to one active mount per gateway URL (host-side lock).
 
 ## cohsh
 ### Purpose
@@ -31,14 +31,15 @@ Canonical operator shell for Cohesix. Attaches to the TCP console (or an in-proc
 ./bin/cohsh --transport tcp --script scripts/cohsh/boot_v0.coh
 ./bin/cohsh --mint-ticket --role worker-heartbeat --ticket-subject worker-1
 ./bin/cohsh --transport qemu --qemu-out-dir out/cohesix --qemu-arg "-nographic"
+./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080
 ```
 
 ### Notes
-- `--transport` supports `tcp`, `qemu`, and `mock`. `qemu` boots QEMU using the staged artefacts under `--qemu-out-dir` (defaults to `out/cohesix`).
+- `--transport` supports `tcp`, `rest`, `qemu`, and `mock`. `qemu` boots QEMU using the staged artefacts under `--qemu-out-dir` (defaults to `out/cohesix`).
 - `.coh` scripts follow the grammar in `docs/USERLAND_AND_CLI.md`; validate with `--check`.
 - `--record-trace` and `--replay-trace` require `--transport mock`.
 - Tickets are required when ticketing is enabled; the default manifest ships mintable secrets for queen and worker roles. Auth tokens (`--auth-token` / `COHSH_AUTH_TOKEN`) are separate from tickets.
-- Environment overrides: `COHSH_AUTH_TOKEN`, `COHSH_TCP_HOST`, `COHSH_TCP_PORT`, `COHSH_POLICY`, `COHSH_TICKET_CONFIG`, `COHSH_TICKET_SECRET`, `COHSH_QEMU_ARGS`, `COHSH_TCP_DEBUG`.
+- Environment overrides: `COHSH_AUTH_TOKEN`, `COHSH_TCP_HOST`, `COHSH_TCP_PORT`, `COHSH_REST_URL`, `COH_REST_URL`, `HIVE_GATEWAY_URL`, `COHSH_POLICY`, `COHSH_TICKET_CONFIG`, `COHSH_TICKET_SECRET`, `COHSH_QEMU_ARGS`, `COHSH_TCP_DEBUG`.
 - Advanced tuning: `COHSH_POOL_CONTROL_SESSIONS`, `COHSH_POOL_TELEMETRY_SESSIONS`, `COHSH_RETRY_MAX_ATTEMPTS`, `COHSH_RETRY_BACKOFF_MS`, `COHSH_RETRY_CEILING_MS`, `COHSH_RETRY_TIMEOUT_MS`, `COHSH_HEARTBEAT_INTERVAL_MS`.
 
 ## coh
@@ -52,6 +53,8 @@ Host bridge for mount, GPU leases, telemetry pulls, runtime breadcrumbs, PEFT li
 ### Usage
 ```bash
 ./bin/coh doctor --mock
+./bin/coh --rest-url http://127.0.0.1:8080 gpu list
+./bin/coh --rest-url http://127.0.0.1:8080 mount --at /tmp/coh-mount
 ./bin/coh gpu list --host 127.0.0.1 --port 31337
 ./bin/coh gpu lease --host 127.0.0.1 --port 31337 --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60
 ./bin/coh run --host 127.0.0.1 --port 31337 --gpu GPU-0 -- echo ok
@@ -64,12 +67,15 @@ Host bridge for mount, GPU leases, telemetry pulls, runtime breadcrumbs, PEFT li
 ```
 
 ### Notes
-- `coh mount` uses FUSE for live mounts. Build with `--features fuse` and ensure a FUSE runtime is installed (macFUSE on macOS, libfuse on Linux). `--mock` skips the mount check.
+- `coh mount` uses FUSE for live mounts. FUSE is enabled by default on Linux; ensure a FUSE runtime is installed. `--mock` skips the mount check.
 - `coh mount` is long-running and stays in the foreground to serve the mount. Use a second terminal for access or run it in the background (`... &`) and unmount with `fusermount -u` (Linux) or `umount` (macOS).
+- `--rest-url` (or `COH_REST_URL` / `HIVE_GATEWAY_URL`) routes operations through `hive-gateway` and does not attach to the TCP console (queen role only).
+- `coh mount --rest-url` is exclusive: only one REST mount per gateway URL. Unmount before starting another.
+- `coh doctor` prefers NVML; if NVML is feature-limited (Jetson), it falls back to CUDA discovery and emits `status=degraded backend=cuda`.
 - `coh gpu list`/`lease` only see GPUs after `/gpu` is published by `gpu-bridge-host` (live: `--publish`; mock: `--mock --list`).
 - Reading `/host/*` requires `host-sidecar-bridge` to be running and publishing providers.
 - Mock vs live: `--mock` uses an in-process backend and ignores the VM; live commands require QEMU + the TCP console. Mixing mock and live in the same session commonly leads to empty views or unexpected failures.
-- `coh gpu --nvml` seeds the mock backend from NVML and requires `--features nvml` (it is mutually exclusive with `--mock`).
+- `coh gpu --nvml` seeds the mock backend from NVML and requires `--features nvml` (it is mutually exclusive with `--mock`); if NVML is feature-limited, CUDA is used as a fallback.
 - `coh run` executes a host command locally after validating a lease and appends bounded breadcrumbs to `/gpu/<id>/status`.
 - `coh run` requires an active lease in `/gpu/<id>/lease` and will refuse to execute without one.
 - Policy enforcement is manifest-driven; `COH_POLICY` (or `out/coh_policy.toml`) must hash-match the compiled defaults.
@@ -88,6 +94,7 @@ Desktop UI (Tauri) that renders the hive view and reuses `cohsh-core` semantics.
 ### Usage
 ```bash
 ./bin/swarmui
+SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 ./bin/swarmui
 SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./bin/swarmui
 ./bin/swarmui --replay /path/to/demo.hive.cbor
 ./bin/swarmui --replay-trace /path/to/trace_v0.trace
@@ -95,8 +102,10 @@ SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./bin/swarm
 ```
 
 ### Notes
-- Transport is selected via `SWARMUI_TRANSPORT=console|tcp|9p|secure9p` (default: `console`).
+- Transport is selected via `SWARMUI_TRANSPORT=console|tcp|9p|secure9p|rest|gateway` (default: `console`).
 - `SWARMUI_9P_HOST`/`SWARMUI_9P_PORT` supply the TCP endpoint for both console and Secure9P transports.
+- `SWARMUI_REST_URL` (fallback `COH_REST_URL`) supplies the hive-gateway base URL for `rest|gateway`.
+- `SWARMUI_TRANSPORT=rest|gateway` is enabled by default. Use `--no-default-features` to strip REST support and rebuild with `--features rest` when needed.
 - `SWARMUI_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`) supplies the console auth token.
 - Ticket minting uses `SWARMUI_TICKET_CONFIG`/`SWARMUI_TICKET_SECRET` (fallback to `COHSH_*`).
 - `--replay` resolves relative paths first against the current working directory, then the app data directory under `snapshots/`, and forces offline mode.
@@ -115,6 +124,7 @@ Package and upload CAS bundles over the TCP console using the same append-only f
 ./bin/cas-tool pack --epoch 1 --input path/to/payload --out-dir out/cas/1
 ./bin/cas-tool upload --bundle out/cas/1 --host 127.0.0.1 --port 31337 \
   --auth-token changeme --ticket "$QUEEN_TICKET"
+./bin/cas-tool upload --bundle out/cas/1 --rest-url http://127.0.0.1:8080
 ```
 
 ### Notes
@@ -125,7 +135,7 @@ Package and upload CAS bundles over the TCP console using the same append-only f
 
 ## gpu-bridge-host
 ### Purpose
-Discover GPUs on the host (NVML or mock) and emit the `/gpu` namespace snapshot consumed by NineDoor.
+Discover GPUs on the host (NVML with CUDA fallback, or mock) and emit the `/gpu` namespace snapshot consumed by NineDoor.
 
 ### Location
 - Source: `apps/gpu-bridge-host`
@@ -136,14 +146,17 @@ Discover GPUs on the host (NVML or mock) and emit the `/gpu` namespace snapshot 
 ./bin/gpu-bridge-host --mock --list
 ./bin/gpu-bridge-host --list
 ./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
+./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080
 ./bin/gpu-bridge-host --publish --interval-ms 1000 --registry demo/peft_registry
 ```
 
 ### Notes
 - `--list` prints JSON for host-side integration; it does not talk to the VM directly.
-- `--publish` streams bounded snapshots to `/gpu/bridge/ctl` over the TCP console (queen role).
+- `--publish` streams bounded snapshots to `/gpu/bridge/ctl` over the TCP console (queen role) or hive-gateway (`--rest-url`).
+- `--rest-url` is enabled by default. Use `--no-default-features` to strip REST support and rebuild with `--features rest` when needed.
 - `--interval-ms` repeats publish in a loop; omit to send a single snapshot.
 - `--registry` points at a host model registry root to populate `/gpu/models`.
+- NVML is preferred on dGPU hosts; when NVML is feature-limited (Jetson), the bridge falls back to CUDA driver/runtime APIs to populate `/gpu/*`.
 
 ## host-sidecar-bridge
 ### Purpose
@@ -158,12 +171,14 @@ Publish host-side providers into `/host` (systemd, k8s, docker, nvidia, jetson, 
 ./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider docker --provider nvidia
 ./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
 ./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --watch
+./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --watch
 ./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme \
   --provider systemd --provider k8s --provider docker --provider nvidia --watch
 ```
 
 ### Notes
-- Live TCP publishing requires building with `--features tcp` (otherwise use `--mock`).
+- Live publishing requires TCP or REST support (enabled by default). Use `--no-default-features` to strip transports, or rebuild with `--features tcp`/`--features rest` as needed.
+- `--rest-url` publishes through hive-gateway (queen role) without attaching to the TCP console.
 - Providers may be `systemd`, `k8s`, `docker`, `nvidia`, `jetson`, or `net`. When no providers are specified, the defaults are `systemd`, `k8s`, `docker`, and `nvidia`.
 - `--watch` polls providers continuously using manifest-backed polling defaults (override with `--policy`). Only `systemd`, `k8s`, `docker`, and `nvidia` have live polling schedules.
 - The `/host` namespace must be enabled in `configs/root_task.toml`.
@@ -190,7 +205,7 @@ curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 - Environment overrides: `HIVE_GATEWAY_BIND`, `HIVE_GATEWAY_MOCK`, `COH_TCP_HOST`, `COH_TCP_PORT`, `COH_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`), `COH_ROLE`, `COH_TICKET`.
 - OpenAPI spec + examples live in `docs/HOST_API.md` and are served at `/v1/openapi.yaml`.
 - Swagger UI is served at `/docs` and uses public CDN assets; use the YAML spec for air-gapped environments.
-- The gateway is a console client; do not attach `cohsh` or `swarmui` at the same time.
+- The gateway is the console client; do not attach `cohsh` or `swarmui` in console mode at the same time. Use `SWARMUI_TRANSPORT=rest` and host tool `--rest-url` flags when multiplexing.
 
 ---
 
@@ -216,6 +231,7 @@ attach queen
 cat /proc/lifecycle/state
 spawn heartbeat ticks=100
 ```
+For multiplexed mode, keep `hive-gateway` attached to the console and run `SWARMUI_TRANSPORT=rest` with host tools using `--rest-url` so the console remains single-client.
 Quit `cohsh`, relaunch SwarmUI to observe the worker activity.
 
 ### 2) GPU surface + lease + breadcrumbs (host tools only)
@@ -223,7 +239,7 @@ Goal: prove the GPU namespace and bounded runtime breadcrumbs.
 Why this matters: shows GPU access is host-side and lease-gated, and that runtime actions are logged in `/gpu/<id>/status`.
 ```bash
 ./qemu/run.sh
-./bin/gpu-bridge-host --list   # NVML discovery on Linux
+./bin/gpu-bridge-host --list   # NVML/CUDA discovery on Linux
 ./bin/coh --host 127.0.0.1 --port 31337 gpu list
 ./bin/coh --host 127.0.0.1 --port 31337 gpu lease --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60
 ./bin/coh --host 127.0.0.1 --port 31337 run --gpu GPU-0 -- echo ok
@@ -289,14 +305,14 @@ ls /updates
 ```
 
 ### 7) Hive gateway monitoring + API control
-Goal: observe host telemetry (NVML-backed GPU snapshots plus systemd, k8s, and docker) over HTTP and submit control actions through the REST projection.
+Goal: observe host telemetry (NVML/CUDA-backed GPU snapshots plus systemd, k8s, and docker) over HTTP and submit control actions through the REST projection.
 Why this matters: demonstrates that monitoring and control stay aligned with the same file and console semantics.
 
 Real-world flow (snapshot + REST read):
 ```bash
 ./qemu/run.sh
 
-# Publish a one-shot NVML GPU snapshot into /gpu (do not keep this attached).
+# Publish a one-shot NVML/CUDA GPU snapshot into /gpu (do not keep this attached).
 ./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
 
 # Publish a one-shot host telemetry snapshot into /host (do not keep this attached).
@@ -319,11 +335,11 @@ curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/host/systemd/cohesix-agent.servi
 # Read a Kubernetes node status (example node id).
 curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/host/k8s/node/node-1/status&max_bytes=256' | jq .
 
-# Read Docker and NVML provider status.
+# Read Docker and NVIDIA provider status.
 curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/host/docker/status&max_bytes=256' | jq .
 curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/host/nvidia/gpu/0/status&max_bytes=256' | jq .
 
-# Read NVML-backed GPU info published by gpu-bridge-host.
+# Read NVML/CUDA-backed GPU info published by gpu-bridge-host.
 curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/gpu/GPU-0/info&max_bytes=2048' | jq .
 ```
 
@@ -352,8 +368,8 @@ curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
 ```
 
 Notes:
-- The console is single-client. Use `host-sidecar-bridge` to publish snapshots, then exit it before running `hive-gateway`.
-- For continuous telemetry, re-run the snapshot publish on a timer or use `host-sidecar-bridge --watch` by itself and attach the gateway afterward.
+- The console is single-client. When `hive-gateway` is attached, use `--rest-url` on host bridges instead of attaching them directly.
+- For continuous telemetry, run `host-sidecar-bridge --watch --rest-url http://127.0.0.1:8080` while `hive-gateway` remains the console client.
 
 ## Policy & Dependency Diagrams
 These diagrams summarize the policy gating and host-tool interdependencies that most often surprise new users.
@@ -420,7 +436,7 @@ flowchart TD
 - `Bounds`: Manifest-defined hard limits on bytes, entries, and walk depth enforced by NineDoor.
 - `Bridge` (host-side): Host tools that publish external state into the VM (`gpu-bridge-host`, `host-sidecar-bridge`).
 - `CAS Updates` (`/updates/*`): Content-addressed update bundles uploaded in bounded chunks (manifest-gated).
-- `Console`: The single-client TCP control channel used by `cohsh`, `coh`, `hive-gateway`, `swarmui`, `gpu-bridge-host`, `host-sidecar-bridge`, `cas-tool`, and Python `TcpBackend`.
+- `Console`: The single-client TCP control channel used directly by `cohsh` (and by `hive-gateway` when multiplexing REST clients). Other host tools attach directly only in console mode.
 - `Control Files`: Append-only control paths such as `/queen/ctl`, `/queen/lifecycle/ctl`, `/queen/schedule/ctl`, `/queen/lease/ctl`, `/queen/export/ctl`, `/policy/ctl`, and `/gpu/bridge/ctl`.
 - `Control Write`: An `ECHO` to a control path (e.g., `/queen/ctl`, `/policy/ctl`) that triggers actions.
 - `Cohesix Hive`: Queen + workers model; queen orchestrates, workers emit telemetry or mirror GPU lease state.

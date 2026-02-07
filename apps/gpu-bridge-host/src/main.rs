@@ -12,6 +12,8 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{ArgAction, Parser};
 use cohsh_core::wire::{parse_ack, AckStatus};
+#[cfg(feature = "rest")]
+use cohesix_rest::GatewayClient;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -56,6 +58,9 @@ struct Args {
     /// Optional ticket payload when attaching to the console.
     #[arg(long)]
     ticket: Option<String>,
+    /// REST gateway base URL for hive-gateway publish mode.
+    #[arg(long, value_name = "URL")]
+    rest_url: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -66,25 +71,51 @@ fn main() -> Result<()> {
         println!("{}", namespace_to_json_pretty(&namespace));
     }
     if args.publish {
-        let auth_token = resolve_auth_token(args.auth_token.as_deref());
-        let mut client = ConsoleClient::connect(
-            &args.tcp_host,
-            args.tcp_port,
-            auth_token.as_str(),
-            args.ticket.as_deref(),
-        )
-        .context("connect to live console")?;
         let interval = args.interval_ms.map(Duration::from_millis);
-        loop {
-            let snapshot = bridge.serialise_namespace()?;
-            let publish = build_publish_lines(&snapshot)?;
-            client
-                .publish_lines(&publish.lines)
-                .context("publish gpu bridge snapshot")?;
-            if let Some(delay) = interval {
-                thread::sleep(delay);
-            } else {
-                break;
+        if let Some(rest_url) = args.rest_url.as_deref() {
+            #[cfg(feature = "rest")]
+            {
+                let client = GatewayClient::new(rest_url);
+                loop {
+                    let snapshot = bridge.serialise_namespace()?;
+                    let publish = build_publish_lines(&snapshot)?;
+                    for line in &publish.lines {
+                        client
+                            .echo("/gpu/bridge/ctl", line.as_str())
+                            .context("publish gpu bridge snapshot via rest")?;
+                    }
+                    if let Some(delay) = interval {
+                        thread::sleep(delay);
+                    } else {
+                        break;
+                    }
+                }
+            }
+            #[cfg(not(feature = "rest"))]
+            {
+                let _ = rest_url;
+                anyhow::bail!("rest publish disabled; rebuild with --features rest");
+            }
+        } else {
+            let auth_token = resolve_auth_token(args.auth_token.as_deref());
+            let mut client = ConsoleClient::connect(
+                &args.tcp_host,
+                args.tcp_port,
+                auth_token.as_str(),
+                args.ticket.as_deref(),
+            )
+            .context("connect to live console")?;
+            loop {
+                let snapshot = bridge.serialise_namespace()?;
+                let publish = build_publish_lines(&snapshot)?;
+                client
+                    .publish_lines(&publish.lines)
+                    .context("publish gpu bridge snapshot")?;
+                if let Some(delay) = interval {
+                    thread::sleep(delay);
+                } else {
+                    break;
+                }
             }
         }
     }

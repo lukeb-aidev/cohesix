@@ -14,7 +14,8 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use coh::console::ConsoleSession;
 use coh::policy::{default_policy_path, load_policy, CohPolicy};
-use coh::{doctor, gpu, mount, peft, run as coh_run, telemetry, CohAudit};
+use coh::rest::RestSession;
+use coh::{doctor, gpu, mount, peft, run as coh_run, telemetry, CohAccess, CohAudit};
 use cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT;
 use cohesix_ticket::Role;
 use cohsh::client::{CohClient, InProcessTransport};
@@ -65,6 +66,9 @@ struct ConnectArgs {
     /// Secure9P port.
     #[arg(long, default_value_t = COHESIX_TCP_CONSOLE_PORT, global = true)]
     port: u16,
+    /// REST gateway base URL for hive-gateway (optional).
+    #[arg(long, value_name = "URL", global = true)]
+    rest_url: Option<String>,
     /// TCP console auth token (default: changeme).
     #[arg(long, global = true)]
     auth_token: Option<String>,
@@ -284,6 +288,36 @@ fn run_mount(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: MountAr
         emit_audit(audit);
         return Ok(());
     }
+    if let Some(rest_url) = resolve_rest_url(args.connect.rest_url.as_deref()) {
+        if role != Role::Queen {
+            let mut audit = CohAudit::new();
+            audit.push_ack(
+                cohsh_core::wire::AckStatus::Err,
+                "MOUNT",
+                Some("reason=rest-transport-queen-only"),
+            );
+            emit_audit(audit);
+            return Err(anyhow!("rest transport supports queen role only"));
+        }
+        let _rest_lock = match mount::RestMountLock::acquire(rest_url.as_str()) {
+            Ok(lock) => lock,
+            Err(err) => {
+                let mut audit = CohAudit::new();
+                let detail = format!("reason={err}");
+                audit.push_ack(
+                    cohsh_core::wire::AckStatus::Err,
+                    "MOUNT",
+                    Some(detail.as_str()),
+                );
+                emit_audit(audit);
+                return Err(err);
+            }
+        };
+        let client = RestSession::connect(rest_url.as_str());
+        audit.push_ack(cohsh_core::wire::AckStatus::Ok, "MOUNT", Some("mode=rest"));
+        emit_audit(audit);
+        return mount::mount_rest(client, policy, &args.at);
+    }
     let client = match connect_console(&args.connect, policy, role, ticket) {
         Ok(client) => client,
         Err(err) => {
@@ -354,7 +388,7 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
         };
         handle_result(result, audit, "GPU")
     } else {
-        let mut client = match connect_console(&args.connect, policy, role, ticket) {
+        let mut client = match connect_access(&args.connect, policy, role, ticket) {
             Ok(client) => client,
             Err(err) => {
                 let mut audit = CohAudit::new();
@@ -412,7 +446,7 @@ fn run_run(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: RunArgs) 
         let result = coh_run::execute(&mut client, policy, &mut audit, &spec);
         handle_result(result, audit, "RUN")
     } else {
-        let mut client = match connect_console(&args.connect, policy, role, ticket) {
+        let mut client = match connect_access(&args.connect, policy, role, ticket) {
             Ok(client) => client,
             Err(err) => {
                 let mut audit = CohAudit::new();
@@ -462,7 +496,7 @@ fn run_peft(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: PeftArgs
                 let result = peft::export_job(&mut client, policy, &spec, &mut audit);
                 handle_result(result.map(|_| ()), audit, "PEFT")
             } else {
-                let mut client = match connect_console(&args.connect, policy, role, ticket) {
+                let mut client = match connect_access(&args.connect, policy, role, ticket) {
                     Ok(client) => client,
                     Err(err) => {
                         let mut audit = CohAudit::new();
@@ -512,7 +546,7 @@ fn run_peft(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: PeftArgs
                             &mut audit,
                         )?;
                     } else {
-                        let mut client = connect_console(&args.connect, policy, role, ticket)?;
+                        let mut client = connect_access(&args.connect, policy, role, ticket)?;
                         publish_gpu_registry(
                             &mut client,
                             Some(&registry_root),
@@ -557,7 +591,7 @@ fn run_peft(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: PeftArgs
                 let result = peft::activate_model(&mut client, policy, &spec, &mut audit);
                 handle_result(result, audit, "PEFT")
             } else {
-                let mut client = match connect_console(&args.connect, policy, role, ticket) {
+                let mut client = match connect_access(&args.connect, policy, role, ticket) {
                     Ok(client) => client,
                     Err(err) => {
                         let mut audit = CohAudit::new();
@@ -601,7 +635,7 @@ fn run_peft(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: PeftArgs
                 let result = peft::rollback_model(&mut client, policy, &spec, &mut audit);
                 handle_result(result, audit, "PEFT")
             } else {
-                let mut client = match connect_console(&args.connect, policy, role, ticket) {
+                let mut client = match connect_access(&args.connect, policy, role, ticket) {
                     Ok(client) => client,
                     Err(err) => {
                         let mut audit = CohAudit::new();
@@ -658,7 +692,7 @@ fn run_telemetry(
             Err(err) => handle_result(Err(err), audit, "TELEMETRY"),
         }
     } else {
-        let mut client = match connect_console(&args.connect, policy, role, ticket) {
+        let mut client = match connect_access(&args.connect, policy, role, ticket) {
             Ok(client) => client,
             Err(err) => {
                 let mut audit = CohAudit::new();
@@ -712,6 +746,34 @@ fn emit_audit(audit: CohAudit) {
     }
 }
 
+enum AccessHandle {
+    Console(ConsoleSession),
+    Rest(RestSession),
+}
+
+impl CohAccess for AccessHandle {
+    fn list_dir(&mut self, path: &str, max_bytes: usize) -> Result<Vec<String>> {
+        match self {
+            AccessHandle::Console(session) => session.list_dir(path, max_bytes),
+            AccessHandle::Rest(session) => session.list_dir(path, max_bytes),
+        }
+    }
+
+    fn read_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        match self {
+            AccessHandle::Console(session) => session.read_file(path, max_bytes),
+            AccessHandle::Rest(session) => session.read_file(path, max_bytes),
+        }
+    }
+
+    fn write_append(&mut self, path: &str, payload: &[u8]) -> Result<usize> {
+        match self {
+            AccessHandle::Console(session) => session.write_append(path, payload),
+            AccessHandle::Rest(session) => session.write_append(path, payload),
+        }
+    }
+}
+
 fn connect_mock(
     role: Role,
     ticket: Option<&str>,
@@ -758,6 +820,28 @@ fn resolve_auth_token(cli_token: Option<&str>) -> String {
     "changeme".to_owned()
 }
 
+fn resolve_rest_url(cli_value: Option<&str>) -> Option<String> {
+    if let Some(value) = cli_value {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    if let Ok(value) = env::var("COH_REST_URL") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    if let Ok(value) = env::var("HIVE_GATEWAY_URL") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    None
+}
+
 fn connect_console(
     args: &ConnectArgs,
     policy: &CohPolicy,
@@ -774,6 +858,22 @@ fn connect_console(
         policy.retry,
     )
     .with_context(|| format!("failed to connect to {}:{}", args.host, args.port))
+}
+
+fn connect_access(
+    args: &ConnectArgs,
+    policy: &CohPolicy,
+    role: Role,
+    ticket: Option<&str>,
+) -> Result<AccessHandle> {
+    if let Some(rest_url) = resolve_rest_url(args.rest_url.as_deref()) {
+        if role != Role::Queen {
+            return Err(anyhow!("rest transport supports queen role only"));
+        }
+        return Ok(AccessHandle::Rest(RestSession::connect(rest_url)));
+    }
+    let console = connect_console(args, policy, role, ticket)?;
+    Ok(AccessHandle::Console(console))
 }
 
 fn publish_gpu_registry<C: coh::CohAccess>(

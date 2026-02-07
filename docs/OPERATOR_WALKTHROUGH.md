@@ -17,6 +17,56 @@ For host tool usage, interdependencies, and policy/mount details, see
 - `/gpu/*` appears only after `gpu-bridge-host --publish` runs; `/host/*` appears only after `host-sidecar-bridge` runs.
 - Mock mode commands (`--mock`) do not talk to the VM; do not mix mock and live in the same session.
 
+## Multiplexer scenarios (hive-gateway)
+These scenarios use `hive-gateway` as the **sole** console client and route all host tools through REST. This keeps the console single-client while enabling multi-tool usage.
+
+### A) Queen on a GPU host + SwarmUI on a remote Mac
+1. On the GPU host, boot the queen (`./qemu/run.sh` in the release bundle).
+2. Start the gateway (queen role):
+   ```bash
+   COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 ./bin/hive-gateway
+   ```
+3. Publish host telemetry through REST:
+   ```bash
+   ./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 --interval-ms 1000
+   ./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --watch --provider systemd --provider nvidia
+   ```
+4. From the Mac, tunnel the gateway:
+   ```bash
+   ssh -L 8080:127.0.0.1:8080 <gpu-host>
+   ```
+5. Start SwarmUI via REST:
+   ```bash
+   SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 ./bin/swarmui
+   ```
+6. Confirm Live Hive view updates and console commands work (no other console clients attached).
+
+### B) Two host publishers (g5g + Jetson) into one queen
+1. Start `hive-gateway` on the queen host (Scenario A, step 2).
+2. On the Jetson, forward the gateway port:
+   ```bash
+   ssh -L 8080:127.0.0.1:8080 <queen-host>
+   ```
+3. Run Jetson publishers against the tunnel:
+   ```bash
+   ./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 --interval-ms 1000
+   ./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --watch --provider systemd --provider nvidia
+   ```
+4. On the queen host, also publish local telemetry with the same `--rest-url`.
+5. `/gpu/*` and `/host/*` are single namespaces. If two hosts publish simultaneously, the most recent write wins. For deterministic demos, stagger publishes (alternate every N seconds) or keep one publisher active at a time.
+
+### C) CAS updates + REST mount via the gateway
+1. Pack and upload a CAS bundle over REST:
+   ```bash
+   ./bin/cas-tool pack --epoch 1 --input ./out/cas/payload --out-dir ./out/cas/1 --signing-key ./resources/fixtures/cas_signing_key.hex
+   ./bin/cas-tool upload --bundle ./out/cas/1 --rest-url http://127.0.0.1:8080
+   ```
+2. Use a live REST-backed mount:
+   ```bash
+   ./bin/coh --rest-url http://127.0.0.1:8080 mount --at /tmp/coh-mount-rest
+   ```
+3. REST mount is **exclusive** per gateway URL; stop the mount before starting another.
+
 ## 0) Preflight: verify console access (optional but recommended)
 Attach and verify the root namespace is reachable:
 ```bash

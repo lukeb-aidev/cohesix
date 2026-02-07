@@ -60,7 +60,7 @@ sequenceDiagram
 ## 3. Host GPU Worker Architecture
 - **Process**: Rust binary running on macOS or a Linux edge node, outside the Cohesix instance, paired with the GPU bridge host.
 - **Responsibilities**:
-  - Discover GPUs using NVML (Linux) or Metal proxies (macOS, stubbed).
+- Discover GPUs using NVML (Linux) with CUDA fallback on Jetson, or Metal proxies (macOS, stubbed).
   - Enforce leases that cap memory (MiB), stream counts, and wall-clock TTL.
   - Mirror GPU state into the Cohesix instance by publishing bounded snapshots to `/gpu/bridge/ctl` over the TCP console (queen role); no CUDA/NVML components enter the VM profile or hardware deployment.
 - **Safety**: Validate kernel binaries via SHA-256; ensure uploads match expected byte length before dispatch.

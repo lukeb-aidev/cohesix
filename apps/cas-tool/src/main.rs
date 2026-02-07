@@ -15,6 +15,7 @@ use cas_tool::{
 };
 use clap::{Parser, Subcommand};
 use cohesix_cas::CasManifest;
+use cohesix_rest::GatewayClient;
 use cohesix_ticket::Role;
 use cohsh::{TcpTransport, Transport};
 use sha2::{Digest, Sha256};
@@ -72,6 +73,9 @@ struct UploadArgs {
     /// Bundle directory containing manifest.cbor and chunks/.
     #[arg(long)]
     bundle: PathBuf,
+    /// REST gateway base URL for hive-gateway upload mode.
+    #[arg(long, value_name = "URL")]
+    rest_url: Option<String>,
     /// TCP host for the Cohesix console.
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
@@ -156,20 +160,30 @@ fn upload_bundle(args: UploadArgs) -> Result<()> {
         chunks.push((name, payload));
     }
 
-    let mut transport = TcpTransport::new(args.host, args.port).with_auth_token(args.auth_token);
-    let session = transport.attach(Role::Queen, args.ticket.as_deref())?;
+    if let Some(rest_url) = args.rest_url.as_deref() {
+        let client = GatewayClient::new(rest_url);
+        for (digest_hex, payload) in chunks {
+            let path = format!("/updates/{}/chunks/{}", manifest.epoch, digest_hex);
+            upload_b64_segments_rest(&client, path.as_str(), &payload)?;
+        }
+        let manifest_path = format!("/updates/{}/manifest.cbor", manifest.epoch);
+        upload_b64_segments_rest(&client, manifest_path.as_str(), &manifest_bytes)?;
+    } else {
+        let mut transport = TcpTransport::new(args.host, args.port).with_auth_token(args.auth_token);
+        let session = transport.attach(Role::Queen, args.ticket.as_deref())?;
 
-    for (digest_hex, payload) in chunks {
-        let path = format!("/updates/{}/chunks/{}", manifest.epoch, digest_hex);
-        upload_b64_segments(&mut transport, &session, path.as_str(), &payload)?;
+        for (digest_hex, payload) in chunks {
+            let path = format!("/updates/{}/chunks/{}", manifest.epoch, digest_hex);
+            upload_b64_segments(&mut transport, &session, path.as_str(), &payload)?;
+        }
+        let manifest_path = format!("/updates/{}/manifest.cbor", manifest.epoch);
+        upload_b64_segments(
+            &mut transport,
+            &session,
+            manifest_path.as_str(),
+            &manifest_bytes,
+        )?;
     }
-    let manifest_path = format!("/updates/{}/manifest.cbor", manifest.epoch);
-    upload_b64_segments(
-        &mut transport,
-        &session,
-        manifest_path.as_str(),
-        &manifest_bytes,
-    )?;
 
     println!("cas-tool: uploaded update epoch={}", manifest.epoch);
     Ok(())
@@ -195,6 +209,25 @@ fn upload_b64_segments(
             );
         }
         transport.write(session, path, line.as_bytes())?;
+    }
+    Ok(())
+}
+
+fn upload_b64_segments_rest(client: &GatewayClient, path: &str, payload: &[u8]) -> Result<()> {
+    let encoded = BASE64_STANDARD.encode(payload);
+    for chunk in encoded.as_bytes().chunks(MAX_B64_CHUNK_LEN) {
+        let chunk_str = str::from_utf8(chunk).context("base64 chunk must be utf-8")?;
+        let mut line = String::with_capacity(B64_PREFIX.len() + chunk_str.len());
+        line.push_str(B64_PREFIX);
+        line.push_str(chunk_str);
+        if line.len() > MAX_ECHO_PAYLOAD_BYTES {
+            anyhow::bail!(
+                "payload segment exceeds console limit (len={} max={})",
+                line.len(),
+                MAX_ECHO_PAYLOAD_BYTES
+            );
+        }
+        client.echo(path, line.as_str())?;
     }
     Ok(())
 }

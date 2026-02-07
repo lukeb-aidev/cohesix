@@ -46,6 +46,8 @@ use cohsh::{
 };
 #[cfg(feature = "tcp")]
 use cohsh::{PooledTcpTransport, SharedTcpTransport, TcpTransport, COHSH_TCP_PORT};
+#[cfg(feature = "rest")]
+use cohsh::RestTransport;
 use cohsh_core::command::MAX_LINE_LEN;
 use cohsh_core::trace::{
     TraceLog, TraceLogBuilder, TraceLogBuilderRef, TracePolicy, TraceReplayTransport,
@@ -58,6 +60,8 @@ enum TransportKind {
     Qemu,
     #[cfg(feature = "tcp")]
     Tcp,
+    #[cfg(feature = "rest")]
+    Rest,
 }
 
 /// Cohesix shell command-line arguments.
@@ -192,6 +196,11 @@ struct Cli {
     #[cfg(feature = "tcp")]
     #[arg(long, default_value_t = false)]
     tcp_debug: bool,
+
+    /// Base URL for the hive-gateway REST transport.
+    #[cfg(feature = "rest")]
+    #[arg(long)]
+    rest_url: Option<String>,
 }
 
 fn init_logging(verbose: bool) {
@@ -281,6 +290,34 @@ fn resolve_ticket_secret(cli_secret: Option<String>) -> Result<Option<String>> {
         Err(env::VarError::NotPresent) => Ok(None),
         Err(err) => Err(anyhow!("failed to read COHSH_TICKET_SECRET: {err}")),
     }
+}
+
+fn resolve_rest_url(cli_value: Option<&str>) -> Option<String> {
+    if let Some(value) = cli_value {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    if let Ok(value) = env::var("COHSH_REST_URL") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    if let Ok(value) = env::var("COH_REST_URL") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    if let Ok(value) = env::var("HIVE_GATEWAY_URL") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    None
 }
 
 fn build_mock_server(seed_gpu: bool) -> Result<NineDoor> {
@@ -477,6 +514,15 @@ fn main() -> Result<()> {
                     });
                     (transport, Some(factory))
                 }
+                #[cfg(feature = "rest")]
+                TransportKind::Rest => {
+                    let rest_url = resolve_rest_url(cli.rest_url.as_deref()).ok_or_else(|| {
+                        anyhow!(
+                            "--transport rest requires --rest-url (or COHSH_REST_URL/COH_REST_URL/HIVE_GATEWAY_URL)"
+                        )
+                    })?;
+                    (Box::new(RestTransport::new(rest_url)), None)
+                }
             }
         };
     let mut shell = Shell::new(transport, writer);
@@ -507,16 +553,7 @@ fn main() -> Result<()> {
             ticket: cli.ticket.clone(),
             attempts: 0,
             max_attempts: 1,
-            auto_log: {
-                #[cfg(feature = "tcp")]
-                {
-                    matches!(cli.transport, TransportKind::Qemu | TransportKind::Tcp)
-                }
-                #[cfg(not(feature = "tcp"))]
-                {
-                    matches!(cli.transport, TransportKind::Qemu)
-                }
-            },
+            auto_log: !matches!(cli.transport, TransportKind::Mock),
         });
         if auto_attach.is_none() {
             shell.write_line("detached shell: run 'attach <role>' to connect")?;
@@ -535,4 +572,27 @@ fn main() -> Result<()> {
     }
 
     run_result
+}
+
+#[cfg(all(test, feature = "rest"))]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn parse_rest_transport_args() {
+        let cli = Cli::try_parse_from([
+            "cohsh",
+            "--transport",
+            "rest",
+            "--rest-url",
+            "http://127.0.0.1:8080",
+        ])
+        .expect("parse rest transport args");
+        assert!(matches!(cli.transport, TransportKind::Rest));
+        assert_eq!(
+            cli.rest_url.as_deref(),
+            Some("http://127.0.0.1:8080")
+        );
+    }
 }

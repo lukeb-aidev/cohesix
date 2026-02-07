@@ -6,7 +6,9 @@ import { HiveRenderer } from "./renderer.js";
 
 const defaultConfig = {
   frame_cap_fps: 60,
+  frame_cap_fps_degraded: 30,
   step_ms: 16,
+  max_steps_per_frame: 3,
   lod_zoom_out: 0.7,
   lod_zoom_in: 1.25,
   lod_event_budget: 512,
@@ -84,9 +86,14 @@ export const createHiveController = (container, status, options = {}) => {
     accumulator += delta;
     const stepSeconds = config.step_ms / 1000;
     const lodMode = computeLod();
-    const frameInterval = 1000 / config.frame_cap_fps;
+    const targetFps = pressure > 1
+      ? Math.min(config.frame_cap_fps, config.frame_cap_fps_degraded)
+      : config.frame_cap_fps;
+    const frameInterval = 1000 / targetFps;
+    let steps = 0;
     while (accumulator >= stepSeconds) {
       accumulator -= stepSeconds;
+      steps += 1;
       const budget = config.lod_event_budget;
       const end = Math.min(pendingCursor + budget, pending.length);
       const batch = pendingCursor < pending.length
@@ -107,19 +114,27 @@ export const createHiveController = (container, status, options = {}) => {
         });
       }
       world.update(stepSeconds);
+      if (steps >= config.max_steps_per_frame) {
+        accumulator = 0;
+        break;
+      }
     }
+    let didRender = false;
     if (time - lastRender >= frameInterval) {
       renderer.render(world, lodMode);
       metrics.renders += 1;
       metrics.lastRenderAt = time;
       lastRender = time;
+      didRender = true;
       if (lodMode !== lastPollMode) {
         updateStatus(`Hive ${lodMode}`);
         lastPollMode = lodMode;
       }
     }
     metrics.pending = pending.length - pendingCursor;
-    renderer.draw();
+    if (didRender) {
+      renderer.draw();
+    }
     requestAnimationFrame(step);
   };
 

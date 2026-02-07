@@ -7,7 +7,9 @@
 use std::collections::BTreeSet;
 #[cfg(feature = "fuse")]
 use std::collections::HashMap;
-use std::path::Path;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 #[cfg(feature = "fuse")]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "fuse")]
@@ -18,11 +20,14 @@ use std::time::{Duration, SystemTime};
 use anyhow::{anyhow, Context, Result};
 use cohsh::client::CohClient;
 use cohsh_core::Secure9pTransport;
+use fs2::FileExt;
 #[cfg(feature = "fuse")]
 use secure9p_codec::OpenMode;
+use sha2::{Digest, Sha256};
 
 use crate::console::ConsoleSession;
 use crate::policy::CohPolicy;
+use crate::rest::RestSession;
 #[cfg(feature = "fuse")]
 use crate::CohAccess;
 use crate::MAX_PATH_COMPONENTS;
@@ -65,6 +70,50 @@ impl AppendOnlyTracker {
             .checked_add(len as u64)
             .ok_or_else(|| anyhow!("append-only offset overflow"))?;
         Ok(())
+    }
+}
+
+/// Exclusive lock for REST-backed mounts (one mount per gateway URL).
+#[derive(Debug)]
+pub struct RestMountLock {
+    path: PathBuf,
+    file: std::fs::File,
+}
+
+impl RestMountLock {
+    /// Acquire the REST mount lock keyed by the gateway URL.
+    pub fn acquire(rest_url: &str) -> Result<Self> {
+        let mut hasher = Sha256::new();
+        hasher.update(rest_url.as_bytes());
+        let digest = hasher.finalize();
+        let suffix = hex::encode(digest);
+        let path = std::env::temp_dir().join(format!("coh-rest-mount-{suffix}.lock"));
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)
+            .with_context(|| format!("open rest mount lock {}", path.display()))?;
+        if let Err(err) = file.try_lock_exclusive() {
+            if err.kind() == std::io::ErrorKind::WouldBlock {
+                return Err(anyhow!(
+                    "rest mount already active for {rest_url}; only one rest mount is allowed"
+                ));
+            }
+            return Err(err).with_context(|| format!("lock rest mount {}", path.display()));
+        }
+        file.set_len(0)
+            .with_context(|| format!("truncate rest mount lock {}", path.display()))?;
+        writeln!(file, "rest_url={rest_url}")
+            .with_context(|| format!("write rest mount lock {}", path.display()))?;
+        Ok(Self { path, file })
+    }
+}
+
+impl Drop for RestMountLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.file);
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -240,7 +289,32 @@ pub fn mount_console(session: ConsoleSession, policy: &CohPolicy, at: &Path) -> 
     #[cfg(feature = "fuse")]
     {
         let validator = MountValidator::from_policy(policy)?;
-        let filesystem = ConsoleFuse::new(session, validator);
+        let filesystem = AccessFuse::new(session, validator);
+        let options = [
+            fuser::MountOption::FSName("coh".to_owned()),
+            fuser::MountOption::AutoUnmount,
+        ];
+        fuser::mount2(filesystem, at, &options)
+            .with_context(|| format!("mount {}", at.display()))?;
+        Ok(())
+    }
+    #[cfg(not(feature = "fuse"))]
+    {
+        let _ = session;
+        let _ = policy;
+        let _ = at;
+        Err(anyhow!(
+            "fuse support disabled; rebuild coh with --features fuse or use --mock"
+        ))
+    }
+}
+
+/// Start a FUSE mount backed by the hive-gateway REST transport.
+pub fn mount_rest(session: RestSession, policy: &CohPolicy, at: &Path) -> Result<()> {
+    #[cfg(feature = "fuse")]
+    {
+        let validator = MountValidator::from_policy(policy)?;
+        let filesystem = AccessFuse::new(session, validator);
         let options = [
             fuser::MountOption::FSName("coh".to_owned()),
             fuser::MountOption::AutoUnmount,
@@ -516,7 +590,6 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
         let handle = self.next_handle.fetch_add(1, Ordering::Relaxed);
         let file_handle = FileHandle {
             fid,
-            is_dir: qid.ty().is_directory(),
             append_tracker: AppendOnlyTracker::new(),
         };
         self.handles
@@ -619,21 +692,21 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
 }
 
 #[cfg(feature = "fuse")]
-struct ConsoleFuse {
-    client: Mutex<ConsoleSession>,
+struct AccessFuse<C: CohAccess + Send> {
+    client: Mutex<C>,
     validator: MountValidator,
     inodes: Mutex<InodeTable>,
-    handles: Mutex<HashMap<u64, ConsoleHandle>>,
+    handles: Mutex<HashMap<u64, AccessHandle>>,
     next_handle: AtomicU64,
 }
 
 #[cfg(feature = "fuse")]
-impl ConsoleFuse {
-    fn new(session: ConsoleSession, validator: MountValidator) -> Self {
+impl<C: CohAccess + Send> AccessFuse<C> {
+    fn new(client: C, validator: MountValidator) -> Self {
         let mut inodes = InodeTable::new();
         inodes.insert("/", true);
         Self {
-            client: Mutex::new(session),
+            client: Mutex::new(client),
             validator,
             inodes: Mutex::new(inodes),
             handles: Mutex::new(HashMap::new()),
@@ -682,18 +755,21 @@ impl ConsoleFuse {
 
     fn stat_remote(&self, remote: &str) -> Result<bool> {
         let mut client = self.client.lock().expect("coh client lock");
-        if client.list_dir(remote, MAX_DIR_LIST_BYTES).is_ok() {
-            return Ok(true);
+        match client.list_dir(remote, MAX_DIR_LIST_BYTES) {
+            Ok(_) => return Ok(true),
+            Err(err) if err.to_string().contains("exceeds max bytes") => return Ok(true),
+            Err(_) => {}
         }
-        if client.read_file(remote, usize::MAX).is_ok() {
-            return Ok(false);
+        match client.read_file(remote, MAX_DIR_LIST_BYTES) {
+            Ok(_) => Ok(false),
+            Err(err) if err.to_string().contains("exceeds max bytes") => Ok(false),
+            Err(_) => Err(anyhow!("path {remote} not found")),
         }
-        Err(anyhow!("path {remote} not found"))
     }
 }
 
 #[cfg(feature = "fuse")]
-impl fuser::Filesystem for ConsoleFuse {
+impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
     fn lookup(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -859,9 +935,8 @@ impl fuser::Filesystem for ConsoleFuse {
             return;
         }
         let handle = self.next_handle.fetch_add(1, Ordering::Relaxed);
-        let file_handle = ConsoleHandle {
+        let file_handle = AccessHandle {
             path: remote,
-            is_dir,
             append_tracker: AppendOnlyTracker::new(),
         };
         self.handles
@@ -972,9 +1047,8 @@ impl fuser::Filesystem for ConsoleFuse {
 
 #[cfg(feature = "fuse")]
 #[derive(Debug, Clone)]
-struct ConsoleHandle {
+struct AccessHandle {
     path: String,
-    is_dir: bool,
     append_tracker: AppendOnlyTracker,
 }
 
@@ -982,7 +1056,6 @@ struct ConsoleHandle {
 #[derive(Debug, Clone)]
 struct FileHandle {
     fid: u32,
-    is_dir: bool,
     append_tracker: AppendOnlyTracker,
 }
 

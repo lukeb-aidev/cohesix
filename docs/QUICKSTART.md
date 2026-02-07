@@ -65,6 +65,23 @@ python3 python/cohesix-py/examples/telemetry_write_pull.py --mock
 Note: in the source tree, the Python client lives under `tools/cohesix-py` instead of `python/cohesix-py`.
 If you need an editable install, upgrade pip (`python3 -m pip install --upgrade pip`) and then use
 `python3 -m pip install -e python/cohesix-py`.
+The Python client requires Python 3.11+. If your system `python3` is older, use a 3.11 venv:
+```bash
+python3.11 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install ./python/cohesix-py
+```
+On Ubuntu, you may need `sudo apt-get install python3.11 python3.11-venv` first.
+
+## Run coh doctor (host checks)
+This runs the real host checks (no mock backend). It does not require QEMU, but it probes host runtimes and GPU discovery.
+```bash
+./bin/coh doctor
+```
+Expected results:
+- NVIDIA host with full NVML: `OK DOCTOR check=nvml ... backend=nvml` and overall success.
+- Jetson (feature-limited NVML): `OK DOCTOR check=nvml status=degraded backend=cuda` and overall success. If you see `ERR DOCTOR check=nvml ...`, your build lacks the CUDA fallback.
 
 ## Run the REST gateway (hive-gateway)
 The gateway projects the existing console/file semantics over HTTP. It does **not** add new control-plane behavior.
@@ -273,9 +290,8 @@ terminal to access the mount, or run it in the background:
 ```
 Unmount with `fusermount -u /tmp/coh-mount` (Linux) or `umount /tmp/coh-mount` (macOS).
 
-Note: live FUSE mounts require a running QEMU instance, a FUSE runtime, and `coh` built with `--features fuse`.
-In this alpha, only the Linux release bundle ships with FUSE enabled; on macOS build from source with
-`--features fuse` and install macFUSE.
+Note: live FUSE mounts require a running QEMU instance, a FUSE runtime, and `coh` built with FUSE
+enabled (default on Linux). Use `--no-default-features` if you need to skip FUSE when building locally.
 `./bin/coh mount --host 127.0.0.1 --port 31337 --at /tmp/coh-mount`
 
 GPU visibility: `coh gpu list`/`lease` only see GPUs after the host bridge publishes `/gpu` (live:
@@ -342,7 +358,7 @@ What this does: pads the trace to the 128-byte CAS chunk size, packs it into a s
 ./bin/gpu-bridge-host --mock --list
 ./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
 ```
-NVML discovery is enabled by default on Linux bundles; use `--no-default-features` to omit NVML.
+NVML + CUDA discovery are enabled by default on Linux bundles; use `--no-default-features` to omit NVML/CUDA.
 Note: `/gpu/models` and `/gpu/telemetry/schema.json` appear only after a live publish.
 
 ### host-sidecar-bridge
