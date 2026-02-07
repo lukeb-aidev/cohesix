@@ -73,7 +73,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [20a](#20a) | cohsh as 9P Client Library | Complete |
 | [20b](#20b) | NineDoor UI Providers | Complete |
 | [20c](#20c) | SwarmUI Desktop (Tauri, Pure 9P/TCP) | Complete |
-| [20d](#20d) | SwarmUI Live Hive Rendering (PixiJS, GPU-First | Complete |
+| [20d](#20d) | SwarmUI Live Hive Rendering (PixiJS, GPU-First) | Complete |
 | [20e](#20e) | CLI/UI Convergence Tests | Complete |
 | [20f](#20f) | UI Security Hardening (Tickets & Quotas) | Complete |
 | [20f1](#20f1) | SwarmUI Host Tool Packaging + Tauri API Fix | Complete |
@@ -89,14 +89,15 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [24](#24) | Python Client + Examples (cohesix) + Doctor + Release Cut | Complete |
 | [24b](#24b) | Live GPU Bridge Wiring + PEFT Live Flow + Live Hive Telemetry Text | Complete |
 | [24b1](#24b1) | Live Hive UX Patch: Performance, Labels, Clickability, Telemetry Harness | Complete |
-| [24c](#24c) | Authoritative Scheduling Grammar + REST Gateway + Scheduler/Lease Observability | Pending |
-| [24d](#24d) | Jetson CUDA Host Support (NVML Fallback + Doctor) | Pending |
-| [25a](#25a) | UEFI Bare-Metal Boot & Device Identity | Pending |
-| [25b](#25b) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
-| [25c](#25c) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Pending |
-| [25d](#25d) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
-| [26](#26) | Edge Local Status (UEFI Host Tool) | Pending |
-| [27](#27) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
+| [24c](#24c) | Authoritative Scheduling Grammar + REST Gateway + Scheduler/Lease Observability | Complete |
+| [24d](#24d) | Jetson CUDA Host Support (NVML Fallback + Doctor) | Complete |
+| [24e](#24e) | REST Multiplexer Transports + SwarmUI Gateway Mode | Complete |
+| [25](#25) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Pending |
+| [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
+| [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
+| [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
+| [29](#29) | Edge Local Status (UEFI Host Tool) | Pending |
+| [30](#30) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
 
 ---
 
@@ -2701,7 +2702,7 @@ After Milestone 20h:
 **Release 0.1.0 alpha**
 ----
 
-Next, Alpha Release 2 targets a plug-and-play operator experience immediately after Milestone 20.x. Milestones 21-24 define the Alpha track; the AWS AMI work follows as Milestone 25a.
+Next, Alpha Release 2 targets a plug-and-play operator experience immediately after Milestone 20.x. Milestones 21-24 define the Alpha track; the UEFI and AWS AMI work follows starting at Milestone 26.
 
 ## Milestone 21a — Telemetry Ingest with OS-Named Segments (Severely Limited Create) <a id="21a"></a> 
 [Milestones](#Milestones)
@@ -3083,13 +3084,13 @@ Define and enforce a **finite lifecycle state machine** for Cohesix nodes, expos
 - Every transition emits an audit record in `/log/queen.log` with old/new state and reason.
 - Tickets, telemetry ingest, worker authority, and host sidecar publishes are gated by lifecycle state.
 
-### Telemetry Spool Policy (Addendum to Milestones 21a & 25b)
+### Telemetry Spool Policy (Addendum to Milestones 21a & 27)
 
-**Rationale:** Telemetry storage must be predictable under pressure. Operators must know *when*, *why*, and *how* data is retained or dropped. This addendum **aligns policy terminology** between 21a telemetry ingest quotas and the 25b persistent spool store; it does **not** retroactively change 21a's completed behavior.
+**Rationale:** Telemetry storage must be predictable under pressure. Operators must know *when*, *why*, and *how* data is retained or dropped. This addendum **aligns policy terminology** between 21a telemetry ingest quotas and the 27 persistent spool store; it does **not** retroactively change 21a's completed behavior.
 
 #### Policy surface (alignment)
 - **Telemetry ingest (21a):** keep `telemetry_ingest.eviction_policy` (`refuse` | `evict-oldest`) as the source of truth for per-device segment limits.
-- **Persistent spool (25b):** use `persistence.spool.mode` (`refuse` | `overwrite_acked`) and `persistence.spool.max_record_bytes` to mirror 21a's refusal/eviction semantics while remaining crash-safe.
+- **Persistent spool (27):** use `persistence.spool.mode` (`refuse` | `overwrite_acked`) and `persistence.spool.max_record_bytes` to mirror 21a's refusal/eviction semantics while remaining crash-safe.
 
 **Manifest example (bytes only)**
 ```toml
@@ -3109,15 +3110,15 @@ mode = "refuse" # or "overwrite_acked"
 - `/proc/spool/status` MUST expose policy and pressure fields (used_bytes, max_bytes, records, dropped, pressure, mode, ack_cursor).
 - If additional nodes are required for UI providers, add `/proc/spool/policy` and `/proc/spool/pressure` **only** with corresponding updates to `ARCHITECTURE.md` and `INTERFACES.md`.
 
-#### CLI surface (host-only, target milestone 25b or later)
+#### CLI surface (host-only, target milestone 27 or later)
 - `cohsh telemetry status` — read spool/ingest status and render policy + pressure.
 - `cohsh telemetry explain` — summarize current policy and refusal/eviction outcomes.
 
 #### Mandatory regression cases
-- Quota exhaustion: `refuse` vs `evict-oldest` (21a) and `overwrite_acked` (25b).
-- Ack cursor behind overwrite window (25b).
-- Record-too-large rejection (25b).
-- Offline accumulation → online drain (21a + 25b).
+- Quota exhaustion: `refuse` vs `evict-oldest` (21a) and `overwrite_acked` (27).
+- Ack cursor behind overwrite window (27).
+- Record-too-large rejection (27).
+- Offline accumulation → online drain (21a + 27).
 
 #### Invariants
 - All drops are auditable.
@@ -4482,9 +4483,886 @@ Checks:
 Deliverables:
   - Updated operator-facing documentation.
 ```
+
+## Milestone 25 — SMP Utilization via Task Isolation (Multicore without Multithreading) <a id="25"></a> 
+[Milestones](#Milestones)
+
+**Why now (platform and performance):** Cohesix targets modern aarch64 hardware where multicore CPUs are the norm. To scale throughput without sacrificing determinism, auditability, or TCB size, Cohesix must exploit seL4 SMP scheduling rather than introducing shared-memory multithreading. This milestone formalizes multicore usage through task isolation, sharding, and explicit authority boundaries.
+
+This is a performance and clarity milestone, not a feature expansion.
+
+## Goal
+Enable Cohesix to take advantage of multicore aarch64 CPUs by:
+1. Running multiple isolated seL4 tasks in parallel,
+2. Keeping authoritative state single-threaded and serial, and
+3. Scaling throughput through replication and partitioning, not threads.
+
+The result must preserve:
+- deterministic ACK/ERR ordering,
+- replayability,
+- bounded work per tick,
+- and a minimal trusted computing base.
+
+## Non-Goals (Explicit)
+- No POSIX threads or shared-memory multithreading
+- No async runtimes with implicit scheduling
+- No background work queues with unbounded growth
+- No relaxation of replay or audit guarantees
+- No changes to Secure9P / NineDoor semantics
+- No new protocols or transports
+
+## Design Principles (Normative)
+1. **Concurrency via isolation, not sharing**  
+   All parallelism is achieved by running separate seL4 tasks.
+2. **Single-threaded authority**  
+   All authoritative decisions (tickets, lifecycle, policy, replay) are serialized through a single authority task.
+3. **Parallelism at the edges**  
+   Parsing, IO, and provider logic may scale horizontally, but must request decisions from the authority task.
+4. **Explicit back-pressure**  
+   When the authority or a shard is saturated, callers receive deterministic `ERR <verb> reason=busy`, not hidden queuing.
+
+## Task-Level Parallelism Model
+
+### Core Roles (Illustrative)
+| Task | Responsibility | Parallelism Strategy |
+|----|---------------|----------------------|
+| `root-task` | Authority, lifecycle, policy | Single instance, serialized |
+| `nine-door` | Secure9P parsing and routing | Sharded per session or subtree |
+| `console-transport` | TCP/serial framing, auth | One task per transport |
+| Providers (`/log`, `/proc`, `/gpu`, `/host`) | Namespace backends | One task per provider |
+| Workers | Role-specific execution | One task per worker |
+
+Each task runs a single-threaded event loop. seL4 schedules tasks across available cores.
+
+## SMP Affinity and Partitioning
+### Affinity Guidelines
+- Authority task MAY be pinned to a single core for stability.
+- IO-heavy tasks MAY be pinned near device IRQ affinity.
+- Provider tasks MAY be distributed across remaining cores.
+
+Affinity is optional and platform-specific but must be:
+- declarative,
+- bounded,
+- and documented.
+
+## Authority Interaction Contract
+All non-authority tasks:
+- Submit requests to the authority task via IPC,
+- Receive explicit `OK` / `ERR` responses,
+- MUST NOT mutate authoritative state directly.
+
+If the authority task cannot accept work:
+- It responds with `ERR <verb> reason=busy`,
+- The refusal is audited and observable,
+- No retries occur inside the VM.
+
+## Determinism and Replay Guarantees
+- Authoritative decisions are totally ordered.
+- Parallel tasks must not reorder or speculate on outcomes.
+- Replay executes the same authority decisions in the same order, regardless of task scheduling or core count.
+- SMP must not introduce nondeterministic ACK/ERR sequences.
+
+## Implementation Touchpoints
+- `apps/root-task/`
+  - Explicit authority IPC surface
+  - Busy/back-pressure signaling
+- `apps/nine-door/`
+  - Optional sharding of protocol handling
+- `apps/root-task/src/net/console_srv.rs` and `apps/root-task/src/serial/`
+  - Transport isolation from authority logic
+- `docs/ARCHITECTURE.md`
+  - SMP model and invariants
+- `docs/SECURITY.md`
+  - Rationale for rejecting multithreading
+
+## Testing and Validation
+
+### Functional
+- All existing regression scripts must pass unchanged.
+- New SMP runs must produce byte-identical ACK/ERR sequences to single-core runs.
+
+### Stress
+- Saturate protocol handlers while authority remains correct.
+- Verify `ERR <verb> reason=busy` emission under load.
+- Confirm no state corruption or reordering.
+- Run concurrent cohsh regression scripts over the REST multiplexer (`hive-gateway` as the sole console client) using `scripts/cohsh/REST_regression_batch.sh`.
+
+### Replay
+- Capture traces on multicore.
+- Replay on single-core QEMU and assert identical outcomes.
+
+## Checks (Definition of Done)
+- Cohesix runs correctly on multicore aarch64 under QEMU and hardware.
+- Parallel tasks execute on multiple cores without shared-memory races.
+- Authority logic remains single-threaded and replayable.
+- Back-pressure is explicit and observable.
+- No new threads, runtimes, or hidden queues introduced.
+- `scripts/cohsh/REST_regression_batch.sh` passes unchanged with `hive-gateway` as the sole console client (concurrent REST runs).
+- Root console `smp` command emits per-core scheduler/CPU metrics (or deterministic `ERR reason=unsupported` when debug syscalls are unavailable).
+- Documentation clearly explains the SMP model and its constraints.
+
+## Task Breakdown
+```
+Title/ID: m25c-smp-kernel-enable
+Goal: Enable seL4 SMP in the external kernel build and document requirements.
+Inputs: seL4/build, docs/ARCHITECTURE.md, docs/BUILD_PLAN.md.
+Changes:
+  - seL4/build/ — regenerate kernel artifacts with SMP enabled.
+  - docs/ARCHITECTURE.md — record SMP kernel requirements and QEMU CPU count.
+Commands:
+  - make -C seL4/build
+Checks:
+  - SMP-enabled kernel boots under QEMU with >1 core.
+Deliverables:
+  - SMP kernel artifacts and documented build requirements.
+
+Title/ID: m25c-authority-ipc
+Goal: Serialize authoritative decisions behind a single IPC surface.
+Inputs: apps/root-task, docs/ROLES_AND_SCHEDULING.md.
+Changes:
+  - apps/root-task/src/authority.rs — authority IPC entrypoint and queueing.
+  - apps/root-task/src/lib.rs — route all authority mutations through IPC.
+Commands:
+  - cargo test -p root-task
+Checks:
+  - Authority decisions are serialized and replay-stable.
+Deliverables:
+  - Single-threaded authority IPC with deterministic ordering.
+
+Title/ID: m25c-sharded-tasks
+Goal: Run IO, parsing, and providers in separate single-threaded seL4 tasks.
+Inputs: apps/nine-door, apps/console, apps/root-task.
+Changes:
+  - apps/root-task/src/spawn.rs — spawn NineDoor shards and provider tasks.
+  - apps/nine-door/src/lib.rs — shard-aware request handling.
+Commands:
+  - cargo check -p root-task
+  - cargo test -p nine-door --test sharding
+Checks:
+  - Shards execute in parallel without shared-memory coupling.
+Deliverables:
+  - Task-isolated protocol handling.
+
+Title/ID: m25c-affinity-ir
+Goal: Add optional affinity hints to IR and enforce bounds.
+Inputs: configs/root_task.toml, tools/coh-rtc, docs/ARCHITECTURE.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs — affinity hints and validation.
+  - configs/root_task.toml — optional affinity policy.
+Commands:
+  - cargo run -p coh-rtc
+  - scripts/check-generated.sh
+Checks:
+  - Invalid affinity configurations are rejected deterministically.
+Deliverables:
+  - Manifest-driven affinity policy (optional).
+
+Title/ID: m25c-smp-replay-regressions
+Goal: Prove SMP determinism vs single-core runs.
+Inputs: docs/TEST_PLAN.md, scripts/cohsh/.
+Changes:
+  - scripts/cohsh/smp_parity.coh — compare ACK/ERR sequences across core counts.
+Commands:
+  - cohsh --script scripts/cohsh/smp_parity.coh
+Checks:
+  - Multicore and single-core transcripts match byte-for-byte.
+Deliverables:
+  - SMP parity regression coverage.
+
+Title/ID: m25-smp-console-metrics
+Goal: Add a root console verb to emit per-core SMP metrics for seL4.
+Inputs: root console parser, seL4 debug syscall docs, docs/USERLAND_AND_CLI.md.
+Changes:
+  - apps/root-task/src/console.rs — add `smp` command (adjacent to `bi`/`caps`) that invokes seL4 debug scheduler/CPU dump APIs (`seL4_DebugDumpScheduler`, `seL4_DebugDumpCPUInfo`) when enabled; bounded output, no shared-memory access.
+  - docs/USERLAND_AND_CLI.md — document `smp` root console output and debug-build gating.
+Commands:
+  - QEMU serial console: `smp`
+Checks:
+  - Debug builds emit per-core scheduler/CPU metrics (core id, runnable/idle summary) with bounded output.
+  - Non-debug builds return deterministic `ERR reason=unsupported` with no side effects.
+Deliverables:
+  - Root console SMP metrics command with seL4-aligned semantics.
+
+Title/ID: m25-smp-rest-regression-batch
+Goal: Stress SMP using concurrent cohsh regression scripts via the REST multiplexer.
+Inputs: scripts/cohsh/*.coh, apps/hive-gateway, docs/TEST_PLAN.md.
+Changes:
+  - scripts/cohsh/REST_regression_batch.sh — run multiple `cohsh --transport rest` scripts concurrently against `hive-gateway` using `COHESIX_GATEWAY_URL` (or `HIVE_GATEWAY_URL`/`COHSH_REST_URL`/`COH_REST_URL`); bounded concurrency, no script changes.
+  - docs/TEST_PLAN.md — add a REST SMP stress run using the batch script.
+Commands:
+  - `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> scripts/cohsh/REST_regression_batch.sh`
+Checks:
+  - All regression scripts pass unchanged under concurrent REST load.
+  - `ERR ... reason=busy` appears only under saturation and is audited; ACK/ERR ordering remains deterministic.
+Deliverables:
+  - REST multiplexer SMP stress harness and documented runbook.
+```
 ----
 **Release 0.5.0 alpha**
 ----
+
+---
+
+The next Alpha release targets bare metal UEFI and AWS native boot via AMI.
+
+---
+
+## Milestone 26 — UEFI Bare-Metal Boot & Device Identity <a id="26"></a> 
+[Milestones](#Milestones)
+
+**Why now (context):**  
+To meet hardware deployment goals (Edge §3 retail hubs, Edge §8 defense ISR, Security §12 segmentation), Cohesix must boot on physical aarch64 UEFI hardware with attested manifests while preserving the lean `no_std` footprint and the upstream seL4 boot model. This milestone transitions from the QEMU reference profile to physical UEFI deployment, with VM behavior expected to mirror the hardware target unless explicitly profile-gated.
+
+**Non-negotiable constraint:**  
+No networking, 9P semantics, or console behaviors may diverge between VM and UEFI profiles except where explicitly marked as hardware-profile-specific in `ARCHITECTURE.md`. Any divergence must be documented and schema-gated. UEFI firmware networking is out of scope; all TCP behavior remains post-seL4 boot in root-task.
+
+---
+
+### Prerequisite (must be completed before Milestone 26)
+**Upstream elfloader EFI support**
+- Confirm and enable upstream seL4 **elfloader EFI build** to produce a valid PE/COFF EFI executable (`elfloader.efi`) for aarch64.
+- The EFI-built elfloader must:
+  - Relocate correctly under UEFI.
+  - Load the seL4 kernel, initial user image, DTB (when present), and CPIO rootfs.
+  - Preserve existing VM boot semantics once seL4 is entered.
+- Any local build glue required to emit `elfloader.efi` must not fork elfloader logic and must track upstream.
+
+---
+
+### Goal
+Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads the generated manifest from boot media, performs TPM-backed (or DICE-fallback) identity attestation in root-task, and mirrors VM behavior deterministically.
+
+---
+
+### Deliverables
+
+- **UEFI boot chain**
+  - Use upstream **elfloader built as an EFI PE/COFF binary** (`EFI/BOOT/BOOTAA64.EFI`) as the sole UEFI application.
+  - Root-task remains the first user process post-kernel boot; root-task is never executed as an EFI application.
+
+- **UEFI image builder**
+  - Introduce `scripts/uefi/esp-build.sh` to build a reproducible FAT ESP containing:
+    - `EFI/BOOT/BOOTAA64.EFI` (elfloader EFI)
+    - `kernel.elf`
+    - `rootserver` (root task ELF)
+    - optional `initrd.cpio`
+    - `manifest.json` and `manifest.sha256`
+    - optional `dtb/` assets (platform-specific)
+  - Deterministic file ordering and hashes; build logs captured as CI artifacts.
+
+- **Identity & attestation**
+  - Identity subsystem implemented in root-task leveraging **TPM 2.0** or declared **DICE fallback**.
+  - Capability ticket seeds are sealed only after successful attestation.
+  - Attestation evidence bound to the manifest fingerprint is appended to `/proc/boot` and exported via NineDoor.
+  - If attestation is enabled but unavailable, boot aborts deterministically with audited error and no partial state.
+
+- **Schema & validation**
+- Manifest IR (current schema) uses `profile.name: uefi-aarch64`.
+  - Hardware declarations under a gated section (e.g., `hw.devices[]` with UART, NET, TPM, RTC; `hw.secure_boot`; `hw.attestation`).
+  - Validation enforces required bindings and TPM availability when attestation is enabled.
+
+- **Secure Boot documentation**
+  - Secure Boot treated as firmware enforcement; OS records and validates observable state where trustworthy.
+  - Measurements, manifest fingerprints, and bring-up notes captured in `docs/HARDWARE_BRINGUP.md` and aligned with `docs/SECURITY.md`.
+
+- **Automation & bring-up**
+  - Introduce `scripts/uefi/qemu-uefi.sh` using EDK2 pflash and the EFI-built elfloader.
+  - Optional host-only TPM emulation (e.g., `swtpm`) for QEMU testing.
+  - Lab checklist for the reference dev board.
+
+---
+
+### Commands
+- `cmake --build seL4/build --target elfloader.efi`
+- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
+- `scripts/uefi/qemu-uefi.sh --console serial --tcp-port 31337`
+- Physical hardware checklist: capture `/proc/boot`, compare manifest hash to CI baseline.
+
+---
+
+### Checks (DoD)
+- EFI-built elfloader boots under QEMU TCG and on the reference dev board.
+- Serial startup ordering **exactly matches** VM baseline; any drift is a bug unless profile-gated and documented.
+- Manifest fingerprint printed early and matches packaged hash.
+- If `hw.attestation.enabled=true`, attestation succeeds and evidence hash matches the manifest fingerprint; if unavailable, boot aborts deterministically.
+- Compiler rejects manifests selecting `uefi-aarch64` without required hardware bindings or attestation settings.
+- Full Regression Pack passes under QEMU and (where applicable) on hardware; any divergence is treated as a bug unless explicitly documented.
+
+---
+
+### Compiler touchpoints
+- `coh-rtc` emits hardware tables for the selected profile; docs import them into `docs/HARDWARE_BRINGUP.md` and `docs/ARCHITECTURE.md`.
+- Regeneration guard compares manifest fingerprints recorded in UEFI docs against generated outputs, failing CI on drift.
+
+---
+
+## Task Breakdown
+
+### Title/ID: m26-uefi-bootchain
+**Goal:** Boot via UEFI → elfloader.efi → seL4; load manifest from ESP; emit stable fingerprint lines.  
+**Inputs:** EFI-built elfloader, `scripts/uefi/esp-build.sh`, `scripts/uefi/qemu-uefi.sh`, `configs/root_task.toml` (`profile.name`).  
+**Changes:**
+- `scripts/uefi/esp-build.sh` — build ESP with `BOOTAA64.EFI` (elfloader), kernel, rootserver, optional initrd, manifest + hash; deterministic logs.
+- `scripts/uefi/qemu-uefi.sh` — UEFI QEMU path using EDK2 pflash; keep `virt` machine for parity.
+- `apps/root-task` — print manifest fingerprint in the same serial ordering as VM baseline.
+**Commands:**
+- `cmake --build seL4/build --target elfloader.efi`
+- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
+**Checks:**
+- QEMU `--uefi` serial output matches VM ordering; missing/invalid manifest aborts before any ticket material.
+**Deliverables:**
+- UEFI boot artifacts and referenced fingerprints in `docs/HARDWARE_BRINGUP.md`.
+
+---
+
+### Title/ID: m26-attestation
+**Goal:** Implement TPM/DICE identity sealing and export via `/proc/boot` with strict determinism.  
+**Inputs:** `apps/root-task/src/attest.rs`, `docs/SECURITY.md` (attestation section).  
+**Changes:**
+- `apps/root-task/src/attest.rs` — bounded TPM quote path + DICE fallback; seal ticket seeds only after successful attestation.
+- `/proc/boot` — append evidence summary (hashes/IDs only; no secrets).
+- Host docs/scripts for optional QEMU TPM emulation.
+**Commands:**
+- `scripts/uefi/qemu-uefi.sh --console serial --tcp-port 31337`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh`
+**Checks:**
+- Attestation failure aborts boot deterministically with audit.
+- Successful evidence hash matches manifest fingerprint.
+- VM vs hardware outputs compared; differences must be profile-gated.
+**Deliverables:**
+- Attestation evidence documented in `docs/SECURITY.md` and `docs/HARDWARE_BRINGUP.md`.
+
+---
+
+## Milestone 27 — UEFI On-Device Spool Stores + Settings Persistence <a id="27"></a> 
+[Milestones](#Milestones)
+
+**Why now (resilience):** After UEFI boot + identity (26), edge deployments need store/forward for telemetry and minimal settings that survive reboots and link outages without introducing a general filesystem or new protocols.
+
+**Non-negotiable constraints**
+- No changes to console grammar, 9P semantics, or TCP behavior vs VM unless profile‑gated and documented.
+- No POSIX VFS; no general filesystem.
+- Pure Rust userspace; no C‑FFI filesystems.
+- Persistence is exposed only through NineDoor nodes (file‑shaped, bounded).
+
+### Prerequisite
+- Milestone **26** completed (UEFI boot chain + device identity).
+
+### Goal
+Provide **bounded, crash‑resilient on‑device persistence** for:
+1) telemetry store/forward (append‑only ring log), and  
+2) minimal settings (A/B committed pages),
+exposed through NineDoor without expanding the TCB.
+
+### Deliverables
+
+#### A) Storage plumbing (hardware + QEMU parity)
+- Block‑device abstraction in HAL (role‑selected devices, not model‑selected).
+- QEMU reference uses `virtio-blk`; hardware path is profile‑gated and documented.
+- Manifest gates for persistence features; no `std` dependencies.
+
+#### B) Telemetry spool store (append‑only ring log)
+- Backing: fixed‑size block region/partition.
+- Record format (versioned, bounded): `magic | version | kind | seq | ts | len | crc | payload`.
+- Crash rule: a record is valid only if header + checksum validate; partial tail records are ignored.
+- Bounded behavior:
+  - max record size and deterministic scan budget.
+  - explicit policy: **refuse when full** or **overwrite oldest only when acked**.
+- NineDoor exposure (names must align with `ARCHITECTURE.md`):
+  - `/proc/spool/status` (read‑only)
+  - `/proc/spool/append` (write‑only, one record per write)
+  - `/proc/spool/read` (bounded read stream)
+  - `/proc/spool/ack` (write‑only cursor advance)
+
+#### C) Settings store (A/B committed pages)
+- Two fixed pages/blocks with `generation + checksum`.
+- Update semantics: write inactive page fully, validate checksum, then commit by generation.
+- Bounded settings size; strict UTF‑8 validation and max key/value lengths (if KV).
+
+#### D) Identity binding
+- Spool/settings metadata binds to the **manifest fingerprint** from 26 (e.g., recorded in `/proc/boot`), without introducing new trust roots.
+
+#### E) Testing + regression hardening
+- Crash‑fault simulation tests for both stores (power loss at every write boundary).
+- Fuzz record decoder with strict size limits; reject malformed frames.
+- Golden fixture: known block image → expected `status/read/ack` behavior.
+- Regression pack additions:
+  - `scripts/cohsh/spool_roundtrip.coh`
+  - `scripts/cohsh/settings_roundtrip.coh`
+
+### Commands
+- `cargo test -p root-task`
+- `cargo test -p nine-door`
+- `cohsh --script scripts/cohsh/spool_roundtrip.coh`
+- `cohsh --script scripts/cohsh/settings_roundtrip.coh`
+
+### Checks (DoD)
+- Spool append/read/ack semantics are deterministic and bounded; invalid tail records after crash are ignored.
+- Store/forward works offline and resumes correctly after reboot.
+- Settings updates are atomic across power loss (A/B semantics).
+- No general filesystem or POSIX surface introduced.
+- VM vs UEFI semantics remain byte‑stable unless explicitly profile‑gated.
+- Regression pack passes unchanged; new tests are additive.
+
+### Compiler touchpoints
+- `coh-rtc` emits persistence limits (record size, max bytes, policy mode) into manifest IR; docs import the generated snippets.
+- Manifest validation rejects persistence when storage devices are missing or mis‑declared for the UEFI profile.
+
+### Task Breakdown
+```
+Title/ID: m27-spool-core
+Goal: Implement append‑only spool store over bounded block device.
+Inputs: HAL block traits, docs/ARCHITECTURE.md, docs/INTERFACES.md.
+Changes:
+  - apps/root-task/src/storage/spool.rs — ring log + checksum validation.
+  - apps/root-task/src/hal/block.rs — block traits + role‑selected device binding.
+Commands:
+  - cargo test -p root-task --test spool
+Checks:
+  - Partial tail records are ignored; bounded scan time enforced.
+Deliverables:
+  - Spool store core with deterministic semantics.
+
+Title/ID: m27-spool-namespace
+Goal: Expose spool nodes via NineDoor.
+Inputs: apps/nine-door, docs/INTERFACES.md.
+Changes:
+  - apps/nine-door/src/host/spool.rs — /proc/spool nodes.
+  - apps/nine-door/src/host/namespace.rs — mount spool provider.
+Commands:
+  - cargo test -p nine-door --test spool
+Checks:
+  - Append/read/ack paths enforce quotas and policy mode.
+Deliverables:
+  - Spool namespace documented and wired.
+
+Title/ID: m27-settings-store
+Goal: Implement A/B settings persistence with atomic commit.
+Inputs: HAL block traits, docs/ARCHITECTURE.md.
+Changes:
+  - apps/root-task/src/storage/settings.rs — A/B pages + checksum.
+Commands:
+  - cargo test -p root-task --test settings
+Checks:
+  - Power‑loss simulations yield either old or new state, never corruption.
+Deliverables:
+  - Settings store with atomic semantics.
+
+Title/ID: m27-spool-regressions
+Goal: Add deterministic regression scripts and fixtures.
+Inputs: scripts/cohsh/, tests/fixtures/.
+Changes:
+  - scripts/cohsh/spool_roundtrip.coh — append/read/ack sequence.
+  - scripts/cohsh/settings_roundtrip.coh — set/get + A/B markers.
+Commands:
+  - cohsh --script scripts/cohsh/spool_roundtrip.coh
+  - cohsh --script scripts/cohsh/settings_roundtrip.coh
+Checks:
+  - Scripts pass unchanged; transcripts stable.
+Deliverables:
+  - Regression fixtures committed and referenced in docs/TEST_PLAN.md.
+```
+
+
+## Milestone 28 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest <a id="28"></a>
+[Milestones](#Milestones)
+
+**Why now (operator & adoption):**  
+By this stage Cohesix is architecturally complete, SMP-aware, and UEFI-capable. What remains is operability: giving operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols.
+
+This milestone delivers a small, opinionated set of host-side utilities that read existing file-shaped state and artifacts. They do not mutate system state, do not self-heal, and do not bypass policy.
+
+---
+
+## Goal
+Provide a coherent operator toolkit that:
+1. Explains current system state (`inspect`)
+2. Records and replays control-plane behavior (`trace`)
+3. Produces self-contained reproducibility artifacts (`bundle`)
+4. Compares system state and policy deterministically (`diff`)
+5. Verifies device identity and attestation evidence (`attest`)
+
+All tools must be:
+- host-side only
+- deterministic and scriptable
+- aligned with existing Secure9P / NineDoor surfaces
+- auditable and replay-compatible
+
+---
+
+## Non-Goals (Explicit)
+- No automatic remediation or self-healing
+- No in-VM UI or interactive tooling
+- No new protocols or transports
+- No mutation of authority, policy, or state
+- No dependency on POSIX filesystem semantics inside the VM
+
+---
+
+## Deliverables
+
+### 1) `coh inspect` — Correlated System Explanation
+
+**Purpose:**  
+Provide a correlated, human-readable explanation of the system’s current operational state.
+
+Reads (examples):
+
+`/proc/lifecycle/*`  
+`/proc/root/*`  
+`/proc/9p/session/*`  
+`/proc/pressure/*`  
+`/proc/spool/status`  
+`/proc/attest/*`
+
+Output characteristics:
+- Structured text (stable field ordering)
+- No “healthy/unhealthy” judgment
+- Explains why the system is in its current state
+- Zero side effects
+
+Exit codes:
+- `0` — state internally consistent
+- `>0` — invariant violation (corruption, impossible state)
+
+---
+
+### 2) `coh trace` — Deterministic Record & Replay
+
+**Purpose:**  
+Capture and replay control-plane behavior for debugging, testing, and UI validation.
+
+Capabilities:
+- Record Secure9P frames + ACK/ERR
+- Snapshot relevant `/proc/*` state at trace boundaries
+- Emit `.trace` artifacts with bounded size
+- Replay traces against:
+  - `cohsh`
+  - SwarmUI Live Hive
+
+Constraints:
+- No live mutation during replay
+- Byte-identical ACK/ERR ordering required
+
+---
+
+### 3) `coh bundle` — Reproducibility Pack
+
+**Purpose:**  
+Produce a single, self-contained artifact for bug reports, audits, and incident review.
+
+Bundle contents (bounded):
+- Manifest + resolved manifest hash
+- Serial log excerpt (if available from the host capture)
+- Trace files (if present)
+- `/proc` snapshots (inspect-equivalent)
+- Spool status summary
+- Attestation summary
+
+Output:
+- Deterministic directory or archive layout
+- No secrets unless explicitly authorized
+- Hash recorded and printed
+
+---
+
+### 4) `coh diff` — Deterministic Comparison
+
+**Purpose:**  
+Answer “what changed?” without guesswork.
+
+Supported comparisons:
+- Two live targets
+- Live target vs bundle
+- Two bundles
+
+Diff surfaces:
+- Namespace shape
+- Manifest-resolved limits
+- Policy rules
+- Lifecycle / root state
+- Attestation fingerprints
+
+Output:
+- Minimal, ordered diff
+- No semantic inference
+- Script-friendly format
+
+---
+
+### 5) `coh attest` — Identity & Evidence Verification
+
+**Purpose:**  
+Verify device identity and boot provenance.
+
+Capabilities:
+- Parse TPM / DICE evidence from `/proc/attest`
+- Verify manifest fingerprint binding
+- Validate against provided trust anchors
+- Emit clear PASS / FAIL + reason
+
+This command is binary by design and suitable for CI and compliance workflows.
+
+---
+
+## Implementation Scope
+- Host tools under `apps/coh/` (or equivalent)
+- Reuse existing parsing and transport crates
+- No changes to VM-side authority logic
+- Minimal, additive code only
+
+---
+
+## Documentation Updates
+- `docs/USERLAND_AND_CLI.md`
+  - Command reference
+  - Output guarantees
+- `docs/SECURITY.md`
+  - Operator tooling trust model
+- `docs/ARCHITECTURE.md`
+  - Operator interaction layer (read-only tools)
+
+---
+
+## Testing & Validation
+- Golden output fixtures for each command
+- Bundle → diff → inspect roundtrip tests
+- Trace capture + replay regression
+- Attestation positive and negative cases
+- Tools must operate correctly against:
+  - QEMU single-core
+  - QEMU multicore
+  - UEFI profile (where applicable)
+
+---
+
+## Checks (Definition of Done)
+- All tools produce deterministic output
+- No tool mutates system state
+- No new protocols introduced
+- Trace replay yields byte-identical ACK/ERR
+- Bundles are sufficient for offline diagnosis
+- Documentation reflects as-built behavior
+
+---
+
+## Outcome
+After Milestone 28:
+- Cohesix is operable, not just correct
+- Incidents are explainable and reproducible
+- Operators can reason about state without guesswork
+- Support and integration costs drop sharply
+- The control plane remains small, auditable, and boring
+
+## Milestone 29 — Edge Local Status (UEFI Host Tool)  <a id="29"></a> 
+[Milestones](#Milestones)
+
+**Why now (compiler):** Field techs need offline status on edge devices using the same 9P grammar. Tool must respect UEFI profile and attestation outputs.
+
+**Goal**
+Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection of boot/attest data using the existing TCP console transport (or offline trace replay), without adding any in-VM 9P/TCP listener.
+
+**Non-Goals**
+- Repo-wide SPDX/NOTICE header sweeps (track separately; not required for the status tool).
+
+**Deliverables**
+- `coh-status` binary reading `/proc/boot`, `/proc/attest/*`, `/worker/*/telemetry` via the existing TCP console transport; offline-friendly.
+- TPM attestation check displaying manifest fingerprint and verifying against cached reference.
+- Shared CBOR parsing code with SwarmUI to preserve grammar.
+
+**Commands**
+- `cargo build -p coh-status`
+- `cargo run -p coh-status -- --script scripts/cohsh/boot_v0.coh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh`
+
+**Checks (DoD)**
+- Works offline; wrong/expired ticket → deterministic `ERR reason=Permission` surfaced to user.
+- CBOR parsing identical to SwarmUI; transcript diff zero for shared flows.
+- Abuse case: attempt to write via coh-status returns ERR and does not mutate state.
+- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
+
+**Compiler touchpoints**
+- `coh-rtc` emits localhost binding guidance and attestation paths for UEFI profile into docs/HARDWARE_BRINGUP.md and docs/USERLAND_AND_CLI.md.
+
+**Task Breakdown**
+```
+Title/ID: m29-status-tool
+Goal: Build coh-status for offline/local status reads over 9P/TCP.
+Inputs: apps/coh-status/, UEFI manifest outputs, attestation nodes.
+Changes:
+  - apps/coh-status/src/main.rs — read-only client using cohsh-core; offline cache for attest data.
+  - apps/coh-status/tests/offline.rs — simulate offline read and expired ticket.
+Commands:
+  - cargo build -p coh-status
+  - cargo run -p coh-status -- --script scripts/cohsh/boot_v0.coh
+Checks:
+  - Expired ticket returns ERR; offline cache used when transport unavailable.
+Deliverables:
+  - Tool usage documented in docs/HARDWARE_BRINGUP.md and docs/USERLAND_AND_CLI.md.
+
+Title/ID: m29-attest-verify
+Goal: Verify TPM attestation parsing parity with SwarmUI.
+Inputs: /proc/attest outputs, SwarmUI CBOR parsers.
+Changes:
+  - apps/coh-status/src/attest.rs — verify manifest fingerprint against cached reference.
+  - shared CBOR decoder module reused from SwarmUI/cohsh-core.
+Commands:
+  - cargo test -p coh-status --test attest
+  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh
+Checks:
+  - Malformed attestation rejected with ERR; valid attestation matches manifest hash identically to SwarmUI.
+Deliverables:
+  - Verified attestation workflow documented; regression outputs stored.
+
+```
+
+## Milestone 30 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)  <a id="30"></a> 
+[Milestones](#Milestones)
+
+**Why now (platform):**  
+Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is the read-only ESP image (UEFI loader + kernel + rootserver + manifest).
+
+**Goal**  
+Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-task**, then bring up ENA networking in root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**. The root-task acts as a 9P client over the existing TCP stack; no new in-VM listeners are introduced beyond the console.
+
+**Deliverables**
+- EFI System Partition containing:
+  - `EFI/BOOT/BOOTAA64.EFI` (elfloader EFI)
+  - `kernel.elf`
+  - `rootserver` (root task ELF)
+  - optional `initrd.cpio`
+  - `manifest.json` and `manifest.sha256`
+  - embedded, signed fabric bootstrap manifest (≥2 endpoints, root trust anchors)
+- ENA driver (adminq + single TX/RX queue) in root-task.
+- Minimal DHCP/TCP/TLS client in root-task (post-seL4), no firmware networking.
+- Diskless bootstrap path **after seL4**: ENA → DHCP → TCP → TLS → 9door mount.
+- Optional IMDSv2 bootstrap (instance identity + config) using a bounded, allowlisted HTTP client over the existing TCP stack. No listeners; no background refresh loop.
+- AMI registration tooling for Arm64 (`uefi` / `uefi-preferred`).
+- Documentation in `docs/AWS_AMI.md` covering boot path, failure modes, and recovery.
+
+**Commands**
+- `cmake --build seL4/build --target elfloader.efi`
+- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
+- `scripts/aws/build-esp.sh`
+- `scripts/aws/register-ami.sh`
+- `scripts/aws/launch-smoke.sh`
+
+**Checks (DoD)**
+- EC2 instance boots directly into Cohesix with no intermediate OS.
+- ENA link comes up deterministically; DHCP lease acquired within bounded time.
+- 9door namespace mounts successfully and control plane is reachable.
+- IMDSv2 metadata fetch is optional and bounded; if unavailable or denied, boot continues safely with explicit diagnostics and no unbounded retries.
+- Power cycle returns to identical clean state (no persistence).
+- Failure cases (no fabric, auth failure, link down) halt safely with explicit console diagnostics.
+
+**Compiler touchpoints**
+- `coh-rtc` emits:
+  - ENA queue bounds and bootstrap retry limits.
+  - Fabric bootstrap manifest schema and signature requirements.
+  - IMDSv2 allowlist, max response bytes, and retry bounds (optional gate).
+- Regeneration guard verifies EFI binary hash against recorded compiler output.
+
+**Task Breakdown**
+```
+Title/ID: m30-uefi-esp
+Goal: Build an EFI System Partition for AWS Arm64 using elfloader + seL4 artifacts.
+Inputs: upstream elfloader EFI build, `scripts/uefi/esp-build.sh`, manifest outputs.
+Changes:
+- `scripts/uefi/esp-build.sh` — build ESP with BOOTAA64.EFI, kernel, rootserver, optional initrd, manifest + hash.
+- `scripts/aws/build-esp.sh` — produce AMI-ready ESP image.
+Commands:
+- cmake --build seL4/build --target elfloader.efi
+- scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json
+Checks:
+- ESP boots to root-task via elfloader with deterministic serial output.
+Deliverables:
+- Documented ESP layout and build recipe for Arm64.
+
+Title/ID: m30-ena-adminq
+Goal: Implement ENA PCIe discovery and admin queue in root-task.
+Inputs: apps/root-task drivers, HAL PCI helpers, docs/AWS_AMI.md.
+Changes:
+- apps/root-task/src/drivers/ena/pci.rs — PCIe enumeration, BAR mapping.
+- apps/root-task/src/drivers/ena/adminq.rs — admin queue + completion queue.
+- apps/root-task/src/net/ena.rs — ENA init wiring.
+Commands:
+- cargo test -p root-task --test ena_adminq
+Checks:
+- Feature negotiation succeeds with minimal feature set.
+Deliverables:
+- AdminQ protocol notes in docs/AWS_AMI.md.
+
+Title/ID: m30-ena-io
+Goal: Bring up minimal ENA dataplane.
+Inputs: apps/root-task drivers, root-task net stack abstractions.
+Changes:
+- apps/root-task/src/drivers/ena/ioq.rs — single TX/RX SQ + CQ.
+- apps/root-task/src/drivers/ena/poll.rs — polling dataplane (no interrupts).
+- apps/root-task/src/net/mod.rs — integrate ENA dataplane into the runtime.
+Commands:
+- cargo test -p root-task --test ena_ioq
+Checks:
+- TX reclaim and RX refill invariants hold under sustained traffic.
+Deliverables:
+- Deterministic dataplane invariants documented.
+
+Title/ID: m30-net-bootstrap
+Goal: Network bootstrap to fabric (post-seL4, in root-task).
+Inputs: apps/root-task net stack, TLS helpers, docs/AWS_AMI.md.
+Changes:
+- apps/root-task/src/net/dhcp.rs — bounded DHCP client.
+- apps/root-task/src/net/tcp.rs — TCP bring-up for long-lived sessions.
+- apps/root-task/src/net/tls.rs — fabric-auth TLS handshake.
+- apps/root-task/src/net/bootstrap.rs — deterministic sequencing and retries.
+Commands:
+- cargo test -p root-task --test net_bootstrap
+Checks:
+- Network reaches "fabric-ready" state within defined bounds.
+Deliverables:
+- Bootstrap timing guarantees recorded.
+
+Title/ID: m30-imdsv2-bootstrap
+Goal: Read bounded instance metadata (IMDSv2) and feed boot policy inputs.
+Inputs: apps/root-task net stack, docs/AWS_AMI.md.
+Changes:
+- apps/root-task/src/net/http.rs — minimal HTTP request/response parsing (bounded, no chunked).
+- apps/root-task/src/net/imdsv2.rs — token fetch + allowlisted metadata queries.
+- apps/root-task/src/boot/policy.rs — consume optional IMDS fields (instance-id, region, az, tags if enabled).
+Commands:
+- cargo test -p root-task --test imdsv2
+Checks:
+- IMDSv2 is optional: absence, timeout, or denial does not block boot and emits deterministic diagnostics.
+Deliverables:
+- IMDSv2 bootstrap flow documented with explicit bounds and allowlist.
+
+Title/ID: m30-fabric-mount
+Goal: Mount 9door namespace and enter steady state (post-seL4).
+Inputs: root-task net stack, Secure9P client, docs/AWS_AMI.md.
+Changes:
+- apps/root-task/src/net/door9p_client.rs — minimal 9P client for fabric mounts.
+- apps/root-task/src/net/bootstrap.rs — signed manifest verification.
+- apps/root-task/src/net/mount.rs — mount orchestration and error handling.
+Commands:
+- cargo test -p root-task --test fabric_mount
+Checks:
+- Namespace mount is read/write correct; auth failures are terminal and explicit.
+Deliverables:
+- Fabric bootstrap flow documented.
+
+Title/ID: m30-ami-pipeline
+Goal: Produce and validate AWS AMI.
+Inputs: scripts/aws/, docs/AWS_AMI.md.
+Changes:
+- scripts/aws/build-esp.sh — ESP image creation.
+- scripts/aws/register-ami.sh — snapshot + AMI registration.
+- scripts/aws/launch-smoke.sh — EC2 smoke test.
+Commands:
+- scripts/aws/register-ami.sh
+Checks:
+- AMI launches on supported Nitro instance family and passes smoke test.
+Deliverables:
+- Reproducible AMI build pipeline.
+```
 
 ----
 **Tracked Activities**
@@ -4758,850 +5636,6 @@ Deliverables:
 **Deliverables**
 - Warning cleanups committed with no behavior changes.
 
----
-
-The next Alpha release targets bare metal UEFI and AWS native boot via AMI.
-
----
-
-## Milestone 25a — UEFI Bare-Metal Boot & Device Identity <a id="25a"></a> 
-[Milestones](#Milestones)
-
-**Why now (context):**  
-To meet hardware deployment goals (Edge §3 retail hubs, Edge §8 defense ISR, Security §12 segmentation), Cohesix must boot on physical aarch64 UEFI hardware with attested manifests while preserving the lean `no_std` footprint and the upstream seL4 boot model. This milestone transitions from the QEMU reference profile to physical UEFI deployment, with VM behavior expected to mirror the hardware target unless explicitly profile-gated.
-
-**Non-negotiable constraint:**  
-No networking, 9P semantics, or console behaviors may diverge between VM and UEFI profiles except where explicitly marked as hardware-profile-specific in `ARCHITECTURE.md`. Any divergence must be documented and schema-gated. UEFI firmware networking is out of scope; all TCP behavior remains post-seL4 boot in root-task.
-
----
-
-### Prerequisite (must be completed before Milestone 25a)
-**Upstream elfloader EFI support**
-- Confirm and enable upstream seL4 **elfloader EFI build** to produce a valid PE/COFF EFI executable (`elfloader.efi`) for aarch64.
-- The EFI-built elfloader must:
-  - Relocate correctly under UEFI.
-  - Load the seL4 kernel, initial user image, DTB (when present), and CPIO rootfs.
-  - Preserve existing VM boot semantics once seL4 is entered.
-- Any local build glue required to emit `elfloader.efi` must not fork elfloader logic and must track upstream.
-
----
-
-### Goal
-Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads the generated manifest from boot media, performs TPM-backed (or DICE-fallback) identity attestation in root-task, and mirrors VM behavior deterministically.
-
----
-
-### Deliverables
-
-- **UEFI boot chain**
-  - Use upstream **elfloader built as an EFI PE/COFF binary** (`EFI/BOOT/BOOTAA64.EFI`) as the sole UEFI application.
-  - Root-task remains the first user process post-kernel boot; root-task is never executed as an EFI application.
-
-- **UEFI image builder**
-  - Introduce `scripts/uefi/esp-build.sh` to build a reproducible FAT ESP containing:
-    - `EFI/BOOT/BOOTAA64.EFI` (elfloader EFI)
-    - `kernel.elf`
-    - `rootserver` (root task ELF)
-    - optional `initrd.cpio`
-    - `manifest.json` and `manifest.sha256`
-    - optional `dtb/` assets (platform-specific)
-  - Deterministic file ordering and hashes; build logs captured as CI artifacts.
-
-- **Identity & attestation**
-  - Identity subsystem implemented in root-task leveraging **TPM 2.0** or declared **DICE fallback**.
-  - Capability ticket seeds are sealed only after successful attestation.
-  - Attestation evidence bound to the manifest fingerprint is appended to `/proc/boot` and exported via NineDoor.
-  - If attestation is enabled but unavailable, boot aborts deterministically with audited error and no partial state.
-
-- **Schema & validation**
-- Manifest IR (current schema) uses `profile.name: uefi-aarch64`.
-  - Hardware declarations under a gated section (e.g., `hw.devices[]` with UART, NET, TPM, RTC; `hw.secure_boot`; `hw.attestation`).
-  - Validation enforces required bindings and TPM availability when attestation is enabled.
-
-- **Secure Boot documentation**
-  - Secure Boot treated as firmware enforcement; OS records and validates observable state where trustworthy.
-  - Measurements, manifest fingerprints, and bring-up notes captured in `docs/HARDWARE_BRINGUP.md` and aligned with `docs/SECURITY.md`.
-
-- **Automation & bring-up**
-  - Introduce `scripts/uefi/qemu-uefi.sh` using EDK2 pflash and the EFI-built elfloader.
-  - Optional host-only TPM emulation (e.g., `swtpm`) for QEMU testing.
-  - Lab checklist for the reference dev board.
-
----
-
-### Commands
-- `cmake --build seL4/build --target elfloader.efi`
-- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
-- `scripts/uefi/qemu-uefi.sh --console serial --tcp-port 31337`
-- Physical hardware checklist: capture `/proc/boot`, compare manifest hash to CI baseline.
-
----
-
-### Checks (DoD)
-- EFI-built elfloader boots under QEMU TCG and on the reference dev board.
-- Serial startup ordering **exactly matches** VM baseline; any drift is a bug unless profile-gated and documented.
-- Manifest fingerprint printed early and matches packaged hash.
-- If `hw.attestation.enabled=true`, attestation succeeds and evidence hash matches the manifest fingerprint; if unavailable, boot aborts deterministically.
-- Compiler rejects manifests selecting `uefi-aarch64` without required hardware bindings or attestation settings.
-- Full Regression Pack passes under QEMU and (where applicable) on hardware; any divergence is treated as a bug unless explicitly documented.
-
----
-
-### Compiler touchpoints
-- `coh-rtc` emits hardware tables for the selected profile; docs import them into `docs/HARDWARE_BRINGUP.md` and `docs/ARCHITECTURE.md`.
-- Regeneration guard compares manifest fingerprints recorded in UEFI docs against generated outputs, failing CI on drift.
-
----
-
-## Task Breakdown
-
-### Title/ID: m25a-uefi-bootchain
-**Goal:** Boot via UEFI → elfloader.efi → seL4; load manifest from ESP; emit stable fingerprint lines.  
-**Inputs:** EFI-built elfloader, `scripts/uefi/esp-build.sh`, `scripts/uefi/qemu-uefi.sh`, `configs/root_task.toml` (`profile.name`).  
-**Changes:**
-- `scripts/uefi/esp-build.sh` — build ESP with `BOOTAA64.EFI` (elfloader), kernel, rootserver, optional initrd, manifest + hash; deterministic logs.
-- `scripts/uefi/qemu-uefi.sh` — UEFI QEMU path using EDK2 pflash; keep `virt` machine for parity.
-- `apps/root-task` — print manifest fingerprint in the same serial ordering as VM baseline.
-**Commands:**
-- `cmake --build seL4/build --target elfloader.efi`
-- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
-**Checks:**
-- QEMU `--uefi` serial output matches VM ordering; missing/invalid manifest aborts before any ticket material.
-**Deliverables:**
-- UEFI boot artifacts and referenced fingerprints in `docs/HARDWARE_BRINGUP.md`.
-
----
-
-### Title/ID: m25a-attestation
-**Goal:** Implement TPM/DICE identity sealing and export via `/proc/boot` with strict determinism.  
-**Inputs:** `apps/root-task/src/attest.rs`, `docs/SECURITY.md` (attestation section).  
-**Changes:**
-- `apps/root-task/src/attest.rs` — bounded TPM quote path + DICE fallback; seal ticket seeds only after successful attestation.
-- `/proc/boot` — append evidence summary (hashes/IDs only; no secrets).
-- Host docs/scripts for optional QEMU TPM emulation.
-**Commands:**
-- `scripts/uefi/qemu-uefi.sh --console serial --tcp-port 31337`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh`
-**Checks:**
-- Attestation failure aborts boot deterministically with audit.
-- Successful evidence hash matches manifest fingerprint.
-- VM vs hardware outputs compared; differences must be profile-gated.
-**Deliverables:**
-- Attestation evidence documented in `docs/SECURITY.md` and `docs/HARDWARE_BRINGUP.md`.
-
----
-
-## Milestone 25b — UEFI On-Device Spool Stores + Settings Persistence <a id="25b"></a> 
-[Milestones](#Milestones)
-
-**Why now (resilience):** After UEFI boot + identity (25a), edge deployments need store/forward for telemetry and minimal settings that survive reboots and link outages without introducing a general filesystem or new protocols.
-
-**Non-negotiable constraints**
-- No changes to console grammar, 9P semantics, or TCP behavior vs VM unless profile‑gated and documented.
-- No POSIX VFS; no general filesystem.
-- Pure Rust userspace; no C‑FFI filesystems.
-- Persistence is exposed only through NineDoor nodes (file‑shaped, bounded).
-
-### Prerequisite
-- Milestone **25a** completed (UEFI boot chain + device identity).
-
-### Goal
-Provide **bounded, crash‑resilient on‑device persistence** for:
-1) telemetry store/forward (append‑only ring log), and  
-2) minimal settings (A/B committed pages),
-exposed through NineDoor without expanding the TCB.
-
-### Deliverables
-
-#### A) Storage plumbing (hardware + QEMU parity)
-- Block‑device abstraction in HAL (role‑selected devices, not model‑selected).
-- QEMU reference uses `virtio-blk`; hardware path is profile‑gated and documented.
-- Manifest gates for persistence features; no `std` dependencies.
-
-#### B) Telemetry spool store (append‑only ring log)
-- Backing: fixed‑size block region/partition.
-- Record format (versioned, bounded): `magic | version | kind | seq | ts | len | crc | payload`.
-- Crash rule: a record is valid only if header + checksum validate; partial tail records are ignored.
-- Bounded behavior:
-  - max record size and deterministic scan budget.
-  - explicit policy: **refuse when full** or **overwrite oldest only when acked**.
-- NineDoor exposure (names must align with `ARCHITECTURE.md`):
-  - `/proc/spool/status` (read‑only)
-  - `/proc/spool/append` (write‑only, one record per write)
-  - `/proc/spool/read` (bounded read stream)
-  - `/proc/spool/ack` (write‑only cursor advance)
-
-#### C) Settings store (A/B committed pages)
-- Two fixed pages/blocks with `generation + checksum`.
-- Update semantics: write inactive page fully, validate checksum, then commit by generation.
-- Bounded settings size; strict UTF‑8 validation and max key/value lengths (if KV).
-
-#### D) Identity binding
-- Spool/settings metadata binds to the **manifest fingerprint** from 25a (e.g., recorded in `/proc/boot`), without introducing new trust roots.
-
-#### E) Testing + regression hardening
-- Crash‑fault simulation tests for both stores (power loss at every write boundary).
-- Fuzz record decoder with strict size limits; reject malformed frames.
-- Golden fixture: known block image → expected `status/read/ack` behavior.
-- Regression pack additions:
-  - `scripts/cohsh/spool_roundtrip.coh`
-  - `scripts/cohsh/settings_roundtrip.coh`
-
-### Commands
-- `cargo test -p root-task`
-- `cargo test -p nine-door`
-- `cohsh --script scripts/cohsh/spool_roundtrip.coh`
-- `cohsh --script scripts/cohsh/settings_roundtrip.coh`
-
-### Checks (DoD)
-- Spool append/read/ack semantics are deterministic and bounded; invalid tail records after crash are ignored.
-- Store/forward works offline and resumes correctly after reboot.
-- Settings updates are atomic across power loss (A/B semantics).
-- No general filesystem or POSIX surface introduced.
-- VM vs UEFI semantics remain byte‑stable unless explicitly profile‑gated.
-- Regression pack passes unchanged; new tests are additive.
-
-### Compiler touchpoints
-- `coh-rtc` emits persistence limits (record size, max bytes, policy mode) into manifest IR; docs import the generated snippets.
-- Manifest validation rejects persistence when storage devices are missing or mis‑declared for the UEFI profile.
-
-### Task Breakdown
-```
-Title/ID: m25b-spool-core
-Goal: Implement append‑only spool store over bounded block device.
-Inputs: HAL block traits, docs/ARCHITECTURE.md, docs/INTERFACES.md.
-Changes:
-  - apps/root-task/src/storage/spool.rs — ring log + checksum validation.
-  - apps/root-task/src/hal/block.rs — block traits + role‑selected device binding.
-Commands:
-  - cargo test -p root-task --test spool
-Checks:
-  - Partial tail records are ignored; bounded scan time enforced.
-Deliverables:
-  - Spool store core with deterministic semantics.
-
-Title/ID: m25b-spool-namespace
-Goal: Expose spool nodes via NineDoor.
-Inputs: apps/nine-door, docs/INTERFACES.md.
-Changes:
-  - apps/nine-door/src/host/spool.rs — /proc/spool nodes.
-  - apps/nine-door/src/host/namespace.rs — mount spool provider.
-Commands:
-  - cargo test -p nine-door --test spool
-Checks:
-  - Append/read/ack paths enforce quotas and policy mode.
-Deliverables:
-  - Spool namespace documented and wired.
-
-Title/ID: m25b-settings-store
-Goal: Implement A/B settings persistence with atomic commit.
-Inputs: HAL block traits, docs/ARCHITECTURE.md.
-Changes:
-  - apps/root-task/src/storage/settings.rs — A/B pages + checksum.
-Commands:
-  - cargo test -p root-task --test settings
-Checks:
-  - Power‑loss simulations yield either old or new state, never corruption.
-Deliverables:
-  - Settings store with atomic semantics.
-
-Title/ID: m25b-spool-regressions
-Goal: Add deterministic regression scripts and fixtures.
-Inputs: scripts/cohsh/, tests/fixtures/.
-Changes:
-  - scripts/cohsh/spool_roundtrip.coh — append/read/ack sequence.
-  - scripts/cohsh/settings_roundtrip.coh — set/get + A/B markers.
-Commands:
-  - cohsh --script scripts/cohsh/spool_roundtrip.coh
-  - cohsh --script scripts/cohsh/settings_roundtrip.coh
-Checks:
-  - Scripts pass unchanged; transcripts stable.
-Deliverables:
-  - Regression fixtures committed and referenced in docs/TEST_PLAN.md.
-```
-
-## Milestone 25c — SMP Utilization via Task Isolation (Multicore without Multithreading) <a id="25c"></a> 
-[Milestones](#Milestones)
-
-**Why now (platform and performance):** Cohesix targets modern aarch64 hardware where multicore CPUs are the norm. To scale throughput without sacrificing determinism, auditability, or TCB size, Cohesix must exploit seL4 SMP scheduling rather than introducing shared-memory multithreading. This milestone formalizes multicore usage through task isolation, sharding, and explicit authority boundaries.
-
-This is a performance and clarity milestone, not a feature expansion.
-
-## Goal
-Enable Cohesix to take advantage of multicore aarch64 CPUs by:
-1. Running multiple isolated seL4 tasks in parallel,
-2. Keeping authoritative state single-threaded and serial, and
-3. Scaling throughput through replication and partitioning, not threads.
-
-The result must preserve:
-- deterministic ACK/ERR ordering,
-- replayability,
-- bounded work per tick,
-- and a minimal trusted computing base.
-
-## Non-Goals (Explicit)
-- No POSIX threads or shared-memory multithreading
-- No async runtimes with implicit scheduling
-- No background work queues with unbounded growth
-- No relaxation of replay or audit guarantees
-- No changes to Secure9P / NineDoor semantics
-- No new protocols or transports
-
-## Design Principles (Normative)
-1. **Concurrency via isolation, not sharing**  
-   All parallelism is achieved by running separate seL4 tasks.
-2. **Single-threaded authority**  
-   All authoritative decisions (tickets, lifecycle, policy, replay) are serialized through a single authority task.
-3. **Parallelism at the edges**  
-   Parsing, IO, and provider logic may scale horizontally, but must request decisions from the authority task.
-4. **Explicit back-pressure**  
-   When the authority or a shard is saturated, callers receive deterministic `ERR <verb> reason=busy`, not hidden queuing.
-
-## Task-Level Parallelism Model
-
-### Core Roles (Illustrative)
-| Task | Responsibility | Parallelism Strategy |
-|----|---------------|----------------------|
-| `root-task` | Authority, lifecycle, policy | Single instance, serialized |
-| `nine-door` | Secure9P parsing and routing | Sharded per session or subtree |
-| `console-transport` | TCP/serial framing, auth | One task per transport |
-| Providers (`/log`, `/proc`, `/gpu`, `/host`) | Namespace backends | One task per provider |
-| Workers | Role-specific execution | One task per worker |
-
-Each task runs a single-threaded event loop. seL4 schedules tasks across available cores.
-
-## SMP Affinity and Partitioning
-### Affinity Guidelines
-- Authority task MAY be pinned to a single core for stability.
-- IO-heavy tasks MAY be pinned near device IRQ affinity.
-- Provider tasks MAY be distributed across remaining cores.
-
-Affinity is optional and platform-specific but must be:
-- declarative,
-- bounded,
-- and documented.
-
-## Authority Interaction Contract
-All non-authority tasks:
-- Submit requests to the authority task via IPC,
-- Receive explicit `OK` / `ERR` responses,
-- MUST NOT mutate authoritative state directly.
-
-If the authority task cannot accept work:
-- It responds with `ERR <verb> reason=busy`,
-- The refusal is audited and observable,
-- No retries occur inside the VM.
-
-## Determinism and Replay Guarantees
-- Authoritative decisions are totally ordered.
-- Parallel tasks must not reorder or speculate on outcomes.
-- Replay executes the same authority decisions in the same order, regardless of task scheduling or core count.
-- SMP must not introduce nondeterministic ACK/ERR sequences.
-
-## Implementation Touchpoints
-- `apps/root-task/`
-  - Explicit authority IPC surface
-  - Busy/back-pressure signaling
-- `apps/nine-door/`
-  - Optional sharding of protocol handling
-- `apps/root-task/src/net/console_srv.rs` and `apps/root-task/src/serial/`
-  - Transport isolation from authority logic
-- `docs/ARCHITECTURE.md`
-  - SMP model and invariants
-- `docs/SECURITY.md`
-  - Rationale for rejecting multithreading
-
-## Testing and Validation
-
-### Functional
-- All existing regression scripts must pass unchanged.
-- New SMP runs must produce byte-identical ACK/ERR sequences to single-core runs.
-
-### Stress
-- Saturate protocol handlers while authority remains correct.
-- Verify `ERR <verb> reason=busy` emission under load.
-- Confirm no state corruption or reordering.
-
-### Replay
-- Capture traces on multicore.
-- Replay on single-core QEMU and assert identical outcomes.
-
-## Checks (Definition of Done)
-- Cohesix runs correctly on multicore aarch64 under QEMU and hardware.
-- Parallel tasks execute on multiple cores without shared-memory races.
-- Authority logic remains single-threaded and replayable.
-- Back-pressure is explicit and observable.
-- No new threads, runtimes, or hidden queues introduced.
-- Documentation clearly explains the SMP model and its constraints.
-
-## Task Breakdown
-```
-Title/ID: m25c-smp-kernel-enable
-Goal: Enable seL4 SMP in the external kernel build and document requirements.
-Inputs: seL4/build, docs/ARCHITECTURE.md, docs/BUILD_PLAN.md.
-Changes:
-  - seL4/build/ — regenerate kernel artifacts with SMP enabled.
-  - docs/ARCHITECTURE.md — record SMP kernel requirements and QEMU CPU count.
-Commands:
-  - make -C seL4/build
-Checks:
-  - SMP-enabled kernel boots under QEMU with >1 core.
-Deliverables:
-  - SMP kernel artifacts and documented build requirements.
-
-Title/ID: m25c-authority-ipc
-Goal: Serialize authoritative decisions behind a single IPC surface.
-Inputs: apps/root-task, docs/ROLES_AND_SCHEDULING.md.
-Changes:
-  - apps/root-task/src/authority.rs — authority IPC entrypoint and queueing.
-  - apps/root-task/src/lib.rs — route all authority mutations through IPC.
-Commands:
-  - cargo test -p root-task
-Checks:
-  - Authority decisions are serialized and replay-stable.
-Deliverables:
-  - Single-threaded authority IPC with deterministic ordering.
-
-Title/ID: m25c-sharded-tasks
-Goal: Run IO, parsing, and providers in separate single-threaded seL4 tasks.
-Inputs: apps/nine-door, apps/console, apps/root-task.
-Changes:
-  - apps/root-task/src/spawn.rs — spawn NineDoor shards and provider tasks.
-  - apps/nine-door/src/lib.rs — shard-aware request handling.
-Commands:
-  - cargo check -p root-task
-  - cargo test -p nine-door --test sharding
-Checks:
-  - Shards execute in parallel without shared-memory coupling.
-Deliverables:
-  - Task-isolated protocol handling.
-
-Title/ID: m25c-affinity-ir
-Goal: Add optional affinity hints to IR and enforce bounds.
-Inputs: configs/root_task.toml, tools/coh-rtc, docs/ARCHITECTURE.md.
-Changes:
-  - tools/coh-rtc/src/ir.rs — affinity hints and validation.
-  - configs/root_task.toml — optional affinity policy.
-Commands:
-  - cargo run -p coh-rtc
-  - scripts/check-generated.sh
-Checks:
-  - Invalid affinity configurations are rejected deterministically.
-Deliverables:
-  - Manifest-driven affinity policy (optional).
-
-Title/ID: m25c-smp-replay-regressions
-Goal: Prove SMP determinism vs single-core runs.
-Inputs: docs/TEST_PLAN.md, scripts/cohsh/.
-Changes:
-  - scripts/cohsh/smp_parity.coh — compare ACK/ERR sequences across core counts.
-Commands:
-  - cohsh --script scripts/cohsh/smp_parity.coh
-Checks:
-  - Multicore and single-core transcripts match byte-for-byte.
-Deliverables:
-  - SMP parity regression coverage.
-```
-
-## Milestone 25d — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest <a id="25d"></a>
-[Milestones](#Milestones)
-
-**Why now (operator & adoption):**  
-By this stage Cohesix is architecturally complete, SMP-aware, and UEFI-capable. What remains is operability: giving operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols.
-
-This milestone delivers a small, opinionated set of host-side utilities that read existing file-shaped state and artifacts. They do not mutate system state, do not self-heal, and do not bypass policy.
-
----
-
-## Goal
-Provide a coherent operator toolkit that:
-1. Explains current system state (`inspect`)
-2. Records and replays control-plane behavior (`trace`)
-3. Produces self-contained reproducibility artifacts (`bundle`)
-4. Compares system state and policy deterministically (`diff`)
-5. Verifies device identity and attestation evidence (`attest`)
-
-All tools must be:
-- host-side only
-- deterministic and scriptable
-- aligned with existing Secure9P / NineDoor surfaces
-- auditable and replay-compatible
-
----
-
-## Non-Goals (Explicit)
-- No automatic remediation or self-healing
-- No in-VM UI or interactive tooling
-- No new protocols or transports
-- No mutation of authority, policy, or state
-- No dependency on POSIX filesystem semantics inside the VM
-
----
-
-## Deliverables
-
-### 1) `coh inspect` — Correlated System Explanation
-
-**Purpose:**  
-Provide a correlated, human-readable explanation of the system’s current operational state.
-
-Reads (examples):
-
-`/proc/lifecycle/*`  
-`/proc/root/*`  
-`/proc/9p/session/*`  
-`/proc/pressure/*`  
-`/proc/spool/status`  
-`/proc/attest/*`
-
-Output characteristics:
-- Structured text (stable field ordering)
-- No “healthy/unhealthy” judgment
-- Explains why the system is in its current state
-- Zero side effects
-
-Exit codes:
-- `0` — state internally consistent
-- `>0` — invariant violation (corruption, impossible state)
-
----
-
-### 2) `coh trace` — Deterministic Record & Replay
-
-**Purpose:**  
-Capture and replay control-plane behavior for debugging, testing, and UI validation.
-
-Capabilities:
-- Record Secure9P frames + ACK/ERR
-- Snapshot relevant `/proc/*` state at trace boundaries
-- Emit `.trace` artifacts with bounded size
-- Replay traces against:
-  - `cohsh`
-  - SwarmUI Live Hive
-
-Constraints:
-- No live mutation during replay
-- Byte-identical ACK/ERR ordering required
-
----
-
-### 3) `coh bundle` — Reproducibility Pack
-
-**Purpose:**  
-Produce a single, self-contained artifact for bug reports, audits, and incident review.
-
-Bundle contents (bounded):
-- Manifest + resolved manifest hash
-- Serial log excerpt (if available from the host capture)
-- Trace files (if present)
-- `/proc` snapshots (inspect-equivalent)
-- Spool status summary
-- Attestation summary
-
-Output:
-- Deterministic directory or archive layout
-- No secrets unless explicitly authorized
-- Hash recorded and printed
-
----
-
-### 4) `coh diff` — Deterministic Comparison
-
-**Purpose:**  
-Answer “what changed?” without guesswork.
-
-Supported comparisons:
-- Two live targets
-- Live target vs bundle
-- Two bundles
-
-Diff surfaces:
-- Namespace shape
-- Manifest-resolved limits
-- Policy rules
-- Lifecycle / root state
-- Attestation fingerprints
-
-Output:
-- Minimal, ordered diff
-- No semantic inference
-- Script-friendly format
-
----
-
-### 5) `coh attest` — Identity & Evidence Verification
-
-**Purpose:**  
-Verify device identity and boot provenance.
-
-Capabilities:
-- Parse TPM / DICE evidence from `/proc/attest`
-- Verify manifest fingerprint binding
-- Validate against provided trust anchors
-- Emit clear PASS / FAIL + reason
-
-This command is binary by design and suitable for CI and compliance workflows.
-
----
-
-## Implementation Scope
-- Host tools under `apps/coh/` (or equivalent)
-- Reuse existing parsing and transport crates
-- No changes to VM-side authority logic
-- Minimal, additive code only
-
----
-
-## Documentation Updates
-- `docs/USERLAND_AND_CLI.md`
-  - Command reference
-  - Output guarantees
-- `docs/SECURITY.md`
-  - Operator tooling trust model
-- `docs/ARCHITECTURE.md`
-  - Operator interaction layer (read-only tools)
-
----
-
-## Testing & Validation
-- Golden output fixtures for each command
-- Bundle → diff → inspect roundtrip tests
-- Trace capture + replay regression
-- Attestation positive and negative cases
-- Tools must operate correctly against:
-  - QEMU single-core
-  - QEMU multicore
-  - UEFI profile (where applicable)
-
----
-
-## Checks (Definition of Done)
-- All tools produce deterministic output
-- No tool mutates system state
-- No new protocols introduced
-- Trace replay yields byte-identical ACK/ERR
-- Bundles are sufficient for offline diagnosis
-- Documentation reflects as-built behavior
-
----
-
-## Outcome
-After Milestone 25d:
-- Cohesix is operable, not just correct
-- Incidents are explainable and reproducible
-- Operators can reason about state without guesswork
-- Support and integration costs drop sharply
-- The control plane remains small, auditable, and boring
-
-## Milestone 26 — Edge Local Status (UEFI Host Tool)  <a id="26"></a> 
-[Milestones](#Milestones)
-
-**Why now (compiler):** Field techs need offline status on edge devices using the same 9P grammar. Tool must respect UEFI profile and attestation outputs.
-
-**Goal**
-Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection of boot/attest data using the existing TCP console transport (or offline trace replay), without adding any in-VM 9P/TCP listener.
-
-**Non-Goals**
-- Repo-wide SPDX/NOTICE header sweeps (track separately; not required for the status tool).
-
-**Deliverables**
-- `coh-status` binary reading `/proc/boot`, `/proc/attest/*`, `/worker/*/telemetry` via the existing TCP console transport; offline-friendly.
-- TPM attestation check displaying manifest fingerprint and verifying against cached reference.
-- Shared CBOR parsing code with SwarmUI to preserve grammar.
-
-**Commands**
-- `cargo build -p coh-status`
-- `cargo run -p coh-status -- --script scripts/cohsh/boot_v0.coh`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh`
-
-**Checks (DoD)**
-- Works offline; wrong/expired ticket → deterministic `ERR reason=Permission` surfaced to user.
-- CBOR parsing identical to SwarmUI; transcript diff zero for shared flows.
-- Abuse case: attempt to write via coh-status returns ERR and does not mutate state.
-- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
-
-**Compiler touchpoints**
-- `coh-rtc` emits localhost binding guidance and attestation paths for UEFI profile into docs/HARDWARE_BRINGUP.md and docs/USERLAND_AND_CLI.md.
-
-**Task Breakdown**
-```
-Title/ID: m26-status-tool
-Goal: Build coh-status for offline/local status reads over 9P/TCP.
-Inputs: apps/coh-status/, UEFI manifest outputs, attestation nodes.
-Changes:
-  - apps/coh-status/src/main.rs — read-only client using cohsh-core; offline cache for attest data.
-  - apps/coh-status/tests/offline.rs — simulate offline read and expired ticket.
-Commands:
-  - cargo build -p coh-status
-  - cargo run -p coh-status -- --script scripts/cohsh/boot_v0.coh
-Checks:
-  - Expired ticket returns ERR; offline cache used when transport unavailable.
-Deliverables:
-  - Tool usage documented in docs/HARDWARE_BRINGUP.md and docs/USERLAND_AND_CLI.md.
-
-Title/ID: m26-attest-verify
-Goal: Verify TPM attestation parsing parity with SwarmUI.
-Inputs: /proc/attest outputs, SwarmUI CBOR parsers.
-Changes:
-  - apps/coh-status/src/attest.rs — verify manifest fingerprint against cached reference.
-  - shared CBOR decoder module reused from SwarmUI/cohsh-core.
-Commands:
-  - cargo test -p coh-status --test attest
-  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh
-Checks:
-  - Malformed attestation rejected with ERR; valid attestation matches manifest hash identically to SwarmUI.
-Deliverables:
-  - Verified attestation workflow documented; regression outputs stored.
-
-```
-
-## Milestone 27 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)  <a id="27"></a> 
-[Milestones](#Milestones)
-
-**Why now (platform):**  
-Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is the read-only ESP image (UEFI loader + kernel + rootserver + manifest).
-
-**Goal**  
-Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-task**, then bring up ENA networking in root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**. The root-task acts as a 9P client over the existing TCP stack; no new in-VM listeners are introduced beyond the console.
-
-**Deliverables**
-- EFI System Partition containing:
-  - `EFI/BOOT/BOOTAA64.EFI` (elfloader EFI)
-  - `kernel.elf`
-  - `rootserver` (root task ELF)
-  - optional `initrd.cpio`
-  - `manifest.json` and `manifest.sha256`
-  - embedded, signed fabric bootstrap manifest (≥2 endpoints, root trust anchors)
-- ENA driver (adminq + single TX/RX queue) in root-task.
-- Minimal DHCP/TCP/TLS client in root-task (post-seL4), no firmware networking.
-- Diskless bootstrap path **after seL4**: ENA → DHCP → TCP → TLS → 9door mount.
-- Optional IMDSv2 bootstrap (instance identity + config) using a bounded, allowlisted HTTP client over the existing TCP stack. No listeners; no background refresh loop.
-- AMI registration tooling for Arm64 (`uefi` / `uefi-preferred`).
-- Documentation in `docs/AWS_AMI.md` covering boot path, failure modes, and recovery.
-
-**Commands**
-- `cmake --build seL4/build --target elfloader.efi`
-- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
-- `scripts/aws/build-esp.sh`
-- `scripts/aws/register-ami.sh`
-- `scripts/aws/launch-smoke.sh`
-
-**Checks (DoD)**
-- EC2 instance boots directly into Cohesix with no intermediate OS.
-- ENA link comes up deterministically; DHCP lease acquired within bounded time.
-- 9door namespace mounts successfully and control plane is reachable.
-- IMDSv2 metadata fetch is optional and bounded; if unavailable or denied, boot continues safely with explicit diagnostics and no unbounded retries.
-- Power cycle returns to identical clean state (no persistence).
-- Failure cases (no fabric, auth failure, link down) halt safely with explicit console diagnostics.
-
-**Compiler touchpoints**
-- `coh-rtc` emits:
-  - ENA queue bounds and bootstrap retry limits.
-  - Fabric bootstrap manifest schema and signature requirements.
-  - IMDSv2 allowlist, max response bytes, and retry bounds (optional gate).
-- Regeneration guard verifies EFI binary hash against recorded compiler output.
-
-**Task Breakdown**
-```
-Title/ID: m27-uefi-esp
-Goal: Build an EFI System Partition for AWS Arm64 using elfloader + seL4 artifacts.
-Inputs: upstream elfloader EFI build, `scripts/uefi/esp-build.sh`, manifest outputs.
-Changes:
-- `scripts/uefi/esp-build.sh` — build ESP with BOOTAA64.EFI, kernel, rootserver, optional initrd, manifest + hash.
-- `scripts/aws/build-esp.sh` — produce AMI-ready ESP image.
-Commands:
-- cmake --build seL4/build --target elfloader.efi
-- scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json
-Checks:
-- ESP boots to root-task via elfloader with deterministic serial output.
-Deliverables:
-- Documented ESP layout and build recipe for Arm64.
-
-Title/ID: m27-ena-adminq
-Goal: Implement ENA PCIe discovery and admin queue in root-task.
-Inputs: apps/root-task drivers, HAL PCI helpers, docs/AWS_AMI.md.
-Changes:
-- apps/root-task/src/drivers/ena/pci.rs — PCIe enumeration, BAR mapping.
-- apps/root-task/src/drivers/ena/adminq.rs — admin queue + completion queue.
-- apps/root-task/src/net/ena.rs — ENA init wiring.
-Commands:
-- cargo test -p root-task --test ena_adminq
-Checks:
-- Feature negotiation succeeds with minimal feature set.
-Deliverables:
-- AdminQ protocol notes in docs/AWS_AMI.md.
-
-Title/ID: m27-ena-io
-Goal: Bring up minimal ENA dataplane.
-Inputs: apps/root-task drivers, root-task net stack abstractions.
-Changes:
-- apps/root-task/src/drivers/ena/ioq.rs — single TX/RX SQ + CQ.
-- apps/root-task/src/drivers/ena/poll.rs — polling dataplane (no interrupts).
-- apps/root-task/src/net/mod.rs — integrate ENA dataplane into the runtime.
-Commands:
-- cargo test -p root-task --test ena_ioq
-Checks:
-- TX reclaim and RX refill invariants hold under sustained traffic.
-Deliverables:
-- Deterministic dataplane invariants documented.
-
-Title/ID: m27-net-bootstrap
-Goal: Network bootstrap to fabric (post-seL4, in root-task).
-Inputs: apps/root-task net stack, TLS helpers, docs/AWS_AMI.md.
-Changes:
-- apps/root-task/src/net/dhcp.rs — bounded DHCP client.
-- apps/root-task/src/net/tcp.rs — TCP bring-up for long-lived sessions.
-- apps/root-task/src/net/tls.rs — fabric-auth TLS handshake.
-- apps/root-task/src/net/bootstrap.rs — deterministic sequencing and retries.
-Commands:
-- cargo test -p root-task --test net_bootstrap
-Checks:
-- Network reaches "fabric-ready" state within defined bounds.
-Deliverables:
-- Bootstrap timing guarantees recorded.
-
-Title/ID: m27-imdsv2-bootstrap
-Goal: Read bounded instance metadata (IMDSv2) and feed boot policy inputs.
-Inputs: apps/root-task net stack, docs/AWS_AMI.md.
-Changes:
-- apps/root-task/src/net/http.rs — minimal HTTP request/response parsing (bounded, no chunked).
-- apps/root-task/src/net/imdsv2.rs — token fetch + allowlisted metadata queries.
-- apps/root-task/src/boot/policy.rs — consume optional IMDS fields (instance-id, region, az, tags if enabled).
-Commands:
-- cargo test -p root-task --test imdsv2
-Checks:
-- IMDSv2 is optional: absence, timeout, or denial does not block boot and emits deterministic diagnostics.
-Deliverables:
-- IMDSv2 bootstrap flow documented with explicit bounds and allowlist.
-
-Title/ID: m27-fabric-mount
-Goal: Mount 9door namespace and enter steady state (post-seL4).
-Inputs: root-task net stack, Secure9P client, docs/AWS_AMI.md.
-Changes:
-- apps/root-task/src/net/door9p_client.rs — minimal 9P client for fabric mounts.
-- apps/root-task/src/net/bootstrap.rs — signed manifest verification.
-- apps/root-task/src/net/mount.rs — mount orchestration and error handling.
-Commands:
-- cargo test -p root-task --test fabric_mount
-Checks:
-- Namespace mount is read/write correct; auth failures are terminal and explicit.
-Deliverables:
-- Fabric bootstrap flow documented.
-
-Title/ID: m27-ami-pipeline
-Goal: Produce and validate AWS AMI.
-Inputs: scripts/aws/, docs/AWS_AMI.md.
-Changes:
-- scripts/aws/build-esp.sh — ESP image creation.
-- scripts/aws/register-ami.sh — snapshot + AMI registration.
-- scripts/aws/launch-smoke.sh — EC2 smoke test.
-Commands:
-- scripts/aws/register-ami.sh
-Checks:
-- AMI launches on supported Nitro instance family and passes smoke test.
-Deliverables:
-- Reproducible AMI build pipeline.
-```
 ---
 ### Docs-as-Built Alignment (applies to Milestone 8 onward)
 

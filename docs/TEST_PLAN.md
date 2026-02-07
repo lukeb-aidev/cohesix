@@ -299,9 +299,10 @@ Run while QEMU is up:
 - Browser binaries are installed into the user Playwright cache (not committed).
 
 ### 6) Regression pack (full-stack, recommended before release)
-- `scripts/cohsh/run_regression_batch.sh`
-- The batch archives logs under `out/regression-logs/<batch>/<script>.{qemu,out}.log`.
+- `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> scripts/cohsh/REST_regression_batch.sh`
+- The batch archives logs under `out/regression-logs/<batch>/<script>.run*.log`.
 - Verify logs show no unexpected errors or disconnects.
+- From Milestone 25 onward, use the REST batch above; the TCP/QEMU batch remains a local bring-up tool only.
 
 ### 7) Release bundle validation (macOS + Ubuntu)
 Run Sections 3–5 using the extracted bundle in a clean temp directory (not the repo checkout).

@@ -15,11 +15,11 @@ LINUX_BUNDLE=0
 LINUX_ONLY=0
 LINUX_HOST_TARGET="${LINUX_HOST_TARGET:-aarch64-unknown-linux-gnu}"
 LINUX_HOST_TOOLS_DIR="${LINUX_HOST_TOOLS_DIR:-}"
-LINUX_SYNC_HOST="${LINUX_SYNC_HOST:-}"
-LINUX_SYNC_USER="${LINUX_SYNC_USER:-ubuntu}"
-LINUX_SYNC_KEY="${LINUX_SYNC_KEY:-}"
-LINUX_SYNC_REMOTE_DIR="${LINUX_SYNC_REMOTE_DIR:-}"
-LINUX_SYNC_LOCAL_OUT="${LINUX_SYNC_LOCAL_OUT:-}"
+LINUX_SYNC_HOST="${LINUX_SYNC_HOST:-${COHESIX_SYNC_HOST:-}}"
+LINUX_SYNC_USER="${LINUX_SYNC_USER:-${COHESIX_SYNC_USER:-ubuntu}}"
+LINUX_SYNC_KEY="${LINUX_SYNC_KEY:-${COHESIX_SYNC_KEY:-}}"
+LINUX_SYNC_REMOTE_DIR="${LINUX_SYNC_REMOTE_DIR:-${COHESIX_SYNC_REMOTE_DIR:-}}"
+LINUX_SYNC_LOCAL_OUT="${LINUX_SYNC_LOCAL_OUT:-${COHESIX_SYNC_LOCAL_OUT:-}}"
 HOST_TOOLS_PROFILE="${HOST_TOOLS_PROFILE:-release}"
 
 usage() {
@@ -38,9 +38,10 @@ Env overrides:
   LINUX_HOST_TOOLS_DIR (prebuilt host tools dir; if empty, build from source)
   LINUX_SYNC_HOST (if set, run scripts/linux_host_tools_sync.sh before bundling)
   LINUX_SYNC_USER (default: ubuntu)
-  LINUX_SYNC_KEY (optional SSH key path)
+  LINUX_SYNC_KEY (required when LINUX_SYNC_HOST is set; optional SSH key path)
   LINUX_SYNC_REMOTE_DIR (optional remote work dir)
   LINUX_SYNC_LOCAL_OUT (optional local host-tools dir)
+  COHESIX_SYNC_HOST/USER/KEY/REMOTE_DIR/LOCAL_OUT (aliases for LINUX_SYNC_*; use these to avoid hardcoded host/key names)
   HOST_TOOLS_PROFILE (default: release)
   ALLOW_CROSS_LINUX_HOST_TOOLS=1 (override host-target guard for cross builds)
 USAGE
@@ -269,6 +270,7 @@ IMAGE_DIR="${ROOT_DIR}/image"
 
 QEMU_BIN="${QEMU_BIN:-qemu-system-aarch64}"
 HOST_OS="$(uname -s 2>/dev/null || true)"
+QEMU_HOST_ADDR="${QEMU_HOST_ADDR:-localhost}"
 TCP_PORT="${TCP_PORT:-31337}"
 UDP_PORT="${UDP_PORT:-31338}"
 SMOKE_PORT="${SMOKE_PORT:-31339}"
@@ -365,7 +367,7 @@ echo "[qemu] Using QEMU accel: ${QEMU_ACCEL}"
   -device loader,file="${KERNEL}",addr=0x70000000,force-raw=on \
   -device loader,file="${ROOTSERVER}",addr=0x80000000,force-raw=on \
   -global virtio-mmio.force-legacy=off \
-  -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-:31337,hostfwd=udp:127.0.0.1:${UDP_PORT}-:31338,hostfwd=tcp:127.0.0.1:${SMOKE_PORT}-:31339" \
+  -netdev "user,id=net0,hostfwd=tcp:${QEMU_HOST_ADDR}:${TCP_PORT}-:31337,hostfwd=udp:${QEMU_HOST_ADDR}:${UDP_PORT}-:31338,hostfwd=tcp:${QEMU_HOST_ADDR}:${SMOKE_PORT}-:31339" \
   -device "virtio-net-device,netdev=net0,mac=52:55:00:d1:55:01,bus=virtio-mmio-bus.0"
 EOF
   chmod +x "${bundle_dir}/qemu/run.sh"
@@ -505,6 +507,9 @@ fi
 
 if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
   if [[ -n "$LINUX_SYNC_HOST" ]]; then
+    if [[ -z "$LINUX_SYNC_KEY" ]]; then
+      fail "LINUX_SYNC_KEY (or COHESIX_SYNC_KEY) is required when LINUX_SYNC_HOST is set"
+    fi
     echo "[release] Syncing Linux host tools via scripts/linux_host_tools_sync.sh"
     sync_args=(--host "$LINUX_SYNC_HOST" --no-bundle)
     if [[ -n "$LINUX_SYNC_USER" ]]; then
