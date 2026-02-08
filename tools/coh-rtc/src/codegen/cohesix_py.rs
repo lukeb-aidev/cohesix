@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Emit manifest-derived Cohesix Python client defaults.
 // Author: Lukas Bower
@@ -45,6 +45,7 @@ pub fn render_defaults(manifest: &Manifest, manifest_hash: &str) -> CohesixPyDef
         "# Purpose: Provide manifest-derived defaults for the Cohesix Python client."
     )
     .ok();
+    writeln!(contents, "# Copyright 2026 Lukas Bower").ok();
     writeln!(contents).ok();
     writeln!(contents, "DEFAULTS = {{").ok();
     writeln!(

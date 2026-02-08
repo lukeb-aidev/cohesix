@@ -1,5 +1,6 @@
 <!-- Author: Lukas Bower -->
 <!-- Purpose: Generated trace replay snippet consumed by docs/TEST_PLAN.md. -->
+<!-- Copyright 2026 Lukas Bower -->
 
 ### Trace replay limits (generated)
 - `trace.format.version`: `1`

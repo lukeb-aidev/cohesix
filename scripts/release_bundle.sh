@@ -286,10 +286,26 @@ UDP_PORT="${UDP_PORT:-31338}"
 SMOKE_PORT="${SMOKE_PORT:-31339}"
 DEFAULT_QEMU_SMP_TOPO="4,cores=4,threads=1,sockets=1"
 DEFAULT_QEMU_VIRT="on"
+DEFAULT_QEMU_ACCEL=""
+DEFAULT_QEMU_MACHINE_EXTRA=""
+if [[ "$HOST_OS" == "Darwin" ]]; then
+  DEFAULT_QEMU_ACCEL="tcg"
+  DEFAULT_QEMU_VIRT="on"
+  DEFAULT_QEMU_MACHINE_EXTRA="kernel-irqchip=off"
+fi
 QEMU_SMP_RAW="${COHESIX_QEMU_SMP:-${QEMU_SMP:-}}"
 QEMU_SMP_TOPO_RAW="${COHESIX_QEMU_SMP_TOPO:-${QEMU_SMP_TOPO:-}}"
 QEMU_VIRT_RAW="${COHESIX_QEMU_VIRT:-${QEMU_VIRT:-}}"
 QEMU_MACHINE_EXTRA_RAW="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-}}"
+if [[ -z "$QEMU_VIRT_RAW" ]]; then
+  QEMU_VIRT_RAW="$DEFAULT_QEMU_VIRT"
+fi
+if [[ -z "$QEMU_MACHINE_EXTRA_RAW" && -n "$DEFAULT_QEMU_MACHINE_EXTRA" ]]; then
+  QEMU_MACHINE_EXTRA_RAW="$DEFAULT_QEMU_MACHINE_EXTRA"
+fi
+if [[ -z "${COHESIX_QEMU_ACCEL:-}" && -z "${QEMU_ACCEL:-}" && -n "$DEFAULT_QEMU_ACCEL" ]]; then
+  QEMU_ACCEL="$DEFAULT_QEMU_ACCEL"
+fi
 GIC_VER_FILE="${IMAGE_DIR}/gic-version.txt"
 GIC_VER="2"
 if [[ -f "${GIC_VER_FILE}" ]]; then
@@ -447,7 +463,10 @@ validate_qemu_virt_arg() {
 
 format_qemu_machine_arg() {
   local virt="$1"
-  local machine="virt,gic-version=${GIC_VER},virtualization=${virt}"
+  local machine="virt,gic-version=${GIC_VER}"
+  if [[ "$HOST_OS" != "Darwin" ]] || [[ -n "$QEMU_VIRT_RAW" ]]; then
+    machine="${machine},virtualization=${virt}"
+  fi
   if [[ -n "$QEMU_MACHINE_EXTRA_RAW" ]]; then
     machine="${machine},${QEMU_MACHINE_EXTRA_RAW}"
   fi

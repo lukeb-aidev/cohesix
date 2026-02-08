@@ -1,5 +1,6 @@
 <!-- Author: Lukas Bower -->
 <!-- Purpose: Generated observability snippet consumed by docs/INTERFACES.md. -->
+<!-- Copyright 2026 Lukas Bower -->
 
 ### /proc observability nodes (generated)
 - `/proc/9p/sessions` (read-only, max 8192 bytes): `sessions total=<u64> worker=<u64> shard_bits=<u8> shard_count=<u16>` plus `shard <hex> <count>` lines.

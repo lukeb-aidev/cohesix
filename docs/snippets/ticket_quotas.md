@@ -1,5 +1,6 @@
 <!-- Author: Lukas Bower -->
 <!-- Purpose: Generated ticket quota snippet consumed by docs/SECURITY.md and docs/USERLAND_AND_CLI.md. -->
+<!-- Copyright 2026 Lukas Bower -->
 
 ### Ticket quota limits (generated)
 - `ticket_limits.max_scopes`: `8`

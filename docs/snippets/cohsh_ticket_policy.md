@@ -1,5 +1,6 @@
 <!-- Author: Lukas Bower -->
 <!-- Purpose: Generated cohsh ticket policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
+<!-- Copyright 2026 Lukas Bower -->
 
 ### cohsh ticket policy (generated)
 - `ticket.max_len`: `224`

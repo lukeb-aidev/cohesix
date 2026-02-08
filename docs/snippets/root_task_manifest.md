@@ -1,5 +1,6 @@
 <!-- Author: Lukas Bower -->
 <!-- Purpose: Generated manifest snippet consumed by docs/ARCHITECTURE.md. -->
+<!-- Copyright 2026 Lukas Bower -->
 
 ### Root-task manifest schema (generated)
 - `meta.author`: `Lukas Bower`
@@ -109,8 +110,8 @@
 - `ui_providers.updates.status`: `true`
 - `client_policies.cohsh.pool.control_sessions`: `2`
 - `client_policies.cohsh.pool.telemetry_sessions`: `4`
-- `client_policies.cohsh.tail.poll_ms_default`: `1500`
-- `client_policies.cohsh.tail.poll_ms_min`: `500`
+- `client_policies.cohsh.tail.poll_ms_default`: `1000`
+- `client_policies.cohsh.tail.poll_ms_min`: `250`
 - `client_policies.cohsh.tail.poll_ms_max`: `10000`
 - `client_policies.cohsh.host_telemetry.nvidia_poll_ms`: `1000`
 - `client_policies.cohsh.host_telemetry.systemd_poll_ms`: `2000`
@@ -166,7 +167,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `2e64f09fb17eafce52fe3e7a29fa7eb11f2299022ca7d13eabf9b31c809b4234`
+- `manifest.sha256`: `a15239ff96ad0f2cc21282023cf6bb344e8eadc572881f1872b84e82b17547a0`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -212,4 +213,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `2e64f09fb17eafce52fe3e7a29fa7eb11f2299022ca7d13eabf9b31c809b4234`)._
+_Generated from `configs/root_task.toml` (sha256: `a15239ff96ad0f2cc21282023cf6bb344e8eadc572881f1872b84e82b17547a0`)._

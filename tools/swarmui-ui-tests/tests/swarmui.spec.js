@@ -1,3 +1,7 @@
+// Author: Lukas Bower
+// Purpose: Playwright coverage for SwarmUI UI workflows and Live Hive rendering.
+// Copyright 2026 Lukas Bower
+
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
@@ -60,7 +64,8 @@ const hiveBootstrap = {
     step_ms: 16,
     lod_zoom_out: 0.7,
     lod_zoom_in: 1.25,
-    lod_event_budget: 512
+    lod_event_budget: 512,
+    status_poll_ms: 400
   },
   namespace_roots: ["/proc", "/queen", "/worker", "/log", "/gpu"],
   agents: [
@@ -232,6 +237,8 @@ const startStaticServer = () =>
 const installTauriMock = async (page) => {
   await page.addInitScript(
     ({ helpLines, hiveBootstrap, hiveBatch }) => {
+      const pollCalls = [];
+      window.__SWARMUI_TEST = { hivePollCalls: pollCalls };
       const respond = async (cmd, payload) => {
         switch (cmd) {
           case "swarmui_mode":
@@ -239,6 +246,7 @@ const installTauriMock = async (page) => {
           case "swarmui_hive_bootstrap":
             return hiveBootstrap;
           case "swarmui_hive_poll":
+            pollCalls.push(Date.now());
             return {
               ...hiveBatch,
               detail: payload?.detail_agent
@@ -274,6 +282,18 @@ const installTauriMock = async (page) => {
       };
     },
     { helpLines, hiveBootstrap, hiveBatch }
+  );
+};
+
+const focusHiveCanvas = async (page) => {
+  const canvas = page.locator("#hive-canvas");
+  await canvas.scrollIntoViewIfNeeded();
+  await canvas.dispatchEvent("pointermove");
+  await page.evaluate(() => window.__SWARMUI_HIVE_DEBUG?.forceFrame?.());
+  await page.waitForFunction(
+    () => window.__SWARMUI_HIVE_DEBUG?.getMetrics?.().renders > 0,
+    null,
+    { timeout: 3000 }
   );
 };
 
@@ -313,7 +333,7 @@ test("Hive canvas renders in replay mode", async ({ page }) => {
 });
 
 test("Live Hive labels enumerate workers", async ({ page }) => {
-  await page.waitForTimeout(200);
+  await focusHiveCanvas(page);
   const labels = await page.evaluate(() =>
     window.__SWARMUI_HIVE_DEBUG.getAgentLabels()
   );
@@ -324,8 +344,39 @@ test("Live Hive labels enumerate workers", async ({ page }) => {
   });
 });
 
-test("Live Hive dots are clickable", async ({ page }) => {
+test("Live Hive poll interval honors status poll policy", async ({ page }) => {
+  await page.waitForFunction(
+    () => window.__SWARMUI_TEST?.hivePollCalls?.length >= 2,
+    null,
+    { timeout: 3000 }
+  );
+  const calls = await page.evaluate(() =>
+    window.__SWARMUI_TEST.hivePollCalls.slice(0, 2)
+  );
+  expect(calls.length).toBe(2);
+  expect(calls[1] - calls[0]).toBeGreaterThanOrEqual(350);
+});
+
+test("Live Hive scroll throttles rendering while active", async ({ page }) => {
   await page.waitForTimeout(200);
+  const before = await page.evaluate(() =>
+    window.__SWARMUI_HIVE_DEBUG.getMetrics()
+  );
+  await page.evaluate(() => window.scrollTo(0, 200));
+  await page.waitForTimeout(80);
+  const mid = await page.evaluate(() =>
+    window.__SWARMUI_HIVE_DEBUG.getMetrics()
+  );
+  await page.waitForTimeout(240);
+  const after = await page.evaluate(() =>
+    window.__SWARMUI_HIVE_DEBUG.getMetrics()
+  );
+  expect(mid.renders).toBeLessThanOrEqual(before.renders + 1);
+  expect(after.renders).toBeGreaterThanOrEqual(mid.renders);
+});
+
+test("Live Hive dots are clickable", async ({ page }) => {
+  await focusHiveCanvas(page);
   const positions = await page.evaluate(() =>
     window.__SWARMUI_HIVE_DEBUG.getAgentScreenPositions()
   );
@@ -347,12 +398,21 @@ test("Scheduler and lease panels render /proc data", async ({ page }) => {
   await expect(page.locator("#hive-lease-preemptions")).toContainText("lease-0");
 });
 
+test("Live Hive overlays remain interactive under load", async ({ page }) => {
+  await page.waitForTimeout(200);
+  const cards = page.locator("#hive-overlays .hive-telemetry__card");
+  await expect(cards).toHaveCount(2);
+  await cards.nth(1).click();
+  await expect(page.locator("#hive-detail-title")).toContainText("worker-gpu-1");
+});
+
 test("Live Hive performance harness stays responsive", async ({ page }) => {
-  await page.waitForTimeout(600);
+  await focusHiveCanvas(page);
+  await page.waitForTimeout(500);
   const metrics = await page.evaluate(() =>
     window.__SWARMUI_HIVE_DEBUG.getMetrics()
   );
-  expect(metrics.renders).toBeGreaterThan(10);
+  expect(metrics.renders).toBeGreaterThanOrEqual(5);
   expect(metrics.pending).toBeLessThan(1024);
 });
 

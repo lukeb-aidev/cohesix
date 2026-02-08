@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Define and export the CBOR telemetry frame schema for docs.
 // Author: Lukas Bower
@@ -122,6 +122,7 @@ pub fn emit_cbor_snippet(path: &Path) -> Result<()> {
         contents,
         "<!-- Purpose: Generated CBOR telemetry schema snippet for docs/INTERFACES.md. -->"
     )?;
+    writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->")?;
     writeln!(contents)?;
     writeln!(contents, "{}", snippet.markdown.trim_end())?;
     fs::write(path, contents)

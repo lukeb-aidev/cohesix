@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Emit manifest-derived Markdown snippets for documentation.
 // Author: Lukas Bower
@@ -1949,6 +1949,7 @@ pub fn emit_doc_snippet(manifest_hash: &str, docs: &DocFragments, path: &Path) -
         contents,
         "<!-- Purpose: Generated manifest snippet consumed by docs/ARCHITECTURE.md. -->"
     )?;
+    writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->")?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.schema_md.trim_end())?;
     writeln!(contents)?;
@@ -1977,6 +1978,7 @@ pub fn emit_gpu_breadcrumbs_snippet(docs: &DocFragments, path: &Path) -> Result<
         contents,
         "<!-- Purpose: Generated GPU status breadcrumb snippet consumed by docs/INTERFACES.md. -->"
     )?;
+    writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->")?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.gpu_breadcrumbs_md.trim_end())?;
     fs::write(path, contents)
@@ -1991,6 +1993,7 @@ pub fn emit_observability_interfaces_snippet(docs: &DocFragments, path: &Path) -
         contents,
         "<!-- Purpose: Generated observability snippet consumed by docs/INTERFACES.md. -->"
     )?;
+    writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->")?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.observability_interfaces_md.trim_end())?;
     fs::write(path, contents).with_context(|| {
@@ -2009,6 +2012,7 @@ pub fn emit_observability_security_snippet(docs: &DocFragments, path: &Path) -> 
         contents,
         "<!-- Purpose: Generated observability snippet consumed by docs/SECURITY.md. -->"
     )?;
+    writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->")?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.observability_security_md.trim_end())?;
     fs::write(path, contents).with_context(|| {
@@ -2027,6 +2031,7 @@ pub fn emit_ticket_quotas_snippet(docs: &DocFragments, path: &Path) -> Result<()
         contents,
         "<!-- Purpose: Generated ticket quota snippet consumed by docs/SECURITY.md and docs/USERLAND_AND_CLI.md. -->"
     )?;
+    writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->")?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.ticket_quotas_md.trim_end())?;
     fs::write(path, contents)
@@ -2041,6 +2046,7 @@ pub fn emit_trace_policy_snippet(docs: &DocFragments, path: &Path) -> Result<()>
         contents,
         "<!-- Purpose: Generated trace replay snippet consumed by docs/TEST_PLAN.md. -->"
     )?;
+    writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->")?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.trace_policy_md.trim_end())?;
     fs::write(path, contents)
@@ -2055,6 +2061,7 @@ pub fn emit_cas_interfaces_snippet(docs: &DocFragments, path: &Path) -> Result<(
         contents,
         "<!-- Purpose: Generated CAS snippet consumed by docs/INTERFACES.md. -->"
     )?;
+    writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->")?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.cas_interfaces_md.trim_end())?;
     fs::write(path, contents)
@@ -2069,6 +2076,7 @@ pub fn emit_cas_security_snippet(docs: &DocFragments, path: &Path) -> Result<()>
         contents,
         "<!-- Purpose: Generated CAS snippet consumed by docs/SECURITY.md. -->"
     )?;
+    writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->")?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.cas_security_md.trim_end())?;
     fs::write(path, contents)
@@ -2083,6 +2091,7 @@ pub fn emit_cohesix_py_defaults_snippet(docs: &DocFragments, path: &Path) -> Res
         contents,
         "<!-- Purpose: Generated Cohesix Python defaults snippet consumed by docs/USERLAND_AND_CLI.md. -->"
     )?;
+    writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->")?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.cohesix_py_defaults_md.trim_end())?;
     fs::write(path, contents).with_context(|| {
@@ -2101,6 +2110,7 @@ pub fn emit_coh_doctor_snippet(docs: &DocFragments, path: &Path) -> Result<()> {
         contents,
         "<!-- Purpose: Generated coh doctor snippet consumed by docs/USERLAND_AND_CLI.md. -->"
     )?;
+    writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->")?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.coh_doctor_checks_md.trim_end())?;
     fs::write(path, contents).with_context(|| {

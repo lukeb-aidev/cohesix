@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Emit cohsh CLI scripts derived from the manifest.
 // Author: Lukas Bower
@@ -17,7 +17,7 @@ pub fn emit_cli_script(manifest: &Manifest, path: &Path) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("manifest does not include a queen ticket"))?;
 
     let mut contents = format!(
-        "# Author: Lukas Bower\n# Purpose: Boot smoke using attach/log/quit flows.\nattach {}\nEXPECT OK\n",
+        "# Author: Lukas Bower\n# Purpose: Boot smoke using attach/log/quit flows.\n# Copyright 2026 Lukas Bower\nattach {}\nEXPECT OK\n",
         queen_role.as_str()
     );
     if manifest.ecosystem.host.enable {

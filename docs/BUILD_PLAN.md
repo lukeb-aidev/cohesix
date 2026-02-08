@@ -4756,6 +4756,7 @@ Changes:
   - apps/swarmui/src/hive.rs — O(1) telemetry line parsing, per-worker pending caps, fresh-only coalescing, round-robin worker sampling, overlay/detail caching.
   - apps/swarmui/src/lib.rs — Live Hive polling uses freshness-first policy; status snapshots rate-limited behind IR-driven bounds.
   - apps/swarmui/frontend/hive/index.js — ring-buffer ingestion, drop-oldest under pressure, index-range event application (no per-step slicing).
+  - apps/swarmui/frontend/app.js + apps/swarmui/frontend/hive/index.js — pause Live Hive rendering and UI updates during scroll or when the canvas is offscreen; throttle cadence, cap detail LOD, and drop render resolution when the canvas is idle to keep page interactions smooth.
   - apps/swarmui/frontend/hive/world.js — cache per-tick positions; in-place compaction for pollen/pulse particles.
   - apps/swarmui/frontend/hive/renderer.js — adaptive resolution/AA/particle budgets under degraded mode.
   - tools/coh-rtc/src/ir.rs + generated configs — manifest-backed Live Hive performance knobs (sample size, pending caps, degrade thresholds).

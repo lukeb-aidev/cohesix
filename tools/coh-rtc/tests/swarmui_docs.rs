@@ -35,6 +35,7 @@ fn strip_header_comments(contents: &str) -> String {
             if trimmed.is_empty()
                 || trimmed.starts_with("<!-- Author:")
                 || trimmed.starts_with("<!-- Purpose:")
+                || trimmed.starts_with("<!-- Copyright")
             {
                 continue;
             }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Render shared cohsh-core documentation snippets.
 // Author: Lukas Bower
@@ -21,6 +21,7 @@ pub fn render_console_grammar_doc() -> String {
         "<!-- Purpose: Generated cohsh grammar snippet consumed by docs/USERLAND_AND_CLI.md. -->"
     )
     .ok();
+    writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->").ok();
     writeln!(contents).ok();
     writeln!(contents, "### cohsh console grammar (generated)").ok();
     for spec in VERB_SPECS.iter() {
@@ -46,6 +47,7 @@ pub fn render_ticket_policy_doc() -> String {
         "<!-- Purpose: Generated cohsh ticket policy snippet consumed by docs/USERLAND_AND_CLI.md. -->"
     )
     .ok();
+    writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->").ok();
     writeln!(contents).ok();
     writeln!(contents, "### cohsh ticket policy (generated)").ok();
     writeln!(contents, "- `ticket.max_len`: `{}`", MAX_TICKET_LEN).ok();

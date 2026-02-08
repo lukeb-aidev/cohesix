@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Author: Lukas Bower
+# Purpose: Launch Cohesix under QEMU from a release bundle.
+# Copyright 2026 Lukas Bower
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,6 +13,8 @@ HOST_OS="$(uname -s 2>/dev/null || true)"
 TCP_PORT="${TCP_PORT:-31337}"
 UDP_PORT="${UDP_PORT:-31338}"
 SMOKE_PORT="${SMOKE_PORT:-31339}"
+DEFAULT_QEMU_SMP_TOPO="4,cores=4,threads=1,sockets=1"
+QEMU_SMP_ARG="${COHESIX_QEMU_SMP_TOPO:-${QEMU_SMP_TOPO:-${COHESIX_QEMU_SMP:-${QEMU_SMP:-$DEFAULT_QEMU_SMP_TOPO}}}}"
 GIC_VER_FILE="${IMAGE_DIR}/gic-version.txt"
 GIC_VER="2"
 if [[ -f "${GIC_VER_FILE}" ]]; then
@@ -89,13 +94,18 @@ resolve_qemu_accel() {
 
 QEMU_ACCEL="$(resolve_qemu_accel)"
 echo "[qemu] Using QEMU accel: ${QEMU_ACCEL}"
+if [[ -z "$QEMU_SMP_ARG" ]]; then
+  echo "[qemu] Invalid QEMU SMP setting: empty value" >&2
+  exit 1
+fi
+echo "[qemu] Using QEMU SMP: ${QEMU_SMP_ARG}"
 
 "${QEMU_BIN}" \
   -accel "${QEMU_ACCEL}" \
   -machine "virt,gic-version=${GIC_VER}" \
   -cpu cortex-a57 \
   -m 1024 \
-  -smp 1 \
+  -smp "${QEMU_SMP_ARG}" \
   -serial mon:stdio \
   -display none \
   -kernel "${ELFLOADER}" \

@@ -1,8 +1,9 @@
 <!-- Author: Lukas Bower -->
 <!-- Purpose: Generated cohsh client snippet consumed by docs/USERLAND_AND_CLI.md. -->
+<!-- Copyright 2026 Lukas Bower -->
 
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `2e64f09fb17eafce52fe3e7a29fa7eb11f2299022ca7d13eabf9b31c809b4234`
+- `manifest.sha256`: `a15239ff96ad0f2cc21282023cf6bb344e8eadc572881f1872b84e82b17547a0`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
 - `trace.max_bytes`: `1048576`
@@ -18,4 +19,4 @@
 - `telemetry_ingest.max_total_bytes_per_device`: `131072`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 
-_Generated from `configs/root_task.toml` (sha256: `2e64f09fb17eafce52fe3e7a29fa7eb11f2299022ca7d13eabf9b31c809b4234`)._
+_Generated from `configs/root_task.toml` (sha256: `a15239ff96ad0f2cc21282023cf6bb344e8eadc572881f1872b84e82b17547a0`)._

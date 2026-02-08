@@ -1,5 +1,6 @@
 <!-- Author: Lukas Bower -->
 <!-- Purpose: Generated GPU status breadcrumb snippet consumed by docs/INTERFACES.md. -->
+<!-- Copyright 2026 Lukas Bower -->
 
 ### GPU status breadcrumb schema (generated)
 - `coh.run.lease.schema`: `gpu-lease/v1`

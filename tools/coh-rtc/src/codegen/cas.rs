@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Emit CAS manifest templates and hashes from the root-task manifest.
 // Author: Lukas Bower
@@ -95,7 +95,7 @@ pub fn emit_cas_template(template: &CasTemplate, path: &Path) -> Result<CasArtif
         .with_context(|| format!("failed to write cas template {}", path.display()))?;
     let hash_path = path.with_extension("json.sha256");
     let hash_contents = format!(
-        "# Author: Lukas Bower\n# Purpose: SHA-256 fingerprint for {}.\n{}  {}\n",
+        "# Author: Lukas Bower\n# Purpose: SHA-256 fingerprint for {}.\n# Copyright 2026 Lukas Bower\n{}  {}\n",
         path.file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("cas_manifest_template.json"),

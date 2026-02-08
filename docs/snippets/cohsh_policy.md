@@ -1,13 +1,14 @@
 <!-- Author: Lukas Bower -->
 <!-- Purpose: Generated cohsh policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
+<!-- Copyright 2026 Lukas Bower -->
 
 ### cohsh client policy (generated)
-- `manifest.sha256`: `2e64f09fb17eafce52fe3e7a29fa7eb11f2299022ca7d13eabf9b31c809b4234`
-- `policy.sha256`: `d2a81b1375a68d34be68083e058dee51046daa7ecdeec71d296a5790fa5cb367`
+- `manifest.sha256`: `a15239ff96ad0f2cc21282023cf6bb344e8eadc572881f1872b84e82b17547a0`
+- `policy.sha256`: `e64e9e7ac16a198b34398c103486e74eb01eee6b39d446ef07076a2b6e7b2665`
 - `cohsh.pool.control_sessions`: `2`
 - `cohsh.pool.telemetry_sessions`: `4`
-- `cohsh.tail.poll_ms_default`: `1500`
-- `cohsh.tail.poll_ms_min`: `500`
+- `cohsh.tail.poll_ms_default`: `1000`
+- `cohsh.tail.poll_ms_min`: `250`
 - `cohsh.tail.poll_ms_max`: `10000`
 - `cohsh.host_telemetry.nvidia_poll_ms`: `1000`
 - `cohsh.host_telemetry.systemd_poll_ms`: `2000`
@@ -20,4 +21,4 @@
 - `heartbeat.interval_ms`: `15000`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `2e64f09fb17eafce52fe3e7a29fa7eb11f2299022ca7d13eabf9b31c809b4234`)._
+_Generated from `configs/root_task.toml` (sha256: `a15239ff96ad0f2cc21282023cf6bb344e8eadc572881f1872b84e82b17547a0`)._

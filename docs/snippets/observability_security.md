@@ -1,5 +1,6 @@
 <!-- Author: Lukas Bower -->
 <!-- Purpose: Generated observability snippet consumed by docs/SECURITY.md. -->
+<!-- Copyright 2026 Lukas Bower -->
 
 ### Observability tolerances (generated)
 - `observability.proc_ingest.latency_samples`: `32`

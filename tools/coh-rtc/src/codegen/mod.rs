@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Emit deterministic artefacts from the root-task manifest.
 // Author: Lukas Bower
@@ -284,7 +284,7 @@ pub fn emit_all(
 
     let hash_path = options.manifest_out.with_extension("json.sha256");
     let hash_contents = format!(
-        "# Author: Lukas Bower\n# Purpose: SHA-256 fingerprint for root_task_resolved.json.\n{}  {}\n",
+        "# Author: Lukas Bower\n# Purpose: SHA-256 fingerprint for root_task_resolved.json.\n# Copyright 2026 Lukas Bower\n{}  {}\n",
         manifest_hash,
         options
             .manifest_out

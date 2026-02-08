@@ -1,5 +1,6 @@
 <!-- Author: Lukas Bower -->
 <!-- Purpose: Generated CAS snippet consumed by docs/SECURITY.md. -->
+<!-- Copyright 2026 Lukas Bower -->
 
 ### CAS integrity stance (generated)
 - `cas.signing.required`: `true`

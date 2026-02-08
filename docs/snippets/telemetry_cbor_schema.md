@@ -1,5 +1,6 @@
 <!-- Author: Lukas Bower -->
 <!-- Purpose: Generated CBOR telemetry schema snippet for docs/INTERFACES.md. -->
+<!-- Copyright 2026 Lukas Bower -->
 
 ### Telemetry CBOR Frame v1 (generated)
 - Schema: `telemetry-frame/v1`

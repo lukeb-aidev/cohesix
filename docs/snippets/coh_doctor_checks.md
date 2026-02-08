@@ -1,5 +1,6 @@
 <!-- Author: Lukas Bower -->
 <!-- Purpose: Generated coh doctor snippet consumed by docs/USERLAND_AND_CLI.md. -->
+<!-- Copyright 2026 Lukas Bower -->
 
 ### coh doctor checks (generated)
 - `check=policy` validates `coh_policy.toml` against manifest + policy hashes.
