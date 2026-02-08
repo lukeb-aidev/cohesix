@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
 # Purpose: Refresh Linux host tools on a remote Ubuntu builder and sync them locally.
+# Copyright 2026 Lukas Bower
 
 set -euo pipefail
 
@@ -101,9 +102,15 @@ run_ssh() {
   ssh "${SSH_OPTS[@]}" "${USER}@${HOST}" "$@"
 }
 
+remote_os_info() {
+  run_ssh "source /etc/os-release && echo \${VERSION_ID:-} \${VERSION_CODENAME:-}"
+}
+
 SRC_TARBALL="/tmp/cohesix-host-tools-src.tar.gz"
 REMOTE_TARBALL="/home/${USER}/cohesix-src.tar.gz"
 REMOTE_TOOLS_TARBALL="/home/${USER}/host-tools-linux.tar.gz"
+REMOTE_JAMMY_ROOT="${REMOTE_DIR}/.jammy-rootfs"
+MAX_GLIBC_VERSION="${MAX_GLIBC_VERSION:-2.35}"
 
 printf "[sync] Packaging host-tool sources...\n"
 rm -f "$SRC_TARBALL"
@@ -130,15 +137,52 @@ scp "${SSH_OPTS[@]}" "$SRC_TARBALL" "${USER}@${HOST}:${REMOTE_TARBALL}"
 printf "[sync] Extracting source on remote...\n"
 run_ssh "tar -xzf '${REMOTE_TARBALL}' -C '${REMOTE_DIR}' && rm -f '${REMOTE_TARBALL}'"
 
+read -r REMOTE_VERSION_ID REMOTE_CODENAME <<<"$(remote_os_info)"
+USE_JAMMY_CHROOT=0
+if [[ "${REMOTE_VERSION_ID}" == 24.* || "${REMOTE_CODENAME}" == "noble" ]]; then
+  USE_JAMMY_CHROOT=1
+fi
+
+if [[ "$USE_JAMMY_CHROOT" -eq 1 ]]; then
+  printf "[sync] Remote host is Ubuntu %s (%s); building in jammy chroot for glibc 2.35 compatibility...\n" \
+    "$REMOTE_VERSION_ID" "${REMOTE_CODENAME:-unknown}"
+  run_ssh "sudo apt-get update -y && sudo apt-get install -y debootstrap"
+  run_ssh "if [[ ! -d '${REMOTE_JAMMY_ROOT}' ]]; then \
+    sudo debootstrap --arch=arm64 jammy '${REMOTE_JAMMY_ROOT}' http://ports.ubuntu.com/ubuntu-ports; \
+    sudo cp /etc/resolv.conf '${REMOTE_JAMMY_ROOT}/etc/resolv.conf'; \
+  fi"
+  run_ssh "sudo tee '${REMOTE_JAMMY_ROOT}/etc/apt/sources.list' >/dev/null <<'EOF'
+deb http://ports.ubuntu.com/ubuntu-ports jammy main universe multiverse
+deb http://ports.ubuntu.com/ubuntu-ports jammy-updates main universe multiverse
+deb http://ports.ubuntu.com/ubuntu-ports jammy-security main universe multiverse
+EOF"
+  run_ssh "sudo mkdir -p '${REMOTE_JAMMY_ROOT}/work' '${REMOTE_JAMMY_ROOT}/proc' '${REMOTE_JAMMY_ROOT}/sys' '${REMOTE_JAMMY_ROOT}/dev'"
+  run_ssh "sudo mountpoint -q '${REMOTE_JAMMY_ROOT}/proc' || sudo mount -t proc /proc '${REMOTE_JAMMY_ROOT}/proc'"
+  run_ssh "sudo mountpoint -q '${REMOTE_JAMMY_ROOT}/sys' || sudo mount --bind /sys '${REMOTE_JAMMY_ROOT}/sys'"
+  run_ssh "sudo mountpoint -q '${REMOTE_JAMMY_ROOT}/dev' || sudo mount --bind /dev '${REMOTE_JAMMY_ROOT}/dev'"
+  run_ssh "sudo mountpoint -q '${REMOTE_JAMMY_ROOT}/work' || sudo mount --bind '${REMOTE_DIR}' '${REMOTE_JAMMY_ROOT}/work'"
+fi
+
 printf "[sync] Installing build dependencies...\n"
-run_ssh "set -euo pipefail
-  if ! dpkg -s libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev >/dev/null 2>&1; then
-    sudo tee /etc/apt/sources.list.d/cohesix-jammy.list >/dev/null <<'EOF'
+if [[ "$USE_JAMMY_CHROOT" -eq 1 ]]; then
+  run_ssh "sudo chroot '${REMOTE_JAMMY_ROOT}' /bin/bash -lc \"set -euo pipefail
+    if ! dpkg -s libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev >/dev/null 2>&1; then
+      apt-get update -y
+      apt-get install -y libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev
+    fi
+    if ! dpkg -s build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev binutils >/dev/null 2>&1; then
+      apt-get update -y
+      apt-get install -y build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev binutils
+    fi\""
+else
+  run_ssh "set -euo pipefail
+    if ! dpkg -s libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev >/dev/null 2>&1; then
+      sudo tee /etc/apt/sources.list.d/cohesix-jammy.list >/dev/null <<'EOF'
 deb http://ports.ubuntu.com/ubuntu-ports jammy main universe
 deb http://ports.ubuntu.com/ubuntu-ports jammy-updates main universe
 deb http://ports.ubuntu.com/ubuntu-ports jammy-security main universe
 EOF
-    sudo tee /etc/apt/preferences.d/cohesix-jammy >/dev/null <<'EOF'
+      sudo tee /etc/apt/preferences.d/cohesix-jammy >/dev/null <<'EOF'
 Package: *
 Pin: release n=jammy
 Pin-Priority: 100
@@ -155,26 +199,73 @@ Package: gir1.2-javascriptcoregtk-4.0
 Pin: release n=jammy
 Pin-Priority: 990
 EOF
-    sudo apt-get update -y
-    sudo apt-get install -y libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev
-  fi
-  if ! dpkg -s build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev >/dev/null 2>&1; then
-    sudo apt-get update -y
-    sudo apt-get install -y build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev
-  fi"
+      sudo apt-get update -y
+      sudo apt-get install -y libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev
+    fi
+    if ! dpkg -s build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev binutils >/dev/null 2>&1; then
+      sudo apt-get update -y
+      sudo apt-get install -y build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev binutils
+    fi"
+fi
 
 printf "[sync] Ensuring Rust toolchain...\n"
-run_ssh "command -v cargo >/dev/null 2>&1 || curl https://sh.rustup.rs -sSf | sh -s -- -y"
+if [[ "$USE_JAMMY_CHROOT" -eq 1 ]]; then
+  run_ssh "sudo chroot '${REMOTE_JAMMY_ROOT}' /bin/bash -lc \"command -v cargo >/dev/null 2>&1 || curl https://sh.rustup.rs -sSf | sh -s -- -y\""
+else
+  run_ssh "command -v cargo >/dev/null 2>&1 || curl https://sh.rustup.rs -sSf | sh -s -- -y"
+fi
 
 printf "[sync] Building Linux host tools...\n"
-run_ssh "source \$HOME/.cargo/env && cd '${REMOTE_DIR}' && \
-  export CARGO_BUILD_JOBS=1; \
-  cargo build --release -p gpu-bridge-host && \
-  cargo build --release -p cas-tool && \
-  cargo build --release -p host-sidecar-bridge --features tcp && \
-  cargo build --release -p cohsh --features tcp && \
-  cargo build --release -p coh --features fuse,nvml && \
-  RUSTFLAGS='-C debuginfo=0' cargo build --release -p swarmui"
+if [[ "$USE_JAMMY_CHROOT" -eq 1 ]]; then
+  run_ssh "sudo chroot '${REMOTE_JAMMY_ROOT}' /bin/bash -lc \"source /root/.cargo/env && cd '/work' && \
+    export CARGO_BUILD_JOBS=1; \
+    cargo build --release -p gpu-bridge-host && \
+    cargo build --release -p cas-tool && \
+    cargo build --release -p hive-gateway && \
+    cargo build --release -p host-sidecar-bridge --features tcp && \
+    cargo build --release -p cohsh --features tcp && \
+    cargo build --release -p coh --features fuse,nvml && \
+    RUSTFLAGS='-C debuginfo=0' cargo build --release -p swarmui\""
+  run_ssh "sudo umount -l '${REMOTE_JAMMY_ROOT}/work' || true"
+  run_ssh "sudo umount -l '${REMOTE_JAMMY_ROOT}/proc' || true"
+  run_ssh "sudo umount -l '${REMOTE_JAMMY_ROOT}/sys' || true"
+  run_ssh "sudo umount -l '${REMOTE_JAMMY_ROOT}/dev' || true"
+else
+  run_ssh "source \$HOME/.cargo/env && cd '${REMOTE_DIR}' && \
+    export CARGO_BUILD_JOBS=1; \
+    cargo build --release -p gpu-bridge-host && \
+    cargo build --release -p cas-tool && \
+    cargo build --release -p hive-gateway && \
+    cargo build --release -p host-sidecar-bridge --features tcp && \
+    cargo build --release -p cohsh --features tcp && \
+    cargo build --release -p coh --features fuse,nvml && \
+    RUSTFLAGS='-C debuginfo=0' cargo build --release -p swarmui"
+fi
+
+printf "[sync] Verifying GLIBC compatibility (<= %s)...\n" "$MAX_GLIBC_VERSION"
+remote_glibc_cmd=$(cat <<EOF
+set -euo pipefail
+max_glibc="${MAX_GLIBC_VERSION}"
+bins=(cohsh coh gpu-bridge-host host-sidecar-bridge cas-tool swarmui hive-gateway)
+for bin in "\${bins[@]}"; do
+  path="${REMOTE_DIR}/target/release/\${bin}"
+  if [[ ! -x "\${path}" ]]; then
+    echo "[sync] ERROR: missing expected binary \${path}" >&2
+    exit 1
+  fi
+  ver=\$(strings "\${path}" | grep -o 'GLIBC_[0-9\\.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1 || true)
+  if [[ -n "\${ver}" ]]; then
+    worst=\$(printf '%s\\n%s\\n' "\${max_glibc}" "\${ver}" | sort -V | tail -n 1)
+    if [[ "\${worst}" != "\${max_glibc}" ]]; then
+      echo "[sync] ERROR: \${bin} requires GLIBC_\${ver} (max allowed GLIBC_\${max_glibc})" >&2
+      exit 1
+    fi
+  fi
+  echo "[sync] \${bin} max GLIBC_\${ver:-unknown}"
+done
+EOF
+)
+run_ssh "bash -lc $(printf %q "${remote_glibc_cmd}")"
 
 printf "[sync] Staging host tool binaries...\n"
 run_ssh "mkdir -p '${REMOTE_DIR}/out/host-tools-linux' && \

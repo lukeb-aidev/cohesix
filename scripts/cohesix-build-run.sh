@@ -2,6 +2,7 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
 # Purpose: Build and stage Cohesix artefacts, including rootfs payloads, for QEMU runs.
+# Copyright 2026 Lukas Bower
 
 set -euo pipefail
 SEL4_LD="${SEL4_LD:-}"
@@ -47,7 +48,8 @@ Any arguments following `--` are forwarded directly to QEMU (or passed through
 to cohsh via --qemu-arg when --transport qemu is selected).
 
 Env overrides:
-  COHESIX_QEMU_SMP / QEMU_SMP (default: 1)
+  COHESIX_QEMU_SMP / QEMU_SMP (default: 4; ignored when *_QEMU_SMP_TOPO is set)
+  COHESIX_QEMU_SMP_TOPO / QEMU_SMP_TOPO (default: 4,cores=4,threads=1,sockets=1)
 USAGE
 }
 
@@ -198,6 +200,56 @@ size = path.stat().st_size
 digest = hashlib.sha256(data).hexdigest()
 print(f"[cohesix-build] {label}: {path} ({size} bytes, sha256={digest})")
 PY
+}
+
+resolve_qemu_smp_arg() {
+    if [[ -n "$QEMU_SMP_TOPO_RAW" ]]; then
+        echo "$QEMU_SMP_TOPO_RAW"
+        return
+    fi
+    if [[ -n "$QEMU_SMP_RAW" ]]; then
+        echo "$QEMU_SMP_RAW"
+        return
+    fi
+    echo "$DEFAULT_QEMU_SMP_TOPO"
+}
+
+validate_qemu_smp_arg() {
+    local arg="$1"
+
+    if [[ -z "$arg" ]]; then
+        fail "QEMU SMP setting is empty"
+    fi
+
+    if [[ "$arg" =~ ^[0-9]+$ ]]; then
+        if [[ "$arg" -lt 1 ]]; then
+            fail "QEMU_SMP must be a positive integer (got ${arg})"
+        fi
+        return
+    fi
+
+    if [[ "$arg" == *" "* ]]; then
+        fail "QEMU SMP topology may not contain spaces (${arg})"
+    fi
+
+    local token
+    IFS=',' read -r -a tokens <<< "$arg"
+    for token in "${tokens[@]}"; do
+        if [[ "$token" =~ ^[0-9]+$ ]]; then
+            if [[ "$token" -lt 1 ]]; then
+                fail "QEMU SMP topology token must be >= 1 (${token})"
+            fi
+            continue
+        fi
+        if [[ "$token" =~ ^[A-Za-z][A-Za-z0-9_-]*=[0-9]+$ ]]; then
+            local value="${token#*=}"
+            if [[ "$value" -lt 1 ]]; then
+                fail "QEMU SMP topology token must be >= 1 (${token})"
+            fi
+            continue
+        fi
+        fail "Invalid QEMU SMP topology token (${token})"
+    done
 }
 
 wait_for_port() {
@@ -402,7 +454,10 @@ main() {
     TCP_PORT="$HOST_CONSOLE_PORT"
     UDP_ECHO_PORT="$HOST_UDP_ECHO_PORT"
     TCP_SMOKE_PORT="$HOST_SMOKE_PORT"
-    QEMU_SMP="${COHESIX_QEMU_SMP:-${QEMU_SMP:-1}}"
+    DEFAULT_QEMU_SMP_TOPO="4,cores=4,threads=1,sockets=1"
+    QEMU_SMP_RAW="${COHESIX_QEMU_SMP:-${QEMU_SMP:-}}"
+    QEMU_SMP_TOPO_RAW="${COHESIX_QEMU_SMP_TOPO:-${QEMU_SMP_TOPO:-}}"
+    QEMU_SMP_ARG="$(resolve_qemu_smp_arg)"
     VIRTIO_MMIO_FORCE_LEGACY=${VIRTIO_MMIO_FORCE_LEGACY:-0}
     ROOT_TASK_FEATURES=""
     ROOT_TASK_FEATURES_OVERRIDE=0
@@ -561,9 +616,7 @@ main() {
         fail "TCP port must be a positive integer"
     fi
 
-    if ! [[ "$QEMU_SMP" =~ ^[0-9]+$ ]] || [[ "$QEMU_SMP" -lt 1 ]]; then
-        fail "QEMU_SMP must be a positive integer (got ${QEMU_SMP})"
-    fi
+    validate_qemu_smp_arg "$QEMU_SMP_ARG"
 
     if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
         fail "seL4 build directory not found: $SEL4_BUILD_DIR"
@@ -790,7 +843,7 @@ main() {
 
     PROC_TESTS_DIR="$STAGING_DIR/cohesix/proc/tests"
     mkdir -p "$PROC_TESTS_DIR"
-    for script in selftest_quick.coh selftest_full.coh selftest_negative.coh; do
+    for script in selftest_quick.coh selftest_full.coh selftest_negative.coh selftest_smp.coh; do
         SRC="$PROJECT_ROOT/resources/proc_tests/$script"
         [[ -f "$SRC" ]] || fail "Missing selftest script: $SRC"
         install -m 0644 "$SRC" "$PROC_TESTS_DIR/$script"
@@ -885,9 +938,10 @@ PY
     ROOTSERVER_LOAD_ADDR=0x80000000
     GIC_VER="$(detect_gic_version)"
     log "Auto-detected GIC version: gic-version=$GIC_VER"
+    log "Using QEMU SMP: $QEMU_SMP_ARG"
 
     # Serial output from the PL011 console and root-task logger is expected on stdio via -serial mon:stdio; keep this wiring intact when adjusting runtime flags.
-    BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp "$QEMU_SMP" -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
+    BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp "$QEMU_SMP_ARG" -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
         if [[ "$NET_BACKEND" == "virtio" ]]; then

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the sel4-sys library and public module surface.
 // Author: Lukas Bower
@@ -129,6 +129,7 @@ mod imp {
         );
     }
 
+    #[cfg(sel4_sys_debug_dump_cpuinfo)]
     #[export_name = "seL4_DebugDumpCPUInfo"]
     pub unsafe extern "C" fn sel4_debug_dump_cpu_info() {
         let mut unused0 = 0;
@@ -151,6 +152,10 @@ mod imp {
             0,
         );
     }
+
+    #[cfg(not(sel4_sys_debug_dump_cpuinfo))]
+    #[export_name = "seL4_DebugDumpCPUInfo"]
+    pub unsafe extern "C" fn sel4_debug_dump_cpu_info() {}
 
     #[inline(always)]
     pub const fn seL4_MessageInfo_new(

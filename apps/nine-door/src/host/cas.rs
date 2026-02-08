@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Content-addressed update storage and validation for NineDoor.
 // Author: Lukas Bower
@@ -269,12 +269,42 @@ impl CasStore {
         self.ensure_epoch(epoch)?;
         let payload = decode_payload(data)?;
         let expected_offset = {
-            let bundle = self.updates.get(epoch).expect("update bundle must exist");
-            if bundle.manifest_bytes.is_some() {
-                return Err(NineDoorError::protocol(
-                    ErrorCode::Permission,
-                    "manifest already committed",
-                ));
+            let bundle = self.updates.get_mut(epoch).expect("update bundle must exist");
+            if let Some(existing) = bundle.manifest_bytes.as_ref() {
+                let expected_offset = bundle.manifest_pending.len() as u64;
+                let provided_offset = if offset == u64::MAX {
+                    expected_offset
+                } else {
+                    offset
+                };
+                if provided_offset != expected_offset {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        format!(
+                            "manifest append offset rejected: expected {expected_offset} got {provided_offset}"
+                        ),
+                    ));
+                }
+                let new_len = expected_offset as usize + payload.len();
+                if new_len > existing.len() {
+                    bundle.manifest_pending.clear();
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "manifest reupload exceeded committed length",
+                    ));
+                }
+                bundle.manifest_pending.extend_from_slice(&payload);
+                if !existing.starts_with(bundle.manifest_pending.as_slice()) {
+                    bundle.manifest_pending.clear();
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "manifest reupload mismatch",
+                    ));
+                }
+                if bundle.manifest_pending.len() == existing.len() {
+                    bundle.manifest_pending.clear();
+                }
+                return Ok(data.len() as u32);
             }
             bundle.manifest_pending.len() as u64
         };
@@ -364,19 +394,40 @@ impl CasStore {
     ) -> Result<u32, NineDoorError> {
         let payload = decode_payload(data)?;
         if let Some(existing) = self.chunks.get(digest) {
-            if offset != 0 && offset != u64::MAX {
+            let pending = self.pending_chunks.entry(*digest).or_default();
+            let expected_offset = pending.len() as u64;
+            let provided_offset = if offset == u64::MAX {
+                expected_offset
+            } else {
+                offset
+            };
+            if provided_offset != expected_offset {
+                pending.clear();
                 return Err(NineDoorError::protocol(
                     ErrorCode::Invalid,
-                    "chunk already committed",
+                    "chunk append offset rejected",
                 ));
             }
-            if existing.as_slice() == payload {
-                return Ok(data.len() as u32);
+            let new_len = pending.len().saturating_add(payload.len());
+            if new_len > existing.len() {
+                pending.clear();
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    "chunk reupload exceeded committed length",
+                ));
             }
-            return Err(NineDoorError::protocol(
-                ErrorCode::Invalid,
-                "chunk already committed",
-            ));
+            pending.extend_from_slice(&payload);
+            if !existing.starts_with(pending.as_slice()) {
+                pending.clear();
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    "chunk payload mismatch",
+                ));
+            }
+            if pending.len() == existing.len() {
+                pending.clear();
+            }
+            return Ok(data.len() as u32);
         }
         if payload.len() > self.config.chunk_bytes() {
             return Err(NineDoorError::protocol(

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Implement the REST transport backend for the Cohesix shell.
 // Author: Lukas Bower
@@ -17,6 +17,7 @@ use crate::{CohshPolicy, Session, Transport, TransportMetrics};
 
 const DEFAULT_SESSION_ID: SessionId = SessionId::BOOTSTRAP;
 
+#[allow(dead_code)]
 trait GatewayClientTail {
     fn tail(&self, path: &str, max_bytes: u32) -> Result<Vec<String>>;
 }

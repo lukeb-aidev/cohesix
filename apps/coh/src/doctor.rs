@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide deterministic host environment checks for coh doctor.
 // Author: Lukas Bower
@@ -117,7 +117,7 @@ fn check_mount(policy: Option<&CohPolicy>, audit: &mut CohAudit, errors: &mut Ve
         errors.push(err.to_string());
         return;
     }
-    if !cfg!(feature = "fuse") {
+    if !cfg!(any(feature = "fuse", target_os = "linux")) {
         let err = "fuse support disabled; rebuild coh with --features fuse or use --mock";
         let detail = format!("check=mount reason={err}");
         audit.push_ack(cohsh_core::wire::AckStatus::Err, "DOCTOR", Some(detail.as_str()));

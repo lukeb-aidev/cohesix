@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
 # Purpose: Package a minimal rootfs and launch Cohesix under QEMU.
+# Copyright 2026 Lukas Bower
 
 set -euo pipefail
 
@@ -44,7 +45,8 @@ root task into a CPIO archive. The script mirrors the expectations in
 built for aarch64.
 
 Env overrides:
-  COHESIX_QEMU_SMP / QEMU_SMP (default: 1)
+  COHESIX_QEMU_SMP / QEMU_SMP (default: 4; ignored when *_QEMU_SMP_TOPO is set)
+  COHESIX_QEMU_SMP_TOPO / QEMU_SMP_TOPO (default: 4,cores=4,threads=1,sockets=1)
 USAGE
 }
 
@@ -58,7 +60,9 @@ DTB_OVERRIDE=""
 DEFAULT_TCP_PORT=31337
 TCP_PORT=""
 SELFTEST_TCP_PORT=31339
-QEMU_SMP="${COHESIX_QEMU_SMP:-${QEMU_SMP:-1}}"
+DEFAULT_QEMU_SMP_TOPO="4,cores=4,threads=1,sockets=1"
+QEMU_SMP_RAW="${COHESIX_QEMU_SMP:-${QEMU_SMP:-}}"
+QEMU_SMP_TOPO_RAW="${COHESIX_QEMU_SMP_TOPO:-${QEMU_SMP_TOPO:-}}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -215,6 +219,62 @@ resolve_qemu_accel() {
     echo "$accel"
 }
 
+resolve_qemu_smp_arg() {
+    if [[ -n "$QEMU_SMP_TOPO_RAW" ]]; then
+        echo "$QEMU_SMP_TOPO_RAW"
+        return
+    fi
+    if [[ -n "$QEMU_SMP_RAW" ]]; then
+        echo "$QEMU_SMP_RAW"
+        return
+    fi
+    echo "$DEFAULT_QEMU_SMP_TOPO"
+}
+
+validate_qemu_smp_arg() {
+    local arg="$1"
+
+    if [[ -z "$arg" ]]; then
+        log "Invalid QEMU SMP setting: empty value"
+        exit 1
+    fi
+
+    if [[ "$arg" =~ ^[0-9]+$ ]]; then
+        if [[ "$arg" -lt 1 ]]; then
+            log "Invalid QEMU_SMP (must be >= 1): $arg"
+            exit 1
+        fi
+        return
+    fi
+
+    if [[ "$arg" == *" "* ]]; then
+        log "Invalid QEMU SMP topology (contains spaces): $arg"
+        exit 1
+    fi
+
+    local token
+    IFS=',' read -r -a tokens <<< "$arg"
+    for token in "${tokens[@]}"; do
+        if [[ "$token" =~ ^[0-9]+$ ]]; then
+            if [[ "$token" -lt 1 ]]; then
+                log "Invalid QEMU SMP topology value: $token"
+                exit 1
+            fi
+            continue
+        fi
+        if [[ "$token" =~ ^[A-Za-z][A-Za-z0-9_-]*=[0-9]+$ ]]; then
+            local value="${token#*=}"
+            if [[ "$value" -lt 1 ]]; then
+                log "Invalid QEMU SMP topology token: $token"
+                exit 1
+            fi
+            continue
+        fi
+        log "Invalid QEMU SMP topology token: $token"
+        exit 1
+    done
+}
+
 for artefact in "$ELFLOADER" "$KERNEL" "$ROOT_TASK"; do
     if [[ ! -f "$artefact" ]]; then
         log "Artefact not found: $artefact"
@@ -235,7 +295,7 @@ fi
 mkdir -p "$OUT_DIR/rootfs/bin"
 cp "$ROOT_TASK" "$OUT_DIR/rootfs/bin/root-task"
 mkdir -p "$OUT_DIR/rootfs/proc/tests"
-for script in selftest_quick.coh selftest_full.coh selftest_negative.coh; do
+for script in selftest_quick.coh selftest_full.coh selftest_negative.coh selftest_smp.coh; do
     SRC="$SCRIPT_DIR/../resources/proc_tests/$script"
     if [[ ! -f "$SRC" ]]; then
         log "Selftest script missing: $SRC"
@@ -262,12 +322,15 @@ GIC_VER="$(detect_gic_version)"
 log "Auto-detected GIC version: gic-version=$GIC_VER"
 QEMU_ACCEL="$(resolve_qemu_accel)"
 log "Using QEMU accel: $QEMU_ACCEL"
+QEMU_SMP_ARG="$(resolve_qemu_smp_arg)"
+validate_qemu_smp_arg "$QEMU_SMP_ARG"
+log "Using QEMU SMP: $QEMU_SMP_ARG"
 
 QEMU_ARGS=(-accel "$QEMU_ACCEL" \
     -machine "virt,gic-version=${GIC_VER}" \
     -cpu cortex-a57 \
     -m 1024 \
-    -smp "$QEMU_SMP" \
+    -smp "$QEMU_SMP_ARG" \
     -serial stdio \
     -monitor none \
     -display none \
@@ -283,11 +346,6 @@ fi
 
 if ! [[ "$TCP_PORT" =~ ^[0-9]+$ ]]; then
     log "Invalid TCP port: $TCP_PORT"
-    exit 1
-fi
-
-if ! [[ "$QEMU_SMP" =~ ^[0-9]+$ ]] || [[ "$QEMU_SMP" -lt 1 ]]; then
-    log "Invalid QEMU_SMP (must be >= 1): $QEMU_SMP"
     exit 1
 fi
 

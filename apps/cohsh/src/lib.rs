@@ -1,7 +1,7 @@
-// Copyright © 2025 Lukas Bower
-// SPDX-License-Identifier: Apache-2.0
-// Purpose: Provide the Cohesix shell CLI core and transport implementations.
 // Author: Lukas Bower
+// Purpose: Provide the Cohesix shell CLI core and transport implementations.
+// Copyright 2026 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -49,6 +49,7 @@ pub use transport::rest::RestTransport;
 pub use transport::COHSH_TCP_PORT;
 
 use std::collections::{BTreeMap, VecDeque};
+use std::env;
 use std::fmt;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -63,7 +64,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::ValueEnum;
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::Role;
@@ -1018,6 +1019,76 @@ impl Transport for NineDoorTransport {
     }
 }
 
+const DEFAULT_QEMU_SMP_TOPO: &str = "4,cores=4,threads=1,sockets=1";
+
+fn resolve_qemu_smp_arg() -> Result<String> {
+    if let Some(arg) = read_env_nonempty(&["COHESIX_QEMU_SMP_TOPO", "QEMU_SMP_TOPO"]) {
+        validate_qemu_smp_arg(&arg)?;
+        return Ok(arg);
+    }
+    if let Some(arg) = read_env_nonempty(&["COHESIX_QEMU_SMP", "QEMU_SMP"]) {
+        validate_qemu_smp_arg(&arg)?;
+        return Ok(arg);
+    }
+    Ok(DEFAULT_QEMU_SMP_TOPO.to_string())
+}
+
+fn read_env_nonempty(keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Ok(value) = env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn validate_qemu_smp_arg(arg: &str) -> Result<()> {
+    let trimmed = arg.trim();
+    if trimmed.is_empty() {
+        bail!("QEMU SMP setting is empty");
+    }
+    if trimmed.chars().any(char::is_whitespace) {
+        bail!("QEMU SMP setting contains whitespace: {trimmed}");
+    }
+    for token in trimmed.split(',') {
+        if token.is_empty() {
+            bail!("QEMU SMP setting has empty token: {trimmed}");
+        }
+        if token.chars().all(|ch| ch.is_ascii_digit()) {
+            let value: u32 = token
+                .parse()
+                .map_err(|_| anyhow!("QEMU SMP value must be a number: {token}"))?;
+            if value < 1 {
+                bail!("QEMU SMP value must be >= 1: {token}");
+            }
+            continue;
+        }
+        let (key, value) = token
+            .split_once('=')
+            .ok_or_else(|| anyhow!("QEMU SMP token must be key=value: {token}"))?;
+        let mut chars = key.chars();
+        let Some(first) = chars.next() else {
+            bail!("QEMU SMP token has empty key: {token}");
+        };
+        if !first.is_ascii_alphabetic() || !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
+            bail!("QEMU SMP token has invalid key: {token}");
+        }
+        if value.is_empty() || !value.chars().all(|ch| ch.is_ascii_digit()) {
+            bail!("QEMU SMP token has invalid value: {token}");
+        }
+        let parsed: u32 = value
+            .parse()
+            .map_err(|_| anyhow!("QEMU SMP token has invalid value: {token}"))?;
+        if parsed < 1 {
+            bail!("QEMU SMP token value must be >= 1: {token}");
+        }
+    }
+    Ok(())
+}
+
 /// QEMU-backed transport that boots the Cohesix image and streams serial logs.
 #[derive(Debug)]
 pub struct QemuTransport {
@@ -1172,6 +1243,7 @@ impl Transport for QemuTransport {
         }
 
         let (elfloader, kernel, rootserver, cpio) = self.artefacts()?;
+        let qemu_smp_arg = resolve_qemu_smp_arg()?;
         *self.log_lines.lock().expect("log mutex poisoned") = Vec::new();
 
         let mut cmd = Command::new(&self.qemu_bin);
@@ -1182,7 +1254,7 @@ impl Transport for QemuTransport {
             .arg("-m")
             .arg("1024")
             .arg("-smp")
-            .arg("1")
+            .arg(&qemu_smp_arg)
             .arg("-serial")
             .arg("mon:stdio")
             .arg("-display")
@@ -4206,6 +4278,49 @@ fn parse_telemetry_push_args<'a>(
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn reset_qemu_env() {
+        for key in [
+            "COHESIX_QEMU_SMP_TOPO",
+            "QEMU_SMP_TOPO",
+            "COHESIX_QEMU_SMP",
+            "QEMU_SMP",
+        ] {
+            env::remove_var(key);
+        }
+    }
+
+    #[test]
+    fn qemu_smp_defaults_to_four_core_topology() {
+        let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+        reset_qemu_env();
+        let arg = resolve_qemu_smp_arg().expect("default smp arg");
+        assert_eq!(arg, DEFAULT_QEMU_SMP_TOPO);
+        reset_qemu_env();
+    }
+
+    #[test]
+    fn qemu_smp_prefers_topology_override() {
+        let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+        reset_qemu_env();
+        env::set_var("COHESIX_QEMU_SMP_TOPO", "6,cores=6,threads=1,sockets=1");
+        env::set_var("COHESIX_QEMU_SMP", "2");
+        let arg = resolve_qemu_smp_arg().expect("override smp arg");
+        assert_eq!(arg, "6,cores=6,threads=1,sockets=1");
+        reset_qemu_env();
+    }
+
+    #[test]
+    fn qemu_smp_rejects_invalid_env() {
+        let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+        reset_qemu_env();
+        env::set_var("QEMU_SMP", "0");
+        assert!(resolve_qemu_smp_arg().is_err());
+        reset_qemu_env();
+    }
 
     #[test]
     fn attach_and_tail_logs() {

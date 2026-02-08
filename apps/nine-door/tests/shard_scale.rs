@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Exercise sharded worker namespace scaling and attach latency.
 // Author: Lukas Bower
@@ -58,6 +58,7 @@ fn sharded_attach_scales_and_exports_metrics() {
 
     let next_index = Arc::new(AtomicUsize::new(0));
     let durations = Arc::new(Mutex::new(Vec::with_capacity(WORKER_COUNT)));
+    let connections = Arc::new(Mutex::new(Vec::with_capacity(WORKER_COUNT)));
     let threads = ATTACH_THREADS.min(WORKER_COUNT);
 
     let mut handles = Vec::with_capacity(threads);
@@ -66,6 +67,7 @@ fn sharded_attach_scales_and_exports_metrics() {
         let workers = Arc::clone(&workers);
         let next_index = Arc::clone(&next_index);
         let durations = Arc::clone(&durations);
+        let connections = Arc::clone(&connections);
         handles.push(std::thread::spawn(move || {
             let mut local = Vec::new();
             loop {
@@ -86,6 +88,7 @@ fn sharded_attach_scales_and_exports_metrics() {
                     )
                     .expect("attach worker");
                 local.push(start.elapsed());
+                connections.lock().unwrap().push(client);
             }
             durations.lock().unwrap().extend(local);
         }));

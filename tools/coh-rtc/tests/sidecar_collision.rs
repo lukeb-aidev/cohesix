@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate sidecar mount collision hashing in coh-rtc output.
 // Author: Lukas Bower
@@ -21,6 +21,7 @@ fn options_for_manifest(temp_dir: &TempDir, manifest_path: PathBuf) -> CompileOp
         observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
         observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
+        trace_policy_snippet_out: temp_dir.path().join("trace_policy.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),

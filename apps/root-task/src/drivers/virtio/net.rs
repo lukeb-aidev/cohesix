@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Virtio MMIO network device driver for the root task, including TX/RX queue management and invariants.
 // Author: Lukas Bower
@@ -4172,9 +4172,14 @@ impl VirtioNet {
                 );
             }
             #[cfg(debug_assertions)]
-            panic!("tx publish guard rejected descriptor (flags/next)");
-            self.cancel_tx_slot(head_id, "tx_publish_guard_flags");
-            return Err(TxPublishError::InvalidDescriptor);
+            {
+                panic!("tx publish guard rejected descriptor (flags/next)");
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                self.cancel_tx_slot(head_id, "tx_publish_guard_flags");
+                return Err(TxPublishError::InvalidDescriptor);
+            }
         }
         if desc.len != total_len || desc.addr != entry.last_addr {
             self.device_faulted = true;

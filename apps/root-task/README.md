@@ -1,7 +1,7 @@
-<!-- Copyright © 2025 Lukas Bower -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Documents the root-task crate responsibilities and scope. -->
 <!-- Author: Lukas Bower -->
+<!-- Purpose: Documents the root-task crate responsibilities and scope. -->
+<!-- Copyright 2026 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # Root Task Crate
 
 The `root-task` crate embodies the responsibilities described in
@@ -179,7 +179,7 @@ wedged endpoint retype attempts and PL011 mappings during early boot.
 Use the standard QEMU launch parameters to boot the resulting image:
 
 ```
-qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a57 -m 1024 -smp 1 \
+qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a57 -m 1024 -smp 4,cores=4,threads=1,sockets=1 \
   -serial mon:stdio -display none \
   -kernel out/cohesix/staging/elfloader \
   -initrd out/cohesix/cohesix-system.cpio \

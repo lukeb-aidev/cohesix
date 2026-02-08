@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Console parser and interactive shell for the root task.
 // Author: Lukas Bower
@@ -155,17 +155,18 @@ impl CohesixConsole {
         self.emit_line(line.as_str());
     }
 
+    #[cfg(all(feature = "kernel", sel4_config_debug_build))]
     fn print_smp(&mut self) {
-        #[cfg(all(feature = "kernel", sel4_config_debug_build))]
-        {
-            self.emit_line("[smp] debug scheduler dump begin");
-            unsafe {
-                sel4_sys::seL4_DebugDumpScheduler();
-                sel4_sys::seL4_DebugDumpCPUInfo();
-            }
-            self.emit_line("[smp] debug scheduler dump end");
-            return;
+        self.emit_line("[smp] debug scheduler dump begin");
+        unsafe {
+            sel4_sys::seL4_DebugDumpScheduler();
+            sel4_sys::seL4_DebugDumpCPUInfo();
         }
+        self.emit_line("[smp] debug scheduler dump end");
+    }
+
+    #[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]
+    fn print_smp(&mut self) {
         self.emit_line("ERR reason=unsupported");
     }
 

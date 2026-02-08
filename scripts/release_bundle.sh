@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
 # Purpose: Assemble a Cohesix alpha release bundle under releases/ and emit a tarball.
+# Copyright 2026 Lukas Bower
 
 set -euo pipefail
 
@@ -21,6 +22,7 @@ LINUX_SYNC_KEY="${LINUX_SYNC_KEY:-${COHESIX_SYNC_KEY:-}}"
 LINUX_SYNC_REMOTE_DIR="${LINUX_SYNC_REMOTE_DIR:-${COHESIX_SYNC_REMOTE_DIR:-}}"
 LINUX_SYNC_LOCAL_OUT="${LINUX_SYNC_LOCAL_OUT:-${COHESIX_SYNC_LOCAL_OUT:-}}"
 HOST_TOOLS_PROFILE="${HOST_TOOLS_PROFILE:-release}"
+SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${ROOT_DIR}/seL4/SMP_build}"
 
 usage() {
   cat <<'USAGE'
@@ -34,6 +36,7 @@ releases/<release-name>-linux.tar.gz. Use --linux-only to emit only the Linux bu
 
 Env overrides:
   RELEASE_NAME, RELEASE_VERSION
+  SEL4_BUILD_DIR (defaults to $REPO/seL4/SMP_build)
   LINUX_HOST_TARGET (default: aarch64-unknown-linux-gnu)
   LINUX_HOST_TOOLS_DIR (prebuilt host tools dir; if empty, build from source)
   LINUX_SYNC_HOST (if set, run scripts/linux_host_tools_sync.sh before bundling)
@@ -231,6 +234,7 @@ bundle_release() {
     "${bundle_dir}/python" \
     "${bundle_dir}/qemu" \
     "${bundle_dir}/resources/fixtures" \
+    "${bundle_dir}/resources/systemd" \
     "${bundle_dir}/scripts" \
     "${bundle_dir}/traces" \
     "${bundle_dir}/ui/swarmui" \
@@ -244,6 +248,9 @@ bundle_release() {
   cp -p "${STAGING_DIR}/cohesix/manifest.json" "${bundle_dir}/image/manifest.json"
   cp -p "${ROOT_DIR}/configs/root_task.toml" "${bundle_dir}/configs/root_task.toml"
   cp -p "${ROOT_DIR}/resources/fixtures/cas_signing_key.hex" "${bundle_dir}/resources/fixtures/cas_signing_key.hex"
+  if [[ -d "${ROOT_DIR}/resources/systemd" ]]; then
+    cp -p "${ROOT_DIR}/resources/systemd/"* "${bundle_dir}/resources/systemd/"
+  fi
   cp -p "${ROOT_DIR}/out/cas_manifest_template.json" "${bundle_dir}/out/cas_manifest_template.json"
   cp -p "${ROOT_DIR}/out/cohsh_policy.toml" "${bundle_dir}/out/cohsh_policy.toml"
   cp -p "${ROOT_DIR}/out/cohsh_policy.toml.sha256" "${bundle_dir}/out/cohsh_policy.toml.sha256"
@@ -251,7 +258,7 @@ bundle_release() {
   cp -p "${ROOT_DIR}/out/coh_policy.toml.sha256" "${bundle_dir}/out/coh_policy.toml.sha256"
 
   if [[ -x "${ROOT_DIR}/scripts/lib/detect_gic_version.py" ]]; then
-    GIC_CFG="${HOME}/seL4/build/kernel/gen_config/kernel/gen_config.h"
+    GIC_CFG="${SEL4_BUILD_DIR}/kernel/gen_config/kernel/gen_config.h"
     if [[ -f "$GIC_CFG" ]]; then
       GIC_VER="$("${ROOT_DIR}/scripts/lib/detect_gic_version.py" "$GIC_CFG" || true)"
       if [[ -n "$GIC_VER" ]]; then
@@ -262,6 +269,9 @@ bundle_release() {
 
   cat <<'EOF' > "${bundle_dir}/qemu/run.sh"
 #!/usr/bin/env bash
+# Author: Lukas Bower
+# Purpose: Launch Cohesix under QEMU from a release bundle.
+# Copyright 2026 Lukas Bower
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -270,10 +280,16 @@ IMAGE_DIR="${ROOT_DIR}/image"
 
 QEMU_BIN="${QEMU_BIN:-qemu-system-aarch64}"
 HOST_OS="$(uname -s 2>/dev/null || true)"
-QEMU_HOST_ADDR="${QEMU_HOST_ADDR:-localhost}"
+QEMU_HOST_ADDR="${QEMU_HOST_ADDR:-127.0.0.1}"
 TCP_PORT="${TCP_PORT:-31337}"
 UDP_PORT="${UDP_PORT:-31338}"
 SMOKE_PORT="${SMOKE_PORT:-31339}"
+DEFAULT_QEMU_SMP_TOPO="4,cores=4,threads=1,sockets=1"
+DEFAULT_QEMU_VIRT="on"
+QEMU_SMP_RAW="${COHESIX_QEMU_SMP:-${QEMU_SMP:-}}"
+QEMU_SMP_TOPO_RAW="${COHESIX_QEMU_SMP_TOPO:-${QEMU_SMP_TOPO:-}}"
+QEMU_VIRT_RAW="${COHESIX_QEMU_VIRT:-${QEMU_VIRT:-}}"
+QEMU_MACHINE_EXTRA_RAW="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-}}"
 GIC_VER_FILE="${IMAGE_DIR}/gic-version.txt"
 GIC_VER="2"
 if [[ -f "${GIC_VER_FILE}" ]]; then
@@ -351,15 +367,109 @@ resolve_qemu_accel() {
   echo "$accel"
 }
 
+resolve_qemu_smp_arg() {
+  if [[ -n "$QEMU_SMP_TOPO_RAW" ]]; then
+    echo "$QEMU_SMP_TOPO_RAW"
+    return
+  fi
+  if [[ -n "$QEMU_SMP_RAW" ]]; then
+    echo "$QEMU_SMP_RAW"
+    return
+  fi
+  echo "$DEFAULT_QEMU_SMP_TOPO"
+}
+
+resolve_qemu_virt_arg() {
+  if [[ -n "$QEMU_VIRT_RAW" ]]; then
+    echo "$QEMU_VIRT_RAW"
+    return
+  fi
+  echo "$DEFAULT_QEMU_VIRT"
+}
+
+validate_qemu_smp_arg() {
+  local arg="$1"
+
+  if [[ -z "$arg" ]]; then
+    echo "[qemu] Invalid QEMU SMP setting: empty value" >&2
+    exit 1
+  fi
+
+  if [[ "$arg" =~ ^[0-9]+$ ]]; then
+    if [[ "$arg" -lt 1 ]]; then
+      echo "[qemu] Invalid QEMU_SMP (must be >= 1): $arg" >&2
+      exit 1
+    fi
+    return
+  fi
+
+  if [[ "$arg" == *" "* ]]; then
+    echo "[qemu] Invalid QEMU SMP topology (contains spaces): $arg" >&2
+    exit 1
+  fi
+
+  local token
+  IFS=',' read -r -a tokens <<< "$arg"
+  for token in "${tokens[@]}"; do
+    if [[ "$token" =~ ^[0-9]+$ ]]; then
+      if [[ "$token" -lt 1 ]]; then
+        echo "[qemu] Invalid QEMU SMP topology token: $token" >&2
+        exit 1
+      fi
+      continue
+    fi
+    if [[ "$token" =~ ^[A-Za-z][A-Za-z0-9_-]*=[0-9]+$ ]]; then
+      local value="${token#*=}"
+      if [[ "$value" -lt 1 ]]; then
+        echo "[qemu] Invalid QEMU SMP topology token: $token" >&2
+        exit 1
+      fi
+      continue
+    fi
+    echo "[qemu] Invalid QEMU SMP topology token: $token" >&2
+    exit 1
+  done
+}
+
+validate_qemu_virt_arg() {
+  local arg="$1"
+
+  case "$arg" in
+    on|off)
+      return
+      ;;
+    *)
+      echo "[qemu] Invalid QEMU virtualization setting (use on|off): $arg" >&2
+      exit 1
+      ;;
+  esac
+}
+
+format_qemu_machine_arg() {
+  local virt="$1"
+  local machine="virt,gic-version=${GIC_VER},virtualization=${virt}"
+  if [[ -n "$QEMU_MACHINE_EXTRA_RAW" ]]; then
+    machine="${machine},${QEMU_MACHINE_EXTRA_RAW}"
+  fi
+  echo "$machine"
+}
+
 QEMU_ACCEL="$(resolve_qemu_accel)"
 echo "[qemu] Using QEMU accel: ${QEMU_ACCEL}"
+QEMU_SMP_ARG="$(resolve_qemu_smp_arg)"
+validate_qemu_smp_arg "$QEMU_SMP_ARG"
+echo "[qemu] Using QEMU SMP: ${QEMU_SMP_ARG}"
+QEMU_VIRT_ARG="$(resolve_qemu_virt_arg)"
+validate_qemu_virt_arg "$QEMU_VIRT_ARG"
+QEMU_MACHINE_ARG="$(format_qemu_machine_arg "$QEMU_VIRT_ARG")"
+echo "[qemu] Using QEMU machine: ${QEMU_MACHINE_ARG}"
 
 "${QEMU_BIN}" \
   -accel "${QEMU_ACCEL}" \
-  -machine "virt,gic-version=${GIC_VER}" \
+  -machine "${QEMU_MACHINE_ARG}" \
   -cpu cortex-a57 \
   -m 1024 \
-  -smp 1 \
+  -smp "${QEMU_SMP_ARG}" \
   -serial mon:stdio \
   -display none \
   -kernel "${ELFLOADER}" \

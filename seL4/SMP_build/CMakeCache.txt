@@ -780,6 +780,12 @@ PROTOBUF_PROTOC_EXECUTABLE:FILEPATH=/opt/homebrew/bin/protoc
 //Path to a program.
 ProcessorCount_cmd_sysctl:FILEPATH=/usr/sbin/sysctl
 
+//No help, variable specified on the command line.
+QEMU_DTB:UNINITIALIZED=/Users/lukasbower/seL4/SMP_build/qemu-arm-virt-virt-on.dtb
+
+//No help, variable specified on the command line.
+QEMU_MACHINE:UNINITIALIZED=virt,secure=off,virtualization=on
+
 //Performance optimized build
 RELEASE:BOOL=OFF
 
@@ -1670,7 +1676,7 @@ KernelCtzNoBuiltin-ADVANCED:INTERNAL=1
 //Location of kernel DTB file
 KernelDTBPath:INTERNAL=/Users/lukasbower/seL4/SMP_build/kernel/kernel.dtb
 //Size of DTB blob, in bytes
-KernelDTBSize:INTERNAL=8163
+KernelDTBSize:INTERNAL=8219
 //ADVANCED property for variable: KernelDangerousCodeInjection
 KernelDangerousCodeInjection-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: KernelDebugBuild

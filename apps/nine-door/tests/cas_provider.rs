@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate CAS provider behavior in the NineDoor namespace.
 // Author: Lukas Bower
@@ -70,6 +70,66 @@ fn cas_upload_and_read_roundtrip() {
     client.open(4, OpenMode::read_only()).expect("open chunk");
     let read_back = client.read(4, 0, MAX_MSIZE).expect("read chunk");
     assert_eq!(read_back, payload);
+}
+
+#[test]
+fn cas_manifest_reupload_is_idempotent() {
+    let key_bytes = [9u8; 32];
+    let signing_key = SigningKey::from_bytes(&key_bytes);
+    let verifying_key = signing_key.verifying_key().to_bytes();
+    let cas = CasConfig::enabled(16, false, true, Some(verifying_key), false);
+    let server = NineDoor::new_with_cas_config(cas);
+    let mut client = attach_queen(&server);
+
+    let payload = b"0123456789abcdef";
+    let digest = Sha256::digest(payload);
+    let mut digest_bytes = [0u8; 32];
+    digest_bytes.copy_from_slice(&digest);
+    let chunk_hex = hex::encode(digest_bytes);
+
+    let manifest = build_signed_manifest("77", 16, payload, digest_bytes, &key_bytes);
+    let manifest_cbor = manifest.encode_signed().expect("encode manifest");
+
+    let chunk_path = vec![
+        "updates".to_owned(),
+        "77".to_owned(),
+        "chunks".to_owned(),
+        chunk_hex,
+    ];
+    write_path(&mut client, 2, &chunk_path, payload).expect("upload chunk");
+
+    let manifest_path = vec![
+        "updates".to_owned(),
+        "77".to_owned(),
+        "manifest.cbor".to_owned(),
+    ];
+    write_path(&mut client, 3, &manifest_path, &manifest_cbor).expect("upload manifest");
+    write_path(&mut client, 4, &manifest_path, &manifest_cbor).expect("reupload manifest");
+}
+
+#[test]
+fn cas_chunk_reupload_accepts_segments() {
+    let cas = CasConfig::enabled(8, false, false, None, false);
+    let server = NineDoor::new_with_cas_config(cas);
+    let mut client = attach_queen(&server);
+
+    let payload = b"ABCDEFGH";
+    let digest = Sha256::digest(payload);
+    let mut digest_bytes = [0u8; 32];
+    digest_bytes.copy_from_slice(&digest);
+    let chunk_hex = hex::encode(digest_bytes);
+    let chunk_path = vec![
+        "updates".to_owned(),
+        "200".to_owned(),
+        "chunks".to_owned(),
+        chunk_hex,
+    ];
+
+    write_path(&mut client, 2, &chunk_path, &payload[..4]).expect("upload chunk part 1");
+    write_path(&mut client, 3, &chunk_path, &payload[4..]).expect("upload chunk part 2");
+
+    write_path(&mut client, 4, &chunk_path, &payload[..4]).expect("reupload chunk part 1");
+    write_path(&mut client, 5, &chunk_path, &payload[4..]).expect("reupload chunk part 2");
 }
 
 #[test]

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: SwarmUI backend primitives and bounded offline cache support.
 // Author: Lukas Bower
@@ -2347,51 +2347,6 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 ticket: ticket.map(str::to_owned),
             },
         }
-    }
-
-    fn read_hive_status_cached(
-        &mut self,
-        role: Role,
-        ticket: Option<&str>,
-        min_interval_ms: u32,
-    ) -> (
-        Option<SwarmUiHiveRootStatus>,
-        Option<SwarmUiHiveSessionSummary>,
-        Option<SwarmUiHivePressureCounters>,
-        Option<SwarmUiHiveScheduleSnapshot>,
-        Option<SwarmUiHiveLeaseSnapshot>,
-    ) {
-        if self.config.offline {
-            return (None, None, None, None, None);
-        }
-        let key = self.session_key(role, ticket);
-        if min_interval_ms > 0 {
-            if let Some(cache) = self.hive_status_cache.get(&key) {
-                if cache.last_at.elapsed().as_millis() < min_interval_ms as u128 {
-                    return (
-                        cache.root.clone(),
-                        cache.sessions.clone(),
-                        cache.pressure_counters.clone(),
-                        cache.schedule.clone(),
-                        cache.lease.clone(),
-                    );
-                }
-            }
-        }
-        let (root, sessions, pressure_counters, schedule, lease) =
-            self.read_hive_status(role, ticket);
-        self.hive_status_cache.insert(
-            key,
-            HiveStatusCache {
-                last_at: Instant::now(),
-                root: root.clone(),
-                sessions: sessions.clone(),
-                pressure_counters: pressure_counters.clone(),
-                schedule: schedule.clone(),
-                lease: lease.clone(),
-            },
-        );
-        (root, sessions, pressure_counters, schedule, lease)
     }
 
     fn read_hive_status(

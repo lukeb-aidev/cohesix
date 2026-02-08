@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Ensure cohsh-core doc snippets match fixtures and docs.
 // Author: Lukas Bower
@@ -21,6 +21,17 @@ fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn read_fixture_hash(path: &PathBuf) -> String {
+    let contents = fs::read_to_string(path).expect("fixture missing");
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.len() == 64 && line.chars().all(|c| c.is_ascii_hexdigit()))
+        .last()
+        .unwrap_or_else(|| panic!("fixture hash missing: {}", path.display()))
+        .to_string()
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -30,10 +41,7 @@ fn repo_root() -> PathBuf {
 #[test]
 fn grammar_snippet_hash_matches_fixture() {
     let rendered = render_console_grammar_doc();
-    let expected = fs::read_to_string(fixture_path("grammar.sha256"))
-        .expect("grammar fixture missing")
-        .trim()
-        .to_string();
+    let expected = read_fixture_hash(&fixture_path("grammar.sha256"));
     let actual = hash_bytes(rendered.as_bytes());
     assert_eq!(actual, expected, "grammar snippet hash drift");
 
@@ -49,10 +57,7 @@ fn grammar_snippet_hash_matches_fixture() {
 #[test]
 fn ticket_policy_snippet_hash_matches_fixture() {
     let rendered = render_ticket_policy_doc();
-    let expected = fs::read_to_string(fixture_path("ticket_policy.sha256"))
-        .expect("ticket policy fixture missing")
-        .trim()
-        .to_string();
+    let expected = read_fixture_hash(&fixture_path("ticket_policy.sha256"));
     let actual = hash_bytes(rendered.as_bytes());
     assert_eq!(actual, expected, "ticket policy snippet hash drift");
 

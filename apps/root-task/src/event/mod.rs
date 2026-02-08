@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Event pump coordinating serial, timer, networking, and IPC work for the root task.
 // Author: Lukas Bower
@@ -1592,6 +1592,7 @@ where
         false
     }
 
+    #[allow(unsafe_code)]
     #[cfg(all(feature = "kernel", sel4_config_debug_build))]
     fn emit_smp(&mut self) -> bool {
         self.emit_console_line("[smp] debug scheduler dump begin");

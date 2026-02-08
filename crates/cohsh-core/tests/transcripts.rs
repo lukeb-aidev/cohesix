@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Compare console transcripts across serial/TCP/core transports.
 // Author: Lukas Bower
@@ -250,6 +250,7 @@ impl ConsoleHarness {
             }
             ConsoleCommand::BootInfo
             | ConsoleCommand::Caps
+            | ConsoleCommand::Smp
             | ConsoleCommand::Mem
             | ConsoleCommand::Test
             | ConsoleCommand::NetTest

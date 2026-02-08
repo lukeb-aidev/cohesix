@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Guard SwarmUI defaults docs against coh-rtc output.
 // Author: Lukas Bower
@@ -26,6 +26,25 @@ fn extract_snippet<'a>(contents: &'a str, start_marker: &str, end_marker: &str) 
     contents[start..end].trim()
 }
 
+fn strip_header_comments(contents: &str) -> String {
+    let mut started = false;
+    let mut lines = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if !started {
+            if trimmed.is_empty()
+                || trimmed.starts_with("<!-- Author:")
+                || trimmed.starts_with("<!-- Purpose:")
+            {
+                continue;
+            }
+            started = true;
+        }
+        lines.push(line);
+    }
+    lines.join("\n").trim().to_string()
+}
+
 fn compile_swarmui_defaults(temp_dir: &TempDir) -> PathBuf {
     let manifest_path = repo_path("configs/root_task.toml");
     let options = CompileOptions {
@@ -39,6 +58,7 @@ fn compile_swarmui_defaults(temp_dir: &TempDir) -> PathBuf {
         observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
         observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
+        trace_policy_snippet_out: temp_dir.path().join("trace_policy.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
@@ -84,5 +104,6 @@ fn userland_swarmui_snippet_matches_repo() {
     );
     let repo_snippet = fs::read_to_string(repo_path("docs/snippets/swarmui_defaults.md"))
         .expect("read repo swarmui defaults");
-    assert_eq!(extracted.trim(), repo_snippet.trim());
+    let normalized_repo = strip_header_comments(&repo_snippet);
+    assert_eq!(extracted.trim(), normalized_repo.trim());
 }

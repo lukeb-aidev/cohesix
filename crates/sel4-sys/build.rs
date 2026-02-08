@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the build script for sel4-sys.
 // Author: Lukas Bower
@@ -22,6 +22,7 @@ const CONFIG_CANDIDATES: &[&str] = &[
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(sel4_config_kernel_mcs)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_sys_debug_dump_cpuinfo)");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD");
 
@@ -59,6 +60,15 @@ fn main() {
     }
 
     generate_bindings(&build_dir, &config_sources);
+
+    if target_os == "none" {
+        let bindings_path = out_dir.join("bindings.rs");
+        if let Ok(contents) = fs::read_to_string(&bindings_path) {
+            if contents.contains("seL4_Syscall_ID_seL4_SysDebugDumpCPUInfo") {
+                println!("cargo:rustc-cfg=sel4_sys_debug_dump_cpuinfo");
+            }
+        }
+    }
 }
 
 fn emit_link_flags(build_dir: &Path) {

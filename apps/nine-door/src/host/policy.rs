@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Maintain PolicyFS state, approvals, and gate decisions for NineDoor.
 // Author: Lukas Bower
@@ -269,8 +269,8 @@ impl PolicyStore {
         let mut next_previous = self.previous.clone();
         for command in commands {
             match command {
-                PolicyCtlCommand::Apply { id, sha256 } => {
-                    let next = PolicyRevision { id, sha256 };
+                PolicyCtlCommand::Apply { id, .. } => {
+                    let next = PolicyRevision { id };
                     next_previous = next_current.take();
                     next_current = Some(next);
                 }
@@ -505,7 +505,6 @@ struct PolicyAction {
 #[derive(Debug, Clone)]
 struct PolicyRevision {
     id: String,
-    sha256: String,
 }
 
 impl PolicyAction {

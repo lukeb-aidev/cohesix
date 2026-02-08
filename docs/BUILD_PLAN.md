@@ -92,7 +92,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [24c](#24c) | Authoritative Scheduling Grammar + REST Gateway + Scheduler/Lease Observability | Complete |
 | [24d](#24d) | Jetson CUDA Host Support (NVML Fallback + Doctor) | Complete |
 | [24e](#24e) | REST Multiplexer Transports + SwarmUI Gateway Mode | Complete |
-| [25](#25) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Pending |
+| [25](#25) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Complete |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -4269,24 +4269,24 @@ Deliverables:
   - Jetson-friendly host setup and Quickstart guidance.
 
 Title/ID: m24d-coh-fuse-default
-Goal: Enable FUSE support by default for `coh` builds when a FUSE runtime is present.
+Goal: Enable FUSE support by default for Linux `coh` builds while keeping macOS opt-in.
 Inputs: apps/coh/Cargo.toml, docs/HOST_TOOLS.md, docs/QUICKSTART.md, docs/PYTHON_SUPPORT.md, docs/USERLAND_AND_CLI.md, docs/TEST_PLAN.md.
 Changes:
-  - apps/coh/Cargo.toml — include `fuse` in default features.
-  - docs/HOST_TOOLS.md — update default FUSE guidance.
-  - docs/QUICKSTART.md — document default FUSE behavior.
-  - docs/PYTHON_SUPPORT.md — align FUSE notes with defaults.
+  - apps/coh/Cargo.toml — default FUSE on Linux, macOS opt-in via feature.
+  - docs/HOST_TOOLS.md — update OS-specific FUSE defaults.
+  - docs/QUICKSTART.md — document macOS opt-in behavior.
+  - docs/PYTHON_SUPPORT.md — align FUSE notes with OS defaults.
   - docs/USERLAND_AND_CLI.md — clarify live mount prerequisites.
-  - docs/TEST_PLAN.md — update optional FUSE note.
+  - docs/TEST_PLAN.md — note macOS default FUSE disabled.
 Commands:
   - cargo check -p coh
   - cargo test -p coh --test transcript
   - cargo test -p coh --test run
 Checks:
   - `coh doctor` passes the mount check when `/dev/fuse` is available.
-  - Docs reflect default FUSE behavior.
+  - Docs reflect OS-specific FUSE defaults.
 Deliverables:
-  - Default FUSE-enabled `coh` builds with aligned documentation.
+  - Linux-default FUSE-enabled `coh` builds with aligned documentation.
 
 Title/ID: m24d-toolchain-linux
 Goal: Provide a Linux toolchain bootstrap script aligned with Cohesix host tool requirements.
@@ -4491,6 +4491,8 @@ Deliverables:
 
 This is a performance and clarity milestone, not a feature expansion.
 
+**Status:** Complete — SMP kernel builds, 4-core QEMU defaults, and task-isolation behaviors are validated. SMP selftests, REST regression batch, and host tool coverage pass on macOS and Linux with documented QEMU overrides.
+
 ## Goal
 Enable Cohesix to take advantage of multicore aarch64 CPUs by:
 1. Running multiple isolated seL4 tasks in parallel,
@@ -4629,6 +4631,25 @@ Checks:
   - `scripts/cohesix-build-run.sh` uses seL4/SMP_build by default; `--sel4-build seL4/build` overrides correctly.
 Deliverables:
   - Repo-local SMP build outputs and updated build defaults.
+
+Title/ID: m25c-smp-qemu-defaults
+Goal: Default QEMU SMP topology to four single-threaded cores while keeping overrides explicit.
+Inputs: scripts/qemu-run.sh, scripts/cohesix-build-run.sh, scripts/release_bundle.sh, releases/*/qemu/run.sh, docs/QUICKSTART.md, docs/TEST_PLAN.md.
+Changes:
+  - scripts/qemu-run.sh — default to `-smp 4,cores=4,threads=1,sockets=1`; allow overrides via `COHESIX_QEMU_SMP` / `QEMU_SMP` (count) and `COHESIX_QEMU_SMP_TOPO` / `QEMU_SMP_TOPO` (full topology string).
+  - scripts/cohesix-build-run.sh — same default and override handling as `scripts/qemu-run.sh`.
+  - scripts/release_bundle.sh — bake the SMP defaults and env overrides into generated `qemu/run.sh`.
+  - releases/<next minor>-* — bump minor version per policy; update bundled `qemu/run.sh` defaults and rename tarballs accordingly.
+  - docs/QUICKSTART.md, docs/TEST_PLAN.md — document the SMP default and override variables.
+Commands:
+  - COHESIX_QEMU_SMP=1 scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none
+  - COHESIX_QEMU_SMP=4 scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none
+Checks:
+  - Default QEMU launches use `-smp 4,cores=4,threads=1,sockets=1`.
+  - SMP overrides apply deterministically with no validation regressions.
+  - Release bundle minor version increments and tarball names match directory names.
+Deliverables:
+  - SMP-aware QEMU launch defaults with documented override behavior.
 
 Title/ID: m25c-authority-ipc
 Goal: Serialize authoritative decisions behind a single IPC surface.

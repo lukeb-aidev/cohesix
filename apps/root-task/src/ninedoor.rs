@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Minimal in-kernel NineDoor bridge for console-driven control and log access.
 // Author: Lukas Bower
@@ -51,6 +51,7 @@ const PROC_TESTS_PATH: &str = "/proc/tests";
 const PROC_TESTS_QUICK_PATH: &str = "/proc/tests/selftest_quick.coh";
 const PROC_TESTS_FULL_PATH: &str = "/proc/tests/selftest_full.coh";
 const PROC_TESTS_NEGATIVE_PATH: &str = "/proc/tests/selftest_negative.coh";
+const PROC_TESTS_SMP_PATH: &str = "/proc/tests/selftest_smp.coh";
 const PROC_INGEST_ROOT_PATH: &str = "/proc/ingest";
 const PROC_INGEST_P50_PATH: &str = "/proc/ingest/p50_ms";
 const PROC_INGEST_P95_PATH: &str = "/proc/ingest/p95_ms";
@@ -197,6 +198,10 @@ const SELFTEST_FULL_SCRIPT: &str = include_str!(concat!(
 const SELFTEST_NEGATIVE_SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../resources/proc_tests/selftest_negative.coh"
+));
+const SELFTEST_SMP_SCRIPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../resources/proc_tests/selftest_smp.coh"
 ));
 
 /// Minimal NineDoor bridge used by the seL4 build until the full Secure9P server is ported.
@@ -438,6 +443,7 @@ impl fmt::Display for NineDoorBridgeError {
             Self::Permission => write!(f, "EPERM"),
             Self::BufferFull => write!(f, "buffer full"),
             Self::InvalidPayload => write!(f, "invalid payload"),
+            Self::Busy => write!(f, "busy"),
         }
     }
 }
@@ -1377,6 +1383,9 @@ impl NineDoorBridge {
         if path == PROC_TESTS_NEGATIVE_PATH {
             return script_lines(SELFTEST_NEGATIVE_SCRIPT);
         }
+        if path == PROC_TESTS_SMP_PATH {
+            return script_lines(SELFTEST_SMP_SCRIPT);
+        }
         if matches!(
             path,
             PROC_LIFECYCLE_STATE_PATH | PROC_LIFECYCLE_REASON_PATH | PROC_LIFECYCLE_SINCE_PATH
@@ -1533,6 +1542,7 @@ impl NineDoorBridge {
                 "selftest_quick.coh",
                 "selftest_full.coh",
                 "selftest_negative.coh",
+                "selftest_smp.coh",
             ]);
         }
         if path == PROC_INGEST_ROOT_PATH {
@@ -2899,15 +2909,37 @@ impl CasState {
     ) -> Result<u32, NineDoorBridgeError> {
         self.ensure_enabled()?;
         self.ensure_update(epoch)?;
+        let payload = decode_cas_payload(data)?;
         let (decoded, manifest_bytes) = {
             let bundle = self
                 .updates
                 .get_mut(epoch)
                 .expect("update bundle must exist");
-            if bundle.manifest_bytes.is_some() {
-                return Err(NineDoorBridgeError::Permission);
+            if let Some(existing) = bundle.manifest_bytes.as_ref() {
+                let expected_offset = bundle.manifest_pending.len() as u64;
+                let provided_offset = if offset == u64::MAX {
+                    expected_offset
+                } else {
+                    offset
+                };
+                if provided_offset != expected_offset {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                let new_len = bundle.manifest_pending.len().saturating_add(payload.len());
+                if new_len > existing.len() {
+                    bundle.manifest_pending.clear();
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                bundle.manifest_pending.extend_from_slice(&payload);
+                if !existing.starts_with(bundle.manifest_pending.as_slice()) {
+                    bundle.manifest_pending.clear();
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                if bundle.manifest_pending.len() == existing.len() {
+                    bundle.manifest_pending.clear();
+                }
+                return Ok(data.len() as u32);
             }
-            let payload = decode_cas_payload(data)?;
             let expected_offset = bundle.manifest_pending.len() as u64;
             let provided_offset = if offset == u64::MAX {
                 expected_offset
@@ -2969,13 +3001,31 @@ impl CasState {
     ) -> Result<u32, NineDoorBridgeError> {
         let payload = decode_cas_payload(data)?;
         if let Some(existing) = self.chunks.get(digest) {
-            if offset != 0 && offset != u64::MAX {
+            let pending = self.pending_chunks.entry(*digest).or_default();
+            let expected_offset = pending.len() as u64;
+            let provided_offset = if offset == u64::MAX {
+                expected_offset
+            } else {
+                offset
+            };
+            if provided_offset != expected_offset {
+                pending.clear();
                 return Err(NineDoorBridgeError::InvalidPayload);
             }
-            if existing.as_slice() == payload.as_slice() {
-                return Ok(data.len() as u32);
+            let new_len = pending.len().saturating_add(payload.len());
+            if new_len > existing.len() {
+                pending.clear();
+                return Err(NineDoorBridgeError::InvalidPayload);
             }
-            return Err(NineDoorBridgeError::InvalidPayload);
+            pending.extend_from_slice(&payload);
+            if !existing.starts_with(pending.as_slice()) {
+                pending.clear();
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            if pending.len() == existing.len() {
+                pending.clear();
+            }
+            return Ok(data.len() as u32);
         }
         let chunk_bytes = self.chunk_bytes();
         if payload.len() > chunk_bytes {
@@ -7940,5 +7990,70 @@ fn truncate(input: &str, limit: usize) -> &str {
         input
     } else {
         &input[..limit]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cohesix_cas::{CasManifest, CAS_MANIFEST_SCHEMA};
+    use ed25519_dalek::{Signature, SigningKey};
+    use sha2::{Digest, Sha256};
+    use signature::Signer;
+
+    #[test]
+    fn cas_manifest_reupload_is_idempotent() {
+        let config = generated::cas_config();
+        let key_bytes = config.signing_key.expect("signing key required");
+        let mut cas = CasState::new(config);
+        let epoch = "1";
+        let payload = vec![0u8; config.chunk_bytes as usize];
+        let digest = Sha256::digest(&payload);
+        let mut digest_bytes = [0u8; 32];
+        digest_bytes.copy_from_slice(&digest);
+
+        cas.append_chunk(epoch, &digest_bytes, u64::MAX, &payload)
+            .expect("upload chunk");
+
+        let manifest = build_signed_manifest(
+            epoch,
+            config.chunk_bytes,
+            &payload,
+            digest_bytes,
+            &key_bytes,
+        );
+        let manifest_cbor = manifest.encode_signed().expect("encode manifest");
+
+        cas.append_manifest(epoch, u64::MAX, &manifest_cbor)
+            .expect("upload manifest");
+        cas.append_manifest(epoch, u64::MAX, &manifest_cbor)
+            .expect("reupload manifest");
+    }
+
+    fn build_signed_manifest(
+        epoch: &str,
+        chunk_bytes: u32,
+        payload: &[u8],
+        digest: [u8; 32],
+        key_bytes: &[u8; 32],
+    ) -> CasManifest {
+        let payload_digest = Sha256::digest(payload);
+        let mut payload_sha256 = [0u8; 32];
+        payload_sha256.copy_from_slice(&payload_digest);
+        let mut manifest = CasManifest {
+            schema: CAS_MANIFEST_SCHEMA.to_owned(),
+            epoch: epoch.to_owned(),
+            chunk_bytes,
+            payload_bytes: chunk_bytes as u64,
+            payload_sha256,
+            chunks: vec![digest],
+            delta: None,
+            signature: None,
+        };
+        let signing_key = SigningKey::from_bytes(key_bytes);
+        let payload = manifest.signature_payload().expect("signing payload");
+        let signature: Signature = signing_key.sign(&payload);
+        manifest.signature = Some(signature.to_bytes());
+        manifest
     }
 }

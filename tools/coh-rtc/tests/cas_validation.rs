@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate CAS manifest checks in coh-rtc.
 // Author: Lukas Bower
@@ -7,6 +7,12 @@
 use coh_rtc::{compile, CompileOptions};
 use std::fs;
 use tempfile::TempDir;
+
+const UI_UPDATES_SNIPPET: &str = r#"
+[ui_providers.updates]
+manifest = true
+status = true
+"#;
 
 fn base_manifest(extra: &str) -> String {
     format!(
@@ -47,6 +53,10 @@ secret = "bootstrap"
     )
 }
 
+fn cas_manifest(extra: &str) -> String {
+    base_manifest(&format!("{UI_UPDATES_SNIPPET}\n{extra}"))
+}
+
 fn compile_error(manifest: &str) -> String {
     let temp_dir = TempDir::new().expect("tempdir");
     let manifest_path = temp_dir.path().join("manifest.toml");
@@ -62,6 +72,7 @@ fn compile_error(manifest: &str) -> String {
         observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
         observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
+        trace_policy_snippet_out: temp_dir.path().join("trace_policy.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
@@ -88,7 +99,7 @@ fn compile_error(manifest: &str) -> String {
 
 #[test]
 fn cas_chunk_bytes_exceeds_msize_rejected() {
-    let manifest = base_manifest(
+    let manifest = cas_manifest(
         r#"
 [cas]
 enable = true
@@ -110,7 +121,7 @@ required = false
 
 #[test]
 fn cas_chunk_bytes_exceeds_budget_rejected() {
-    let manifest = base_manifest(
+    let manifest = cas_manifest(
         r#"
 [cas]
 enable = true
@@ -131,7 +142,7 @@ required = false
 
 #[test]
 fn cas_signing_key_required_when_signing_required() {
-    let manifest = base_manifest(
+    let manifest = cas_manifest(
         r#"
 [cas]
 enable = true
@@ -152,7 +163,7 @@ required = true
 
 #[test]
 fn cas_signing_section_required_when_enabled() {
-    let manifest = base_manifest(
+    let manifest = cas_manifest(
         r#"
 [cas]
 enable = true
@@ -182,7 +193,7 @@ enable = true
 
 #[test]
 fn cas_chunk_bytes_zero_rejected() {
-    let manifest = base_manifest(
+    let manifest = cas_manifest(
         r#"
 [cas]
 enable = true

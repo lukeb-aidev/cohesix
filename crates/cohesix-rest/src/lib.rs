@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide a small REST client for the Cohesix hive-gateway.
 // Author: Lukas Bower
@@ -43,9 +43,21 @@ impl GatewayClient {
     /// Fetch manifest-derived bounds from the gateway.
     pub fn bounds(&self) -> Result<BoundsResponse> {
         let url = format!("{}/v1/meta/bounds", self.base_url);
-        let response = self.agent.get(&url).call();
-        let parsed = handle_response("BOUNDS", response)?;
-        Ok(parsed.into_bounds()?)
+        match self.agent.get(&url).call() {
+            Ok(resp) => resp
+                .into_json()
+                .map_err(|err| anyhow!(err))
+                .context("decode bounds response"),
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                if body.is_empty() {
+                    Err(anyhow!("BOUNDS failed (http {code})"))
+                } else {
+                    Err(anyhow!("BOUNDS failed (http {code}): {body}"))
+                }
+            }
+            Err(ureq::Error::Transport(err)) => Err(anyhow!(err).context("gateway transport error")),
+        }
     }
 
     /// Issue an LS request via the gateway.
@@ -121,26 +133,6 @@ struct GatewayResponse {
     policy: Option<PolicyBounds>,
     #[serde(default)]
     observability: Option<ObservabilityBounds>,
-}
-
-impl GatewayResponse {
-    fn into_bounds(self) -> Result<BoundsResponse> {
-        Ok(BoundsResponse {
-            manifest_sha256: self
-                .manifest_sha256
-                .ok_or_else(|| anyhow!("missing manifest_sha256"))?,
-            secure9p: self.secure9p.ok_or_else(|| anyhow!("missing secure9p"))?,
-            console: self.console.ok_or_else(|| anyhow!("missing console"))?,
-            paths: self.paths.ok_or_else(|| anyhow!("missing paths"))?,
-            control_plane: self
-                .control_plane
-                .ok_or_else(|| anyhow!("missing control_plane"))?,
-            policy: self.policy.ok_or_else(|| anyhow!("missing policy"))?,
-            observability: self
-                .observability
-                .ok_or_else(|| anyhow!("missing observability"))?,
-        })
-    }
 }
 
 /// Manifest-derived bounds returned by the gateway.
@@ -354,4 +346,55 @@ fn ensure_ok(verb: &str, response: GatewayResponse) -> Result<GatewayResponse> {
         .error
         .unwrap_or_else(|| format!("{verb} failed"));
     Err(anyhow!(detail))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BoundsResponse;
+
+    #[test]
+    fn bounds_response_parses_without_status_wrapper() {
+        let json = r#"{
+            "manifest_sha256": "deadbeef",
+            "secure9p": {"msize": 8192, "walk_depth": 8},
+            "console": {
+                "max_line_len": 256,
+                "max_path_len": 96,
+                "max_json_len": 192,
+                "max_id_len": 32,
+                "max_echo_len": 128,
+                "max_ticket_len": 224
+            },
+            "paths": {
+                "queen_ctl": "/queen/ctl",
+                "queen_lifecycle_ctl": "/queen/lifecycle/ctl",
+                "queen_schedule_ctl": "/queen/schedule/ctl",
+                "queen_lease_ctl": "/queen/lease/ctl",
+                "queen_export_ctl": "/queen/export/ctl",
+                "policy_ctl": "/policy/ctl",
+                "log": "/log/queen.log"
+            },
+            "control_plane": {
+                "schedule": {"enable": true, "queue_max_entries": 64, "ctl_max_bytes": 8192},
+                "lease": {"enable": true, "active_max_entries": 64, "preemptions_max_entries": 64, "ctl_max_bytes": 8192},
+                "export": {"enable": true, "ctl_max_bytes": 2048}
+            },
+            "policy": {"enable": true, "queue_max_entries": 32, "queue_max_bytes": 4096, "ctl_max_bytes": 2048},
+            "observability": {
+                "proc_schedule": {"summary": true, "queue": true, "summary_bytes": 128, "queue_bytes": 256},
+                "proc_lease": {
+                    "summary": true,
+                    "active": true,
+                    "preemptions": true,
+                    "summary_bytes": 160,
+                    "active_bytes": 256,
+                    "preemptions_bytes": 256
+                }
+            }
+        }"#;
+        let parsed: BoundsResponse = serde_json::from_str(json).expect("bounds json");
+        assert_eq!(parsed.manifest_sha256, "deadbeef");
+        assert_eq!(parsed.secure9p.msize, 8192);
+        assert_eq!(parsed.observability.proc_schedule.queue_bytes, 256);
+    }
 }

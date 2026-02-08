@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Document Cohesix Python client usage and backends. -->
 <!-- Author: Lukas Bower -->
@@ -141,7 +141,7 @@ python3 tools/cohesix-py/examples/lease_run.py --mount-root /tmp/coh-mount
 ```
 
 Notes:
-- Live mounts require FUSE (a FUSE runtime installed and `coh` built with FUSE enabled; default on Linux).
+- Live mounts require FUSE (a FUSE runtime installed and `coh` built with FUSE enabled; default on Linux, macOS requires `--features fuse` plus MacFUSE).
 - The mount root is constrained by the manifest allowlist in `out/coh_policy.toml`.
 - The mount process stays in the foreground; use a second terminal or run it in the background.
 

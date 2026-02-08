@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Synthetic namespace builder backing the NineDoor Secure9P server.
 // Author: Lukas Bower
@@ -1309,8 +1309,12 @@ impl Namespace {
             )?;
         }
         if self.ui.updates.status {
-            self.ensure_read_only_file(&update_path, "status", b"")?;
-            self.ensure_read_only_file(&update_path, "status.cbor", b"")?;
+            self.ensure_file_raw(&update_path, "status", FileNode::ReadOnly(Vec::new()))?;
+            self.ensure_file_raw(
+                &update_path,
+                "status.cbor",
+                FileNode::ReadOnly(Vec::new()),
+            )?;
         }
         self.ensure_dir_raw(&update_path, "chunks")?;
         Ok(())

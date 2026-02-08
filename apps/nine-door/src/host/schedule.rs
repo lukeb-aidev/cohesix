@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Maintain schedule/lease/export control state for NineDoor host mode.
 // Author: Lukas Bower
@@ -165,10 +165,6 @@ impl ScheduleState {
         }
     }
 
-    pub(crate) fn enabled(&self) -> bool {
-        self.enabled
-    }
-
     pub(crate) fn proc_enabled(&self) -> bool {
         self.proc_summary || self.proc_queue
     }
@@ -330,10 +326,6 @@ impl LeaseState {
             proc_active_bytes: proc.active_bytes,
             proc_preemptions_bytes: proc.preemptions_bytes,
         }
-    }
-
-    pub(crate) fn enabled(&self) -> bool {
-        self.enabled
     }
 
     pub(crate) fn proc_enabled(&self) -> bool {
@@ -594,10 +586,6 @@ impl ExportState {
             windows: Vec::new(),
             next_seq: 1,
         }
-    }
-
-    pub(crate) fn enabled(&self) -> bool {
-        self.enabled
     }
 
     pub(crate) fn ctl_log(&self) -> &[u8] {

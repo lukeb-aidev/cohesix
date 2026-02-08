@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Document Cohesix test fixtures, hashes, and convergence guardrails. -->
 <!-- Author: Lukas Bower -->
@@ -26,6 +26,9 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
 - `scripts/ci/check_test_plan.sh`
 - If IR or manifest changes: `cargo run -p coh-rtc` then `scripts/check-generated.sh`.
 - Ensure `SEL4_BUILD_DIR` points at the SMP kernel build (`$REPO/seL4/SMP_build` by default); override to `$REPO/seL4/build` when validating single-core baselines.
+- Default QEMU SMP topology is four single-threaded cores; set `COHESIX_QEMU_SMP=1` for single-core baselines or `COHESIX_QEMU_SMP_TOPO` for explicit topologies.
+- macOS: FUSE mount coverage is optional unless `coh` is rebuilt with `--features fuse` and MacFUSE is installed.
+- If the host lacks EL2/virtualization support or KVM cannot provide GICv2, set `COHESIX_QEMU_VIRT=off` and/or `COHESIX_QEMU_MACHINE_EXTRA=kernel-irqchip=off` when invoking the release `qemu/run.sh`.
 - Before any QEMU TCP run, start tcpdump and confirm the log path (example: `logs/tcpdump-new-YYYYMMDD-HHMMSS.log`). Use the same path in TCP correlation checks.
 - Headless Linux requires `xvfb-run` (`sudo apt-get install -y xvfb` if missing).
 - Ensure `/updates` and `/host` are enabled for host tool tests:
@@ -145,7 +148,7 @@ Run while QEMU is up:
     - `./bin/coh --host 127.0.0.1 --port 31337 peft import --publish --model demo-model --from demo/peft_adapter --job job_0001 --export ./out/peft_export --registry ./out/peft_registry`
     - `./bin/coh --host 127.0.0.1 --port 31337 peft activate --model demo-model --registry ./out/peft_registry`
     - Verify in `cohsh` (after closing SwarmUI): `ls /gpu/models/available` and `cat /gpu/models/active`
-  - Optional FUSE: `./bin/coh mount --host 127.0.0.1 --port 31337 --at /tmp/coh-mount` (requires FUSE runtime; build `coh` with FUSE enabled if you disabled default features).
+  - Optional FUSE: `./bin/coh mount --host 127.0.0.1 --port 31337 --at /tmp/coh-mount` (requires a FUSE runtime; macOS defaults to FUSE disabled and needs `--features fuse` plus MacFUSE).
 - `swarmui` live (console + observability; do not attach cohsh simultaneously):
   - macOS: `./bin/swarmui`
   - headless Linux: `xvfb-run -a ./bin/swarmui`
@@ -213,8 +216,8 @@ Run while QEMU is up:
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/lifecycle/state&max_bytes=64' | jq .`
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/tail?path=/log/queen.log&max_bytes=512' | jq .`
   - REST `/proc` bounds (schedule + lease):
-    - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/schedule/summary&max_bytes=160' | jq .`
-    - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/schedule/queue&max_bytes=512' | jq .`
+    - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/schedule/summary&max_bytes=128' | jq .`
+    - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/schedule/queue&max_bytes=256' | jq .`
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/lease/summary&max_bytes=128' | jq .`
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/lease/active&max_bytes=256' | jq .`
   - Policy approval (only if `/policy/rules` exists):
@@ -320,9 +323,6 @@ Run Sections 3–5 using the extracted bundle in a clean temp directory (not the
 
 ## Trace replay limits
 <!-- coh-rtc:trace-policy:start -->
-<!-- Author: Lukas Bower -->
-<!-- Purpose: Generated trace replay snippet consumed by docs/TEST_PLAN.md. -->
-
 ### Trace replay limits (generated)
 - `trace.format.version`: `1`
 - `trace.hash`: `sha256`

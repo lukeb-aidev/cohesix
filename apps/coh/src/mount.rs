@@ -1,42 +1,42 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide Secure9P-backed mount helpers for coh.
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 use std::sync::Mutex;
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, Context, Result};
 use cohsh::client::CohClient;
 use cohsh_core::Secure9pTransport;
 use fs2::FileExt;
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 use secure9p_codec::OpenMode;
 use sha2::{Digest, Sha256};
 
 use crate::console::ConsoleSession;
 use crate::policy::CohPolicy;
 use crate::rest::RestSession;
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 use crate::CohAccess;
 use crate::MAX_PATH_COMPONENTS;
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 use crate::{list_dir, MAX_DIR_LIST_BYTES};
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 const ROOT_INODE: u64 = 1;
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 const TTL: Duration = Duration::from_secs(1);
 
 /// Append-only offset tracker for mount writes.
@@ -261,7 +261,7 @@ pub fn mount<T: Secure9pTransport + Send + 'static>(
     policy: &CohPolicy,
     at: &Path,
 ) -> Result<()> {
-    #[cfg(feature = "fuse")]
+    #[cfg(any(feature = "fuse", target_os = "linux"))]
     {
         let validator = MountValidator::from_policy(policy)?;
         let filesystem = CohFuse::new(client, validator);
@@ -273,7 +273,7 @@ pub fn mount<T: Secure9pTransport + Send + 'static>(
             .with_context(|| format!("mount {}", at.display()))?;
         Ok(())
     }
-    #[cfg(not(feature = "fuse"))]
+    #[cfg(not(any(feature = "fuse", target_os = "linux")))]
     {
         let _ = client;
         let _ = policy;
@@ -286,7 +286,7 @@ pub fn mount<T: Secure9pTransport + Send + 'static>(
 
 /// Start a FUSE mount backed by the TCP console transport.
 pub fn mount_console(session: ConsoleSession, policy: &CohPolicy, at: &Path) -> Result<()> {
-    #[cfg(feature = "fuse")]
+    #[cfg(any(feature = "fuse", target_os = "linux"))]
     {
         let validator = MountValidator::from_policy(policy)?;
         let filesystem = AccessFuse::new(session, validator);
@@ -298,7 +298,7 @@ pub fn mount_console(session: ConsoleSession, policy: &CohPolicy, at: &Path) -> 
             .with_context(|| format!("mount {}", at.display()))?;
         Ok(())
     }
-    #[cfg(not(feature = "fuse"))]
+    #[cfg(not(any(feature = "fuse", target_os = "linux")))]
     {
         let _ = session;
         let _ = policy;
@@ -311,7 +311,7 @@ pub fn mount_console(session: ConsoleSession, policy: &CohPolicy, at: &Path) -> 
 
 /// Start a FUSE mount backed by the hive-gateway REST transport.
 pub fn mount_rest(session: RestSession, policy: &CohPolicy, at: &Path) -> Result<()> {
-    #[cfg(feature = "fuse")]
+    #[cfg(any(feature = "fuse", target_os = "linux"))]
     {
         let validator = MountValidator::from_policy(policy)?;
         let filesystem = AccessFuse::new(session, validator);
@@ -323,7 +323,7 @@ pub fn mount_rest(session: RestSession, policy: &CohPolicy, at: &Path) -> Result
             .with_context(|| format!("mount {}", at.display()))?;
         Ok(())
     }
-    #[cfg(not(feature = "fuse"))]
+    #[cfg(not(any(feature = "fuse", target_os = "linux")))]
     {
         let _ = session;
         let _ = policy;
@@ -334,7 +334,7 @@ pub fn mount_rest(session: RestSession, policy: &CohPolicy, at: &Path) -> Result
     }
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 struct CohFuse<T: Secure9pTransport> {
     client: Mutex<CohClient<T>>,
     validator: MountValidator,
@@ -343,7 +343,7 @@ struct CohFuse<T: Secure9pTransport> {
     next_handle: AtomicU64,
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 impl<T: Secure9pTransport> CohFuse<T> {
     fn new(client: CohClient<T>, validator: MountValidator) -> Self {
         let mut inodes = InodeTable::new();
@@ -405,7 +405,7 @@ impl<T: Secure9pTransport> CohFuse<T> {
     }
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
     fn lookup(
         &mut self,
@@ -691,7 +691,7 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
     }
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 struct AccessFuse<C: CohAccess + Send> {
     client: Mutex<C>,
     validator: MountValidator,
@@ -700,7 +700,7 @@ struct AccessFuse<C: CohAccess + Send> {
     next_handle: AtomicU64,
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 impl<C: CohAccess + Send> AccessFuse<C> {
     fn new(client: C, validator: MountValidator) -> Self {
         let mut inodes = InodeTable::new();
@@ -768,7 +768,7 @@ impl<C: CohAccess + Send> AccessFuse<C> {
     }
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
     fn lookup(
         &mut self,
@@ -1045,28 +1045,28 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
     }
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 #[derive(Debug, Clone)]
 struct AccessHandle {
     path: String,
     append_tracker: AppendOnlyTracker,
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 #[derive(Debug, Clone)]
 struct FileHandle {
     fid: u32,
     append_tracker: AppendOnlyTracker,
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 #[derive(Debug, Clone)]
 struct InodeEntry {
     path: String,
     is_dir: bool,
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 #[derive(Debug, Default)]
 struct InodeTable {
     by_inode: HashMap<u64, InodeEntry>,
@@ -1074,7 +1074,7 @@ struct InodeTable {
     next_inode: u64,
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", target_os = "linux"))]
 impl InodeTable {
     fn new() -> Self {
         Self {

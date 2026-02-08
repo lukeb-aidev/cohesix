@@ -1,9 +1,9 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Guard that observability docs match coh-rtc output.
 // Author: Lukas Bower
 
-use coh_rtc::codegen::{hash_bytes, DocFragments};
+use coh_rtc::codegen::{cohesix_py, hash_bytes, DocFragments};
 use coh_rtc::ir::{load_manifest, serialize_manifest};
 use std::fs;
 use std::path::PathBuf;
@@ -31,7 +31,8 @@ fn generated_docs() -> DocFragments {
     let manifest = load_manifest(&manifest_path).expect("load manifest");
     let resolved = serialize_manifest(&manifest).expect("serialize manifest");
     let manifest_hash = hash_bytes(&resolved);
-    DocFragments::from_manifest(&manifest, &manifest_hash)
+    let py_defaults = cohesix_py::render_defaults(&manifest, &manifest_hash);
+    DocFragments::from_manifest(&manifest, &manifest_hash, &py_defaults)
 }
 
 #[test]

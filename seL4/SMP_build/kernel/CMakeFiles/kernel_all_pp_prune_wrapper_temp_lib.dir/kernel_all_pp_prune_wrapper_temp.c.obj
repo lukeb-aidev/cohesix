@@ -2407,6 +2407,8 @@ static inline __attribute__((__const__)) word_t physBase(void)
 }
 
 /* INTERRUPTS */
+/* INTERRUPT_VGIC_MAINTENANCE generated from /intc@8000000 */
+
 /* INTERRUPT_VTIMER_EVENT generated from /timer */
 
 /* KERNEL_TIMER_IRQ generated from /timer */
@@ -2416,6 +2418,7 @@ static inline __attribute__((__const__)) word_t physBase(void)
 
 
 /* KERNEL DEVICES */
+
 
 
 
@@ -2444,6 +2447,7 @@ static const kernel_frame_t __attribute__((__section__(".boot.rodata"))) kernel_
         .armExecuteNever = true,
         .userAvailable = false
     },
+# 81 "/Users/lukasbower/seL4/SMP_build/kernel/gen_headers/plat/machine/devices_gen.h"
 };
 
 /* Elements in kernel_device_frames may be enabled in specific configurations

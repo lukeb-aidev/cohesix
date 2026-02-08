@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate coh-rtc determinism and validation behavior.
 // Author: Lukas Bower
@@ -30,6 +30,7 @@ fn manifest_codegen_is_deterministic() {
     let observability_interfaces_snippet = temp_dir.path().join("observability_interfaces.md");
     let observability_security_snippet = temp_dir.path().join("observability_security.md");
     let ticket_quotas_snippet = temp_dir.path().join("ticket_quotas.md");
+    let trace_policy_snippet = temp_dir.path().join("trace_policy.md");
     let cas_interfaces_snippet = temp_dir.path().join("cas_interfaces.md");
     let cas_security_snippet = temp_dir.path().join("cas_security.md");
     let cbor_snippet = temp_dir.path().join("telemetry_cbor.md");
@@ -61,6 +62,7 @@ fn manifest_codegen_is_deterministic() {
         observability_interfaces_snippet_out: observability_interfaces_snippet.clone(),
         observability_security_snippet_out: observability_security_snippet.clone(),
         ticket_quotas_snippet_out: ticket_quotas_snippet.clone(),
+        trace_policy_snippet_out: trace_policy_snippet.clone(),
         cas_interfaces_snippet_out: cas_interfaces_snippet.clone(),
         cas_security_snippet_out: cas_security_snippet.clone(),
         cbor_snippet_out: cbor_snippet.clone(),
@@ -93,6 +95,7 @@ fn manifest_codegen_is_deterministic() {
     let baseline_obs_security =
         fs::read(&observability_security_snippet).expect("observability security snippet");
     let baseline_ticket_quotas = fs::read(&ticket_quotas_snippet).expect("ticket quotas snippet");
+    let baseline_trace_policy = fs::read(&trace_policy_snippet).expect("trace policy snippet");
     let baseline_cas_interfaces =
         fs::read(&cas_interfaces_snippet).expect("cas interfaces snippet");
     let baseline_cas_security = fs::read(&cas_security_snippet).expect("cas security snippet");
@@ -130,6 +133,7 @@ fn manifest_codegen_is_deterministic() {
     let second_obs_security =
         fs::read(&observability_security_snippet).expect("observability security snippet");
     let second_ticket_quotas = fs::read(&ticket_quotas_snippet).expect("ticket quotas snippet");
+    let second_trace_policy = fs::read(&trace_policy_snippet).expect("trace policy snippet");
     let second_cas_interfaces = fs::read(&cas_interfaces_snippet).expect("cas interfaces snippet");
     let second_cas_security = fs::read(&cas_security_snippet).expect("cas security snippet");
     let second_cbor = fs::read(&cbor_snippet).expect("cbor snippet");
@@ -162,6 +166,7 @@ fn manifest_codegen_is_deterministic() {
     assert_eq!(baseline_obs_interfaces, second_obs_interfaces);
     assert_eq!(baseline_obs_security, second_obs_security);
     assert_eq!(baseline_ticket_quotas, second_ticket_quotas);
+    assert_eq!(baseline_trace_policy, second_trace_policy);
     assert_eq!(baseline_cas_interfaces, second_cas_interfaces);
     assert_eq!(baseline_cas_security, second_cas_security);
     assert_eq!(baseline_cbor, second_cbor);
@@ -234,6 +239,7 @@ secret = "bootstrap"
         observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
         observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
+        trace_policy_snippet_out: temp_dir.path().join("trace_policy.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
@@ -329,6 +335,7 @@ secret = "bootstrap"
         observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
         observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
+        trace_policy_snippet_out: temp_dir.path().join("trace_policy.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
@@ -409,6 +416,7 @@ secret = "bootstrap"
         observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
         observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
+        trace_policy_snippet_out: temp_dir.path().join("trace_policy.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
@@ -496,6 +504,7 @@ secret = "bootstrap"
         observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
         observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
+        trace_policy_snippet_out: temp_dir.path().join("trace_policy.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),
@@ -576,6 +585,7 @@ secret = "bootstrap"
         observability_interfaces_snippet_out: temp_dir.path().join("observability_interfaces.md"),
         observability_security_snippet_out: temp_dir.path().join("observability_security.md"),
         ticket_quotas_snippet_out: temp_dir.path().join("ticket_quotas.md"),
+        trace_policy_snippet_out: temp_dir.path().join("trace_policy.md"),
         cas_interfaces_snippet_out: temp_dir.path().join("cas_interfaces.md"),
         cas_security_snippet_out: temp_dir.path().join("cas_security.md"),
         cbor_snippet_out: temp_dir.path().join("telemetry_cbor.md"),

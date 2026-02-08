@@ -1,15 +1,5 @@
 /*
- * DTS of QEMU v10.1.0 for:
- *    qemu-system-aarch64
- *    -machine
- *    virt,secure=off,dumpdtb=/Users/lukasbower/seL4/SMP_build/qemu-arm-virt.dtb
- *    -cpu
- *    cortex-a53
- *    -smp
- *    4
- *    -m
- *    1024
- *    -nographic
+ * converted from /Users/lukasbower/seL4/SMP_build/qemu-arm-virt-virt-on.dtb
  */
 
 /dts-v1/;
@@ -27,7 +17,7 @@
 		cpu_on = <0xc4000003>;
 		cpu_off = <0x84000002>;
 		cpu_suspend = <0xc4000001>;
-		method = "hvc";
+		method = "smc";
 		compatible = "arm,psci-1.0", "arm,psci-0.2", "arm,psci";
 	};
 
@@ -334,7 +324,8 @@
 
 	intc@8000000 {
 		phandle = <0x8005>;
-		reg = <0x00 0x8000000 0x00 0x10000 0x00 0x8010000 0x00 0x10000>;
+		interrupts = <0x01 0x09 0x04>;
+		reg = <0x00 0x8000000 0x00 0x10000 0x00 0x8010000 0x00 0x10000 0x00 0x8030000 0x00 0x10000 0x00 0x8040000 0x00 0x10000>;
 		compatible = "arm,cortex-a15-gic";
 		ranges;
 		#size-cells = <0x02>;
@@ -438,7 +429,7 @@
 
 	chosen {
 		stdout-path = "/pl011@9000000";
-		rng-seed = <0xc6a4557f 0x9f073e10 0xcb44a9e0 0x62f3a59c 0x26351918 0xdc24f166 0x3420d3e6 0x59d750c3>;
-		kaslr-seed = <0xe017fe91 0x34008fd5>;
+		rng-seed = <0xe8a6ac13 0x45ba5b77 0x77538429 0x92132dba 0x1cea2964 0x4ac12681 0x431b4a1 0x3c3a3b53>;
+		kaslr-seed = <0xee016142 0xfb7c9eb9>;
 	};
 };

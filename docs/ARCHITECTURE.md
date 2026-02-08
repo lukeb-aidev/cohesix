@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Describe the Cohesix system architecture, component responsibilities, and boundary constraints. -->
 <!-- Author: Lukas Bower -->
@@ -30,7 +30,8 @@ Non-goals:
 ## 2.1 SMP Execution Model (Task Isolation)
 - SMP is enabled only when the seL4 kernel is built with `SMP=ON` and `KernelMaxNumNodes >= 2`.
 - Cohesix uses **task isolation** (separate seL4 tasks) rather than shared-memory multithreading; authoritative state remains serialized.
-- For QEMU bring-up, set `COHESIX_QEMU_SMP` (or `QEMU_SMP`) to match `KernelMaxNumNodes` when running `scripts/qemu-run.sh` or `scripts/cohesix-build-run.sh`.
+- For QEMU bring-up, set `COHESIX_QEMU_SMP` (or `QEMU_SMP`) to match `KernelMaxNumNodes`, or provide a full topology via `COHESIX_QEMU_SMP_TOPO`, when running `scripts/qemu-run.sh` or `scripts/cohesix-build-run.sh`.
+- QEMU SMP bring-up on macOS/TCG requires PSCI `smc`; the SMP kernel build must ingest a DTB dumped with `virtualization=on` so the elfloader emits `PSCI_METHOD_SMC` for the platform.
 - Optional affinity hints live in `root_task.affinity` inside `configs/root_task.toml`; all core indices must be `< max_cores`, and `max_cores` must match the kernel build’s node count when affinity is enabled.
 
 ## 3. Top-Level Architecture

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: CLI entry point for the Cohesix shell prototype.
 // Author: Lukas Bower
@@ -292,6 +292,7 @@ fn resolve_ticket_secret(cli_secret: Option<String>) -> Result<Option<String>> {
     }
 }
 
+#[cfg(feature = "rest")]
 fn resolve_rest_url(cli_value: Option<&str>) -> Option<String> {
     if let Some(value) = cli_value {
         let trimmed = value.trim();

@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Configure the Cohesix host bridge CLI crate.
+# Copyright 2026 Lukas Bower
 [package]
 name = "coh"
 version = "0.1.0"
@@ -9,7 +10,7 @@ publish = false
 description = "Cohesix host bridge CLI (mount, gpu, telemetry pull)"
 
 [features]
-default = ["nvml", "cuda", "fuse"]
+default = ["nvml", "cuda"]
 mock = []
 fuse = ["dep:fuser"]
 nvml = ["gpu-bridge-host/nvml"]
@@ -31,9 +32,14 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 toml = "0.8"
-fuser = { version = "0.15", optional = true }
 libc = "0.2"
 fs2 = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser = { version = "0.15" }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+fuser = { version = "0.15", optional = true }
 
 [dev-dependencies]
 tempfile = "3.12"
