@@ -146,6 +146,44 @@ Host bridge for mount, GPU leases, telemetry pulls, runtime breadcrumbs, PEFT li
 - Binary: `out/cohesix/host-tools/coh` (bundle: `bin/coh`)
 
 ### Usage
+
+Usage: coh [OPTIONS] <COMMAND>
+```bash
+Commands:
+  doctor     Run deterministic environment checks
+  mount      Mount a Secure9P namespace via FUSE
+  gpu        GPU discovery and lease operations
+  peft       PEFT/LoRA lifecycle operations
+  run        Run a host command with lease validation and breadcrumb logging
+  telemetry  Telemetry pull operations
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --role <ROLE>
+          Role to use when attaching to Secure9P
+
+          Possible values:
+          - queen:            Queen orchestration role
+          - worker-heartbeat: Worker heartbeat role
+          - worker-gpu:       Worker GPU role
+          - worker-bus:       Worker bus role
+          - worker-lora:      Worker LoRa role
+          
+          [default: queen]
+
+      --ticket <TICKET>
+          Optional capability ticket payload
+
+      --policy <FILE>
+          Path to the manifest-derived coh policy TOML
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+```
+
 ```bash
 ./bin/coh doctor --mock
 ./bin/coh --rest-url http://127.0.0.1:8080 gpu list
@@ -216,6 +254,19 @@ Package and upload CAS bundles over the TCP console using the same append-only f
 
 ### Usage
 ```bash
+Usage: cas-tool <COMMAND>
+
+Commands:
+  pack    Package a payload into CAS chunks and manifest
+  upload  Upload a CAS bundle via the TCP console
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+```
+
+```bash
 ./bin/cas-tool pack --epoch 1 --input path/to/payload --out-dir out/cas/1
 ./bin/cas-tool upload --bundle out/cas/1 --host 127.0.0.1 --port 31337 \
   --auth-token changeme --ticket "$QUEEN_TICKET"
@@ -237,6 +288,21 @@ Discover GPUs on the host (NVML with CUDA fallback, or mock) and emit the `/gpu`
 - Binary: `out/cohesix/host-tools/gpu-bridge-host` (bundle: `bin/gpu-bridge-host`)
 
 ### Usage
+```bash
+      --mock                     Use the deterministic mock backend instead of NVML
+      --registry <DIR>           Host registry root containing available model manifests
+      --list                     Print GPU namespace JSON to stdout
+      --publish                  Publish the GPU namespace into /gpu/bridge/ctl on a live Queen
+      --interval-ms <MS>         Interval in milliseconds between publish snapshots (requires --publish)
+      --tcp-host <TCP_HOST>      TCP host for the live console publish mode [default: 127.0.0.1]
+      --tcp-port <TCP_PORT>      TCP port for the live console publish mode [default: 31337]
+      --auth-token <AUTH_TOKEN>  Authentication token for the live console publish mode
+      --ticket <TICKET>          Optional ticket payload when attaching to the console
+      --rest-url <URL>           REST gateway base URL for hive-gateway publish mode
+  -h, --help                     Print help
+  -V, --version                  Print version
+```
+
 ```bash
 ./bin/gpu-bridge-host --mock --list
 ./bin/gpu-bridge-host --list
@@ -263,6 +329,20 @@ Publish host-side providers into `/host` (systemd, k8s, docker, nvidia, jetson, 
 
 ### Usage
 ```bash
+      --mock                     Enable deterministic mock mode (in-process NineDoor)
+      --mount <MOUNT>            Mount point for the /host namespace [default: /host]
+      --provider <PROVIDER>      Provider to publish (repeat for multiple) [possible values: systemd, k8s, docker, nvidia, jetson, net]
+      --policy <FILE>            Path to the manifest-derived cohsh policy TOML (polling defaults)
+      --watch                    Run continuously, polling providers on their configured interval
+      --rest-url <URL>           REST gateway base URL for hive-gateway publish mode
+      --tcp-host <TCP_HOST>      TCP host for a live NineDoor console (non-mock) [default: 127.0.0.1]
+      --tcp-port <TCP_PORT>      TCP port for a live NineDoor console (non-mock) [default: 31337]
+      --auth-token <AUTH_TOKEN>  Authentication token for the TCP console (non-mock) [default: changeme]
+  -h, --help                     Print help
+  -V, --version                  Print version
+```
+
+```bash
 ./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider docker --provider nvidia
 ./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
 ./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --watch
@@ -288,7 +368,19 @@ Host-only REST gateway that maps 1:1 to Cohesix console/file semantics (`LS`, `C
 
 ### Usage
 ```bash
-./bin/hive-gateway --mock --bind 127.0.0.1:8080
+      --bind <BIND>              Bind address for the REST gateway [default: 127.0.0.1:8080]
+      --tcp-host <TCP_HOST>      TCP console host [default: 127.0.0.1]
+      --tcp-port <TCP_PORT>      TCP console port [default: 31337]
+      --auth-token <AUTH_TOKEN>  TCP console auth token [default: changeme]
+      --role <ROLE>              Role to attach with (queen by default) [default: queen]
+      --ticket <TICKET>          Optional capability ticket payload
+      --mock                     Use the in-process mock NineDoor backend
+  -h, --help                     Print help
+  -V, --version                  Print version
+```
+
+```bash
+./bin/hive-gateway --bind 127.0.0.1:8080
 COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
   COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
   ./bin/hive-gateway
