@@ -67,9 +67,9 @@ Canonical operator shell for Cohesix. Runs on the host and attaches to NineDoor 
 | `kill <worker_id>` | Queue worker termination. |
 | `bind <src> <dst>` | Bind namespace path (queen session required). |
 | `mount <service> <path>` | Mount a service namespace (queen session required). |
-| `lifecycle <cordon|drain|resume|quiesce|reset>` | Node lifecycle controls (queen session required). |
+| `lifecycle <cordon|drain|resume|quiesce|reset>` | Node lifecycle controls via `/queen/lifecycle/ctl` (queen session required). |
 | `telemetry push <file> --device <id>` | Push a bounded telemetry segment. |
-| `test [--mode <quick|full|smp>] [--json] [--timeout <s>] [--no-mutate]` | Run self-tests. |
+| `test [--mode <quick|full|smp>] [--json] [--timeout <s>] [--no-mutate]` | Run self-tests (timeout 1–120s). |
 | `ping` | Health check; reports attach + transport status. |
 | `tcp-diag [port]` | TCP connectivity check without protocol traffic (TCP builds only). |
 | `pool bench <opts>` | Pooled throughput benchmark (advanced). |
@@ -93,10 +93,22 @@ coh> test --mode quick --no-mutate
 coh> test --mode full --json
 ```
 
+### Pool bench examples
+`pool bench` writes bounded payloads to a path and measures baseline vs pooled throughput. Use append-only paths (for example `/log/queen.log` or worker telemetry).
+```text
+coh> pool bench path=/log/queen.log ops=50 kind=control
+coh> pool bench path=/log/queen.log ops=200 batch=4 payload_bytes=64 kind=control
+coh> pool bench path=/worker/<id>/telemetry ops=200 batch=8 kind=telemetry payload=telemetry
+coh> pool bench path=/log/queen.log ops=50 kind=control inject_failures=2 inject_bytes=8
+coh> pool bench path=/log/queen.log ops=20 kind=control exhaust=4
+```
+
 ### Telemetry push
 `telemetry push` accepts `txt`, `log`, `json`, `ndjson`, or `csv` inputs and forwards bounded records to `/queen/telemetry/<device_id>/`.
 ```text
 coh> telemetry push demo/telemetry/demo.txt --device device-1
+coh> telemetry push demo/telemetry/sample.ndjson --device jetson-1
+coh> telemetry push demo/telemetry/sample.csv --device g5g-1
 ```
 
 ### Quota checks (why you see `ELIMIT`)
