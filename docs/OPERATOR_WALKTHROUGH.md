@@ -1,30 +1,72 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Provide an operator walkthrough for lifecycle control and recovery. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Operator Walkthrough
 
-This walkthrough follows the as-built lifecycle control surfaces exposed by NineDoor and `cohsh`,
-and includes Milestone 24b live GPU publish, PEFT flows, host-sidecar telemetry, and Live Hive text overlays.
+This walkthrough follows the as-built lifecycle control surfaces exposed by NineDoor and `cohsh`
+for v0.6.0-alpha. It includes hive-gateway (REST multiplexer), live GPU publish, PEFT flows,
+host-sidecar telemetry, and Live Hive text overlays.
 For host tool usage, interdependencies, and policy/mount details, see
 [HOST_TOOLS.md](HOST_TOOLS.md).
 
 ## Assumptions and conventions
 - `coh>` indicates the `cohsh` prompt.
-- Only one console client at a time (quit SwarmUI or other tools before attaching `cohsh`).
+- Only one console client at a time. When using `hive-gateway`, keep it attached and route
+  all other tools through REST.
 - Live examples assume QEMU is running and the TCP console is reachable at `127.0.0.1:31337`.
 - If policy gating is enabled (see `/policy/rules`), writes to `/queen/ctl` require approvals queued in `/actions/queue`.
 - `/gpu/*` appears only after `gpu-bridge-host --publish` runs; `/host/*` appears only after `host-sidecar-bridge` runs.
 - Mock mode commands (`--mock`) do not talk to the VM; do not mix mock and live in the same session.
 
-## Multiplexer scenarios (hive-gateway)
+## Hive-gateway mental model (v0.6.0-alpha)
+- `hive-gateway` is the **sole** console client; everything else must use REST (`--rest-url`).
+- REST is a 1:1 projection of `LS`, `CAT`, and `ECHO`. It does not add new verbs or semantics.
+- REST clients inherit the gateway role (typically `queen`); there is no per-request ticket.
+- Keep the gateway bound to loopback and use an SSH tunnel for remote operators.
+
+## Quickstart: gateway multiplexing (single host)
+Goal: run `hive-gateway` as the only console client and use REST for all tools.
+
+1. Boot the Queen VM.
+   ```bash
+   ./qemu/run.sh
+   ```
+2. Start the gateway (queen role).
+   ```bash
+   COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+     COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
+     ./bin/hive-gateway
+   ```
+3. Verify the gateway is healthy.
+   ```bash
+   curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
+   curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/' | jq .
+   ```
+4. Attach `cohsh` via REST (not TCP).
+   ```bash
+   ./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 --role queen
+   ```
+5. Publish host snapshots through the gateway.
+   ```bash
+   ./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 --interval-ms 1000
+   ./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --watch
+   ```
+6. Launch SwarmUI over REST.
+   ```bash
+   SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 ./bin/swarmui
+   ```
+
+## Real-world multiplexer scenarios (hive-gateway)
 These scenarios use `hive-gateway` as the **sole** console client and route all host tools through REST. This keeps the console single-client while enabling multi-tool usage.
 
 ### A) Queen on a GPU host + SwarmUI on a remote Mac
 1. On the GPU host, boot the queen (`./qemu/run.sh` in the release bundle).
 2. Start the gateway (queen role):
    ```bash
-   COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 ./bin/hive-gateway
+   COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+     COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
+     ./bin/hive-gateway
    ```
 3. Publish host telemetry through REST:
    ```bash
@@ -67,7 +109,20 @@ These scenarios use `hive-gateway` as the **sole** console client and route all 
    ```
 3. REST mount is **exclusive** per gateway URL; stop the mount before starting another.
 
-## 0) Preflight: verify console access (optional but recommended)
+### D) Headless ops (REST + cohsh script)
+Use REST to automate an operator script without taking the console.
+1. Start `hive-gateway` (Scenario A, step 2).
+2. Run a `.coh` script over REST:
+   ```bash
+   ./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 --role queen \
+     --script scripts/cohsh/boot_v0.coh
+   ```
+   In a release bundle, replace the script path with your own `.coh` file.
+
+## 0) Preflight: verify console or gateway access (optional but recommended)
+Choose one path depending on your transport:
+
+TCP console:
 Attach and verify the root namespace is reachable:
 ```bash
 ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
@@ -78,6 +133,12 @@ If policy gating is enabled, confirm rules and current pressure:
 ```bash
 coh> cat /policy/rules
 coh> cat /proc/pressure/policy
+```
+
+REST gateway:
+```bash
+curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
+curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/' | jq .
 ```
 
 ## 1) Attach a queen session
@@ -239,5 +300,6 @@ SwarmUI is read-only and must not run concurrently with `cohsh`.
 - `ERR ECHO reason=policy ... EPERM`: queue an approval in `/actions/queue`, then retry the control write.
 - `ERR AUTH` or `connection refused`: verify QEMU is running and the console port matches `127.0.0.1:31337`.
 - `cohsh` hangs or `coh` cannot connect: another console client is already attached.
+- REST calls fail: confirm `hive-gateway` is running, bound to the expected address, and is the only console client.
 - `/gpu` empty: run `./bin/gpu-bridge-host --publish ...` (live) or `--mock --list` (mock).
 - `/host` empty: run `./bin/host-sidecar-bridge --watch --provider ...`.

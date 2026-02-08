@@ -6,6 +6,9 @@
 
 Host tools run outside the VM and project the same file/console semantics the VM enforces. They do not introduce new control-plane verbs or bypass Secure9P; every tool is a convenience wrapper over `LS`, `CAT`, `ECHO`, and/or mounted Secure9P namespaces.
 
+**v0.6.0-alpha note**
+This release introduces `hive-gateway` as the supported multiplexing layer for host tools. When you need multiple tools or remote operators, run `hive-gateway` as the **sole** console client and point every other tool at it using REST.
+
 **Build + locations**
 - Source tree: `scripts/cohesix-build-run.sh` stages host binaries under `out/cohesix/host-tools/`. It builds `cohsh` and `host-sidecar-bridge` with TCP support, plus `coh`, `gpu-bridge-host`, `cas-tool`, `hive-gateway`, and (when `cohesix-dev` is enabled) `swarmui`.
 - Source tree (manual): `cargo build -p <tool>` produces `target/<profile>/<tool>`.
@@ -15,6 +18,48 @@ All examples below use `./bin/<tool>` as the bundle layout. In the source tree, 
 
 **Console exclusivity**
 The TCP console is single-client. Only one of `cohsh`, `swarmui`, `hive-gateway`, `coh`, `gpu-bridge-host`, `host-sidecar-bridge`, `cas-tool`, or a Python `TcpBackend` should be attached at a time. `cohsh` enforces this with a lock file; set `COHSH_CONSOLE_LOCK=0` only if you understand the risk. For multiplexed deployments, run `hive-gateway` as the sole console client and point host tools at it using REST (`--rest-url`, `COH_REST_URL`, or `SWARMUI_REST_URL`). `coh mount --rest-url` is limited to one active mount per gateway URL (host-side lock).
+
+**Choosing a transport**
+Use the TCP console when a single tool is active and you want minimal hops. Use `hive-gateway` when you need multiple tools, remote operators, or a REST surface.
+
+| Scenario | Recommended transport | Why |
+| --- | --- | --- |
+| Single operator, local machine | TCP console | Lowest latency, simplest mental model. |
+| SwarmUI + CLI together | REST via `hive-gateway` | Console is single-client; REST multiplexes. |
+| Remote Mac controlling a GPU host | REST via SSH tunnel | Keeps console on the host, secure remote access. |
+| Multiple publishers (gpu + host-sidecar) | REST via `hive-gateway` | One console client, many REST clients. |
+
+## Hive-gateway quickstart (v0.6.0-alpha)
+Goal: run `hive-gateway` as the only console client and route all tools through REST.
+
+1. Boot the Queen VM.
+```bash
+./qemu/run.sh
+```
+2. Start the gateway (queen role).
+```bash
+COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+  COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
+  ./bin/hive-gateway
+```
+3. Verify the gateway is healthy.
+```bash
+curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
+curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/' | jq .
+```
+4. Attach `cohsh` via REST (not TCP).
+```bash
+./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 --role queen
+```
+5. Publish host snapshots through the gateway.
+```bash
+./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 --interval-ms 1000
+./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --watch
+```
+6. Launch SwarmUI over REST.
+```bash
+SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 ./bin/swarmui
+```
 
 ## cohsh
 ### Purpose
@@ -51,7 +96,7 @@ Canonical operator shell for Cohesix. Runs on the host and attaches to NineDoor 
 - `attach <role> [ticket]` and `login <role> [ticket]` are equivalent inside the shell.
 - `detach` closes the NineDoor session but keeps the shell alive; `quit` exits.
 - TCP auth uses `--auth-token` or `COHSH_AUTH_TOKEN` and is separate from capability tickets.
-- REST transport is queen-only and requires a running `hive-gateway` (`--rest-url` or `COHSH_REST_URL`).
+- REST transport is queen-only and requires a running `hive-gateway` (`--rest-url` or `COHSH_REST_URL`). REST clients inherit the gateway role.
 
 ### Core commands (interactive)
 | Command | Notes |
@@ -393,6 +438,24 @@ curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 - OpenAPI spec + examples live in `docs/HOST_API.md` and are served at `/v1/openapi.yaml`.
 - Swagger UI is served at `/docs` and uses public CDN assets; use the YAML spec for air-gapped environments.
 - The gateway is the console client; do not attach `cohsh` or `swarmui` in console mode at the same time. Use `SWARMUI_TRANSPORT=rest` and host tool `--rest-url` flags when multiplexing.
+- REST is queen-only in v0.6.0-alpha. Worker-role attach remains console/9P only.
+- REST clients inherit the gateway role and ticket; there is no per-request ticket.
+- Bind the gateway to loopback and expose it remotely via SSH tunneling.
+
+### Remote access pattern (SSH tunnel)
+```bash
+# On the GPU host (runs the gateway and holds the console).
+COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+  COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
+  ./bin/hive-gateway
+
+# From your Mac, tunnel the gateway.
+ssh -L 8080:127.0.0.1:8080 <gpu-host>
+
+# Use REST clients locally.
+SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 ./bin/swarmui
+./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 --role queen
+```
 
 ---
 
@@ -420,6 +483,26 @@ spawn heartbeat ticks=100
 ```
 For multiplexed mode, keep `hive-gateway` attached to the console and run `SWARMUI_TRANSPORT=rest` with host tools using `--rest-url` so the console remains single-client.
 Quit `cohsh`, relaunch SwarmUI to observe the worker activity.
+
+### 1b) Live Hive operator flow (gateway multiplexed)
+Goal: run SwarmUI, `cohsh`, and host publishers concurrently through `hive-gateway`.
+Why this matters: demonstrates the supported multi-tool pattern in v0.6.0-alpha.
+```bash
+./qemu/run.sh
+COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+  COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
+  ./bin/hive-gateway
+./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 --interval-ms 1000
+./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --watch
+SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 ./bin/swarmui
+./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 --role queen
+```
+In `cohsh`:
+```
+attach queen
+ls /gpu
+ls /host
+```
 
 ### 2) GPU surface + lease + breadcrumbs (host tools only)
 Goal: prove the GPU namespace and bounded runtime breadcrumbs.
@@ -495,21 +578,19 @@ ls /updates
 Goal: observe host telemetry (NVML/CUDA-backed GPU snapshots plus systemd, k8s, and docker) over HTTP and submit control actions through the REST projection.
 Why this matters: demonstrates that monitoring and control stay aligned with the same file and console semantics.
 
-Real-world flow (snapshot + REST read):
+Real-world flow (continuous publish + REST read):
 ```bash
 ./qemu/run.sh
 
-# Publish a one-shot NVML/CUDA GPU snapshot into /gpu (do not keep this attached).
-./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
-
-# Publish a one-shot host telemetry snapshot into /host (do not keep this attached).
-./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme \
-  --provider systemd --provider k8s --provider docker --provider nvidia
-
-# Start the REST gateway (sole console client) and read the published snapshot.
+# Start the REST gateway (sole console client).
 COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
   COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
   ./bin/hive-gateway
+
+# Publish continuous snapshots through the gateway.
+./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 --interval-ms 1000
+./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --watch \
+  --provider systemd --provider k8s --provider docker --provider nvidia
 ```
 In another terminal:
 ```bash
