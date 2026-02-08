@@ -67,9 +67,9 @@ Canonical operator shell for Cohesix. Runs on the host and attaches to NineDoor 
 | `kill <worker_id>` | Queue worker termination. |
 | `bind <src> <dst>` | Bind namespace path (queen session required). |
 | `mount <service> <path>` | Mount a service namespace (queen session required). |
-| `lifecycle <cordon|drain|resume|quiesce|reset>` | Node lifecycle controls via `/queen/lifecycle/ctl` (queen session required). |
+| `lifecycle <cordon\|drain\|resume\|quiesce\|reset>` | Node lifecycle controls via `/queen/lifecycle/ctl` (queen session required). |
 | `telemetry push <file> --device <id>` | Push a bounded telemetry segment. |
-| `test [--mode <quick|full|smp>] [--json] [--timeout <s>] [--no-mutate]` | Run self-tests (timeout 1–120s). |
+| `test [--mode <quick\|full\|smp>] [--json] [--timeout <s>] [--no-mutate]` | Run self-tests (timeout 1–120s). |
 | `ping` | Health check; reports attach + transport status. |
 | `tcp-diag [port]` | TCP connectivity check without protocol traffic (TCP builds only). |
 | `pool bench <opts>` | Pooled throughput benchmark (advanced). |
