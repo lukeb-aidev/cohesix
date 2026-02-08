@@ -1,2 +1,0 @@
-VMM_PLATSUPPORT_VESA_FRAMEBUFFER: true # LibSel4VMMPlatsupportVESAFrameBuffer=ON
-VMM_USE_HPET: false

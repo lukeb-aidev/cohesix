@@ -5442,6 +5442,38 @@ Deliverables:
 ----
 **Tracked Activities**
 ----
+## Activity — seL4 Build Artifact Prune (Repo Only)
+
+**Status:** Planned.
+
+**Purpose:** Reduce repo-local seL4 build trees to the minimal artifacts required for Cohesix builds while preserving kernel truth outputs under `seL4/build/`.
+
+**Constraints**
+- Repo-only pruning; upstream seL4 trees under `~/seL4` are untouched.
+- Keep kernel truth outputs: `kernel/gen_headers/**`, `kernel/generated/**`, and config headers.
+- Preserve build/run dependencies (`elfloader`, `kernel.elf`, `libsel4.a`, libsel4 headers, and config files).
+- Cohesix must build and stage with `SEL4_BUILD_DIR` pointing at the pruned trees.
+
+**Inputs**
+- `seL4/build/`
+- `seL4/SMP_build/`
+- `scripts/cohesix-build-run.sh`
+- `crates/sel4-sys/build.rs`
+- `apps/root-task/build.rs`
+
+**Runbook (repo only)**
+1) Build allowlists for both trees and remove everything else.
+2) Build Cohesix with `SEL4_BUILD_DIR` set to each tree.
+3) Validate GIC detection against the pruned config headers.
+
+**Checks**
+- `SEL4_BUILD_DIR=... cargo build -p root-task --target aarch64-unknown-none` succeeds.
+- `SEL4_BUILD_DIR=... scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none` succeeds.
+- `scripts/lib/detect_gic_version.py <kernel/gen_config/kernel/gen_config.h>` returns a version.
+
+**Deliverables**
+- Repo-local seL4 trees pruned to the minimal allowlist.
+
 ## Activity — Security Evidence Demo (Post-M24, NIST 800-53 LOW)
 
 **Status:** Complete.
@@ -5648,6 +5680,58 @@ Deliverables:
 
 **Deliverables**
 - Demo notes and artifacts under `demo/` (no code changes, no release bundle changes).
+
+---
+
+## Activity — Jetson Orin Nano Gesture Language Demo (Post-M24d, OSS Only)
+
+**Status:** Planned.
+
+**Purpose:** Train and deploy an OSS-only gesture command language (10-20 commands) using a Jetson Orin Nano 8GB + webcam, while demonstrating Cohesix GPU leasing, telemetry, and `/gpu/models` publish/activate without introducing new protocols or VM-side ML.
+
+**Constraints**
+- No Cohesix code changes; demo uses existing release bundle binaries and current repo artifacts only.
+- OSS-only stack; avoid NC/ND datasets or licenses that restrict derivative use.
+- Training/inference runs host-side on Jetson; no CUDA/NVML in the VM.
+- Use existing Secure9P/console semantics only; no ad-hoc RPC.
+- Live GPU bridge publish must be active for `/gpu/models` and `/gpu/telemetry/schema.json` visibility.
+- SwarmUI must not run concurrently with cohsh (quit SwarmUI before cohsh).
+
+**Inputs**
+- `docs/GPU_NODES.md`
+- `docs/HOST_TOOLS.md`
+- `docs/OPERATOR_WALKTHROUGH.md`
+- OSS stack (example): MediaPipe (Apache-2.0), PyTorch (BSD), OpenCV (Apache-2.0), HaGRID (CC BY-SA) or ASL Alphabet (CC BY 4.0).
+
+**Runbook (documented commands only; host-side training)**
+0) Boot Queen on a Linux host: `./qemu/run.sh`
+1) Start SwarmUI on the same Linux host: `./bin/swarmui`
+2) On Jetson, start live GPU bridge publish to the Queen:
+   - `./bin/gpu-bridge-host --publish --tcp-host <queen-host> --tcp-port 31337 --interval-ms 1000 --registry /mnt/nvme/models/gesture_registry`
+3) On Jetson, lease the GPU for training:
+   - `./bin/coh --host <queen-host> --port 31337 gpu lease --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 3600`
+4) Capture dataset and train (host-side, OSS-only):
+   - Use a hand-landmark pipeline (e.g., MediaPipe) to record sequences from the webcam into a local dataset.
+   - Train a lightweight temporal classifier on landmark sequences; export artifacts under `/mnt/nvme/models/gesture/adapter/`.
+5) Publish model registry and activate (Jetson host tools):
+   - `./bin/coh --host <queen-host> --port 31337 peft import --publish --model gesture-ctl-v1 --from /mnt/nvme/models/gesture/adapter --job job_0003 --export /mnt/nvme/models/gesture/export --registry /mnt/nvme/models/gesture_registry`
+   - `./bin/coh --host <queen-host> --port 31337 peft activate --model gesture-ctl-v1 --registry /mnt/nvme/models/gesture_registry`
+6) Verify visibility (quit SwarmUI before cohsh):
+   - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337`
+   - `ls /gpu/models/available`
+   - `cat /gpu/models/active`
+7) Live inference loop (Jetson host-side):
+   - Run the gesture recognizer against the webcam and emit bounded telemetry lines tagged with `model_id=gesture-ctl-v1` into `/queen/telemetry/*` via existing tools.
+
+**Checks**
+- `/gpu/models` is visible and contains `gesture-ctl-v1` after publish.
+- Telemetry records conform to existing `gpu-telemetry/v1` schema; no new paths introduced.
+- Training/inference remains host-side; no VM or Cohesix code changes.
+- No concurrent cohsh + SwarmUI usage.
+
+**Deliverables**
+- Demo notes and artifacts under `demo/` (no code changes, no release bundle changes).
+- Registry content under `/mnt/nvme/models/gesture_registry` (host-side only).
 
 ---
 
