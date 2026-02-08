@@ -18,7 +18,7 @@ The TCP console is single-client. Only one of `cohsh`, `swarmui`, `hive-gateway`
 
 ## cohsh
 ### Purpose
-Canonical operator shell for Cohesix. Attaches to the TCP console (or an in-process NineDoor Secure9P server for mock/trace workflows) and drives `/queen/ctl`, logs, telemetry, and control files.
+Canonical operator shell for Cohesix. Runs on the host and attaches to NineDoor over the TCP console, the REST gateway multiplexer, or mock/QEMU transports for development. It never runs inside the VM and does not add new control-plane semantics.
 
 ### Location
 - Source: `apps/cohsh`
@@ -26,22 +26,88 @@ Canonical operator shell for Cohesix. Attaches to the TCP console (or an in-proc
 
 ### Usage
 ```bash
-./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337
-./bin/cohsh --transport tcp --role worker-heartbeat --ticket "$WORKER_TICKET"
-./bin/cohsh --transport tcp --script scripts/cohsh/boot_v0.coh
-./bin/cohsh --mint-ticket --role worker-heartbeat --ticket-subject worker-1
+# TCP console (single client).
+./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
+
+# REST gateway (multiplexed; hive-gateway is the sole console client).
+./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 --role queen
+
+# QEMU (dev convenience).
 ./bin/cohsh --transport qemu --qemu-out-dir out/cohesix --qemu-arg "-nographic"
-./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080
+
+# Mock (offline, in-process NineDoor).
+./bin/cohsh --transport mock --mock-seed-gpu
+
+# Run or validate a .coh script.
+./bin/cohsh --transport tcp --script scripts/cohsh/boot_v0.coh
+./bin/cohsh --check scripts/cohsh/boot_v0.coh
+
+# Mint a ticket (worker roles require a subject).
+./bin/cohsh --mint-ticket --role worker-heartbeat --ticket-subject worker-1
 ```
-## Quota checks (why you see `ELIMIT`)
+
+### Session + auth model
+- `--role <role>` attaches immediately; use `--ticket <payload>` when ticketing is enabled.
+- `attach <role> [ticket]` and `login <role> [ticket]` are equivalent inside the shell.
+- `detach` closes the NineDoor session but keeps the shell alive; `quit` exits.
+- TCP auth uses `--auth-token` or `COHSH_AUTH_TOKEN` and is separate from capability tickets.
+- REST transport is queen-only and requires a running `hive-gateway` (`--rest-url` or `COHSH_REST_URL`).
+
+### Core commands (interactive)
+| Command | Notes |
+| --- | --- |
+| `help` | List available shell commands and console verbs. |
+| `attach <role> [ticket]` | Start a session (`login` is an alias). |
+| `ls <path>` | Enumerate directory entries. |
+| `cat <path>` | Read file contents once. |
+| `tail <path>` | Stream a file. |
+| `log` | Alias for `tail /log/queen.log`. |
+| `echo <text> > <path>` | Append a single line; adds a newline. |
+| `spawn <role> ...` | Queue worker spawn (see examples below). |
+| `kill <worker_id>` | Queue worker termination. |
+| `bind <src> <dst>` | Bind namespace path (queen session required). |
+| `mount <service> <path>` | Mount a service namespace (queen session required). |
+| `lifecycle <cordon|drain|resume|quiesce|reset>` | Node lifecycle controls (queen session required). |
+| `telemetry push <file> --device <id>` | Push a bounded telemetry segment. |
+| `test [--mode <quick|full|smp>] [--json] [--timeout <s>] [--no-mutate]` | Run self-tests. |
+| `ping` | Health check; reports attach + transport status. |
+| `tcp-diag [port]` | TCP connectivity check without protocol traffic (TCP builds only). |
+| `pool bench <opts>` | Pooled throughput benchmark (advanced). |
+| `quit` | Close the session and exit. |
+
+### Spawn examples
+```text
+coh> spawn heartbeat ticks=120
+coh> spawn heartbeat ticks=50 ttl_s=60 ops=500
+coh> spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=1 ttl_s=120
+coh> spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=1 ttl_s=120 priority=3 budget_ttl_s=300 budget_ops=500
+```
+
+### Tests
+`test` executes the bundled `.coh` scripts under `/proc/tests/` (0.6.0-alpha includes `selftest_smp.coh`). Default timeout is 30s; maximum is 120s.
+```text
+coh> test --mode quick
+coh> test --mode full --timeout 120
+coh> test --mode smp
+coh> test --mode quick --no-mutate
+coh> test --mode full --json
+```
+
+### Telemetry push
+`telemetry push` accepts `txt`, `log`, `json`, `ndjson`, or `csv` inputs and forwards bounded records to `/queen/telemetry/<device_id>/`.
+```text
+coh> telemetry push demo/telemetry/demo.txt --device device-1
+```
+
+### Quota checks (why you see `ELIMIT`)
 `cohsh` enforces ticket-scoped quotas in the root-task. Each attached session carries a ticket with:
-- **Scope** (which paths/verbs are permitted),
-- **Rate/bandwidth** limits (bytes/second, total bytes),
+- **Scope** (which paths/verbs are permitted).
+- **Rate/bandwidth** limits (bytes/second, total bytes).
 - **Cursor bounds** for telemetry tails.
 
 If a command exceeds these limits, the console returns `ERR ... reason=ELIMIT` (quota) or `ERR ... reason=EPERM` (scope). Fixes are:
-- attach with a **queen** ticket (higher limits),
-- reduce the tail rate/size,
+- attach with a **queen** ticket (higher limits).
+- reduce the tail rate/size.
 - reattach to reset counters after a long session.
 
 ### Tips & gotchas
@@ -50,69 +116,11 @@ If a command exceeds these limits, the console returns `ERR ... reason=ELIMIT` (
 - GPU spawns require `/gpu` entries: if `/gpu` is empty, run `./bin/gpu-bridge-host --mock --list` and retry.
 - `ELIMIT` errors on `tail` indicate ticket quota limits; reattach with a queen ticket or slow the tail.
 
-### Start and attach
-- Connect as queen (most common):
-  ```bash
-  ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
-  ```
-- Attach after startup:
-  ```text
-  coh> attach queen
-  ```
-- Use tickets when required:
-  ```bash
-  QUEEN_TICKET=$(./bin/cohsh --mint-ticket --role queen)
-  ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen --ticket "$QUEEN_TICKET"
-  ```
-
-### Navigate and inspect
-- List namespaces:
-  ```text
-  coh> ls /
-  coh> ls /worker
-  ```
-- Read a file once:
-  ```text
-  coh> cat /log/queen.log
-  ```
-- Stream a file:
-  ```text
-  coh> tail /log/queen.log
-  coh> tail /worker/<id>/telemetry
-  ```
-
-### Common control actions
-- Spawn heartbeat workers:
-  ```text
-  coh> spawn heartbeat ticks=100
-  coh> spawn heartbeat ticks=50 ttl_s=60 ops=500
-  ```
-- Spawn GPU workers (requires GPU bridge):
-  ```text
-  coh> spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=1 ttl_s=120
-  ```
-- Kill a worker:
-  ```text
-  coh> kill worker-<id>
-  ```
-
-### Self-tests and diagnostics
-- Quick vs full tests:
-  ```text
-  coh> test --mode quick
-  coh> test --mode full --timeout 120
-    coh> test --mode smp
-  ```
-- TCP health check:
-  ```text
-  coh> tcp-diag
-  coh> tcp-diag 31337
-  ```
-  
 ### Notes
-- `--transport` supports `tcp`, `rest`, `qemu`, and `mock`. `qemu` boots QEMU using the staged artefacts under `--qemu-out-dir` (defaults to `out/cohesix`).
+- `--transport` supports `tcp`, `rest`, `qemu`, and `mock`. `tcp` is the default when built with TCP support.
 - `.coh` scripts follow the grammar in `docs/USERLAND_AND_CLI.md`; validate with `--check`.
 - `--record-trace` and `--replay-trace` require `--transport mock`.
+- `--mock-seed-gpu` seeds mock sessions with `/gpu` entries for demos/scripts.
 - Tickets are required when ticketing is enabled; the default manifest ships mintable secrets for queen and worker roles. Auth tokens (`--auth-token` / `COHSH_AUTH_TOKEN`) are separate from tickets.
 - Environment overrides: `COHSH_AUTH_TOKEN`, `COHSH_TCP_HOST`, `COHSH_TCP_PORT`, `COHSH_REST_URL`, `COH_REST_URL`, `HIVE_GATEWAY_URL`, `COHSH_POLICY`, `COHSH_TICKET_CONFIG`, `COHSH_TICKET_SECRET`, `COHSH_QEMU_ARGS`, `COHSH_TCP_DEBUG`.
 - Advanced tuning: `COHSH_POOL_CONTROL_SESSIONS`, `COHSH_POOL_TELEMETRY_SESSIONS`, `COHSH_RETRY_MAX_ATTEMPTS`, `COHSH_RETRY_BACKOFF_MS`, `COHSH_RETRY_CEILING_MS`, `COHSH_RETRY_TIMEOUT_MS`, `COHSH_HEARTBEAT_INTERVAL_MS`.
