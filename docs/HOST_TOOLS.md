@@ -402,6 +402,7 @@ Publish host-side providers into `/host` (systemd, k8s, docker, nvidia, jetson, 
 - Providers may be `systemd`, `k8s`, `docker`, `nvidia`, `jetson`, or `net`. When no providers are specified, the defaults are `systemd`, `k8s`, `docker`, and `nvidia`.
 - `--watch` polls providers continuously using manifest-backed polling defaults (override with `--policy`). Only `systemd`, `k8s`, `docker`, and `nvidia` have live polling schedules.
 - The `/host` namespace must be enabled in `configs/root_task.toml`.
+- `--watch` updates appear under `/host/*` (for example `/host/systemd/status`, `/host/nvidia/gpu/0/status`). View them via `cohsh`, REST (`/v1/fs/cat`), or a `coh mount`.
 
 ## hive-gateway
 ### Purpose

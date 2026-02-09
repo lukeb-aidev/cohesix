@@ -25,6 +25,10 @@ For host tool usage, interdependencies, and policy/mount details, see
 - REST clients inherit the gateway role (typically `queen`); there is no per-request ticket.
 - Keep the gateway bound to loopback and use an SSH tunnel for remote operators.
 
+## Where `--watch` data lands
+- `host-sidecar-bridge --watch` continuously refreshes `/host/*` (for example `/host/systemd/status`, `/host/nvidia/gpu/0/status`).
+- View `/host/*` with `cohsh` (`ls /host`, `cat /host/systemd/status`), REST (`/v1/fs/ls`, `/v1/fs/cat`), or a `coh mount`.
+
 ## Quickstart: gateway multiplexing (single host)
 Goal: run `hive-gateway` as the only console client and use REST for all tools.
 
