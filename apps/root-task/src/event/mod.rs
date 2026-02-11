@@ -40,6 +40,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 #[cfg(feature = "kernel")]
+use crate::affinity;
+#[cfg(feature = "kernel")]
 use crate::lifecycle;
 
 #[cfg(not(feature = "kernel"))]
@@ -116,7 +118,7 @@ use crate::net::{
     NetTelemetry, CONSOLE_QUEUE_DEPTH, NET_DIAG, NET_DIAG_FEATURED,
 };
 #[cfg(feature = "kernel")]
-use crate::ninedoor::TelemetryTail;
+use crate::ninedoor::TelemetryTailMeta;
 #[cfg(feature = "kernel")]
 use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
 #[cfg(feature = "net-console")]
@@ -975,6 +977,25 @@ struct PendingStream {
     cursor: Option<PendingCursor>,
 }
 
+#[cfg(feature = "kernel")]
+impl PendingStream {
+    fn new() -> Self {
+        Self {
+            lines: HeaplessVec::new(),
+            next_line: 0,
+            bandwidth_bytes: 0,
+            cursor: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.lines.clear();
+        self.next_line = 0;
+        self.bandwidth_bytes = 0;
+        self.cursor = None;
+    }
+}
+
 pub struct EventPump<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>
 where
     D: SerialDriver,
@@ -1596,10 +1617,8 @@ where
     #[cfg(all(feature = "kernel", sel4_config_debug_build))]
     fn emit_smp(&mut self) -> bool {
         self.emit_console_line("[smp] debug scheduler dump begin");
-        unsafe {
-            sel4_sys::seL4_DebugDumpScheduler();
-            sel4_sys::seL4_DebugDumpCPUInfo();
-        }
+        let policy = affinity::policy();
+        affinity::debug_dump_per_core(&policy, |line| self.emit_console_line(line));
         self.emit_console_line("[smp] debug scheduler dump end");
         true
     }
@@ -2132,72 +2151,94 @@ where
                         #[cfg(not(feature = "kernel"))]
                         let stream_bytes = 0u64;
                         #[cfg(feature = "kernel")]
-                        let mut pending_stream: Option<PendingStream> = None;
-                        #[cfg(feature = "kernel")]
-                        let mut telemetry_stream: Option<TelemetryTail> = None;
-                        #[cfg(feature = "kernel")]
                         let mut path_supported = false;
+                        #[cfg(feature = "kernel")]
+                        let mut tail_error: Option<NineDoorBridgeError> = None;
+                        #[cfg(feature = "kernel")]
+                        let mut cursor_meta: Option<TelemetryTailMeta> = None;
                         #[cfg(feature = "kernel")]
                         {
                             let cursor_offset = self.ticket_cursor_offset(path_str).unwrap_or(0);
                             if path_str == "/log/queen.log" {
-                                let lines = log_buffer::snapshot_lines::<
-                                    DEFAULT_LINE_CAPACITY,
-                                    { log_buffer::LOG_SNAPSHOT_LINES },
-                                >();
-                                stream_bytes = lines.iter().map(|line| line.len() as u64).sum();
-                                pending_stream = Some(PendingStream {
-                                    lines,
-                                    next_line: 0,
-                                    bandwidth_bytes: stream_bytes,
-                                    cursor: None,
-                                });
+                                let bytes = {
+                                    let pending = self
+                                        .pending_stream
+                                        .get_or_insert_with(PendingStream::new);
+                                    pending.reset();
+                                    log_buffer::snapshot_lines_into(&mut pending.lines);
+                                    pending
+                                        .lines
+                                        .iter()
+                                        .map(|line| line.len() as u64)
+                                        .sum()
+                                };
+                                stream_bytes = bytes;
                                 path_supported = true;
                             } else if path_str == "/proc/ingest/watch" {
                                 if let Some(bridge) = self.ninedoor.as_mut() {
-                                    let lines = bridge
-                                        .ingest_watch_lines(self.now_ms, &mut *self.audit)
-                                        .unwrap_or_else(|_| HeaplessVec::new());
-                                    stream_bytes = lines.iter().map(|line| line.len() as u64).sum();
-                                    pending_stream = Some(PendingStream {
-                                        lines,
-                                        next_line: 0,
-                                        bandwidth_bytes: stream_bytes,
-                                        cursor: None,
-                                    });
+                                    let bytes = {
+                                        let pending = self
+                                            .pending_stream
+                                            .get_or_insert_with(PendingStream::new);
+                                        pending.reset();
+                                        if bridge
+                                            .ingest_watch_lines_into(
+                                                self.now_ms,
+                                                &mut *self.audit,
+                                                &mut pending.lines,
+                                            )
+                                            .is_err()
+                                        {
+                                            pending.lines.clear();
+                                        }
+                                        pending
+                                            .lines
+                                            .iter()
+                                            .map(|line| line.len() as u64)
+                                            .sum()
+                                    };
+                                    stream_bytes = bytes;
                                     path_supported = true;
                                 }
                             } else if let Some(bridge) = self.ninedoor.as_mut() {
-                                match bridge.telemetry_tail(path_str, cursor_offset) {
-                                    Ok(stream) => {
-                                        telemetry_stream = stream;
-                                        if let Some(stream) = telemetry_stream.as_ref() {
-                                            stream_bytes = stream
+                                let (bytes, meta, err) = {
+                                    let pending = self
+                                        .pending_stream
+                                        .get_or_insert_with(PendingStream::new);
+                                    pending.reset();
+                                    match bridge.telemetry_tail_into(
+                                        path_str,
+                                        cursor_offset,
+                                        &mut pending.lines,
+                                    ) {
+                                        Ok(Some(meta)) => {
+                                            let bytes = pending
                                                 .lines
                                                 .iter()
                                                 .map(|line| line.len() as u64)
                                                 .sum();
-                                            path_supported = true;
+                                            (bytes, Some(meta), None)
                                         }
+                                        Ok(None) => (0, None, None),
+                                        Err(err) => (0, None, Some(err)),
                                     }
-                                    Err(err) => {
-                                        cmd_status = "err";
-                                        let sid = self.session_id.unwrap_or(0);
-                                        let err_msg = format_message(format_args!("{err}"));
-                                        self.audit_ninedoor_err(
-                                            sid,
-                                            "TAIL",
-                                            path_str,
-                                            err_msg.as_str(),
-                                        );
-                                        self.emit_ninedoor_refusal(
-                                            verb_label,
-                                            Some(path_str),
-                                            &err,
-                                        );
-                                    }
+                                };
+                                if let Some(err) = err {
+                                    tail_error = Some(err);
+                                } else if let Some(meta) = meta {
+                                    stream_bytes = bytes;
+                                    cursor_meta = Some(meta);
+                                    path_supported = true;
                                 }
                             }
+                        }
+                        #[cfg(feature = "kernel")]
+                        if let Some(err) = tail_error {
+                            cmd_status = "err";
+                            let sid = self.session_id.unwrap_or(0);
+                            let err_msg = format_message(format_args!("{err}"));
+                            self.audit_ninedoor_err(sid, "TAIL", path_str, err_msg.as_str());
+                            self.emit_ninedoor_refusal(verb_label, Some(path_str), &err);
                         }
                         #[cfg(feature = "kernel")]
                         if cmd_status != "err" && !path_supported {
@@ -2219,38 +2260,42 @@ where
                                 cmd_status = "err";
                             } else {
                                 #[cfg(feature = "kernel")]
-                                if let Some(stream) = telemetry_stream {
-                                    let cursor_check = match self
-                                        .check_ticket_cursor(path_str, stream.start_offset)
-                                    {
-                                        Ok(check) => check,
-                                        Err(denial) => {
-                                            self.record_ticket_denial(
-                                                path_str,
-                                                TicketVerb::Read,
-                                                denial,
-                                            );
-                                            self.emit_ticket_denied(
-                                                verb_label,
-                                                Some(path_str),
-                                                denial,
-                                            );
-                                            cmd_status = "err";
-                                            None
+                                {
+                                    let mut cursor_check: Option<CursorCheck> = None;
+                                    if let Some(meta) = cursor_meta {
+                                        match self.check_ticket_cursor(path_str, meta.start_offset) {
+                                            Ok(check) => {
+                                                cursor_check = check;
+                                            }
+                                            Err(denial) => {
+                                                self.record_ticket_denial(
+                                                    path_str,
+                                                    TicketVerb::Read,
+                                                    denial,
+                                                );
+                                                self.emit_ticket_denied(
+                                                    verb_label,
+                                                    Some(path_str),
+                                                    denial,
+                                                );
+                                                cmd_status = "err";
+                                            }
                                         }
-                                    };
+                                    }
                                     if cmd_status != "err" {
-                                        pending_stream = Some(PendingStream {
-                                            lines: stream.lines,
-                                            next_line: 0,
-                                            bandwidth_bytes: stream_bytes,
-                                            cursor: cursor_check.map(|check| PendingCursor {
-                                                path_key: path_str.to_owned(),
-                                                offset: stream.start_offset,
-                                                len: stream.consumed_bytes,
-                                                check,
-                                            }),
-                                        });
+                                        if let Some(pending) = self.pending_stream.as_mut() {
+                                            pending.next_line = 0;
+                                            pending.bandwidth_bytes = stream_bytes;
+                                            pending.cursor = match (cursor_meta, cursor_check) {
+                                                (Some(meta), Some(check)) => Some(PendingCursor {
+                                                    path_key: path_str.to_owned(),
+                                                    offset: meta.start_offset,
+                                                    len: meta.consumed_bytes,
+                                                    check,
+                                                }),
+                                                _ => None,
+                                            };
+                                        }
                                     }
                                 }
                                 if cmd_status != "err" {
@@ -2267,7 +2312,6 @@ where
                                     self.audit_tail_start(sid, path_str);
                                     #[cfg(feature = "kernel")]
                                     {
-                                        self.pending_stream = pending_stream;
                                         forwarded = true;
                                     }
                                 }
@@ -2292,126 +2336,152 @@ where
                         #[cfg(feature = "kernel")]
                         {
                             if let Some(bridge_ref) = self.ninedoor.as_mut() {
-                                match bridge_ref.cat(path_str) {
-                                    Ok(lines) => {
-                                        let data_bytes =
-                                            lines.iter().map(|line| line.len() as u64).sum();
-                                        let log_path = path_str == "/log/queen.log";
-                                        let stream_bytes = if log_path { 0 } else { data_bytes };
-                                        if let Err(denial) =
-                                            self.check_ticket_bandwidth(stream_bytes)
+                                let (data_bytes, cat_err) = {
+                                    let pending = self
+                                        .pending_stream
+                                        .get_or_insert_with(PendingStream::new);
+                                    pending.reset();
+                                    match bridge_ref.cat_into(path_str, &mut pending.lines) {
+                                        Ok(()) => {
+                                            let data_bytes = pending
+                                                .lines
+                                                .iter()
+                                                .map(|line| line.len() as u64)
+                                                .sum();
+                                            (data_bytes, None)
+                                        }
+                                        Err(err) => (0, Some(err)),
+                                    }
+                                };
+                                if let Some(err) = cat_err {
+                                    cmd_status = "err";
+                                    let sid = self.session_id.unwrap_or(0);
+                                    let err_msg = format_message(format_args!("{err}"));
+                                    self.audit_ninedoor_err(
+                                        sid,
+                                        "CAT",
+                                        path_str,
+                                        err_msg.as_str(),
+                                    );
+                                    self.emit_ninedoor_refusal(
+                                        verb_label,
+                                        Some(path_str),
+                                        &err,
+                                    );
+                                } else {
+                                    let log_path = path_str == "/log/queen.log";
+                                    let stream_bytes = if log_path { 0 } else { data_bytes };
+                                    if let Err(denial) = self.check_ticket_bandwidth(stream_bytes) {
+                                        self.record_ticket_denial(
+                                            path_str,
+                                            TicketVerb::Read,
+                                            denial,
+                                        );
+                                        self.emit_ticket_denied(
+                                            verb_label,
+                                            Some(path_str),
+                                            denial,
+                                        );
+                                        if let Some(pending) = self.pending_stream.as_mut() {
+                                            pending.lines.clear();
+                                        }
+                                        cmd_status = "err";
+                                    } else {
+                                        let cursor_check = match self.check_ticket_cursor(path_str, 0)
                                         {
-                                            self.record_ticket_denial(
-                                                path_str,
-                                                TicketVerb::Read,
-                                                denial,
-                                            );
-                                            self.emit_ticket_denied(
-                                                verb_label,
-                                                Some(path_str),
-                                                denial,
-                                            );
-                                            cmd_status = "err";
-                                        } else {
-                                            let cursor_check =
-                                                match self.check_ticket_cursor(path_str, 0) {
-                                                    Ok(check) => check,
-                                                    Err(denial) => {
-                                                        self.record_ticket_denial(
-                                                            path_str,
-                                                            TicketVerb::Read,
-                                                            denial,
-                                                        );
-                                                        self.emit_ticket_denied(
-                                                            verb_label,
-                                                            Some(path_str),
-                                                            denial,
-                                                        );
-                                                        cmd_status = "err";
-                                                        None
-                                                    }
-                                                };
-                                            if cmd_status != "err" {
-                                                let summary = {
-                                                    // Prefer user echo lines while also surfacing newer audit entries.
-                                                    // Keep references to avoid a large stack copy for /log/queen.log.
-                                                    let user_lines: HeaplessVec<
-                                                        HeaplessString<DEFAULT_LINE_CAPACITY>,
+                                            Ok(check) => check,
+                                            Err(denial) => {
+                                                self.record_ticket_denial(
+                                                    path_str,
+                                                    TicketVerb::Read,
+                                                    denial,
+                                                );
+                                                self.emit_ticket_denied(
+                                                    verb_label,
+                                                    Some(path_str),
+                                                    denial,
+                                                );
+                                                if let Some(pending) =
+                                                    self.pending_stream.as_mut()
+                                                {
+                                                    pending.lines.clear();
+                                                }
+                                                cmd_status = "err";
+                                                None
+                                            }
+                                        };
+                                        if cmd_status != "err" {
+                                            let summary = {
+                                                // Prefer user echo lines while also surfacing newer audit entries.
+                                                // Keep references to avoid a large stack copy for /log/queen.log.
+                                                let pending_lines = self
+                                                    .pending_stream
+                                                    .as_ref()
+                                                    .map(|pending| pending.lines.as_slice())
+                                                    .unwrap_or(&[]);
+                                                let user_lines: HeaplessVec<
+                                                    HeaplessString<DEFAULT_LINE_CAPACITY>,
+                                                    { log_buffer::LOG_USER_SNAPSHOT_LINES },
+                                                > = if log_path {
+                                                    log_buffer::snapshot_user_lines::<
+                                                        DEFAULT_LINE_CAPACITY,
                                                         { log_buffer::LOG_USER_SNAPSHOT_LINES },
-                                                    > = if log_path {
-                                                        log_buffer::snapshot_user_lines::<
-                                                            DEFAULT_LINE_CAPACITY,
-                                                            { log_buffer::LOG_USER_SNAPSHOT_LINES },
-                                                        >(
-                                                        )
-                                                    } else {
-                                                        HeaplessVec::new()
-                                                    };
-                                                    let mut summary_refs: HeaplessVec<
-                                                        &str,
-                                                        {
-                                                            log_buffer::LOG_SNAPSHOT_LINES
-                                                                + log_buffer::LOG_USER_SNAPSHOT_LINES
-                                                        },
-                                                    > = HeaplessVec::new();
-                                                    if log_path {
-                                                        if user_lines.is_empty() {
-                                                            for line in lines.iter() {
-                                                                if summary_refs
-                                                                    .push(line.as_str())
-                                                                    .is_err()
-                                                                {
-                                                                    break;
-                                                                }
-                                                            }
-                                                        } else {
-                                                            for user_line in user_lines.iter() {
-                                                                if summary_refs
-                                                                    .push(user_line.as_str())
-                                                                    .is_err()
-                                                                {
-                                                                    break;
-                                                                }
-                                                            }
-                                                            let mut last_user_idx: Option<usize> =
-                                                                None;
-                                                            for (idx, line) in
-                                                                lines.iter().enumerate()
+                                                    >()
+                                                } else {
+                                                    HeaplessVec::new()
+                                                };
+                                                let mut summary_refs: HeaplessVec<
+                                                    &str,
+                                                    {
+                                                        log_buffer::LOG_SNAPSHOT_LINES
+                                                            + log_buffer::LOG_USER_SNAPSHOT_LINES
+                                                    },
+                                                > = HeaplessVec::new();
+                                                if log_path {
+                                                    if user_lines.is_empty() {
+                                                        for line in pending_lines.iter() {
+                                                            if summary_refs
+                                                                .push(line.as_str())
+                                                                .is_err()
                                                             {
-                                                                if user_lines.iter().any(
-                                                                    |user_line| {
-                                                                        user_line.as_str()
-                                                                            == line.as_str()
-                                                                    },
-                                                                ) {
-                                                                    last_user_idx = Some(idx);
-                                                                }
-                                                            }
-                                                            let start = last_user_idx
-                                                                .map(|idx| idx + 1)
-                                                                .unwrap_or(0);
-                                                            for line in lines.iter().skip(start) {
-                                                                if line.as_str().starts_with('[') {
-                                                                    continue;
-                                                                }
-                                                                if user_lines.iter().any(
-                                                                    |user_line| {
-                                                                        user_line.as_str()
-                                                                            == line.as_str()
-                                                                    },
-                                                                ) {
-                                                                    continue;
-                                                                }
-                                                                if summary_refs
-                                                                    .push(line.as_str())
-                                                                    .is_err()
-                                                                {
-                                                                    break;
-                                                                }
+                                                                break;
                                                             }
                                                         }
                                                     } else {
-                                                        for line in lines.iter() {
+                                                        for user_line in user_lines.iter() {
+                                                            if summary_refs
+                                                                .push(user_line.as_str())
+                                                                .is_err()
+                                                            {
+                                                                break;
+                                                            }
+                                                        }
+                                                        let mut last_user_idx: Option<usize> = None;
+                                                        for (idx, line) in
+                                                            pending_lines.iter().enumerate()
+                                                        {
+                                                            if user_lines.iter().any(|user_line| {
+                                                                user_line.as_str()
+                                                                    == line.as_str()
+                                                            }) {
+                                                                last_user_idx = Some(idx);
+                                                            }
+                                                        }
+                                                        let start = last_user_idx
+                                                            .map(|idx| idx + 1)
+                                                            .unwrap_or(0);
+                                                        for line in
+                                                            pending_lines.iter().skip(start)
+                                                        {
+                                                            if line.as_str().starts_with('[') {
+                                                                continue;
+                                                            }
+                                                            if user_lines.iter().any(|user_line| {
+                                                                user_line.as_str()
+                                                                    == line.as_str()
+                                                            }) {
+                                                                continue;
+                                                            }
                                                             if summary_refs
                                                                 .push(line.as_str())
                                                                 .is_err()
@@ -2420,171 +2490,148 @@ where
                                                             }
                                                         }
                                                     }
-                                                    let summary_lines: &[&str] =
-                                                        summary_refs.as_slice();
-                                                    let mut summary: HeaplessString<128> =
-                                                        HeaplessString::new();
-                                                    let mut selected: HeaplessVec<
-                                                        usize,
-                                                        { log_buffer::LOG_SNAPSHOT_LINES },
-                                                    > = HeaplessVec::new();
-                                                    let mut total_len = 0usize;
-                                                    let max_line_len = summary.capacity() / 2;
-                                                    let mut prefer_user_lines = true;
-                                                    for _pass in 0..2 {
-                                                        for (idx, line) in
-                                                            summary_lines.iter().enumerate().rev()
-                                                        {
-                                                            if prefer_user_lines
-                                                                && line.starts_with('[')
-                                                            {
-                                                                continue;
-                                                            }
-                                                            let line_len = line.len();
-                                                            if line_len > max_line_len {
-                                                                continue;
-                                                            }
-                                                            let sep =
-                                                                if total_len == 0 { 0 } else { 1 };
-                                                            if line_len
-                                                                .saturating_add(sep)
-                                                                .saturating_add(total_len)
-                                                                > summary.capacity()
-                                                            {
-                                                                continue;
-                                                            }
-                                                            total_len = total_len
-                                                                .saturating_add(line_len)
-                                                                .saturating_add(sep);
-                                                            if selected.push(idx).is_err() {
-                                                                break;
-                                                            }
-                                                        }
-                                                        if !selected.is_empty()
-                                                            || !prefer_user_lines
+                                                } else {
+                                                    for line in pending_lines.iter() {
+                                                        if summary_refs
+                                                            .push(line.as_str())
+                                                            .is_err()
                                                         {
                                                             break;
                                                         }
-                                                        selected.clear();
-                                                        total_len = 0;
-                                                        prefer_user_lines = false;
                                                     }
-                                                    if selected.is_empty()
-                                                        && !summary_lines.is_empty()
+                                                }
+                                                let summary_lines: &[&str] = summary_refs.as_slice();
+                                                let mut summary: HeaplessString<128> =
+                                                    HeaplessString::new();
+                                                let mut selected: HeaplessVec<
+                                                    usize,
+                                                    { log_buffer::LOG_SNAPSHOT_LINES },
+                                                > = HeaplessVec::new();
+                                                let mut total_len = 0usize;
+                                                let max_line_len = summary.capacity() / 2;
+                                                let mut prefer_user_lines = true;
+                                                for _pass in 0..2 {
+                                                    for (idx, line) in
+                                                        summary_lines.iter().enumerate().rev()
                                                     {
-                                                        if let Some(line) = summary_lines.last() {
+                                                        if prefer_user_lines && line.starts_with('[')
+                                                        {
+                                                            continue;
+                                                        }
+                                                        let line_len = line.len();
+                                                        if line_len > max_line_len {
+                                                            continue;
+                                                        }
+                                                        let sep = if total_len == 0 { 0 } else { 1 };
+                                                        if line_len
+                                                            .saturating_add(sep)
+                                                            .saturating_add(total_len)
+                                                            > summary.capacity()
+                                                        {
+                                                            continue;
+                                                        }
+                                                        total_len = total_len
+                                                            .saturating_add(line_len)
+                                                            .saturating_add(sep);
+                                                        if selected.push(idx).is_err() {
+                                                            break;
+                                                        }
+                                                    }
+                                                    if !selected.is_empty() || !prefer_user_lines {
+                                                        break;
+                                                    }
+                                                    selected.clear();
+                                                    total_len = 0;
+                                                    prefer_user_lines = false;
+                                                }
+                                                if selected.is_empty() && !summary_lines.is_empty() {
+                                                    if let Some(line) = summary_lines.last() {
+                                                        for ch in line.chars() {
+                                                            if summary.push(ch).is_err() {
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                } else {
+                                                    for (pos, idx) in
+                                                        selected.iter().rev().enumerate()
+                                                    {
+                                                        if pos > 0 {
+                                                            if summary.push('|').is_err() {
+                                                                break;
+                                                            }
+                                                        }
+                                                        if let Some(line) = summary_lines.get(*idx) {
+                                                            if summary.push_str(line).is_err() {
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if path_str.starts_with("/updates/")
+                                                    || path_str.starts_with("/models/")
+                                                {
+                                                    if let Some(line) = summary_lines.first() {
+                                                        if line.starts_with("b64:") {
+                                                            summary.clear();
                                                             for ch in line.chars() {
                                                                 if summary.push(ch).is_err() {
                                                                     break;
                                                                 }
                                                             }
                                                         }
-                                                    } else {
-                                                        for (pos, idx) in
-                                                            selected.iter().rev().enumerate()
-                                                        {
-                                                            if pos > 0 {
-                                                                if summary.push('|').is_err() {
-                                                                    break;
-                                                                }
-                                                            }
-                                                            if let Some(line) =
-                                                                summary_lines.get(*idx)
-                                                            {
-                                                                if summary.push_str(line).is_err() {
-                                                                    break;
-                                                                }
-                                                            }
+                                                    }
+                                                }
+                                                let max_summary_len = 128usize.saturating_sub(
+                                                    "path=".len() + path_str.len() + " data=".len(),
+                                                );
+                                                if summary.len() > max_summary_len {
+                                                    let mut trimmed: HeaplessString<128> =
+                                                        HeaplessString::new();
+                                                    for ch in summary.as_str().chars() {
+                                                        if trimmed.len() >= max_summary_len {
+                                                            break;
+                                                        }
+                                                        if trimmed.push(ch).is_err() {
+                                                            break;
                                                         }
                                                     }
-                                                    if path_str.starts_with("/updates/")
-                                                        || path_str.starts_with("/models/")
-                                                    {
-                                                        if let Some(line) = summary_lines.first() {
-                                                            if line.starts_with("b64:") {
-                                                                summary.clear();
-                                                                for ch in line.chars() {
-                                                                    if summary.push(ch).is_err() {
-                                                                        break;
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    let max_summary_len = 128usize.saturating_sub(
-                                                        "path=".len()
-                                                            + path_str.len()
-                                                            + " data=".len(),
-                                                    );
-                                                    if summary.len() > max_summary_len {
-                                                        let mut trimmed: HeaplessString<128> =
-                                                            HeaplessString::new();
-                                                        for ch in summary.as_str().chars() {
-                                                            if trimmed.len() >= max_summary_len {
-                                                                break;
-                                                            }
-                                                            if trimmed.push(ch).is_err() {
-                                                                break;
-                                                            }
-                                                        }
-                                                        summary = trimmed;
-                                                    }
-                                                    summary
-                                                };
-                                                let detail = format_message(format_args!(
-                                                    "path={} data={}",
-                                                    path_str,
-                                                    summary.as_str()
+                                                    summary = trimmed;
+                                                }
+                                                summary
+                                            };
+                                            let detail = format_message(format_args!(
+                                                "path={} data={}",
+                                                path_str,
+                                                summary.as_str()
+                                            ));
+                                            #[cfg(feature = "cohesix-dev")]
+                                            {
+                                                let message = format_message(format_args!(
+                                                    "audit cat.ack path={}",
+                                                    path_str
                                                 ));
-                                                #[cfg(feature = "cohesix-dev")]
-                                                {
-                                                    let message = format_message(format_args!(
-                                                        "audit cat.ack path={}",
-                                                        path_str
-                                                    ));
-                                                    crate::debug_uart::debug_uart_line(
-                                                        message.as_str(),
-                                                    );
-                                                }
-                                                self.emit_ack_ok(verb_label, Some(detail.as_str()));
-                                                self.metrics.ui_reads =
-                                                    self.metrics.ui_reads.saturating_add(1);
-                                                self.stream_end_pending = true;
-                                                if log_path {
-                                                    self.pending_stream = None;
-                                                } else {
-                                                    self.pending_stream = Some(PendingStream {
-                                                        lines,
-                                                        next_line: 0,
-                                                        bandwidth_bytes: stream_bytes,
-                                                        cursor: cursor_check.map(|check| {
-                                                            PendingCursor {
-                                                                path_key: path_str.to_owned(),
-                                                                offset: 0,
-                                                                len: data_bytes as usize,
-                                                                check,
-                                                            }
-                                                        }),
-                                                    });
-                                                }
+                                                crate::debug_uart::debug_uart_line(message.as_str());
+                                            }
+                                            self.emit_ack_ok(verb_label, Some(detail.as_str()));
+                                            self.metrics.ui_reads =
+                                                self.metrics.ui_reads.saturating_add(1);
+                                            self.stream_end_pending = true;
+                                            if log_path {
+                                                self.pending_stream = None;
+                                            } else if let Some(pending) =
+                                                self.pending_stream.as_mut()
+                                            {
+                                                pending.next_line = 0;
+                                                pending.bandwidth_bytes = stream_bytes;
+                                                pending.cursor = cursor_check.map(|check| PendingCursor {
+                                                    path_key: path_str.to_owned(),
+                                                    offset: 0,
+                                                    len: data_bytes as usize,
+                                                    check,
+                                                });
                                             }
                                         }
-                                    }
-                                    Err(err) => {
-                                        cmd_status = "err";
-                                        let sid = self.session_id.unwrap_or(0);
-                                        let err_msg = format_message(format_args!("{err}"));
-                                        self.audit_ninedoor_err(
-                                            sid,
-                                            "CAT",
-                                            path_str,
-                                            err_msg.as_str(),
-                                        );
-                                        self.emit_ninedoor_refusal(
-                                            verb_label,
-                                            Some(path_str),
-                                            &err,
-                                        );
                                     }
                                 }
                             } else {
@@ -2624,55 +2671,60 @@ where
                         #[cfg(feature = "kernel")]
                         {
                             if let Some(bridge_ref) = self.ninedoor.as_mut() {
-                                match bridge_ref.list(path_str) {
-                                    Ok(entries) => {
-                                        let data_bytes =
-                                            entries.iter().map(|entry| entry.len() as u64).sum();
-                                        if let Err(denial) = self.check_ticket_bandwidth(data_bytes)
-                                        {
-                                            self.record_ticket_denial(
-                                                path_str,
-                                                TicketVerb::Read,
-                                                denial,
-                                            );
-                                            self.emit_ticket_denied(
-                                                verb_label,
-                                                Some(path_str),
-                                                denial,
-                                            );
-                                            cmd_status = "err";
-                                        } else {
-                                            let detail = format_message(format_args!(
-                                                "path={} entries={}",
-                                                path_str,
-                                                entries.len()
-                                            ));
-                                            self.emit_ack_ok(verb_label, Some(detail.as_str()));
-                                            self.pending_stream = Some(PendingStream {
-                                                lines: entries,
-                                                next_line: 0,
-                                                bandwidth_bytes: data_bytes,
-                                                cursor: None,
-                                            });
-                                            self.stream_end_pending = true;
+                                let (data_bytes, entries_len, list_err) = {
+                                    let pending = self
+                                        .pending_stream
+                                        .get_or_insert_with(PendingStream::new);
+                                    pending.reset();
+                                    match bridge_ref.list_into(path_str, &mut pending.lines) {
+                                        Ok(()) => {
+                                            let data_bytes = pending
+                                                .lines
+                                                .iter()
+                                                .map(|entry| entry.len() as u64)
+                                                .sum();
+                                            let entries_len = pending.lines.len();
+                                            (data_bytes, entries_len, None)
                                         }
+                                        Err(err) => (0, 0, Some(err)),
                                     }
-                                    Err(err) => {
-                                        cmd_status = "err";
-                                        let sid = self.session_id.unwrap_or(0);
-                                        let err_msg = format_message(format_args!("{err}"));
-                                        self.audit_ninedoor_err(
-                                            sid,
-                                            "LS",
-                                            path_str,
-                                            err_msg.as_str(),
-                                        );
-                                        self.emit_ninedoor_refusal(
-                                            verb_label,
-                                            Some(path_str),
-                                            &err,
-                                        );
+                                };
+                                if let Some(err) = list_err {
+                                    cmd_status = "err";
+                                    let sid = self.session_id.unwrap_or(0);
+                                    let err_msg = format_message(format_args!("{err}"));
+                                    self.audit_ninedoor_err(
+                                        sid,
+                                        "LS",
+                                        path_str,
+                                        err_msg.as_str(),
+                                    );
+                                    self.emit_ninedoor_refusal(
+                                        verb_label,
+                                        Some(path_str),
+                                        &err,
+                                    );
+                                } else if let Err(denial) =
+                                    self.check_ticket_bandwidth(data_bytes)
+                                {
+                                    self.record_ticket_denial(path_str, TicketVerb::Read, denial);
+                                    self.emit_ticket_denied(verb_label, Some(path_str), denial);
+                                    if let Some(pending) = self.pending_stream.as_mut() {
+                                        pending.lines.clear();
                                     }
+                                    cmd_status = "err";
+                                } else {
+                                    let detail = format_message(format_args!(
+                                        "path={} entries={}",
+                                        path_str, entries_len
+                                    ));
+                                    self.emit_ack_ok(verb_label, Some(detail.as_str()));
+                                    if let Some(pending) = self.pending_stream.as_mut() {
+                                        pending.next_line = 0;
+                                        pending.bandwidth_bytes = data_bytes;
+                                        pending.cursor = None;
+                                    }
+                                    self.stream_end_pending = true;
                                 }
                             } else {
                                 cmd_status = "err";

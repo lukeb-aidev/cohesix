@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Describe host-side GPU bridge behaviour, namespaces, and telemetry/model lifecycle semantics. -->
 <!-- Author: Lukas Bower -->
@@ -79,6 +79,7 @@ sequenceDiagram
 
 Note:
 - `/gpu/models` and `/gpu/telemetry/schema.json` appear only after a host GPU bridge publish; before that `ls /gpu/models` returns `ERR` with `invalid-path`.
+- `/gpu/bridge/ctl` is single-writer; concurrent publishers must be serialized to avoid interleaved snapshot lines.
 
 ## 5. Lease Model
 ```rust

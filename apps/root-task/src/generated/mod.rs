@@ -63,6 +63,16 @@ pub struct ShardingConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct AffinityPolicy {
+    pub enabled: bool,
+    pub max_cores: u8,
+    pub authority_core: Option<u8>,
+    pub ninedoor_cores: &'static [u8],
+    pub provider_cores: &'static [u8],
+    pub worker_cores: &'static [u8],
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum TelemetryFrameSchema {
     LegacyPlaintext,
     CborV1,
@@ -387,7 +397,7 @@ pub struct AuditConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
-pub const MANIFEST_SHA256: &str = "a15239ff96ad0f2cc21282023cf6bb344e8eadc572881f1872b84e82b17547a0";
+pub const MANIFEST_SHA256: &str = "fd4aee25dd42e51e6e4b581a46acd45299dcf2c12436f2d1fdf12d77dd177d93";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
@@ -395,6 +405,7 @@ pub const CACHE_POLICY: CachePolicy = bootstrap::CACHE_POLICY;
 pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;
 pub const TICKET_LIMITS: TicketLimits = bootstrap::TICKET_LIMITS;
 pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;
+pub const AFFINITY_POLICY: AffinityPolicy = bootstrap::AFFINITY_POLICY;
 pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();
 pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;
 pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = bootstrap::TELEMETRY_INGEST_CONFIG;
@@ -452,6 +463,10 @@ pub const fn ticket_limits() -> TicketLimits {
 
 pub const fn sharding_config() -> ShardingConfig {
     bootstrap::SHARDING_CONFIG
+}
+
+pub const fn affinity_policy() -> AffinityPolicy {
+    bootstrap::AFFINITY_POLICY
 }
 
 pub const fn shard_labels() -> &'static [&'static str] {

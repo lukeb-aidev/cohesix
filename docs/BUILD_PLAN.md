@@ -93,6 +93,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [24d](#24d) | Jetson CUDA Host Support (NVML Fallback + Doctor) | Complete |
 | [24e](#24e) | REST Multiplexer Transports + SwarmUI Gateway Mode | Complete |
 | [25](#25) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Complete |
+| [25a](#25a) | REST Live Hive Performance (Parallel Polling + Batching) | Pending |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -4756,7 +4757,7 @@ Changes:
   - apps/swarmui/src/hive.rs — O(1) telemetry line parsing, per-worker pending caps, fresh-only coalescing, round-robin worker sampling, overlay/detail caching.
   - apps/swarmui/src/lib.rs — Live Hive polling uses freshness-first policy; status snapshots rate-limited behind IR-driven bounds.
   - apps/swarmui/frontend/hive/index.js — ring-buffer ingestion, drop-oldest under pressure, index-range event application (no per-step slicing).
-  - apps/swarmui/frontend/app.js + apps/swarmui/frontend/hive/index.js — pause Live Hive rendering and UI updates during scroll or when the canvas is offscreen; throttle cadence, cap detail LOD, and drop render resolution when the canvas is idle to keep page interactions smooth.
+  - apps/swarmui/frontend/app.js + apps/swarmui/frontend/hive/index.js — keep Live Hive rendering active during scroll (no pause) while degrading cadence/quality; pause rendering only when the canvas is offscreen; throttle cadence, cap detail LOD, and drop render resolution when the canvas is idle to keep page interactions smooth.
   - apps/swarmui/frontend/hive/world.js — cache per-tick positions; in-place compaction for pollen/pulse particles.
   - apps/swarmui/frontend/hive/renderer.js — adaptive resolution/AA/particle budgets under degraded mode.
   - tools/coh-rtc/src/ir.rs + generated configs — manifest-backed Live Hive performance knobs (sample size, pending caps, degrade thresholds).
@@ -4772,6 +4773,141 @@ Checks:
   - Renderer meets frame budget targets under load; degraded mode engages deterministically.
 Deliverables:
   - Freshness-first Live Hive with documented bounds and ≥100x reduction in worst-case UI/ingest latency.
+```
+
+## Milestone 25a — REST Live Hive Performance (Parallel Polling + Batching) <a id="25a"></a> 
+[Milestones](#Milestones)
+
+**Why now (demo readiness):** REST is the only transport that supports the demo multiplexer, but Live Hive poll latency is dominated by serial REST reads. This milestone reduces REST wall-clock latency without changing protocols or semantics, while preserving Secure9P bounds and auditability.
+
+**Status:** Pending — REST polling remains serial, status reads are uncached in REST mode, and no deterministic REST performance harness exists.
+
+## Goal
+Reduce Live Hive REST status poll wall-clock time with minimal risk by:
+1. Parallelizing REST status reads in SwarmUI, and
+2. Honoring `status_poll_ms` caching in REST mode,
+3. Increasing REST session pool sizing to support concurrency,
+4. Parallelizing REST telemetry tails after pool sizing, with concurrency capped to pool limits, and
+5. Adding a deterministic REST performance harness, and
+6. Applying manifest-driven CPU affinity to the root-task authority thread during bootstrap.
+
+## Non-Goals (Explicit)
+- No new protocols or transports.
+- No changes to ACK/ERR/END grammar.
+- No changes to Secure9P semantics or bounds.
+- No release bundle updates under `releases/`.
+- No UI feature expansion beyond performance.
+
+## Design Principles (Normative)
+1. **Protocol stability** — REST remains a thin wrapper over existing NineDoor semantics.
+2. **Bounded concurrency** — parallelism must respect pool sizing and manifest limits.
+3. **Deterministic behavior** — parallel reads must not reorder or coalesce event semantics.
+4. **Opt-in batching** — new batch endpoints must be additive and backward compatible.
+
+## Implementation Touchpoints
+- `apps/swarmui/src/lib.rs` — REST status polling: cache + parallel reads.
+- `configs/root_task.toml` — REST pool sizing adjustments (manifest-driven).
+- `out/cohsh_policy.toml` + generated policy artifacts (via `coh-rtc`).
+- `apps/swarmui/src/hive.rs` — REST telemetry tails: parallel with pool-capped concurrency.
+- `scripts/rest_perf_harness.py` — deterministic REST performance harness.
+- `apps/root-task/src/affinity.rs`, `apps/root-task/src/sel4.rs`, `apps/root-task/src/kernel.rs` — apply manifest-driven affinity during bootstrap.
+
+## Testing and Validation
+
+### Functional
+- SwarmUI REST mode must continue to render Live Hive without regressions.
+
+### Performance
+- Run the REST performance harness to quantify sequential vs parallel status latency.
+ - Verify pool sizing eliminates "session pool exhausted" under parallel polling.
+
+## Checks (Definition of Done)
+- SwarmUI REST mode reduces status polling wall-clock latency by at least 2x on the same host.
+- `scripts/rest_perf_harness.py --suite status --assert-min-ratio 2.0` passes.
+- `scripts/rest_perf_harness.py --suite telemetry --assert-min-ratio 1.3` passes when workers are present.
+- `cargo test -p swarmui` passes.
+- `cargo run -p coh-rtc` + `scripts/check-generated.sh` pass after manifest changes.
+
+## Task Breakdown
+```
+Title/ID: m25a-rest-perf-harness
+Goal: Add a deterministic REST performance harness for Live Hive polling.
+Inputs: scripts/rest_perf_harness.py.
+Changes:
+  - scripts/rest_perf_harness.py — sequential vs parallel REST timing for status + telemetry.
+Commands:
+  - python3 scripts/rest_perf_harness.py --help
+Checks:
+  - Harness reports averages and enforces optional min speedup ratio.
+Deliverables:
+  - REST performance harness script.
+
+Title/ID: m25a-swarmui-rest-status
+Goal: Parallelize and cache REST status polling in Live Hive.
+Inputs: apps/swarmui/src/lib.rs.
+Changes:
+  - apps/swarmui/src/lib.rs — parallel `/proc` reads and honor `status_poll_ms` in REST mode.
+Commands:
+  - cargo test -p swarmui
+Checks:
+  - Live Hive status remains correct; poll latency drops.
+Deliverables:
+  - SwarmUI REST status polling improvements.
+
+Title/ID: m25a-rest-pool-sizing
+Goal: Increase REST session pool sizing to support parallel polling.
+Inputs: configs/root_task.toml.
+Changes:
+  - configs/root_task.toml — adjust `client_policies.cohsh.pool` sizes.
+  - out/cohsh_policy.toml — regenerated.
+  - apps/cohsh/src/generated/policy.rs — regenerated.
+  - docs/snippets/cohsh_policy.md — regenerated.
+Commands:
+  - cargo run -p coh-rtc
+  - scripts/check-generated.sh
+Checks:
+  - Generated policy artifacts match manifest.
+Deliverables:
+  - Updated REST pool sizing and generated artifacts.
+
+Title/ID: m25a-swarmui-rest-telemetry
+Goal: Parallelize REST telemetry tails per worker after pool sizing.
+Inputs: apps/swarmui/src/hive.rs, configs/root_task.toml, out/cohsh_policy.toml.
+Changes:
+  - apps/swarmui/src/hive.rs — parallel `tail` calls within pool-sized bounds.
+Commands:
+  - cargo test -p swarmui
+Checks:
+  - No changes to telemetry semantics; poll latency improves with multiple workers.
+  - Parallelism never exceeds configured REST telemetry pool size.
+Deliverables:
+  - SwarmUI REST telemetry polling improvements with pool-capped concurrency.
+
+Title/ID: m25a-root-affinity-wire
+Goal: Apply manifest-driven CPU affinity to the root-task authority thread and role-specific operations (NineDoor attach and worker spawns) and extend SMP debug output to iterate configured cores.
+Inputs: apps/root-task/src/affinity.rs, apps/root-task/src/sel4.rs, apps/root-task/src/kernel.rs, tools/coh-rtc, configs/root_task.toml, docs/ARCHITECTURE.md.
+Changes:
+  - apps/root-task/src/affinity.rs — policy validation and role-based core selection helpers.
+  - apps/root-task/src/sel4.rs — guarded TCB affinity syscall wrapper.
+  - apps/root-task/src/kernel.rs — validate policy and pin the init TCB to `authority_core`.
+  - apps/root-task/src/userland/mod.rs — apply NineDoor affinity during bridge attach.
+  - apps/root-task/src/ninedoor.rs — apply worker affinity during worker spawns.
+  - apps/root-task/src/console/mod.rs — per-core SMP debug dumps using configured affinity cores.
+  - apps/root-task/src/event/mod.rs — per-core SMP debug dumps using configured affinity cores.
+  - tools/coh-rtc/src/codegen/rust.rs — emit affinity policy tables.
+  - tools/coh-rtc/src/codegen/docs.rs — include affinity fields in manifest snippet.
+  - docs/ARCHITECTURE.md — document root-task affinity application.
+Commands:
+  - cargo test -p root-task
+  - cargo run -p coh-rtc
+  - scripts/check-generated.sh
+Checks:
+  - Root-task bootstrap logs authority core pinning when affinity is enabled.
+  - NineDoor attach and worker spawns log role-core affinity applications.
+  - `smp` debug output cycles through configured role cores.
+  - Generated manifest snippet includes affinity fields and matches configs.
+Deliverables:
+  - Manifest-driven root-task affinity wiring for the init TCB.
 ```
 ----
 **Release 0.5.0 alpha**

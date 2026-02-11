@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: SwarmUI Tauri entry point and command wiring.
 // Author: Lukas Bower
@@ -563,9 +563,9 @@ fn main() {
                     let rest_url = env::var("SWARMUI_REST_URL")
                         .or_else(|_| env::var("COH_REST_URL"))
                         .unwrap_or_else(|_| "http://127.0.0.1:8080".to_owned());
-                    let transport = CohshRestTransport::new(rest_url);
-                    SwarmUiService::Rest(SwarmUiConsoleBackend::with_transport(
-                        config, transport,
+                    let transport = CohshRestTransport::new(rest_url.clone());
+                    SwarmUiService::Rest(SwarmUiConsoleBackend::with_rest_transport(
+                        config, transport, rest_url,
                     ))
                 }
                 #[cfg(not(feature = "rest"))]

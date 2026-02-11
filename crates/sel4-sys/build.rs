@@ -18,6 +18,11 @@ const CONFIG_CANDIDATES: &[&str] = &[
     "kernel/gen_config/KernelConfigGenerated.cmake",
     "kernel/gen_config/kernel/KernelConfigGenerated.cmake",
     "kernel/gen_config/kernel_all.cmake",
+    "libsel4/sel4_arch_include/sel4/config.h",
+    "libsel4/gen_config/sel4/config.h",
+    "libsel4/gen_config/sel4/gen_config.h",
+    "libsel4/include/sel4/gen_config.h",
+    "libsel4/include/sel4/config.h",
 ];
 
 fn main() {
@@ -419,6 +424,7 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
         build_dir.join("libsel4/include"),
         build_dir.join(format!("libsel4/sel4_arch_include/{}", sel4_arch)),
         build_dir.join(format!("libsel4/arch_include/{}", arch)),
+        build_dir.join("libsel4/sel4_arch_include"),
         build_dir.join("libsel4/autoconf"),
         build_dir.join("libsel4/gen_config"),
         build_dir.join("kernel/gen_config"),

@@ -21,6 +21,8 @@ pub use cohsh_core::{
 use crate::platform::Platform;
 #[cfg(feature = "kernel")]
 use crate::sel4::BootInfoExt;
+#[cfg(feature = "kernel")]
+use crate::affinity;
 
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4;
@@ -158,10 +160,8 @@ impl CohesixConsole {
     #[cfg(all(feature = "kernel", sel4_config_debug_build))]
     fn print_smp(&mut self) {
         self.emit_line("[smp] debug scheduler dump begin");
-        unsafe {
-            sel4_sys::seL4_DebugDumpScheduler();
-            sel4_sys::seL4_DebugDumpCPUInfo();
-        }
+        let policy = affinity::policy();
+        affinity::debug_dump_per_core(&policy, |line| self.emit_line(line));
         self.emit_line("[smp] debug scheduler dump end");
     }
 

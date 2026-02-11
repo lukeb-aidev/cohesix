@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: seL4 resource management helpers for the root task.
 // Author: Lukas Bower
@@ -19,7 +19,7 @@ use core::{
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-use spin::Mutex as SpinMutex;
+use spin::{Mutex as SpinMutex, Once as SpinOnce};
 
 use crate::bootstrap::bootinfo_snapshot::{BootInfoState, BootinfoWindow};
 use crate::bootstrap::cspace_sys;
@@ -1281,6 +1281,160 @@ pub fn debug_cap_identify(_slot: seL4_CPtr) -> seL4_Word {
     0
 }
 
+/// Returns the physical address for a mapped ARM page capability.
+#[cfg(feature = "kernel")]
+pub fn page_get_address(frame: seL4_CPtr) -> Result<usize, seL4_Error> {
+    let mut mr0: seL4_Word = 0;
+    let mut mr1: seL4_Word = 0;
+    let mut mr2: seL4_Word = 0;
+    let mut mr3: seL4_Word = 0;
+    let tag = sel4_sys::seL4_MessageInfo::new(
+        sel4_sys::arch_invocation_label_ARMPageGetAddress as seL4_Word,
+        0,
+        0,
+        0,
+    );
+    let output = unsafe { sel4_sys::seL4_CallWithMRs(frame, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3) };
+    let err = sel4_sys::seL4_MessageInfo_get_label(output) as seL4_Error;
+    if err == seL4_NoError {
+        Ok(mr0 as usize)
+    } else {
+        Err(err)
+    }
+}
+
+#[cfg(not(feature = "kernel"))]
+/// Stub returning zero because page address queries require the kernel feature.
+pub fn page_get_address(_frame: seL4_CPtr) -> Result<usize, seL4_Error> {
+    Ok(0)
+}
+
+#[cfg(feature = "kernel")]
+static USER_IMAGE_PADDR_RANGE: SpinOnce<Option<Range<usize>>> = SpinOnce::new();
+
+/// Returns the page-aligned base virtual address of the root-task user image.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn user_image_base_vaddr() -> usize {
+    extern "C" {
+        static __text_start: u8;
+    }
+    let base = core::ptr::addr_of!(__text_start) as usize;
+    base & !(PAGE_SIZE - 1)
+}
+
+#[cfg(not(feature = "kernel"))]
+#[must_use]
+pub fn user_image_base_vaddr() -> usize {
+    0
+}
+
+/// Resolves a user-image virtual address to its physical address when available.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn user_image_vaddr_to_paddr(vaddr: usize) -> Option<usize> {
+    let bootinfo = unsafe { &*sel4_sys::seL4_GetBootInfo() };
+    let base = user_image_base_vaddr();
+    if vaddr < base {
+        return None;
+    }
+    let offset = vaddr - base;
+    let index = offset >> PAGE_BITS;
+    let start = bootinfo.userImageFrames.start as usize;
+    let end = bootinfo.userImageFrames.end as usize;
+    let slot = start.saturating_add(index);
+    if slot >= end {
+        return None;
+    }
+    let page_paddr = page_get_address(slot as seL4_CPtr).ok()?;
+    Some(page_paddr.saturating_add(offset & (PAGE_SIZE - 1)))
+}
+
+#[cfg(not(feature = "kernel"))]
+#[must_use]
+pub fn user_image_vaddr_to_paddr(_vaddr: usize) -> Option<usize> {
+    None
+}
+
+/// Returns the physical address range covering the root-task user image frames.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn user_image_paddr_range() -> Option<Range<usize>> {
+    let cached = USER_IMAGE_PADDR_RANGE.call_once(|| {
+        let bootinfo = unsafe { &*sel4_sys::seL4_GetBootInfo() };
+        let start = bootinfo.userImageFrames.start as usize;
+        let end = bootinfo.userImageFrames.end as usize;
+        if start >= end {
+            return None;
+        }
+        let first = page_get_address(start as seL4_CPtr).ok()?;
+        let last = page_get_address((end - 1) as seL4_CPtr).ok()?;
+        Some(first..last.saturating_add(PAGE_SIZE))
+    });
+    cached.clone()
+}
+
+#[cfg(not(feature = "kernel"))]
+#[must_use]
+pub fn user_image_paddr_range() -> Option<Range<usize>> {
+    None
+}
+
+/// Sets the CPU affinity for a TCB when SMP is enabled.
+#[cfg(feature = "kernel")]
+pub fn set_tcb_affinity(tcb_cap: seL4_CPtr, core: u8) -> Result<(), seL4_Error> {
+    let guard_stage = "TCB.SetAffinity";
+    let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    let mut breadcrumb = HeaplessString::<96>::new();
+    let _ = fmt::write(
+        &mut breadcrumb,
+        format_args!("tcb=0x{tcb:04x} core={core}", tcb = guarded_tcb),
+    );
+    sel4_guard::uart_breadcrumb(guard_stage, "seL4_TCB_SetAffinity", breadcrumb.as_str());
+
+    #[cfg(target_os = "none")]
+    let result = unsafe {
+        let mut mr0 = core as seL4_Word;
+        let mut mr1: seL4_Word = 0;
+        let mut mr2: seL4_Word = 0;
+        let mut mr3: seL4_Word = 0;
+        let tag = sel4_sys::seL4_MessageInfo_new(
+            sel4_sys::invocation_label_TCBSetAffinity as seL4_Word,
+            0,
+            0,
+            1,
+        );
+        let output_tag =
+            sel4_sys::seL4_CallWithMRs(guarded_tcb, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = sel4_sys::seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+        if result != seL4_NoError {
+            sel4_sys::seL4_SetMR(0, mr0);
+            sel4_sys::seL4_SetMR(1, mr1);
+            sel4_sys::seL4_SetMR(2, mr2);
+            sel4_sys::seL4_SetMR(3, mr3);
+        }
+        result
+    };
+    #[cfg(not(target_os = "none"))]
+    let result = {
+        let _ = (guarded_tcb, core);
+        seL4_NoError
+    };
+
+    if result == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[tcb] affinity failed tcb=0x{tcb:04x} core={core} err={err} ({name})",
+            tcb = tcb_cap,
+            core = core,
+            err = result,
+            name = error_name(result),
+        );
+        Err(result)
+    }
+}
+
 /// Safe projection of `seL4_CNode_Copy` for bootstrap modules.
 #[cfg(feature = "kernel")]
 #[inline(always)]
@@ -1697,6 +1851,20 @@ pub fn bootinfo_debug_dump(view: &BootInfoView) {
         header.empty_last_slot_excl()
     );
     debug_assert!(init_bits > 0, "BootInfo initBits is 0 — capacity invalid");
+}
+
+#[inline(always)]
+pub fn debug_dump_scheduler() {
+    unsafe {
+        sel4_sys::seL4_DebugDumpScheduler();
+    }
+}
+
+#[inline(always)]
+pub fn debug_dump_cpu_info() {
+    unsafe {
+        sel4_sys::seL4_DebugDumpCPUInfo();
+    }
 }
 
 const BOOTINFO_WINDOW_CANARY_PRE: u64 = 0xd00d_f00d_5a5a_cafe;
@@ -2635,6 +2803,76 @@ impl<'a> UntypedCatalog<'a> {
         None
     }
 
+    /// Reserves the highest-address RAM untyped meeting the requested size.
+    pub fn reserve_ram_high(&mut self, obj_bits: u8) -> Option<ReservedUntyped> {
+        let obj_bytes = 1u128 << core::cmp::min(obj_bits, 127);
+        let mut best_index: Option<usize> = None;
+        let mut best_end: usize = 0;
+        for (index, entry) in self.entries.iter().enumerate() {
+            if self.device_pt_pool_index == Some(index)
+                || entry.desc.is_device != 0
+                || entry.desc.size_bits < obj_bits
+            {
+                continue;
+            }
+            if entry.remaining_bytes() < obj_bytes {
+                continue;
+            }
+            let base = entry.desc.paddr as usize;
+            let end = base.saturating_add(1usize << entry.desc.size_bits);
+            if best_index.is_none() || end > best_end {
+                best_index = Some(index);
+                best_end = end;
+            }
+        }
+        if let Some(index) = best_index {
+            return self.reserve_index(index, obj_bits);
+        }
+        None
+    }
+
+    /// Marks a physical address range as consumed within RAM untypeds.
+    pub fn reserve_paddr_range(&mut self, range: Range<usize>, label: &'static str) {
+        if range.start >= range.end {
+            return;
+        }
+        for (index, entry) in self.entries.iter_mut().enumerate() {
+            if self.device_pt_pool_index == Some(index) || entry.desc.is_device != 0 {
+                continue;
+            }
+            let base = entry.desc.paddr as usize;
+            let end = base.saturating_add(1usize << entry.desc.size_bits);
+            if range.end <= base || range.start >= end {
+                continue;
+            }
+            let overlap_start = core::cmp::max(base, range.start);
+            let overlap_end = core::cmp::min(end, range.end);
+            let cap = entry.capacity_bytes();
+            if overlap_start > base {
+                log::warn!(
+                    "[untyped] reserved range {label} overlaps ut=0x{cap:03x} mid-span; disabling entry base=0x{base:08x} end=0x{end:08x}",
+                    cap = self.bootinfo.untyped.start + index as seL4_CPtr,
+                    base = base,
+                    end = end,
+                );
+                entry.used_bytes = cap;
+                continue;
+            }
+            let used_bytes = overlap_end.saturating_sub(base) as u128;
+            if used_bytes == 0 {
+                continue;
+            }
+            let clamped = core::cmp::min(cap, used_bytes);
+            log::info!(
+                "[untyped] reserving {label} range in ut=0x{cap:03x} base=0x{base:08x} used_bytes=0x{used:x}",
+                cap = self.bootinfo.untyped.start + index as seL4_CPtr,
+                base = base,
+                used = clamped,
+            );
+            entry.used_bytes = core::cmp::max(entry.used_bytes, clamped);
+        }
+    }
+
     /// Releases a previously reserved untyped so it may be reused.
     pub fn release(&mut self, reserved: &ReservedUntyped) {
         if let Some(entry) = self.entries.get_mut(reserved.index) {
@@ -3065,7 +3303,14 @@ impl<'a> KernelEnv<'a> {
                 "device page-table pool exhausted during bootstrap reservation"
             );
         }
-        let untyped = UntypedCatalog::new(bootinfo, pool_index);
+        let mut untyped = UntypedCatalog::new(bootinfo, pool_index);
+        if let Some(range) = user_image_paddr_range() {
+            untyped.reserve_paddr_range(range, "user-image");
+        } else {
+            log::warn!(
+                "[untyped] user image paddr range unavailable; DMA allocations may overlap image"
+            );
+        }
         Self {
             bootinfo,
             slots,
@@ -3439,17 +3684,15 @@ impl<'a> KernelEnv<'a> {
         BOOTINFO_WINDOW_GUARD.check("alloc_dma_frame_attr");
         let reserved = self
             .untyped
-            .reserve_ram(PAGE_BITS as u8)
+            .reserve_ram_high(PAGE_BITS as u8)
             .ok_or(seL4_NotEnoughMemory)?;
         let frame_slot = self.allocate_slot();
-        let trace = self.prepare_retype_trace(
+        let mut trace = self.prepare_retype_trace(
             &reserved,
             frame_slot,
             sel4_sys::seL4_ARM_Page as seL4_Word,
             PAGE_BITS as seL4_Word,
-            RetypeKind::DmaPage {
-                paddr: reserved.paddr(),
-            },
+            RetypeKind::DmaPage { paddr: 0 },
         );
         self.record_retype(trace, RetypeStatus::Pending);
         if let Err(err) = self.retype_page(reserved.cap(), &trace) {
@@ -3457,22 +3700,30 @@ impl<'a> KernelEnv<'a> {
             self.untyped.release(&reserved);
             return Err(err);
         }
+        let paddr = match page_get_address(frame_slot) {
+            Ok(paddr) => paddr,
+            Err(err) => {
+                self.record_retype(trace, RetypeStatus::Err(err));
+                return Err(err);
+            }
+        };
+        trace.kind = RetypeKind::DmaPage { paddr };
         self.record_retype(trace, RetypeStatus::Ok);
         let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "dma-frame");
         self.dma_cursor = range.end;
         self.map_frame(frame_slot, range.start, attr, false)?;
         let attr_raw: usize = unsafe { core::mem::transmute(attr) };
-        record_dma_mapping(reserved.paddr(), range.start, PAGE_SIZE, attr_raw);
+        record_dma_mapping(paddr, range.start, PAGE_SIZE, attr_raw);
         ::log::info!(
             target: "hal",
             "[hal] dma frame mapped vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=0x{attr:08x}",
             vaddr = range.start,
-            paddr = reserved.paddr(),
+            paddr = paddr,
             attr = attr_raw,
         );
         Ok(RamFrame {
             cap: frame_slot,
-            paddr: reserved.paddr(),
+            paddr,
             ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(range.start))
                 .expect("DMA mapping address must be non-null"),
         })
@@ -4448,6 +4699,59 @@ mod tests {
 
         assert_eq!(successes, (pool.total_bytes / (1 << PAGE_TABLE_BITS)));
         assert_eq!(pool.reserve_page_table(), Err(seL4_NotEnoughMemory));
+    }
+
+    #[test]
+    fn reserve_ram_high_prefers_top_of_untyped() {
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.untyped.start = 0;
+        bootinfo.untyped.end = 2;
+        bootinfo.untypedList[0].paddr = 0x4000_0000;
+        bootinfo.untypedList[0].sizeBits = 16;
+        bootinfo.untypedList[0].isDevice = 0;
+        bootinfo.untypedList[1].paddr = 0x5000_0000;
+        bootinfo.untypedList[1].sizeBits = 16;
+        bootinfo.untypedList[1].isDevice = 0;
+
+        let mut catalog = UntypedCatalog::new(&bootinfo, None);
+        let high = catalog
+            .reserve_ram_high(PAGE_BITS as u8)
+            .expect("high reservation");
+
+        assert_eq!(high.paddr(), 0x5000_0000);
+    }
+
+    #[test]
+    fn reserve_paddr_range_consumes_prefix() {
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.untyped.start = 0;
+        bootinfo.untyped.end = 1;
+        bootinfo.untypedList[0].paddr = 0x4000_0000;
+        bootinfo.untypedList[0].sizeBits = 16;
+        bootinfo.untypedList[0].isDevice = 0;
+
+        let mut catalog = UntypedCatalog::new(&bootinfo, None);
+        catalog.reserve_paddr_range(0x4000_0000..0x4000_3000, "test");
+
+        let reserved = catalog
+            .reserve_ram_high(PAGE_BITS as u8)
+            .expect("reservation after prefix");
+        assert_eq!(reserved.paddr(), 0x4000_3000);
+    }
+
+    #[test]
+    fn reserve_paddr_range_mid_span_disables_entry() {
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.untyped.start = 0;
+        bootinfo.untyped.end = 1;
+        bootinfo.untypedList[0].paddr = 0x4000_0000;
+        bootinfo.untypedList[0].sizeBits = 16;
+        bootinfo.untypedList[0].isDevice = 0;
+
+        let mut catalog = UntypedCatalog::new(&bootinfo, None);
+        catalog.reserve_paddr_range(0x4000_1000..0x4000_2000, "test");
+
+        assert!(catalog.reserve_ram_high(PAGE_BITS as u8).is_none());
     }
 
     #[test]

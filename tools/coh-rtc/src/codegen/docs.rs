@@ -44,6 +44,43 @@ impl DocFragments {
             manifest.root_task.schema
         )
         .ok();
+        let affinity = &manifest.root_task.affinity;
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.enabled`: `{}`",
+            affinity.enabled
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.max_cores`: `{}`",
+            affinity.max_cores
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.authority_core`: `{}`",
+            format_affinity_core(affinity.authority_core)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.ninedoor_cores`: `{}`",
+            format_affinity_list(&affinity.ninedoor_cores)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.provider_cores`: `{}`",
+            format_affinity_list(&affinity.provider_cores)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.worker_cores`: `{}`",
+            format_affinity_list(&affinity.worker_cores)
+        )
+        .ok();
         writeln!(schema_md, "- `profile.name`: `{}`", manifest.profile.name).ok();
         writeln!(
             schema_md,
@@ -2189,6 +2226,26 @@ fn format_sidecar_link(link: crate::ir::SidecarLink) -> &'static str {
     match link {
         crate::ir::SidecarLink::Serial => "serial",
         crate::ir::SidecarLink::Tcp => "tcp",
+    }
+}
+
+fn format_affinity_core(core: Option<u8>) -> String {
+    match core {
+        Some(value) => value.to_string(),
+        None => "(none)".to_string(),
+    }
+}
+
+fn format_affinity_list(list: &[u8]) -> String {
+    if list.is_empty() {
+        "(none)".to_string()
+    } else {
+        let joined = list
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("[{joined}]")
     }
 }
 

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: seL4 bootstrap, capability setup, and runtime hand-off for root-task.
 // Author: Lukas Bower
@@ -24,6 +24,7 @@ use core::arch::asm;
 use crate::arch::aarch64::timer::timer_freq_hz;
 #[cfg(feature = "kernel")]
 use crate::audit::boot as audit_boot;
+use crate::affinity;
 use crate::boot::{bi_extra, ep, tcb, uart_pl011};
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::cspace::cspace_first_retypes;
@@ -1284,6 +1285,36 @@ fn bootstrap<P: Platform>(
     })?;
     boot_guard.record_phase("BootInfoValidate");
     sel4_guard::install_bootinfo(&bootinfo_view);
+    let affinity_policy = affinity::policy();
+    if affinity_policy.enabled {
+        let observed_nodes = bootinfo_view.header().numNodes as u8;
+        if let Err(err) = affinity::validate_policy(&affinity_policy, observed_nodes) {
+            return Err(BootError::Fatal(format!(
+                "affinity policy invalid: {err}"
+            )));
+        }
+        let tcb = bootinfo_view.header().init_tcb_cap();
+        match affinity::apply_tcb_affinity(
+            tcb,
+            affinity::AffinityRole::Authority,
+            0,
+            &affinity_policy,
+        ) {
+            Ok(Some(core)) => {
+                log::info!("[boot] affinity: init tcb pinned core={core}");
+            }
+            Ok(None) => {
+                log::warn!(
+                    "[boot] affinity enabled but authority_core unset; init tcb left unpinned"
+                );
+            }
+            Err(err) => {
+                return Err(BootError::Fatal(format!(
+                    "affinity policy apply failed: {err}"
+                )));
+            }
+        }
+    }
 
     early_phase = EarlyBootPhase::MemoryLayout;
     sequencer

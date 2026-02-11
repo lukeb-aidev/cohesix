@@ -245,8 +245,8 @@ fn check_bootinfo_canary(mark: &'static str) -> Result<(), DriverError> {
     Ok(())
 }
 
-fn bootinfo_protected_ranges() -> HeaplessVec<Range<usize>, 4> {
-    let mut ranges = HeaplessVec::<Range<usize>, 4>::new();
+fn bootinfo_protected_ranges() -> HeaplessVec<Range<usize>, 6> {
+    let mut ranges = HeaplessVec::<Range<usize>, 6>::new();
     if let Some(state) = BootInfoState::get() {
         let _ = ranges.push(state.snapshot_region());
     }
@@ -258,6 +258,9 @@ fn bootinfo_protected_ranges() -> HeaplessVec<Range<usize>, 4> {
     let text = guards::text_bounds();
     if text.start < text.end {
         let _ = ranges.push(text);
+    }
+    if let Some(range) = crate::sel4::user_image_paddr_range() {
+        let _ = ranges.push(range);
     }
     ranges
 }

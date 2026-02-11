@@ -93,6 +93,16 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct AffinityPolicy {{")?;
+    writeln!(mod_contents, "    pub enabled: bool,")?;
+    writeln!(mod_contents, "    pub max_cores: u8,")?;
+    writeln!(mod_contents, "    pub authority_core: Option<u8>,")?;
+    writeln!(mod_contents, "    pub ninedoor_cores: &'static [u8],")?;
+    writeln!(mod_contents, "    pub provider_cores: &'static [u8],")?;
+    writeln!(mod_contents, "    pub worker_cores: &'static [u8],")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub enum TelemetryFrameSchema {{")?;
     writeln!(mod_contents, "    LegacyPlaintext,")?;
     writeln!(mod_contents, "    CborV1,")?;
@@ -474,6 +484,10 @@ pub fn emit_rust(
     )?;
     writeln!(
         mod_contents,
+        "pub const AFFINITY_POLICY: AffinityPolicy = bootstrap::AFFINITY_POLICY;"
+    )?;
+    writeln!(
+        mod_contents,
         "pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();"
     )?;
     writeln!(
@@ -638,6 +652,13 @@ pub fn emit_rust(
     writeln!(mod_contents)?;
     writeln!(
         mod_contents,
+        "pub const fn affinity_policy() -> AffinityPolicy {{"
+    )?;
+    writeln!(mod_contents, "    bootstrap::AFFINITY_POLICY")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
         "pub const fn shard_labels() -> &'static [&'static str] {{"
     )?;
     writeln!(mod_contents, "    &bootstrap::SHARD_LABELS")?;
@@ -773,7 +794,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostProvider, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AffinityPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostProvider, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -863,6 +884,54 @@ pub fn emit_rust(
         manifest.sharding.enabled,
         manifest.sharding.shard_bits,
         manifest.sharding.legacy_worker_alias
+    )?;
+    let affinity = &manifest.root_task.affinity;
+    let affinity_authority = match affinity.authority_core {
+        Some(core) => format!("Some({core})"),
+        None => "None".to_string(),
+    };
+    let affinity_ninedoor = affinity
+        .ninedoor_cores
+        .iter()
+        .map(|core| core.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let affinity_provider = affinity
+        .provider_cores
+        .iter()
+        .map(|core| core.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let affinity_worker = affinity
+        .worker_cores
+        .iter()
+        .map(|core| core.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(
+        bootstrap_contents,
+        "pub const AFFINITY_NINEDOOR_CORES: [u8; {}] = [{}];\n",
+        affinity.ninedoor_cores.len(),
+        affinity_ninedoor
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const AFFINITY_PROVIDER_CORES: [u8; {}] = [{}];\n",
+        affinity.provider_cores.len(),
+        affinity_provider
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const AFFINITY_WORKER_CORES: [u8; {}] = [{}];\n",
+        affinity.worker_cores.len(),
+        affinity_worker
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const AFFINITY_POLICY: AffinityPolicy = AffinityPolicy {{ enabled: {}, max_cores: {}, authority_core: {}, ninedoor_cores: &AFFINITY_NINEDOOR_CORES, provider_cores: &AFFINITY_PROVIDER_CORES, worker_cores: &AFFINITY_WORKER_CORES }};\n",
+        affinity.enabled,
+        affinity.max_cores,
+        affinity_authority
     )?;
     let shard_labels = build_shard_labels(manifest);
     writeln!(

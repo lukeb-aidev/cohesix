@@ -5,12 +5,12 @@
 
 #![allow(unused_imports)]
 
-use super::{AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostProvider, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig};
+use super::{AffinityPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostProvider, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig};
 use cohesix_ticket::Role;
 
 pub const TICKET_TABLE_SHA256: &str = "fd0ebff1d0b4cfcc2a03a1015578545dfa68f0240e782b60ad7956c2492972eb";
 pub const NAMESPACE_TABLE_SHA256: &str = "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
-pub const AUDIT_TABLE_SHA256: &str = "18eaf8d19474489cb76430e70f7c499b163287c6d9b11dd69ea4ab05682308da";
+pub const AUDIT_TABLE_SHA256: &str = "5464b9e0e061e5031fec94b8e3ef18a030abebba513b2dacd1ae0ed2cdbc9799";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec { role: Role::Queen, secret: "bootstrap" },
@@ -31,6 +31,14 @@ pub const SECURE9P_LIMITS: Secure9pLimits = Secure9pLimits { msize: 8192, walk_d
 pub const TICKET_LIMITS: TicketLimits = TicketLimits { max_scopes: 8, max_scope_path_len: 128, max_scope_rate_per_s: 64, bandwidth_bytes: 131072, cursor_resumes: 16, cursor_advances: 256 };
 
 pub const SHARDING_CONFIG: ShardingConfig = ShardingConfig { enabled: true, shard_bits: 8, legacy_worker_alias: true };
+
+pub const AFFINITY_NINEDOOR_CORES: [u8; 1] = [1];
+
+pub const AFFINITY_PROVIDER_CORES: [u8; 2] = [2, 3];
+
+pub const AFFINITY_WORKER_CORES: [u8; 2] = [2, 3];
+
+pub const AFFINITY_POLICY: AffinityPolicy = AffinityPolicy { enabled: true, max_cores: 4, authority_core: Some(0), ninedoor_cores: &AFFINITY_NINEDOOR_CORES, provider_cores: &AFFINITY_PROVIDER_CORES, worker_cores: &AFFINITY_WORKER_CORES };
 
 pub const SHARD_LABELS: [&str; 256] = [
     "00",
@@ -361,9 +369,9 @@ pub const POLICY_RULES: [PolicyRule; 2] = [
     PolicyRule { id: "systemd-restart", target: "/host/systemd/*/restart" },
 ];
 
-pub const POLICY_CONFIG: PolicyConfig = PolicyConfig { enable: true, limits: PolicyLimits { queue_max_entries: 32, queue_max_bytes: 4096, ctl_max_bytes: 2048, status_max_bytes: 512 }, rules: &POLICY_RULES };
+pub const POLICY_CONFIG: PolicyConfig = PolicyConfig { enable: true, limits: PolicyLimits { queue_max_entries: 64, queue_max_bytes: 8192, ctl_max_bytes: 2048, status_max_bytes: 512 }, rules: &POLICY_RULES };
 
-pub const POLICY_RULES_JSON: &str = "{\n  \"enabled\": true,\n  \"limits\": {\n    \"queue_max_entries\": 32,\n    \"queue_max_bytes\": 4096,\n    \"ctl_max_bytes\": 2048,\n    \"status_max_bytes\": 512\n  },\n  \"rules\": [\n    {\n      \"id\": \"queen-ctl\",\n      \"target\": \"/queen/ctl\"\n    },\n    {\n      \"id\": \"systemd-restart\",\n      \"target\": \"/host/systemd/*/restart\"\n    }\n  ]\n}";
+pub const POLICY_RULES_JSON: &str = "{\n  \"enabled\": true,\n  \"limits\": {\n    \"queue_max_entries\": 64,\n    \"queue_max_bytes\": 8192,\n    \"ctl_max_bytes\": 2048,\n    \"status_max_bytes\": 512\n  },\n  \"rules\": [\n    {\n      \"id\": \"queen-ctl\",\n      \"target\": \"/queen/ctl\"\n    },\n    {\n      \"id\": \"systemd-restart\",\n      \"target\": \"/host/systemd/*/restart\"\n    }\n  ]\n}";
 
 pub const AUDIT_CONFIG: AuditConfig = AuditConfig { enable: false, journal_max_bytes: 8192, decisions_max_bytes: 4096, replay_enable: false, replay_max_entries: 64, replay_ctl_max_bytes: 1024, replay_status_max_bytes: 1024 };
 
@@ -378,7 +386,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = [
 pub const INITIAL_AUDIT_LINES: [&str; 23] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=a15239ff96ad0f2cc21282023cf6bb344e8eadc572881f1872b84e82b17547a0",
+    "manifest.sha256=fd4aee25dd42e51e6e4b581a46acd45299dcf2c12436f2d1fdf12d77dd177d93",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

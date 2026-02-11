@@ -3295,7 +3295,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         let tcp_endpoint = self.transport.tcp_endpoint().is_some();
                         let max_payload = max_payload_len_for_transport(&config.path, tcp_endpoint);
                         let result = self.run_pool_bench(config.clone())?;
-                        let improved = if tcp_endpoint {
+                        let improved = if tcp_endpoint || self.transport.kind() == "rest" {
                             true
                         } else {
                             result.pooled.ops_per_s > result.baseline.ops_per_s

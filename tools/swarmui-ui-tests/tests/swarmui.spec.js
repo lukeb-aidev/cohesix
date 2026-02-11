@@ -357,13 +357,13 @@ test("Live Hive poll interval honors status poll policy", async ({ page }) => {
   expect(calls[1] - calls[0]).toBeGreaterThanOrEqual(350);
 });
 
-test("Live Hive scroll throttles rendering while active", async ({ page }) => {
+test("Live Hive keeps rendering during scroll", async ({ page }) => {
   await page.waitForTimeout(200);
   const before = await page.evaluate(() =>
     window.__SWARMUI_HIVE_DEBUG.getMetrics()
   );
   await page.evaluate(() => window.scrollTo(0, 200));
-  await page.waitForTimeout(80);
+  await page.waitForTimeout(120);
   const mid = await page.evaluate(() =>
     window.__SWARMUI_HIVE_DEBUG.getMetrics()
   );
@@ -371,7 +371,7 @@ test("Live Hive scroll throttles rendering while active", async ({ page }) => {
   const after = await page.evaluate(() =>
     window.__SWARMUI_HIVE_DEBUG.getMetrics()
   );
-  expect(mid.renders).toBeLessThanOrEqual(before.renders + 1);
+  expect(after.renders).toBeGreaterThan(before.renders);
   expect(after.renders).toBeGreaterThanOrEqual(mid.renders);
 });
 

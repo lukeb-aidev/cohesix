@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide bounded session pooling for cohsh transports.
 // Author: Lukas Bower
@@ -86,15 +86,15 @@ impl SessionPool {
             .map(str::to_owned);
         state.closed = false;
 
-        let extra_control = self.control_capacity.saturating_sub(1);
-        for _ in 0..extra_control {
-            let session = self.spawn_session(role, state.ticket.as_deref())?;
-            state.control_idle.push_back(session);
-            state.control_total = state.control_total.saturating_add(1);
-        }
-        for _ in 0..self.telemetry_capacity {
-            let session = self.spawn_session(role, state.ticket.as_deref())?;
-            state.telemetry_idle.push_back(session);
+        // Seed the pool with a single control + telemetry session. Additional
+        // sessions are spawned lazily on checkout to avoid bursty attach storms
+        // during gateway startup.
+        let control_session = self.spawn_session(role, state.ticket.as_deref())?;
+        state.control_idle.push_back(control_session);
+        state.control_total = state.control_total.saturating_add(1);
+        if self.telemetry_capacity > 0 {
+            let telemetry_session = self.spawn_session(role, state.ticket.as_deref())?;
+            state.telemetry_idle.push_back(telemetry_session);
             state.telemetry_total = state.telemetry_total.saturating_add(1);
         }
         Ok(())

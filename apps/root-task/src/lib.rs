@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Root-task library surface exposing console and networking modules for tests.
 // Author: Lukas Bower
@@ -29,6 +29,8 @@ pub mod audit;
 #[cfg(feature = "kernel")]
 /// Authority queue for serializing control-plane mutations.
 pub mod authority;
+/// Manifest-driven SMP affinity helpers.
+pub mod affinity;
 pub mod console;
 pub mod event;
 /// Compile-time feature manifest and guard rails.

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Userland hand-off and runtime wiring for console and networking surfaces.
 // Author: Lukas Bower
@@ -13,6 +13,8 @@ use core::sync::atomic::AtomicU64;
 
 #[cfg(feature = "serial-console")]
 use crate::boot::uart_pl011;
+#[cfg(feature = "kernel")]
+use crate::affinity;
 use crate::bootstrap::log as boot_log;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::console::CohesixConsole;
@@ -388,7 +390,13 @@ where
     V: CapabilityValidator,
 {
     if let Some(ninedoor) = ctx.ninedoor.borrow_mut().take() {
-        pump = pump.with_ninedoor(ninedoor);
+        let policy = affinity::policy();
+        pump = affinity::with_role_affinity(
+            affinity::AffinityRole::NineDoor,
+            0,
+            &policy,
+            || pump.with_ninedoor(ninedoor),
+        );
     }
 
     pump

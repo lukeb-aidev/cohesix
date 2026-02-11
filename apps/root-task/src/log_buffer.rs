@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Bounded log ring backing /log/queen.log after the console handoff.
 // Author: Lukas Bower
@@ -53,15 +53,24 @@ impl LogRing {
         &self,
     ) -> HeaplessVec<HeaplessString<LINE>, LIMIT> {
         let mut out = HeaplessVec::new();
+        self.snapshot_into(&mut out);
+        out
+    }
+
+    fn snapshot_into<const LINE: usize, const LIMIT: usize>(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<LINE>, LIMIT>,
+    ) {
+        output.clear();
         for line in self.lines.iter().rev() {
-            if out.is_full() {
+            if output.is_full() {
                 break;
             }
             let mut entry: HeaplessString<LINE> = HeaplessString::new();
             let _ = entry.push_str(line.as_str());
-            let _ = out.push(entry);
+            let _ = output.push(entry);
         }
-        let slice = out.as_mut_slice();
+        let slice = output.as_mut_slice();
         let mut head = 0usize;
         let mut tail = slice.len().saturating_sub(1);
         while head < tail {
@@ -69,7 +78,6 @@ impl LogRing {
             head = head.saturating_add(1);
             tail = tail.saturating_sub(1);
         }
-        out
     }
 }
 
@@ -100,15 +108,24 @@ impl UserRing {
         &self,
     ) -> HeaplessVec<HeaplessString<LINE>, LIMIT> {
         let mut out = HeaplessVec::new();
+        self.snapshot_into(&mut out);
+        out
+    }
+
+    fn snapshot_into<const LINE: usize, const LIMIT: usize>(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<LINE>, LIMIT>,
+    ) {
+        output.clear();
         for line in self.lines.iter().rev() {
-            if out.is_full() {
+            if output.is_full() {
                 break;
             }
             let mut entry: HeaplessString<LINE> = HeaplessString::new();
             let _ = entry.push_str(line.as_str());
-            let _ = out.push(entry);
+            let _ = output.push(entry);
         }
-        let slice = out.as_mut_slice();
+        let slice = output.as_mut_slice();
         let mut head = 0usize;
         let mut tail = slice.len().saturating_sub(1);
         while head < tail {
@@ -116,7 +133,6 @@ impl UserRing {
             head = head.saturating_add(1);
             tail = tail.saturating_sub(1);
         }
-        out
     }
 }
 
@@ -151,7 +167,19 @@ pub fn snapshot_lines<const LINE: usize, const LIMIT: usize>(
     LOG_RING.lock().snapshot::<LINE, LIMIT>()
 }
 
+pub fn snapshot_lines_into<const LINE: usize, const LIMIT: usize>(
+    output: &mut HeaplessVec<HeaplessString<LINE>, LIMIT>,
+) {
+    LOG_RING.lock().snapshot_into(output);
+}
+
 pub fn snapshot_user_lines<const LINE: usize, const LIMIT: usize>(
 ) -> HeaplessVec<HeaplessString<LINE>, LIMIT> {
     USER_RING.lock().snapshot::<LINE, LIMIT>()
+}
+
+pub fn snapshot_user_lines_into<const LINE: usize, const LIMIT: usize>(
+    output: &mut HeaplessVec<HeaplessString<LINE>, LIMIT>,
+) {
+    USER_RING.lock().snapshot_into(output);
 }

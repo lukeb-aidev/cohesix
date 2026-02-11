@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Define and validate the root-task manifest IR.
 // Author: Lukas Bower
@@ -1746,13 +1746,29 @@ pub struct AffinityPolicy {
 impl Default for AffinityPolicy {
     fn default() -> Self {
         Self {
-            enabled: false,
-            max_cores: 1,
-            authority_core: None,
-            ninedoor_cores: Vec::new(),
-            provider_cores: Vec::new(),
-            worker_cores: Vec::new(),
+            enabled: true,
+            max_cores: 4,
+            authority_core: Some(0),
+            ninedoor_cores: vec![1],
+            provider_cores: vec![2, 3],
+            worker_cores: vec![2, 3],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AffinityPolicy;
+
+    #[test]
+    fn affinity_defaults_enabled_with_expected_cores() {
+        let policy = AffinityPolicy::default();
+        assert!(policy.enabled);
+        assert_eq!(policy.max_cores, 4);
+        assert_eq!(policy.authority_core, Some(0));
+        assert_eq!(policy.ninedoor_cores, vec![1]);
+        assert_eq!(policy.provider_cores, vec![2, 3]);
+        assert_eq!(policy.worker_cores, vec![2, 3]);
     }
 }
 

@@ -1,14 +1,19 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: SwarmUI Live Hive event modeling, replay, and bounded polling helpers.
 // Author: Lukas Bower
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
-
+#[cfg(feature = "rest")]
+use cohsh::RestTransport as CohshRestTransport;
 use cohsh::client::CohClient;
 use cohsh::{Session, Transport};
 use cohsh_core::{BoundedLineBuffer, Secure9pTransport, TailPollPolicy, TailPoller};
+#[cfg(feature = "rest")]
+use cohesix_ticket::Role;
+#[cfg(feature = "rest")]
+use std::thread;
 use secure9p_codec::OpenMode;
 use serde::{Deserialize, Serialize};
 
@@ -960,6 +965,165 @@ impl ConsoleHiveSessionState {
             self.trim_queue(max_queue);
             processed = processed.saturating_add(1);
         }
+        if processed > 0 {
+            self.worker_cursor = (start_index + processed) % worker_count;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "rest")]
+    pub(crate) fn ingest_rest_parallel(
+        &mut self,
+        worker_root: &str,
+        config: &SwarmUiHiveConfig,
+        rest_url: &str,
+        parallel_limit: usize,
+        role: Role,
+        ticket: Option<&str>,
+    ) -> Result<(), SwarmUiError> {
+        let now_ms = now_ms();
+        let mut budget = config.lod_event_budget as usize;
+        let max_queue = config.pending_event_cap as usize;
+        let worker_count = self.workers.len();
+        if worker_count == 0 {
+            return Ok(());
+        }
+        let pending_cap = config.pending_lines_per_worker as usize;
+        let max_workers = (config.poll_workers_per_tick as usize).min(worker_count);
+        let start_index = self.worker_cursor % worker_count;
+        let mut processed = 0usize;
+        let mut offset = 0usize;
+        let parallel_limit = parallel_limit.max(1);
+        let ticket_owned = ticket.map(str::to_owned);
+
+        'outer: while offset < worker_count && processed < max_workers && budget > 0 {
+            let mut batch = Vec::new();
+            while offset < worker_count
+                && processed + batch.len() < max_workers
+                && batch.len() < parallel_limit
+                && budget > 0
+            {
+                let idx = (start_index + offset) % worker_count;
+                let worker_id = self.workers[idx].clone();
+                let poller = self
+                    .pollers
+                    .entry(worker_id.clone())
+                    .or_insert_with(|| TailPoller::new(self.tail_policy, None));
+                let should_poll = poller.should_poll(now_ms);
+                batch.push((worker_id, should_poll));
+                offset = offset.saturating_add(1);
+            }
+
+            let mut tail_results: HashMap<String, Vec<String>> = HashMap::new();
+            let poll_targets = batch
+                .iter()
+                .filter(|(_, should_poll)| *should_poll)
+                .map(|(worker_id, _)| worker_id.clone())
+                .collect::<Vec<_>>();
+            if !poll_targets.is_empty() {
+                let rest_url = rest_url.to_owned();
+                let chunk_results = thread::scope(|scope| {
+                    let mut handles = Vec::with_capacity(poll_targets.len());
+                    for worker_id in &poll_targets {
+                        let rest_url = rest_url.clone();
+                        let ticket = ticket_owned.clone();
+                        let worker_id = worker_id.clone();
+                        handles.push(scope.spawn(move || {
+                            let mut transport = CohshRestTransport::new(rest_url);
+                            let session = transport
+                                .attach(role, ticket.as_deref())
+                                .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
+                            let path = format!("{worker_root}/{worker_id}/telemetry");
+                            let lines = transport
+                                .tail(&session, &path)
+                                .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
+                            Ok::<(String, Vec<String>), SwarmUiError>((worker_id, lines))
+                        }));
+                    }
+                    let mut out = Vec::with_capacity(handles.len());
+                    for handle in handles {
+                        match handle.join() {
+                            Ok(Ok(result)) => out.push(Ok(result)),
+                            Ok(Err(err)) => out.push(Err(err)),
+                            Err(_) => out.push(Err(SwarmUiError::Transport(
+                                "rest tail thread panicked".to_owned(),
+                            ))),
+                        }
+                    }
+                    out
+                });
+                for result in chunk_results {
+                    let (worker_id, lines) = result?;
+                    tail_results.insert(worker_id, lines);
+                }
+            }
+
+            for (worker_id, should_poll) in batch {
+                if processed >= max_workers || budget == 0 {
+                    break 'outer;
+                }
+                processed = processed.saturating_add(1);
+                if !should_poll {
+                    continue;
+                }
+                let Some(lines) = tail_results.remove(&worker_id) else {
+                    return Err(SwarmUiError::Transport(format!(
+                        "missing REST tail result for {worker_id}"
+                    )));
+                };
+                let poller = self
+                    .pollers
+                    .get_mut(&worker_id)
+                    .expect("poller exists");
+                poller.mark_polled(now_ms);
+                let mut lines = lines;
+                if pending_cap > 0 && lines.len() > pending_cap {
+                    let keep_from = lines.len().saturating_sub(pending_cap);
+                    lines = lines.split_off(keep_from);
+                    self.dropped = self.dropped.saturating_add(keep_from as u64);
+                }
+                let namespace = format!("{worker_root}/{worker_id}/telemetry");
+                let detail_lines = config.detail_lines as usize;
+                let line_cap = config.line_cap_bytes as usize;
+                let per_worker = config.per_worker_bytes as usize;
+                let mut buffer = self
+                    .buffers
+                    .remove(&worker_id)
+                    .unwrap_or_else(|| BoundedLineBuffer::new(detail_lines, per_worker, line_cap));
+                let role = self
+                    .roles
+                    .get(&worker_id)
+                    .map(|value| value.as_str());
+                let mut touched = false;
+                for line in lines {
+                    if budget == 0 {
+                        break;
+                    }
+                    let Some(normalized) = normalize_telemetry_line(&line) else {
+                        continue;
+                    };
+                    buffer.push_line(normalized);
+                    touched = true;
+                    if let Some(event) = parse_line_to_event_with_namespace(
+                        &worker_id,
+                        &namespace,
+                        role,
+                        normalized,
+                        &mut self.seq,
+                        config.line_cap_bytes as usize,
+                    ) {
+                        self.queue.push_back(event);
+                        budget = budget.saturating_sub(1);
+                    }
+                }
+                self.buffers.insert(worker_id.clone(), buffer);
+                if touched {
+                    self.buffers_revision = self.buffers_revision.wrapping_add(1);
+                }
+                self.trim_queue(max_queue);
+            }
+        }
+
         if processed > 0 {
             self.worker_cursor = (start_index + processed) % worker_count;
         }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Smoltcp-backed TCP console stack for the in-VM root task.
 // Author: Lukas Bower
@@ -1241,15 +1241,24 @@ fn log_storage_addresses_once(marker: &'static str) {
     ];
 
     for snapshot in storage_snapshots {
+        let paddr = crate::sel4::user_image_vaddr_to_paddr(snapshot.storage);
+        let pend = paddr
+            .map(|addr| addr.saturating_add(snapshot.storage_len))
+            .unwrap_or(0);
+        let paddr_val = paddr.unwrap_or(0);
+        let paddr_known = paddr.is_some();
         info!(
             target: "net-storage",
-            "[net-storage] addr marker={marker} label={} flag=0x{flag:016x} owner=0x{owner:016x} tag=0x{tag:016x} storage=0x{storage:016x} len=0x{len:08x}",
+            "[net-storage] addr marker={marker} label={} flag=0x{flag:016x} owner=0x{owner:016x} tag=0x{tag:016x} storage=0x{storage:016x} len=0x{len:08x} paddr=0x{paddr:016x}..0x{pend:016x} paddr_known={known}",
             snapshot.label,
             flag = snapshot.flag,
             owner = snapshot.owner,
             tag = snapshot.tag,
             storage = snapshot.storage,
             len = snapshot.storage_len,
+            paddr = paddr_val,
+            pend = pend,
+            known = paddr_known,
         );
     }
 
@@ -1275,15 +1284,24 @@ fn log_storage_addresses_once(marker: &'static str) {
         ];
 
         for snapshot in probe_snapshots {
+            let paddr = crate::sel4::user_image_vaddr_to_paddr(snapshot.storage);
+            let pend = paddr
+                .map(|addr| addr.saturating_add(snapshot.storage_len))
+                .unwrap_or(0);
+            let paddr_val = paddr.unwrap_or(0);
+            let paddr_known = paddr.is_some();
             info!(
                 target: "net-storage",
-                "[net-storage] addr marker={marker} label={} flag=0x{flag:016x} owner=0x{owner:016x} tag=0x{tag:016x} storage=0x{storage:016x} len=0x{len:08x}",
+                "[net-storage] addr marker={marker} label={} flag=0x{flag:016x} owner=0x{owner:016x} tag=0x{tag:016x} storage=0x{storage:016x} len=0x{len:08x} paddr=0x{paddr:016x}..0x{pend:016x} paddr_known={known}",
                 snapshot.label,
                 flag = snapshot.flag,
                 owner = snapshot.owner,
                 tag = snapshot.tag,
                 storage = snapshot.storage,
                 len = snapshot.storage_len,
+                paddr = paddr_val,
+                pend = pend,
+                known = paddr_known,
             );
         }
     }
@@ -1437,6 +1455,72 @@ where
 }
 
 impl<D: NetDevice> NetStack<D> {
+    #[inline]
+    fn console_socket_capacity_ok(rx_capacity: usize, tx_capacity: usize) -> bool {
+        rx_capacity == TCP_RX_BUFFER && tx_capacity == TCP_TX_BUFFER
+    }
+
+    fn rebuild_console_socket(
+        &mut self,
+        now_ms: u64,
+        rx_capacity: usize,
+        tx_capacity: usize,
+        rx_queue: usize,
+        tx_queue: usize,
+    ) -> bool {
+        error!(
+            "[net-console] console socket buffer corruption detected (rx_capacity={}, tx_capacity={}, rx_queue={}, tx_queue={}); rebuilding socket",
+            rx_capacity,
+            tx_capacity,
+            rx_queue,
+            tx_queue
+        );
+        self.outbound.reset();
+        self.server.end_session();
+        self.session_active = false;
+        self.active_client_id = None;
+        self.peer_endpoint = None;
+        self.listener_announced = false;
+        self.reset_session_state_with(None);
+        let _ = self.sockets.remove(self.tcp_handle);
+        let rx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_RX_STORAGE[..]) };
+        let tx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_TX_STORAGE[..]) };
+        let mut tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
+        if let Err(err) = tcp_socket.listen(IpListenEndpoint::from(self.listen_port)) {
+            warn!(
+                "[net-console] console socket relisten failed port={} err={err:?}",
+                self.listen_port
+            );
+        } else {
+            NET_DIAG.record_listener_bound();
+            info!(
+                "[net-console] console socket rebuilt at now_ms={} port={}",
+                now_ms, self.listen_port
+            );
+        }
+        self.tcp_handle = self.sockets.add(tcp_socket);
+        true
+    }
+
+    fn validate_console_socket(&mut self, now_ms: u64) -> bool {
+        let (rx_capacity, tx_capacity, rx_queue, tx_queue) = {
+            let socket = self.sockets.get::<TcpSocket>(self.tcp_handle);
+            (
+                socket.recv_capacity(),
+                socket.send_capacity(),
+                socket.recv_queue(),
+                socket.send_queue(),
+            )
+        };
+        let capacity_ok = Self::console_socket_capacity_ok(rx_capacity, tx_capacity);
+        let queue_ok = rx_queue <= rx_capacity && tx_queue <= tx_capacity;
+        if capacity_ok && queue_ok {
+            return true;
+        }
+        self.rebuild_console_socket(now_ms, rx_capacity, tx_capacity, rx_queue, tx_queue);
+        false
+    }
+
     fn set_auth_state(auth_state: &mut AuthState, active_client_id: Option<u64>, next: AuthState) {
         if next != *auth_state {
             let conn_id = active_client_id.unwrap_or(0);
@@ -2273,6 +2357,13 @@ impl<D: NetDevice> NetStack<D> {
             self.device.debug_snapshot();
         }
 
+        if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
+            self.telemetry.last_poll_ms = now_ms;
+            self.telemetry.tx_drops = self.device.tx_drop_count();
+            self.sync_device_counters();
+            return true;
+        }
+
         self.bump_poll_counter();
         if self.stage_policy.tx_only && !self.tx_only_sent {
             let activity = self.send_udp_beacon();
@@ -2313,6 +2404,12 @@ impl<D: NetDevice> NetStack<D> {
         // responses (including AUTH acknowledgements) are flushed to the wire
         // without waiting for the next timer tick.
         if tcp_activity {
+            if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
+                self.telemetry.last_poll_ms = now_ms;
+                self.telemetry.tx_drops = self.device.tx_drop_count();
+                self.sync_device_counters();
+                return true;
+            }
             self.bump_poll_counter();
             poll_result = self
                 .interface
@@ -3116,6 +3213,9 @@ impl<D: NetDevice> NetStack<D> {
         let last_tcp_state;
         let mut allow_flush = true;
         let listen_port = self.listen_port;
+        if !self.validate_console_socket(now_ms) {
+            return true;
+        }
 
         let (snapshot, tcp_state) = {
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
@@ -4420,6 +4520,12 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         if !self.stage_policy.allow_console_io {
             return false;
         }
+        if self.stage_policy.allow_tcp {
+            let now_ms = self.last_now_ms.unwrap_or(0);
+            if !self.validate_console_socket(now_ms) {
+                return false;
+            }
+        }
         #[cfg(feature = "cohesix-dev")]
         if line.starts_with("OK CAT") || line.starts_with("OK ECHO") || line == "END" {
             let socket = self.sockets.get::<TcpSocket>(self.tcp_handle);
@@ -4671,6 +4777,22 @@ mod tests {
 
         let explicit = render_host_selftest_target(Some("example.com:5555"), TCP_SMOKE_PORT, ip);
         assert_eq!(explicit.as_str(), "example.com:5555");
+    }
+
+    #[test]
+    fn console_socket_capacity_guard_matches_expected_buffers() {
+        assert!(NetStack::<DefaultNetDevice>::console_socket_capacity_ok(
+            TCP_RX_BUFFER,
+            TCP_TX_BUFFER
+        ));
+        assert!(!NetStack::<DefaultNetDevice>::console_socket_capacity_ok(
+            3,
+            TCP_TX_BUFFER
+        ));
+        assert!(!NetStack::<DefaultNetDevice>::console_socket_capacity_ok(
+            TCP_RX_BUFFER,
+            3
+        ));
     }
 
     #[test]

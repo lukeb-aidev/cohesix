@@ -33,6 +33,10 @@ use cohsh::{
     tcp_debug_enabled, CohshPolicy, Session as CohshSession, TcpTransport as CohshTcpTransport,
     Transport as CohshTransport,
 };
+#[cfg(feature = "rest")]
+use cohsh::RestTransport as CohshRestTransport;
+#[cfg(feature = "rest")]
+use std::thread;
 use cohsh_core::command::{Command as ConsoleCommand, CommandParser, ConsoleError, MAX_LINE_LEN};
 use cohsh_core::wire::{render_ack, AckLine, AckStatus, END_LINE};
 use cohsh_core::{
@@ -1198,6 +1202,18 @@ struct SwarmUiConsoleSession {
     session: CohshSession,
 }
 
+#[derive(Debug, Clone)]
+struct RestParallelConfig {
+    base_url: String,
+    telemetry_sessions: usize,
+}
+
+impl RestParallelConfig {
+    fn parallel_limit(&self) -> usize {
+        self.telemetry_sessions.max(1)
+    }
+}
+
 /// SwarmUI backend that speaks the Cohesix TCP console transport.
 pub struct SwarmUiConsoleBackend<T: CohshTransport> {
     config: SwarmUiConfig,
@@ -1213,6 +1229,7 @@ pub struct SwarmUiConsoleBackend<T: CohshTransport> {
     active_tails: usize,
     tail_policy: TailPollPolicy,
     cache: Option<SnapshotCache>,
+    rest_parallel: Option<RestParallelConfig>,
 }
 
 impl SwarmUiConsoleBackend<CohshTcpTransport> {
@@ -1260,7 +1277,23 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             active_tails: 0,
             tail_policy,
             cache,
+            rest_parallel: None,
         }
+    }
+
+    /// Construct a SwarmUI console backend for REST transport with parallel settings.
+    pub fn with_rest_transport(
+        config: SwarmUiConfig,
+        transport: T,
+        rest_url: impl Into<String>,
+    ) -> Self {
+        let mut backend = Self::with_transport(config, transport);
+        let policy = CohshPolicy::from_generated();
+        backend.rest_parallel = Some(RestParallelConfig {
+            base_url: rest_url.into(),
+            telemetry_sessions: policy.pool.telemetry_sessions.max(1) as usize,
+        });
+        backend
     }
 
     /// Toggle offline mode (disables network access when enabled).
@@ -2217,8 +2250,29 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             .hive_states
             .remove(&key)
             .ok_or_else(|| SwarmUiError::Hive("hive not bootstrapped".to_owned()))?;
-        let ingest_result = {
-            let session = self.session_for(role, ticket)?;
+        let session = self.session_for(role, ticket)?;
+        let ingest_result = if let Some(rest_parallel) = self.rest_parallel.as_ref() {
+            #[cfg(feature = "rest")]
+            {
+                state.ingest_rest_parallel(
+                    &worker_root,
+                    &hive_config,
+                    rest_parallel.base_url.as_str(),
+                    rest_parallel.parallel_limit(),
+                    role,
+                    ticket,
+                )
+            }
+            #[cfg(not(feature = "rest"))]
+            {
+                state.ingest(
+                    &mut self.transport,
+                    &session.session,
+                    &worker_root,
+                    &hive_config,
+                )
+            }
+        } else {
             state.ingest(
                 &mut self.transport,
                 &session.session,
@@ -2240,8 +2294,12 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             backlog as f32 / hive_config.lod_event_budget as f32
         };
         let dropped = state.dropped();
-        let (root, sessions, pressure_counters, schedule, lease) =
-            self.read_hive_status(role, ticket);
+        let (root, sessions, pressure_counters, schedule, lease) = if self.rest_parallel.is_some()
+        {
+            self.read_hive_status_cached(role, ticket, hive_config.status_poll_ms)
+        } else {
+            self.read_hive_status(role, ticket)
+        };
         Ok(SwarmUiHiveBatch {
             events,
             pressure,
@@ -2349,6 +2407,51 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         }
     }
 
+    fn read_hive_status_cached(
+        &mut self,
+        role: Role,
+        ticket: Option<&str>,
+        min_interval_ms: u32,
+    ) -> (
+        Option<SwarmUiHiveRootStatus>,
+        Option<SwarmUiHiveSessionSummary>,
+        Option<SwarmUiHivePressureCounters>,
+        Option<SwarmUiHiveScheduleSnapshot>,
+        Option<SwarmUiHiveLeaseSnapshot>,
+    ) {
+        if self.config.offline {
+            return (None, None, None, None, None);
+        }
+        let key = self.session_key(role, ticket);
+        if min_interval_ms > 0 {
+            if let Some(cache) = self.hive_status_cache.get(&key) {
+                if cache.last_at.elapsed().as_millis() < min_interval_ms as u128 {
+                    return (
+                        cache.root.clone(),
+                        cache.sessions.clone(),
+                        cache.pressure_counters.clone(),
+                        cache.schedule.clone(),
+                        cache.lease.clone(),
+                    );
+                }
+            }
+        }
+        let (root, sessions, pressure_counters, schedule, lease) =
+            self.read_hive_status(role, ticket);
+        self.hive_status_cache.insert(
+            key,
+            HiveStatusCache {
+                last_at: Instant::now(),
+                root: root.clone(),
+                sessions: sessions.clone(),
+                pressure_counters: pressure_counters.clone(),
+                schedule: schedule.clone(),
+                lease: lease.clone(),
+            },
+        );
+        (root, sessions, pressure_counters, schedule, lease)
+    }
+
     fn read_hive_status(
         &mut self,
         role: Role,
@@ -2362,6 +2465,10 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
     ) {
         if self.config.offline {
             return (None, None, None, None, None);
+        }
+        #[cfg(feature = "rest")]
+        if let Some(rest_parallel) = self.rest_parallel.clone() {
+            return self.read_hive_status_rest_parallel(role, ticket, &rest_parallel);
         }
         let session = match self.session_for(role, ticket) {
             Ok(session) => session,
@@ -2509,6 +2616,201 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             "/proc/lease/preemptions",
         )
         .unwrap_or_default();
+        let lease = if lease_summary_line.is_some()
+            || !lease_active_lines.is_empty()
+            || !lease_preemptions_lines.is_empty()
+        {
+            Some(SwarmUiHiveLeaseSnapshot {
+                summary: lease_summary_line.as_deref().map(parse_lease_summary),
+                active: parse_lease_active(lease_active_lines),
+                preemptions: parse_lease_preemptions(lease_preemptions_lines),
+            })
+        } else {
+            None
+        };
+
+        (root, sessions, pressure_counters, schedule, lease)
+    }
+
+    #[cfg(feature = "rest")]
+    fn read_hive_status_rest_parallel(
+        &mut self,
+        role: Role,
+        ticket: Option<&str>,
+        rest_parallel: &RestParallelConfig,
+    ) -> (
+        Option<SwarmUiHiveRootStatus>,
+        Option<SwarmUiHiveSessionSummary>,
+        Option<SwarmUiHivePressureCounters>,
+        Option<SwarmUiHiveScheduleSnapshot>,
+        Option<SwarmUiHiveLeaseSnapshot>,
+    ) {
+        let _ = self.session_for(role, ticket);
+        let parallel_limit = rest_parallel.parallel_limit();
+        let rest_url = rest_parallel.base_url.clone();
+        let ticket_owned = ticket.map(str::to_owned);
+        let paths = [
+            "/proc/root/reachable",
+            "/proc/root/cut_reason",
+            "/proc/9p/session/active",
+            "/proc/pressure/busy",
+            "/proc/pressure/quota",
+            "/proc/pressure/cut",
+            "/proc/pressure/policy",
+            "/proc/schedule/summary",
+            "/proc/schedule/queue",
+            "/proc/lease/summary",
+            "/proc/lease/active",
+            "/proc/lease/preemptions",
+        ];
+        let mut results: HashMap<&'static str, Vec<String>> = HashMap::new();
+        let mut idx = 0usize;
+        while idx < paths.len() {
+            let end = (idx + parallel_limit).min(paths.len());
+            let chunk = &paths[idx..end];
+            let chunk_results = thread::scope(|scope| {
+                let mut handles = Vec::with_capacity(chunk.len());
+                for path in chunk {
+                    let rest_url = rest_url.clone();
+                    let ticket = ticket_owned.clone();
+                    let path = *path;
+                    handles.push((
+                        path,
+                        scope.spawn(move || {
+                            let mut transport = CohshRestTransport::new(rest_url);
+                            let session = transport
+                                .attach(role, ticket.as_deref())
+                                .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
+                            let lines = transport
+                                .read(&session, path)
+                                .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
+                            Ok::<Vec<String>, SwarmUiError>(lines)
+                        }),
+                    ));
+                }
+                let mut out = Vec::with_capacity(chunk.len());
+                for (path, handle) in handles {
+                    match handle.join() {
+                        Ok(Ok(lines)) => out.push((path, Some(lines))),
+                        Ok(Err(_)) => out.push((path, None)),
+                        Err(_) => out.push((path, None)),
+                    }
+                }
+                out
+            });
+            for (path, lines) in chunk_results {
+                if let Some(lines) = lines {
+                    results.insert(path, lines);
+                }
+            }
+            idx = end;
+        }
+
+        let reachable_line = results
+            .get("/proc/root/reachable")
+            .and_then(|lines| lines.first().cloned());
+        let cut_reason_line = results
+            .get("/proc/root/cut_reason")
+            .and_then(|lines| lines.first().cloned());
+        let reachable = reachable_line
+            .as_deref()
+            .and_then(|line| parse_kv_value(line, "reachable"))
+            .map(|value| value == "yes");
+        let cut_reason = cut_reason_line
+            .as_deref()
+            .and_then(|line| parse_kv_value(line, "cut_reason"))
+            .unwrap_or("unknown")
+            .to_owned();
+        let root = reachable.map(|reachable| SwarmUiHiveRootStatus {
+            reachable,
+            cut_reason,
+        });
+
+        let session_line = results
+            .get("/proc/9p/session/active")
+            .and_then(|lines| lines.first().cloned());
+        let active = session_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "active"))
+            .unwrap_or(0);
+        let draining = session_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "draining"))
+            .unwrap_or(0);
+        let sessions = session_line.map(|_| SwarmUiHiveSessionSummary { active, draining });
+
+        let busy_line = results
+            .get("/proc/pressure/busy")
+            .and_then(|lines| lines.first().cloned());
+        let quota_line = results
+            .get("/proc/pressure/quota")
+            .and_then(|lines| lines.first().cloned());
+        let cut_line = results
+            .get("/proc/pressure/cut")
+            .and_then(|lines| lines.first().cloned());
+        let policy_line = results
+            .get("/proc/pressure/policy")
+            .and_then(|lines| lines.first().cloned());
+        let busy = busy_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "busy"))
+            .unwrap_or(0);
+        let quota = quota_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "quota"))
+            .unwrap_or(0);
+        let cut = cut_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "cut"))
+            .unwrap_or(0);
+        let policy = policy_line
+            .as_deref()
+            .and_then(|line| parse_kv_u64(line, "policy"))
+            .unwrap_or(0);
+        let pressure_counters = if busy_line.is_some()
+            || quota_line.is_some()
+            || cut_line.is_some()
+            || policy_line.is_some()
+        {
+            Some(SwarmUiHivePressureCounters {
+                busy,
+                quota,
+                cut,
+                policy,
+            })
+        } else {
+            None
+        };
+
+        let schedule_summary_line = results
+            .get("/proc/schedule/summary")
+            .and_then(|lines| lines.first().cloned());
+        let schedule_queue_lines = results
+            .get("/proc/schedule/queue")
+            .cloned()
+            .unwrap_or_default();
+        let schedule = if schedule_summary_line.is_some() || !schedule_queue_lines.is_empty() {
+            Some(SwarmUiHiveScheduleSnapshot {
+                summary: schedule_summary_line
+                    .as_deref()
+                    .map(parse_schedule_summary),
+                queue: parse_schedule_queue(schedule_queue_lines),
+            })
+        } else {
+            None
+        };
+
+        let lease_summary_line = results
+            .get("/proc/lease/summary")
+            .and_then(|lines| lines.first().cloned());
+        let lease_active_lines = results
+            .get("/proc/lease/active")
+            .cloned()
+            .unwrap_or_default();
+        let lease_preemptions_lines = results
+            .get("/proc/lease/preemptions")
+            .cloned()
+            .unwrap_or_default();
         let lease = if lease_summary_line.is_some()
             || !lease_active_lines.is_empty()
             || !lease_preemptions_lines.is_empty()
@@ -2690,6 +2992,74 @@ fn normalize_payload_line(input: &str) -> Result<String, String> {
         payload.push('\n');
     }
     Ok(payload)
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use super::*;
+    use secure9p_codec::SessionId;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct TestTransport {
+        reads: Arc<AtomicUsize>,
+    }
+
+    impl TestTransport {
+        fn new(reads: Arc<AtomicUsize>) -> Self {
+            Self { reads }
+        }
+    }
+
+    impl CohshTransport for TestTransport {
+        fn attach(&mut self, role: Role, _ticket: Option<&str>) -> Result<CohshSession> {
+            Ok(CohshSession::new(SessionId::BOOTSTRAP, role))
+        }
+
+        fn kind(&self) -> &'static str {
+            "test"
+        }
+
+        fn ping(&mut self, _session: &CohshSession) -> Result<String> {
+            Ok("pong".to_owned())
+        }
+
+        fn tail(&mut self, _session: &CohshSession, _path: &str) -> Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+
+        fn read(&mut self, _session: &CohshSession, _path: &str) -> Result<Vec<String>> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            Ok(vec!["ok".to_owned()])
+        }
+
+        fn list(&mut self, _session: &CohshSession, _path: &str) -> Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+
+        fn write(&mut self, _session: &CohshSession, _path: &str, _payload: &[u8]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn console_hive_status_cache_respects_interval() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = SwarmUiConfig::from_generated(temp_dir.path().to_path_buf());
+        let reads = Arc::new(AtomicUsize::new(0));
+        let transport = TestTransport::new(reads.clone());
+        let mut backend = SwarmUiConsoleBackend::with_transport(config, transport);
+
+        let _ = backend.read_hive_status_cached(Role::Queen, None, 1000);
+        let first_reads = reads.load(Ordering::SeqCst);
+        assert!(first_reads > 0);
+
+        let _ = backend.read_hive_status_cached(Role::Queen, None, 1000);
+        let second_reads = reads.load(Ordering::SeqCst);
+        assert_eq!(first_reads, second_reads);
+    }
 }
 
 fn trim_payload_newline(mut payload: String) -> String {

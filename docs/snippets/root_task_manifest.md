@@ -6,6 +6,12 @@
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
 - `root_task.schema`: `1.5`
+- `root_task.affinity.enabled`: `true`
+- `root_task.affinity.max_cores`: `4`
+- `root_task.affinity.authority_core`: `0`
+- `root_task.affinity.ninedoor_cores`: `[1]`
+- `root_task.affinity.provider_cores`: `[2, 3]`
+- `root_task.affinity.worker_cores`: `[2, 3]`
 - `profile.name`: `virt-aarch64`
 - `profile.kernel`: `true`
 - `event_pump.tick_ms`: `5`
@@ -109,7 +115,7 @@
 - `ui_providers.updates.manifest`: `true`
 - `ui_providers.updates.status`: `true`
 - `client_policies.cohsh.pool.control_sessions`: `2`
-- `client_policies.cohsh.pool.telemetry_sessions`: `4`
+- `client_policies.cohsh.pool.telemetry_sessions`: `8`
 - `client_policies.cohsh.tail.poll_ms_default`: `1000`
 - `client_policies.cohsh.tail.poll_ms_min`: `250`
 - `client_policies.cohsh.tail.poll_ms_max`: `10000`
@@ -167,7 +173,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `a15239ff96ad0f2cc21282023cf6bb344e8eadc572881f1872b84e82b17547a0`
+- `manifest.sha256`: `fd4aee25dd42e51e6e4b581a46acd45299dcf2c12436f2d1fdf12d77dd177d93`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -204,8 +210,8 @@
 - `ecosystem.audit.replay_ctl_max_bytes`: `1024`
 - `ecosystem.audit.replay_status_max_bytes`: `1024`
 - `ecosystem.policy.enable`: `true`
-- `ecosystem.policy.queue_max_entries`: `32`
-- `ecosystem.policy.queue_max_bytes`: `4096`
+- `ecosystem.policy.queue_max_entries`: `64`
+- `ecosystem.policy.queue_max_bytes`: `8192`
 - `ecosystem.policy.ctl_max_bytes`: `2048`
 - `ecosystem.policy.status_max_bytes`: `512`
 - `ecosystem.policy.rules`: `queen-ctl` → `/queen/ctl`
@@ -213,4 +219,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `a15239ff96ad0f2cc21282023cf6bb344e8eadc572881f1872b84e82b17547a0`)._
+_Generated from `configs/root_task.toml` (sha256: `fd4aee25dd42e51e6e4b581a46acd45299dcf2c12436f2d1fdf12d77dd177d93`)._

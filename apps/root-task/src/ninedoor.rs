@@ -9,6 +9,7 @@
 extern crate alloc;
 
 use crate::bootstrap::{boot_tracer, log as boot_log, BootPhase};
+use crate::affinity;
 use crate::authority::{AuthorityError, AuthorityOp, AuthorityQueue};
 use crate::event::AuditSink;
 use crate::generated;
@@ -253,6 +254,12 @@ pub enum NineDoorBridgeError {
 #[derive(Debug)]
 pub(crate) struct TelemetryTail {
     pub(crate) lines: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    pub(crate) start_offset: u64,
+    pub(crate) consumed_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TelemetryTailMeta {
     pub(crate) start_offset: u64,
     pub(crate) consumed_bytes: usize,
 }
@@ -575,6 +582,24 @@ impl NineDoorBridge {
         path: &str,
         cursor_offset: u64,
     ) -> Result<Option<TelemetryTail>, NineDoorBridgeError> {
+        let mut lines: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
+            HeaplessVec::new();
+        if let Some(meta) = self.telemetry_tail_into(path, cursor_offset, &mut lines)? {
+            return Ok(Some(TelemetryTail {
+                lines,
+                start_offset: meta.start_offset,
+                consumed_bytes: meta.consumed_bytes,
+            }));
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn telemetry_tail_into(
+        &mut self,
+        path: &str,
+        cursor_offset: u64,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<Option<TelemetryTailMeta>, NineDoorBridgeError> {
         let Some(worker_id) = parse_worker_telemetry_path(path) else {
             return Ok(None);
         };
@@ -584,9 +609,9 @@ impl NineDoorBridge {
             .find(|worker| worker.id.as_str() == worker_id)
             .ok_or(NineDoorBridgeError::InvalidPath)?;
         let read = worker.ring.read_from(cursor_offset, UI_MAX_STREAM_BYTES);
-        let lines = lines_from_bytes(read.bytes.as_slice())?;
-        Ok(Some(TelemetryTail {
-            lines,
+        output.clear();
+        lines_from_bytes_into(read.bytes.as_slice(), output)?;
+        Ok(Some(TelemetryTailMeta {
             start_offset: read.start_offset,
             consumed_bytes: read.consumed_bytes,
         }))
@@ -601,7 +626,19 @@ impl NineDoorBridge {
         HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
         NineDoorBridgeError,
     > {
-        self.observe.watch_lines(now_ms, audit)
+        let mut output: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
+            HeaplessVec::new();
+        self.ingest_watch_lines_into(now_ms, audit, &mut output)?;
+        Ok(output)
+    }
+
+    pub fn ingest_watch_lines_into(
+        &mut self,
+        now_ms: u64,
+        audit: &mut dyn AuditSink,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
+        self.observe.watch_lines_into(now_ms, audit, output)
     }
 
     /// Handle a log stream request.
@@ -1174,107 +1211,117 @@ impl NineDoorBridge {
         HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
         NineDoorBridgeError,
     > {
+        let mut output = HeaplessVec::new();
+        self.cat_into(path, &mut output)?;
+        Ok(output)
+    }
+
+    /// Read file contents into a caller-provided buffer to avoid stack-heavy temporaries.
+    pub fn cat_into(
+        &mut self,
+        path: &str,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
+        output.clear();
         let segments = split_path_segments(path);
         if path == LOG_PATH {
-            return Ok(log_buffer::snapshot_lines::<
-                DEFAULT_LINE_CAPACITY,
-                MAX_STREAM_LINES,
-            >());
+            log_buffer::snapshot_lines_into(output);
+            return Ok(());
         }
         if self.audit.enabled {
             if path == AUDIT_JOURNAL_PATH {
-                return lines_from_bytes(&self.audit.journal_snapshot());
+                return lines_from_bytes_into(&self.audit.journal_snapshot(), output);
             }
             if path == AUDIT_DECISIONS_PATH {
-                return lines_from_bytes(&self.audit.decisions_snapshot());
+                return lines_from_bytes_into(&self.audit.decisions_snapshot(), output);
             }
             if path == AUDIT_EXPORT_PATH {
-                return lines_from_bytes(&self.audit.export_snapshot());
+                return lines_from_bytes_into(&self.audit.export_snapshot(), output);
             }
         }
         if self.replay.enabled {
             if path == REPLAY_CTL_PATH {
-                return lines_from_bytes(self.replay.ctl_log());
+                return lines_from_bytes_into(self.replay.ctl_log(), output);
             }
             if path == REPLAY_STATUS_PATH {
-                return lines_from_bytes(self.replay.status());
+                return lines_from_bytes_into(self.replay.status(), output);
             }
         }
         if self.policy.enabled {
             if self.ui.policy_preflight.req && path == POLICY_PREFLIGHT_REQ_PATH {
                 let payload = self.policy.preflight_req_text()?;
-                return lines_from_bytes(payload.as_slice());
+                return lines_from_bytes_into(payload.as_slice(), output);
             }
             if self.ui.policy_preflight.req && path == POLICY_PREFLIGHT_REQ_CBOR_PATH {
                 let payload = self.policy.preflight_req_cbor()?;
-                return cas_lines_from_bytes(payload.as_slice());
+                return cas_lines_from_bytes_into(payload.as_slice(), output);
             }
             if self.ui.policy_preflight.diff && path == POLICY_PREFLIGHT_DIFF_PATH {
                 let payload = self.policy.preflight_diff_text()?;
-                return lines_from_bytes(payload.as_slice());
+                return lines_from_bytes_into(payload.as_slice(), output);
             }
             if self.ui.policy_preflight.diff && path == POLICY_PREFLIGHT_DIFF_CBOR_PATH {
                 let payload = self.policy.preflight_diff_cbor()?;
-                return cas_lines_from_bytes(payload.as_slice());
+                return cas_lines_from_bytes_into(payload.as_slice(), output);
             }
             if path == POLICY_RULES_PATH {
-                return script_lines(self.policy.rules_json());
+                return script_lines_into(self.policy.rules_json(), output);
             }
             if path == POLICY_CTL_PATH {
-                return lines_from_bytes(self.policy.ctl_log());
+                return lines_from_bytes_into(self.policy.ctl_log(), output);
             }
             if path == ACTIONS_QUEUE_PATH {
-                return lines_from_bytes(self.policy.queue_log());
+                return lines_from_bytes_into(self.policy.queue_log(), output);
             }
             if let Some(action_id) = parse_action_status_path(path) {
-                return self.action_status_lines(action_id);
+                return self.action_status_lines_into(action_id, output);
             }
         }
         if self.schedule.enabled() && path == QUEEN_SCHEDULE_CTL_PATH {
-            return lines_from_bytes(self.schedule.ctl_log());
+            return lines_from_bytes_into(self.schedule.ctl_log(), output);
         }
         if self.lease.enabled() && path == QUEEN_LEASE_CTL_PATH {
-            return lines_from_bytes(self.lease.ctl_log());
+            return lines_from_bytes_into(self.lease.ctl_log(), output);
         }
         if self.export.enabled() && path == QUEEN_EXPORT_CTL_PATH {
-            return lines_from_bytes(self.export.ctl_log());
+            return lines_from_bytes_into(self.export.ctl_log(), output);
         }
         if self.schedule.proc_enabled() {
             if path == PROC_SCHEDULE_SUMMARY_PATH {
-                return self.schedule.summary_lines();
+                return self.schedule.summary_lines_into(output);
             }
             if path == PROC_SCHEDULE_QUEUE_PATH {
-                return self.schedule.queue_lines();
+                return self.schedule.queue_lines_into(output);
             }
         }
         if self.lease.proc_enabled() {
             if path == PROC_LEASE_SUMMARY_PATH {
-                return self.lease.summary_lines();
+                return self.lease.summary_lines_into(output);
             }
             if path == PROC_LEASE_ACTIVE_PATH {
-                return self.lease.active_lines();
+                return self.lease.active_lines_into(output);
             }
             if path == PROC_LEASE_PREEMPTIONS_PATH {
-                return self.lease.preemptions_lines();
+                return self.lease.preemptions_lines_into(output);
             }
         }
         if segments.as_slice() == ["gpu", "bridge", "ctl"] {
             if !self.gpu.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return lines_from_bytes(self.gpu.bridge.ctl_log.as_slice());
+            return lines_from_bytes_into(self.gpu.bridge.ctl_log.as_slice(), output);
         }
         if segments.as_slice() == ["gpu", "bridge", "status"] {
             if !self.gpu.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return lines_from_bytes(self.gpu.bridge.status.as_slice());
+            return lines_from_bytes_into(self.gpu.bridge.status.as_slice(), output);
         }
         if segments.as_slice() == ["gpu", "models", "active"] {
             if !self.gpu.enabled() || !self.gpu.models_ready() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return lines_from_bytes(self.gpu.models_active_log.as_slice());
+            return lines_from_bytes_into(self.gpu.models_active_log.as_slice(), output);
         }
         if let ["gpu", "models", "available", model_id, "manifest.toml"] = segments.as_slice() {
             if !self.gpu.enabled() || !self.gpu.models_ready() {
@@ -1286,7 +1333,7 @@ impl NineDoorBridge {
                 .iter()
                 .find(|entry| entry.model_id == *model_id)
             {
-                return lines_from_text(entry.manifest_toml.as_str());
+                return lines_from_text_into(entry.manifest_toml.as_str(), output);
             }
             return Err(NineDoorBridgeError::InvalidPath);
         }
@@ -1294,7 +1341,7 @@ impl NineDoorBridge {
             if !self.gpu.enabled() || !self.gpu.telemetry_ready() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return lines_from_bytes(self.gpu.telemetry_schema.as_slice());
+            return lines_from_bytes_into(self.gpu.telemetry_schema.as_slice(), output);
         }
         if let ["gpu", gpu_id, leaf] = segments.as_slice() {
             if !self.gpu.enabled() {
@@ -1305,10 +1352,10 @@ impl NineDoorBridge {
                 .entry(gpu_id)
                 .ok_or(NineDoorBridgeError::InvalidPath)?;
             return match *leaf {
-                "info" => lines_from_text(entry.info_payload.as_str()),
-                "ctl" => lines_from_bytes(entry.ctl_log.as_slice()),
-                "lease" => lines_from_bytes(entry.lease_log.as_slice()),
-                "status" => lines_from_bytes(entry.status_log.as_slice()),
+                "info" => lines_from_text_into(entry.info_payload.as_str(), output),
+                "ctl" => lines_from_bytes_into(entry.ctl_log.as_slice(), output),
+                "lease" => lines_from_bytes_into(entry.lease_log.as_slice(), output),
+                "status" => lines_from_bytes_into(entry.status_log.as_slice(), output),
                 _ => Err(NineDoorBridgeError::InvalidPath),
             };
         }
@@ -1325,7 +1372,7 @@ impl NineDoorBridge {
                 .iter()
                 .find(|segment| segment.id == seg_id)
                 .ok_or(NineDoorBridgeError::InvalidPath)?;
-            return lines_from_bytes(segment.data.as_slice());
+            return lines_from_bytes_into(segment.data.as_slice(), output);
         }
         if let Some(device_id) = telemetry_ingest_latest_path(path) {
             if !self.telemetry_ingest.enabled() {
@@ -1336,9 +1383,9 @@ impl NineDoorBridge {
                 .device(device_id)
                 .ok_or(NineDoorBridgeError::InvalidPath)?;
             if let Some(latest) = device.latest.as_deref() {
-                return lines_from_text(latest);
+                return lines_from_text_into(latest, output);
             }
-            return Ok(HeaplessVec::new());
+            return Ok(());
         }
         if let Some(kind) = self.sidecars.kind_for_path(segments.as_slice()) {
             if !self.sidecar_allowed(kind, segments.as_slice(), SidecarAccess::Read) {
@@ -1346,7 +1393,7 @@ impl NineDoorBridge {
                 return Err(NineDoorBridgeError::Permission);
             }
             if let Some(data) = self.sidecars.read(segments.as_slice()) {
-                return lines_from_bytes(&data);
+                return lines_from_bytes_into(&data, output);
             }
             return Err(NineDoorBridgeError::InvalidPath);
         }
@@ -1361,30 +1408,30 @@ impl NineDoorBridge {
             }
             let payloads = self.cas.update_status_payloads(epoch.as_str())?;
             if cbor {
-                return cas_lines_from_bytes(payloads.cbor.as_slice());
+                return cas_lines_from_bytes_into(payloads.cbor.as_slice(), output);
             }
-            return lines_from_bytes(payloads.text.as_slice());
+            return lines_from_bytes_into(payloads.text.as_slice(), output);
         }
         if let Some(bytes) = self.cas.read_path(path, self.is_queen())? {
-            return cas_lines_from_bytes(&bytes);
+            return cas_lines_from_bytes_into(&bytes, output);
         }
         if let Some(value) = self.host.entry_value(path) {
-            return lines_from_text(value);
+            return lines_from_text_into(value, output);
         }
         if path == PROC_BOOT_PATH {
-            return boot_lines();
+            return boot_lines_into(output);
         }
         if path == PROC_TESTS_QUICK_PATH {
-            return script_lines(SELFTEST_QUICK_SCRIPT);
+            return script_lines_into(SELFTEST_QUICK_SCRIPT, output);
         }
         if path == PROC_TESTS_FULL_PATH {
-            return script_lines(SELFTEST_FULL_SCRIPT);
+            return script_lines_into(SELFTEST_FULL_SCRIPT, output);
         }
         if path == PROC_TESTS_NEGATIVE_PATH {
-            return script_lines(SELFTEST_NEGATIVE_SCRIPT);
+            return script_lines_into(SELFTEST_NEGATIVE_SCRIPT, output);
         }
         if path == PROC_TESTS_SMP_PATH {
-            return script_lines(SELFTEST_SMP_SCRIPT);
+            return script_lines_into(SELFTEST_SMP_SCRIPT, output);
         }
         if matches!(
             path,
@@ -1404,7 +1451,7 @@ impl NineDoorBridge {
                 }
                 _ => {}
             }
-            return lines_from_text(line.as_str());
+            return lines_from_text_into(line.as_str(), output);
         }
         if path == PROC_9P_SESSION_ACTIVE_PATH {
             if !self.observe.proc_9p_session_enabled() {
@@ -1413,15 +1460,15 @@ impl NineDoorBridge {
             let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
             let active = if self.attached { 1 } else { 0 };
             let _ = write!(line, "active={} draining=0", active);
-            return lines_from_text(line.as_str());
+            return lines_from_text_into(line.as_str(), output);
         }
-        if let Some(result) = self.observe.root_lines(path) {
+        if let Some(result) = self.observe.root_lines_into(path, output) {
             return result;
         }
-        if let Some(result) = self.observe.pressure_lines(path) {
+        if let Some(result) = self.observe.pressure_lines_into(path, output) {
             return result;
         }
-        if let Some(result) = self.observe.ingest_lines(path) {
+        if let Some(result) = self.observe.ingest_lines_into(path, output) {
             return result;
         }
         Err(NineDoorBridgeError::InvalidPath)
@@ -1435,188 +1482,217 @@ impl NineDoorBridge {
         HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
         NineDoorBridgeError,
     > {
+        let mut output = HeaplessVec::new();
+        self.list_into(path, &mut output)?;
+        Ok(output)
+    }
+
+    /// List directory entries into a caller-provided buffer to avoid stack-heavy temporaries.
+    pub fn list_into(
+        &mut self,
+        path: &str,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
+        output.clear();
         let sharding = generated::sharding_config();
         let segments = split_path_segments(path);
         if path == "/worker" {
             if sharding.enabled && !legacy_worker_alias_enabled(sharding) {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return self.list_workers();
+            self.list_workers_into(output)?;
+            return Ok(());
         }
         if path == "/shard" {
             if !sharding.enabled {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return list_shard_labels();
+            list_shard_labels_into(output)?;
+            return Ok(());
         }
         if let Some((label, worker_root)) = parse_shard_worker_root(path) {
             if !sharding.enabled || !shard_label_known(label) {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
             if worker_root {
-                return self.list_workers_for_shard(label);
+                self.list_workers_for_shard_into(label, output)?;
+                return Ok(());
             }
-            return list_from_slice(&["worker"]);
+            list_from_slice_into(&["worker"], output)?;
+            return Ok(());
         }
         if path == "/" {
-            let mut output = HeaplessVec::new();
             for entry in ["gpu", "kmesg", "log", "proc", "queen", "trace"] {
-                push_list_entry(&mut output, entry)?;
+                push_list_entry(output, entry)?;
             }
             if self.cas.enabled() {
-                push_list_entry(&mut output, "updates")?;
+                push_list_entry(output, "updates")?;
                 if self.cas.models_enabled() {
-                    push_list_entry(&mut output, "models")?;
+                    push_list_entry(output, "models")?;
                 }
             }
             if sharding.enabled {
-                push_list_entry(&mut output, "shard")?;
+                push_list_entry(output, "shard")?;
             }
             if !sharding.enabled || legacy_worker_alias_enabled(sharding) {
-                push_list_entry(&mut output, "worker")?;
+                push_list_entry(output, "worker")?;
             }
             if self.host.enabled {
-                push_list_entry(&mut output, self.host.mount_label())?;
+                push_list_entry(output, self.host.mount_label())?;
             }
-            self.sidecars.push_root_entries(&mut output)?;
+            self.sidecars.push_root_entries(output)?;
             if self.policy.enabled {
-                push_list_entry(&mut output, "policy")?;
-                push_list_entry(&mut output, "actions")?;
+                push_list_entry(output, "policy")?;
+                push_list_entry(output, "actions")?;
             }
             if self.audit.enabled {
-                push_list_entry(&mut output, "audit")?;
+                push_list_entry(output, "audit")?;
             }
             if self.replay.enabled {
-                push_list_entry(&mut output, "replay")?;
+                push_list_entry(output, "replay")?;
             }
-            return Ok(output);
+            return Ok(());
         }
         if path == "/log" {
-            return list_from_slice(&["queen.log"]);
+            list_from_slice_into(&["queen.log"], output)?;
+            return Ok(());
         }
         if path == "/proc" {
-            let mut output = HeaplessVec::new();
-            push_list_entry(&mut output, "boot")?;
-            push_list_entry(&mut output, "tests")?;
-            push_list_entry(&mut output, "lifecycle")?;
+            push_list_entry(output, "boot")?;
+            push_list_entry(output, "tests")?;
+            push_list_entry(output, "lifecycle")?;
             if self.observe.proc_9p_session_enabled() {
-                push_list_entry(&mut output, "9p")?;
+                push_list_entry(output, "9p")?;
             }
             if self.observe.proc_ingest_enabled() {
-                push_list_entry(&mut output, "ingest")?;
+                push_list_entry(output, "ingest")?;
             }
             if self.observe.proc_root_enabled() {
-                push_list_entry(&mut output, "root")?;
+                push_list_entry(output, "root")?;
             }
             if self.observe.proc_pressure_enabled() {
-                push_list_entry(&mut output, "pressure")?;
+                push_list_entry(output, "pressure")?;
             }
             if self.schedule.proc_enabled() {
-                push_list_entry(&mut output, "schedule")?;
+                push_list_entry(output, "schedule")?;
             }
             if self.lease.proc_enabled() {
-                push_list_entry(&mut output, "lease")?;
+                push_list_entry(output, "lease")?;
             }
-            return Ok(output);
+            return Ok(());
         }
         if path == PROC_9P_ROOT_PATH {
             if !self.observe.proc_9p_session_enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return list_from_slice(&["session"]);
+            list_from_slice_into(&["session"], output)?;
+            return Ok(());
         }
         if path == PROC_9P_SESSION_ROOT_PATH {
             if !self.observe.proc_9p_session_enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return list_from_slice(&["active"]);
+            list_from_slice_into(&["active"], output)?;
+            return Ok(());
         }
         if path == PROC_LIFECYCLE_ROOT_PATH {
-            return list_from_slice(&["state", "reason", "since"]);
+            list_from_slice_into(&["state", "reason", "since"], output)?;
+            return Ok(());
         }
         if path == PROC_ROOT_ROOT_PATH {
-            return self.observe.list_root();
+            self.observe.list_root_into(output)?;
+            return Ok(());
         }
         if path == "/proc/tests" {
-            return list_from_slice(&[
-                "selftest_quick.coh",
-                "selftest_full.coh",
-                "selftest_negative.coh",
-                "selftest_smp.coh",
-            ]);
+            list_from_slice_into(
+                &[
+                    "selftest_quick.coh",
+                    "selftest_full.coh",
+                    "selftest_negative.coh",
+                    "selftest_smp.coh",
+                ],
+                output,
+            )?;
+            return Ok(());
         }
         if path == PROC_INGEST_ROOT_PATH {
-            return self.observe.list_ingest();
+            self.observe.list_ingest_into(output)?;
+            return Ok(());
         }
         if path == PROC_PRESSURE_ROOT_PATH {
-            return self.observe.list_pressure();
+            self.observe.list_pressure_into(output)?;
+            return Ok(());
         }
         if path == PROC_SCHEDULE_ROOT_PATH {
             if !self.schedule.proc_enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return self.schedule.list_proc();
+            self.schedule.list_proc_into(output)?;
+            return Ok(());
         }
         if path == PROC_LEASE_ROOT_PATH {
             if !self.lease.proc_enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return self.lease.list_proc();
+            self.lease.list_proc_into(output)?;
+            return Ok(());
         }
         if path == "/queen" {
-            let mut output = HeaplessVec::new();
-            push_list_entry(&mut output, "ctl")?;
-            push_list_entry(&mut output, "lifecycle")?;
+            push_list_entry(output, "ctl")?;
+            push_list_entry(output, "lifecycle")?;
             if self.schedule.enabled() {
-                push_list_entry(&mut output, "schedule")?;
+                push_list_entry(output, "schedule")?;
             }
             if self.lease.enabled() {
-                push_list_entry(&mut output, "lease")?;
+                push_list_entry(output, "lease")?;
             }
             if self.export.enabled() {
-                push_list_entry(&mut output, "export")?;
+                push_list_entry(output, "export")?;
             }
             if self.telemetry_ingest.enabled() {
-                push_list_entry(&mut output, "telemetry")?;
+                push_list_entry(output, "telemetry")?;
             }
-            return Ok(output);
+            return Ok(());
         }
         if path == QUEEN_LIFECYCLE_ROOT_PATH {
-            return list_from_slice(&["ctl"]);
+            list_from_slice_into(&["ctl"], output)?;
+            return Ok(());
         }
         if path == QUEEN_SCHEDULE_ROOT_PATH {
             if !self.schedule.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return list_from_slice(&["ctl"]);
+            list_from_slice_into(&["ctl"], output)?;
+            return Ok(());
         }
         if path == QUEEN_LEASE_ROOT_PATH {
             if !self.lease.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return list_from_slice(&["ctl"]);
+            list_from_slice_into(&["ctl"], output)?;
+            return Ok(());
         }
         if path == QUEEN_EXPORT_ROOT_PATH {
             if !self.export.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return list_from_slice(&["ctl", "lora_jobs"]);
+            list_from_slice_into(&["ctl", "lora_jobs"], output)?;
+            return Ok(());
         }
         if path == "/queen/export/lora_jobs" {
             if !self.export.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return Ok(HeaplessVec::new());
+            return Ok(());
         }
         if path == "/queen/telemetry" {
             if !self.telemetry_ingest.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            let mut output = HeaplessVec::new();
             for device_id in self.telemetry_ingest.devices.keys() {
-                push_list_entry(&mut output, device_id)?;
+                push_list_entry(output, device_id)?;
             }
-            return Ok(output);
+            return Ok(());
         }
         if let Some(device_id) = telemetry_ingest_device_root(path) {
             if !self.telemetry_ingest.enabled() {
@@ -1625,7 +1701,8 @@ impl NineDoorBridge {
             if self.telemetry_ingest.device(device_id).is_none() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return list_from_slice(&["ctl", "seg", "latest"]);
+            list_from_slice_into(&["ctl", "seg", "latest"], output)?;
+            return Ok(());
         }
         if let Some(device_id) = telemetry_ingest_seg_dir(path) {
             if !self.telemetry_ingest.enabled() {
@@ -1635,53 +1712,53 @@ impl NineDoorBridge {
                 .telemetry_ingest
                 .device(device_id)
                 .ok_or(NineDoorBridgeError::InvalidPath)?;
-            let mut output = HeaplessVec::new();
             for segment in device.segments.iter() {
-                push_list_entry(&mut output, segment.id.as_str())?;
+                push_list_entry(output, segment.id.as_str())?;
             }
-            return Ok(output);
+            return Ok(());
         }
         if path == "/trace" {
-            return list_from_slice(&["ctl", "events"]);
+            list_from_slice_into(&["ctl", "events"], output)?;
+            return Ok(());
         }
         if segments.as_slice() == ["gpu"] {
             if !self.gpu.enabled() {
-                return Ok(HeaplessVec::new());
+                return Ok(());
             }
-            let mut output = HeaplessVec::new();
-            push_list_entry(&mut output, "bridge")?;
+            push_list_entry(output, "bridge")?;
             if self.gpu.models_ready() {
-                push_list_entry(&mut output, "models")?;
+                push_list_entry(output, "models")?;
             }
             if self.gpu.telemetry_ready() {
-                push_list_entry(&mut output, "telemetry")?;
+                push_list_entry(output, "telemetry")?;
             }
             for entry in self.gpu.entries.iter() {
-                push_list_entry(&mut output, entry.id.as_str())?;
+                push_list_entry(output, entry.id.as_str())?;
             }
-            return Ok(output);
+            return Ok(());
         }
         if segments.as_slice() == ["gpu", "bridge"] {
             if !self.gpu.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return list_from_slice(&["ctl", "status"]);
+            list_from_slice_into(&["ctl", "status"], output)?;
+            return Ok(());
         }
         if segments.as_slice() == ["gpu", "models"] {
             if !self.gpu.enabled() || !self.gpu.models_ready() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return list_from_slice(&["available", "active"]);
+            list_from_slice_into(&["available", "active"], output)?;
+            return Ok(());
         }
         if segments.as_slice() == ["gpu", "models", "available"] {
             if !self.gpu.enabled() || !self.gpu.models_ready() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            let mut output = HeaplessVec::new();
             for model in &self.gpu.models {
-                push_list_entry(&mut output, model.model_id.as_str())?;
+                push_list_entry(output, model.model_id.as_str())?;
             }
-            return Ok(output);
+            return Ok(());
         }
         if let ["gpu", "models", "available", model_id] = segments.as_slice() {
             if !self.gpu.enabled() || !self.gpu.models_ready() {
@@ -1693,7 +1770,8 @@ impl NineDoorBridge {
                 .iter()
                 .any(|entry| entry.model_id == *model_id)
             {
-                return list_from_slice(&["manifest.toml"]);
+                list_from_slice_into(&["manifest.toml"], output)?;
+                return Ok(());
             }
             return Err(NineDoorBridgeError::InvalidPath);
         }
@@ -1701,7 +1779,8 @@ impl NineDoorBridge {
             if !self.gpu.enabled() || !self.gpu.telemetry_ready() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return list_from_slice(&["schema.json"]);
+            list_from_slice_into(&["schema.json"], output)?;
+            return Ok(());
         }
         if let ["gpu", gpu_id] = segments.as_slice() {
             if !self.gpu.enabled() {
@@ -1710,82 +1789,85 @@ impl NineDoorBridge {
             if self.gpu.entry(gpu_id).is_none() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return list_from_slice(&["info", "ctl", "lease", "status"]);
+            list_from_slice_into(&["info", "ctl", "lease", "status"], output)?;
+            return Ok(());
         }
         if path == "/worker" {
             if sharding.enabled && !legacy_worker_alias_enabled(sharding) {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            return Ok(HeaplessVec::new());
+            return Ok(());
         }
         if self.policy.enabled {
             if path == POLICY_ROOT_PATH {
-                let mut output = HeaplessVec::new();
-                push_list_entry(&mut output, "ctl")?;
-                push_list_entry(&mut output, "rules")?;
+                push_list_entry(output, "ctl")?;
+                push_list_entry(output, "rules")?;
                 if self.ui.policy_preflight.req || self.ui.policy_preflight.diff {
-                    push_list_entry(&mut output, "preflight")?;
+                    push_list_entry(output, "preflight")?;
                 }
-                return Ok(output);
+                return Ok(());
             }
             if path == POLICY_PREFLIGHT_ROOT_PATH {
                 if !self.ui.policy_preflight.req && !self.ui.policy_preflight.diff {
                     return Err(NineDoorBridgeError::InvalidPath);
                 }
-                let mut output = HeaplessVec::new();
                 if self.ui.policy_preflight.req {
-                    push_list_entry(&mut output, "req")?;
-                    push_list_entry(&mut output, "req.cbor")?;
+                    push_list_entry(output, "req")?;
+                    push_list_entry(output, "req.cbor")?;
                 }
                 if self.ui.policy_preflight.diff {
-                    push_list_entry(&mut output, "diff")?;
-                    push_list_entry(&mut output, "diff.cbor")?;
+                    push_list_entry(output, "diff")?;
+                    push_list_entry(output, "diff.cbor")?;
                 }
-                return Ok(output);
+                return Ok(());
             }
             if path == ACTIONS_ROOT_PATH {
-                return list_from_slice(&["queue"]);
+                list_from_slice_into(&["queue"], output)?;
+                return Ok(());
             }
         }
         if self.audit.enabled && path == AUDIT_ROOT_PATH {
-            return list_from_slice(&["journal", "decisions", "export"]);
+            list_from_slice_into(&["journal", "decisions", "export"], output)?;
+            return Ok(());
         }
         if self.replay.enabled && path == REPLAY_ROOT_PATH {
-            return list_from_slice(&["ctl", "status"]);
+            list_from_slice_into(&["ctl", "status"], output)?;
+            return Ok(());
         }
         if let Some(kind) = self.sidecars.kind_for_path(segments.as_slice()) {
             if !self.sidecar_allowed(kind, segments.as_slice(), SidecarAccess::List) {
                 self.log_sidecar_denial(kind);
                 return Err(NineDoorBridgeError::Permission);
             }
-            if let Some(output) = self.sidecars.list(segments.as_slice()) {
-                return output;
+            if let Some(result) = self.sidecars.list_into(segments.as_slice(), output) {
+                return result;
             }
             return Err(NineDoorBridgeError::InvalidPath);
         }
         let resolved = self.resolve_bound_path(path);
         let path = resolved.as_deref().unwrap_or(path);
-        if let Some(output) = self.cas.list_path(
-            path,
-            self.is_queen(),
-            self.ui.updates.manifest,
-            self.ui.updates.status,
-        )? {
-            return Ok(output);
+        if self
+            .cas
+            .list_path_into(
+                path,
+                self.is_queen(),
+                self.ui.updates.manifest,
+                self.ui.updates.status,
+                output,
+            )?
+        {
+            return Ok(());
         }
-        if let Some(output) = self.host.list(path) {
-            return Ok(output);
+        if let Some(result) = self.host.list_into(path, output) {
+            return result;
         }
         Err(NineDoorBridgeError::InvalidPath)
     }
 
-    fn list_workers(
+    fn list_workers_into(
         &self,
-    ) -> Result<
-        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
-        NineDoorBridgeError,
-    > {
-        let mut output = HeaplessVec::new();
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         for worker in self.workers.iter() {
             let mut line = HeaplessString::new();
             line.push_str(worker.id.as_str())
@@ -1794,25 +1876,22 @@ impl NineDoorBridge {
                 .push(line)
                 .map_err(|_| NineDoorBridgeError::BufferFull)?;
         }
-        Ok(output)
+        Ok(())
     }
 
-    fn list_workers_for_shard(
+    fn list_workers_for_shard_into(
         &self,
         label: &str,
-    ) -> Result<
-        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
-        NineDoorBridgeError,
-    > {
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         let sharding = generated::sharding_config();
-        let mut output = HeaplessVec::new();
         for worker in self.workers.iter() {
             let worker_label = worker_shard_label(worker.id.as_str(), sharding);
             if worker_label == label {
-                push_list_entry(&mut output, worker.id.as_str())?;
+                push_list_entry(output, worker.id.as_str())?;
             }
         }
-        Ok(output)
+        Ok(())
     }
 
     fn handle_queen_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
@@ -1914,18 +1993,27 @@ impl NineDoorBridge {
     }
 
     fn spawn_worker(&mut self, target: SpawnTarget) -> Result<(), NineDoorBridgeError> {
-        let mut id = HeaplessString::<MAX_WORKER_ID_LEN>::new();
-        let worker_id = self.next_worker_id;
-        write!(id, "worker-{worker_id}").map_err(|_| NineDoorBridgeError::BufferFull)?;
-        if self.workers.is_full() {
-            return Err(NineDoorBridgeError::BufferFull);
-        }
-        self.next_worker_id = self.next_worker_id.saturating_add(1);
-        let ring = TelemetryRing::new(self.telemetry.ring_bytes_per_worker as usize);
-        self.workers
-            .push(WorkerTelemetry { id, ring, target })
-            .map_err(|_| NineDoorBridgeError::BufferFull)?;
-        Ok(())
+        let policy = affinity::policy();
+        let worker_index = self.next_worker_id.saturating_sub(1) as usize;
+        affinity::with_role_affinity(
+            affinity::AffinityRole::Worker,
+            worker_index,
+            &policy,
+            || {
+                let mut id = HeaplessString::<MAX_WORKER_ID_LEN>::new();
+                let worker_id = self.next_worker_id;
+                write!(id, "worker-{worker_id}").map_err(|_| NineDoorBridgeError::BufferFull)?;
+                if self.workers.is_full() {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                self.next_worker_id = self.next_worker_id.saturating_add(1);
+                let ring = TelemetryRing::new(self.telemetry.ring_bytes_per_worker as usize);
+                self.workers
+                    .push(WorkerTelemetry { id, ring, target })
+                    .map_err(|_| NineDoorBridgeError::BufferFull)?;
+                Ok(())
+            },
+        )
     }
 
     fn remove_worker(&mut self, worker_id: &str) -> Result<(), NineDoorBridgeError> {
@@ -2165,6 +2253,16 @@ impl NineDoorBridge {
         HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
         NineDoorBridgeError,
     > {
+        let mut output = HeaplessVec::new();
+        self.action_status_lines_into(action_id, &mut output)?;
+        Ok(output)
+    }
+
+    fn action_status_lines_into(
+        &self,
+        action_id: &str,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         let action = self
             .policy
             .actions
@@ -2192,9 +2290,8 @@ impl NineDoorBridge {
             line.clear();
             let _ = write!(line, "{{\"id\":\"{}\",\"state\":\"oversize\"}}", action.id);
         }
-        let mut output = HeaplessVec::new();
-        push_boot_line(&mut output, line.as_str())?;
-        Ok(output)
+        output.clear();
+        push_boot_line(output, line.as_str())
     }
 
     fn log_policy_gate_allow(&self, path: &str, allowance: &PolicyGateAllowance) {
@@ -2370,24 +2467,44 @@ impl ObserveState {
             NineDoorBridgeError,
         >,
     > {
+        let mut output = HeaplessVec::new();
+        match self.ingest_lines_into(path, &mut output) {
+            Some(Ok(())) => Some(Ok(output)),
+            Some(Err(err)) => Some(Err(err)),
+            None => None,
+        }
+    }
+
+    fn ingest_lines_into(
+        &self,
+        path: &str,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Option<Result<(), NineDoorBridgeError>> {
+        output.clear();
         match path {
-            PROC_INGEST_P50_PATH if self.proc_ingest.p50_ms => {
-                Some(render_p50_line(self.snapshot).and_then(|line| lines_from_text(line.as_str())))
-            }
-            PROC_INGEST_P95_PATH if self.proc_ingest.p95_ms => {
-                Some(render_p95_line(self.snapshot).and_then(|line| lines_from_text(line.as_str())))
-            }
+            PROC_INGEST_P50_PATH if self.proc_ingest.p50_ms => Some(
+                render_p50_line(self.snapshot)
+                    .and_then(|line| lines_from_text_into(line.as_str(), output)),
+            ),
+            PROC_INGEST_P95_PATH if self.proc_ingest.p95_ms => Some(
+                render_p95_line(self.snapshot)
+                    .and_then(|line| lines_from_text_into(line.as_str(), output)),
+            ),
             PROC_INGEST_BACKPRESSURE_PATH if self.proc_ingest.backpressure => Some(
                 render_backpressure_line(self.snapshot)
-                    .and_then(|line| lines_from_text(line.as_str())),
+                    .and_then(|line| lines_from_text_into(line.as_str(), output)),
             ),
             PROC_INGEST_DROPPED_PATH if self.proc_ingest.dropped => Some(
-                render_dropped_line(self.snapshot).and_then(|line| lines_from_text(line.as_str())),
+                render_dropped_line(self.snapshot)
+                    .and_then(|line| lines_from_text_into(line.as_str(), output)),
             ),
             PROC_INGEST_QUEUED_PATH if self.proc_ingest.queued => Some(
-                render_queued_line(self.snapshot).and_then(|line| lines_from_text(line.as_str())),
+                render_queued_line(self.snapshot)
+                    .and_then(|line| lines_from_text_into(line.as_str(), output)),
             ),
-            PROC_INGEST_WATCH_PATH if self.proc_ingest.watch => Some(self.watch.lines()),
+            PROC_INGEST_WATCH_PATH if self.proc_ingest.watch => {
+                Some(self.watch.lines_into(output))
+            }
             _ => None,
         }
     }
@@ -2401,19 +2518,33 @@ impl ObserveState {
             NineDoorBridgeError,
         >,
     > {
+        let mut output = HeaplessVec::new();
+        match self.root_lines_into(path, &mut output) {
+            Some(Ok(())) => Some(Ok(output)),
+            Some(Err(err)) => Some(Err(err)),
+            None => None,
+        }
+    }
+
+    fn root_lines_into(
+        &self,
+        path: &str,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Option<Result<(), NineDoorBridgeError>> {
+        output.clear();
         let snapshot = lifecycle::root_snapshot();
         match path {
             PROC_ROOT_REACHABLE_PATH if self.proc_root.reachable => Some(
                 render_root_reachable_line(snapshot)
-                    .and_then(|line| lines_from_text(line.as_str())),
+                    .and_then(|line| lines_from_text_into(line.as_str(), output)),
             ),
             PROC_ROOT_LAST_SEEN_PATH if self.proc_root.last_seen_ms => Some(
                 render_root_last_seen_line(snapshot)
-                    .and_then(|line| lines_from_text(line.as_str())),
+                    .and_then(|line| lines_from_text_into(line.as_str(), output)),
             ),
             PROC_ROOT_CUT_REASON_PATH if self.proc_root.cut_reason => Some(
                 render_root_cut_reason_line(snapshot)
-                    .and_then(|line| lines_from_text(line.as_str())),
+                    .and_then(|line| lines_from_text_into(line.as_str(), output)),
             ),
             _ => None,
         }
@@ -2428,21 +2559,37 @@ impl ObserveState {
             NineDoorBridgeError,
         >,
     > {
+        let mut output = HeaplessVec::new();
+        match self.pressure_lines_into(path, &mut output) {
+            Some(Ok(())) => Some(Ok(output)),
+            Some(Err(err)) => Some(Err(err)),
+            None => None,
+        }
+    }
+
+    fn pressure_lines_into(
+        &self,
+        path: &str,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Option<Result<(), NineDoorBridgeError>> {
+        output.clear();
         let snapshot = crate::observe::pressure_snapshot();
         match path {
             PROC_PRESSURE_BUSY_PATH if self.proc_pressure.busy => Some(
-                render_pressure_busy_line(snapshot).and_then(|line| lines_from_text(line.as_str())),
+                render_pressure_busy_line(snapshot)
+                    .and_then(|line| lines_from_text_into(line.as_str(), output)),
             ),
             PROC_PRESSURE_QUOTA_PATH if self.proc_pressure.quota => Some(
                 render_pressure_quota_line(snapshot)
-                    .and_then(|line| lines_from_text(line.as_str())),
+                    .and_then(|line| lines_from_text_into(line.as_str(), output)),
             ),
             PROC_PRESSURE_CUT_PATH if self.proc_pressure.cut => Some(
-                render_pressure_cut_line(snapshot).and_then(|line| lines_from_text(line.as_str())),
+                render_pressure_cut_line(snapshot)
+                    .and_then(|line| lines_from_text_into(line.as_str(), output)),
             ),
             PROC_PRESSURE_POLICY_PATH if self.proc_pressure.policy => Some(
                 render_pressure_policy_line(snapshot)
-                    .and_then(|line| lines_from_text(line.as_str())),
+                    .and_then(|line| lines_from_text_into(line.as_str(), output)),
             ),
             _ => None,
         }
@@ -2456,89 +2603,92 @@ impl ObserveState {
         HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
         NineDoorBridgeError,
     > {
+        let mut output = HeaplessVec::new();
+        self.watch_lines_into(now_ms, audit, &mut output)?;
+        Ok(output)
+    }
+
+    fn watch_lines_into(
+        &mut self,
+        now_ms: u64,
+        audit: &mut dyn AuditSink,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         if !self.proc_ingest.watch {
             return Err(NineDoorBridgeError::InvalidPath);
         }
         self.watch.maybe_append(now_ms, self.snapshot, audit)?;
-        self.watch.lines()
+        output.clear();
+        self.watch.lines_into(output)
     }
 
-    fn list_ingest(
+    fn list_ingest_into(
         &self,
-    ) -> Result<
-        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
-        NineDoorBridgeError,
-    > {
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         if !self.proc_ingest_enabled() {
             return Err(NineDoorBridgeError::InvalidPath);
         }
-        let mut output = HeaplessVec::new();
         if self.proc_ingest.p50_ms {
-            push_list_entry(&mut output, "p50_ms")?;
+            push_list_entry(output, "p50_ms")?;
         }
         if self.proc_ingest.p95_ms {
-            push_list_entry(&mut output, "p95_ms")?;
+            push_list_entry(output, "p95_ms")?;
         }
         if self.proc_ingest.backpressure {
-            push_list_entry(&mut output, "backpressure")?;
+            push_list_entry(output, "backpressure")?;
         }
         if self.proc_ingest.dropped {
-            push_list_entry(&mut output, "dropped")?;
+            push_list_entry(output, "dropped")?;
         }
         if self.proc_ingest.queued {
-            push_list_entry(&mut output, "queued")?;
+            push_list_entry(output, "queued")?;
         }
         if self.proc_ingest.watch {
-            push_list_entry(&mut output, "watch")?;
+            push_list_entry(output, "watch")?;
         }
-        Ok(output)
+        Ok(())
     }
 
-    fn list_root(
+    fn list_root_into(
         &self,
-    ) -> Result<
-        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
-        NineDoorBridgeError,
-    > {
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         if !self.proc_root_enabled() {
             return Err(NineDoorBridgeError::InvalidPath);
         }
-        let mut output = HeaplessVec::new();
         if self.proc_root.reachable {
-            push_list_entry(&mut output, "reachable")?;
+            push_list_entry(output, "reachable")?;
         }
         if self.proc_root.last_seen_ms {
-            push_list_entry(&mut output, "last_seen_ms")?;
+            push_list_entry(output, "last_seen_ms")?;
         }
         if self.proc_root.cut_reason {
-            push_list_entry(&mut output, "cut_reason")?;
+            push_list_entry(output, "cut_reason")?;
         }
-        Ok(output)
+        Ok(())
     }
 
-    fn list_pressure(
+    fn list_pressure_into(
         &self,
-    ) -> Result<
-        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
-        NineDoorBridgeError,
-    > {
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         if !self.proc_pressure_enabled() {
             return Err(NineDoorBridgeError::InvalidPath);
         }
-        let mut output = HeaplessVec::new();
         if self.proc_pressure.busy {
-            push_list_entry(&mut output, "busy")?;
+            push_list_entry(output, "busy")?;
         }
         if self.proc_pressure.quota {
-            push_list_entry(&mut output, "quota")?;
+            push_list_entry(output, "quota")?;
         }
         if self.proc_pressure.cut {
-            push_list_entry(&mut output, "cut")?;
+            push_list_entry(output, "cut")?;
         }
         if self.proc_pressure.policy {
-            push_list_entry(&mut output, "policy")?;
+            push_list_entry(output, "policy")?;
         }
-        Ok(output)
+        Ok(())
     }
 }
 
@@ -2604,6 +2754,15 @@ impl IngestWatch {
         NineDoorBridgeError,
     > {
         let mut output = HeaplessVec::new();
+        self.lines_into(&mut output)?;
+        Ok(output)
+    }
+
+    fn lines_into(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
+        output.clear();
         for entry in self.entries.iter() {
             let mut line = HeaplessString::new();
             line.push_str(entry.as_str())
@@ -2612,7 +2771,7 @@ impl IngestWatch {
                 .push(line)
                 .map_err(|_| NineDoorBridgeError::BufferFull)?;
         }
-        Ok(output)
+        Ok(())
     }
 }
 
@@ -2734,18 +2893,16 @@ impl CasState {
         Ok(Some(data))
     }
 
-    fn list_path(
+    fn list_path_into(
         &mut self,
         path: &str,
         is_queen: bool,
         ui_updates_manifest: bool,
         ui_updates_status: bool,
-    ) -> Result<
-        Option<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>>,
-        NineDoorBridgeError,
-    > {
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<bool, NineDoorBridgeError> {
         let Some(cas_path) = parse_cas_path(path)? else {
-            return Ok(None);
+            return Ok(false);
         };
         if !is_queen {
             return Err(NineDoorBridgeError::Permission);
@@ -2782,11 +2939,11 @@ impl CasState {
             }
             _ => return Err(NineDoorBridgeError::InvalidPath),
         };
-        let mut output = HeaplessVec::new();
+        output.clear();
         for entry in entries {
-            push_list_entry(&mut output, entry.as_str())?;
+            push_list_entry(output, entry.as_str())?;
         }
-        Ok(Some(output))
+        Ok(true)
     }
 
     fn read_manifest(&self, epoch: &str) -> Result<Vec<u8>, NineDoorBridgeError> {
@@ -3510,10 +3667,11 @@ impl HostState {
             .unwrap_or("host")
     }
 
-    fn list(
+    fn list_into(
         &self,
         path: &str,
-    ) -> Option<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>> {
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Option<Result<(), NineDoorBridgeError>> {
         if !self.enabled {
             return None;
         }
@@ -3524,7 +3682,8 @@ impl HostState {
         if parts.len() < self.mount_parts.len() {
             if self.mount_parts_prefix(&parts) {
                 let next = &self.mount_parts[parts.len()];
-                return list_from_slice(&[next.as_str()]).ok();
+                output.clear();
+                return Some(list_from_slice_into(&[next.as_str()], output));
             }
             return None;
         }
@@ -3532,14 +3691,14 @@ impl HostState {
             if !self.mount_parts_match(&parts) {
                 return None;
             }
-            let mut output = HeaplessVec::new();
+            output.clear();
             for provider in self.providers.iter().copied() {
                 let label = host_provider_label(provider);
-                if push_list_entry(&mut output, label).is_err() {
-                    return None;
+                if push_list_entry(output, label).is_err() {
+                    return Some(Err(NineDoorBridgeError::BufferFull));
                 }
             }
-            return Some(output);
+            return Some(Ok(()));
         }
         if !self.mount_parts_match(&parts) {
             return None;
@@ -3547,45 +3706,58 @@ impl HostState {
         let rel = &parts[self.mount_parts.len()..];
         match rel {
             ["systemd"] if self.has_provider(generated::HostProvider::Systemd) => {
-                list_from_slice(&SYSTEMD_UNITS).ok()
+                output.clear();
+                Some(list_from_slice_into(&SYSTEMD_UNITS, output))
             }
             ["systemd", unit]
                 if self.has_provider(generated::HostProvider::Systemd)
                     && SYSTEMD_UNITS.iter().any(|entry| entry == unit) =>
             {
-                list_from_slice(&["status", "restart"]).ok()
+                output.clear();
+                Some(list_from_slice_into(&["status", "restart"], output))
             }
             ["k8s"] if self.has_provider(generated::HostProvider::K8s) => {
-                list_from_slice(&["node"]).ok()
+                output.clear();
+                Some(list_from_slice_into(&["node"], output))
             }
             ["k8s", "node"] if self.has_provider(generated::HostProvider::K8s) => {
-                list_from_slice(&K8S_NODES).ok()
+                output.clear();
+                Some(list_from_slice_into(&K8S_NODES, output))
             }
             ["k8s", "node", node]
                 if self.has_provider(generated::HostProvider::K8s)
                     && K8S_NODES.iter().any(|entry| entry == node) =>
             {
-                list_from_slice(&["status", "cordon", "drain"]).ok()
+                output.clear();
+                Some(list_from_slice_into(&["status", "cordon", "drain"], output))
             }
             ["docker"] if self.has_provider(generated::HostProvider::Docker) => {
-                list_from_slice(&["status"]).ok()
+                output.clear();
+                Some(list_from_slice_into(&["status"], output))
             }
             ["nvidia"] if self.has_provider(generated::HostProvider::Nvidia) => {
-                list_from_slice(&["gpu"]).ok()
+                output.clear();
+                Some(list_from_slice_into(&["gpu"], output))
             }
             ["nvidia", "gpu"] if self.has_provider(generated::HostProvider::Nvidia) => {
-                list_from_slice(&NVIDIA_GPUS).ok()
+                output.clear();
+                Some(list_from_slice_into(&NVIDIA_GPUS, output))
             }
             ["nvidia", "gpu", gpu]
                 if self.has_provider(generated::HostProvider::Nvidia)
                     && NVIDIA_GPUS.iter().any(|entry| entry == gpu) =>
             {
-                list_from_slice(&["status", "power_cap", "thermal"]).ok()
+                output.clear();
+                Some(list_from_slice_into(&["status", "power_cap", "thermal"], output))
             }
             ["jetson"] if self.has_provider(generated::HostProvider::Jetson) => {
-                Some(HeaplessVec::new())
+                output.clear();
+                Some(Ok(()))
             }
-            ["net"] if self.has_provider(generated::HostProvider::Net) => Some(HeaplessVec::new()),
+            ["net"] if self.has_provider(generated::HostProvider::Net) => {
+                output.clear();
+                Some(Ok(()))
+            }
             _ => None,
         }
     }
@@ -4242,16 +4414,15 @@ impl SidecarState {
         }
     }
 
-    fn list(
+    fn list_into(
         &self,
         path: &[&str],
-    ) -> Option<
-        Result<
-            HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
-            NineDoorBridgeError,
-        >,
-    > {
-        self.bus.list(path).or_else(|| self.lora.list(path))
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Option<Result<(), NineDoorBridgeError>> {
+        if let Some(result) = self.bus.list_into(path, output) {
+            return Some(result);
+        }
+        self.lora.list_into(path, output)
     }
 
     fn read(&self, path: &[&str]) -> Option<Vec<u8>> {
@@ -4390,42 +4561,38 @@ impl SidecarBusState {
             .any(|adapter| adapter.scope == scope && segments_start_with(path, &adapter.mount_root))
     }
 
-    fn list(
+    fn list_into(
         &self,
         path: &[&str],
-    ) -> Option<
-        Result<
-            HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
-            NineDoorBridgeError,
-        >,
-    > {
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Option<Result<(), NineDoorBridgeError>> {
         if self.adapters.is_empty() {
             return None;
         }
-        let mut output = HeaplessVec::new();
         let mut matched_root = false;
         for adapter in &self.adapters {
             let root_len = adapter.mount_root.len().saturating_sub(1);
             let root = &adapter.mount_root[..root_len];
             if segments_equal(path, root) {
+                if !matched_root {
+                    output.clear();
+                }
                 matched_root = true;
-                if push_list_entry(&mut output, adapter.mount_label.as_str()).is_err() {
+                if push_list_entry(output, adapter.mount_label.as_str()).is_err() {
                     return Some(Err(NineDoorBridgeError::BufferFull));
                 }
             }
         }
         if matched_root {
-            return Some(Ok(output));
+            return Some(Ok(()));
         }
         for adapter in &self.adapters {
             if segments_equal(path, &adapter.mount_root) {
-                return Some(list_from_slice(&[
-                    "ctl",
-                    "telemetry",
-                    "link",
-                    "replay",
-                    "spool",
-                ]));
+                output.clear();
+                return Some(list_from_slice_into(
+                    &["ctl", "telemetry", "link", "replay", "spool"],
+                    output,
+                ));
             }
         }
         None
@@ -4640,36 +4807,35 @@ impl SidecarLoraState {
             .any(|adapter| adapter.scope == scope && segments_start_with(path, &adapter.mount_root))
     }
 
-    fn list(
+    fn list_into(
         &self,
         path: &[&str],
-    ) -> Option<
-        Result<
-            HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
-            NineDoorBridgeError,
-        >,
-    > {
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Option<Result<(), NineDoorBridgeError>> {
         if self.adapters.is_empty() {
             return None;
         }
-        let mut output = HeaplessVec::new();
         let mut matched_root = false;
         for adapter in &self.adapters {
             let root_len = adapter.mount_root.len().saturating_sub(1);
             let root = &adapter.mount_root[..root_len];
             if segments_equal(path, root) {
+                if !matched_root {
+                    output.clear();
+                }
                 matched_root = true;
-                if push_list_entry(&mut output, adapter.mount_label.as_str()).is_err() {
+                if push_list_entry(output, adapter.mount_label.as_str()).is_err() {
                     return Some(Err(NineDoorBridgeError::BufferFull));
                 }
             }
         }
         if matched_root {
-            return Some(Ok(output));
+            return Some(Ok(()));
         }
         for adapter in &self.adapters {
             if segments_equal(path, &adapter.mount_root) {
-                return Some(list_from_slice(&["ctl", "telemetry", "tamper"]));
+                output.clear();
+                return Some(list_from_slice_into(&["ctl", "telemetry", "tamper"], output));
             }
         }
         None
@@ -5078,22 +5244,23 @@ impl PolicyState {
         {
             return PolicyGateDecision::Allowed(PolicyGateAllowance::NotRequired);
         }
-        if let Some(action) = self
+        if let Some(index) = self
             .actions
-            .iter_mut()
-            .find(|action| !action.consumed && action.target == normalized)
+            .iter()
+            .position(|action| !action.consumed && action.target == normalized)
         {
+            let mut action = self.actions.remove(index);
             action.consumed = true;
             return match action.decision {
                 PolicyDecision::Approve => {
                     PolicyGateDecision::Allowed(PolicyGateAllowance::Action {
-                        id: action.id.clone(),
-                        target: action.target.clone(),
+                        id: action.id,
+                        target: action.target,
                     })
                 }
                 PolicyDecision::Deny => PolicyGateDecision::Denied(PolicyGateDenial::Action {
-                    id: action.id.clone(),
-                    target: action.target.clone(),
+                    id: action.id,
+                    target: action.target,
                 }),
             };
         }
@@ -5179,18 +5346,17 @@ impl ScheduleState {
         &self.ctl_log
     }
 
-    fn list_proc(
+    fn list_proc_into(
         &self,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
-        let mut output = HeaplessVec::new();
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         if self.proc_summary {
-            push_list_entry(&mut output, "summary")?;
+            push_list_entry(output, "summary")?;
         }
         if self.proc_queue {
-            push_list_entry(&mut output, "queue")?;
+            push_list_entry(output, "queue")?;
         }
-        Ok(output)
+        Ok(())
     }
 
     fn append_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
@@ -5226,6 +5392,15 @@ impl ScheduleState {
         &self,
     ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
     {
+        let mut output = HeaplessVec::new();
+        self.summary_lines_into(&mut output)?;
+        Ok(output)
+    }
+
+    fn summary_lines_into(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
         let _ = write!(
             line,
@@ -5238,13 +5413,23 @@ impl ScheduleState {
         if line.len() > self.proc_summary_bytes || line.len() > OBSERVE_SCHEDULE_SUMMARY_BYTES {
             return Err(NineDoorBridgeError::BufferFull);
         }
-        lines_from_text(line.as_str())
+        output.clear();
+        lines_from_text_into(line.as_str(), output)
     }
 
     fn queue_lines(
         &self,
     ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
     {
+        let mut output = HeaplessVec::new();
+        self.queue_lines_into(&mut output)?;
+        Ok(output)
+    }
+
+    fn queue_lines_into(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         let mut out = String::new();
         for entry in &self.queue {
             let line = format!(
@@ -5258,7 +5443,8 @@ impl ScheduleState {
                 break;
             }
         }
-        lines_from_bytes(out.as_bytes())
+        output.clear();
+        lines_from_bytes_into(out.as_bytes(), output)
     }
 }
 
@@ -5345,21 +5531,20 @@ impl LeaseState {
         &self.ctl_log
     }
 
-    fn list_proc(
+    fn list_proc_into(
         &self,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
-        let mut output = HeaplessVec::new();
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         if self.proc_summary {
-            push_list_entry(&mut output, "summary")?;
+            push_list_entry(output, "summary")?;
         }
         if self.proc_active {
-            push_list_entry(&mut output, "active")?;
+            push_list_entry(output, "active")?;
         }
         if self.proc_preemptions {
-            push_list_entry(&mut output, "preemptions")?;
+            push_list_entry(output, "preemptions")?;
         }
-        Ok(output)
+        Ok(())
     }
 
     fn append_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
@@ -5475,6 +5660,15 @@ impl LeaseState {
         &self,
     ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
     {
+        let mut output = HeaplessVec::new();
+        self.summary_lines_into(&mut output)?;
+        Ok(output)
+    }
+
+    fn summary_lines_into(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
         let _ = write!(
             line,
@@ -5488,13 +5682,23 @@ impl LeaseState {
         if line.len() > self.proc_summary_bytes || line.len() > OBSERVE_LEASE_SUMMARY_BYTES {
             return Err(NineDoorBridgeError::BufferFull);
         }
-        lines_from_text(line.as_str())
+        output.clear();
+        lines_from_text_into(line.as_str(), output)
     }
 
     fn active_lines(
         &self,
     ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
     {
+        let mut output = HeaplessVec::new();
+        self.active_lines_into(&mut output)?;
+        Ok(output)
+    }
+
+    fn active_lines_into(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         let mut out = String::new();
         for entry in &self.active {
             let line = format!(
@@ -5514,13 +5718,23 @@ impl LeaseState {
                 break;
             }
         }
-        lines_from_bytes(out.as_bytes())
+        output.clear();
+        lines_from_bytes_into(out.as_bytes(), output)
     }
 
     fn preemptions_lines(
         &self,
     ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
     {
+        let mut output = HeaplessVec::new();
+        self.preemptions_lines_into(&mut output)?;
+        Ok(output)
+    }
+
+    fn preemptions_lines_into(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
         let mut out = String::new();
         for entry in &self.preemptions {
             let line = format!(
@@ -5534,7 +5748,8 @@ impl LeaseState {
                 break;
             }
         }
-        lines_from_bytes(out.as_bytes())
+        output.clear();
+        lines_from_bytes_into(out.as_bytes(), output)
     }
 }
 
@@ -6540,9 +6755,7 @@ fn list_from_slice(
 ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
 {
     let mut output = HeaplessVec::new();
-    for entry in entries {
-        push_list_entry(&mut output, entry)?;
-    }
+    list_from_slice_into(entries, &mut output)?;
     Ok(output)
 }
 
@@ -6550,10 +6763,27 @@ fn list_shard_labels(
 ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
 {
     let mut output = HeaplessVec::new();
-    for label in generated::shard_labels() {
-        push_list_entry(&mut output, label)?;
-    }
+    list_shard_labels_into(&mut output)?;
     Ok(output)
+}
+
+fn list_from_slice_into(
+    entries: &[&str],
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+) -> Result<(), NineDoorBridgeError> {
+    for entry in entries {
+        push_list_entry(output, entry)?;
+    }
+    Ok(())
+}
+
+fn list_shard_labels_into(
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+) -> Result<(), NineDoorBridgeError> {
+    for label in generated::shard_labels() {
+        push_list_entry(output, label)?;
+    }
+    Ok(())
 }
 
 fn push_list_entry(
@@ -6568,20 +6798,29 @@ fn push_list_entry(
         .map_err(|_| NineDoorBridgeError::BufferFull)
 }
 
+fn lines_from_bytes_into(
+    data: &[u8],
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+) -> Result<(), NineDoorBridgeError> {
+    let text = str::from_utf8(data).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    lines_from_text_into(text, output)
+}
+
 fn lines_from_bytes(
     data: &[u8],
 ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
 {
-    let text = str::from_utf8(data).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
-    lines_from_text(text)
+    let mut output = HeaplessVec::new();
+    lines_from_bytes_into(data, &mut output)?;
+    Ok(output)
 }
 
-fn cas_lines_from_bytes(
+fn cas_lines_from_bytes_into(
     data: &[u8],
-) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-{
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+) -> Result<(), NineDoorBridgeError> {
+    output.clear();
     let encoded = BASE64_STANDARD.encode(data);
-    let mut output = HeaplessVec::new();
     let max_payload = (DEFAULT_LINE_CAPACITY.saturating_sub(4) / 4) * 4;
     if encoded.len().saturating_add(4) <= DEFAULT_LINE_CAPACITY {
         let mut line = HeaplessString::new();
@@ -6592,7 +6831,7 @@ fn cas_lines_from_bytes(
         output
             .push(line)
             .map_err(|_| NineDoorBridgeError::BufferFull)?;
-        return Ok(output);
+        return Ok(());
     }
     for chunk in encoded.as_bytes().chunks(max_payload) {
         let chunk_str =
@@ -6606,6 +6845,15 @@ fn cas_lines_from_bytes(
             .push(line)
             .map_err(|_| NineDoorBridgeError::BufferFull)?;
     }
+    Ok(())
+}
+
+fn cas_lines_from_bytes(
+    data: &[u8],
+) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+{
+    let mut output = HeaplessVec::new();
+    cas_lines_from_bytes_into(data, &mut output)?;
     Ok(output)
 }
 
@@ -6620,11 +6868,20 @@ fn cbor_error(_: CborError) -> NineDoorBridgeError {
     NineDoorBridgeError::BufferFull
 }
 
+fn lines_from_text_into(
+    text: &str,
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+) -> Result<(), NineDoorBridgeError> {
+    script_lines_into(text, output)
+}
+
 fn lines_from_text(
     text: &str,
 ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
 {
-    script_lines(text)
+    let mut output = HeaplessVec::new();
+    lines_from_text_into(text, &mut output)?;
+    Ok(output)
 }
 
 fn build_update_status_text(
@@ -7726,12 +7983,22 @@ fn append_log_bytes(
     let payload_bytes = payload.as_bytes();
     let needs_newline = !payload_bytes.ends_with(b"\n");
     let extra = if needs_newline { 1 } else { 0 };
-    let new_len = log
-        .len()
-        .saturating_add(payload_bytes.len())
-        .saturating_add(extra);
-    if new_len > max_bytes as usize {
+    let max_bytes = max_bytes as usize;
+    let payload_len = payload_bytes.len().saturating_add(extra);
+    if payload_len > max_bytes {
         return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    let new_len = log.len().saturating_add(payload_len);
+    if new_len > max_bytes {
+        let mut drop_len = new_len.saturating_sub(max_bytes);
+        if drop_len < log.len() {
+            if let Some(pos) = log[drop_len..].iter().position(|byte| *byte == b'\n') {
+                drop_len = drop_len.saturating_add(pos + 1);
+            } else {
+                drop_len = log.len();
+            }
+        }
+        log.drain(0..drop_len);
     }
     log.extend_from_slice(payload_bytes);
     if needs_newline {
@@ -7942,11 +8209,11 @@ fn log_telemetry_quota_reject(requested: usize, capacity: usize) {
     log_buffer::append_user_line(line.as_str());
 }
 
-fn boot_lines(
-) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-{
-    let mut output = HeaplessVec::new();
-    push_boot_line(&mut output, BOOT_HEADER)?;
+fn boot_lines_into(
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+) -> Result<(), NineDoorBridgeError> {
+    output.clear();
+    push_boot_line(output, BOOT_HEADER)?;
     // Keep the shim output concise so console ack summaries remain within bounds.
     for line in generated::initial_audit_lines() {
         if line.starts_with("manifest.schema=")
@@ -7955,10 +8222,29 @@ fn boot_lines(
             || line.starts_with("telemetry.")
             || line.starts_with("event_pump.")
         {
-            push_boot_line(&mut output, line)?;
+            push_boot_line(output, line)?;
         }
     }
+    Ok(())
+}
+
+fn boot_lines(
+) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
+{
+    let mut output = HeaplessVec::new();
+    boot_lines_into(&mut output)?;
     Ok(output)
+}
+
+fn script_lines_into(
+    script: &str,
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+) -> Result<(), NineDoorBridgeError> {
+    output.clear();
+    for line in script.lines() {
+        push_boot_line(output, line)?;
+    }
+    Ok(())
 }
 
 fn script_lines(
@@ -7966,9 +8252,7 @@ fn script_lines(
 ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
 {
     let mut output = HeaplessVec::new();
-    for line in script.lines() {
-        push_boot_line(&mut output, line)?;
-    }
+    script_lines_into(script, &mut output)?;
     Ok(output)
 }
 
@@ -8055,5 +8339,77 @@ mod tests {
         let signature: Signature = signing_key.sign(&payload);
         manifest.signature = Some(signature.to_bytes());
         manifest
+    }
+
+    #[test]
+    fn append_log_bytes_trims_to_limit() {
+        let mut log = Vec::new();
+        append_log_bytes(&mut log, "line1", 16).expect("append line1");
+        append_log_bytes(&mut log, "line2", 16).expect("append line2");
+        append_log_bytes(&mut log, "line3", 16).expect("append line3");
+        let rendered = core::str::from_utf8(&log).expect("utf8 log");
+        assert_eq!(rendered, "line2\nline3\n");
+    }
+
+    #[test]
+    fn append_log_bytes_rejects_oversize_payload() {
+        let mut log = Vec::new();
+        let err = append_log_bytes(&mut log, "0123456789", 8).unwrap_err();
+        assert!(matches!(err, NineDoorBridgeError::InvalidPayload));
+    }
+
+    #[test]
+    fn list_into_clears_and_emits_root_prefix() {
+        let mut bridge = NineDoorBridge::new();
+        let mut output: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
+            HeaplessVec::new();
+        let mut junk = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        junk.push_str("junk").expect("insert junk");
+        output.push(junk).expect("push junk");
+
+        bridge
+            .list_into("/", &mut output)
+            .expect("list root");
+
+        assert!(
+            !output.iter().any(|line| line.as_str() == "junk"),
+            "list_into should clear existing entries"
+        );
+
+        let expected_prefix = ["gpu", "kmesg", "log", "proc", "queen", "trace"];
+        assert!(
+            output.len() >= expected_prefix.len(),
+            "root listing missing expected entries"
+        );
+        for (idx, entry) in expected_prefix.iter().enumerate() {
+            let Some(line) = output.get(idx) else {
+                panic!("missing entry {entry} at index {idx}");
+            };
+            assert_eq!(line.as_str(), *entry);
+        }
+    }
+
+    #[test]
+    fn cat_into_clears_and_emits_boot_header() {
+        let mut bridge = NineDoorBridge::new();
+        let mut output: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
+            HeaplessVec::new();
+        let mut junk = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        junk.push_str("junk").expect("insert junk");
+        output.push(junk).expect("push junk");
+
+        bridge
+            .cat_into(PROC_BOOT_PATH, &mut output)
+            .expect("cat boot");
+
+        assert!(
+            !output.iter().any(|line| line.as_str() == "junk"),
+            "cat_into should clear existing entries"
+        );
+        assert_eq!(
+            output.first().map(|line| line.as_str()),
+            Some(BOOT_HEADER),
+            "boot output should begin with header"
+        );
     }
 }

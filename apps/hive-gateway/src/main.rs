@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Host-only REST gateway projecting Cohesix console/file semantics.
 // Author: Lukas Bower
@@ -724,7 +724,7 @@ async fn handle_list(state: AppState, path: String) -> impl axum::response::Into
     let result = tokio::task::spawn_blocking(move || state.list(&path_clone)).await;
     match result {
         Ok(Ok(lines)) => response_ok(verb, path, lines, None),
-        Ok(Err(err)) => response_err(verb, &path, err.to_string(), StatusCode::SERVICE_UNAVAILABLE),
+        Ok(Err(err)) => response_transport_err(verb, &path, err),
         Err(err) => response_err(verb, &path, err.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
@@ -773,7 +773,7 @@ async fn handle_cat(state: AppState, query: CatQuery) -> impl axum::response::In
             }
             response_ok(verb, query.path, lines, Some(bytes))
         }
-        Ok(Err(err)) => response_err(verb, &query.path, err.to_string(), StatusCode::SERVICE_UNAVAILABLE),
+        Ok(Err(err)) => response_transport_err(verb, &query.path, err),
         Err(err) => response_err(verb, &query.path, err.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
@@ -822,7 +822,7 @@ async fn handle_tail(state: AppState, query: TailQuery) -> impl axum::response::
             }
             response_ok(verb, query.path, lines, Some(bytes))
         }
-        Ok(Err(err)) => response_err(verb, &query.path, err.to_string(), StatusCode::SERVICE_UNAVAILABLE),
+        Ok(Err(err)) => response_transport_err(verb, &query.path, err),
         Err(err) => response_err(verb, &query.path, err.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
@@ -856,7 +856,7 @@ async fn handle_echo(state: AppState, payload: EchoRequest) -> impl axum::respon
     let result = tokio::task::spawn_blocking(move || state.write(&path, &payload_bytes)).await;
     match result {
         Ok(Ok(())) => response_ok(verb, payload.path, Vec::new(), Some(raw_len)),
-        Ok(Err(err)) => response_err(verb, &payload.path, err.to_string(), StatusCode::SERVICE_UNAVAILABLE),
+        Ok(Err(err)) => response_transport_err(verb, &payload.path, err),
         Err(err) => response_err(verb, &payload.path, err.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
@@ -1020,4 +1020,51 @@ fn response_err(
             error: Some(message),
         }),
     )
+}
+
+fn extract_ack_error(message: &str) -> Option<&str> {
+    let offset = message.find("ERR ")?;
+    Some(message[offset..].trim())
+}
+
+fn response_transport_err(
+    verb: &'static str,
+    path: &str,
+    err: anyhow::Error,
+) -> (StatusCode, Json<GatewayResponse>) {
+    let message = err.to_string();
+    if let Some(ack) = extract_ack_error(&message) {
+        return response_err(verb, path, ack, StatusCode::OK);
+    }
+    response_err(verb, path, message, StatusCode::SERVICE_UNAVAILABLE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::anyhow;
+
+    #[test]
+    fn extract_ack_error_returns_err_line() {
+        let message = "echo failed: ERR ECHO reason=policy detail=denied path=/queen/ctl error=EPERM";
+        let ack = extract_ack_error(message).expect("ack");
+        assert!(ack.starts_with("ERR ECHO"));
+        assert!(ack.contains("reason=policy"));
+    }
+
+    #[test]
+    fn response_transport_err_maps_ack_to_ok() {
+        let err = anyhow!(
+            "echo failed: ERR ECHO reason=policy detail=denied path=/queen/ctl error=EPERM"
+        );
+        let (status, body) = response_transport_err("ECHO", "/queen/ctl", err);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.0.status, "ERR");
+        assert!(body
+            .0
+            .error
+            .as_ref()
+            .expect("error")
+            .contains("reason=policy"));
+    }
 }

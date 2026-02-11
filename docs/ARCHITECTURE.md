@@ -32,7 +32,7 @@ Non-goals:
 - Cohesix uses **task isolation** (separate seL4 tasks) rather than shared-memory multithreading; authoritative state remains serialized.
 - For QEMU bring-up, set `COHESIX_QEMU_SMP` (or `QEMU_SMP`) to match `KernelMaxNumNodes`, or provide a full topology via `COHESIX_QEMU_SMP_TOPO`, when running `scripts/qemu-run.sh` or `scripts/cohesix-build-run.sh`.
 - QEMU SMP bring-up on macOS/TCG requires PSCI `smc`; the SMP kernel build must ingest a DTB dumped with `virtualization=on` so the elfloader emits `PSCI_METHOD_SMC` for the platform.
-- Optional affinity hints live in `root_task.affinity` inside `configs/root_task.toml`; all core indices must be `< max_cores`, and `max_cores` must match the kernel build’s node count when affinity is enabled.
+- Affinity hints live in `root_task.affinity` inside `configs/root_task.toml`; all core indices must be `< max_cores`, and `max_cores` must match the kernel build’s node count when affinity is enabled. Defaults enable affinity with `authority_core=0`, `ninedoor_cores=[1]`, `provider_cores=[2, 3]`, and `worker_cores=[2, 3]` unless overridden in the manifest. When enabled, root-task pins its init TCB to `authority_core` during bootstrap, temporarily applies the NineDoor core when attaching the bridge, and applies worker-core affinity during worker spawns. The `smp` debug command cycles the init TCB across the configured role cores and emits per-core scheduler dumps to prove core reachability.
 
 ## 3. Top-Level Architecture
 - `root-task` (`apps/root-task`): seL4 bootstrap, CSpace management, event pump, console (serial + TCP), ticket issuance, log buffer (`/log/queen.log`), HAL, and the in-VM NineDoor bridge.
