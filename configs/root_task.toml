@@ -91,13 +91,13 @@ to = "ONLINE"
 
 [control_plane.schedule]
 enable = true
-queue_max_entries = 64
+queue_max_entries = 256
 ctl_max_bytes = 8192
 
 [control_plane.lease]
 enable = true
-active_max_entries = 64
-preemptions_max_entries = 64
+active_max_entries = 256
+preemptions_max_entries = 256
 ctl_max_bytes = 8192
 
 [control_plane.export]
@@ -352,7 +352,7 @@ replay_status_max_bytes = 1024
 
 [ecosystem.policy]
 enable = true
-queue_max_entries = 64
+queue_max_entries = 256
 queue_max_bytes = 8192
 ctl_max_bytes = 2048
 status_max_bytes = 512

@@ -41,11 +41,11 @@
 - `lifecycle.initial_state`: `BOOTING`
 - `lifecycle.auto_transitions`: `BOOTING->ONLINE`
 - `control_plane.schedule.enable`: `true`
-- `control_plane.schedule.queue_max_entries`: `64`
+- `control_plane.schedule.queue_max_entries`: `256`
 - `control_plane.schedule.ctl_max_bytes`: `8192`
 - `control_plane.lease.enable`: `true`
-- `control_plane.lease.active_max_entries`: `64`
-- `control_plane.lease.preemptions_max_entries`: `64`
+- `control_plane.lease.active_max_entries`: `256`
+- `control_plane.lease.preemptions_max_entries`: `256`
 - `control_plane.lease.ctl_max_bytes`: `8192`
 - `control_plane.export.enable`: `true`
 - `control_plane.export.ctl_max_bytes`: `2048`
@@ -173,7 +173,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `fd4aee25dd42e51e6e4b581a46acd45299dcf2c12436f2d1fdf12d77dd177d93`
+- `manifest.sha256`: `d1880bfe0d830f06f36a6e0b11713d8e87aa95ebee75c6501ac6b963207a415d`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -210,7 +210,7 @@
 - `ecosystem.audit.replay_ctl_max_bytes`: `1024`
 - `ecosystem.audit.replay_status_max_bytes`: `1024`
 - `ecosystem.policy.enable`: `true`
-- `ecosystem.policy.queue_max_entries`: `64`
+- `ecosystem.policy.queue_max_entries`: `256`
 - `ecosystem.policy.queue_max_bytes`: `8192`
 - `ecosystem.policy.ctl_max_bytes`: `2048`
 - `ecosystem.policy.status_max_bytes`: `512`
@@ -219,4 +219,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `fd4aee25dd42e51e6e4b581a46acd45299dcf2c12436f2d1fdf12d77dd177d93`)._
+_Generated from `configs/root_task.toml` (sha256: `d1880bfe0d830f06f36a6e0b11713d8e87aa95ebee75c6501ac6b963207a415d`)._

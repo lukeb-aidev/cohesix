@@ -215,6 +215,7 @@ class SimState:
     include_lifecycle: bool
     auto_approve: bool
     worker_cap: Optional[int] = None
+    next_worker_seq: int = 1
     approval_seq: int = 0
     policy_lock: threading.Lock = field(default_factory=threading.Lock)
     lease_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -359,6 +360,34 @@ def list_workers(client: RestClient) -> List[str]:
             response,
         )
     return [line.strip() for line in response.lines if line.strip()]
+
+
+def parse_worker_seq(worker_id: str) -> Optional[int]:
+    if not worker_id.startswith("worker-"):
+        return None
+    suffix = worker_id[len("worker-"):]
+    if not suffix.isdigit():
+        return None
+    value = int(suffix)
+    if value <= 0:
+        return None
+    return value
+
+
+def seed_next_worker_seq(state: SimState, worker_ids: Sequence[str]) -> None:
+    max_seq = 0
+    for worker_id in worker_ids:
+        seq = parse_worker_seq(worker_id)
+        if seq is not None and seq > max_seq:
+            max_seq = seq
+    if max_seq > 0:
+        state.next_worker_seq = max(state.next_worker_seq, max_seq + 1)
+
+
+def allocate_synthetic_worker_id(state: SimState) -> str:
+    worker_id = f"worker-{state.next_worker_seq}"
+    state.next_worker_seq += 1
+    return worker_id
 
 
 def build_telemetry_specs(
@@ -1006,13 +1035,17 @@ def _echo_with_policy_retry_inner(
     retry_transient(attempt, timeout_s=10.0, label=f"echo {path}")
 
 
-def spawn_worker(client: RestClient, state: SimState) -> str:
+def spawn_worker(
+    client: RestClient,
+    state: SimState,
+    known_workers: Sequence[str],
+) -> str:
     payload = {
         "spawn": "heartbeat",
         "ticks": state.rng.randint(50, 200),
         "budget": {"ttl_s": 300, "ops": 500},
     }
-    before = set(list_workers(client))
+    before = set(known_workers)
     line = json.dumps(payload, separators=(",", ":"))
     retry_transient(
         lambda: echo_with_policy_retry(client, "/queen/ctl", line, state),
@@ -1022,10 +1055,34 @@ def spawn_worker(client: RestClient, state: SimState) -> str:
     deadline = time.time() + 10
     while time.time() < deadline:
         time.sleep(0.5)
-        after = set(list_workers(client))
-        new_ids = list(after - before)
+        try:
+            current_workers = list_workers(client)
+        except RestError as exc:
+            if is_buffer_full_error(exc):
+                worker_id = allocate_synthetic_worker_id(state)
+                if state.logger:
+                    state.logger.log(
+                        "worker listing saturated; "
+                        f"using synthetic worker id {worker_id}"
+                    )
+                return worker_id
+            raise
+        seed_next_worker_seq(state, current_workers)
+        after = set(current_workers)
+        new_ids = [worker_id for worker_id in after - before]
         if new_ids:
-            return new_ids[0]
+            new_ids.sort(
+                key=lambda worker_id: parse_worker_seq(worker_id) or 0
+            )
+            return new_ids[-1]
+    if len(before) >= 64:
+        worker_id = allocate_synthetic_worker_id(state)
+        if state.logger:
+            state.logger.log(
+                "worker listing did not expose new id before timeout; "
+                f"using synthetic worker id {worker_id}"
+            )
+        return worker_id
     raise RestError("spawn did not yield a new worker")
 
 
@@ -1442,10 +1499,11 @@ def ensure_workers(
     target: int,
 ) -> Tuple[List[str], List[str]]:
     current = list_workers(client)
+    seed_next_worker_seq(state, current)
     spawned: List[str] = []
     while len(current) < target:
         try:
-            new_worker = spawn_worker(client, state)
+            new_worker = spawn_worker(client, state, current)
         except RestError as exc:
             if "buffer full" in str(exc).lower():
                 if state.worker_cap is None or len(current) < state.worker_cap:
@@ -1457,8 +1515,9 @@ def ensure_workers(
                 break
             raise
         else:
-            spawned.append(new_worker)
-            current.append(new_worker)
+            if new_worker not in current:
+                spawned.append(new_worker)
+                current.append(new_worker)
     return current, spawned
 
 
@@ -1473,7 +1532,7 @@ def adjust_workers(
     if len(current) < target:
         while len(current) < target:
             try:
-                new_worker = spawn_worker(client, state)
+                new_worker = spawn_worker(client, state, current)
             except RestError as exc:
                 if "buffer full" in str(exc).lower():
                     if state.worker_cap is None or len(current) < state.worker_cap:
@@ -1485,8 +1544,9 @@ def adjust_workers(
                     break
                 raise
             else:
-                spawned.append(new_worker)
-                current.append(new_worker)
+                if new_worker not in current:
+                    spawned.append(new_worker)
+                    current.append(new_worker)
     elif len(current) > target:
         while len(current) > target and spawned:
             victim = spawned.pop()

@@ -4,7 +4,7 @@
 # Copyright 2026 Lukas Bower
 
 DEFAULTS = {
-    "manifest_sha256": "fd4aee25dd42e51e6e4b581a46acd45299dcf2c12436f2d1fdf12d77dd177d93",
+    "manifest_sha256": "d1880bfe0d830f06f36a6e0b11713d8e87aa95ebee75c6501ac6b963207a415d",
     "secure9p": {"msize": 8192, "walk_depth": 8},
     "console": {
         "max_line_len": 256,
@@ -34,13 +34,13 @@ DEFAULTS = {
     "control_plane": {
         "schedule": {
             "enable": True,
-            "queue_max_entries": 64,
+            "queue_max_entries": 256,
             "ctl_max_bytes": 8192,
         },
         "lease": {
             "enable": True,
-            "active_max_entries": 64,
-            "preemptions_max_entries": 64,
+            "active_max_entries": 256,
+            "preemptions_max_entries": 256,
             "ctl_max_bytes": 8192,
         },
         "export": {

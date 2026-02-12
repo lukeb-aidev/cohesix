@@ -10,7 +10,7 @@ use cohesix_ticket::Role;
 
 pub const TICKET_TABLE_SHA256: &str = "fd0ebff1d0b4cfcc2a03a1015578545dfa68f0240e782b60ad7956c2492972eb";
 pub const NAMESPACE_TABLE_SHA256: &str = "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
-pub const AUDIT_TABLE_SHA256: &str = "5464b9e0e061e5031fec94b8e3ef18a030abebba513b2dacd1ae0ed2cdbc9799";
+pub const AUDIT_TABLE_SHA256: &str = "0a075366e66f7a187fc0a1ef10ba0068c8b3544ab287b971dde6e42e8f92bdb3";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec { role: Role::Queen, secret: "bootstrap" },
@@ -309,7 +309,7 @@ pub const LIFECYCLE_AUTO_TRANSITIONS: [LifecycleAutoTransition; 1] = [
 
 pub const LIFECYCLE_CONFIG: LifecycleConfig = LifecycleConfig { initial_state: LifecycleState::Booting, auto_transitions: &LIFECYCLE_AUTO_TRANSITIONS };
 
-pub const CONTROL_PLANE_CONFIG: ControlPlaneConfig = ControlPlaneConfig { schedule: ScheduleControlConfig { enable: true, queue_max_entries: 64, ctl_max_bytes: 8192 }, lease: LeaseControlConfig { enable: true, active_max_entries: 64, preemptions_max_entries: 64, ctl_max_bytes: 8192 }, export: ExportControlConfig { enable: true, ctl_max_bytes: 2048 } };
+pub const CONTROL_PLANE_CONFIG: ControlPlaneConfig = ControlPlaneConfig { schedule: ScheduleControlConfig { enable: true, queue_max_entries: 256, ctl_max_bytes: 8192 }, lease: LeaseControlConfig { enable: true, active_max_entries: 256, preemptions_max_entries: 256, ctl_max_bytes: 8192 }, export: ExportControlConfig { enable: true, ctl_max_bytes: 2048 } };
 
 pub const CAS_CONFIG: CasConfig = CasConfig { enable: true, chunk_bytes: 128, delta_enable: true, signing_required: true, signing_key: Some([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]), models_enabled: false };
 
@@ -369,9 +369,9 @@ pub const POLICY_RULES: [PolicyRule; 2] = [
     PolicyRule { id: "systemd-restart", target: "/host/systemd/*/restart" },
 ];
 
-pub const POLICY_CONFIG: PolicyConfig = PolicyConfig { enable: true, limits: PolicyLimits { queue_max_entries: 64, queue_max_bytes: 8192, ctl_max_bytes: 2048, status_max_bytes: 512 }, rules: &POLICY_RULES };
+pub const POLICY_CONFIG: PolicyConfig = PolicyConfig { enable: true, limits: PolicyLimits { queue_max_entries: 256, queue_max_bytes: 8192, ctl_max_bytes: 2048, status_max_bytes: 512 }, rules: &POLICY_RULES };
 
-pub const POLICY_RULES_JSON: &str = "{\n  \"enabled\": true,\n  \"limits\": {\n    \"queue_max_entries\": 64,\n    \"queue_max_bytes\": 8192,\n    \"ctl_max_bytes\": 2048,\n    \"status_max_bytes\": 512\n  },\n  \"rules\": [\n    {\n      \"id\": \"queen-ctl\",\n      \"target\": \"/queen/ctl\"\n    },\n    {\n      \"id\": \"systemd-restart\",\n      \"target\": \"/host/systemd/*/restart\"\n    }\n  ]\n}";
+pub const POLICY_RULES_JSON: &str = "{\n  \"enabled\": true,\n  \"limits\": {\n    \"queue_max_entries\": 256,\n    \"queue_max_bytes\": 8192,\n    \"ctl_max_bytes\": 2048,\n    \"status_max_bytes\": 512\n  },\n  \"rules\": [\n    {\n      \"id\": \"queen-ctl\",\n      \"target\": \"/queen/ctl\"\n    },\n    {\n      \"id\": \"systemd-restart\",\n      \"target\": \"/host/systemd/*/restart\"\n    }\n  ]\n}";
 
 pub const AUDIT_CONFIG: AuditConfig = AuditConfig { enable: false, journal_max_bytes: 8192, decisions_max_bytes: 4096, replay_enable: false, replay_max_entries: 64, replay_ctl_max_bytes: 1024, replay_status_max_bytes: 1024 };
 
@@ -386,7 +386,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = [
 pub const INITIAL_AUDIT_LINES: [&str; 23] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=fd4aee25dd42e51e6e4b581a46acd45299dcf2c12436f2d1fdf12d77dd177d93",
+    "manifest.sha256=d1880bfe0d830f06f36a6e0b11713d8e87aa95ebee75c6501ac6b963207a415d",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
