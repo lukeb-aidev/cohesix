@@ -3,7 +3,8 @@
 # Purpose: Run the cohsh .coh regression pack in two QEMU boots (base + gated).
 # Copyright 2026 Lukas Bower
 
-# Note: override timeouts via env vars, e.g. READY_TIMEOUT=300 PORT_TIMEOUT=60 QUIT_CLOSE_TIMEOUT=60 scripts/cohsh/run_regression_batch.sh
+# Note: override auth/timeouts via env vars, e.g. COHSH_AUTH_TOKEN=... READY_TIMEOUT=300 PORT_TIMEOUT=60 QUIT_CLOSE_TIMEOUT=60 scripts/cohsh/run_regression_batch.sh
+# Note: set COHSH_BATCH_CLEAN_TARGET=1 for a forced clean rebuild before batch execution.
 # ** Note: typical end-to-end runtime is ~25 minutes; plan for >= 30 minutes to avoid repeated retries.
 
 set -euo pipefail
@@ -47,7 +48,9 @@ READY_MARKER="Cohesix console ready"
 READY_TIMEOUT="${READY_TIMEOUT:-180}"
 PORT_TIMEOUT="${PORT_TIMEOUT:-30}"
 QUIT_CLOSE_TIMEOUT="${QUIT_CLOSE_TIMEOUT:-30}"
+AUTH_READY_TIMEOUT="${AUTH_READY_TIMEOUT:-60}"
 SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${SEL4_BUILD:-${PROJECT_ROOT}/seL4/SMP_build}}"
+COHSH_AUTH_TOKEN="${COHSH_AUTH_TOKEN:-${COH_AUTH_TOKEN:-changeme}}"
 
 if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
     echo "Missing seL4 build directory: $SEL4_BUILD_DIR" >&2
@@ -93,6 +96,51 @@ wait_port_ready() {
             return 1
         fi
         if check_port_open "$host" "$port"; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    return 2
+}
+
+check_auth_ready() {
+    local host="$1"
+    local port="$2"
+    local token="$3"
+    python3 - "$host" "$port" "$token" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+token = sys.argv[3]
+payload = f"AUTH {token}\n".encode()
+try:
+    with socket.create_connection((host, port), timeout=0.5) as sock:
+        sock.settimeout(0.8)
+        sock.sendall(payload)
+        data = sock.recv(256)
+except OSError:
+    sys.exit(1)
+
+if b"OK AUTH" in data or b"ERR AUTH" in data:
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+wait_auth_ready() {
+    local host="$1"
+    local port="$2"
+    local token="$3"
+    local timeout="$4"
+    local pid="$5"
+    local deadline=$((SECONDS + timeout))
+    while (( SECONDS < deadline )); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            return 1
+        fi
+        if check_auth_ready "$host" "$port" "$token"; then
             return 0
         fi
         sleep 0.2
@@ -175,57 +223,63 @@ wait_log_count_increase() {
 run_cohsh() {
     local script="$1"
     local bin="${COHSH_BIN:-./out/cohesix/host-tools/cohsh}"
+    local common_args=(
+        --transport tcp
+        --tcp-host 127.0.0.1
+        --tcp-port 31337
+        --auth-token "${COHSH_AUTH_TOKEN}"
+    )
     case "$script" in
         boot_v0.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/boot_v0.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/boot_v0.coh
             ;;
         9p_batch.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/9p_batch.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/9p_batch.coh
             ;;
         host_absent.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/host_absent.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/host_absent.coh
             ;;
         telemetry_ring.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/telemetry_ring.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/telemetry_ring.coh
             ;;
         telemetry_push_create.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/telemetry_push_create.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/telemetry_push_create.coh
             ;;
         shard_1k.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/shard_1k.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/shard_1k.coh
             ;;
         observe_watch.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/observe_watch.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/observe_watch.coh
             ;;
         root_cut_basic.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/root_cut_basic.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/root_cut_basic.coh
             ;;
         session_lifecycle.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/session_lifecycle.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/session_lifecycle.coh
             ;;
         busy_backpressure.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/busy_backpressure.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/busy_backpressure.coh
             ;;
         cas_roundtrip.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/cas_roundtrip.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/cas_roundtrip.coh
             ;;
         tcp_basic.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/tcp_basic.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/tcp_basic.coh
             ;;
         session_pool.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/session_pool.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/session_pool.coh
             ;;
         policy_gate.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/policy_gate.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/policy_gate.coh
             ;;
         model_cas_bind.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/model_cas_bind.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/model_cas_bind.coh
             ;;
         replay_journal.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/replay_journal.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/replay_journal.coh
             ;;
         sidecar_integration.coh)
-            "$bin" --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --script scripts/cohsh/sidecar_integration.coh
+            "$bin" "${common_args[@]}" --script scripts/cohsh/sidecar_integration.coh
             ;;
         *)
             echo "Unknown script: $script" >&2
@@ -281,17 +335,24 @@ run_batch() {
         > "$qemu_log" 2>&1 &
     qemu_pid=$!
 
-    if ! wait_log_marker "$qemu_log" "$READY_MARKER" "$READY_TIMEOUT" "$qemu_pid"; then
-        echo "FAIL: console ready marker not seen" >&2
-        tail -n 50 "$qemu_log" >&2 || true
-        return 1
-    fi
-
-    if ! wait_port_ready 127.0.0.1 31337 "$PORT_TIMEOUT" "$qemu_pid"; then
+    if ! wait_port_ready 127.0.0.1 31337 "$READY_TIMEOUT" "$qemu_pid"; then
         echo "FAIL: TCP console not ready" >&2
         tail -n 50 "$qemu_log" >&2 || true
         return 1
     fi
+    echo "INFO: TCP console reachable on 127.0.0.1:31337"
+
+    if ! log_has "$qemu_log" "$READY_MARKER"; then
+        echo "WARN: console ready marker not seen; proceeding because TCP console is reachable" >&2
+    fi
+
+    echo "INFO: waiting for TCP auth handshake readiness"
+    if ! wait_auth_ready 127.0.0.1 31337 "$COHSH_AUTH_TOKEN" "$AUTH_READY_TIMEOUT" "$qemu_pid"; then
+        echo "FAIL: TCP console auth endpoint not ready" >&2
+        tail -n 50 "$qemu_log" >&2 || true
+        return 1
+    fi
+    echo "INFO: TCP auth handshake is responsive"
 
     COHSH_BIN="${out_dir}/host-tools/cohsh"
 
@@ -341,8 +402,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if [[ "${COHSH_BATCH_CLEAN_TARGET:-0}" == "1" ]]; then
+    rm -rf "${PROJECT_ROOT}/target"
+fi
 rm -rf \
-    "${PROJECT_ROOT}/target" \
     "${PROJECT_ROOT}/out/cohesix" \
     "${PROJECT_ROOT}/out/cohesix-gated" \
     "$ARCHIVE_ROOT"

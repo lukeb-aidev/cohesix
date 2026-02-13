@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
-# Purpose: Validate docs/TEST_PLAN.md hashes against on-disk fixtures.
+# Purpose: Validate docs/TEST_PLAN.md hashes, command alignment, and scripted stage references.
+# Copyright 2026 Lukas Bower
 
 set -euo pipefail
 
@@ -37,7 +38,36 @@ for rel_path, expected in entries:
         print(f"  actual:   {actual}", file=sys.stderr)
         errors += 1
 
+required_snippets = [
+    "## Mandatory Agent Execution Contract",
+    "Defect resolution is mandatory before progression.",
+    "scripts/ci/test_plan_run.sh",
+    "scripts/ci/test_plan_stage_01_integrity.sh",
+    "scripts/ci/test_plan_stage_02_host_fast.sh",
+    "scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh",
+    "scripts/ci/test_plan_stage_04_rest_multiplexer.sh",
+    "scripts/ci/test_plan_stage_05_due_diligence.sh",
+    "scripts/cohsh/run_regression_batch.sh",
+    "scripts/cohsh/REST_regression_batch.sh",
+    "scripts/ci/due_diligence_gate.sh",
+    "cargo test -p tests",
+    "cargo test --workspace",
+]
+for snippet in required_snippets:
+    if snippet not in text:
+        print(f"missing required TEST_PLAN entry: {snippet}", file=sys.stderr)
+        errors += 1
+
+inline_commands = re.findall(r'`([^`]+)`', text)
+for command in inline_commands:
+    if re.search(r'(^|\s)python(\s|$)', command) and "python3" not in command:
+        print(
+            f"non-portable python command in docs/TEST_PLAN.md: `{command}` (use python3)",
+            file=sys.stderr,
+        )
+        errors += 1
+
 if errors:
     sys.exit(1)
-print("test plan hashes ok")
+print("test plan integrity checks ok")
 PY

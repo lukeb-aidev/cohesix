@@ -161,7 +161,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "session_pool.coh:ba523237c1933fbce09df879e871e4269013b74b5b8f8a046adbd2de00e7395e"
             .to_owned(),
-        "shard_1k.coh:e2bc812ad54129094db9cafbc5ed7d38fef0cf5fc24e0a993d73dcc2ef963cbd"
+        "shard_1k.coh:d4ce5a6d7a8dff0b2d26382cdec8edc2486ac20b6766b6a51f009e811691620a"
             .to_owned(),
         "sidecar_integration.coh:4cb5dcf403712defa9016f4bcc4bf27b891df6a1dce646dc304acf4b5f7cad74"
             .to_owned(),

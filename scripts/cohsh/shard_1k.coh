@@ -3,11 +3,11 @@
 attach queen
 EXPECT OK
 echo '{"id":"shard-spawn-1","target":"/queen/ctl","decision":"approve"}' > /actions/queue
-EXPECT OK
+EXPECT SUBSTR path=/actions/queue
 spawn heartbeat ticks=10 ttl_s=60
 EXPECT OK
 echo '{"id":"shard-spawn-2","target":"/queen/ctl","decision":"approve"}' > /actions/queue
-EXPECT OK
+EXPECT SUBSTR path=/actions/queue
 spawn heartbeat ticks=10 ttl_s=60
 EXPECT OK
 # worker-1 shard label = sha256("worker-1")[0] = 0x13

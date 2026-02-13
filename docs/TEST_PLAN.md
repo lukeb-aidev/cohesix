@@ -5,6 +5,33 @@
 
 # Test Plan
 
+## Mandatory Agent Execution Contract
+This section is a mandatory execution contract for all contributors and agents working this repository.
+
+1. Use scripted stages as the source of truth.
+- Run `scripts/ci/test_plan_run.sh --list` first.
+- Execute stages in order with a shared state dir: `scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>`.
+- Stage scripts are authoritative:
+  - `scripts/ci/test_plan_stage_01_integrity.sh`
+  - `scripts/ci/test_plan_stage_02_host_fast.sh`
+  - `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`
+  - `scripts/ci/test_plan_stage_04_rest_multiplexer.sh`
+  - `scripts/ci/test_plan_stage_05_due_diligence.sh`
+
+2. Defect resolution is mandatory before progression.
+- If any stage fails, stop immediately.
+- Fix the root cause in code/docs/scripts first; do not bypass by proceeding to a later stage.
+- Re-run the failed stage until green, then continue to the next stage.
+- Do not mark the run complete until Stage 05 (`scripts/ci/due_diligence_gate.sh`) passes.
+
+3. No silent skips.
+- A skipped stage or command must be explicitly recorded with reason and impact.
+- Do not treat skipped or incomplete runs as release-ready.
+
+4. Keep docs and scripts aligned.
+- If execution behavior changes, update this document and the corresponding scripts in the same change.
+- `scripts/ci/check_test_plan.sh` must pass before continuing.
+
 ## Purpose
 Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP console reliability and performance, deterministic replay, and every shipped host tool.
 
@@ -23,6 +50,7 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
 - Milestone-agnostic: run sections appropriate to the change set.
 
 ## Preflight and guardrails
+- `scripts/ci/test_plan_run.sh --list` (verify scripted stage inventory before execution)
 - `scripts/ci/check_test_plan.sh`
 - If IR or manifest changes: `cargo run -p coh-rtc` then `scripts/check-generated.sh`.
 - Ensure `SEL4_BUILD_DIR` points at the SMP kernel build (`$REPO/seL4/SMP_build` by default); override to `$REPO/seL4/build` when validating single-core baselines.
@@ -39,13 +67,16 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
 
 ## Execution order
 Run in order unless explicitly skipped with a recorded reason.
+- Scripted runner (recommended): `scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>`
 
 ### 1) Artifact and fixture integrity
+- `scripts/ci/test_plan_stage_01_integrity.sh`
 - `scripts/ci/check_test_plan.sh`
 - If IR/manifest changed:
   - `scripts/check-generated.sh`
 
 ### 2) Host-side unit/integration tests (fast)
+- `scripts/ci/test_plan_stage_02_host_fast.sh`
 - `cargo test -p coh --features mock`
 - `cargo test -p cohesix-rest`
 - `cargo test -p gpu-bridge-host`
@@ -75,15 +106,22 @@ Run in order unless explicitly skipped with a recorded reason.
 - `cargo test -p swarmui --test trace`
 - `cargo run -p coh --features mock -- doctor --mock`
 - `cargo test -p hive-gateway`
-- `python -m pytest -k cohesix_parity`
-- `python tools/cohesix-py/examples/lease_run.py --mock`
-- `python tools/cohesix-py/examples/peft_roundtrip.py --mock`
-- `python tools/cohesix-py/examples/telemetry_write_pull.py --mock`
+- `cargo test -p tests`
+- `cargo test --workspace`
+- If `pytest` is not available in the host `python3`, `scripts/ci/test_plan_stage_02_host_fast.sh` auto-creates `${TEST_PLAN_STATE_DIR}/.venv` and installs `pytest` there.
+- `python3 -m pytest -k cohesix_parity`
+- `python3 tools/cohesix-py/examples/lease_run.py --mock`
+- `python3 tools/cohesix-py/examples/peft_roundtrip.py --mock`
+- `python3 tools/cohesix-py/examples/telemetry_write_pull.py --mock`
 - Fixture regen (only when needed):
   - `COHESIX_WRITE_TRACE=1 cargo test -p cohsh --test trace`
   - `COHESIX_WRITE_TRACE=1 cargo test -p swarmui --test trace`
 
 ### 3) QEMU boot + TCP console baseline
+- `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`
+- Stage 03 sets resilient defaults for clean hosts: `TP_STAGE3_READY_TIMEOUT=900`, `TP_STAGE3_PORT_TIMEOUT=60`, `TP_STAGE3_AUTH_READY_TIMEOUT=120`, `TP_STAGE3_QUIT_CLOSE_TIMEOUT=60` (override as needed).
+- `scripts/cohsh/run_regression_batch.sh` keeps Cargo build cache by default; set `COHSH_BATCH_CLEAN_TARGET=1` only for deliberate clean-rebuild validation.
+- `scripts/cohsh/run_regression_batch.sh` (invoked by stage 03; can be run directly for bring-up)
 Start QEMU (source tree or bundle), then verify:
 - Capture QEMU serial to `logs/qemu-console.log` (example: `./qemu/run.sh | tee logs/qemu-console.log`).
 - `cohsh` (queen): `help`, `attach queen` (skip if you launched cohsh with `--role`),
@@ -302,6 +340,7 @@ Run while QEMU is up:
 - Browser binaries are installed into the user Playwright cache (not committed).
 
 ### 6) Regression pack (full-stack, recommended before release)
+- `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` (requires `COHESIX_GATEWAY_URL` or equivalent gateway env var)
 - `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> scripts/cohsh/REST_regression_batch.sh`
 - The batch archives logs under `out/regression-logs/<batch>/<script>.run*.log`.
 - Verify logs show no unexpected errors or disconnects.
@@ -316,10 +355,15 @@ Run while QEMU is up:
 
 ### 7) Release bundle validation (macOS + Ubuntu)
 Run Sections 3–5 using the extracted bundle in a clean temp directory (not the repo checkout).
-- macOS bundle: `releases/Cohesix-0.1-Alpha-MacOS.tar.gz`
-- Ubuntu bundle: `releases/Cohesix-0.1-Alpha-linux.tar.gz`
+- macOS bundle: `releases/Cohesix-0.7.0-alpha-MacOS.tar.gz`
+- Ubuntu bundle: `releases/Cohesix-0.7.0-alpha-linux.tar.gz`
 - Ensure headless Linux uses `xvfb-run` for SwarmUI.
-- The release bundle includes `tests/fixtures/transcripts` for running `python -m pytest -k cohesix_parity`.
+- The release bundle includes `tests/fixtures/transcripts` for running `python3 -m pytest -k cohesix_parity`.
+
+### 8) Final release gate (must pass)
+- `scripts/ci/test_plan_stage_05_due_diligence.sh`
+- `scripts/ci/due_diligence_gate.sh`
+- Do not progress beyond this stage until all prior scripted stages have completion markers and the due-diligence gate is fully green.
 
 ## Trace replay limits
 <!-- coh-rtc:trace-policy:start -->
@@ -334,7 +378,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `out/manifests/root_task_resolved.json` — `sha256:fd4aee25dd42e51e6e4b581a46acd45299dcf2c12436f2d1fdf12d77dd177d93`
+- `out/manifests/root_task_resolved.json` — `sha256:d1880bfe0d830f06f36a6e0b11713d8e87aa95ebee75c6501ac6b963207a415d`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`
@@ -362,4 +406,4 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 - `tests/fixtures/traces/trace_v0.hive.cbor` — `sha256:977113ebcfad69272cbb15ddc57e7ce1ccd1df87baa6568704253cacc55e8e2d`
 
 ## Guard
-- `scripts/ci/check_test_plan.sh` verifies hashes above match on-disk fixtures and manifest fingerprints; `scripts/check-generated.sh` invokes it.
+- `scripts/ci/check_test_plan.sh` verifies hashes, required scripted-stage references, and command alignment (`python3`, workspace/tests gates); `scripts/check-generated.sh` invokes it.

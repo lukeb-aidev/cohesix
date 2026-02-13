@@ -11,6 +11,10 @@ declare -a EXTRA_QEMU_ARGS=()
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 HOST_OS="$(uname -s)"
+QEMU_MACHINE_EXTRA="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-}}"
+if [[ -z "$QEMU_MACHINE_EXTRA" && "$HOST_OS" == "Darwin" ]]; then
+    QEMU_MACHINE_EXTRA="kernel-irqchip=off"
+fi
 
 usage() {
     cat <<'USAGE'
@@ -50,6 +54,8 @@ to cohsh via --qemu-arg when --transport qemu is selected).
 Env overrides:
   COHESIX_QEMU_SMP / QEMU_SMP (default: 4; ignored when *_QEMU_SMP_TOPO is set)
   COHESIX_QEMU_SMP_TOPO / QEMU_SMP_TOPO (default: 4,cores=4,threads=1,sockets=1)
+  COHESIX_QEMU_ACCEL / QEMU_ACCEL (auto; default tcg on macOS, kvm/tcg on Linux)
+  COHESIX_QEMU_MACHINE_EXTRA / QEMU_MACHINE_EXTRA (appended to -machine)
 USAGE
 }
 
@@ -86,7 +92,7 @@ detect_qemu_accel() {
     host_os="$(uname -s 2>/dev/null || true)"
     case "$host_os" in
         Darwin)
-            echo "hvf"
+            echo "tcg"
             ;;
         Linux)
             if [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]; then
@@ -939,9 +945,14 @@ PY
     GIC_VER="$(detect_gic_version)"
     log "Auto-detected GIC version: gic-version=$GIC_VER"
     log "Using QEMU SMP: $QEMU_SMP_ARG"
+    local machine_arg="virt,gic-version=${GIC_VER}"
+    if [[ -n "$QEMU_MACHINE_EXTRA" ]]; then
+        machine_arg="${machine_arg},${QEMU_MACHINE_EXTRA}"
+    fi
+    log "Using QEMU machine: ${machine_arg}"
 
     # Serial output from the PL011 console and root-task logger is expected on stdio via -serial mon:stdio; keep this wiring intact when adjusting runtime flags.
-    BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp "$QEMU_SMP_ARG" -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
+    BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "${machine_arg}" -cpu cortex-a57 -m 1024 -smp "$QEMU_SMP_ARG" -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
         if [[ "$NET_BACKEND" == "virtio" ]]; then

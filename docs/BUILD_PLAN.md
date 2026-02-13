@@ -94,6 +94,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [24e](#24e) | REST Multiplexer Transports + SwarmUI Gateway Mode | Complete |
 | [25](#25) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Complete |
 | [25a](#25a) | REST Live Hive Performance (Parallel Polling + Batching) | Pending |
+| [25b](#25b) | Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) | Pending |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -4909,6 +4910,161 @@ Checks:
 Deliverables:
   - Manifest-driven root-task affinity wiring for the init TCB.
 ```
+
+## Milestone 25b — Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) <a id="25b"></a>
+[Milestones](#Milestones)
+
+**Why now (release integrity + scale):** The live benchmark demonstrates 100 workers sustained with timeout onset under heavier activity before 100 in ramp mode, while due-diligence still contains open P1 blockers in gateway auth, token handling, regression coverage, and platform gates. This milestone addresses both concerns in one bounded track so scale gains are security-valid and release-valid.
+
+**Status:** Pending - 1k-worker readiness is not yet demonstrated and multiple P1 findings remain open (`DD-2026-0001`, `DD-2026-0002`, `DD-2026-0003`, `DD-2026-0004`, `DD-2026-0005`, `DD-2026-0009`, `DD-2026-0010`).
+
+## Goal
+Deliver a single-console-compliant gateway path that can be validated toward 1,000-worker operation while closing release-blocking due-diligence findings by:
+1. Hardening gateway edge authentication and secret handling.
+2. Preserving the one-console-client design while improving multiplexed throughput and fairness.
+3. Expanding benchmark methodology to deterministic 8..1000 worker ramps with reproducible evidence.
+4. Restoring failing regression/workspace gates so performance evidence is trustworthy.
+5. Publishing closure evidence in audit artifacts and benchmark docs.
+
+## Non-Goals (Explicit)
+- No new in-VM TCP listeners or alternate control-plane transports.
+- No changes to ACK/ERR/END grammar or Secure9P protocol semantics.
+- No bypass of role/ticket authorization inside the VM.
+- No broad UI feature work unrelated to scale or due-diligence closure.
+- No release bundle changes under `releases/` in this milestone.
+
+## Design Principles (Normative)
+1. **Single-console authority** - `hive-gateway` remains the sole TCP console client; all concurrent operators route through REST.
+2. **Edge auth plus VM auth** - add caller authentication at REST ingress without changing VM attach semantics.
+3. **Bounded fairness** - queueing, caching, and concurrency must be explicit, bounded, and manifest/policy constrained.
+4. **Evidence-first closure** - every P1/P2 closure includes deterministic repro, command logs, commit SHA, and independent verification.
+5. **No hidden drift** - docs, generated artifacts, and gate scripts must converge on one canonical command set.
+
+## Implementation Touchpoints
+- `apps/hive-gateway/src/main.rs` - request-auth middleware, bind/exposure guardrails, bounded broker queueing and metrics.
+- `apps/cohsh/src/transport/tcp.rs`, `apps/cohsh/src/session_pool.rs` - transport/pool behavior required for gateway throughput under single console.
+- `apps/root-task/src/net/mod.rs`, `apps/root-task/src/net/console_srv.rs` - default token removal and auth-log redaction.
+- `scripts/rest_perf_harness.py` - deterministic ramp/seed support, resilient summaries, graph/CSV export.
+- `tests/tests/shard_1k.rs`, `scripts/cohsh/shard_1k.coh`, `crates/sel4-runtime/src/lib.rs`, `crates/sel4-sys/src/lib.rs` - regression/workspace gate repairs.
+- `docs/BENCHMARKS.md`, `docs/HOST_API.md`, `docs/USERLAND_AND_CLI.md`, `docs/TEST_PLAN.md`, `docs/audit/*` - as-built benchmark + assurance evidence alignment.
+
+## Testing and Validation
+
+### Security and Auth
+- Verify unauthenticated REST writes are rejected deterministically.
+- Verify startup fails fast when required auth token inputs are missing in non-test mode.
+- Verify auth rejection logs never include raw token bytes or token-adjacent material.
+
+### Scale and Performance
+- Run fixed-seed worker ramps (`8..1000`) with preflight-gated VM boot/TCP/auth validation.
+- Compare baseline vs aggressive profiles with identical topology and bounds.
+- Confirm summary emission even on timeout-heavy runs to preserve evidence quality.
+
+### Regression and Release Gates
+- Re-run `cargo test -p tests` and `cargo test --workspace` after fixture/platform fixes.
+- Re-run generated-artifact and test-plan guards with updated docs snippets.
+- Re-run `scripts/ci/due_diligence_gate.sh` and attach logs in audit evidence.
+
+## Checks (Definition of Done)
+- Single-console design remains intact (no additional in-VM listener; gateway is sole console client in multiplexer mode).
+- `DD-2026-0001`, `DD-2026-0002`, `DD-2026-0003`, and `DD-2026-0010` move to `CLOSED_VERIFIED` with reproducible evidence.
+- `DD-2026-0004`, `DD-2026-0005`, and `DD-2026-0009` move to `CLOSED_VERIFIED` with passing gate commands.
+- `scripts/rest_perf_harness.py` supports deterministic 8..1000 worker runs and always emits machine-readable summary output.
+- `docs/BENCHMARKS.md` includes comparative 8..1000 results and graphs sourced from committed evidence logs.
+- `scripts/ci/due_diligence_gate.sh` passes without skipped/incomplete steps on milestone closure runs.
+
+## Task Breakdown
+```
+Title/ID: m25b-gateway-edge-auth
+Goal: Close gateway-facing auth blockers while preserving VM authority semantics.
+Inputs: apps/hive-gateway/src/main.rs, docs/HOST_API.md, docs/OPERATOR_WALKTHROUGH.md, docs/audit/findings.csv.
+Changes:
+  - apps/hive-gateway/src/main.rs - add required request authentication middleware for mutating routes and fail-fast startup when auth secrets are unset in non-test mode.
+  - apps/hive-gateway/src/main.rs - enforce safe default exposure (loopback-only unless explicitly overridden with documented risk flags).
+  - apps/hive-gateway/tests/* - add integration tests for unauthenticated/incorrect-token/authorized request paths.
+  - docs/HOST_API.md - document request-auth contract, headers, and deployment hardening defaults.
+Commands:
+  - cargo test -p hive-gateway
+Checks:
+  - Unauthenticated POST `/v1/fs/echo` and equivalent write paths return deterministic authorization errors.
+  - Gateway refuses insecure startup configuration in non-test mode.
+Deliverables:
+  - Closure evidence for DD-2026-0002 and DD-2026-0010 with logs and commit SHA.
+
+Title/ID: m25b-console-token-hygiene
+Goal: Remove insecure token defaults and prevent auth token leakage in logs.
+Inputs: apps/root-task/src/net/mod.rs, apps/root-task/src/net/console_srv.rs, tools/coh-rtc, configs/root_task.toml, docs/audit/findings.csv.
+Changes:
+  - apps/root-task/src/net/mod.rs - remove production default auth token path and require explicit configured token source.
+  - apps/root-task/src/net/console_srv.rs - replace raw auth-byte logging with structured redacted diagnostics.
+  - apps/root-task/tests/* - add negative assertions proving token material is not logged on auth rejection.
+  - tools/coh-rtc + generated outputs - wire token requirements through generated policy/config where applicable.
+Commands:
+  - cargo test -p root-task
+  - cargo run -p coh-rtc
+  - scripts/check-generated.sh
+Checks:
+  - Missing token config fails fast outside test profiles.
+  - Auth failure logs do not expose token contents or byte-equivalent payload.
+Deliverables:
+  - Closure evidence for DD-2026-0001 and DD-2026-0003 with regenerated artifacts.
+
+Title/ID: m25b-single-console-broker
+Goal: Increase gateway multiplexing throughput under one attached console session.
+Inputs: apps/hive-gateway/src/main.rs, apps/cohsh/src/session_pool.rs, apps/cohsh/src/transport/tcp.rs, docs/USERLAND_AND_CLI.md.
+Changes:
+  - apps/hive-gateway/src/main.rs - introduce bounded broker queueing with priority classes (control before telemetry), fairness scheduling, and explicit backpressure signals.
+  - apps/hive-gateway/src/main.rs - add bounded read-through caches for hot `/proc` reads with deterministic TTL and invalidation.
+  - apps/hive-gateway/src/main.rs - expose queue depth, saturation, timeout, and retry counters through gateway metrics/status paths.
+  - docs/USERLAND_AND_CLI.md - clarify single-console behavior and REST multiplexer operational limits.
+Commands:
+  - cargo test -p hive-gateway
+  - python3 scripts/rest_perf_harness.py --suite status --assert-min-ratio 2.0
+Checks:
+  - Parallel REST load no longer collapses into avoidable "session pool exhausted" behavior at configured policy limits.
+  - No change to console grammar or in-VM listener topology.
+Deliverables:
+  - Single-console broker implementation with bounded throughput/fairness instrumentation.
+
+Title/ID: m25b-rest-harness-1k
+Goal: Extend the benchmark harness and report pipeline for deterministic 1k-worker readiness evidence.
+Inputs: scripts/rest_perf_harness.py, docs/BENCHMARKS.md.
+Changes:
+  - scripts/rest_perf_harness.py - add deterministic seed handling for ramp profiles and worker bands up to 1000.
+  - scripts/rest_perf_harness.py - require preflight boot/TCP/auth/LS checks before load execution.
+  - scripts/rest_perf_harness.py - harden timeout/error handling so run summaries and per-op stats are always emitted.
+  - scripts/rest_perf_harness.py - emit CSV/JSON artifacts consumable by benchmark graphs.
+  - docs/BENCHMARKS.md - publish baseline vs aggressive 8..1000 runs, degradation thresholds, and graph-backed interpretation.
+Commands:
+  - python3 scripts/rest_perf_harness.py --mode simulate --workers-min 8 --workers-max 1000 --duration-mins 5 --seed 2501
+  - python3 scripts/rest_perf_harness.py --mode simulate --workers-min 8 --workers-max 1000 --duration-mins 5 --seed 2501 --intensity-min 6 --intensity-max 6
+Checks:
+  - Both runs emit reproducible summaries and evidence files.
+  - Report includes graphs and explicit onset points for buffer pressure and timeout behavior.
+Deliverables:
+  - 1k-worker readiness benchmark evidence pack and updated benchmark report.
+
+Title/ID: m25b-regression-and-gate-closure
+Goal: Repair failing release gates so scale evidence is release-grade.
+Inputs: tests/tests/shard_1k.rs, scripts/cohsh/shard_1k.coh, crates/sel4-runtime/src/lib.rs, crates/sel4-sys/src/lib.rs, docs/TEST_PLAN.md, scripts/ci/due_diligence_gate.sh, docs/audit/*.
+Changes:
+  - tests/tests/shard_1k.rs + scripts/cohsh/shard_1k.coh - align policy queue and shard fixture expectations with current namespace semantics.
+  - crates/sel4-runtime/src/lib.rs - add target-aware section annotation handling for macOS Mach-O compatibility.
+  - crates/sel4-sys/src/lib.rs - cfg-gate affinity invocation wrapper for kernels lacking affinity labels.
+  - docs/TEST_PLAN.md - normalize commands to `python3` and include `cargo test -p tests` plus `cargo test --workspace` gate coverage.
+  - docs/audit/findings.csv + docs/audit/BLOCKERS.md + docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md - update dispositions, closure evidence, and independent verification records.
+Commands:
+  - cargo test -p tests --test shard_1k
+  - cargo test --workspace
+  - scripts/ci/check_test_plan.sh
+  - scripts/ci/due_diligence_gate.sh
+Checks:
+  - DD-2026-0004, DD-2026-0005, DD-2026-0009, DD-2026-0006, DD-2026-0007, DD-2026-0011, and DD-2026-0012 have closure evidence and pass relevant gates.
+  - Due-diligence gate completes with no `P0/P1` blockers open.
+Deliverables:
+  - Clean gate run logs and updated audit registers proving release-ready closure.
+```
+
 ----
 **Release 0.5.0 alpha**
 ----

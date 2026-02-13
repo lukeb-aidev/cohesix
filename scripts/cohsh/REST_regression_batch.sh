@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
 # Purpose: Run concurrent cohsh regression scripts through the REST multiplexer.
+# Copyright 2026 Lukas Bower
 
 set -euo pipefail
 

@@ -27,6 +27,24 @@ pub struct CasArtifacts {
     pub template_hash: PathBuf,
 }
 
+fn canonicalize_json_keys(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<_> = map.into_iter().collect();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            let mut canonical = Map::new();
+            for (key, child) in entries {
+                canonical.insert(key, canonicalize_json_keys(child));
+            }
+            Value::Object(canonical)
+        }
+        Value::Array(items) => {
+            Value::Array(items.into_iter().map(canonicalize_json_keys).collect())
+        }
+        other => other,
+    }
+}
+
 pub fn build_cas_template(manifest: &Manifest) -> CasTemplate {
     let mut map = Map::new();
     map.insert(
@@ -80,7 +98,8 @@ pub fn build_cas_template(manifest: &Manifest) -> CasTemplate {
     };
     map.insert("signature".to_owned(), signature_value);
 
-    let json = serde_json::to_string_pretty(&Value::Object(map))
+    let canonical = canonicalize_json_keys(Value::Object(map));
+    let json = serde_json::to_string_pretty(&canonical)
         .expect("render cas manifest template json");
     let hash = hash_bytes(json.as_bytes());
     CasTemplate { json, hash }
