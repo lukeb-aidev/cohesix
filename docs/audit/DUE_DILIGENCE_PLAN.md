@@ -1,0 +1,209 @@
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Define a DoD-aligned, high-assurance due diligence process, evidence model, and gate criteria for Cohesix releases. -->
+<!-- Copyright 2026 Lukas Bower -->
+
+# Cohesix Due Diligence Plan (High-Assurance, DoD-Aligned)
+
+## 1. Positioning
+This plan is an engineering and assurance process for release readiness.
+It is not, by itself, an Authority to Operate (ATO) or cATO decision.
+
+## 2. Objective
+Run a repeatable, evidence-driven audit that validates design integrity, code quality, architecture conformance, and security posture before release.
+
+## 3. Scope
+This process applies to:
+- VM components (`apps/root-task`, `apps/nine-door`, worker roles, Secure9P crates)
+- Host tools that affect control-plane behavior (`apps/cohsh`, `apps/coh`, `apps/hive-gateway`, `apps/gpu-bridge-host`)
+- Generated artifacts and docs-as-built outputs (`out/`, `docs/snippets/`, generated regions in `docs/*.md`)
+- CI scripts and release orchestration relevant to assurance outcomes
+
+## 4. Governing References
+The process is aligned to these references:
+
+- DoDI 8510.01, *Risk Management Framework for DoD Systems* (effective July 19, 2022).
+- DoD Enterprise DevSecOps Fundamentals v2.5 (approved October 16, 2024).
+- DoD Enterprise DevSecOps Activities & Tools Guidebook v2.5 (April 2025).
+- DevSecOps cATO Implementation Guide v1.0 (March 2024).
+- cATO Evaluation Criteria (May 29, 2024).
+- NIST SP 800-53 / 53A / 53B Release 5.2.0 (August 27, 2025 update line).
+- NIST SP 800-218 (SSDF) v1.1 (current final baseline).
+- NIST SP 800-161 Rev.1 Update 1 (November 1, 2024 update) for supply chain risk management.
+
+## 5. Assurance Claims (Must Be Proven by Evidence)
+1. Security
+- No hardcoded production secrets.
+- AuthN/AuthZ and capability checks are enforced on all control-plane entry points.
+- User-controlled inputs are validated and bounded.
+- Supply-chain risk checks are executed and reviewed.
+
+2. Design and Architecture
+- Cohesix charter red lines are preserved.
+- HAL boundaries are intact (no direct MMIO/unsafe bypass).
+- Protocol behavior remains consistent with canonical docs/fixtures.
+- Privilege boundaries and role ownership remain explicit and test-backed.
+
+3. Code Quality and Correctness
+- Required build/test gates pass.
+- Regression fixtures and transcript grammar remain stable.
+- Unsafe Rust usage is justified, reviewed, and bounded.
+- Failure handling paths are tested (not only happy paths).
+
+4. Determinism and Integrity
+- `coh-rtc` generation is reproducible.
+- Generated artifacts, manifest fingerprints, and docs snippets are hash-consistent.
+- Release evidence is complete, immutable, and traceable to a commit SHA.
+
+## 6. Evidence Pack (Mandatory)
+Every due-diligence run must produce or refresh:
+
+1. Findings and blockers
+- `docs/audit/findings.csv`
+- `docs/audit/BLOCKERS.md`
+
+2. Checklist sign-offs
+- `docs/audit/checklists/ARCHITECTURE_CHECKLIST.md`
+- `docs/audit/checklists/SECURITY_CHECKLIST.md`
+- `docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md`
+
+3. Audit report
+- `docs/audit/AUDIT_REPORT_<YYYY-MM-DD>.md`
+
+4. Gate logs
+- Logs from `scripts/ci/due_diligence_gate.sh`
+- Logs from required regression and generated-artifact checks
+
+5. Traceability artifacts
+- `docs/audit/CONTROL_TRACEABILITY.md` (control ID -> proof path -> commit SHA)
+- `docs/audit/EXCEPTIONS.md` (exception records with expiration dates and explicit risk acceptance owner)
+
+## 7. Roles and Independence
+- Builder role: implements fixes and adds tests.
+- Auditor role: independently verifies evidence and closure quality.
+- Decision authority: records PASS/FAIL decision and accepted residual risks.
+
+No finding may be self-closed by the same person who introduced the code unless independently reviewed.
+
+## 8. Severity and Disposition Model
+- `P0`: Critical trust-boundary break, active exploit path, or safety-impacting defect. Immediate block.
+- `P1`: High-impact assurance failure. Release blocked until fixed and re-verified.
+- `P2`: Material quality/process weakness. Must be fixed or explicitly accepted with owner + expiration.
+- `P3`: Improvement item. Tracked backlog unless elevated by risk trend.
+
+Disposition states:
+- `OPEN`, `IN_REMEDIATION`, `PENDING_VERIFY`, `CLOSED_VERIFIED`, `ACCEPTED_RISK`
+
+## 9. RMF-Aligned Operating Procedure
+This procedure mirrors RMF intent (Prepare, Categorize, Select, Implement, Assess, Authorize, Monitor):
+
+1. Prepare
+- Freeze branch and commit SHA.
+- Record build host details and toolchain versions.
+- Freeze scope to audited artifacts list.
+
+2. Categorize
+- Identify changed trust boundaries and affected control families.
+- Classify impact of each change path (auth, memory safety, protocol, supply chain, release integrity).
+
+3. Select
+- Select required tests/scans for impacted surfaces.
+- Select architecture and security checklist rows that must be re-attested.
+
+4. Implement (execute checks)
+- Run `scripts/ci/due_diligence_gate.sh`.
+- Run docs/generated-artifact consistency checks.
+- Run regression pack and protocol fixture checks.
+- Run static and dynamic analysis suite (Section 12).
+
+5. Assess
+- Record all failures in `docs/audit/findings.csv`.
+- Validate evidence quality (reproducible command, log path, commit SHA, owner, due date).
+- Require independent review for all `P0/P1` closures and all unsafe-related findings.
+
+6. Authorize (release decision)
+- Update `docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md`.
+- Issue decision state (`PASS`, `PASS_WITH_RESIDUAL_RISK`, `FAIL`) with rationale.
+- Publish blocker list and required remediation sequence.
+
+7. Monitor
+- Re-run the due-diligence gate on every release candidate and significant control-plane change.
+- Track recurring finding classes; trigger corrective action for repeat defects.
+- Expire risk acceptances automatically unless renewed with evidence.
+
+## 10. Release Decision Criteria
+- `PASS`
+- All required gates pass.
+- No open `P0/P1`.
+- No expired `ACCEPTED_RISK`.
+
+- `PASS_WITH_RESIDUAL_RISK`
+- No open `P0/P1`.
+- Only time-bounded accepted `P2` with explicit owner and expiration.
+
+- `FAIL`
+- Any open `P0/P1`.
+- Missing or non-reproducible evidence.
+- Determinism drift in generated outputs.
+- Unreviewed exceptions to control requirements.
+
+## 11. Minimal Required Commands (Baseline)
+At minimum, every full run executes:
+
+```bash
+scripts/ci/due_diligence_gate.sh
+scripts/check-generated.sh
+scripts/ci/check_test_plan.sh
+scripts/cohsh/run_regression_batch.sh
+```
+
+If environment constraints prevent execution, the run is marked incomplete and cannot be `PASS`.
+
+## 12. OSS Static and Dynamic Analysis Recommendations (Separate from Baseline Gate)
+These tools are recommended as an additive assurance layer. They can run in dedicated jobs while baseline gates remain stable.
+
+1. Rust static analysis
+- `cargo clippy` for correctness/style/perf lints.
+- `cargo-audit` + RustSec Advisory DB for known vulnerable dependencies.
+- `cargo-deny` for advisories, license policy, banned crates, source allowlists, duplicate dependency pressure.
+- `cargo-geiger` for unsafe usage inventory and trend monitoring.
+- `cargo-vet` for third-party dependency trust and audit attestations.
+- `semgrep` (community edition) for custom policy checks over Rust and scripts.
+
+2. Supply chain and SBOM
+- `syft` to generate SBOMs (SPDX/CycloneDX).
+- `grype`, `trivy`, or `osv-scanner` to scan source/images/SBOMs for vulnerabilities.
+- `cosign` for signature and in-toto attestations on release artifacts.
+
+3. Secrets and configuration policy
+- `gitleaks` or `trufflehog` for secret detection in git history and working tree.
+- `conftest` (OPA/Rego) to enforce policy-as-code on YAML/TOML/config manifests and CI definitions.
+- `checkov` for IaC/static configuration misconfiguration scanning where IaC exists.
+
+4. Dynamic analysis and robustness
+- `cargo-fuzz` (libFuzzer), `honggfuzz-rs`, and/or AFL++ for parser/protocol fuzzing.
+- Rust sanitizers (`address`, `thread`, etc.) in dedicated host-target test jobs.
+- `miri` for undefined behavior detection in unsafe-sensitive units.
+- `loom` for concurrency schedule exploration in critical synchronization paths.
+- Optional proof-oriented checks with `kani` for high-risk invariants.
+
+## 13. Tool Adoption Order (Pragmatic Rollout)
+1. Immediate (high value, low friction)
+- `cargo clippy`, `cargo-audit`, `cargo-deny`, `gitleaks`, `syft` + one vuln scanner.
+
+2. Near term
+- `semgrep` policy pack, `cargo-geiger`, `conftest`, `trivy`/`grype` image scans.
+
+3. High assurance expansion
+- `cargo-fuzz` corpus program, sanitizer matrix, `miri` jobs, `loom` harnesses, `cosign` attestations, `cargo-vet`.
+
+## 14. Quality of Closure Requirements
+A finding may close only when:
+- Repro is no longer possible on current HEAD.
+- Relevant tests/scans exist and pass.
+- Evidence includes command, output location, commit SHA, and reviewer.
+- Root cause and prevention action are documented (not just symptom patching).
+
+## 15. Current Entry Blockers
+Active blockers and findings are tracked in:
+- `docs/audit/BLOCKERS.md`
+- `docs/audit/findings.csv`

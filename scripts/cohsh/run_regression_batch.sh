@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
 # Purpose: Run the cohsh .coh regression pack in two QEMU boots (base + gated).
+# Copyright 2026 Lukas Bower
 
 # Note: override timeouts via env vars, e.g. READY_TIMEOUT=300 PORT_TIMEOUT=60 QUIT_CLOSE_TIMEOUT=60 scripts/cohsh/run_regression_batch.sh
 # ** Note: typical end-to-end runtime is ~25 minutes; plan for >= 30 minutes to avoid repeated retries.
@@ -8,6 +9,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$PROJECT_ROOT"
 
 BASE_SCRIPTS=(
     "boot_v0.coh"
@@ -40,11 +42,18 @@ GATED_SCRIPTS=(
 
 BASE_MANIFEST="${PROJECT_ROOT}/configs/root_task.toml"
 GATED_MANIFEST="${PROJECT_ROOT}/configs/root_task_regression.toml"
-ARCHIVE_ROOT="out/regression-logs"
+ARCHIVE_ROOT="${PROJECT_ROOT}/out/regression-logs"
 READY_MARKER="Cohesix console ready"
 READY_TIMEOUT="${READY_TIMEOUT:-180}"
 PORT_TIMEOUT="${PORT_TIMEOUT:-30}"
 QUIT_CLOSE_TIMEOUT="${QUIT_CLOSE_TIMEOUT:-30}"
+SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${SEL4_BUILD:-${PROJECT_ROOT}/seL4/SMP_build}}"
+
+if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
+    echo "Missing seL4 build directory: $SEL4_BUILD_DIR" >&2
+    echo "Set SEL4_BUILD_DIR (or SEL4_BUILD) to your kernel build, e.g. ${PROJECT_ROOT}/seL4/SMP_build" >&2
+    exit 1
+fi
 
 check_port_open() {
     local host="$1"
@@ -261,8 +270,8 @@ run_batch() {
         --cohsh-grammar-doc "$PROJECT_ROOT/docs/snippets/cohsh_grammar.md" \
         --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md"
 
-    COH_RTC_MANIFEST="$manifest" SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
-        --sel4-build "$HOME/seL4/build" \
+    COH_RTC_MANIFEST="$manifest" SEL4_BUILD_DIR="$SEL4_BUILD_DIR" ./scripts/cohesix-build-run.sh \
+        --sel4-build "$SEL4_BUILD_DIR" \
         --out-dir "$out_dir" \
         --profile release \
         --root-task-features cohesix-dev \
@@ -332,22 +341,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
-rm -rf target out/cohesix out/cohesix-gated "$ARCHIVE_ROOT"
+rm -rf \
+    "${PROJECT_ROOT}/target" \
+    "${PROJECT_ROOT}/out/cohesix" \
+    "${PROJECT_ROOT}/out/cohesix-gated" \
+    "$ARCHIVE_ROOT"
 mkdir -p "$ARCHIVE_ROOT"
 
-if ! run_batch "base" "$BASE_MANIFEST" "out/cohesix" "${BASE_SCRIPTS[@]}"; then
+if ! run_batch "base" "$BASE_MANIFEST" "${PROJECT_ROOT}/out/cohesix" "${BASE_SCRIPTS[@]}"; then
     exit 1
 fi
 
-if ! run_batch "base-telemetry" "$BASE_MANIFEST" "out/cohesix" "${BASE_TELEMETRY_SCRIPTS[@]}"; then
+if ! run_batch "base-telemetry" "$BASE_MANIFEST" "${PROJECT_ROOT}/out/cohesix" "${BASE_TELEMETRY_SCRIPTS[@]}"; then
     exit 1
 fi
 
-if ! run_batch "base-shard" "$BASE_MANIFEST" "out/cohesix" "${BASE_SHARD_SCRIPTS[@]}"; then
+if ! run_batch "base-shard" "$BASE_MANIFEST" "${PROJECT_ROOT}/out/cohesix" "${BASE_SHARD_SCRIPTS[@]}"; then
     exit 1
 fi
 
-if ! run_batch "gated" "$GATED_MANIFEST" "out/cohesix-gated" "${GATED_SCRIPTS[@]}"; then
+if ! run_batch "gated" "$GATED_MANIFEST" "${PROJECT_ROOT}/out/cohesix-gated" "${GATED_SCRIPTS[@]}"; then
     exit 1
 fi
 
