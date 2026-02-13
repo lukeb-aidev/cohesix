@@ -32,7 +32,8 @@ struct BootStack([u8; STACK_BYTES]);
 // inflated the PT_LOAD span when the root-task stack lived in that section.
 // Keep the bootstrap stack inside the main data segment so it stays adjacent
 // to the remainder of the image and avoids spanning the kernel window.
-#[link_section = ".data"]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__data")]
+#[cfg_attr(not(target_vendor = "apple"), link_section = ".data")]
 #[used]
 static mut BOOT_STACK: BootStack = BootStack([0; STACK_BYTES]);
 
@@ -72,7 +73,7 @@ impl BootInfoCell {
 
 static BOOTINFO: BootInfoCell = BootInfoCell::new();
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_os = "none"))]
 // seL4 kernel entry stub invoked after seL4 initialises the initial thread.
 // Defined in global assembly to avoid unstable `#[naked]` functions while
 // preserving the debug stack instrumentation.
@@ -93,7 +94,7 @@ _start:
     entry = sym __sel4_start_rust,
 );
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_os = "none"))]
 #[inline(never)]
 unsafe extern "C" fn __sel4_start_rust(bootinfo: *mut seL4_BootInfo) -> ! {
     __sel4_start_init_boot_info(bootinfo);
@@ -103,7 +104,11 @@ unsafe extern "C" fn __sel4_start_rust(bootinfo: *mut seL4_BootInfo) -> ! {
     sel4_start(bootinfo)
 }
 
-#[cfg(all(not(target_arch = "aarch64"), not(test), not(doc)))]
+#[cfg(all(
+    not(all(target_arch = "aarch64", target_os = "none")),
+    not(test),
+    not(doc)
+))]
 #[no_mangle]
 pub unsafe extern "C" fn _start(_bootinfo: *mut seL4_BootInfo) -> ! {
     loop {
@@ -125,11 +130,11 @@ pub fn bootinfo() -> Option<&'static mut seL4_BootInfo> {
         .map(|ptr| unsafe { &mut *ptr.cast::<seL4_BootInfo>() })
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_os = "none"))]
 extern "C" {
     pub fn _start(bootinfo: *mut seL4_BootInfo) -> !;
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_os = "none"))]
 #[used]
 static START_PTR: unsafe extern "C" fn(*mut seL4_BootInfo) -> ! = _start;

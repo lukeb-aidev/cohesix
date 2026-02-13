@@ -11,6 +11,14 @@ declare -a EXTRA_QEMU_ARGS=()
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 HOST_OS="$(uname -s)"
+QEMU_MACHINE_EXTRA="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-}}"
+if [[ -z "$QEMU_MACHINE_EXTRA" && "$HOST_OS" == "Darwin" ]]; then
+    QEMU_MACHINE_EXTRA="kernel-irqchip=off"
+fi
+QEMU_VIRT_RAW="${COHESIX_QEMU_VIRT:-${QEMU_VIRT:-}}"
+if [[ -z "$QEMU_VIRT_RAW" ]]; then
+    QEMU_VIRT_RAW="on"
+fi
 
 usage() {
     cat <<'USAGE'
@@ -50,6 +58,9 @@ to cohsh via --qemu-arg when --transport qemu is selected).
 Env overrides:
   COHESIX_QEMU_SMP / QEMU_SMP (default: 4; ignored when *_QEMU_SMP_TOPO is set)
   COHESIX_QEMU_SMP_TOPO / QEMU_SMP_TOPO (default: 4,cores=4,threads=1,sockets=1)
+  COHESIX_QEMU_VIRT / QEMU_VIRT (on|off; default: on)
+  COHESIX_QEMU_ACCEL / QEMU_ACCEL (auto; default tcg on macOS, kvm/tcg on Linux)
+  COHESIX_QEMU_MACHINE_EXTRA / QEMU_MACHINE_EXTRA (appended to -machine)
 USAGE
 }
 
@@ -86,7 +97,7 @@ detect_qemu_accel() {
     host_os="$(uname -s 2>/dev/null || true)"
     case "$host_os" in
         Darwin)
-            echo "hvf"
+            echo "tcg"
             ;;
         Linux)
             if [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]; then
@@ -214,6 +225,27 @@ resolve_qemu_smp_arg() {
     echo "$DEFAULT_QEMU_SMP_TOPO"
 }
 
+resolve_qemu_virt_arg() {
+    if [[ -n "$QEMU_VIRT_RAW" ]]; then
+        echo "$QEMU_VIRT_RAW"
+        return
+    fi
+    echo "on"
+}
+
+validate_qemu_virt_arg() {
+    local arg="$1"
+
+    case "$arg" in
+        on|off)
+            return
+            ;;
+        *)
+            fail "Invalid QEMU virtualization setting (use on|off): ${arg}"
+            ;;
+    esac
+}
+
 validate_qemu_smp_arg() {
     local arg="$1"
 
@@ -314,7 +346,7 @@ build_network_args() {
     local smoke_port="$1"
 
     NETWORK_ARGS=(
-        -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-:${TCP_PORT},hostfwd=udp:127.0.0.1:${UDP_ECHO_PORT}-:${UDP_ECHO_PORT},hostfwd=tcp:127.0.0.1:${smoke_port}-:31339"
+        -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-:31337,hostfwd=udp:127.0.0.1:${UDP_ECHO_PORT}-:31338,hostfwd=tcp:127.0.0.1:${smoke_port}-:31339"
     )
 
     if [[ "${NET_BACKEND}" == "virtio" ]]; then
@@ -331,8 +363,8 @@ build_network_args() {
 log_tcp_hostfwd() {
     local smoke_port="$1"
 
-    log "Hostfwd: tcp 127.0.0.1:${TCP_PORT} -> 10.0.2.15:${TCP_PORT}"
-    log "Hostfwd: udp 127.0.0.1:${UDP_ECHO_PORT} -> 10.0.2.15:${UDP_ECHO_PORT}"
+    log "Hostfwd: tcp 127.0.0.1:${TCP_PORT} -> 10.0.2.15:31337"
+    log "Hostfwd: udp 127.0.0.1:${UDP_ECHO_PORT} -> 10.0.2.15:31338"
     log "Hostfwd: tcp 127.0.0.1:${smoke_port} -> 10.0.2.15:31339"
     log "Note: 10.0.2.15 is not directly reachable from the host under slirp"
     log "sudo tcpdump -i lo0 -n 'tcp port ${TCP_PORT} or udp port ${UDP_ECHO_PORT} or tcp port ${smoke_port}'"
@@ -617,6 +649,8 @@ main() {
     fi
 
     validate_qemu_smp_arg "$QEMU_SMP_ARG"
+    QEMU_VIRT_ARG="$(resolve_qemu_virt_arg)"
+    validate_qemu_virt_arg "$QEMU_VIRT_ARG"
 
     if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
         fail "seL4 build directory not found: $SEL4_BUILD_DIR"
@@ -939,9 +973,15 @@ PY
     GIC_VER="$(detect_gic_version)"
     log "Auto-detected GIC version: gic-version=$GIC_VER"
     log "Using QEMU SMP: $QEMU_SMP_ARG"
+    log "Using QEMU virtualization: ${QEMU_VIRT_ARG}"
+    local machine_arg="virt,gic-version=${GIC_VER},virtualization=${QEMU_VIRT_ARG}"
+    if [[ -n "$QEMU_MACHINE_EXTRA" ]]; then
+        machine_arg="${machine_arg},${QEMU_MACHINE_EXTRA}"
+    fi
+    log "Using QEMU machine: ${machine_arg}"
 
     # Serial output from the PL011 console and root-task logger is expected on stdio via -serial mon:stdio; keep this wiring intact when adjusting runtime flags.
-    BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp "$QEMU_SMP_ARG" -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
+    BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "${machine_arg}" -cpu cortex-a57 -m 1024 -smp "$QEMU_SMP_ARG" -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
         if [[ "$NET_BACKEND" == "virtio" ]]; then

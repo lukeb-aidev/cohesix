@@ -259,6 +259,9 @@ mod tests {
     use super::*;
     use core::ptr;
     use core::sync::atomic::{AtomicU8, Ordering};
+    use spin::Mutex;
+
+    static TEST_GUARD: Mutex<()> = Mutex::new(());
 
     unsafe extern "C" fn capture_emit(context: *mut (), byte: u8) {
         let slot_ptr = context as *const AtomicU8;
@@ -273,6 +276,7 @@ mod tests {
 
     #[test]
     fn invalid_emit_pointer_is_buffered() {
+        let _guard = TEST_GUARD.lock();
         clear_debug_buffer();
         reset_sink();
         install_raw_sink(ptr::null_mut(), 0x2);
@@ -285,6 +289,7 @@ mod tests {
 
     #[test]
     fn valid_emit_pointer_is_used() {
+        let _guard = TEST_GUARD.lock();
         clear_debug_buffer();
         reset_sink();
         static CAPTURED: AtomicU8 = AtomicU8::new(0);
@@ -298,6 +303,7 @@ mod tests {
 
     #[test]
     fn invalid_context_pointer_is_buffered() {
+        let _guard = TEST_GUARD.lock();
         clear_debug_buffer();
         reset_sink();
         static CAPTURED: AtomicU8 = AtomicU8::new(0);
