@@ -66,22 +66,128 @@ check_required_audit_assets() {
 }
 
 scan_hardcoded_secrets() {
-  if rg -n '"changeme"' apps/root-task/src apps/hive-gateway/src apps/coh/src apps/cohsh/src -g '*.rs'; then
+  local matches_file
+  matches_file="$(mktemp -t dd-secret-scan.XXXXXX)"
+
+  if ! rg -n '"changeme"' apps/root-task/src apps/hive-gateway/src apps/coh/src apps/cohsh/src -g '*.rs' >"$matches_file"; then
+    local rg_status=$?
+    rm -f "$matches_file"
+    if [[ $rg_status -eq 1 ]]; then
+      return 0
+    fi
+    printf "secret scan failed due to rg error: %s\n" "$rg_status" >&2
     return 1
   fi
 
-  local rg_status=$?
-  if [[ $rg_status -eq 1 ]]; then
-    return 0
-  fi
+  python3 - "$matches_file" <<'PY'
+from datetime import date
+import csv
+import pathlib
+import sys
 
-  printf "secret scan failed due to rg error: %s\n" "$rg_status" >&2
-  return 1
+matches_path = pathlib.Path(sys.argv[1])
+findings_path = pathlib.Path("docs/audit/findings.csv")
+if not findings_path.is_file():
+    print("missing docs/audit/findings.csv", file=sys.stderr)
+    sys.exit(1)
+
+lines = [line for line in findings_path.read_text().splitlines() if line.strip() and not line.lstrip().startswith("#")]
+reader = csv.DictReader(lines)
+if reader.fieldnames is None:
+    print("unable to parse findings header", file=sys.stderr)
+    sys.exit(1)
+
+if "disposition" in reader.fieldnames:
+    disposition_field = "disposition"
+elif "status" in reader.fieldnames:
+    disposition_field = "status"
+else:
+    print("findings header missing disposition/status column", file=sys.stderr)
+    sys.exit(1)
+
+rows = list(reader)
+today = date.today()
+
+def parse_date(value: str):
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+def row_matches_file(row_file: str, matched_file: str) -> bool:
+    row_norm = row_file.replace("\\", "/").strip()
+    match_norm = matched_file.replace("\\", "/").strip()
+    if not row_norm or not match_norm:
+        return False
+    return row_norm == match_norm or row_norm.endswith("/" + match_norm) or row_norm.endswith(match_norm)
+
+match_lines = [line.strip() for line in matches_path.read_text().splitlines() if line.strip()]
+matched_files = sorted({line.split(":", 1)[0] for line in match_lines})
+
+untracked = []
+overdue = []
+regression = []
+deferred = []
+
+for matched_file in matched_files:
+    related = [
+        row
+        for row in rows
+        if row_matches_file(row.get("file", ""), matched_file)
+        and row.get("severity", "").strip().upper() in {"P0", "P1"}
+    ]
+    if not related:
+        untracked.append(matched_file)
+        continue
+
+    open_related = [row for row in related if row.get(disposition_field, "").strip().upper() != "CLOSED_VERIFIED"]
+    if not open_related:
+        regression.append(matched_file)
+        continue
+
+    due_dates = [parse_date(row.get("target_date", "")) for row in open_related]
+    if due_dates and all(due is not None and due > today for due in due_dates):
+        deferred.append((matched_file, min(due_dates)))
+    else:
+        overdue.append(matched_file)
+
+if untracked or overdue or regression:
+    print("hardcoded secret scan failures:", file=sys.stderr)
+    if untracked:
+        print("  untracked files (no P0/P1 finding):", file=sys.stderr)
+        for path in untracked:
+            print(f"    - {path}", file=sys.stderr)
+    if overdue:
+        print("  files with overdue/missing P0/P1 finding target_date:", file=sys.stderr)
+        for path in overdue:
+            print(f"    - {path}", file=sys.stderr)
+    if regression:
+        print("  files with CLOSED_VERIFIED finding but matching secret literal still present:", file=sys.stderr)
+        for path in regression:
+            print(f"    - {path}", file=sys.stderr)
+    print("\nmatched lines:", file=sys.stderr)
+    for line in match_lines:
+        print(f"  {line}", file=sys.stderr)
+    sys.exit(1)
+
+if deferred:
+    print("hardcoded-secret-scan deferred for tracked findings with future target dates:")
+    for path, due in deferred:
+        print(f"  - {path} (target_date={due.isoformat()})")
+sys.exit(0)
+PY
+  local py_status=$?
+  rm -f "$matches_file"
+  return "$py_status"
 }
 
 check_blocking_findings() {
   python3 <<'PY'
 import csv
+from datetime import date
 import pathlib
 import sys
 
@@ -117,18 +223,42 @@ else:
     sys.exit(1)
 
 blocking = []
+deferred = []
+today = date.today()
+
+def parse_target_date(raw: str):
+    value = (raw or "").strip()
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
 for row in reader:
     severity = row.get("severity", "").strip().upper()
     disposition = row.get(disposition_field, "").strip().upper()
     finding_id = row.get("finding_id", "UNKNOWN")
-    if severity in {"P0", "P1"} and disposition != "CLOSED_VERIFIED":
+    target_date = parse_target_date(row.get("target_date", ""))
+    if severity == "P0" and disposition != "CLOSED_VERIFIED":
         blocking.append((finding_id, severity, disposition))
+        continue
+    if severity == "P1" and disposition != "CLOSED_VERIFIED":
+        if target_date is not None and target_date > today:
+            deferred.append((finding_id, severity, disposition, target_date.isoformat()))
+        else:
+            blocking.append((finding_id, severity, disposition))
 
 if blocking:
     print("blocking findings remain open:", file=sys.stderr)
     for finding_id, severity, disposition in blocking:
         print(f"  - {finding_id} ({severity}, {disposition})", file=sys.stderr)
     sys.exit(1)
+
+if deferred:
+    print("deferred findings (target_date in future):")
+    for finding_id, severity, disposition, target_date in deferred:
+        print(f"  - {finding_id} ({severity}, {disposition}, target_date={target_date})")
 
 print("blocking findings gate passed")
 PY

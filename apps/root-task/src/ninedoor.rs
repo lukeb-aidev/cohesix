@@ -5244,23 +5244,22 @@ impl PolicyState {
         {
             return PolicyGateDecision::Allowed(PolicyGateAllowance::NotRequired);
         }
-        if let Some(index) = self
+        if let Some(action) = self
             .actions
-            .iter()
-            .position(|action| !action.consumed && action.target == normalized)
+            .iter_mut()
+            .find(|action| !action.consumed && action.target == normalized)
         {
-            let mut action = self.actions.remove(index);
             action.consumed = true;
             return match action.decision {
                 PolicyDecision::Approve => {
                     PolicyGateDecision::Allowed(PolicyGateAllowance::Action {
-                        id: action.id,
-                        target: action.target,
+                        id: action.id.clone(),
+                        target: action.target.clone(),
                     })
                 }
                 PolicyDecision::Deny => PolicyGateDecision::Denied(PolicyGateDenial::Action {
-                    id: action.id,
-                    target: action.target,
+                    id: action.id.clone(),
+                    target: action.target.clone(),
                 }),
             };
         }

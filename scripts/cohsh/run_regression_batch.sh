@@ -114,12 +114,27 @@ import sys
 host = sys.argv[1]
 port = int(sys.argv[2])
 token = sys.argv[3]
-payload = f"AUTH {token}\n".encode()
+payload = f"AUTH {token}".encode()
+frame_len = len(payload) + 4
+frame = frame_len.to_bytes(4, "little") + payload
 try:
     with socket.create_connection((host, port), timeout=0.5) as sock:
         sock.settimeout(0.8)
-        sock.sendall(payload)
-        data = sock.recv(256)
+        sock.sendall(frame)
+        header = sock.recv(4)
+        if len(header) != 4:
+            sys.exit(1)
+        total = int.from_bytes(header, "little")
+        if total < 4 or total > 4096:
+            sys.exit(1)
+        remaining = total - 4
+        chunks = bytearray()
+        while len(chunks) < remaining:
+            part = sock.recv(remaining - len(chunks))
+            if not part:
+                break
+            chunks.extend(part)
+        data = bytes(chunks)
 except OSError:
     sys.exit(1)
 
