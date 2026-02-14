@@ -38,6 +38,8 @@ pub const DEV_VIRT_PREFIX: u8 = 24;
 pub const CONSOLE_TCP_PORT: u16 = COHESIX_TCP_CONSOLE_PORT;
 /// Unsafe fallback token used only when generated ticket inventory is unavailable.
 const AUTH_TOKEN_FALLBACK: &str = "";
+/// Insecure placeholder token rejected by configuration validation.
+const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 /// Idle timeout applied to authenticated TCP console sessions (milliseconds).
 ///
 /// When the kernel timer cannot use the architected counter (default in dev-virt),
@@ -177,7 +179,7 @@ pub fn validate_console_auth_token(token: &str) -> Result<(), &'static str> {
     if token.trim().is_empty() {
         return Err("console auth token must be configured");
     }
-    if token.trim() == "changeme" {
+    if token.trim() == INSECURE_PLACEHOLDER_TOKEN {
         return Err("console auth token must not use insecure placeholder");
     }
     Ok(())

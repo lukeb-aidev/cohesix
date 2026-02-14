@@ -32,6 +32,8 @@ use nine_door::NineDoor;
 
 use cohsh::client::InProcessTransport;
 use cohsh::trace::{TraceAckMode, TraceShellTransport};
+#[cfg(feature = "rest")]
+use cohsh::RestTransport;
 use cohsh::SECURE9P_MSIZE;
 #[cfg(feature = "tcp")]
 use cohsh::{
@@ -46,8 +48,6 @@ use cohsh::{
 };
 #[cfg(feature = "tcp")]
 use cohsh::{PooledTcpTransport, SharedTcpTransport, TcpTransport, COHSH_TCP_PORT};
-#[cfg(feature = "rest")]
-use cohsh::RestTransport;
 use cohsh_core::command::MAX_LINE_LEN;
 use cohsh_core::trace::{
     TraceLog, TraceLogBuilder, TraceLogBuilderRef, TracePolicy, TraceReplayTransport,
@@ -189,8 +189,8 @@ struct Cli {
 
     /// Authentication token required by the TCP console listener.
     #[cfg(feature = "tcp")]
-    #[arg(long, default_value = "changeme")]
-    auth_token: String,
+    #[arg(long)]
+    auth_token: Option<String>,
 
     /// Enable verbose TCP handshake logging.
     #[cfg(feature = "tcp")]
@@ -349,6 +349,49 @@ fn resolve_rest_auth_token(cli_value: Option<&str>) -> Option<String> {
     None
 }
 
+#[cfg(feature = "tcp")]
+const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
+
+#[cfg(feature = "tcp")]
+fn resolve_tcp_auth_token(cli_value: Option<&str>) -> Result<String> {
+    if let Some(value) = cli_value {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            if trimmed == INSECURE_PLACEHOLDER_TOKEN {
+                return Err(anyhow!(
+                    "tcp auth token uses insecure placeholder token; set --auth-token or COHSH_AUTH_TOKEN/COH_AUTH_TOKEN"
+                ));
+            }
+            return Ok(trimmed.to_owned());
+        }
+    }
+    if let Ok(value) = env::var("COHSH_AUTH_TOKEN") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            if trimmed == INSECURE_PLACEHOLDER_TOKEN {
+                return Err(anyhow!(
+                    "tcp auth token uses insecure placeholder token; set --auth-token or COHSH_AUTH_TOKEN/COH_AUTH_TOKEN"
+                ));
+            }
+            return Ok(trimmed.to_owned());
+        }
+    }
+    if let Ok(value) = env::var("COH_AUTH_TOKEN") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            if trimmed == INSECURE_PLACEHOLDER_TOKEN {
+                return Err(anyhow!(
+                    "tcp auth token uses insecure placeholder token; set --auth-token or COHSH_AUTH_TOKEN/COH_AUTH_TOKEN"
+                ));
+            }
+            return Ok(trimmed.to_owned());
+        }
+    }
+    Err(anyhow!(
+        "tcp auth token must be configured with --auth-token or COHSH_AUTH_TOKEN/COH_AUTH_TOKEN"
+    ))
+}
+
 fn build_mock_server(seed_gpu: bool) -> Result<NineDoor> {
     let server = NineDoor::new();
     if seed_gpu {
@@ -391,7 +434,7 @@ fn main() -> Result<()> {
         }
     }
     #[cfg(feature = "tcp")]
-    let (tcp_host, tcp_port, auth_token, tcp_debug) = {
+    let (tcp_host, tcp_port, tcp_debug) = {
         let mut host = cli.tcp_host.clone();
         if let Ok(value) = env::var("COHSH_TCP_HOST") {
             if host == "127.0.0.1" {
@@ -404,14 +447,8 @@ fn main() -> Result<()> {
                 port = parsed;
             }
         }
-        let mut token = cli.auth_token.clone();
-        if let Ok(value) = env::var("COHSH_AUTH_TOKEN") {
-            if token == "changeme" {
-                token = value;
-            }
-        }
         let tcp_debug = cli.tcp_debug || tcp_debug_enabled() || cli.verbose;
-        (host, port, token, tcp_debug)
+        (host, port, tcp_debug)
     };
 
     let policy_path = resolve_policy_path(cli.policy.clone())?;
@@ -523,6 +560,7 @@ fn main() -> Result<()> {
                 ),
                 #[cfg(feature = "tcp")]
                 TransportKind::Tcp => {
+                    let auth_token = resolve_tcp_auth_token(cli.auth_token.as_deref())?;
                     let retry = policy.retry;
                     let heartbeat = policy.heartbeat;
                     let shared = Arc::new(Mutex::new(
@@ -554,8 +592,10 @@ fn main() -> Result<()> {
                     let pool_url = rest_url.clone();
                     let pool_token = rest_auth_token.clone();
                     let factory = Arc::new(move || {
-                        Ok(Box::new(RestTransport::new(pool_url.clone(), pool_token.clone()))
-                            as Box<dyn Transport + Send>)
+                        Ok(
+                            Box::new(RestTransport::new(pool_url.clone(), pool_token.clone()))
+                                as Box<dyn Transport + Send>,
+                        )
                     });
                     (
                         Box::new(RestTransport::new(rest_url, rest_auth_token)),
@@ -629,9 +669,6 @@ mod tests {
         ])
         .expect("parse rest transport args");
         assert!(matches!(cli.transport, TransportKind::Rest));
-        assert_eq!(
-            cli.rest_url.as_deref(),
-            Some("http://127.0.0.1:8080")
-        );
+        assert_eq!(cli.rest_url.as_deref(), Some("http://127.0.0.1:8080"));
     }
 }

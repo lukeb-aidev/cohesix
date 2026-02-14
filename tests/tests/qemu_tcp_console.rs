@@ -14,6 +14,8 @@ use cohesix_ticket::Role;
 use cohsh::{Shell, TcpTransport, Transport};
 use tests::TEST_TIMEOUT;
 
+const TEST_AUTH_TOKEN: &str = "test-auth-token";
+
 fn write_frame(stream: &mut std::net::TcpStream, line: &str) {
     let total_len = line.len().saturating_add(4) as u32;
     stream.write_all(&total_len.to_le_bytes()).unwrap();
@@ -48,7 +50,7 @@ fn tcp_console_script_recovers_from_disconnect() -> Result<()> {
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             while let Some(line) = read_frame(&mut reader) {
                 let trimmed = line.trim();
-                if trimmed == "AUTH changeme" {
+                if trimmed == format!("AUTH {TEST_AUTH_TOKEN}") {
                     write_frame(&mut stream, "OK AUTH");
                 } else if trimmed.starts_with("ATTACH") {
                     server_log
@@ -83,7 +85,8 @@ fn tcp_console_script_recovers_from_disconnect() -> Result<()> {
     let transport = TcpTransport::new("127.0.0.1", port)
         .with_timeout(TEST_TIMEOUT)
         .with_heartbeat_interval(Duration::from_millis(75))
-        .with_max_retries(4);
+        .with_max_retries(4)
+        .with_auth_token(TEST_AUTH_TOKEN);
     let mut shell = Shell::new(transport, Vec::new());
     shell.attach(Role::Queen, None)?;
     shell.execute("log")?;

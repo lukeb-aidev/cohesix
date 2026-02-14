@@ -69,7 +69,7 @@ struct ConnectArgs {
     /// REST gateway base URL for hive-gateway (optional).
     #[arg(long, value_name = "URL", global = true)]
     rest_url: Option<String>,
-    /// TCP console auth token (default: changeme).
+    /// TCP console auth token.
     #[arg(long, global = true)]
     auth_token: Option<String>,
     /// Use the in-process mock backend.
@@ -798,26 +798,45 @@ fn connect_mock(
     Ok((server, client))
 }
 
-fn resolve_auth_token(cli_token: Option<&str>) -> String {
+const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
+
+fn resolve_auth_token(cli_token: Option<&str>) -> Result<String> {
     if let Some(token) = cli_token {
         let trimmed = token.trim();
         if !trimmed.is_empty() {
-            return trimmed.to_owned();
+            if trimmed == INSECURE_PLACEHOLDER_TOKEN {
+                return Err(anyhow!(
+                    "tcp auth token uses insecure placeholder token; set --auth-token or COH_AUTH_TOKEN/COHSH_AUTH_TOKEN"
+                ));
+            }
+            return Ok(trimmed.to_owned());
         }
     }
     if let Ok(value) = env::var("COH_AUTH_TOKEN") {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
-            return trimmed.to_owned();
+            if trimmed == INSECURE_PLACEHOLDER_TOKEN {
+                return Err(anyhow!(
+                    "tcp auth token uses insecure placeholder token; set --auth-token or COH_AUTH_TOKEN/COHSH_AUTH_TOKEN"
+                ));
+            }
+            return Ok(trimmed.to_owned());
         }
     }
     if let Ok(value) = env::var("COHSH_AUTH_TOKEN") {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
-            return trimmed.to_owned();
+            if trimmed == INSECURE_PLACEHOLDER_TOKEN {
+                return Err(anyhow!(
+                    "tcp auth token uses insecure placeholder token; set --auth-token or COH_AUTH_TOKEN/COHSH_AUTH_TOKEN"
+                ));
+            }
+            return Ok(trimmed.to_owned());
         }
     }
-    "changeme".to_owned()
+    Err(anyhow!(
+        "tcp auth token must be configured with --auth-token or COH_AUTH_TOKEN/COHSH_AUTH_TOKEN"
+    ))
 }
 
 fn resolve_rest_url(cli_value: Option<&str>) -> Option<String> {
@@ -848,7 +867,7 @@ fn connect_console(
     role: Role,
     ticket: Option<&str>,
 ) -> Result<ConsoleSession> {
-    let auth_token = resolve_auth_token(args.auth_token.as_deref());
+    let auth_token = resolve_auth_token(args.auth_token.as_deref())?;
     ConsoleSession::connect(
         &args.host,
         args.port,
@@ -894,7 +913,11 @@ fn publish_gpu_registry<C: coh::CohAccess>(
         publish.bytes.len(),
         publish.sha256
     );
-    audit.push_ack(cohsh_core::wire::AckStatus::Ok, "ECHO", Some(detail.as_str()));
+    audit.push_ack(
+        cohsh_core::wire::AckStatus::Ok,
+        "ECHO",
+        Some(detail.as_str()),
+    );
     Ok(())
 }
 

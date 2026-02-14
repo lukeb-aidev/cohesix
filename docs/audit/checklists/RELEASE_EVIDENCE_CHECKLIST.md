@@ -5,11 +5,11 @@
 # Release Evidence Checklist
 
 ## Run Metadata
-- Audit window: `2026-02-13T22:24:03Z` -> `2026-02-13T22:33:24Z`
-- Baseline commit SHA: `b89a7cf333aa3bac70dde338817a718fdacdc0fc`
+- Audit window: `2026-02-14T04:38:51Z` (full baseline run)
+- Baseline commit SHA: `22cd5017d060c3439b6f7fc4f70717f329134803`
 - Auditor: `automation-agent`
 - Independent reviewer: `TBD`
-- Gate evidence root: `out/audit/gate/20260213T222403Z`
+- Gate evidence root: `out/audit/gate/20260214T044955Z`
 
 ## Required Evidence Pack
 - [x] `scripts/ci/due_diligence_gate.sh` output captured.
@@ -22,23 +22,23 @@
 - [x] `docs/audit/EXCEPTIONS.md` reviewed; no expired active exceptions.
 - [x] `docs/audit/checklists/ARCHITECTURE_CHECKLIST.md` completed and signed.
 - [x] `docs/audit/checklists/SECURITY_CHECKLIST.md` completed and signed.
-- [x] `docs/audit/AUDIT_REPORT_2026-02-13.md` produced for this run.
+- [x] `docs/audit/AUDIT_REPORT_2026-02-14.md` produced for this run.
 
 ## Decision Guardrails
-- [ ] No open `P0/P1` findings in `docs/audit/findings.csv`.
+- [x] No open `P0/P1` findings in `docs/audit/findings.csv`.
 - [x] Any `P2` accepted risks have owner and expiration in `docs/audit/EXCEPTIONS.md`.
 - [x] All closures include reproducible command/log evidence and commit SHA.
 - [ ] Independent reviewer verified all `P0/P1` remediations.
 
 ## Release Decision
+- Decision: `PASS`
+- Decision date: `2026-02-14`
+- Decision authority: `Due-diligence automation run (pending human independent review sign-off)`
+- Residual risk summary: `No open blockers; independent reviewer verification remains pending for newly closed findings.`
+- Follow-up deadlines: `Independent reviewer sign-off before release publication authority action.`
+
+## Prior Snapshot (2026-02-13 Baseline)
 - Decision: `FAIL`
 - Decision date: `2026-02-13`
-- Decision authority: `Due-diligence automation run (pending human review authority)`
-- Residual risk summary: `8 open P1 findings remain (auth defaults, auth log leakage, gateway request authz, and sel4-sys cfg-gating risk).`
-- Follow-up deadlines: `2026-02-20` for open P1 remediation; independent verification required before release.
-
-## Prior Snapshot (2026-02-12 Baseline)
-- Decision: `FAIL`
-- Decision date: `2026-02-12`
 - Decision owner: `Audit run pending human sign-off`
-- Residual risks: `Not accepted (blocking P1 findings open)`
+- Residual risks: `Open P1 findings (auth defaults/logging/cfg-gating)`

@@ -1262,6 +1262,7 @@ mod imp {
     }
 
     #[inline(always)]
+    #[cfg(sel4_sys_has_tcb_set_affinity)]
     pub unsafe fn seL4_TCB_SetAffinity(service: seL4_TCB, affinity: seL4_Word) -> seL4_Error {
         let mut mr0: seL4_Word = affinity;
         let mut mr1: seL4_Word = 0;
@@ -1280,6 +1281,12 @@ mod imp {
         }
 
         result
+    }
+
+    #[inline(always)]
+    #[cfg(not(sel4_sys_has_tcb_set_affinity))]
+    pub unsafe fn seL4_TCB_SetAffinity(_service: seL4_TCB, _affinity: seL4_Word) -> seL4_Error {
+        seL4_IllegalOperation
     }
 
     #[inline(always)]

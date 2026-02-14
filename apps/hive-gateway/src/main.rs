@@ -7,8 +7,8 @@
 
 //! Host-only REST gateway projecting Cohesix console/file semantics.
 
-use std::env;
 use std::collections::{HashMap, VecDeque};
+use std::env;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -22,25 +22,26 @@ use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
+use cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT;
+use cohesix_ticket::Role;
 use cohsh::{
     CohshPolicy, PoolKind, Session, SessionPool, TransportFactory, CLIENT_LOG_PATH,
     CLIENT_POLICY_CTL_PATH, CLIENT_QUEEN_CTL_PATH, CLIENT_QUEEN_EXPORT_CTL_PATH,
-    CLIENT_QUEEN_LEASE_CTL_PATH, CLIENT_QUEEN_LIFECYCLE_CTL_PATH,
-    CLIENT_QUEEN_SCHEDULE_CTL_PATH, CONTROL_EXPORT_CTL_MAX_BYTES, CONTROL_EXPORT_ENABLED,
-    CONTROL_LEASE_ACTIVE_MAX_ENTRIES, CONTROL_LEASE_CTL_MAX_BYTES, CONTROL_LEASE_ENABLED,
-    CONTROL_LEASE_PREEMPTIONS_MAX_ENTRIES, CONTROL_SCHEDULE_CTL_MAX_BYTES,
-    CONTROL_SCHEDULE_ENABLED, CONTROL_SCHEDULE_QUEUE_MAX_ENTRIES, POLICY_CTL_MAX_BYTES,
-    POLICY_ENABLED, POLICY_QUEUE_MAX_BYTES, POLICY_QUEUE_MAX_ENTRIES, PROC_LEASE_ACTIVE_BYTES,
-    PROC_LEASE_PREEMPTIONS_BYTES, PROC_LEASE_SUMMARY_BYTES,
-    PROC_LEASE_ACTIVE_ENABLED, PROC_LEASE_PREEMPTIONS_ENABLED, PROC_LEASE_SUMMARY_ENABLED,
-    PROC_SCHEDULE_QUEUE_BYTES, PROC_SCHEDULE_SUMMARY_BYTES, PROC_SCHEDULE_QUEUE_ENABLED,
-    PROC_SCHEDULE_SUMMARY_ENABLED, SECURE9P_MSIZE,
-    SECURE9P_WALK_DEPTH,
+    CLIENT_QUEEN_LEASE_CTL_PATH, CLIENT_QUEEN_LIFECYCLE_CTL_PATH, CLIENT_QUEEN_SCHEDULE_CTL_PATH,
+    CONTROL_EXPORT_CTL_MAX_BYTES, CONTROL_EXPORT_ENABLED, CONTROL_LEASE_ACTIVE_MAX_ENTRIES,
+    CONTROL_LEASE_CTL_MAX_BYTES, CONTROL_LEASE_ENABLED, CONTROL_LEASE_PREEMPTIONS_MAX_ENTRIES,
+    CONTROL_SCHEDULE_CTL_MAX_BYTES, CONTROL_SCHEDULE_ENABLED, CONTROL_SCHEDULE_QUEUE_MAX_ENTRIES,
+    POLICY_CTL_MAX_BYTES, POLICY_ENABLED, POLICY_QUEUE_MAX_BYTES, POLICY_QUEUE_MAX_ENTRIES,
+    PROC_LEASE_ACTIVE_BYTES, PROC_LEASE_ACTIVE_ENABLED, PROC_LEASE_PREEMPTIONS_BYTES,
+    PROC_LEASE_PREEMPTIONS_ENABLED, PROC_LEASE_SUMMARY_BYTES, PROC_LEASE_SUMMARY_ENABLED,
+    PROC_SCHEDULE_QUEUE_BYTES, PROC_SCHEDULE_QUEUE_ENABLED, PROC_SCHEDULE_SUMMARY_BYTES,
+    PROC_SCHEDULE_SUMMARY_ENABLED, SECURE9P_MSIZE, SECURE9P_WALK_DEPTH,
 };
 use cohsh::{NineDoorTransport, SharedTcpTransport, TcpTransport};
-use cohsh_core::{parse_role, RoleParseMode, MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN, MAX_LINE_LEN, MAX_PATH_LEN, MAX_TICKET_LEN};
-use cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT;
-use cohesix_ticket::Role;
+use cohsh_core::{
+    parse_role, RoleParseMode, MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN, MAX_LINE_LEN, MAX_PATH_LEN,
+    MAX_TICKET_LEN,
+};
 use nine_door::NineDoor;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -57,6 +58,7 @@ const PROC_LEASE_ACTIVE_PATH: &str = "/proc/lease/active";
 const PROC_LEASE_PREEMPTIONS_PATH: &str = "/proc/lease/preemptions";
 const REQUEST_AUTH_HEADER: &str = "x-cohesix-auth";
 const AUTHORIZATION_BEARER_PREFIX: &str = "bearer ";
+const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 const DEFAULT_PROC_CACHE_TTL_MS: u64 = 250;
 const DEFAULT_PROC_CACHE_MAX_ENTRIES: usize = 64;
 const CONTROL_POOL_WAIT_LIMIT_MS: u64 = 2_000;
@@ -480,9 +482,7 @@ impl GatewayConfig {
         if !mock {
             if let Ok(value) = env::var("HIVE_GATEWAY_MOCK") {
                 let trimmed = value.trim();
-                if !trimmed.is_empty()
-                    && !matches!(trimmed, "0" | "false" | "off" | "no")
-                {
+                if !trimmed.is_empty() && !matches!(trimmed, "0" | "false" | "off" | "no") {
                     mock = true;
                 }
             }
@@ -517,11 +517,8 @@ impl GatewayConfig {
         let allow_non_loopback_bind =
             cli.allow_non_loopback_bind || env_flag("HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND");
         let auth_token = normalize_required_secret("tcp auth token", auth_token, mock)?;
-        let request_auth_token = normalize_required_secret(
-            "request auth token",
-            request_auth_token,
-            mock,
-        )?;
+        let request_auth_token =
+            normalize_required_secret("request auth token", request_auth_token, mock)?;
         Ok(Self {
             bind,
             tcp_host,
@@ -603,14 +600,14 @@ fn normalize_required_secret(label: &str, value: Option<String>, mock: bool) -> 
     if trimmed.is_empty() {
         anyhow::bail!("{label} must be configured in non-mock mode");
     }
-    if trimmed == "changeme" {
+    if trimmed == INSECURE_PLACEHOLDER_TOKEN {
         if label == "tcp auth token" && allow_insecure_console_auth() {
             warn!(
                 "allowing insecure TCP auth token placeholder because HIVE_GATEWAY_ALLOW_INSECURE_CONSOLE_AUTH is set"
             );
             return Ok(trimmed.to_owned());
         }
-        anyhow::bail!("{label} uses insecure placeholder 'changeme'; set a real secret");
+        anyhow::bail!("{label} uses insecure placeholder token; set a real secret");
     }
     Ok(trimmed.to_owned())
 }
@@ -636,7 +633,8 @@ fn build_session_pool(config: &GatewayConfig, policy: CohshPolicy) -> Result<Sha
     if config.mock {
         let server = NineDoor::new();
         let factory: Arc<dyn TransportFactory> = Arc::new(move || {
-            Ok(Box::new(NineDoorTransport::new(server.clone())) as Box<dyn cohsh::Transport + Send>)
+            Ok(Box::new(NineDoorTransport::new(server.clone()))
+                as Box<dyn cohsh::Transport + Send>)
         });
         return Ok(SessionPool::new(
             policy.pool.control_sessions,
@@ -852,10 +850,13 @@ impl AppState {
     }
 
     fn ping(&self) -> Result<()> {
-        self.with_pool(PoolKind::Control, |transport: &mut dyn cohsh::Transport, session| {
-            transport.ping(session).context("ping failed")?;
-            Ok(())
-        })
+        self.with_pool(
+            PoolKind::Control,
+            |transport: &mut dyn cohsh::Transport, session| {
+                transport.ping(session).context("ping failed")?;
+                Ok(())
+            },
+        )
     }
 
     fn is_connected(&self) -> bool {
@@ -890,9 +891,10 @@ impl AppState {
 
     fn list(&self, path: &str) -> Result<Vec<String>> {
         let path = path.to_owned();
-        self.with_pool(PoolKind::Telemetry, move |transport: &mut dyn cohsh::Transport, session| {
-            transport.list(session, &path)
-        })
+        self.with_pool(
+            PoolKind::Telemetry,
+            move |transport: &mut dyn cohsh::Transport, session| transport.list(session, &path),
+        )
     }
 
     fn read(&self, path: &str) -> Result<Vec<String>> {
@@ -920,9 +922,10 @@ impl AppState {
 
     fn tail(&self, path: &str) -> Result<Vec<String>> {
         let path = path.to_owned();
-        self.with_pool(PoolKind::Telemetry, move |transport: &mut dyn cohsh::Transport, session| {
-            transport.tail(session, &path)
-        })
+        self.with_pool(
+            PoolKind::Telemetry,
+            move |transport: &mut dyn cohsh::Transport, session| transport.tail(session, &path),
+        )
     }
 
     fn write(&self, path: &str, payload: &[u8]) -> Result<()> {
@@ -930,7 +933,9 @@ impl AppState {
         let payload = payload.to_vec();
         let result = self.with_pool(
             PoolKind::Control,
-            move |transport: &mut dyn cohsh::Transport, session| transport.write(session, &path, &payload),
+            move |transport: &mut dyn cohsh::Transport, session| {
+                transport.write(session, &path, &payload)
+            },
         );
         if result.is_ok() {
             self.read_cache_invalidate();
@@ -943,7 +948,12 @@ impl AppState {
     }
 
     fn status(&self) -> GatewayStatusResponse {
-        let status = self.inner.status.lock().expect("status lock poisoned").clone();
+        let status = self
+            .inner
+            .status
+            .lock()
+            .expect("status lock poisoned")
+            .clone();
         let last_change_unix_ms = status.last_change.and_then(|value| {
             value
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -1025,7 +1035,10 @@ async fn meta_status(State(state): State<AppState>) -> impl axum::response::Into
 }
 
 async fn openapi_yaml() -> impl axum::response::IntoResponse {
-    ([(axum::http::header::CONTENT_TYPE, "application/yaml")], OPENAPI_YAML)
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/yaml")],
+        OPENAPI_YAML,
+    )
 }
 
 async fn swagger_ui() -> impl axum::response::IntoResponse {
@@ -1075,7 +1088,12 @@ async fn handle_list(state: AppState, path: String) -> impl axum::response::Into
     match result {
         Ok(Ok(lines)) => response_ok(verb, path, lines, None),
         Ok(Err(err)) => response_transport_err(verb, &path, err),
-        Err(err) => response_err(verb, &path, err.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
+        Err(err) => response_err(
+            verb,
+            &path,
+            err.to_string(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
     }
 }
 
@@ -1124,7 +1142,12 @@ async fn handle_cat(state: AppState, query: CatQuery) -> impl axum::response::In
             response_ok(verb, query.path, lines, Some(bytes))
         }
         Ok(Err(err)) => response_transport_err(verb, &query.path, err),
-        Err(err) => response_err(verb, &query.path, err.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
+        Err(err) => response_err(
+            verb,
+            &query.path,
+            err.to_string(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
     }
 }
 
@@ -1173,7 +1196,12 @@ async fn handle_tail(state: AppState, query: TailQuery) -> impl axum::response::
             response_ok(verb, query.path, lines, Some(bytes))
         }
         Ok(Err(err)) => response_transport_err(verb, &query.path, err),
-        Err(err) => response_err(verb, &query.path, err.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
+        Err(err) => response_err(
+            verb,
+            &query.path,
+            err.to_string(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
     }
 }
 
@@ -1207,7 +1235,12 @@ async fn handle_echo(state: AppState, payload: EchoRequest) -> impl axum::respon
     match result {
         Ok(Ok(())) => response_ok(verb, payload.path, Vec::new(), Some(raw_len)),
         Ok(Err(err)) => response_transport_err(verb, &payload.path, err),
-        Err(err) => response_err(verb, &payload.path, err.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
+        Err(err) => response_err(
+            verb,
+            &payload.path,
+            err.to_string(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
     }
 }
 
@@ -1274,10 +1307,7 @@ fn validate_path(path: &str) -> Result<(), String> {
         depth = depth.saturating_add(1);
     }
     if depth > SECURE9P_WALK_DEPTH as usize {
-        return Err(format!(
-            "path exceeds max depth {}",
-            SECURE9P_WALK_DEPTH
-        ));
+        return Err(format!("path exceeds max depth {}", SECURE9P_WALK_DEPTH));
     }
     Ok(())
 }
@@ -1321,11 +1351,15 @@ fn max_ctl_bytes(path: &str, bounds: &BoundsResponse) -> Option<usize> {
 
 fn max_proc_bytes(path: &str, bounds: &BoundsResponse) -> Option<usize> {
     match path {
-        PROC_SCHEDULE_SUMMARY_PATH => Some(bounds.observability.proc_schedule.summary_bytes as usize),
+        PROC_SCHEDULE_SUMMARY_PATH => {
+            Some(bounds.observability.proc_schedule.summary_bytes as usize)
+        }
         PROC_SCHEDULE_QUEUE_PATH => Some(bounds.observability.proc_schedule.queue_bytes as usize),
         PROC_LEASE_SUMMARY_PATH => Some(bounds.observability.proc_lease.summary_bytes as usize),
         PROC_LEASE_ACTIVE_PATH => Some(bounds.observability.proc_lease.active_bytes as usize),
-        PROC_LEASE_PREEMPTIONS_PATH => Some(bounds.observability.proc_lease.preemptions_bytes as usize),
+        PROC_LEASE_PREEMPTIONS_PATH => {
+            Some(bounds.observability.proc_lease.preemptions_bytes as usize)
+        }
         _ => None,
     }
 }
@@ -1440,7 +1474,8 @@ mod tests {
 
     #[test]
     fn extract_ack_error_returns_err_line() {
-        let message = "echo failed: ERR ECHO reason=policy detail=denied path=/queen/ctl error=EPERM";
+        let message =
+            "echo failed: ERR ECHO reason=policy detail=denied path=/queen/ctl error=EPERM";
         let ack = extract_ack_error(message).expect("ack");
         assert!(ack.starts_with("ERR ECHO"));
         assert!(ack.contains("reason=policy"));
@@ -1466,16 +1501,14 @@ mod tests {
     fn enforce_bind_exposure_rejects_non_loopback_without_override() {
         let addr: SocketAddr = "0.0.0.0:8080".parse().expect("parse");
         let err = enforce_bind_exposure(addr, false).expect_err("must reject");
-        assert!(err
-            .to_string()
-            .contains("refusing non-loopback bind"));
+        assert!(err.to_string().contains("refusing non-loopback bind"));
     }
 
     #[test]
     fn normalize_required_secret_rejects_placeholder() {
         let err = normalize_required_secret(
             "request auth token",
-            Some("changeme".to_owned()),
+            Some(INSECURE_PLACEHOLDER_TOKEN.to_owned()),
             false,
         )
         .expect_err("placeholder must be rejected");

@@ -1294,7 +1294,8 @@ pub fn page_get_address(frame: seL4_CPtr) -> Result<usize, seL4_Error> {
         0,
         0,
     );
-    let output = unsafe { sel4_sys::seL4_CallWithMRs(frame, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3) };
+    let output =
+        unsafe { sel4_sys::seL4_CallWithMRs(frame, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3) };
     let err = sel4_sys::seL4_MessageInfo_get_label(output) as seL4_Error;
     if err == seL4_NoError {
         Ok(mr0 as usize)
@@ -1393,28 +1394,7 @@ pub fn set_tcb_affinity(tcb_cap: seL4_CPtr, core: u8) -> Result<(), seL4_Error> 
     sel4_guard::uart_breadcrumb(guard_stage, "seL4_TCB_SetAffinity", breadcrumb.as_str());
 
     #[cfg(target_os = "none")]
-    let result = unsafe {
-        let mut mr0 = core as seL4_Word;
-        let mut mr1: seL4_Word = 0;
-        let mut mr2: seL4_Word = 0;
-        let mut mr3: seL4_Word = 0;
-        let tag = sel4_sys::seL4_MessageInfo_new(
-            sel4_sys::invocation_label_TCBSetAffinity as seL4_Word,
-            0,
-            0,
-            1,
-        );
-        let output_tag =
-            sel4_sys::seL4_CallWithMRs(guarded_tcb, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
-        let result = sel4_sys::seL4_MessageInfo_get_label(output_tag) as seL4_Error;
-        if result != seL4_NoError {
-            sel4_sys::seL4_SetMR(0, mr0);
-            sel4_sys::seL4_SetMR(1, mr1);
-            sel4_sys::seL4_SetMR(2, mr2);
-            sel4_sys::seL4_SetMR(3, mr3);
-        }
-        result
-    };
+    let result = unsafe { sel4_sys::seL4_TCB_SetAffinity(guarded_tcb, core as seL4_Word) };
     #[cfg(not(target_os = "none"))]
     let result = {
         let _ = (guarded_tcb, core);

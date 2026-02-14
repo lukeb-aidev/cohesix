@@ -13,6 +13,8 @@ use cohesix_ticket::Role;
 use cohsh::proto::{parse_ack, AckStatus};
 use cohsh::{TcpTransport, Transport};
 
+const TEST_AUTH_TOKEN: &str = "tcp-console-test-token";
+
 fn write_frame(stream: &mut std::net::TcpStream, line: &str) {
     let total_len = line.len().saturating_add(4) as u32;
     stream
@@ -39,7 +41,7 @@ fn tcp_transport_handles_attach_and_tail() {
         let (mut stream, _) = listener.accept().expect("accept client");
         let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
         let line = read_frame(&mut reader);
-        assert!(line.starts_with("AUTH changeme"));
+        assert!(line.starts_with(format!("AUTH {TEST_AUTH_TOKEN}").as_str()));
         write_frame(&mut stream, "OK AUTH");
         let line = read_frame(&mut reader);
         assert!(line.starts_with("ATTACH queen"));
@@ -51,7 +53,7 @@ fn tcp_transport_handles_attach_and_tail() {
         write_frame(&mut stream, "END");
     });
 
-    let mut transport = TcpTransport::new("127.0.0.1", port);
+    let mut transport = TcpTransport::new("127.0.0.1", port).with_auth_token(TEST_AUTH_TOKEN);
     let session = transport.attach(Role::Queen, None).expect("attach queen");
     let attach_ack = transport.drain_acknowledgements();
     assert_eq!(attach_ack.len(), 2);
@@ -80,14 +82,15 @@ fn tcp_transport_times_out_when_server_is_silent() {
         let (stream, _) = listener.accept().expect("accept client");
         let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
         let line = read_frame(&mut reader);
-        assert!(line.starts_with("AUTH changeme"));
+        assert!(line.starts_with(format!("AUTH {TEST_AUTH_TOKEN}").as_str()));
         // Deliberately remain silent to trigger the client's auth timeout.
         std::thread::sleep(std::time::Duration::from_millis(250));
         drop(stream);
     });
 
-    let mut transport =
-        TcpTransport::new("127.0.0.1", port).with_timeout(Duration::from_millis(200));
+    let mut transport = TcpTransport::new("127.0.0.1", port)
+        .with_timeout(Duration::from_millis(200))
+        .with_auth_token(TEST_AUTH_TOKEN);
     let result = transport.attach(Role::Queen, None);
     assert!(result.is_err());
     let err = format!("{result:?}");

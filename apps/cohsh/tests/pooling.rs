@@ -213,6 +213,7 @@ fn read_frame(reader: &mut BufReader<std::net::TcpStream>) -> Option<String> {
 fn tcp_short_write_retry_is_idempotent() {
     use cohsh::{CohshRetryPolicy, TcpTransport};
 
+    let auth_token = "pool-test-token";
     let received = Arc::new(Mutex::new(Vec::new()));
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
     let port = listener.local_addr().expect("listener addr").port();
@@ -224,7 +225,7 @@ fn tcp_short_write_retry_is_idempotent() {
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
             while let Some(line) = read_frame(&mut reader) {
                 let trimmed = line.trim();
-                if trimmed == "AUTH changeme" {
+                if trimmed == format!("AUTH {auth_token}") {
                     write_frame(&mut stream, "OK AUTH");
                 } else if trimmed.starts_with("ATTACH") {
                     write_frame(&mut stream, "OK ATTACH role=queen");
@@ -256,7 +257,7 @@ fn tcp_short_write_retry_is_idempotent() {
     let mut transport = TcpTransport::new("127.0.0.1", port)
         .with_retry_policy(retry)
         .with_heartbeat_interval(Duration::from_millis(200))
-        .with_auth_token("changeme");
+        .with_auth_token(auth_token);
     let session = transport
         .attach(Role::Queen, None)
         .expect("attach tcp session");

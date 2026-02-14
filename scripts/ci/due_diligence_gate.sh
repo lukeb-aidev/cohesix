@@ -77,12 +77,14 @@ scan_hardcoded_secrets() {
   local matches_file
   matches_file="$(mktemp -t dd-secret-scan.XXXXXX)"
 
-  if ! rg -n '"changeme"' apps/root-task/src apps/hive-gateway/src apps/coh/src apps/cohsh/src -g '*.rs' >"$matches_file"; then
-    local rg_status=$?
+  rg -n '"changeme"' apps/root-task/src apps/hive-gateway/src apps/coh/src apps/cohsh/src -g '*.rs' >"$matches_file"
+  local rg_status=$?
+  if [[ $rg_status -eq 1 ]]; then
     rm -f "$matches_file"
-    if [[ $rg_status -eq 1 ]]; then
-      return 0
-    fi
+    return 0
+  fi
+  if [[ $rg_status -ne 0 ]]; then
+    rm -f "$matches_file"
     printf "secret scan failed due to rg error: %s\n" "$rg_status" >&2
     return 1
   fi

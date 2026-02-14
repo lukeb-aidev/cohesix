@@ -28,6 +28,7 @@ const CONFIG_CANDIDATES: &[&str] = &[
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(sel4_config_kernel_mcs)");
     println!("cargo:rustc-check-cfg=cfg(sel4_sys_debug_dump_cpuinfo)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_sys_has_tcb_set_affinity)");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD");
 
@@ -71,6 +72,9 @@ fn main() {
         if let Ok(contents) = fs::read_to_string(&bindings_path) {
             if contents.contains("seL4_Syscall_ID_seL4_SysDebugDumpCPUInfo") {
                 println!("cargo:rustc-cfg=sel4_sys_debug_dump_cpuinfo");
+            }
+            if contents.contains("invocation_label_TCBSetAffinity") {
+                println!("cargo:rustc-cfg=sel4_sys_has_tcb_set_affinity");
             }
         }
     }

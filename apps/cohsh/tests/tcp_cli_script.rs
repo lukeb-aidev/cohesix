@@ -13,6 +13,8 @@ use std::time::Duration;
 use assert_cmd::Command;
 use predicates::prelude::*;
 
+const TEST_AUTH_TOKEN: &str = "tcp-cli-script-test-token";
+
 fn write_frame(stream: &mut std::net::TcpStream, line: &str) {
     let total_len = line.len().saturating_add(4) as u32;
     stream.write_all(&total_len.to_le_bytes()).unwrap();
@@ -43,7 +45,7 @@ fn tcp_script_executes_against_basic_server() {
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
             while let Some(line) = read_frame(&mut reader) {
                 let trimmed = line.trim();
-                if trimmed == "AUTH changeme" {
+                if trimmed == format!("AUTH {TEST_AUTH_TOKEN}") {
                     write_frame(&mut stream, "OK AUTH");
                 } else if trimmed.starts_with("ATTACH") {
                     write_frame(&mut stream, "OK ATTACH role=queen");
@@ -77,6 +79,7 @@ fn tcp_script_executes_against_basic_server() {
         .arg("--script")
         .arg(&script_path)
         .env("COHSH_TCP_PORT", port.to_string())
+        .env("COHSH_AUTH_TOKEN", TEST_AUTH_TOKEN)
         .timeout(Duration::from_secs(10))
         .assert();
 
@@ -110,6 +113,7 @@ fn tcp_script_reports_connection_failure() {
         .arg("--script")
         .arg(&script_path)
         .env("COHSH_TCP_PORT", port.to_string())
+        .env("COHSH_AUTH_TOKEN", TEST_AUTH_TOKEN)
         .timeout(Duration::from_secs(8))
         .assert();
 
@@ -132,6 +136,7 @@ fn tcp_interactive_attach_failure_keeps_prompt() {
         .arg(port.to_string())
         .arg("--role")
         .arg("queen")
+        .env("COHSH_AUTH_TOKEN", TEST_AUTH_TOKEN)
         .write_stdin("quit\n")
         .timeout(Duration::from_secs(10))
         .assert();

@@ -29,16 +29,6 @@ const PREAUTH_FIRST_CAPACITY: usize = 4;
 const PREAUTH_LAST_CAPACITY: usize = 4;
 const PREAUTH_INFO_ALLOWLIST: &[&str] = &["[net-console]", "[cohsh-net]", "[console]", "[event]"];
 
-fn auth_fingerprint(bytes: &[u8]) -> u32 {
-    // Non-cryptographic fingerprint for diagnostics without leaking token bytes.
-    let mut hash = 0x811C9DC5u32;
-    for byte in bytes {
-        hash ^= u32::from(*byte);
-        hash = hash.wrapping_mul(0x01000193);
-    }
-    hash
-}
-
 /// Outcome of processing newly received bytes from the TCP stream.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SessionEvent {
@@ -184,14 +174,11 @@ impl TcpConsoleServer {
         );
     }
 
-    fn log_reject(&self, reason: &str, line: &str) {
-        let fingerprint = auth_fingerprint(line.as_bytes());
+    fn log_reject(&self, reason: &str) {
         warn!(
-            "[cohsh-net][auth] reject: conn id={} reason={} raw_len={} fingerprint=0x{:08x}",
+            "[cohsh-net][auth] reject: conn id={} reason={}",
             self.conn_label(),
             reason,
-            line.len(),
-            fingerprint
         );
     }
 
@@ -325,39 +312,33 @@ impl TcpConsoleServer {
             }
             if let Some(expected_len) = self.frame_payload_len {
                 if self.frame_buffer.push(byte).is_err() {
-                    self.log_reject(REASON_INVALID_LENGTH, "<frame overflow>");
+                    self.log_reject(REASON_INVALID_LENGTH);
                     return SessionEvent::AuthFailed(REASON_INVALID_LENGTH);
                 }
                 if self.frame_buffer.len() == expected_len {
                     let line = match core::str::from_utf8(self.frame_buffer.as_slice()) {
                         Ok(line) => line,
                         Err(_) => {
-                            self.log_reject(REASON_INVALID_LENGTH, "<frame utf8>");
+                            self.log_reject(REASON_INVALID_LENGTH);
                             return SessionEvent::AuthFailed(REASON_INVALID_LENGTH);
                         }
                     };
                     #[cfg(feature = "net-trace-31337")]
                     info!(
-                        "[cohsh-net] conn id={} auth: received len={} fingerprint=0x{:08x}",
+                        "[cohsh-net] conn id={} auth: received len={}",
                         self.conn_label(),
                         line.len(),
-                        auth_fingerprint(line.as_bytes())
                     );
                     self.line_buffer.clear();
                     if self.line_buffer.push_str(line).is_err() {
-                        self.log_reject(REASON_INVALID_LENGTH, "<frame copy>");
+                        self.log_reject(REASON_INVALID_LENGTH);
                         return SessionEvent::AuthFailed(REASON_INVALID_LENGTH);
                     }
                     let line = self.line_buffer.clone();
                     self.frame_payload_len = None;
                     self.frame_buffer.clear();
                     self.last_activity_ms = now_ms;
-                    log::debug!(
-                        target: "net-console",
-                        "[tcp-console] line received: len={} fingerprint=0x{:08x}",
-                        line.len(),
-                        auth_fingerprint(line.as_bytes()),
-                    );
+                    log::debug!(target: "net-console", "[tcp-console] line received: len={}", line.len());
                     event = self.handle_line(line, now_ms);
                     if matches!(event, SessionEvent::Close) {
                         break;
@@ -370,7 +351,7 @@ impl TcpConsoleServer {
                     self.frame_len_pos = 0;
                     let declared = u32::from_le_bytes(self.frame_len_buf) as usize;
                     if declared < 4 || declared > MAX_MSIZE as usize {
-                        self.log_reject(REASON_INVALID_LENGTH, "<frame length>");
+                        self.log_reject(REASON_INVALID_LENGTH);
                         if matches!(self.state, SessionState::Authenticated) && declared >= 4 {
                             self.enqueue_frame_length_error();
                             self.begin_frame_drop(declared.saturating_sub(4));
@@ -380,7 +361,7 @@ impl TcpConsoleServer {
                     }
                     let payload_len = declared.saturating_sub(4);
                     if payload_len > DEFAULT_LINE_CAPACITY {
-                        self.log_reject(REASON_INVALID_LENGTH, "<frame payload>");
+                        self.log_reject(REASON_INVALID_LENGTH);
                         if matches!(self.state, SessionState::Authenticated) {
                             self.enqueue_frame_length_error();
                             self.begin_frame_drop(payload_len);
@@ -450,21 +431,18 @@ impl TcpConsoleServer {
     fn process_auth(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) -> SessionEvent {
         // Expected client hello: ASCII "AUTH " prefix and token payload.
         let raw_bytes = line.as_bytes();
-        let fingerprint = auth_fingerprint(raw_bytes);
         log::info!(
-            "[cohsh-net][auth] parsing auth frame (len={} fingerprint=0x{:08x})",
-            raw_bytes.len(),
-            fingerprint
+            "[cohsh-net][auth] parsing auth frame (len={})",
+            raw_bytes.len()
         );
         let expected_len = self.expected_frame_len();
         let observed_len = raw_bytes.len();
         info!("[cohsh-net] auth: hello received (len={})", observed_len);
         #[cfg(feature = "net-trace-31337")]
         log::info!(
-            "[cohsh-net] conn id={} auth: parsing frame observed_len={} fingerprint=0x{:08x}",
+            "[cohsh-net] conn id={} auth: parsing frame observed_len={}",
             self.conn_label(),
             observed_len,
-            fingerprint
         );
         if observed_len != expected_len {
             warn!(
@@ -473,7 +451,7 @@ impl TcpConsoleServer {
                 expected_len,
                 observed_len
             );
-            self.log_reject(REASON_INVALID_LENGTH, line.as_str());
+            self.log_reject(REASON_INVALID_LENGTH);
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some(DETAIL_REASON_INVALID_LENGTH));
             self.set_state(SessionState::Inactive);
             warn!("[cohsh-net][auth] closing session: reason=invalid-length");
@@ -483,12 +461,11 @@ impl TcpConsoleServer {
 
         let Some(stripped) = line.strip_prefix(AUTH_PREFIX) else {
             warn!(
-                "[cohsh-net][auth] conn id={} reject: missing AUTH prefix raw_len={} fingerprint=0x{:08x}",
+                "[cohsh-net][auth] conn id={} reject: missing AUTH prefix raw_len={}",
                 self.conn_label(),
                 raw_bytes.len(),
-                fingerprint
             );
-            self.log_reject(REASON_EXPECTED_TOKEN, line.as_str());
+            self.log_reject(REASON_EXPECTED_TOKEN);
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some(DETAIL_REASON_EXPECTED_TOKEN));
             self.set_state(SessionState::Inactive);
             warn!("[cohsh-net][auth] closing session: reason=expected-token");
@@ -499,12 +476,11 @@ impl TcpConsoleServer {
         let token = stripped.trim();
         if token.is_empty() {
             warn!(
-                "[cohsh-net][auth] conn id={} reject: empty token raw_len={} fingerprint=0x{:08x}",
+                "[cohsh-net][auth] conn id={} reject: empty token raw_len={}",
                 self.conn_label(),
                 raw_bytes.len(),
-                fingerprint
             );
-            self.log_reject(REASON_EXPECTED_TOKEN, line.as_str());
+            self.log_reject(REASON_EXPECTED_TOKEN);
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some(DETAIL_REASON_EXPECTED_TOKEN));
             self.set_state(SessionState::Inactive);
             warn!("[cohsh-net][auth] closing session: reason=expected-token");
@@ -541,7 +517,7 @@ impl TcpConsoleServer {
                 token.len(),
                 self.auth_token.len()
             );
-            self.log_reject(REASON_INVALID_TOKEN, token);
+            self.log_reject(REASON_INVALID_TOKEN);
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some(DETAIL_REASON_INVALID_TOKEN));
             self.set_state(SessionState::Inactive);
             warn!("[cohsh-net][auth] closing session: reason=invalid-token");
@@ -934,14 +910,6 @@ mod tests {
 
     const TOKEN: &str = "token123";
 
-    #[test]
-    fn auth_fingerprint_changes_with_input() {
-        let a = auth_fingerprint(b"AUTH alpha");
-        let b = auth_fingerprint(b"AUTH beta");
-        assert_ne!(a, b);
-        assert_eq!(a, auth_fingerprint(b"AUTH alpha"));
-    }
-
     fn frame_line<const N: usize>(line: &str) -> HeaplessVec<u8, N> {
         let mut buf = HeaplessVec::new();
         let total_len = line.len().saturating_add(4);
@@ -988,8 +956,7 @@ mod tests {
         let mut server = TcpConsoleServer::new(TOKEN, 10_000);
         server.begin_session(0, Some(4));
 
-        let auth_payload =
-            frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("AUTH {TOKEN}"));
+        let auth_payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("AUTH {TOKEN}"));
         let event = server.ingest(auth_payload.as_slice(), 1);
         assert_eq!(event, SessionEvent::Authenticated);
         let _ = server.pop_outbound();
@@ -1076,8 +1043,7 @@ mod tests {
             "pre-auth lines must not enter live queue"
         );
 
-        let auth_payload =
-            frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("AUTH {TOKEN}"));
+        let auth_payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("AUTH {TOKEN}"));
         let event = server.ingest(auth_payload.as_slice(), 1);
         assert_eq!(event, SessionEvent::Authenticated);
 

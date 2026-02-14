@@ -219,7 +219,7 @@ Host tools MUST remain protocol-faithful: they consume the as-built interfaces a
 - Behavior changes require updated tests and documented commands.
 - Before merge, run:
   ```
-  cargo run -p coh-rtc
+  cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
   ```
   and verify regenerated artifacts hash-match committed versions.
 

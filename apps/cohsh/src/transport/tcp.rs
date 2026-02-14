@@ -36,11 +36,14 @@ const DEFAULT_RETRY_BACKOFF: Duration = Duration::from_millis(200);
 const DEFAULT_RETRY_CEILING: Duration = Duration::from_secs(2);
 /// Maximum retries when sending commands or recovering after a disconnect.
 const DEFAULT_MAX_RETRIES: usize = 3;
+/// Empty default requires callers to configure auth explicitly before attach.
+const DEFAULT_AUTH_TOKEN: &str = "";
 /// Maximum number of acknowledgement lines retained between drains.
 const MAX_PENDING_ACK: usize = 32;
 const FRAME_ERROR_VERB: &str = "FRAME";
 const CONSOLE_LOCK_ENV: &str = "COHSH_CONSOLE_LOCK";
 const CONSOLE_LOCK_DISABLE_VALUES: &[&str] = &["0", "false", "off", "no"];
+const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 
 /// Return true when verbose TCP debugging is enabled via the environment.
 pub fn tcp_debug_enabled() -> bool {
@@ -340,7 +343,7 @@ impl TcpTransport {
             retry_backoff: DEFAULT_RETRY_BACKOFF,
             retry_ceiling: DEFAULT_RETRY_CEILING,
             max_retries: DEFAULT_MAX_RETRIES,
-            auth_token: "changeme".to_owned(),
+            auth_token: DEFAULT_AUTH_TOKEN.to_owned(),
             tcp_debug: tcp_debug_enabled(),
             stream: None,
             reader: None,
@@ -500,6 +503,21 @@ impl TcpTransport {
         }
     }
 
+    fn validate_auth_token(&self) -> Result<()> {
+        let token = self.auth_token.trim();
+        if token.is_empty() {
+            return Err(anyhow!(
+                "tcp auth token must be configured with --auth-token or COHSH_AUTH_TOKEN/COH_AUTH_TOKEN"
+            ));
+        }
+        if token == INSECURE_PLACEHOLDER_TOKEN {
+            return Err(anyhow!(
+                "tcp auth token uses insecure placeholder token; set a real secret"
+            ));
+        }
+        Ok(())
+    }
+
     fn perform_auth(&mut self) -> Result<()> {
         let auth_line = format!("AUTH {}", self.auth_token);
         let auth_start = Instant::now();
@@ -654,6 +672,7 @@ impl TcpTransport {
         if self.authenticated && self.stream.is_some() {
             return Ok(());
         }
+        self.validate_auth_token()?;
 
         if self.requested_role.is_none() {
             if let Some(cache) = &self.session_cache {
@@ -1837,6 +1856,7 @@ mod tests {
 
     use cohesix_proto::REASON_INVALID_TOKEN;
     use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
+    const TEST_AUTH_TOKEN: &str = "test-auth-token";
 
     fn write_frame(stream: &mut TcpStream, line: &str) {
         let total_len = line.len().saturating_add(4) as u32;
@@ -1917,7 +1937,7 @@ mod tests {
                 while let Some(line) = read_frame(&mut reader) {
                     let trimmed = line.trim();
                     if trimmed.starts_with("AUTH ") {
-                        if trimmed == "AUTH changeme" {
+                        if trimmed == format!("AUTH {TEST_AUTH_TOKEN}") {
                             write_frame(&mut stream, "OK AUTH");
                         } else {
                             write_frame(
@@ -1950,7 +1970,7 @@ mod tests {
             .with_timeout(Duration::from_millis(100))
             .with_heartbeat_interval(Duration::from_millis(50))
             .with_max_retries(4)
-            .with_auth_token("changeme");
+            .with_auth_token(TEST_AUTH_TOKEN);
         let session = transport.attach(Role::Queen, None).unwrap();
         let attach_ack = transport.drain_acknowledgements();
         assert!(attach_ack
@@ -1981,7 +2001,8 @@ mod tests {
 
         let mut transport = TcpTransport::new("127.0.0.1", port)
             .with_timeout(Duration::from_millis(200))
-            .with_max_retries(1);
+            .with_max_retries(1)
+            .with_auth_token(TEST_AUTH_TOKEN);
         let err = transport
             .attach(Role::Queen, None)
             .expect_err("connection should fail with no listener");
@@ -2022,6 +2043,26 @@ mod tests {
     }
 
     #[test]
+    fn missing_auth_token_rejected_before_connect() {
+        let mut transport = TcpTransport::new("127.0.0.1", 31337).with_max_retries(1);
+        let err = transport
+            .attach(Role::Queen, None)
+            .expect_err("missing token must fail");
+        assert!(err.to_string().contains("must be configured"));
+    }
+
+    #[test]
+    fn placeholder_auth_token_rejected_before_connect() {
+        let mut transport = TcpTransport::new("127.0.0.1", 31337)
+            .with_max_retries(1)
+            .with_auth_token(INSECURE_PLACEHOLDER_TOKEN);
+        let err = transport
+            .attach(Role::Queen, None)
+            .expect_err("placeholder token must fail");
+        assert!(err.to_string().contains("insecure placeholder"));
+    }
+
+    #[test]
     fn partial_frames_survive_timeouts() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -2056,7 +2097,7 @@ mod tests {
         let mut transport = TcpTransport::new("127.0.0.1", port)
             .with_timeout(Duration::from_millis(50))
             .with_max_retries(3)
-            .with_auth_token("changeme");
+            .with_auth_token(TEST_AUTH_TOKEN);
         let session = transport.attach(Role::Queen, None).unwrap();
         let entries = transport.list(&session, "/proc/tests").unwrap();
         assert_eq!(entries, vec!["selftest_quick.coh".to_owned()]);

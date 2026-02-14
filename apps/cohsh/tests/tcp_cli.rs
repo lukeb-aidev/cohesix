@@ -13,6 +13,8 @@ use std::time::Duration;
 use cohesix_ticket::Role;
 use cohsh::{Shell, TcpTransport};
 
+const TEST_AUTH_TOKEN: &str = "tcp-cli-test-token";
+
 fn write_frame(stream: &mut std::net::TcpStream, line: &str) {
     let total_len = line.len().saturating_add(4) as u32;
     stream.write_all(&total_len.to_le_bytes()).unwrap();
@@ -43,7 +45,7 @@ fn tcp_shell_attach_and_ping_emit_acknowledgements() {
             let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
             while let Some(line) = read_frame(&mut reader) {
                 let trimmed = line.trim();
-                if trimmed == "AUTH changeme" {
+                if trimmed == format!("AUTH {TEST_AUTH_TOKEN}") {
                     write_frame(&mut stream, "OK AUTH");
                 } else if trimmed.starts_with("ATTACH") {
                     write_frame(&mut stream, "OK ATTACH role=queen");
@@ -57,7 +59,7 @@ fn tcp_shell_attach_and_ping_emit_acknowledgements() {
 
     let transport = TcpTransport::new("127.0.0.1", port)
         .with_timeout(Duration::from_millis(200))
-        .with_auth_token("changeme");
+        .with_auth_token(TEST_AUTH_TOKEN);
     let writer = Cursor::new(Vec::new());
     let mut shell = Shell::new(transport, writer);
 

@@ -25,7 +25,7 @@ use cohsh_core::{
 };
 
 const BOOT_SCRIPT: &str = "scripts/cohsh/boot_v0.coh";
-const AUTH_TOKEN: &str = "changeme";
+const AUTH_TOKEN: &str = "transcript-test-token";
 const CONVERGE_SCENARIO: &str = "converge_v0";
 const CONVERGE_TAIL_PATH: &str = "/worker/worker-1/telemetry";
 const QUEEN_LOG_PATH: &str = "/log/queen.log";

@@ -94,7 +94,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [24e](#24e) | REST Multiplexer Transports + SwarmUI Gateway Mode | Complete |
 | [25](#25) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Complete |
 | [25a](#25a) | REST Live Hive Performance (Parallel Polling + Batching) | Pending |
-| [25b](#25b) | Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) | Pending |
+| [25b](#25b) | Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) | Complete |
 | [25c](#25c) | Python Orchestration SDK (1k Fleet Playbooks + Host Integrations) | Complete |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
@@ -4917,7 +4917,7 @@ Deliverables:
 
 **Why now (release integrity + scale):** The live benchmark demonstrates 100 workers sustained with timeout onset under heavier activity before 100 in ramp mode, while due-diligence still contains open P1 blockers in gateway auth, token handling, regression coverage, and platform gates. This milestone addresses both concerns in one bounded track so scale gains are security-valid and release-valid.
 
-**Status:** Pending - 1k-worker readiness is not yet demonstrated and multiple P1 findings remain open (`DD-2026-0001`, `DD-2026-0002`, `DD-2026-0003`, `DD-2026-0004`, `DD-2026-0005`, `DD-2026-0009`, `DD-2026-0010`).
+**Status:** Complete - due-diligence gate baseline passed at `out/audit/gate/20260214T044955Z`, `P0/P1` blockers are closed in `docs/audit/findings.csv`, and Milestone 25b closure evidence is published in `docs/audit/AUDIT_REPORT_2026-02-14.md`.
 
 ## Goal
 Deliver a single-console-compliant gateway path that can be validated toward 1,000-worker operation while closing release-blocking due-diligence findings by:
