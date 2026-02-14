@@ -17,6 +17,7 @@ mirrors the same verbs, bounds, and error rules enforced by `cohsh` and Secure9P
 - `docs/HOST_TOOLS.md` — host tool semantics, policy gates, mounts, and interdependencies.
 - `docs/API_GUIDELINES.md` — REST gateway scope and connectivity checks.
 - `docs/OPERATOR_WALKTHROUGH.md` — operator lifecycle and recovery flow.
+- `tools/cohesix-py/README.md` — Python quickstart and copy/paste examples (`tool/cohesix_py/README.md` reference path).
 
 ## Where it lives
 - **Source tree**: `tools/cohesix-py/`
@@ -91,6 +92,65 @@ cohesix-playbook --playbook mixed-closed-loop-ai-factory --dry-run --mock
 cohesix-playbook --playbook jetson-traffic-safety --tcp-host 127.0.0.1 --tcp-port 31337
 ```
 Reports are written under `out/examples/playbooks/<playbook-id>/`.
+
+## Concise real-world examples
+These are intentionally short, copy/paste commands that map to production activities.
+
+### 1) Run a release-control dry run for a large Mac fleet
+```bash
+cohesix-playbook --playbook mac-release-factory --dry-run --mock
+```
+Outcome: validates scheduler/approval orchestration and emits a report/audit pair you can inspect before live rollout.
+
+### 2) Drive Jetson traffic safety orchestration through the REST gateway
+```bash
+cohesix-playbook \
+  --playbook jetson-traffic-safety \
+  --rest-url http://127.0.0.1:8080
+```
+Outcome: executes bounded control writes (schedule + lease) and captures auditable results under `out/examples/playbooks/`.
+
+### 3) Run a closed-loop mixed-fleet AI factory plan
+```bash
+cohesix-playbook --playbook mixed-closed-loop-ai-factory --dry-run --mock
+```
+Outcome: validates Mac-train + Jetson-infer coordination logic without touching live control files.
+
+### 4) Programmatically enqueue schedule + lease controls from Python
+```python
+from cohesix import CohesixOrchestrator, ScheduleRequest, LeaseRequest
+
+with CohesixOrchestrator.from_env() as orch:
+    orch.enqueue_schedule([
+        ScheduleRequest("sched-edge-1", "worker-gpu", priority=6, ticks=6, budget_ms=180)
+    ])
+    orch.apply_leases([
+        LeaseRequest(
+            op="grant",
+            lease_id="lease-edge-1",
+            subject="queen",
+            resource="gpu0",
+            ttl_s=300,
+            priority=6,
+        )
+    ])
+```
+Outcome: integrates directly into existing Python jobs without inventing new control semantics.
+
+### 5) Pull host integration telemetry snapshot and ship it through the playbook flow
+```python
+from cohesix.integrations import collect_host_snapshot, snapshot_to_ndjson
+
+snapshot = collect_host_snapshot(
+    systemd_services=["cohesix-agent.service"],
+    include_docker=True,
+    include_k8s=True,
+    include_nvml=True,
+    include_peft=True,
+)
+print(snapshot_to_ndjson(snapshot))
+```
+Outcome: gives one normalized snapshot envelope for service health, containers, pods, GPU state, and PEFT runtime readiness.
 
 ## Common example flags
 All bundled examples share the same backend arguments:
