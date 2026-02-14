@@ -96,7 +96,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25a](#25a) | REST Live Hive Performance (Parallel Polling + Batching) | Pending |
 | [25b](#25b) | Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) | Complete |
 | [25c](#25c) | Python Orchestration SDK (1k Fleet Playbooks + Host Integrations) | Complete |
-| [25d](#25d) | REST Request-Auth Parity Across Host Tools (Gateway Capability Max) | Pending |
+| [25d](#25d) | REST Request-Auth Parity Across Host Tools (Gateway Capability Max) | Complete |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -5192,7 +5192,7 @@ Deliverables:
 
 **Why now (gateway readiness at 1k scale):** `hive-gateway` now enforces request-auth at the REST edge for mutating paths. Any host tool that can route through REST must attach request-auth consistently or it becomes a brittle outlier in multi-tool, high-concurrency deployments.
 
-**Status:** Pending
+**Status:** Complete - REST request-auth parity is implemented across all REST-capable host tools, SwarmUI REST fan-out paths propagate gateway auth headers, and docs/test-plan checks are aligned and passing.
 
 ## Goal
 Deliver request-auth parity across all REST-capable host tools so gateway mode is predictable, secure, and low-friction:
