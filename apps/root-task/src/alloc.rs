@@ -16,7 +16,7 @@ use linked_list_allocator::LockedHeap;
 use crate::bootstrap::{log as boot_log, no_alloc};
 
 /// Statically reserved heap span used during bootstrap.
-pub const HEAP_BYTES: usize = 512 * 1024;
+pub const HEAP_BYTES: usize = 2 * 1024 * 1024;
 
 static HEAP_INITIALISED: AtomicBool = AtomicBool::new(false);
 

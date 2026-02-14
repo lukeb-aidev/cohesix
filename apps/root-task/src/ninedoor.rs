@@ -85,7 +85,7 @@ const PROC_LEASE_ACTIVE_PATH: &str = "/proc/lease/active";
 const PROC_LEASE_PREEMPTIONS_PATH: &str = "/proc/lease/preemptions";
 const BOOT_HEADER: &str = "Cohesix boot: root-task online";
 const MAX_STREAM_LINES: usize = log_buffer::LOG_SNAPSHOT_LINES;
-const MAX_WORKERS: usize = 100;
+const MAX_WORKERS: usize = 1500;
 const MAX_BINDS: usize = 8;
 const CAS_MAX_CHUNKS: usize = 8;
 const CAS_MAX_UPDATES: usize = 8;
@@ -216,7 +216,7 @@ pub struct NineDoorBridge {
     ui: generated::UiProviderConfig,
     telemetry: generated::TelemetryConfig,
     telemetry_ingest: TelemetryIngestState,
-    workers: HeaplessVec<WorkerTelemetry, MAX_WORKERS>,
+    workers: Vec<WorkerTelemetry>,
     binds: HeaplessVec<BindEntry, MAX_BINDS>,
     authority: AuthorityQueue,
     host: HostState,
@@ -476,7 +476,7 @@ impl NineDoorBridge {
             ui: generated::ui_provider_config(),
             telemetry: generated::telemetry_config(),
             telemetry_ingest: TelemetryIngestState::new(),
-            workers: HeaplessVec::new(),
+            workers: Vec::new(),
             binds: HeaplessVec::new(),
             authority: AuthorityQueue::new(AUTHORITY_QUEUE_MAX),
             host,
@@ -1868,7 +1868,10 @@ impl NineDoorBridge {
         &self,
         output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
     ) -> Result<(), NineDoorBridgeError> {
-        for worker in self.workers.iter() {
+        // Keep directory listings bounded while surfacing the most recently
+        // spawned workers at high scale.
+        let start = self.workers.len().saturating_sub(MAX_STREAM_LINES);
+        for worker in self.workers.iter().skip(start) {
             let mut line = HeaplessString::new();
             line.push_str(worker.id.as_str())
                 .map_err(|_| NineDoorBridgeError::BufferFull)?;
@@ -1885,11 +1888,17 @@ impl NineDoorBridge {
         output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
     ) -> Result<(), NineDoorBridgeError> {
         let sharding = generated::sharding_config();
-        for worker in self.workers.iter() {
+        let mut recent: HeaplessVec<&str, MAX_STREAM_LINES> = HeaplessVec::new();
+        for worker in self.workers.iter().rev() {
             let worker_label = worker_shard_label(worker.id.as_str(), sharding);
             if worker_label == label {
-                push_list_entry(output, worker.id.as_str())?;
+                if recent.push(worker.id.as_str()).is_err() {
+                    break;
+                }
             }
+        }
+        for worker_id in recent.iter().rev() {
+            push_list_entry(output, worker_id)?;
         }
         Ok(())
     }
@@ -1920,7 +1929,7 @@ impl NineDoorBridge {
         if !self.gpu.enabled() {
             return Err(NineDoorBridgeError::InvalidPath);
         }
-        if self.workers.is_full() {
+        if self.workers.len() >= MAX_WORKERS {
             return Err(NineDoorBridgeError::BufferFull);
         }
         let gpu_id =
@@ -2003,14 +2012,15 @@ impl NineDoorBridge {
                 let mut id = HeaplessString::<MAX_WORKER_ID_LEN>::new();
                 let worker_id = self.next_worker_id;
                 write!(id, "worker-{worker_id}").map_err(|_| NineDoorBridgeError::BufferFull)?;
-                if self.workers.is_full() {
+                if self.workers.len() >= MAX_WORKERS {
                     return Err(NineDoorBridgeError::BufferFull);
                 }
                 self.next_worker_id = self.next_worker_id.saturating_add(1);
                 let ring = TelemetryRing::new(self.telemetry.ring_bytes_per_worker as usize);
                 self.workers
-                    .push(WorkerTelemetry { id, ring, target })
+                    .try_reserve(1)
                     .map_err(|_| NineDoorBridgeError::BufferFull)?;
+                self.workers.push(WorkerTelemetry { id, ring, target });
                 Ok(())
             },
         )
@@ -5216,6 +5226,7 @@ impl PolicyState {
             return Ok(());
         }
         let max_entries = self.limits.queue_max_entries as usize;
+        self.evict_consumed_actions(actions.len(), max_entries);
         if self.actions.len() + actions.len() > max_entries {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
@@ -5230,6 +5241,15 @@ impl PolicyState {
             self.actions.push(action);
         }
         Ok(())
+    }
+
+    fn evict_consumed_actions(&mut self, incoming: usize, max_entries: usize) {
+        while self.actions.len().saturating_add(incoming) > max_entries {
+            let Some(index) = self.actions.iter().position(|action| action.consumed) else {
+                break;
+            };
+            let _ = self.actions.remove(index);
+        }
     }
 
     fn consume_gate(&mut self, path: &str) -> PolicyGateDecision {
@@ -8410,5 +8430,68 @@ mod tests {
             Some(BOOT_HEADER),
             "boot output should begin with header"
         );
+    }
+
+    #[test]
+    fn action_queue_evicts_consumed_entries_before_rejecting() {
+        let mut policy = PolicyState::new();
+        policy.limits.queue_max_entries = 2;
+        policy.actions = vec![
+            PolicyAction {
+                id: "old-consumed".to_owned(),
+                target: "/queen/ctl".to_owned(),
+                decision: PolicyDecision::Approve,
+                consumed: true,
+            },
+            PolicyAction {
+                id: "active-1".to_owned(),
+                target: "/queen/ctl".to_owned(),
+                decision: PolicyDecision::Approve,
+                consumed: false,
+            },
+        ];
+
+        policy
+            .append_action_queue(
+                "{\"id\":\"active-2\",\"target\":\"/queen/ctl\",\"decision\":\"approve\"}\n",
+                "queen",
+                "test-ticket",
+            )
+            .expect("append action should evict consumed entry");
+
+        assert_eq!(policy.actions.len(), 2);
+        assert!(
+            policy
+                .actions
+                .iter()
+                .all(|action| action.id.as_str() != "old-consumed")
+        );
+        assert!(
+            policy
+                .actions
+                .iter()
+                .any(|action| action.id.as_str() == "active-2")
+        );
+    }
+
+    #[test]
+    fn action_queue_rejects_when_only_unconsumed_entries_remain() {
+        let mut policy = PolicyState::new();
+        policy.limits.queue_max_entries = 1;
+        policy.actions = vec![PolicyAction {
+            id: "active-1".to_owned(),
+            target: "/queen/ctl".to_owned(),
+            decision: PolicyDecision::Approve,
+            consumed: false,
+        }];
+
+        let err = policy
+            .append_action_queue(
+                "{\"id\":\"active-2\",\"target\":\"/queen/ctl\",\"decision\":\"approve\"}\n",
+                "queen",
+                "test-ticket",
+            )
+            .expect_err("queue should reject when no consumed entries can be evicted");
+        assert!(matches!(err, NineDoorBridgeError::InvalidPayload));
     }
 }

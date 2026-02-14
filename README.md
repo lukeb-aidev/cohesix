@@ -288,6 +288,7 @@ See below for detailed design, interfaces, and milestone tracking:
 - [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)
 - [docs/OPERATOR_WALKTHROUGH.md](docs/OPERATOR_WALKTHROUGH.md)
 - [docs/USE_CASES.md](docs/USE_CASES.md)
+- [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 
 ---
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import csv
 import json
 import os
 import random
@@ -38,7 +39,7 @@ DEFAULT_MAX_WORKERS = 4
 DEFAULT_TAIL_BYTES = 256
 DEFAULT_LOG_TAIL_BYTES = 32768
 DEFAULT_QEMU_SMP = "4,cores=4,threads=1,sockets=1"
-DEFAULT_WORKERS_MIN = 5
+DEFAULT_WORKERS_MIN = 8
 DEFAULT_WORKERS_MAX = 50
 DEFAULT_INTENSITY_MIN = 1
 DEFAULT_INTENSITY_MAX = 10
@@ -50,8 +51,10 @@ DEFAULT_ENTROPY = 5.0
 DEFAULT_GATEWAY_BIND = "127.0.0.1:8080"
 DEFAULT_TCP_HOST = "127.0.0.1"
 DEFAULT_TCP_PORT = 31337
-DEFAULT_AUTH_TOKEN = "changeme"
+DEFAULT_AUTH_TOKEN = ""
+DEFAULT_REQUEST_AUTH_TOKEN = ""
 DEFAULT_ROLE = "queen"
+DEFAULT_SUMMARY_MAX_ERROR_LINES = 400
 
 
 @dataclass(frozen=True)
@@ -112,12 +115,29 @@ def is_transient_error(error: Exception) -> bool:
         return True
     if "buffer full" in message or "buffer-full" in message:
         return True
+    if "timed out" in message or "timeout" in message:
+        return True
     return False
 
 
 def is_buffer_full_error(error: Exception) -> bool:
     message = str(error).lower()
     return "buffer full" in message or "buffer-full" in message
+
+
+def is_buffer_full_response(response: GatewayResponse) -> bool:
+    message = (response.error or "").lower()
+    return "buffer full" in message or "buffer-full" in message
+
+
+def is_worker_capacity_event(error: Exception) -> bool:
+    message = str(error).lower()
+    return (
+        "buffer full" in message
+        or "buffer-full" in message
+        or "timed out" in message
+        or "timeout" in message
+    )
 
 
 def retry_transient(
@@ -239,14 +259,18 @@ class WorkerProfile:
 class RestClient:
     """Minimal REST client for hive-gateway."""
 
-    def __init__(self, rest_url: str, timeout: float):
+    def __init__(
+        self, rest_url: str, timeout: float, request_auth_token: Optional[str] = None
+    ):
         self.rest_url = normalize_rest_url(rest_url)
         self.timeout = timeout
+        token = (request_auth_token or "").strip()
+        self.request_auth_token = token if token else None
 
     def get_json(self, path: str, params: Optional[Dict[str, str]] = None) -> dict:
         url = self._build_url(path, params)
         try:
-            return fetch_json(url, self.timeout)
+            return fetch_json(url, self.timeout, self.request_auth_headers())
         except urllib.error.HTTPError as exc:
             raise RestError(f"HTTP {exc.code} {exc.reason} for {url}") from exc
         except urllib.error.URLError as exc:
@@ -257,6 +281,8 @@ class RestClient:
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(url, data=data, method="POST")
         request.add_header("Content-Type", "application/json")
+        for key, value in self.request_auth_headers().items():
+            request.add_header(key, value)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 payload = response.read()
@@ -291,6 +317,14 @@ class RestClient:
         payload = {"path": path, "line": line}
         return parse_gateway_response(self.post_json("/v1/fs/echo", payload))
 
+    def request_auth_headers(self) -> Dict[str, str]:
+        if self.request_auth_token is None:
+            return {}
+        return {
+            "Authorization": f"Bearer {self.request_auth_token}",
+            "x-cohesix-auth": self.request_auth_token,
+        }
+
     def _build_url(self, path: str, params: Optional[Dict[str, str]]) -> str:
         url = f"{self.rest_url}{path}"
         if not params:
@@ -298,9 +332,12 @@ class RestClient:
         return f"{url}?{urllib.parse.urlencode(params)}"
 
 
-def fetch_json(url: str, timeout: float) -> dict:
+def fetch_json(url: str, timeout: float, headers: Optional[Dict[str, str]] = None) -> dict:
     """Fetch JSON from a URL and decode the response."""
-    with urllib.request.urlopen(url, timeout=timeout) as response:
+    request = urllib.request.Request(url, method="GET")
+    for key, value in (headers or {}).items():
+        request.add_header(key, value)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = response.read()
     return json.loads(payload)
 
@@ -643,6 +680,11 @@ def parse_args() -> argparse.Namespace:
         help="Auth token for hive-gateway.",
     )
     launch.add_argument(
+        "--request-auth-token",
+        default=DEFAULT_REQUEST_AUTH_TOKEN,
+        help="REST request auth token for mutating gateway routes.",
+    )
+    launch.add_argument(
         "--role",
         default=DEFAULT_ROLE,
         help="Role for hive-gateway (default: %(default)s).",
@@ -724,14 +766,44 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not kill spawned workers after the run.",
     )
+    sim.add_argument(
+        "--summary-max-error-lines",
+        type=int,
+        default=DEFAULT_SUMMARY_MAX_ERROR_LINES,
+        help="Maximum distinct error lines included in summary artifacts.",
+    )
 
     args = parser.parse_args()
 
+    env_tcp_token = (
+        os.environ.get("COH_AUTH_TOKEN")
+        or os.environ.get("COHSH_AUTH_TOKEN")
+        or ""
+    ).strip()
+    if (not args.auth_token or args.auth_token == DEFAULT_AUTH_TOKEN) and env_tcp_token:
+        args.auth_token = env_tcp_token
+
+    env_request_token = (
+        os.environ.get("HIVE_GATEWAY_REQUEST_AUTH_TOKEN")
+        or os.environ.get("COHSH_REST_AUTH_TOKEN")
+        or os.environ.get("COH_REST_AUTH_TOKEN")
+        or ""
+    ).strip()
+    if (
+        (not args.request_auth_token or args.request_auth_token == DEFAULT_REQUEST_AUTH_TOKEN)
+        and env_request_token
+    ):
+        args.request_auth_token = env_request_token
+
     if args.mode == "simulate":
         args.auto_approve = not args.no_auto_approve
+        if not args.auth_token.strip():
+            raise SystemExit(
+                "simulate mode requires --auth-token (or COH_AUTH_TOKEN/COHSH_AUTH_TOKEN)"
+            )
         args.duration_mins = clamp_int(args.duration_mins, 1, 60, "duration-mins")
-        args.workers_min = clamp_int(args.workers_min, 1, 512, "workers-min")
-        args.workers_max = clamp_int(args.workers_max, 1, 512, "workers-max")
+        args.workers_min = clamp_int(args.workers_min, 1, 1500, "workers-min")
+        args.workers_max = clamp_int(args.workers_max, 1, 1500, "workers-max")
         if args.workers_min > args.workers_max:
             raise SystemExit("workers-min must be <= workers-max")
         args.intensity_min = clamp_int(args.intensity_min, 1, 10, "intensity-min")
@@ -741,6 +813,12 @@ def parse_args() -> argparse.Namespace:
         args.entropy = clamp_float(args.entropy, 0.0, 10.0, "entropy")
         args.base_rps = clamp_float(args.base_rps, 0.1, 1000.0, "base-rps")
         args.max_inflight = clamp_int(args.max_inflight, 1, 4096, "max-inflight")
+        args.summary_max_error_lines = clamp_int(
+            args.summary_max_error_lines,
+            32,
+            2000,
+            "summary-max-error-lines",
+        )
 
     return args
 
@@ -757,6 +835,41 @@ def wait_for_port(host: str, port: int, timeout_s: float) -> None:
     raise TimeoutError(f"Timeout waiting for {host}:{port}")
 
 
+def validate_tcp_auth(host: str, port: int, token: str, timeout_s: float) -> None:
+    """Validate raw TCP auth handshake against the VM console."""
+    token = token.strip()
+    if not token:
+        raise TimeoutError("TCP auth token is required for handshake preflight")
+    payload = f"AUTH {token}".encode("utf-8")
+    frame = (len(payload) + 4).to_bytes(4, "little") + payload
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=1.0) as sock:
+                sock.settimeout(1.5)
+                sock.sendall(frame)
+                header = sock.recv(4)
+                if len(header) != 4:
+                    raise TimeoutError("short auth frame header")
+                total = int.from_bytes(header, "little")
+                if total < 4 or total > 8192:
+                    raise TimeoutError(f"invalid auth frame size {total}")
+                remaining = total - 4
+                payload_bytes = b""
+                while len(payload_bytes) < remaining:
+                    part = sock.recv(remaining - len(payload_bytes))
+                    if not part:
+                        break
+                    payload_bytes += part
+                text = payload_bytes.decode("utf-8", errors="ignore")
+                if "OK AUTH" in text or "ERR AUTH" in text:
+                    return
+        except OSError:
+            pass
+        time.sleep(0.4)
+    raise TimeoutError(f"TCP auth handshake did not succeed for {host}:{port}")
+
+
 def wait_for_gateway(client: RestClient, timeout_s: float) -> dict:
     """Wait for the gateway to respond to /v1/meta/bounds."""
     deadline = time.time() + timeout_s
@@ -764,6 +877,7 @@ def wait_for_gateway(client: RestClient, timeout_s: float) -> dict:
     while time.time() < deadline:
         try:
             bounds = client.get_json("/v1/meta/bounds")
+            client.get_json("/v1/meta/status")
             root = client.ls("/")
             if root.status == "OK":
                 return bounds
@@ -1046,44 +1160,31 @@ def spawn_worker(
         "budget": {"ttl_s": 300, "ops": 500},
     }
     before = set(known_workers)
+    seed_next_worker_seq(state, known_workers)
+    predicted_worker = allocate_synthetic_worker_id(state)
     line = json.dumps(payload, separators=(",", ":"))
     retry_transient(
         lambda: echo_with_policy_retry(client, "/queen/ctl", line, state),
         timeout_s=15.0,
         label="spawn worker",
     )
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        time.sleep(0.5)
+    # At high worker counts, repeatedly listing /worker for every spawn turns into
+    # a benchmark-side bottleneck. The root-task worker ids are monotonic, so once
+    # spawn is acknowledged we can advance deterministically.
+    if len(before) < 32:
         try:
             current_workers = list_workers(client)
         except RestError as exc:
-            if is_buffer_full_error(exc):
-                worker_id = allocate_synthetic_worker_id(state)
-                if state.logger:
-                    state.logger.log(
-                        "worker listing saturated; "
-                        f"using synthetic worker id {worker_id}"
-                    )
-                return worker_id
-            raise
-        seed_next_worker_seq(state, current_workers)
-        after = set(current_workers)
-        new_ids = [worker_id for worker_id in after - before]
-        if new_ids:
-            new_ids.sort(
-                key=lambda worker_id: parse_worker_seq(worker_id) or 0
-            )
-            return new_ids[-1]
-    if len(before) >= 64:
-        worker_id = allocate_synthetic_worker_id(state)
-        if state.logger:
-            state.logger.log(
-                "worker listing did not expose new id before timeout; "
-                f"using synthetic worker id {worker_id}"
-            )
-        return worker_id
-    raise RestError("spawn did not yield a new worker")
+            if not is_buffer_full_error(exc):
+                raise
+        else:
+            seed_next_worker_seq(state, current_workers)
+            after = set(current_workers)
+            new_ids = [worker_id for worker_id in after - before]
+            if new_ids:
+                new_ids.sort(key=lambda worker_id: parse_worker_seq(worker_id) or 0)
+                return new_ids[-1]
+    return predicted_worker
 
 
 def kill_worker(client: RestClient, state: SimState, worker_id: str) -> None:
@@ -1180,14 +1281,15 @@ def build_operations(
                 },
                 separators=(",", ":"),
             )
-            try:
-                echo_with_policy_retry(client, path, line, sim_state)
-            except RestError as exc:
-                if is_buffer_full_error(exc):
+            response = client.echo(path, line)
+            if response.status != "OK":
+                if is_buffer_full_response(response):
                     return
-                raise
-            else:
-                remember_lease_id(sim_state, lease_id)
+                raise RestError(
+                    f"ECHO {path} failed: {response.error}",
+                    response,
+                )
+            remember_lease_id(sim_state, lease_id)
 
         return _run
 
@@ -1200,7 +1302,14 @@ def build_operations(
                 {"op": "preempt", "id": lease_id, "reason": "benchmark"},
                 separators=(",", ":"),
             )
-            echo_with_policy_retry(client, path, line, sim_state)
+            response = client.echo(path, line)
+            if response.status != "OK":
+                if is_buffer_full_response(response):
+                    return
+                raise RestError(
+                    f"ECHO {path} failed: {response.error}",
+                    response,
+                )
             remove_lease_id(sim_state, lease_id)
 
         return _run
@@ -1504,13 +1613,13 @@ def ensure_workers(
     while len(current) < target:
         try:
             new_worker = spawn_worker(client, state, current)
-        except RestError as exc:
-            if "buffer full" in str(exc).lower():
+        except Exception as exc:
+            if is_worker_capacity_event(exc):
                 if state.worker_cap is None or len(current) < state.worker_cap:
                     state.worker_cap = len(current)
                 if state.logger:
                     state.logger.log(
-                        f"worker capacity reached at {len(current)} (buffer full)"
+                        f"worker capacity reached at {len(current)} ({exc})"
                     )
                 break
             raise
@@ -1533,13 +1642,13 @@ def adjust_workers(
         while len(current) < target:
             try:
                 new_worker = spawn_worker(client, state, current)
-            except RestError as exc:
-                if "buffer full" in str(exc).lower():
+            except Exception as exc:
+                if is_worker_capacity_event(exc):
                     if state.worker_cap is None or len(current) < state.worker_cap:
                         state.worker_cap = len(current)
                     if state.logger:
                         state.logger.log(
-                            f"worker capacity reached at {len(current)} (buffer full)"
+                            f"worker capacity reached at {len(current)} ({exc})"
                         )
                     break
                 raise
@@ -1582,14 +1691,23 @@ def run_simulation(args: argparse.Namespace) -> int:
             env["COHESIX_QEMU_SMP_TOPO"] = args.qemu_smp
             qemu_proc = launch_process([qemu_run], env, args.qemu_log)
             wait_for_port(args.tcp_host, args.tcp_port, 120)
+            validate_tcp_auth(args.tcp_host, args.tcp_port, args.auth_token, 120)
+        else:
+            wait_for_port(args.tcp_host, args.tcp_port, 60)
+            validate_tcp_auth(args.tcp_host, args.tcp_port, args.auth_token, 60)
 
         if not args.no_gateway:
             if not gateway_bin:
                 raise SystemExit("Gateway launch requested but no binary found.")
+            if not args.request_auth_token.strip():
+                raise SystemExit(
+                    "simulate mode requires --request-auth-token (or HIVE_GATEWAY_REQUEST_AUTH_TOKEN)"
+                )
             env = os.environ.copy()
             env["COH_TCP_HOST"] = args.tcp_host
             env["COH_TCP_PORT"] = str(args.tcp_port)
             env["COH_AUTH_TOKEN"] = args.auth_token
+            env["HIVE_GATEWAY_REQUEST_AUTH_TOKEN"] = args.request_auth_token
             env["COH_ROLE"] = args.role
             env["HIVE_GATEWAY_BIND"] = args.gateway_bind
             gateway_proc = launch_process(
@@ -1598,7 +1716,7 @@ def run_simulation(args: argparse.Namespace) -> int:
                 args.gateway_log,
             )
 
-        client = RestClient(rest_url, args.timeout)
+        client = RestClient(rest_url, args.timeout, args.request_auth_token)
         bounds = wait_for_gateway(client, 60)
 
         root_entries = discover_root_entries(client)
@@ -1637,6 +1755,8 @@ def run_simulation(args: argparse.Namespace) -> int:
         stats: Dict[str, OpStats] = {}
         stats_lock = threading.Lock()
         overall = OpStats()
+        ramp_rows: List[Dict[str, object]] = []
+        run_error: Optional[Exception] = None
 
         duration_s = args.duration_mins * 60
         ramp_step = max(1, args.ramp_step_secs)
@@ -1655,73 +1775,120 @@ def run_simulation(args: argparse.Namespace) -> int:
         semaphore = threading.BoundedSemaphore(args.max_inflight)
 
         try:
-            while time.time() < end_time:
-                now = time.time()
-                progress = min(1.0, max(0.0, 1.0 - (end_time - now) / duration_s))
-                target_workers = int(
-                    round(
-                        args.workers_min
-                        + (args.workers_max - args.workers_min) * progress
+            try:
+                step_index = 0
+                while time.time() < end_time:
+                    now = time.time()
+                    progress = min(1.0, max(0.0, 1.0 - (end_time - now) / duration_s))
+                    target_workers = int(
+                        round(
+                            args.workers_min
+                            + (args.workers_max - args.workers_min) * progress
+                        )
                     )
-                )
-                target_workers = clamp_target_workers(target_workers, state.worker_cap)
-                target_intensity = args.intensity_min + (
-                    args.intensity_max - args.intensity_min
-                ) * progress
+                    target_workers = clamp_target_workers(target_workers, state.worker_cap)
+                    target_intensity = args.intensity_min + (
+                        args.intensity_max - args.intensity_min
+                    ) * progress
 
-                worker_ids, spawned = adjust_workers(
-                    client, state, worker_ids, spawned, target_workers
-                )
-                profiles = build_worker_profiles(
-                    operations, worker_ids, entropy, rng
-                )
-                load_weights = normalize_weights(
-                    {profile.worker_id: profile.load_factor for profile in profiles}
-                )
-                worker_lookup = {profile.worker_id: profile for profile in profiles}
-
-                step_end = min(end_time, now + ramp_step)
-                rps = args.base_rps * target_intensity * max(len(worker_ids), 1)
-                if rps <= 0:
-                    time.sleep(step_end - time.time())
-                    continue
-                interval = 1.0 / rps
-
-                args.logger.log(
-                    f"[simulate] workers={len(worker_ids)} "
-                    f"intensity={target_intensity:.1f} rps={rps:.1f}"
-                )
-
-                while time.time() < step_end:
-                    worker_id = pick_worker(rng, load_weights)
-                    profile = worker_lookup[worker_id]
-                    op = pick_weighted(rng, profile.op_weights)
-                    semaphore.acquire()
-                    executor.submit(
-                        execute_operation,
-                        client,
-                        op,
-                        worker_id,
-                        state,
-                        stats,
-                        stats_lock,
-                        overall,
-                        semaphore,
+                    worker_ids, spawned = adjust_workers(
+                        client, state, worker_ids, spawned, target_workers
                     )
-                    time.sleep(interval)
+                    profiles = build_worker_profiles(
+                        operations, worker_ids, entropy, rng
+                    )
+                    load_weights = normalize_weights(
+                        {profile.worker_id: profile.load_factor for profile in profiles}
+                    )
+                    worker_lookup = {profile.worker_id: profile for profile in profiles}
+
+                    step_end = min(end_time, now + ramp_step)
+                    rps = args.base_rps * target_intensity * max(len(worker_ids), 1)
+                    if rps <= 0:
+                        time.sleep(step_end - time.time())
+                        continue
+                    interval = 1.0 / rps
+
+                    args.logger.log(
+                        f"[simulate] workers={len(worker_ids)} "
+                        f"intensity={target_intensity:.1f} rps={rps:.1f}"
+                    )
+                    with stats_lock:
+                        step_start_count = overall.count
+                        step_start_ok = overall.ok
+                        step_start_err = overall.err
+
+                    while time.time() < step_end:
+                        remaining_s = step_end - time.time()
+                        if remaining_s <= 0:
+                            break
+                        worker_id = pick_worker(rng, load_weights)
+                        profile = worker_lookup[worker_id]
+                        op = pick_weighted(rng, profile.op_weights)
+                        if not semaphore.acquire(timeout=remaining_s):
+                            break
+                        executor.submit(
+                            execute_operation,
+                            client,
+                            op,
+                            worker_id,
+                            state,
+                            stats,
+                            stats_lock,
+                            overall,
+                            semaphore,
+                        )
+                        sleep_s = min(interval, max(0.0, step_end - time.time()))
+                        if sleep_s > 0:
+                            time.sleep(sleep_s)
+
+                    with stats_lock:
+                        step_ops = overall.count - step_start_count
+                        step_ok = overall.ok - step_start_ok
+                        step_err = overall.err - step_start_err
+                    err_rate = 0.0 if step_ops == 0 else step_err / step_ops
+                    ramp_rows.append(
+                        {
+                            "step": step_index,
+                            "workers": len(worker_ids),
+                            "intensity": round(target_intensity, 3),
+                            "rps": round(rps, 3),
+                            "ops": step_ops,
+                            "ok": step_ok,
+                            "err": step_err,
+                            "err_rate": round(err_rate, 6),
+                        }
+                    )
+                    step_index += 1
+            except Exception as exc:
+                run_error = exc
         finally:
             executor.shutdown(wait=True)
 
         args.logger.log("[simulate] summary")
         report_stats(overall, stats, args.logger)
+        artifacts = write_simulation_artifacts(
+            args,
+            args.logger,
+            overall,
+            stats,
+            ramp_rows,
+            state.worker_cap,
+        )
+        for label, path in artifacts.items():
+            args.logger.log(f"[artifact] {label}={path}")
 
-        if not args.no_cleanup:
+        if not args.no_cleanup and args.no_qemu:
             for worker_id in list(spawned):
                 try:
                     kill_worker(client, state, worker_id)
-                except RestError as exc:
+                except Exception as exc:
                     args.logger.log(f"[cleanup] failed to kill {worker_id}: {exc}")
-
+        elif not args.no_cleanup:
+            args.logger.log("[cleanup] skipping per-worker kill; QEMU teardown will reset state")
+        if run_error is not None:
+            args.logger.log(f"[simulate] failed: {run_error}")
+            return 1
         return 0
     finally:
         terminate_process(gateway_proc, "gateway")
@@ -1780,11 +1947,152 @@ def report_stats(overall: OpStats, stats: Dict[str, OpStats], logger: RunLogger)
         )
 
 
+def summarize_errors(errors: Dict[str, int], max_lines: int) -> List[Dict[str, object]]:
+    ordered = sorted(errors.items(), key=lambda item: item[1], reverse=True)
+    return [
+        {"error": message, "count": count}
+        for message, count in ordered[:max_lines]
+    ]
+
+
+def operation_summary(entry: OpStats, max_error_lines: int) -> Dict[str, object]:
+    return {
+        "count": entry.count,
+        "ok": entry.ok,
+        "err": entry.err,
+        "avg_s": entry.avg(),
+        "min_s": entry.min_s,
+        "max_s": entry.max_s,
+        "p95_s": entry.percentile(95),
+        "errors": summarize_errors(entry.errors, max_error_lines),
+    }
+
+
+def write_ramp_svg(ramp_rows: List[Dict[str, object]], svg_path: str) -> None:
+    if not ramp_rows:
+        return
+    width = 900
+    height = 320
+    padding = 40
+    x_span = max(len(ramp_rows) - 1, 1)
+    max_workers = max(int(row.get("workers", 0)) for row in ramp_rows)
+    max_err_rate = max(float(row.get("err_rate", 0.0)) for row in ramp_rows)
+    if max_workers <= 0:
+        max_workers = 1
+    if max_err_rate <= 0:
+        max_err_rate = 1.0
+
+    worker_points: List[str] = []
+    err_points: List[str] = []
+    for index, row in enumerate(ramp_rows):
+        x = padding + ((width - 2 * padding) * index / x_span)
+        workers = float(row.get("workers", 0.0))
+        err_rate = float(row.get("err_rate", 0.0))
+        y_workers = height - padding - ((height - 2 * padding) * workers / max_workers)
+        y_err = height - padding - ((height - 2 * padding) * err_rate / max_err_rate)
+        worker_points.append(f"{x:.1f},{y_workers:.1f}")
+        err_points.append(f"{x:.1f},{y_err:.1f}")
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">
+  <rect x="0" y="0" width="{width}" height="{height}" fill="#ffffff"/>
+  <line x1="{padding}" y1="{height - padding}" x2="{width - padding}" y2="{height - padding}" stroke="#333" stroke-width="1"/>
+  <line x1="{padding}" y1="{padding}" x2="{padding}" y2="{height - padding}" stroke="#333" stroke-width="1"/>
+  <polyline fill="none" stroke="#1f77b4" stroke-width="2" points="{' '.join(worker_points)}"/>
+  <polyline fill="none" stroke="#d62728" stroke-width="2" points="{' '.join(err_points)}"/>
+  <text x="{padding}" y="20" font-size="14" fill="#111">Ramp workers (blue) vs error rate (red)</text>
+</svg>
+"""
+    with open(svg_path, "w", encoding="utf-8") as handle:
+        handle.write(svg)
+
+
+def write_simulation_artifacts(
+    args: argparse.Namespace,
+    logger: RunLogger,
+    overall: OpStats,
+    stats: Dict[str, OpStats],
+    ramp_rows: List[Dict[str, object]],
+    worker_cap: Optional[int],
+) -> Dict[str, str]:
+    base_path = logger.path.rsplit(".", 1)[0]
+    summary_json = f"{base_path}.summary.json"
+    ops_csv = f"{base_path}.ops.csv"
+    ramp_csv = f"{base_path}.ramp.csv"
+    ramp_svg = f"{base_path}.ramp.svg"
+
+    summary_payload = {
+        "mode": "simulate",
+        "seed": args.seed,
+        "rest_url": args.rest_url,
+        "workers_min": args.workers_min,
+        "workers_max": args.workers_max,
+        "worker_cap": worker_cap,
+        "intensity_min": args.intensity_min,
+        "intensity_max": args.intensity_max,
+        "duration_mins": args.duration_mins,
+        "overall": operation_summary(overall, args.summary_max_error_lines),
+        "operations": {
+            name: operation_summary(entry, args.summary_max_error_lines)
+            for name, entry in sorted(stats.items())
+        },
+        "ramp": ramp_rows,
+    }
+    with open(summary_json, "w", encoding="utf-8") as handle:
+        json.dump(summary_payload, handle, indent=2, sort_keys=True)
+
+    with open(ops_csv, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(
+            ["operation", "count", "ok", "err", "avg_s", "p95_s", "min_s", "max_s"]
+        )
+        for name, entry in sorted(stats.items()):
+            writer.writerow(
+                [
+                    name,
+                    entry.count,
+                    entry.ok,
+                    entry.err,
+                    f"{entry.avg():.6f}",
+                    f"{entry.percentile(95):.6f}",
+                    f"{entry.min_s:.6f}",
+                    f"{entry.max_s:.6f}",
+                ]
+            )
+
+    with open(ramp_csv, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "step",
+                "workers",
+                "intensity",
+                "rps",
+                "ops",
+                "ok",
+                "err",
+                "err_rate",
+            ],
+        )
+        writer.writeheader()
+        for row in ramp_rows:
+            writer.writerow(row)
+
+    write_ramp_svg(ramp_rows, ramp_svg)
+
+    return {
+        "summary_json": summary_json,
+        "ops_csv": ops_csv,
+        "ramp_csv": ramp_csv,
+        "ramp_svg": ramp_svg,
+    }
+
+
 def run_perf(args: argparse.Namespace) -> int:
-    client = RestClient(args.rest_url, args.timeout)
+    client = RestClient(args.rest_url, args.timeout, args.request_auth_token)
     bounds_url = f"{normalize_rest_url(args.rest_url)}/v1/meta/bounds"
+    perf_summary: Dict[str, Dict[str, object]] = {}
     try:
-        bounds = fetch_json(bounds_url, args.timeout)
+        bounds = fetch_json(bounds_url, args.timeout, client.request_auth_headers())
     except Exception as exc:  # pragma: no cover - CLI error reporting
         args.logger.log(f"Failed to fetch bounds: {exc}")
         return 1
@@ -1793,6 +2101,15 @@ def run_perf(args: argparse.Namespace) -> int:
         seq_times, par_times = measure(status_specs, client, args.runs)
         report("status", seq_times, par_times, args.assert_min_ratio, args.logger)
         args.logger.log("status suite complete")
+        seq_avg = average(seq_times)
+        par_avg = average(par_times)
+        perf_summary["status"] = {
+            "sequential_s": seq_times,
+            "parallel_s": par_times,
+            "avg_sequential_s": seq_avg,
+            "avg_parallel_s": par_avg,
+            "speedup": seq_avg / par_avg if par_avg > 0 else 0.0,
+        }
 
     if args.suite in ("telemetry", "all"):
         try:
@@ -1818,6 +2135,33 @@ def run_perf(args: argparse.Namespace) -> int:
             args.logger,
         )
         args.logger.log("telemetry suite complete")
+        seq_avg = average(seq_times)
+        par_avg = average(par_times)
+        perf_summary["telemetry"] = {
+            "sequential_s": seq_times,
+            "parallel_s": par_times,
+            "avg_sequential_s": seq_avg,
+            "avg_parallel_s": par_avg,
+            "speedup": seq_avg / par_avg if par_avg > 0 else 0.0,
+        }
+
+    if perf_summary:
+        base_path = args.logger.path.rsplit(".", 1)[0]
+        summary_path = f"{base_path}.perf-summary.json"
+        with open(summary_path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "mode": "perf",
+                    "rest_url": args.rest_url,
+                    "runs": args.runs,
+                    "suite": args.suite,
+                    "results": perf_summary,
+                },
+                handle,
+                indent=2,
+                sort_keys=True,
+            )
+        args.logger.log(f"[artifact] perf_summary_json={summary_path}")
 
     return 0
 

@@ -5,7 +5,7 @@ OUTPUT_FORMAT(elf64-littleaarch64)
 OUTPUT_ARCH(aarch64)
 ENTRY(_start)
 
-HEAP_SIZE = 0x00040000;      /* 256 KiB bootstrap heap. */
+HEAP_SIZE = 0x00200000;      /* 2 MiB bootstrap heap for 1500-worker envelopes. */
 __stack_guard = 0x00002000;  /* Guard page to catch stack overruns. */
 __stack_size = 0x00020000;   /* 128 KiB stack for early boot logging/tracing. */
 
