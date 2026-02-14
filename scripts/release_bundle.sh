@@ -524,7 +524,28 @@ hive_digest = hashlib.sha256(hive.read_bytes()).hexdigest()
 PY
 
   cp -R "${ROOT_DIR}/apps/swarmui/frontend/." "${bundle_dir}/ui/swarmui/"
-  cp -R "${ROOT_DIR}/tools/cohesix-py" "${bundle_dir}/python/cohesix-py"
+
+  local PYTHON_SRC_DIR="${ROOT_DIR}/tools/cohesix-py"
+  local PYTHON_REQUIRED_FILES=(
+    "README.md"
+    "pyproject.toml"
+    "cohesix/__init__.py"
+    "cohesix/client.py"
+    "cohesix/orchestration.py"
+    "cohesix/integrations.py"
+    "cohesix/playbooks.py"
+    "cohesix/playbook_cli.py"
+    "examples/use_case_playbook.py"
+    "tests/test_orchestration.py"
+    "tests/test_integrations.py"
+    "tests/test_playbooks.py"
+  )
+  require_dir "${PYTHON_SRC_DIR}"
+  local rel_path
+  for rel_path in "${PYTHON_REQUIRED_FILES[@]}"; do
+    require_file "${PYTHON_SRC_DIR}/${rel_path}"
+  done
+  cp -R "${PYTHON_SRC_DIR}" "${bundle_dir}/python/cohesix-py"
 
   DOCS_LIST=(
     "ARCHITECTURE.md"
@@ -535,6 +556,7 @@ PY
     "ROLES_AND_SCHEDULING.md"
     "SECURE9P.md"
     "SECURITY.md"
+    "PYTHON_SUPPORT.md"
     "USERLAND_AND_CLI.md"
     "USE_CASES.md"
     "WORKER_TICKETS.md"
