@@ -13,8 +13,8 @@ mod transport;
 
 pub use cache::{CacheError, SnapshotCache, SnapshotRecord};
 pub use hive::{
-    SwarmUiHiveAgent, SwarmUiHiveBatch, SwarmUiHiveBootstrap, SwarmUiHiveConfig, SwarmUiHiveEvent,
-    SwarmUiHiveDetail, SwarmUiHiveEventKind, SwarmUiHiveLeaseEntry, SwarmUiHiveLeasePreemption,
+    SwarmUiHiveAgent, SwarmUiHiveBatch, SwarmUiHiveBootstrap, SwarmUiHiveConfig, SwarmUiHiveDetail,
+    SwarmUiHiveEvent, SwarmUiHiveEventKind, SwarmUiHiveLeaseEntry, SwarmUiHiveLeasePreemption,
     SwarmUiHiveLeaseSnapshot, SwarmUiHiveLeaseSummary, SwarmUiHiveOverlay,
     SwarmUiHivePressureCounters, SwarmUiHiveRootStatus, SwarmUiHiveScheduleEntry,
     SwarmUiHiveScheduleSnapshot, SwarmUiHiveScheduleSummary, SwarmUiHiveSessionSummary,
@@ -29,14 +29,12 @@ use std::time::{Duration, Instant};
 use cohesix_ticket::{Role, TicketClaims};
 use cohsh::client::{CohClient, TailEvent};
 use cohsh::queen;
+#[cfg(feature = "rest")]
+use cohsh::RestTransport as CohshRestTransport;
 use cohsh::{
     tcp_debug_enabled, CohshPolicy, Session as CohshSession, TcpTransport as CohshTcpTransport,
     Transport as CohshTransport,
 };
-#[cfg(feature = "rest")]
-use cohsh::RestTransport as CohshRestTransport;
-#[cfg(feature = "rest")]
-use std::thread;
 use cohsh_core::command::{Command as ConsoleCommand, CommandParser, ConsoleError, MAX_LINE_LEN};
 use cohsh_core::wire::{render_ack, AckLine, AckStatus, END_LINE};
 use cohsh_core::{
@@ -45,6 +43,8 @@ use cohsh_core::{
 };
 use secure9p_codec::OpenMode;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "rest")]
+use std::thread;
 
 mod generated;
 
@@ -1014,16 +1014,13 @@ where
             None
         };
 
-        let schedule_summary_line =
-            read_single_line(&mut session.client, "/proc/schedule/summary");
+        let schedule_summary_line = read_single_line(&mut session.client, "/proc/schedule/summary");
         let schedule_queue_lines = read_lines(&mut session.client, "/proc/schedule/queue")
             .ok()
             .unwrap_or_default();
         let schedule = if schedule_summary_line.is_some() || !schedule_queue_lines.is_empty() {
             Some(SwarmUiHiveScheduleSnapshot {
-                summary: schedule_summary_line
-                    .as_deref()
-                    .map(parse_schedule_summary),
+                summary: schedule_summary_line.as_deref().map(parse_schedule_summary),
                 queue: parse_schedule_queue(schedule_queue_lines),
             })
         } else {
@@ -1205,6 +1202,7 @@ struct SwarmUiConsoleSession {
 #[derive(Debug, Clone)]
 struct RestParallelConfig {
     base_url: String,
+    request_auth_token: Option<String>,
     telemetry_sessions: usize,
 }
 
@@ -1286,11 +1284,13 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         config: SwarmUiConfig,
         transport: T,
         rest_url: impl Into<String>,
+        request_auth_token: Option<String>,
     ) -> Self {
         let mut backend = Self::with_transport(config, transport);
         let policy = CohshPolicy::from_generated();
         backend.rest_parallel = Some(RestParallelConfig {
             base_url: rest_url.into(),
+            request_auth_token,
             telemetry_sessions: policy.pool.telemetry_sessions.max(1) as usize,
         });
         backend
@@ -2258,6 +2258,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                     &worker_root,
                     &hive_config,
                     rest_parallel.base_url.as_str(),
+                    rest_parallel.request_auth_token.as_deref(),
                     rest_parallel.parallel_limit(),
                     role,
                     ticket,
@@ -2294,8 +2295,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             backlog as f32 / hive_config.lod_event_budget as f32
         };
         let dropped = state.dropped();
-        let (root, sessions, pressure_counters, schedule, lease) = if self.rest_parallel.is_some()
-        {
+        let (root, sessions, pressure_counters, schedule, lease) = if self.rest_parallel.is_some() {
             self.read_hive_status_cached(role, ticket, hive_config.status_poll_ms)
         } else {
             self.read_hive_status(role, ticket)
@@ -2588,28 +2588,20 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         .unwrap_or_default();
         let schedule = if schedule_summary_line.is_some() || !schedule_queue_lines.is_empty() {
             Some(SwarmUiHiveScheduleSnapshot {
-                summary: schedule_summary_line
-                    .as_deref()
-                    .map(parse_schedule_summary),
+                summary: schedule_summary_line.as_deref().map(parse_schedule_summary),
                 queue: parse_schedule_queue(schedule_queue_lines),
             })
         } else {
             None
         };
 
-        let lease_summary_line = read_lines_console(
-            &mut self.transport,
-            &session.session,
-            "/proc/lease/summary",
-        )
-        .ok()
-        .and_then(|lines| lines.into_iter().next());
-        let lease_active_lines = read_lines_console(
-            &mut self.transport,
-            &session.session,
-            "/proc/lease/active",
-        )
-        .unwrap_or_default();
+        let lease_summary_line =
+            read_lines_console(&mut self.transport, &session.session, "/proc/lease/summary")
+                .ok()
+                .and_then(|lines| lines.into_iter().next());
+        let lease_active_lines =
+            read_lines_console(&mut self.transport, &session.session, "/proc/lease/active")
+                .unwrap_or_default();
         let lease_preemptions_lines = read_lines_console(
             &mut self.transport,
             &session.session,
@@ -2648,6 +2640,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         let _ = self.session_for(role, ticket);
         let parallel_limit = rest_parallel.parallel_limit();
         let rest_url = rest_parallel.base_url.clone();
+        let rest_auth_token = rest_parallel.request_auth_token.clone();
         let ticket_owned = ticket.map(str::to_owned);
         let paths = [
             "/proc/root/reachable",
@@ -2672,12 +2665,13 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 let mut handles = Vec::with_capacity(chunk.len());
                 for path in chunk {
                     let rest_url = rest_url.clone();
+                    let rest_auth_token = rest_auth_token.clone();
                     let ticket = ticket_owned.clone();
                     let path = *path;
                     handles.push((
                         path,
                         scope.spawn(move || {
-                            let mut transport = CohshRestTransport::new(rest_url, None);
+                            let mut transport = CohshRestTransport::new(rest_url, rest_auth_token);
                             let session = transport
                                 .attach(role, ticket.as_deref())
                                 .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
@@ -2791,9 +2785,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             .unwrap_or_default();
         let schedule = if schedule_summary_line.is_some() || !schedule_queue_lines.is_empty() {
             Some(SwarmUiHiveScheduleSnapshot {
-                summary: schedule_summary_line
-                    .as_deref()
-                    .map(parse_schedule_summary),
+                summary: schedule_summary_line.as_deref().map(parse_schedule_summary),
                 queue: parse_schedule_queue(schedule_queue_lines),
             })
         } else {
@@ -2996,8 +2988,8 @@ fn normalize_payload_line(input: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Result;
     use super::*;
+    use anyhow::Result;
     use secure9p_codec::SessionId;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;

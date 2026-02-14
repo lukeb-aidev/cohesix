@@ -17,7 +17,7 @@ This release introduces `hive-gateway` as the supported multiplexing layer for h
 All examples below use `./bin/<tool>` as the bundle layout. In the source tree, replace `./bin` with `out/cohesix/host-tools` (staged) or `target/<profile>` (manual).
 
 **Console exclusivity**
-The TCP console is single-client. Only one of `cohsh`, `swarmui`, `hive-gateway`, `coh`, `gpu-bridge-host`, `host-sidecar-bridge`, `cas-tool`, or a Python `TcpBackend` should be attached at a time. `cohsh` enforces this with a lock file; set `COHSH_CONSOLE_LOCK=0` only if you understand the risk. For multiplexed deployments, run `hive-gateway` as the sole console client and point host tools at it using REST (`--rest-url`, `COH_REST_URL`, or `SWARMUI_REST_URL`). `coh mount --rest-url` is limited to one active mount per gateway URL (host-side lock).
+The TCP console is single-client. Only one of `cohsh`, `swarmui`, `hive-gateway`, `coh`, `gpu-bridge-host`, `host-sidecar-bridge`, `cas-tool`, or a Python `TcpBackend` should be attached at a time. `cohsh` enforces this with a lock file; set `COHSH_CONSOLE_LOCK=0` only if you understand the risk. For multiplexed deployments, run `hive-gateway` as the sole console client and point host tools at it using REST (`--rest-url`, `COH_REST_URL`, or `SWARMUI_REST_URL`) with request-auth configured (`--rest-auth-token` or `HIVE_GATEWAY_REQUEST_AUTH_TOKEN` / `COHSH_REST_AUTH_TOKEN` / `COH_REST_AUTH_TOKEN`; SwarmUI also supports `SWARMUI_REST_AUTH_TOKEN`). `coh mount --rest-url` is limited to one active mount per gateway URL (host-side lock).
 
 **Choosing a transport**
 Use the TCP console when a single tool is active and you want minimal hops. Use `hive-gateway` when you need multiple tools, remote operators, or a REST surface.
@@ -39,6 +39,7 @@ Goal: run `hive-gateway` as the only console client and route all tools through 
 2. Start the gateway (queen role).
 ```bash
 COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+  HIVE_GATEWAY_REQUEST_AUTH_TOKEN=replace-with-real-token \
   COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
   ./bin/hive-gateway
 ```
@@ -49,16 +50,20 @@ curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/' | jq .
 ```
 4. Attach `cohsh` via REST (not TCP).
 ```bash
-./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 --role queen
+./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --role queen
 ```
 5. Publish host snapshots through the gateway.
 ```bash
-./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 --interval-ms 1000
-./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --watch
+./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --interval-ms 1000
+./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --watch
 ```
 6. Launch SwarmUI over REST.
 ```bash
-SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 ./bin/swarmui
+SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 \
+  SWARMUI_REST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" ./bin/swarmui
 ```
 
 ## cohsh
@@ -96,7 +101,7 @@ Canonical operator shell for Cohesix. Runs on the host and attaches to NineDoor 
 - `attach <role> [ticket]` and `login <role> [ticket]` are equivalent inside the shell.
 - `detach` closes the NineDoor session but keeps the shell alive; `quit` exits.
 - TCP auth uses `--auth-token` or `COHSH_AUTH_TOKEN` and is separate from capability tickets.
-- REST transport is queen-only and requires a running `hive-gateway` (`--rest-url` or `COHSH_REST_URL`). REST clients inherit the gateway role.
+- REST transport is queen-only and requires a running `hive-gateway` (`--rest-url` or `COHSH_REST_URL`). Use `--rest-auth-token` (or `COHSH_REST_AUTH_TOKEN` / `COH_REST_AUTH_TOKEN` / `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`) for gateway request-auth.
 
 ### Core commands (interactive)
 | Command | Notes |
@@ -179,7 +184,7 @@ If a command exceeds these limits, the console returns `ERR ... reason=ELIMIT` (
 - `--record-trace` and `--replay-trace` require `--transport mock`.
 - `--mock-seed-gpu` seeds mock sessions with `/gpu` entries for demos/scripts.
 - Tickets are required when ticketing is enabled; the default manifest ships mintable secrets for queen and worker roles. Auth tokens (`--auth-token` / `COHSH_AUTH_TOKEN`) are separate from tickets.
-- Environment overrides: `COHSH_AUTH_TOKEN`, `COHSH_TCP_HOST`, `COHSH_TCP_PORT`, `COHSH_REST_URL`, `COH_REST_URL`, `HIVE_GATEWAY_URL`, `COHSH_POLICY`, `COHSH_TICKET_CONFIG`, `COHSH_TICKET_SECRET`, `COHSH_QEMU_ARGS`, `COHSH_TCP_DEBUG`.
+- Environment overrides: `COHSH_AUTH_TOKEN`, `COHSH_TCP_HOST`, `COHSH_TCP_PORT`, `COHSH_REST_URL`, `COH_REST_URL`, `HIVE_GATEWAY_URL`, `COHSH_REST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COHSH_POLICY`, `COHSH_TICKET_CONFIG`, `COHSH_TICKET_SECRET`, `COHSH_QEMU_ARGS`, `COHSH_TCP_DEBUG`.
 - Advanced tuning: `COHSH_POOL_CONTROL_SESSIONS`, `COHSH_POOL_TELEMETRY_SESSIONS`, `COHSH_RETRY_MAX_ATTEMPTS`, `COHSH_RETRY_BACKOFF_MS`, `COHSH_RETRY_CEILING_MS`, `COHSH_RETRY_TIMEOUT_MS`, `COHSH_HEARTBEAT_INTERVAL_MS`.
 
 ## coh
@@ -231,8 +236,8 @@ Options:
 
 ```bash
 ./bin/coh doctor --mock
-./bin/coh --rest-url http://127.0.0.1:8080 gpu list
-./bin/coh --rest-url http://127.0.0.1:8080 mount --at /tmp/coh-mount
+./bin/coh --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" gpu list
+./bin/coh --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" mount --at /tmp/coh-mount
 ./bin/coh gpu list --host 127.0.0.1 --port 31337
 ./bin/coh gpu lease --host 127.0.0.1 --port 31337 --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60
 ./bin/coh run --host 127.0.0.1 --port 31337 --gpu GPU-0 -- echo ok
@@ -247,7 +252,7 @@ Options:
 ### Notes
 - `coh mount` uses FUSE for live mounts. FUSE is enabled by default on Linux (ensure a FUSE runtime is installed). On macOS, FUSE is disabled by default; rebuild `coh` with `--features fuse` and install MacFUSE. `--mock` skips the mount check.
 - `coh mount` is long-running and stays in the foreground to serve the mount. Use a second terminal for access or run it in the background (`... &`) and unmount with `fusermount -u` (Linux) or `umount` (macOS).
-- `--rest-url` (or `COH_REST_URL` / `HIVE_GATEWAY_URL`) routes operations through `hive-gateway` and does not attach to the TCP console (queen role only).
+- `--rest-url` (or `COH_REST_URL` / `HIVE_GATEWAY_URL`) routes operations through `hive-gateway` and does not attach to the TCP console (queen role only). Use `--rest-auth-token` (or `COH_REST_AUTH_TOKEN` / `COHSH_REST_AUTH_TOKEN` / `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`) for gateway request-auth.
 - `coh mount --rest-url` is exclusive: only one REST mount per gateway URL. Unmount before starting another.
 - `coh doctor` prefers NVML; if NVML is feature-limited (Jetson), it falls back to CUDA discovery and emits `status=degraded backend=cuda`.
 - `coh gpu list`/`lease` only see GPUs after `/gpu` is published by `gpu-bridge-host` (live: `--publish`; mock: `--mock --list`).
@@ -259,6 +264,7 @@ Options:
 - Policy enforcement is manifest-driven; `COH_POLICY` (or `out/coh_policy.toml`) must hash-match the compiled defaults.
 - If policy gating is enabled (see `/policy/rules`), writes to `/queen/ctl` require approvals queued in `/actions/queue`. `coh gpu lease`, `coh run`, and `coh peft ...` will fail with `ERR ECHO reason=policy ... EPERM` until an approval is queued.
 - Auth token fallback order is `--auth-token`, `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`.
+- REST request-auth fallback order is `--rest-auth-token`, `COH_REST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, then `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`.
 - `peft import --publish` (alias `--refresh-gpu-models`) refreshes `/gpu/models` in the live VM.
 
 ## swarmui
@@ -272,7 +278,8 @@ Desktop UI (Tauri) that renders the hive view and reuses `cohsh-core` semantics.
 ### Usage
 ```bash
 ./bin/swarmui
-SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 ./bin/swarmui
+SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 \
+  SWARMUI_REST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" ./bin/swarmui
 SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./bin/swarmui
 ./bin/swarmui --replay /path/to/demo.hive.cbor
 ./bin/swarmui --replay-trace /path/to/trace_v0.trace
@@ -283,6 +290,7 @@ SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./bin/swarm
 - Transport is selected via `SWARMUI_TRANSPORT=console|tcp|9p|secure9p|rest|gateway` (default: `console`).
 - `SWARMUI_9P_HOST`/`SWARMUI_9P_PORT` supply the TCP endpoint for both console and Secure9P transports.
 - `SWARMUI_REST_URL` (fallback `COH_REST_URL`) supplies the hive-gateway base URL for `rest|gateway`.
+- REST request-auth uses `SWARMUI_REST_AUTH_TOKEN` (fallback `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`).
 - `SWARMUI_TRANSPORT=rest|gateway` is enabled by default. Use `--no-default-features` to strip REST support and rebuild with `--features rest` when needed.
 - `SWARMUI_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`) supplies the console auth token.
 - Ticket minting uses `SWARMUI_TICKET_CONFIG`/`SWARMUI_TICKET_SECRET` (fallback to `COHSH_*`).
@@ -291,7 +299,7 @@ SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./bin/swarm
 
 ## cas-tool
 ### Purpose
-Package and upload CAS bundles over the TCP console using the same append-only flows as `cohsh`.
+Package and upload CAS bundles over the TCP console or REST gateway using the same append-only flows as `cohsh`.
 
 ### Location
 - Source: `apps/cas-tool`
@@ -303,7 +311,7 @@ Usage: cas-tool <COMMAND>
 
 Commands:
   pack    Package a payload into CAS chunks and manifest
-  upload  Upload a CAS bundle via the TCP console
+  upload  Upload a CAS bundle via the TCP console or REST gateway
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -315,7 +323,8 @@ Options:
 ./bin/cas-tool pack --epoch 1 --input path/to/payload --out-dir out/cas/1
 ./bin/cas-tool upload --bundle out/cas/1 --host 127.0.0.1 --port 31337 \
   --auth-token changeme --ticket "$QUEEN_TICKET"
-./bin/cas-tool upload --bundle out/cas/1 --rest-url http://127.0.0.1:8080
+./bin/cas-tool upload --bundle out/cas/1 --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"
 ```
 
 ### Notes
@@ -323,6 +332,7 @@ Options:
 - `--template`, `--chunk-bytes`, and `--delta-base` mirror the manifest template inputs.
 - If signing is required in `configs/root_task.toml`, pass `--signing-key` when packing (Ed25519 key in hex).
 - Payloads are chunked and sent as bounded `ECHO` writes (`b64:` segments) to `/updates/<epoch>/`.
+- REST upload request-auth fallback order is `--rest-auth-token`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, then `COH_REST_AUTH_TOKEN`.
 
 ## gpu-bridge-host
 ### Purpose
@@ -344,6 +354,7 @@ Discover GPUs on the host (NVML with CUDA fallback, or mock) and emit the `/gpu`
       --auth-token <AUTH_TOKEN>  Authentication token for the live console publish mode
       --ticket <TICKET>          Optional ticket payload when attaching to the console
       --rest-url <URL>           REST gateway base URL for hive-gateway publish mode
+      --rest-auth-token <TOKEN>  Request auth token for REST mutating routes
   -h, --help                     Print help
   -V, --version                  Print version
 ```
@@ -352,7 +363,8 @@ Discover GPUs on the host (NVML with CUDA fallback, or mock) and emit the `/gpu`
 ./bin/gpu-bridge-host --mock --list
 ./bin/gpu-bridge-host --list
 ./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
-./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080
+./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"
 ./bin/gpu-bridge-host --publish --interval-ms 1000 --registry demo/peft_registry
 ```
 
@@ -360,6 +372,7 @@ Discover GPUs on the host (NVML with CUDA fallback, or mock) and emit the `/gpu`
 - `--list` prints JSON for host-side integration; it does not talk to the VM directly.
 - `--publish` streams bounded snapshots to `/gpu/bridge/ctl` over the TCP console (queen role) or hive-gateway (`--rest-url`).
 - `--rest-url` is enabled by default. Use `--no-default-features` to strip REST support and rebuild with `--features rest` when needed.
+- REST publish request-auth fallback order is `--rest-auth-token`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, then `COH_REST_AUTH_TOKEN`.
 - `--interval-ms` repeats publish in a loop; omit to send a single snapshot.
 - `--registry` points at a host model registry root to populate `/gpu/models`.
 - NVML is preferred on dGPU hosts; when NVML is feature-limited (Jetson), the bridge falls back to CUDA driver/runtime APIs to populate `/gpu/*`.
@@ -380,6 +393,7 @@ Publish host-side providers into `/host` (systemd, k8s, docker, nvidia, jetson, 
       --policy <FILE>            Path to the manifest-derived cohsh policy TOML (polling defaults)
       --watch                    Run continuously, polling providers on their configured interval
       --rest-url <URL>           REST gateway base URL for hive-gateway publish mode
+      --rest-auth-token <TOKEN>  Request auth token for REST mutating routes
       --tcp-host <TCP_HOST>      TCP host for a live NineDoor console (non-mock) [default: 127.0.0.1]
       --tcp-port <TCP_PORT>      TCP port for a live NineDoor console (non-mock) [default: 31337]
       --auth-token <AUTH_TOKEN>  Authentication token for the TCP console (non-mock) [default: changeme]
@@ -391,7 +405,8 @@ Publish host-side providers into `/host` (systemd, k8s, docker, nvidia, jetson, 
 ./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider docker --provider nvidia
 ./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
 ./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --watch
-./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --watch
+./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --watch
 ./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme \
   --provider systemd --provider k8s --provider docker --provider nvidia --watch
 ```
@@ -399,6 +414,7 @@ Publish host-side providers into `/host` (systemd, k8s, docker, nvidia, jetson, 
 ### Notes
 - Live publishing requires TCP or REST support (enabled by default). Use `--no-default-features` to strip transports, or rebuild with `--features tcp`/`--features rest` as needed.
 - `--rest-url` publishes through hive-gateway (queen role) without attaching to the TCP console.
+- REST publish request-auth fallback order is `--rest-auth-token`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, then `COH_REST_AUTH_TOKEN`.
 - Providers may be `systemd`, `k8s`, `docker`, `nvidia`, `jetson`, or `net`. When no providers are specified, the defaults are `systemd`, `k8s`, `docker`, and `nvidia`.
 - `--watch` polls providers continuously using manifest-backed polling defaults (override with `--policy`). Only `systemd`, `k8s`, `docker`, and `nvidia` have live polling schedules.
 - The `/host` namespace must be enabled in `configs/root_task.toml`.
@@ -418,6 +434,8 @@ Host-only REST gateway that maps 1:1 to Cohesix console/file semantics (`LS`, `C
       --tcp-host <TCP_HOST>      TCP console host [default: 127.0.0.1]
       --tcp-port <TCP_PORT>      TCP console port [default: 31337]
       --auth-token <AUTH_TOKEN>  TCP console auth token [default: changeme]
+      --request-auth-token <REQUEST_AUTH_TOKEN>
+                                Per-request REST auth token for mutating paths
       --role <ROLE>              Role to attach with (queen by default) [default: queen]
       --ticket <TICKET>          Optional capability ticket payload
       --mock                     Use the in-process mock NineDoor backend
@@ -428,6 +446,7 @@ Host-only REST gateway that maps 1:1 to Cohesix console/file semantics (`LS`, `C
 ```bash
 ./bin/hive-gateway --bind 127.0.0.1:8080
 COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+  HIVE_GATEWAY_REQUEST_AUTH_TOKEN=replace-with-real-token \
   COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
   ./bin/hive-gateway
 
@@ -435,7 +454,7 @@ curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 ```
 
 ### Notes
-- Environment overrides: `HIVE_GATEWAY_BIND`, `HIVE_GATEWAY_MOCK`, `COH_TCP_HOST`, `COH_TCP_PORT`, `COH_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`), `COH_ROLE`, `COH_TICKET`.
+- Environment overrides: `HIVE_GATEWAY_BIND`, `HIVE_GATEWAY_MOCK`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, `COH_TCP_HOST`, `COH_TCP_PORT`, `COH_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`), `COH_ROLE`, `COH_TICKET`.
 - OpenAPI spec + examples live in `docs/HOST_API.md` and are served at `/v1/openapi.yaml`.
 - Swagger UI is served at `/docs` and uses public CDN assets; use the YAML spec for air-gapped environments.
 - The gateway is the console client; do not attach `cohsh` or `swarmui` in console mode at the same time. Use `SWARMUI_TRANSPORT=rest` and host tool `--rest-url` flags when multiplexing.
@@ -447,6 +466,7 @@ curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 ```bash
 # On the GPU host (runs the gateway and holds the console).
 COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+  HIVE_GATEWAY_REQUEST_AUTH_TOKEN=replace-with-real-token \
   COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
   ./bin/hive-gateway
 
@@ -454,8 +474,10 @@ COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
 ssh -L 8080:127.0.0.1:8080 <gpu-host>
 
 # Use REST clients locally.
-SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 ./bin/swarmui
-./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 --role queen
+SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 \
+  SWARMUI_REST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" ./bin/swarmui
+./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --role queen
 ```
 
 ---
@@ -491,12 +513,17 @@ Why this matters: demonstrates the supported multi-tool pattern in v0.6.0-alpha.
 ```bash
 ./qemu/run.sh
 COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+  HIVE_GATEWAY_REQUEST_AUTH_TOKEN=replace-with-real-token \
   COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
   ./bin/hive-gateway
-./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 --interval-ms 1000
-./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --watch
-SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 ./bin/swarmui
-./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 --role queen
+./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --interval-ms 1000
+./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --watch
+SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 \
+  SWARMUI_REST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" ./bin/swarmui
+./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --role queen
 ```
 In `cohsh`:
 ```

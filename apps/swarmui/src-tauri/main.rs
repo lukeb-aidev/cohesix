@@ -16,10 +16,10 @@ use serde::Serialize;
 use tauri::State;
 
 use cohsh::ticket_mint::{mint_ticket_from_config, mint_ticket_from_secret, TicketMintRequest};
-use cohsh::TcpTransport as CohshTcpTransport;
-use cohsh::COHSH_TCP_PORT;
 #[cfg(feature = "rest")]
 use cohsh::RestTransport as CohshRestTransport;
+use cohsh::TcpTransport as CohshTcpTransport;
+use cohsh::COHSH_TCP_PORT;
 use cohsh_core::command::MAX_LINE_LEN;
 use cohsh_core::trace::{TraceLog, TracePolicy};
 use swarmui::{
@@ -464,6 +464,23 @@ fn resolve_ticket_secret(cli_secret: Option<String>) -> Result<Option<String>, S
     }
 }
 
+fn resolve_rest_auth_token() -> Option<String> {
+    for key in [
+        "SWARMUI_REST_AUTH_TOKEN",
+        "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
+        "COHSH_REST_AUTH_TOKEN",
+        "COH_REST_AUTH_TOKEN",
+    ] {
+        if let Ok(value) = env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
+        }
+    }
+    None
+}
+
 fn mint_ticket_for_role(
     role_label: &str,
     subject: Option<&str>,
@@ -563,9 +580,14 @@ fn main() {
                     let rest_url = env::var("SWARMUI_REST_URL")
                         .or_else(|_| env::var("COH_REST_URL"))
                         .unwrap_or_else(|_| "http://127.0.0.1:8080".to_owned());
-                    let transport = CohshRestTransport::new(rest_url.clone(), None);
+                    let rest_auth_token = resolve_rest_auth_token();
+                    let transport =
+                        CohshRestTransport::new(rest_url.clone(), rest_auth_token.clone());
                     SwarmUiService::Rest(SwarmUiConsoleBackend::with_rest_transport(
-                        config, transport, rest_url,
+                        config,
+                        transport,
+                        rest_url,
+                        rest_auth_token,
                     ))
                 }
                 #[cfg(not(feature = "rest"))]
@@ -573,9 +595,7 @@ fn main() {
                     panic!("SWARMUI_TRANSPORT=rest requires swarmui built with --features rest");
                 }
             }
-            other => panic!(
-                "unsupported SWARMUI_TRANSPORT '{other}' (use console, 9p, or rest)"
-            ),
+            other => panic!("unsupported SWARMUI_TRANSPORT '{other}' (use console, 9p, or rest)"),
         }
     };
     let mut hive_replay_loaded = false;

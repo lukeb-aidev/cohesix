@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: CLI entry point for the coh host bridge tool.
 // Author: Lukas Bower
@@ -69,6 +69,9 @@ struct ConnectArgs {
     /// REST gateway base URL for hive-gateway (optional).
     #[arg(long, value_name = "URL", global = true)]
     rest_url: Option<String>,
+    /// Request auth token for REST mutating routes.
+    #[arg(long, value_name = "TOKEN", global = true)]
+    rest_auth_token: Option<String>,
     /// TCP console auth token.
     #[arg(long, global = true)]
     auth_token: Option<String>,
@@ -313,7 +316,8 @@ fn run_mount(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: MountAr
                 return Err(err);
             }
         };
-        let client = RestSession::connect(rest_url.as_str());
+        let rest_auth_token = resolve_rest_auth_token(args.connect.rest_auth_token.as_deref());
+        let client = RestSession::connect(rest_url.as_str(), rest_auth_token);
         audit.push_ack(cohsh_core::wire::AckStatus::Ok, "MOUNT", Some("mode=rest"));
         emit_audit(audit);
         return mount::mount_rest(client, policy, &args.at);
@@ -861,6 +865,28 @@ fn resolve_rest_url(cli_value: Option<&str>) -> Option<String> {
     None
 }
 
+fn resolve_rest_auth_token(cli_value: Option<&str>) -> Option<String> {
+    if let Some(value) = cli_value {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    for key in [
+        "COH_REST_AUTH_TOKEN",
+        "COHSH_REST_AUTH_TOKEN",
+        "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
+    ] {
+        if let Ok(value) = env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
+        }
+    }
+    None
+}
+
 fn connect_console(
     args: &ConnectArgs,
     policy: &CohPolicy,
@@ -889,7 +915,11 @@ fn connect_access(
         if role != Role::Queen {
             return Err(anyhow!("rest transport supports queen role only"));
         }
-        return Ok(AccessHandle::Rest(RestSession::connect(rest_url)));
+        let rest_auth_token = resolve_rest_auth_token(args.rest_auth_token.as_deref());
+        return Ok(AccessHandle::Rest(RestSession::connect(
+            rest_url,
+            rest_auth_token,
+        )));
     }
     let console = connect_console(args, policy, role, ticket)?;
     Ok(AccessHandle::Console(console))

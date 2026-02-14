@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide REST-backed CohAccess helpers for coh.
 // Author: Lukas Bower
@@ -16,10 +16,12 @@ pub struct RestSession {
 
 impl RestSession {
     /// Connect to the REST gateway.
-    pub fn connect(base_url: impl Into<String>) -> Self {
-        Self {
-            client: GatewayClient::new(base_url),
+    pub fn connect(base_url: impl Into<String>, request_auth_token: Option<String>) -> Self {
+        let mut client = GatewayClient::new(base_url);
+        if let Some(token) = request_auth_token {
+            client = client.with_request_auth_token(token);
         }
+        Self { client }
     }
 
     fn join_lines(lines: &[String]) -> Vec<u8> {

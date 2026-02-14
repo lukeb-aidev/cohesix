@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: CLI entry point for CAS bundle packaging and upload.
 // Author: Lukas Bower
@@ -19,6 +19,7 @@ use cohesix_rest::GatewayClient;
 use cohesix_ticket::Role;
 use cohsh::{TcpTransport, Transport};
 use sha2::{Digest, Sha256};
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::str;
@@ -39,7 +40,7 @@ struct Cli {
 enum Command {
     /// Package a payload into CAS chunks and manifest.
     Pack(PackArgs),
-    /// Upload a CAS bundle via the TCP console.
+    /// Upload a CAS bundle via the TCP console or REST gateway.
     Upload(UploadArgs),
 }
 
@@ -76,6 +77,9 @@ struct UploadArgs {
     /// REST gateway base URL for hive-gateway upload mode.
     #[arg(long, value_name = "URL")]
     rest_url: Option<String>,
+    /// Request auth token for REST mutating routes.
+    #[arg(long, value_name = "TOKEN")]
+    rest_auth_token: Option<String>,
     /// TCP host for the Cohesix console.
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
@@ -161,7 +165,10 @@ fn upload_bundle(args: UploadArgs) -> Result<()> {
     }
 
     if let Some(rest_url) = args.rest_url.as_deref() {
-        let client = GatewayClient::new(rest_url);
+        let mut client = GatewayClient::new(rest_url);
+        if let Some(token) = resolve_rest_auth_token(args.rest_auth_token.as_deref()) {
+            client = client.with_request_auth_token(token);
+        }
         for (digest_hex, payload) in chunks {
             let path = format!("/updates/{}/chunks/{}", manifest.epoch, digest_hex);
             upload_b64_segments_rest(&client, path.as_str(), &payload)?;
@@ -169,7 +176,8 @@ fn upload_bundle(args: UploadArgs) -> Result<()> {
         let manifest_path = format!("/updates/{}/manifest.cbor", manifest.epoch);
         upload_b64_segments_rest(&client, manifest_path.as_str(), &manifest_bytes)?;
     } else {
-        let mut transport = TcpTransport::new(args.host, args.port).with_auth_token(args.auth_token);
+        let mut transport =
+            TcpTransport::new(args.host, args.port).with_auth_token(args.auth_token);
         let session = transport.attach(Role::Queen, args.ticket.as_deref())?;
 
         for (digest_hex, payload) in chunks {
@@ -187,6 +195,28 @@ fn upload_bundle(args: UploadArgs) -> Result<()> {
 
     println!("cas-tool: uploaded update epoch={}", manifest.epoch);
     Ok(())
+}
+
+fn resolve_rest_auth_token(cli_value: Option<&str>) -> Option<String> {
+    if let Some(value) = cli_value {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    for key in [
+        "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
+        "COHSH_REST_AUTH_TOKEN",
+        "COH_REST_AUTH_TOKEN",
+    ] {
+        if let Ok(value) = env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
+        }
+    }
+    None
 }
 
 fn upload_b64_segments(

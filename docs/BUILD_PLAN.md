@@ -96,6 +96,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25a](#25a) | REST Live Hive Performance (Parallel Polling + Batching) | Pending |
 | [25b](#25b) | Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) | Complete |
 | [25c](#25c) | Python Orchestration SDK (1k Fleet Playbooks + Host Integrations) | Complete |
+| [25d](#25d) | REST Request-Auth Parity Across Host Tools (Gateway Capability Max) | Pending |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -5184,6 +5185,94 @@ Checks:
   - Local and G5g test runs both pass; docs match as-built behavior.
 Deliverables:
   - Updated docs + Linux validation evidence.
+```
+
+## Milestone 25d — REST Request-Auth Parity Across Host Tools (Gateway Capability Max) <a id="25d"></a>
+[Milestones](#Milestones)
+
+**Why now (gateway readiness at 1k scale):** `hive-gateway` now enforces request-auth at the REST edge for mutating paths. Any host tool that can route through REST must attach request-auth consistently or it becomes a brittle outlier in multi-tool, high-concurrency deployments.
+
+**Status:** Pending
+
+## Goal
+Deliver request-auth parity across all REST-capable host tools so gateway mode is predictable, secure, and low-friction:
+1. Standardize token resolution order (CLI override + canonical env fallbacks).
+2. Attach request-auth headers from every REST-capable host client path (including parallel fan-out paths).
+3. Preserve single-console architecture (`hive-gateway` remains the only TCP console client in multiplexed mode).
+4. Keep docs aligned with as-built CLI/env behavior.
+
+## Non-Goals (Explicit)
+- No new REST routes, RPC semantics, or control-plane verbs.
+- No changes to in-VM console grammar (`ACK/ERR/END`) or NineDoor behavior.
+- No changes to ticket authorization semantics.
+- No changes under `releases/` in this milestone.
+
+## Implementation Touchpoints
+- `apps/coh/src/main.rs`, `apps/coh/src/rest.rs` - add REST request-auth token CLI/env resolution and attach headers for all REST access paths.
+- `apps/cas-tool/src/main.rs` - add REST request-auth support for CAS uploads through gateway.
+- `apps/gpu-bridge-host/src/main.rs` - add REST request-auth support for `/gpu/bridge/ctl` publish mode.
+- `apps/swarmui/src-tauri/main.rs`, `apps/swarmui/src/lib.rs`, `apps/swarmui/src/hive.rs` - propagate request-auth token through REST transport bootstrap and parallel telemetry/status polling paths.
+- `docs/HOST_TOOLS.md`, `docs/USERLAND_AND_CLI.md` - document canonical REST request-auth flags/env fallbacks for host operators.
+
+## Commands
+- `cargo test -p coh`
+- `cargo test -p cas-tool`
+- `cargo test -p gpu-bridge-host`
+- `cargo test -p swarmui`
+- `cargo check -p swarmui`
+
+## Checks (DoD)
+- All REST-capable host tools attach request-auth when provided via CLI/env.
+- No REST-capable host tool requires ad-hoc or undocumented env variables.
+- SwarmUI REST parallel fan-out paths (status + telemetry) preserve request-auth headers.
+- Gateway-mode docs list the exact token flags/env keys operators must set.
+- Existing TCP/mock flows remain unchanged.
+
+## Task Breakdown
+```
+Title/ID: m25d-rest-auth-parity-host-tools
+Goal: Ensure every REST-capable host tool resolves and attaches gateway request-auth headers.
+Inputs: apps/coh/src/main.rs, apps/coh/src/rest.rs, apps/cas-tool/src/main.rs, apps/gpu-bridge-host/src/main.rs.
+Changes:
+  - apps/coh/src/main.rs, apps/coh/src/rest.rs - add `--rest-auth-token` support and env fallback resolution for REST mode.
+  - apps/cas-tool/src/main.rs - add `--rest-auth-token` and env fallbacks for REST upload mode.
+  - apps/gpu-bridge-host/src/main.rs - add `--rest-auth-token` and env fallbacks for REST publish mode.
+Commands:
+  - cargo test -p coh
+  - cargo test -p cas-tool
+  - cargo test -p gpu-bridge-host
+Checks:
+  - REST clients instantiate `GatewayClient` with request-auth when configured.
+Deliverables:
+  - Host-tool REST request-auth parity with deterministic fallback order.
+
+Title/ID: m25d-swarmui-rest-auth-fanout
+Goal: Propagate request-auth through SwarmUI REST boot and parallel fan-out reads/tails.
+Inputs: apps/swarmui/src-tauri/main.rs, apps/swarmui/src/lib.rs, apps/swarmui/src/hive.rs.
+Changes:
+  - apps/swarmui/src-tauri/main.rs - resolve `SWARMUI_REST_AUTH_TOKEN` + canonical gateway env fallbacks.
+  - apps/swarmui/src/lib.rs - carry request-auth token in REST parallel config and pass to all spawned transports.
+  - apps/swarmui/src/hive.rs - attach request-auth token in parallel telemetry tail workers.
+Commands:
+  - cargo test -p swarmui
+  - cargo check -p swarmui
+Checks:
+  - No SwarmUI REST code path creates `CohshRestTransport` without request-auth propagation.
+Deliverables:
+  - SwarmUI REST transport parity with gateway auth policy.
+
+Title/ID: m25d-docs-as-built-rest-auth
+Goal: Keep operator docs fully aligned with REST auth semantics after parity fixes.
+Inputs: docs/HOST_TOOLS.md, docs/USERLAND_AND_CLI.md.
+Changes:
+  - docs/HOST_TOOLS.md - document per-tool `--rest-auth-token` and env fallback behavior.
+  - docs/USERLAND_AND_CLI.md - reflect gateway request-auth requirements for `coh` and `swarmui` REST mode.
+Commands:
+  - scripts/ci/check_test_plan.sh
+Checks:
+  - Docs match shipped tool flags and env keys exactly.
+Deliverables:
+  - Updated host-tool operator guidance with no auth ambiguity.
 ```
 
 ----

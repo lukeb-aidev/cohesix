@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: CLI entry point for the host-side GPU bridge; prints mirrored namespace metadata.
 // Author: Lukas Bower
@@ -11,9 +11,9 @@
 
 use anyhow::{anyhow, Context, Result};
 use clap::{ArgAction, Parser};
-use cohsh_core::wire::{parse_ack, AckStatus};
 #[cfg(feature = "rest")]
 use cohesix_rest::GatewayClient;
+use cohsh_core::wire::{parse_ack, AckStatus};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -61,6 +61,9 @@ struct Args {
     /// REST gateway base URL for hive-gateway publish mode.
     #[arg(long, value_name = "URL")]
     rest_url: Option<String>,
+    /// Request auth token for REST mutating routes.
+    #[arg(long, value_name = "TOKEN")]
+    rest_auth_token: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -75,7 +78,10 @@ fn main() -> Result<()> {
         if let Some(rest_url) = args.rest_url.as_deref() {
             #[cfg(feature = "rest")]
             {
-                let client = GatewayClient::new(rest_url);
+                let mut client = GatewayClient::new(rest_url);
+                if let Some(token) = resolve_rest_auth_token(args.rest_auth_token.as_deref()) {
+                    client = client.with_request_auth_token(token);
+                }
                 loop {
                     let snapshot = bridge.serialise_namespace()?;
                     let publish = build_publish_lines(&snapshot)?;
@@ -144,6 +150,29 @@ fn resolve_auth_token(cli_token: Option<&str>) -> String {
     "changeme".to_owned()
 }
 
+#[cfg(feature = "rest")]
+fn resolve_rest_auth_token(cli_value: Option<&str>) -> Option<String> {
+    if let Some(value) = cli_value {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    for key in [
+        "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
+        "COHSH_REST_AUTH_TOKEN",
+        "COH_REST_AUTH_TOKEN",
+    ] {
+        if let Ok(value) = std::env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
+        }
+    }
+    None
+}
+
 struct ConsoleClient {
     stream: TcpStream,
 }
@@ -195,8 +224,7 @@ impl ConsoleClient {
         let payload_len = total_len.saturating_sub(4);
         let mut payload = vec![0u8; payload_len];
         self.stream.read_exact(&mut payload)?;
-        let line =
-            String::from_utf8(payload).map_err(|_| anyhow!("console frame is not UTF-8"))?;
+        let line = String::from_utf8(payload).map_err(|_| anyhow!("console frame is not UTF-8"))?;
         Ok(Some(line))
     }
 

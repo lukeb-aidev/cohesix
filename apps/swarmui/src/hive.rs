@@ -3,19 +3,19 @@
 // Purpose: SwarmUI Live Hive event modeling, replay, and bounded polling helpers.
 // Author: Lukas Bower
 
-use std::collections::{HashMap, VecDeque};
-use std::time::{SystemTime, UNIX_EPOCH};
-#[cfg(feature = "rest")]
-use cohsh::RestTransport as CohshRestTransport;
-use cohsh::client::CohClient;
-use cohsh::{Session, Transport};
-use cohsh_core::{BoundedLineBuffer, Secure9pTransport, TailPollPolicy, TailPoller};
 #[cfg(feature = "rest")]
 use cohesix_ticket::Role;
+use cohsh::client::CohClient;
 #[cfg(feature = "rest")]
-use std::thread;
+use cohsh::RestTransport as CohshRestTransport;
+use cohsh::{Session, Transport};
+use cohsh_core::{BoundedLineBuffer, Secure9pTransport, TailPollPolicy, TailPoller};
 use secure9p_codec::OpenMode;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
+#[cfg(feature = "rest")]
+use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{SwarmUiError, SwarmUiTranscript};
 
@@ -517,18 +517,23 @@ impl HiveSessionState {
                     let fid = client
                         .open(&path, OpenMode::read_only())
                         .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
-                    self.cursors
-                        .entry(worker_id.clone())
-                        .or_insert_with(|| {
-                            HiveTelemetryCursor::new(
-                                &worker_id,
-                                fid,
-                                TailPoller::new(self.tail_policy, None),
-                            )
-                        })
+                    self.cursors.entry(worker_id.clone()).or_insert_with(|| {
+                        HiveTelemetryCursor::new(
+                            &worker_id,
+                            fid,
+                            TailPoller::new(self.tail_policy, None),
+                        )
+                    })
                 }
             };
-            cursor.fill_pending(client, msize, budget, pending_cap, now_ms, &mut self.dropped)?;
+            cursor.fill_pending(
+                client,
+                msize,
+                budget,
+                pending_cap,
+                now_ms,
+                &mut self.dropped,
+            )?;
             let detail_lines = config.detail_lines as usize;
             let line_cap = config.line_cap_bytes as usize;
             let per_worker = config.per_worker_bytes as usize;
@@ -536,10 +541,7 @@ impl HiveSessionState {
                 .buffers
                 .remove(&worker_id)
                 .unwrap_or_else(|| BoundedLineBuffer::new(detail_lines, per_worker, line_cap));
-            let role = self
-                .roles
-                .get(&worker_id)
-                .map(|value| value.as_str());
+            let role = self.roles.get(&worker_id).map(|value| value.as_str());
             let (consumed, touched) = cursor.drain_events(
                 worker_root,
                 &mut self.seq,
@@ -932,10 +934,7 @@ impl ConsoleHiveSessionState {
                 .buffers
                 .remove(&worker_id)
                 .unwrap_or_else(|| BoundedLineBuffer::new(detail_lines, per_worker, line_cap));
-            let role = self
-                .roles
-                .get(&worker_id)
-                .map(|value| value.as_str());
+            let role = self.roles.get(&worker_id).map(|value| value.as_str());
             let mut touched = false;
             for line in lines {
                 if budget == 0 {
@@ -977,6 +976,7 @@ impl ConsoleHiveSessionState {
         worker_root: &str,
         config: &SwarmUiHiveConfig,
         rest_url: &str,
+        request_auth_token: Option<&str>,
         parallel_limit: usize,
         role: Role,
         ticket: Option<&str>,
@@ -995,6 +995,7 @@ impl ConsoleHiveSessionState {
         let mut offset = 0usize;
         let parallel_limit = parallel_limit.max(1);
         let ticket_owned = ticket.map(str::to_owned);
+        let request_auth_token_owned = request_auth_token.map(str::to_owned);
 
         'outer: while offset < worker_count && processed < max_workers && budget > 0 {
             let mut batch = Vec::new();
@@ -1026,10 +1027,12 @@ impl ConsoleHiveSessionState {
                     let mut handles = Vec::with_capacity(poll_targets.len());
                     for worker_id in &poll_targets {
                         let rest_url = rest_url.clone();
+                        let request_auth_token = request_auth_token_owned.clone();
                         let ticket = ticket_owned.clone();
                         let worker_id = worker_id.clone();
                         handles.push(scope.spawn(move || {
-                            let mut transport = CohshRestTransport::new(rest_url, None);
+                            let mut transport =
+                                CohshRestTransport::new(rest_url, request_auth_token);
                             let session = transport
                                 .attach(role, ticket.as_deref())
                                 .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
@@ -1071,10 +1074,7 @@ impl ConsoleHiveSessionState {
                         "missing REST tail result for {worker_id}"
                     )));
                 };
-                let poller = self
-                    .pollers
-                    .get_mut(&worker_id)
-                    .expect("poller exists");
+                let poller = self.pollers.get_mut(&worker_id).expect("poller exists");
                 poller.mark_polled(now_ms);
                 let mut lines = lines;
                 if pending_cap > 0 && lines.len() > pending_cap {
@@ -1090,10 +1090,7 @@ impl ConsoleHiveSessionState {
                     .buffers
                     .remove(&worker_id)
                     .unwrap_or_else(|| BoundedLineBuffer::new(detail_lines, per_worker, line_cap));
-                let role = self
-                    .roles
-                    .get(&worker_id)
-                    .map(|value| value.as_str());
+                let role = self.roles.get(&worker_id).map(|value| value.as_str());
                 let mut touched = false;
                 for line in lines {
                     if budget == 0 {
