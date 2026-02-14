@@ -4776,6 +4776,9 @@ Checks:
 Deliverables:
   - Freshness-first Live Hive with documented bounds and ≥100x reduction in worst-case UI/ingest latency.
 ```
+----
+**Release 0.6.0 alpha**
+----
 
 ## Milestone 25a — REST Live Hive Performance (Parallel Polling + Batching) <a id="25a"></a> 
 [Milestones](#Milestones)
@@ -4911,6 +4914,9 @@ Checks:
 Deliverables:
   - Manifest-driven root-task affinity wiring for the init TCB.
 ```
+----
+**Release 0.7.0 alpha**
+----
 
 ## Milestone 25b — Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) <a id="25b"></a>
 [Milestones](#Milestones)
@@ -5181,12 +5187,12 @@ Deliverables:
 ```
 
 ----
-**Release 0.5.0 alpha**
+**Release 0.8.0 alpha**
 ----
 
 ---
 
-The next Alpha release targets bare metal UEFI and AWS native boot via AMI.
+The next planned releases will target bare metal UEFI and AWS native boot via AMI.
 
 ---
 

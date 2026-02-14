@@ -67,10 +67,11 @@ else
     fi
   fi
   python_matrix=(
-    "\"${python_bin}\" -m pytest -k cohesix_parity"
+    "\"${python_bin}\" -m pytest tools/cohesix-py/tests"
     "\"${python_bin}\" tools/cohesix-py/examples/lease_run.py --mock"
     "\"${python_bin}\" tools/cohesix-py/examples/peft_roundtrip.py --mock"
     "\"${python_bin}\" tools/cohesix-py/examples/telemetry_write_pull.py --mock"
+    "\"${python_bin}\" tools/cohesix-py/examples/use_case_playbook.py --playbook mixed-closed-loop-ai-factory --dry-run --mock --no-proc-snapshot --no-host-snapshot --no-push-host-snapshot --out out/test-plan/python-playbooks"
   )
   for command in "${python_matrix[@]}"; do
     tp_run_shell "${command}" "${command}"

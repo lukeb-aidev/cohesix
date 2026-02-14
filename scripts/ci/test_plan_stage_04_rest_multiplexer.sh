@@ -30,4 +30,30 @@ tp_log "INFO  gateway-auth-token=present"
 
 tp_run_cmd "cohsh-rest-regression-batch" "${TEST_PLAN_ROOT}/scripts/cohsh/REST_regression_batch.sh"
 
+if [[ "${TP_SKIP_PYTHON:-0}" == "1" ]]; then
+  tp_log "SKIP  python-rest-smoke (TP_SKIP_PYTHON=1)"
+else
+  python_bin="${TP_PYTHON_BIN:-python3}"
+  tp_run_shell "python-rest-smoke" \
+    "COHESIX_GATEWAY_URL=\"${gateway_url}\" HIVE_GATEWAY_REQUEST_AUTH_TOKEN=\"${gateway_auth_token}\" \"${python_bin}\" - <<'PY'
+import os
+import sys
+from pathlib import Path
+
+repo_root = Path.cwd()
+sys.path.insert(0, str(repo_root / \"tools\" / \"cohesix-py\"))
+
+from cohesix.backends import RestBackend
+
+gateway_url = os.environ[\"COHESIX_GATEWAY_URL\"]
+backend = RestBackend(gateway_url)
+
+root_entries = backend.list_dir(\"/\")
+if not root_entries:
+    raise SystemExit(\"REST smoke failed: root listing is empty\")
+log_payload = backend.read_file(\"/log/queen.log\", 4096)
+print(f\"python-rest-smoke root_entries={len(root_entries)} log_bytes={len(log_payload)}\")
+PY"
+fi
+
 tp_stage_complete 4

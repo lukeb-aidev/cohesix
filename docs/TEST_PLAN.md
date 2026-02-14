@@ -109,10 +109,11 @@ Run in order unless explicitly skipped with a recorded reason.
 - `cargo test -p tests`
 - `cargo test --workspace`
 - If `pytest` is not available in the host `python3`, `scripts/ci/test_plan_stage_02_host_fast.sh` auto-creates `${TEST_PLAN_STATE_DIR}/.venv` and installs `pytest` there.
-- `python3 -m pytest -k cohesix_parity`
+- `python3 -m pytest tools/cohesix-py/tests`
 - `python3 tools/cohesix-py/examples/lease_run.py --mock`
 - `python3 tools/cohesix-py/examples/peft_roundtrip.py --mock`
 - `python3 tools/cohesix-py/examples/telemetry_write_pull.py --mock`
+- `python3 tools/cohesix-py/examples/use_case_playbook.py --playbook mixed-closed-loop-ai-factory --dry-run --mock --no-proc-snapshot --no-host-snapshot --no-push-host-snapshot --out out/test-plan/python-playbooks`
 - Fixture regen (only when needed):
   - `COHESIX_WRITE_TRACE=1 cargo test -p cohsh --test trace`
   - `COHESIX_WRITE_TRACE=1 cargo test -p swarmui --test trace`
@@ -342,6 +343,7 @@ Run while QEMU is up:
 ### 6) Regression pack (full-stack, recommended before release)
 - `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` (requires `COHESIX_GATEWAY_URL` or equivalent gateway env var)
 - `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> scripts/cohsh/REST_regression_batch.sh`
+- Stage 04 also runs a Python REST smoke (`tools/cohesix-py` `RestBackend`) that performs `LS /` and `CAT /log/queen.log` against the same gateway.
 - The batch archives logs under `out/regression-logs/<batch>/<script>.run*.log`.
 - Verify logs show no unexpected errors or disconnects.
 - From Milestone 25 onward, use the REST batch above; the TCP/QEMU batch remains a local bring-up tool only.
@@ -358,7 +360,7 @@ Run Sections 3–5 using the extracted bundle in a clean temp directory (not the
 - macOS bundle: `releases/Cohesix-0.7.0-alpha-MacOS.tar.gz`
 - Ubuntu bundle: `releases/Cohesix-0.7.0-alpha-linux.tar.gz`
 - Ensure headless Linux uses `xvfb-run` for SwarmUI.
-- The release bundle includes `tests/fixtures/transcripts` for running `python3 -m pytest -k cohesix_parity`.
+- The release bundle includes Python tests and fixtures for running `python3 -m pytest tools/cohesix-py/tests`.
 
 ### 8) Final release gate (must pass)
 - `scripts/ci/test_plan_stage_05_due_diligence.sh`
