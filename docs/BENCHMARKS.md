@@ -48,11 +48,11 @@ No `--mock` mode was used for reported results.
 ### Run Matrix
 | Run ID | Purpose | Key Params | Artifact Prefix |
 | --- | --- | --- | --- |
-| `RAMP-1K` | Baseline (prior validated cap) | `workers=8..1000`, `intensity=4`, `duration=8m` | `logs/m25b_1k_rerun_20260213T233420Z` |
-| `FIXED-1K` | Baseline hard-cap proof | `workers=1000`, `intensity=1`, `duration=1m` | `logs/m25b_1k_rerun_fixed1000_20260213T234240Z` |
-| `RAMP-1P5K` | New-cap degradation mapping | `workers=8..1500`, `intensity=4`, `duration=8m` | `logs/m25b_1p5k_ramp_20260214T020554Z` |
-| `FIXED-1P5K` | New hard-cap proof | `workers=1500`, `intensity=1`, `duration=1m` | `logs/m25b_1p5k_fixed1500_v2_20260214T020432Z` |
-| `FIXED-1200-I4` | Aggressive sustained check | `workers=1200`, `intensity=4`, `duration=2m` | `logs/m25b_1p5k_fixed1200_i4_20260214T021516Z` |
+| `RAMP-1K` | Baseline (prior validated cap) | `workers=8..1000`, `intensity=4`, `duration=8m` | `docs/bench/m25b_1k_rerun_20260213T233420Z` |
+| `FIXED-1K` | Baseline hard-cap proof | `workers=1000`, `intensity=1`, `duration=1m` | `docs/bench/m25b_1k_rerun_fixed1000_20260213T234240Z` |
+| `RAMP-1P5K` | New-cap degradation mapping | `workers=8..1500`, `intensity=4`, `duration=8m` | `docs/bench/m25b_1p5k_ramp_20260214T020554Z` |
+| `FIXED-1P5K` | New hard-cap proof | `workers=1500`, `intensity=1`, `duration=1m` | `docs/bench/m25b_1p5k_fixed1500_v2_20260214T020432Z` |
+| `FIXED-1200-I4` | Aggressive sustained check | `workers=1200`, `intensity=4`, `duration=2m` | `docs/bench/m25b_1p5k_fixed1200_i4_20260214T021516Z` |
 
 ### Results
 | Metric | `RAMP-1K` | `FIXED-1K` | `RAMP-1P5K` | `FIXED-1P5K` | `FIXED-1200-I4` |
@@ -80,25 +80,25 @@ No `--mock` mode was used for reported results.
 - **Recommendation:** keep hard cap at `1500` now, but treat `~1100` as the conservative aggressive-load SLO target until gateway rate-control and queueing are tuned.
 
 ### Graphs
-- `RAMP-1P5K`: `logs/m25b_1p5k_ramp_20260214T020554Z.ramp.svg`
-- `FIXED-1P5K`: `logs/m25b_1p5k_fixed1500_v2_20260214T020432Z.ramp.svg`
-- `FIXED-1200-I4`: `logs/m25b_1p5k_fixed1200_i4_20260214T021516Z.ramp.svg`
+- `RAMP-1P5K`: `docs/bench/m25b_1p5k_ramp_20260214T020554Z.ramp.svg`
+- `FIXED-1P5K`: `docs/bench/m25b_1p5k_fixed1500_v2_20260214T020432Z.ramp.svg`
+- `FIXED-1200-I4`: `docs/bench/m25b_1p5k_fixed1200_i4_20260214T021516Z.ramp.svg`
 
-![RAMP-1P5K Worker/Error Graph](../logs/m25b_1p5k_ramp_20260214T020554Z.ramp.svg)
+![RAMP-1P5K Worker/Error Graph](bench/m25b_1p5k_ramp_20260214T020554Z.ramp.svg)
 
-![FIXED-1P5K Worker/Error Graph](../logs/m25b_1p5k_fixed1500_v2_20260214T020432Z.ramp.svg)
+![FIXED-1P5K Worker/Error Graph](bench/m25b_1p5k_fixed1500_v2_20260214T020432Z.ramp.svg)
 
-![FIXED-1200-I4 Worker/Error Graph](../logs/m25b_1p5k_fixed1200_i4_20260214T021516Z.ramp.svg)
+![FIXED-1200-I4 Worker/Error Graph](bench/m25b_1p5k_fixed1200_i4_20260214T021516Z.ramp.svg)
 
 ### Evidence Index
-- `logs/m25b_1k_rerun_20260213T233420Z.summary.json`
-- `logs/m25b_1k_rerun_fixed1000_20260213T234240Z.summary.json`
-- `logs/m25b_1p5k_ramp_20260214T020554Z.summary.json`
-- `logs/m25b_1p5k_fixed1500_v2_20260214T020432Z.summary.json`
-- `logs/m25b_1p5k_fixed1200_i4_20260214T021516Z.summary.json`
-- `logs/m25b_1p5k_ramp_20260214T020554Z.ramp.csv`
-- `logs/m25b_1p5k_fixed1500_v2_20260214T020432Z.ramp.csv`
-- `logs/m25b_1p5k_fixed1200_i4_20260214T021516Z.ramp.csv`
+- `docs/bench/m25b_1k_rerun_20260213T233420Z.summary.json`
+- `docs/bench/m25b_1k_rerun_fixed1000_20260213T234240Z.summary.json`
+- `docs/bench/m25b_1p5k_ramp_20260214T020554Z.summary.json`
+- `docs/bench/m25b_1p5k_fixed1500_v2_20260214T020432Z.summary.json`
+- `docs/bench/m25b_1p5k_fixed1200_i4_20260214T021516Z.summary.json`
+- `docs/bench/m25b_1p5k_ramp_20260214T020554Z.ramp.csv`
+- `docs/bench/m25b_1p5k_fixed1500_v2_20260214T020432Z.ramp.csv`
+- `docs/bench/m25b_1p5k_fixed1200_i4_20260214T021516Z.ramp.csv`
 
 ### Repro Commands
 ```bash
