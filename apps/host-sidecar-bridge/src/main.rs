@@ -14,6 +14,8 @@ use cohsh::NineDoorTransport;
 use cohsh::{default_policy_path, load_policy, CohshPolicy, Transport};
 use host_sidecar_bridge::{default_providers, HostSidecarBridge};
 use nine_door::{HostNamespaceConfig, HostProvider, NineDoor};
+#[cfg(any(feature = "rest", feature = "tcp"))]
+use std::env;
 use std::path::PathBuf;
 #[cfg(any(feature = "rest", feature = "tcp"))]
 use std::thread;
@@ -52,6 +54,10 @@ struct Args {
     /// REST gateway base URL for hive-gateway publish mode.
     #[arg(long, value_name = "URL")]
     rest_url: Option<String>,
+
+    /// Request auth token for REST write operations (header auth at hive-gateway edge).
+    #[arg(long, value_name = "TOKEN")]
+    rest_auth_token: Option<String>,
 
     /// TCP host for a live NineDoor console (non-mock).
     #[cfg(feature = "tcp")]
@@ -117,7 +123,13 @@ fn main() -> Result<()> {
     if let Some(rest_url) = args.rest_url.as_deref() {
         #[cfg(any(feature = "rest", feature = "tcp"))]
         {
-            let mut transport = RestTransport::new(rest_url);
+            let rest_auth_token = args.rest_auth_token.clone().or_else(|| {
+                env::var("HIVE_GATEWAY_REQUEST_AUTH_TOKEN")
+                    .or_else(|_| env::var("COHSH_REST_AUTH_TOKEN"))
+                    .or_else(|_| env::var("COH_REST_AUTH_TOKEN"))
+                    .ok()
+            });
+            let mut transport = RestTransport::new(rest_url, rest_auth_token);
             let session = bridge.attach(&mut transport)?;
             let topology = bridge.discover_topology(&mut transport, &session);
             if args.watch {

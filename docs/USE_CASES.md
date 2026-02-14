@@ -1,16 +1,16 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Catalogue high-value Cohesix use cases and their operational constraints. -->
 <!-- Author: Lukas Bower -->
 # USE_CASES.md
 Author: Lukas Bower — October 15, 2025
-Revision: February 4, 2026
+Revision: February 14, 2026
 
 ## Purpose
 This document enumerates concrete, high-value use cases for Cohesix across sectors. It preserves technical specifics while adding business context so stakeholders can quickly assess fit, risk, and required integrations.
 
 ## Executive Summary
-Cohesix is a control-plane operating system for secure orchestration and telemetry of edge GPU nodes. It exposes a Secure9P file namespace as the only control surface and keeps heavy ecosystems (Kubernetes, CUDA/NVML, OT protocols, model registries) on the host and outside the VM's trusted computing base. For business stakeholders, this means smaller audit scope, safer multi-tenant GPU sharing, and resilient operations in disconnected or hostile networks.
+Cohesix is a control-plane operating system for secure orchestration and telemetry of edge GPU nodes. It exposes a Secure9P file namespace as the only control surface and keeps heavy ecosystems (Kubernetes, CUDA/NVML, OT protocols, model registries) on the host and outside the VM's trusted computing base. Milestone 25c now adds a world-class Python orchestration surface with typed control APIs, host-provider adapters, and ready-to-run playbooks for Mac, Jetson, and mixed 1k-worker fleets. For business stakeholders, this means smaller audit scope, safer multi-tenant GPU sharing, and faster integration into existing Python tooling.
 
 ## Positioning (Business + Technical)
 **Cohesix is:**
@@ -32,16 +32,67 @@ Cohesix is a control-plane operating system for secure orchestration and telemet
 ## Operating Model (As-Built)
 A Cohesix hive runs inside an seL4 VM on aarch64. The Queen (root-task + NineDoor) exposes `/queen`, `/proc`, `/log`, and sharded worker telemetry under `/shard/<label>/worker/<id>/telemetry`, with optional `/gpu`, `/host`, `/policy`, `/audit`, `/replay`, `/updates`, and `/models` namespaces when enabled by the manifest. Workers run as separate roles with bounded budgets. External ecosystems live on the host; host-side bridges publish `/host/*` and `/gpu/*` views into the namespace. QEMU `aarch64/virt` is the reference dev/CI environment, and UEFI ARM64 hardware is the target deployment profile.
 
+## Python Orchestration Surface (As-Built, Milestone 25c)
+The Python SDK (`tools/cohesix-py`) is now a first-class operator path for high-scale automation while preserving Cohesix protocol boundaries.
+
+**Control APIs (typed, bounded, non-authoritative):**
+- `CohesixOrchestrator` provides typed requests for:
+  - approvals (`/actions/queue`)
+  - schedule control (`/queen/schedule/ctl`)
+  - lease control (`/queen/lease/ctl`)
+  - export windows (`/queen/export/ctl`)
+- `/proc` snapshot helpers provide bounded reads for scheduler and lease observability.
+
+**Integration adapters (host-side only):**
+- `systemd` service state probes.
+- Docker inventory (SDK first, CLI fallback).
+- Kubernetes pod snapshots (SDK first, `kubectl` fallback).
+- NVML/NVIDIA probes (`pynvml` first, `nvidia-smi` fallback).
+- PEFT runtime probes (`torch`, `transformers`, `peft`, `accelerate`, `bitsandbytes`).
+
+**Playbook UX (frictionless integration):**
+- `cohesix-playbook --list` returns a deterministic catalog.
+- `cohesix-playbook --playbook <id> --dry-run --mock` validates plans with no control writes.
+- Reports and audit transcripts are emitted under `out/examples/playbooks/<playbook-id>/`.
+
+**Built-in world-class playbooks (1k-worker oriented):**
+- Mac fleets:
+  - `mac-release-factory`
+  - `mac-private-peft-grid`
+  - `mac-endpoint-compliance`
+- Jetson fleets:
+  - `jetson-traffic-safety`
+  - `jetson-manufacturing-safety`
+  - `jetson-critical-infra`
+- Mixed fleets:
+  - `mixed-closed-loop-ai-factory`
+  - `mixed-medical-edge-ai`
+  - `mixed-logistics-digital-twin`
+
 ## Strategic Fit Patterns
 - Change-authority substrate for regulated or safety-critical environments.
 - Governed edge AI where model activation and rollback must be auditable.
 - Disconnected or hostile networks where state must survive link loss.
 - Cross-ecosystem governance without replacing Kubernetes/systemd/GPU stacks.
 - Audit-first infrastructure where policy gates and append-only logs are mandatory.
+- Python-first adoption path for enterprises with existing automation, MLOps, and CI stacks.
 
 ---
 
 ## Use Case Catalog
+
+### 25c Playbook Mapping (1k+ Worker Readiness)
+| Fleet type | Business program | Python playbook id |
+| --- | --- | --- |
+| Mac | Global app release factory | `mac-release-factory` |
+| Mac | Private PEFT/LoRA grid | `mac-private-peft-grid` |
+| Mac | Endpoint compliance orchestration | `mac-endpoint-compliance` |
+| Jetson | Traffic safety mesh | `jetson-traffic-safety` |
+| Jetson | Manufacturing safety + QA | `jetson-manufacturing-safety` |
+| Jetson | Critical infrastructure sensing | `jetson-critical-infra` |
+| Mixed | Closed-loop edge AI factory | `mixed-closed-loop-ai-factory` |
+| Mixed | Medical edge AI governance | `mixed-medical-edge-ai` |
+| Mixed | Logistics digital twin operations | `mixed-logistics-digital-twin` |
 
 ### Edge and Industrial
 

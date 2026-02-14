@@ -8,16 +8,17 @@
 //! Host-only REST gateway projecting Cohesix console/file semantics.
 
 use std::env;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::response::Html;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
@@ -54,6 +55,13 @@ const PROC_SCHEDULE_QUEUE_PATH: &str = "/proc/schedule/queue";
 const PROC_LEASE_SUMMARY_PATH: &str = "/proc/lease/summary";
 const PROC_LEASE_ACTIVE_PATH: &str = "/proc/lease/active";
 const PROC_LEASE_PREEMPTIONS_PATH: &str = "/proc/lease/preemptions";
+const REQUEST_AUTH_HEADER: &str = "x-cohesix-auth";
+const AUTHORIZATION_BEARER_PREFIX: &str = "bearer ";
+const DEFAULT_PROC_CACHE_TTL_MS: u64 = 250;
+const DEFAULT_PROC_CACHE_MAX_ENTRIES: usize = 64;
+const CONTROL_POOL_WAIT_LIMIT_MS: u64 = 2_000;
+const TELEMETRY_POOL_WAIT_LIMIT_MS: u64 = 800;
+const POOL_RETRY_SLEEP_MS: u64 = 10;
 
 const OPENAPI_YAML: &str = include_str!("../../../resources/openapi/hive-gateway.yaml");
 
@@ -97,9 +105,15 @@ struct Cli {
     /// TCP console port.
     #[arg(long, default_value_t = COHESIX_TCP_CONSOLE_PORT)]
     tcp_port: u16,
-    /// TCP console auth token.
-    #[arg(long, default_value = "changeme")]
-    auth_token: String,
+    /// TCP console auth token (or set COH_AUTH_TOKEN / COHSH_AUTH_TOKEN).
+    #[arg(long)]
+    auth_token: Option<String>,
+    /// Per-request REST auth token for mutating paths (`Authorization: Bearer` or `x-cohesix-auth`).
+    #[arg(long)]
+    request_auth_token: Option<String>,
+    /// Allow non-loopback bind addresses (risk: exposes write-capable gateway over network).
+    #[arg(long, default_value_t = false)]
+    allow_non_loopback_bind: bool,
     /// Role to attach with (queen by default).
     #[arg(long, default_value = "queen")]
     role: String,
@@ -120,10 +134,13 @@ struct GatewayInner {
     pool: SharedPool,
     role: Role,
     ticket: Option<String>,
+    request_auth_token: String,
     status: Mutex<GatewayStatus>,
     shutdown: AtomicBool,
     bounds: BoundsResponse,
     policy: CohshPolicy,
+    broker: BrokerMetrics,
+    proc_cache: Mutex<ProcReadCache>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -233,6 +250,109 @@ struct GatewayStatus {
     connects: u64,
 }
 
+#[derive(Default)]
+struct BrokerMetrics {
+    control_waiters: AtomicU64,
+    telemetry_waiters: AtomicU64,
+    control_checkouts: AtomicU64,
+    telemetry_checkouts: AtomicU64,
+    pool_exhausted: AtomicU64,
+    checkout_retries: AtomicU64,
+    timeout_rejections: AtomicU64,
+    telemetry_yields: AtomicU64,
+    proc_cache_hits: AtomicU64,
+    proc_cache_misses: AtomicU64,
+    proc_cache_evictions: AtomicU64,
+}
+
+impl BrokerMetrics {
+    fn wait_counter(&self, kind: PoolKind) -> &AtomicU64 {
+        match kind {
+            PoolKind::Control => &self.control_waiters,
+            PoolKind::Telemetry => &self.telemetry_waiters,
+        }
+    }
+
+    fn checkout_counter(&self, kind: PoolKind) -> &AtomicU64 {
+        match kind {
+            PoolKind::Control => &self.control_checkouts,
+            PoolKind::Telemetry => &self.telemetry_checkouts,
+        }
+    }
+
+    fn snapshot(&self) -> BrokerStatusResponse {
+        BrokerStatusResponse {
+            control_waiters: self.control_waiters.load(Ordering::Relaxed),
+            telemetry_waiters: self.telemetry_waiters.load(Ordering::Relaxed),
+            control_checkouts: self.control_checkouts.load(Ordering::Relaxed),
+            telemetry_checkouts: self.telemetry_checkouts.load(Ordering::Relaxed),
+            pool_exhausted: self.pool_exhausted.load(Ordering::Relaxed),
+            checkout_retries: self.checkout_retries.load(Ordering::Relaxed),
+            timeout_rejections: self.timeout_rejections.load(Ordering::Relaxed),
+            telemetry_yields: self.telemetry_yields.load(Ordering::Relaxed),
+            proc_cache_hits: self.proc_cache_hits.load(Ordering::Relaxed),
+            proc_cache_misses: self.proc_cache_misses.load(Ordering::Relaxed),
+            proc_cache_evictions: self.proc_cache_evictions.load(Ordering::Relaxed),
+        }
+    }
+}
+
+struct WaitCounterGuard<'a> {
+    counter: &'a AtomicU64,
+}
+
+impl<'a> WaitCounterGuard<'a> {
+    fn new(counter: &'a AtomicU64) -> Self {
+        counter.fetch_add(1, Ordering::Relaxed);
+        Self { counter }
+    }
+}
+
+impl Drop for WaitCounterGuard<'_> {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+#[derive(Default)]
+struct ProcReadCache {
+    entries: HashMap<String, ProcReadCacheEntry>,
+    order: VecDeque<String>,
+}
+
+#[derive(Clone)]
+struct ProcReadCacheEntry {
+    inserted_at: Instant,
+    lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GatewayStatusResponse {
+    connected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_change_unix_ms: Option<u128>,
+    reconnects: u64,
+    connects: u64,
+    broker: BrokerStatusResponse,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BrokerStatusResponse {
+    control_waiters: u64,
+    telemetry_waiters: u64,
+    control_checkouts: u64,
+    telemetry_checkouts: u64,
+    pool_exhausted: u64,
+    checkout_retries: u64,
+    timeout_rejections: u64,
+    telemetry_yields: u64,
+    proc_cache_hits: u64,
+    proc_cache_misses: u64,
+    proc_cache_evictions: u64,
+}
+
 #[derive(Debug, Deserialize)]
 struct PathQuery {
     path: String,
@@ -293,10 +413,13 @@ async fn main() -> Result<()> {
             pool,
             role: config.role,
             ticket: config.ticket.clone(),
+            request_auth_token: config.request_auth_token.clone(),
             status: Mutex::new(GatewayStatus::default()),
             shutdown: AtomicBool::new(false),
             bounds,
             policy,
+            broker: BrokerMetrics::default(),
+            proc_cache: Mutex::new(ProcReadCache::default()),
         }),
     };
 
@@ -309,6 +432,7 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/v1/meta/bounds", get(meta_bounds))
+        .route("/v1/meta/status", get(meta_status))
         .route("/v1/fs/ls", get(fs_ls))
         .route("/v1/fs/cat", get(fs_cat))
         .route("/v1/fs/tail", get(fs_tail))
@@ -321,6 +445,7 @@ async fn main() -> Result<()> {
         .bind
         .parse()
         .with_context(|| format!("invalid bind address {}", config.bind))?;
+    enforce_bind_exposure(addr, config.allow_non_loopback_bind)?;
 
     info!("hive-gateway listening on {}", addr);
 
@@ -342,9 +467,11 @@ struct GatewayConfig {
     tcp_host: String,
     tcp_port: u16,
     auth_token: String,
+    request_auth_token: String,
     role: Role,
     ticket: Option<String>,
     mock: bool,
+    allow_non_loopback_bind: bool,
 }
 
 impl GatewayConfig {
@@ -363,10 +490,18 @@ impl GatewayConfig {
         let bind = env_override(cli.bind, "127.0.0.1:8080", "HIVE_GATEWAY_BIND");
         let tcp_host = env_override(cli.tcp_host, "127.0.0.1", "COH_TCP_HOST");
         let tcp_port = env_override_u16(cli.tcp_port, COHESIX_TCP_CONSOLE_PORT, "COH_TCP_PORT");
-        let mut auth_token = env_override(cli.auth_token, "changeme", "COH_AUTH_TOKEN");
-        if auth_token == "changeme" {
-            auth_token = env_override(auth_token, "changeme", "COHSH_AUTH_TOKEN");
-        }
+        let auth_token = resolve_secret(
+            cli.auth_token.as_deref(),
+            &["COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN"],
+        );
+        let request_auth_token = resolve_secret(
+            cli.request_auth_token.as_deref(),
+            &[
+                "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
+                "COH_REST_AUTH_TOKEN",
+                "COHSH_REST_AUTH_TOKEN",
+            ],
+        );
         let role_value = env_override(cli.role, "queen", "COH_ROLE");
         let role = parse_role(&role_value, RoleParseMode::AllowWorkerAlias)
             .ok_or_else(|| anyhow::anyhow!("unsupported role '{role_value}'"))?;
@@ -379,16 +514,36 @@ impl GatewayConfig {
                 }
             }
         }
+        let allow_non_loopback_bind =
+            cli.allow_non_loopback_bind || env_flag("HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND");
+        let auth_token = normalize_required_secret("tcp auth token", auth_token, mock)?;
+        let request_auth_token = normalize_required_secret(
+            "request auth token",
+            request_auth_token,
+            mock,
+        )?;
         Ok(Self {
             bind,
             tcp_host,
             tcp_port,
             auth_token,
+            request_auth_token,
             role,
             ticket,
             mock,
+            allow_non_loopback_bind,
         })
     }
+}
+
+fn env_flag(key: &str) -> bool {
+    let Ok(value) = env::var(key) else {
+        return false;
+    };
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "0" | "false" | "off" | "no"
+    )
 }
 
 fn env_override(value: String, default_value: &str, key: &str) -> String {
@@ -411,6 +566,70 @@ fn env_override_u16(value: u16, default_value: u16, key: &str) -> u16 {
         }
     }
     value
+}
+
+fn resolve_secret(cli_value: Option<&str>, env_keys: &[&str]) -> Option<String> {
+    if let Some(value) = cli_value {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    for key in env_keys {
+        if let Ok(value) = env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
+        }
+    }
+    None
+}
+
+fn allow_insecure_console_auth() -> bool {
+    env_flag("HIVE_GATEWAY_ALLOW_INSECURE_CONSOLE_AUTH")
+        || env_flag("COHESIX_ALLOW_INSECURE_CONSOLE_AUTH")
+}
+
+fn normalize_required_secret(label: &str, value: Option<String>, mock: bool) -> Result<String> {
+    let secret = value.unwrap_or_default();
+    let trimmed = secret.trim();
+    if mock {
+        if trimmed.is_empty() {
+            return Ok("mock-only-token".to_owned());
+        }
+        return Ok(trimmed.to_owned());
+    }
+    if trimmed.is_empty() {
+        anyhow::bail!("{label} must be configured in non-mock mode");
+    }
+    if trimmed == "changeme" {
+        if label == "tcp auth token" && allow_insecure_console_auth() {
+            warn!(
+                "allowing insecure TCP auth token placeholder because HIVE_GATEWAY_ALLOW_INSECURE_CONSOLE_AUTH is set"
+            );
+            return Ok(trimmed.to_owned());
+        }
+        anyhow::bail!("{label} uses insecure placeholder 'changeme'; set a real secret");
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn enforce_bind_exposure(addr: SocketAddr, allow_non_loopback: bool) -> Result<()> {
+    if addr.ip().is_loopback() {
+        return Ok(());
+    }
+    if allow_non_loopback {
+        warn!(
+            "hive-gateway binding to non-loopback address {}; exposure override enabled",
+            addr
+        );
+        return Ok(());
+    }
+    anyhow::bail!(
+        "refusing non-loopback bind {}; set --allow-non-loopback-bind or HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND=1",
+        addr
+    );
 }
 
 fn build_session_pool(config: &GatewayConfig, policy: CohshPolicy) -> Result<SharedPool> {
@@ -571,12 +790,20 @@ impl AppState {
         F: FnOnce(&mut dyn cohsh::Transport, &Session) -> Result<T>,
     {
         self.ensure_connected()?;
-        let mut delay = Duration::from_millis(self.inner.policy.retry.backoff_ms);
-        let ceiling = Duration::from_millis(self.inner.policy.retry.ceiling_ms);
+        let deadline = Instant::now()
+            + Duration::from_millis(match kind {
+                PoolKind::Control => CONTROL_POOL_WAIT_LIMIT_MS,
+                PoolKind::Telemetry => TELEMETRY_POOL_WAIT_LIMIT_MS,
+            });
         let shutdown = &self.inner.shutdown;
+        let _wait_guard = WaitCounterGuard::new(self.inner.broker.wait_counter(kind));
         loop {
             match self.inner.pool.checkout(kind) {
                 Ok(mut lease) => {
+                    self.inner
+                        .broker
+                        .checkout_counter(kind)
+                        .fetch_add(1, Ordering::Relaxed);
                     let session = lease.session().clone();
                     return action(lease.transport_mut(), &session);
                 }
@@ -587,8 +814,32 @@ impl AppState {
                     if shutdown.load(Ordering::SeqCst) {
                         return Err(err);
                     }
-                    thread::sleep(delay);
-                    delay = next_delay(delay, ceiling);
+                    self.inner
+                        .broker
+                        .pool_exhausted
+                        .fetch_add(1, Ordering::Relaxed);
+                    if matches!(kind, PoolKind::Telemetry)
+                        && self.inner.broker.control_waiters.load(Ordering::Relaxed) > 0
+                    {
+                        self.inner
+                            .broker
+                            .telemetry_yields
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    if Instant::now() >= deadline {
+                        self.inner
+                            .broker
+                            .timeout_rejections
+                            .fetch_add(1, Ordering::Relaxed);
+                        return Err(anyhow::anyhow!(
+                            "gateway backpressure: session pool checkout timed out for {kind:?}"
+                        ));
+                    }
+                    self.inner
+                        .broker
+                        .checkout_retries
+                        .fetch_add(1, Ordering::Relaxed);
+                    thread::sleep(Duration::from_millis(POOL_RETRY_SLEEP_MS));
                 }
             }
         }
@@ -645,10 +896,26 @@ impl AppState {
     }
 
     fn read(&self, path: &str) -> Result<Vec<String>> {
-        let path = path.to_owned();
-        self.with_pool(PoolKind::Telemetry, move |transport: &mut dyn cohsh::Transport, session| {
-            transport.read(session, &path)
-        })
+        if is_cacheable_proc_path(path) {
+            if let Some(lines) = self.read_cache_get(path) {
+                return Ok(lines);
+            }
+            self.inner
+                .broker
+                .proc_cache_misses
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        let path_owned = path.to_owned();
+        let lines = self.with_pool(
+            PoolKind::Telemetry,
+            move |transport: &mut dyn cohsh::Transport, session| {
+                transport.read(session, &path_owned)
+            },
+        )?;
+        if is_cacheable_proc_path(path) {
+            self.read_cache_insert(path, lines.clone());
+        }
+        Ok(lines)
     }
 
     fn tail(&self, path: &str) -> Result<Vec<String>> {
@@ -661,13 +928,87 @@ impl AppState {
     fn write(&self, path: &str, payload: &[u8]) -> Result<()> {
         let path = path.to_owned();
         let payload = payload.to_vec();
-        self.with_pool(PoolKind::Control, move |transport: &mut dyn cohsh::Transport, session| {
-            transport.write(session, &path, &payload)
-        })
+        let result = self.with_pool(
+            PoolKind::Control,
+            move |transport: &mut dyn cohsh::Transport, session| transport.write(session, &path, &payload),
+        );
+        if result.is_ok() {
+            self.read_cache_invalidate();
+        }
+        result
     }
 
     fn bounds(&self) -> BoundsResponse {
         self.inner.bounds.clone()
+    }
+
+    fn status(&self) -> GatewayStatusResponse {
+        let status = self.inner.status.lock().expect("status lock poisoned").clone();
+        let last_change_unix_ms = status.last_change.and_then(|value| {
+            value
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .ok()
+                .map(|duration| duration.as_millis())
+        });
+        GatewayStatusResponse {
+            connected: status.connected,
+            last_error: status.last_error,
+            last_change_unix_ms,
+            reconnects: status.reconnects,
+            connects: status.connects,
+            broker: self.inner.broker.snapshot(),
+        }
+    }
+
+    fn request_auth_token(&self) -> &str {
+        self.inner.request_auth_token.as_str()
+    }
+
+    fn read_cache_get(&self, path: &str) -> Option<Vec<String>> {
+        let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
+        let Some(entry) = cache.entries.get(path).cloned() else {
+            return None;
+        };
+        if entry.inserted_at.elapsed() > Duration::from_millis(DEFAULT_PROC_CACHE_TTL_MS) {
+            cache.entries.remove(path);
+            cache.order.retain(|value| value != path);
+            return None;
+        }
+        self.inner
+            .broker
+            .proc_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
+        Some(entry.lines)
+    }
+
+    fn read_cache_insert(&self, path: &str, lines: Vec<String>) {
+        let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
+        if !cache.entries.contains_key(path)
+            && cache.entries.len() >= DEFAULT_PROC_CACHE_MAX_ENTRIES
+        {
+            if let Some(evicted) = cache.order.pop_front() {
+                cache.entries.remove(evicted.as_str());
+                self.inner
+                    .broker
+                    .proc_cache_evictions
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        cache.order.retain(|value| value != path);
+        cache.order.push_back(path.to_owned());
+        cache.entries.insert(
+            path.to_owned(),
+            ProcReadCacheEntry {
+                inserted_at: Instant::now(),
+                lines,
+            },
+        );
+    }
+
+    fn read_cache_invalidate(&self) {
+        let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
+        cache.entries.clear();
+        cache.order.clear();
     }
 }
 
@@ -677,6 +1018,10 @@ fn is_pool_exhausted(err: &anyhow::Error) -> bool {
 
 async fn meta_bounds(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     Json(state.bounds())
+}
+
+async fn meta_status(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    Json(state.status())
 }
 
 async fn openapi_yaml() -> impl axum::response::IntoResponse {
@@ -710,9 +1055,14 @@ async fn fs_tail(
 
 async fn fs_echo(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<EchoRequest>,
-) -> impl axum::response::IntoResponse {
-    handle_echo(state, payload).await
+) -> axum::response::Response {
+    if let Err(err) = validate_request_auth(&headers, state.request_auth_token()) {
+        return response_err("ECHO", payload.path.as_str(), err, StatusCode::UNAUTHORIZED)
+            .into_response();
+    }
+    handle_echo(state, payload).await.into_response()
 }
 
 async fn handle_list(state: AppState, path: String) -> impl axum::response::IntoResponse {
@@ -859,6 +1209,45 @@ async fn handle_echo(state: AppState, payload: EchoRequest) -> impl axum::respon
         Ok(Err(err)) => response_transport_err(verb, &payload.path, err),
         Err(err) => response_err(verb, &payload.path, err.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
     }
+}
+
+fn is_cacheable_proc_path(path: &str) -> bool {
+    path.starts_with("/proc/")
+}
+
+fn extract_request_auth(headers: &HeaderMap) -> Option<String> {
+    if let Some(header) = headers.get(axum::http::header::AUTHORIZATION) {
+        if let Ok(value) = header.to_str() {
+            let lowered = value.to_ascii_lowercase();
+            if lowered.starts_with(AUTHORIZATION_BEARER_PREFIX) {
+                let token = value[AUTHORIZATION_BEARER_PREFIX.len()..].trim();
+                if !token.is_empty() {
+                    return Some(token.to_owned());
+                }
+            }
+        }
+    }
+    if let Some(header) = headers.get(REQUEST_AUTH_HEADER) {
+        if let Ok(value) = header.to_str() {
+            let token = value.trim();
+            if !token.is_empty() {
+                return Some(token.to_owned());
+            }
+        }
+    }
+    None
+}
+
+fn validate_request_auth(headers: &HeaderMap, expected: &str) -> Result<(), String> {
+    let Some(observed) = extract_request_auth(headers) else {
+        return Err(format!(
+            "missing request auth token; provide Authorization: Bearer <token> or {REQUEST_AUTH_HEADER}"
+        ));
+    };
+    if observed == expected {
+        return Ok(());
+    }
+    Err("invalid request auth token".to_owned())
 }
 
 fn validate_path(path: &str) -> Result<(), String> {
@@ -1033,6 +1422,9 @@ fn response_transport_err(
     err: anyhow::Error,
 ) -> (StatusCode, Json<GatewayResponse>) {
     let message = err.to_string();
+    if message.contains("gateway backpressure") {
+        return response_err(verb, path, message, StatusCode::TOO_MANY_REQUESTS);
+    }
     if let Some(ack) = extract_ack_error(&message) {
         return response_err(verb, path, ack, StatusCode::OK);
     }
@@ -1043,6 +1435,8 @@ fn response_transport_err(
 mod tests {
     use super::*;
     use anyhow::anyhow;
+    use axum::http::header::AUTHORIZATION;
+    use axum::http::{HeaderMap, HeaderValue};
 
     #[test]
     fn extract_ack_error_returns_err_line() {
@@ -1066,5 +1460,72 @@ mod tests {
             .as_ref()
             .expect("error")
             .contains("reason=policy"));
+    }
+
+    #[test]
+    fn enforce_bind_exposure_rejects_non_loopback_without_override() {
+        let addr: SocketAddr = "0.0.0.0:8080".parse().expect("parse");
+        let err = enforce_bind_exposure(addr, false).expect_err("must reject");
+        assert!(err
+            .to_string()
+            .contains("refusing non-loopback bind"));
+    }
+
+    #[test]
+    fn normalize_required_secret_rejects_placeholder() {
+        let err = normalize_required_secret(
+            "request auth token",
+            Some("changeme".to_owned()),
+            false,
+        )
+        .expect_err("placeholder must be rejected");
+        assert!(err.to_string().contains("insecure placeholder"));
+    }
+
+    #[test]
+    fn extract_request_auth_reads_bearer_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str("Bearer secret-token").expect("header value"),
+        );
+        let token = extract_request_auth(&headers).expect("token");
+        assert_eq!(token, "secret-token");
+    }
+
+    #[test]
+    fn extract_request_auth_reads_alt_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            REQUEST_AUTH_HEADER,
+            HeaderValue::from_str("alt-token").expect("header value"),
+        );
+        let token = extract_request_auth(&headers).expect("token");
+        assert_eq!(token, "alt-token");
+    }
+
+    #[test]
+    fn validate_request_auth_rejects_missing_token() {
+        let headers = HeaderMap::new();
+        let err = validate_request_auth(&headers, "expected").expect_err("missing token");
+        assert!(err.contains("missing request auth token"));
+    }
+
+    #[test]
+    fn validate_request_auth_accepts_matching_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str("Bearer expected").expect("header value"),
+        );
+        validate_request_auth(&headers, "expected").expect("auth accepted");
+    }
+
+    #[test]
+    fn response_transport_err_maps_backpressure_to_too_many_requests() {
+        let err = anyhow!("gateway backpressure: session pool checkout timed out for Telemetry");
+        let (status, body) = response_transport_err("CAT", "/proc/root/reachable", err);
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(body.0.status, "ERR");
     }
 }

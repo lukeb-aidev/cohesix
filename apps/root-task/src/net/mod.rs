@@ -13,10 +13,13 @@ pub mod diag;
 #[cfg(feature = "net")]
 pub use diag::{NetDiagSnapshot, NET_DIAG, NET_DIAG_FEATURED};
 
+#[cfg(all(feature = "kernel", feature = "net-console"))]
 use core::ops::Range;
 
 use crate::observe::IngestSnapshot;
 use crate::serial::DEFAULT_LINE_CAPACITY;
+#[cfg(feature = "kernel")]
+use cohesix_ticket::Role;
 #[cfg(all(feature = "net", feature = "kernel"))]
 pub mod outbound;
 pub use cohesix_net_constants::{COHESIX_TCP_CONSOLE_PORT, COHSH_TCP_PORT, TCP_CONSOLE_PORT};
@@ -33,8 +36,8 @@ pub const DEV_VIRT_PREFIX: u8 = 24;
 
 /// TCP port exposed by the console listener inside the VM.
 pub const CONSOLE_TCP_PORT: u16 = COHESIX_TCP_CONSOLE_PORT;
-/// Authentication token expected from TCP console clients.
-pub const AUTH_TOKEN: &str = "changeme";
+/// Unsafe fallback token used only when generated ticket inventory is unavailable.
+const AUTH_TOKEN_FALLBACK: &str = "";
 /// Idle timeout applied to authenticated TCP console sessions (milliseconds).
 ///
 /// When the kernel timer cannot use the architected counter (default in dev-virt),
@@ -121,9 +124,9 @@ pub struct ConsoleNetConfig {
 
 impl ConsoleNetConfig {
     /// Construct a configuration using the default constants.
-    pub const fn default() -> Self {
+    pub fn default() -> Self {
         Self {
-            auth_token: AUTH_TOKEN,
+            auth_token: console_auth_token(),
             idle_timeout_ms: IDLE_TIMEOUT_MS,
             listen_port: COHSH_TCP_PORT,
             address: NetAddressConfig::dev_virt(),
@@ -149,6 +152,35 @@ impl ConsoleNetConfig {
         }
         self
     }
+}
+
+/// Resolve the TCP console authentication token from generated manifest data.
+#[must_use]
+pub fn console_auth_token() -> &'static str {
+    #[cfg(feature = "kernel")]
+    {
+        for ticket in crate::generated::ticket_inventory() {
+            if ticket.role == Role::Queen {
+                return ticket.secret;
+            }
+        }
+        AUTH_TOKEN_FALLBACK
+    }
+    #[cfg(not(feature = "kernel"))]
+    {
+        "test-console-token"
+    }
+}
+
+/// Validate that the configured TCP console authentication token is usable.
+pub fn validate_console_auth_token(token: &str) -> Result<(), &'static str> {
+    if token.trim().is_empty() {
+        return Err("console auth token must be configured");
+    }
+    if token.trim() == "changeme" {
+        return Err("console auth token must not use insecure placeholder");
+    }
+    Ok(())
 }
 
 /// Networking telemetry reported by the event pump.

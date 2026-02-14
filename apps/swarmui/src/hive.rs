@@ -1029,7 +1029,7 @@ impl ConsoleHiveSessionState {
                         let ticket = ticket_owned.clone();
                         let worker_id = worker_id.clone();
                         handles.push(scope.spawn(move || {
-                            let mut transport = CohshRestTransport::new(rest_url);
+                            let mut transport = CohshRestTransport::new(rest_url, None);
                             let session = transport
                                 .attach(role, ticket.as_deref())
                                 .map_err(|err| SwarmUiError::Transport(err.to_string()))?;

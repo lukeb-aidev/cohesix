@@ -1432,6 +1432,12 @@ where
             "listen_port/ip must be configured",
         ));
     }
+    if let Err(reason) = super::validate_console_auth_token(config.auth_token) {
+        log::error!(
+            "[net-console] invalid configuration: token rejected (reason={reason}); disabling net-console"
+        );
+        return Err(NetConsoleError::InvalidConfig(reason));
+    }
 
     debug_validate_socket_storage(concat!(file!(), ":", line!()));
 

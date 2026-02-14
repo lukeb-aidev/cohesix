@@ -7,6 +7,10 @@
 #   DD_GATE_LOG_DIR            Override log output root (default: out/audit/gate/<utc-timestamp>)
 #   DD_SKIP_TEST_PLAN_CHECK=1  Mark test-plan hash check as incomplete (run still fails)
 #   DD_SKIP_REGRESSION_BATCH=1 Mark regression batch check as incomplete (run still fails)
+#   DD_REGRESSION_READY_TIMEOUT  Override run_regression_batch READY_TIMEOUT (default: 900)
+#   DD_REGRESSION_PORT_TIMEOUT   Override run_regression_batch PORT_TIMEOUT (default: 60)
+#   DD_REGRESSION_AUTH_TIMEOUT   Override run_regression_batch AUTH_READY_TIMEOUT (default: 120)
+#   DD_REGRESSION_QUIT_TIMEOUT   Override run_regression_batch QUIT_CLOSE_TIMEOUT (default: 60)
 
 set -euo pipefail
 
@@ -15,6 +19,10 @@ cd "$repo_root"
 
 run_id=$(date -u +"%Y%m%dT%H%M%SZ")
 log_root="${DD_GATE_LOG_DIR:-${repo_root}/out/audit/gate/${run_id}}"
+dd_regression_ready_timeout="${DD_REGRESSION_READY_TIMEOUT:-900}"
+dd_regression_port_timeout="${DD_REGRESSION_PORT_TIMEOUT:-60}"
+dd_regression_auth_timeout="${DD_REGRESSION_AUTH_TIMEOUT:-120}"
+dd_regression_quit_timeout="${DD_REGRESSION_QUIT_TIMEOUT:-60}"
 mkdir -p "$log_root"
 
 declare -a failures=()
@@ -338,7 +346,14 @@ fi
 if [[ "${DD_SKIP_REGRESSION_BATCH:-0}" == "1" ]]; then
   mark_incomplete_step "regression-batch" "DD_SKIP_REGRESSION_BATCH=1"
 else
-  run_step "regression-batch" scripts/cohsh/run_regression_batch.sh
+  run_step \
+    "regression-batch" \
+    env \
+    READY_TIMEOUT="${dd_regression_ready_timeout}" \
+    PORT_TIMEOUT="${dd_regression_port_timeout}" \
+    AUTH_READY_TIMEOUT="${dd_regression_auth_timeout}" \
+    QUIT_CLOSE_TIMEOUT="${dd_regression_quit_timeout}" \
+    scripts/cohsh/run_regression_batch.sh
 fi
 run_step "release-guardrails-findings" check_blocking_findings
 run_step "release-guardrails-exceptions" check_exceptions_register

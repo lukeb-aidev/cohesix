@@ -563,7 +563,7 @@ fn main() {
                     let rest_url = env::var("SWARMUI_REST_URL")
                         .or_else(|_| env::var("COH_REST_URL"))
                         .unwrap_or_else(|_| "http://127.0.0.1:8080".to_owned());
-                    let transport = CohshRestTransport::new(rest_url.clone());
+                    let transport = CohshRestTransport::new(rest_url.clone(), None);
                     SwarmUiService::Rest(SwarmUiConsoleBackend::with_rest_transport(
                         config, transport, rest_url,
                     ))

@@ -11,6 +11,7 @@ SCRIPT_ROOT="${COHSH_SCRIPT_ROOT:-${ROOT_DIR}/scripts/cohsh}"
 COHSH_BIN="${COHSH_BIN:-${ROOT_DIR}/out/cohesix/host-tools/cohsh}"
 
 GATEWAY_URL="${COHESIX_GATEWAY_URL:-${HIVE_GATEWAY_URL:-${COHSH_REST_URL:-${COH_REST_URL:-}}}}"
+GATEWAY_AUTH_TOKEN="${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:-${COHSH_REST_AUTH_TOKEN:-${COH_REST_AUTH_TOKEN:-}}}"
 PARALLELISM="${COHSH_PARALLELISM:-3}"
 REPEAT="${COHSH_REPEAT:-1}"
 BATCH_NAME="${COHSH_BATCH_NAME:-rest-regression}"
@@ -24,6 +25,7 @@ Runs a concurrent cohsh regression batch over the hive-gateway REST multiplexer.
 
 Required env:
   COHESIX_GATEWAY_URL (or HIVE_GATEWAY_URL/COHSH_REST_URL/COH_REST_URL)
+  HIVE_GATEWAY_REQUEST_AUTH_TOKEN (or COHSH_REST_AUTH_TOKEN/COH_REST_AUTH_TOKEN)
 
 Optional env:
   COHSH_BIN (default: out/cohesix/host-tools/cohsh)
@@ -57,7 +59,8 @@ quit
 EOF
   for ((i = 0; i < attempts; i += 1)); do
     if COHSH_REST_URL="${GATEWAY_URL}" \
-      "${COHSH_BIN}" --transport rest --rest-url "${GATEWAY_URL}" --role queen --script "${tmp_script}" \
+      HIVE_GATEWAY_REQUEST_AUTH_TOKEN="${GATEWAY_AUTH_TOKEN}" \
+      "${COHSH_BIN}" --transport rest --rest-url "${GATEWAY_URL}" --rest-auth-token "${GATEWAY_AUTH_TOKEN}" --role queen --script "${tmp_script}" \
       >/dev/null 2>&1; then
       rm -f "${tmp_script}"
       return 0
@@ -71,6 +74,11 @@ EOF
 if [[ -z "${GATEWAY_URL}" ]]; then
   usage >&2
   fail "Gateway URL is required (set COHESIX_GATEWAY_URL or HIVE_GATEWAY_URL)"
+fi
+
+if [[ -z "${GATEWAY_AUTH_TOKEN}" ]]; then
+  usage >&2
+  fail "Gateway request auth token is required (set HIVE_GATEWAY_REQUEST_AUTH_TOKEN or COHSH_REST_AUTH_TOKEN)"
 fi
 
 if [[ ! -x "${COHSH_BIN}" ]]; then
@@ -116,7 +124,8 @@ run_one() {
   local log_path="${OUT_DIR}/${script%.coh}.run${index}.log"
   printf "[rest-batch] start %s (#%s)\n" "$script" "$index"
   COHSH_REST_URL="${GATEWAY_URL}" \
-    "${COHSH_BIN}" --transport rest --rest-url "${GATEWAY_URL}" --script "${SCRIPT_ROOT}/${script}" \
+    HIVE_GATEWAY_REQUEST_AUTH_TOKEN="${GATEWAY_AUTH_TOKEN}" \
+    "${COHSH_BIN}" --transport rest --rest-url "${GATEWAY_URL}" --rest-auth-token "${GATEWAY_AUTH_TOKEN}" --script "${SCRIPT_ROOT}/${script}" \
     >"${log_path}" 2>&1
 }
 

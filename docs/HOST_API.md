@@ -9,17 +9,21 @@ The **hive-gateway** is a host-only REST projection of Cohesix console/file sema
 **Key properties**
 - **Authority lives in the VM**: the gateway is a stateless proxy for `LS`/`CAT`/`ECHO` semantics.
 - **Bounded**: payload sizes and `/proc` read limits are validated against manifest-derived limits.
-- **No per-request auth**: the gateway attaches once using the configured role/ticket; protect the HTTP endpoint accordingly.
+- **Edge auth enforced for writes**: mutating routes require `Authorization: Bearer <token>` (or `x-cohesix-auth`).
+- **Safe exposure defaults**: binds are loopback-only unless explicitly overridden.
 
 ## Auth + role configuration
 The gateway uses the fixed role/ticket configured in its environment (or CLI flags). Set these in `/etc/cohesix/hive-gateway.env` when running under systemd:
 ```
 COH_TCP_HOST=127.0.0.1
 COH_TCP_PORT=31337
-COH_AUTH_TOKEN=changeme
+COH_AUTH_TOKEN=<tcp-console-auth-token>
+HIVE_GATEWAY_REQUEST_AUTH_TOKEN=<rest-request-auth-token>
 COH_ROLE=queen
 COH_TICKET=
 HIVE_GATEWAY_BIND=127.0.0.1:8080
+# Optional risk override for non-loopback binds:
+# HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND=1
 ```
 
 ## Examples
@@ -32,6 +36,7 @@ curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 ```
 curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" \
   -d '{"path":"/queen/schedule/ctl","line":"{\"id\":\"job-1\",\"role\":\"worker-gpu\",\"priority\":2,\"ticks\":3,\"budget_ms\":120}"}'
 ```
 
@@ -49,6 +54,7 @@ curl -sS 'http://127.0.0.1:8080/v1/fs/tail?path=/log/queen.log&max_bytes=512'
 ```
 curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" \
   -d '{"path":"/policy/ctl","line":"{\"op\":\"apply\",\"id\":\"rev-22\",\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}"}'
 ```
 

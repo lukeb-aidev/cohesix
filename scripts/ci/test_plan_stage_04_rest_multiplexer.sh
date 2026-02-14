@@ -14,12 +14,19 @@ tp_require_stage_done 3
 tp_stage_begin 4 "rest-multiplexer"
 
 gateway_url="${COHESIX_GATEWAY_URL:-${HIVE_GATEWAY_URL:-${COHSH_REST_URL:-${COH_REST_URL:-}}}}"
+gateway_auth_token="${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:-${COHSH_REST_AUTH_TOKEN:-${COH_REST_AUTH_TOKEN:-}}}"
 if [[ -z "${gateway_url}" ]]; then
   tp_log "FAIL  missing gateway URL"
   tp_log "set COHESIX_GATEWAY_URL (or HIVE_GATEWAY_URL/COHSH_REST_URL/COH_REST_URL) before running stage 04"
   exit 1
 fi
 tp_log "INFO  gateway-url=${gateway_url}"
+if [[ -z "${gateway_auth_token}" ]]; then
+  tp_log "FAIL  missing gateway request auth token"
+  tp_log "set HIVE_GATEWAY_REQUEST_AUTH_TOKEN (or COHSH_REST_AUTH_TOKEN/COH_REST_AUTH_TOKEN) before running stage 04"
+  exit 1
+fi
+tp_log "INFO  gateway-auth-token=present"
 
 tp_run_cmd "cohsh-rest-regression-batch" "${TEST_PLAN_ROOT}/scripts/cohsh/REST_regression_batch.sh"
 

@@ -50,7 +50,37 @@ PORT_TIMEOUT="${PORT_TIMEOUT:-30}"
 QUIT_CLOSE_TIMEOUT="${QUIT_CLOSE_TIMEOUT:-30}"
 AUTH_READY_TIMEOUT="${AUTH_READY_TIMEOUT:-60}"
 SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${SEL4_BUILD:-${PROJECT_ROOT}/seL4/SMP_build}}"
-COHSH_AUTH_TOKEN="${COHSH_AUTH_TOKEN:-${COH_AUTH_TOKEN:-changeme}}"
+resolve_manifest_auth_token() {
+    local manifest_path="$1"
+    python3 - "$manifest_path" <<'PY'
+import pathlib
+import sys
+
+manifest = pathlib.Path(sys.argv[1])
+if not manifest.is_file():
+    print("bootstrap")
+    raise SystemExit(0)
+
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:
+    print("bootstrap")
+    raise SystemExit(0)
+
+data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+tickets = data.get("tickets", [])
+for ticket in tickets:
+    if str(ticket.get("role", "")).strip() == "queen":
+        secret = str(ticket.get("secret", "")).strip()
+        if secret:
+            print(secret)
+            raise SystemExit(0)
+print("bootstrap")
+PY
+}
+
+DEFAULT_MANIFEST_AUTH_TOKEN="$(resolve_manifest_auth_token "${BASE_MANIFEST}")"
+COHSH_AUTH_TOKEN="${COHSH_AUTH_TOKEN:-${COH_AUTH_TOKEN:-${DEFAULT_MANIFEST_AUTH_TOKEN}}}"
 
 if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
     echo "Missing seL4 build directory: $SEL4_BUILD_DIR" >&2

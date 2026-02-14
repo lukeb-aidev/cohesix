@@ -1,0 +1,121 @@
+# Author: Lukas Bower
+# Purpose: Validate high-level Cohesix orchestration controls and environment backend selection.
+# Copyright 2026 Lukas Bower
+
+"""Tests for `cohesix.orchestration`."""
+
+from __future__ import annotations
+
+import os
+import tempfile
+from pathlib import Path
+
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from cohesix.audit import CohesixAudit  # noqa: E402
+from cohesix.backends import MockBackend  # noqa: E402
+from cohesix.orchestration import (  # noqa: E402
+    ApprovalRequest,
+    CohesixOrchestrator,
+    ControlPlan,
+    ExportRequest,
+    LeaseRequest,
+    ScheduleRequest,
+)
+
+
+def test_execute_plan_writes_control_files() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        backend = MockBackend(root=tmp)
+        orchestrator = CohesixOrchestrator(backend=backend)
+        audit = CohesixAudit()
+
+        plan = ControlPlan(
+            approvals=(
+                ApprovalRequest(
+                    approval_id="approve-a",
+                    target_path="/queen/schedule/ctl",
+                ),
+            ),
+            schedule=(
+                ScheduleRequest(
+                    request_id="sched-a",
+                    role="worker-gpu",
+                    priority=5,
+                    ticks=2,
+                    budget_ms=120,
+                ),
+            ),
+            leases=(
+                LeaseRequest(
+                    op="grant",
+                    lease_id="lease-a",
+                    subject="queen",
+                    resource="gpu0",
+                    ttl_s=120,
+                    priority=5,
+                ),
+            ),
+            exports=(
+                ExportRequest(op="open", export_id="export-a", ttl_s=300),
+            ),
+        )
+        result = orchestrator.execute_plan(plan=plan, dry_run=False, audit=audit)
+
+        assert len(result.approval_writes) == 1
+        assert len(result.schedule_writes) == 1
+        assert len(result.lease_writes) == 1
+        assert len(result.export_writes) == 1
+
+        schedule_path = Path(tmp) / "queen" / "schedule" / "ctl"
+        assert schedule_path.is_file()
+        assert "sched-a" in schedule_path.read_text(encoding="utf-8")
+
+
+def test_read_proc_snapshot() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "proc" / "schedule").mkdir(parents=True, exist_ok=True)
+        (root / "proc" / "lease").mkdir(parents=True, exist_ok=True)
+        (root / "proc" / "schedule" / "summary").write_text(
+            "queue=1 dequeued=0 dropped=0 max_entries=64\n",
+            encoding="utf-8",
+        )
+        (root / "proc" / "schedule" / "queue").write_text(
+            "id=sched-a role=worker-gpu priority=4 ticks=2 budget_ms=120 seq=1\n",
+            encoding="utf-8",
+        )
+        (root / "proc" / "lease" / "summary").write_text(
+            "active=1 preemptions=0 quotas=1 max_active=64 max_preemptions=64\n",
+            encoding="utf-8",
+        )
+        (root / "proc" / "lease" / "active").write_text(
+            "id=lease-a subject=queen resource=gpu0 ttl_s=300 priority=5 state=ACTIVE seq=1\n",
+            encoding="utf-8",
+        )
+        (root / "proc" / "lease" / "preemptions").write_text("", encoding="utf-8")
+
+        backend = MockBackend(root=tmp)
+        orchestrator = CohesixOrchestrator(backend=backend)
+        snapshot = orchestrator.read_proc_snapshot()
+
+        assert snapshot.schedule_summary.startswith("queue=1")
+        assert len(snapshot.schedule_queue) == 1
+        assert snapshot.lease_summary.startswith("active=1")
+        assert len(snapshot.lease_active) == 1
+        assert snapshot.lease_preemptions == []
+
+
+def test_from_env_selects_mock_backend() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        original = dict(os.environ)
+        try:
+            os.environ["COHESIX_MOCK"] = "1"
+            os.environ["COHESIX_MOCK_ROOT"] = tmp
+            orchestrator = CohesixOrchestrator.from_env()
+            assert isinstance(orchestrator.backend, MockBackend)
+        finally:
+            os.environ.clear()
+            os.environ.update(original)

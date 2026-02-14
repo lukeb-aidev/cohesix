@@ -29,6 +29,16 @@ const PREAUTH_FIRST_CAPACITY: usize = 4;
 const PREAUTH_LAST_CAPACITY: usize = 4;
 const PREAUTH_INFO_ALLOWLIST: &[&str] = &["[net-console]", "[cohsh-net]", "[console]", "[event]"];
 
+fn auth_fingerprint(bytes: &[u8]) -> u32 {
+    // Non-cryptographic fingerprint for diagnostics without leaking token bytes.
+    let mut hash = 0x811C9DC5u32;
+    for byte in bytes {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    hash
+}
+
 /// Outcome of processing newly received bytes from the TCP stream.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SessionEvent {
@@ -175,12 +185,13 @@ impl TcpConsoleServer {
     }
 
     fn log_reject(&self, reason: &str, line: &str) {
+        let fingerprint = auth_fingerprint(line.as_bytes());
         warn!(
-            "[cohsh-net][auth] reject: conn id={} reason={} raw_len={} raw_bytes={:02x?}",
+            "[cohsh-net][auth] reject: conn id={} reason={} raw_len={} fingerprint=0x{:08x}",
             self.conn_label(),
             reason,
             line.len(),
-            line.as_bytes()
+            fingerprint
         );
     }
 
@@ -327,10 +338,10 @@ impl TcpConsoleServer {
                     };
                     #[cfg(feature = "net-trace-31337")]
                     info!(
-                        "[cohsh-net] conn id={} auth: received len={} bytes={:02x?}",
+                        "[cohsh-net] conn id={} auth: received len={} fingerprint=0x{:08x}",
                         self.conn_label(),
                         line.len(),
-                        line.as_bytes()
+                        auth_fingerprint(line.as_bytes())
                     );
                     self.line_buffer.clear();
                     if self.line_buffer.push_str(line).is_err() {
@@ -343,9 +354,9 @@ impl TcpConsoleServer {
                     self.last_activity_ms = now_ms;
                     log::debug!(
                         target: "net-console",
-                        "[tcp-console] line received: len={} first_bytes={:02x?}",
+                        "[tcp-console] line received: len={} fingerprint=0x{:08x}",
                         line.len(),
-                        &line.as_bytes()[..core::cmp::min(line.len(), 32)],
+                        auth_fingerprint(line.as_bytes()),
                     );
                     event = self.handle_line(line, now_ms);
                     if matches!(event, SessionEvent::Close) {
@@ -439,20 +450,21 @@ impl TcpConsoleServer {
     fn process_auth(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) -> SessionEvent {
         // Expected client hello: ASCII "AUTH " prefix and token payload.
         let raw_bytes = line.as_bytes();
+        let fingerprint = auth_fingerprint(raw_bytes);
         log::info!(
-            "[cohsh-net][auth] parsing auth frame ({} bytes): {:02x?}",
+            "[cohsh-net][auth] parsing auth frame (len={} fingerprint=0x{:08x})",
             raw_bytes.len(),
-            &raw_bytes[..core::cmp::min(raw_bytes.len(), 32)]
+            fingerprint
         );
         let expected_len = self.expected_frame_len();
         let observed_len = raw_bytes.len();
         info!("[cohsh-net] auth: hello received (len={})", observed_len);
         #[cfg(feature = "net-trace-31337")]
         log::info!(
-            "[cohsh-net] conn id={} auth: parsing frame observed_len={} bytes={:02x?}",
+            "[cohsh-net] conn id={} auth: parsing frame observed_len={} fingerprint=0x{:08x}",
             self.conn_label(),
             observed_len,
-            &raw_bytes[..core::cmp::min(raw_bytes.len(), 32)]
+            fingerprint
         );
         if observed_len != expected_len {
             warn!(
@@ -471,10 +483,10 @@ impl TcpConsoleServer {
 
         let Some(stripped) = line.strip_prefix(AUTH_PREFIX) else {
             warn!(
-                "[cohsh-net][auth] conn id={} reject: missing AUTH prefix raw_len={} raw_bytes={:02x?}",
+                "[cohsh-net][auth] conn id={} reject: missing AUTH prefix raw_len={} fingerprint=0x{:08x}",
                 self.conn_label(),
                 raw_bytes.len(),
-                &raw_bytes[..core::cmp::min(raw_bytes.len(), AUTH_PREFIX.len())]
+                fingerprint
             );
             self.log_reject(REASON_EXPECTED_TOKEN, line.as_str());
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some(DETAIL_REASON_EXPECTED_TOKEN));
@@ -487,10 +499,10 @@ impl TcpConsoleServer {
         let token = stripped.trim();
         if token.is_empty() {
             warn!(
-                "[cohsh-net][auth] conn id={} reject: empty token raw_len={} raw_bytes={:02x?}",
+                "[cohsh-net][auth] conn id={} reject: empty token raw_len={} fingerprint=0x{:08x}",
                 self.conn_label(),
                 raw_bytes.len(),
-                &raw_bytes[..core::cmp::min(raw_bytes.len(), AUTH_PREFIX.len())]
+                fingerprint
             );
             self.log_reject(REASON_EXPECTED_TOKEN, line.as_str());
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some(DETAIL_REASON_EXPECTED_TOKEN));
@@ -500,23 +512,20 @@ impl TcpConsoleServer {
             return SessionEvent::AuthFailed("expected-token");
         }
 
-        let mut token_parts = token.split_whitespace();
-        let role_str = token_parts.next().unwrap_or("");
-        let role_ok = !role_str.is_empty();
+        let token_ok = !token.is_empty();
         let version_ok = true;
-        if !(version_ok && role_ok) {
+        if !(version_ok && token_ok) {
             warn!(
-                "[cohsh-net][auth] conn id={} invalid magic/version/role: version_ok={} role_ok={}",
+                "[cohsh-net][auth] conn id={} invalid magic/version/token: version_ok={} token_ok={}",
                 self.conn_label(),
                 version_ok,
-                role_ok
+                token_ok
             );
         }
 
         info!(
-            "[cohsh-net] parsed handshake: conn_id={} role='{}' token_len={}",
+            "[cohsh-net] parsed handshake: conn_id={} token_len={}",
             self.conn_label(),
-            role_str,
             token.len()
         );
         info!(
@@ -546,10 +555,10 @@ impl TcpConsoleServer {
         let preauth_stats = self.flush_preauth_buffer();
         self.enqueue_preauth_summary(preauth_stats, "auth-flush");
         info!(
-            "[cohsh-net][auth] accepted client: conn_id={} role={:?}, version={:?}",
+            "[cohsh-net][auth] accepted client: conn_id={} version={:?} token_len={}",
             self.conn_label(),
-            role_str,
-            1u8
+            1u8,
+            token.len()
         );
         info!("[net-console] auth ok");
         SessionEvent::Authenticated
@@ -923,7 +932,15 @@ impl TcpConsoleServer {
 mod tests {
     use super::*;
 
-    const TOKEN: &str = "changeme";
+    const TOKEN: &str = "token123";
+
+    #[test]
+    fn auth_fingerprint_changes_with_input() {
+        let a = auth_fingerprint(b"AUTH alpha");
+        let b = auth_fingerprint(b"AUTH beta");
+        assert_ne!(a, b);
+        assert_eq!(a, auth_fingerprint(b"AUTH alpha"));
+    }
 
     fn frame_line<const N: usize>(line: &str) -> HeaplessVec<u8, N> {
         let mut buf = HeaplessVec::new();
@@ -939,7 +956,7 @@ mod tests {
         let mut server = TcpConsoleServer::new(TOKEN, 10_000);
         server.begin_session(0, Some(1));
 
-        let payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>("AUTH changeme");
+        let payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("AUTH {TOKEN}"));
         let event = server.ingest(payload.as_slice(), 1);
 
         assert_eq!(event, SessionEvent::Authenticated);
@@ -971,7 +988,8 @@ mod tests {
         let mut server = TcpConsoleServer::new(TOKEN, 10_000);
         server.begin_session(0, Some(4));
 
-        let auth_payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>("AUTH changeme");
+        let auth_payload =
+            frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("AUTH {TOKEN}"));
         let event = server.ingest(auth_payload.as_slice(), 1);
         assert_eq!(event, SessionEvent::Authenticated);
         let _ = server.pop_outbound();
@@ -1046,9 +1064,10 @@ mod tests {
     #[test]
     fn buffers_preauth_lines_and_flushes_on_auth() {
         let mut server = TcpConsoleServer::new(TOKEN, 10_000);
+        server.begin_session(0, Some(4));
         for idx in 0..(PREAUTH_FIRST_CAPACITY + PREAUTH_LAST_CAPACITY + 2) {
             let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
-            write!(&mut line, "line-{idx}").unwrap();
+            write!(&mut line, "[net-console] line-{idx}").unwrap();
             assert!(server.enqueue_outbound(line.as_str()).is_ok());
         }
 
@@ -1057,8 +1076,8 @@ mod tests {
             "pre-auth lines must not enter live queue"
         );
 
-        server.begin_session(0, Some(4));
-        let auth_payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>("AUTH changeme");
+        let auth_payload =
+            frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("AUTH {TOKEN}"));
         let event = server.ingest(auth_payload.as_slice(), 1);
         assert_eq!(event, SessionEvent::Authenticated);
 
@@ -1084,7 +1103,7 @@ mod tests {
         );
         let mut payloads = drained
             .iter()
-            .filter(|line| line.as_str().starts_with("line-"))
+            .filter(|line| line.as_str().starts_with("[net-console] line-"))
             .map(|line| line.as_str())
             .collect::<HeaplessVec<&str, { PREAUTH_FIRST_CAPACITY + PREAUTH_LAST_CAPACITY + 2 }>>();
         payloads.sort_unstable();
@@ -1094,14 +1113,14 @@ mod tests {
         > = HeaplessVec::new();
         for idx in 0..PREAUTH_FIRST_CAPACITY {
             let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
-            write!(&mut line, "line-{idx}").unwrap();
+            write!(&mut line, "[net-console] line-{idx}").unwrap();
             expected.push(line).unwrap();
         }
         for idx in
             (PREAUTH_FIRST_CAPACITY + 2)..(PREAUTH_FIRST_CAPACITY + PREAUTH_LAST_CAPACITY + 2)
         {
             let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
-            write!(&mut line, "line-{idx}").unwrap();
+            write!(&mut line, "[net-console] line-{idx}").unwrap();
             expected.push(line).unwrap();
         }
         for expected_line in expected {
@@ -1120,7 +1139,7 @@ mod tests {
         server.begin_session(0, Some(7));
         for idx in 0..(PREAUTH_FIRST_CAPACITY + PREAUTH_LAST_CAPACITY + 4) {
             let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
-            write!(&mut line, "line-{idx}").unwrap();
+            write!(&mut line, "[net-console] line-{idx}").unwrap();
             server.enqueue_outbound(line.as_str()).unwrap();
         }
         assert!(server.preauth_drop_warned);

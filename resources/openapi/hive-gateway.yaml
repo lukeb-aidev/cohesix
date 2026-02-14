@@ -18,6 +18,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BoundsResponse"
+  /v1/meta/status:
+    get:
+      summary: Gateway connection and broker status counters.
+      responses:
+        "200":
+          description: Runtime gateway status and broker metrics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayStatusResponse"
   /v1/fs/ls:
     get:
       summary: List directory entries (LS).
@@ -99,6 +109,9 @@ paths:
   /v1/fs/echo:
     post:
       summary: Append a single line (ECHO).
+      security:
+        - bearerAuth: []
+        - requestAuthHeader: []
       requestBody:
         required: true
         content:
@@ -108,6 +121,12 @@ paths:
       responses:
         "200":
           description: Echo operation response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "401":
+          description: Missing or invalid request authentication token.
           content:
             application/json:
               schema:
@@ -139,6 +158,19 @@ paths:
               schema:
                 type: string
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: >
+        Required for mutating endpoints. Supply `Authorization: Bearer <token>`.
+    requestAuthHeader:
+      type: apiKey
+      in: header
+      name: x-cohesix-auth
+      description: >
+        Alternative to bearer auth for mutating endpoints.
   schemas:
     GatewayResponse:
       type: object
@@ -321,3 +353,74 @@ components:
                   type: integer
                 preemptions_bytes:
                   type: integer
+    GatewayStatusResponse:
+      type: object
+      required:
+        - connected
+        - reconnects
+        - connects
+        - broker
+      properties:
+        connected:
+          type: boolean
+        last_error:
+          type: string
+        last_change_unix_ms:
+          type: integer
+          minimum: 0
+        reconnects:
+          type: integer
+          minimum: 0
+        connects:
+          type: integer
+          minimum: 0
+        broker:
+          $ref: "#/components/schemas/BrokerStatusResponse"
+    BrokerStatusResponse:
+      type: object
+      required:
+        - control_waiters
+        - telemetry_waiters
+        - control_checkouts
+        - telemetry_checkouts
+        - pool_exhausted
+        - checkout_retries
+        - timeout_rejections
+        - telemetry_yields
+        - proc_cache_hits
+        - proc_cache_misses
+        - proc_cache_evictions
+      properties:
+        control_waiters:
+          type: integer
+          minimum: 0
+        telemetry_waiters:
+          type: integer
+          minimum: 0
+        control_checkouts:
+          type: integer
+          minimum: 0
+        telemetry_checkouts:
+          type: integer
+          minimum: 0
+        pool_exhausted:
+          type: integer
+          minimum: 0
+        checkout_retries:
+          type: integer
+          minimum: 0
+        timeout_rejections:
+          type: integer
+          minimum: 0
+        telemetry_yields:
+          type: integer
+          minimum: 0
+        proc_cache_hits:
+          type: integer
+          minimum: 0
+        proc_cache_misses:
+          type: integer
+          minimum: 0
+        proc_cache_evictions:
+          type: integer
+          minimum: 0

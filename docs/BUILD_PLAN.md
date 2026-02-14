@@ -95,6 +95,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25](#25) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Complete |
 | [25a](#25a) | REST Live Hive Performance (Parallel Polling + Batching) | Pending |
 | [25b](#25b) | Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) | Pending |
+| [25c](#25c) | Python Orchestration SDK (1k Fleet Playbooks + Host Integrations) | Complete |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -5063,6 +5064,120 @@ Checks:
   - Due-diligence gate completes with no `P0/P1` blockers open.
 Deliverables:
   - Clean gate run logs and updated audit registers proving release-ready closure.
+```
+
+## Milestone 25c — Python Orchestration SDK (1k Fleet Playbooks + Host Integrations) <a id="25c"></a>
+[Milestones](#Milestones)
+
+**Why now (adoption + operator scale):** 1k-worker readiness is not only transport and gateway throughput; operators also need low-friction automation that plugs into existing Python tooling while preserving Cohesix control semantics and auditability.
+
+**Status:** Complete - Python orchestration APIs, host integration adapters, playbook CLI, documentation updates, and local/G5g validation are complete.
+
+## Goal
+Deliver a world-class Python SDK surface that:
+1. Keeps Cohesix non-authoritative protocol boundaries intact.
+2. Makes 1k-fleet operations simple to integrate from existing Python tooling and CI.
+3. Covers high-impact Mac, Jetson, and mixed-fleet use cases with auditable playbooks.
+4. Runs deterministically in local `.venv` and Linux (G5g) environments.
+
+## Non-Goals (Explicit)
+- No new in-VM listeners, transports, or protocol verbs.
+- No bypass of role/ticket/policy gates.
+- No behavior drift from `/queen/*/ctl` and `/proc/*` schemas documented in `docs/INTERFACES.md`.
+- No changes under `releases/` in this milestone.
+
+## Deliverables
+- Python orchestration core with typed schedule/lease/export/approval APIs mapped to existing control files.
+- Environment-driven backend selection (`mock`, mounted filesystem, REST gateway, TCP console) with deterministic precedence.
+- Host integration adapters for:
+  - `systemd` service state,
+  - Docker container inventory,
+  - Kubernetes pod phase snapshots,
+  - NVML/NVIDIA GPU telemetry,
+  - PEFT/LoRA runtime package probes.
+- Built-in high-impact playbooks covering:
+  - 1000 Mac: release factory, private PEFT grid, endpoint compliance.
+  - 1000 Jetson: traffic safety mesh, manufacturing safety + QA, critical infrastructure sensing.
+  - Mixed fleets: closed-loop AI factory, medical edge AI, logistics digital twin.
+- Frictionless CLI entrypoint (`cohesix-playbook`) plus example wrapper script.
+- Updated documentation in `tools/cohesix-py/README.md` and `docs/PYTHON_SUPPORT.md`.
+- Added Python tests for orchestration APIs, integration adapters, and playbook flows.
+
+## Commands
+- `source .venv/bin/activate`
+- `python -m pip install -e 'tools/cohesix-py[integrations,ml,dev]'`
+- `python -m pytest tools/cohesix-py/tests -q`
+- `python -m cohesix.playbook_cli --list`
+- `python -m cohesix.playbook_cli --playbook mixed-closed-loop-ai-factory --dry-run --mock`
+- `python tools/cohesix-py/examples/use_case_playbook.py --playbook jetson-traffic-safety --dry-run --mock`
+- Linux validation (G5g): run the same install/tests/playbook dry-run over SSH on the G5g host defined in `~/cohesix_dev.txt`.
+
+## Checks (DoD)
+- Python package installs cleanly into repo `.venv`.
+- New tests pass with deterministic output in mock mode.
+- Playbook CLI lists all built-in playbooks and executes dry-run reports without control writes.
+- Live-compatible control writes remain bounded and map only to canonical control files.
+- Host adapters degrade gracefully when optional host dependencies are unavailable.
+- Linux validation on G5g passes with the same test suite and playbook dry-run commands.
+
+## Task Breakdown
+```
+Title/ID: m25c-python-orchestration-core
+Goal: Add typed, bounded orchestration APIs for schedule/lease/export/approval workflows.
+Inputs: tools/cohesix-py/cohesix/client.py, docs/INTERFACES.md.
+Changes:
+  - tools/cohesix-py/cohesix/orchestration.py - typed request models, env backend discovery, /proc snapshot reads.
+Commands:
+  - python -m pytest tools/cohesix-py/tests/test_orchestration.py -q
+Checks:
+  - Control payloads are validated, bounded, and written only to canonical paths.
+Deliverables:
+  - Orchestration API module with deterministic tests.
+
+Title/ID: m25c-python-host-integrations
+Goal: Integrate systemd, docker, k8s, NVML, and PEFT probes with graceful fallback behavior.
+Inputs: docs/HOST_TOOLS.md, docs/PYTHON_SUPPORT.md.
+Changes:
+  - tools/cohesix-py/cohesix/integrations.py - provider probes + NDJSON rendering for telemetry shipping.
+  - tools/cohesix-py/tests/test_integrations.py - probe fallback/parse tests.
+Commands:
+  - python -m pytest tools/cohesix-py/tests/test_integrations.py -q
+Checks:
+  - Missing dependencies are reported as skipped/degraded, not hard failures.
+Deliverables:
+  - Provider adapter module and test coverage.
+
+Title/ID: m25c-python-playbooks
+Goal: Ship high-impact built-in playbooks for Mac, Jetson, and mixed 1k-fleet workflows.
+Inputs: docs/USE_CASES.md, docs/PYTHON_SUPPORT.md.
+Changes:
+  - tools/cohesix-py/cohesix/playbooks.py - playbook catalog + execution helpers.
+  - tools/cohesix-py/cohesix/playbook_cli.py - frictionless playbook CLI.
+  - tools/cohesix-py/examples/use_case_playbook.py - example wrapper.
+  - tools/cohesix-py/tests/test_playbooks.py - playbook catalog and execution tests.
+Commands:
+  - python -m pytest tools/cohesix-py/tests/test_playbooks.py -q
+  - python -m cohesix.playbook_cli --list
+Checks:
+  - All nine use-case playbooks are discoverable and dry-run capable.
+Deliverables:
+  - Playbook SDK + CLI + tests.
+
+Title/ID: m25c-python-docs-and-linux-validation
+Goal: Document world-class Python UX and validate on local + G5g Linux.
+Inputs: tools/cohesix-py/README.md, docs/PYTHON_SUPPORT.md, ~/cohesix_dev.txt.
+Changes:
+  - tools/cohesix-py/README.md - install/CLI/playbook UX updates.
+  - docs/PYTHON_SUPPORT.md - orchestration + integration + playbook docs.
+Commands:
+  - source .venv/bin/activate
+  - python -m pip install -e 'tools/cohesix-py[integrations,ml,dev]'
+  - python -m pytest tools/cohesix-py/tests -q
+  - ssh -i ~/.ssh/cohesix-cuda-builder.pem ubuntu@34.221.49.64 '<linux test commands>'
+Checks:
+  - Local and G5g test runs both pass; docs match as-built behavior.
+Deliverables:
+  - Updated docs + Linux validation evidence.
 ```
 
 ----

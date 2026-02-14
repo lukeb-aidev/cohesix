@@ -19,6 +19,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
 pub struct GatewayClient {
     base_url: String,
     agent: ureq::Agent,
+    request_auth_token: Option<String>,
 }
 
 impl GatewayClient {
@@ -32,7 +33,23 @@ impl GatewayClient {
             .timeout_read(DEFAULT_TIMEOUT)
             .timeout_write(DEFAULT_TIMEOUT)
             .build();
-        Self { base_url: base, agent }
+        Self {
+            base_url: base,
+            agent,
+            request_auth_token: None,
+        }
+    }
+
+    /// Configure a per-request auth token for mutating routes.
+    pub fn with_request_auth_token(mut self, token: impl Into<String>) -> Self {
+        let token = token.into();
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            self.request_auth_token = None;
+        } else {
+            self.request_auth_token = Some(trimmed.to_owned());
+        }
+        self
     }
 
     /// Return the configured base URL.
@@ -43,7 +60,7 @@ impl GatewayClient {
     /// Fetch manifest-derived bounds from the gateway.
     pub fn bounds(&self) -> Result<BoundsResponse> {
         let url = format!("{}/v1/meta/bounds", self.base_url);
-        match self.agent.get(&url).call() {
+        match self.with_auth(self.agent.get(&url)).call() {
             Ok(resp) => resp
                 .into_json()
                 .map_err(|err| anyhow!(err))
@@ -64,7 +81,7 @@ impl GatewayClient {
     pub fn list(&self, path: &str) -> Result<Vec<String>> {
         let path = urlencoding::encode(path);
         let url = format!("{}/v1/fs/ls?path={}", self.base_url, path);
-        let response = self.agent.get(&url).call();
+        let response = self.with_auth(self.agent.get(&url)).call();
         let parsed = handle_response("LS", response)?;
         Ok(parsed.lines)
     }
@@ -76,7 +93,7 @@ impl GatewayClient {
             "{}/v1/fs/cat?path={}&max_bytes={}",
             self.base_url, path, max_bytes
         );
-        let response = self.agent.get(&url).call();
+        let response = self.with_auth(self.agent.get(&url)).call();
         let parsed = handle_response("CAT", response)?;
         Ok(parsed.lines)
     }
@@ -88,7 +105,7 @@ impl GatewayClient {
             "{}/v1/fs/tail?path={}&max_bytes={}",
             self.base_url, path, max_bytes
         );
-        let response = self.agent.get(&url).call();
+        let response = self.with_auth(self.agent.get(&url)).call();
         let parsed = handle_response("TAIL", response)?;
         Ok(parsed.lines)
     }
@@ -100,9 +117,20 @@ impl GatewayClient {
             path: path.to_owned(),
             line: Some(line.to_owned()),
         };
-        let response = self.agent.post(&url).send_json(payload);
+        let response = self
+            .with_auth(self.agent.post(&url))
+            .send_json(payload);
         let parsed = handle_response("ECHO", response)?;
         Ok(parsed.bytes.unwrap_or(0))
+    }
+
+    fn with_auth(&self, request: ureq::Request) -> ureq::Request {
+        let Some(token) = self.request_auth_token.as_deref() else {
+            return request;
+        };
+        request
+            .set("Authorization", format!("Bearer {token}").as_str())
+            .set("x-cohesix-auth", token)
     }
 }
 

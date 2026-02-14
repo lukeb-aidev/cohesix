@@ -5,29 +5,39 @@
 # Architecture Conformance Checklist
 
 ## Run Metadata
-- Audit date:
-- Commit SHA:
-- Auditor:
-- Independent reviewer:
+- Audit date: `2026-02-13`
+- Commit SHA: `b89a7cf333aa3bac70dde338817a718fdacdc0fc`
+- Auditor: `automation-agent`
+- Independent reviewer: `TBD`
+- Evidence root: `out/audit/gate/20260213T222403Z`
 
 ## Architecture Checks
-- [ ] Trust-boundary and affected control families documented in `docs/audit/CONTROL_TRACEABILITY.md`.
-- [ ] Capability discipline preserved: no implicit authority transfer, no ad-hoc RPC bypass.
-- [ ] Secure9P constraints enforced (`msize <= 8192`, walk depth <= 8, no `..`, fid lifecycle discipline).
-- [ ] No unauthorized in-VM TCP listener beyond approved console exception.
+- [x] Trust-boundary and affected control families documented in `docs/audit/CONTROL_TRACEABILITY.md`.
+- [x] Capability discipline preserved: no implicit authority transfer, no ad-hoc RPC bypass.
+- [x] Secure9P constraints enforced (`msize <= 8192`, walk depth <= 8, no `..`, fid lifecycle discipline).
+- [x] No unauthorized in-VM TCP listener beyond approved console exception.
 - [ ] HAL boundary preserved: no direct MMIO/unsafe access outside HAL-owned layers.
-- [ ] Queen/worker lifecycle semantics align with `docs/ROLES_AND_SCHEDULING.md`.
-- [ ] Namespace layout and control paths align with `docs/INTERFACES.md`.
-- [ ] Generated manifest and docs snippets align with code behavior (`scripts/check-generated.sh`).
+- [x] Queen/worker lifecycle semantics align with `docs/ROLES_AND_SCHEDULING.md`.
+- [x] Namespace layout and control paths align with `docs/INTERFACES.md`.
+- [x] Generated manifest and docs snippets align with code behavior (`scripts/check-generated.sh`).
 - [ ] Unsafe-code deltas reviewed with explicit safety justification and reviewer sign-off.
 
 ## Evidence References
 - Architecture evidence paths:
+  - `out/audit/gate/20260213T222403Z/regression-batch.log`
+  - `out/audit/gate/20260213T222403Z/generated-artifacts.log`
+  - `docs/audit/CONTROL_TRACEABILITY.md`
 - Command logs:
+  - `scripts/ci/due_diligence_gate.sh`
+  - `scripts/check-generated.sh`
+  - `scripts/cohsh/run_regression_batch.sh`
 - Related finding IDs:
+  - `DD-2026-0004` (closed)
+  - `DD-2026-0008` (closed)
+  - `DD-2026-0009` (open)
 
 ## Sign-off
-- Auditor decision: `PASS` | `FAIL`
-- Independent reviewer decision: `PASS` | `FAIL`
-- Decision date:
-- Notes:
+- Auditor decision: `FAIL`
+- Independent reviewer decision: `TBD`
+- Decision date: `2026-02-13`
+- Notes: `Automated gate and regression evidence are passing, but HAL boundary and unsafe-delta manual review evidence are still required for architectural closure.`

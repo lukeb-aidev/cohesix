@@ -201,6 +201,11 @@ struct Cli {
     #[cfg(feature = "rest")]
     #[arg(long)]
     rest_url: Option<String>,
+
+    /// Request auth token for REST mutating routes.
+    #[cfg(feature = "rest")]
+    #[arg(long)]
+    rest_auth_token: Option<String>,
 }
 
 fn init_logging(verbose: bool) {
@@ -316,6 +321,29 @@ fn resolve_rest_url(cli_value: Option<&str>) -> Option<String> {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
             return Some(trimmed.to_owned());
+        }
+    }
+    None
+}
+
+#[cfg(feature = "rest")]
+fn resolve_rest_auth_token(cli_value: Option<&str>) -> Option<String> {
+    if let Some(value) = cli_value {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    for key in [
+        "COHSH_REST_AUTH_TOKEN",
+        "COH_REST_AUTH_TOKEN",
+        "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
+    ] {
+        if let Ok(value) = env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
         }
     }
     None
@@ -522,11 +550,17 @@ fn main() -> Result<()> {
                             "--transport rest requires --rest-url (or COHSH_REST_URL/COH_REST_URL/HIVE_GATEWAY_URL)"
                         )
                     })?;
+                    let rest_auth_token = resolve_rest_auth_token(cli.rest_auth_token.as_deref());
                     let pool_url = rest_url.clone();
+                    let pool_token = rest_auth_token.clone();
                     let factory = Arc::new(move || {
-                        Ok(Box::new(RestTransport::new(pool_url.clone())) as Box<dyn Transport + Send>)
+                        Ok(Box::new(RestTransport::new(pool_url.clone(), pool_token.clone()))
+                            as Box<dyn Transport + Send>)
                     });
-                    (Box::new(RestTransport::new(rest_url)), Some(factory))
+                    (
+                        Box::new(RestTransport::new(rest_url, rest_auth_token)),
+                        Some(factory),
+                    )
                 }
             }
         };

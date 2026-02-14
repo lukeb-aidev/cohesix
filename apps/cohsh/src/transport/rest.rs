@@ -41,10 +41,14 @@ pub struct RestTransport {
 
 impl RestTransport {
     /// Create a new REST transport for the supplied gateway base URL.
-    pub fn new(base_url: impl Into<String>) -> Self {
+    pub fn new(base_url: impl Into<String>, request_auth_token: Option<String>) -> Self {
         let policy = CohshPolicy::from_generated();
+        let mut client = GatewayClient::new(base_url);
+        if let Some(token) = request_auth_token {
+            client = client.with_request_auth_token(token);
+        }
         Self {
-            client: GatewayClient::new(base_url),
+            client,
             ack_lines: VecDeque::new(),
             attached: false,
             max_read_bytes: policy.trace.max_bytes,
@@ -404,7 +408,7 @@ mod tests {
 
     #[test]
     fn read_max_bytes_clamps_to_proc_bound() {
-        let mut transport = RestTransport::new("http://example")
+        let mut transport = RestTransport::new("http://example", None)
             .with_max_read_bytes(2048)
             .with_max_tail_bytes(2048);
         transport.bounds = Some(sample_bounds());

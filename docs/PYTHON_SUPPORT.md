@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Document Cohesix Python client usage and backends. -->
 <!-- Author: Lukas Bower -->
-# Cohesix Python Support (Milestone 24c)
+# Cohesix Python Support (Milestone 25c)
 
 The `cohesix` Python client is a **thin, non-authoritative** wrapper over existing Cohesix
 console and filesystem semantics. It **does not introduce new control-plane behavior**; it
@@ -31,6 +31,19 @@ Examples below use bundle paths (`./bin/<tool>`). In the source tree, replace `.
 - **RestBackend**: uses the `hive-gateway` REST projection (host-only).
 - **MockBackend**: deterministic in-memory filesystem for tests/examples.
 
+## Orchestration APIs (Milestone 25c)
+- `CohesixOrchestrator`: typed wrappers for `/actions/queue`, `/queen/schedule/ctl`, `/queen/lease/ctl`, and `/queen/export/ctl`.
+- `read_proc_snapshot()`: bounded reads for `/proc/schedule/*` and `/proc/lease/*`.
+- `from_env()`: backend auto-discovery using environment variables.
+- `playbooks`: built-in high-impact playbooks and an execution helper that can push host snapshots into telemetry.
+
+## Host integration adapters (Milestone 25c)
+- `systemd` service probes (`systemctl show`).
+- Docker container probes (SDK-first, CLI fallback).
+- Kubernetes pod probes (SDK-first, `kubectl` fallback).
+- NVML/NVIDIA probes (`pynvml` first, `nvidia-smi` fallback).
+- PEFT runtime package probes (`torch`, `transformers`, `peft`, `accelerate`, `bitsandbytes`).
+
 ## Backend matrix
 | Backend | Requires | Best for | Notes |
 | --- | --- | --- | --- |
@@ -57,10 +70,27 @@ Source tree (editable):
 ```bash
 python3 -m pip install -e tools/cohesix-py
 ```
+Source tree (editable + integration extras):
+```bash
+python3 -m pip install -e 'tools/cohesix-py[integrations]'
+```
+Source tree (editable + PEFT extras):
+```bash
+python3 -m pip install -e 'tools/cohesix-py[ml]'
+```
 Release bundle:
 ```bash
 python3 -m pip install ./python/cohesix-py
 ```
+
+## Playbook CLI
+The package now ships `cohesix-playbook` for one-command orchestration templates:
+```bash
+cohesix-playbook --list
+cohesix-playbook --playbook mixed-closed-loop-ai-factory --dry-run --mock
+cohesix-playbook --playbook jetson-traffic-safety --tcp-host 127.0.0.1 --tcp-port 31337
+```
+Reports are written under `out/examples/playbooks/<playbook-id>/`.
 
 ## Common example flags
 All bundled examples share the same backend arguments:
@@ -165,6 +195,12 @@ The parity tests verify the Python client matches `cohsh` behavior byte-for-byte
 ```bash
 python3 -m pytest -k cohesix_parity tools/cohesix-py/tests/test_parity.py
 ```
+Orchestration/integration/playbook tests:
+```bash
+python3 -m pytest tools/cohesix-py/tests/test_orchestration.py -q
+python3 -m pytest tools/cohesix-py/tests/test_integrations.py -q
+python3 -m pytest tools/cohesix-py/tests/test_playbooks.py -q
+```
 
 ## Troubleshooting
 - `ERR AUTH`: set `COH_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`) or pass `--auth-token`.
@@ -175,44 +211,27 @@ python3 -m pytest -k cohesix_parity tools/cohesix-py/tests/test_parity.py
 - Filesystem backend mount errors: ensure FUSE is installed and `coh` was built with FUSE enabled.
 - REST errors: confirm `hive-gateway` is running and reachable at `/v1/meta/bounds`.
 
-## Real-world use cases (examples)
-These examples assume a live Queen VM unless you explicitly add `--mock`.
+## Real-world use-case playbooks (1k+ workers)
+The built-in playbook catalog covers all high-impact use cases defined for Milestone 25d discussions:
+- `mac-release-factory`
+- `mac-private-peft-grid`
+- `mac-endpoint-compliance`
+- `jetson-traffic-safety`
+- `jetson-manufacturing-safety`
+- `jetson-critical-infra`
+- `mixed-closed-loop-ai-factory`
+- `mixed-medical-edge-ai`
+- `mixed-logistics-digital-twin`
 
-### 1) Edge telemetry ingestion -> export bundle
-Goal: push telemetry from edge hosts and pull a bounded export bundle for training.
+Dry-run any playbook with no control writes:
 ```bash
-python3 tools/cohesix-py/examples/telemetry_write_pull.py --tcp-host 127.0.0.1 --tcp-port 31337
+cohesix-playbook --playbook mac-release-factory --dry-run --mock
 ```
-Why this matters: proves append-only telemetry ingest and bounded export without adding new protocols.
 
-### 2) Lease -> run -> release automation
-Goal: validate GPU lease behavior before a deployment.
+Run through the example wrapper:
 ```bash
-python3 tools/cohesix-py/examples/lease_run.py --tcp-host 127.0.0.1 --tcp-port 31337
+python3 tools/cohesix-py/examples/use_case_playbook.py --playbook mixed-logistics-digital-twin --dry-run --mock
 ```
-Why this matters: ensures lease enforcement and breadcrumbs are consistent with `coh` and `cohsh` flows.
-
-### 3) PEFT roundtrip from a training farm
-Goal: export a training job, import adapter artifacts, and activate safely.
-```bash
-python3 tools/cohesix-py/examples/peft_roundtrip.py --tcp-host 127.0.0.1 --tcp-port 31337
-```
-Why this matters: demonstrates auditable adapter handling with explicit activation/rollback semantics.
-
-### 4) Local operator tooling (TCP backend)
-Goal: automate common operator checks using the same console semantics as `cohsh`.
-```bash
-python3 tools/cohesix-py/examples/lease_run.py --tcp-host 127.0.0.1 --tcp-port 31337
-```
-Why this matters: confirms the Python client is a thin wrapper over the live console, not a new control plane.
-
-### 5) Filesystem backend for air-gapped automation
-Goal: operate via a mounted Secure9P namespace without TCP in the workflow.
-```bash
-./bin/coh --host 127.0.0.1 --port 31337 mount --at /tmp/coh-mount
-python3 tools/cohesix-py/examples/lease_run.py --mount-root /tmp/coh-mount
-```
-Why this matters: keeps control-plane access file-shaped and auditable even in restricted environments.
 
 ## Design alignment
 This client exists to lower adoption friction while preserving Cohesix's core guarantees:

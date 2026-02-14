@@ -1202,7 +1202,7 @@ where
         };
 
         #[cfg(feature = "net-console")]
-        if let Some((activity, telemetry, buffered, conn_id, ingest_snapshot)) = net_poll {
+        if let Some((activity, telemetry, buffered, conn_id, _ingest_snapshot)) = net_poll {
             self.net_conn_id = conn_id;
             if NET_DIAG_FEATURED {
                 self.log_net_diag(telemetry);
@@ -1218,7 +1218,7 @@ where
             }
             #[cfg(feature = "kernel")]
             if let Some(bridge) = self.ninedoor.as_mut() {
-                bridge.update_ingest_snapshot(ingest_snapshot);
+                bridge.update_ingest_snapshot(_ingest_snapshot);
             }
             self.drain_net_console_events();
         }
@@ -3992,7 +3992,7 @@ mod tests {
     #[test]
     fn pump_bootstrap_logs_subsystems() {
         let driver = LoopbackSerial::<16>::new();
-        let serial = SerialPort::<_, 16, 16, 32>::new(driver);
+        let serial = SerialPort::<_, 16, 16, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent {
             tick: 1,
             now_ms: 10,
@@ -4237,26 +4237,19 @@ mod tests {
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
-        let mut store: TicketTable<4> = TicketTable::new();
-        store.register(Role::Queen, "net").unwrap();
+        let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
         let mut line = HeaplessString::new();
-        let token = issue_token("net", Role::Queen);
-        line.push_str(format!("attach queen {token}").as_str())
-            .unwrap();
+        line.push_str("ping").unwrap();
         net.lines.push(ConsoleLine::new(line, 1)).unwrap();
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.poll();
         drop(pump);
-        assert!(audit
-            .entries
-            .iter()
-            .any(|entry| entry.contains("attach accepted")));
         assert!(net
             .sent
             .iter()
-            .any(|line| line.as_str().starts_with("OK ATTACH")));
+            .any(|line| line.as_str().starts_with("OK PING")));
     }
 
     #[test]

@@ -17,7 +17,7 @@ use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
 
 use super::{
-    console_srv::TcpConsoleServer, ConsoleLine, NetPoller, NetTelemetry, AUTH_TOKEN,
+    console_auth_token, console_srv::TcpConsoleServer, ConsoleLine, NetPoller, NetTelemetry,
     IDLE_TIMEOUT_MS, MAX_FRAME_LEN,
 };
 use crate::observe::IngestSnapshot;
@@ -321,7 +321,7 @@ impl NetStack {
             interface,
             hardware_addr: mac,
             telemetry: NetTelemetry::default(),
-            server: TcpConsoleServer::new(AUTH_TOKEN, IDLE_TIMEOUT_MS),
+            server: TcpConsoleServer::new(console_auth_token(), IDLE_TIMEOUT_MS),
             session_active: false,
         };
         (stack, handle)
@@ -367,7 +367,7 @@ impl NetStack {
             }
             let trimmed = line.trim_end_matches(['\r', '\n']);
             let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 4 }> = HeaplessVec::new();
-            if encode_frame(trimmed, &mut payload).is_err() {
+            if Self::encode_frame(trimmed, &mut payload).is_err() {
                 self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
                 continue;
             }
@@ -418,15 +418,15 @@ impl NetStack {
                 HeaplessVec::new();
             let mut auth_line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
             let _ = auth_line.push_str("AUTH ");
-            let _ = auth_line.push_str(AUTH_TOKEN);
-            let _ = encode_frame(auth_line.as_str(), &mut auth_payload);
+            let _ = auth_line.push_str(console_auth_token());
+            let _ = Self::encode_frame(auth_line.as_str(), &mut auth_payload);
             let _ = self.server.ingest(auth_payload.as_slice(), 0);
             self.session_active = true;
         }
 
         let trimmed = line.trim_end_matches(['\r', '\n']);
         let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 8 }> = HeaplessVec::new();
-        if encode_frame(trimmed, &mut payload).is_err() {
+        if Self::encode_frame(trimmed, &mut payload).is_err() {
             return;
         }
         let _ = self.server.ingest(payload.as_slice(), 1);
@@ -590,21 +590,25 @@ mod tests {
         );
 
         let auth_payload =
-            frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("AUTH {AUTH_TOKEN}"));
+            frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("AUTH {}", console_auth_token()));
         let event = stack.server.ingest(auth_payload.as_slice(), 1);
         assert_eq!(event, SessionEvent::Authenticated);
 
         assert!(stack.poll_with_time(2));
 
-        let frame = handle.pop_tx().expect("frame not enqueued");
-        let lines = decode_frames(frame.as_slice());
-        assert!(lines
+        let first = handle.pop_tx().expect("first frame missing");
+        let second = handle.pop_tx().expect("second frame missing");
+        let mut observed: heapless::Vec<heapless::String<96>, 8> = heapless::Vec::new();
+        for line in decode_frames(first.as_slice()) {
+            let _ = observed.push(line);
+        }
+        for line in decode_frames(second.as_slice()) {
+            let _ = observed.push(line);
+        }
+        assert!(observed
             .iter()
             .any(|line| line.as_str() == "OK TEST detail=42"));
-
-        let ack = handle.pop_tx().expect("auth acknowledgement missing");
-        let lines = decode_frames(ack.as_slice());
-        assert!(lines.iter().any(|line| line.as_str() == "OK AUTH"));
+        assert!(observed.iter().any(|line| line.as_str() == "OK AUTH"));
     }
 
     #[test]
