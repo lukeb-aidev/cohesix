@@ -55,7 +55,7 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
 - If IR or manifest changes: `cargo run -p coh-rtc` then `scripts/check-generated.sh`.
 - Ensure `SEL4_BUILD_DIR` points at the SMP kernel build (`$REPO/seL4/SMP_build` by default); override to `$REPO/seL4/build` when validating single-core baselines.
 - Default QEMU SMP topology is four single-threaded cores; set `COHESIX_QEMU_SMP=1` for single-core baselines or `COHESIX_QEMU_SMP_TOPO` for explicit topologies.
-- macOS: FUSE mount coverage is optional unless `coh` is rebuilt with `--features fuse` and MacFUSE is installed.
+- macOS: FUSE mount coverage is optional unless the MacFUSE runtime is installed and approved (verify `/dev/macfuse0` exists, or `/dev/osxfuse0` on older OSXFUSE).
 - If the host lacks EL2/virtualization support or KVM cannot provide GICv2, set `COHESIX_QEMU_VIRT=off` and/or `COHESIX_QEMU_MACHINE_EXTRA=kernel-irqchip=off` when invoking the release `qemu/run.sh`.
 - Before any QEMU TCP run, start tcpdump and confirm the log path (example: `logs/tcpdump-new-YYYYMMDD-HHMMSS.log`). Use the same path in TCP correlation checks.
 - Headless Linux requires `xvfb-run` (`sudo apt-get install -y xvfb` if missing).
@@ -187,7 +187,7 @@ Run while QEMU is up:
     - `./bin/coh --host 127.0.0.1 --port 31337 peft import --publish --model demo-model --from demo/peft_adapter --job job_0001 --export ./out/peft_export --registry ./out/peft_registry`
     - `./bin/coh --host 127.0.0.1 --port 31337 peft activate --model demo-model --registry ./out/peft_registry`
     - Verify in `cohsh` (after closing SwarmUI): `ls /gpu/models/available` and `cat /gpu/models/active`
-  - Optional FUSE: `./bin/coh mount --host 127.0.0.1 --port 31337 --at /tmp/coh-mount` (requires a FUSE runtime; macOS defaults to FUSE disabled and needs `--features fuse` plus MacFUSE).
+  - Optional FUSE: `./bin/coh mount --host 127.0.0.1 --port 31337 --at /tmp/coh-mount` (requires a FUSE runtime; on macOS this means MacFUSE installed and approved, typically `/dev/macfuse0`).
 - `swarmui` live (console + observability; do not attach cohsh simultaneously):
   - macOS: `./bin/swarmui`
   - headless Linux: `xvfb-run -a ./bin/swarmui`
@@ -260,31 +260,37 @@ Run while QEMU is up:
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/lease/summary&max_bytes=128' | jq .`
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/lease/active&max_bytes=256' | jq .`
   - Policy approval (only if `/policy/rules` exists):
-    - `curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo -H 'Content-Type: application/json' -d '{"path":"/actions/queue","line":"{\"id\":\"approve-rest-1\",\"target\":\"/queen/ctl\",\"decision\":\"approve\"}"}'`
+    - `curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo -H "Authorization: Bearer ${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" -H 'Content-Type: application/json' -d '{"path":"/actions/queue","line":"{\"id\":\"approve-rest-1\",\"target\":\"/queen/ctl\",\"decision\":\"approve\"}"}'`
   - REST spawn (heartbeat) through the gateway:
-    - `curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo -H 'Content-Type: application/json' -d '{"path":"/queen/ctl","line":"{\"spawn\":\"heartbeat\",\"ticks\":120,\"budget\":{\"ttl_s\":300,\"ops\":500}}"}'`
+    - `curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo -H "Authorization: Bearer ${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" -H 'Content-Type: application/json' -d '{"path":"/queen/ctl","line":"{\"spawn\":\"heartbeat\",\"ticks\":120,\"budget\":{\"ttl_s\":300,\"ops\":500}}"}'`
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/worker' | jq .`
   - Host publishers over REST:
-    - `./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 --interval-ms 1000`
-    - `./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --watch --provider systemd --provider nvidia`
+    - `./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --interval-ms 1000`
+    - `./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --watch --provider systemd --provider nvidia`
     - Validate: `curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/gpu' | jq .` and `curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/host' | jq .`
   - `coh` REST path coverage (queen role via gateway):
-    - `./bin/coh --rest-url http://127.0.0.1:8080 gpu list`
-    - `./bin/coh --rest-url http://127.0.0.1:8080 gpu lease --gpu GPU-0 --mem-mb 2048 --streams 1 --ttl-s 120`
-    - `./bin/coh --rest-url http://127.0.0.1:8080 run --gpu GPU-0 -- echo ok`
-    - `./bin/coh --rest-url http://127.0.0.1:8080 telemetry pull --out ./out/telemetry-rest`
-    - `./bin/coh --rest-url http://127.0.0.1:8080 peft export --job job_0001 --out ./out/peft_export_rest` (skip if no export job is seeded)
-    - `./bin/coh --rest-url http://127.0.0.1:8080 peft import --publish --model demo-model --from demo/peft_adapter --job job_0001 --export ./out/peft_export_rest --registry ./out/peft_registry_rest`
-    - `./bin/coh --rest-url http://127.0.0.1:8080 peft activate --model demo-model --registry ./out/peft_registry_rest`
-    - `./bin/coh --rest-url http://127.0.0.1:8080 peft rollback --registry ./out/peft_registry_rest`
+    - `./bin/coh gpu --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" list`
+    - `./bin/coh gpu --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" lease --gpu GPU-0 --mem-mb 2048 --streams 1 --ttl-s 120`
+    - `./bin/coh run --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --gpu GPU-0 -- echo ok`
+    - `./bin/coh telemetry --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" pull --out ./out/telemetry-rest`
+    - `./bin/coh peft --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" export --job job_0001 --out ./out/peft_export_rest` (skip if no export job is seeded)
+    - `./bin/coh peft --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" import --publish --model demo-model --from demo/peft_adapter --job job_0001 --export ./out/peft_export_rest --registry ./out/peft_registry_rest`
+    - `./bin/coh peft --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" activate --model demo-model --registry ./out/peft_registry_rest`
+    - `./bin/coh peft --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" rollback --registry ./out/peft_registry_rest`
   - REST mount exclusivity:
-    - `./bin/coh --rest-url http://127.0.0.1:8080 mount --at /tmp/coh-mount-rest`
-    - In a second shell: `./bin/coh --rest-url http://127.0.0.1:8080 mount --at /tmp/coh-mount-rest-2` → must fail with an exclusive lock error.
+    - `./bin/coh mount --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --at /tmp/coh-mount-rest`
+    - In a second shell: `./bin/coh mount --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --at /tmp/coh-mount-rest-2` → must fail with an exclusive lock error.
+    - Read/write smoke (supported MIME types only):
+      - `cat /tmp/coh-mount-rest/proc/lifecycle/state` (must be non-empty)
+      - `head -n 5 /tmp/coh-mount-rest/log/queen.log` (must be non-empty)
+      - `DEV=tp-mount-xfer-1; printf '{"new":"segment","mime":"text/plain"}\n' >> "/tmp/coh-mount-rest/queen/telemetry/${DEV}/ctl"`
+      - `printf 'hello-from-test-plan ts_ms=%s\n' "$(date +%s000)" >> "/tmp/coh-mount-rest/queen/telemetry/${DEV}/seg/seg-000001"`
+      - `cat "/tmp/coh-mount-rest/queen/telemetry/${DEV}/latest"` (expects `seg-000001`)
   - `cas-tool` REST upload:
     - `./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 --signing-key ./resources/fixtures/cas_signing_key.hex`
-    - `./bin/cas-tool upload --bundle ./out/cas/1 --rest-url http://127.0.0.1:8080`
+    - `./bin/cas-tool upload --bundle ./out/cas/1 --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"`
   - `cohsh` REST CLI:
-    - `./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080`
+    - `./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"`
     - `attach queen`
     - `cat /proc/schedule/summary`
     - `cat /proc/lease/summary`

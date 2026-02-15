@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Networking subsystem abstractions and configuration for console transports.
 // Author: Lukas Bower
@@ -51,7 +51,14 @@ pub const IDLE_TIMEOUT_MS: u64 = if cfg!(feature = "timers-arch-counter") {
     24 * 60 * 60 * 1000
 };
 /// Timeout applied to authentication attempts from newly connected clients.
-pub const AUTH_TIMEOUT_MS: u64 = 5 * 1000;
+///
+/// See `IDLE_TIMEOUT_MS` for notes on the `dev-virt` dummy timebase running far
+/// faster than wall time when the architected counter is unavailable.
+pub const AUTH_TIMEOUT_MS: u64 = if cfg!(feature = "timers-arch-counter") {
+    5 * 1000
+} else {
+    10 * 60 * 1000
+};
 
 /// Number of console lines retained between pump cycles.
 pub const CONSOLE_QUEUE_DEPTH: usize = 8;
@@ -84,6 +91,22 @@ impl NetStage {
             Self::IcmpOnly => "icmp_only",
             Self::TcpHandshakeOnly => "tcp_handshake_only",
             Self::Full => "full",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AUTH_TIMEOUT_MS;
+
+    #[test]
+    fn auth_timeout_scales_with_timebase() {
+        if cfg!(feature = "timers-arch-counter") {
+            assert_eq!(AUTH_TIMEOUT_MS, 5_000);
+        } else {
+            // In dev-virt the dummy timer advances once per poll; enforce a large enough
+            // auth deadline to avoid spurious WAN/tunnel authentication failures.
+            assert!(AUTH_TIMEOUT_MS >= 10 * 60 * 1000);
         }
     }
 }

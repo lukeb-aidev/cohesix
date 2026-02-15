@@ -757,7 +757,7 @@ main() {
         --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md"
 
     SEL4_COMPONENT_PACKAGES=(nine-door worker-heart worker-gpu)
-    HOST_TOOL_PACKAGES=(gpu-bridge-host cas-tool coh hive-gateway)
+    HOST_TOOL_PACKAGES=(gpu-bridge-host cas-tool hive-gateway)
     if has_root_task_feature "cohesix-dev"; then
         HOST_TOOL_PACKAGES+=(swarmui)
     fi
@@ -772,6 +772,19 @@ main() {
 
     log "Building host tooling via: cargo ${HOST_BUILD_ARGS[*]}"
     cargo "${HOST_BUILD_ARGS[@]}"
+
+    COH_BUILD_ARGS=(build)
+    if (( ${#PROFILE_ARGS[@]} > 0 )); then
+        COH_BUILD_ARGS+=("${PROFILE_ARGS[@]}")
+    fi
+    COH_BUILD_ARGS+=(-p coh)
+    # On macOS, `coh mount` requires the optional FUSE backend (MacFUSE runtime).
+    # Build with `--features fuse` by default so operators can mount without a manual rebuild.
+    if [[ "$HOST_OS" == "Darwin" ]]; then
+        COH_BUILD_ARGS+=(--features fuse)
+    fi
+    log "Building coh CLI via: cargo ${COH_BUILD_ARGS[*]}"
+    cargo "${COH_BUILD_ARGS[@]}"
 
     HOST_SIDECAR_ARGS=(build)
     if (( ${#PROFILE_ARGS[@]} > 0 )); then

@@ -12,7 +12,7 @@ This release introduces `hive-gateway` as the supported multiplexing layer for h
 **Build + locations**
 - Source tree: `scripts/cohesix-build-run.sh` stages host binaries under `out/cohesix/host-tools/`. It builds `cohsh` and `host-sidecar-bridge` with TCP support, plus `coh`, `gpu-bridge-host`, `cas-tool`, `hive-gateway`, and (when `cohesix-dev` is enabled) `swarmui`.
 - Source tree (manual): `cargo build -p <tool>` produces `target/<profile>/<tool>`.
-- Release bundles: host tools live in `bin/`. The Linux release bundle ships `coh` with `fuse,nvml,cuda`; macOS bundles default to FUSE disabled unless `coh` is rebuilt with `--features fuse` and MacFUSE installed. `cohsh` and `host-sidecar-bridge` include TCP support.
+- Release bundles: host tools live in `bin/`. The Linux release bundle ships `coh` with `fuse,nvml,cuda`; macOS bundles ship `coh` with FUSE enabled (requires MacFUSE installed and approved, typically surfaced as `/dev/macfuse0`). `cohsh` and `host-sidecar-bridge` include TCP support.
 
 All examples below use `./bin/<tool>` as the bundle layout. In the source tree, replace `./bin` with `out/cohesix/host-tools` (staged) or `target/<profile>` (manual).
 
@@ -236,8 +236,8 @@ Options:
 
 ```bash
 ./bin/coh doctor --mock
-./bin/coh --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" gpu list
-./bin/coh --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" mount --at /tmp/coh-mount
+./bin/coh gpu --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" list
+./bin/coh mount --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --at /tmp/coh-mount
 ./bin/coh gpu list --host 127.0.0.1 --port 31337
 ./bin/coh gpu lease --host 127.0.0.1 --port 31337 --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60
 ./bin/coh run --host 127.0.0.1 --port 31337 --gpu GPU-0 -- echo ok
@@ -250,7 +250,7 @@ Options:
 ```
 
 ### Notes
-- `coh mount` uses FUSE for live mounts. FUSE is enabled by default on Linux (ensure a FUSE runtime is installed). On macOS, FUSE is disabled by default; rebuild `coh` with `--features fuse` and install MacFUSE. `--mock` skips the mount check.
+- `coh mount` uses FUSE for live mounts. FUSE is enabled by default on Linux (ensure a FUSE runtime is installed). On macOS, `coh` is built with FUSE enabled in Cohesix bundles, but mounts still require MacFUSE installed and approved (verify `/dev/macfuse0` exists). `--mock` skips the mount check.
 - `coh mount` is long-running and stays in the foreground to serve the mount. Use a second terminal for access or run it in the background (`... &`) and unmount with `fusermount -u` (Linux) or `umount` (macOS).
 - `--rest-url` (or `COH_REST_URL` / `HIVE_GATEWAY_URL`) routes operations through `hive-gateway` and does not attach to the TCP console (queen role only). Use `--rest-auth-token` (or `COH_REST_AUTH_TOKEN` / `COHSH_REST_AUTH_TOKEN` / `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`) for gateway request-auth.
 - `coh mount --rest-url` is exclusive: only one REST mount per gateway URL. Unmount before starting another.

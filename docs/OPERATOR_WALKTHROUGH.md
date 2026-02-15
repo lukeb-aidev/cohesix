@@ -109,7 +109,8 @@ These scenarios use `hive-gateway` as the **sole** console client and route all 
    ```
 2. Use a live REST-backed mount:
    ```bash
-   ./bin/coh --rest-url http://127.0.0.1:8080 mount --at /tmp/coh-mount-rest
+   ./bin/coh mount --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+     --at /tmp/coh-mount-rest
    ```
 3. REST mount is **exclusive** per gateway URL; stop the mount before starting another.
 
@@ -122,6 +123,56 @@ Use REST to automate an operator script without taking the console.
      --script scripts/cohsh/boot_v0.coh
    ```
    In a release bundle, replace the script path with your own `.coh` file.
+
+## FUSE mounts (`coh mount`) over TCP vs REST
+`coh mount` exposes a host filesystem view over Secure9P namespaces. It is a projection of `LS`/`CAT`/`ECHO` with manifest-derived bounds and policy allowlists enforced.
+
+Prerequisites:
+- Linux: install FUSE3 (`sudo apt-get update && sudo apt-get install -y fuse3`). Confirm `fusermount3` exists.
+- macOS: FUSE mounts require MacFUSE installed and approved (verify `/dev/macfuse0` exists, or `/dev/osxfuse0` on older OSXFUSE). Cohesix bundles ship `coh` with FUSE enabled, but mounts fail until the MacFUSE runtime is active.
+
+Transport selection:
+- **TCP mount**: attaches directly to the console. Only one console client is supported; do not run `hive-gateway` concurrently.
+- **REST mount**: connects through `hive-gateway` and supports multi-tool/multi-host usage while keeping the console single-client. REST writes require request-auth.
+
+### TCP mount (single console client only)
+```bash
+./bin/coh mount --host 127.0.0.1 --port 31337 --auth-token "${COH_AUTH_TOKEN}" --at /tmp/coh-mount-tcp
+```
+If you need more than one host/tool concurrently, stop the TCP mount and use the gateway + REST mount instead.
+Remote TCP mounts over high-latency links (for example AWS → Mac over an SSH reverse tunnel) are supported, but remain single-client; prefer `hive-gateway` + REST for remote multi-host operation.
+
+### REST mount (gateway multiplexing; recommended)
+Start the gateway first (Scenario A), then mount through REST:
+```bash
+./bin/coh mount --rest-url http://127.0.0.1:8080 --rest-auth-token "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" \
+  --at /tmp/coh-mount-rest
+```
+Validate reads:
+```bash
+cat /tmp/coh-mount-rest/proc/lifecycle/state
+head -n 5 /tmp/coh-mount-rest/log/queen.log
+```
+
+### Bidirectional telemetry transfer smoke (supported MIME types)
+This is the safe, OS-owned “file transfer” surface: create telemetry segments via `/queen/telemetry/<device>/ctl` with a MIME type, then append records to the OS-named segment.
+
+On **Host A** (for example Jetson):
+```bash
+MNT=/tmp/coh-mount-rest
+DEV=jetson-xfer-1
+printf '{"new":"segment","mime":"text/plain"}\n' >> "${MNT}/queen/telemetry/${DEV}/ctl"
+printf "hello-from-jetson ts_ms=%s\n" "$(date +%s000)" >> "${MNT}/queen/telemetry/${DEV}/seg/seg-000001"
+```
+
+On **Host B** (for example g5g), confirm visibility:
+```bash
+MNT=/tmp/coh-mount-rest
+DEV=jetson-xfer-1
+cat "${MNT}/queen/telemetry/${DEV}/latest"
+tail -n 5 "${MNT}/queen/telemetry/${DEV}/seg/seg-000001"
+```
+Repeat the same flow in the opposite direction with a different `DEV` value (for example `g5g-xfer-1`) and verify Host A can read it.
 
 ## 0) Preflight: verify console or gateway access (optional but recommended)
 Choose one path depending on your transport:

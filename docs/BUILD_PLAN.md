@@ -96,7 +96,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25a](#25a) | REST Live Hive Performance (Parallel Polling + Batching) | Pending |
 | [25b](#25b) | Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) | Complete |
 | [25c](#25c) | Python Orchestration SDK (1k Fleet Playbooks + Host Integrations) | Complete |
-| [25d](#25d) | REST Request-Auth Parity Across Host Tools (Gateway Capability Max) | Complete |
+| [25d](#25d) | REST Request-Auth Parity Across Host Tools (Gateway Capability Max) | In Progress |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -4287,7 +4287,7 @@ Commands:
   - cargo test -p coh --test transcript
   - cargo test -p coh --test run
 Checks:
-  - `coh doctor` passes the mount check when `/dev/fuse` is available.
+  - `coh doctor` passes the mount check when Linux `/dev/fuse` (or macOS `/dev/macfuse0`) is available.
   - Docs reflect OS-specific FUSE defaults.
 Deliverables:
   - Linux-default FUSE-enabled `coh` builds with aligned documentation.
@@ -4344,7 +4344,7 @@ Add REST-backed transports for host publishers (`gpu-bridge-host`, `host-sidecar
 - `coh mount --rest-url` mounts via gateway (queen-role only, append-only semantics preserved, single REST mount per gateway URL).
 - SwarmUI REST mode connects through hive-gateway and renders the same panels/features as console/9p modes (REST transport enabled by default).
 - SwarmUI live hive view remains responsive (no PixiJS stalls) with live multi-worker telemetry.
-- Multiplexer smoke coverage: `cohsh` REST attach/ping; `gpu-bridge-host --rest-url --publish`; `host-sidecar-bridge --rest-url --watch`; `cas-tool upload --rest-url`; `coh --rest-url` (`mount`, `gpu`, `telemetry pull`, `peft`, `run`); `SWARMUI_TRANSPORT=rest` with live hive view and console commands.
+- Multiplexer smoke coverage: `cohsh` REST attach/ping; `gpu-bridge-host --rest-url --publish`; `host-sidecar-bridge --rest-url --watch`; `cas-tool upload --rest-url`; `coh mount|gpu|telemetry|peft|run --rest-url`; `SWARMUI_TRANSPORT=rest` with live hive view and console commands.
 - Docs describe REST multiplexer usage and transport selection clearly.
 
 **Task Breakdown**
@@ -5192,7 +5192,7 @@ Deliverables:
 
 **Why now (gateway readiness at 1k scale):** `hive-gateway` now enforces request-auth at the REST edge for mutating paths. Any host tool that can route through REST must attach request-auth consistently or it becomes a brittle outlier in multi-tool, high-concurrency deployments.
 
-**Status:** Complete - REST request-auth parity is implemented across all REST-capable host tools, SwarmUI REST fan-out paths propagate gateway auth headers, and docs/test-plan checks are aligned and passing.
+**Status:** In Progress - request-auth parity is implemented for core REST-capable tools, but `coh mount` requires correctness fixes (FUSE attrs + dynamic telemetry paths), gateway request-auth regression coverage, and a TCP console auth deadline review (remote TCP mounts can time out over higher-latency SSH tunnels).
 
 ## Goal
 Deliver request-auth parity across all REST-capable host tools so gateway mode is predictable, secure, and low-friction:
@@ -5209,6 +5209,8 @@ Deliver request-auth parity across all REST-capable host tools so gateway mode i
 
 ## Implementation Touchpoints
 - `apps/coh/src/main.rs`, `apps/coh/src/rest.rs` - add REST request-auth token CLI/env resolution and attach headers for all REST access paths.
+- `apps/coh/src/mount.rs` - ensure FUSE mount is a faithful projection of `LS`/`CAT`/`ECHO` semantics (non-zero file sizes, append-only offset discipline, and limited dynamic telemetry roots aligned with Milestone 21a).
+- `apps/root-task/src/net/mod.rs`, `apps/root-task/src/net/console_srv.rs` - adjust TCP console unauthenticated auth deadlines to support remote tunnel usage without changing console grammar.
 - `apps/cas-tool/src/main.rs` - add REST request-auth support for CAS uploads through gateway.
 - `apps/gpu-bridge-host/src/main.rs` - add REST request-auth support for `/gpu/bridge/ctl` publish mode.
 - `apps/swarmui/src-tauri/main.rs`, `apps/swarmui/src/lib.rs`, `apps/swarmui/src/hive.rs` - propagate request-auth token through REST transport bootstrap and parallel telemetry/status polling paths.
@@ -5273,6 +5275,52 @@ Checks:
   - Docs match shipped tool flags and env keys exactly.
 Deliverables:
   - Updated host-tool operator guidance with no auth ambiguity.
+
+Title/ID: m25d-coh-mount-rest-writable-and-bidir
+Goal: Make `coh mount --rest-url` reliably readable/writable and suitable for safe bidirectional telemetry transfer (Milestone 21a semantics).
+Inputs: apps/coh/src/mount.rs, apps/coh/src/main.rs, apps/coh/src/rest.rs, docs/OPERATOR_WALKTHROUGH.md, docs/TEST_PLAN.md.
+Changes:
+  - apps/coh/src/mount.rs - fix FUSE file attrs (non-zero file sizes), ensure `readdir` reports accurate directory vs file types (macOS uses the type eagerly), eliminate write-only “ghost” entries, allow host-side appends by avoiding POSIX-perm EPERM (kernel-level checks), and support limited dynamic telemetry roots under `coh.telemetry.root` without introducing generic POSIX create semantics.
+  - apps/coh/src/main.rs, apps/coh/src/rest.rs - ensure REST request-auth token is accepted and attached for mount-backed `ECHO` paths so gateway mode stays writable when request-auth is enforced.
+  - docs/OPERATOR_WALKTHROUGH.md - document FUSE mount prerequisites and a bidirectional telemetry transfer smoke using supported MIME types.
+  - docs/TEST_PLAN.md - add a gateway-mode mount regression: REST mount can `cat` `/proc/*` and append to `/queen/telemetry/<device>/ctl` with request-auth enabled.
+Commands:
+  - cargo test -p coh
+Checks:
+  - REST mount `cat` shows non-empty content for bounded files like `/proc/lifecycle/state` and `/log/queen.log`.
+  - REST mount can create a new telemetry device root by addressing `${coh.telemetry.root}/<device>/ctl`, then append records into the OS-named segment, and another host can read them via mount.
+  - macOS REST mounts can append to `/queen/telemetry/<device>/ctl` without local EPERM/permission denials (errors must come from Cohesix bounds/policy, not host file mode bits).
+  - No new generic create/mkdir/unlink/rename semantics are introduced; dynamic behavior is strictly scoped to telemetry ingest roots and remains OS-owned.
+Deliverables:
+  - Writable, bounded REST mount suitable for multi-host gateway ops with deterministic, policy-aligned behavior.
+
+Title/ID: m25d-console-auth-timeout-remote-tcp-mount
+Goal: Make remote TCP console attachments (and `coh mount --host/--port`) reliable over SSH tunnels/high-latency links without changing console grammar.
+Inputs: apps/root-task/src/net/mod.rs, apps/root-task/src/net/console_srv.rs, apps/cohsh/src/transport/tcp.rs, docs/HOST_TOOLS.md, docs/OPERATOR_WALKTHROUGH.md.
+Changes:
+  - apps/root-task/src/net/mod.rs, apps/root-task/src/net/console_srv.rs - increase unauthenticated auth deadline (or implement a bounded auth window) so a client can deliver its token over WAN latency.
+  - apps/cohsh/src/transport/tcp.rs - keep client-side retry/backoff bounded and emit a crisp error that points operators at gateway mode when auth times out.
+  - docs/HOST_TOOLS.md, docs/OPERATOR_WALKTHROUGH.md - document that REST via `hive-gateway` is the default for remote multi-host ops; TCP console is best-effort over WAN until this is fixed.
+Commands:
+  - scripts/cohesix-build-run.sh --transport tcp --tcp-port 31337
+  - (remote) cohsh/coh attach or mount over an SSH reverse tunnel
+Checks:
+  - g5g (AWS) can attach/mount over a reverse tunnel without `authentication timed out waiting for server response`.
+Deliverables:
+  - Remote-safe TCP auth window with unchanged console wire grammar and updated operator guidance.
+
+Title/ID: m25d-macos-coh-fuse-default
+Goal: Ship macOS `coh` builds with FUSE enabled so operators can use `coh mount` once MacFUSE is installed/approved.
+Inputs: scripts/cohesix-build-run.sh, docs/HOST_TOOLS.md, docs/OPERATOR_WALKTHROUGH.md, docs/TEST_PLAN.md.
+Changes:
+  - scripts/cohesix-build-run.sh - build `coh` with `--features fuse` on macOS hosts.
+  - docs/HOST_TOOLS.md, docs/OPERATOR_WALKTHROUGH.md, docs/TEST_PLAN.md - document MacFUSE prerequisites (`/dev/macfuse0`) and keep examples as-built.
+Commands:
+  - cargo build -p coh --release --features fuse
+Checks:
+  - macOS `coh mount` no longer reports “fuse support disabled”.
+Deliverables:
+  - macOS-ready `coh mount` binary and aligned operator docs.
 ```
 
 ----

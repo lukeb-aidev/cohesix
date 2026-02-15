@@ -56,4 +56,102 @@ print(f\"python-rest-smoke root_entries={len(root_entries)} log_bytes={len(log_p
 PY"
 fi
 
+if [[ "${TP_SKIP_FUSE:-0}" == "1" ]]; then
+  tp_log "SKIP  coh-rest-mount-regression (TP_SKIP_FUSE=1)"
+elif [[ "$(uname -s)" != "Linux" ]]; then
+  tp_log "SKIP  coh-rest-mount-regression (not Linux)"
+elif [[ ! -e /dev/fuse ]]; then
+  tp_log "SKIP  coh-rest-mount-regression (/dev/fuse missing)"
+elif ! command -v fusermount3 >/dev/null 2>&1; then
+  tp_log "SKIP  coh-rest-mount-regression (fusermount3 missing)"
+else
+  coh_bin="${TP_COH_BIN:-${TEST_PLAN_ROOT}/out/cohesix/host-tools/coh}"
+  if [[ ! -x "${coh_bin}" ]]; then
+    tp_log "SKIP  coh-rest-mount-regression (coh binary missing: ${coh_bin})"
+  else
+    tp_run_shell "coh-rest-mount-regression" \
+      "set -euo pipefail
+mount_dir=\"${TEST_PLAN_STATE_DIR}/coh-mount-rest\"
+mount_log=\"${TEST_PLAN_LOG_DIR}/coh-rest-mount.log\"
+mkdir -p \"${TEST_PLAN_LOG_DIR}\"
+mkdir -p \"${mount_dir}\"
+if grep -F \" ${mount_dir} \" /proc/mounts >/dev/null 2>&1; then
+  fusermount3 -u \"${mount_dir}\" || true
+fi
+
+cleanup() {
+  if grep -F \" ${mount_dir} \" /proc/mounts >/dev/null 2>&1; then
+    fusermount3 -u \"${mount_dir}\" || true
+  fi
+  if [[ -n \"${coh_mount_pid:-}\" ]]; then
+    wait \"${coh_mount_pid}\" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+COH_REST_URL=\"${gateway_url}\" HIVE_GATEWAY_REQUEST_AUTH_TOKEN=\"${gateway_auth_token}\" \\
+  \"${coh_bin}\" mount --rest-url \"${gateway_url}\" --rest-auth-token \"${gateway_auth_token}\" \\
+  --at \"${mount_dir}\" >\"${mount_log}\" 2>&1 &
+coh_mount_pid=$!
+
+for i in \$(seq 1 50); do
+  if grep -F \" ${mount_dir} \" /proc/mounts >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 \"${coh_mount_pid}\" >/dev/null 2>&1; then
+    echo \"coh mount exited early\"
+    tail -n 80 \"${mount_log}\" || true
+    exit 1
+  fi
+  sleep 0.2
+done
+if ! grep -F \" ${mount_dir} \" /proc/mounts >/dev/null 2>&1; then
+  echo \"coh mount did not become active\"
+  tail -n 80 \"${mount_log}\" || true
+  exit 1
+fi
+
+state_path=\"${mount_dir}/proc/lifecycle/state\"
+if [[ ! -f \"${state_path}\" ]]; then
+  echo \"missing mount file: ${state_path}\"
+  exit 1
+fi
+state_bytes=\$(wc -c <\"${state_path}\" | tr -d ' ')
+if [[ \"${state_bytes}\" -lt 4 ]]; then
+  echo \"expected non-empty lifecycle state; got bytes=${state_bytes}\"
+  exit 1
+fi
+
+log_path=\"${mount_dir}/log/queen.log\"
+if [[ ! -f \"${log_path}\" ]]; then
+  echo \"missing mount file: ${log_path}\"
+  exit 1
+fi
+log_bytes=\$(wc -c <\"${log_path}\" | tr -d ' ')
+if [[ \"${log_bytes}\" -lt 1 ]]; then
+  echo \"expected non-empty queen log; got bytes=${log_bytes}\"
+  exit 1
+fi
+
+dev_id=\"tp-mount-\$(date +%s)\"
+echo '{\"new\":\"segment\",\"mime\":\"text/plain\"}' >>\"${mount_dir}/queen/telemetry/${dev_id}/ctl\"
+echo \"hello-from-mount ts_ms=\$(date +%s000)\" >>\"${mount_dir}/queen/telemetry/${dev_id}/seg/seg-000001\"
+
+latest_path=\"${mount_dir}/queen/telemetry/${dev_id}/latest\"
+if [[ ! -f \"${latest_path}\" ]]; then
+  echo \"missing latest pointer: ${latest_path}\"
+  exit 1
+fi
+latest=\$(cat \"${latest_path}\" | tr -d '\\r\\n')
+if [[ \"${latest}\" != \"seg-000001\" ]]; then
+  echo \"expected latest=seg-000001; got latest=${latest}\"
+  exit 1
+fi
+if ! grep -q \"hello-from-mount\" \"${mount_dir}/queen/telemetry/${dev_id}/seg/seg-000001\"; then
+  echo \"expected appended telemetry record missing\"
+  exit 1
+fi"
+  fi
+fi
+
 tp_stage_complete 4

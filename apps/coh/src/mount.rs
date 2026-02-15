@@ -289,7 +289,7 @@ pub fn mount_console(session: ConsoleSession, policy: &CohPolicy, at: &Path) -> 
     #[cfg(any(feature = "fuse", target_os = "linux"))]
     {
         let validator = MountValidator::from_policy(policy)?;
-        let filesystem = AccessFuse::new(session, validator);
+        let filesystem = AccessFuse::new(session, validator, policy.telemetry.root.as_str());
         let options = [
             fuser::MountOption::FSName("coh".to_owned()),
             fuser::MountOption::AutoUnmount,
@@ -314,7 +314,7 @@ pub fn mount_rest(session: RestSession, policy: &CohPolicy, at: &Path) -> Result
     #[cfg(any(feature = "fuse", target_os = "linux"))]
     {
         let validator = MountValidator::from_policy(policy)?;
-        let filesystem = AccessFuse::new(session, validator);
+        let filesystem = AccessFuse::new(session, validator, policy.telemetry.root.as_str());
         let options = [
             fuser::MountOption::FSName("coh".to_owned()),
             fuser::MountOption::AutoUnmount,
@@ -357,7 +357,7 @@ impl<T: Secure9pTransport> CohFuse<T> {
         }
     }
 
-    fn attr_for(inode: u64, is_dir: bool) -> fuser::FileAttr {
+    fn attr_for(&self, inode: u64, is_dir: bool) -> fuser::FileAttr {
         let now = SystemTime::now();
         fuser::FileAttr {
             ino: inode,
@@ -372,7 +372,9 @@ impl<T: Secure9pTransport> CohFuse<T> {
             } else {
                 fuser::FileType::RegularFile
             },
-            perm: if is_dir { 0o755 } else { 0o644 },
+            // Allow the host kernel to attempt writes; the underlying Cohesix namespace enforces
+            // append-only and allowlist policy, so we do not rely on POSIX perms for safety.
+            perm: if is_dir { 0o755 } else { 0o666 },
             nlink: 1,
             uid: 0,
             gid: 0,
@@ -445,7 +447,7 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
             let mut inodes = self.inodes.lock().expect("inode lock");
             inodes.insert(&child_path, is_dir)
         };
-        let attr = Self::attr_for(inode, is_dir);
+        let attr = self.attr_for(inode, is_dir);
         reply.entry(&TTL, &attr, 0);
     }
 
@@ -464,7 +466,7 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
             reply.error(libc::ENOENT);
             return;
         };
-        let attr = Self::attr_for(inode, entry.is_dir);
+        let attr = self.attr_for(inode, entry.is_dir);
         reply.attr(&TTL, &attr);
     }
 
@@ -517,13 +519,18 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
             } else {
                 format!("{path}/{entry}")
             };
-            let _remote = match self.validator.resolve_remote(&child_path) {
+            let remote = match self.validator.resolve_remote(&child_path) {
                 Ok(remote) => remote,
                 Err(_) => {
                     continue;
                 }
             };
-            let is_dir = path == "/" && !self.validator.allow_all_under_root();
+            // macOS uses the `readdir` entry type eagerly (unlike Linux where it is usually a hint),
+            // so we must provide accurate directory/file classification here.
+            let is_dir = match self.stat_remote(&remote) {
+                Ok((_, is_dir)) => is_dir,
+                Err(_) => false,
+            };
             let inode = {
                 let mut inodes = self.inodes.lock().expect("inode lock");
                 inodes.insert(&child_path, is_dir)
@@ -695,6 +702,7 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
 struct AccessFuse<C: CohAccess + Send> {
     client: Mutex<C>,
     validator: MountValidator,
+    telemetry_root: String,
     inodes: Mutex<InodeTable>,
     handles: Mutex<HashMap<u64, AccessHandle>>,
     next_handle: AtomicU64,
@@ -702,23 +710,33 @@ struct AccessFuse<C: CohAccess + Send> {
 
 #[cfg(any(feature = "fuse", target_os = "linux"))]
 impl<C: CohAccess + Send> AccessFuse<C> {
-    fn new(client: C, validator: MountValidator) -> Self {
+    fn new(client: C, validator: MountValidator, telemetry_root: impl Into<String>) -> Self {
         let mut inodes = InodeTable::new();
         inodes.insert("/", true);
+        let mut telemetry_root = telemetry_root.into();
+        if telemetry_root.len() > 1 && telemetry_root.ends_with('/') {
+            while telemetry_root.ends_with('/') {
+                telemetry_root.pop();
+            }
+        }
+        if telemetry_root.is_empty() {
+            telemetry_root.push('/');
+        }
         Self {
             client: Mutex::new(client),
             validator,
+            telemetry_root,
             inodes: Mutex::new(inodes),
             handles: Mutex::new(HashMap::new()),
             next_handle: AtomicU64::new(1),
         }
     }
 
-    fn attr_for(inode: u64, is_dir: bool) -> fuser::FileAttr {
+    fn attr_for(&self, inode: u64, is_dir: bool, size: u64) -> fuser::FileAttr {
         let now = SystemTime::now();
         fuser::FileAttr {
             ino: inode,
-            size: 0,
+            size: if is_dir { 0 } else { size },
             blocks: 0,
             atime: now,
             mtime: now,
@@ -729,7 +747,9 @@ impl<C: CohAccess + Send> AccessFuse<C> {
             } else {
                 fuser::FileType::RegularFile
             },
-            perm: if is_dir { 0o755 } else { 0o644 },
+            // Allow the host kernel to attempt writes; the underlying Cohesix namespace enforces
+            // append-only and allowlist policy, so we do not rely on POSIX perms for safety.
+            perm: if is_dir { 0o755 } else { 0o666 },
             nlink: 1,
             uid: 0,
             gid: 0,
@@ -744,6 +764,38 @@ impl<C: CohAccess + Send> AccessFuse<C> {
         inodes.path_for(inode).map(|entry| entry.path.clone())
     }
 
+    fn telemetry_dynamic_kind(&self, parent_path: &str, name: &str) -> Option<bool> {
+        // Telemetry ingest uses OS-owned creation with bounded namespaces, but operators still need
+        // to address new device roots before they appear in listings.
+        let root = self.telemetry_root.as_str();
+        if parent_path == root {
+            return Some(true);
+        }
+        let prefix = format!("{root}/");
+        let rest = parent_path.strip_prefix(prefix.as_str())?;
+        if rest.is_empty() {
+            return Some(true);
+        }
+        // Only allow the first-level `/queen/telemetry/<device>` nodes to resolve dynamically.
+        if rest.contains('/') {
+            return None;
+        }
+        match name {
+            "ctl" | "latest" => Some(false),
+            "seg" => Some(true),
+            _ => None,
+        }
+    }
+
+    fn file_size_bytes(&self, remote: &str) -> u64 {
+        let mut client = self.client.lock().expect("coh client lock");
+        match client.read_file(remote, MAX_DIR_LIST_BYTES) {
+            Ok(data) => data.len() as u64,
+            Err(err) if err.to_string().contains("exceeds max bytes") => MAX_DIR_LIST_BYTES as u64,
+            Err(_) => 0,
+        }
+    }
+
     fn list_root_entries(&self) -> Result<Vec<String>> {
         if self.validator.allow_all_under_root() {
             let mut client = self.client.lock().expect("coh client lock");
@@ -753,18 +805,14 @@ impl<C: CohAccess + Send> AccessFuse<C> {
         Ok(self.validator.root_entries())
     }
 
-    fn stat_remote(&self, remote: &str) -> Result<bool> {
+    fn probe_is_dir(&self, remote: &str) -> Result<bool> {
         let mut client = self.client.lock().expect("coh client lock");
         match client.list_dir(remote, MAX_DIR_LIST_BYTES) {
             Ok(_) => return Ok(true),
             Err(err) if err.to_string().contains("exceeds max bytes") => return Ok(true),
             Err(_) => {}
         }
-        match client.read_file(remote, MAX_DIR_LIST_BYTES) {
-            Ok(_) => Ok(false),
-            Err(err) if err.to_string().contains("exceeds max bytes") => Ok(false),
-            Err(_) => Err(anyhow!("path {remote} not found")),
-        }
+        Ok(false)
     }
 }
 
@@ -797,18 +845,62 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
                 return;
             }
         };
-        let is_dir = match self.stat_remote(&remote) {
-            Ok(is_dir) => is_dir,
-            Err(_) => {
-                reply.error(libc::ENOENT);
-                return;
+        let dynamic_kind = self.telemetry_dynamic_kind(&parent_path, name.as_ref());
+        // Prefer directory enumeration for existence checks so write-only files still resolve.
+        let entries = if parent_path == "/" {
+            match self.list_root_entries() {
+                Ok(entries) => entries,
+                Err(_) => {
+                    reply.error(libc::EIO);
+                    return;
+                }
+            }
+        } else {
+            let parent_remote = match self.validator.resolve_remote(&parent_path) {
+                Ok(remote) => remote,
+                Err(_) => {
+                    reply.error(libc::EACCES);
+                    return;
+                }
+            };
+            let mut client = self.client.lock().expect("coh client lock");
+            match client.list_dir(&parent_remote, MAX_DIR_LIST_BYTES) {
+                Ok(entries) => entries,
+                Err(_) => {
+                    if dynamic_kind.is_none() {
+                        reply.error(libc::EIO);
+                        return;
+                    }
+                    Vec::new()
+                }
+            }
+        };
+        if !entries.iter().any(|entry| entry == name.as_ref()) && dynamic_kind.is_none() {
+            reply.error(libc::ENOENT);
+            return;
+        }
+
+        let is_dir = if let Some(kind) = dynamic_kind {
+            kind
+        } else {
+            match self.probe_is_dir(&remote) {
+                Ok(is_dir) => is_dir,
+                Err(_) => {
+                    reply.error(libc::EIO);
+                    return;
+                }
             }
         };
         let inode = {
             let mut inodes = self.inodes.lock().expect("inode lock");
             inodes.insert(&child_path, is_dir)
         };
-        let attr = Self::attr_for(inode, is_dir);
+        let size = if is_dir {
+            0
+        } else {
+            self.file_size_bytes(&remote)
+        };
+        let attr = self.attr_for(inode, is_dir, size);
         reply.entry(&TTL, &attr, 0);
     }
 
@@ -827,7 +919,15 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
             reply.error(libc::ENOENT);
             return;
         };
-        let attr = Self::attr_for(inode, entry.is_dir);
+        let size = if entry.is_dir {
+            0
+        } else {
+            match self.validator.resolve_remote(entry.path.as_str()) {
+                Ok(remote) => self.file_size_bytes(&remote),
+                Err(_) => 0,
+            }
+        };
+        let attr = self.attr_for(inode, entry.is_dir, size);
         reply.attr(&TTL, &attr);
     }
 
@@ -880,13 +980,21 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
             } else {
                 format!("{path}/{entry}")
             };
-            let _remote = match self.validator.resolve_remote(&child_path) {
+            let remote = match self.validator.resolve_remote(&child_path) {
                 Ok(remote) => remote,
                 Err(_) => {
                     continue;
                 }
             };
-            let is_dir = path == "/" && !self.validator.allow_all_under_root();
+            // macOS uses the `readdir` entry type eagerly (unlike Linux where it is usually a hint),
+            // so we must provide accurate directory/file classification here.
+            let is_dir =
+                if let Some(kind) = self.telemetry_dynamic_kind(path.as_str(), entry.as_str()) {
+                    kind
+                } else {
+                    // CohAccess does not expose stat/qid metadata, so probe via directory listing.
+                    self.probe_is_dir(&remote).unwrap_or(false)
+                };
             let inode = {
                 let mut inodes = self.inodes.lock().expect("inode lock");
                 inodes.insert(&child_path, is_dir)
@@ -908,36 +1016,34 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
     }
 
     fn open(&mut self, _req: &fuser::Request<'_>, inode: u64, flags: i32, reply: fuser::ReplyOpen) {
-        let path = match self.resolve_inode_path(inode) {
-            Some(path) => path,
-            None => {
-                reply.error(libc::ENOENT);
-                return;
-            }
+        let write = flags & libc::O_ACCMODE != libc::O_RDONLY;
+        let entry = {
+            let inodes = self.inodes.lock().expect("inode lock");
+            inodes.path_for(inode).cloned()
         };
-        let remote = match self.validator.resolve_remote(&path) {
+        let Some(entry) = entry else {
+            reply.error(libc::ENOENT);
+            return;
+        };
+        if entry.is_dir && write {
+            reply.error(libc::EISDIR);
+            return;
+        }
+        let remote = match self.validator.resolve_remote(&entry.path) {
             Ok(remote) => remote,
             Err(_) => {
                 reply.error(libc::EACCES);
                 return;
             }
         };
-        let is_dir = match self.stat_remote(&remote) {
-            Ok(is_dir) => is_dir,
-            Err(_) => {
-                reply.error(libc::ENOENT);
-                return;
-            }
-        };
-        let write = flags & libc::O_ACCMODE != libc::O_RDONLY;
-        if is_dir && write {
-            reply.error(libc::EISDIR);
-            return;
-        }
         let handle = self.next_handle.fetch_add(1, Ordering::Relaxed);
+        let mut tracker = AppendOnlyTracker::new();
+        if write && !entry.is_dir {
+            tracker.cursor = self.file_size_bytes(&remote);
+        }
         let file_handle = AccessHandle {
             path: remote,
-            append_tracker: AppendOnlyTracker::new(),
+            append_tracker: tracker,
         };
         self.handles
             .lock()
@@ -1007,9 +1113,22 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
                 return;
             }
         };
-        if let Err(_) = handle.append_tracker.check_and_advance(offset, data.len()) {
-            reply.error(libc::EINVAL);
-            return;
+        if handle
+            .append_tracker
+            .check_and_advance(offset, data.len())
+            .is_err()
+        {
+            if offset >= 0 {
+                handle.append_tracker.cursor = self.file_size_bytes(&handle.path);
+            }
+            if handle
+                .append_tracker
+                .check_and_advance(offset, data.len())
+                .is_err()
+            {
+                reply.error(libc::EINVAL);
+                return;
+            }
         }
         let mut client = self.client.lock().expect("coh client lock");
         let written: usize = match client.write_append(&handle.path, data) {
@@ -1110,5 +1229,139 @@ impl InodeTable {
 
     fn path_for(&self, inode: u64) -> Option<&InodeEntry> {
         self.by_inode.get(&inode)
+    }
+}
+
+#[cfg(all(test, any(feature = "fuse", target_os = "linux")))]
+mod access_fuse_tests {
+    use super::*;
+
+    #[derive(Debug, Clone)]
+    enum DummyRead {
+        Ok(Vec<u8>),
+        Err(String),
+    }
+
+    #[derive(Debug)]
+    struct DummyAccess {
+        read: DummyRead,
+    }
+
+    impl DummyAccess {
+        fn ok(bytes: impl Into<Vec<u8>>) -> Self {
+            Self {
+                read: DummyRead::Ok(bytes.into()),
+            }
+        }
+
+        fn err(message: impl Into<String>) -> Self {
+            Self {
+                read: DummyRead::Err(message.into()),
+            }
+        }
+    }
+
+    impl CohAccess for DummyAccess {
+        fn list_dir(&mut self, _path: &str, _max_bytes: usize) -> Result<Vec<String>> {
+            Err(anyhow!("not implemented"))
+        }
+
+        fn read_file(&mut self, _path: &str, _max_bytes: usize) -> Result<Vec<u8>> {
+            match &self.read {
+                DummyRead::Ok(bytes) => Ok(bytes.clone()),
+                DummyRead::Err(message) => Err(anyhow!("{message}")),
+            }
+        }
+
+        fn write_append(&mut self, _path: &str, _payload: &[u8]) -> Result<usize> {
+            Err(anyhow!("not implemented"))
+        }
+    }
+
+    fn allow_all_validator() -> MountValidator {
+        MountValidator {
+            root: "/".to_owned(),
+            allowlist: vec!["/".to_owned()],
+            allow_all_under_root: true,
+        }
+    }
+
+    #[test]
+    fn telemetry_root_is_normalized() {
+        let access = AccessFuse::new(
+            DummyAccess::ok(Vec::<u8>::new()),
+            allow_all_validator(),
+            "/queen/telemetry/",
+        );
+        assert_eq!(access.telemetry_root, "/queen/telemetry");
+    }
+
+    #[test]
+    fn telemetry_dynamic_kind_is_scoped_to_device_roots() {
+        let access = AccessFuse::new(
+            DummyAccess::ok(Vec::<u8>::new()),
+            allow_all_validator(),
+            "/queen/telemetry",
+        );
+        assert_eq!(
+            access.telemetry_dynamic_kind("/queen/telemetry", "dev-a"),
+            Some(true)
+        );
+        assert_eq!(
+            access.telemetry_dynamic_kind("/queen/telemetry/dev-a", "ctl"),
+            Some(false)
+        );
+        assert_eq!(
+            access.telemetry_dynamic_kind("/queen/telemetry/dev-a", "latest"),
+            Some(false)
+        );
+        assert_eq!(
+            access.telemetry_dynamic_kind("/queen/telemetry/dev-a", "seg"),
+            Some(true)
+        );
+        assert_eq!(
+            access.telemetry_dynamic_kind("/queen/telemetry/dev-a", "other"),
+            None
+        );
+        assert_eq!(
+            access.telemetry_dynamic_kind("/queen/telemetry/dev-a/seg", "seg-000001"),
+            None
+        );
+    }
+
+    #[test]
+    fn file_size_bytes_returns_remote_length() {
+        let access = AccessFuse::new(
+            DummyAccess::ok("hello\n"),
+            allow_all_validator(),
+            "/queen/telemetry",
+        );
+        assert_eq!(access.file_size_bytes("/proc/lifecycle/state"), 6);
+    }
+
+    #[test]
+    fn file_size_bytes_caps_at_max_bytes_on_bounds_errors() {
+        let access = AccessFuse::new(
+            DummyAccess::err("read /log/queen.log exceeds max bytes 65536"),
+            allow_all_validator(),
+            "/queen/telemetry",
+        );
+        assert_eq!(
+            access.file_size_bytes("/log/queen.log"),
+            MAX_DIR_LIST_BYTES as u64
+        );
+    }
+
+    #[test]
+    fn fuse_file_perms_allow_writes() {
+        let access = AccessFuse::new(
+            DummyAccess::ok(Vec::<u8>::new()),
+            allow_all_validator(),
+            "/queen/telemetry",
+        );
+        let file_attr = access.attr_for(2, false, 1);
+        assert_eq!(file_attr.perm, 0o666);
+        let dir_attr = access.attr_for(1, true, 0);
+        assert_eq!(dir_attr.perm, 0o755);
     }
 }

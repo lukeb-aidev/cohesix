@@ -41,7 +41,11 @@ pub fn run(config: DoctorConfig, audit: &mut CohAudit) -> Result<()> {
                 CohPolicy::manifest_hash(),
                 CohPolicy::policy_hash()
             );
-            audit.push_ack(cohsh_core::wire::AckStatus::Ok, "DOCTOR", Some(detail.as_str()));
+            audit.push_ack(
+                cohsh_core::wire::AckStatus::Ok,
+                "DOCTOR",
+                Some(detail.as_str()),
+            );
             Some(policy)
         }
         Err(err) => {
@@ -49,7 +53,11 @@ pub fn run(config: DoctorConfig, audit: &mut CohAudit) -> Result<()> {
                 "check=policy path={} reason={err}",
                 config.policy_path.display()
             );
-            audit.push_ack(cohsh_core::wire::AckStatus::Err, "DOCTOR", Some(detail.as_str()));
+            audit.push_ack(
+                cohsh_core::wire::AckStatus::Err,
+                "DOCTOR",
+                Some(detail.as_str()),
+            );
             errors.push(err.to_string());
             None
         }
@@ -88,11 +96,19 @@ fn check_ticket(role: Role, ticket: Option<&str>, audit: &mut CohAudit, errors: 
     match normalize_ticket(role, ticket, TicketPolicy::tcp()) {
         Ok(_) => {
             let detail = format!("check=ticket role={label}");
-            audit.push_ack(cohsh_core::wire::AckStatus::Ok, "DOCTOR", Some(detail.as_str()));
+            audit.push_ack(
+                cohsh_core::wire::AckStatus::Ok,
+                "DOCTOR",
+                Some(detail.as_str()),
+            );
         }
         Err(err) => {
             let detail = format!("check=ticket role={label} reason={err}");
-            audit.push_ack(cohsh_core::wire::AckStatus::Err, "DOCTOR", Some(detail.as_str()));
+            audit.push_ack(
+                cohsh_core::wire::AckStatus::Err,
+                "DOCTOR",
+                Some(detail.as_str()),
+            );
             errors.push(err.to_string());
         }
     }
@@ -113,21 +129,33 @@ fn check_mount(policy: Option<&CohPolicy>, audit: &mut CohAudit, errors: &mut Ve
     };
     if let Err(err) = mount::validate_mount(policy) {
         let detail = format!("check=mount reason={err}");
-        audit.push_ack(cohsh_core::wire::AckStatus::Err, "DOCTOR", Some(detail.as_str()));
+        audit.push_ack(
+            cohsh_core::wire::AckStatus::Err,
+            "DOCTOR",
+            Some(detail.as_str()),
+        );
         errors.push(err.to_string());
         return;
     }
     if !cfg!(any(feature = "fuse", target_os = "linux")) {
         let err = "fuse support disabled; rebuild coh with --features fuse or use --mock";
         let detail = format!("check=mount reason={err}");
-        audit.push_ack(cohsh_core::wire::AckStatus::Err, "DOCTOR", Some(detail.as_str()));
+        audit.push_ack(
+            cohsh_core::wire::AckStatus::Err,
+            "DOCTOR",
+            Some(detail.as_str()),
+        );
         errors.push(err.to_owned());
         return;
     }
     if !fuse_device_present() {
         let err = "fuse device not detected";
         let detail = format!("check=mount reason={err}");
-        audit.push_ack(cohsh_core::wire::AckStatus::Err, "DOCTOR", Some(detail.as_str()));
+        audit.push_ack(
+            cohsh_core::wire::AckStatus::Err,
+            "DOCTOR",
+            Some(detail.as_str()),
+        );
         errors.push(err.to_owned());
         return;
     }
@@ -136,7 +164,11 @@ fn check_mount(policy: Option<&CohPolicy>, audit: &mut CohAudit, errors: &mut Ve
         policy.mount.root,
         policy.mount.allowlist.len()
     );
-    audit.push_ack(cohsh_core::wire::AckStatus::Ok, "DOCTOR", Some(detail.as_str()));
+    audit.push_ack(
+        cohsh_core::wire::AckStatus::Ok,
+        "DOCTOR",
+        Some(detail.as_str()),
+    );
 }
 
 fn check_nvml(audit: &mut CohAudit, errors: &mut Vec<String>) {
@@ -151,7 +183,11 @@ fn check_nvml(audit: &mut CohAudit, errors: &mut Vec<String>) {
         }
         Err(err) => {
             let detail = format!("check=nvml reason={err}");
-            audit.push_ack(cohsh_core::wire::AckStatus::Err, "DOCTOR", Some(detail.as_str()));
+            audit.push_ack(
+                cohsh_core::wire::AckStatus::Err,
+                "DOCTOR",
+                Some(detail.as_str()),
+            );
             errors.push(err.to_string());
         }
     }
@@ -162,10 +198,7 @@ fn nvml_detail(report: &InventoryReport) -> String {
         return "check=nvml".to_owned();
     }
     if let Some(from) = report.fallback_from {
-        let reason = report
-            .fallback_reason
-            .as_deref()
-            .unwrap_or("unknown");
+        let reason = report.fallback_reason.as_deref().unwrap_or("unknown");
         return format!(
             "check=nvml status=degraded backend={} fallback_from={} reason={}",
             report.backend.label(),
@@ -188,11 +221,19 @@ fn check_runtime(tool: &str, mock: bool, audit: &mut CohAudit, errors: &mut Vec<
     match tool_version(tool) {
         Ok(version) => {
             let detail = format!("check=runtime tool={tool} version={version}");
-            audit.push_ack(cohsh_core::wire::AckStatus::Ok, "DOCTOR", Some(detail.as_str()));
+            audit.push_ack(
+                cohsh_core::wire::AckStatus::Ok,
+                "DOCTOR",
+                Some(detail.as_str()),
+            );
         }
         Err(err) => {
             let detail = format!("check=runtime tool={tool} reason={err}");
-            audit.push_ack(cohsh_core::wire::AckStatus::Err, "DOCTOR", Some(detail.as_str()));
+            audit.push_ack(
+                cohsh_core::wire::AckStatus::Err,
+                "DOCTOR",
+                Some(detail.as_str()),
+            );
             errors.push(err.to_string());
         }
     }
@@ -213,12 +254,7 @@ fn tool_version(tool: &str) -> Result<String> {
     if text.trim().is_empty() && !output.stderr.is_empty() {
         text.push_str(std::str::from_utf8(&output.stderr).unwrap_or(""));
     }
-    let version = text
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_owned();
+    let version = text.lines().next().unwrap_or("").trim().to_owned();
     if version.is_empty() {
         Ok("unknown".to_owned())
     } else {
@@ -231,7 +267,12 @@ fn fuse_device_present() -> bool {
         return Path::new("/dev/fuse").exists();
     }
     if cfg!(target_os = "macos") {
-        return Path::new("/dev/osxfuse").exists() || Path::new("/dev/fuse").exists();
+        // macFUSE exposes character devices as /dev/macfuseN.
+        // Older OSXFUSE variants exposed /dev/osxfuse0 (and sometimes /dev/osxfuse).
+        return Path::new("/dev/macfuse0").exists()
+            || Path::new("/dev/osxfuse0").exists()
+            || Path::new("/dev/osxfuse").exists()
+            || Path::new("/dev/fuse").exists();
     }
     false
 }
