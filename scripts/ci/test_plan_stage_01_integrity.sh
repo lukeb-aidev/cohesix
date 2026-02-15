@@ -14,7 +14,10 @@ tp_stage_begin 1 "integrity"
 
 tp_run_cmd "test-plan-hash-check" "${TEST_PLAN_ROOT}/scripts/ci/check_test_plan.sh"
 if [[ "${TP_SKIP_GENERATED_CHECK:-0}" == "1" ]]; then
-  tp_log "SKIP  generated-artifacts (TP_SKIP_GENERATED_CHECK=1)"
+  tp_mark_incomplete \
+    "generated-artifacts" \
+    "TP_SKIP_GENERATED_CHECK=1" \
+    "Generated artifact drift is not checked; docs-as-built and manifest/codegen alignment may be invalid."
 else
   tp_run_cmd "generated-artifacts" "${TEST_PLAN_ROOT}/scripts/check-generated.sh"
 fi

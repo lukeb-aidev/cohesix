@@ -25,12 +25,24 @@ This section is a mandatory execution contract for all contributors and agents w
 - Do not mark the run complete until Stage 05 (`scripts/ci/due_diligence_gate.sh`) passes.
 
 3. No silent skips.
-- A skipped stage or command must be explicitly recorded with reason and impact.
-- Do not treat skipped or incomplete runs as release-ready.
+- Stage scripts treat skips as **INCOMPLETE**: they write an `incomplete/` record under the shared state dir and the stage exits non-zero.
+- A run with any INCOMPLETE marker is **not** a PASS and must not be treated as release-ready.
+- Platform-specific **NA** checks (for example, Linux-only mount coverage on macOS) are logged as `NA` and do not block PASS.
 
 4. Keep docs and scripts aligned.
 - If execution behavior changes, update this document and the corresponding scripts in the same change.
 - `scripts/ci/check_test_plan.sh` must pass before continuing.
+
+## Definition of "Test Plan PASS" (Normative)
+A run is **PASS** if and only if:
+- It is executed via the staged runner with a shared state dir: `scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>`.
+- Stages **01-05** complete successfully and create `stage_01.done` ... `stage_05.done` in the shared state dir.
+- No stage wrote an INCOMPLETE marker (presence of any `stage_*.incomplete` or any files under `out/test-plan/<run-id>/incomplete/` means **FAIL**).
+- Stage 05 runs `scripts/ci/due_diligence_gate.sh` and it is green.
+
+Notes:
+- Running individual stages (for example `--stage 2`) is for iteration only; it is not a "PASS" run.
+- "NA" checks must still be logged, but they do not cause failure; INCOMPLETE always fails.
 
 ## Purpose
 Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP console reliability and performance, deterministic replay, and every shipped host tool.
@@ -39,7 +51,7 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
 - Pre-existing features continue to work; new features are validated against documented behaviour.
 - QEMU boots the VM and exposes Secure9P/TCP console without protocol drift.
 - TCP console remains reliable under load (no unexpected disconnects/resets/partial writes).
-- Performance baselines are captured for TCP throughput/latency.
+- Performance baselines are captured and stored under `docs/bench/` (see `docs/BENCHMARKS.md`) for any changes affecting throughput/latency.
 - Host tools behave correctly: `coh`, `cohsh`, `swarmui`, `cas-tool`, `gpu-bridge-host`, `host-sidecar-bridge`.
 - Deterministic replay passes for cohsh and SwarmUI (trace + hive snapshot).
 - Fixtures and manifests remain hash-consistent.
@@ -65,8 +77,14 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
   - Re-run `coh-rtc` and `scripts/check-generated.sh` if toggled.
 - Clear old logs if needed: `rm -rf out/regression-logs logs`.
 
+## Performance baselines (Authoritative)
+- Performance evidence is only valid when it is **stored and reviewable**:
+  - Commit harness artifacts under `docs/bench/` (JSON/CSV/SVG) and
+  - Index/interpret them in `docs/BENCHMARKS.md`.
+- Do not use "last local run" as a baseline. If you need a new baseline, commit it and update `docs/BENCHMARKS.md` in the same change.
+
 ## Execution order
-Run in order unless explicitly skipped with a recorded reason.
+Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - Scripted runner (recommended): `scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>`
 
 ### 1) Artifact and fixture integrity
@@ -123,6 +141,8 @@ Run in order unless explicitly skipped with a recorded reason.
 - Stage 03 sets resilient defaults for clean hosts: `TP_STAGE3_READY_TIMEOUT=900`, `TP_STAGE3_PORT_TIMEOUT=60`, `TP_STAGE3_AUTH_READY_TIMEOUT=120`, `TP_STAGE3_QUIT_CLOSE_TIMEOUT=60` (override as needed).
 - `scripts/cohsh/run_regression_batch.sh` keeps Cargo build cache by default; set `COHSH_BATCH_CLEAN_TARGET=1` only for deliberate clean-rebuild validation.
 - `scripts/cohsh/run_regression_batch.sh` (invoked by stage 03; can be run directly for bring-up)
+- Stage 03 archives per-script logs under the stage state dir (for example `out/test-plan/<run-id>/qemu-regression-logs/`).
+- Manual runs of `scripts/cohsh/run_regression_batch.sh` default to `out/regression-logs/` unless `COHSH_LOG_ROOT` is set.
 Start QEMU (source tree or bundle), then verify:
 - Capture QEMU serial to `logs/qemu-console.log` (example: `./qemu/run.sh | tee logs/qemu-console.log`).
 - `cohsh` (queen): `help`, `attach queen` (skip if you launched cohsh with `--role`),
@@ -145,7 +165,7 @@ Run while QEMU is up:
 - Reasonable acceptance:
   - `tcp-diag` has zero failures.
   - `pool bench` shows non-zero throughput and stable latency.
-  - Any >20% regression vs the last baseline on the same host is a defect to investigate.
+  - Any performance regression claim must be backed by committed baseline artifacts under `docs/bench/` (and indexed in `docs/BENCHMARKS.md` when applicable); do not compare against unpublished local runs.
 - Capture logs:
   - cohsh: `logs/cohsh-session.log`
   - QEMU serial: `logs/qemu-console.log`
@@ -349,8 +369,13 @@ Run while QEMU is up:
 ### 6) Regression pack (full-stack, recommended before release)
 - `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` (requires `COHESIX_GATEWAY_URL` or equivalent gateway env var)
 - `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> scripts/cohsh/REST_regression_batch.sh`
+- Stage 04 runs two REST batches:
+  - A concurrent "core" batch (boot/proc/pool/backpressure coverage).
+  - A strict "parity" batch (policy + `/host` control writes + control-plane smoke): `scripts/cohsh/policy_gate.coh`, `scripts/cohsh/host_sidecar_mock.coh`, `scripts/cohsh/rest_control_plane_smoke.coh`.
 - Stage 04 also runs a Python REST smoke (`tools/cohesix-py` `RestBackend`) that performs `LS /` and `CAT /log/queen.log` against the same gateway.
-- The batch archives logs under `out/regression-logs/<batch>/<script>.run*.log`.
+- Logs:
+  - Scripted Stage 04 writes REST batch logs under the stage state dir (for example `out/test-plan/<run-id>/rest-regression-logs/`).
+  - Manual runs of `scripts/cohsh/REST_regression_batch.sh` default to `out/regression-logs/<batch>/<script>.run*.log` unless `COHSH_LOG_ROOT` is set.
 - Verify logs show no unexpected errors or disconnects.
 - From Milestone 25 onward, use the REST batch above; the TCP/QEMU batch remains a local bring-up tool only.
 

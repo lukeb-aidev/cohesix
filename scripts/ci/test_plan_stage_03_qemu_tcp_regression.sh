@@ -21,6 +21,7 @@ auth_ready_timeout="${TP_STAGE3_AUTH_READY_TIMEOUT:-120}"
 tp_run_cmd \
   "cohsh-qemu-regression-batch" \
   env \
+  COHSH_LOG_ROOT="${TEST_PLAN_STATE_DIR}/qemu-regression-logs" \
   READY_TIMEOUT="${ready_timeout}" \
   PORT_TIMEOUT="${port_timeout}" \
   QUIT_CLOSE_TIMEOUT="${quit_close_timeout}" \

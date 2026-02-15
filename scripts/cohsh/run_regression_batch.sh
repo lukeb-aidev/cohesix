@@ -4,6 +4,7 @@
 # Copyright 2026 Lukas Bower
 
 # Note: override auth/timeouts via env vars, e.g. COHSH_AUTH_TOKEN=... READY_TIMEOUT=300 PORT_TIMEOUT=60 QUIT_CLOSE_TIMEOUT=60 scripts/cohsh/run_regression_batch.sh
+# Note: archive root defaults to out/regression-logs; override via COHSH_LOG_ROOT=/path/to/logs.
 # Note: set COHSH_BATCH_CLEAN_TARGET=1 for a forced clean rebuild before batch execution.
 # ** Note: typical end-to-end runtime is ~25 minutes; plan for >= 30 minutes to avoid repeated retries.
 
@@ -16,6 +17,7 @@ BASE_SCRIPTS=(
     "boot_v0.coh"
     "9p_batch.coh"
     "host_absent.coh"
+    "host_sidecar_mock.coh"
     "observe_watch.coh"
     "root_cut_basic.coh"
     "session_lifecycle.coh"
@@ -43,7 +45,7 @@ GATED_SCRIPTS=(
 
 BASE_MANIFEST="${PROJECT_ROOT}/configs/root_task.toml"
 GATED_MANIFEST="${PROJECT_ROOT}/configs/root_task_regression.toml"
-ARCHIVE_ROOT="${PROJECT_ROOT}/out/regression-logs"
+ARCHIVE_ROOT="${COHSH_LOG_ROOT:-${PROJECT_ROOT}/out/regression-logs}"
 READY_MARKER="Cohesix console ready"
 READY_TIMEOUT="${READY_TIMEOUT:-180}"
 PORT_TIMEOUT="${PORT_TIMEOUT:-30}"
@@ -283,6 +285,9 @@ run_cohsh() {
             ;;
         host_absent.coh)
             "$bin" "${common_args[@]}" --script scripts/cohsh/host_absent.coh
+            ;;
+        host_sidecar_mock.coh)
+            "$bin" "${common_args[@]}" --script scripts/cohsh/host_sidecar_mock.coh
             ;;
         telemetry_ring.coh)
             "$bin" "${common_args[@]}" --script scripts/cohsh/telemetry_ring.coh

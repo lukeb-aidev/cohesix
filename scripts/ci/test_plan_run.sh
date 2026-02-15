@@ -28,7 +28,10 @@ Options:
 Environment pass-through:
   TEST_PLAN_STATE_DIR
   COHESIX_GATEWAY_URL / HIVE_GATEWAY_URL / COHSH_REST_URL / COH_REST_URL
-  TP_SKIP_GENERATED_CHECK, TP_SKIP_PYTHON, TP_WRITE_TRACE_FIXTURES
+  TP_SKIP_GENERATED_CHECK, TP_SKIP_PYTHON, TP_SKIP_FUSE, TP_WRITE_TRACE_FIXTURES
+
+Notes:
+  - TP_SKIP_* options record an INCOMPLETE marker and the stage fails (they are for local iteration only).
 USAGE
 }
 

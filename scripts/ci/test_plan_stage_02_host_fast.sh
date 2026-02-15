@@ -52,7 +52,10 @@ for command in "${host_matrix[@]}"; do
 done
 
 if [[ "${TP_SKIP_PYTHON:-0}" == "1" ]]; then
-  tp_log "SKIP  python-matrix (TP_SKIP_PYTHON=1)"
+  tp_mark_incomplete \
+    "python-matrix" \
+    "TP_SKIP_PYTHON=1" \
+    "Python client tests and examples were not executed; host tool parity and release-bundle correctness are unproven."
 else
   python_bin="${TP_PYTHON_BIN:-python3}"
   if ! "${python_bin}" -c "import pytest" >/dev/null 2>&1; then

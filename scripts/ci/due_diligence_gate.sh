@@ -351,6 +351,7 @@ else
   run_step \
     "regression-batch" \
     env \
+    COHSH_LOG_ROOT="${log_root}/regression-logs" \
     READY_TIMEOUT="${dd_regression_ready_timeout}" \
     PORT_TIMEOUT="${dd_regression_port_timeout}" \
     AUTH_READY_TIMEOUT="${dd_regression_auth_timeout}" \

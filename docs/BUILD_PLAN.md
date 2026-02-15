@@ -1028,17 +1028,16 @@ Provide a host-only sidecar bridge that projects external ecosystem controls int
   - `cargo run -p host-sidecar-bridge -- --mock --mount /host`
   - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/host_absent.coh`
   - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/host_sidecar_mock.coh`
-- TODO: Add scripts/cohsh/host_sidecar_mock.coh to the regression pack once host-enabled manifests are wired into CI.
-- Manifest/IR alignment: `/host` tree appears only when `ecosystem.host.enable = true` with providers declared under `ecosystem.host.providers[]` and mount point defaulting to `/host`.
-- Docs include policy and TCB notes emphasising that the bridge mirrors host controls without expanding the in-VM attack surface.
+  - Manifest/IR alignment: `/host` tree appears only when `ecosystem.host.enable = true` with providers declared under `ecosystem.host.providers[]` and mount point defaulting to `/host`.
+  - Docs include policy and TCB notes emphasising that the bridge mirrors host controls without expanding the in-VM attack surface.
 
-**Status:** Complete — host-sidecar bridge and manifest-gated `/host` namespace are verified via host tool tests, `host_sidecar_policy`, and CLI regression coverage for disabled `/host`.
+**Status:** Complete — host-sidecar bridge and manifest-gated `/host` namespace are verified via host tool tests, `host_sidecar_policy`, and regression scripts covering `/host` role enforcement.
 
 **Checks (DoD)**
 - `/host/*` tree mounts only when enabled by the manifest; omitted otherwise.
 - Writes to control nodes are rejected for non-queen roles and result in append-only audit lines; mock mode exercises this path in CI.
 - No new in-VM TCP services are introduced; all transports remain host-side per Secure9P.
-- Abuse case: denied write to `/host/systemd/*/restart` returns deterministic ERR and logged audit; disablement removes namespace entirely and CLI regression confirms absence.
+- Abuse case: denied write to `/host/systemd/*/restart` returns deterministic ERR and logged audit; disablement removes namespace entirely and unit/integration tests assert absence.
 
 **Compiler touchpoints**
 - `coh-rtc` validation ensures enabling `ecosystem.host` respects existing Secure9P red lines (msize, walk depth, role isolation) and memory budgets.
@@ -1094,8 +1093,8 @@ Add a PolicyFS surface that captures human-legible approvals for sensitive opera
   - `/actions/<id>/status` (read-only)
 - Enforcement: selected control writes (e.g., `/queen/ctl`, `/host/*/restart`) require a policy gate when enabled; denials/approvals append to the audit log using existing telemetry logging.
 - CLI regression demonstrating a denied action followed by an approved action under policy gating.
-- TODO: Implement scripts/cohsh/policy_gate.coh and add it to regression pack DoD.
-- Manifest flag (e.g., `ecosystem.policy.enable`) toggles the gate and publishes rules; defaults keep policy off to preserve prior behaviour.
+- `scripts/cohsh/policy_gate.coh` is part of the regression pack and must remain deterministic.
+- Manifest flag (e.g., `ecosystem.policy.enable`) toggles the gate and publishes rules; the current default manifest enables the gate and disabling it reverts to prior control semantics.
 
 **Status:** Complete — PolicyFS surfaces and gating are manifest-driven, approval consumption is enforced, and the policy gate regression passes deterministically.
 

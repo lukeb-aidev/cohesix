@@ -28,10 +28,36 @@ if [[ -z "${gateway_auth_token}" ]]; then
 fi
 tp_log "INFO  gateway-auth-token=present"
 
-tp_run_cmd "cohsh-rest-regression-batch" "${TEST_PLAN_ROOT}/scripts/cohsh/REST_regression_batch.sh"
+core_scripts="boot_v0.coh observe_watch.coh busy_backpressure.coh session_pool.coh"
+parity_scripts="host_sidecar_mock.coh policy_gate.coh rest_control_plane_smoke.coh"
+
+tp_run_cmd \
+  "cohsh-rest-regression-core" \
+  env \
+  COHESIX_GATEWAY_URL="${gateway_url}" \
+  HIVE_GATEWAY_REQUEST_AUTH_TOKEN="${gateway_auth_token}" \
+  COHSH_LOG_ROOT="${TEST_PLAN_STATE_DIR}/rest-regression-logs" \
+  COHSH_BATCH_NAME="rest-regression-core" \
+  COHSH_PARALLELISM=3 \
+  COHSH_SCRIPT_LIST="${core_scripts}" \
+  "${TEST_PLAN_ROOT}/scripts/cohsh/REST_regression_batch.sh"
+
+tp_run_cmd \
+  "cohsh-rest-regression-parity" \
+  env \
+  COHESIX_GATEWAY_URL="${gateway_url}" \
+  HIVE_GATEWAY_REQUEST_AUTH_TOKEN="${gateway_auth_token}" \
+  COHSH_LOG_ROOT="${TEST_PLAN_STATE_DIR}/rest-regression-logs" \
+  COHSH_BATCH_NAME="rest-regression-parity" \
+  COHSH_PARALLELISM=1 \
+  COHSH_SCRIPT_LIST="${parity_scripts}" \
+  "${TEST_PLAN_ROOT}/scripts/cohsh/REST_regression_batch.sh"
 
 if [[ "${TP_SKIP_PYTHON:-0}" == "1" ]]; then
-  tp_log "SKIP  python-rest-smoke (TP_SKIP_PYTHON=1)"
+  tp_mark_incomplete \
+    "python-rest-smoke" \
+    "TP_SKIP_PYTHON=1" \
+    "REST smoke via cohesix-py was not executed; Python REST parity is unproven."
 else
   python_bin="${TP_PYTHON_BIN:-python3}"
   tp_run_shell "python-rest-smoke" \
@@ -57,17 +83,29 @@ PY"
 fi
 
 if [[ "${TP_SKIP_FUSE:-0}" == "1" ]]; then
-  tp_log "SKIP  coh-rest-mount-regression (TP_SKIP_FUSE=1)"
+  tp_mark_incomplete \
+    "coh-rest-mount-regression" \
+    "TP_SKIP_FUSE=1" \
+    "REST FUSE mount regression was skipped; mount semantics and exclusivity are unproven."
 elif [[ "$(uname -s)" != "Linux" ]]; then
-  tp_log "SKIP  coh-rest-mount-regression (not Linux)"
+  tp_log "NA    coh-rest-mount-regression (Linux-only)"
 elif [[ ! -e /dev/fuse ]]; then
-  tp_log "SKIP  coh-rest-mount-regression (/dev/fuse missing)"
+  tp_mark_incomplete \
+    "coh-rest-mount-regression" \
+    "/dev/fuse missing" \
+    "FUSE is not available on the Linux host; REST mount correctness cannot be validated."
 elif ! command -v fusermount3 >/dev/null 2>&1; then
-  tp_log "SKIP  coh-rest-mount-regression (fusermount3 missing)"
+  tp_mark_incomplete \
+    "coh-rest-mount-regression" \
+    "fusermount3 missing" \
+    "FUSE tooling is missing on the Linux host; REST mount correctness cannot be validated."
 else
   coh_bin="${TP_COH_BIN:-${TEST_PLAN_ROOT}/out/cohesix/host-tools/coh}"
   if [[ ! -x "${coh_bin}" ]]; then
-    tp_log "SKIP  coh-rest-mount-regression (coh binary missing: ${coh_bin})"
+    tp_mark_incomplete \
+      "coh-rest-mount-regression" \
+      "coh binary missing: ${coh_bin}" \
+      "REST mount regression requires the host coh binary; rebuild host tools or set TP_COH_BIN."
   else
     tp_run_shell "coh-rest-mount-regression" \
       "set -euo pipefail
