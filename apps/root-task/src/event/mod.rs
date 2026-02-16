@@ -2808,7 +2808,14 @@ where
                         self.metrics.denied_commands += 1;
                         self.audit.denied("echo denied");
                         cmd_status = "err";
-                        self.emit_refusal(verb_label, RefusalReason::Policy, Some("detail=denied"));
+                        let detail = format_message(format_args!(
+                            "detail=denied path={path_str} error=EPERM"
+                        ));
+                        self.emit_refusal(
+                            verb_label,
+                            RefusalReason::Policy,
+                            Some(detail.as_str()),
+                        );
                     } else {
                         if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Write) {
                             self.record_ticket_denial(path_str, TicketVerb::Write, denial);
