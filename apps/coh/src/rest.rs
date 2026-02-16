@@ -5,7 +5,7 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{anyhow, Context, Result};
-use cohesix_rest::GatewayClient;
+use cohesix_rest::{BoundsResponse, GatewayClient};
 
 use crate::CohAccess;
 
@@ -22,6 +22,16 @@ impl RestSession {
             client = client.with_request_auth_token(token);
         }
         Self { client }
+    }
+
+    /// Fetch manifest-derived bounds from the gateway.
+    pub fn bounds(&self) -> Result<BoundsResponse> {
+        self.client.bounds()
+    }
+
+    /// Return the gateway base URL.
+    pub fn base_url(&self) -> &str {
+        self.client.base_url()
     }
 
     fn join_lines(lines: &[String]) -> Vec<u8> {
@@ -65,6 +75,17 @@ impl CohAccess for RestSession {
         let payload = Self::join_lines(&lines);
         if payload.len() > max_bytes {
             return Err(anyhow!("read {path} exceeds max bytes {max_bytes}"));
+        }
+        Ok(payload)
+    }
+
+    fn tail_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        let max_bytes_u32 = u32::try_from(max_bytes)
+            .map_err(|_| anyhow!("tail {path} exceeds max bytes {max_bytes}"))?;
+        let lines = self.client.tail(path, max_bytes_u32)?;
+        let payload = Self::join_lines(&lines);
+        if payload.len() > max_bytes {
+            return Err(anyhow!("tail {path} exceeds max bytes {max_bytes}"));
         }
         Ok(payload)
     }

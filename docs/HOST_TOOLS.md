@@ -206,6 +206,7 @@ Commands:
   peft       PEFT/LoRA lifecycle operations
   run        Run a host command with lease validation and breadcrumb logging
   telemetry  Telemetry pull operations
+  evidence   Evidence pack and timeline operations
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -239,14 +240,44 @@ Options:
 ./bin/coh gpu --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" list
 ./bin/coh mount --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --at /tmp/coh-mount
 ./bin/coh gpu list --host 127.0.0.1 --port 31337
-./bin/coh gpu lease --host 127.0.0.1 --port 31337 --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60
-./bin/coh run --host 127.0.0.1 --port 31337 --gpu GPU-0 -- echo ok
+./bin/coh gpu lease --host 127.0.0.1 --port 31337 --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60 \
+  --receipt-out ./out/receipts/lease.json
+./bin/coh run --host 127.0.0.1 --port 31337 --gpu GPU-0 --receipt-out ./out/receipts/run.json -- echo ok
 ./bin/coh telemetry pull --host 127.0.0.1 --port 31337 --out ./out/telemetry
+./bin/coh evidence pack --host 127.0.0.1 --port 31337 --out ./out/evidence/live --with-telemetry
+./bin/coh evidence timeline --in ./out/evidence/live
 ./bin/coh peft export --host 127.0.0.1 --port 31337 --job job_8932 --out ./out/export
 ./bin/coh peft import --host 127.0.0.1 --port 31337 --publish --model demo-model \
   --from demo/peft_adapter --job job_8932 --export ./out/export --registry ./out/model_registry
 ./bin/coh peft activate --host 127.0.0.1 --port 31337 --model demo-model --registry ./out/model_registry
 ./bin/coh peft rollback --host 127.0.0.1 --port 31337 --registry ./out/model_registry
+```
+
+### Evidence packs
+`coh evidence pack` exports a deterministic on-disk directory sourced only from existing Cohesix surfaces (`/proc`, `/log`, `/audit`, `/replay`, telemetry). It is suitable for audits, due diligence, and incident review.
+
+Pack layout (relative to `--out`):
+- `meta.json` - pack metadata (manifest + policy fingerprints, redaction policy).
+- `bounds.json` - `GET /v1/meta/bounds` snapshot (or an equivalent local snapshot when not using REST).
+- `summary.json` - captured/missing inventory.
+- `proc/` - bounded `/proc/*` snapshots (when enabled).
+- `log/queen.log` - bounded `/log/queen.log` tail snapshot.
+- `audit/` - `/audit/export`, redacted `/audit/journal`, redacted `/audit/decisions` (when audit is enabled).
+- `replay/status` - `/replay/status` snapshot (when replay is enabled).
+- `telemetry/` - downloaded telemetry segments (when `--with-telemetry` is set).
+
+`coh evidence timeline` generates `timeline.ndjson` and `timeline.md` offline from the pack directory.
+
+### CI + SIEM integration kits (Python)
+CI validation (machine-readable summary JSON, non-zero exit on failures):
+```bash
+python3 tools/cohesix-py/examples/ci_evidence_pack.py --pack ./out/evidence/live
+```
+
+SIEM export (normalized NDJSON for Splunk/Elastic ingestion):
+```bash
+python3 tools/cohesix-py/examples/siem_export_ndjson.py --pack ./out/evidence/live \
+  --out ./out/evidence/live/siem.ndjson
 ```
 
 ### Notes
@@ -261,6 +292,8 @@ Options:
 - `coh gpu --nvml` seeds the mock backend from NVML and requires `--features nvml` (it is mutually exclusive with `--mock`); if NVML is feature-limited, CUDA is used as a fallback.
 - `coh run` executes a host command locally after validating a lease and appends bounded breadcrumbs to `/gpu/<id>/status`.
 - `coh run` requires an active lease in `/gpu/<id>/lease` and will refuse to execute without one.
+- `coh evidence pack` exports a deterministic on-disk snapshot sourced only from existing Cohesix surfaces (`/proc`, `/log`, `/audit`, `/replay`, telemetry). Exported audit JSONL hashes ticket fields (`ticket` → `sha256:<hex>`) so evidence packs do not leak raw capability tickets.
+- `coh evidence timeline` generates `timeline.ndjson` and `timeline.md` offline from an evidence pack directory.
 - Policy enforcement is manifest-driven; `COH_POLICY` (or `out/coh_policy.toml`) must hash-match the compiled defaults.
 - If policy gating is enabled (see `/policy/rules`), writes to `/queen/ctl` require approvals queued in `/actions/queue`. `coh gpu lease`, `coh run`, and `coh peft ...` will fail with `ERR ECHO reason=policy ... EPERM` until an approval is queued.
 - Auth token fallback order is `--auth-token`, `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`.

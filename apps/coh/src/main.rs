@@ -15,7 +15,10 @@ use clap::{Parser, Subcommand};
 use coh::console::ConsoleSession;
 use coh::policy::{default_policy_path, load_policy, CohPolicy};
 use coh::rest::RestSession;
-use coh::{doctor, gpu, mount, peft, run as coh_run, telemetry, CohAccess, CohAudit};
+use coh::{
+    doctor, evidence, evidence_timeline, gpu, mount, peft, run as coh_run, telemetry, CohAccess,
+    CohAudit,
+};
 use cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT;
 use cohesix_ticket::Role;
 use cohsh::client::{CohClient, InProcessTransport};
@@ -56,6 +59,8 @@ enum Command {
     Run(RunArgs),
     /// Telemetry pull operations.
     Telemetry(TelemetryArgs),
+    /// Evidence pack and timeline operations.
+    Evidence(EvidenceArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -189,6 +194,9 @@ struct GpuLeaseArgs {
     /// Optional budget ops override.
     #[arg(long)]
     budget_ops: Option<u64>,
+    /// Optional receipt output path.
+    #[arg(long, value_name = "FILE")]
+    receipt_out: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -198,6 +206,9 @@ struct RunArgs {
     /// GPU identifier.
     #[arg(long)]
     gpu: String,
+    /// Optional receipt output path.
+    #[arg(long, value_name = "FILE")]
+    receipt_out: Option<PathBuf>,
     /// Command to execute (pass after `--`).
     #[arg(
         trailing_var_arg = true,
@@ -213,6 +224,35 @@ struct TelemetryArgs {
     connect: ConnectArgs,
     #[command(subcommand)]
     command: TelemetryCommand,
+}
+
+#[derive(Debug, Parser)]
+struct EvidenceArgs {
+    #[command(subcommand)]
+    command: EvidenceCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum EvidenceCommand {
+    /// Export a deterministic evidence pack directory.
+    Pack(EvidencePackArgs),
+    /// Generate `timeline.ndjson` and `timeline.md` from an evidence pack.
+    Timeline {
+        #[arg(long, value_name = "DIR", alias = "in")]
+        input: PathBuf,
+    },
+}
+
+#[derive(Debug, Parser)]
+struct EvidencePackArgs {
+    #[command(flatten)]
+    connect: ConnectArgs,
+    /// Output directory for the evidence pack.
+    #[arg(long, value_name = "DIR")]
+    out: PathBuf,
+    /// Include telemetry pulls under `telemetry/` inside the pack.
+    #[arg(long, default_value_t = false)]
+    with_telemetry: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -250,6 +290,7 @@ fn main() -> Result<()> {
             let policy = load_policy(&policy_path)?;
             run_telemetry(role, cli.ticket.as_deref(), &policy, args)
         }
+        Command::Evidence(args) => run_evidence(role, cli.ticket.as_deref(), &policy_path, args),
     }
 }
 
@@ -358,6 +399,7 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
     if args.connect.mock && args.nvml {
         return Err(anyhow!("--mock and --nvml are mutually exclusive"));
     }
+    let bounds = evidence::build_local_bounds();
     let mut audit = CohAudit::new();
     if args.connect.mock || args.nvml {
         let (_server, mut client) = match connect_mock(role, ticket, true, args.nvml) {
@@ -378,16 +420,32 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
             GpuCommand::List => gpu::list(&mut client, &mut audit),
             GpuCommand::Status { gpu } => gpu::status(&mut client, &mut audit, &gpu),
             GpuCommand::Lease(lease) => {
+                let GpuLeaseArgs {
+                    gpu,
+                    mem_mb,
+                    streams,
+                    ttl_s,
+                    priority,
+                    budget_ttl_s,
+                    budget_ops,
+                    receipt_out,
+                } = lease;
                 let args = gpu::GpuLeaseArgs {
-                    gpu_id: lease.gpu,
-                    mem_mb: lease.mem_mb,
-                    streams: lease.streams,
-                    ttl_s: lease.ttl_s,
-                    priority: lease.priority,
-                    budget_ttl_s: lease.budget_ttl_s,
-                    budget_ops: lease.budget_ops,
+                    gpu_id: gpu,
+                    mem_mb,
+                    streams,
+                    ttl_s,
+                    priority,
+                    budget_ttl_s,
+                    budget_ops,
                 };
-                gpu::lease(&mut client, &mut audit, &args)
+                gpu::lease_with_receipt(
+                    &mut client,
+                    &mut audit,
+                    &args,
+                    receipt_out.as_deref(),
+                    &bounds,
+                )
             }
         };
         handle_result(result, audit, "GPU")
@@ -410,16 +468,32 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
             GpuCommand::List => gpu::list(&mut client, &mut audit),
             GpuCommand::Status { gpu } => gpu::status(&mut client, &mut audit, &gpu),
             GpuCommand::Lease(lease) => {
+                let GpuLeaseArgs {
+                    gpu,
+                    mem_mb,
+                    streams,
+                    ttl_s,
+                    priority,
+                    budget_ttl_s,
+                    budget_ops,
+                    receipt_out,
+                } = lease;
                 let args = gpu::GpuLeaseArgs {
-                    gpu_id: lease.gpu,
-                    mem_mb: lease.mem_mb,
-                    streams: lease.streams,
-                    ttl_s: lease.ttl_s,
-                    priority: lease.priority,
-                    budget_ttl_s: lease.budget_ttl_s,
-                    budget_ops: lease.budget_ops,
+                    gpu_id: gpu,
+                    mem_mb,
+                    streams,
+                    ttl_s,
+                    priority,
+                    budget_ttl_s,
+                    budget_ops,
                 };
-                gpu::lease(&mut client, &mut audit, &args)
+                gpu::lease_with_receipt(
+                    &mut client,
+                    &mut audit,
+                    &args,
+                    receipt_out.as_deref(),
+                    &bounds,
+                )
             }
         };
         handle_result(result, audit, "GPU")
@@ -428,6 +502,8 @@ fn run_gpu(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: GpuArgs) 
 
 fn run_run(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: RunArgs) -> Result<()> {
     let mut audit = CohAudit::new();
+    let bounds = evidence::build_local_bounds();
+    let receipt_out = args.receipt_out.clone();
     if args.connect.mock {
         let (_server, mut client) = match connect_mock(role, ticket, true, false) {
             Ok(value) => value,
@@ -447,7 +523,14 @@ fn run_run(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: RunArgs) 
             gpu_id: args.gpu,
             command: args.command,
         };
-        let result = coh_run::execute(&mut client, policy, &mut audit, &spec);
+        let result = coh_run::execute_with_receipt(
+            &mut client,
+            policy,
+            &mut audit,
+            &spec,
+            receipt_out.as_deref(),
+            &bounds,
+        );
         handle_result(result, audit, "RUN")
     } else {
         let mut client = match connect_access(&args.connect, policy, role, ticket) {
@@ -468,7 +551,14 @@ fn run_run(role: Role, ticket: Option<&str>, policy: &CohPolicy, args: RunArgs) 
             gpu_id: args.gpu,
             command: args.command,
         };
-        let result = coh_run::execute(&mut client, policy, &mut audit, &spec);
+        let result = coh_run::execute_with_receipt(
+            &mut client,
+            policy,
+            &mut audit,
+            &spec,
+            receipt_out.as_deref(),
+            &bounds,
+        );
         handle_result(result, audit, "RUN")
     }
 }
@@ -725,6 +815,55 @@ fn run_telemetry(
     }
 }
 
+fn run_evidence(
+    role: Role,
+    ticket: Option<&str>,
+    policy_path: &PathBuf,
+    args: EvidenceArgs,
+) -> Result<()> {
+    match args.command {
+        EvidenceCommand::Pack(pack) => {
+            let policy = load_policy(policy_path)?;
+            let mut audit = CohAudit::new();
+            let bounds = if pack.connect.mock {
+                evidence::build_local_bounds()
+            } else if let Some(rest_url) = resolve_rest_url(pack.connect.rest_url.as_deref()) {
+                let rest_auth_token = resolve_rest_auth_token(pack.connect.rest_auth_token.as_deref());
+                let rest = RestSession::connect(rest_url, rest_auth_token);
+                rest.bounds().unwrap_or_else(|_| evidence::build_local_bounds())
+            } else {
+                evidence::build_local_bounds()
+            };
+
+            let spec = evidence::EvidencePackSpec {
+                out_dir: pack.out,
+                with_telemetry: pack.with_telemetry,
+            };
+
+            let result = if pack.connect.mock {
+                let (_server, mut client) = connect_mock(role, ticket, true, false)?;
+                evidence::export_pack(&mut client, &policy, &bounds, &spec, &mut audit).map(|_| ())
+            } else {
+                let mut access = connect_access(&pack.connect, &policy, role, ticket)?;
+                evidence::export_pack(&mut access, &policy, &bounds, &spec, &mut audit).map(|_| ())
+            };
+            handle_result(result, audit, "EVIDENCE")
+        }
+        EvidenceCommand::Timeline { input } => {
+            let mut audit = CohAudit::new();
+            let result = evidence_timeline::write_timeline(&input).map(|summary| {
+                audit.push_line(format!(
+                    "evidence timeline events={} ndjson={} markdown={}",
+                    summary.events,
+                    summary.ndjson_path.display(),
+                    summary.markdown_path.display()
+                ));
+            });
+            handle_result(result, audit, "EVIDENCE")
+        }
+    }
+}
+
 fn handle_result(result: Result<()>, mut audit: CohAudit, verb: &str) -> Result<()> {
     match result {
         Ok(()) => {
@@ -767,6 +906,13 @@ impl CohAccess for AccessHandle {
         match self {
             AccessHandle::Console(session) => session.read_file(path, max_bytes),
             AccessHandle::Rest(session) => session.read_file(path, max_bytes),
+        }
+    }
+
+    fn tail_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        match self {
+            AccessHandle::Console(session) => session.tail_file(path, max_bytes),
+            AccessHandle::Rest(session) => session.tail_file(path, max_bytes),
         }
     }
 

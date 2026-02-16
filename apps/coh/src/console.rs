@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide console-backed CohAccess helpers for coh.
 // Author: Lukas Bower
@@ -82,6 +82,21 @@ impl CohAccess for ConsoleSession {
             return Err(anyhow!("read {path} exceeds max bytes {max_bytes}"));
         }
         Ok(payload)
+    }
+
+    fn tail_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        let lines = self.transport.tail(&self.session, path);
+        self.drain_acks();
+        let lines = lines?;
+        let payload = Self::join_lines(&lines);
+        if payload.len() <= max_bytes {
+            return Ok(payload);
+        }
+        if max_bytes == 0 {
+            return Ok(Vec::new());
+        }
+        let start = payload.len().saturating_sub(max_bytes);
+        Ok(payload[start..].to_vec())
     }
 
     fn write_append(&mut self, path: &str, payload: &[u8]) -> Result<usize> {

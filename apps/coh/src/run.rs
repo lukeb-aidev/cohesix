@@ -1,9 +1,11 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide coh run wrapper for lease validation and breadcrumb logging.
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 
+use std::fs;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, Context, Result};
@@ -142,6 +144,123 @@ pub fn execute<C: CohAccess>(
     } else {
         Err(anyhow!("command terminated by signal"))
     }
+}
+
+/// Execute a command and optionally emit a receipt JSON.
+pub fn execute_with_receipt<C: CohAccess>(
+    client: &mut C,
+    policy: &CohPolicy,
+    audit: &mut CohAudit,
+    spec: &RunSpec,
+    receipt_out: Option<&Path>,
+    bounds: &cohesix_rest::BoundsResponse,
+) -> Result<()> {
+    let result = execute(client, policy, audit, spec);
+    let Some(receipt_path) = receipt_out else {
+        return result;
+    };
+    let proc_lease = snapshot_proc_lease(client, bounds);
+    let receipt = RunReceipt {
+        schema: "cohesix-receipt-v1",
+        kind: "run",
+        manifest_sha256: bounds.manifest_sha256.as_str(),
+        gpu_id: spec.gpu_id.clone(),
+        command: spec.command.clone(),
+        status: if result.is_ok() { "ok" } else { "err" },
+        error: result.as_ref().err().map(safe_error_detail),
+        acks: extract_ack_lines(audit),
+        proc_lease,
+    };
+    write_receipt_json(receipt_path, &receipt)?;
+    result
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RunReceipt<'a> {
+    schema: &'static str,
+    kind: &'static str,
+    manifest_sha256: &'a str,
+    gpu_id: String,
+    command: Vec<String>,
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    acks: Vec<String>,
+    proc_lease: ProcLeaseSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProcLeaseSnapshot {
+    summary: Option<String>,
+    active: Option<String>,
+    preemptions: Option<String>,
+}
+
+fn snapshot_proc_lease<C: CohAccess>(
+    client: &mut C,
+    bounds: &cohesix_rest::BoundsResponse,
+) -> ProcLeaseSnapshot {
+    let proc = &bounds.observability.proc_lease;
+    let summary = read_optional_text(
+        client,
+        "/proc/lease/summary",
+        proc.summary.then_some(proc.summary_bytes as usize),
+    );
+    let active = read_optional_text(
+        client,
+        "/proc/lease/active",
+        proc.active.then_some(proc.active_bytes as usize),
+    );
+    let preemptions = read_optional_text(
+        client,
+        "/proc/lease/preemptions",
+        proc.preemptions.then_some(proc.preemptions_bytes as usize),
+    );
+    ProcLeaseSnapshot {
+        summary,
+        active,
+        preemptions,
+    }
+}
+
+fn read_optional_text<C: CohAccess>(
+    client: &mut C,
+    path: &str,
+    max_bytes: Option<usize>,
+) -> Option<String> {
+    let max_bytes = max_bytes?;
+    let payload = client.read_file(path, max_bytes).ok()?;
+    String::from_utf8(payload).ok()
+}
+
+fn extract_ack_lines(audit: &CohAudit) -> Vec<String> {
+    audit
+        .lines()
+        .iter()
+        .filter(|line| line.starts_with("OK ") || line.starts_with("ERR "))
+        .cloned()
+        .collect()
+}
+
+fn safe_error_detail(err: &anyhow::Error) -> String {
+    const MAX_DETAIL: usize = 256;
+    let text = err.to_string();
+    if text.len() <= MAX_DETAIL {
+        return text;
+    }
+    text[..MAX_DETAIL].to_owned()
+}
+
+fn write_receipt_json<T: Serialize>(path: &Path, receipt: &T) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create receipt dir {}", parent.display()))?;
+    }
+    let tmp = path.with_extension("partial");
+    let payload = serde_json::to_vec_pretty(receipt).context("serialize receipt")?;
+    fs::write(&tmp, &payload).with_context(|| format!("write receipt {}", tmp.display()))?;
+    fs::rename(&tmp, path).with_context(|| format!("commit receipt {}", path.display()))?;
+    Ok(())
 }
 
 fn spawn_command(command: &[String]) -> Result<std::process::Child> {

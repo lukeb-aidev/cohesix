@@ -8,7 +8,7 @@
 //! REST client helpers for the Cohesix hive-gateway.
 
 use anyhow::{anyhow, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Default REST timeout applied to hive-gateway requests.
@@ -164,7 +164,7 @@ struct GatewayResponse {
 }
 
 /// Manifest-derived bounds returned by the gateway.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BoundsResponse {
     /// Manifest fingerprint from coh-rtc.
     pub manifest_sha256: String,
@@ -183,7 +183,7 @@ pub struct BoundsResponse {
 }
 
 /// Secure9P protocol bounds.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Secure9pBounds {
     /// Maximum 9P message size.
     pub msize: u32,
@@ -192,7 +192,7 @@ pub struct Secure9pBounds {
 }
 
 /// Console framing bounds.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConsoleBounds {
     /// Maximum line length for console frames.
     pub max_line_len: usize,
@@ -209,7 +209,7 @@ pub struct ConsoleBounds {
 }
 
 /// Canonical control and log paths.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PathBounds {
     /// Queen control path.
     pub queen_ctl: String,
@@ -228,7 +228,7 @@ pub struct PathBounds {
 }
 
 /// Control plane bounds for schedule/lease/export.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ControlPlaneBounds {
     /// Schedule control bounds.
     pub schedule: ScheduleBounds,
@@ -239,7 +239,7 @@ pub struct ControlPlaneBounds {
 }
 
 /// Schedule queue bounds.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ScheduleBounds {
     /// Whether scheduling is enabled.
     pub enable: bool,
@@ -250,7 +250,7 @@ pub struct ScheduleBounds {
 }
 
 /// Lease control bounds.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LeaseBounds {
     /// Whether leasing is enabled.
     pub enable: bool,
@@ -263,7 +263,7 @@ pub struct LeaseBounds {
 }
 
 /// Export control bounds.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExportBounds {
     /// Whether export control is enabled.
     pub enable: bool,
@@ -272,7 +272,7 @@ pub struct ExportBounds {
 }
 
 /// Policy gate bounds.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PolicyBounds {
     /// Whether policy gating is enabled.
     pub enable: bool,
@@ -285,7 +285,7 @@ pub struct PolicyBounds {
 }
 
 /// Observability bounds for /proc paths.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ObservabilityBounds {
     /// Schedule /proc bounds.
     pub proc_schedule: ProcScheduleBounds,
@@ -294,7 +294,7 @@ pub struct ObservabilityBounds {
 }
 
 /// /proc schedule bounds.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProcScheduleBounds {
     /// Whether /proc/schedule/summary is enabled.
     pub summary: bool,
@@ -307,7 +307,7 @@ pub struct ProcScheduleBounds {
 }
 
 /// /proc lease bounds.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProcLeaseBounds {
     /// Whether /proc/lease/summary is enabled.
     pub summary: bool,

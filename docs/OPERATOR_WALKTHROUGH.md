@@ -61,6 +61,34 @@ Goal: run `hive-gateway` as the only console client and use REST for all tools.
    SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 ./bin/swarmui
    ```
 
+## Evidence packs (audit + incident review)
+Evidence packs are deterministic, host-side exports sourced only from existing Cohesix surfaces (`/proc`, `/log`, `/audit`, `/replay`, telemetry). They are suitable for due diligence, incident review, and compliance artifacts without introducing new control-plane semantics.
+
+### Export an evidence pack (recommended: REST via hive-gateway)
+1. Ensure `hive-gateway` is running (see quickstart above).
+2. Export a pack:
+   ```bash
+   ./bin/coh evidence pack --rest-url http://127.0.0.1:8080 \
+     --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+     --out ./out/evidence/live --with-telemetry
+   ```
+3. Generate an offline timeline:
+   ```bash
+   ./bin/coh evidence timeline --in ./out/evidence/live
+   ```
+
+### CI and SIEM integration kits (Python)
+Validate the pack layout and emit a CI-friendly JSON summary:
+```bash
+python3 tools/cohesix-py/examples/ci_evidence_pack.py --pack ./out/evidence/live
+```
+
+Export normalized NDJSON for SIEM ingestion (Splunk/Elastic):
+```bash
+python3 tools/cohesix-py/examples/siem_export_ndjson.py --pack ./out/evidence/live \
+  --out ./out/evidence/live/siem.ndjson
+```
+
 ## Real-world multiplexer scenarios (hive-gateway)
 These scenarios use `hive-gateway` as the **sole** console client and route all host tools through REST. This keeps the console single-client while enabling multi-tool usage.
 

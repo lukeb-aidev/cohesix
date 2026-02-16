@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide shared helpers for the coh host bridge CLI.
 // Author: Lukas Bower
@@ -11,6 +11,10 @@
 pub mod console;
 /// Host environment doctor checks.
 pub mod doctor;
+/// Evidence pack and timeline helpers.
+pub mod evidence;
+/// Offline timeline generation for evidence packs.
+pub mod evidence_timeline;
 /// GPU inventory and lease helpers.
 pub mod gpu;
 /// Secure9P-backed mount adapter.
@@ -181,6 +185,10 @@ pub trait CohAccess {
     fn list_dir(&mut self, path: &str, max_bytes: usize) -> Result<Vec<String>>;
     /// Read an entire file into memory.
     fn read_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>>;
+    /// Read a bounded tail snapshot of a file.
+    fn tail_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        self.read_file(path, max_bytes)
+    }
     /// Append payload bytes to a file.
     fn write_append(&mut self, path: &str, payload: &[u8]) -> Result<usize>;
 }
@@ -192,6 +200,42 @@ impl<T: Secure9pTransport> CohAccess for CohClient<T> {
 
     fn read_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
         read_file(self, path, max_bytes)
+    }
+
+    fn tail_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        if max_bytes == 0 {
+            return Err(anyhow!("tail {path} max bytes must be > 0"));
+        }
+        let fid = self
+            .open(path, OpenMode::read_only())
+            .with_context(|| format!("open {path} for tail"))?;
+        let mut offset = 0u64;
+        let mut window: Vec<u8> = Vec::new();
+        let count = self.negotiated_msize();
+        loop {
+            let chunk = self.read(fid, offset, count).with_context(|| format!("read {path}"))?;
+            if chunk.is_empty() {
+                break;
+            }
+            offset = offset
+                .checked_add(chunk.len() as u64)
+                .context("tail offset overflow")?;
+            if chunk.len() >= max_bytes {
+                window.clear();
+                window.extend_from_slice(&chunk[chunk.len() - max_bytes..]);
+            } else {
+                let available = max_bytes.saturating_sub(chunk.len());
+                if window.len() > available {
+                    window = window[window.len() - available..].to_vec();
+                }
+                window.extend_from_slice(&chunk);
+            }
+            if chunk.len() < count as usize {
+                break;
+            }
+        }
+        self.clunk(fid).with_context(|| format!("clunk {path}"))?;
+        Ok(window)
     }
 
     fn write_append(&mut self, path: &str, payload: &[u8]) -> Result<usize> {
