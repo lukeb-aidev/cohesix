@@ -97,6 +97,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25b](#25b) | Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) | Complete |
 | [25c](#25c) | Python Orchestration SDK (1k Fleet Playbooks + Host Integrations) | Complete |
 | [25d](#25d) | REST Request-Auth Parity Across Host Tools (Gateway Capability Max) | In Progress |
+| [25e](#25e) | Evidence Packs + Integration Kits (Audit-First Adoption) | Pending |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -5324,6 +5325,115 @@ Deliverables:
 
 ----
 **Release 0.8.0 alpha**
+----
+
+---
+
+## Milestone 25e — Evidence Packs + Integration Kits (Audit-First Adoption) <a id="25e"></a>
+[Milestones](#Milestones)
+
+**Why now (buyability + integration):** Cohesix has a scale-capable, request-authenticated gateway path (25b–25d) and Python orchestration (25c). The highest leverage remaining adoption blocker is not new VM semantics; it is the absence of deterministic, auditor-friendly evidence artifacts and turnkey integration patterns that reuse existing control surfaces without introducing new protocols.
+
+**Status:** Pending — evidence exports are ad-hoc (manual `cat`/tail/telemetry pulls), GPU lease requests are not receipt-backed, and operators lack ready-to-run CI/SIEM integration recipes anchored to the OpenAPI gateway contract.
+
+## Goal
+Deliver high-impact, low-risk adoption accelerators that remain host-side and strictly protocol-faithful:
+1. Deterministic evidence packs for audits, due diligence, and incident review, sourced only from existing `/proc`, `/log`, `/audit`, `/replay`, `/updates`, `/models`, and telemetry surfaces.
+2. A correlated timeline view derived from evidence pack contents (no new runtime behavior).
+3. Turnkey integration kits (CI + SIEM) that consume the REST/OpenAPI gateway and/or `coh`/Python tooling without introducing new control-plane semantics.
+4. GPU lease receipts and chargeback-friendly exports derived from `/proc/lease/*`, `/audit/journal`, and `/gpu/*` status files (no changes to lease enforcement).
+
+## Non-Goals (Explicit)
+- No new in-VM listeners, protocols, transports, or control verbs.
+- No changes to ACK/ERR/END grammar, NineDoor error semantics, or Secure9P bounds.
+- No device identity enrollment or attestation work (covered by Milestone 26 and Milestone 28 `coh attest`).
+- No changes under `releases/` in this milestone.
+
+## Implementation Touchpoints
+- `apps/coh/src/main.rs` + `apps/coh/src/lib.rs` — add evidence subcommands and shared helpers.
+- `apps/coh/src/telemetry.rs` — reuse bounded telemetry pull implementation inside evidence packs.
+- `crates/cohesix-rest/src/lib.rs` + `apps/hive-gateway` — consume `GET /v1/meta/bounds` and REST file projections for evidence reads.
+- `apps/nine-door/src/host/audit.rs` + `apps/root-task/src/ninedoor.rs` — ensure evidence pack includes `/audit/export` and correlatable audit journal entries (read-only).
+- `docs/HOST_TOOLS.md`, `docs/HOST_API.md`, `docs/OPERATOR_WALKTHROUGH.md` — document evidence pack CLI and integration recipes.
+
+## Commands
+- `cargo test -p coh`
+- `cargo test -p hive-gateway`
+- `python -m pytest tools/cohesix-py/tests -q`
+
+## Checks (Definition of Done)
+- `coh evidence pack` succeeds in `--mock` mode and in REST gateway mode with request-auth enabled, emitting a deterministic directory structure under `out/evidence/<id>/`.
+- Evidence packs contain: manifest fingerprint, bounds snapshot, `/proc` snapshots, `/audit/export`, `/audit/journal`, `/audit/decisions`, `/replay/status`, a bounded `/log/queen.log` capture, and (optionally) downloaded telemetry segments.
+- `coh evidence timeline` produces stable, correlated output from an evidence pack without network access.
+- GPU lease receipts can be emitted from `coh gpu lease` / `coh run` without changing VM control semantics, and include correlatable identifiers (`lease id`, `subject`, `resource`, `seq`) captured from `/proc/lease/*`.
+- Integration kits run in mock mode end-to-end and contain no hardcoded secrets; all tokens/URLs are supplied via env vars.
+
+## Task Breakdown
+```
+Title/ID: m25e-coh-evidence-pack
+Goal: Add a deterministic evidence pack exporter that captures bounded, auditor-friendly system state without new semantics.
+Inputs: apps/coh/src/main.rs, apps/coh/src/lib.rs, apps/coh/src/telemetry.rs, crates/cohesix-rest/src/lib.rs, docs/INTERFACES.md.
+Changes:
+  - apps/coh/src/main.rs - add `coh evidence pack` subcommand (supports `--mock`, `--rest-url`, and TCP console flows).
+  - apps/coh/src/lib.rs + apps/coh/src/evidence.rs - implement bounded evidence reads for canonical nodes (`/proc/*`, `/log/queen.log`, `/audit/*`, `/replay/*`, `/proc/lease/*`, `/proc/schedule/*`).
+  - apps/coh/src/evidence.rs - include manifest fingerprint + gateway bounds snapshot (`GET /v1/meta/bounds`) to bind evidence packs to a concrete as-built contract.
+  - apps/coh/src/evidence.rs - optionally reuse `telemetry::pull` to download telemetry segments into the pack under manifest bounds.
+  - docs/HOST_TOOLS.md + docs/OPERATOR_WALKTHROUGH.md - document evidence pack usage and output layout.
+Commands:
+  - cargo test -p coh
+  - cargo run -p coh -- --mock evidence pack --out out/evidence/mock
+Checks:
+  - Pack includes all required nodes and never reads past manifest-bounded byte caps.
+  - Pack output is stable for identical inputs (deterministic file names + ordering).
+Deliverables:
+  - `coh evidence pack` implementation + docs.
+
+Title/ID: m25e-coh-evidence-timeline
+Goal: Produce a correlated timeline view from evidence packs for incident review and audit traceability.
+Inputs: apps/coh/src/evidence.rs (from m25e-coh-evidence-pack), apps/nine-door/src/host/audit.rs (journal format reference), docs/audit/CONTROL_TRACEABILITY.md.
+Changes:
+  - apps/coh/src/main.rs - add `coh evidence timeline --in <pack-dir>` that emits `timeline.ndjson` and `timeline.md`.
+  - apps/coh/src/evidence_timeline.rs - parse `/audit/journal` JSONL + `/audit/decisions`, correlate with `/proc/lease/*` snapshots and `seq` fields, and emit stable, bounded output.
+  - apps/coh/tests/evidence_timeline.rs - add fixture-driven tests ensuring stable ordering and robust handling of partial packs.
+Commands:
+  - cargo test -p coh
+Checks:
+  - Timeline output is deterministic for a fixed evidence pack and does not require network access.
+Deliverables:
+  - Timeline generator suitable for postmortems and due diligence artifacts.
+
+Title/ID: m25e-integration-kits-ci-siem
+Goal: Ship turnkey, protocol-faithful integration kits that reduce adoption friction in CI and SIEM pipelines.
+Inputs: docs/HOST_API.md (OpenAPI), docs/HOST_TOOLS.md, tools/cohesix-py.
+Changes:
+  - docs/HOST_TOOLS.md - add a dedicated section: CI usage (generate evidence pack, upload artifacts) and SIEM export patterns (audit journal + decisions + lease snapshots).
+  - tools/cohesix-py/examples/ci_evidence_pack.py - run `coh evidence pack` (or REST equivalents) in mock/dry-run, validate output layout, emit a machine-readable summary JSON.
+  - tools/cohesix-py/examples/siem_export_ndjson.py - read an evidence pack and emit normalized NDJSON suitable for Splunk/Elastic ingestion (no network by default; optional `--post` with env-configured URL/token).
+  - tools/cohesix-py/tests/test_examples_ci_siem.py - ensure examples run deterministically in mock mode and never require external connectivity.
+Commands:
+  - python -m pytest tools/cohesix-py/tests -q
+Checks:
+  - Examples run in mock mode on macOS and produce stable outputs with no secrets in logs.
+Deliverables:
+  - Integration kits that demonstrate “buyable” workflows without new control semantics.
+
+Title/ID: m25e-gpu-lease-receipts
+Goal: Add receipt-backed GPU leasing outputs for audit and chargeback without changing lease enforcement.
+Inputs: apps/coh/src/gpu.rs, apps/coh/src/run.rs, docs/INTERFACES.md.
+Changes:
+  - apps/coh/src/gpu.rs - add optional `--receipt-out` that writes a JSON receipt including request parameters, ACK line, and a bounded `/proc/lease/*` snapshot captured immediately after the lease request.
+  - apps/coh/src/run.rs - extend host command wrapper to emit receipts for lease-validated runs (breadcrumb correlation).
+  - apps/coh/tests/receipts.rs - validate receipt schema, bounds, and determinism.
+Commands:
+  - cargo test -p coh
+Checks:
+  - Receipts never include secrets (tokens, raw tickets) and are stable for fixed inputs.
+Deliverables:
+  - Receipt artifacts suitable for audit and internal billing pipelines.
+```
+
+----
+**Release 0.9.0 alpha**
 ----
 
 ---
