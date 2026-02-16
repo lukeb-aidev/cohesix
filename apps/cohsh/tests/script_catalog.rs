@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Lock cohsh .coh grammar coverage for existing regression scripts.
 // Author: Lukas Bower
@@ -152,6 +152,8 @@ fn script_token_stream_is_stable() {
         "policy_gate.coh:6d7ad6b827641b2578843e3db0bedcd9ffcf911f48520a6e0478d468860f239f"
             .to_owned(),
         "replay_journal.coh:1ff3cc6ac006c47fe8a6f914fb5b079d352a41691c2b5da34cf6441fba4d5a8f"
+            .to_owned(),
+        "rest_control_plane_smoke.coh:d9caa417b846e6af631a608d9f3b61dcc35d88f55ebe66a60ab5c75a72e6eb84"
             .to_owned(),
         "root_cut_basic.coh:13b16b64658f4042e13e69cadf7e8a51dae210a5f3e69f373dda08d819f59d8c"
             .to_owned(),
