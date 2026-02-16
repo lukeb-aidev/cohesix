@@ -33,6 +33,65 @@ def _start_auth_server(expected_token: str) -> tuple[ThreadingHTTPServer, str, A
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
             parsed = urlparse(self.path)
+            if parsed.path == "/v1/meta/bounds":
+                if not self._validate_auth("BOUNDS", "/v1/meta/bounds"):
+                    return
+                return self._send_json(
+                    200,
+                    {
+                        "manifest_sha256": "deadbeef",
+                        "secure9p": {"msize": 8192, "walk_depth": 8},
+                        "console": {
+                            "max_line_len": 256,
+                            "max_path_len": 96,
+                            "max_json_len": 192,
+                            "max_id_len": 32,
+                            "max_echo_len": 128,
+                            "max_ticket_len": 224,
+                        },
+                        "paths": {
+                            "queen_ctl": "/queen/ctl",
+                            "queen_lifecycle_ctl": "/queen/lifecycle/ctl",
+                            "queen_schedule_ctl": "/queen/schedule/ctl",
+                            "queen_lease_ctl": "/queen/lease/ctl",
+                            "queen_export_ctl": "/queen/export/ctl",
+                            "policy_ctl": "/policy/ctl",
+                            "log": "/log/queen.log",
+                        },
+                        "control_plane": {
+                            "schedule": {"enable": True, "queue_max_entries": 64, "ctl_max_bytes": 8192},
+                            "lease": {
+                                "enable": True,
+                                "active_max_entries": 64,
+                                "preemptions_max_entries": 64,
+                                "ctl_max_bytes": 8192,
+                            },
+                            "export": {"enable": True, "ctl_max_bytes": 2048},
+                        },
+                        "policy": {
+                            "enable": True,
+                            "queue_max_entries": 32,
+                            "queue_max_bytes": 4096,
+                            "ctl_max_bytes": 2048,
+                        },
+                        "observability": {
+                            "proc_schedule": {
+                                "summary": True,
+                                "queue": True,
+                                "summary_bytes": 128,
+                                "queue_bytes": 256,
+                            },
+                            "proc_lease": {
+                                "summary": True,
+                                "active": True,
+                                "preemptions": True,
+                                "summary_bytes": 160,
+                                "active_bytes": 256,
+                                "preemptions_bytes": 256,
+                            },
+                        },
+                    },
+                )
             if parsed.path == "/v1/fs/ls":
                 query = parse_qs(parsed.query)
                 path = (query.get("path") or ["/"])[0]
@@ -46,6 +105,17 @@ def _start_auth_server(expected_token: str) -> tuple[ThreadingHTTPServer, str, A
                     return
                 return self._send_ok(
                     "CAT",
+                    path,
+                    lines=["queen online"],
+                    bytes_written=len("queen online".encode("utf-8")),
+                )
+            if parsed.path == "/v1/fs/tail":
+                query = parse_qs(parsed.query)
+                path = (query.get("path") or ["/log/queen.log"])[0]
+                if not self._validate_auth("TAIL", path):
+                    return
+                return self._send_ok(
+                    "TAIL",
                     path,
                     lines=["queen online"],
                     bytes_written=len("queen online".encode("utf-8")),
@@ -160,3 +230,20 @@ def test_rest_backend_uses_env_request_auth_header() -> None:
     assert entries == ["log", "queen.log"]
     assert capture.authorization_values == ["Bearer env-token"]
     assert capture.request_auth_values == ["env-token"]
+
+
+def test_rest_backend_tail_and_bounds_with_auth_headers() -> None:
+    server, base_url, capture = _start_auth_server(expected_token="explicit-token")
+    try:
+        backend = RestBackend(base_url, request_auth_token="explicit-token")
+        tail = backend.tail_file("/log/queen.log", 4096)
+        bounds = backend.get_bounds()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert tail == b"queen online"
+    assert isinstance(bounds, dict)
+    assert bounds.get("manifest_sha256") == "deadbeef"
+    assert capture.authorization_values == ["Bearer explicit-token"] * 2
+    assert capture.request_auth_values == ["explicit-token"] * 2

@@ -1,3 +1,7 @@
+# Author: Lukas Bower
+# Purpose: Implement high-level Cohesix Python client workflows and bounded helper utilities.
+# Copyright 2026 Lukas Bower
+
 """High-level Cohesix Python client operations."""
 
 from __future__ import annotations
@@ -13,8 +17,10 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from .audit import CohesixAudit
 from .backends import Backend, TcpBackend
 from .defaults import DEFAULTS
+from .evidence import EvidencePackSummary, TimelineSummary, export_evidence_pack, write_evidence_timeline
 from .errors import CohesixError
 from .paths import validate_path
+from .receipts import build_lease_receipt, build_run_receipt, write_receipt_json
 
 _CONSOLE = DEFAULTS.get("console", {})
 _TELEMETRY_PUSH = DEFAULTS.get("telemetry_push", {})
@@ -106,6 +112,38 @@ class CohesixClient:
             audit.push_line(
                 f"lease requested gpu_id={args.gpu_id} mem_mb={args.mem_mb} streams={args.streams} ttl_s={args.ttl_s}"
             )
+
+    def gpu_lease_with_receipt(
+        self,
+        args: GpuLeaseArgs,
+        receipt_out: Path,
+        audit: Optional[CohesixAudit] = None,
+    ) -> Dict[str, object]:
+        lease_error: Optional[Exception] = None
+        try:
+            self.gpu_lease(args, audit)
+        except Exception as exc:
+            lease_error = exc
+
+        receipt = build_lease_receipt(
+            backend=self.backend,
+            defaults=self.defaults,
+            args=args,
+            status="ok" if lease_error is None else "err",
+            error=lease_error,
+            audit=audit,
+        )
+        try:
+            write_receipt_json(receipt_out, receipt)
+        except Exception as exc:
+            if lease_error is not None:
+                raise CohesixError(
+                    f"lease failed: {lease_error}; receipt failed: {exc}"
+                ) from exc
+            raise
+        if lease_error is not None:
+            raise lease_error
+        return receipt
 
     def telemetry_pull(self, out_dir: Path, audit: Optional[CohesixAudit] = None) -> Tuple[int, int, int]:
         telemetry = self.policy.get("telemetry", {})
@@ -309,6 +347,58 @@ class CohesixClient:
             audit.push_ack("OK", "ECHO", f"path={status_path} bytes={written}")
         if result.returncode != 0:
             raise CohesixError(f"command exited with code {result.returncode}")
+
+    def run_command_with_receipt(
+        self,
+        gpu_id: str,
+        command: List[str],
+        receipt_out: Path,
+        audit: Optional[CohesixAudit] = None,
+    ) -> Dict[str, object]:
+        run_error: Optional[Exception] = None
+        try:
+            self.run_command(gpu_id=gpu_id, command=command, audit=audit)
+        except Exception as exc:
+            run_error = exc
+
+        receipt = build_run_receipt(
+            backend=self.backend,
+            defaults=self.defaults,
+            gpu_id=gpu_id,
+            command=command,
+            status="ok" if run_error is None else "err",
+            error=run_error,
+            audit=audit,
+        )
+        try:
+            write_receipt_json(receipt_out, receipt)
+        except Exception as exc:
+            if run_error is not None:
+                raise CohesixError(
+                    f"run failed: {run_error}; receipt failed: {exc}"
+                ) from exc
+            raise
+        if run_error is not None:
+            raise run_error
+        return receipt
+
+    def evidence_pack(
+        self,
+        out_dir: Path,
+        with_telemetry: bool = False,
+        audit: Optional[CohesixAudit] = None,
+    ) -> EvidencePackSummary:
+        return export_evidence_pack(
+            backend=self.backend,
+            defaults=self.defaults,
+            out_dir=out_dir,
+            with_telemetry=with_telemetry,
+            telemetry_pull=self.telemetry_pull,
+            audit=audit,
+        )
+
+    def evidence_timeline(self, pack_dir: Path) -> TimelineSummary:
+        return write_evidence_timeline(pack_dir)
 
     def queen_kill(self, worker_id: str, audit: Optional[CohesixAudit] = None) -> None:
         worker_id = worker_id.strip()

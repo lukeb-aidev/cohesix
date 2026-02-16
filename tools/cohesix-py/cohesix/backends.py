@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from .defaults import DEFAULTS
 from .errors import CohesixError
@@ -51,8 +51,14 @@ class Backend:
     def read_file(self, path: str, max_bytes: int) -> bytes:
         raise NotImplementedError
 
+    def tail_file(self, path: str, max_bytes: int) -> bytes:
+        return self.read_file(path, max_bytes)
+
     def write_append(self, path: str, payload: bytes) -> int:
         raise NotImplementedError
+
+    def get_bounds(self) -> Optional[Dict[str, Any]]:
+        return None
 
 
 class FilesystemBackend(Backend):
@@ -85,6 +91,19 @@ class FilesystemBackend(Backend):
         if len(data) > max_bytes:
             raise CohesixError(f"read {path} exceeds max bytes {max_bytes}")
         return data
+
+    def tail_file(self, path: str, max_bytes: int) -> bytes:
+        resolved = self._resolve(path)
+        if not os.path.isfile(resolved):
+            raise CohesixError(f"{path} is not a file")
+        if max_bytes <= 0:
+            return b""
+        with open(resolved, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            file_size = handle.tell()
+            seek_pos = max(0, file_size - max_bytes)
+            handle.seek(seek_pos)
+            return handle.read(max_bytes)
 
     def write_append(self, path: str, payload: bytes) -> int:
         resolved = self._resolve(path)
@@ -220,6 +239,13 @@ class TcpBackend(Backend):
             raise CohesixError(f"read {path} exceeds max bytes {max_bytes}")
         return data
 
+    def tail_file(self, path: str, max_bytes: int) -> bytes:
+        lines = self._stream_command("TAIL", path)
+        data = "\n".join(lines).encode("utf-8")
+        if len(data) > max_bytes:
+            raise CohesixError(f"tail {path} exceeds max bytes {max_bytes}")
+        return data
+
     def write_append(self, path: str, payload: bytes) -> int:
         validate_path(path)
         try:
@@ -278,6 +304,20 @@ class RestBackend(Backend):
             raise CohesixError(f"read {path} exceeds max bytes {max_bytes}")
         return payload
 
+    def tail_file(self, path: str, max_bytes: int) -> bytes:
+        response = self._request_json(
+            "GET",
+            "/v1/fs/tail",
+            query={"path": path, "max_bytes": str(int(max_bytes))},
+        )
+        lines = response.get("lines", [])
+        if not isinstance(lines, list):
+            raise CohesixError("invalid REST response: lines missing")
+        payload = "\n".join(str(line) for line in lines).encode("utf-8")
+        if len(payload) > max_bytes:
+            raise CohesixError(f"tail {path} exceeds max bytes {max_bytes}")
+        return payload
+
     def write_append(self, path: str, payload: bytes) -> int:
         validate_path(path)
         try:
@@ -297,6 +337,16 @@ class RestBackend(Backend):
         bytes_written = response.get("bytes", len(payload))
         return int(bytes_written)
 
+    def get_bounds(self) -> Optional[Dict[str, Any]]:
+        payload = self._request_payload("GET", "/v1/meta/bounds")
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except Exception as exc:  # pragma: no cover - indicates gateway bug
+            raise CohesixError("invalid REST bounds payload") from exc
+        if not isinstance(data, dict):  # pragma: no cover - indicates gateway bug
+            raise CohesixError("invalid REST bounds payload")
+        return data
+
     def _request_json(
         self,
         method: str,
@@ -304,6 +354,16 @@ class RestBackend(Backend):
         query: Optional[dict] = None,
         body: Optional[dict] = None,
     ) -> dict:
+        payload = self._request_payload(method, path, query=query, body=body)
+        return self._parse_rest_payload(method, path, payload)
+
+    def _request_payload(
+        self,
+        method: str,
+        path: str,
+        query: Optional[dict] = None,
+        body: Optional[dict] = None,
+    ) -> bytes:
         url = f"{self.base_url}{path}"
         if query:
             url = f"{url}?{urllib.parse.urlencode(query)}"
@@ -322,10 +382,11 @@ class RestBackend(Backend):
                 payload = resp.read()
         except urllib.error.HTTPError as exc:
             payload = exc.read()
-            return self._raise_rest_error(method, path, payload, exc)
+            self._raise_rest_error(method, path, payload, exc)
+            raise AssertionError("unreachable")
         except urllib.error.URLError as exc:
             raise CohesixError(f"REST connection failed: {exc}") from exc
-        return self._parse_rest_payload(method, path, payload)
+        return payload
 
     def _parse_rest_payload(self, method: str, path: str, payload: bytes) -> dict:
         try:

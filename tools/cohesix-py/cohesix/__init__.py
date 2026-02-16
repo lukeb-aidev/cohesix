@@ -7,6 +7,7 @@
 from .audit import CohesixAudit
 from .backends import FilesystemBackend, MockBackend, RestBackend, TcpBackend
 from .client import CohesixClient
+from .evidence import EvidencePackSummary, TimelineSummary, export_evidence_pack, write_evidence_timeline
 from .errors import CohesixError
 from .orchestration import (
     ApprovalRequest,
@@ -33,6 +34,7 @@ __all__ = [
     "CohesixClient",
     "CohesixError",
     "ControlPlan",
+    "EvidencePackSummary",
     "ExportRequest",
     "FilesystemBackend",
     "LeaseRequest",
@@ -40,11 +42,14 @@ __all__ = [
     "PlaybookReport",
     "RestBackend",
     "ScheduleRequest",
+    "TimelineSummary",
     "TcpBackend",
     "UseCasePlaybook",
     "describe_playbooks",
     "execute_playbook",
+    "export_evidence_pack",
     "load_playbook",
     "playbook_ids",
+    "write_evidence_timeline",
     "world_class_playbooks",
 ]

@@ -33,6 +33,9 @@ python3 -m pip install -e 'tools/cohesix-py[ml]'
 - `CohesixOrchestrator`: typed schedule/lease/export/approval controls.
 - `/proc` observability snapshots for scheduler and lease state.
 - Host integration probes for `systemd`, Docker, Kubernetes, NVML, and PEFT runtime versions.
+- Native evidence + receipt APIs on `CohesixClient`:
+  - `evidence_pack(...)` and `evidence_timeline(...)`
+  - `gpu_lease_with_receipt(...)` and `run_command_with_receipt(...)`
 
 ## Playbooks (1k-worker use-case coverage)
 Built-in playbooks cover:
