@@ -371,7 +371,8 @@ Run while QEMU is up:
 - `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> scripts/cohsh/REST_regression_batch.sh`
 - Stage 04 runs two REST batches:
   - A concurrent "core" batch (boot/proc/pool/backpressure coverage).
-  - A strict "parity" batch (policy + `/host` control writes + control-plane smoke): `scripts/cohsh/policy_gate.coh`, `scripts/cohsh/host_sidecar_mock.coh`, `scripts/cohsh/rest_control_plane_smoke.coh`.
+  - A strict "parity" batch (policy + control-plane smoke): `scripts/cohsh/policy_gate.coh`, `scripts/cohsh/rest_control_plane_smoke.coh`.
+    - Note: the gateway runs with a fixed role/ticket (typically `queen`), so worker-role `/host` denial remains covered by the TCP/QEMU regression script `scripts/cohsh/host_sidecar_mock.coh`.
 - Stage 04 also runs a Python REST smoke (`tools/cohesix-py` `RestBackend`) that performs `LS /` and `CAT /log/queen.log` against the same gateway.
 - Logs:
   - Scripted Stage 04 writes REST batch logs under the stage state dir (for example `out/test-plan/<run-id>/rest-regression-logs/`).

@@ -29,7 +29,7 @@ fi
 tp_log "INFO  gateway-auth-token=present"
 
 core_scripts="boot_v0.coh observe_watch.coh busy_backpressure.coh session_pool.coh"
-parity_scripts="host_sidecar_mock.coh policy_gate.coh rest_control_plane_smoke.coh"
+parity_scripts="policy_gate.coh rest_control_plane_smoke.coh"
 
 tp_run_cmd \
   "cohsh-rest-regression-core" \

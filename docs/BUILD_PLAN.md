@@ -97,7 +97,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25b](#25b) | Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) | Complete |
 | [25c](#25c) | Python Orchestration SDK (1k Fleet Playbooks + Host Integrations) | Complete |
 | [25d](#25d) | REST Request-Auth Parity Across Host Tools (Gateway Capability Max) | In Progress |
-| [25e](#25e) | Evidence Packs + Integration Kits (Audit-First Adoption) | In Progress |
+| [25e](#25e) | Evidence Packs + Integration Kits (Audit-First Adoption) | Complete |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -5334,7 +5334,7 @@ Deliverables:
 
 **Why now (buyability + integration):** Cohesix has a scale-capable, request-authenticated gateway path (25b–25d) and Python orchestration (25c). The highest leverage remaining adoption blocker is not new VM semantics; it is the absence of deterministic, auditor-friendly evidence artifacts and turnkey integration patterns that reuse existing control surfaces without introducing new protocols.
 
-**Status:** In Progress — evidence packs, timelines, receipts, and integration kit examples are implemented; pending full `docs/TEST_PLAN.md` pass and final docs-as-built review.
+**Status:** Complete — full `docs/TEST_PLAN.md` pass (2026-02-16) and docs-as-built review complete.
 
 ## Goal
 Deliver high-impact, low-risk adoption accelerators that remain host-side and strictly protocol-faithful:

@@ -148,6 +148,55 @@ impl RestTransport {
         }
         self.max_tail_bytes
     }
+
+    fn render_read_ack_detail(&mut self, path: &str, lines: &[String]) -> String {
+        // Match the TCP transport's ergonomics: include a small inline payload preview for
+        // single-line reads so `.coh` scripts can assert on the response line deterministically.
+        let mut detail = format!("path={path}");
+
+        let preview = match lines {
+            [line] => line.as_str(),
+            _ => return detail,
+        };
+        if preview.is_empty() {
+            return detail;
+        }
+
+        self.ensure_bounds();
+        let max_len = self
+            .bounds
+            .as_ref()
+            .map(|bounds| bounds.console.max_line_len)
+            .unwrap_or(cohsh_core::MAX_LINE_LEN);
+        if max_len == 0 {
+            return detail;
+        }
+
+        // Conservatively cap `data=` so the full acknowledgement line stays within bounds.
+        // `render_ack` prefixes `OK CAT` plus separators, so leave headroom.
+        let headroom = 64usize;
+        let available = max_len.saturating_sub(detail.len()).saturating_sub(headroom);
+        if available == 0 {
+            return detail;
+        }
+
+        let clipped = if preview.len() <= available {
+            preview
+        } else {
+            // Avoid slicing on non-UTF-8 boundaries.
+            let mut end = available;
+            while end > 0 && preview.get(..end).is_none() {
+                end = end.saturating_sub(1);
+            }
+            match preview.get(..end) {
+                Some(value) if !value.is_empty() => value,
+                _ => return detail,
+            }
+        };
+        detail.push_str(" data=");
+        detail.push_str(clipped);
+        detail
+    }
 }
 
 impl Transport for RestTransport {
@@ -211,8 +260,8 @@ impl Transport for RestTransport {
         let max_bytes = self.read_max_bytes(path);
         match self.client.read(path, max_bytes) {
             Ok(lines) => {
-                let detail = format!("path={path}");
-                self.push_ack(AckStatus::Ok, ConsoleVerb::Cat.ack_label(), Some(detail.as_str()));
+                let detail = self.render_read_ack_detail(path, &lines);
+                self.push_ack(AckStatus::Ok, ConsoleVerb::Cat.ack_label(), Some(&detail));
                 Ok(lines)
             }
             Err(err) => {
