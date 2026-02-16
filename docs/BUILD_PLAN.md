@@ -97,7 +97,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25b](#25b) | Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) | Complete |
 | [25c](#25c) | Python Orchestration SDK (1k Fleet Playbooks + Host Integrations) | Complete |
 | [25d](#25d) | REST Request-Auth Parity Across Host Tools (Gateway Capability Max) | In Progress |
-| [25e](#25e) | Evidence Packs + Integration Kits (Audit-First Adoption) | Pending |
+| [25e](#25e) | Evidence Packs + Integration Kits (Audit-First Adoption) | In Progress |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -5334,11 +5334,11 @@ Deliverables:
 
 **Why now (buyability + integration):** Cohesix has a scale-capable, request-authenticated gateway path (25b–25d) and Python orchestration (25c). The highest leverage remaining adoption blocker is not new VM semantics; it is the absence of deterministic, auditor-friendly evidence artifacts and turnkey integration patterns that reuse existing control surfaces without introducing new protocols.
 
-**Status:** Pending — evidence exports are ad-hoc (manual `cat`/tail/telemetry pulls), GPU lease requests are not receipt-backed, and operators lack ready-to-run CI/SIEM integration recipes anchored to the OpenAPI gateway contract.
+**Status:** In Progress — evidence packs, timelines, receipts, and integration kit examples are implemented; pending full `docs/TEST_PLAN.md` pass and final docs-as-built review.
 
 ## Goal
 Deliver high-impact, low-risk adoption accelerators that remain host-side and strictly protocol-faithful:
-1. Deterministic evidence packs for audits, due diligence, and incident review, sourced only from existing `/proc`, `/log`, `/audit`, `/replay`, `/updates`, `/models`, and telemetry surfaces.
+1. Deterministic evidence packs for audits, due diligence, and incident review, sourced only from existing `/proc`, `/log`, `/audit`, `/replay`, and telemetry surfaces.
 2. A correlated timeline view derived from evidence pack contents (no new runtime behavior).
 3. Turnkey integration kits (CI + SIEM) that consume the REST/OpenAPI gateway and/or `coh`/Python tooling without introducing new control-plane semantics.
 4. GPU lease receipts and chargeback-friendly exports derived from `/proc/lease/*`, `/audit/journal`, and `/gpu/*` status files (no changes to lease enforcement).
@@ -5363,7 +5363,7 @@ Deliver high-impact, low-risk adoption accelerators that remain host-side and st
 
 ## Checks (Definition of Done)
 - `coh evidence pack` succeeds in `--mock` mode and in REST gateway mode with request-auth enabled, emitting a deterministic directory structure under `out/evidence/<id>/`.
-- Evidence packs contain: manifest fingerprint, bounds snapshot, `/proc` snapshots, `/audit/export`, `/audit/journal`, `/audit/decisions`, `/replay/status`, a bounded `/log/queen.log` capture, and (optionally) downloaded telemetry segments.
+- Evidence packs contain: manifest/policy fingerprint, bounds snapshot, `/proc` snapshots, `/replay/status`, a bounded `/log/queen.log` capture, and (optionally) downloaded telemetry segments. When `/audit/export` is present, packs include `/audit/export` plus redacted `/audit/journal` and `/audit/decisions`.
 - `coh evidence timeline` produces stable, correlated output from an evidence pack without network access.
 - GPU lease receipts can be emitted from `coh gpu lease` / `coh run` without changing VM control semantics, and include correlatable identifiers (`lease id`, `subject`, `resource`, `seq`) captured from `/proc/lease/*`.
 - Integration kits run in mock mode end-to-end and contain no hardcoded secrets; all tokens/URLs are supplied via env vars.

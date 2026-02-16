@@ -39,6 +39,7 @@ Goal: run `hive-gateway` as the only console client and use REST for all tools.
 2. Start the gateway (queen role).
    ```bash
    COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+     HIVE_GATEWAY_REQUEST_AUTH_TOKEN=replace-with-real-token \
      COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
      ./bin/hive-gateway
    ```
@@ -49,16 +50,20 @@ Goal: run `hive-gateway` as the only console client and use REST for all tools.
    ```
 4. Attach `cohsh` via REST (not TCP).
    ```bash
-   ./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 --role queen
+   ./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 \
+     --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --role queen
    ```
 5. Publish host snapshots through the gateway.
    ```bash
-   ./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 --interval-ms 1000
-   ./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 --watch
+   ./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080 \
+     --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --interval-ms 1000
+   ./bin/host-sidecar-bridge --rest-url http://127.0.0.1:8080 \
+     --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --watch
    ```
 6. Launch SwarmUI over REST.
    ```bash
-   SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 ./bin/swarmui
+   SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 \
+     SWARMUI_REST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" ./bin/swarmui
    ```
 
 ## Evidence packs (audit + incident review)

@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Provide a high-level overview of Cohesix architecture and workspace layout. -->
 <!-- Author: Lukas Bower -->
@@ -56,6 +56,8 @@ Cohesix does **not include a traditional filesystem**; instead it exposes a **sy
 Cohesix does not provide HTTPS or TLS. Instead, it relies on an **authenticated, encrypted private network** (e.g. VPN or overlay) for transport security, keeping the Cohesix TCB small and focused. See this [example](docs/NETWORK_CONFIG.md).
 
 All control and telemetry are file-shaped and exposed via Secure9P; the console mirrors those semantics. There are **no ad-hoc RPC channels**, no background daemons, and no general in-VM networking services.
+
+For audits and incident review, the host-side `coh evidence pack` tool exports deterministic, redacted evidence bundles sourced only from existing `/proc`, `/log`, `/audit`, `/replay`, and telemetry surfaces.
 
 Operators interact with Cohesix through two consoles:
 - a local **PL011 UART console** for early bring-up and recovery, and  

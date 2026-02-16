@@ -64,6 +64,16 @@ python3 tools/cohesix-py/examples/peft_roundtrip.py --mock
 python3 tools/cohesix-py/examples/telemetry_write_pull.py --mock
 ```
 
+## Evidence pack integration kits (Milestone 25e)
+These examples operate on an evidence pack directory produced by `coh evidence pack` and run offline once the pack exists.
+```bash
+cargo run -p coh -- --mock evidence pack --out out/evidence/mock
+python3 tools/cohesix-py/examples/ci_evidence_pack.py --pack out/evidence/mock \
+  --out out/evidence/mock/ci_summary.json
+python3 tools/cohesix-py/examples/siem_export_ndjson.py --pack out/evidence/mock \
+  --out out/evidence/mock/siem.ndjson
+```
+
 ## Notes
 - Bounds are enforced from manifest-derived defaults in `cohesix/generated.py`.
 - Keep one TCP console client at a time (or use REST via `hive-gateway`).

@@ -8,6 +8,8 @@ The `cohesix` Python client is a **thin, non-authoritative** wrapper over existi
 console and filesystem semantics. It **does not introduce new control-plane behavior**; it
 mirrors the same verbs, bounds, and error rules enforced by `cohsh` and Secure9P.
 
+Milestone 25e adds offline integration kit examples that validate and export evidence packs for CI and SIEM ingestion.
+
 ## Concise real-world examples
 These are intentionally short, copy/paste commands that map to production activities.
 
@@ -77,7 +79,7 @@ Outcome: gives one normalized snapshot envelope for service health, containers, 
 - `docs/HOST_TOOLS.md` — host tool semantics, policy gates, mounts, and interdependencies.
 - `docs/API_GUIDELINES.md` — REST gateway scope and connectivity checks.
 - `docs/OPERATOR_WALKTHROUGH.md` — operator lifecycle and recovery flow.
-- `tools/cohesix-py/README.md` — Python quickstart and copy/paste examples (`tool/cohesix_py/README.md` reference path).
+- `tools/cohesix-py/README.md` — Python quickstart and copy/paste examples.
 
 ## Where it lives
 - **Source tree**: `tools/cohesix-py/`
@@ -178,6 +180,16 @@ python3 tools/cohesix-py/examples/peft_roundtrip.py --mock
 python3 tools/cohesix-py/examples/telemetry_write_pull.py --mock
 ```
 Artifacts land under `out/examples/` unless `--out` is provided.
+
+## Evidence pack integration kits (Milestone 25e)
+These examples operate on an evidence pack directory produced by `coh evidence pack`. Once the pack exists, they run offline (no VM or network required).
+```bash
+cargo run -p coh -- --mock evidence pack --out out/evidence/mock
+python3 tools/cohesix-py/examples/ci_evidence_pack.py --pack out/evidence/mock \
+  --out out/evidence/mock/ci_summary.json
+python3 tools/cohesix-py/examples/siem_export_ndjson.py --pack out/evidence/mock \
+  --out out/evidence/mock/siem.ndjson
+```
 
 ## Live connection requirements (no `--mock`)
 To run against a live Queen, you need:

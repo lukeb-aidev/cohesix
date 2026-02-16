@@ -25,7 +25,7 @@ to the TCP console to drive and observe the system.
 
 ## Host tools at a glance
 - `cohsh` - primary CLI shell; use it to attach to the queen, run commands, and read logs.
-- `coh` - host bridge CLI for mount/gpu/run/telemetry/peft plus `coh doctor`.
+- `coh` - host bridge CLI for mount/gpu/run/evidence/telemetry/peft plus `coh doctor`.
 - `cohesix` (Python) - thin client with mock and TCP backends; examples under `python/cohesix-py/examples/`.
 - `hive-gateway` - REST gateway that projects console/file semantics over HTTP.
 - `swarmui` - UI for replay or live observation with an embedded console panel (core verbs only).
@@ -57,10 +57,13 @@ On Ubuntu this uses `apt-get` (via `sudo` if needed). On macOS it uses Homebrew.
 These do not require QEMU and should finish quickly on a fresh host:
 ```bash
 ./bin/coh doctor --mock
+./bin/coh evidence pack --mock --out ./out/evidence/mock
 python3 -m pip install ./python/cohesix-py
 python3 python/cohesix-py/examples/lease_run.py --mock
 python3 python/cohesix-py/examples/peft_roundtrip.py --mock
 python3 python/cohesix-py/examples/telemetry_write_pull.py --mock
+python3 python/cohesix-py/examples/ci_evidence_pack.py --pack ./out/evidence/mock
+python3 python/cohesix-py/examples/siem_export_ndjson.py --pack ./out/evidence/mock --out ./out/evidence/mock/siem.ndjson
 ```
 Note: in the source tree, the Python client lives under `tools/cohesix-py` instead of `python/cohesix-py`.
 If you need an editable install, upgrade pip (`python3 -m pip install --upgrade pip`) and then use
@@ -271,9 +274,13 @@ These are safe demo commands to prove the host tooling works. Live uploads requi
 
 ### coh (host bridge)
 ```bash
+mkdir -p ./out/receipts
 ./bin/coh gpu --host 127.0.0.1 --port 31337 list
-./bin/coh gpu --host 127.0.0.1 --port 31337 lease --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60
-./bin/coh run --host 127.0.0.1 --port 31337 --gpu GPU-0 -- echo ok
+./bin/coh gpu --host 127.0.0.1 --port 31337 lease --gpu GPU-0 --mem-mb 4096 --streams 1 --ttl-s 60 \
+  --receipt-out ./out/receipts/lease.json
+./bin/coh run --host 127.0.0.1 --port 31337 --gpu GPU-0 --receipt-out ./out/receipts/run.json -- echo ok
+./bin/coh evidence pack --host 127.0.0.1 --port 31337 --out ./out/evidence/live
+./bin/coh evidence timeline --in ./out/evidence/live
 ./bin/coh telemetry --host 127.0.0.1 --port 31337 pull --out ./out/telemetry
 ./bin/coh mount --mock --at /tmp/coh-mount
 ```
@@ -297,7 +304,6 @@ Unmount with `fusermount -u /tmp/coh-mount` (Linux) or `umount /tmp/coh-mount` (
 Note: live FUSE mounts require a running QEMU instance, a FUSE runtime, and `coh` built with FUSE
 enabled (default on Linux). On macOS, FUSE is disabled by default; rebuild `coh` with `--features fuse`
 and install MacFUSE.
-`./bin/coh mount --host 127.0.0.1 --port 31337 --at /tmp/coh-mount`
 
 GPU visibility: `coh gpu list`/`lease` only see GPUs after the host bridge publishes `/gpu` (live:
 `./bin/gpu-bridge-host --publish ...`; mock: `./bin/gpu-bridge-host --mock --list`).
