@@ -115,7 +115,7 @@
 - `ui_providers.updates.manifest`: `true`
 - `ui_providers.updates.status`: `true`
 - `client_policies.cohsh.pool.control_sessions`: `2`
-- `client_policies.cohsh.pool.telemetry_sessions`: `8`
+- `client_policies.cohsh.pool.telemetry_sessions`: `24`
 - `client_policies.cohsh.tail.poll_ms_default`: `1000`
 - `client_policies.cohsh.tail.poll_ms_min`: `250`
 - `client_policies.cohsh.tail.poll_ms_max`: `10000`
@@ -173,7 +173,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `d1880bfe0d830f06f36a6e0b11713d8e87aa95ebee75c6501ac6b963207a415d`
+- `manifest.sha256`: `36dbaac12406c2984dc207399045931bf3e080463df8774b6e469e24abcd0da8`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -219,4 +219,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `d1880bfe0d830f06f36a6e0b11713d8e87aa95ebee75c6501ac6b963207a415d`)._
+_Generated from `configs/root_task.toml` (sha256: `36dbaac12406c2984dc207399045931bf3e080463df8774b6e469e24abcd0da8`)._

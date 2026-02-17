@@ -38,6 +38,7 @@ use cohsh::{
     PROC_SCHEDULE_SUMMARY_ENABLED, SECURE9P_MSIZE, SECURE9P_WALK_DEPTH,
 };
 use cohsh::{NineDoorTransport, SharedTcpTransport, TcpTransport};
+use cohsh::policy::PolicyOverrides;
 use cohsh_core::{
     parse_role, RoleParseMode, MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN, MAX_LINE_LEN, MAX_PATH_LEN,
     MAX_TICKET_LEN,
@@ -59,11 +60,17 @@ const PROC_LEASE_PREEMPTIONS_PATH: &str = "/proc/lease/preemptions";
 const REQUEST_AUTH_HEADER: &str = "x-cohesix-auth";
 const AUTHORIZATION_BEARER_PREFIX: &str = "bearer ";
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
-const DEFAULT_PROC_CACHE_TTL_MS: u64 = 250;
+const DEFAULT_PROC_CACHE_TTL_MS: u64 = 500;
 const DEFAULT_PROC_CACHE_MAX_ENTRIES: usize = 64;
 const CONTROL_POOL_WAIT_LIMIT_MS: u64 = 2_000;
-const TELEMETRY_POOL_WAIT_LIMIT_MS: u64 = 800;
+const TELEMETRY_POOL_WAIT_LIMIT_MS: u64 = 1_500;
 const POOL_RETRY_SLEEP_MS: u64 = 10;
+const CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 1_200;
+const CONTROL_WRITE_RETRY_SLEEP_MS: u64 = 15;
+const CONTROL_WRITE_RETRY_MAX_SLEEP_MS: u64 = 120;
+const CACHE_INVALIDATE_CONTROL_NAMESPACES: &[&str] = &["/proc", "/queen", "/worker", "/gpu"];
+const CACHE_INVALIDATE_HOST_NAMESPACES: &[&str] = &["/host"];
+const CACHE_INVALIDATE_GPU_NAMESPACES: &[&str] = &["/gpu"];
 
 const OPENAPI_YAML: &str = include_str!("../../../resources/openapi/hive-gateway.yaml");
 
@@ -122,6 +129,12 @@ struct Cli {
     /// Optional capability ticket payload.
     #[arg(long)]
     ticket: Option<String>,
+    /// Override pooled control session capacity for this gateway process.
+    #[arg(long)]
+    pool_control_sessions: Option<u16>,
+    /// Override pooled telemetry session capacity for this gateway process.
+    #[arg(long)]
+    pool_telemetry_sessions: Option<u16>,
     /// Use the in-process mock NineDoor backend.
     #[arg(long, default_value_t = false)]
     mock: bool,
@@ -406,7 +419,12 @@ async fn main() -> Result<()> {
         info!("hive-gateway mock transport enabled");
     }
 
-    let policy = CohshPolicy::from_generated();
+    let policy = apply_policy_overrides(CohshPolicy::from_generated(), &config)?;
+    info!(
+        "hive-gateway session pool control={} telemetry={}",
+        policy.pool.control_sessions,
+        policy.pool.telemetry_sessions
+    );
     let pool = build_session_pool(&config, policy)?;
     let bounds = build_bounds();
 
@@ -472,6 +490,8 @@ struct GatewayConfig {
     request_auth_token: String,
     role: Role,
     ticket: Option<String>,
+    pool_control_sessions: Option<u16>,
+    pool_telemetry_sessions: Option<u16>,
     mock: bool,
     allow_non_loopback_bind: bool,
 }
@@ -514,6 +534,14 @@ impl GatewayConfig {
                 }
             }
         }
+        let pool_control_sessions = env_override_opt_u16(
+            cli.pool_control_sessions,
+            "HIVE_GATEWAY_POOL_CONTROL_SESSIONS",
+        );
+        let pool_telemetry_sessions = env_override_opt_u16(
+            cli.pool_telemetry_sessions,
+            "HIVE_GATEWAY_POOL_TELEMETRY_SESSIONS",
+        );
         let allow_non_loopback_bind =
             cli.allow_non_loopback_bind || env_flag("HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND");
         let auth_token = normalize_required_secret("tcp auth token", auth_token, mock)?;
@@ -527,6 +555,8 @@ impl GatewayConfig {
             request_auth_token,
             role,
             ticket,
+            pool_control_sessions,
+            pool_telemetry_sessions,
             mock,
             allow_non_loopback_bind,
         })
@@ -563,6 +593,16 @@ fn env_override_u16(value: u16, default_value: u16, key: &str) -> u16 {
         }
     }
     value
+}
+
+fn env_override_opt_u16(value: Option<u16>, key: &str) -> Option<u16> {
+    if value.is_some() {
+        return value;
+    }
+    let Ok(env_value) = env::var(key) else {
+        return None;
+    };
+    env_value.trim().parse::<u16>().ok().filter(|v| *v > 0)
 }
 
 fn resolve_secret(cli_value: Option<&str>, env_keys: &[&str]) -> Option<String> {
@@ -627,6 +667,20 @@ fn enforce_bind_exposure(addr: SocketAddr, allow_non_loopback: bool) -> Result<(
         "refusing non-loopback bind {}; set --allow-non-loopback-bind or HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND=1",
         addr
     );
+}
+
+fn apply_policy_overrides(policy: CohshPolicy, config: &GatewayConfig) -> Result<CohshPolicy> {
+    let overrides = PolicyOverrides {
+        pool_control_sessions: config.pool_control_sessions,
+        pool_telemetry_sessions: config.pool_telemetry_sessions,
+        ..PolicyOverrides::default()
+    };
+    if overrides == PolicyOverrides::default() {
+        return Ok(policy);
+    }
+    policy.with_overrides(&overrides).context(
+        "failed to apply gateway pool overrides; check pool_control_sessions/pool_telemetry_sessions",
+    )
 }
 
 fn build_session_pool(config: &GatewayConfig, policy: CohshPolicy) -> Result<SharedPool> {
@@ -890,15 +944,30 @@ impl AppState {
     }
 
     fn list(&self, path: &str) -> Result<Vec<String>> {
-        let path = path.to_owned();
-        self.with_pool(
+        if is_cacheable_list_path(path) {
+            if let Some(lines) = self.read_cache_get(path) {
+                return Ok(lines);
+            }
+            self.inner
+                .broker
+                .proc_cache_misses
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        let path_owned = path.to_owned();
+        let lines = self.with_pool(
             PoolKind::Telemetry,
-            move |transport: &mut dyn cohsh::Transport, session| transport.list(session, &path),
-        )
+            move |transport: &mut dyn cohsh::Transport, session| {
+                transport.list(session, &path_owned)
+            },
+        )?;
+        if is_cacheable_list_path(path) {
+            self.read_cache_insert(path, lines.clone());
+        }
+        Ok(lines)
     }
 
     fn read(&self, path: &str) -> Result<Vec<String>> {
-        if is_cacheable_proc_path(path) {
+        if is_cacheable_read_path(path) {
             if let Some(lines) = self.read_cache_get(path) {
                 return Ok(lines);
             }
@@ -914,7 +983,7 @@ impl AppState {
                 transport.read(session, &path_owned)
             },
         )?;
-        if is_cacheable_proc_path(path) {
+        if is_cacheable_read_path(path) {
             self.read_cache_insert(path, lines.clone());
         }
         Ok(lines)
@@ -929,18 +998,41 @@ impl AppState {
     }
 
     fn write(&self, path: &str, payload: &[u8]) -> Result<()> {
-        let path = path.to_owned();
+        let write_path = path.to_owned();
         let payload = payload.to_vec();
-        let result = self.with_pool(
-            PoolKind::Control,
-            move |transport: &mut dyn cohsh::Transport, session| {
-                transport.write(session, &path, &payload)
-            },
-        );
-        if result.is_ok() {
-            self.read_cache_invalidate();
+        let deadline = Instant::now() + Duration::from_millis(CONTROL_WRITE_RETRY_WINDOW_MS);
+        let retry_deadline_enabled = is_retryable_control_write_path(write_path.as_str());
+        let mut retry_delay = Duration::from_millis(CONTROL_WRITE_RETRY_SLEEP_MS);
+        loop {
+            let result = self.with_pool(
+                PoolKind::Control,
+                |transport: &mut dyn cohsh::Transport, session| {
+                    transport.write(session, write_path.as_str(), payload.as_slice())
+                },
+            );
+            match result {
+                Ok(()) => {
+                    self.read_cache_invalidate_for_write(write_path.as_str());
+                    return Ok(());
+                }
+                Err(err) => {
+                    if !retry_deadline_enabled {
+                        return Err(err);
+                    }
+                    let message = err.to_string();
+                    if Instant::now() >= deadline
+                        || !is_retryable_control_write_error(message.as_str())
+                    {
+                        return Err(err);
+                    }
+                    thread::sleep(retry_delay);
+                    retry_delay = next_delay(
+                        retry_delay,
+                        Duration::from_millis(CONTROL_WRITE_RETRY_MAX_SLEEP_MS),
+                    );
+                }
+            }
         }
-        result
     }
 
     fn bounds(&self) -> BoundsResponse {
@@ -1015,10 +1107,23 @@ impl AppState {
         );
     }
 
-    fn read_cache_invalidate(&self) {
+    fn read_cache_invalidate_for_write(&self, write_path: &str) {
         let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
-        cache.entries.clear();
-        cache.order.clear();
+        let Some(namespaces) = cache_invalidation_namespaces(write_path) else {
+            cache.entries.clear();
+            cache.order.clear();
+            return;
+        };
+        cache
+            .entries
+            .retain(|key, _| !namespaces.iter().any(|ns| cache_key_in_namespace(key, ns)));
+        let retained_order: Vec<String> = cache
+            .order
+            .iter()
+            .filter(|key| cache.entries.contains_key((*key).as_str()))
+            .cloned()
+            .collect();
+        cache.order = VecDeque::from(retained_order);
     }
 }
 
@@ -1244,8 +1349,49 @@ async fn handle_echo(state: AppState, payload: EchoRequest) -> impl axum::respon
     }
 }
 
-fn is_cacheable_proc_path(path: &str) -> bool {
-    path.starts_with("/proc/")
+fn is_cacheable_read_path(path: &str) -> bool {
+    path.starts_with("/proc/") || path.starts_with("/host/") || path.starts_with("/gpu/")
+}
+
+fn is_cacheable_list_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/" | "/proc" | "/queen" | "/worker" | "/gpu" | "/host"
+    )
+}
+
+fn cache_key_in_namespace(key: &str, namespace: &str) -> bool {
+    key == namespace || key.starts_with(&format!("{namespace}/"))
+}
+
+fn cache_invalidation_namespaces(write_path: &str) -> Option<&'static [&'static str]> {
+    if write_path.starts_with("/queen/")
+        || write_path == CLIENT_POLICY_CTL_PATH
+        || write_path.starts_with("/actions/")
+    {
+        return Some(CACHE_INVALIDATE_CONTROL_NAMESPACES);
+    }
+    if write_path.starts_with("/host/") {
+        return Some(CACHE_INVALIDATE_HOST_NAMESPACES);
+    }
+    if write_path.starts_with("/gpu/") {
+        return Some(CACHE_INVALIDATE_GPU_NAMESPACES);
+    }
+    None
+}
+
+fn is_retryable_control_write_path(path: &str) -> bool {
+    path.starts_with("/queen/")
+        || path == CLIENT_POLICY_CTL_PATH
+        || path.starts_with("/actions/")
+}
+
+fn is_retryable_control_write_error(error: &str) -> bool {
+    let lowered = error.to_ascii_lowercase();
+    lowered.contains("buffer-full")
+        || lowered.contains("buffer full")
+        || lowered.contains("session pool exhausted")
+        || lowered.contains("gateway backpressure")
 }
 
 fn extract_request_auth(headers: &HeaderMap) -> Option<String> {
@@ -1560,5 +1706,101 @@ mod tests {
         let (status, body) = response_transport_err("CAT", "/proc/root/reachable", err);
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(body.0.status, "ERR");
+    }
+
+    #[test]
+    fn cacheable_read_path_includes_proc_host_and_gpu() {
+        assert!(is_cacheable_read_path("/proc/root/reachable"));
+        assert!(is_cacheable_read_path("/host/systemd/ssh.service/status"));
+        assert!(is_cacheable_read_path("/gpu/bridge/status"));
+        assert!(!is_cacheable_read_path("/queen/ctl"));
+    }
+
+    #[test]
+    fn cacheable_list_path_covers_hot_roots() {
+        for path in ["/", "/proc", "/queen", "/worker", "/gpu", "/host"] {
+            assert!(is_cacheable_list_path(path), "expected cacheable path: {path}");
+        }
+        assert!(!is_cacheable_list_path("/log"));
+    }
+
+    #[test]
+    fn cache_key_in_namespace_matches_exact_or_child() {
+        assert!(cache_key_in_namespace("/proc/schedule/summary", "/proc"));
+        assert!(cache_key_in_namespace("/proc", "/proc"));
+        assert!(!cache_key_in_namespace("/process", "/proc"));
+    }
+
+    #[test]
+    fn cache_invalidation_namespaces_follow_write_scope() {
+        assert_eq!(
+            cache_invalidation_namespaces("/queen/schedule/ctl"),
+            Some(CACHE_INVALIDATE_CONTROL_NAMESPACES)
+        );
+        assert_eq!(
+            cache_invalidation_namespaces("/policy/ctl"),
+            Some(CACHE_INVALIDATE_CONTROL_NAMESPACES)
+        );
+        assert_eq!(
+            cache_invalidation_namespaces("/host/docker/status"),
+            Some(CACHE_INVALIDATE_HOST_NAMESPACES)
+        );
+        assert_eq!(
+            cache_invalidation_namespaces("/gpu/bridge/status"),
+            Some(CACHE_INVALIDATE_GPU_NAMESPACES)
+        );
+        assert_eq!(cache_invalidation_namespaces("/log/queen.log"), None);
+    }
+
+    #[test]
+    fn retryable_control_write_helpers_match_expected_paths_and_errors() {
+        assert!(is_retryable_control_write_path("/queen/lease/ctl"));
+        assert!(is_retryable_control_write_path("/policy/ctl"));
+        assert!(is_retryable_control_write_path("/actions/queue"));
+        assert!(!is_retryable_control_write_path("/host/docker/status"));
+
+        assert!(is_retryable_control_write_error(
+            "ERR ECHO reason=quota detail=buffer-full path=/queen/schedule/ctl error=buffer full"
+        ));
+        assert!(is_retryable_control_write_error(
+            "gateway backpressure: session pool checkout timed out for Control"
+        ));
+        assert!(!is_retryable_control_write_error(
+            "ERR ECHO reason=policy detail=invalid-payload path=/queen/lease/ctl error=invalid payload"
+        ));
+    }
+
+    #[test]
+    fn apply_policy_overrides_updates_pool_sizes_when_requested() {
+        let mut config = GatewayConfig {
+            bind: "127.0.0.1:8080".to_owned(),
+            tcp_host: "127.0.0.1".to_owned(),
+            tcp_port: 31337,
+            auth_token: "token".to_owned(),
+            request_auth_token: "request-token".to_owned(),
+            role: Role::Queen,
+            ticket: None,
+            pool_control_sessions: Some(3),
+            pool_telemetry_sessions: Some(12),
+            mock: true,
+            allow_non_loopback_bind: false,
+        };
+        let policy = CohshPolicy::from_generated();
+        let updated = apply_policy_overrides(policy, &config).expect("apply overrides");
+        assert_eq!(updated.pool.control_sessions, 3);
+        assert_eq!(updated.pool.telemetry_sessions, 12);
+
+        config.pool_control_sessions = None;
+        config.pool_telemetry_sessions = None;
+        let unchanged =
+            apply_policy_overrides(CohshPolicy::from_generated(), &config).expect("no override");
+        assert_eq!(
+            unchanged.pool.control_sessions,
+            CohshPolicy::from_generated().pool.control_sessions
+        );
+        assert_eq!(
+            unchanged.pool.telemetry_sessions,
+            CohshPolicy::from_generated().pool.telemetry_sessions
+        );
     }
 }

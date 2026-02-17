@@ -6,6 +6,7 @@
 
 import importlib.util
 import pathlib
+import socket
 import sys
 
 MODULE_PATH = (
@@ -62,6 +63,36 @@ def test_clamp_target_workers_respects_cap() -> None:
     assert rest_perf.clamp_target_workers(6, 8) == 6
 
 
+def test_parse_bind_host_port_accepts_valid_host_port() -> None:
+    host, port = rest_perf.parse_bind_host_port("127.0.0.1:8080", "gateway-bind")
+    assert host == "127.0.0.1"
+    assert port == 8080
+
+
+def test_parse_bind_host_port_rejects_invalid_value() -> None:
+    try:
+        rest_perf.parse_bind_host_port("not-a-bind", "gateway-bind")
+    except SystemExit as exc:
+        assert "gateway-bind must be host:port" in str(exc)
+    else:
+        raise AssertionError("Expected parse_bind_host_port to fail for malformed bind")
+
+
+def test_assert_bind_available_rejects_in_use_port() -> None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    host, port = sock.getsockname()
+    try:
+        try:
+            rest_perf.assert_bind_available(host, port, "QEMU console")
+        except SystemExit as exc:
+            assert "already in use" in str(exc)
+        else:
+            raise AssertionError("Expected assert_bind_available to fail on occupied port")
+    finally:
+        sock.close()
+
+
 def test_is_transient_error_policy_denied() -> None:
     err = Exception(
         "ERR ECHO reason=policy detail=denied path=/queen/ctl error=EPERM"
@@ -73,6 +104,11 @@ def test_is_transient_error_buffer_full() -> None:
     err = Exception(
         "ERR ECHO reason=quota detail=buffer-full path=/queen/ctl error=buffer full"
     )
+    assert rest_perf.is_transient_error(err)
+
+
+def test_is_transient_error_http_429() -> None:
+    err = Exception("HTTP 429 Too Many Requests for http://127.0.0.1:8080/v1/fs/echo")
     assert rest_perf.is_transient_error(err)
 
 
@@ -97,6 +133,8 @@ def test_lease_tracking_helpers() -> None:
         telemetry_enabled=False,
         include_lifecycle=False,
         auto_approve=True,
+        transient_retries=True,
+        strict_control_errors=False,
     )
 
     assert rest_perf.choose_lease_id(state) is None
@@ -116,6 +154,99 @@ def test_is_transient_error_rejects_invalid_payload() -> None:
         "ERR ECHO reason=policy detail=invalid-payload path=/policy/ctl error=invalid payload"
     )
     assert not rest_perf.is_transient_error(err)
+
+
+def test_allocate_ids_are_monotonic() -> None:
+    state = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=0,
+        policy_enabled=True,
+        actions_enabled=True,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=True,
+        transient_retries=True,
+        strict_control_errors=False,
+    )
+    assert rest_perf.allocate_schedule_id(state) == "sched-00000001"
+    assert rest_perf.allocate_schedule_id(state) == "sched-00000002"
+    assert rest_perf.allocate_lease_id(state) == "lease-00000001"
+    assert rest_perf.allocate_lease_id(state) == "lease-00000002"
+
+
+def test_telemetry_append_rotates_segment_on_quota() -> None:
+    def gateway_response(
+        status: str,
+        path: str,
+        *,
+        lines: list[str] | None = None,
+        error: str | None = None,
+    ) -> rest_perf.GatewayResponse:
+        return rest_perf.GatewayResponse(
+            status=status,
+            verb="ECHO",
+            path=path,
+            end=True,
+            lines=[] if lines is None else lines,
+            bytes=None,
+            error=error,
+        )
+
+    class DummyClient:
+        def __init__(self) -> None:
+            self.ctl_calls = 0
+            self.latest = ""
+            self.append_paths: list[str] = []
+
+        def echo(self, path: str, line: str) -> rest_perf.GatewayResponse:
+            if path == "/queen/telemetry/bench/ctl":
+                self.ctl_calls += 1
+                self.latest = f"seg-{self.ctl_calls:06d}"
+                return gateway_response("OK", path)
+            if path.startswith("/queen/telemetry/bench/seg/"):
+                self.append_paths.append(path)
+                if path.endswith("seg-000001"):
+                    return gateway_response(
+                        "ERR",
+                        path,
+                        error=(
+                            "ERR ECHO reason=quota detail=buffer-full "
+                            f"path={path} error=buffer full"
+                        ),
+                    )
+                return gateway_response("OK", path)
+            raise AssertionError(f"unexpected echo path: {path}")
+
+        def cat(self, path: str, _max_bytes: int) -> rest_perf.GatewayResponse:
+            if path == "/queen/telemetry/bench/latest":
+                return gateway_response("OK", path, lines=[self.latest])
+            raise AssertionError(f"unexpected cat path: {path}")
+
+    state = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=0,
+        policy_enabled=True,
+        actions_enabled=True,
+        telemetry_enabled=True,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=True,
+        strict_control_errors=False,
+    )
+    client = DummyClient()
+    rest_perf.telemetry_append_op(client, "worker-1", state)
+    assert client.ctl_calls == 2
+    assert client.append_paths == [
+        "/queen/telemetry/bench/seg/seg-000001",
+        "/queen/telemetry/bench/seg/seg-000002",
+    ]
+    assert state.telemetry_segments["bench"] == "seg-000002"
 
 
 def test_echo_with_policy_retry_queues_on_buffer_full() -> None:
@@ -178,6 +309,8 @@ def test_echo_with_policy_retry_queues_on_buffer_full() -> None:
         telemetry_enabled=False,
         include_lifecycle=False,
         auto_approve=True,
+        transient_retries=True,
+        strict_control_errors=False,
     )
     client = DummyClient()
     rest_perf._echo_with_policy_retry_inner(client, "/queen/ctl", "{}", state)
@@ -187,3 +320,103 @@ def test_echo_with_policy_retry_queues_on_buffer_full() -> None:
         "/actions/queue",
         "/queen/ctl",
     ]
+
+
+def test_run_with_retry_policy_honors_no_retry_mode() -> None:
+    state = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=0,
+        policy_enabled=True,
+        actions_enabled=True,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=True,
+        transient_retries=False,
+        strict_control_errors=False,
+    )
+    attempts = 0
+
+    def op() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise Exception("HTTP 429 Too Many Requests")
+
+    try:
+        rest_perf.run_with_retry_policy(op, state, timeout_s=2.0, label="no-retry")
+    except Exception as exc:
+        assert "429" in str(exc)
+    else:
+        raise AssertionError("Expected no-retry mode to surface the first failure")
+    assert attempts == 1
+
+
+def test_run_with_retry_policy_retries_when_enabled() -> None:
+    state = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=0,
+        policy_enabled=True,
+        actions_enabled=True,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=True,
+        transient_retries=True,
+        strict_control_errors=False,
+    )
+    attempts = 0
+
+    def op() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise Exception("HTTP 429 Too Many Requests")
+
+    rest_perf.run_with_retry_policy(op, state, timeout_s=2.0, label="retry")
+    assert attempts == 2
+
+
+def test_should_tolerate_buffer_full_respects_strict_mode() -> None:
+    response = rest_perf.GatewayResponse(
+        status="ERR",
+        verb="ECHO",
+        path="/queen/lease/ctl",
+        end=True,
+        lines=[],
+        bytes=None,
+        error="buffer full",
+    )
+    relaxed = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=0,
+        policy_enabled=True,
+        actions_enabled=True,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=True,
+        transient_retries=False,
+        strict_control_errors=False,
+    )
+    strict = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=0,
+        policy_enabled=True,
+        actions_enabled=True,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=True,
+        transient_retries=False,
+        strict_control_errors=True,
+    )
+    assert rest_perf.should_tolerate_buffer_full(response, relaxed)
+    assert not rest_perf.should_tolerate_buffer_full(response, strict)

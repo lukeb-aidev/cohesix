@@ -4,7 +4,7 @@
 # Copyright 2026 Lukas Bower
 
 DEFAULTS = {
-    "manifest_sha256": "d1880bfe0d830f06f36a6e0b11713d8e87aa95ebee75c6501ac6b963207a415d",
+    "manifest_sha256": "36dbaac12406c2984dc207399045931bf3e080463df8774b6e469e24abcd0da8",
     "secure9p": {"msize": 8192, "walk_depth": 8},
     "console": {
         "max_line_len": 256,

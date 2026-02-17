@@ -1293,7 +1293,7 @@ Deliverables:
 Add pooled sessions and retry policies to `cohsh`, governed by compiler-exported policy files.
 
 **Deliverables**
-- `apps/cohsh/src/lib.rs` extends `Shell` with a session pool (default manifest value: two control, four telemetry) and batched Twrite helper. `apps/cohsh/src/transport/tcp.rs` gains retry scheduling based on manifest policy.
+- `apps/cohsh/src/lib.rs` extends `Shell` with a session pool (default manifest value: two control, twenty-four telemetry) and batched Twrite helper. `apps/cohsh/src/transport/tcp.rs` gains retry scheduling based on manifest policy.
 - `apps/cohsh/tests/pooling.rs` verifies pooled throughput and idempotent retry behaviour.
 - Manifest IR v1.3: `client_policies.cohsh.pool`, `client_policies.retry`, `client_policies.heartbeat`. Compiler emits `out/cohsh_policy.toml` consumed at runtime (CLI loads it on start, failing if missing/out-of-sync).
 - CLI regression `scripts/cohsh/session_pool.coh` demonstrating increased throughput under load and safe recovery from injected failures.

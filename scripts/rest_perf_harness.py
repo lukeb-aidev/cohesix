@@ -16,9 +16,11 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import csv
+import errno
 import json
 import os
 import random
+import signal
 import socket
 import subprocess
 import sys
@@ -111,11 +113,15 @@ def is_transient_error(error: Exception) -> bool:
     message = str(error).lower()
     if "http 503" in message or "http 502" in message or "service unavailable" in message:
         return True
+    if "http 429" in message or "too many requests" in message:
+        return True
     if "reason=policy" in message and "detail=denied" in message:
         return True
     if "buffer full" in message or "buffer-full" in message:
         return True
     if "timed out" in message or "timeout" in message:
+        return True
+    if "connection reset" in message or "connection refused" in message:
         return True
     return False
 
@@ -145,9 +151,12 @@ def retry_transient(
     timeout_s: float,
     label: str,
     base_sleep: float = 0.5,
+    max_sleep: float = 2.0,
+    jitter: float = 0.25,
 ) -> None:
-    deadline = time.time() + timeout_s
+    deadline = time.monotonic() + timeout_s
     attempt = 0
+    sleep_s = base_sleep
     while True:
         try:
             fn()
@@ -156,9 +165,38 @@ def retry_transient(
             if not is_transient_error(exc):
                 raise
             attempt += 1
-            if time.time() >= deadline:
+            now = time.monotonic()
+            if now >= deadline:
                 raise RestError(f"{label} failed after {attempt} retries: {exc}") from exc
-            time.sleep(base_sleep)
+            remaining = deadline - now
+            if remaining <= 0:
+                raise RestError(f"{label} failed after {attempt} retries: {exc}") from exc
+            jitter_scale = 1.0 + ((random.random() * 2.0 - 1.0) * jitter)
+            wait_s = min(sleep_s * max(0.1, jitter_scale), remaining)
+            time.sleep(wait_s)
+            sleep_s = min(sleep_s * 1.5, max_sleep)
+
+
+def run_with_retry_policy(
+    fn: Callable[[], None],
+    state: Optional["SimState"],
+    timeout_s: float,
+    label: str,
+    base_sleep: float = 0.5,
+    max_sleep: float = 2.0,
+    jitter: float = 0.25,
+) -> None:
+    if state is not None and not state.transient_retries:
+        fn()
+        return
+    retry_transient(
+        fn,
+        timeout_s=timeout_s,
+        label=label,
+        base_sleep=base_sleep,
+        max_sleep=max_sleep,
+        jitter=jitter,
+    )
 
 
 @dataclass
@@ -234,17 +272,26 @@ class SimState:
     telemetry_enabled: bool
     include_lifecycle: bool
     auto_approve: bool
+    transient_retries: bool
+    strict_control_errors: bool
     worker_cap: Optional[int] = None
     next_worker_seq: int = 1
     approval_seq: int = 0
     policy_lock: threading.Lock = field(default_factory=threading.Lock)
     lease_lock: threading.Lock = field(default_factory=threading.Lock)
+    id_lock: threading.Lock = field(default_factory=threading.Lock)
     active_leases: List[str] = field(default_factory=list)
     policy_current: Optional[str] = None
     policy_previous: Optional[str] = None
     telemetry_segments: Dict[str, str] = field(default_factory=dict)
     telemetry_lock: Optional[threading.Lock] = None
+    next_schedule_seq: int = 0
+    next_lease_seq: int = 0
     logger: Optional[RunLogger] = None
+
+
+def should_tolerate_buffer_full(response: GatewayResponse, state: SimState) -> bool:
+    return (not state.strict_control_errors) and is_buffer_full_response(response)
 
 
 @dataclass
@@ -659,6 +706,18 @@ def parse_args() -> argparse.Namespace:
         help="Path to write hive-gateway log output.",
     )
     launch.add_argument(
+        "--gateway-pool-control-sessions",
+        type=int,
+        default=None,
+        help="Override hive-gateway pooled control sessions (optional).",
+    )
+    launch.add_argument(
+        "--gateway-pool-telemetry-sessions",
+        type=int,
+        default=None,
+        help="Override hive-gateway pooled telemetry sessions (optional).",
+    )
+    launch.add_argument(
         "--no-gateway",
         action="store_true",
         help="Skip launching hive-gateway (assume already running).",
@@ -767,6 +826,16 @@ def parse_args() -> argparse.Namespace:
         help="Do not kill spawned workers after the run.",
     )
     sim.add_argument(
+        "--no-transient-retries",
+        action="store_true",
+        help="Disable transient retry loops; each operation is attempted once.",
+    )
+    sim.add_argument(
+        "--strict-control-errors",
+        action="store_true",
+        help="Count control-plane buffer-full responses as errors.",
+    )
+    sim.add_argument(
         "--summary-max-error-lines",
         type=int,
         default=DEFAULT_SUMMARY_MAX_ERROR_LINES,
@@ -797,6 +866,7 @@ def parse_args() -> argparse.Namespace:
 
     if args.mode == "simulate":
         args.auto_approve = not args.no_auto_approve
+        args.transient_retries = not args.no_transient_retries
         if not args.auth_token.strip():
             raise SystemExit(
                 "simulate mode requires --auth-token (or COH_AUTH_TOKEN/COHSH_AUTH_TOKEN)"
@@ -819,8 +889,72 @@ def parse_args() -> argparse.Namespace:
             2000,
             "summary-max-error-lines",
         )
+        if args.gateway_pool_control_sessions is not None:
+            args.gateway_pool_control_sessions = clamp_int(
+                args.gateway_pool_control_sessions,
+                1,
+                256,
+                "gateway-pool-control-sessions",
+            )
+        if args.gateway_pool_telemetry_sessions is not None:
+            args.gateway_pool_telemetry_sessions = clamp_int(
+                args.gateway_pool_telemetry_sessions,
+                1,
+                512,
+                "gateway-pool-telemetry-sessions",
+            )
 
     return args
+
+
+def parse_bind_host_port(bind: str, label: str) -> Tuple[str, int]:
+    """Parse a host:port bind argument and fail fast on malformed values."""
+    parsed = urllib.parse.urlparse(f"tcp://{bind}")
+    host = parsed.hostname
+    port = parsed.port
+    if host is None or port is None:
+        raise SystemExit(f"{label} must be host:port (got {bind!r})")
+    return host, port
+
+
+def assert_bind_available(host: str, port: int, label: str) -> None:
+    """Fail fast when a required bind port is already occupied."""
+    try:
+        candidates = socket.getaddrinfo(
+            host,
+            port,
+            type=socket.SOCK_STREAM,
+            flags=socket.AI_PASSIVE,
+        )
+    except socket.gaierror as exc:
+        raise SystemExit(f"{label} host {host!r} is not resolvable: {exc}") from exc
+
+    last_error: Optional[OSError] = None
+    for family, socktype, proto, _canonname, sockaddr in candidates:
+        with socket.socket(family, socktype, proto) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6:
+                try:
+                    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                except OSError:
+                    pass
+            try:
+                sock.bind(sockaddr)
+                return
+            except OSError as exc:
+                last_error = exc
+                if exc.errno == errno.EADDRINUSE:
+                    raise SystemExit(
+                        f"{label} port {host}:{port} is already in use. "
+                        f"Stop the existing process or choose a different port."
+                    ) from exc
+                continue
+
+    if last_error is not None:
+        raise SystemExit(
+            f"{label} port {host}:{port} is unavailable: {last_error}"
+        ) from last_error
+    raise SystemExit(f"{label} port {host}:{port} is unavailable")
 
 
 def wait_for_port(host: str, port: int, timeout_s: float) -> None:
@@ -952,6 +1086,7 @@ def launch_process(
         stdout=log_file,
         stderr=subprocess.STDOUT,
         env=env,
+        start_new_session=True,
     )
 
 
@@ -961,12 +1096,18 @@ def terminate_process(proc: Optional[subprocess.Popen], label: str) -> None:
         return
     if proc.poll() is not None:
         return
-    proc.terminate()
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         print(f"[{label}] force killing", file=sys.stderr)
-        proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
         proc.wait(timeout=5)
 
 
@@ -1106,6 +1247,18 @@ def remove_lease_id(state: SimState, lease_id: str) -> None:
             state.active_leases.remove(lease_id)
 
 
+def allocate_schedule_id(state: SimState) -> str:
+    with state.id_lock:
+        state.next_schedule_seq += 1
+        return f"sched-{state.next_schedule_seq:08d}"
+
+
+def allocate_lease_id(state: SimState) -> str:
+    with state.id_lock:
+        state.next_lease_seq += 1
+        return f"lease-{state.next_lease_seq:08d}"
+
+
 def echo_with_policy_retry(
     client: RestClient,
     path: str,
@@ -1146,7 +1299,12 @@ def _echo_with_policy_retry_inner(
             response,
         )
 
-    retry_transient(attempt, timeout_s=10.0, label=f"echo {path}")
+    run_with_retry_policy(
+        attempt,
+        state,
+        timeout_s=10.0,
+        label=f"echo {path}",
+    )
 
 
 def spawn_worker(
@@ -1163,8 +1321,9 @@ def spawn_worker(
     seed_next_worker_seq(state, known_workers)
     predicted_worker = allocate_synthetic_worker_id(state)
     line = json.dumps(payload, separators=(",", ":"))
-    retry_transient(
+    run_with_retry_policy(
         lambda: echo_with_policy_retry(client, "/queen/ctl", line, state),
+        state,
         timeout_s=15.0,
         label="spawn worker",
     )
@@ -1204,17 +1363,35 @@ def build_operations(
 
     def op_ls(path: str) -> Callable[[RestClient, str, SimState], None]:
         def _run(client: RestClient, _worker: str, _state: SimState) -> None:
-            response = client.ls(path)
-            if response.status != "OK":
-                raise RestError(f"LS {path} failed: {response.error}", response)
+            def attempt() -> None:
+                response = client.ls(path)
+                if response.status != "OK":
+                    raise RestError(f"LS {path} failed: {response.error}", response)
+
+            run_with_retry_policy(
+                attempt,
+                state,
+                timeout_s=5.0,
+                label=f"ls {path}",
+                base_sleep=0.2,
+            )
 
         return _run
 
     def op_cat(path: str, max_bytes: int) -> Callable[[RestClient, str, SimState], None]:
         def _run(client: RestClient, _worker: str, _state: SimState) -> None:
-            response = client.cat(path, max_bytes)
-            if response.status != "OK":
-                raise RestError(f"CAT {path} failed: {response.error}", response)
+            def attempt() -> None:
+                response = client.cat(path, max_bytes)
+                if response.status != "OK":
+                    raise RestError(f"CAT {path} failed: {response.error}", response)
+
+            run_with_retry_policy(
+                attempt,
+                state,
+                timeout_s=5.0,
+                label=f"cat {path}",
+                base_sleep=0.2,
+            )
 
         return _run
 
@@ -1223,23 +1400,54 @@ def build_operations(
     ]:
         def _run(client: RestClient, worker: str, _state: SimState) -> None:
             path = path_builder(worker)
-            response = client.tail(path, max_bytes)
-            if response.status != "OK":
-                raise RestError(f"TAIL {path} failed: {response.error}", response)
+            def attempt() -> None:
+                response = client.tail(path, max_bytes)
+                if response.status != "OK":
+                    raise RestError(f"TAIL {path} failed: {response.error}", response)
+
+            run_with_retry_policy(
+                attempt,
+                state,
+                timeout_s=5.0,
+                label=f"tail {path}",
+                base_sleep=0.2,
+            )
 
         return _run
 
     def op_tail_log(path: str, max_bytes: int) -> Callable[[RestClient, str, SimState], None]:
         def _run(client: RestClient, _worker: str, _state: SimState) -> None:
-            attempt_bytes = max_bytes
-            for _ in range(3):
-                response = client.tail(path, attempt_bytes)
-                if response.status == "OK":
-                    return
-                if response.error and "tail exceeded max_bytes" in response.error:
-                    attempt_bytes = min(attempt_bytes * 2, 65536)
-                    continue
-                raise RestError(f"TAIL {path} failed: {response.error}", response)
+            def attempt() -> None:
+                attempt_bytes = max_bytes
+                for _ in range(3):
+                    response = client.tail(path, attempt_bytes)
+                    if response.status == "OK":
+                        return
+                    if response.error and "tail exceeded max_bytes" in response.error:
+                        attempt_bytes = min(attempt_bytes * 2, 65536)
+                        continue
+                    raise RestError(f"TAIL {path} failed: {response.error}", response)
+                raise RestError(f"TAIL {path} failed after max_bytes retries")
+
+            run_with_retry_policy(
+                attempt,
+                state,
+                timeout_s=5.0,
+                label=f"tail log {path}",
+                base_sleep=0.2,
+            )
+
+        return _run
+
+    def op_meta_bounds() -> Callable[[RestClient, str, SimState], None]:
+        def _run(client: RestClient, _worker: str, _state: SimState) -> None:
+            run_with_retry_policy(
+                lambda: client.get_json("/v1/meta/bounds"),
+                state,
+                timeout_s=5.0,
+                label="meta bounds",
+                base_sleep=0.2,
+            )
 
         return _run
 
@@ -1258,18 +1466,29 @@ def build_operations(
     ) -> Callable[[RestClient, str, SimState], None]:
         def _run(client: RestClient, worker: str, sim_state: SimState) -> None:
             line = line_builder(worker, sim_state)
-            try:
-                echo_with_policy_retry(client, path, line, sim_state)
-            except RestError as exc:
-                if is_buffer_full_error(exc):
+            def attempt() -> None:
+                response = client.echo(path, line)
+                if response.status == "OK":
                     return
-                raise
+                if should_tolerate_buffer_full(response, sim_state):
+                    return
+                raise RestError(
+                    f"ECHO {path} failed: {response.error}",
+                    response,
+                )
+
+            run_with_retry_policy(
+                attempt,
+                sim_state,
+                timeout_s=5.0,
+                label=f"echo best-effort {path}",
+            )
 
         return _run
 
     def op_lease_grant(path: str) -> Callable[[RestClient, str, SimState], None]:
         def _run(client: RestClient, _worker: str, sim_state: SimState) -> None:
-            lease_id = f"lease-{sim_state.rng.randint(1000, 9999)}"
+            lease_id = allocate_lease_id(sim_state)
             line = json.dumps(
                 {
                     "op": "grant",
@@ -1281,15 +1500,24 @@ def build_operations(
                 },
                 separators=(",", ":"),
             )
-            response = client.echo(path, line)
-            if response.status != "OK":
-                if is_buffer_full_response(response):
+            def attempt() -> None:
+                response = client.echo(path, line)
+                if response.status == "OK":
+                    remember_lease_id(sim_state, lease_id)
+                    return
+                if should_tolerate_buffer_full(response, sim_state):
                     return
                 raise RestError(
                     f"ECHO {path} failed: {response.error}",
                     response,
                 )
-            remember_lease_id(sim_state, lease_id)
+
+            run_with_retry_policy(
+                attempt,
+                sim_state,
+                timeout_s=5.0,
+                label=f"lease grant {lease_id}",
+            )
 
         return _run
 
@@ -1302,15 +1530,29 @@ def build_operations(
                 {"op": "preempt", "id": lease_id, "reason": "benchmark"},
                 separators=(",", ":"),
             )
-            response = client.echo(path, line)
-            if response.status != "OK":
-                if is_buffer_full_response(response):
+            def attempt() -> None:
+                response = client.echo(path, line)
+                if response.status == "OK":
+                    remove_lease_id(sim_state, lease_id)
+                    return
+                if should_tolerate_buffer_full(response, sim_state):
+                    return
+                err_lower = (response.error or "").lower()
+                # Another thread may have preempted the same lease first.
+                if "invalid payload" in err_lower or "invalid-payload" in err_lower:
+                    remove_lease_id(sim_state, lease_id)
                     return
                 raise RestError(
                     f"ECHO {path} failed: {response.error}",
                     response,
                 )
-            remove_lease_id(sim_state, lease_id)
+
+            run_with_retry_policy(
+                attempt,
+                sim_state,
+                timeout_s=5.0,
+                label=f"lease preempt {lease_id}",
+            )
 
         return _run
 
@@ -1355,7 +1597,7 @@ def build_operations(
 
         return _run
 
-    ops.append(Operation("meta_bounds", 0.4, "meta", lambda c, w, s: c.get_json("/v1/meta/bounds")))
+    ops.append(Operation("meta_bounds", 0.4, "meta", op_meta_bounds()))
 
     for entry in ("/", "/proc", "/queen", "/worker", "/gpu", "/host"):
         if entry == "/" or entry.strip("/") in root_entries:
@@ -1401,7 +1643,7 @@ def build_operations(
                     "/queen/schedule/ctl",
                     lambda _w, st: json.dumps(
                         {
-                            "id": f"sched-{st.rng.randint(1000, 9999)}",
+                            "id": allocate_schedule_id(st),
                             "role": "worker-gpu",
                             "priority": st.rng.randint(1, 5),
                             "ticks": st.rng.randint(1, 5),
@@ -1504,51 +1746,122 @@ def build_operations(
 
 def telemetry_append_op(client: RestClient, _worker: str, state: SimState) -> None:
     device_id = "bench"
-    segment = ensure_telemetry_segment(client, state, device_id)
     payload = f"telemetry seq={state.rng.randint(1, 100000)}"
-    path = f"/queen/telemetry/{device_id}/seg/{segment}"
-    def attempt() -> None:
-        response = client.echo(path, payload)
-        if response.status != "OK":
-            raise RestError(f"ECHO {path} failed: {response.error}", response)
 
-    retry_transient(attempt, timeout_s=10.0, label=f"telemetry append {device_id}")
+    def attempt() -> None:
+        segment = ensure_telemetry_segment(client, state, device_id)
+        last_response: Optional[GatewayResponse] = None
+        last_path = f"/queen/telemetry/{device_id}/seg/{segment}"
+        for _ in range(3):
+            path = f"/queen/telemetry/{device_id}/seg/{segment}"
+            last_path = path
+            response = client.echo(path, payload)
+            if response.status == "OK":
+                return
+            last_response = response
+            if is_buffer_full_response(response):
+                segment = ensure_telemetry_segment(
+                    client,
+                    state,
+                    device_id,
+                    force_new=True,
+                )
+                continue
+            if is_telemetry_segment_missing_response(response):
+                segment = refresh_telemetry_segment(client, state, device_id)
+                continue
+            raise RestError(f"ECHO {path} failed: {response.error}", response)
+        if last_response is not None:
+            raise RestError(
+                f"ECHO {last_path} failed: {last_response.error}",
+                last_response,
+            )
+        raise RestError(f"ECHO {last_path} failed")
+
+    run_with_retry_policy(
+        attempt,
+        state,
+        timeout_s=10.0,
+        label=f"telemetry append {device_id}",
+        base_sleep=0.2,
+    )
 
 
 def telemetry_segment_op(client: RestClient, _worker: str, state: SimState) -> None:
-    retry_transient(
-        lambda: ensure_telemetry_segment(client, state, "bench"),
+    run_with_retry_policy(
+        lambda: ensure_telemetry_segment(
+            client,
+            state,
+            "bench",
+            force_new=True,
+        ),
+        state,
         timeout_s=10.0,
         label="telemetry segment",
+        base_sleep=0.2,
     )
 
 
 def ensure_telemetry_segment(
-    client: RestClient, state: SimState, device_id: str
+    client: RestClient,
+    state: SimState,
+    device_id: str,
+    force_new: bool = False,
 ) -> str:
     if state.telemetry_lock is None:
         state.telemetry_lock = threading.Lock()
     with state.telemetry_lock:
         existing = state.telemetry_segments.get(device_id)
-        if existing:
+        if existing and not force_new:
             return existing
-        line = json.dumps(
-            {"new": "segment", "mime": "text/plain"}, separators=(",", ":")
+        return create_telemetry_segment(client, state, device_id)
+
+
+def refresh_telemetry_segment(client: RestClient, state: SimState, device_id: str) -> str:
+    if state.telemetry_lock is None:
+        state.telemetry_lock = threading.Lock()
+    with state.telemetry_lock:
+        latest = read_latest_telemetry_segment(client, device_id)
+        if latest is not None:
+            state.telemetry_segments[device_id] = latest
+            return latest
+        return create_telemetry_segment(client, state, device_id)
+
+
+def create_telemetry_segment(client: RestClient, state: SimState, device_id: str) -> str:
+    line = json.dumps(
+        {"new": "segment", "mime": "text/plain"}, separators=(",", ":")
+    )
+    echo_with_policy_retry(
+        client, f"/queen/telemetry/{device_id}/ctl", line, state
+    )
+    latest = read_latest_telemetry_segment(client, device_id)
+    if latest is None:
+        raise RestError(
+            f"Failed to read latest segment for {device_id}: latest unavailable"
         )
-        echo_with_policy_retry(
-            client, f"/queen/telemetry/{device_id}/ctl", line, state
-        )
-        response = client.cat(f"/queen/telemetry/{device_id}/latest", 64)
-        if response.status != "OK" or not response.lines:
-            raise RestError(
-                f"Failed to read latest segment for {device_id}: {response.error}",
-                response,
-            )
-        segment = response.lines[0].strip()
-        if not segment:
-            raise RestError(f"Empty segment id for {device_id}")
-        state.telemetry_segments[device_id] = segment
-        return segment
+    state.telemetry_segments[device_id] = latest
+    return latest
+
+
+def read_latest_telemetry_segment(client: RestClient, device_id: str) -> Optional[str]:
+    response = client.cat(f"/queen/telemetry/{device_id}/latest", 64)
+    if response.status != "OK" or not response.lines:
+        return None
+    segment = response.lines[0].strip()
+    if not segment:
+        return None
+    return segment
+
+
+def is_telemetry_segment_missing_response(response: GatewayResponse) -> bool:
+    message = (response.error or "").lower()
+    return (
+        "segment not found" in message
+        or "segment missing" in message
+        or "not found" in message
+        or "invalid path" in message
+    )
 
 
 def pick_weighted(rng: random.Random, choices: List[Tuple[Operation, float]]) -> Operation:
@@ -1685,6 +1998,7 @@ def run_simulation(args: argparse.Namespace) -> int:
 
     try:
         if not args.no_qemu:
+            assert_bind_available(args.tcp_host, args.tcp_port, "QEMU console")
             if not qemu_run:
                 raise SystemExit("QEMU launch requested but no run script found.")
             env = os.environ.copy()
@@ -1697,6 +2011,11 @@ def run_simulation(args: argparse.Namespace) -> int:
             validate_tcp_auth(args.tcp_host, args.tcp_port, args.auth_token, 60)
 
         if not args.no_gateway:
+            gateway_host, gateway_port = parse_bind_host_port(
+                args.gateway_bind,
+                "gateway-bind",
+            )
+            assert_bind_available(gateway_host, gateway_port, "Gateway bind")
             if not gateway_bin:
                 raise SystemExit("Gateway launch requested but no binary found.")
             if not args.request_auth_token.strip():
@@ -1710,8 +2029,23 @@ def run_simulation(args: argparse.Namespace) -> int:
             env["HIVE_GATEWAY_REQUEST_AUTH_TOKEN"] = args.request_auth_token
             env["COH_ROLE"] = args.role
             env["HIVE_GATEWAY_BIND"] = args.gateway_bind
+            gateway_cmd = [gateway_bin, "--bind", args.gateway_bind]
+            if args.gateway_pool_control_sessions is not None:
+                gateway_cmd.extend(
+                    [
+                        "--pool-control-sessions",
+                        str(args.gateway_pool_control_sessions),
+                    ]
+                )
+            if args.gateway_pool_telemetry_sessions is not None:
+                gateway_cmd.extend(
+                    [
+                        "--pool-telemetry-sessions",
+                        str(args.gateway_pool_telemetry_sessions),
+                    ]
+                )
             gateway_proc = launch_process(
-                [gateway_bin, "--bind", args.gateway_bind],
+                gateway_cmd,
                 env,
                 args.gateway_log,
             )
@@ -1737,6 +2071,8 @@ def run_simulation(args: argparse.Namespace) -> int:
             telemetry_enabled=telemetry_on,
             include_lifecycle=args.include_lifecycle,
             auto_approve=args.auto_approve,
+            transient_retries=args.transient_retries,
+            strict_control_errors=args.strict_control_errors,
             logger=args.logger,
         )
 
@@ -1766,7 +2102,11 @@ def run_simulation(args: argparse.Namespace) -> int:
             f"[simulate] duration={args.duration_mins}m "
             f"workers={args.workers_min}-{args.workers_max} "
             f"intensity={args.intensity_min}-{args.intensity_max} "
-            f"rest={rest_url}"
+            f"rest={rest_url} "
+            f"transient_retries={'on' if args.transient_retries else 'off'} "
+            f"strict_control_errors={'on' if args.strict_control_errors else 'off'} "
+            f"gateway_pool_control={args.gateway_pool_control_sessions or 'default'} "
+            f"gateway_pool_telemetry={args.gateway_pool_telemetry_sessions or 'default'}"
         )
 
         executor = concurrent.futures.ThreadPoolExecutor(
@@ -2030,6 +2370,10 @@ def write_simulation_artifacts(
         "intensity_min": args.intensity_min,
         "intensity_max": args.intensity_max,
         "duration_mins": args.duration_mins,
+        "transient_retries": args.transient_retries,
+        "strict_control_errors": args.strict_control_errors,
+        "gateway_pool_control_sessions": args.gateway_pool_control_sessions,
+        "gateway_pool_telemetry_sessions": args.gateway_pool_telemetry_sessions,
         "overall": operation_summary(overall, args.summary_max_error_lines),
         "operations": {
             name: operation_summary(entry, args.summary_max_error_lines)
