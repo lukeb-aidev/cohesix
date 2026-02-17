@@ -133,6 +133,18 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub max_total_bytes_per_device: u32,")?;
     writeln!(
         mod_contents,
+        "    pub max_reference_entries_per_segment: u32,"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub max_reference_manifest_bytes_per_segment: u32,"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub max_reference_bytes_per_segment: u64,"
+    )?;
+    writeln!(
+        mod_contents,
         "    pub eviction_policy: TelemetryIngestEvictionPolicy,"
     )?;
     writeln!(mod_contents, "}}")?;
@@ -952,10 +964,15 @@ pub fn emit_rust(
     )?;
     writeln!(
         bootstrap_contents,
-        "pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = TelemetryIngestConfig {{ max_segments_per_device: {}, max_bytes_per_segment: {}, max_total_bytes_per_device: {}, eviction_policy: {} }};\n",
+        "pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = TelemetryIngestConfig {{ max_segments_per_device: {}, max_bytes_per_segment: {}, max_total_bytes_per_device: {}, max_reference_entries_per_segment: {}, max_reference_manifest_bytes_per_segment: {}, max_reference_bytes_per_segment: {}, eviction_policy: {} }};\n",
         manifest.telemetry_ingest.max_segments_per_device,
         manifest.telemetry_ingest.max_bytes_per_segment,
         manifest.telemetry_ingest.max_total_bytes_per_device,
+        manifest.telemetry_ingest.max_reference_entries_per_segment,
+        manifest
+            .telemetry_ingest
+            .max_reference_manifest_bytes_per_segment,
+        manifest.telemetry_ingest.max_reference_bytes_per_segment,
         ingest_eviction_policy_to_rust(&manifest.telemetry_ingest.eviction_policy)
     )?;
     writeln!(

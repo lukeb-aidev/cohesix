@@ -8,6 +8,8 @@ use std::collections::{HashMap, VecDeque};
 
 /// Maximum bytes permitted per telemetry ingest record.
 pub const MAX_TELEMETRY_RECORD_BYTES: usize = 4096;
+const TELEMETRY_REFERENCE_CHUNK_SCHEMA: &str = "coh-ref-c/v1";
+const TELEMETRY_REFERENCE_DIGEST_MAX_BYTES: usize = 64;
 
 /// Eviction policy when telemetry ingest quotas are exceeded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +29,12 @@ pub struct TelemetryIngestConfig {
     pub max_bytes_per_segment: usize,
     /// Maximum total bytes across all segments for a device.
     pub max_total_bytes_per_device: usize,
+    /// Maximum number of reference entries accepted for a segment manifest.
+    pub max_reference_entries_per_segment: usize,
+    /// Maximum encoded bytes in reference records for a segment manifest.
+    pub max_reference_manifest_bytes_per_segment: usize,
+    /// Maximum logical bytes described by reference records for a segment.
+    pub max_reference_bytes_per_segment: u64,
     /// Eviction policy applied when quotas are exceeded.
     pub eviction_policy: TelemetryIngestEvictionPolicy,
 }
@@ -37,6 +45,9 @@ impl TelemetryIngestConfig {
         self.max_segments_per_device > 0
             && self.max_bytes_per_segment > 0
             && self.max_total_bytes_per_device > 0
+            && self.max_reference_entries_per_segment > 0
+            && self.max_reference_manifest_bytes_per_segment > 0
+            && self.max_reference_bytes_per_segment > 0
     }
 }
 
@@ -46,6 +57,9 @@ impl Default for TelemetryIngestConfig {
             max_segments_per_device: 4,
             max_bytes_per_segment: 32 * 1024,
             max_total_bytes_per_device: 128 * 1024,
+            max_reference_entries_per_segment: 1024,
+            max_reference_manifest_bytes_per_segment: 32 * 1024,
+            max_reference_bytes_per_segment: 1_073_741_824,
             eviction_policy: TelemetryIngestEvictionPolicy::EvictOldest,
         }
     }
@@ -67,6 +81,7 @@ pub(crate) enum TelemetryIngestErrorKind {
     Disabled,
     QuotaExceeded,
     SegmentMissing,
+    InvalidPayload,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +94,18 @@ pub(crate) struct TelemetryIngestError {
 struct TelemetrySegmentState {
     id: String,
     bytes: usize,
+    mode: TelemetrySegmentMode,
+    reference_entries: usize,
+    reference_manifest_bytes: usize,
+    reference_total_bytes: u64,
+    reference_next_seq: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TelemetrySegmentMode {
+    Unknown,
+    Plain,
+    ReferenceManifest,
 }
 
 #[derive(Debug, Clone)]
@@ -179,6 +206,11 @@ impl TelemetryIngestState {
         device.segments.push_back(TelemetrySegmentState {
             id: seg_id.clone(),
             bytes: 0,
+            mode: TelemetrySegmentMode::Unknown,
+            reference_entries: 0,
+            reference_manifest_bytes: 0,
+            reference_total_bytes: 0,
+            reference_next_seq: 1,
         });
         Ok(TelemetryCreateOutcome { seg_id, evicted })
     }
@@ -187,7 +219,7 @@ impl TelemetryIngestState {
         &mut self,
         device_id: &str,
         seg_id: &str,
-        bytes: usize,
+        payload: &[u8],
     ) -> Result<TelemetryAppendOutcome, TelemetryIngestError> {
         if !self.config.enabled() {
             return Err(TelemetryIngestError {
@@ -195,6 +227,7 @@ impl TelemetryIngestState {
                 message: "telemetry ingest is disabled".to_owned(),
             });
         }
+        let bytes = payload.len();
         let device = self
             .devices
             .get_mut(device_id)
@@ -258,14 +291,197 @@ impl TelemetryIngestState {
                 }
             }
         }
+        let reference_chunk = parse_telemetry_reference_chunk(payload)?;
         if let Some(segment) = device
             .segments
             .iter_mut()
             .find(|segment| segment.id == seg_id)
         {
+            match reference_chunk {
+                Some(reference) => {
+                    if matches!(segment.mode, TelemetrySegmentMode::Plain) {
+                        return Err(TelemetryIngestError {
+                            kind: TelemetryIngestErrorKind::InvalidPayload,
+                            message: "telemetry segment cannot mix inline and reference records"
+                                .to_owned(),
+                        });
+                    }
+                    if reference.seq != segment.reference_next_seq {
+                        return Err(TelemetryIngestError {
+                            kind: TelemetryIngestErrorKind::InvalidPayload,
+                            message: "telemetry reference sequence is not monotonic".to_owned(),
+                        });
+                    }
+                    if reference.offset != segment.reference_total_bytes {
+                        return Err(TelemetryIngestError {
+                            kind: TelemetryIngestErrorKind::InvalidPayload,
+                            message: "telemetry reference offset is not contiguous".to_owned(),
+                        });
+                    }
+                    if segment.reference_entries.saturating_add(1)
+                        > self.config.max_reference_entries_per_segment
+                    {
+                        return Err(TelemetryIngestError {
+                            kind: TelemetryIngestErrorKind::QuotaExceeded,
+                            message: "telemetry reference entry quota exceeded".to_owned(),
+                        });
+                    }
+                    if segment.reference_manifest_bytes.saturating_add(bytes)
+                        > self.config.max_reference_manifest_bytes_per_segment
+                    {
+                        return Err(TelemetryIngestError {
+                            kind: TelemetryIngestErrorKind::QuotaExceeded,
+                            message: "telemetry reference manifest byte quota exceeded".to_owned(),
+                        });
+                    }
+                    let referenced_total =
+                        segment.reference_total_bytes.saturating_add(reference.chunk_bytes);
+                    if referenced_total > self.config.max_reference_bytes_per_segment {
+                        return Err(TelemetryIngestError {
+                            kind: TelemetryIngestErrorKind::QuotaExceeded,
+                            message: "telemetry referenced byte quota exceeded".to_owned(),
+                        });
+                    }
+                    segment.mode = TelemetrySegmentMode::ReferenceManifest;
+                    segment.reference_entries = segment.reference_entries.saturating_add(1);
+                    segment.reference_manifest_bytes =
+                        segment.reference_manifest_bytes.saturating_add(bytes);
+                    segment.reference_total_bytes = referenced_total;
+                    segment.reference_next_seq = segment.reference_next_seq.saturating_add(1);
+                }
+                None => {
+                    if matches!(segment.mode, TelemetrySegmentMode::ReferenceManifest) {
+                        return Err(TelemetryIngestError {
+                            kind: TelemetryIngestErrorKind::InvalidPayload,
+                            message: "telemetry segment cannot append inline data after reference manifest"
+                                .to_owned(),
+                        });
+                    }
+                    if matches!(segment.mode, TelemetrySegmentMode::Unknown) {
+                        segment.mode = TelemetrySegmentMode::Plain;
+                    }
+                }
+            }
             segment.bytes = segment.bytes.saturating_add(bytes);
             device.total_bytes = device.total_bytes.saturating_add(bytes);
         }
         Ok(TelemetryAppendOutcome { evicted })
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TelemetryReferenceChunk {
+    seq: u64,
+    offset: u64,
+    chunk_bytes: u64,
+}
+
+fn parse_telemetry_reference_chunk(
+    payload: &[u8],
+) -> Result<Option<TelemetryReferenceChunk>, TelemetryIngestError> {
+    let Ok(text) = std::str::from_utf8(payload) else {
+        return Ok(None);
+    };
+    let Some(schema) = parse_json_string_field(text, "schema") else {
+        return Ok(None);
+    };
+    if schema != TELEMETRY_REFERENCE_CHUNK_SCHEMA {
+        return Ok(None);
+    }
+    let seq = parse_json_u64_field(text, "seq").ok_or_else(|| TelemetryIngestError {
+        kind: TelemetryIngestErrorKind::InvalidPayload,
+        message: "telemetry reference chunk missing seq".to_owned(),
+    })?;
+    let offset = parse_json_u64_field(text, "off").ok_or_else(|| TelemetryIngestError {
+        kind: TelemetryIngestErrorKind::InvalidPayload,
+        message: "telemetry reference chunk missing off".to_owned(),
+    })?;
+    let chunk_bytes = parse_json_u64_field(text, "len").ok_or_else(|| TelemetryIngestError {
+        kind: TelemetryIngestErrorKind::InvalidPayload,
+        message: "telemetry reference chunk missing len".to_owned(),
+    })?;
+    if chunk_bytes == 0 {
+        return Err(TelemetryIngestError {
+            kind: TelemetryIngestErrorKind::InvalidPayload,
+            message: "telemetry reference chunk len must be >= 1".to_owned(),
+        });
+    }
+    let digest = parse_json_string_field(text, "sha256").ok_or_else(|| TelemetryIngestError {
+        kind: TelemetryIngestErrorKind::InvalidPayload,
+        message: "telemetry reference chunk missing sha256".to_owned(),
+    })?;
+    if !is_valid_reference_digest(digest) {
+        return Err(TelemetryIngestError {
+            kind: TelemetryIngestErrorKind::InvalidPayload,
+            message: "telemetry reference chunk sha256 is invalid".to_owned(),
+        });
+    }
+    Ok(Some(TelemetryReferenceChunk {
+        seq,
+        offset,
+        chunk_bytes,
+    }))
+}
+
+fn parse_json_u64_field(input: &str, key: &str) -> Option<u64> {
+    let mut cursor = 0usize;
+    while let Some(found) = input[cursor..].find(key) {
+        let index = cursor + found;
+        let before = index.checked_sub(1)?;
+        let after = index + key.len();
+        let bytes = input.as_bytes();
+        if bytes.get(before) != Some(&b'"') || bytes.get(after) != Some(&b'"') {
+            cursor = after;
+            continue;
+        }
+        let mut rest = &input[after + 1..];
+        let colon = rest.find(':')?;
+        rest = rest[colon + 1..].trim_start();
+        let mut end = 0usize;
+        for ch in rest.chars() {
+            if !ch.is_ascii_digit() {
+                break;
+            }
+            end = end.saturating_add(ch.len_utf8());
+        }
+        if end == 0 {
+            return None;
+        }
+        return rest[..end].parse().ok();
+    }
+    None
+}
+
+fn parse_json_string_field<'a>(input: &'a str, key: &str) -> Option<&'a str> {
+    let mut cursor = 0usize;
+    while let Some(found) = input[cursor..].find(key) {
+        let index = cursor + found;
+        let before = index.checked_sub(1)?;
+        let after = index + key.len();
+        let bytes = input.as_bytes();
+        if bytes.get(before) != Some(&b'"') || bytes.get(after) != Some(&b'"') {
+            cursor = after;
+            continue;
+        }
+        let mut rest = &input[after + 1..];
+        let colon = rest.find(':')?;
+        rest = rest[colon + 1..].trim_start();
+        if !rest.starts_with('"') {
+            return None;
+        }
+        rest = &rest[1..];
+        let end = rest.find('"')?;
+        return Some(&rest[..end]);
+    }
+    None
+}
+
+fn is_valid_reference_digest(value: &str) -> bool {
+    if value.is_empty() || value.len() > TELEMETRY_REFERENCE_DIGEST_MAX_BYTES {
+        return false;
+    }
+    value.chars().all(|ch| {
+        ch.is_ascii_alphanumeric()
+            || matches!(ch, '-' | '_' | '+' | '/' | '=' | '.')
+    })
 }

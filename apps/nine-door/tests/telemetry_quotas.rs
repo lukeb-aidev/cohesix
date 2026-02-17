@@ -74,6 +74,7 @@ fn telemetry_ingest_refuses_segment_quota() {
         max_bytes_per_segment: 64,
         max_total_bytes_per_device: 64,
         eviction_policy: TelemetryIngestEvictionPolicy::Refuse,
+        ..TelemetryIngestConfig::default()
     };
     let server = NineDoor::new_with_limits_and_telemetry_manifest(
         Arc::new(TestClock::default()),
@@ -117,6 +118,7 @@ fn telemetry_ingest_evicts_oldest_segment() {
         max_bytes_per_segment: 64,
         max_total_bytes_per_device: 128,
         eviction_policy: TelemetryIngestEvictionPolicy::EvictOldest,
+        ..TelemetryIngestConfig::default()
     };
     let server = NineDoor::new_with_limits_and_telemetry_manifest(
         Arc::new(TestClock::default()),
@@ -165,6 +167,7 @@ fn telemetry_ingest_evicts_on_total_bytes() {
         max_bytes_per_segment: 32,
         max_total_bytes_per_device: 32,
         eviction_policy: TelemetryIngestEvictionPolicy::EvictOldest,
+        ..TelemetryIngestConfig::default()
     };
     let server = NineDoor::new_with_limits_and_telemetry_manifest(
         Arc::new(TestClock::default()),

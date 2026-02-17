@@ -4,7 +4,9 @@
 
 """Tests for scripts/rest_perf_harness.py helpers."""
 
+import argparse
 import importlib.util
+import json
 import pathlib
 import socket
 import sys
@@ -420,3 +422,108 @@ def test_should_tolerate_buffer_full_respects_strict_mode() -> None:
     )
     assert rest_perf.should_tolerate_buffer_full(response, relaxed)
     assert not rest_perf.should_tolerate_buffer_full(response, strict)
+
+
+def test_resolve_telemetry_scenario_1gb_defaults() -> None:
+    scenario = rest_perf.resolve_telemetry_scenario(
+        "telemetry-1gb", 16 * 1024 * 1024
+    )
+    assert scenario is not None
+    assert scenario.artifact_bytes == 1024 * 1024 * 1024
+    assert scenario.reference_entries == 64
+    assert scenario.requests_per_operation == 66
+
+
+def test_build_telemetry_reference_records_cover_size() -> None:
+    records = rest_perf.build_telemetry_reference_records_for_bytes(
+        1 * 1024 * 1024, 256 * 1024
+    )
+    assert len(records) == 4
+    total = 0
+    for index, record in enumerate(records, start=1):
+        payload = json.loads(record)
+        assert payload["schema"] == rest_perf.TELEMETRY_REFERENCE_SCHEMA
+        assert payload["seq"] == index
+        assert payload["off"] == total
+        assert payload["len"] > 0
+        assert isinstance(payload["sha256"], str) and payload["sha256"]
+        total += payload["len"]
+    assert total == 1 * 1024 * 1024
+
+
+def test_apply_fast_ramp_defaults_updates_default_inputs() -> None:
+    args = argparse.Namespace(
+        fast_ramp=True,
+        workers_min=rest_perf.DEFAULT_WORKERS_MIN,
+        workers_max=rest_perf.DEFAULT_WORKERS_MAX,
+        intensity_min=rest_perf.DEFAULT_INTENSITY_MIN,
+        intensity_max=rest_perf.DEFAULT_INTENSITY_MAX,
+        duration_mins=rest_perf.DEFAULT_DURATION_MINS,
+        ramp_step_secs=rest_perf.DEFAULT_RAMP_STEP_SECS,
+        base_rps=rest_perf.DEFAULT_BASE_RPS,
+        max_inflight=rest_perf.DEFAULT_MAX_INFLIGHT,
+    )
+    rest_perf.apply_fast_ramp_defaults(args)
+    assert args.workers_min == rest_perf.FAST_RAMP_WORKERS_MIN
+    assert args.workers_max == rest_perf.FAST_RAMP_WORKERS_MAX
+    assert args.intensity_min == rest_perf.FAST_RAMP_INTENSITY_MIN
+    assert args.intensity_max == rest_perf.FAST_RAMP_INTENSITY_MAX
+    assert args.duration_mins == rest_perf.FAST_RAMP_DURATION_MINS
+    assert args.ramp_step_secs == rest_perf.FAST_RAMP_RAMP_STEP_SECS
+    assert abs(args.base_rps - rest_perf.FAST_RAMP_BASE_RPS) < 1e-9
+    assert args.max_inflight == rest_perf.FAST_RAMP_MAX_INFLIGHT
+
+
+def test_apply_fast_ramp_defaults_preserves_explicit_inputs() -> None:
+    args = argparse.Namespace(
+        fast_ramp=True,
+        workers_min=99,
+        workers_max=199,
+        intensity_min=3,
+        intensity_max=9,
+        duration_mins=7,
+        ramp_step_secs=11,
+        base_rps=3.5,
+        max_inflight=77,
+    )
+    rest_perf.apply_fast_ramp_defaults(args)
+    assert args.workers_min == 99
+    assert args.workers_max == 199
+    assert args.intensity_min == 3
+    assert args.intensity_max == 9
+    assert args.duration_mins == 7
+    assert args.ramp_step_secs == 11
+    assert args.base_rps == 3.5
+    assert args.max_inflight == 77
+
+
+def test_error_rate_helper() -> None:
+    stats = rest_perf.OpStats()
+    assert rest_perf.error_rate(stats) == 0.0
+    stats.record(0.05, True, None)
+    stats.record(0.05, False, "boom")
+    assert abs(rest_perf.error_rate(stats) - 0.5) < 1e-9
+
+
+def test_parse_args_no_retries_alias_disables_transient_retries() -> None:
+    original_argv = list(sys.argv)
+    try:
+        sys.argv = [
+            "rest_perf_harness.py",
+            "--mode",
+            "simulate",
+            "--auth-token",
+            "changeme",
+            "--no-retries",
+            "--scenario",
+            "telemetry-1mb",
+            "--error-budget-rate",
+            "0.01",
+        ]
+        args = rest_perf.parse_args()
+    finally:
+        sys.argv = original_argv
+    assert args.no_transient_retries
+    assert not args.transient_retries
+    assert args.scenario == "telemetry-1mb"
+    assert abs(args.error_budget_rate - 0.01) < 1e-9

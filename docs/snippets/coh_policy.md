@@ -3,15 +3,15 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### coh policy defaults (generated)
-- `manifest.sha256`: `36dbaac12406c2984dc207399045931bf3e080463df8774b6e469e24abcd0da8`
-- `policy.sha256`: `5db8aa45b183878d7888d334621f483a29ad9caaa14a3892447c4caca50d7078`
+- `manifest.sha256`: `7886e1a2e1a95b39b2e894c714ddf1d317995fefa8da956aa796c8b070ccf1a8`
+- `policy.sha256`: `3e4789d354435564ce5fa47d8f397edff4d18967812da5c6e4eb25ce568c9c07`
 - `coh.mount.root`: `/`
 - `coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
 - `coh.telemetry.root`: `/queen/telemetry`
 - `coh.telemetry.max_devices`: `32`
 - `coh.telemetry.max_segments_per_device`: `4`
-- `coh.telemetry.max_bytes_per_segment`: `32768`
-- `coh.telemetry.max_total_bytes_per_device`: `131072`
+- `coh.telemetry.max_bytes_per_segment`: `131072`
+- `coh.telemetry.max_total_bytes_per_device`: `524288`
 - `coh.run.lease.schema`: `gpu-lease/v1`
 - `coh.run.lease.active_state`: `ACTIVE`
 - `coh.run.lease.max_bytes`: `1024`

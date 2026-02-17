@@ -78,8 +78,11 @@ retain_on_boot = false
 
 [telemetry_ingest]
 max_segments_per_device = 4
-max_bytes_per_segment = 32768
-max_total_bytes_per_device = 131072
+max_bytes_per_segment = 131072
+max_total_bytes_per_device = 524288
+max_reference_entries_per_segment = 1024
+max_reference_manifest_bytes_per_segment = 131072
+max_reference_bytes_per_segment = 1073741824
 eviction_policy = "evict-oldest"
 
 [lifecycle]
@@ -214,8 +217,8 @@ allowlist = ["/proc", "/queen", "/worker", "/log", "/gpu", "/host"]
 root = "/queen/telemetry"
 max_devices = 32
 max_segments_per_device = 4
-max_bytes_per_segment = 32768
-max_total_bytes_per_device = 131072
+max_bytes_per_segment = 131072
+max_total_bytes_per_device = 524288
 
 [client_policies.coh.run.lease]
 schema = "gpu-lease/v1"

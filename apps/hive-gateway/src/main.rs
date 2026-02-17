@@ -10,6 +10,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::net::SocketAddr;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -37,7 +38,7 @@ use cohsh::{
     PROC_SCHEDULE_QUEUE_BYTES, PROC_SCHEDULE_QUEUE_ENABLED, PROC_SCHEDULE_SUMMARY_BYTES,
     PROC_SCHEDULE_SUMMARY_ENABLED, SECURE9P_MSIZE, SECURE9P_WALK_DEPTH,
 };
-use cohsh::{NineDoorTransport, SharedTcpTransport, TcpTransport};
+use cohsh::{NineDoorTransport, PooledTcpTransport, TcpTransport};
 use cohsh::policy::PolicyOverrides;
 use cohsh_core::{
     parse_role, RoleParseMode, MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN, MAX_LINE_LEN, MAX_PATH_LEN,
@@ -64,7 +65,11 @@ const DEFAULT_PROC_CACHE_TTL_MS: u64 = 500;
 const DEFAULT_PROC_CACHE_MAX_ENTRIES: usize = 64;
 const CONTROL_POOL_WAIT_LIMIT_MS: u64 = 2_000;
 const TELEMETRY_POOL_WAIT_LIMIT_MS: u64 = 1_500;
-const POOL_RETRY_SLEEP_MS: u64 = 10;
+const BROKER_ENQUEUE_RETRY_SLEEP_MS: u64 = 5;
+const BROKER_CONTROL_QUEUE_CAPACITY: usize = 256;
+const BROKER_TELEMETRY_QUEUE_CAPACITY: usize = 1024;
+const BROKER_CONTROL_BURST: usize = 6;
+const BROKER_IDLE_WAIT_MS: u64 = 20;
 const CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 1_200;
 const CONTROL_WRITE_RETRY_SLEEP_MS: u64 = 15;
 const CONTROL_WRITE_RETRY_MAX_SLEEP_MS: u64 = 120;
@@ -146,15 +151,15 @@ struct AppState {
 }
 
 struct GatewayInner {
-    pool: SharedPool,
+    broker_client: GatewayBrokerClient,
     role: Role,
     ticket: Option<String>,
     request_auth_token: String,
     status: Mutex<GatewayStatus>,
-    shutdown: AtomicBool,
+    shutdown: Arc<AtomicBool>,
     bounds: BoundsResponse,
     policy: CohshPolicy,
-    broker: BrokerMetrics,
+    broker: Arc<BrokerMetrics>,
     proc_cache: Mutex<ProcReadCache>,
 }
 
@@ -312,23 +317,6 @@ impl BrokerMetrics {
     }
 }
 
-struct WaitCounterGuard<'a> {
-    counter: &'a AtomicU64,
-}
-
-impl<'a> WaitCounterGuard<'a> {
-    fn new(counter: &'a AtomicU64) -> Self {
-        counter.fetch_add(1, Ordering::Relaxed);
-        Self { counter }
-    }
-}
-
-impl Drop for WaitCounterGuard<'_> {
-    fn drop(&mut self) {
-        self.counter.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
 #[derive(Default)]
 struct ProcReadCache {
     entries: HashMap<String, ProcReadCacheEntry>,
@@ -366,6 +354,44 @@ struct BrokerStatusResponse {
     proc_cache_hits: u64,
     proc_cache_misses: u64,
     proc_cache_evictions: u64,
+}
+
+#[derive(Clone)]
+struct GatewayBrokerClient {
+    control_tx: SyncSender<BrokerCommand>,
+    telemetry_tx: SyncSender<BrokerCommand>,
+}
+
+struct BrokerCommand {
+    kind: PoolKind,
+    request: BrokerRequest,
+    response_tx: mpsc::Sender<Result<BrokerResponse>>,
+}
+
+enum BrokerRequest {
+    Attach {
+        role: Role,
+        ticket: Option<String>,
+    },
+    Ping,
+    List {
+        path: String,
+    },
+    Read {
+        path: String,
+    },
+    Tail {
+        path: String,
+    },
+    Write {
+        path: String,
+        payload: Vec<u8>,
+    },
+}
+
+enum BrokerResponse {
+    Unit,
+    Lines(Vec<String>),
 }
 
 #[derive(Debug, Deserialize)]
@@ -427,18 +453,25 @@ async fn main() -> Result<()> {
     );
     let pool = build_session_pool(&config, policy)?;
     let bounds = build_bounds();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let broker_metrics = Arc::new(BrokerMetrics::default());
+    let broker_client = build_gateway_broker(
+        pool.clone(),
+        broker_metrics.clone(),
+        shutdown.clone(),
+    );
 
     let state = AppState {
         inner: Arc::new(GatewayInner {
-            pool,
+            broker_client,
             role: config.role,
             ticket: config.ticket.clone(),
             request_auth_token: config.request_auth_token.clone(),
             status: Mutex::new(GatewayStatus::default()),
-            shutdown: AtomicBool::new(false),
+            shutdown,
             bounds,
             policy,
-            broker: BrokerMetrics::default(),
+            broker: broker_metrics,
             proc_cache: Mutex::new(ProcReadCache::default()),
         }),
     };
@@ -702,7 +735,7 @@ fn build_session_pool(config: &GatewayConfig, policy: CohshPolicy) -> Result<Sha
         .with_heartbeat_interval(Duration::from_millis(policy.heartbeat.interval_ms));
     let inner = Arc::new(Mutex::new(tcp));
     let factory: Arc<dyn TransportFactory> = Arc::new(move || {
-        Ok(Box::new(SharedTcpTransport::new(inner.clone())) as Box<dyn cohsh::Transport + Send>)
+        Ok(Box::new(PooledTcpTransport::new(inner.clone())) as Box<dyn cohsh::Transport + Send>)
     });
     Ok(SessionPool::new(
         policy.pool.control_sessions,
@@ -777,6 +810,155 @@ fn build_bounds() -> BoundsResponse {
     }
 }
 
+fn build_gateway_broker(
+    pool: SharedPool,
+    metrics: Arc<BrokerMetrics>,
+    shutdown: Arc<AtomicBool>,
+) -> GatewayBrokerClient {
+    let (control_tx, control_rx) = mpsc::sync_channel(BROKER_CONTROL_QUEUE_CAPACITY);
+    let (telemetry_tx, telemetry_rx) = mpsc::sync_channel(BROKER_TELEMETRY_QUEUE_CAPACITY);
+    thread::spawn(move || {
+        run_broker_dispatcher(pool, metrics, shutdown, control_rx, telemetry_rx);
+    });
+    GatewayBrokerClient {
+        control_tx,
+        telemetry_tx,
+    }
+}
+
+fn run_broker_dispatcher(
+    pool: SharedPool,
+    metrics: Arc<BrokerMetrics>,
+    shutdown: Arc<AtomicBool>,
+    control_rx: Receiver<BrokerCommand>,
+    telemetry_rx: Receiver<BrokerCommand>,
+) {
+    loop {
+        if shutdown.load(Ordering::SeqCst) {
+            break;
+        }
+
+        let mut dispatched = false;
+        for _ in 0..BROKER_CONTROL_BURST {
+            match control_rx.try_recv() {
+                Ok(command) => {
+                    dispatched = true;
+                    dispatch_broker_command(&pool, &metrics, command);
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+
+        match telemetry_rx.try_recv() {
+            Ok(command) => {
+                dispatched = true;
+                dispatch_broker_command(&pool, &metrics, command);
+            }
+            Err(TryRecvError::Empty) => {
+                if dispatched {
+                    metrics.telemetry_yields.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            Err(TryRecvError::Disconnected) => {}
+        }
+
+        if dispatched {
+            continue;
+        }
+
+        match control_rx.recv_timeout(Duration::from_millis(BROKER_IDLE_WAIT_MS)) {
+            Ok(command) => {
+                dispatch_broker_command(&pool, &metrics, command);
+                continue;
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {}
+        }
+
+        match telemetry_rx.recv_timeout(Duration::from_millis(BROKER_IDLE_WAIT_MS)) {
+            Ok(command) => dispatch_broker_command(&pool, &metrics, command),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {}
+        }
+    }
+    pool.shutdown();
+}
+
+fn dispatch_broker_command(pool: &SharedPool, metrics: &BrokerMetrics, command: BrokerCommand) {
+    decrement_counter(metrics.wait_counter(command.kind));
+    metrics
+        .checkout_counter(command.kind)
+        .fetch_add(1, Ordering::Relaxed);
+    let result = execute_broker_request(pool, command.kind, command.request).map_err(|err| {
+        if is_pool_exhausted(&err) {
+            metrics.pool_exhausted.fetch_add(1, Ordering::Relaxed);
+            anyhow::anyhow!(
+                "gateway backpressure: broker checkout exhausted for {:?}",
+                command.kind
+            )
+        } else {
+            err
+        }
+    });
+    let _ = command.response_tx.send(result);
+}
+
+fn execute_broker_request(
+    pool: &SharedPool,
+    kind: PoolKind,
+    request: BrokerRequest,
+) -> Result<BrokerResponse> {
+    match request {
+        BrokerRequest::Attach { role, ticket } => {
+            pool.attach(role, ticket.as_deref())?;
+            Ok(BrokerResponse::Unit)
+        }
+        BrokerRequest::Ping => with_pool_once(pool, kind, |transport, session| {
+            transport.ping(session).context("ping failed")?;
+            Ok(BrokerResponse::Unit)
+        }),
+        BrokerRequest::List { path } => with_pool_once(pool, kind, move |transport, session| {
+            transport
+                .list(session, &path)
+                .map(BrokerResponse::Lines)
+        }),
+        BrokerRequest::Read { path } => with_pool_once(pool, kind, move |transport, session| {
+            transport
+                .read(session, &path)
+                .map(BrokerResponse::Lines)
+        }),
+        BrokerRequest::Tail { path } => with_pool_once(pool, kind, move |transport, session| {
+            transport
+                .tail(session, &path)
+                .map(BrokerResponse::Lines)
+        }),
+        BrokerRequest::Write { path, payload } => with_pool_once(
+            pool,
+            kind,
+            move |transport, session| {
+                transport.write(session, path.as_str(), payload.as_slice())?;
+                Ok(BrokerResponse::Unit)
+            },
+        ),
+    }
+}
+
+fn with_pool_once<F>(pool: &SharedPool, kind: PoolKind, action: F) -> Result<BrokerResponse>
+where
+    F: FnOnce(&mut dyn cohsh::Transport, &Session) -> Result<BrokerResponse>,
+{
+    let mut lease = pool.checkout(kind)?;
+    let session = lease.session().clone();
+    action(lease.transport_mut(), &session)
+}
+
+fn decrement_counter(counter: &AtomicU64) {
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        Some(value.saturating_sub(1))
+    });
+}
+
 fn spawn_connection_manager(state: AppState, host: String, port: u16) {
     thread::spawn(move || {
         let mut backoff = Duration::from_millis(state.inner.policy.retry.backoff_ms);
@@ -791,7 +973,6 @@ fn spawn_connection_manager(state: AppState, host: String, port: u16) {
             if state.is_connected() {
                 if let Err(err) = state.ping() {
                     state.mark_disconnected(err);
-                    state.inner.pool.shutdown();
                     attempt = 0;
                     backoff = Duration::from_millis(state.inner.policy.retry.backoff_ms);
                     warn!("hive-gateway disconnected");
@@ -837,46 +1018,39 @@ async fn shutdown_signal(state: AppState) {
 }
 
 impl AppState {
-    fn with_pool<F, T>(&self, kind: PoolKind, action: F) -> Result<T>
-    where
-        F: FnOnce(&mut dyn cohsh::Transport, &Session) -> Result<T>,
-    {
-        self.ensure_connected()?;
-        let deadline = Instant::now()
-            + Duration::from_millis(match kind {
-                PoolKind::Control => CONTROL_POOL_WAIT_LIMIT_MS,
-                PoolKind::Telemetry => TELEMETRY_POOL_WAIT_LIMIT_MS,
-            });
-        let shutdown = &self.inner.shutdown;
-        let _wait_guard = WaitCounterGuard::new(self.inner.broker.wait_counter(kind));
+    fn submit_broker(&self, kind: PoolKind, request: BrokerRequest) -> Result<BrokerResponse> {
+        let timeout_ms = match kind {
+            PoolKind::Control => CONTROL_POOL_WAIT_LIMIT_MS,
+            PoolKind::Telemetry => TELEMETRY_POOL_WAIT_LIMIT_MS,
+        };
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        let tx = match kind {
+            PoolKind::Control => &self.inner.broker_client.control_tx,
+            PoolKind::Telemetry => &self.inner.broker_client.telemetry_tx,
+        };
+        let (response_tx, response_rx) = mpsc::channel();
+        let mut command = BrokerCommand {
+            kind,
+            request,
+            response_tx,
+        };
         loop {
-            match self.inner.pool.checkout(kind) {
-                Ok(mut lease) => {
+            match tx.try_send(command) {
+                Ok(()) => {
                     self.inner
                         .broker
-                        .checkout_counter(kind)
+                        .wait_counter(kind)
                         .fetch_add(1, Ordering::Relaxed);
-                    let session = lease.session().clone();
-                    return action(lease.transport_mut(), &session);
+                    break;
                 }
-                Err(err) => {
-                    if !is_pool_exhausted(&err) {
-                        return Err(err);
-                    }
-                    if shutdown.load(Ordering::SeqCst) {
-                        return Err(err);
-                    }
+                Err(TrySendError::Full(returned)) => {
+                    command = returned;
                     self.inner
                         .broker
                         .pool_exhausted
                         .fetch_add(1, Ordering::Relaxed);
-                    if matches!(kind, PoolKind::Telemetry)
-                        && self.inner.broker.control_waiters.load(Ordering::Relaxed) > 0
-                    {
-                        self.inner
-                            .broker
-                            .telemetry_yields
-                            .fetch_add(1, Ordering::Relaxed);
+                    if self.inner.shutdown.load(Ordering::SeqCst) {
+                        return Err(anyhow::anyhow!("gateway broker is shutting down"));
                     }
                     if Instant::now() >= deadline {
                         self.inner
@@ -884,33 +1058,62 @@ impl AppState {
                             .timeout_rejections
                             .fetch_add(1, Ordering::Relaxed);
                         return Err(anyhow::anyhow!(
-                            "gateway backpressure: session pool checkout timed out for {kind:?}"
+                            "gateway backpressure: broker queue timed out for {kind:?}"
                         ));
                     }
                     self.inner
                         .broker
                         .checkout_retries
                         .fetch_add(1, Ordering::Relaxed);
-                    thread::sleep(Duration::from_millis(POOL_RETRY_SLEEP_MS));
+                    thread::sleep(Duration::from_millis(BROKER_ENQUEUE_RETRY_SLEEP_MS));
                 }
+                Err(TrySendError::Disconnected(_)) => {
+                    return Err(anyhow::anyhow!("gateway broker is unavailable"));
+                }
+            }
+        }
+        let now = Instant::now();
+        let remaining = deadline.saturating_duration_since(now);
+        if remaining.is_zero() {
+            self.inner
+                .broker
+                .timeout_rejections
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(anyhow::anyhow!(
+                "gateway backpressure: broker response timed out for {kind:?}"
+            ));
+        }
+        match response_rx.recv_timeout(remaining) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => {
+                self.inner
+                    .broker
+                    .timeout_rejections
+                    .fetch_add(1, Ordering::Relaxed);
+                Err(anyhow::anyhow!(
+                    "gateway backpressure: broker response timed out for {kind:?}"
+                ))
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                Err(anyhow::anyhow!("gateway broker disconnected"))
             }
         }
     }
 
     fn attach(&self) -> Result<()> {
-        self.inner
-            .pool
-            .attach(self.inner.role, self.inner.ticket.as_deref())
+        self.submit_broker(
+            PoolKind::Control,
+            BrokerRequest::Attach {
+                role: self.inner.role,
+                ticket: self.inner.ticket.clone(),
+            },
+        )?;
+        Ok(())
     }
 
     fn ping(&self) -> Result<()> {
-        self.with_pool(
-            PoolKind::Control,
-            |transport: &mut dyn cohsh::Transport, session| {
-                transport.ping(session).context("ping failed")?;
-                Ok(())
-            },
-        )
+        self.submit_broker(PoolKind::Control, BrokerRequest::Ping)?;
+        Ok(())
     }
 
     fn is_connected(&self) -> bool {
@@ -944,6 +1147,7 @@ impl AppState {
     }
 
     fn list(&self, path: &str) -> Result<Vec<String>> {
+        self.ensure_connected()?;
         if is_cacheable_list_path(path) {
             if let Some(lines) = self.read_cache_get(path) {
                 return Ok(lines);
@@ -953,13 +1157,15 @@ impl AppState {
                 .proc_cache_misses
                 .fetch_add(1, Ordering::Relaxed);
         }
-        let path_owned = path.to_owned();
-        let lines = self.with_pool(
+        let lines = match self.submit_broker(
             PoolKind::Telemetry,
-            move |transport: &mut dyn cohsh::Transport, session| {
-                transport.list(session, &path_owned)
+            BrokerRequest::List {
+                path: path.to_owned(),
             },
-        )?;
+        )? {
+            BrokerResponse::Lines(lines) => lines,
+            BrokerResponse::Unit => Vec::new(),
+        };
         if is_cacheable_list_path(path) {
             self.read_cache_insert(path, lines.clone());
         }
@@ -967,6 +1173,7 @@ impl AppState {
     }
 
     fn read(&self, path: &str) -> Result<Vec<String>> {
+        self.ensure_connected()?;
         if is_cacheable_read_path(path) {
             if let Some(lines) = self.read_cache_get(path) {
                 return Ok(lines);
@@ -976,13 +1183,15 @@ impl AppState {
                 .proc_cache_misses
                 .fetch_add(1, Ordering::Relaxed);
         }
-        let path_owned = path.to_owned();
-        let lines = self.with_pool(
+        let lines = match self.submit_broker(
             PoolKind::Telemetry,
-            move |transport: &mut dyn cohsh::Transport, session| {
-                transport.read(session, &path_owned)
+            BrokerRequest::Read {
+                path: path.to_owned(),
             },
-        )?;
+        )? {
+            BrokerResponse::Lines(lines) => lines,
+            BrokerResponse::Unit => Vec::new(),
+        };
         if is_cacheable_read_path(path) {
             self.read_cache_insert(path, lines.clone());
         }
@@ -990,28 +1199,35 @@ impl AppState {
     }
 
     fn tail(&self, path: &str) -> Result<Vec<String>> {
-        let path = path.to_owned();
-        self.with_pool(
+        self.ensure_connected()?;
+        match self.submit_broker(
             PoolKind::Telemetry,
-            move |transport: &mut dyn cohsh::Transport, session| transport.tail(session, &path),
-        )
+            BrokerRequest::Tail {
+                path: path.to_owned(),
+            },
+        )? {
+            BrokerResponse::Lines(lines) => Ok(lines),
+            BrokerResponse::Unit => Ok(Vec::new()),
+        }
     }
 
     fn write(&self, path: &str, payload: &[u8]) -> Result<()> {
+        self.ensure_connected()?;
         let write_path = path.to_owned();
         let payload = payload.to_vec();
         let deadline = Instant::now() + Duration::from_millis(CONTROL_WRITE_RETRY_WINDOW_MS);
         let retry_deadline_enabled = is_retryable_control_write_path(write_path.as_str());
         let mut retry_delay = Duration::from_millis(CONTROL_WRITE_RETRY_SLEEP_MS);
         loop {
-            let result = self.with_pool(
+            let result = self.submit_broker(
                 PoolKind::Control,
-                |transport: &mut dyn cohsh::Transport, session| {
-                    transport.write(session, write_path.as_str(), payload.as_slice())
+                BrokerRequest::Write {
+                    path: write_path.clone(),
+                    payload: payload.clone(),
                 },
             );
             match result {
-                Ok(()) => {
+                Ok(_) => {
                     self.read_cache_invalidate_for_write(write_path.as_str());
                     return Ok(());
                 }

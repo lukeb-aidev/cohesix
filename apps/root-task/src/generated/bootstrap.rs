@@ -10,7 +10,7 @@ use cohesix_ticket::Role;
 
 pub const TICKET_TABLE_SHA256: &str = "fd0ebff1d0b4cfcc2a03a1015578545dfa68f0240e782b60ad7956c2492972eb";
 pub const NAMESPACE_TABLE_SHA256: &str = "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
-pub const AUDIT_TABLE_SHA256: &str = "1dc9f1cfc9dc358fd59b1467d02d4192d9f9e6c6d2b60d11d3886051c7a126c6";
+pub const AUDIT_TABLE_SHA256: &str = "1fdd1b18e8f790003b400e40b532ca777a10b0bbc5dc9f3b8717ef101ae4e00e";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec { role: Role::Queen, secret: "bootstrap" },
@@ -301,7 +301,7 @@ pub const SHARD_LABELS: [&str; 256] = [
 
 pub const TELEMETRY_CONFIG: TelemetryConfig = TelemetryConfig { ring_bytes_per_worker: 1024, frame_schema: TelemetryFrameSchema::LegacyPlaintext, cursor: TelemetryCursorConfig { retain_on_boot: false } };
 
-pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = TelemetryIngestConfig { max_segments_per_device: 4, max_bytes_per_segment: 32768, max_total_bytes_per_device: 131072, eviction_policy: TelemetryIngestEvictionPolicy::EvictOldest };
+pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = TelemetryIngestConfig { max_segments_per_device: 4, max_bytes_per_segment: 131072, max_total_bytes_per_device: 524288, max_reference_entries_per_segment: 1024, max_reference_manifest_bytes_per_segment: 131072, max_reference_bytes_per_segment: 1073741824, eviction_policy: TelemetryIngestEvictionPolicy::EvictOldest };
 
 pub const LIFECYCLE_AUTO_TRANSITIONS: [LifecycleAutoTransition; 1] = [
     LifecycleAutoTransition { from: LifecycleState::Booting, to: LifecycleState::Online },
@@ -386,7 +386,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = [
 pub const INITIAL_AUDIT_LINES: [&str; 23] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=36dbaac12406c2984dc207399045931bf3e080463df8774b6e469e24abcd0da8",
+    "manifest.sha256=7886e1a2e1a95b39b2e894c714ddf1d317995fefa8da956aa796c8b070ccf1a8",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

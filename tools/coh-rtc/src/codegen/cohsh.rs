@@ -714,6 +714,26 @@ fn render_client_rust(manifest: &Manifest, manifest_hash: &str) -> String {
     .ok();
     writeln!(
         contents,
+        "pub const TELEMETRY_INGEST_MAX_REFERENCE_ENTRIES_PER_SEGMENT: u32 = {};",
+        manifest.telemetry_ingest.max_reference_entries_per_segment
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const TELEMETRY_INGEST_MAX_REFERENCE_MANIFEST_BYTES_PER_SEGMENT: u32 = {};",
+        manifest
+            .telemetry_ingest
+            .max_reference_manifest_bytes_per_segment
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const TELEMETRY_INGEST_MAX_REFERENCE_BYTES_PER_SEGMENT: u64 = {};",
+        manifest.telemetry_ingest.max_reference_bytes_per_segment
+    )
+    .ok();
+    writeln!(
+        contents,
         "pub const TELEMETRY_INGEST_EVICTION_POLICY: &str = \"{}\";",
         format_ingest_eviction_policy(&manifest.telemetry_ingest.eviction_policy)
     )
@@ -809,6 +829,26 @@ fn render_client_doc(manifest: &Manifest, manifest_hash: &str) -> String {
         contents,
         "- `telemetry_ingest.max_total_bytes_per_device`: `{}`",
         manifest.telemetry_ingest.max_total_bytes_per_device
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `telemetry_ingest.max_reference_entries_per_segment`: `{}`",
+        manifest.telemetry_ingest.max_reference_entries_per_segment
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `telemetry_ingest.max_reference_manifest_bytes_per_segment`: `{}`",
+        manifest
+            .telemetry_ingest
+            .max_reference_manifest_bytes_per_segment
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `telemetry_ingest.max_reference_bytes_per_segment`: `{}`",
+        manifest.telemetry_ingest.max_reference_bytes_per_segment
     )
     .ok();
     writeln!(

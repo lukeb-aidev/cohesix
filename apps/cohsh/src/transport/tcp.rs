@@ -11,7 +11,8 @@ use std::io::{self, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -274,16 +275,12 @@ impl SharedTcpTransport {
 #[derive(Clone)]
 pub struct PooledTcpTransport {
     inner: Arc<Mutex<TcpTransport>>,
-    next_session_id: Arc<AtomicU64>,
 }
 
 impl PooledTcpTransport {
     /// Create a pooled TCP transport wrapper for session pool use.
-    pub fn new(inner: Arc<Mutex<TcpTransport>>, next_session_id: Arc<AtomicU64>) -> Self {
-        Self {
-            inner,
-            next_session_id,
-        }
+    pub fn new(inner: Arc<Mutex<TcpTransport>>) -> Self {
+        Self { inner }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, TcpTransport> {
@@ -1776,9 +1773,9 @@ impl Transport for SharedTcpTransport {
 }
 
 impl Transport for PooledTcpTransport {
-    fn attach(&mut self, role: Role, _ticket: Option<&str>) -> Result<Session> {
-        let id = self.next_session_id.fetch_add(1, Ordering::SeqCst);
-        Ok(Session::new(SessionId::from_raw(id), role))
+    fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session> {
+        let mut inner = self.lock();
+        inner.attach(role, ticket)
     }
 
     fn kind(&self) -> &'static str {

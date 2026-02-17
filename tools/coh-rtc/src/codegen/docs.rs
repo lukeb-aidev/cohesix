@@ -227,6 +227,26 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `telemetry_ingest.max_reference_entries_per_segment`: `{}`",
+            manifest.telemetry_ingest.max_reference_entries_per_segment
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `telemetry_ingest.max_reference_manifest_bytes_per_segment`: `{}`",
+            manifest
+                .telemetry_ingest
+                .max_reference_manifest_bytes_per_segment
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `telemetry_ingest.max_reference_bytes_per_segment`: `{}`",
+            manifest.telemetry_ingest.max_reference_bytes_per_segment
+        )
+        .ok();
+        writeln!(
+            schema_md,
             "- `telemetry_ingest.eviction_policy`: `{}`",
             format_ingest_eviction_policy(&manifest.telemetry_ingest.eviction_policy)
         )
@@ -1868,6 +1888,26 @@ impl DocFragments {
             cohesix_py_defaults_md,
             "- `telemetry_ingest.max_total_bytes_per_device`: `{}`",
             manifest.telemetry_ingest.max_total_bytes_per_device
+        )
+        .ok();
+        writeln!(
+            cohesix_py_defaults_md,
+            "- `telemetry_ingest.max_reference_entries_per_segment`: `{}`",
+            manifest.telemetry_ingest.max_reference_entries_per_segment
+        )
+        .ok();
+        writeln!(
+            cohesix_py_defaults_md,
+            "- `telemetry_ingest.max_reference_manifest_bytes_per_segment`: `{}`",
+            manifest
+                .telemetry_ingest
+                .max_reference_manifest_bytes_per_segment
+        )
+        .ok();
+        writeln!(
+            cohesix_py_defaults_md,
+            "- `telemetry_ingest.max_reference_bytes_per_segment`: `{}`",
+            manifest.telemetry_ingest.max_reference_bytes_per_segment
         )
         .ok();
         writeln!(

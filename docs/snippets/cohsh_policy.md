@@ -3,8 +3,8 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### cohsh client policy (generated)
-- `manifest.sha256`: `36dbaac12406c2984dc207399045931bf3e080463df8774b6e469e24abcd0da8`
-- `policy.sha256`: `98071d10d7fa80502f6f95fad6a249546fabc157ced408d0f63668c61803defc`
+- `manifest.sha256`: `7886e1a2e1a95b39b2e894c714ddf1d317995fefa8da956aa796c8b070ccf1a8`
+- `policy.sha256`: `a8184702bc72d1c2109a1d14a8d636d9a56b91da8aab65943edea697a5aedb1f`
 - `cohsh.pool.control_sessions`: `2`
 - `cohsh.pool.telemetry_sessions`: `24`
 - `cohsh.tail.poll_ms_default`: `1000`
@@ -21,4 +21,4 @@
 - `heartbeat.interval_ms`: `15000`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `36dbaac12406c2984dc207399045931bf3e080463df8774b6e469e24abcd0da8`)._
+_Generated from `configs/root_task.toml` (sha256: `7886e1a2e1a95b39b2e894c714ddf1d317995fefa8da956aa796c8b070ccf1a8`)._

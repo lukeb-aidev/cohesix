@@ -64,6 +64,7 @@ fn telemetry_ingest_rejects_oversize_record() {
         max_bytes_per_segment: 8192,
         max_total_bytes_per_device: 8192,
         eviction_policy: TelemetryIngestEvictionPolicy::Refuse,
+        ..TelemetryIngestConfig::default()
     };
     let server = NineDoor::new_with_limits_and_telemetry_manifest(
         Arc::new(TestClock::default()),

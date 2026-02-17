@@ -155,6 +155,7 @@ coh> pool bench path=/log/queen.log ops=20 kind=control exhaust=4
 
 ### Telemetry push
 `telemetry push` accepts `txt`, `log`, `json`, `ndjson`, or `csv` inputs and forwards bounded records to `/queen/telemetry/<device_id>/`.
+When source bytes exceed inline envelope limits, `cohsh` emits bounded `coh-ref-c/v1` reference-manifest records (manifest-driven entry/byte limits) instead of generic file transfer.
 ```text
 coh> telemetry push demo/telemetry/demo.txt --device device-1
 coh> telemetry push demo/telemetry/sample.ndjson --device jetson-1
@@ -471,6 +472,10 @@ Host-only REST gateway that maps 1:1 to Cohesix console/file semantics (`LS`, `C
                                 Per-request REST auth token for mutating paths
       --role <ROLE>              Role to attach with (queen by default) [default: queen]
       --ticket <TICKET>          Optional capability ticket payload
+      --pool-control-sessions <POOL_CONTROL_SESSIONS>
+                                Override pooled control session capacity
+      --pool-telemetry-sessions <POOL_TELEMETRY_SESSIONS>
+                                Override pooled telemetry session capacity
       --mock                     Use the in-process mock NineDoor backend
   -h, --help                     Print help
   -V, --version                  Print version
@@ -488,11 +493,14 @@ curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 
 ### Notes
 - Environment overrides: `HIVE_GATEWAY_BIND`, `HIVE_GATEWAY_MOCK`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, `COH_TCP_HOST`, `COH_TCP_PORT`, `COH_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`), `COH_ROLE`, `COH_TICKET`.
+- Pool overrides: `HIVE_GATEWAY_POOL_CONTROL_SESSIONS`, `HIVE_GATEWAY_POOL_TELEMETRY_SESSIONS`.
 - OpenAPI spec + examples live in `docs/HOST_API.md` and are served at `/v1/openapi.yaml`.
 - Swagger UI is served at `/docs` and uses public CDN assets; use the YAML spec for air-gapped environments.
 - The gateway is the console client; do not attach `cohsh` or `swarmui` in console mode at the same time. Use `SWARMUI_TRANSPORT=rest` and host tool `--rest-url` flags when multiplexing.
 - REST is queen-only in v0.6.0-alpha. Worker-role attach remains console/9P only.
 - REST clients inherit the gateway role and ticket; there is no per-request ticket.
+- Request handling is brokered through bounded control/telemetry queues with fair scheduling; write/read pressure returns deterministic `429` (`gateway backpressure`) instead of hidden retries.
+- `/v1/meta/status` includes broker counters (`control_waiters`, `telemetry_waiters`, `pool_exhausted`, `timeout_rejections`, `telemetry_yields`) for tuning and incident triage.
 - Bind the gateway to loopback and expose it remotely via SSH tunneling.
 
 ### Remote access pattern (SSH tunnel)

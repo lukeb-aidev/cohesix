@@ -57,6 +57,7 @@ const MAX_LEASE_REASON_LEN: usize = 24;
 const MAX_LEASE_ACTIVE_ENTRIES: u32 = 256;
 const MAX_LEASE_PREEMPTION_ENTRIES: u32 = 256;
 const MAX_AFFINITY_CORES: u8 = 64;
+const MAX_TELEMETRY_REFERENCE_ENTRIES_PER_SEGMENT: u32 = 16_384;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -770,8 +771,23 @@ impl Manifest {
         let zero_segments = ingest.max_segments_per_device == 0;
         let zero_segment_bytes = ingest.max_bytes_per_segment == 0;
         let zero_total_bytes = ingest.max_total_bytes_per_device == 0;
-        if zero_segments || zero_segment_bytes || zero_total_bytes {
-            if zero_segments && zero_segment_bytes && zero_total_bytes {
+        let zero_reference_entries = ingest.max_reference_entries_per_segment == 0;
+        let zero_reference_manifest_bytes = ingest.max_reference_manifest_bytes_per_segment == 0;
+        let zero_reference_bytes = ingest.max_reference_bytes_per_segment == 0;
+        if zero_segments
+            || zero_segment_bytes
+            || zero_total_bytes
+            || zero_reference_entries
+            || zero_reference_manifest_bytes
+            || zero_reference_bytes
+        {
+            if zero_segments
+                && zero_segment_bytes
+                && zero_total_bytes
+                && zero_reference_entries
+                && zero_reference_manifest_bytes
+                && zero_reference_bytes
+            {
                 return Ok(());
             }
             bail!("telemetry_ingest.* must be all zero (disabled) or all non-zero (enabled)");
@@ -780,6 +796,27 @@ impl Manifest {
             bail!(
                 "telemetry_ingest.max_total_bytes_per_device {} must be >= max_bytes_per_segment {}",
                 ingest.max_total_bytes_per_device,
+                ingest.max_bytes_per_segment
+            );
+        }
+        if ingest.max_reference_entries_per_segment > MAX_TELEMETRY_REFERENCE_ENTRIES_PER_SEGMENT {
+            bail!(
+                "telemetry_ingest.max_reference_entries_per_segment {} exceeds max {}",
+                ingest.max_reference_entries_per_segment,
+                MAX_TELEMETRY_REFERENCE_ENTRIES_PER_SEGMENT
+            );
+        }
+        if ingest.max_reference_manifest_bytes_per_segment > ingest.max_bytes_per_segment {
+            bail!(
+                "telemetry_ingest.max_reference_manifest_bytes_per_segment {} must be <= max_bytes_per_segment {}",
+                ingest.max_reference_manifest_bytes_per_segment,
+                ingest.max_bytes_per_segment
+            );
+        }
+        if ingest.max_reference_bytes_per_segment < ingest.max_bytes_per_segment as u64 {
+            bail!(
+                "telemetry_ingest.max_reference_bytes_per_segment {} must be >= max_bytes_per_segment {}",
+                ingest.max_reference_bytes_per_segment,
                 ingest.max_bytes_per_segment
             );
         }
@@ -2067,6 +2104,9 @@ pub struct TelemetryIngest {
     pub max_segments_per_device: u32,
     pub max_bytes_per_segment: u32,
     pub max_total_bytes_per_device: u32,
+    pub max_reference_entries_per_segment: u32,
+    pub max_reference_manifest_bytes_per_segment: u32,
+    pub max_reference_bytes_per_segment: u64,
     pub eviction_policy: TelemetryIngestEvictionPolicy,
 }
 
@@ -2076,6 +2116,9 @@ impl Default for TelemetryIngest {
             max_segments_per_device: 4,
             max_bytes_per_segment: 32 * 1024,
             max_total_bytes_per_device: 128 * 1024,
+            max_reference_entries_per_segment: 1024,
+            max_reference_manifest_bytes_per_segment: 32 * 1024,
+            max_reference_bytes_per_segment: 1_073_741_824,
             eviction_policy: TelemetryIngestEvictionPolicy::EvictOldest,
         }
     }

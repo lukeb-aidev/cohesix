@@ -313,6 +313,9 @@ Path: `/queen/export/ctl` (append-only JSONL)
   - `max_segments_per_device`
   - `max_bytes_per_segment`
   - `max_total_bytes_per_device`
+  - `max_reference_entries_per_segment`
+  - `max_reference_manifest_bytes_per_segment`
+  - `max_reference_bytes_per_segment`
   - `eviction_policy` (`refuse` | `evict-oldest`)
 - Max record size: 4096 bytes; each append is treated as one telemetry record.
 
@@ -334,6 +337,24 @@ Path: `/queen/export/ctl` (append-only JSONL)
 | `seq` | `uint` | yes | Monotonic per-segment sequence number (starts at 1). |
 | `mime` | `text` | yes | MIME type of the source payload (e.g. `text/plain`). |
 | `payload` | `text` | yes | Opaque UTF-8 payload chunk; `cohsh` chunks to stay within `max_record_bytes` (4096). |
+
+### Telemetry reference-manifest envelope (coh-ref-c/v1)
+For large host artifacts, `cohsh telemetry push` and the Python SDK emit reference-manifest lines instead of inline payload transfer:
+```json
+{"schema":"coh-ref-c/v1","seq":1,"off":0,"len":16777216,"sha256":"QmFzZTY0RGlnZXN0Li4u"}
+```
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `schema` | `text` | yes | Schema identifier; must be `coh-ref-c/v1`. |
+| `seq` | `uint` | yes | Monotonic record sequence (starts at 1). |
+| `off` | `uint` | yes | Referenced byte offset. Must be contiguous (`off == prior off + len`). |
+| `len` | `uint` | yes | Referenced chunk bytes (`>= 1`). |
+| `sha256` | `text` | yes | Chunk digest token (bounded ASCII digest alphabet). |
+
+Deterministic ingest rules:
+- A segment is either inline (`cohsh-telemetry-push/v1`) or reference-manifest (`coh-ref-c/v1`); mixing modes in one segment is rejected.
+- Reference manifests are bounded by `max_reference_entries_per_segment`, `max_reference_manifest_bytes_per_segment`, and `max_reference_bytes_per_segment`.
+- Per-record Secure9P limits are unchanged (`msize <= 8192`, record payload <= 4096 bytes).
 
 <!-- coh-rtc:sharding:start -->
 ### Sharded worker namespace (generated)

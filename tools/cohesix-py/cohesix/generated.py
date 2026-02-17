@@ -4,7 +4,7 @@
 # Copyright 2026 Lukas Bower
 
 DEFAULTS = {
-    "manifest_sha256": "36dbaac12406c2984dc207399045931bf3e080463df8774b6e469e24abcd0da8",
+    "manifest_sha256": "7886e1a2e1a95b39b2e894c714ddf1d317995fefa8da956aa796c8b070ccf1a8",
     "secure9p": {"msize": 8192, "walk_depth": 8},
     "console": {
         "max_line_len": 256,
@@ -66,8 +66,11 @@ DEFAULTS = {
     },
     "telemetry_ingest": {
         "max_segments_per_device": 4,
-        "max_bytes_per_segment": 32768,
-        "max_total_bytes_per_device": 131072,
+        "max_bytes_per_segment": 131072,
+        "max_total_bytes_per_device": 524288,
+        "max_reference_entries_per_segment": 1024,
+        "max_reference_manifest_bytes_per_segment": 131072,
+        "max_reference_bytes_per_segment": 1073741824,
         "eviction_policy": "evict-oldest",
     },
     "telemetry_push": {
@@ -90,8 +93,8 @@ DEFAULTS = {
             "root": "/queen/telemetry",
             "max_devices": 32,
             "max_segments_per_device": 4,
-            "max_bytes_per_segment": 32768,
-            "max_total_bytes_per_device": 131072,
+            "max_bytes_per_segment": 131072,
+            "max_total_bytes_per_device": 524288,
         },
         "run": {
             "lease": {

@@ -329,6 +329,26 @@ pub fn render_defaults(manifest: &Manifest, manifest_hash: &str) -> CohesixPyDef
     .ok();
     writeln!(
         contents,
+        "        \"max_reference_entries_per_segment\": {},",
+        manifest.telemetry_ingest.max_reference_entries_per_segment
+    )
+    .ok();
+    writeln!(
+        contents,
+        "        \"max_reference_manifest_bytes_per_segment\": {},",
+        manifest
+            .telemetry_ingest
+            .max_reference_manifest_bytes_per_segment
+    )
+    .ok();
+    writeln!(
+        contents,
+        "        \"max_reference_bytes_per_segment\": {},",
+        manifest.telemetry_ingest.max_reference_bytes_per_segment
+    )
+    .ok();
+    writeln!(
+        contents,
         "        \"eviction_policy\": \"{}\",",
         format_ingest_eviction_policy(&manifest.telemetry_ingest.eviction_policy)
     )

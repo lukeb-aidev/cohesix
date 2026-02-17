@@ -9,9 +9,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use cohsh_core::wire::AckStatus;
+use serde::Deserialize;
 
 use crate::policy::{CohPolicy, CohTelemetryPolicy};
 use crate::{validate_component, CohAccess, CohAudit, MAX_DIR_LIST_BYTES};
+
+const TELEMETRY_REFERENCE_SCHEMA: &str = "coh-ref-c/v1";
 
 /// Summary of a telemetry pull operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,13 +105,25 @@ fn pull_device<C: CohAccess>(
         let relative = PathBuf::from(device_id).join("seg").join(&seg_id);
         let output_path = out_dir.join(&relative);
         write_segment(&output_path, &payload)?;
-        audit.push_line(format!(
-            "telemetry device={} segment={} bytes={} saved={}",
-            device_id,
-            seg_id,
-            payload.len(),
-            relative.display()
-        ));
+        if let Some(reference) = parse_reference_manifest(&payload) {
+            audit.push_line(format!(
+                "telemetry device={} segment={} bytes={} refs={} source_bytes={} mode=reference saved={}",
+                device_id,
+                seg_id,
+                payload.len(),
+                reference.refs,
+                reference.source_bytes,
+                relative.display()
+            ));
+        } else {
+            audit.push_line(format!(
+                "telemetry device={} segment={} bytes={} saved={}",
+                device_id,
+                seg_id,
+                payload.len(),
+                relative.display()
+            ));
+        }
         segment_count = segment_count.saturating_add(1);
     }
     Ok((segment_count, total_bytes))
@@ -128,4 +143,52 @@ fn write_segment(path: &Path, payload: &[u8]) -> Result<()> {
     fs::rename(&tmp_path, path)
         .with_context(|| format!("commit telemetry segment {}", path.display()))?;
     Ok(())
+}
+
+#[derive(Debug)]
+struct TelemetryReferenceSummary {
+    refs: usize,
+    source_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct TelemetryReferenceRecord {
+    schema: String,
+    seq: u64,
+    off: u64,
+    len: u64,
+    sha256: String,
+}
+
+fn parse_reference_manifest(payload: &[u8]) -> Option<TelemetryReferenceSummary> {
+    let text = std::str::from_utf8(payload).ok()?;
+    let mut refs = 0usize;
+    let mut expected_seq = 1u64;
+    let mut expected_off = 0u64;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let record: TelemetryReferenceRecord = serde_json::from_str(trimmed).ok()?;
+        if record.schema != TELEMETRY_REFERENCE_SCHEMA {
+            return None;
+        }
+        if record.seq != expected_seq || record.off != expected_off {
+            return None;
+        }
+        if record.len == 0 || record.sha256.trim().is_empty() {
+            return None;
+        }
+        refs = refs.saturating_add(1);
+        expected_seq = expected_seq.saturating_add(1);
+        expected_off = expected_off.saturating_add(record.len);
+    }
+    if refs == 0 {
+        return None;
+    }
+    Some(TelemetryReferenceSummary {
+        refs,
+        source_bytes: expected_off,
+    })
 }

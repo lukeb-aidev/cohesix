@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import os
 import subprocess
@@ -30,6 +31,8 @@ TELEMETRY_RECORD_MAX_BYTES = int(_TELEMETRY_PUSH.get("max_record_bytes", 4096))
 TELEMETRY_PUSH_SCHEMA = _TELEMETRY_PUSH.get(
     "schema", "cohsh-telemetry-push/v1"
 )
+TELEMETRY_REFERENCE_SCHEMA = "coh-ref-c/v1"
+TELEMETRY_REFERENCE_CHUNK_BYTES = 16 * 1024 * 1024
 
 MAX_DIR_LIST_BYTES = 64 * 1024
 MAX_GPU_INFO_BYTES = 16 * 1024
@@ -242,8 +245,49 @@ class CohesixClient:
         if seg_id is None:
             raise CohesixError("telemetry push could not resolve latest segment id")
 
-        records = build_telemetry_records(payload, mime, TELEMETRY_RECORD_MAX_BYTES)
-        total_bytes = sum(len(record) for record in records)
+        seg_path = f"/queen/telemetry/{device_id}/seg/{seg_id}"
+        max_record_bytes = min(TELEMETRY_RECORD_MAX_BYTES, MAX_ECHO_LEN)
+        payload_bytes = payload.encode("utf-8")
+        source_bytes = len(payload_bytes)
+        ref_entries_limit = int(
+            ingest.get("max_reference_entries_per_segment", 0) or 0
+        )
+        ref_manifest_bytes_limit = int(
+            ingest.get("max_reference_manifest_bytes_per_segment", 0) or 0
+        )
+        ref_bytes_limit = int(ingest.get("max_reference_bytes_per_segment", 0) or 0)
+        if ref_entries_limit <= 0:
+            ref_entries_limit = 1024
+        if ref_manifest_bytes_limit <= 0:
+            ref_manifest_bytes_limit = max_segment_bytes
+        if ref_bytes_limit <= 0:
+            ref_bytes_limit = source_bytes
+
+        mode = "inline"
+        if source_bytes <= max_segment_bytes:
+            records = build_telemetry_records(payload, mime, max_record_bytes)
+            total_bytes = sum(len(record) for record in records)
+            if total_bytes > max_segment_bytes:
+                mode = "reference"
+                records = build_telemetry_reference_records(
+                    payload_bytes,
+                    max_record_bytes,
+                    ref_entries_limit,
+                    ref_manifest_bytes_limit,
+                    ref_bytes_limit,
+                )
+                total_bytes = sum(len(record) for record in records)
+        else:
+            mode = "reference"
+            records = build_telemetry_reference_records(
+                payload_bytes,
+                max_record_bytes,
+                ref_entries_limit,
+                ref_manifest_bytes_limit,
+                ref_bytes_limit,
+            )
+            total_bytes = sum(len(record) for record in records)
+
         if total_bytes > max_segment_bytes:
             raise CohesixError(
                 f"telemetry payload exceeds max_bytes_per_segment {max_segment_bytes}"
@@ -251,14 +295,13 @@ class CohesixClient:
         if max_total_bytes:
             current_bytes = 0
             for seg_id in existing_segments:
-                seg_path = f"{seg_root}/{seg_id}"
-                payload_bytes = self.backend.read_file(seg_path, max_segment_bytes)
-                current_bytes += len(payload_bytes)
+                seg_path_existing = f"{seg_root}/{seg_id}"
+                payload_existing = self.backend.read_file(seg_path_existing, max_segment_bytes)
+                current_bytes += len(payload_existing)
             if current_bytes + total_bytes > max_total_bytes:
                 raise CohesixError(
                     f"telemetry bytes {current_bytes + total_bytes} exceeds max_total_bytes_per_device {max_total_bytes}"
                 )
-        seg_path = f"/queen/telemetry/{device_id}/seg/{seg_id}"
         for record in records:
             if isinstance(self.backend, TcpBackend) and len(record) > MAX_ECHO_LEN:
                 raise CohesixError(
@@ -269,13 +312,15 @@ class CohesixClient:
                 audit.push_ack("OK", "ECHO", f"path={seg_path} bytes={written}")
         if audit is not None:
             audit.push_line(
-                f"telemetry push device={device_id} seg_id={seg_id} records={len(records)} bytes={total_bytes}"
+                f"telemetry push device={device_id} seg_id={seg_id} records={len(records)} bytes={total_bytes} source_bytes={source_bytes} mode={mode}"
             )
         return {
             "device_id": device_id,
             "seg_id": seg_id,
             "records": len(records),
             "bytes": total_bytes,
+            "source_bytes": source_bytes,
+            "mode": mode,
         }
 
     def run_command(
@@ -675,6 +720,63 @@ def build_telemetry_record(seq: int, mime: str, payload: str) -> bytes:
         "seq": int(seq),
         "mime": mime,
         "payload": payload,
+    }
+    encoded = json.dumps(envelope, separators=(",", ":"))
+    return (encoded + "\n").encode("utf-8")
+
+
+def build_telemetry_reference_records(
+    payload: bytes,
+    max_record_bytes: int,
+    max_entries: int,
+    max_manifest_bytes: int,
+    max_reference_bytes: int,
+) -> List[bytes]:
+    if not payload:
+        raise CohesixError("telemetry reference payload is empty")
+    if len(payload) > max_reference_bytes:
+        raise CohesixError(
+            f"telemetry source bytes {len(payload)} exceeds max_reference_bytes_per_segment {max_reference_bytes}"
+        )
+    records: List[bytes] = []
+    offset = 0
+    seq = 1
+    manifest_bytes = 0
+    while offset < len(payload):
+        if len(records) + 1 > max_entries:
+            raise CohesixError(
+                f"telemetry reference entries exceed max_reference_entries_per_segment {max_entries}"
+            )
+        end = min(len(payload), offset + TELEMETRY_REFERENCE_CHUNK_BYTES)
+        chunk = payload[offset:end]
+        digest = base64.urlsafe_b64encode(hashlib.sha256(chunk).digest()).decode("ascii")
+        digest = digest.rstrip("=")
+        record = build_telemetry_reference_record(seq, offset, len(chunk), digest)
+        if len(record) > max_record_bytes:
+            raise CohesixError(
+                f"telemetry reference record exceeds max_record_bytes {max_record_bytes}"
+            )
+        manifest_bytes += len(record)
+        if manifest_bytes > max_manifest_bytes:
+            raise CohesixError(
+                "telemetry reference manifest exceeds max_reference_manifest_bytes_per_segment "
+                f"{max_manifest_bytes}"
+            )
+        records.append(record)
+        seq += 1
+        offset = end
+    return records
+
+
+def build_telemetry_reference_record(
+    seq: int, offset: int, length: int, sha256_b64: str
+) -> bytes:
+    envelope = {
+        "schema": TELEMETRY_REFERENCE_SCHEMA,
+        "seq": int(seq),
+        "off": int(offset),
+        "len": int(length),
+        "sha256": sha256_b64,
     }
     encoded = json.dumps(envelope, separators=(",", ":"))
     return (encoded + "\n").encode("utf-8")

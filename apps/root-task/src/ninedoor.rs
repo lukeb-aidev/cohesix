@@ -186,6 +186,8 @@ const OBSERVE_LEASE_PREEMPTIONS_BYTES: usize =
     generated::OBSERVABILITY_CONFIG.proc_lease.preemptions_bytes as usize;
 const SIDECAR_LOG_MAX_BYTES: usize = generated::SECURE9P_LIMITS.msize as usize;
 const TELEMETRY_INGEST_RECORD_MAX_BYTES: usize = 4096;
+const TELEMETRY_REFERENCE_CHUNK_SCHEMA: &str = "coh-ref-c/v1";
+const TELEMETRY_REFERENCE_DIGEST_MAX_BYTES: usize = 64;
 const AUTHORITY_QUEUE_MAX: usize = 16;
 
 const SELFTEST_QUICK_SCRIPT: &str = include_str!(concat!(
@@ -269,6 +271,18 @@ struct TelemetryIngestSegment {
     id: String,
     bytes: usize,
     data: Vec<u8>,
+    mode: TelemetryIngestSegmentMode,
+    reference_entries: usize,
+    reference_manifest_bytes: usize,
+    reference_total_bytes: u64,
+    reference_next_seq: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TelemetryIngestSegmentMode {
+    Unknown,
+    Plain,
+    ReferenceManifest,
 }
 
 #[derive(Debug)]
@@ -358,6 +372,11 @@ impl TelemetryIngestState {
             id: seg_id.clone(),
             bytes: 0,
             data: Vec::new(),
+            mode: TelemetryIngestSegmentMode::Unknown,
+            reference_entries: 0,
+            reference_manifest_bytes: 0,
+            reference_total_bytes: 0,
+            reference_next_seq: 1,
         });
         Ok(seg_id)
     }
@@ -381,7 +400,12 @@ impl TelemetryIngestState {
         }
         let max_segment_bytes = self.config.max_bytes_per_segment as usize;
         let max_total_bytes = self.config.max_total_bytes_per_device as usize;
+        let max_reference_entries = self.config.max_reference_entries_per_segment as usize;
+        let max_reference_manifest_bytes =
+            self.config.max_reference_manifest_bytes_per_segment as usize;
+        let max_reference_bytes = self.config.max_reference_bytes_per_segment;
         let eviction_policy = self.config.eviction_policy;
+        let reference_chunk = parse_telemetry_reference_chunk(payload)?;
         let device = self
             .devices
             .get_mut(device_id)
@@ -431,6 +455,47 @@ impl TelemetryIngestState {
             .iter_mut()
             .find(|segment| segment.id == seg_id)
             .ok_or(NineDoorBridgeError::InvalidPath)?;
+        match reference_chunk {
+            Some(reference) => {
+                if matches!(segment.mode, TelemetryIngestSegmentMode::Plain) {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                if reference.seq != segment.reference_next_seq {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                if reference.offset != segment.reference_total_bytes {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                if segment.reference_entries.saturating_add(1) > max_reference_entries {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                if segment.reference_manifest_bytes.saturating_add(record_len)
+                    > max_reference_manifest_bytes
+                {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                let referenced_total =
+                    segment.reference_total_bytes.saturating_add(reference.chunk_bytes);
+                if referenced_total > max_reference_bytes {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                segment.mode = TelemetryIngestSegmentMode::ReferenceManifest;
+                segment.reference_entries = segment.reference_entries.saturating_add(1);
+                segment.reference_manifest_bytes = segment
+                    .reference_manifest_bytes
+                    .saturating_add(record_len);
+                segment.reference_total_bytes = referenced_total;
+                segment.reference_next_seq = segment.reference_next_seq.saturating_add(1);
+            }
+            None => {
+                if matches!(segment.mode, TelemetryIngestSegmentMode::ReferenceManifest) {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                if matches!(segment.mode, TelemetryIngestSegmentMode::Unknown) {
+                    segment.mode = TelemetryIngestSegmentMode::Plain;
+                }
+            }
+        }
         segment.data.extend_from_slice(payload_bytes);
         if needs_newline {
             segment.data.push(b'\n');
@@ -8167,6 +8232,52 @@ fn parse_telemetry_ctl(payload: &str) -> Result<(), NineDoorBridgeError> {
         return Err(NineDoorBridgeError::InvalidPayload);
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TelemetryReferenceChunk {
+    seq: u64,
+    offset: u64,
+    chunk_bytes: u64,
+}
+
+fn parse_telemetry_reference_chunk(
+    payload: &str,
+) -> Result<Option<TelemetryReferenceChunk>, NineDoorBridgeError> {
+    let Some(schema) = parse_json_string_field(payload, "schema") else {
+        return Ok(None);
+    };
+    if schema != TELEMETRY_REFERENCE_CHUNK_SCHEMA {
+        return Ok(None);
+    }
+    let seq = parse_json_u64_field(payload, "seq").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    let offset =
+        parse_json_u64_field(payload, "off").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    let chunk_bytes =
+        parse_json_u64_field(payload, "len").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    if chunk_bytes == 0 {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    let digest =
+        parse_json_string_field(payload, "sha256").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    if !is_valid_reference_digest(digest) {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(Some(TelemetryReferenceChunk {
+        seq,
+        offset,
+        chunk_bytes,
+    }))
+}
+
+fn is_valid_reference_digest(value: &str) -> bool {
+    if value.is_empty() || value.len() > TELEMETRY_REFERENCE_DIGEST_MAX_BYTES {
+        return false;
+    }
+    value.chars().all(|ch| {
+        ch.is_ascii_alphanumeric()
+            || matches!(ch, '-' | '_' | '+' | '/' | '=' | '.')
+    })
 }
 
 fn parse_json_string_field<'a>(input: &'a str, key: &str) -> Option<&'a str> {

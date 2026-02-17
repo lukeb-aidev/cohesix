@@ -65,11 +65,14 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
+use base64::Engine as _;
 use clap::ValueEnum;
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::Role;
 use cohsh_core::wire::{render_ack, AckLine, AckStatus};
-use cohsh_core::{normalize_ticket, role_label, ConsoleVerb, RoleParseMode, TicketPolicy};
+use cohsh_core::{
+    normalize_ticket, role_label, ConsoleVerb, RoleParseMode, TicketPolicy, MAX_ECHO_LEN,
+};
 use log::info;
 use nine_door::{InProcessConnection, NineDoor};
 use secure9p_codec::{OpenMode, SessionId, MAX_MSIZE};
@@ -255,13 +258,21 @@ const TEST_MSIZE_SENTINEL: &str = "{{msize_overflow}}";
 const MAX_PATH_COMPONENTS: usize = 8;
 const CONSOLE_LINE_CAPACITY: usize = 256;
 const TELEMETRY_PUSH_SCHEMA: &str = "cohsh-telemetry-push/v1";
+const TELEMETRY_REFERENCE_SCHEMA: &str = "coh-ref-c/v1";
 const TELEMETRY_RECORD_MAX_BYTES: usize = 4096;
+const TELEMETRY_REFERENCE_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 const TELEMETRY_INGEST_MAX_SEGMENTS_PER_DEVICE: u32 =
     generated_client::TELEMETRY_INGEST_MAX_SEGMENTS_PER_DEVICE;
 const TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT: usize =
     generated_client::TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT as usize;
 const TELEMETRY_INGEST_MAX_TOTAL_BYTES_PER_DEVICE: u32 =
     generated_client::TELEMETRY_INGEST_MAX_TOTAL_BYTES_PER_DEVICE;
+const TELEMETRY_INGEST_MAX_REFERENCE_ENTRIES_PER_SEGMENT: usize =
+    generated_client::TELEMETRY_INGEST_MAX_REFERENCE_ENTRIES_PER_SEGMENT as usize;
+const TELEMETRY_INGEST_MAX_REFERENCE_MANIFEST_BYTES_PER_SEGMENT: usize =
+    generated_client::TELEMETRY_INGEST_MAX_REFERENCE_MANIFEST_BYTES_PER_SEGMENT as usize;
+const TELEMETRY_INGEST_MAX_REFERENCE_BYTES_PER_SEGMENT: u64 =
+    generated_client::TELEMETRY_INGEST_MAX_REFERENCE_BYTES_PER_SEGMENT;
 const TELEMETRY_PUSH_ALLOWED_EXTENSIONS: &[(&str, &str)] = &[
     ("txt", "text/plain"),
     ("log", "text/plain"),
@@ -1521,6 +1532,8 @@ struct TelemetryPushSummary {
     seg_id: String,
     records: usize,
     bytes: usize,
+    source_bytes: u64,
+    mode: &'static str,
 }
 
 #[derive(Serialize)]
@@ -1529,6 +1542,15 @@ struct TelemetryPushEnvelope<'a> {
     seq: u64,
     mime: &'a str,
     payload: &'a str,
+}
+
+#[derive(Serialize)]
+struct TelemetryReferenceEnvelope<'a> {
+    schema: &'static str,
+    seq: u64,
+    off: u64,
+    len: u64,
+    sha256: &'a str,
 }
 
 #[derive(Serialize)]
@@ -2426,11 +2448,13 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         match self.telemetry_push(args.src_path, args.device_id) {
                             Ok(summary) => {
                                 let detail = format!(
-                                    "action=push device={} seg_id={} records={} bytes={}",
+                                    "action=push device={} seg_id={} records={} bytes={} source_bytes={} mode={}",
                                     summary.device_id,
                                     summary.seg_id,
                                     summary.records,
-                                    summary.bytes
+                                    summary.bytes,
+                                    summary.source_bytes,
+                                    summary.mode,
                                 );
                                 let ack = match render_telemetry_ack(AckStatus::Ok, &detail) {
                                     Ok(ack) => ack,
@@ -2864,28 +2888,17 @@ impl<T: Transport, W: Write> Shell<T, W> {
         if !metadata.is_file() {
             return Err(anyhow!("telemetry push source must be a file"));
         }
-        if metadata.len() == 0 {
+        let source_bytes = metadata.len();
+        if source_bytes == 0 {
             return Err(anyhow!("telemetry push source is empty"));
         }
-        if metadata.len() as usize > TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT {
+        if source_bytes > TELEMETRY_INGEST_MAX_REFERENCE_BYTES_PER_SEGMENT {
             return Err(anyhow!(
-                "telemetry push source exceeds max_bytes_per_segment {} bytes",
-                TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT
+                "telemetry push source exceeds max_reference_bytes_per_segment {} bytes",
+                TELEMETRY_INGEST_MAX_REFERENCE_BYTES_PER_SEGMENT
             ));
         }
         let mime = telemetry_mime_for_path(source)?;
-        let data = fs::read(source)
-            .with_context(|| format!("failed to read telemetry push source {src_path}"))?;
-        let text =
-            std::str::from_utf8(&data).context("telemetry push source must be UTF-8 text")?;
-        let records = build_telemetry_records(text, mime)?;
-        let total_bytes: usize = records.iter().map(|record| record.len()).sum();
-        if total_bytes > TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT {
-            return Err(anyhow!(
-                "telemetry push payload exceeds max_bytes_per_segment {} bytes",
-                TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT
-            ));
-        }
         let ctl_path = format!("/queen/telemetry/{device_id}/ctl");
         ensure_valid_path(&ctl_path)?;
         let ctl_payload = build_telemetry_ctl_payload(mime)?;
@@ -2909,6 +2922,41 @@ impl<T: Transport, W: Write> Shell<T, W> {
         };
         let seg_path = format!("/queen/telemetry/{device_id}/seg/{seg_id}");
         ensure_valid_path(&seg_path)?;
+        let tcp_endpoint = self.transport.tcp_endpoint().is_some();
+        let max_record_bytes =
+            TELEMETRY_RECORD_MAX_BYTES.min(max_payload_len_for_transport(&seg_path, tcp_endpoint));
+        if max_record_bytes == 0 {
+            return Err(anyhow!("telemetry push record budget resolved to zero"));
+        }
+        let (mode, records, total_bytes) = if source_bytes as usize
+            <= TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT
+        {
+            let data = fs::read(source)
+                .with_context(|| format!("failed to read telemetry push source {src_path}"))?;
+            match std::str::from_utf8(&data) {
+                Ok(text) => {
+                    let inline_records = build_telemetry_records(text, mime, max_record_bytes)?;
+                    let inline_bytes: usize =
+                        inline_records.iter().map(|record| record.len()).sum();
+                    if inline_bytes <= TELEMETRY_INGEST_MAX_BYTES_PER_SEGMENT {
+                        ("inline", inline_records, inline_bytes)
+                    } else {
+                        let (reference_records, manifest_bytes) =
+                            build_telemetry_reference_records_from_file(source, max_record_bytes)?;
+                        ("reference", reference_records, manifest_bytes)
+                    }
+                }
+                Err(_) => {
+                    let (reference_records, manifest_bytes) =
+                        build_telemetry_reference_records_from_file(source, max_record_bytes)?;
+                    ("reference", reference_records, manifest_bytes)
+                }
+            }
+        } else {
+            let (reference_records, manifest_bytes) =
+                build_telemetry_reference_records_from_file(source, max_record_bytes)?;
+            ("reference", reference_records, manifest_bytes)
+        };
         if !records.is_empty() {
             let written = self.transport.write_batch(&session, &seg_path, &records)?;
             if written != records.len() {
@@ -2925,6 +2973,8 @@ impl<T: Transport, W: Write> Shell<T, W> {
             seg_id,
             records: records.len(),
             bytes: total_bytes,
+            source_bytes,
+            mode,
         })
     }
 
@@ -3447,11 +3497,13 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         match self.telemetry_push(args.src_path, args.device_id) {
                             Ok(summary) => {
                                 let detail = format!(
-                                    "action=push device={} seg_id={} records={} bytes={}",
+                                    "action=push device={} seg_id={} records={} bytes={} source_bytes={} mode={}",
                                     summary.device_id,
                                     summary.seg_id,
                                     summary.records,
-                                    summary.bytes
+                                    summary.bytes,
+                                    summary.source_bytes,
+                                    summary.mode,
                                 );
                                 let ack = render_telemetry_ack(AckStatus::Ok, &detail)?;
                                 self.write_ack_line(&ack)?;
@@ -3863,7 +3915,12 @@ fn max_payload_len_for_transport(path: &str, tcp_endpoint: bool) -> usize {
     } else {
         (MAX_MSIZE as usize).saturating_sub(4)
     };
-    max_payload_len_for_path(path, line_capacity)
+    let line_budget = max_payload_len_for_path(path, line_capacity);
+    if tcp_endpoint {
+        line_budget.min(MAX_ECHO_LEN)
+    } else {
+        line_budget
+    }
 }
 
 fn build_payload(
@@ -4079,7 +4136,7 @@ fn build_telemetry_ctl_payload(mime: &str) -> Result<String> {
     Ok(payload)
 }
 
-fn build_telemetry_records(payload: &str, mime: &str) -> Result<Vec<Vec<u8>>> {
+fn build_telemetry_records(payload: &str, mime: &str, max_record_bytes: usize) -> Result<Vec<Vec<u8>>> {
     if payload.is_empty() {
         return Err(anyhow!("telemetry push payload is empty"));
     }
@@ -4087,19 +4144,19 @@ fn build_telemetry_records(payload: &str, mime: &str) -> Result<Vec<Vec<u8>>> {
     let mut seq = 1u64;
     let mut records = Vec::new();
     while !remaining.is_empty() {
-        let payload_len = select_telemetry_payload_len(remaining, seq, mime)?;
+        let payload_len = select_telemetry_payload_len(remaining, seq, mime, max_record_bytes)?;
         if payload_len == 0 {
             return Err(anyhow!(
                 "telemetry record exceeds max_record_bytes {}",
-                TELEMETRY_RECORD_MAX_BYTES
+                max_record_bytes
             ));
         }
         let chunk = &remaining[..payload_len];
         let record = build_telemetry_record(seq, mime, chunk)?;
-        if record.len() > TELEMETRY_RECORD_MAX_BYTES {
+        if record.len() > max_record_bytes {
             return Err(anyhow!(
                 "telemetry record exceeds max_record_bytes {}",
-                TELEMETRY_RECORD_MAX_BYTES
+                max_record_bytes
             ));
         }
         records.push(record);
@@ -4109,7 +4166,12 @@ fn build_telemetry_records(payload: &str, mime: &str) -> Result<Vec<Vec<u8>>> {
     Ok(records)
 }
 
-fn select_telemetry_payload_len(remaining: &str, seq: u64, mime: &str) -> Result<usize> {
+fn select_telemetry_payload_len(
+    remaining: &str,
+    seq: u64,
+    mime: &str,
+    max_record_bytes: usize,
+) -> Result<usize> {
     let mut low = 0usize;
     let mut high = remaining.len();
     while low < high {
@@ -4119,7 +4181,7 @@ fn select_telemetry_payload_len(remaining: &str, seq: u64, mime: &str) -> Result
         }
         let candidate = &remaining[..mid];
         let record = build_telemetry_record(seq, mime, candidate)?;
-        if record.len() <= TELEMETRY_RECORD_MAX_BYTES {
+        if record.len() <= max_record_bytes {
             low = mid;
         } else {
             high = mid.saturating_sub(1);
@@ -4136,6 +4198,100 @@ fn build_telemetry_record(seq: u64, mime: &str, payload: &str) -> Result<Vec<u8>
         payload,
     };
     let mut encoded = serde_json::to_string(&envelope).context("telemetry record encode failed")?;
+    encoded.push('\n');
+    Ok(encoded.into_bytes())
+}
+
+fn build_telemetry_reference_records_from_file(
+    source: &Path,
+    max_record_bytes: usize,
+) -> Result<(Vec<Vec<u8>>, usize)> {
+    let source_bytes = fs::metadata(source)
+        .with_context(|| format!("failed to stat telemetry source {}", source.display()))?
+        .len();
+    if source_bytes == 0 {
+        return Err(anyhow!("telemetry push source is empty"));
+    }
+    if source_bytes > TELEMETRY_INGEST_MAX_REFERENCE_BYTES_PER_SEGMENT {
+        return Err(anyhow!(
+            "telemetry source bytes {} exceeds max_reference_bytes_per_segment {}",
+            source_bytes,
+            TELEMETRY_INGEST_MAX_REFERENCE_BYTES_PER_SEGMENT
+        ));
+    }
+    let mut file = fs::File::open(source)
+        .with_context(|| format!("failed to open telemetry source {}", source.display()))?;
+    let mut offset = 0u64;
+    let mut seq = 1u64;
+    let mut records = Vec::new();
+    let mut manifest_bytes = 0usize;
+    let mut buffer = vec![0u8; TELEMETRY_REFERENCE_CHUNK_BYTES];
+    loop {
+        let read = file
+            .read(buffer.as_mut_slice())
+            .with_context(|| format!("failed to read telemetry source {}", source.display()))?;
+        if read == 0 {
+            break;
+        }
+        if records.len().saturating_add(1) > TELEMETRY_INGEST_MAX_REFERENCE_ENTRIES_PER_SEGMENT {
+            return Err(anyhow!(
+                "telemetry reference entries exceed max_reference_entries_per_segment {}",
+                TELEMETRY_INGEST_MAX_REFERENCE_ENTRIES_PER_SEGMENT
+            ));
+        }
+        let sha256 = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&buffer[..read]);
+            let digest = hasher.finalize();
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+        };
+        let record = build_telemetry_reference_record(seq, offset, read as u64, sha256.as_str())?;
+        if record.len() > max_record_bytes {
+            return Err(anyhow!(
+                "telemetry reference record exceeds max_record_bytes {}",
+                max_record_bytes
+            ));
+        }
+        manifest_bytes = manifest_bytes.saturating_add(record.len());
+        if manifest_bytes > TELEMETRY_INGEST_MAX_REFERENCE_MANIFEST_BYTES_PER_SEGMENT {
+            return Err(anyhow!(
+                "telemetry reference manifest exceeds max_reference_manifest_bytes_per_segment {}",
+                TELEMETRY_INGEST_MAX_REFERENCE_MANIFEST_BYTES_PER_SEGMENT
+            ));
+        }
+        records.push(record);
+        offset = offset.saturating_add(read as u64);
+        seq = seq.saturating_add(1);
+    }
+    if records.is_empty() {
+        return Err(anyhow!("telemetry reference manifest is empty"));
+    }
+    if offset != source_bytes {
+        return Err(anyhow!(
+            "telemetry reference source scan mismatch expected={} actual={}",
+            source_bytes,
+            offset
+        ));
+    }
+    Ok((records, manifest_bytes))
+}
+
+fn build_telemetry_reference_record(
+    seq: u64,
+    offset: u64,
+    chunk_bytes: u64,
+    sha256: &str,
+) -> Result<Vec<u8>> {
+    let envelope = TelemetryReferenceEnvelope {
+        schema: TELEMETRY_REFERENCE_SCHEMA,
+        seq,
+        off: offset,
+        len: chunk_bytes,
+        sha256,
+    };
+    let mut encoded =
+        serde_json::to_string(&envelope).context("telemetry reference record encode failed")?;
     encoded.push('\n');
     Ok(encoded.into_bytes())
 }
@@ -4389,6 +4545,20 @@ mod tests {
     fn echo_payload_expands_msize_sentinel() {
         let payload = build_echo_payload(TEST_MSIZE_SENTINEL).unwrap();
         assert!(payload.len() > MAX_MSIZE as usize);
+    }
+
+    #[test]
+    fn tcp_payload_budget_is_capped_by_console_echo_limit() {
+        let path = "/queen/telemetry/telemetry-demo/seg/seg-000001";
+        let budget = max_payload_len_for_transport(path, true);
+        assert_eq!(budget, MAX_ECHO_LEN);
+    }
+
+    #[test]
+    fn non_tcp_payload_budget_uses_msize_window() {
+        let path = "/queen/telemetry/telemetry-demo/seg/seg-000001";
+        let budget = max_payload_len_for_transport(path, false);
+        assert!(budget > MAX_ECHO_LEN);
     }
 
     #[test]

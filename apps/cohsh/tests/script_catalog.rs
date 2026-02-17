@@ -171,7 +171,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "tcp_basic.coh:619970b6ff14332bbef80f704c117b4471653bb75f7a6187b27d93fbc16415a7"
             .to_owned(),
-        "telemetry_push_create.coh:9c4303824d27694869366c806c654482728cecf265c87d0de84f8598cd0e78a2"
+        "telemetry_push_create.coh:d8612c5d812d4e5d20e6dd3973569194b201d4465eadab9a6e61deb203231dea"
             .to_owned(),
         "telemetry_ring.coh:92ca2e5604e7b123e1aa026a2ca7b27fe6f914cc8cb280faff6189e6c35e1513"
             .to_owned(),

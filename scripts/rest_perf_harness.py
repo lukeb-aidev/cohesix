@@ -14,10 +14,13 @@ Modes:
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import csv
 import errno
+import hashlib
 import json
+import math
 import os
 import random
 import signal
@@ -57,6 +60,36 @@ DEFAULT_AUTH_TOKEN = ""
 DEFAULT_REQUEST_AUTH_TOKEN = ""
 DEFAULT_ROLE = "queen"
 DEFAULT_SUMMARY_MAX_ERROR_LINES = 400
+DEFAULT_READY_TIMEOUT_SECS = 180
+DEFAULT_TELEMETRY_REFERENCE_CHUNK_BYTES = 16 * 1024 * 1024
+
+FAST_RAMP_WORKERS_MIN = 24
+FAST_RAMP_WORKERS_MAX = 120
+FAST_RAMP_INTENSITY_MIN = 2
+FAST_RAMP_INTENSITY_MAX = 10
+FAST_RAMP_DURATION_MINS = 2
+FAST_RAMP_RAMP_STEP_SECS = 8
+FAST_RAMP_BASE_RPS = 0.6
+FAST_RAMP_MAX_INFLIGHT = 192
+
+TELEMETRY_SCENARIO_BYTES = {
+    "telemetry-1mb": 1 * 1024 * 1024,
+    "telemetry-10mb": 10 * 1024 * 1024,
+    "telemetry-100mb": 100 * 1024 * 1024,
+    "telemetry-1gb": 1024 * 1024 * 1024,
+}
+TELEMETRY_REFERENCE_SCHEMA = "coh-ref-c/v1"
+
+
+@dataclass(frozen=True)
+class TelemetryScenario:
+    """Scenario preset for large telemetry reference-manifest runs."""
+
+    name: str
+    artifact_bytes: int
+    chunk_bytes: int
+    reference_entries: int
+    requests_per_operation: int
 
 
 @dataclass(frozen=True)
@@ -288,6 +321,9 @@ class SimState:
     next_schedule_seq: int = 0
     next_lease_seq: int = 0
     logger: Optional[RunLogger] = None
+    telemetry_scenario: Optional[TelemetryScenario] = None
+    telemetry_reference_chunk_bytes: int = DEFAULT_TELEMETRY_REFERENCE_CHUNK_BYTES
+    telemetry_reference_records: Optional[List[str]] = None
 
 
 def should_tolerate_buffer_full(response: GatewayResponse, state: SimState) -> bool:
@@ -591,6 +627,87 @@ def clamp_float(
     return value
 
 
+def resolve_telemetry_scenario(
+    scenario_name: Optional[str], chunk_bytes: int
+) -> Optional[TelemetryScenario]:
+    if scenario_name is None:
+        return None
+    artifact_bytes = TELEMETRY_SCENARIO_BYTES[scenario_name]
+    entries = max(1, int(math.ceil(artifact_bytes / float(chunk_bytes))))
+    # Per operation: create-segment write + latest read + N manifest writes.
+    requests_per_operation = entries + 2
+    return TelemetryScenario(
+        name=scenario_name,
+        artifact_bytes=artifact_bytes,
+        chunk_bytes=chunk_bytes,
+        reference_entries=entries,
+        requests_per_operation=requests_per_operation,
+    )
+
+
+def build_telemetry_reference_record(
+    seq: int, offset: int, length: int, digest_b64: str
+) -> str:
+    envelope = {
+        "schema": TELEMETRY_REFERENCE_SCHEMA,
+        "seq": int(seq),
+        "off": int(offset),
+        "len": int(length),
+        "sha256": digest_b64,
+    }
+    return json.dumps(envelope, separators=(",", ":"))
+
+
+def build_telemetry_reference_records_for_bytes(
+    total_bytes: int, chunk_bytes: int
+) -> List[str]:
+    if total_bytes <= 0:
+        raise ValueError("total_bytes must be > 0")
+    if chunk_bytes <= 0:
+        raise ValueError("chunk_bytes must be > 0")
+    records: List[str] = []
+    offset = 0
+    seq = 1
+    while offset < total_bytes:
+        length = min(chunk_bytes, total_bytes - offset)
+        digest_seed = f"cohesix-ref:{total_bytes}:{seq}:{offset}:{length}".encode(
+            "utf-8"
+        )
+        digest = hashlib.sha256(digest_seed).digest()
+        digest_b64 = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+        records.append(build_telemetry_reference_record(seq, offset, length, digest_b64))
+        offset += length
+        seq += 1
+    return records
+
+
+def apply_fast_ramp_defaults(args: argparse.Namespace) -> None:
+    if not args.fast_ramp:
+        return
+    if args.workers_min == DEFAULT_WORKERS_MIN:
+        args.workers_min = FAST_RAMP_WORKERS_MIN
+    if args.workers_max == DEFAULT_WORKERS_MAX:
+        args.workers_max = FAST_RAMP_WORKERS_MAX
+    if args.intensity_min == DEFAULT_INTENSITY_MIN:
+        args.intensity_min = FAST_RAMP_INTENSITY_MIN
+    if args.intensity_max == DEFAULT_INTENSITY_MAX:
+        args.intensity_max = FAST_RAMP_INTENSITY_MAX
+    if args.duration_mins == DEFAULT_DURATION_MINS:
+        args.duration_mins = FAST_RAMP_DURATION_MINS
+    if args.ramp_step_secs == DEFAULT_RAMP_STEP_SECS:
+        args.ramp_step_secs = FAST_RAMP_RAMP_STEP_SECS
+    if abs(args.base_rps - DEFAULT_BASE_RPS) < 1e-9:
+        args.base_rps = FAST_RAMP_BASE_RPS
+    if args.max_inflight == DEFAULT_MAX_INFLIGHT:
+        args.max_inflight = FAST_RAMP_MAX_INFLIGHT
+
+
+def error_rate(entry: OpStats) -> float:
+    if entry.count <= 0:
+        return 0.0
+    return entry.err / entry.count
+
+
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -704,6 +821,12 @@ def parse_args() -> argparse.Namespace:
         "--gateway-log",
         default=None,
         help="Path to write hive-gateway log output.",
+    )
+    launch.add_argument(
+        "--ready-timeout-secs",
+        type=int,
+        default=DEFAULT_READY_TIMEOUT_SECS,
+        help="Timeout budget for QEMU/gateway readiness checks.",
     )
     launch.add_argument(
         "--gateway-pool-control-sessions",
@@ -831,6 +954,40 @@ def parse_args() -> argparse.Namespace:
         help="Disable transient retry loops; each operation is attempted once.",
     )
     sim.add_argument(
+        "--no-retries",
+        action="store_true",
+        help="Alias for --no-transient-retries.",
+    )
+    sim.add_argument(
+        "--fast-ramp",
+        action="store_true",
+        help=(
+            "Apply the accelerated ramp preset (workers/intensity/duration/"
+            "ramp/base_rps/max_inflight) unless explicitly overridden."
+        ),
+    )
+    sim.add_argument(
+        "--scenario",
+        choices=tuple(sorted(TELEMETRY_SCENARIO_BYTES.keys())),
+        default=None,
+        help="Optional large telemetry scenario preset.",
+    )
+    sim.add_argument(
+        "--error-budget-rate",
+        type=float,
+        default=None,
+        help=(
+            "Fail the run when overall error_rate exceeds this threshold "
+            "(for example 0.01 for 1%%)."
+        ),
+    )
+    sim.add_argument(
+        "--telemetry-reference-chunk-bytes",
+        type=int,
+        default=DEFAULT_TELEMETRY_REFERENCE_CHUNK_BYTES,
+        help="Reference-manifest chunk size used for scenario payload synthesis.",
+    )
+    sim.add_argument(
         "--strict-control-errors",
         action="store_true",
         help="Count control-plane buffer-full responses as errors.",
@@ -865,12 +1022,21 @@ def parse_args() -> argparse.Namespace:
         args.request_auth_token = env_request_token
 
     if args.mode == "simulate":
+        if args.no_retries:
+            args.no_transient_retries = True
         args.auto_approve = not args.no_auto_approve
         args.transient_retries = not args.no_transient_retries
         if not args.auth_token.strip():
             raise SystemExit(
                 "simulate mode requires --auth-token (or COH_AUTH_TOKEN/COHSH_AUTH_TOKEN)"
             )
+        args.telemetry_reference_chunk_bytes = clamp_int(
+            args.telemetry_reference_chunk_bytes,
+            1024,
+            128 * 1024 * 1024,
+            "telemetry-reference-chunk-bytes",
+        )
+        apply_fast_ramp_defaults(args)
         args.duration_mins = clamp_int(args.duration_mins, 1, 60, "duration-mins")
         args.workers_min = clamp_int(args.workers_min, 1, 1500, "workers-min")
         args.workers_max = clamp_int(args.workers_max, 1, 1500, "workers-max")
@@ -883,11 +1049,21 @@ def parse_args() -> argparse.Namespace:
         args.entropy = clamp_float(args.entropy, 0.0, 10.0, "entropy")
         args.base_rps = clamp_float(args.base_rps, 0.1, 1000.0, "base-rps")
         args.max_inflight = clamp_int(args.max_inflight, 1, 4096, "max-inflight")
+        if args.error_budget_rate is not None:
+            args.error_budget_rate = clamp_float(
+                args.error_budget_rate, 0.0, 1.0, "error-budget-rate"
+            )
         args.summary_max_error_lines = clamp_int(
             args.summary_max_error_lines,
             32,
             2000,
             "summary-max-error-lines",
+        )
+        args.ready_timeout_secs = clamp_int(
+            args.ready_timeout_secs,
+            30,
+            1200,
+            "ready-timeout-secs",
         )
         if args.gateway_pool_control_sessions is not None:
             args.gateway_pool_control_sessions = clamp_int(
@@ -1710,22 +1886,32 @@ def build_operations(
         )
 
     if state.telemetry_enabled:
-        ops.append(
-            Operation(
-                "telemetry_segment",
-                0.3,
-                "telemetry",
-                telemetry_segment_op,
+        if state.telemetry_scenario is not None:
+            ops.append(
+                Operation(
+                    "telemetry_reference_manifest",
+                    1.2,
+                    "telemetry",
+                    telemetry_reference_manifest_op,
+                )
             )
-        )
-        ops.append(
-            Operation(
-                "telemetry_append",
-                0.4,
-                "telemetry",
-                telemetry_append_op,
+        else:
+            ops.append(
+                Operation(
+                    "telemetry_segment",
+                    0.3,
+                    "telemetry",
+                    telemetry_segment_op,
+                )
             )
-        )
+            ops.append(
+                Operation(
+                    "telemetry_append",
+                    0.4,
+                    "telemetry",
+                    telemetry_append_op,
+                )
+            )
 
     if state.include_lifecycle and "queen" in root_entries:
         for token in ("cordon", "resume", "reset"):
@@ -1783,6 +1969,56 @@ def telemetry_append_op(client: RestClient, _worker: str, state: SimState) -> No
         state,
         timeout_s=10.0,
         label=f"telemetry append {device_id}",
+        base_sleep=0.2,
+    )
+
+
+def telemetry_reference_records_for_state(state: SimState) -> List[str]:
+    if state.telemetry_scenario is None:
+        raise RestError("telemetry scenario is not configured")
+    if state.telemetry_reference_records is None:
+        records = build_telemetry_reference_records_for_bytes(
+            state.telemetry_scenario.artifact_bytes,
+            state.telemetry_scenario.chunk_bytes,
+        )
+        if len(records) != state.telemetry_scenario.reference_entries:
+            raise RestError(
+                "telemetry scenario record synthesis mismatch "
+                f"expected={state.telemetry_scenario.reference_entries} "
+                f"actual={len(records)}"
+            )
+        state.telemetry_reference_records = records
+    return state.telemetry_reference_records
+
+
+def telemetry_reference_manifest_op(
+    client: RestClient,
+    worker: str,
+    state: SimState,
+) -> None:
+    scenario = state.telemetry_scenario
+    if scenario is None:
+        raise RestError("telemetry reference scenario is not enabled")
+    records = telemetry_reference_records_for_state(state)
+    device_id = f"bench-{worker}"
+
+    def attempt() -> None:
+        segment = ensure_telemetry_segment(client, state, device_id, force_new=True)
+        path = f"/queen/telemetry/{device_id}/seg/{segment}"
+        for line in records:
+            response = client.echo(path, line)
+            if response.status != "OK":
+                raise RestError(
+                    f"ECHO {path} failed: {response.error}",
+                    response,
+                )
+
+    timeout_s = max(10.0, float(len(records)) * 0.25)
+    run_with_retry_policy(
+        attempt,
+        state,
+        timeout_s=timeout_s,
+        label=f"telemetry reference {scenario.name}",
         base_sleep=0.2,
     )
 
@@ -2004,11 +2240,21 @@ def run_simulation(args: argparse.Namespace) -> int:
             env = os.environ.copy()
             env["COHESIX_QEMU_SMP_TOPO"] = args.qemu_smp
             qemu_proc = launch_process([qemu_run], env, args.qemu_log)
-            wait_for_port(args.tcp_host, args.tcp_port, 120)
-            validate_tcp_auth(args.tcp_host, args.tcp_port, args.auth_token, 120)
+            wait_for_port(args.tcp_host, args.tcp_port, args.ready_timeout_secs)
+            validate_tcp_auth(
+                args.tcp_host,
+                args.tcp_port,
+                args.auth_token,
+                args.ready_timeout_secs,
+            )
         else:
-            wait_for_port(args.tcp_host, args.tcp_port, 60)
-            validate_tcp_auth(args.tcp_host, args.tcp_port, args.auth_token, 60)
+            wait_for_port(args.tcp_host, args.tcp_port, args.ready_timeout_secs)
+            validate_tcp_auth(
+                args.tcp_host,
+                args.tcp_port,
+                args.auth_token,
+                args.ready_timeout_secs,
+            )
 
         if not args.no_gateway:
             gateway_host, gateway_port = parse_bind_host_port(
@@ -2051,7 +2297,7 @@ def run_simulation(args: argparse.Namespace) -> int:
             )
 
         client = RestClient(rest_url, args.timeout, args.request_auth_token)
-        bounds = wait_for_gateway(client, 60)
+        bounds = wait_for_gateway(client, args.ready_timeout_secs)
 
         root_entries = discover_root_entries(client)
         host_paths = discover_host_paths(client)
@@ -2059,6 +2305,13 @@ def run_simulation(args: argparse.Namespace) -> int:
         policy_on = policy_enabled(client)
         actions_on = actions_enabled(client)
         telemetry_on = telemetry_ingest_enabled(client)
+        scenario = resolve_telemetry_scenario(
+            args.scenario, args.telemetry_reference_chunk_bytes
+        )
+        if scenario is not None and not telemetry_on:
+            raise SystemExit(
+                "telemetry scenario requested but /queen/telemetry is unavailable"
+            )
 
         state = SimState(
             bounds=bounds,
@@ -2074,6 +2327,8 @@ def run_simulation(args: argparse.Namespace) -> int:
             transient_retries=args.transient_retries,
             strict_control_errors=args.strict_control_errors,
             logger=args.logger,
+            telemetry_scenario=scenario,
+            telemetry_reference_chunk_bytes=args.telemetry_reference_chunk_bytes,
         )
 
         worker_ids, spawned = ensure_workers(client, state, args.workers_min)
@@ -2106,8 +2361,16 @@ def run_simulation(args: argparse.Namespace) -> int:
             f"transient_retries={'on' if args.transient_retries else 'off'} "
             f"strict_control_errors={'on' if args.strict_control_errors else 'off'} "
             f"gateway_pool_control={args.gateway_pool_control_sessions or 'default'} "
-            f"gateway_pool_telemetry={args.gateway_pool_telemetry_sessions or 'default'}"
+            f"gateway_pool_telemetry={args.gateway_pool_telemetry_sessions or 'default'} "
+            f"scenario={scenario.name if scenario else 'mixed'} "
+            f"error_budget_rate={args.error_budget_rate if args.error_budget_rate is not None else 'none'}"
         )
+        if scenario is not None:
+            args.logger.log(
+                f"[simulate] scenario={scenario.name} artifact_bytes={scenario.artifact_bytes} "
+                f"chunk_bytes={scenario.chunk_bytes} reference_entries={scenario.reference_entries} "
+                f"requests_per_operation={scenario.requests_per_operation}"
+            )
 
         executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=args.max_inflight
@@ -2144,6 +2407,11 @@ def run_simulation(args: argparse.Namespace) -> int:
 
                     step_end = min(end_time, now + ramp_step)
                     rps = args.base_rps * target_intensity * max(len(worker_ids), 1)
+                    if (
+                        scenario is not None
+                        and scenario.requests_per_operation > 0
+                    ):
+                        rps = rps / scenario.requests_per_operation
                     if rps <= 0:
                         time.sleep(step_end - time.time())
                         continue
@@ -2207,6 +2475,16 @@ def run_simulation(args: argparse.Namespace) -> int:
 
         args.logger.log("[simulate] summary")
         report_stats(overall, stats, args.logger)
+        overall_err_rate = error_rate(overall)
+        error_budget_pass = (
+            args.error_budget_rate is None
+            or overall_err_rate <= args.error_budget_rate
+        )
+        args.logger.log(
+            f"[simulate] reliability error_rate={overall_err_rate:.6f} "
+            f"budget={args.error_budget_rate if args.error_budget_rate is not None else 'none'} "
+            f"pass={'yes' if error_budget_pass else 'no'}"
+        )
         artifacts = write_simulation_artifacts(
             args,
             args.logger,
@@ -2214,6 +2492,8 @@ def run_simulation(args: argparse.Namespace) -> int:
             stats,
             ramp_rows,
             state.worker_cap,
+            overall_err_rate,
+            error_budget_pass,
         )
         for label, path in artifacts.items():
             args.logger.log(f"[artifact] {label}={path}")
@@ -2228,6 +2508,12 @@ def run_simulation(args: argparse.Namespace) -> int:
             args.logger.log("[cleanup] skipping per-worker kill; QEMU teardown will reset state")
         if run_error is not None:
             args.logger.log(f"[simulate] failed: {run_error}")
+            return 1
+        if not error_budget_pass:
+            args.logger.log(
+                "[simulate] failed: error budget exceeded "
+                f"(error_rate={overall_err_rate:.6f} budget={args.error_budget_rate})"
+            )
             return 1
         return 0
     finally:
@@ -2353,6 +2639,8 @@ def write_simulation_artifacts(
     stats: Dict[str, OpStats],
     ramp_rows: List[Dict[str, object]],
     worker_cap: Optional[int],
+    overall_error_rate: float,
+    error_budget_pass: bool,
 ) -> Dict[str, str]:
     base_path = logger.path.rsplit(".", 1)[0]
     summary_json = f"{base_path}.summary.json"
@@ -2371,7 +2659,14 @@ def write_simulation_artifacts(
         "intensity_max": args.intensity_max,
         "duration_mins": args.duration_mins,
         "transient_retries": args.transient_retries,
+        "no_retries": not args.transient_retries,
         "strict_control_errors": args.strict_control_errors,
+        "fast_ramp": args.fast_ramp,
+        "scenario": args.scenario,
+        "telemetry_reference_chunk_bytes": args.telemetry_reference_chunk_bytes,
+        "error_budget_rate": args.error_budget_rate,
+        "error_rate": overall_error_rate,
+        "error_budget_pass": error_budget_pass,
         "gateway_pool_control_sessions": args.gateway_pool_control_sessions,
         "gateway_pool_telemetry_sessions": args.gateway_pool_telemetry_sessions,
         "overall": operation_summary(overall, args.summary_max_error_lines),

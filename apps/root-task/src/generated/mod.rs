@@ -101,6 +101,9 @@ pub struct TelemetryIngestConfig {
     pub max_segments_per_device: u32,
     pub max_bytes_per_segment: u32,
     pub max_total_bytes_per_device: u32,
+    pub max_reference_entries_per_segment: u32,
+    pub max_reference_manifest_bytes_per_segment: u32,
+    pub max_reference_bytes_per_segment: u64,
     pub eviction_policy: TelemetryIngestEvictionPolicy,
 }
 
@@ -397,7 +400,7 @@ pub struct AuditConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
-pub const MANIFEST_SHA256: &str = "36dbaac12406c2984dc207399045931bf3e080463df8774b6e469e24abcd0da8";
+pub const MANIFEST_SHA256: &str = "7886e1a2e1a95b39b2e894c714ddf1d317995fefa8da956aa796c8b070ccf1a8";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

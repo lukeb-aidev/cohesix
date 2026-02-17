@@ -2079,7 +2079,7 @@ impl Namespace {
         }
         let outcome = self
             .telemetry_ingest
-            .append_record(device_id, seg_id, data.len())
+            .append_record(device_id, seg_id, data)
             .map_err(map_telemetry_ingest_error)?;
         for evicted in &outcome.evicted {
             self.remove_telemetry_ingest_segment(device_id, evicted)?;
@@ -3424,6 +3424,7 @@ fn map_telemetry_ingest_error(err: TelemetryIngestError) -> NineDoorError {
             ErrorCode::NotFound
         }
         TelemetryIngestErrorKind::QuotaExceeded => ErrorCode::TooBig,
+        TelemetryIngestErrorKind::InvalidPayload => ErrorCode::Invalid,
     };
     NineDoorError::protocol(code, err.message)
 }

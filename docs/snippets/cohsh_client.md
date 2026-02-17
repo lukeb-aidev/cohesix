@@ -3,7 +3,7 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `36dbaac12406c2984dc207399045931bf3e080463df8774b6e469e24abcd0da8`
+- `manifest.sha256`: `7886e1a2e1a95b39b2e894c714ddf1d317995fefa8da956aa796c8b070ccf1a8`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
 - `trace.max_bytes`: `1048576`
@@ -15,8 +15,11 @@
 - `client_paths.policy_ctl`: `/policy/ctl`
 - `client_paths.log`: `/log/queen.log`
 - `telemetry_ingest.max_segments_per_device`: `4`
-- `telemetry_ingest.max_bytes_per_segment`: `32768`
-- `telemetry_ingest.max_total_bytes_per_device`: `131072`
+- `telemetry_ingest.max_bytes_per_segment`: `131072`
+- `telemetry_ingest.max_total_bytes_per_device`: `524288`
+- `telemetry_ingest.max_reference_entries_per_segment`: `1024`
+- `telemetry_ingest.max_reference_manifest_bytes_per_segment`: `131072`
+- `telemetry_ingest.max_reference_bytes_per_segment`: `1073741824`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 
-_Generated from `configs/root_task.toml` (sha256: `36dbaac12406c2984dc207399045931bf3e080463df8774b6e469e24abcd0da8`)._
+_Generated from `configs/root_task.toml` (sha256: `7886e1a2e1a95b39b2e894c714ddf1d317995fefa8da956aa796c8b070ccf1a8`)._

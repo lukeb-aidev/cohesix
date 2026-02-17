@@ -44,6 +44,9 @@ fn telemetry_ingest_disabled_hides_namespace() {
         max_segments_per_device: 0,
         max_bytes_per_segment: 0,
         max_total_bytes_per_device: 0,
+        max_reference_entries_per_segment: 0,
+        max_reference_manifest_bytes_per_segment: 0,
+        max_reference_bytes_per_segment: 0,
         eviction_policy: TelemetryIngestEvictionPolicy::Refuse,
     };
     let server = NineDoor::new_with_limits_and_telemetry_manifest(
@@ -69,6 +72,7 @@ fn telemetry_ingest_allocates_segment_and_latest() {
         max_bytes_per_segment: 256,
         max_total_bytes_per_device: 512,
         eviction_policy: TelemetryIngestEvictionPolicy::Refuse,
+        ..TelemetryIngestConfig::default()
     };
     let server = NineDoor::new_with_limits_and_telemetry_manifest(
         Arc::new(TestClock::default()),
