@@ -98,6 +98,8 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25c](#25c) | Python Orchestration SDK (1k Fleet Playbooks + Host Integrations) | Complete |
 | [25d](#25d) | REST Request-Auth Parity Across Host Tools (Gateway Capability Max) | In Progress |
 | [25e](#25e) | Evidence Packs + Integration Kits (Audit-First Adoption) | Complete |
+| [25f](#25f) | Gateway Broker Refactor + Large Telemetry Reference Manifests (No-Retry Reliability Gate) | Pending |
+| [25g](#25g) | Host Control Tickets via FUSE (GPU/PEFT + systemd/docker + K8s Coexistence) | Pending |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -5432,9 +5434,275 @@ Deliverables:
   - Receipt artifacts suitable for audit and internal billing pipelines.
 ```
 
+---
+
+## Milestone 25f — Gateway Broker Refactor + Large Telemetry Reference Manifests (No-Retry Reliability Gate) <a id="25f"></a>
+[Milestones](#Milestones)
+
+**Why now (beta reliability + telemetry realism):** Strict no-retry gateway runs still surface backpressure and timeout failures under accelerated mixed control/telemetry load. The gateway currently multiplexes logical pool sessions over one locked TCP transport, and current harness coverage does not explicitly pressure MB/GB telemetry scenarios. This milestone addresses the root cause while preserving Cohesix red lines and single-console architecture.
+
+## Goal
+Deliver a Cohesix-aligned reliability and scale step that:
+1. Replaces lock-contention request handling in `hive-gateway` with a bounded broker model (single wire owner, concurrent REST callers).
+2. Allows many chunk references per telemetry manifest so MB/GB-class host artifacts can be represented without turning telemetry ingest into generic file transfer.
+3. Expands the performance harness to explicit `1 MB`, `10 MB`, `100 MB`, and `1 GB` gateway scenarios with `--no-retries`, fast ramp, and strict error-budget gating.
+
+## Non-Goals (Explicit)
+- No new in-VM TCP listeners, RPC channels, or ad-hoc host/VM protocols.
+- No change to ACK/ERR/END grammar, NineDoor error semantics, or Secure9P red lines (`msize <= 8192`, walk depth <= 8).
+- No generic POSIX create/upload semantics under telemetry paths; segment naming/retention remains OS-owned and bounded.
+- No hidden retry paths in benchmark mode; failures must remain visible and count against pass/fail.
+
+## Implementation Touchpoints
+- `apps/hive-gateway/src/main.rs` - brokerized request scheduler/dispatcher, bounded queueing, fairness between control and telemetry classes, and queue/backpressure observability.
+- `apps/cohsh/src/transport/tcp.rs`, `apps/cohsh/src/session_pool.rs` - align transport/session abstractions with gateway broker ownership (single wire writer, no concurrent socket mutation).
+- `tools/coh-rtc/src/ir.rs`, `configs/root_task.toml`, generated policy artifacts - introduce bounded telemetry reference-manifest limits (count/bytes) as manifest-driven controls.
+- `apps/nine-door/src/host/telemetry.rs`, `apps/root-task/src/ninedoor.rs` - validate and enforce reference-manifest envelopes and quotas deterministically.
+- `apps/cohsh/src/lib.rs`, `apps/coh/src/telemetry.rs`, `tools/cohesix-py` - support telemetry push/pull workflows that emit and consume chunk-reference manifests under manifest limits.
+- `scripts/rest_perf_harness.py`, `tests/test_rest_perf_harness.py` - add explicit large-size scenario matrix, no-retry mode, fast-ramp presets, and strict error-budget exit behavior.
+- `docs/INTERFACES.md`, `docs/HOST_TOOLS.md`, `docs/TEST_PLAN.md` - document as-built manifest-reference envelope semantics and benchmark gates.
+
+## Commands
+- `cargo test -p hive-gateway`
+- `cargo test -p cohsh`
+- `cargo test -p nine-door`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `.venv/bin/python -m pytest -q tests/test_rest_perf_harness.py`
+- `python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1mb --error-budget-rate 0.01`
+- `python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01`
+- `python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-100mb --error-budget-rate 0.01`
+- `python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1gb --error-budget-rate 0.01`
+
+## Checks (Definition of Done)
+- Gateway REST handlers use a bounded broker queue/dispatcher instead of per-request lock contention on shared transport state; control-path latency remains protected under telemetry pressure.
+- Backpressure is explicit and deterministic (`429` / gateway backpressure path), with queue depth and timeout counters exposed in status telemetry.
+- Telemetry reference manifests accept many bounded chunk references per segment (manifest-driven limits), reject malformed/oversized entries deterministically, and never relax existing per-record Secure9P bounds.
+- Large-file scenarios (`1 MB`, `10 MB`, `100 MB`, `1 GB`) run through gateway mode with `--no-retries` and fast ramp; heavy-ish beta gate is `error_rate <= 1.0%` (`--error-budget-rate 0.01`) and harness exits non-zero on violation.
+- `docs/TEST_PLAN.md` includes mandatory commands and pass criteria for all four scenarios (no skip path).
+
+## Task Breakdown
+```
+Title/ID: m25f-gateway-broker-refactor
+Goal: Replace lock-contention transport access with a bounded broker model while preserving single-console wire ownership.
+Inputs: apps/hive-gateway/src/main.rs, apps/cohsh/src/session_pool.rs, apps/cohsh/src/transport/tcp.rs, docs/HOST_TOOLS.md.
+Changes:
+  - apps/hive-gateway/src/main.rs - add broker request queues (control + telemetry), deterministic scheduling/fairness, and queue-aware backpressure responses.
+  - apps/hive-gateway/src/main.rs - keep `hive-gateway` as sole console client; remove direct per-request competition on shared transport mutex.
+  - apps/cohsh/src/session_pool.rs, apps/cohsh/src/transport/tcp.rs - align lease/session lifecycle with broker ownership and bounded shutdown/reconnect behavior.
+Commands:
+  - cargo test -p hive-gateway
+  - cargo test -p cohsh
+Checks:
+  - Under concurrent REST load, checkout timeout/backpressure rates fall materially from baseline and control-plane operations remain serviceable.
+Deliverables:
+  - Brokerized gateway transport path with deterministic backpressure telemetry.
+
+Title/ID: m25f-telemetry-manifest-chunk-references
+Goal: Support MB/GB telemetry artifacts via many bounded chunk references rather than bulk inline payload transfer.
+Inputs: tools/coh-rtc/src/ir.rs, configs/root_task.toml, apps/nine-door/src/host/telemetry.rs, apps/root-task/src/ninedoor.rs, docs/INTERFACES.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs + configs/root_task.toml - add manifest-driven limits for telemetry reference manifests (max refs, max manifest bytes, max referenced bytes scope as required).
+  - apps/nine-door/src/host/telemetry.rs + apps/root-task/src/ninedoor.rs - enforce deterministic validation for reference-manifest envelopes and bounded append semantics.
+  - apps/cohsh/src/lib.rs + apps/coh/src/telemetry.rs - add/extend host tooling for emitting reference manifests and resolving latest segment IDs without new control verbs.
+  - docs/INTERFACES.md - document reference-manifest schema and limits as-built.
+Commands:
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo test -p nine-door
+  - cargo test -p cohsh
+Checks:
+  - Valid manifests append successfully; malformed and over-limit manifests fail with deterministic ERR details.
+Deliverables:
+  - Manifest-reference telemetry ingest path suitable for real-world artifact sizes while preserving Cohesix control-plane boundaries.
+
+Title/ID: m25f-harness-large-scenarios-no-retry
+Goal: Make gateway reliability regressions visible with explicit no-retry large-size scenario gates.
+Inputs: scripts/rest_perf_harness.py, tests/test_rest_perf_harness.py, docs/TEST_PLAN.md.
+Changes:
+  - scripts/rest_perf_harness.py - add explicit scenario presets (`telemetry-1mb`, `telemetry-10mb`, `telemetry-100mb`, `telemetry-1gb`) routed through gateway paths.
+  - scripts/rest_perf_harness.py - enforce `--no-retries` mode, fast-ramp controls, and strict `--error-budget-rate` pass/fail behavior.
+  - tests/test_rest_perf_harness.py - cover scenario wiring, no-retry semantics, and error-budget failure behavior.
+  - docs/TEST_PLAN.md - add canonical commands and required outputs for all four scenarios.
+Commands:
+  - .venv/bin/python -m pytest -q tests/test_rest_perf_harness.py
+  - python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1mb --error-budget-rate 0.01
+  - python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01
+  - python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-100mb --error-budget-rate 0.01
+  - python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1gb --error-budget-rate 0.01
+Checks:
+  - Each scenario emits deterministic summary artifacts and fails hard (exit code non-zero) when error rate exceeds budget.
+Deliverables:
+  - A repeatable large-object gateway reliability gate with no hidden retries.
+
+Title/ID: m25f-docs-sync-and-operator-guidance
+Goal: Keep docs-as-built alignment for broker behavior, large telemetry references, and no-retry gates.
+Inputs: docs/INTERFACES.md, docs/HOST_TOOLS.md, docs/TEST_PLAN.md, docs/ARCHITECTURE.md.
+Changes:
+  - docs/INTERFACES.md - describe telemetry reference-manifest envelopes and manifest-driven limits.
+  - docs/HOST_TOOLS.md - document gateway broker behavior, expected backpressure signals, and operator tuning knobs.
+  - docs/TEST_PLAN.md - codify the mandatory 1MB/10MB/100MB/1GB no-retry fast-ramp matrix and pass/fail policy.
+  - docs/ARCHITECTURE.md - update transport implementation notes to reflect brokerized gateway path while preserving single-console architecture.
+Commands:
+  - scripts/ci/check_test_plan.sh
+Checks:
+  - Documentation matches implemented flags, limits, and failure semantics exactly.
+Deliverables:
+  - Canonical operator and test documentation for Milestone 25f.
+```
+
 ----
 **Release 0.9.0 alpha**
 ----
+
+---
+
+## Milestone 25g — Host Control Tickets via FUSE (GPU/PEFT + systemd/docker + K8s Coexistence) <a id="25g"></a>
+[Milestones](#Milestones)
+
+**Why now (high-value orchestration):** Cohesix already has bounded control surfaces for `/gpu/*`, `/host/*`, policy gates, and evidence packs, but host actions still require tool-specific flows. The highest-leverage next step is a unified, auditable host execution queue where Queen emits bounded JSON control tickets and host executors consume them through mounted file views without adding new protocols.
+
+## Goal
+Deliver a deterministic, policy-gated host control-ticket plane that:
+1. Defines a manifest-driven ticket contract with idempotency and lifecycle states.
+2. Adds a host ticket agent that watches mounted ticket files and executes bounded adapters.
+3. Prioritizes high-value adapters: GPU lease/PEFT lifecycle, systemd remediation, Docker remediation, and Kubernetes coexistence translation.
+4. Extends evidence/replay so every ticket decision is traceable and reproducible.
+
+## Non-Goals (Explicit)
+- No new in-VM TCP listeners, RPC channels, or host/VM sideband protocols.
+- No change to ACK/ERR/END grammar, NineDoor error semantics, or Secure9P bounds.
+- No in-VM CUDA/NVML, no in-VM container runtime, and no bypass of role/ticket authorization.
+- No unbounded queueing, retries, or background mutation loops.
+
+## Design Principles (Normative)
+1. **Spec/status split** - ticket requests and ticket outcomes are append-only, separate streams.
+2. **At-least-once + idempotency** - executors may re-read; outcomes are deduplicated by `id` + `idempotency_key`.
+3. **Policy-first execution** - Queen gating and ticket scopes remain authoritative before host side effects.
+4. **Replayability** - ticket state transitions are deterministic and captured by existing audit/evidence paths.
+
+## Implementation Touchpoints
+- `tools/coh-rtc/src/ir.rs`, `configs/root_task.toml`, generated artifacts - emit ticket schema/bounds (`host-ticket/v1`) and allowlisted action kinds.
+- `apps/nine-door/src/host/*`, `apps/root-task/src/ninedoor.rs` - expose bounded ticket files under `/host/tickets/*` with append-only semantics.
+- `apps/host-ticket-agent/*` (new host tool) - watch mounted ticket streams, claim work, execute adapters, and append status receipts.
+- `apps/gpu-bridge-host/*`, `apps/coh/src/peft/*` - GPU/PEFT ticket executors.
+- `apps/host-sidecar-bridge/*` - systemd/docker/K8s adapter execution and status projection.
+- `tools/cohesix-py/*` - optional RBAC-to-ticket translation helpers for Kubernetes coexistence workflows.
+- `docs/INTERFACES.md`, `docs/HOST_TOOLS.md`, `docs/USERLAND_AND_CLI.md`, `docs/USE_CASES.md`, `docs/TEST_PLAN.md`, `docs/ARCHITECTURE.md` - docs-as-built and operator/test alignment.
+
+## Commands
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `scripts/check-generated.sh`
+- `cargo test -p nine-door`
+- `cargo test -p host-sidecar-bridge`
+- `cargo test -p gpu-bridge-host`
+- `cargo test -p coh --features mock`
+- `cargo test -p tests --test shard_1k`
+- `python3 -m pytest tools/cohesix-py/tests -q`
+- `scripts/ci/check_test_plan.sh`
+
+## Checks (Definition of Done)
+- Ticket namespace is manifest-gated and bounded, with deterministic state transitions:
+  - `queued` -> `claimed` -> `running` -> `succeeded|failed|expired`.
+- Host ticket agent executes only allowlisted actions and writes bounded status receipts without leaking auth tokens or raw signing secrets.
+- GPU/PEFT tickets drive `lease`, `import`, `activate`, and `rollback` flows using existing `/gpu/*` and `/queen/export/*` semantics.
+- systemd/docker tickets perform bounded remediation (restart/stop/status verify) through host adapters and emit correlatable outcomes.
+- Kubernetes coexistence flow translates RBAC-scoped intents into Cohesix tickets without introducing alternative control-plane semantics.
+- Evidence packs and timeline tooling include ticket request/outcome correlation so incident replay and chargeback are deterministic.
+- `docs/TEST_PLAN.md` includes mandatory ticket-flow runs (GPU/PEFT, systemd, docker, K8s coexistence, replay/evidence) with no skip path.
+
+## Task Breakdown
+```
+Title/ID: m25g-ticket-ir-and-namespace
+Goal: Define host control-ticket schema/bounds and expose append-only ticket streams in the namespace.
+Inputs: tools/coh-rtc/src/ir.rs, configs/root_task.toml, apps/nine-door/src/host, apps/root-task/src/ninedoor.rs, docs/INTERFACES.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs + configs/root_task.toml - add `host-ticket/v1` schema, action allowlist, byte caps, and lifecycle enums.
+  - apps/nine-door/src/host/tickets.rs + apps/root-task/src/ninedoor.rs - add `/host/tickets/spec`, `/host/tickets/status`, `/host/tickets/deadletter`, and bounded snapshot nodes.
+  - docs/INTERFACES.md - document ticket file paths, schema, and deterministic failure semantics.
+Commands:
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - scripts/check-generated.sh
+  - cargo test -p nine-door
+Checks:
+  - Valid ticket lines append successfully; malformed/over-limit lines fail deterministically.
+Deliverables:
+  - Manifest-driven host ticket contract with generated artifacts and interface docs.
+
+Title/ID: m25g-host-ticket-agent-core
+Goal: Add a host-only ticket agent that watches mounted ticket streams and executes bounded work with idempotent claims.
+Inputs: apps/coh/src/mount.rs, apps/host-ticket-agent (new), docs/HOST_TOOLS.md, docs/ARCHITECTURE.md.
+Changes:
+  - apps/host-ticket-agent/src/main.rs - tail/watch loop for `/host/tickets/spec` with deterministic cursor resume.
+  - apps/host-ticket-agent/src/claim.rs - claim/idempotency handling keyed by `id` + `idempotency_key`.
+  - apps/host-ticket-agent/src/status.rs - append bounded `host-ticket-result/v1` receipts to `/host/tickets/status`.
+  - docs/HOST_TOOLS.md + docs/ARCHITECTURE.md - document runtime model, failure handling, and single-console constraints.
+Commands:
+  - cargo test -p host-ticket-agent
+Checks:
+  - Agent survives watcher interruptions, resumes from cursor, and avoids duplicate side effects for repeated tickets.
+Deliverables:
+  - Host ticket execution agent with deterministic claim/execute/report lifecycle.
+
+Title/ID: m25g-gpu-peft-ticket-executors
+Goal: Implement high-value GPU lease and PEFT lifecycle ticket actions.
+Inputs: apps/gpu-bridge-host, apps/coh/src/peft, docs/GPU_NODES.md, docs/USE_CASES.md.
+Changes:
+  - apps/host-ticket-agent/src/executors/gpu.rs - execute `gpu.lease.grant|renew|release` and verify via `/gpu/<id>/lease`.
+  - apps/host-ticket-agent/src/executors/peft.rs - execute `peft.import|activate|rollback` using existing host registry and `/gpu/models/*` flows.
+  - docs/GPU_NODES.md + docs/USE_CASES.md - document ticket-driven GPU/PEFT orchestration for multi-tenant edge and model governance use cases.
+Commands:
+  - cargo test -p gpu-bridge-host
+  - cargo test -p coh --features mock
+Checks:
+  - Ticketed GPU/PEFT flows are auditable, bounded, and preserve existing lease/model semantics.
+Deliverables:
+  - Ticket executors for the highest-value GPU/PEFT control loops.
+
+Title/ID: m25g-systemd-docker-remediation
+Goal: Add deterministic systemd/docker remediation ticket actions through host-side adapters.
+Inputs: apps/host-sidecar-bridge, apps/host-ticket-agent, docs/HOST_TOOLS.md, docs/INTERFACES.md.
+Changes:
+  - apps/host-ticket-agent/src/executors/systemd.rs - support allowlisted `start|stop|restart|status-check` unit actions.
+  - apps/host-ticket-agent/src/executors/docker.rs - support allowlisted container restart/stop/status actions with bounded output capture.
+  - apps/host-sidecar-bridge/src/providers/* - normalize status verification for post-action receipts.
+  - docs/HOST_TOOLS.md + docs/INTERFACES.md - document remediation action schemas and safeguards.
+Commands:
+  - cargo test -p host-sidecar-bridge
+  - cargo test -p host-ticket-agent
+Checks:
+  - Remediation actions emit deterministic success/failure receipts and never execute non-allowlisted commands.
+Deliverables:
+  - Policy-bounded systemd/docker ticket remediation path.
+
+Title/ID: m25g-k8s-rbac-ticket-translation
+Goal: Preserve Kubernetes coexistence by translating RBAC-scoped intents into Cohesix host tickets.
+Inputs: tools/cohesix-py, apps/host-ticket-agent, docs/USE_CASES.md, docs/PYTHON_SUPPORT.md.
+Changes:
+  - tools/cohesix-py/cohesix/orchestrator.py - add optional RBAC-to-ticket translation helpers for cordon/drain/lease workflows.
+  - apps/host-ticket-agent/src/executors/k8s.rs - execute allowlisted K8s actions and emit bounded receipts.
+  - docs/USE_CASES.md + docs/PYTHON_SUPPORT.md - document coexistence constraints, identity mapping, and ticket translation flow.
+Commands:
+  - python3 -m pytest tools/cohesix-py/tests -q
+  - cargo test -p host-ticket-agent
+Checks:
+  - K8s coexistence remains out-of-band governance (no scheduler replacement) with deterministic ticket/audit linkage.
+Deliverables:
+  - RBAC-scoped K8s coexistence adapter over ticketed control semantics.
+
+Title/ID: m25g-evidence-replay-and-testplan
+Goal: Extend audit/evidence/replay and codify mandatory ticket-flow validation in the Test Plan.
+Inputs: apps/coh/src/evidence.rs, apps/coh/src/evidence_timeline.rs, docs/TEST_PLAN.md, docs/SECURITY.md, docs/USERLAND_AND_CLI.md.
+Changes:
+  - apps/coh/src/evidence.rs + apps/coh/src/evidence_timeline.rs - correlate ticket `id`/`idempotency_key` across spec/status/audit/lease artifacts.
+  - docs/TEST_PLAN.md - add mandatory control-ticket matrix: GPU/PEFT, systemd remediation, docker remediation, K8s coexistence translation, and replay/timeline validation.
+  - docs/SECURITY.md + docs/USERLAND_AND_CLI.md - document token redaction, idempotency semantics, and operator procedures.
+Commands:
+  - cargo test -p coh
+  - scripts/ci/check_test_plan.sh
+Checks:
+  - Evidence packs and timelines are deterministic and include ticket correlation for all mandatory ticket classes.
+Deliverables:
+  - Canonical docs and regression requirements for Milestone 25g ticketed orchestration.
+```
 
 ---
 
