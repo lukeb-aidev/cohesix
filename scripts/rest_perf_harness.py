@@ -2248,13 +2248,19 @@ def run_simulation(args: argparse.Namespace) -> int:
                 args.ready_timeout_secs,
             )
         else:
-            wait_for_port(args.tcp_host, args.tcp_port, args.ready_timeout_secs)
-            validate_tcp_auth(
-                args.tcp_host,
-                args.tcp_port,
-                args.auth_token,
-                args.ready_timeout_secs,
-            )
+            if args.no_gateway:
+                emit(
+                    args.logger,
+                    "using external gateway; skipping direct TCP auth preflight",
+                )
+            else:
+                wait_for_port(args.tcp_host, args.tcp_port, args.ready_timeout_secs)
+                validate_tcp_auth(
+                    args.tcp_host,
+                    args.tcp_port,
+                    args.auth_token,
+                    args.ready_timeout_secs,
+                )
 
         if not args.no_gateway:
             gateway_host, gateway_port = parse_bind_host_port(

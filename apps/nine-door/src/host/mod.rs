@@ -47,8 +47,8 @@ pub use self::audit::{AuditConfig, AuditLimits, ReplayConfig};
 pub use self::cas::CasConfig;
 use self::core::{role_to_uname, ServerCore};
 pub use self::namespace::{
-    HostNamespaceConfig, HostProvider, ShardLayout, SidecarBusAdapterConfig, SidecarBusConfig,
-    SidecarLoraAdapterConfig, SidecarLoraConfig, SidecarNamespaceConfig,
+    HostNamespaceConfig, HostProvider, HostTicketPolicy, ShardLayout, SidecarBusAdapterConfig,
+    SidecarBusConfig, SidecarLoraAdapterConfig, SidecarLoraConfig, SidecarNamespaceConfig,
 };
 pub use self::observe::{
     ObserveConfig, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig,

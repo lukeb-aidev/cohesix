@@ -7,12 +7,20 @@
 
 //! Host-sidecar bridge helpers that publish mock provider data into `/host`.
 
+/// Provider output normalization helpers.
+pub mod providers;
+
 use anyhow::{bail, Context, Result};
 use cohesix_ticket::Role;
 use cohsh::Transport;
 use nine_door::HostProvider;
 use std::collections::HashMap;
 use std::process::Command;
+
+use crate::providers::{
+    format_docker_status_line, format_systemd_status_line, parse_docker_info_output,
+    parse_systemd_show_output,
+};
 
 const DEFAULT_SYSTEMD_UNITS: &[&str] = &["cohesix-agent.service", "ssh.service"];
 const DEFAULT_K8S_NODES: &[&str] = &["node-1"];
@@ -425,20 +433,9 @@ fn systemd_unit_status(unit: &str) -> Result<String> {
         bail!("systemctl show {unit} failed");
     }
     let text = String::from_utf8(output.stdout).context("systemctl output not UTF-8")?;
-    let mut state = "unknown";
-    let mut sub = "unknown";
-    for line in text.lines() {
-        if let Some(value) = line.strip_prefix("ActiveState=") {
-            state = value.trim();
-        } else if let Some(value) = line.strip_prefix("SubState=") {
-            sub = value.trim();
-        }
-    }
-    Ok(format!(
-        "state={} sub={}",
-        sanitize_value(state),
-        sanitize_value(sub)
-    ))
+    let parsed = parse_systemd_show_output(text.as_str())
+        .ok_or_else(|| anyhow::anyhow!("systemctl output missing ActiveState/SubState"))?;
+    Ok(format_systemd_status_line(&parsed))
 }
 
 fn kubectl_nodes() -> Result<HashMap<String, String>> {
@@ -487,18 +484,9 @@ fn docker_status_line() -> Result<String> {
         bail!("docker info failed");
     }
     let text = String::from_utf8(output.stdout).context("docker info not UTF-8")?;
-    let tokens = text.split_whitespace().collect::<Vec<_>>();
-    if tokens.len() < 5 {
-        bail!("docker info output incomplete");
-    }
-    Ok(format!(
-        "version={} containers={} running={} paused={} stopped={}",
-        sanitize_value(tokens[0]),
-        sanitize_value(tokens[1]),
-        sanitize_value(tokens[2]),
-        sanitize_value(tokens[3]),
-        sanitize_value(tokens[4])
-    ))
+    let parsed = parse_docker_info_output(text.as_str())
+        .ok_or_else(|| anyhow::anyhow!("docker info output incomplete"))?;
+    Ok(format_docker_status_line(&parsed))
 }
 
 #[derive(Debug, Clone)]

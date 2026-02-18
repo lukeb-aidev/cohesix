@@ -5,12 +5,12 @@
 
 #![allow(unused_imports)]
 
-use super::{AffinityPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostProvider, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig};
+use super::{AffinityPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig};
 use cohesix_ticket::Role;
 
 pub const TICKET_TABLE_SHA256: &str = "fd0ebff1d0b4cfcc2a03a1015578545dfa68f0240e782b60ad7956c2492972eb";
 pub const NAMESPACE_TABLE_SHA256: &str = "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
-pub const AUDIT_TABLE_SHA256: &str = "1fdd1b18e8f790003b400e40b532ca777a10b0bbc5dc9f3b8717ef101ae4e00e";
+pub const AUDIT_TABLE_SHA256: &str = "61347a321c056a7c4be6e10eceaf9a0e962c844971d1803ce47427a11eafc3aa";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec { role: Role::Queen, secret: "bootstrap" },
@@ -351,7 +351,35 @@ pub const HOST_PROVIDERS: [HostProvider; 4] = [
     HostProvider::Nvidia,
 ];
 
-pub const HOST_CONFIG: HostConfig = HostConfig { enable: true, mount_at: "/host", providers: &HOST_PROVIDERS };
+pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; 16] = [
+    HostTicketAction::GpuLeaseGrant,
+    HostTicketAction::GpuLeaseRenew,
+    HostTicketAction::GpuLeaseRelease,
+    HostTicketAction::PeftImport,
+    HostTicketAction::PeftActivate,
+    HostTicketAction::PeftRollback,
+    HostTicketAction::SystemdStart,
+    HostTicketAction::SystemdStop,
+    HostTicketAction::SystemdRestart,
+    HostTicketAction::SystemdStatusCheck,
+    HostTicketAction::DockerRestart,
+    HostTicketAction::DockerStop,
+    HostTicketAction::DockerStatusCheck,
+    HostTicketAction::K8sCordon,
+    HostTicketAction::K8sDrain,
+    HostTicketAction::K8sLeaseSync,
+];
+
+pub const HOST_TICKET_LIFECYCLE: [HostTicketLifecycleState; 6] = [
+    HostTicketLifecycleState::Queued,
+    HostTicketLifecycleState::Claimed,
+    HostTicketLifecycleState::Running,
+    HostTicketLifecycleState::Succeeded,
+    HostTicketLifecycleState::Failed,
+    HostTicketLifecycleState::Expired,
+];
+
+pub const HOST_CONFIG: HostConfig = HostConfig { enable: true, mount_at: "/host", providers: &HOST_PROVIDERS, tickets: HostTicketConfig { enable: true, request_schema: "host-ticket/v1", result_schema: "host-ticket-result/v1", max_line_bytes: 2048, action_allowlist: &HOST_TICKET_ACTION_ALLOWLIST, lifecycle: &HOST_TICKET_LIFECYCLE } };
 
 pub const MODBUS_ADAPTERS: [SidecarBusAdapter; 0] = [
 ];
@@ -386,7 +414,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = [
 pub const INITIAL_AUDIT_LINES: [&str; 23] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=7886e1a2e1a95b39b2e894c714ddf1d317995fefa8da956aa796c8b070ccf1a8",
+    "manifest.sha256=af1586465c29995de8086260fe57138aa3481d8ea70f42e5d37b1add06026af0",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

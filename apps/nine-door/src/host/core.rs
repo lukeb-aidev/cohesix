@@ -1796,6 +1796,9 @@ impl ServerCore {
         } else if let Some(target) = host_target {
             self.control
                 .ensure_lifecycle_gate(lifecycle::GATE_HOST_PUBLISH)?;
+            self.control
+                .namespace()
+                .validate_host_ticket_append(path.as_slice(), data)?;
             let count = self
                 .control
                 .namespace_mut()

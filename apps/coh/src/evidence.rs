@@ -28,6 +28,8 @@ const DEFAULT_AUDIT_FALLBACK_MAX_BYTES: usize = 16 * 1024;
 const DEFAULT_REPLAY_STATUS_MAX_BYTES: usize = 1024;
 const DEFAULT_PROC_BOOT_MAX_BYTES: usize = 64 * 1024;
 const DEFAULT_LOG_MAX_BYTES: usize = 128 * 1024;
+const DEFAULT_HOST_TICKET_MAX_BYTES: usize = 128 * 1024;
+const REDACTED_VALUE: &str = "<redacted>";
 
 /// Specification for exporting an evidence pack.
 #[derive(Debug, Clone)]
@@ -153,6 +155,7 @@ pub fn export_pack<C: CohAccess>(
     )?;
 
     capture_audit(client, spec, audit, &mut items)?;
+    capture_host_tickets(client, spec, audit, &mut items)?;
     capture_file(
         client,
         &spec.out_dir,
@@ -357,6 +360,27 @@ fn capture_audit<C: CohAccess>(
     Ok(())
 }
 
+fn capture_host_tickets<C: CohAccess>(
+    client: &mut C,
+    spec: &EvidencePackSpec,
+    audit: &mut CohAudit,
+    items: &mut Vec<EvidenceItem>,
+) -> Result<()> {
+    for path in [
+        "/host/tickets/spec",
+        "/host/tickets/status",
+        "/host/tickets/deadletter",
+    ] {
+        if let Some(payload) =
+            read_optional(client, path, DEFAULT_HOST_TICKET_MAX_BYTES, CaptureVerb::Cat, audit, items)?
+        {
+            let redacted = redact_host_ticket_json_lines(&payload)?;
+            write_payload(&spec.out_dir, path, &redacted)?;
+        }
+    }
+    Ok(())
+}
+
 fn redact_ticket_json_lines(payload: &[u8]) -> Result<Vec<u8>> {
     let text = std::str::from_utf8(payload).context("audit payload must be UTF-8")?;
     let mut out = String::new();
@@ -378,12 +402,65 @@ fn redact_ticket_json_lines(payload: &[u8]) -> Result<Vec<u8>> {
                 }
             }
         }
+        redact_sensitive_value(&mut value);
         let encoded =
             serde_json::to_string(&value).context("serialize redacted audit JSON line")?;
         out.push_str(&encoded);
         out.push('\n');
     }
     Ok(out.into_bytes())
+}
+
+fn redact_host_ticket_json_lines(payload: &[u8]) -> Result<Vec<u8>> {
+    let text = std::str::from_utf8(payload).context("host ticket payload must be UTF-8")?;
+    let mut out = String::new();
+    for (idx, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut value: serde_json::Value = serde_json::from_str(trimmed).with_context(|| {
+            format!(
+                "host ticket JSONL line {} is not valid JSON; refusing unsanitised export",
+                idx + 1
+            )
+        })?;
+        redact_sensitive_value(&mut value);
+        let encoded =
+            serde_json::to_string(&value).context("serialize redacted host ticket JSON line")?;
+        out.push_str(&encoded);
+        out.push('\n');
+    }
+    Ok(out.into_bytes())
+}
+
+fn redact_sensitive_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, nested) in map.iter_mut() {
+                if sensitive_key(key.as_str()) {
+                    *nested = serde_json::Value::String(REDACTED_VALUE.to_owned());
+                } else {
+                    redact_sensitive_value(nested);
+                }
+            }
+        }
+        serde_json::Value::Array(list) => {
+            for nested in list {
+                redact_sensitive_value(nested);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sensitive_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    lower.contains("token")
+        || lower.contains("secret")
+        || lower.contains("password")
+        || lower.contains("signing_key")
+        || lower.contains("api_key")
 }
 
 fn hash_ticket(ticket: &str) -> String {
@@ -563,12 +640,18 @@ fn error_item(path: &str, saved_as: &str, verb: CaptureVerb, err: &anyhow::Error
 }
 
 fn is_missing(err: &anyhow::Error) -> bool {
-    let msg = err.to_string();
-    msg.contains("NotFound")
-        || msg.contains("not found")
-        || msg.contains("disabled")
-        || msg.contains("does not exist")
-        || msg.contains("404")
+    for cause in err.chain() {
+        let msg = cause.to_string();
+        if msg.contains("NotFound")
+            || msg.contains("not found")
+            || msg.contains("disabled")
+            || msg.contains("does not exist")
+            || msg.contains("404")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn safe_detail(err: &anyhow::Error) -> String {

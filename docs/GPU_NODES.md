@@ -345,6 +345,11 @@ To deploy this at scale, only a few thin adapters are needed:
   - Publishes `/gpu/<id>/*`, `/gpu/models/*`, and `/gpu/telemetry/schema.json` via `/gpu/bridge/ctl`
   - Watches `/gpu/models` (host registry) for active pointer changes
   - Loads LoRA adapters via TensorRT / PyTorch
+- `host-ticket-agent`
+  - Tails `/host/tickets/spec` (`host-ticket/v1`) and executes allowlisted actions.
+  - Handles GPU lease tickets (`gpu.lease.grant|renew|release`) using existing `/queen/ctl`, `/queen/lease/ctl`, and `/gpu/<id>/lease`.
+  - Handles PEFT lifecycle tickets (`peft.import|activate|rollback`) using the same host registry and `/gpu/models/*` pointers as `coh peft`.
+  - Appends bounded lifecycle receipts to `/host/tickets/status` and `/host/tickets/deadletter` for evidence replay.
 
 ### Cloud-side
 - `coh peft` (host tool)

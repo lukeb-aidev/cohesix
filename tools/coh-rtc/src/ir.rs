@@ -46,6 +46,7 @@ const MAX_COH_TELEMETRY_DEVICES: u32 = 256;
 const MAX_COH_SCHEMA_LEN: usize = 64;
 const MAX_COH_LEASE_STATE_LEN: usize = 16;
 const MAX_COH_PEFT_ID_LEN: u32 = 256;
+const MAX_HOST_TICKET_ACTIONS: usize = 32;
 const MAX_LIFECYCLE_AUTO_TRANSITIONS: usize = 8;
 const MAX_SCHEDULE_ID_LEN: usize = 64;
 const MAX_SCHEDULE_ROLE_LEN: usize = 16;
@@ -327,10 +328,15 @@ impl Manifest {
     fn validate_ecosystem(&self) -> Result<()> {
         self.validate_policy()?;
         self.validate_audit()?;
-        if !self.ecosystem.host.enable {
+        let host = &self.ecosystem.host;
+        if !host.enable {
+            if host.tickets.enable {
+                bail!("ecosystem.host.tickets.enable requires ecosystem.host.enable = true");
+            }
             return Ok(());
         }
         self.validate_host_mount()?;
+        self.validate_host_tickets()?;
         if self.secure9p.msize > MAX_MSIZE {
             bail!("ecosystem.host.enable requires secure9p.msize <= {MAX_MSIZE}");
         }
@@ -727,12 +733,97 @@ impl Manifest {
                 MAX_WALK_DEPTH
             );
         }
+        if self.ecosystem.host.tickets.enable
+            && components.len().saturating_add(2) > self.secure9p.walk_depth as usize
+        {
+            bail!(
+                "ecosystem.host.mount_at requires secure9p.walk_depth >= {} for /tickets paths",
+                components.len() + 2
+            );
+        }
         for component in components {
             if component == ".." {
                 bail!("ecosystem.host.mount_at contains disallowed '..'");
             }
             if component.is_empty() {
                 bail!("ecosystem.host.mount_at contains empty path component");
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_host_tickets(&self) -> Result<()> {
+        let tickets = &self.ecosystem.host.tickets;
+        if !tickets.enable {
+            return Ok(());
+        }
+        let request_schema = tickets.request_schema.trim();
+        if request_schema.is_empty() {
+            bail!("ecosystem.host.tickets.request_schema must not be empty");
+        }
+        if request_schema.len() > MAX_COH_SCHEMA_LEN {
+            bail!(
+                "ecosystem.host.tickets.request_schema exceeds max length {}",
+                MAX_COH_SCHEMA_LEN
+            );
+        }
+        let result_schema = tickets.result_schema.trim();
+        if result_schema.is_empty() {
+            bail!("ecosystem.host.tickets.result_schema must not be empty");
+        }
+        if result_schema.len() > MAX_COH_SCHEMA_LEN {
+            bail!(
+                "ecosystem.host.tickets.result_schema exceeds max length {}",
+                MAX_COH_SCHEMA_LEN
+            );
+        }
+        if tickets.max_line_bytes == 0 {
+            bail!("ecosystem.host.tickets.max_line_bytes must be >= 1");
+        }
+        if tickets.max_line_bytes > self.secure9p.msize {
+            bail!(
+                "ecosystem.host.tickets.max_line_bytes {} exceeds secure9p.msize {}",
+                tickets.max_line_bytes,
+                self.secure9p.msize
+            );
+        }
+        if tickets.action_allowlist.is_empty() {
+            bail!("ecosystem.host.tickets.action_allowlist must not be empty");
+        }
+        if tickets.action_allowlist.len() > MAX_HOST_TICKET_ACTIONS {
+            bail!(
+                "ecosystem.host.tickets.action_allowlist exceeds max {}",
+                MAX_HOST_TICKET_ACTIONS
+            );
+        }
+        let mut seen_actions = BTreeSet::new();
+        for action in &tickets.action_allowlist {
+            if !seen_actions.insert(*action) {
+                bail!("ecosystem.host.tickets.action_allowlist has duplicates");
+            }
+        }
+        if tickets.lifecycle.is_empty() {
+            bail!("ecosystem.host.tickets.lifecycle must not be empty");
+        }
+        let mut seen_states = BTreeSet::new();
+        for state in &tickets.lifecycle {
+            if !seen_states.insert(*state) {
+                bail!("ecosystem.host.tickets.lifecycle has duplicates");
+            }
+        }
+        for required in [
+            HostTicketLifecycleState::Queued,
+            HostTicketLifecycleState::Claimed,
+            HostTicketLifecycleState::Running,
+            HostTicketLifecycleState::Succeeded,
+            HostTicketLifecycleState::Failed,
+            HostTicketLifecycleState::Expired,
+        ] {
+            if !seen_states.contains(&required) {
+                bail!(
+                    "ecosystem.host.tickets.lifecycle must include state '{}'",
+                    required.as_str()
+                );
             }
         }
         Ok(())
@@ -3127,6 +3218,8 @@ pub struct EcosystemHost {
     pub providers: Vec<HostProvider>,
     #[serde(default = "default_host_mount")]
     pub mount_at: String,
+    #[serde(default)]
+    pub tickets: HostTicketConfig,
 }
 
 impl Default for EcosystemHost {
@@ -3135,6 +3228,7 @@ impl Default for EcosystemHost {
             enable: false,
             providers: Vec::new(),
             mount_at: default_host_mount(),
+            tickets: HostTicketConfig::default(),
         }
     }
 }
@@ -3148,6 +3242,117 @@ pub enum HostProvider {
     Nvidia,
     Jetson,
     Net,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct HostTicketConfig {
+    pub enable: bool,
+    #[serde(default = "default_host_ticket_request_schema")]
+    pub request_schema: String,
+    #[serde(default = "default_host_ticket_result_schema")]
+    pub result_schema: String,
+    pub max_line_bytes: u32,
+    #[serde(default = "default_host_ticket_action_allowlist")]
+    pub action_allowlist: Vec<HostTicketAction>,
+    #[serde(default = "default_host_ticket_lifecycle")]
+    pub lifecycle: Vec<HostTicketLifecycleState>,
+}
+
+impl Default for HostTicketConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            request_schema: default_host_ticket_request_schema(),
+            result_schema: default_host_ticket_result_schema(),
+            max_line_bytes: 2048,
+            action_allowlist: default_host_ticket_action_allowlist(),
+            lifecycle: default_host_ticket_lifecycle(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HostTicketAction {
+    #[serde(rename = "gpu.lease.grant")]
+    GpuLeaseGrant,
+    #[serde(rename = "gpu.lease.renew")]
+    GpuLeaseRenew,
+    #[serde(rename = "gpu.lease.release")]
+    GpuLeaseRelease,
+    #[serde(rename = "peft.import")]
+    PeftImport,
+    #[serde(rename = "peft.activate")]
+    PeftActivate,
+    #[serde(rename = "peft.rollback")]
+    PeftRollback,
+    #[serde(rename = "systemd.start")]
+    SystemdStart,
+    #[serde(rename = "systemd.stop")]
+    SystemdStop,
+    #[serde(rename = "systemd.restart")]
+    SystemdRestart,
+    #[serde(rename = "systemd.status-check")]
+    SystemdStatusCheck,
+    #[serde(rename = "docker.restart")]
+    DockerRestart,
+    #[serde(rename = "docker.stop")]
+    DockerStop,
+    #[serde(rename = "docker.status-check")]
+    DockerStatusCheck,
+    #[serde(rename = "k8s.cordon")]
+    K8sCordon,
+    #[serde(rename = "k8s.drain")]
+    K8sDrain,
+    #[serde(rename = "k8s.lease.sync")]
+    K8sLeaseSync,
+}
+
+impl HostTicketAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::GpuLeaseGrant => "gpu.lease.grant",
+            Self::GpuLeaseRenew => "gpu.lease.renew",
+            Self::GpuLeaseRelease => "gpu.lease.release",
+            Self::PeftImport => "peft.import",
+            Self::PeftActivate => "peft.activate",
+            Self::PeftRollback => "peft.rollback",
+            Self::SystemdStart => "systemd.start",
+            Self::SystemdStop => "systemd.stop",
+            Self::SystemdRestart => "systemd.restart",
+            Self::SystemdStatusCheck => "systemd.status-check",
+            Self::DockerRestart => "docker.restart",
+            Self::DockerStop => "docker.stop",
+            Self::DockerStatusCheck => "docker.status-check",
+            Self::K8sCordon => "k8s.cordon",
+            Self::K8sDrain => "k8s.drain",
+            Self::K8sLeaseSync => "k8s.lease.sync",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case")]
+pub enum HostTicketLifecycleState {
+    Queued,
+    Claimed,
+    Running,
+    Succeeded,
+    Failed,
+    Expired,
+}
+
+impl HostTicketLifecycleState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Claimed => "claimed",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Expired => "expired",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3244,6 +3449,46 @@ impl Role {
 
 fn default_host_mount() -> String {
     "/host".to_owned()
+}
+
+fn default_host_ticket_request_schema() -> String {
+    "host-ticket/v1".to_owned()
+}
+
+fn default_host_ticket_result_schema() -> String {
+    "host-ticket-result/v1".to_owned()
+}
+
+fn default_host_ticket_action_allowlist() -> Vec<HostTicketAction> {
+    vec![
+        HostTicketAction::GpuLeaseGrant,
+        HostTicketAction::GpuLeaseRenew,
+        HostTicketAction::GpuLeaseRelease,
+        HostTicketAction::PeftImport,
+        HostTicketAction::PeftActivate,
+        HostTicketAction::PeftRollback,
+        HostTicketAction::SystemdStart,
+        HostTicketAction::SystemdStop,
+        HostTicketAction::SystemdRestart,
+        HostTicketAction::SystemdStatusCheck,
+        HostTicketAction::DockerRestart,
+        HostTicketAction::DockerStop,
+        HostTicketAction::DockerStatusCheck,
+        HostTicketAction::K8sCordon,
+        HostTicketAction::K8sDrain,
+        HostTicketAction::K8sLeaseSync,
+    ]
+}
+
+fn default_host_ticket_lifecycle() -> Vec<HostTicketLifecycleState> {
+    vec![
+        HostTicketLifecycleState::Queued,
+        HostTicketLifecycleState::Claimed,
+        HostTicketLifecycleState::Running,
+        HostTicketLifecycleState::Succeeded,
+        HostTicketLifecycleState::Failed,
+        HostTicketLifecycleState::Expired,
+    ]
 }
 
 fn default_coh_mount_root() -> String {

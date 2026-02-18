@@ -54,6 +54,34 @@ struct DecisionEntry {
     ticket: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct HostTicketSpecEntry {
+    id: String,
+    idempotency_key: String,
+    action: String,
+    #[serde(default)]
+    target: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct HostTicketResultEntry {
+    id: String,
+    idempotency_key: String,
+    action: String,
+    state: String,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct HostTicketIdentity {
+    id: String,
+    idempotency_key: String,
+    action: String,
+    state: Option<String>,
+    target: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct TimelineEvent {
     schema: &'static str,
@@ -77,6 +105,12 @@ struct TimelineEvent {
     payload: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    idempotency_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    correlation_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ticket_action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -111,6 +145,8 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
     let journal_path = pack_dir.join("audit").join("journal");
     if journal_path.is_file() {
         for entry in parse_jsonl::<AuditJournalEntry>(&journal_path, "audit/journal")? {
+            let ticket_identity =
+                parse_ticket_identity_from_payload(entry.path.as_str(), entry.payload.as_str());
             events.push(TimelineEvent {
                 schema: TIMELINE_SCHEMA,
                 kind: entry.kind,
@@ -123,11 +159,18 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
                 role: Some(entry.role),
                 ticket: Some(entry.ticket),
                 payload: Some(entry.payload),
-                id: None,
-                target: None,
+                id: ticket_identity.as_ref().map(|value| value.id.clone()),
+                idempotency_key: ticket_identity
+                    .as_ref()
+                    .map(|value| value.idempotency_key.clone()),
+                correlation_key: ticket_identity
+                    .as_ref()
+                    .map(|value| ticket_correlation_key(&value.id, &value.idempotency_key)),
+                ticket_action: ticket_identity.as_ref().map(|value| value.action.clone()),
+                target: ticket_identity.as_ref().and_then(|value| value.target.clone()),
                 subject: None,
                 resource: None,
-                state: None,
+                state: ticket_identity.as_ref().and_then(|value| value.state.clone()),
                 ttl_s: None,
                 priority: None,
             });
@@ -150,10 +193,111 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
                 ticket: Some(entry.ticket),
                 payload: None,
                 id: entry.id,
+                idempotency_key: None,
+                correlation_key: None,
+                ticket_action: None,
                 target: entry.target,
                 subject: None,
                 resource: None,
                 state: None,
+                ttl_s: None,
+                priority: None,
+            });
+        }
+    }
+
+    let host_ticket_spec = pack_dir.join("host").join("tickets").join("spec");
+    if host_ticket_spec.is_file() {
+        for entry in parse_jsonl::<HostTicketSpecEntry>(&host_ticket_spec, "host/tickets/spec")? {
+            events.push(TimelineEvent {
+                schema: TIMELINE_SCHEMA,
+                kind: "host-ticket.spec".to_owned(),
+                source: "host/tickets/spec".to_owned(),
+                seq: None,
+                lease_seq: None,
+                path: Some("/host/tickets/spec".to_owned()),
+                outcome: None,
+                error: None,
+                role: None,
+                ticket: None,
+                payload: None,
+                id: Some(entry.id.clone()),
+                idempotency_key: Some(entry.idempotency_key.clone()),
+                correlation_key: Some(ticket_correlation_key(
+                    entry.id.as_str(),
+                    entry.idempotency_key.as_str(),
+                )),
+                ticket_action: Some(entry.action),
+                target: entry.target,
+                subject: None,
+                resource: None,
+                state: Some("queued".to_owned()),
+                ttl_s: None,
+                priority: None,
+            });
+        }
+    }
+
+    let host_ticket_status = pack_dir.join("host").join("tickets").join("status");
+    if host_ticket_status.is_file() {
+        for entry in parse_jsonl::<HostTicketResultEntry>(&host_ticket_status, "host/tickets/status")? {
+            events.push(TimelineEvent {
+                schema: TIMELINE_SCHEMA,
+                kind: "host-ticket.status".to_owned(),
+                source: "host/tickets/status".to_owned(),
+                seq: None,
+                lease_seq: None,
+                path: Some("/host/tickets/status".to_owned()),
+                outcome: Some(entry.state.clone()),
+                error: None,
+                role: None,
+                ticket: None,
+                payload: entry.message,
+                id: Some(entry.id.clone()),
+                idempotency_key: Some(entry.idempotency_key.clone()),
+                correlation_key: Some(ticket_correlation_key(
+                    entry.id.as_str(),
+                    entry.idempotency_key.as_str(),
+                )),
+                ticket_action: Some(entry.action),
+                target: None,
+                subject: None,
+                resource: None,
+                state: Some(entry.state),
+                ttl_s: None,
+                priority: None,
+            });
+        }
+    }
+
+    let host_ticket_deadletter = pack_dir.join("host").join("tickets").join("deadletter");
+    if host_ticket_deadletter.is_file() {
+        for entry in
+            parse_jsonl::<HostTicketResultEntry>(&host_ticket_deadletter, "host/tickets/deadletter")?
+        {
+            events.push(TimelineEvent {
+                schema: TIMELINE_SCHEMA,
+                kind: "host-ticket.deadletter".to_owned(),
+                source: "host/tickets/deadletter".to_owned(),
+                seq: None,
+                lease_seq: None,
+                path: Some("/host/tickets/deadletter".to_owned()),
+                outcome: Some(entry.state.clone()),
+                error: None,
+                role: None,
+                ticket: None,
+                payload: entry.message,
+                id: Some(entry.id.clone()),
+                idempotency_key: Some(entry.idempotency_key.clone()),
+                correlation_key: Some(ticket_correlation_key(
+                    entry.id.as_str(),
+                    entry.idempotency_key.as_str(),
+                )),
+                ticket_action: Some(entry.action),
+                target: None,
+                subject: None,
+                resource: None,
+                state: Some(entry.state),
                 ttl_s: None,
                 priority: None,
             });
@@ -177,6 +321,9 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
                 ticket: None,
                 payload: None,
                 id: Some(entry.id),
+                idempotency_key: None,
+                correlation_key: None,
+                ticket_action: None,
                 target: None,
                 subject: Some(entry.subject),
                 resource: Some(entry.resource),
@@ -197,6 +344,11 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
         let right_lease = right.lease_seq.unwrap_or(u64::MAX);
         if left_lease != right_lease {
             return left_lease.cmp(&right_lease);
+        }
+        let left_corr = left.correlation_key.as_deref().unwrap_or("");
+        let right_corr = right.correlation_key.as_deref().unwrap_or("");
+        if left_corr != right_corr {
+            return left_corr.cmp(right_corr);
         }
         left.kind.cmp(&right.kind)
     });
@@ -220,6 +372,39 @@ fn parse_jsonl<T: for<'de> Deserialize<'de>>(path: &Path, label: &str) -> Result
         out.push(parsed);
     }
     Ok(out)
+}
+
+fn parse_ticket_identity_from_payload(path: &str, payload: &str) -> Option<HostTicketIdentity> {
+    if !path.starts_with("/host/tickets/") {
+        return None;
+    }
+    let trimmed = payload.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(parsed) = serde_json::from_str::<HostTicketResultEntry>(trimmed) {
+        return Some(HostTicketIdentity {
+            id: parsed.id,
+            idempotency_key: parsed.idempotency_key,
+            action: parsed.action,
+            state: Some(parsed.state),
+            target: None,
+        });
+    }
+    if let Ok(parsed) = serde_json::from_str::<HostTicketSpecEntry>(trimmed) {
+        return Some(HostTicketIdentity {
+            id: parsed.id,
+            idempotency_key: parsed.idempotency_key,
+            action: parsed.action,
+            state: Some("queued".to_owned()),
+            target: parsed.target,
+        });
+    }
+    None
+}
+
+fn ticket_correlation_key(id: &str, idempotency_key: &str) -> String {
+    format!("{id}:{idempotency_key}")
 }
 
 #[derive(Debug, Clone)]
@@ -317,6 +502,16 @@ fn write_markdown(path: &Path, events: &[TimelineEvent]) -> Result<()> {
                     event.state.as_deref().unwrap_or("")
                 ));
             }
+            _ if event.correlation_key.is_some() => {
+                out.push_str(&format!(
+                    "- ticket={} action={} state={} source={} target={}\n",
+                    event.correlation_key.as_deref().unwrap_or(""),
+                    event.ticket_action.as_deref().unwrap_or(""),
+                    event.state.as_deref().unwrap_or(""),
+                    event.source,
+                    event.target.as_deref().unwrap_or("")
+                ));
+            }
             _ => {}
         }
     }
@@ -333,4 +528,3 @@ fn write_atomic(path: &Path, payload: &[u8]) -> Result<()> {
     fs::rename(&tmp, path).with_context(|| format!("commit {}", path.display()))?;
     Ok(())
 }
-

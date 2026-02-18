@@ -129,6 +129,7 @@ const MAX_EXPORT_ID_LEN: usize = 64;
 const SYSTEMD_UNITS: [&str; 2] = ["cohesix-agent.service", "ssh.service"];
 const K8S_NODES: [&str; 1] = ["node-1"];
 const NVIDIA_GPUS: [&str; 1] = ["0"];
+const HOST_TICKET_ID_MAX_BYTES: usize = 128;
 const GPU_LEASE_SCHEMA: &str = "gpu-lease/v1";
 const GPU_LEASE_ACTIVE_STATE: &str = "ACTIVE";
 const LEASE_STATE_ACTIVE: &str = "ACTIVE";
@@ -1155,6 +1156,10 @@ impl NineDoorBridge {
                 }
                 return Err(NineDoorBridgeError::Permission);
             }
+            if !self.host.writable(path) {
+                self.log_host_write(path, Some(control), HostWriteOutcome::Denied, None);
+                return Err(NineDoorBridgeError::Permission);
+            }
             self.ensure_lifecycle_gate(lifecycle::GATE_HOST_PUBLISH)?;
             let role = self.role_label();
             let ticket = String::from(self.ticket_label());
@@ -1174,6 +1179,7 @@ impl NineDoorBridge {
                 }
                 PolicyGateDecision::Allowed(_) => {}
             }
+            self.host.validate_append(path, payload)?;
             self.host.update_value(path, payload);
             self.log_host_write(
                 path,
@@ -1208,6 +1214,10 @@ impl NineDoorBridge {
                 }
                 return Err(NineDoorBridgeError::Permission);
             }
+            if !self.host.writable(path) {
+                self.log_host_write(path, None, HostWriteOutcome::Denied, None);
+                return Err(NineDoorBridgeError::Permission);
+            }
             self.ensure_lifecycle_gate(lifecycle::GATE_HOST_PUBLISH)?;
             let role = self.role_label();
             let ticket = String::from(self.ticket_label());
@@ -1227,6 +1237,7 @@ impl NineDoorBridge {
                 }
                 PolicyGateDecision::Allowed(_) => {}
             }
+            self.host.validate_append(path, payload)?;
             self.host.update_value(path, payload);
             self.log_host_write(path, None, HostWriteOutcome::Allowed, Some(payload.len()));
             if self.audit.enabled {
@@ -3696,6 +3707,7 @@ struct HostEntry {
     path: String,
     value: String,
     control: Option<&'static str>,
+    writable: bool,
 }
 
 #[derive(Debug)]
@@ -3704,6 +3716,12 @@ struct HostState {
     mount_at: String,
     mount_parts: Vec<String>,
     providers: &'static [generated::HostProvider],
+    tickets_enabled: bool,
+    ticket_request_schema: &'static str,
+    ticket_result_schema: &'static str,
+    ticket_max_line_bytes: u32,
+    ticket_action_allowlist: &'static [generated::HostTicketAction],
+    ticket_lifecycle: &'static [generated::HostTicketLifecycleState],
     entries: Vec<HostEntry>,
 }
 
@@ -3727,6 +3745,12 @@ impl HostState {
             mount_at,
             mount_parts,
             providers: config.providers,
+            tickets_enabled: config.tickets.enable,
+            ticket_request_schema: config.tickets.request_schema,
+            ticket_result_schema: config.tickets.result_schema,
+            ticket_max_line_bytes: config.tickets.max_line_bytes,
+            ticket_action_allowlist: config.tickets.action_allowlist,
+            ticket_lifecycle: config.tickets.lifecycle,
             entries: Vec::new(),
         };
         if state.enabled {
@@ -3767,6 +3791,9 @@ impl HostState {
                 return None;
             }
             output.clear();
+            if self.tickets_enabled && push_list_entry(output, "tickets").is_err() {
+                return Some(Err(NineDoorBridgeError::BufferFull));
+            }
             for provider in self.providers.iter().copied() {
                 let label = host_provider_label(provider);
                 if push_list_entry(output, label).is_err() {
@@ -3780,6 +3807,20 @@ impl HostState {
         }
         let rel = &parts[self.mount_parts.len()..];
         match rel {
+            ["tickets"] if self.tickets_enabled => {
+                output.clear();
+                Some(list_from_slice_into(
+                    &[
+                        "spec",
+                        "status",
+                        "deadletter",
+                        "spec.snapshot",
+                        "status.snapshot",
+                        "deadletter.snapshot",
+                    ],
+                    output,
+                ))
+            }
             ["systemd"] if self.has_provider(generated::HostProvider::Systemd) => {
                 output.clear();
                 Some(list_from_slice_into(&SYSTEMD_UNITS, output))
@@ -3789,7 +3830,10 @@ impl HostState {
                     && SYSTEMD_UNITS.iter().any(|entry| entry == unit) =>
             {
                 output.clear();
-                Some(list_from_slice_into(&["status", "restart"], output))
+                Some(list_from_slice_into(
+                    &["status", "start", "stop", "restart"],
+                    output,
+                ))
             }
             ["k8s"] if self.has_provider(generated::HostProvider::K8s) => {
                 output.clear();
@@ -3808,7 +3852,7 @@ impl HostState {
             }
             ["docker"] if self.has_provider(generated::HostProvider::Docker) => {
                 output.clear();
-                Some(list_from_slice_into(&["status"], output))
+                Some(list_from_slice_into(&["status", "restart", "stop"], output))
             }
             ["nvidia"] if self.has_provider(generated::HostProvider::Nvidia) => {
                 output.clear();
@@ -3857,6 +3901,30 @@ impl HostState {
             .and_then(|entry| entry.control)
     }
 
+    fn writable(&self, path: &str) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        self.entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .map(|entry| entry.writable)
+            .unwrap_or(false)
+    }
+
+    fn validate_append(&self, path: &str, payload: &str) -> Result<(), NineDoorBridgeError> {
+        if !self.tickets_enabled {
+            return Ok(());
+        }
+        if path.ends_with("/tickets/spec") {
+            return self.validate_ticket_spec_lines(payload);
+        }
+        if path.ends_with("/tickets/status") || path.ends_with("/tickets/deadletter") {
+            return self.validate_ticket_result_lines(payload);
+        }
+        Ok(())
+    }
+
     fn update_value(&mut self, path: &str, value: &str) -> bool {
         if !self.enabled {
             return false;
@@ -3866,6 +3934,112 @@ impl HostState {
             return true;
         }
         false
+    }
+
+    fn validate_ticket_spec_lines(&self, payload: &str) -> Result<(), NineDoorBridgeError> {
+        let mut saw_line = false;
+        for raw_line in payload.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            saw_line = true;
+            self.validate_ticket_line_bytes(line)?;
+            validate_json_keys(
+                line,
+                &["schema", "id", "idempotency_key", "action", "target", "args"],
+            )?;
+            let schema =
+                parse_json_string_field(line, "schema").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            if schema != self.ticket_request_schema {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            let id =
+                parse_json_string_field(line, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let idempotency_key = parse_json_string_field(line, "idempotency_key")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let action =
+                parse_json_string_field(line, "action").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            validate_host_ticket_token(id)?;
+            validate_host_ticket_token(idempotency_key)?;
+            if !self
+                .ticket_action_allowlist
+                .iter()
+                .any(|allowed| host_ticket_action_label(*allowed) == action)
+            {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            if let Some(target) = parse_json_string_field(line, "target") {
+                if target.trim().is_empty() {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+            }
+        }
+        if !saw_line {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        Ok(())
+    }
+
+    fn validate_ticket_result_lines(&self, payload: &str) -> Result<(), NineDoorBridgeError> {
+        let mut saw_line = false;
+        for raw_line in payload.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            saw_line = true;
+            self.validate_ticket_line_bytes(line)?;
+            validate_json_keys(
+                line,
+                &["schema", "id", "idempotency_key", "action", "state", "message"],
+            )?;
+            let schema =
+                parse_json_string_field(line, "schema").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            if schema != self.ticket_result_schema {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            let id =
+                parse_json_string_field(line, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let idempotency_key = parse_json_string_field(line, "idempotency_key")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let action =
+                parse_json_string_field(line, "action").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let state = parse_json_string_field(line, "state")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            validate_host_ticket_token(id)?;
+            validate_host_ticket_token(idempotency_key)?;
+            if !self
+                .ticket_action_allowlist
+                .iter()
+                .any(|allowed| host_ticket_action_label(*allowed) == action)
+            {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            if !self
+                .ticket_lifecycle
+                .iter()
+                .any(|allowed| host_ticket_lifecycle_label(*allowed) == state)
+            {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            if let Some(message) = parse_json_string_field(line, "message") {
+                if message.trim().is_empty() {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+            }
+        }
+        if !saw_line {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        Ok(())
+    }
+
+    fn validate_ticket_line_bytes(&self, line: &str) -> Result<(), NineDoorBridgeError> {
+        if line.as_bytes().len() > self.ticket_max_line_bytes as usize {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        Ok(())
     }
 
     fn has_provider(&self, provider: generated::HostProvider) -> bool {
@@ -3894,11 +4068,25 @@ impl HostState {
     }
 
     fn build_entries(&mut self) {
+        if self.tickets_enabled {
+            self.push_entry(&["tickets", "spec"], "", Some("tickets.spec"));
+            self.push_entry(&["tickets", "status"], "", Some("tickets.status"));
+            self.push_entry(
+                &["tickets", "deadletter"],
+                "",
+                Some("tickets.deadletter"),
+            );
+            self.push_read_only_entry(&["tickets", "spec.snapshot"], "");
+            self.push_read_only_entry(&["tickets", "status.snapshot"], "");
+            self.push_read_only_entry(&["tickets", "deadletter.snapshot"], "");
+        }
         for provider in self.providers.iter().copied() {
             match provider {
                 generated::HostProvider::Systemd => {
                     for unit in SYSTEMD_UNITS {
                         self.push_entry(&["systemd", unit, "status"], "active", None);
+                        self.push_entry(&["systemd", unit, "start"], "", Some("systemd.start"));
+                        self.push_entry(&["systemd", unit, "stop"], "", Some("systemd.stop"));
                         self.push_entry(&["systemd", unit, "restart"], "", Some("systemd.restart"));
                     }
                 }
@@ -3911,6 +4099,8 @@ impl HostState {
                 }
                 generated::HostProvider::Docker => {
                     self.push_entry(&["docker", "status"], "unknown", None);
+                    self.push_entry(&["docker", "restart"], "", Some("docker.restart"));
+                    self.push_entry(&["docker", "stop"], "", Some("docker.stop"));
                 }
                 generated::HostProvider::Nvidia => {
                     for gpu in NVIDIA_GPUS {
@@ -3934,6 +4124,17 @@ impl HostState {
             path,
             value: String::from(value),
             control,
+            writable: true,
+        });
+    }
+
+    fn push_read_only_entry(&mut self, parts: &[&str], value: &str) {
+        let path = join_path(self.mount_at.as_str(), parts);
+        self.entries.push(HostEntry {
+            path,
+            value: String::from(value),
+            control: None,
+            writable: false,
         });
     }
 }
@@ -6711,6 +6912,54 @@ fn host_provider_label(provider: generated::HostProvider) -> &'static str {
         generated::HostProvider::Jetson => "jetson",
         generated::HostProvider::Net => "net",
     }
+}
+
+fn host_ticket_action_label(action: generated::HostTicketAction) -> &'static str {
+    match action {
+        generated::HostTicketAction::GpuLeaseGrant => "gpu.lease.grant",
+        generated::HostTicketAction::GpuLeaseRenew => "gpu.lease.renew",
+        generated::HostTicketAction::GpuLeaseRelease => "gpu.lease.release",
+        generated::HostTicketAction::PeftImport => "peft.import",
+        generated::HostTicketAction::PeftActivate => "peft.activate",
+        generated::HostTicketAction::PeftRollback => "peft.rollback",
+        generated::HostTicketAction::SystemdStart => "systemd.start",
+        generated::HostTicketAction::SystemdStop => "systemd.stop",
+        generated::HostTicketAction::SystemdRestart => "systemd.restart",
+        generated::HostTicketAction::SystemdStatusCheck => "systemd.status-check",
+        generated::HostTicketAction::DockerRestart => "docker.restart",
+        generated::HostTicketAction::DockerStop => "docker.stop",
+        generated::HostTicketAction::DockerStatusCheck => "docker.status-check",
+        generated::HostTicketAction::K8sCordon => "k8s.cordon",
+        generated::HostTicketAction::K8sDrain => "k8s.drain",
+        generated::HostTicketAction::K8sLeaseSync => "k8s.lease.sync",
+    }
+}
+
+fn host_ticket_lifecycle_label(state: generated::HostTicketLifecycleState) -> &'static str {
+    match state {
+        generated::HostTicketLifecycleState::Queued => "queued",
+        generated::HostTicketLifecycleState::Claimed => "claimed",
+        generated::HostTicketLifecycleState::Running => "running",
+        generated::HostTicketLifecycleState::Succeeded => "succeeded",
+        generated::HostTicketLifecycleState::Failed => "failed",
+        generated::HostTicketLifecycleState::Expired => "expired",
+    }
+}
+
+fn validate_host_ticket_token(value: &str) -> Result<(), NineDoorBridgeError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    if trimmed.as_bytes().len() > HOST_TICKET_ID_MAX_BYTES {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    if !trimmed.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':')
+    }) {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
 }
 
 fn join_path(mount: &str, parts: &[&str]) -> String {

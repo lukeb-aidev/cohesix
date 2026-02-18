@@ -134,3 +134,137 @@ fn host_control_write_requires_queen_and_audits() {
     assert!(log_text.contains("host-write outcome=allow"));
     assert!(log_text.contains("control=systemd.restart"));
 }
+
+#[test]
+fn host_ticket_streams_validate_schema_and_bounds() {
+    let host_config = HostNamespaceConfig::enabled("/host", &[HostProvider::Systemd])
+        .expect("host config");
+    let server = NineDoor::new_with_host_config(host_config);
+    server.register_ticket_secret(Role::WorkerHeartbeat, "worker");
+    let ticket = issue_ticket("worker", Role::WorkerHeartbeat, "worker-1");
+
+    let mut queen = server.connect().expect("create queen session");
+    queen.version(MAX_MSIZE).expect("version handshake");
+    queen.attach(1, Role::Queen).expect("queen attach");
+    let queen_ctl = vec!["queen".to_owned(), "ctl".to_owned()];
+    queen.walk(1, 8, &queen_ctl).expect("walk /queen/ctl");
+    queen
+        .open(8, OpenMode::write_append())
+        .expect("open /queen/ctl");
+    queen
+        .write(8, b"{\"spawn\":\"heartbeat\",\"ticks\":5}\n")
+        .expect("spawn worker");
+    queen.clunk(8).expect("clunk /queen/ctl");
+
+    let mut worker = server.connect().expect("create worker session");
+    worker.version(MAX_MSIZE).expect("version handshake");
+    worker
+        .attach_with_identity(
+            1,
+            Role::WorkerHeartbeat,
+            Some("worker-1"),
+            Some(ticket.as_str()),
+        )
+        .expect("worker attach");
+
+    let spec_path = vec![
+        "host".to_owned(),
+        "tickets".to_owned(),
+        "spec".to_owned(),
+    ];
+    worker.walk(1, 2, &spec_path).expect("walk ticket spec");
+    let err = worker
+        .open(2, OpenMode::write_append())
+        .expect_err("worker open ticket spec");
+    match err {
+        NineDoorError::Protocol { code, message } => {
+            assert_eq!(code, ErrorCode::Permission);
+            assert!(message.contains("EPERM"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    queen.walk(1, 2, &spec_path).expect("queen walk ticket spec");
+    queen
+        .open(2, OpenMode::write_append())
+        .expect("queen open ticket spec");
+    let valid_spec = br#"{"schema":"host-ticket/v1","id":"ticket-1","idempotency_key":"idem-1","action":"systemd.restart","target":"/host/systemd/cohesix-agent.service/restart"}"#;
+    queen.write(2, valid_spec).expect("write valid ticket spec");
+    queen.clunk(2).expect("clunk ticket spec");
+
+    queen.walk(1, 3, &spec_path).expect("queen walk ticket spec");
+    queen
+        .open(3, OpenMode::write_append())
+        .expect("queen open ticket spec");
+    let err = queen
+        .write(3, b"{\"schema\":\"host-ticket/v1\",\"id\":\"bad\",\"idempotency_key\":\"idem\",\"action\":\"unknown\"}")
+        .expect_err("write invalid allowlist action");
+    match err {
+        NineDoorError::Protocol { code, message } => {
+            assert_eq!(code, ErrorCode::Invalid);
+            assert!(message.contains("not allowlisted"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    queen.clunk(3).expect("clunk invalid ticket spec");
+
+    queen.walk(1, 4, &spec_path).expect("queen walk ticket spec");
+    queen
+        .open(4, OpenMode::write_append())
+        .expect("queen open ticket spec");
+    let oversize_id = "a".repeat(2050);
+    let oversize = format!(
+        "{{\"schema\":\"host-ticket/v1\",\"id\":\"{oversize_id}\",\"idempotency_key\":\"idem-2\",\"action\":\"systemd.restart\"}}"
+    );
+    let err = queen
+        .write(4, oversize.as_bytes())
+        .expect_err("write oversize ticket line");
+    match err {
+        NineDoorError::Protocol { code, message } => {
+            assert_eq!(code, ErrorCode::Invalid);
+            assert!(message.contains("max_line_bytes"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    queen.clunk(4).expect("clunk oversize ticket spec");
+
+    let status_path = vec![
+        "host".to_owned(),
+        "tickets".to_owned(),
+        "status".to_owned(),
+    ];
+    queen.walk(1, 5, &status_path).expect("queen walk ticket status");
+    queen
+        .open(5, OpenMode::write_append())
+        .expect("queen open ticket status");
+    let status = br#"{"schema":"host-ticket-result/v1","id":"ticket-1","idempotency_key":"idem-1","action":"systemd.restart","state":"claimed","message":"accepted"}"#;
+    queen.write(5, status).expect("write valid ticket status");
+    queen.clunk(5).expect("clunk ticket status");
+
+    let deadletter_path = vec![
+        "host".to_owned(),
+        "tickets".to_owned(),
+        "deadletter".to_owned(),
+    ];
+    queen
+        .walk(1, 6, &deadletter_path)
+        .expect("queen walk deadletter");
+    queen
+        .open(6, OpenMode::write_append())
+        .expect("queen open deadletter");
+    let err = queen
+        .write(6, b"{\"schema\":\"host-ticket-result/v1\",\"id\":\"ticket-1\",\"idempotency_key\":\"idem-1\",\"action\":\"systemd.restart\",\"state\":\"bogus\"}")
+        .expect_err("write invalid ticket state");
+    match err {
+        NineDoorError::Protocol { code, message } => {
+            assert_eq!(code, ErrorCode::Invalid);
+            assert!(message.contains("state"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    queen.clunk(6).expect("clunk deadletter");
+
+    let log_text = read_log_text(&mut queen, 7);
+    assert!(log_text.contains("control=tickets.spec"));
+    assert!(log_text.contains("control=tickets.status"));
+}

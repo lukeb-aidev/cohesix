@@ -1,5 +1,9 @@
 # Author: Lukas Bower
 # Purpose: Define the Cohesix workspace members and shared dependencies.
+# Copyright 2026 Lukas Bower
+# SPDX-License-Identifier: Apache-2.0
+# Purpose: Define Cohesix workspace members and shared dependency versions.
+# Author: Lukas Bower
 [workspace]
 members = [
     "apps/cohesix-proto",
@@ -18,6 +22,7 @@ members = [
     "apps/sidecar-bus",
     "apps/gpu-bridge-host",
     "apps/host-sidecar-bridge",
+    "apps/host-ticket-agent",
     "apps/hive-gateway",
     "crates/cohesix-cas",
     "crates/cohesix-rest",

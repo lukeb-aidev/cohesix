@@ -4,7 +4,10 @@
 // Author: Lukas Bower
 
 use crate::codegen::hash_bytes;
-use crate::ir::{resolve_manifest_relative_path, HostProvider, Manifest, Role, SidecarLink};
+use crate::ir::{
+    resolve_manifest_relative_path, HostProvider, HostTicketAction, HostTicketLifecycleState,
+    Manifest, Role, SidecarLink,
+};
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -356,11 +359,58 @@ pub fn emit_rust(
     writeln!(mod_contents, "    Net,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum HostTicketAction {{")?;
+    writeln!(mod_contents, "    GpuLeaseGrant,")?;
+    writeln!(mod_contents, "    GpuLeaseRenew,")?;
+    writeln!(mod_contents, "    GpuLeaseRelease,")?;
+    writeln!(mod_contents, "    PeftImport,")?;
+    writeln!(mod_contents, "    PeftActivate,")?;
+    writeln!(mod_contents, "    PeftRollback,")?;
+    writeln!(mod_contents, "    SystemdStart,")?;
+    writeln!(mod_contents, "    SystemdStop,")?;
+    writeln!(mod_contents, "    SystemdRestart,")?;
+    writeln!(mod_contents, "    SystemdStatusCheck,")?;
+    writeln!(mod_contents, "    DockerRestart,")?;
+    writeln!(mod_contents, "    DockerStop,")?;
+    writeln!(mod_contents, "    DockerStatusCheck,")?;
+    writeln!(mod_contents, "    K8sCordon,")?;
+    writeln!(mod_contents, "    K8sDrain,")?;
+    writeln!(mod_contents, "    K8sLeaseSync,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum HostTicketLifecycleState {{")?;
+    writeln!(mod_contents, "    Queued,")?;
+    writeln!(mod_contents, "    Claimed,")?;
+    writeln!(mod_contents, "    Running,")?;
+    writeln!(mod_contents, "    Succeeded,")?;
+    writeln!(mod_contents, "    Failed,")?;
+    writeln!(mod_contents, "    Expired,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct HostTicketConfig {{")?;
+    writeln!(mod_contents, "    pub enable: bool,")?;
+    writeln!(mod_contents, "    pub request_schema: &'static str,")?;
+    writeln!(mod_contents, "    pub result_schema: &'static str,")?;
+    writeln!(mod_contents, "    pub max_line_bytes: u32,")?;
+    writeln!(
+        mod_contents,
+        "    pub action_allowlist: &'static [HostTicketAction],"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub lifecycle: &'static [HostTicketLifecycleState],"
+    )?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct HostConfig {{")?;
     writeln!(mod_contents, "    pub enable: bool,")?;
     writeln!(mod_contents, "    pub mount_at: &'static str,")?;
     writeln!(mod_contents, "    pub providers: &'static [HostProvider],")?;
+    writeln!(mod_contents, "    pub tickets: HostTicketConfig,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -806,7 +856,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AffinityPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostProvider, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AffinityPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -1240,9 +1290,39 @@ pub fn emit_rust(
     writeln!(bootstrap_contents, "];\n")?;
     writeln!(
         bootstrap_contents,
-        "pub const HOST_CONFIG: HostConfig = HostConfig {{ enable: {}, mount_at: \"{}\", providers: &HOST_PROVIDERS }};\n",
+        "pub const HOST_TICKET_ACTION_ALLOWLIST: [HostTicketAction; {}] = [",
+        manifest.ecosystem.host.tickets.action_allowlist.len()
+    )?;
+    for action in &manifest.ecosystem.host.tickets.action_allowlist {
+        writeln!(
+            bootstrap_contents,
+            "    {},",
+            host_ticket_action_to_rust(*action)
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const HOST_TICKET_LIFECYCLE: [HostTicketLifecycleState; {}] = [",
+        manifest.ecosystem.host.tickets.lifecycle.len()
+    )?;
+    for state in &manifest.ecosystem.host.tickets.lifecycle {
+        writeln!(
+            bootstrap_contents,
+            "    {},",
+            host_ticket_lifecycle_to_rust(*state)
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const HOST_CONFIG: HostConfig = HostConfig {{ enable: {}, mount_at: \"{}\", providers: &HOST_PROVIDERS, tickets: HostTicketConfig {{ enable: {}, request_schema: \"{}\", result_schema: \"{}\", max_line_bytes: {}, action_allowlist: &HOST_TICKET_ACTION_ALLOWLIST, lifecycle: &HOST_TICKET_LIFECYCLE }} }};\n",
         manifest.ecosystem.host.enable,
-        escape_literal(&manifest.ecosystem.host.mount_at)
+        escape_literal(&manifest.ecosystem.host.mount_at),
+        manifest.ecosystem.host.tickets.enable,
+        escape_literal(&manifest.ecosystem.host.tickets.request_schema),
+        escape_literal(&manifest.ecosystem.host.tickets.result_schema),
+        manifest.ecosystem.host.tickets.max_line_bytes
     )?;
 
     let (modbus_adapters, dnp3_adapters) = resolve_bus_adapters(manifest)?;
@@ -1402,6 +1482,38 @@ fn host_provider_to_rust(provider: &HostProvider) -> &'static str {
         HostProvider::Nvidia => "HostProvider::Nvidia",
         HostProvider::Jetson => "HostProvider::Jetson",
         HostProvider::Net => "HostProvider::Net",
+    }
+}
+
+fn host_ticket_action_to_rust(action: HostTicketAction) -> &'static str {
+    match action {
+        HostTicketAction::GpuLeaseGrant => "HostTicketAction::GpuLeaseGrant",
+        HostTicketAction::GpuLeaseRenew => "HostTicketAction::GpuLeaseRenew",
+        HostTicketAction::GpuLeaseRelease => "HostTicketAction::GpuLeaseRelease",
+        HostTicketAction::PeftImport => "HostTicketAction::PeftImport",
+        HostTicketAction::PeftActivate => "HostTicketAction::PeftActivate",
+        HostTicketAction::PeftRollback => "HostTicketAction::PeftRollback",
+        HostTicketAction::SystemdStart => "HostTicketAction::SystemdStart",
+        HostTicketAction::SystemdStop => "HostTicketAction::SystemdStop",
+        HostTicketAction::SystemdRestart => "HostTicketAction::SystemdRestart",
+        HostTicketAction::SystemdStatusCheck => "HostTicketAction::SystemdStatusCheck",
+        HostTicketAction::DockerRestart => "HostTicketAction::DockerRestart",
+        HostTicketAction::DockerStop => "HostTicketAction::DockerStop",
+        HostTicketAction::DockerStatusCheck => "HostTicketAction::DockerStatusCheck",
+        HostTicketAction::K8sCordon => "HostTicketAction::K8sCordon",
+        HostTicketAction::K8sDrain => "HostTicketAction::K8sDrain",
+        HostTicketAction::K8sLeaseSync => "HostTicketAction::K8sLeaseSync",
+    }
+}
+
+fn host_ticket_lifecycle_to_rust(state: HostTicketLifecycleState) -> &'static str {
+    match state {
+        HostTicketLifecycleState::Queued => "HostTicketLifecycleState::Queued",
+        HostTicketLifecycleState::Claimed => "HostTicketLifecycleState::Claimed",
+        HostTicketLifecycleState::Running => "HostTicketLifecycleState::Running",
+        HostTicketLifecycleState::Succeeded => "HostTicketLifecycleState::Succeeded",
+        HostTicketLifecycleState::Failed => "HostTicketLifecycleState::Failed",
+        HostTicketLifecycleState::Expired => "HostTicketLifecycleState::Expired",
     }
 }
 

@@ -10,7 +10,10 @@ use coh::policy::CohPolicy;
 use coh::CohAudit;
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
 use cohsh::client::{CohClient, InProcessTransport};
-use nine_door::{AuditConfig, AuditLimits, HostNamespaceConfig, NineDoor, PolicyConfig, ReplayConfig};
+use nine_door::{
+    AuditConfig, AuditLimits, HostNamespaceConfig, HostProvider, NineDoor, PolicyConfig,
+    ReplayConfig,
+};
 use tempfile::TempDir;
 
 #[test]
@@ -66,6 +69,36 @@ fn evidence_pack_redacts_ticket_payloads() -> Result<()> {
         journal.contains("sha256:"),
         "expected evidence pack to hash tickets"
     );
+
+    Ok(())
+}
+
+#[test]
+fn evidence_pack_redacts_host_ticket_sensitive_fields() -> Result<()> {
+    let host = HostNamespaceConfig::enabled("/host", &[HostProvider::Systemd])?;
+    let server = NineDoor::new_with_host_and_policy_config(host, PolicyConfig::disabled());
+    let connection = server.connect().context("open NineDoor session")?;
+    let transport = InProcessTransport::new(connection);
+    let mut client = CohClient::connect(transport, Role::Queen, None)?;
+
+    let spec_line = r#"{"schema":"host-ticket/v1","id":"ticket-1","idempotency_key":"idem-1","action":"systemd.restart","target":"/host/systemd/cohesix-agent.service/restart","args":{"unit":"cohesix-agent.service","auth_token":"super-secret-token"}}"#;
+    coh::CohAccess::write_append(&mut client, "/host/tickets/spec", format!("{spec_line}\n").as_bytes())?;
+
+    let temp = TempDir::new().expect("tempdir");
+    let out_dir = temp.path().join("pack");
+    let spec = EvidencePackSpec {
+        out_dir: out_dir.clone(),
+        with_telemetry: false,
+    };
+    let policy = CohPolicy::from_generated();
+    let bounds = build_local_bounds();
+    let mut audit = CohAudit::new();
+    export_pack(&mut client, &policy, &bounds, &spec, &mut audit)?;
+
+    let captured = std::fs::read_to_string(out_dir.join("host").join("tickets").join("spec"))
+        .context("read host ticket spec capture")?;
+    assert!(!captured.contains("super-secret-token"));
+    assert!(captured.contains("<redacted>"));
 
     Ok(())
 }

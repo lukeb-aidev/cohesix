@@ -1,0 +1,23 @@
+# Author: Lukas Bower
+# Purpose: Configure the host-ticket-agent crate for ticket-driven host orchestration.
+# Copyright 2026 Lukas Bower
+[package]
+name = "host-ticket-agent"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+coh = { path = "../coh" }
+cohesix-ticket = { workspace = true }
+cohsh = { path = "../cohsh", features = ["tcp", "rest"] }
+host-sidecar-bridge = { path = "../host-sidecar-bridge" }
+nine-door = { path = "../nine-door" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.12"

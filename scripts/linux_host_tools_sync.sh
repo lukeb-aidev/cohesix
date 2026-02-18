@@ -116,7 +116,7 @@ printf "[sync] Packaging host-tool sources...\n"
 rm -f "$SRC_TARBALL"
 {
   printf '%s\0' Cargo.toml Cargo.lock .cargo/config.toml scripts/rustc-wrapper.sh
-  git ls-files -z apps crates tools tests resources
+  git ls-files -z --cached --others --exclude-standard apps crates tools tests resources
 } | tar --null -T - -czf "$SRC_TARBALL"
 
 if [[ "$CLEAN" -eq 1 ]]; then
@@ -222,6 +222,7 @@ if [[ "$USE_JAMMY_CHROOT" -eq 1 ]]; then
     cargo build --release -p gpu-bridge-host && \
     cargo build --release -p cas-tool && \
     cargo build --release -p hive-gateway && \
+    cargo build --release -p host-ticket-agent && \
     cargo build --release -p host-sidecar-bridge --features tcp && \
     cargo build --release -p cohsh --features tcp && \
     cargo build --release -p coh --features fuse,nvml && \
@@ -236,6 +237,7 @@ else
     cargo build --release -p gpu-bridge-host && \
     cargo build --release -p cas-tool && \
     cargo build --release -p hive-gateway && \
+    cargo build --release -p host-ticket-agent && \
     cargo build --release -p host-sidecar-bridge --features tcp && \
     cargo build --release -p cohsh --features tcp && \
     cargo build --release -p coh --features fuse,nvml && \
@@ -246,7 +248,7 @@ printf "[sync] Verifying GLIBC compatibility (<= %s)...\n" "$MAX_GLIBC_VERSION"
 remote_glibc_cmd=$(cat <<EOF
 set -euo pipefail
 max_glibc="${MAX_GLIBC_VERSION}"
-bins=(cohsh coh gpu-bridge-host host-sidecar-bridge cas-tool swarmui hive-gateway)
+bins=(cohsh coh gpu-bridge-host host-sidecar-bridge cas-tool swarmui hive-gateway host-ticket-agent)
 for bin in "\${bins[@]}"; do
   path="${REMOTE_DIR}/target/release/\${bin}"
   if [[ ! -x "\${path}" ]]; then
@@ -275,7 +277,8 @@ run_ssh "mkdir -p '${REMOTE_DIR}/out/host-tools-linux' && \
   install -m 0755 '${REMOTE_DIR}/target/release/host-sidecar-bridge' '${REMOTE_DIR}/out/host-tools-linux/' && \
   install -m 0755 '${REMOTE_DIR}/target/release/cas-tool' '${REMOTE_DIR}/out/host-tools-linux/' && \
   install -m 0755 '${REMOTE_DIR}/target/release/swarmui' '${REMOTE_DIR}/out/host-tools-linux/' && \
-  install -m 0755 '${REMOTE_DIR}/target/release/hive-gateway' '${REMOTE_DIR}/out/host-tools-linux/'"
+  install -m 0755 '${REMOTE_DIR}/target/release/hive-gateway' '${REMOTE_DIR}/out/host-tools-linux/' && \
+  install -m 0755 '${REMOTE_DIR}/target/release/host-ticket-agent' '${REMOTE_DIR}/out/host-tools-linux/'"
 
 printf "[sync] Packing host tools for transfer...\n"
 run_ssh "tar -C '${REMOTE_DIR}/out' -czf '${REMOTE_TOOLS_TARBALL}' host-tools-linux"

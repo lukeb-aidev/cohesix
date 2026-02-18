@@ -100,6 +100,333 @@ impl HostProvider {
     }
 }
 
+const HOST_TICKET_ID_MAX_BYTES: usize = 128;
+const DEFAULT_HOST_TICKET_ACTIONS: &[&str] = &[
+    "gpu.lease.grant",
+    "gpu.lease.renew",
+    "gpu.lease.release",
+    "peft.import",
+    "peft.activate",
+    "peft.rollback",
+    "systemd.start",
+    "systemd.stop",
+    "systemd.restart",
+    "systemd.status-check",
+    "docker.restart",
+    "docker.stop",
+    "docker.status-check",
+    "k8s.cordon",
+    "k8s.drain",
+    "k8s.lease.sync",
+];
+const DEFAULT_HOST_TICKET_LIFECYCLE: &[&str] = &[
+    "queued",
+    "claimed",
+    "running",
+    "succeeded",
+    "failed",
+    "expired",
+];
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostTicketSpecLine {
+    schema: String,
+    id: String,
+    idempotency_key: String,
+    action: String,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    args: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostTicketResultLine {
+    schema: String,
+    id: String,
+    idempotency_key: String,
+    action: String,
+    state: String,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+/// Configuration for `/host/tickets/*` control streams.
+#[derive(Debug, Clone)]
+pub struct HostTicketPolicy {
+    enabled: bool,
+    request_schema: String,
+    result_schema: String,
+    max_line_bytes: u32,
+    action_allowlist: BTreeSet<String>,
+    lifecycle: BTreeSet<String>,
+}
+
+impl HostTicketPolicy {
+    /// Construct a disabled ticket policy.
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            request_schema: "host-ticket/v1".to_owned(),
+            result_schema: "host-ticket-result/v1".to_owned(),
+            max_line_bytes: 2048,
+            action_allowlist: BTreeSet::new(),
+            lifecycle: BTreeSet::new(),
+        }
+    }
+
+    /// Construct the default enabled ticket policy.
+    pub fn default_enabled() -> Self {
+        Self::enabled(
+            "host-ticket/v1",
+            "host-ticket-result/v1",
+            2048,
+            DEFAULT_HOST_TICKET_ACTIONS,
+            DEFAULT_HOST_TICKET_LIFECYCLE,
+        )
+        .expect("default host ticket policy")
+    }
+
+    /// Construct an enabled ticket policy.
+    pub fn enabled(
+        request_schema: &str,
+        result_schema: &str,
+        max_line_bytes: u32,
+        action_allowlist: &[&str],
+        lifecycle: &[&str],
+    ) -> Result<Self, NineDoorError> {
+        if request_schema.trim().is_empty() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "host ticket request schema must not be empty",
+            ));
+        }
+        if result_schema.trim().is_empty() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "host ticket result schema must not be empty",
+            ));
+        }
+        if max_line_bytes == 0 || max_line_bytes > MAX_MSIZE {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("host ticket max_line_bytes must be 1..={MAX_MSIZE}"),
+            ));
+        }
+        let mut actions = BTreeSet::new();
+        for action in action_allowlist {
+            let action = action.trim();
+            if action.is_empty() {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    "host ticket action allowlist must not contain empty values",
+                ));
+            }
+            actions.insert(action.to_owned());
+        }
+        if actions.is_empty() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "host ticket action allowlist must not be empty",
+            ));
+        }
+        let mut lifecycle_states = BTreeSet::new();
+        for state in lifecycle {
+            let state = state.trim();
+            if state.is_empty() {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    "host ticket lifecycle must not contain empty values",
+                ));
+            }
+            lifecycle_states.insert(state.to_owned());
+        }
+        if lifecycle_states.is_empty() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "host ticket lifecycle must not be empty",
+            ));
+        }
+        for required in DEFAULT_HOST_TICKET_LIFECYCLE {
+            if !lifecycle_states.contains(*required) {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    format!("host ticket lifecycle missing required state '{required}'"),
+                ));
+            }
+        }
+        Ok(Self {
+            enabled: true,
+            request_schema: request_schema.trim().to_owned(),
+            result_schema: result_schema.trim().to_owned(),
+            max_line_bytes,
+            action_allowlist: actions,
+            lifecycle: lifecycle_states,
+        })
+    }
+
+    fn validate_append(
+        &self,
+        mount_path: &[String],
+        path: &[String],
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let Some(relative) = path.strip_prefix(mount_path) else {
+            return Ok(());
+        };
+        let Some(kind) = (match relative {
+            [first, second] if first == "tickets" && second == "spec" => Some(TicketLineKind::Spec),
+            [first, second] if first == "tickets" && second == "status" => {
+                Some(TicketLineKind::Result)
+            }
+            [first, second] if first == "tickets" && second == "deadletter" => {
+                Some(TicketLineKind::Result)
+            }
+            _ => None,
+        }) else {
+            return Ok(());
+        };
+        let text = std::str::from_utf8(data).map_err(|_| {
+            NineDoorError::protocol(ErrorCode::Invalid, "host ticket payload must be UTF-8")
+        })?;
+        let mut saw_line = false;
+        for raw_line in text.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            saw_line = true;
+            if line.as_bytes().len() > self.max_line_bytes as usize {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    format!(
+                        "host ticket line exceeds max_line_bytes {}",
+                        self.max_line_bytes
+                    ),
+                ));
+            }
+            match kind {
+                TicketLineKind::Spec => self.validate_spec_line(line)?,
+                TicketLineKind::Result => self.validate_result_line(line)?,
+            }
+        }
+        if !saw_line {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "host ticket payload must contain at least one JSON line",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_spec_line(&self, line: &str) -> Result<(), NineDoorError> {
+        let parsed: HostTicketSpecLine = serde_json::from_str(line).map_err(|err| {
+            NineDoorError::protocol(ErrorCode::Invalid, format!("invalid host ticket spec: {err}"))
+        })?;
+        if parsed.schema != self.request_schema {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("host ticket schema must be '{}'", self.request_schema),
+            ));
+        }
+        validate_ticket_identifier("id", &parsed.id)?;
+        validate_ticket_identifier("idempotency_key", &parsed.idempotency_key)?;
+        if !self.action_allowlist.contains(parsed.action.as_str()) {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("host ticket action '{}' is not allowlisted", parsed.action),
+            ));
+        }
+        if let Some(target) = parsed.target.as_deref() {
+            if target.trim().is_empty() {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    "host ticket target must not be empty",
+                ));
+            }
+        }
+        let _ = parsed.args;
+        Ok(())
+    }
+
+    fn validate_result_line(&self, line: &str) -> Result<(), NineDoorError> {
+        let parsed: HostTicketResultLine = serde_json::from_str(line).map_err(|err| {
+            NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("invalid host ticket result: {err}"),
+            )
+        })?;
+        if parsed.schema != self.result_schema {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("host ticket result schema must be '{}'", self.result_schema),
+            ));
+        }
+        validate_ticket_identifier("id", &parsed.id)?;
+        validate_ticket_identifier("idempotency_key", &parsed.idempotency_key)?;
+        if !self.action_allowlist.contains(parsed.action.as_str()) {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("host ticket action '{}' is not allowlisted", parsed.action),
+            ));
+        }
+        if !self.lifecycle.contains(parsed.state.as_str()) {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("host ticket state '{}' is invalid", parsed.state),
+            ));
+        }
+        if let Some(message) = parsed.message.as_deref() {
+            if message.trim().is_empty() {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    "host ticket result message must not be empty when present",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TicketLineKind {
+    Spec,
+    Result,
+}
+
+fn validate_ticket_identifier(label: &str, value: &str) -> Result<(), NineDoorError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("host ticket {label} must not be empty"),
+        ));
+    }
+    if trimmed.as_bytes().len() > HOST_TICKET_ID_MAX_BYTES {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!(
+                "host ticket {label} exceeds {} bytes",
+                HOST_TICKET_ID_MAX_BYTES
+            ),
+        ));
+    }
+    if !trimmed.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':')
+    }) {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("host ticket {label} contains invalid characters"),
+        ));
+    }
+    Ok(())
+}
+
 /// Manifest-driven shard layout for worker namespaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShardLayout {
@@ -287,6 +614,7 @@ pub struct HostNamespaceConfig {
     enabled: bool,
     mount_path: Vec<String>,
     providers: Vec<HostProvider>,
+    tickets: HostTicketPolicy,
 }
 
 impl HostNamespaceConfig {
@@ -296,6 +624,7 @@ impl HostNamespaceConfig {
             enabled: false,
             mount_path: vec!["host".to_owned()],
             providers: Vec::new(),
+            tickets: HostTicketPolicy::disabled(),
         }
     }
 
@@ -306,7 +635,18 @@ impl HostNamespaceConfig {
             enabled: true,
             mount_path,
             providers: providers.to_vec(),
+            tickets: HostTicketPolicy::default_enabled(),
         })
+    }
+
+    /// Override the host ticket policy.
+    pub fn with_ticket_policy(mut self, policy: HostTicketPolicy) -> Self {
+        self.tickets = policy;
+        self
+    }
+
+    fn ticket_policy(&self) -> Option<&HostTicketPolicy> {
+        self.enabled.then_some(&self.tickets)
     }
 }
 
@@ -729,6 +1069,23 @@ impl Namespace {
     /// Return the configured host mount path, if enabled.
     pub fn host_mount_path(&self) -> Option<&[String]> {
         self.host.enabled.then_some(self.host.mount_path.as_slice())
+    }
+
+    /// Return the configured host ticket policy when host mounting is enabled.
+    pub fn host_ticket_policy(&self) -> Option<&HostTicketPolicy> {
+        self.host.ticket_policy()
+    }
+
+    /// Validate append payloads for `/host/tickets/*` paths.
+    pub fn validate_host_ticket_append(
+        &self,
+        path: &[String],
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        let Some(policy) = self.host_ticket_policy() else {
+            return Ok(());
+        };
+        policy.validate_append(self.host.mount_path.as_slice(), path, data)
     }
 
     /// Return the configured bus sidecar scopes.
@@ -1666,6 +2023,9 @@ impl Namespace {
     fn bootstrap_host(&mut self) -> Result<(), NineDoorError> {
         let host_root = self.host.mount_path.clone();
         self.ensure_dir_path(&host_root)?;
+        if self.host.tickets.enabled {
+            self.install_host_tickets(&host_root)?;
+        }
         let providers = self.host.providers.clone();
         for provider in providers {
             match provider {
@@ -1677,6 +2037,22 @@ impl Namespace {
                 HostProvider::Net => self.ensure_dir(&host_root, "net")?,
             }
         }
+        Ok(())
+    }
+
+    fn install_host_tickets(&mut self, host_root: &[String]) -> Result<(), NineDoorError> {
+        self.ensure_dir(host_root, "tickets")?;
+        let tickets_root = {
+            let mut path = host_root.to_vec();
+            path.push("tickets".to_owned());
+            path
+        };
+        self.ensure_append_only_file(&tickets_root, "spec", b"")?;
+        self.ensure_append_only_file(&tickets_root, "status", b"")?;
+        self.ensure_append_only_file(&tickets_root, "deadletter", b"")?;
+        self.ensure_read_only_file(&tickets_root, "spec.snapshot", b"")?;
+        self.ensure_read_only_file(&tickets_root, "status.snapshot", b"")?;
+        self.ensure_read_only_file(&tickets_root, "deadletter.snapshot", b"")?;
         Ok(())
     }
 
@@ -1738,6 +2114,8 @@ impl Namespace {
                 path
             };
             self.ensure_append_only_file(&unit_path, "status", b"active")?;
+            self.ensure_append_only_file(&unit_path, "start", b"")?;
+            self.ensure_append_only_file(&unit_path, "stop", b"")?;
             self.ensure_append_only_file(&unit_path, "restart", b"")?;
         }
         Ok(())
@@ -1778,6 +2156,8 @@ impl Namespace {
             path
         };
         self.ensure_append_only_file(&docker_root, "status", b"unknown")?;
+        self.ensure_append_only_file(&docker_root, "restart", b"")?;
+        self.ensure_append_only_file(&docker_root, "stop", b"")?;
         Ok(())
     }
 

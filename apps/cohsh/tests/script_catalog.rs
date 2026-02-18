@@ -133,7 +133,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "cas_roundtrip.coh:f6afb2dc79c414d04cc33f9a6d29da2f665959d2436c8d24baaa11f14b2ca98f"
             .to_owned(),
-        "host_absent.coh:6c69c9db1a503fed9fb69636c4028b26432711eb62054e0d115a0f1cb6e89354"
+        "host_absent.coh:f86f0aee6f7199034b7414d55788edbe2900ac8754f68296edf975816a7919df"
             .to_owned(),
         "host_sidecar_mock.coh:9532e7596d512c9089359e569090316ebf54a03c5cb0b35ab26dd5b22acbf3cb"
             .to_owned(),

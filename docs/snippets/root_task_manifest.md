@@ -176,7 +176,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `7886e1a2e1a95b39b2e894c714ddf1d317995fefa8da956aa796c8b070ccf1a8`
+- `manifest.sha256`: `af1586465c29995de8086260fe57138aa3481d8ea70f42e5d37b1add06026af0`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -222,4 +222,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `7886e1a2e1a95b39b2e894c714ddf1d317995fefa8da956aa796c8b070ccf1a8`)._
+_Generated from `configs/root_task.toml` (sha256: `af1586465c29995de8086260fe57138aa3481d8ea70f42e5d37b1add06026af0`)._

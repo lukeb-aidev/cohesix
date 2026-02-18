@@ -305,11 +305,52 @@ pub enum HostProvider {
     Net,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostTicketAction {
+    GpuLeaseGrant,
+    GpuLeaseRenew,
+    GpuLeaseRelease,
+    PeftImport,
+    PeftActivate,
+    PeftRollback,
+    SystemdStart,
+    SystemdStop,
+    SystemdRestart,
+    SystemdStatusCheck,
+    DockerRestart,
+    DockerStop,
+    DockerStatusCheck,
+    K8sCordon,
+    K8sDrain,
+    K8sLeaseSync,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostTicketLifecycleState {
+    Queued,
+    Claimed,
+    Running,
+    Succeeded,
+    Failed,
+    Expired,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct HostTicketConfig {
+    pub enable: bool,
+    pub request_schema: &'static str,
+    pub result_schema: &'static str,
+    pub max_line_bytes: u32,
+    pub action_allowlist: &'static [HostTicketAction],
+    pub lifecycle: &'static [HostTicketLifecycleState],
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct HostConfig {
     pub enable: bool,
     pub mount_at: &'static str,
     pub providers: &'static [HostProvider],
+    pub tickets: HostTicketConfig,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -400,7 +441,7 @@ pub struct AuditConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
-pub const MANIFEST_SHA256: &str = "7886e1a2e1a95b39b2e894c714ddf1d317995fefa8da956aa796c8b070ccf1a8";
+pub const MANIFEST_SHA256: &str = "af1586465c29995de8086260fe57138aa3481d8ea70f42e5d37b1add06026af0";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

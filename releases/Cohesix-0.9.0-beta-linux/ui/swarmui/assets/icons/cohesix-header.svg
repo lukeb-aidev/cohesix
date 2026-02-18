@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="420" viewBox="0 0 1400 420">
+  <style>
+    :root{
+      --palette-ember:#f0a257;
+      --ember-dark:#c8732d;
+      --ember-light:#ffd1a3;
+      --palette-ink:#e7edf5;
+    }
+    .core{stroke:var(--palette-ember);stroke-width:22;stroke-linecap:round;stroke-linejoin:round;fill:none}
+    .inner{stroke:var(--ember-dark);stroke-width:22;stroke-linecap:round;stroke-linejoin:round;fill:none}
+    .node{fill:var(--ember-light)}
+    .word{
+      fill:var(--palette-ink);
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+    }
+  </style>
+
+  <g transform="translate(110,40)">
+    <path class="core" d="M210 46 L336 118 L336 262 L210 334 L84 262 L84 118 Z"/>
+
+    <!-- Inner dark segments -->
+    <path class="inner" d="M222 102 L282 136"/>
+    <path class="inner" d="M292 156 L292 224"/>
+    <path class="inner" d="M282 244 L222 278"/>
+
+    <!-- FINAL: Recognisable centered "C", ~20% smaller -->
+    <!-- Center (210,190), radius = 44 -->
+<g transform="translate(-12,0)">
+    <path class="core"
+          d="M254 162
+             A44 44 0 1 0 254 218" />
+</g>
+
+    <!-- Nodes -->
+    <circle class="node" cx="210" cy="46"  r="14"/>
+    <circle class="node" cx="336" cy="118" r="14"/>
+    <circle class="node" cx="336" cy="262" r="14"/>
+    <circle class="node" cx="210" cy="334" r="14"/>
+    <circle class="node" cx="84"  cy="262" r="14"/>
+    <circle class="node" cx="84"  cy="118" r="14"/>
+  </g>
+
+  <text class="word" x="520" y="275" font-size="110">COHESIX</text>
+</svg>

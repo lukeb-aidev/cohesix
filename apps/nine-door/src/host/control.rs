@@ -23,19 +23,33 @@ pub enum HostWriteOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HostControlKind {
+    SystemdStart,
+    SystemdStop,
     SystemdRestart,
     K8sCordon,
     K8sDrain,
+    DockerRestart,
+    DockerStop,
     NvidiaPowerCap,
+    TicketsSpec,
+    TicketsStatus,
+    TicketsDeadletter,
 }
 
 impl HostControlKind {
     fn label(self) -> &'static str {
         match self {
+            HostControlKind::SystemdStart => "systemd.start",
+            HostControlKind::SystemdStop => "systemd.stop",
             HostControlKind::SystemdRestart => "systemd.restart",
             HostControlKind::K8sCordon => "k8s.cordon",
             HostControlKind::K8sDrain => "k8s.drain",
+            HostControlKind::DockerRestart => "docker.restart",
+            HostControlKind::DockerStop => "docker.stop",
             HostControlKind::NvidiaPowerCap => "nvidia.power_cap",
+            HostControlKind::TicketsSpec => "tickets.spec",
+            HostControlKind::TicketsStatus => "tickets.status",
+            HostControlKind::TicketsDeadletter => "tickets.deadletter",
         }
     }
 }
@@ -60,6 +74,12 @@ pub fn host_write_target<'a>(
         return None;
     }
     let control = match relative {
+        [first, _, last] if first == "systemd" && last == "start" => {
+            Some(HostControlKind::SystemdStart.label())
+        }
+        [first, _, last] if first == "systemd" && last == "stop" => {
+            Some(HostControlKind::SystemdStop.label())
+        }
         [first, _, last] if first == "systemd" && last == "restart" => {
             Some(HostControlKind::SystemdRestart.label())
         }
@@ -69,8 +89,23 @@ pub fn host_write_target<'a>(
         [first, second, _, last] if first == "k8s" && second == "node" && last == "drain" => {
             Some(HostControlKind::K8sDrain.label())
         }
+        [first, second] if first == "docker" && second == "restart" => {
+            Some(HostControlKind::DockerRestart.label())
+        }
+        [first, second] if first == "docker" && second == "stop" => {
+            Some(HostControlKind::DockerStop.label())
+        }
         [first, second, _, last] if first == "nvidia" && second == "gpu" && last == "power_cap" => {
             Some(HostControlKind::NvidiaPowerCap.label())
+        }
+        [first, second] if first == "tickets" && second == "spec" => {
+            Some(HostControlKind::TicketsSpec.label())
+        }
+        [first, second] if first == "tickets" && second == "status" => {
+            Some(HostControlKind::TicketsStatus.label())
+        }
+        [first, second] if first == "tickets" && second == "deadletter" => {
+            Some(HostControlKind::TicketsDeadletter.label())
         }
         _ => None,
     };
