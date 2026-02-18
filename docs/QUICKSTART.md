@@ -1,8 +1,8 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Quickstart instructions for Cohesix alpha bundle runs. -->
+<!-- Purpose: Quickstart instructions for Cohesix release bundle runs. -->
 <!-- Author: Lukas Bower -->
-# Cohesix Alpha Quickstart
+# Cohesix 0.9.0-beta Quickstart
 
 ## What is Cohesix?
 Cohesix is a small control-plane operating system for secure orchestration and telemetry of
@@ -34,17 +34,12 @@ to the TCP console to drive and observe the system.
 - `host-sidecar-bridge` - publish mock or live host providers into `/host` for policy/CI validation and telemetry snapshots (optional).
 See `docs/HOST_TOOLS.md` for details.
 
-## 0.4.0-alpha highlights (milestones 21a-24c)
-- Telemetry ingest with OS-named segments: `cohsh telemetry push` + `coh telemetry pull`.
-- Host bridge `coh` for Secure9P mount, GPU lease/status, and telemetry export (no new VM semantics).
-- SwarmUI Live Hive visibility + embedded console panel that reuses the existing TCP session.
-- Live Hive UX polish: worker labels, role color-coding, click-to-select details panel, and bounded overlays.
-- Lifecycle controls (`cohsh lifecycle`) plus `/proc/lifecycle/*` and `/proc/root/*` cut signals.
-- `coh run` command that records bounded GPU breadcrumb entries under `/gpu/<id>/status`.
-- `coh peft` export/import/activate/rollback flows (LoRA lifecycle glue).
-- Cohesix Python client + examples and `coh doctor` for deterministic host checks.
-- Authoritative scheduling/lease/export/policy control files with `/proc` observability.
-- Host REST gateway (`hive-gateway`) projecting console/file semantics over HTTP.
+## 0.9.0-beta highlights (milestones 25d-25g)
+- REST request-auth parity and deterministic `coh mount --rest-url` behavior across host tools.
+- Deterministic evidence workflows: `coh evidence pack`, `coh evidence timeline`, plus CI/SIEM integration kits.
+- `hive-gateway` brokered request handling with bounded queues, explicit backpressure (`429`), and no hidden retries.
+- Host control tickets under `/host/tickets/*` with `host-ticket-agent` and allowlisted adapters for GPU/PEFT/systemd/docker/k8s.
+- Python orchestration updates: typed host-ticket requests, K8s RBAC-to-ticket translation helpers, and 1k-fleet playbooks.
 
 ## Setup host runtime (required once per host)
 Install or verify runtime dependencies (QEMU + SwarmUI runtime libs):

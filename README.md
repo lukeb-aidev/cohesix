@@ -14,6 +14,8 @@
   </tr>
 </table>
 
+Cohesix `0.9.0-beta` is the project's first beta release, with significant improvements in stability and operator usability.
+
 Open-source releases are available in [releases/](releases/).
 
 **Tested platforms**:

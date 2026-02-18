@@ -6,7 +6,7 @@
 
 Host tools run outside the VM and project the same file/console semantics the VM enforces. They do not introduce new control-plane verbs or bypass Secure9P; every tool is a convenience wrapper over `LS`, `CAT`, `ECHO`, and/or mounted Secure9P namespaces.
 
-**v0.6.0-alpha note**
+**0.9.0-beta note**
 This release introduces `hive-gateway` as the supported multiplexing layer for host tools. When you need multiple tools or remote operators, run `hive-gateway` as the **sole** console client and point every other tool at it using REST.
 
 **Build + locations**
@@ -29,7 +29,7 @@ Use the TCP console when a single tool is active and you want minimal hops. Use 
 | Remote Mac controlling a GPU host | REST via SSH tunnel | Keeps console on the host, secure remote access. |
 | Multiple publishers (gpu + host-sidecar) | REST via `hive-gateway` | One console client, many REST clients. |
 
-## Hive-gateway quickstart (v0.6.0-alpha)
+## Hive-gateway quickstart (0.9.0-beta)
 Goal: run `hive-gateway` as the only console client and route all tools through REST.
 
 1. Boot the Queen VM.
@@ -134,7 +134,7 @@ coh> spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=1 ttl_s=120 priority=3 budget_tt
 ```
 
 ### Tests
-`test` executes the bundled `.coh` scripts under `/proc/tests/` (0.6.0-alpha includes `selftest_smp.coh`). Default timeout is 30s; maximum is 120s.
+`test` executes the bundled `.coh` scripts under `/proc/tests/` (for example `selftest_smp.coh`). Default timeout is 30s; maximum is 120s.
 ```text
 coh> test --mode quick
 coh> test --mode full --timeout 120
@@ -537,7 +537,7 @@ curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 - OpenAPI spec + examples live in `docs/HOST_API.md` and are served at `/v1/openapi.yaml`.
 - Swagger UI is served at `/docs` and uses public CDN assets; use the YAML spec for air-gapped environments.
 - The gateway is the console client; do not attach `cohsh` or `swarmui` in console mode at the same time. Use `SWARMUI_TRANSPORT=rest` and host tool `--rest-url` flags when multiplexing.
-- REST is queen-only in v0.6.0-alpha. Worker-role attach remains console/9P only.
+- REST is queen-only in 0.9.0-beta. Worker-role attach remains console/9P only.
 - REST clients inherit the gateway role and ticket; there is no per-request ticket.
 - Request handling is brokered through bounded control/telemetry queues with fair scheduling; write/read pressure returns deterministic `429` (`gateway backpressure`) instead of hidden retries.
 - `/v1/meta/status` includes broker counters (`control_waiters`, `telemetry_waiters`, `pool_exhausted`, `timeout_rejections`, `telemetry_yields`) for tuning and incident triage.
@@ -590,7 +590,7 @@ Quit `cohsh`, relaunch SwarmUI to observe the worker activity.
 
 ### 1b) Live Hive operator flow (gateway multiplexed)
 Goal: run SwarmUI, `cohsh`, and host publishers concurrently through `hive-gateway`.
-Why this matters: demonstrates the supported multi-tool pattern in v0.6.0-alpha.
+Why this matters: demonstrates the supported multi-tool pattern in 0.9.0-beta.
 ```bash
 ./qemu/run.sh
 COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \

@@ -5,7 +5,7 @@
 # Cohesix Operator Walkthrough
 
 This walkthrough follows the as-built lifecycle control surfaces exposed by NineDoor and `cohsh`
-for v0.6.0-alpha. It includes hive-gateway (REST multiplexer), live GPU publish, PEFT flows,
+for 0.9.0-beta. It includes hive-gateway (REST multiplexer), live GPU publish, PEFT flows,
 host-sidecar telemetry, and Live Hive text overlays.
 For host tool usage, interdependencies, and policy/mount details, see
 [HOST_TOOLS.md](HOST_TOOLS.md).
@@ -19,7 +19,7 @@ For host tool usage, interdependencies, and policy/mount details, see
 - `/gpu/*` appears only after `gpu-bridge-host --publish` runs; `/host/*` appears only after `host-sidecar-bridge` runs.
 - Mock mode commands (`--mock`) do not talk to the VM; do not mix mock and live in the same session.
 
-## Hive-gateway mental model (v0.6.0-alpha)
+## Hive-gateway mental model (0.9.0-beta)
 - `hive-gateway` is the **sole** console client; everything else must use REST (`--rest-url`).
 - REST is a 1:1 projection of `LS`, `CAT`, and `ECHO`. It does not add new verbs or semantics.
 - REST clients inherit the gateway role (typically `queen`); there is no per-request ticket.
@@ -381,6 +381,76 @@ SwarmUI is read-only and must not run concurrently with `cohsh`.
    COH
    ```
 4. Relaunch SwarmUI and select a worker dot to view the bounded overlay + detail panel.
+
+## 12) LLMOps operator flow (0.9.0-beta)
+Use this flow when operating PEFT/LoRA lifecycles and GPU leases with deterministic receipts and evidence.
+
+### A) Validate the plan first (no control writes)
+Dry-run a built-in LLM-focused playbook:
+```bash
+cohesix-playbook --playbook mac-private-peft-grid --dry-run --mock
+cohesix-playbook --playbook mixed-closed-loop-ai-factory --dry-run --mock
+```
+Expected: reports under `out/examples/playbooks/<playbook-id>/` with no live writes.
+
+### B) Keep one multiplexed control path
+1. Start `hive-gateway` as the sole console client:
+   ```bash
+   COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+     HIVE_GATEWAY_REQUEST_AUTH_TOKEN=replace-with-real-token \
+     COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
+     ./bin/hive-gateway
+   ```
+2. Start `host-ticket-agent` through the same gateway:
+   ```bash
+   ./bin/host-ticket-agent --rest-url http://127.0.0.1:8080 \
+     --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"
+   ```
+
+### C) Enqueue bounded host control tickets
+Submit ticket lines to `/host/tickets/spec` (schema `host-ticket/v1`) from a REST client:
+```bash
+curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" \
+  -d '{"path":"/host/tickets/spec","line":"{\"schema\":\"host-ticket/v1\",\"id\":\"llmops-gpu-lease-1\",\"idempotency_key\":\"llmops-run-20260218\",\"action\":\"gpu.lease.grant\",\"args\":{\"gpu_id\":\"GPU-0\",\"mem_mb\":4096,\"streams\":1,\"ttl_s\":600}}"}'
+
+curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" \
+  -d '{"path":"/host/tickets/spec","line":"{\"schema\":\"host-ticket/v1\",\"id\":\"llmops-peft-activate-1\",\"idempotency_key\":\"llmops-run-20260218\",\"action\":\"peft.activate\",\"args\":{\"model\":\"lejepa-edge-v1\"}}"}'
+```
+Notes:
+- Keep `id` unique per request.
+- Reuse `idempotency_key` across retries for the same intended operation.
+- Allowed action families are bounded by manifest (`gpu.lease.*`, `peft.*`, `systemd.*`, `docker.*`, `k8s.*`).
+
+### D) Read receipts and deadletters
+Check deterministic ticket outcomes:
+```bash
+curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/host/tickets/status&max_bytes=2048' | jq .
+curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/host/tickets/deadletter&max_bytes=2048' | jq .
+```
+Expected lifecycle states: `claimed`, `running`, `succeeded` (or `failed`/`expired` in deadletter).
+
+### E) Capture LLMOps evidence for CI and SIEM
+```bash
+./bin/coh evidence pack --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --out ./out/evidence/llmops --with-telemetry
+./bin/coh evidence timeline --in ./out/evidence/llmops
+python3 tools/cohesix-py/examples/ci_evidence_pack.py --pack ./out/evidence/llmops \
+  --out ./out/evidence/llmops/ci_summary.json
+python3 tools/cohesix-py/examples/siem_export_ndjson.py --pack ./out/evidence/llmops \
+  --out ./out/evidence/llmops/siem.ndjson
+```
+
+### F) Backpressure and reliability checks
+Gateway overload is explicit (HTTP `429`) and should be handled by caller-side pacing.
+```bash
+curl -sS http://127.0.0.1:8080/v1/meta/status | jq .
+```
+Inspect broker counters (`control_waiters`, `telemetry_waiters`, `pool_exhausted`, `timeout_rejections`) before increasing publish rates.
 
 ---
 

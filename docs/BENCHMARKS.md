@@ -1,6 +1,6 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Document Cohesix hive-gateway worker-capacity benchmark evidence and limits for v0.7.0-alpha. -->
+<!-- Purpose: Document Cohesix hive-gateway worker-capacity benchmark evidence and limits for 0.9.0-beta readiness. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Benchmarks
 

@@ -432,8 +432,8 @@ Failure policy:
 
 ### 7) Release bundle validation (macOS + Ubuntu)
 Run Sections 3–5 using the extracted bundle in a clean temp directory (not the repo checkout).
-- macOS bundle: `releases/Cohesix-0.7.0-alpha-MacOS.tar.gz`
-- Ubuntu bundle: `releases/Cohesix-0.7.0-alpha-linux.tar.gz`
+- macOS bundle: `releases/Cohesix-0.9.0-beta-MacOS.tar.gz`
+- Ubuntu bundle: `releases/Cohesix-0.9.0-beta-linux.tar.gz`
 - Ensure headless Linux uses `xvfb-run` for SwarmUI.
 - The release bundle includes Python tests and fixtures for running `python3 -m pytest tools/cohesix-py/tests`.
 
