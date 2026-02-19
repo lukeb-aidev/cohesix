@@ -4,6 +4,11 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Benchmarks
 
+## 0.9.0-beta Benchmark Verdict (As-Built)
+- **Worker-capacity benchmark:** PASS for the `1500` hard cap in real VM/TCP/gateway mode (Milestone 25b evidence under `docs/bench/`).
+- **Large-telemetry reliability gate:** PASS for all required no-retry scenarios (`telemetry-1mb`, `telemetry-10mb`, `telemetry-100mb`, `telemetry-1gb`) with `error_budget_rate=0.01` (Milestone 25f evidence under `logs/rest_bench_20260217T*.summary.json`).
+- **Methodology alignment:** PASS against `docs/TEST_PLAN.md` section `6b` (no mock mode, no retries, fast-ramp, explicit error-budget checks).
+
 ## Hive-Gateway Worker Capacity (Milestone 25b)
 
 ### Executive Summary
@@ -80,6 +85,7 @@ No `--mock` mode was used for reported results.
 - **Recommendation:** keep hard cap at `1500` now, but treat `~1100` as the conservative aggressive-load SLO target until gateway rate-control and queueing are tuned.
 
 ### Graphs
+- Generation method: `scripts/rest_perf_harness.py` `simulate` mode writes `*.ramp.svg` via `write_ramp_svg(...)` from each run's `ramp` rows in `*.summary.json`.
 - `RAMP-1P5K`: `docs/bench/m25b_1p5k_ramp_20260214T020554Z.ramp.svg`
 - `FIXED-1P5K`: `docs/bench/m25b_1p5k_fixed1500_v2_20260214T020432Z.ramp.svg`
 - `FIXED-1200-I4`: `docs/bench/m25b_1p5k_fixed1200_i4_20260214T021516Z.ramp.svg`
@@ -151,50 +157,63 @@ python3 scripts/rest_perf_harness.py \
   --log-prefix m25b_1p5k_fixed1200_i4
 ```
 
-## Strict No-Retry Reliability Tuning (Milestone 25e Follow-up)
+## Large-Telemetry Reliability Gate (Milestone 25f, 0.9.0-beta)
 
-### Goal
-- Reduce strict-profile failures under aggressive load without enabling retries.
+### Required Methodology (from `docs/TEST_PLAN.md` section 6b)
+- Real QEMU + real TCP console + real `hive-gateway` (no mock mode).
+- `--no-retries --fast-ramp --error-budget-rate 0.01`.
+- Required scenarios:
+  - `telemetry-1mb`
+  - `telemetry-10mb`
+  - `telemetry-100mb`
+  - `telemetry-1gb`
+- Pass criteria:
+  - exit code `0`;
+  - `error_budget_pass=true`;
+  - `error_rate <= 0.01`;
+  - `no_retries=true`;
+  - `fast_ramp=true`;
+  - `scenario` matches the preset.
 
-### Profile
-- Host: AWS g5g.xlarge.
-- Transport: real QEMU + real TCP console + real `hive-gateway` (no mock mode).
-- Harness flags: `--no-transient-retries --strict-control-errors`.
-- Load shape: `workers=32..1200`, `intensity=3..10`, `duration=3m`, `ramp-step=5s`, `base-rps=0.2`, `max-inflight=256`, `seed=4402`.
+### Local 0.9.0-beta Results (latest run per scenario)
+| Scenario | Summary Artifact | Ops | Errors | Error Rate | p95 Latency | Error Budget |
+| --- | --- | --- | --- | --- | --- | --- |
+| `telemetry-1mb` | `logs/rest_bench_20260217T223323Z.summary.json` | `7906` | `0` | `0.0000%` | `0.0277s` | `PASS` |
+| `telemetry-10mb` | `logs/rest_bench_20260217T223635Z.summary.json` | `7911` | `0` | `0.0000%` | `0.0278s` | `PASS` |
+| `telemetry-100mb` | `logs/rest_bench_20260217T223949Z.summary.json` | `2898` | `0` | `0.0000%` | `0.0314s` | `PASS` |
+| `telemetry-1gb` | `logs/rest_bench_20260217T224303Z.summary.json` | `487` | `0` | `0.0000%` | `0.0317s` | `PASS` |
 
-### Pool Sweep Results
-| Run ID | Gateway Pool Config | Error Rate | Errors / Ops |
-| --- | --- | --- | --- |
-| `FAST8B` | default (2/8) | `19.0713%` | `5992 / 31419` |
-| `FAST9B` | `2/12` | `16.7442%` | `5433 / 32447` |
-| `FAST10B` | `2/16` | `15.7256%` | `5030 / 31986` |
-| `FAST11B` | `2/24` | `10.8819%` | `3450 / 31704` |
-| `FAST11C` | `2/24` repeat | `12.8279%` | `4338 / 33817` |
-| `FAST12B` | `3/16` | `17.2350%` | `5277 / 30618` |
+Each artifact above records:
+- `error_budget_pass=true`
+- `no_retries=true`
+- `fast_ramp=true`
+- `error_budget_rate=0.01`
 
-### Root Cause and Fix
-- Dominant failure mode was gateway-side backpressure from telemetry-pool saturation.
-- Increasing telemetry pool capacity from `8` to `24` produced the largest low-risk gain.
-- Fix applied in manifest defaults:
-  - `configs/root_task.toml`: `client_policies.cohsh.pool.telemetry_sessions = 24`.
-  - Regenerated policy artifacts via `coh-rtc`.
+### Repro Commands (mandatory matrix)
+```bash
+python3 scripts/rest_perf_harness.py simulate \
+  --rest-url http://127.0.0.1:8080 \
+  --no-retries --fast-ramp --scenario telemetry-1mb --error-budget-rate 0.01
 
-### Post-Fix Validation (No Override)
-- `FAST14` (default policy, no CLI overrides): `10.9254%` (`3595 / 32905`).
-- Gateway startup log confirms default now loads as `control=2 telemetry=24`.
+python3 scripts/rest_perf_harness.py simulate \
+  --rest-url http://127.0.0.1:8080 \
+  --no-retries --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01
 
-### Improvement vs Pre-Fix Baseline
-- Baseline (`FAST8B`, `2/8`) to post-fix default (`FAST14`, `2/24`):
-  - Error rate: `19.0713%` -> `10.9254%` (`-8.1459` points).
-  - Total errors: `5992` -> `3595` (`-2397`, ~`40%` fewer).
-  - Backpressure signatures (`gateway backpressure`): `5358` -> `3253`.
-  - Buffer-full signatures: `614` -> `329`.
+python3 scripts/rest_perf_harness.py simulate \
+  --rest-url http://127.0.0.1:8080 \
+  --no-retries --fast-ramp --scenario telemetry-100mb --error-budget-rate 0.01
 
-### Evidence
-- `logs/soak/beta_nr_strict_fast8b_3m_poolbase_seed4402_20260217T090301Z.summary.json`
-- `logs/soak/beta_nr_strict_fast9b_3m_poolt12_seed4402_20260217T090909Z.summary.json`
-- `logs/soak/beta_nr_strict_fast10b_3m_poolt16_seed4402_20260217T091234Z.summary.json`
-- `logs/soak/beta_nr_strict_fast11b_3m_poolt24_seed4402_20260217T091549Z.summary.json`
-- `logs/soak/beta_nr_strict_fast11c_3m_poolt24_seed4402_20260217T092247Z.summary.json`
-- `logs/soak/beta_nr_strict_fast12b_3m_poolc3t16_seed4402_20260217T091906Z.summary.json`
-- `logs/soak/beta_nr_strict_fast14_3m_default24_seed4402_20260217T093529Z.summary.json`
+python3 scripts/rest_perf_harness.py simulate \
+  --rest-url http://127.0.0.1:8080 \
+  --no-retries --fast-ramp --scenario telemetry-1gb --error-budget-rate 0.01
+```
+
+### Evidence Index (25f)
+- `logs/rest_bench_20260217T222843Z.summary.json`
+- `logs/rest_bench_20260217T223323Z.summary.json`
+- `logs/rest_bench_20260217T223635Z.summary.json`
+- `logs/rest_bench_20260217T223949Z.summary.json`
+- `logs/rest_bench_20260217T224303Z.summary.json`
+
+Release-note corroboration:
+- `releases/RELEASE_NOTES-0.9.0-beta.md` records 25f gate PASS and the same local artifact pattern (`logs/rest_bench_20260217T*.summary.json`), plus G5g host-path evidence.
