@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Run required pull request and main branch Rust validation for Cohesix.
+# Purpose: Run required x86 host Rust validation checks for Cohesix on GitHub Actions.
 # Copyright 2026 Lukas Bower
 
 name: Cohesix CI
@@ -35,8 +35,21 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Validate workspace compiles
-        run: cargo check --workspace --locked
+      - name: Generate manifest-derived policy artifacts
+        run: |
+          cargo run -q -p coh-rtc -- \
+            configs/root_task.toml \
+            --out apps/root-task/src/generated \
+            --manifest out/manifests/root_task_resolved.json
 
-      - name: Run workspace tests
-        run: cargo test --workspace --locked --quiet
+      - name: Rust check (workspace, host-safe set)
+        run: cargo check --workspace --exclude swarmui --exclude coh --exclude host-ticket-agent --exclude root-task
+
+      - name: Rust test (secure9p-codec)
+        run: cargo test -p secure9p-codec --quiet
+
+      - name: Rust test (integration crate)
+        run: cargo test -p tests --quiet
+
+      - name: Rust test (workspace, host-safe set)
+        run: cargo test --workspace --exclude swarmui --exclude coh --exclude host-ticket-agent --exclude root-task --quiet
