@@ -244,3 +244,57 @@ For production today:
 3. Put strict automation discipline around `/mnt/coh-live`.
 4. Enforce idempotency + WAL replay in operator automation.
 5. Collect evidence packs at each failover event for audit and postmortem.
+
+## 14) Watchdog Ops Automation (Auto-Cutover)
+`0.9.0-beta` supports host-side watchdog automation without changing VM semantics.
+
+Script:
+- `scripts/failover_watchdog.py`
+
+Behavior:
+1. Poll both REST gateways (`/v1/meta/status` and `/v1/fs/cat path=/proc/root/reachable`).
+2. Track consecutive failure/success counters per side.
+3. Declare active failed when `failure_threshold` is met.
+4. Require standby healthy (`success_threshold`) before cutover.
+5. Atomically flip live symlink (`/mnt/coh-live` or lab equivalent) to standby.
+6. Enforce hold-down timer to avoid flapping.
+7. Emit JSON events (`start`, `probe`, `cutover`, `cutover-error`, `stop`).
+
+### Recommended Invocation
+```bash
+python3 scripts/failover_watchdog.py \
+  --a-rest-url http://127.0.0.1:64080 \
+  --b-rest-url http://127.0.0.1:65081 \
+  --a-mount /mnt/coh-a \
+  --b-mount /mnt/coh-b \
+  --live-link /mnt/coh-live \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --failure-threshold 3 \
+  --success-threshold 1 \
+  --hold-down-sec 15 \
+  --interval-sec 1
+```
+
+Options for production controls:
+- `--fence-cmd "<command with {src} and {dst}>"`
+- `--post-cutover-cmd "<command with {src} and {dst}>"`
+- `--lock-file /var/run/cohesix-failover-watchdog.lock`
+- `--allow-failback` (disabled by default; keep manual failback unless strongly justified)
+
+### Watchdog Validation (Latest)
+Validation date: **February 19, 2026**
+
+Scenario:
+1. Mac watchdog configured with `live -> mnt-a`.
+2. Queen A endpoint intentionally unavailable (`http://127.0.0.1:64080` down).
+3. Queen B endpoint served from Jetson via SSH local forward (`http://127.0.0.1:65081`).
+4. Watchdog run with `--once --failure-threshold 1 --success-threshold 1 --hold-down-sec 0`.
+
+Observed:
+- Pre-run live target: `.../mac/mnt-a`
+- Post-run live target: `.../mac/mnt-b`
+- Watchdog event: `"event":"cutover","reason":"active-failed","src_side":"a","dst_side":"b"`
+- Standby lifecycle remained healthy: `state=ONLINE`
+
+Evidence directory:
+- `/tmp/coh_watchdog_20260219T095123Z`
