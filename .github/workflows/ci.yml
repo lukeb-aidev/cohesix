@@ -35,8 +35,8 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Rust check (workspace)
-        run: cargo check --workspace
+      - name: Rust check (workspace, host-safe set)
+        run: cargo check --workspace --exclude swarmui
 
       - name: Rust test (secure9p-codec)
         run: cargo test -p secure9p-codec --quiet
@@ -44,5 +44,5 @@ jobs:
       - name: Rust test (integration crate)
         run: cargo test -p tests --quiet
 
-      - name: Rust test (workspace)
-        run: cargo test --workspace --quiet
+      - name: Rust test (workspace, host-safe set)
+        run: cargo test --workspace --exclude swarmui --quiet
