@@ -36,7 +36,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Rust check (workspace, host-safe set)
-        run: cargo check --workspace --exclude swarmui --exclude coh --exclude host-ticket-agent
+        run: cargo check --workspace --exclude swarmui --exclude coh --exclude host-ticket-agent --exclude root-task
 
       - name: Rust test (secure9p-codec)
         run: cargo test -p secure9p-codec --quiet
@@ -45,4 +45,4 @@ jobs:
         run: cargo test -p tests --quiet
 
       - name: Rust test (workspace, host-safe set)
-        run: cargo test --workspace --exclude swarmui --exclude coh --exclude host-ticket-agent --quiet
+        run: cargo test --workspace --exclude swarmui --exclude coh --exclude host-ticket-agent --exclude root-task --quiet
