@@ -8,24 +8,22 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 from typing import Optional
 
 from .audit import CohesixAudit
+from .auth import resolve_tcp_auth_token
 from .backends import FilesystemBackend, MockBackend, RestBackend, TcpBackend
+from .errors import CohesixError
 from .orchestration import CohesixOrchestrator
 from .playbooks import describe_playbooks, execute_playbook, load_playbook, playbook_ids
 
 
 def _resolve_auth_token(value: Optional[str]) -> str:
-    if value and value.strip():
-        return value.strip()
-    for env_name in ("COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN"):
-        env_value = os.environ.get(env_name)
-        if env_value and env_value.strip():
-            return env_value.strip()
-    return "changeme"
+    try:
+        return resolve_tcp_auth_token(value)
+    except ValueError as exc:
+        raise CohesixError(str(exc)) from exc
 
 
 def _build_backend(args: argparse.Namespace):

@@ -19,6 +19,7 @@ from cohesix.integrations import (  # noqa: E402
     HostSnapshot,
     ProbeResult,
     probe_docker,
+    probe_nvml,
     probe_peft_runtime,
     probe_systemd,
     snapshot_to_ndjson,
@@ -90,3 +91,31 @@ def test_snapshot_to_ndjson_renders_one_line_per_probe() -> None:
     lines = [line for line in payload.splitlines() if line.strip()]
     assert len(lines) == 2
     assert "\"provider\":\"docker\"" in payload
+
+
+def test_probe_nvml_cli_fallback_handles_na_values() -> None:
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "pynvml":
+            raise ModuleNotFoundError("pynvml")
+        return original_import(name, *args, **kwargs)
+
+    completed = subprocess.CompletedProcess(
+        args=["nvidia-smi"],
+        returncode=0,
+        stdout="0, GPU-UUID, Device, 8192, 1024, [N/A], [N/A]\n",
+        stderr="",
+    )
+    with mock.patch("builtins.__import__", side_effect=fake_import):
+        with mock.patch("cohesix.integrations.shutil.which", return_value="/usr/bin/nvidia-smi"):
+            with mock.patch("cohesix.integrations._safe_command", return_value=completed):
+                result = probe_nvml()
+
+    assert result.provider == "nvidia"
+    assert result.status == "ok"
+    devices = result.data.get("devices", [])
+    assert isinstance(devices, list)
+    assert len(devices) == 1
+    assert devices[0]["utilization_gpu_pct"] is None
+    assert devices[0]["temperature_c"] is None

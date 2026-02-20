@@ -105,15 +105,16 @@ def export_evidence_pack(
 
     _capture_audit(backend, out_dir, items, audit)
 
-    _capture_file(
+    replay_payload = _read_optional(
         backend,
-        out_dir,
         "/replay/status",
-        "CAT",
         DEFAULT_REPLAY_STATUS_MAX_BYTES,
+        "CAT",
         items,
         audit=audit,
     )
+    if replay_payload is not None:
+        _write_payload_atomic(out_dir, "/replay/status", replay_payload)
 
     if with_telemetry:
         if telemetry_pull is None:
@@ -706,6 +707,7 @@ def _is_missing_error(exc: Exception) -> bool:
         or "404" in message
         or "does not exist" in message
         or "is not a file" in message
+        or "invalid-path" in message
         or "disabled" in message
     )
 

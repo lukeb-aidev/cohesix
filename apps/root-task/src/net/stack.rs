@@ -3617,6 +3617,7 @@ impl<D: NetDevice> NetStack<D> {
                                         self.active_client_id,
                                         AuthState::Failed,
                                     );
+                                    let bytes_before = self.conn_bytes_written;
                                     activity |= Self::flush_outbound(
                                         &mut self.server,
                                         &mut self.outbound,
@@ -3629,6 +3630,26 @@ impl<D: NetDevice> NetStack<D> {
                                         self.auth_state,
                                         &mut self.session_state,
                                     );
+                                    if self.conn_bytes_written == bytes_before {
+                                        if Self::send_auth_failure_ack(
+                                            &mut self.server,
+                                            &mut self.conn_bytes_written,
+                                            &mut self.counters,
+                                            socket,
+                                            self.active_client_id,
+                                            self.auth_state,
+                                            &mut self.session_state,
+                                            now_ms,
+                                            reason,
+                                        ) {
+                                            activity = true;
+                                        } else {
+                                            warn!(
+                                                "[cohsh-net][auth] unable to flush auth failure ack before close (reason={})",
+                                                reason
+                                            );
+                                        }
+                                    }
                                     Self::log_session_closed(
                                         &mut self.session_state,
                                         self.peer_endpoint,
@@ -4428,6 +4449,51 @@ impl<D: NetDevice> NetStack<D> {
                 );
                 Err(SendError::WouldBlock)
             }
+        }
+    }
+
+    fn send_auth_failure_ack(
+        server: &mut TcpConsoleServer,
+        conn_bytes_written: &mut u64,
+        counters: &mut NetCounters,
+        socket: &mut TcpSocket,
+        conn_id: Option<u64>,
+        auth_state: AuthState,
+        session_state: &mut SessionState,
+        now_ms: u64,
+        reason: &str,
+    ) -> bool {
+        let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        if line.push_str("ERR AUTH reason=").is_err() || line.push_str(reason).is_err() {
+            return false;
+        }
+        let total_len = line.len().saturating_add(4);
+        let Ok(total_len_u32) = u32::try_from(total_len) else {
+            return false;
+        };
+        let mut frame: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 4 }> = HeaplessVec::new();
+        if frame
+            .extend_from_slice(&total_len_u32.to_le_bytes())
+            .is_err()
+            || frame.extend_from_slice(line.as_bytes()).is_err()
+        {
+            return false;
+        }
+        match Self::send_payload(
+            server,
+            conn_bytes_written,
+            counters,
+            socket,
+            conn_id,
+            auth_state,
+            session_state,
+            now_ms,
+            frame.as_slice(),
+            OutboundLane::Control,
+            true,
+        ) {
+            Ok(()) => true,
+            Err(_) => false,
         }
     }
 

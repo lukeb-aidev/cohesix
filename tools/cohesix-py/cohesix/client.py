@@ -77,7 +77,14 @@ class CohesixClient:
         output = []
         for gpu_id in sorted(gpus):
             info_path = f"/gpu/{gpu_id}/info"
-            payload = self.backend.read_file(info_path, MAX_GPU_INFO_BYTES)
+            try:
+                payload = self.backend.read_file(info_path, MAX_GPU_INFO_BYTES)
+            except Exception as exc:
+                if _is_missing_path_error(exc):
+                    if audit is not None:
+                        audit.push_line(f"gpu skip id={gpu_id} reason=missing-info")
+                    continue
+                raise
             if audit is not None:
                 audit.push_ack("OK", "CAT", f"path={info_path}")
             try:
@@ -621,6 +628,18 @@ def validate_component(component: str) -> None:
         raise CohesixError(f"path component '{component}' contains '/'")
     if "\x00" in component:
         raise CohesixError("path component contains NUL byte")
+
+
+def _is_missing_path_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "not found" in message
+        or "404" in message
+        or "does not exist" in message
+        or "is not a file" in message
+        or "is not a directory" in message
+        or "invalid-path" in message
+    )
 
 
 def normalise_payload(payload: str, max_bytes: Optional[int] = None) -> str:

@@ -10,6 +10,7 @@ import json
 import os
 import socket
 import struct
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,6 +32,14 @@ REQUEST_AUTH_ENV_KEYS = (
     "COHSH_REST_AUTH_TOKEN",
     "COH_REST_AUTH_TOKEN",
 )
+_RETRY = DEFAULTS.get("retry", {})
+REST_DEFAULT_MAX_ATTEMPTS = max(1, int(_RETRY.get("max_attempts", 3) or 3))
+REST_DEFAULT_BACKOFF_MS = max(0, int(_RETRY.get("backoff_ms", 200) or 0))
+REST_DEFAULT_BACKOFF_CEILING_MS = max(
+    REST_DEFAULT_BACKOFF_MS,
+    int(_RETRY.get("ceiling_ms", 2000) or 2000),
+)
+REST_RETRYABLE_HTTP_CODES = {429, 500, 502, 503, 504}
 
 
 def _resolve_request_auth_token(value: Optional[str]) -> Optional[str]:
@@ -169,7 +178,10 @@ class TcpBackend(Backend):
         assert self._sock is not None
         buf = b""
         while len(buf) < size:
-            chunk = self._sock.recv(size - len(buf))
+            try:
+                chunk = self._sock.recv(size - len(buf))
+            except OSError as exc:
+                raise CohesixError(f"connection closed ({exc})") from exc
             if not chunk:
                 raise CohesixError("connection closed")
             buf += chunk
@@ -189,13 +201,22 @@ class TcpBackend(Backend):
 
     def _auth(self) -> None:
         self._send_line(f"AUTH {self.auth_token}")
+        saw_line = False
         for _ in range(self.max_retries * 4):
-            line = self._recv_line()
+            try:
+                line = self._recv_line()
+            except CohesixError as exc:
+                if not saw_line and "connection closed" in str(exc).lower():
+                    raise CohesixError(
+                        "authentication rejected: connection closed before AUTH response"
+                    ) from exc
+                raise
+            saw_line = True
             if line.startswith("OK AUTH"):
                 return
             if line.startswith("ERR AUTH"):
                 raise CohesixError(line)
-        raise CohesixError("auth timed out")
+        raise CohesixError("auth timed out waiting for AUTH response")
 
     def _attach(self) -> None:
         ticket_payload = self.ticket or ""
@@ -278,10 +299,26 @@ class RestBackend(Backend):
         base_url: str,
         timeout_s: float = 2.0,
         request_auth_token: Optional[str] = None,
+        max_attempts: Optional[int] = None,
+        backoff_ms: Optional[int] = None,
+        backoff_ceiling_ms: Optional[int] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
         self.request_auth_token = _resolve_request_auth_token(request_auth_token)
+        self.max_attempts = max(1, int(max_attempts or REST_DEFAULT_MAX_ATTEMPTS))
+        self.backoff_ms = max(
+            0,
+            int(REST_DEFAULT_BACKOFF_MS if backoff_ms is None else backoff_ms),
+        )
+        self.backoff_ceiling_ms = max(
+            self.backoff_ms,
+            int(
+                REST_DEFAULT_BACKOFF_CEILING_MS
+                if backoff_ceiling_ms is None
+                else backoff_ceiling_ms
+            ),
+        )
 
     def list_dir(self, path: str) -> List[str]:
         response = self._request_json("GET", "/v1/fs/ls", query={"path": path})
@@ -370,23 +407,30 @@ class RestBackend(Backend):
         data = None
         if body is not None:
             data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("Accept", "application/json")
-        if self.request_auth_token:
-            req.add_header("Authorization", f"Bearer {self.request_auth_token}")
-            req.add_header("x-cohesix-auth", self.request_auth_token)
-        if body is not None:
-            req.add_header("Content-Type", "application/json")
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
-                payload = resp.read()
-        except urllib.error.HTTPError as exc:
-            payload = exc.read()
-            self._raise_rest_error(method, path, payload, exc)
-            raise AssertionError("unreachable")
-        except urllib.error.URLError as exc:
-            raise CohesixError(f"REST connection failed: {exc}") from exc
-        return payload
+        for attempt in range(self.max_attempts):
+            req = urllib.request.Request(url, data=data, method=method)
+            req.add_header("Accept", "application/json")
+            if self.request_auth_token:
+                req.add_header("Authorization", f"Bearer {self.request_auth_token}")
+                req.add_header("x-cohesix-auth", self.request_auth_token)
+            if body is not None:
+                req.add_header("Content-Type", "application/json")
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                    return resp.read()
+            except urllib.error.HTTPError as exc:
+                payload = exc.read()
+                if self._should_retry_http(exc, attempt):
+                    self._sleep_backoff(attempt, exc)
+                    continue
+                self._raise_rest_error(method, path, payload, exc)
+                raise AssertionError("unreachable")
+            except urllib.error.URLError as exc:
+                if self._should_retry_url(exc, attempt):
+                    self._sleep_backoff(attempt, None)
+                    continue
+                raise CohesixError(f"REST connection failed: {exc}") from exc
+        raise CohesixError(f"REST {method} {path} failed after {self.max_attempts} attempts")
 
     def _parse_rest_payload(self, method: str, path: str, payload: bytes) -> dict:
         try:
@@ -410,6 +454,43 @@ class RestBackend(Backend):
         if isinstance(data, dict) and data.get("error"):
             raise CohesixError(str(data.get("error")))
         raise CohesixError(f"REST {method} {path} failed with status {exc.code}")
+
+    def _should_retry_http(self, exc: urllib.error.HTTPError, attempt: int) -> bool:
+        return attempt + 1 < self.max_attempts and int(exc.code) in REST_RETRYABLE_HTTP_CODES
+
+    def _should_retry_url(self, exc: urllib.error.URLError, attempt: int) -> bool:
+        if attempt + 1 >= self.max_attempts:
+            return False
+        reason = str(exc.reason).lower() if getattr(exc, "reason", None) is not None else ""
+        return any(
+            marker in reason
+            for marker in (
+                "timed out",
+                "temporarily unavailable",
+                "temporary failure",
+                "connection refused",
+                "connection reset",
+                "connection aborted",
+                "broken pipe",
+                "failed to establish",
+            )
+        )
+
+    def _sleep_backoff(
+        self, attempt: int, exc: Optional[urllib.error.HTTPError]
+    ) -> None:
+        delay_ms = self.backoff_ms * (2**attempt)
+        if self.backoff_ceiling_ms > 0:
+            delay_ms = min(delay_ms, self.backoff_ceiling_ms)
+        if exc is not None:
+            retry_after = exc.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    delay_ms = max(delay_ms, int(retry_after) * 1000)
+                except ValueError:
+                    pass
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
 
 
 class MockBackend(FilesystemBackend):
