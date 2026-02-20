@@ -5549,10 +5549,6 @@ Deliverables:
   - Canonical operator and test documentation for Milestone 25f.
 ```
 
-----
-**Release 0.9.0 alpha**
-----
-
 ---
 
 ## Milestone 25g — Host Control Tickets via FUSE (GPU/PEFT + systemd/docker + K8s Coexistence) <a id="25g"></a>
@@ -5703,6 +5699,10 @@ Checks:
 Deliverables:
   - Canonical docs and regression requirements for Milestone 25g ticketed orchestration.
 ```
+
+----
+**Release 0.9.0 alpha**
+----
 
 ---
 
