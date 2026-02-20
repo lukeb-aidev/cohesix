@@ -2,11 +2,13 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Document Cohesix Python client usage and backends. -->
 <!-- Author: Lukas Bower -->
-# Cohesix Python Support (Milestone 25c)
+# Cohesix Python Support (0.9.0-beta As-Built)
 
 The `cohesix` Python client is a **thin, non-authoritative** wrapper over existing Cohesix
 console and filesystem semantics. It **does not introduce new control-plane behavior**; it
 mirrors the same verbs, bounds, and error rules enforced by `cohsh` and Secure9P.
+
+This document reflects the `0.9.0-beta` release line (Milestones 25c/25e/25g plus TCP/auth hardening).
 
 Milestone 25e adds offline integration kit examples that validate and export evidence packs for CI and SIEM ingestion.
 
@@ -167,6 +169,29 @@ Release bundle:
 python3 -m pip install ./python/cohesix-py
 ```
 
+## Per-host `.venv` setup (macOS/Linux)
+Create an isolated environment in the repo root before running tests/examples:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e 'tools/cohesix-py[dev]'
+```
+
+If you need host integration and ML adapters:
+```bash
+python -m pip install -e 'tools/cohesix-py[dev,integrations,ml]'
+```
+
+Quick verification:
+```bash
+.venv/bin/python -m pytest tools/cohesix-py/tests/test_auth.py -q
+```
+
+Notes:
+- `zsh` users should keep extras quoted (for example, `'tools/cohesix-py[dev]'`).
+- Python `>=3.11` is required.
+
 ## Playbook CLI
 The package now ships `cohesix-playbook` for one-command orchestration templates:
 ```bash
@@ -180,17 +205,18 @@ Reports are written under `out/examples/playbooks/<playbook-id>/`.
 All bundled examples share the same backend arguments:
 - `--mock` and `--mock-root` (default mock root: `out/examples/mockfs`)
 - `--mount-root` (FilesystemBackend)
-- `--rest http://127.0.0.1:8080` (RestBackend)
+- `--rest http://127.0.0.1:8080` (examples) or `--rest-url http://127.0.0.1:8080` (`cohesix-playbook`) for RestBackend
 - `--tcp-host` and `--tcp-port` (TcpBackend)
 - `--auth-token` (for TCP: explicit token override; otherwise resolve queen secret from manifest, then `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`; placeholder `changeme` is rejected; for REST: request-auth override)
 - `--role` and `--ticket`
-- `--timeout-s` and `--max-retries`
+- `--timeout-s` and `--max-retries` (`--max-retries` applies to TCP auth/attach loops; REST uses manifest/default retry policy)
 - `--out` to override `out/examples/`
 Notes:
 - Use only one backend flag group at a time. Do not combine `--mock` with `--tcp-host`, `--rest`, or `--mount-root`.
 - With `--rest`, `--auth-token` is used as the gateway request-auth token.
 - If `--rest` is used and `--auth-token` is not set, `RestBackend` checks
   `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, then `COH_REST_AUTH_TOKEN`.
+- For TCP token discovery, manifest candidates are checked first using `COH_RTC_MANIFEST`, `COH_MANIFEST`, `COHESIX_MANIFEST`, then default paths `configs/root_task.toml` and `configs/root_task_regression.toml`.
 - In live runs, ensure QEMU is running and the console port matches your `--tcp-port`.
 
 ## Quickstart (mock mode)
@@ -215,7 +241,7 @@ python3 tools/cohesix-py/examples/siem_export_ndjson.py --pack out/evidence/mock
 ## Live connection requirements (no `--mock`)
 To run against a live Queen, you need:
 - A running QEMU VM: `scripts/qemu-run.sh` (bundle: `./qemu/run.sh`)
-- A valid console auth token (pass `--auth-token`, or provide a manifest queen secret / `COHSH_AUTH_TOKEN` / `COH_AUTH_TOKEN`)
+- A valid console auth token (pass `--auth-token`, or provide a manifest queen secret via `COH_RTC_MANIFEST` / `COH_MANIFEST` / `COHESIX_MANIFEST`, or set `COHSH_AUTH_TOKEN` / `COH_AUTH_TOKEN`)
 - Any required host integrations (e.g., GPU bridge if using `/gpu`)
 
 If policy gating is enabled (see `/policy/rules`), queue approvals before any control writes to `/queen/ctl`:
@@ -259,6 +285,7 @@ curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 ```
 
 Note: the gateway is itself a console client; avoid attaching `cohsh` or `swarmui` at the same time.
+`RestBackend` retries transient failures by default (`429/500/502/503/504` and transient connection errors), using exponential backoff with a `Retry-After` floor when present.
 
 ## Filesystem backend (Secure9P mount)
 1) Mount the namespace on the host (requires `coh mount`):
@@ -281,7 +308,7 @@ The client enforces manifest-derived defaults emitted by `coh-rtc` and embedded 
 - telemetry ingest caps
 - registry and path allowlists
 
-If the generated defaults drift from the manifest (`configs/root_task.toml` -> `coh-rtc`), the client will reject mismatched hashes.
+`manifest_sha256` from generated defaults is exported in receipts/evidence and can be cross-checked with REST `/v1/meta/bounds`. Drift prevention is enforced in build/CI by regenerating artifacts from manifest IR (`coh-rtc`), rather than runtime manifest reloading.
 
 ## Connectivity checklist (live)
 - `ping` and `ls /` succeed via your chosen backend.
@@ -304,12 +331,14 @@ python3 -m pytest tools/cohesix-py/tests/test_playbooks.py -q
 
 ## Troubleshooting
 - `ERR AUTH`: set `COH_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`) or pass `--auth-token`.
+- `authentication rejected: connection closed before AUTH response`: the server closed/reset before returning AUTH status (commonly invalid token or console contention). Verify token source and single-client ownership.
+- `auth timed out waiting for AUTH response`: AUTH frame was sent but no terminal response arrived before retries/timeout.
 - `ERR ATTACH`: your role requires a ticket; pass `--ticket` or mint one with `cohsh --mint-ticket`.
 - `ERR ECHO reason=policy ... EPERM`: policy gating requires an approval in `/actions/queue`.
 - Empty `/gpu`: ensure the host GPU bridge integration is running; use `./bin/gpu-bridge-host --mock --list` for mock demos.
 - Non-mock PEFT flows require `/gpu/models` to be visible; run `./bin/gpu-bridge-host --publish ...` or `coh peft import --publish` to refresh the live registry.
 - Filesystem backend mount errors: ensure FUSE is installed and `coh` was built with FUSE enabled.
-- REST errors: confirm `hive-gateway` is running and reachable at `/v1/meta/bounds`.
+- REST errors: confirm `hive-gateway` is running and reachable at `/v1/meta/bounds`; transient `429/5xx` and short network failures are retried automatically.
 
 ## Real-world use-case playbooks (1k+ workers)
 The built-in playbook catalog covers all high-impact use cases defined for Milestone 25d discussions:
