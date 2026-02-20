@@ -14,3 +14,5 @@ __pycache__/
 node_modules/
 playwright-report/
 test-results/
+/releases/Cohesix-0.9.0-beta-MacOS/.venv_live_090
+/releases/Cohesix-0.9.0-beta-MacOS/out/validation
