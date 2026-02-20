@@ -100,6 +100,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25e](#25e) | Evidence Packs + Integration Kits (Audit-First Adoption) | Complete |
 | [25f](#25f) | Gateway Broker Refactor + Large Telemetry Reference Manifests (No-Retry Reliability Gate) | Complete |
 | [25g](#25g) | Host Control Tickets via FUSE (GPU/PEFT + systemd/docker + K8s Coexistence) | Complete |
+| [25h](#25h) | Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) | Pending |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -5698,6 +5699,168 @@ Checks:
   - Evidence packs and timelines are deterministic and include ticket correlation for all mandatory ticket classes.
 Deliverables:
   - Canonical docs and regression requirements for Milestone 25g ticketed orchestration.
+```
+
+---
+
+## Milestone 25h — Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) <a id="25h"></a>
+[Milestones](#Milestones)
+
+**Why now (fleet reality):** `docs/BENCHMARKS.md` validates a 1500 hard cap, with aggressive-profile reliability pressure around `~1000-1200` workers per hive due to gateway backpressure. The practical scale path is federation of many bounded hives, not active/active writes to one logical hive. `docs/FAILOVER.md` already codifies single-writer active/standby and host-orchestrated cutover; this milestone extends that model for interoperable multi-hive operations.
+
+## Goal
+Deliver a deterministic multi-hive interoperability layer that:
+1. Scales operational control across many independent hives using host-side ticket relay.
+2. Preserves single-writer semantics per hive and explicit split-brain fencing.
+3. Enables pragmatic "10 queens -> 10,000 workers" orchestration patterns without adding new in-VM protocols.
+4. Produces replayable, correlated evidence for cross-hive intents and outcomes.
+
+## Non-Goals (Explicit)
+- No active/active multi-queen writes to one logical hive namespace.
+- No built-in cross-queen state replication or consensus protocol.
+- No new in-VM TCP listeners, RPC channels, or shared-memory authority paths.
+- No relaxation of Secure9P limits, ACK/ERR/END grammar, or existing policy gates.
+- No dependence on REST-backed FUSE appends for mutation paths in federated mode; control writes remain REST `/v1/fs/echo`-driven.
+
+## Design Principles (Normative)
+1. **Hive as authority island** - each hive remains independently authoritative and bounded.
+2. **Forward intents, not mutable state** - relay append-only tickets and receipts, never raw state replication.
+3. **Idempotent by construction** - cross-hive actions correlate by `id + idempotency_key + source_hive + target_hive`.
+4. **Host-owned federation logic** - keep routing, WAL, and retry policy host-side to preserve tiny VM TCB.
+5. **Read-many, write-disciplined** - broad fleet reads are allowed; writes are fenced per-hive and explicit.
+
+## Implementation Touchpoints
+- `tools/coh-rtc/src/ir.rs`, `configs/root_task.toml`, generated artifacts - add manifest-gated federation config:
+  - peer inventory, per-peer auth references, relay queue bounds, allowed cross-hive actions, and WAL bounds.
+- `apps/host-ticket-agent/*` and/or new `apps/hive-federation-relay/*` - implement bounded cross-hive relay worker over existing REST gateway paths.
+- `apps/hive-gateway/*` - expose relay-safe status counters (queue, dedupe, remote write failures) without adding control semantics.
+- `apps/coh/src/evidence.rs`, `apps/coh/src/evidence_timeline.rs` - include cross-hive correlation fields in evidence/timeline exports.
+- `scripts/failover_watchdog.py` - integrate federation-aware fencing hooks (pause relay during cutover, resume after health checks).
+- `tools/cohesix-py/*` - optional fleet orchestrator helpers for fan-out by shard/hive policy while preserving ticket semantics.
+- `docs/FAILOVER.md`, `docs/HOST_TOOLS.md`, `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, `docs/TEST_PLAN.md`, `docs/USE_CASES.md` - canonical as-built behavior and operator runbooks.
+
+## Commands
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `scripts/check-generated.sh`
+- `cargo test -p host-ticket-agent`
+- `cargo test -p hive-gateway`
+- `cargo test -p coh`
+- `python3 -m pytest tools/cohesix-py/tests -q`
+- `python3 scripts/failover_watchdog.py --help`
+- `scripts/ci/check_test_plan.sh`
+
+## Checks (Definition of Done)
+- Per-hive single-writer invariant is preserved during normal operations, relay fan-out, planned failover, and unplanned cutover.
+- Cross-hive relay is deterministic and idempotent: duplicate spec lines or relay restarts do not produce duplicate side effects.
+- Federated writes use authenticated REST mutation paths; read-only FUSE mounts may be used for observability.
+- Relay queueing is bounded with explicit backpressure/timeout counters and deterministic failure receipts.
+- Evidence/timeline output correlates source hive intent -> target hive execution -> terminal receipt with stable IDs.
+- A multi-hive validation matrix (minimum 3 hives; stretch 10 hives) passes with no split-brain writes and no grammar drift.
+- `docs/TEST_PLAN.md` includes mandatory federation runs (relay success, relay failure, dedupe, failover pause/resume, evidence correlation) with no skip path.
+
+## Task Breakdown
+```
+Title/ID: m25h-federation-ir-and-policy
+Goal: Add manifest-driven federation config and bounds for cross-hive relay behavior.
+Inputs: tools/coh-rtc/src/ir.rs, configs/root_task.toml, docs/INTERFACES.md, docs/ARCHITECTURE.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs + configs/root_task.toml - add `federation` section (peers, allowlisted actions, queue/WAL bounds, auth references).
+  - Generated artifacts/snippets - emit federation bounds for docs and host tooling.
+  - docs/INTERFACES.md + docs/ARCHITECTURE.md - document federation envelope and invariants.
+Commands:
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - scripts/check-generated.sh
+Checks:
+  - Invalid peer config or over-limit bounds fail generation deterministically.
+Deliverables:
+  - Manifest-backed federation policy with generated docs snippets and hash-checked artifacts.
+
+Title/ID: m25h-relay-agent-core
+Goal: Implement bounded cross-hive ticket relay with WAL and deterministic cursor resume.
+Inputs: apps/host-ticket-agent, apps/hive-gateway, docs/HOST_TOOLS.md, docs/FAILOVER.md.
+Changes:
+  - apps/host-ticket-agent/src/relay.rs (or new apps/hive-federation-relay) - watch source `/host/tickets/spec`, forward allowlisted intents to target `/host/tickets/spec`.
+  - apps/host-ticket-agent/src/wal.rs - persist pending relay intents and replay unapplied entries after restart.
+  - apps/hive-gateway - expose relay observability counters under existing status surfaces.
+Commands:
+  - cargo test -p host-ticket-agent
+  - cargo test -p hive-gateway
+Checks:
+  - Relay restarts resume from cursor/WAL without duplicate side effects.
+Deliverables:
+  - Host-side relay engine with bounded queueing and restart-safe behavior.
+
+Title/ID: m25h-federated-ticket-envelope
+Goal: Define cross-hive ticket envelope and status correlation rules.
+Inputs: apps/nine-door/src/host/tickets.rs, apps/root-task/src/ninedoor.rs, docs/INTERFACES.md.
+Changes:
+  - Ticket schema evolution (`host-ticket/v1` additive fields or `host-ticket-federated/v1`) including `source_hive`, `target_hive`, `relay_hop`, and correlation IDs.
+  - Deterministic mapping from target status receipts back to source status/deadletter.
+  - docs/INTERFACES.md - normative schema and lifecycle transitions for federated flow.
+Commands:
+  - cargo test -p nine-door
+  - cargo test -p host-ticket-agent
+Checks:
+  - Malformed or unauthorized federated envelopes are rejected with deterministic ERR/receipts.
+Deliverables:
+  - Stable cross-hive envelope contract and receipt-correlation semantics.
+
+Title/ID: m25h-fleet-read-model
+Goal: Add operator-grade fleet read model without introducing global write semantics.
+Inputs: apps/coh, apps/hive-gateway, docs/HOST_TOOLS.md.
+Changes:
+  - apps/coh/src/fleet.rs - read-only fan-in helpers (`coh fleet status`, `coh fleet lease-summary`, `coh fleet pressure`).
+  - docs/HOST_TOOLS.md - document read-only fleet commands and write-fencing guidance.
+  - Optional REST/FUSE examples for multi-hive observability trees.
+Commands:
+  - cargo test -p coh
+Checks:
+  - Fleet read commands produce deterministic merged output and never mutate hive state.
+Deliverables:
+  - Read-only fleet observability surface aligned with single-writer control semantics.
+
+Title/ID: m25h-failover-fencing-integration
+Goal: Integrate relay behavior with failover fencing and cutover runbooks.
+Inputs: scripts/failover_watchdog.py, docs/FAILOVER.md, docs/TEST_PLAN.md.
+Changes:
+  - scripts/failover_watchdog.py - add relay pause/resume hooks tied to hold-down and health thresholds.
+  - docs/FAILOVER.md - federation-aware runbook: freeze relay, cut over, replay WAL, resume relay.
+  - docs/TEST_PLAN.md - mandatory failover + relay consistency checks.
+Commands:
+  - python3 scripts/failover_watchdog.py --help
+  - scripts/ci/check_test_plan.sh
+Checks:
+  - Planned/unplanned cutovers do not create split-brain relay writes or duplicate downstream actions.
+Deliverables:
+  - Federation-aware failover automation and validated operator procedure.
+
+Title/ID: m25h-federation-scale-gate
+Goal: Validate pragmatic multi-hive scale targets with deterministic pass/fail criteria.
+Inputs: scripts/rest_perf_harness.py, docs/BENCHMARKS.md, docs/TEST_PLAN.md, docs/USE_CASES.md.
+Changes:
+  - scripts/rest_perf_harness.py - add multi-hive scenario mode (N gateways, per-hive worker caps, relay load profile).
+  - docs/BENCHMARKS.md - publish 3-hive baseline and optional 10-hive stretch results with first-failure mode analysis.
+  - docs/USE_CASES.md + docs/TEST_PLAN.md - map federated scale to concrete use-case flows and mandatory gate commands.
+Commands:
+  - python scripts/rest_perf_harness.py simulate --multi-hive --hives 3 --workers-per-hive 1000 --no-retries --error-budget-rate 0.01
+Checks:
+  - Multi-hive scenarios hit target worker totals via federation without breaching per-hive invariants.
+Deliverables:
+  - Federation scale gate evidence and use-case-aligned capacity guidance.
+
+Title/ID: m25h-evidence-and-timeline-correlation
+Goal: Make cross-hive relay flows first-class in evidence packs and timelines.
+Inputs: apps/coh/src/evidence.rs, apps/coh/src/evidence_timeline.rs, docs/HOST_TOOLS.md.
+Changes:
+  - apps/coh/src/evidence.rs - export source/target relay correlation fields and redacted auth metadata.
+  - apps/coh/src/evidence_timeline.rs - stitch multi-hive ticket lifecycle into deterministic timeline ordering.
+  - docs/HOST_TOOLS.md - operator guidance for multi-hive postmortems and chargeback.
+Commands:
+  - cargo test -p coh
+Checks:
+  - Evidence/timeline output is deterministic and sufficient to reconstruct federated control flow.
+Deliverables:
+  - Cross-hive evidence correlation integrated into existing audit-first tooling.
 ```
 
 ----
