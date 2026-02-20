@@ -27,6 +27,11 @@ class AuthCapture:
     request_auth_values: list[str] = field(default_factory=list)
 
 
+@dataclass
+class RetryCapture:
+    requests: int = 0
+
+
 def _start_auth_server(expected_token: str) -> tuple[ThreadingHTTPServer, str, AuthCapture]:
     capture = AuthCapture(expected_token=expected_token)
 
@@ -194,6 +199,59 @@ def _start_auth_server(expected_token: str) -> tuple[ThreadingHTTPServer, str, A
     return server, base_url, capture
 
 
+def _start_retry_server(
+    failures_before_success: int,
+) -> tuple[ThreadingHTTPServer, str, RetryCapture]:
+    capture = RetryCapture()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+            parsed = urlparse(self.path)
+            if parsed.path != "/v1/fs/ls":
+                self.send_error(404)
+                return
+            capture.requests += 1
+            if capture.requests <= failures_before_success:
+                return self._send_json(
+                    503,
+                    {
+                        "status": "ERR",
+                        "verb": "LS",
+                        "path": "/",
+                        "end": True,
+                        "error": "temporary unavailable",
+                        "lines": [],
+                    },
+                )
+            return self._send_json(
+                200,
+                {
+                    "status": "OK",
+                    "verb": "LS",
+                    "path": "/",
+                    "end": True,
+                    "lines": ["gpu", "proc"],
+                },
+            )
+
+        def _send_json(self, code: int, body: dict[str, object]) -> None:
+            payload = json.dumps(body).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args) -> None:  # type: ignore[override]
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    return server, base_url, capture
+
+
 def test_rest_backend_sends_explicit_request_auth_headers() -> None:
     server, base_url, capture = _start_auth_server(expected_token="explicit-token")
     try:
@@ -247,3 +305,21 @@ def test_rest_backend_tail_and_bounds_with_auth_headers() -> None:
     assert bounds.get("manifest_sha256") == "deadbeef"
     assert capture.authorization_values == ["Bearer explicit-token"] * 2
     assert capture.request_auth_values == ["explicit-token"] * 2
+
+
+def test_rest_backend_retries_transient_http_failures() -> None:
+    server, base_url, capture = _start_retry_server(failures_before_success=1)
+    try:
+        backend = RestBackend(
+            base_url,
+            max_attempts=3,
+            backoff_ms=1,
+            backoff_ceiling_ms=2,
+        )
+        entries = backend.list_dir("/")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert entries == ["gpu", "proc"]
+    assert capture.requests == 2

@@ -7,11 +7,11 @@
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 from typing import Optional
 
 from cohesix.audit import CohesixAudit
+from cohesix.auth import resolve_tcp_auth_token
 from cohesix.backends import FilesystemBackend, MockBackend, RestBackend, TcpBackend
 from cohesix.defaults import DEFAULTS
 
@@ -50,15 +50,7 @@ def add_backend_args(parser: argparse.ArgumentParser) -> None:
 
 
 def resolve_auth_token(value: Optional[str]) -> str:
-    if value:
-        trimmed = value.strip()
-        if trimmed:
-            return trimmed
-    for env_var in ("COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN"):
-        env_val = os.environ.get(env_var)
-        if env_val and env_val.strip():
-            return env_val.strip()
-    return "changeme"
+    return resolve_tcp_auth_token(value)
 
 
 def resolve_output_root(overridden: Optional[Path]) -> Path:

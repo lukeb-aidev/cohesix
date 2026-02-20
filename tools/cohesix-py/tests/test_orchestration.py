@@ -15,7 +15,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cohesix.audit import CohesixAudit  # noqa: E402
-from cohesix.backends import MockBackend  # noqa: E402
+from cohesix.backends import MockBackend, RestBackend  # noqa: E402
+from cohesix.errors import CohesixError  # noqa: E402
 from cohesix.orchestration import (  # noqa: E402
     ApprovalRequest,
     CohesixOrchestrator,
@@ -177,3 +178,21 @@ def test_enqueue_k8s_rbac_tickets_translates_intents() -> None:
         assert len(lines) == 2
         assert '"action":"k8s.cordon"' in lines[0]
         assert '"action":"k8s.lease.sync"' in lines[1]
+
+
+def test_enqueue_host_tickets_checks_transport_payload_bound() -> None:
+    backend = RestBackend("http://127.0.0.1:1")
+    orchestrator = CohesixOrchestrator(backend=backend)
+    request = HostTicketRequest(
+        ticket_id="ticket-long",
+        idempotency_key="idem-long",
+        action="k8s.cordon",
+        target="/host/k8s/node/node-1/cordon",
+        args={"subject": "ops", "namespace": "edge"},
+    )
+    try:
+        orchestrator.enqueue_host_tickets([request])
+    except CohesixError as exc:
+        assert "transport payload bound" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected transport payload bound failure")

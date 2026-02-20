@@ -50,6 +50,19 @@ def _coerce_status(ok: bool, has_data: bool) -> str:
     return "skipped"
 
 
+def _parse_optional_int(value: str) -> Optional[int]:
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    lowered = cleaned.lower()
+    if lowered in {"n/a", "na", "none", "unknown", "[n/a]"}:
+        return None
+    try:
+        return int(cleaned)
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True)
 class ProbeResult:
     """Normalized probe result for host integration providers."""
@@ -354,15 +367,29 @@ def probe_nvml(max_devices: int = 32, timeout_s: float = 5.0) -> ProbeResult:
             if len(parts) < 7:
                 error = "one or more nvidia-smi rows were malformed"
                 continue
+            index = _parse_optional_int(parts[0])
+            if index is None:
+                error = "one or more nvidia-smi rows were malformed"
+                continue
+            memory_total_mb = _parse_optional_int(parts[3])
+            memory_used_mb = _parse_optional_int(parts[4])
+            utilization_gpu_pct = _parse_optional_int(parts[5])
+            temperature_c = _parse_optional_int(parts[6])
+            if memory_total_mb is None:
+                memory_total_mb = 0
+                error = "one or more nvidia-smi rows were malformed"
+            if memory_used_mb is None:
+                memory_used_mb = 0
+                error = "one or more nvidia-smi rows were malformed"
             devices.append(
                 {
-                    "index": int(parts[0]),
+                    "index": index,
                     "uuid": parts[1],
                     "name": parts[2],
-                    "memory_total_mb": int(parts[3]),
-                    "memory_used_mb": int(parts[4]),
-                    "utilization_gpu_pct": int(parts[5]),
-                    "temperature_c": int(parts[6]),
+                    "memory_total_mb": memory_total_mb,
+                    "memory_used_mb": memory_used_mb,
+                    "utilization_gpu_pct": utilization_gpu_pct,
+                    "temperature_c": temperature_c,
                 }
             )
 

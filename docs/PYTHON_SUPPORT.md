@@ -182,7 +182,7 @@ All bundled examples share the same backend arguments:
 - `--mount-root` (FilesystemBackend)
 - `--rest http://127.0.0.1:8080` (RestBackend)
 - `--tcp-host` and `--tcp-port` (TcpBackend)
-- `--auth-token` (for TCP: defaults to `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`, then `changeme`; for REST: request-auth override)
+- `--auth-token` (for TCP: explicit token override; otherwise resolve queen secret from manifest, then `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`; placeholder `changeme` is rejected; for REST: request-auth override)
 - `--role` and `--ticket`
 - `--timeout-s` and `--max-retries`
 - `--out` to override `out/examples/`
@@ -215,7 +215,7 @@ python3 tools/cohesix-py/examples/siem_export_ndjson.py --pack out/evidence/mock
 ## Live connection requirements (no `--mock`)
 To run against a live Queen, you need:
 - A running QEMU VM: `scripts/qemu-run.sh` (bundle: `./qemu/run.sh`)
-- A valid console auth token (default `changeme` or set `COHSH_AUTH_TOKEN` / `COH_AUTH_TOKEN`)
+- A valid console auth token (pass `--auth-token`, or provide a manifest queen secret / `COHSH_AUTH_TOKEN` / `COH_AUTH_TOKEN`)
 - Any required host integrations (e.g., GPU bridge if using `/gpu`)
 
 If policy gating is enabled (see `/policy/rules`), queue approvals before any control writes to `/queen/ctl`:
@@ -235,14 +235,14 @@ scripts/qemu-run.sh
 python3 tools/cohesix-py/examples/lease_run.py \
   --tcp-host 127.0.0.1 --tcp-port 31337
 ```
-If your console auth token is not the default, set `COH_AUTH_TOKEN` or pass `--auth-token`.
+If token resolution is ambiguous, pass `--auth-token` explicitly.
 
 Note: the TCP console is single-client. Do not attach `cohsh`, `swarmui`, or `hive-gateway` while using the TCP backend.
 
 ## REST backend (hive-gateway)
 1) Start the REST gateway on the host:
 ```bash
-COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN="$COH_AUTH_TOKEN" \
   HIVE_GATEWAY_REQUEST_AUTH_TOKEN=replace-with-real-token \
   COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
   ./bin/hive-gateway

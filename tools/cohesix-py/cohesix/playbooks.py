@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+import hashlib
+import time
+from dataclasses import asdict, dataclass, replace
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .audit import CohesixAudit
@@ -63,6 +65,7 @@ class PlaybookReport:
     fleet: str
     objective: str
     dry_run: bool
+    run_id: Optional[str]
     plan_execution: PlanExecution
     proc_snapshot: ProcSnapshot
     host_snapshot: Optional[HostSnapshot]
@@ -475,7 +478,9 @@ def execute_playbook(
 ) -> PlaybookReport:
     """Execute a playbook via existing control-plane semantics."""
 
-    plan_execution = orchestrator.execute_plan(playbook.plan, dry_run=dry_run, audit=audit)
+    run_id = None if dry_run else _generate_run_id()
+    plan = _apply_run_id(playbook.plan, run_id) if run_id is not None else playbook.plan
+    plan_execution = orchestrator.execute_plan(plan, dry_run=dry_run, audit=audit)
 
     proc_snapshot = ProcSnapshot()
     if include_proc_snapshot and not dry_run:
@@ -509,6 +514,7 @@ def execute_playbook(
         fleet=playbook.fleet,
         objective=playbook.objective,
         dry_run=dry_run,
+        run_id=run_id,
         plan_execution=plan_execution,
         proc_snapshot=proc_snapshot,
         host_snapshot=host_snapshot,
@@ -567,3 +573,69 @@ def iter_playbooks() -> Iterable[UseCasePlaybook]:
 
     for key in playbook_ids():
         yield load_playbook(key)
+
+
+def _generate_run_id() -> str:
+    return format(time.time_ns(), "x")
+
+
+def _apply_run_id(plan: ControlPlan, run_id: str) -> ControlPlan:
+    approvals = tuple(
+        replace(
+            item,
+            approval_id=_append_run_suffix(item.approval_id, run_id, max_bytes=128),
+        )
+        for item in plan.approvals
+    )
+    schedule = tuple(
+        replace(
+            item,
+            request_id=_append_run_suffix(item.request_id, run_id, max_bytes=128),
+        )
+        for item in plan.schedule
+    )
+    leases = tuple(
+        replace(
+            item,
+            lease_id=(
+                _append_run_suffix(item.lease_id, run_id, max_bytes=128)
+                if item.lease_id is not None
+                else None
+            ),
+        )
+        for item in plan.leases
+    )
+    exports = tuple(
+        replace(
+            item,
+            export_id=_append_run_suffix(item.export_id, run_id, max_bytes=128),
+        )
+        for item in plan.exports
+    )
+    return ControlPlan(
+        approvals=approvals,
+        schedule=schedule,
+        leases=leases,
+        exports=exports,
+    )
+
+
+def _append_run_suffix(token: str, run_id: str, max_bytes: int) -> str:
+    suffix = run_id.strip()
+    if not suffix:
+        return token
+    candidate = f"{token}-{suffix}"
+    if len(candidate.encode("utf-8")) <= max_bytes:
+        return candidate
+
+    digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:8]
+    budget = max_bytes - len(suffix) - len(digest) - 2
+    if budget <= 0:
+        clipped = suffix[: max(1, max_bytes - len(digest) - 1)]
+        compact = f"{clipped}-{digest}"
+        return compact[:max_bytes]
+    base = token[:budget]
+    compact = f"{base}-{suffix}-{digest}"
+    if len(compact.encode("utf-8")) <= max_bytes:
+        return compact
+    return compact[:max_bytes]

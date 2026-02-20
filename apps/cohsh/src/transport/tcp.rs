@@ -11,8 +11,6 @@ use std::io::{self, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process;
-#[cfg(test)]
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -635,6 +633,14 @@ impl TcpTransport {
                                 auth_start.elapsed(),
                             );
                         }
+                        if total_bytes_read > 0 {
+                            return Err(anyhow!(
+                                "authentication rejected: incomplete AUTH handshake (state={:?}, bytes_read={}, bytes_written={})",
+                                self.auth_state,
+                                total_bytes_read,
+                                total_bytes_written
+                            ));
+                        }
                         return Err(anyhow!(
                             "authentication timed out waiting for server response (state={:?}, bytes_read={}, bytes_written={})",
                             self.auth_state,
@@ -659,7 +665,11 @@ impl TcpTransport {
                         "[cohsh][auth] state={:?} connection closed during authentication",
                         self.auth_state
                     );
-                    return Err(anyhow!("connection closed during authentication"));
+                    return Err(anyhow!(
+                        "authentication rejected: connection closed by server during AUTH handshake (bytes_read={}, bytes_written={})",
+                        total_bytes_read,
+                        total_bytes_written
+                    ));
                 }
             }
         }
@@ -2037,6 +2047,37 @@ mod tests {
             .attach(Role::Queen, None)
             .expect_err("attach should fail on bad auth");
         assert!(err.to_string().contains("authentication failed"));
+    }
+
+    #[test]
+    fn auth_close_without_ack_is_classified_as_rejection() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for stream in listener.incoming().take(1) {
+                let mut stream = stream.unwrap();
+                write_frame(&mut stream, "OK AUTH detail=present-token");
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                while let Some(line) = read_frame(&mut reader) {
+                    if line.trim().starts_with("AUTH ") {
+                        // Simulate a server that terminates authentication immediately
+                        // without emitting an ACK frame.
+                        let _ = stream.shutdown(Shutdown::Both);
+                        break;
+                    }
+                }
+            }
+        });
+
+        let mut transport = TcpTransport::new("127.0.0.1", port)
+            .with_timeout(Duration::from_millis(100))
+            .with_max_retries(1)
+            .with_auth_token(TEST_AUTH_TOKEN);
+        let err = transport
+            .attach(Role::Queen, None)
+            .expect_err("attach should fail when auth closes without ack");
+        assert!(err.to_string().contains("authentication failed"));
+        assert!(err.to_string().contains("authentication rejected"));
     }
 
     #[test]

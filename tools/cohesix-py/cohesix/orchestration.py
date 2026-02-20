@@ -10,6 +10,7 @@ files and read-only observability paths.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -17,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from .audit import CohesixAudit
+from .auth import resolve_tcp_auth_token
 from .backends import Backend, FilesystemBackend, MockBackend, RestBackend, TcpBackend
 from .client import CohesixClient
 from .defaults import DEFAULTS
@@ -72,10 +74,6 @@ def _require_positive(field_name: str, value: int) -> int:
     if value <= 0:
         raise CohesixError(f"{field_name} must be > 0")
     return value
-
-
-def _json_line_size(payload: Dict[str, object]) -> int:
-    return len(json.dumps(payload, separators=(",", ":")).encode("utf-8")) + 1
 
 
 @dataclass(frozen=True)
@@ -356,23 +354,20 @@ class K8sRbacIntent:
             "lease-sync": "k8s.lease.sync",
         }
         action = action_map[self.verb]
-        target_suffix = "status" if self.verb == "lease-sync" else self.verb
-        target = f"/host/k8s/node/{self.node}/{target_suffix}"
-        args: Dict[str, object] = {
-            "node": self.node,
-            "subject": self.subject,
-            "namespace": self.namespace,
-            "intent_id": self.intent_id,
-        }
+        idempotency_seed = f"{self.intent_id}.{self.verb}.{self.node}"
+        idempotency_key = "k8s" + hashlib.sha256(
+            idempotency_seed.encode("utf-8")
+        ).hexdigest()[:8]
+        args: Dict[str, object] = {"node": self.node}
         if self.reason is not None:
             args["reason"] = self.reason
         if self.ttl_s is not None:
             args["ttl_s"] = self.ttl_s
         return HostTicketRequest(
             ticket_id=self.intent_id,
-            idempotency_key=f"{self.intent_id}.{self.verb}",
+            idempotency_key=idempotency_key,
             action=action,
-            target=target,
+            target=None,
             args=args,
         )
 
@@ -428,6 +423,7 @@ class CohesixOrchestrator:
         self.backend = backend
         self.defaults = defaults or DEFAULTS
         self.client = CohesixClient(backend=backend, defaults=self.defaults)
+        self.console = self.defaults.get("console", {})
         self.paths = self.defaults.get("paths", {})
         self.control_plane = self.defaults.get("control_plane", {})
         self.observability = self.defaults.get("observability", {})
@@ -470,11 +466,10 @@ class CohesixOrchestrator:
 
         host = os.environ.get("COH_TCP_HOST") or os.environ.get("COHSH_TCP_HOST") or "127.0.0.1"
         port = _env_int("COH_TCP_PORT", _env_int("COHSH_TCP_PORT", 31337))
-        auth_token = (
-            os.environ.get("COH_AUTH_TOKEN")
-            or os.environ.get("COHSH_AUTH_TOKEN")
-            or "changeme"
-        )
+        try:
+            auth_token = resolve_tcp_auth_token()
+        except ValueError as exc:
+            raise CohesixError(str(exc)) from exc
         role = os.environ.get("COH_ROLE") or os.environ.get("COHSH_ROLE") or "queen"
         ticket = os.environ.get("COH_TICKET") or os.environ.get("COHSH_TICKET")
         max_retries = _env_int("COHESIX_MAX_RETRIES", 3)
@@ -580,17 +575,28 @@ class CohesixOrchestrator:
         }
 
         payloads: List[str] = []
+        transport_bound = self._transport_payload_bound(path)
         for request in requests:
             if allowlist and request.action not in allowlist:
                 raise CohesixError(
                     f"ticket action {request.action!r} is not in host ticket allowlist"
                 )
             payload = request.to_payload(schema=schema)
-            if _json_line_size(payload) > max_bytes:
+            payload_text = json.dumps(payload, separators=(",", ":"))
+            payload_bytes = len(payload_text.encode("utf-8"))
+            if max_bytes > 0 and payload_bytes + 1 > max_bytes:
                 raise CohesixError(
                     f"host ticket payload for {request.ticket_id} exceeds bound {max_bytes} bytes"
                 )
-            payloads.append(json.dumps(payload, separators=(",", ":")))
+            if (
+                transport_bound is not None
+                and payload_bytes > transport_bound
+            ):
+                raise CohesixError(
+                    f"host ticket payload for {request.ticket_id} exceeds transport payload bound "
+                    f"{transport_bound} bytes for {path}"
+                )
+            payloads.append(payload_text)
         return self._append_json_lines(path, payloads, max_bytes, audit)
 
     def enqueue_k8s_rbac_tickets(
@@ -657,10 +663,19 @@ class CohesixOrchestrator:
     ) -> List[ControlWriteResult]:
         validate_path(path)
         results: List[ControlWriteResult] = []
+        transport_bound = self._transport_payload_bound(path)
         for payload in payloads:
             line = payload.strip()
             if not line:
                 raise CohesixError("control payload must not be empty")
+            line_bytes = len(line.encode("utf-8"))
+            if (
+                transport_bound is not None
+                and line_bytes > transport_bound
+            ):
+                raise CohesixError(
+                    f"control payload for {path} exceeds transport payload bound {transport_bound} bytes"
+                )
             encoded = (line + "\n").encode("utf-8")
             if max_bytes > 0 and len(encoded) > max_bytes:
                 raise CohesixError(
@@ -687,3 +702,15 @@ class CohesixOrchestrator:
             audit.push_ack("OK", "CAT", f"path={path}")
         lines = payload.decode("utf-8").splitlines()
         return [line.strip() for line in lines if line.strip()]
+
+    def _transport_payload_bound(self, path: str) -> Optional[int]:
+        if not isinstance(self.backend, (TcpBackend, RestBackend)):
+            return None
+        max_echo_len = int(self.console.get("max_echo_len", 0) or 0)
+        max_line_len = int(self.console.get("max_line_len", 0) or 0)
+        bound = max_echo_len if max_echo_len > 0 else None
+        if max_line_len > 0:
+            overhead = len("ECHO ") + len(path) + 1
+            line_bound = max(0, max_line_len - overhead)
+            bound = line_bound if bound is None else min(bound, line_bound)
+        return bound

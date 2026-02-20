@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cohesix.audit import CohesixAudit  # noqa: E402
 from cohesix.backends import MockBackend  # noqa: E402
 from cohesix.client import CohesixClient, GpuLeaseArgs  # noqa: E402
+from cohesix.errors import CohesixError  # noqa: E402
 
 
 def _seed_evidence_sources(root: Path) -> None:
@@ -269,3 +270,35 @@ def test_run_receipt_no_secrets(tmp_path: Path) -> None:
     text = receipt_path.read_text(encoding="utf-8")
     assert "cohesix-ticket-" not in text
     assert "changeme" not in text
+
+
+def test_gpu_list_skips_non_gpu_entries_without_info(tmp_path: Path) -> None:
+    backend = MockBackend(root=str(tmp_path / "mockfs"))
+    root = Path(backend.root)
+    (root / "gpu" / "bridge").mkdir(parents=True, exist_ok=True)
+
+    client = CohesixClient(backend)
+    gpus = client.gpu_list()
+    ids = {str(item["id"]) for item in gpus}
+    assert ids == {"GPU-0", "GPU-1"}
+
+
+def test_evidence_pack_missing_replay_invalid_path_is_non_fatal(tmp_path: Path) -> None:
+    class ReplayInvalidPathBackend(MockBackend):
+        def read_file(self, path: str, max_bytes: int) -> bytes:
+            if path == "/replay/status":
+                raise CohesixError("invalid-path")
+            return super().read_file(path, max_bytes)
+
+    backend = ReplayInvalidPathBackend(root=str(tmp_path / "mockfs"))
+    root = Path(backend.root)
+    _seed_evidence_sources(root)
+    (root / "replay" / "status").unlink(missing_ok=True)
+
+    client = CohesixClient(backend)
+    summary = client.evidence_pack(tmp_path / "pack", with_telemetry=False)
+    assert summary.errors == 0
+    payload = json.loads((tmp_path / "pack" / "summary.json").read_text(encoding="utf-8"))
+    replay_items = [item for item in payload["items"] if item.get("path") == "/replay/status"]
+    assert replay_items
+    assert replay_items[0]["status"] == "missing"
