@@ -93,10 +93,10 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [24d](#24d) | Jetson CUDA Host Support (NVML Fallback + Doctor) | Complete |
 | [24e](#24e) | REST Multiplexer Transports + SwarmUI Gateway Mode | Complete |
 | [25](#25) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Complete |
-| [25a](#25a) | REST Live Hive Performance (Parallel Polling + Batching) | Pending |
+| [25a](#25a) | REST Live Hive Performance (Parallel Polling + Batching) | Complete |
 | [25b](#25b) | Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) | Complete |
 | [25c](#25c) | Python Orchestration SDK (1k Fleet Playbooks + Host Integrations) | Complete |
-| [25d](#25d) | REST Request-Auth Parity Across Host Tools (Gateway Capability Max) | In Progress |
+| [25d](#25d) | REST Request-Auth Parity Across Host Tools (Gateway Capability Max) | Complete |
 | [25e](#25e) | Evidence Packs + Integration Kits (Audit-First Adoption) | Complete |
 | [25f](#25f) | Gateway Broker Refactor + Large Telemetry Reference Manifests (No-Retry Reliability Gate) | Complete |
 | [25g](#25g) | Host Control Tickets via FUSE (GPU/PEFT + systemd/docker + K8s Coexistence) | Complete |
@@ -4788,7 +4788,7 @@ Deliverables:
 
 **Why now (demo readiness):** REST is the only transport that supports the demo multiplexer, but Live Hive poll latency is dominated by serial REST reads. This milestone reduces REST wall-clock latency without changing protocols or semantics, while preserving Secure9P bounds and auditability.
 
-**Status:** Pending — REST polling remains serial, status reads are uncached in REST mode, and no deterministic REST performance harness exists.
+**Status:** Complete — REST status polling is parallelized, REST cache behavior honors `status_poll_ms`, pool sizing supports bounded concurrency, telemetry fan-out is pool-capped, and deterministic REST performance harness coverage is in place.
 
 ## Goal
 Reduce Live Hive REST status poll wall-clock time with minimal risk by:
@@ -5194,7 +5194,7 @@ Deliverables:
 
 **Why now (gateway readiness at 1k scale):** `hive-gateway` now enforces request-auth at the REST edge for mutating paths. Any host tool that can route through REST must attach request-auth consistently or it becomes a brittle outlier in multi-tool, high-concurrency deployments.
 
-**Status:** In Progress - request-auth parity is implemented for core REST-capable tools, but `coh mount` requires correctness fixes (FUSE attrs + dynamic telemetry paths), gateway request-auth regression coverage, and a TCP console auth deadline review (remote TCP mounts can time out over higher-latency SSH tunnels).
+**Status:** Complete - request-auth parity is implemented across REST-capable host tools, `coh mount` REST correctness fixes are landed, request-auth regression coverage is in place, and TCP console auth deadline behavior has been reviewed/aligned for remote tunnel usage.
 
 ## Goal
 Deliver request-auth parity across all REST-capable host tools so gateway mode is predictable, secure, and low-friction:
