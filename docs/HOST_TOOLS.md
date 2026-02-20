@@ -822,6 +822,8 @@ flowchart TD
 ## Glossary
 - `9P2000.L`: The only supported 9P protocol variant; all Secure9P traffic uses it.
 - `Actions Queue` (`/actions/queue`): Append-only approvals/denials that satisfy policy gating for control writes.
+- `Active/Standby`: Failover topology where one hive is writable (active) and the other is pre-staged for takeover (standby).
+- `Allowlist`: Explicit set of permitted paths, actions, or adapters defined by policy/manifest; everything else is denied.
 - `Append-Only`: Write semantics where offsets are ignored/rejected; each write appends a new record or line.
 - `Approval`: Single-use decision line in `/actions/queue` (`id`, `target`, `decision`).
 - `Attach`: Session handshake that binds a role (and optional ticket) to a namespace slice.
@@ -846,14 +848,18 @@ flowchart TD
 - `Console`: The single-client TCP control channel used directly by `cohsh` (and by `hive-gateway` when multiplexing REST clients). Other host tools attach directly only in console mode.
 - `Control Files`: Append-only control paths such as `/queen/ctl`, `/queen/lifecycle/ctl`, `/queen/schedule/ctl`, `/queen/lease/ctl`, `/queen/export/ctl`, `/policy/ctl`, and `/gpu/bridge/ctl`.
 - `Control Write`: An `ECHO` to a control path (e.g., `/queen/ctl`, `/policy/ctl`) that triggers actions.
+- `Cutover`: Atomic switch of the active operator path (for example `/mnt/coh-live`) from active to standby during failover.
+- `Deadletter` (`/host/tickets/deadletter`): Terminally failed host-ticket specs recorded for operator review and remediation.
 - `Deterministic`: Behaviors are bounded and replayable; same input yields same output.
 - `ECHO`: Console write verb used for control files; append-only to control paths.
 - `EPERM`: Permission error; in Cohesix often means policy gate denied the write.
+- `Epoch` (`/updates/<epoch>/`): Numeric CAS update label used to scope a specific bundle upload and its manifest/chunks.
 - `Evidence Pack`: Deterministic export directory from `coh evidence pack` containing bounded snapshots (`meta.json`, `bounds.json`, `summary.json`, plus `proc/`, `log/`, optional `audit/`, `replay/`, `telemetry/`).
 - `Evidence Timeline`: Offline correlation output from `coh evidence timeline` (`timeline.ndjson`, `timeline.md`) generated from an evidence pack.
 - `Export Window` (`/queen/export/ctl`): Append-only control for opening/closing bounded export periods.
 - `Failover` (`0.9.0-beta`): Supported as single-writer active/standby with host-orchestrated cutover; active/active multi-queen writes to one logical hive are not supported.
 - `Feature Gate`: Manifest toggle that enables/disables namespaces (for example `/policy`, `/audit`, `/replay`, `/updates`, `/models`).
+- `Fencing`: Controls that prevent split-brain by ensuring only one writer can mutate control paths at a time.
 - `Fid`: 9P file identifier scoped to a session.
 - `FUSE`: Filesystem in Userspace; used by `coh mount` to expose Secure9P namespaces.
 - `Gateway Broker`: `hive-gateway` request scheduler using bounded control/telemetry queues to multiplex REST clients over a single console session.
@@ -861,9 +867,11 @@ flowchart TD
 - `Gateway Status Counters` (`/v1/meta/status`): Broker observability fields (`control_waiters`, `telemetry_waiters`, `pool_exhausted`, `timeout_rejections`, `telemetry_yields`) used for tuning and triage.
 - `GPU Bridge Publish`: Snapshot publish flow that installs `/gpu/*`, `/gpu/models/*`, and `/gpu/telemetry/schema.json`.
 - `GPU Lease`: A time-bounded claim on a GPU resource recorded under `/gpu/<id>/lease`.
+- `Hold-Down Timer`: Watchdog cool-down period after a cutover to prevent rapid failover flapping.
 - `Host Providers`: Source of `/host/*` data (systemd, k8s, docker, nvidia, jetson, net) via `host-sidecar-bridge`.
 - `Host Ticket Agent`: Host executor that processes `/host/tickets/spec` and writes lifecycle receipts to `/host/tickets/status|deadletter`.
 - `Host Ticket Namespace` (`/host/tickets/*`): Host control ticket surfaces: spec queue (`/host/tickets/spec`), lifecycle receipts (`/host/tickets/status`), and failures (`/host/tickets/deadletter`).
+- `Idempotency Key`: Stable request identity used to safely deduplicate/replay control intents and host-ticket execution.
 - `IR/Manifest`: The compiler-generated truth of system behavior (for example `root_task.toml`).
 - `JSONL`: Newline-delimited JSON; one object per line.
 - `K8s Coexistence Intents` (`k8s.cordon`, `k8s.drain`, `k8s.lease.sync`): Host-ticket action class for Kubernetes safety and lease synchronization.
@@ -876,6 +884,7 @@ flowchart TD
 - `Models Registry` (`/gpu/models/*` or `/models/*`): Host-authored model manifests and active pointers (manifest-gated).
 - `Mount`: FUSE view of Secure9P paths; long-running process.
 - `msize`: Negotiated Secure9P max message size (≤ 8192).
+- `Mutating Routes` (REST): Gateway endpoints that change VM state (for example `POST /v1/fs/echo`); require request-auth.
 - `Namespace`: Role-scoped view of paths exposed by NineDoor.
 - `NineDoor`: Userspace 9P server in the VM enforcing bounds and policy.
 - `OK/ERR/END`: Console response grammar. `OK` = command accepted; `ERR` = refused with reason; `END` = end of a stream or listing.
@@ -899,6 +908,7 @@ flowchart TD
 - `Sharding`: Canonical worker namespace layout under `/shard/<label>/worker/<id>/telemetry`.
 - `Sharding Legacy Alias`: Optional `/worker/<id>/telemetry` alias for backward compatibility when `sharding.legacy_worker_alias = true`.
 - `Short Write`: Transport-level partial write handling (reject or bounded retry).
+- `Single-Writer`: Operational rule that exactly one active writable control path/queen is used per logical hive.
 - `Tag Window`: Manifest-bounded limit on in-flight 9P tags per session.
 - `Telemetry`: Append-only worker data stored under `/worker/*` or `/shard/*/worker/*`.
 - `Telemetry Segment`: OS-named ingest segment under `/queen/telemetry/<device_id>/seg/`.
@@ -910,6 +920,7 @@ flowchart TD
 - `Ticket Subject`: Worker identity bound to a ticket.
 - `Trace/Replay`: Deterministic logs and snapshots used for UI replay/testing.
 - `UI Providers`: Manifest-gated observability nodes under `/proc`.
+- `WAL (Write-Ahead Log)`: Host-side intent log written before control mutations so unapplied entries can be replayed safely after cutover.
 - `Walk Depth`: Maximum path components allowed in Secure9P walks.
 - `Watchdog (Failover)`: Host-side automation (`scripts/failover_watchdog.py`) that probes both gateways, applies failure/success thresholds + hold-down, and flips the live mount symlink during cutover.
 - `Worker` (heart/gpu): Child roles; heart emits telemetry, gpu mirrors lease state.
