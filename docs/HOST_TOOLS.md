@@ -821,45 +821,44 @@ flowchart TD
 
 ## Glossary
 - `9P2000.L`: The only supported 9P protocol variant; all Secure9P traffic uses it.
-- `OK/ERR/END`: Console response grammar. `OK` = command accepted; `ERR` = refused with reason; `END` = end of a stream or listing.
 - `Actions Queue` (`/actions/queue`): Append-only approvals/denials that satisfy policy gating for control writes.
-- `Approval`: Single-use decision line in `/actions/queue` (`id`, `target`, `decision`).
 - `Append-Only`: Write semantics where offsets are ignored/rejected; each write appends a new record or line.
+- `Approval`: Single-use decision line in `/actions/queue` (`id`, `target`, `decision`).
 - `Attach`: Session handshake that binds a role (and optional ticket) to a namespace slice.
 - `Audit`: Optional policy/decision logging (when `/audit` is enabled).
 - `AuditFS` (`/audit/*`): Append-only audit journal and decisions (manifest-gated).
 - `Auth Token`: Console authentication token (for example `COH_AUTH_TOKEN`). Distinct from role tickets.
 - `Auth Token Fallback (coh)`: Resolution order is `--auth-token`, `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`; placeholder `changeme` is rejected.
 - `Auth Token Fallback (cohsh)`: Resolution order is `--auth-token`, `COHSH_AUTH_TOKEN`, then `COH_AUTH_TOKEN`; placeholder `changeme` is rejected.
-- `Gateway Request-Auth Token`: Per-request REST auth token for mutating gateway routes (`Authorization: Bearer <token>` or `x-cohesix-auth`).
-- `Gateway Broker`: `hive-gateway` request scheduler using bounded control/telemetry queues to multiplex REST clients over a single console session.
-- `Gateway Status Counters` (`/v1/meta/status`): Broker observability fields (`control_waiters`, `telemetry_waiters`, `pool_exhausted`, `timeout_rejections`, `telemetry_yields`) used for tuning and triage.
-- `Batch Frames`: Manifest-bounded batching of multiple 9P frames per round trip.
 - `Backpressure`: Deterministic refusal when a bounded buffer or queue is full.
+- `Batch Frames`: Manifest-bounded batching of multiple 9P frames per round trip.
+- `Bounds`: Manifest-defined hard limits on bytes, entries, and walk depth enforced by NineDoor.
+- `Bridge` (host-side): Host tools that publish external state into the VM (`gpu-bridge-host`, `host-sidecar-bridge`).
 - `Budget`: Per-ticket resource limits (ticks/ops/ttl_s) enforced by root-task and NineDoor.
 - `Budget Ops`: Max NineDoor operations permitted before revocation.
 - `Budget Ticks`: Scheduler quanta allocated to a worker.
 - `Budget TTL`: Wall-clock lifetime for a worker budget (seconds); leases use their own `ttl_s`.
-- `Bounds`: Manifest-defined hard limits on bytes, entries, and walk depth enforced by NineDoor.
-- `Bridge` (host-side): Host tools that publish external state into the VM (`gpu-bridge-host`, `host-sidecar-bridge`).
 - `CAS Updates` (`/updates/*`): Content-addressed update bundles uploaded in bounded chunks (manifest-gated).
+- `Clunk`: 9P operation that releases a fid; fids cannot be reused after clunk.
+- `COH`: Host bridge CLI for GPU, telemetry, mounts, PEFT, and runtime checks.
+- `Cohesix Hive`: Queen + workers model; queen orchestrates, workers emit telemetry or mirror GPU lease state.
+- `COHSH`: Operator shell for direct console control and scripting.
 - `Console`: The single-client TCP control channel used directly by `cohsh` (and by `hive-gateway` when multiplexing REST clients). Other host tools attach directly only in console mode.
 - `Control Files`: Append-only control paths such as `/queen/ctl`, `/queen/lifecycle/ctl`, `/queen/schedule/ctl`, `/queen/lease/ctl`, `/queen/export/ctl`, `/policy/ctl`, and `/gpu/bridge/ctl`.
 - `Control Write`: An `ECHO` to a control path (e.g., `/queen/ctl`, `/policy/ctl`) that triggers actions.
-- `Cohesix Hive`: Queen + workers model; queen orchestrates, workers emit telemetry or mirror GPU lease state.
-- `COH`: Host bridge CLI for GPU, telemetry, mounts, PEFT, and runtime checks.
-- `COHSH`: Operator shell for direct console control and scripting.
-- `Clunk`: 9P operation that releases a fid; fids cannot be reused after clunk.
 - `Deterministic`: Behaviors are bounded and replayable; same input yields same output.
 - `ECHO`: Console write verb used for control files; append-only to control paths.
+- `EPERM`: Permission error; in Cohesix often means policy gate denied the write.
 - `Evidence Pack`: Deterministic export directory from `coh evidence pack` containing bounded snapshots (`meta.json`, `bounds.json`, `summary.json`, plus `proc/`, `log/`, optional `audit/`, `replay/`, `telemetry/`).
 - `Evidence Timeline`: Offline correlation output from `coh evidence timeline` (`timeline.ndjson`, `timeline.md`) generated from an evidence pack.
-- `EPERM`: Permission error; in Cohesix often means policy gate denied the write.
-- `Failover` (`0.9.0-beta`): Supported as single-writer active/standby with host-orchestrated cutover; active/active multi-queen writes to one logical hive are not supported.
 - `Export Window` (`/queen/export/ctl`): Append-only control for opening/closing bounded export periods.
+- `Failover` (`0.9.0-beta`): Supported as single-writer active/standby with host-orchestrated cutover; active/active multi-queen writes to one logical hive are not supported.
 - `Feature Gate`: Manifest toggle that enables/disables namespaces (for example `/policy`, `/audit`, `/replay`, `/updates`, `/models`).
 - `Fid`: 9P file identifier scoped to a session.
 - `FUSE`: Filesystem in Userspace; used by `coh mount` to expose Secure9P namespaces.
+- `Gateway Broker`: `hive-gateway` request scheduler using bounded control/telemetry queues to multiplex REST clients over a single console session.
+- `Gateway Request-Auth Token`: Per-request REST auth token for mutating gateway routes (`Authorization: Bearer <token>` or `x-cohesix-auth`).
+- `Gateway Status Counters` (`/v1/meta/status`): Broker observability fields (`control_waiters`, `telemetry_waiters`, `pool_exhausted`, `timeout_rejections`, `telemetry_yields`) used for tuning and triage.
 - `GPU Bridge Publish`: Snapshot publish flow that installs `/gpu/*`, `/gpu/models/*`, and `/gpu/telemetry/schema.json`.
 - `GPU Lease`: A time-bounded claim on a GPU resource recorded under `/gpu/<id>/lease`.
 - `Host Providers`: Source of `/host/*` data (systemd, k8s, docker, nvidia, jetson, net) via `host-sidecar-bridge`.
@@ -870,21 +869,21 @@ flowchart TD
 - `K8s Coexistence Intents` (`k8s.cordon`, `k8s.drain`, `k8s.lease.sync`): Host-ticket action class for Kubernetes safety and lease synchronization.
 - `Lease`: Time-bounded resource allocation recorded under `/queen/lease/ctl` and `/proc/lease/*`.
 - `Lease Preemption` (`/queen/lease/ctl`): Forced termination of an active lease with a reason.
-- `Lease Renewal` (`/queen/lease/ctl`): Extension of an existing lease TTL.
 - `Lease Quota` (`/queen/lease/ctl`): Limits on active leases and preemptions per subject/resource.
+- `Lease Renewal` (`/queen/lease/ctl`): Extension of an existing lease TTL.
 - `Lifecycle Gates`: State-driven allow/deny checks for attach, publish, telemetry, and job writes.
-- `Models Registry` (`/gpu/models/*` or `/models/*`): Host-authored model manifests and active pointers (manifest-gated).
 - `Mock Mode`: In-process backend; no VM or TCP console required.
-- `msize`: Negotiated Secure9P max message size (≤ 8192).
+- `Models Registry` (`/gpu/models/*` or `/models/*`): Host-authored model manifests and active pointers (manifest-gated).
 - `Mount`: FUSE view of Secure9P paths; long-running process.
+- `msize`: Negotiated Secure9P max message size (≤ 8192).
 - `Namespace`: Role-scoped view of paths exposed by NineDoor.
 - `NineDoor`: Userspace 9P server in the VM enforcing bounds and policy.
-- `Root Task`: seL4 root task hosting NineDoor, console listeners, and ticket issuance.
-- `Policy Gate`: Manifest-enabled rule set requiring approvals for sensitive writes.
-- `Policy Rules` (`/policy/rules`): Manifest-derived policy snapshot; read-only.
+- `OK/ERR/END`: Console response grammar. `OK` = command accepted; `ERR` = refused with reason; `END` = end of a stream or listing.
 - `Policy Control` (`/policy/ctl`): Append-only control file for apply/rollback.
-- `PolicyFS` (`/policy/*`): Policy control, rules, and preflight observability (manifest-gated).
+- `Policy Gate`: Manifest-enabled rule set requiring approvals for sensitive writes.
 - `Policy Preflight` (`/policy/preflight/*`): Observability into queued vs consumed approvals.
+- `Policy Rules` (`/policy/rules`): Manifest-derived policy snapshot; read-only.
+- `PolicyFS` (`/policy/*`): Policy control, rules, and preflight observability (manifest-gated).
 - `Pressure` (`/proc/pressure/*`): Read-only counters indicating resource pressure (policy queue, ingest, etc.).
 - `Provider`: Component that implements a namespace subtree (host bridges or NineDoor providers).
 - `QEMU` (aarch64/virt): Reference dev/CI VM target.
@@ -892,13 +891,7 @@ flowchart TD
 - `ReplayFS` (`/replay/*`): Append-only replay control and status (manifest-gated).
 - `REST Mount Exclusivity` (`coh mount --rest-url`): Exactly one active FUSE mount per gateway URL on a host; additional mounts must wait until unmount.
 - `Role Ticket`: Role-scoped capability token minted for queen/worker roles.
-- `Watchdog (Failover)`: Host-side automation (`scripts/failover_watchdog.py`) that probes both gateways, applies failure/success thresholds + hold-down, and flips the live mount symlink during cutover.
-- `Ticket`: Capability token (`cohesix-ticket`) binding role, subject, budget, and mounts.
-- `Ticket Claims`: Structured fields inside a ticket (role, budget, subject, mounts, issued_at_ms).
-- `Ticket Quotas`: Manifest-defined limits on ticket scopes and rates.
-- `Ticket Scope`: Optional path/rate limits attached to a ticket.
-- `Ticket Secret`: Host-only secret used to MAC tickets.
-- `Ticket Subject`: Worker identity bound to a ticket.
+- `Root Task`: seL4 root task hosting NineDoor, console listeners, and ticket issuance.
 - `Schedule Queue` (`/queen/schedule/ctl`, `/proc/schedule/*`): Declarative scheduling requests and read-only snapshots.
 - `Secure9P`: File-shaped control plane; all interactions are paths and bounded reads/writes.
 - `Shard`: Two-hex-digit worker namespace label derived from the worker ID hash; used in `/shard/<label>/worker/<id>/telemetry`.
@@ -909,7 +902,14 @@ flowchart TD
 - `Tag Window`: Manifest-bounded limit on in-flight 9P tags per session.
 - `Telemetry`: Append-only worker data stored under `/worker/*` or `/shard/*/worker/*`.
 - `Telemetry Segment`: OS-named ingest segment under `/queen/telemetry/<device_id>/seg/`.
+- `Ticket`: Capability token (`cohesix-ticket`) binding role, subject, budget, and mounts.
+- `Ticket Claims`: Structured fields inside a ticket (role, budget, subject, mounts, issued_at_ms).
+- `Ticket Quotas`: Manifest-defined limits on ticket scopes and rates.
+- `Ticket Scope`: Optional path/rate limits attached to a ticket.
+- `Ticket Secret`: Host-only secret used to MAC tickets.
+- `Ticket Subject`: Worker identity bound to a ticket.
 - `Trace/Replay`: Deterministic logs and snapshots used for UI replay/testing.
 - `UI Providers`: Manifest-gated observability nodes under `/proc`.
 - `Walk Depth`: Maximum path components allowed in Secure9P walks.
+- `Watchdog (Failover)`: Host-side automation (`scripts/failover_watchdog.py`) that probes both gateways, applies failure/success thresholds + hold-down, and flips the live mount symlink during cutover.
 - `Worker` (heart/gpu): Child roles; heart emits telemetry, gpu mirrors lease state.
