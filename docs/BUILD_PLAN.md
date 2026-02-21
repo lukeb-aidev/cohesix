@@ -106,6 +106,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [26b](#26b) | UEFI DHCP Baseline (Pi 4 NIC + Wi-Fi Policy) | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
+| [28b](#28b) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
 | [29](#29) | Edge Local Status (UEFI Host Tool) | Pending |
 | [30](#30) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
 
@@ -6657,6 +6658,227 @@ After Milestone 28:
 - Operators can reason about state without guesswork
 - Support and integration costs drop sharply
 - The control plane remains small, auditable, and boring
+
+## Milestone 28b — Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents <a id="28b"></a>
+[Milestones](#Milestones)
+
+**Why now (risk closure):**  
+Milestones 25g and 25h delivered host tickets, federation relay, and bounded WAL behavior. As-built deployments still have two critical exposure points:
+1) REST callers collapse into one gateway-attached Queen principal, and
+2) failover correctness depends on external fencing discipline rather than deterministic writer fencing in the control plane path.
+
+This milestone closes those gaps using existing as-built mechanisms (`hive-gateway`, `cohsh-core` ticket claims, `/host/tickets/*`, relay WAL, manifest compiler) without introducing new VM protocols or relaxing single-writer semantics.
+
+---
+
+## Goal
+Strengthen authority and failover guarantees while preserving current transport and grammar boundaries:
+1. Require caller-scoped delegated authority for mutating REST operations.
+2. Make Queen control intents replay-safe with deterministic idempotency keys.
+3. Add explicit writer-epoch fencing for failover and relay paths.
+4. Eliminate fixture/bootstrap secret usage from release profiles.
+5. Ship production profiles with audit/replay enabled and bounded by manifest limits.
+
+---
+
+## Non-Goals (Explicit)
+- No active/active multi-queen writers for one logical hive.
+- No in-VM HTTP services or new RPC channels.
+- No changes to ACK/ERR/END grammar or Secure9P transport framing.
+- No best-effort reconciliation loops or autonomous remediation behavior.
+
+---
+
+## Deliverables
+
+### 1) Delegated REST Identity (No Shared Queen Principal for Writes)
+**Purpose:** Preserve gateway multiplexing while restoring caller-level capability boundaries.
+
+Implementation requirements:
+- Mutating REST routes (`/v1/fs/echo` and equivalent write paths) require:
+  - gateway request-auth token, and
+  - delegated capability ticket header (`x-cohesix-ticket`), validated using existing ticket claims rules.
+- Gateway maintains a bounded upstream session pool keyed by delegated ticket identity (hash), not a single shared writer session.
+- Delegated ticket claims (`role`, `subject`, `mount scopes`, `budgets`) constrain what each REST caller can mutate.
+- Read-only REST routes may remain gateway-role scoped in compatibility mode, but production profile defaults require delegated tickets for all mutating paths.
+
+As-built leverage:
+- Reuse `cohsh-core` ticket parsing/validation and existing ticket quota semantics.
+- Reuse deterministic permission errors (`EPERM`, `ELIMIT`) and existing audit logging surfaces.
+
+---
+
+### 2) Idempotent Queen Control Grammar
+**Purpose:** Ensure retries/replays never duplicate side effects on `/queen/ctl`.
+
+Implementation requirements:
+- Introduce strict envelope schema for `/queen/ctl` writes:
+  - required: `schema`, `id`, `idempotency_key`, `issued_unix_ms`, `cmd`.
+- Add bounded dedupe table in root-task authority path keyed by `id + idempotency_key`.
+- Duplicate intent behavior is deterministic:
+  - no side effects repeated,
+  - stable acknowledgement path,
+  - audit line records dedupe decision.
+- Provide read-only introspection node for recent dedupe outcomes (bounded bytes/entries).
+
+As-built leverage:
+- Align with existing idempotency model used by `/host/tickets/spec`.
+- Keep all writes append-only and routed through existing authority flow.
+
+---
+
+### 3) Writer-Epoch Fencing and Failover Determinism
+**Purpose:** Replace implicit human/process fencing with explicit, verifiable writer epochs.
+
+Implementation requirements:
+- Add monotonic writer epoch to host control ticket flows and relay envelopes.
+- Host-ticket-agent and relay pipeline reject stale-writer intents deterministically.
+- Expose read-only writer-epoch/fence state for operator diagnostics and evidence correlation.
+- Update failover runbook to require epoch promotion before standby becomes writable.
+
+As-built leverage:
+- Reuse existing `/host/tickets/{spec,status,deadletter}` lifecycle and relay WAL.
+- Reuse existing failover active/standby model and single-writer policy.
+
+---
+
+### 4) Production Secret and Key Discipline
+**Purpose:** Remove bootstrap/fixture secret assumptions from release-grade configurations.
+
+Implementation requirements:
+- Replace literal ticket secrets and fixture CAS signing key usage in production manifests with secret references.
+- `coh-rtc` rejects release profiles that include:
+  - fixture signing key paths,
+  - bootstrap/default secret literals.
+- Host tooling/docs define deterministic env/file resolution order for ticket secrets and CAS signing keys.
+- Add rotation tests proving key rollover works without protocol changes.
+
+As-built leverage:
+- Extend existing manifest validation and due-diligence secret-hygiene checks from Milestone 25b.
+
+---
+
+### 5) Production Audit/Replay Baseline
+**Purpose:** Make post-incident reconstruction and failover verification first-class in production profiles.
+
+Implementation requirements:
+- Production profile defaults:
+  - `ecosystem.audit.enable = true`
+  - `ecosystem.audit.replay_enable = true`
+  - bounded retention values sized for fleet operations.
+- Evidence packs include writer-epoch and dedupe state snapshots.
+- Release gate fails if production profile disables audit/replay without explicit exception record.
+
+As-built leverage:
+- Use current `/audit/*`, `/replay/*`, `coh evidence pack`, and timeline tooling.
+
+---
+
+## Commands
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo test -p hive-gateway`
+- `cargo test -p coh`
+- `cargo test -p cohsh`
+- `cargo test -p root-task`
+- `cargo test -p tests --test host_ticket_agent`
+- `cargo test -p tests --test failover`
+- `scripts/cohsh/run_regression_batch.sh`
+
+---
+
+## Checks (Definition of Done)
+- Mutating REST request without delegated ticket is denied deterministically and audited.
+- Delegated caller cannot exceed ticket scopes/quotas even when gateway is multiplexing many clients.
+- Duplicate `/queen/ctl` intent (`id + idempotency_key`) never repeats side effects.
+- Stale writer epoch is rejected deterministically across local and relayed host tickets.
+- Production manifest/profile fails validation if fixture/default secrets are present.
+- Production profile surfaces `/audit/*` and `/replay/*`; evidence packs include epoch and dedupe state.
+- Regression pack passes unchanged; only additive fixtures are introduced.
+
+---
+
+## Compiler touchpoints
+- `coh-rtc` schema/version update for:
+  - delegated-ticket enforcement policy on REST mutating paths,
+  - `/queen/ctl` envelope schema and dedupe bounds,
+  - writer-epoch fencing policy and relay requirements,
+  - production secret references,
+  - audit/replay required defaults for release profiles.
+- Generated snippets refreshed in:
+  - `docs/INTERFACES.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/SECURITY.md`
+  - `docs/FAILOVER.md`
+
+---
+
+## Task Breakdown
+```
+Title/ID: m28b-rest-delegated-identity
+Goal: Require delegated capability tickets for mutating REST operations while preserving gateway multiplexing.
+Inputs: apps/hive-gateway, apps/coh, apps/cohsh, docs/HOST_API.md, docs/API_GUIDELINES.md
+Changes:
+  - apps/hive-gateway/src/main.rs — require x-cohesix-ticket on mutating routes and enforce ticket-scoped upstream session routing.
+  - apps/hive-gateway/src/auth.rs — delegated ticket validation + bounded cache keyed by ticket hash.
+  - apps/coh/src/rest.rs — pass delegated ticket header for mutating REST calls.
+  - apps/cohsh/src/transport/rest.rs — propagate delegated ticket on write paths.
+Commands: cargo test -p hive-gateway && cargo test -p coh && cargo test -p cohsh
+Checks: Writes without delegated ticket fail deterministically; writes with scoped ticket succeed only within claims.
+Deliverables: Gateway no longer executes all writes as an undifferentiated shared Queen principal.
+
+Title/ID: m28b-queen-ctl-idempotency
+Goal: Add deterministic idempotency for /queen/ctl intents.
+Inputs: apps/root-task, apps/nine-door, docs/INTERFACES.md
+Changes:
+  - apps/root-task/src/control/queen_ctl.rs — strict envelope parser with required id/idempotency_key and dedupe guard.
+  - apps/root-task/src/control/dedupe.rs — bounded dedupe table with deterministic eviction and audit lines.
+  - apps/nine-door/src/host/proc.rs — read-only dedupe status surface for operators.
+Commands: cargo test -p root-task && cargo test -p nine-door
+Checks: Duplicate intent never repeats side effects; deterministic audit and /proc visibility prove dedupe behavior.
+Deliverables: Replay-safe Queen control grammar with bounded dedupe state.
+
+Title/ID: m28b-failover-epoch-fencing
+Goal: Enforce monotonic writer-epoch fencing across local and federated host ticket flows.
+Inputs: apps/host-ticket-agent, docs/FAILOVER.md, docs/INTERFACES.md
+Changes:
+  - apps/host-ticket-agent/src/spec.rs — add writer_epoch validation to host-ticket schemas.
+  - apps/host-ticket-agent/src/relay.rs — enforce stale epoch rejection and WAL replay ordering by epoch.
+  - apps/host-ticket-agent/src/status.rs — expose bounded epoch/fence counters for evidence and diagnostics.
+Commands: cargo test -p host-ticket-agent && cargo test -p tests --test failover
+Checks: Stale writer epoch intents are rejected deterministically and deadlettered; promoted epoch resumes writes.
+Deliverables: Explicit, verifiable writer fencing for active/standby failover.
+
+Title/ID: m28b-production-secret-profile
+Goal: Remove fixture/default secrets from release-grade manifests and enforce secret-reference policy.
+Inputs: configs/root_task.toml, tools/coh-rtc, docs/SECURITY.md
+Changes:
+  - tools/coh-rtc/src/validate.rs — reject fixture key paths and bootstrap/default secret literals in production profiles.
+  - configs/root_task.toml — introduce secret-reference fields for ticket and CAS signing material.
+  - scripts/ci/due_diligence_gate.sh — extend hardcoded-secret checks to generated manifests/profiles.
+Commands: cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json && scripts/ci/due_diligence_gate.sh
+Checks: Production profile generation fails on fixture/default secrets and passes with secret references.
+Deliverables: Release-manifest secret hygiene is compiler-enforced, not convention-only.
+
+Title/ID: m28b-audit-replay-production-default
+Goal: Ship production profile with audit/replay enabled and include fencing/dedupe state in evidence packs.
+Inputs: configs/root_task.toml, apps/coh, docs/TEST_PLAN.md
+Changes:
+  - configs/root_task.toml — production profile audit/replay defaults and bounded retention values.
+  - apps/coh/src/evidence.rs — include writer-epoch and dedupe status snapshots in evidence export.
+  - docs/TEST_PLAN.md — add production-profile gate assertions for /audit and /replay availability.
+Commands: cargo test -p coh && cargo test -p tests --test evidence && scripts/cohsh/run_regression_batch.sh
+Checks: Evidence includes audit/replay plus fencing/dedupe state; regression pack remains byte-stable.
+Deliverables: Audit-first production baseline with deterministic incident reconstruction inputs.
+```
+
+---
+
+## Outcome
+After Milestone 28b:
+- REST multiplexing retains convenience without collapsing caller identity.
+- Failover safety relies on deterministic writer fencing, not operator luck.
+- Queen control retries are safe by construction.
+- Release profiles enforce key hygiene and enable audit-grade reconstruction by default.
 
 ## Milestone 29 — Edge Local Status (UEFI Host Tool)  <a id="29"></a> 
 [Milestones](#Milestones)
