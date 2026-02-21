@@ -253,8 +253,9 @@ source "$HOME/.cargo/env"
 ```bash
 sudo apt-get update
 sudo apt-get install -y git cmake ninja-build clang llvm lld python3 python3-pip qemu-system-aarch64
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
 source "$HOME/.cargo/env"
+rustup target add aarch64-unknown-none --toolchain 1.93.1
 ```
 If you're on another Linux distro, install the same dependencies with your package manager (QEMU + build essentials + Rust).
 

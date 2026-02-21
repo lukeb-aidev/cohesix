@@ -1,0 +1,9 @@
+# Author: Lukas Bower
+# Purpose: Define ratchet baseline counts for high-risk non-test Rust patterns tracked by due-diligence gates.
+# Copyright 2026 Lukas Bower
+
+[non_test]
+unsafe = 513
+unwrap = 210
+expect = 500
+panic = 106

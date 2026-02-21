@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Define the normative Cohesix build charter, scope, and guardrails for contributors. -->
 <!-- Author: Lukas Bower -->
@@ -78,8 +78,8 @@ These artifacts define kernel-level truth. Code must align with them exactly.
    - AVOID memory scribbles.
    - BIAS RE-USE of existing instrumentation, add new instrumentation WITH CARE.
 
- 10. **.coh Scrip Grammar**
-   - All .coh scripts MUST FOLLOW the syntax and grammar defiined in docs/USERLAND_AND_CLI.md.
+ 10. **.coh Script Grammar**
+   - All .coh scripts MUST FOLLOW the syntax and grammar defined in docs/USERLAND_AND_CLI.md.
    - If grammar must be modified to support new functionality, you MUST UPDATE docs/USERLAND_AND_CLI.md accordingly.
 ---
 
@@ -222,6 +222,40 @@ Host tools MUST remain protocol-faithful: they consume the as-built interfaces a
   cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
   ```
   and verify regenerated artifacts hash-match committed versions.
+
+---
+
+## LLM-Assisted Rust Audit Gate (Normative — Violations Block Merge)
+
+- LLM-generated Rust is untrusted by default. Compilable code is not acceptable by itself.
+- Any PR containing generated or AI-assisted code MUST include command evidence and reviewer sign-off.
+
+### Mandatory Baseline Commands
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo check --workspace`
+- `cargo test --workspace`
+- `cargo audit`
+- `cargo deny check advisories`
+
+### Unsafe Rust Discipline
+- Every `unsafe` block MUST include a `SAFETY:` comment stating the invariant and why it holds.
+- Every `unsafe impl Send` or `unsafe impl Sync` MUST include invariant rationale and concurrency test evidence.
+- `core::mem::transmute` is prohibited unless layout/ABI equivalence is documented at the call site.
+- No HAL bypasses are permitted under any generated-code justification.
+
+### Panic and Error Discipline
+- `unwrap()` in non-test code is prohibited unless explicitly documented as impossible-by-construction.
+- `expect()` in non-test code MUST include a precise invariant message and be limited to internal invariant boundaries.
+- User-controlled input paths MUST return typed errors; error swallowing via `ok()`, `unwrap_or_default()`, or lossy coercion is prohibited unless documented.
+
+### Concurrency and Async Discipline
+- Never hold lock guards across `.await`.
+- Unbounded channels in control-plane paths require explicit justification and backpressure analysis.
+- Spawned tasks must define cancellation/shutdown behavior and ownership.
+
+### Ratchet Rule
+- Non-test risk indicators (`unsafe`, `unwrap`, `expect`, `panic!`) MUST NOT increase unless an approved exception is recorded in `docs/audit/findings.csv` and `docs/audit/EXCEPTIONS.md`.
 
 ---
 

@@ -7,6 +7,8 @@
 #   DD_GATE_LOG_DIR            Override log output root (default: out/audit/gate/<utc-timestamp>)
 #   DD_SKIP_TEST_PLAN_CHECK=1  Mark test-plan hash check as incomplete (run still fails)
 #   DD_SKIP_REGRESSION_BATCH=1 Mark regression batch check as incomplete (run still fails)
+#   DD_SKIP_CARGO_AUDIT=1      Mark cargo-audit as incomplete (run still fails)
+#   DD_SKIP_CARGO_DENY=1       Mark cargo-deny advisories check as incomplete (run still fails)
 #   DD_REGRESSION_READY_TIMEOUT  Override run_regression_batch READY_TIMEOUT (default: 900)
 #   DD_REGRESSION_PORT_TIMEOUT   Override run_regression_batch PORT_TIMEOUT (default: 60)
 #   DD_REGRESSION_AUTH_TIMEOUT   Override run_regression_batch AUTH_READY_TIMEOUT (default: 120)
@@ -58,6 +60,7 @@ check_required_audit_assets() {
     "docs/audit/BLOCKERS.md"
     "docs/audit/CONTROL_TRACEABILITY.md"
     "docs/audit/EXCEPTIONS.md"
+    "docs/audit/rust_risk_baseline.toml"
     "docs/audit/checklists/ARCHITECTURE_CHECKLIST.md"
     "docs/audit/checklists/SECURITY_CHECKLIST.md"
     "docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md"
@@ -71,6 +74,80 @@ check_required_audit_assets() {
     fi
   done
   return "$missing"
+}
+
+check_rust_risk_ratchet() {
+  python3 <<'PY'
+import pathlib
+import subprocess
+import sys
+import tomllib
+
+baseline_path = pathlib.Path("docs/audit/rust_risk_baseline.toml")
+if not baseline_path.is_file():
+    print(f"missing {baseline_path}", file=sys.stderr)
+    sys.exit(1)
+
+with baseline_path.open("rb") as handle:
+    baseline_doc = tomllib.load(handle)
+
+baseline = baseline_doc.get("non_test")
+if not isinstance(baseline, dict):
+    print("rust_risk_baseline.toml missing [non_test] table", file=sys.stderr)
+    sys.exit(1)
+
+patterns = {
+    "unsafe": r"\bunsafe\b",
+    "unwrap": r"\.unwrap\(",
+    "expect": r"\.expect\(",
+    "panic": r"\bpanic!\(",
+}
+
+glob_filters = [
+    "-g", "*.rs",
+    "-g", "!**/tests/**",
+    "-g", "!**/test/**",
+    "-g", "!**/*_test.rs",
+]
+
+def count_matches(pattern: str) -> int:
+    cmd = ["rg", "-n", pattern, "apps", "crates", *glob_filters]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode == 1:
+        return 0
+    if proc.returncode != 0:
+        print(f"rg failed for pattern {pattern!r}: {proc.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+    return len([line for line in proc.stdout.splitlines() if line.strip()])
+
+errors = []
+counts = {}
+for key, pattern in patterns.items():
+    baseline_value = baseline.get(key)
+    if not isinstance(baseline_value, int):
+        errors.append(f"baseline missing integer for [non_test].{key}")
+        continue
+    current_value = count_matches(pattern)
+    counts[key] = current_value
+    if current_value > baseline_value:
+        errors.append(
+            f"non-test {key} count increased: baseline={baseline_value} current={current_value}"
+        )
+
+print("rust-risk-ratchet counts:")
+for key in sorted(patterns.keys()):
+    baseline_value = baseline.get(key, "UNKNOWN")
+    current_value = counts.get(key, "UNKNOWN")
+    print(f"  - {key}: baseline={baseline_value} current={current_value}")
+
+if errors:
+    print("rust-risk-ratchet failed:", file=sys.stderr)
+    for error in errors:
+        print(f"  - {error}", file=sys.stderr)
+    sys.exit(1)
+
+print("rust-risk-ratchet passed")
+PY
 }
 
 scan_hardcoded_secrets() {
@@ -335,10 +412,23 @@ PY
 }
 
 run_step "required-audit-assets" check_required_audit_assets
+run_step "cargo-fmt-check" cargo fmt --all -- --check
+run_step "cargo-clippy-workspace" cargo clippy --workspace --all-targets -- -D warnings
 run_step "cargo-check-workspace" cargo check --workspace
 run_step "secure9p-codec-tests" cargo test -p secure9p-codec
 run_step "integration-tests" cargo test -p tests
 run_step "workspace-tests" cargo test --workspace
+if [[ "${DD_SKIP_CARGO_AUDIT:-0}" == "1" ]]; then
+  mark_incomplete_step "cargo-audit" "DD_SKIP_CARGO_AUDIT=1"
+else
+  run_step "cargo-audit" cargo audit
+fi
+if [[ "${DD_SKIP_CARGO_DENY:-0}" == "1" ]]; then
+  mark_incomplete_step "cargo-deny-advisories" "DD_SKIP_CARGO_DENY=1"
+else
+  run_step "cargo-deny-advisories" cargo deny check advisories
+fi
+run_step "rust-risk-ratchet" check_rust_risk_ratchet
 run_step "generated-artifacts" scripts/check-generated.sh
 if [[ "${DD_SKIP_TEST_PLAN_CHECK:-0}" == "1" ]]; then
   mark_incomplete_step "test-plan-hash-check" "DD_SKIP_TEST_PLAN_CHECK=1"

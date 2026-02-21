@@ -396,9 +396,9 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 - `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` (requires `COHESIX_GATEWAY_URL` or equivalent gateway env var)
 - `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> scripts/cohsh/REST_regression_batch.sh`
 - Stage 04 runs two REST batches:
-  - A concurrent "core" batch (boot/proc/pool/backpressure coverage).
-  - A strict "parity" batch (policy + control-plane smoke): `scripts/cohsh/policy_gate.coh`, `scripts/cohsh/rest_control_plane_smoke.coh`.
-    - Note: the gateway runs with a fixed role/ticket (typically `queen`), so worker-role `/host` denial remains covered by the TCP/QEMU regression script `scripts/cohsh/host_sidecar_mock.coh`.
+  - A concurrent "core" batch (boot/proc/pool coverage): `scripts/cohsh/boot_v0.coh`, `scripts/cohsh/observe_watch.coh`, `scripts/cohsh/session_pool.coh`.
+  - A strict "parity" batch (control-plane smoke): `scripts/cohsh/rest_control_plane_smoke.coh`.
+    - Note: `scripts/cohsh/busy_backpressure.coh` and `scripts/cohsh/policy_gate.coh` remain covered by the TCP/QEMU regression matrix (Stage 03), where console-parser semantics are validated directly.
 - Stage 04 also runs a Python REST smoke (`tools/cohesix-py` `RestBackend`) that performs `LS /` and `CAT /log/queen.log` against the same gateway.
 - Logs:
   - Scripted Stage 04 writes REST batch logs under the stage state dir (for example `out/test-plan/<run-id>/rest-regression-logs/`).

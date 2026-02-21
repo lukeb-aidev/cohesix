@@ -1,0 +1,8 @@
+# Author: Lukas Bower
+# Purpose: Pin the Cohesix workspace Rust toolchain and required components/targets.
+# Copyright 2026 Lukas Bower
+
+[toolchain]
+channel = "1.93.1"
+components = ["clippy", "rustfmt"]
+targets = ["aarch64-unknown-none"]

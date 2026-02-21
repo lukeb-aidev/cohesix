@@ -29,11 +29,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain 1.93.1
+        uses: dtolnay/rust-toolchain@1.93.1
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-audit and cargo-deny
+        run: cargo install --locked cargo-audit cargo-deny
 
       - name: Generate manifest-derived policy artifacts
         run: |
@@ -41,6 +44,12 @@ jobs:
             configs/root_task.toml \
             --out apps/root-task/src/generated \
             --manifest out/manifests/root_task_resolved.json
+
+      - name: Rust fmt check (workspace)
+        run: cargo fmt --all -- --check
+
+      - name: Rust clippy (workspace, host-safe set)
+        run: cargo clippy --workspace --all-targets --exclude swarmui --exclude coh --exclude host-ticket-agent --exclude root-task -- -D warnings
 
       - name: Rust check (workspace, host-safe set)
         run: cargo check --workspace --exclude swarmui --exclude coh --exclude host-ticket-agent --exclude root-task
@@ -53,3 +62,9 @@ jobs:
 
       - name: Rust test (workspace, host-safe set)
         run: cargo test --workspace --exclude swarmui --exclude coh --exclude host-ticket-agent --exclude root-task --quiet
+
+      - name: Cargo audit
+        run: cargo audit
+
+      - name: Cargo deny advisories
+        run: cargo deny check advisories

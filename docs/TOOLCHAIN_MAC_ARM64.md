@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Documents macOS ARM64 toolchain requirements and setup steps. -->
 <!-- Author: Lukas Bower -->
@@ -13,9 +13,12 @@ brew install git cmake ninja llvm@17 python@3 qemu coreutils jq
 
 ## 2. Rust Toolchain
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
 source "$HOME/.cargo/env"
-rustup component add rustfmt clippy
+rustup toolchain install 1.93.1
+rustup override set 1.93.1
+rustup component add rustfmt clippy --toolchain 1.93.1
+rustup target add aarch64-unknown-none --toolchain 1.93.1
 rustc --version
 ```
 - Incremental builds are forcibly disabled (`CARGO_INCREMENTAL=0`) for the

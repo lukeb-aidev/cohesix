@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
 # Purpose: Install Cohesix Linux host toolchain dependencies (Ubuntu, ARM64).
+# Copyright 2026 Lukas Bower
 
 set -euo pipefail
+
+RUST_TOOLCHAIN_VERSION="1.93.1"
+RUST_TARGET="aarch64-unknown-none"
 
 log() {
   printf "[toolchain] %s\n" "$*"
@@ -72,7 +76,7 @@ DEBIAN_FRONTEND=noninteractive "${APT_PREFIX[@]}" install -y "${PACKAGES[@]}"
 
 if ! command -v rustup >/dev/null 2>&1; then
   log "Installing rustup..."
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain "$RUST_TOOLCHAIN_VERSION"
   # shellcheck source=/dev/null
   source "$HOME/.cargo/env"
 else
@@ -80,8 +84,15 @@ else
   source "$HOME/.cargo/env"
 fi
 
-log "Ensuring rustfmt and clippy are installed..."
-rustup component add rustfmt clippy --toolchain stable
+log "Ensuring Rust toolchain ${RUST_TOOLCHAIN_VERSION} is installed..."
+rustup toolchain install "$RUST_TOOLCHAIN_VERSION"
+rustup override set "$RUST_TOOLCHAIN_VERSION"
+
+log "Ensuring rustfmt and clippy are installed for ${RUST_TOOLCHAIN_VERSION}..."
+rustup component add rustfmt clippy --toolchain "$RUST_TOOLCHAIN_VERSION"
+
+log "Ensuring target ${RUST_TARGET} is installed for ${RUST_TOOLCHAIN_VERSION}..."
+rustup target add "$RUST_TARGET" --toolchain "$RUST_TOOLCHAIN_VERSION"
 
 log "Rust version: $(rustc --version)"
 

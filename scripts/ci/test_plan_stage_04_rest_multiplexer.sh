@@ -28,8 +28,11 @@ if [[ -z "${gateway_auth_token}" ]]; then
 fi
 tp_log "INFO  gateway-auth-token=present"
 
-core_scripts="boot_v0.coh observe_watch.coh busy_backpressure.coh session_pool.coh"
-parity_scripts="policy_gate.coh rest_control_plane_smoke.coh"
+# Keep Stage 04 on scripts that are parity-safe over the REST file projection.
+# `busy_backpressure.coh` and `policy_gate.coh` depend on console-parser semantics
+# and remain covered in the TCP regression matrix (Stage 03).
+core_scripts="boot_v0.coh observe_watch.coh session_pool.coh"
+parity_scripts="rest_control_plane_smoke.coh"
 
 tp_run_cmd \
   "cohsh-rest-regression-core" \
@@ -64,6 +67,7 @@ else
     "COHESIX_GATEWAY_URL=\"${gateway_url}\" HIVE_GATEWAY_REQUEST_AUTH_TOKEN=\"${gateway_auth_token}\" \"${python_bin}\" - <<'PY'
 import os
 import sys
+import time
 from pathlib import Path
 
 repo_root = Path.cwd()
@@ -72,13 +76,41 @@ sys.path.insert(0, str(repo_root / \"tools\" / \"cohesix-py\"))
 from cohesix.backends import RestBackend
 
 gateway_url = os.environ[\"COHESIX_GATEWAY_URL\"]
-backend = RestBackend(gateway_url)
+backend = RestBackend(
+    gateway_url,
+    timeout_s=10.0,
+    max_attempts=6,
+    backoff_ms=200,
+    backoff_ceiling_ms=2000,
+)
 
-root_entries = backend.list_dir(\"/\")
+def with_retry(label, fn):
+    delay_s = 0.5
+    for attempt in range(1, 13):
+        try:
+            return fn()
+        except Exception as exc:
+            message = str(exc).lower()
+            transient = (
+                \"429\" in message
+                or \"backpressure\" in message
+                or \"timed out\" in message
+            )
+            if (not transient) or attempt == 12:
+                raise
+            time.sleep(delay_s)
+            delay_s = min(delay_s * 2, 5.0)
+
+root_entries = with_retry(\"list_dir\", lambda: backend.list_dir(\"/\"))
 if not root_entries:
     raise SystemExit(\"REST smoke failed: root listing is empty\")
-log_payload = backend.read_file(\"/log/queen.log\", 4096)
-print(f\"python-rest-smoke root_entries={len(root_entries)} log_bytes={len(log_payload)}\")
+state_payload = with_retry(
+    \"read_file\",
+    lambda: backend.read_file(\"/proc/lifecycle/state\", 128),
+)
+print(
+    f\"python-rest-smoke root_entries={len(root_entries)} state_bytes={len(state_payload)}\"
+)
 PY"
 fi
 

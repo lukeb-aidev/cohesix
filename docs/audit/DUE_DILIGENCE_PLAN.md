@@ -158,6 +158,10 @@ scripts/ci/due_diligence_gate.sh
 scripts/check-generated.sh
 scripts/ci/check_test_plan.sh
 scripts/cohsh/run_regression_batch.sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo audit
+cargo deny check advisories
 ```
 
 If environment constraints prevent execution, the run is marked incomplete and cannot be `PASS`.
@@ -170,13 +174,10 @@ Optional (Milestone 25e; recommended for audit/incident review evidence artifact
 ./bin/coh evidence timeline --in out/evidence/<run-id>
 ```
 
-## 12. OSS Static and Dynamic Analysis Recommendations (Separate from Baseline Gate)
-These tools are recommended as an additive assurance layer. They can run in dedicated jobs while baseline gates remain stable.
+## 12. Additional OSS Static and Dynamic Analysis Recommendations (Beyond Baseline Gate)
+These tools are additive assurance layers beyond the baseline gate.
 
 1. Rust static analysis
-- `cargo clippy` for correctness/style/perf lints.
-- `cargo-audit` + RustSec Advisory DB for known vulnerable dependencies.
-- `cargo-deny` for advisories, license policy, banned crates, source allowlists, duplicate dependency pressure.
 - `cargo-geiger` for unsafe usage inventory and trend monitoring.
 - `cargo-vet` for third-party dependency trust and audit attestations.
 - `semgrep` (community edition) for custom policy checks over Rust and scripts.
@@ -200,10 +201,10 @@ These tools are recommended as an additive assurance layer. They can run in dedi
 
 ## 13. Tool Adoption Order (Pragmatic Rollout)
 1. Immediate (high value, low friction)
-- `cargo clippy`, `cargo-audit`, `cargo-deny`, `gitleaks`, `syft` + one vuln scanner.
+- `cargo-geiger`, `gitleaks`, `syft` + one vuln scanner.
 
 2. Near term
-- `semgrep` policy pack, `cargo-geiger`, `conftest`, `trivy`/`grype` image scans.
+- `semgrep` policy pack, `conftest`, `trivy`/`grype` image scans.
 
 3. High assurance expansion
 - `cargo-fuzz` corpus program, sanitizer matrix, `miri` jobs, `loom` harnesses, `cosign` attestations, `cargo-vet`.
