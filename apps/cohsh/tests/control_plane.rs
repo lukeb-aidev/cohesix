@@ -22,8 +22,7 @@ const LEASE_GRANT_PAYLOAD: &str =
     r#"{"op":"grant","id":"lease-1","subject":"queen","resource":"gpu0","ttl_s":300,"priority":5}"#;
 const LEASE_PREEMPT_PAYLOAD: &str = r#"{"op":"preempt","id":"lease-1","reason":"timeout"}"#;
 const EXPORT_OPEN_PAYLOAD: &str = r#"{"op":"open","id":"export-1","ttl_s":900}"#;
-const EXPORT_CLOSE_PAYLOAD: &str =
-    r#"{"op":"close","id":"export-1","reason":"window-complete"}"#;
+const EXPORT_CLOSE_PAYLOAD: &str = r#"{"op":"close","id":"export-1","reason":"window-complete"}"#;
 const POLICY_APPLY_PAYLOAD: &str = r#"{"op":"apply","id":"rev-2026-02-03","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
 const POLICY_ROLLBACK_PAYLOAD: &str = r#"{"op":"rollback","id":"rev-2026-02-03"}"#;
 
@@ -49,7 +48,11 @@ fn control_plane_transcript_matches_fixture() -> Result<()> {
         Some(detail.as_str()),
     ));
 
-    write_payload(&mut client, "/queen/schedule/ctl", SCHEDULE_PAYLOAD.as_bytes())?;
+    write_payload(
+        &mut client,
+        "/queen/schedule/ctl",
+        SCHEDULE_PAYLOAD.as_bytes(),
+    )?;
     transcript.push(render_echo_ack("/queen/schedule/ctl", SCHEDULE_PAYLOAD));
 
     read_payload(&mut client, PROC_SCHEDULE_SUMMARY)?;
@@ -60,10 +63,18 @@ fn control_plane_transcript_matches_fixture() -> Result<()> {
     transcript.push(render_cat_ack(PROC_SCHEDULE_QUEUE));
     transcript.push(END_LINE.to_owned());
 
-    write_payload(&mut client, "/queen/lease/ctl", LEASE_GRANT_PAYLOAD.as_bytes())?;
+    write_payload(
+        &mut client,
+        "/queen/lease/ctl",
+        LEASE_GRANT_PAYLOAD.as_bytes(),
+    )?;
     transcript.push(render_echo_ack("/queen/lease/ctl", LEASE_GRANT_PAYLOAD));
 
-    write_payload(&mut client, "/queen/lease/ctl", LEASE_PREEMPT_PAYLOAD.as_bytes())?;
+    write_payload(
+        &mut client,
+        "/queen/lease/ctl",
+        LEASE_PREEMPT_PAYLOAD.as_bytes(),
+    )?;
     transcript.push(render_echo_ack("/queen/lease/ctl", LEASE_PREEMPT_PAYLOAD));
 
     read_payload(&mut client, PROC_LEASE_SUMMARY)?;
@@ -78,16 +89,28 @@ fn control_plane_transcript_matches_fixture() -> Result<()> {
     transcript.push(render_cat_ack(PROC_LEASE_PREEMPTIONS));
     transcript.push(END_LINE.to_owned());
 
-    write_payload(&mut client, "/queen/export/ctl", EXPORT_OPEN_PAYLOAD.as_bytes())?;
+    write_payload(
+        &mut client,
+        "/queen/export/ctl",
+        EXPORT_OPEN_PAYLOAD.as_bytes(),
+    )?;
     transcript.push(render_echo_ack("/queen/export/ctl", EXPORT_OPEN_PAYLOAD));
 
-    write_payload(&mut client, "/queen/export/ctl", EXPORT_CLOSE_PAYLOAD.as_bytes())?;
+    write_payload(
+        &mut client,
+        "/queen/export/ctl",
+        EXPORT_CLOSE_PAYLOAD.as_bytes(),
+    )?;
     transcript.push(render_echo_ack("/queen/export/ctl", EXPORT_CLOSE_PAYLOAD));
 
     write_payload(&mut client, "/policy/ctl", POLICY_APPLY_PAYLOAD.as_bytes())?;
     transcript.push(render_echo_ack("/policy/ctl", POLICY_APPLY_PAYLOAD));
 
-    write_payload(&mut client, "/policy/ctl", POLICY_ROLLBACK_PAYLOAD.as_bytes())?;
+    write_payload(
+        &mut client,
+        "/policy/ctl",
+        POLICY_ROLLBACK_PAYLOAD.as_bytes(),
+    )?;
     transcript.push(render_echo_ack("/policy/ctl", POLICY_ROLLBACK_PAYLOAD));
 
     transcript.push(render_ack_line(
@@ -119,7 +142,10 @@ fn write_payload<T: cohsh_core::Secure9pTransport>(
     Ok(())
 }
 
-fn read_payload<T: cohsh_core::Secure9pTransport>(client: &mut CohClient<T>, path: &str) -> Result<()> {
+fn read_payload<T: cohsh_core::Secure9pTransport>(
+    client: &mut CohClient<T>,
+    path: &str,
+) -> Result<()> {
     let fid = client.open(path, OpenMode::read_only())?;
     let _ = client.read(fid, 0, client.negotiated_msize())?;
     client.clunk(fid)?;
@@ -127,13 +153,21 @@ fn read_payload<T: cohsh_core::Secure9pTransport>(client: &mut CohClient<T>, pat
 }
 
 fn render_echo_ack(path: &str, payload: &str) -> String {
-    let detail = format!("path={path} bytes={}", payload.as_bytes().len());
-    render_ack_line(AckStatus::Ok, ConsoleVerb::Echo.ack_label(), Some(detail.as_str()))
+    let detail = format!("path={path} bytes={}", payload.len());
+    render_ack_line(
+        AckStatus::Ok,
+        ConsoleVerb::Echo.ack_label(),
+        Some(detail.as_str()),
+    )
 }
 
 fn render_cat_ack(path: &str) -> String {
     let detail = format!("path={path}");
-    render_ack_line(AckStatus::Ok, ConsoleVerb::Cat.ack_label(), Some(detail.as_str()))
+    render_ack_line(
+        AckStatus::Ok,
+        ConsoleVerb::Cat.ack_label(),
+        Some(detail.as_str()),
+    )
 }
 
 fn render_ack_line(status: AckStatus, verb: &str, detail: Option<&str>) -> String {

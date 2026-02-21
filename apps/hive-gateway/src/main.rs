@@ -10,8 +10,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::net::SocketAddr;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -25,6 +25,7 @@ use axum::{Json, Router};
 use clap::Parser;
 use cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT;
 use cohesix_ticket::Role;
+use cohsh::policy::PolicyOverrides;
 use cohsh::{
     CohshPolicy, PoolKind, Session, SessionPool, TransportFactory, CLIENT_LOG_PATH,
     CLIENT_POLICY_CTL_PATH, CLIENT_QUEEN_CTL_PATH, CLIENT_QUEEN_EXPORT_CTL_PATH,
@@ -39,7 +40,6 @@ use cohsh::{
     PROC_SCHEDULE_SUMMARY_ENABLED, SECURE9P_MSIZE, SECURE9P_WALK_DEPTH,
 };
 use cohsh::{NineDoorTransport, PooledTcpTransport, TcpTransport};
-use cohsh::policy::PolicyOverrides;
 use cohsh_core::{
     parse_role, RoleParseMode, MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN, MAX_LINE_LEN, MAX_PATH_LEN,
     MAX_TICKET_LEN,
@@ -283,6 +283,9 @@ struct BrokerMetrics {
     proc_cache_hits: AtomicU64,
     proc_cache_misses: AtomicU64,
     proc_cache_evictions: AtomicU64,
+    relay_queue_depth: AtomicU64,
+    relay_deduped: AtomicU64,
+    relay_remote_write_failures: AtomicU64,
 }
 
 impl BrokerMetrics {
@@ -313,6 +316,9 @@ impl BrokerMetrics {
             proc_cache_hits: self.proc_cache_hits.load(Ordering::Relaxed),
             proc_cache_misses: self.proc_cache_misses.load(Ordering::Relaxed),
             proc_cache_evictions: self.proc_cache_evictions.load(Ordering::Relaxed),
+            relay_queue_depth: self.relay_queue_depth.load(Ordering::Relaxed),
+            relay_deduped: self.relay_deduped.load(Ordering::Relaxed),
+            relay_remote_write_failures: self.relay_remote_write_failures.load(Ordering::Relaxed),
         }
     }
 }
@@ -354,6 +360,9 @@ struct BrokerStatusResponse {
     proc_cache_hits: u64,
     proc_cache_misses: u64,
     proc_cache_evictions: u64,
+    relay_queue_depth: u64,
+    relay_deduped: u64,
+    relay_remote_write_failures: u64,
 }
 
 #[derive(Clone)]
@@ -369,24 +378,12 @@ struct BrokerCommand {
 }
 
 enum BrokerRequest {
-    Attach {
-        role: Role,
-        ticket: Option<String>,
-    },
+    Attach { role: Role, ticket: Option<String> },
     Ping,
-    List {
-        path: String,
-    },
-    Read {
-        path: String,
-    },
-    Tail {
-        path: String,
-    },
-    Write {
-        path: String,
-        payload: Vec<u8>,
-    },
+    List { path: String },
+    Read { path: String },
+    Tail { path: String },
+    Write { path: String, payload: Vec<u8> },
 }
 
 enum BrokerResponse {
@@ -448,18 +445,15 @@ async fn main() -> Result<()> {
     let policy = apply_policy_overrides(CohshPolicy::from_generated(), &config)?;
     info!(
         "hive-gateway session pool control={} telemetry={}",
-        policy.pool.control_sessions,
-        policy.pool.telemetry_sessions
+        policy.pool.control_sessions, policy.pool.telemetry_sessions
     );
     let pool = build_session_pool(&config, policy)?;
     let bounds = build_bounds();
     let shutdown = Arc::new(AtomicBool::new(false));
     let broker_metrics = Arc::new(BrokerMetrics::default());
-    let broker_client = build_gateway_broker(
-        pool.clone(),
-        broker_metrics.clone(),
-        shutdown.clone(),
-    );
+    seed_relay_metrics_from_env(&broker_metrics);
+    let broker_client =
+        build_gateway_broker(pool.clone(), broker_metrics.clone(), shutdown.clone());
 
     let state = AppState {
         inner: Arc::new(GatewayInner {
@@ -636,6 +630,24 @@ fn env_override_opt_u16(value: Option<u16>, key: &str) -> Option<u16> {
         return None;
     };
     env_value.trim().parse::<u16>().ok().filter(|v| *v > 0)
+}
+
+fn seed_relay_metrics_from_env(metrics: &BrokerMetrics) {
+    if let Some(value) = env_u64("HIVE_GATEWAY_RELAY_QUEUE_DEPTH") {
+        metrics.relay_queue_depth.store(value, Ordering::Relaxed);
+    }
+    if let Some(value) = env_u64("HIVE_GATEWAY_RELAY_DEDUPED") {
+        metrics.relay_deduped.store(value, Ordering::Relaxed);
+    }
+    if let Some(value) = env_u64("HIVE_GATEWAY_RELAY_REMOTE_WRITE_FAILURES") {
+        metrics
+            .relay_remote_write_failures
+            .store(value, Ordering::Relaxed);
+    }
+}
+
+fn env_u64(key: &str) -> Option<u64> {
+    env::var(key).ok()?.trim().parse::<u64>().ok()
 }
 
 fn resolve_secret(cli_value: Option<&str>, env_keys: &[&str]) -> Option<String> {
@@ -919,28 +931,20 @@ fn execute_broker_request(
             Ok(BrokerResponse::Unit)
         }),
         BrokerRequest::List { path } => with_pool_once(pool, kind, move |transport, session| {
-            transport
-                .list(session, &path)
-                .map(BrokerResponse::Lines)
+            transport.list(session, &path).map(BrokerResponse::Lines)
         }),
         BrokerRequest::Read { path } => with_pool_once(pool, kind, move |transport, session| {
-            transport
-                .read(session, &path)
-                .map(BrokerResponse::Lines)
+            transport.read(session, &path).map(BrokerResponse::Lines)
         }),
         BrokerRequest::Tail { path } => with_pool_once(pool, kind, move |transport, session| {
-            transport
-                .tail(session, &path)
-                .map(BrokerResponse::Lines)
+            transport.tail(session, &path).map(BrokerResponse::Lines)
         }),
-        BrokerRequest::Write { path, payload } => with_pool_once(
-            pool,
-            kind,
-            move |transport, session| {
+        BrokerRequest::Write { path, payload } => {
+            with_pool_once(pool, kind, move |transport, session| {
                 transport.write(session, path.as_str(), payload.as_slice())?;
                 Ok(BrokerResponse::Unit)
-            },
-        ),
+            })
+        }
     }
 }
 
@@ -1284,9 +1288,7 @@ impl AppState {
 
     fn read_cache_get(&self, path: &str) -> Option<Vec<String>> {
         let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
-        let Some(entry) = cache.entries.get(path).cloned() else {
-            return None;
-        };
+        let entry = cache.entries.get(path).cloned()?;
         if entry.inserted_at.elapsed() > Duration::from_millis(DEFAULT_PROC_CACHE_TTL_MS) {
             cache.entries.remove(path);
             cache.order.retain(|value| value != path);
@@ -1451,7 +1453,7 @@ async fn handle_cat(state: AppState, query: CatQuery) -> impl axum::response::In
     let result = tokio::task::spawn_blocking(move || state.read(&path)).await;
     match result {
         Ok(Ok(lines)) => {
-            let bytes = lines.join("\n").as_bytes().len();
+            let bytes = lines.join("\n").len();
             if bytes > max_bytes {
                 return response_err(
                     verb,
@@ -1505,7 +1507,7 @@ async fn handle_tail(state: AppState, query: TailQuery) -> impl axum::response::
     let result = tokio::task::spawn_blocking(move || state.tail(&path)).await;
     match result {
         Ok(Ok(lines)) => {
-            let bytes = lines.join("\n").as_bytes().len();
+            let bytes = lines.join("\n").len();
             if bytes > max_bytes {
                 return response_err(
                     verb,
@@ -1535,13 +1537,13 @@ async fn handle_echo(state: AppState, payload: EchoRequest) -> impl axum::respon
         return response_err(verb, &payload.path, err, StatusCode::BAD_REQUEST);
     }
     let raw_line = payload.line.unwrap_or_default();
-    let raw_len = raw_line.as_bytes().len();
+    let raw_len = raw_line.len();
     let trimmed = match normalise_payload(&raw_line, &payload.path) {
         Ok(value) => value,
         Err(err) => return response_err(verb, &payload.path, err, StatusCode::BAD_REQUEST),
     };
     if let Some(limit) = max_ctl_bytes(&payload.path, &state.bounds()) {
-        if trimmed.as_bytes().len() > limit {
+        if trimmed.len() > limit {
             return response_err(
                 verb,
                 &payload.path,
@@ -1597,9 +1599,7 @@ fn cache_invalidation_namespaces(write_path: &str) -> Option<&'static [&'static 
 }
 
 fn is_retryable_control_write_path(path: &str) -> bool {
-    path.starts_with("/queen/")
-        || path == CLIENT_POLICY_CTL_PATH
-        || path.starts_with("/actions/")
+    path.starts_with("/queen/") || path == CLIENT_POLICY_CTL_PATH || path.starts_with("/actions/")
 }
 
 fn is_retryable_control_write_error(error: &str) -> bool {
@@ -1652,7 +1652,7 @@ fn validate_path(path: &str) -> Result<(), String> {
     if !path.starts_with('/') {
         return Err("path must be absolute".to_owned());
     }
-    if path.as_bytes().len() > MAX_PATH_LEN {
+    if path.len() > MAX_PATH_LEN {
         return Err(format!("path exceeds max length {MAX_PATH_LEN}"));
     }
     if path.as_bytes().contains(&0) {
@@ -1679,7 +1679,7 @@ fn normalise_payload(raw: &str, path: &str) -> Result<String, String> {
     if trimmed.contains('\n') || trimmed.contains('\r') {
         return Err("payload must be a single line".to_owned());
     }
-    let len = trimmed.as_bytes().len();
+    let len = trimmed.len();
     if len > MAX_ECHO_LEN {
         return Err(format!("payload exceeds max_echo_len {MAX_ECHO_LEN}"));
     }
@@ -1935,7 +1935,10 @@ mod tests {
     #[test]
     fn cacheable_list_path_covers_hot_roots() {
         for path in ["/", "/proc", "/queen", "/worker", "/gpu", "/host"] {
-            assert!(is_cacheable_list_path(path), "expected cacheable path: {path}");
+            assert!(
+                is_cacheable_list_path(path),
+                "expected cacheable path: {path}"
+            );
         }
         assert!(!is_cacheable_list_path("/log"));
     }

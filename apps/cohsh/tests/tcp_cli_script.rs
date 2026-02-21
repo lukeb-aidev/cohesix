@@ -40,7 +40,7 @@ fn tcp_script_executes_against_basic_server() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
     let port = listener.local_addr().expect("listener addr").port();
     thread::spawn(move || {
-        for stream in listener.incoming() {
+        if let Some(stream) = listener.incoming().next() {
             let mut stream = stream.expect("accept stream");
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
             while let Some(line) = read_frame(&mut reader) {
@@ -62,7 +62,6 @@ fn tcp_script_executes_against_basic_server() {
                     write_frame(&mut stream, "OK PING reply=pong");
                 }
             }
-            break;
         }
     });
 

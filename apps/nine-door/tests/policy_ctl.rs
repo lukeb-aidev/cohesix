@@ -5,7 +5,9 @@
 #![forbid(unsafe_code)]
 
 use cohesix_ticket::Role;
-use nine_door::{HostNamespaceConfig, InProcessConnection, NineDoor, NineDoorError, PolicyConfig, PolicyLimits};
+use nine_door::{
+    HostNamespaceConfig, InProcessConnection, NineDoor, NineDoorError, PolicyConfig, PolicyLimits,
+};
 use secure9p_codec::{ErrorCode, OpenMode, MAX_MSIZE};
 
 fn attach_queen(server: &NineDoor) -> InProcessConnection {

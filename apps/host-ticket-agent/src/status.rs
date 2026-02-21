@@ -28,9 +28,13 @@ pub fn build_result_line(
         action: spec.action.clone(),
         state: state.to_owned(),
         message: cleaned_message,
+        source_hive: spec.source_hive.clone(),
+        target_hive: spec.target_hive.clone(),
+        relay_hop: spec.relay_hop,
+        relay_correlation_id: spec.relay_correlation_id.clone(),
     };
     let mut line = serde_json::to_string(&result)?;
-    if line.as_bytes().len() > max_line_bytes as usize {
+    if line.len() > max_line_bytes as usize {
         let fallback = truncate_to_bytes(
             result
                 .message
@@ -45,10 +49,14 @@ pub fn build_result_line(
             action: result.action,
             state: result.state,
             message: Some(fallback),
+            source_hive: result.source_hive,
+            target_hive: result.target_hive,
+            relay_hop: result.relay_hop,
+            relay_correlation_id: result.relay_correlation_id,
         };
         line = serde_json::to_string(&compact)?;
     }
-    if line.as_bytes().len() > max_line_bytes as usize {
+    if line.len() > max_line_bytes as usize {
         return Err(anyhow!(
             "ticket result line exceeds max_line_bytes {}",
             max_line_bytes
@@ -78,12 +86,12 @@ fn sanitize_message(input: &str) -> String {
 }
 
 fn truncate_to_bytes(input: &str, max_bytes: usize) -> String {
-    if input.as_bytes().len() <= max_bytes {
+    if input.len() <= max_bytes {
         return input.to_owned();
     }
     let mut out = String::new();
     for ch in input.chars() {
-        if out.as_bytes().len().saturating_add(ch.len_utf8()) > max_bytes {
+        if out.len().saturating_add(ch.len_utf8()) > max_bytes {
             break;
         }
         out.push(ch);
@@ -106,15 +114,19 @@ mod tests {
             target: None,
             args: Value::Null,
             expires_unix_ms: None,
+            source_hive: Some("hive-a".to_owned()),
+            target_hive: Some("hive-b".to_owned()),
+            relay_hop: Some(1),
+            relay_correlation_id: Some("ticket-1:k1:hive-a:hive-b".to_owned()),
         };
         let line = build_result_line(
             &spec,
             "host-ticket-result/v1",
             "failed",
             Some("line one\nline two"),
-            256,
+            512,
         )
-        .expect("build line");
+        .unwrap_or_else(|err| unreachable!("build line: {err}"));
         assert!(line.contains("line one line two"));
 
         let err = build_result_line(

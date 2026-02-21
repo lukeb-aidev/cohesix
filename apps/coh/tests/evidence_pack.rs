@@ -48,7 +48,11 @@ fn evidence_pack_redacts_ticket_payloads() -> Result<()> {
 
     // Emit at least one control write so the audit journal stores the ticket value.
     let payload = cohsh::queen::spawn("heartbeat", ["ticks=1"].iter().copied())?;
-    coh::CohAccess::write_append(&mut client, cohsh::queen::queen_ctl_path(), payload.as_bytes())?;
+    coh::CohAccess::write_append(
+        &mut client,
+        cohsh::queen::queen_ctl_path(),
+        payload.as_bytes(),
+    )?;
 
     let temp = TempDir::new().expect("tempdir");
     let out_dir = temp.path().join("pack");
@@ -64,7 +68,10 @@ fn evidence_pack_redacts_ticket_payloads() -> Result<()> {
     let journal_path = out_dir.join("audit").join("journal");
     let journal = std::fs::read_to_string(&journal_path)
         .with_context(|| format!("read {}", journal_path.display()))?;
-    assert!(!journal.contains(&secret_ticket), "evidence pack leaked raw ticket");
+    assert!(
+        !journal.contains(&secret_ticket),
+        "evidence pack leaked raw ticket"
+    );
     assert!(
         journal.contains("sha256:"),
         "expected evidence pack to hash tickets"
@@ -81,8 +88,12 @@ fn evidence_pack_redacts_host_ticket_sensitive_fields() -> Result<()> {
     let transport = InProcessTransport::new(connection);
     let mut client = CohClient::connect(transport, Role::Queen, None)?;
 
-    let spec_line = r#"{"schema":"host-ticket/v1","id":"ticket-1","idempotency_key":"idem-1","action":"systemd.restart","target":"/host/systemd/cohesix-agent.service/restart","args":{"unit":"cohesix-agent.service","auth_token":"super-secret-token"}}"#;
-    coh::CohAccess::write_append(&mut client, "/host/tickets/spec", format!("{spec_line}\n").as_bytes())?;
+    let spec_line = r#"{"schema":"host-ticket/v1","id":"ticket-1","idempotency_key":"idem-1","action":"systemd.restart","target":"/host/systemd/cohesix-agent.service/restart","source_hive":"hive-a","target_hive":"hive-b","relay_hop":1,"relay_correlation_id":"ticket-1:idem-1:hive-a:hive-b","args":{"unit":"cohesix-agent.service","auth_token":"super-secret-token","auth_ref":"COHESIX_RELAY_HIVE_B_TOKEN"}}"#;
+    coh::CohAccess::write_append(
+        &mut client,
+        "/host/tickets/spec",
+        format!("{spec_line}\n").as_bytes(),
+    )?;
 
     let temp = TempDir::new().expect("tempdir");
     let out_dir = temp.path().join("pack");
@@ -98,6 +109,7 @@ fn evidence_pack_redacts_host_ticket_sensitive_fields() -> Result<()> {
     let captured = std::fs::read_to_string(out_dir.join("host").join("tickets").join("spec"))
         .context("read host ticket spec capture")?;
     assert!(!captured.contains("super-secret-token"));
+    assert!(!captured.contains("COHESIX_RELAY_HIVE_B_TOKEN"));
     assert!(captured.contains("<redacted>"));
 
     Ok(())

@@ -728,6 +728,7 @@ impl HiveTelemetryCursor {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn drain_events(
         &mut self,
         worker_root: &str,
@@ -971,6 +972,7 @@ impl ConsoleHiveSessionState {
     }
 
     #[cfg(feature = "rest")]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn ingest_rest_parallel(
         &mut self,
         worker_root: &str,

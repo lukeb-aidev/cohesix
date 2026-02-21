@@ -27,7 +27,8 @@ fn evidence_timeline_is_deterministic_for_fixed_pack() -> Result<()> {
     let decisions = "{\"seq\":3,\"kind\":\"policy-gate\",\"outcome\":\"approve\",\"id\":\"a1\",\"target\":\"/queen/ctl\",\"path\":\"/queen/ctl\",\"role\":\"queen\",\"ticket\":\"sha256:cafe\"}\n";
     std::fs::write(pack.join("audit").join("decisions"), decisions)?;
 
-    let lease_active = "id=lease-1 subject=queen resource=gpu0 ttl_s=60 priority=1 state=ACTIVE seq=7\n";
+    let lease_active =
+        "id=lease-1 subject=queen resource=gpu0 ttl_s=60 priority=1 state=ACTIVE seq=7\n";
     std::fs::write(pack.join("proc").join("lease").join("active"), lease_active)?;
 
     let summary = write_timeline(pack)?;
@@ -55,9 +56,9 @@ fn evidence_timeline_correlates_host_ticket_streams() -> Result<()> {
 
     std::fs::create_dir_all(pack.join("host").join("tickets"))?;
 
-    let spec = "{\"schema\":\"host-ticket/v1\",\"id\":\"ticket-1\",\"idempotency_key\":\"idem-1\",\"action\":\"systemd.restart\",\"target\":\"/host/systemd/cohesix-agent.service/restart\"}\n";
+    let spec = "{\"schema\":\"host-ticket/v1\",\"id\":\"ticket-1\",\"idempotency_key\":\"idem-1\",\"action\":\"systemd.restart\",\"target\":\"/host/systemd/cohesix-agent.service/restart\",\"source_hive\":\"hive-a\",\"target_hive\":\"hive-b\",\"relay_hop\":1,\"relay_correlation_id\":\"ticket-1:idem-1:hive-a:hive-b\"}\n";
     std::fs::write(pack.join("host").join("tickets").join("spec"), spec)?;
-    let status = "{\"schema\":\"host-ticket-result/v1\",\"id\":\"ticket-1\",\"idempotency_key\":\"idem-1\",\"action\":\"systemd.restart\",\"state\":\"succeeded\",\"message\":\"ok\"}\n";
+    let status = "{\"schema\":\"host-ticket-result/v1\",\"id\":\"ticket-1\",\"idempotency_key\":\"idem-1\",\"action\":\"systemd.restart\",\"state\":\"succeeded\",\"message\":\"ok\",\"source_hive\":\"hive-a\",\"target_hive\":\"hive-b\",\"relay_hop\":2,\"relay_correlation_id\":\"ticket-1:idem-1:hive-a:hive-b\"}\n";
     std::fs::write(pack.join("host").join("tickets").join("status"), status)?;
 
     let summary = write_timeline(pack)?;
@@ -65,11 +66,14 @@ fn evidence_timeline_correlates_host_ticket_streams() -> Result<()> {
         .with_context(|| format!("read {}", summary.ndjson_path.display()))?;
     assert!(ndjson.contains("\"kind\":\"host-ticket.spec\""));
     assert!(ndjson.contains("\"kind\":\"host-ticket.status\""));
-    assert!(ndjson.contains("\"correlation_key\":\"ticket-1:idem-1\""));
+    assert!(ndjson.contains("\"correlation_key\":\"ticket-1:idem-1:hive-a:hive-b\""));
+    assert!(ndjson.contains("\"relay_hop\":2"));
 
     let markdown = std::fs::read_to_string(&summary.markdown_path)
         .with_context(|| format!("read {}", summary.markdown_path.display()))?;
-    assert!(markdown.contains("ticket=ticket-1:idem-1"));
+    assert!(markdown.contains("ticket=ticket-1:idem-1:hive-a:hive-b"));
+    assert!(markdown.contains("source_hive=hive-a"));
+    assert!(markdown.contains("target_hive=hive-b"));
 
     Ok(())
 }

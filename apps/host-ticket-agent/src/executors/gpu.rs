@@ -36,7 +36,9 @@ fn execute_grant(
     let mem_mb = to_u32(arg_u64(spec, "mem_mb").unwrap_or(4096), "mem_mb")?;
     let streams = to_u8(arg_u64(spec, "streams").unwrap_or(1), "streams")?;
     let ttl_s = to_u32(arg_u64(spec, "ttl_s").unwrap_or(120), "ttl_s")?;
-    let priority = arg_u64(spec, "priority").map(|value| to_u8(value, "priority")).transpose()?;
+    let priority = arg_u64(spec, "priority")
+        .map(|value| to_u8(value, "priority"))
+        .transpose()?;
 
     let mut args = vec![
         format!("gpu_id={gpu_id}"),
@@ -94,9 +96,15 @@ fn execute_renew(
     }
     let encoded = serde_json::to_string(&payload).context("serialize renew payload")?;
     transport
-        .write(session, CLIENT_QUEEN_LEASE_CTL_PATH, format!("{encoded}\n").as_bytes())
+        .write(
+            session,
+            CLIENT_QUEEN_LEASE_CTL_PATH,
+            format!("{encoded}\n").as_bytes(),
+        )
         .context("write gpu lease renew to /queen/lease/ctl")?;
-    Ok(format!("gpu lease renew id={lease_id} ttl_s={ttl_s} queued"))
+    Ok(format!(
+        "gpu lease renew id={lease_id} ttl_s={ttl_s} queued"
+    ))
 }
 
 fn execute_release(
@@ -112,8 +120,14 @@ fn execute_release(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .or_else(|| active_worker_for_gpu(transport, session, gpu_id.as_str()).ok().flatten())
-        .ok_or_else(|| anyhow!("gpu release requires worker_id or active /gpu/{gpu_id}/lease entry"))?;
+        .or_else(|| {
+            active_worker_for_gpu(transport, session, gpu_id.as_str())
+                .ok()
+                .flatten()
+        })
+        .ok_or_else(|| {
+            anyhow!("gpu release requires worker_id or active /gpu/{gpu_id}/lease entry")
+        })?;
 
     let payload = queen::kill(worker_id.as_str())?;
     transport
@@ -216,6 +230,10 @@ mod tests {
             target: Some("/gpu/GPU-0/lease".to_owned()),
             args: Value::Null,
             expires_unix_ms: None,
+            source_hive: None,
+            target_hive: None,
+            relay_hop: None,
+            relay_correlation_id: None,
         };
         let gpu_id = resolve_gpu_id(&spec).expect("gpu id");
         assert_eq!(gpu_id, "GPU-0");
@@ -231,6 +249,10 @@ mod tests {
             target: Some("/gpu/GPU-0/lease".to_owned()),
             args: serde_json::json!({ "gpu_id": "GPU-9" }),
             expires_unix_ms: None,
+            source_hive: None,
+            target_hive: None,
+            relay_hop: None,
+            relay_correlation_id: None,
         };
         let gpu_id = resolve_gpu_id(&spec).expect("gpu id");
         assert_eq!(gpu_id, "GPU-9");

@@ -8,9 +8,9 @@
 
 extern crate alloc;
 
-use crate::bootstrap::{boot_tracer, log as boot_log, BootPhase};
 use crate::affinity;
 use crate::authority::{AuthorityError, AuthorityOp, AuthorityQueue};
+use crate::bootstrap::{boot_tracer, log as boot_log, BootPhase};
 use crate::event::AuditSink;
 use crate::generated;
 use crate::lifecycle;
@@ -475,16 +475,16 @@ impl TelemetryIngestState {
                 {
                     return Err(NineDoorBridgeError::BufferFull);
                 }
-                let referenced_total =
-                    segment.reference_total_bytes.saturating_add(reference.chunk_bytes);
+                let referenced_total = segment
+                    .reference_total_bytes
+                    .saturating_add(reference.chunk_bytes);
                 if referenced_total > max_reference_bytes {
                     return Err(NineDoorBridgeError::BufferFull);
                 }
                 segment.mode = TelemetryIngestSegmentMode::ReferenceManifest;
                 segment.reference_entries = segment.reference_entries.saturating_add(1);
-                segment.reference_manifest_bytes = segment
-                    .reference_manifest_bytes
-                    .saturating_add(record_len);
+                segment.reference_manifest_bytes =
+                    segment.reference_manifest_bytes.saturating_add(record_len);
                 segment.reference_total_bytes = referenced_total;
                 segment.reference_next_seq = segment.reference_next_seq.saturating_add(1);
             }
@@ -1114,9 +1114,7 @@ impl NineDoorBridge {
             if !self.gpu.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            if !self.is_queen()
-                && !matches!(self.session_role, Some(SessionRoleLabel::WorkerGpu))
-            {
+            if !self.is_queen() && !matches!(self.session_role, Some(SessionRoleLabel::WorkerGpu)) {
                 return Err(NineDoorBridgeError::Permission);
             }
             let ctl_max = self.gpu.ctl_max_bytes;
@@ -1922,16 +1920,13 @@ impl NineDoorBridge {
         }
         let resolved = self.resolve_bound_path(path);
         let path = resolved.as_deref().unwrap_or(path);
-        if self
-            .cas
-            .list_path_into(
-                path,
-                self.is_queen(),
-                self.ui.updates.manifest,
-                self.ui.updates.status,
-                output,
-            )?
-        {
+        if self.cas.list_path_into(
+            path,
+            self.is_queen(),
+            self.ui.updates.manifest,
+            self.ui.updates.status,
+            output,
+        )? {
             return Ok(());
         }
         if let Some(result) = self.host.list_into(path, output) {
@@ -2008,8 +2003,8 @@ impl NineDoorBridge {
         if self.workers.len() >= MAX_WORKERS {
             return Err(NineDoorBridgeError::BufferFull);
         }
-        let gpu_id =
-            parse_json_string_field(payload, "gpu_id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+        let gpu_id = parse_json_string_field(payload, "gpu_id")
+            .ok_or(NineDoorBridgeError::InvalidPayload)?;
         let mem_mb = u32::try_from(
             parse_json_u64_field(payload, "mem_mb").ok_or(NineDoorBridgeError::InvalidPayload)?,
         )
@@ -2588,9 +2583,7 @@ impl ObserveState {
                 render_queued_line(self.snapshot)
                     .and_then(|line| lines_from_text_into(line.as_str(), output)),
             ),
-            PROC_INGEST_WATCH_PATH if self.proc_ingest.watch => {
-                Some(self.watch.lines_into(output))
-            }
+            PROC_INGEST_WATCH_PATH if self.proc_ingest.watch => Some(self.watch.lines_into(output)),
             _ => None,
         }
     }
@@ -3867,7 +3860,10 @@ impl HostState {
                     && NVIDIA_GPUS.iter().any(|entry| entry == gpu) =>
             {
                 output.clear();
-                Some(list_from_slice_into(&["status", "power_cap", "thermal"], output))
+                Some(list_from_slice_into(
+                    &["status", "power_cap", "thermal"],
+                    output,
+                ))
             }
             ["jetson"] if self.has_provider(generated::HostProvider::Jetson) => {
                 output.clear();
@@ -3947,10 +3943,22 @@ impl HostState {
             self.validate_ticket_line_bytes(line)?;
             validate_json_keys(
                 line,
-                &["schema", "id", "idempotency_key", "action", "target", "args"],
+                &[
+                    "schema",
+                    "id",
+                    "idempotency_key",
+                    "action",
+                    "target",
+                    "args",
+                    "expires_unix_ms",
+                    "source_hive",
+                    "target_hive",
+                    "relay_hop",
+                    "relay_correlation_id",
+                ],
             )?;
-            let schema =
-                parse_json_string_field(line, "schema").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let schema = parse_json_string_field(line, "schema")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
             if schema != self.ticket_request_schema {
                 return Err(NineDoorBridgeError::InvalidPayload);
             }
@@ -3958,8 +3966,8 @@ impl HostState {
                 parse_json_string_field(line, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
             let idempotency_key = parse_json_string_field(line, "idempotency_key")
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
-            let action =
-                parse_json_string_field(line, "action").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let action = parse_json_string_field(line, "action")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
             validate_host_ticket_token(id)?;
             validate_host_ticket_token(idempotency_key)?;
             if !self
@@ -3973,6 +3981,30 @@ impl HostState {
                 if target.trim().is_empty() {
                     return Err(NineDoorBridgeError::InvalidPayload);
                 }
+            }
+            if let Some(expires_unix_ms) = parse_json_u64_field(line, "expires_unix_ms") {
+                if expires_unix_ms == 0 {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+            }
+            let source_hive = parse_json_string_field(line, "source_hive");
+            let target_hive = parse_json_string_field(line, "target_hive");
+            if source_hive.is_some() != target_hive.is_some() {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            if let Some(source_hive) = source_hive {
+                validate_host_ticket_token(source_hive)?;
+            }
+            if let Some(target_hive) = target_hive {
+                validate_host_ticket_token(target_hive)?;
+            }
+            if let Some(relay_hop) = parse_json_u64_field(line, "relay_hop") {
+                if relay_hop == 0 || relay_hop > 32 {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+            }
+            if let Some(correlation) = parse_json_string_field(line, "relay_correlation_id") {
+                validate_host_ticket_token(correlation)?;
             }
         }
         if !saw_line {
@@ -3992,10 +4024,21 @@ impl HostState {
             self.validate_ticket_line_bytes(line)?;
             validate_json_keys(
                 line,
-                &["schema", "id", "idempotency_key", "action", "state", "message"],
+                &[
+                    "schema",
+                    "id",
+                    "idempotency_key",
+                    "action",
+                    "state",
+                    "message",
+                    "source_hive",
+                    "target_hive",
+                    "relay_hop",
+                    "relay_correlation_id",
+                ],
             )?;
-            let schema =
-                parse_json_string_field(line, "schema").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let schema = parse_json_string_field(line, "schema")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
             if schema != self.ticket_result_schema {
                 return Err(NineDoorBridgeError::InvalidPayload);
             }
@@ -4003,8 +4046,8 @@ impl HostState {
                 parse_json_string_field(line, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
             let idempotency_key = parse_json_string_field(line, "idempotency_key")
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
-            let action =
-                parse_json_string_field(line, "action").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let action = parse_json_string_field(line, "action")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
             let state = parse_json_string_field(line, "state")
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
             validate_host_ticket_token(id)?;
@@ -4027,6 +4070,25 @@ impl HostState {
                 if message.trim().is_empty() {
                     return Err(NineDoorBridgeError::InvalidPayload);
                 }
+            }
+            let source_hive = parse_json_string_field(line, "source_hive");
+            let target_hive = parse_json_string_field(line, "target_hive");
+            if source_hive.is_some() != target_hive.is_some() {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            if let Some(source_hive) = source_hive {
+                validate_host_ticket_token(source_hive)?;
+            }
+            if let Some(target_hive) = target_hive {
+                validate_host_ticket_token(target_hive)?;
+            }
+            if let Some(relay_hop) = parse_json_u64_field(line, "relay_hop") {
+                if relay_hop == 0 || relay_hop > 32 {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+            }
+            if let Some(correlation) = parse_json_string_field(line, "relay_correlation_id") {
+                validate_host_ticket_token(correlation)?;
             }
         }
         if !saw_line {
@@ -4071,11 +4133,7 @@ impl HostState {
         if self.tickets_enabled {
             self.push_entry(&["tickets", "spec"], "", Some("tickets.spec"));
             self.push_entry(&["tickets", "status"], "", Some("tickets.status"));
-            self.push_entry(
-                &["tickets", "deadletter"],
-                "",
-                Some("tickets.deadletter"),
-            );
+            self.push_entry(&["tickets", "deadletter"], "", Some("tickets.deadletter"));
             self.push_read_only_entry(&["tickets", "spec.snapshot"], "");
             self.push_read_only_entry(&["tickets", "status.snapshot"], "");
             self.push_read_only_entry(&["tickets", "deadletter.snapshot"], "");
@@ -4179,7 +4237,9 @@ struct GpuBridgeSnapshot {
 #[derive(Debug)]
 enum GpuBridgeUpdate {
     None,
-    Started { bytes: usize },
+    Started {
+        bytes: usize,
+    },
     Complete {
         bytes: usize,
         sha256: String,
@@ -4209,14 +4269,8 @@ impl GpuState {
                 ("GPU-1", "Mock 4060", 8_192_u32, 64_u32),
             ];
             for (id, name, memory_mb, sm_count) in specs {
-                let info_payload = render_gpu_info_payload(
-                    id,
-                    name,
-                    memory_mb,
-                    sm_count,
-                    "555.0",
-                    "12.4",
-                );
+                let info_payload =
+                    render_gpu_info_payload(id, name, memory_mb, sm_count, "555.0", "12.4");
                 let ctl_log = format!("LEASE {id}\n").into_bytes();
                 entries.push(GpuEntry {
                     id: id.to_owned(),
@@ -4290,9 +4344,7 @@ impl GpuState {
                     snapshot,
                 }) => {
                     self.apply_bridge_snapshot(snapshot)?;
-                    self.set_bridge_status(&format!(
-                        "state=ok bytes={bytes} sha256={sha256}"
-                    ))?;
+                    self.set_bridge_status(&format!("state=ok bytes={bytes} sha256={sha256}"))?;
                 }
                 Err(err) => {
                     let _ = self.set_bridge_status("state=err");
@@ -4354,8 +4406,8 @@ impl GpuState {
                 .pending
                 .as_mut()
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
-            let expected_len =
-                base64_encoded_len(pending.expected_bytes).ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let expected_len = base64_encoded_len(pending.expected_bytes)
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
             if pending.encoded.len().saturating_add(rest.len()) > expected_len {
                 return Err(NineDoorBridgeError::InvalidPayload);
             }
@@ -4365,7 +4417,10 @@ impl GpuState {
         Err(NineDoorBridgeError::InvalidPayload)
     }
 
-    fn apply_bridge_snapshot(&mut self, snapshot: GpuBridgeSnapshot) -> Result<(), NineDoorBridgeError> {
+    fn apply_bridge_snapshot(
+        &mut self,
+        snapshot: GpuBridgeSnapshot,
+    ) -> Result<(), NineDoorBridgeError> {
         let active_line = format!("{}\n", snapshot.active);
         if active_line.len() > GPU_MODELS_ACTIVE_MAX_BYTES as usize {
             return Err(NineDoorBridgeError::InvalidPayload);
@@ -4424,7 +4479,9 @@ fn parse_gpu_bridge_begin(payload: &str) -> Result<(usize, [u8; 32]), NineDoorBr
             .ok_or(NineDoorBridgeError::InvalidPayload)?;
         match key {
             "bytes" => {
-                let parsed = value.parse::<usize>().map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+                let parsed = value
+                    .parse::<usize>()
+                    .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
                 if parsed == 0 {
                     return Err(NineDoorBridgeError::InvalidPayload);
                 }
@@ -5111,7 +5168,10 @@ impl SidecarLoraState {
         for adapter in &self.adapters {
             if segments_equal(path, &adapter.mount_root) {
                 output.clear();
-                return Some(list_from_slice_into(&["ctl", "telemetry", "tamper"], output));
+                return Some(list_from_slice_into(
+                    &["ctl", "telemetry", "tamper"],
+                    output,
+                ));
             }
         }
         None
@@ -5675,8 +5735,10 @@ impl ScheduleState {
 
     fn summary_lines(
         &self,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
         let mut output = HeaplessVec::new();
         self.summary_lines_into(&mut output)?;
         Ok(output)
@@ -5704,8 +5766,10 @@ impl ScheduleState {
 
     fn queue_lines(
         &self,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
         let mut output = HeaplessVec::new();
         self.queue_lines_into(&mut output)?;
         Ok(output)
@@ -5943,8 +6007,10 @@ impl LeaseState {
 
     fn summary_lines(
         &self,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
         let mut output = HeaplessVec::new();
         self.summary_lines_into(&mut output)?;
         Ok(output)
@@ -5973,8 +6039,10 @@ impl LeaseState {
 
     fn active_lines(
         &self,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
         let mut output = HeaplessVec::new();
         self.active_lines_into(&mut output)?;
         Ok(output)
@@ -6009,8 +6077,10 @@ impl LeaseState {
 
     fn preemptions_lines(
         &self,
-    ) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-    {
+    ) -> Result<
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+        NineDoorBridgeError,
+    > {
         let mut output = HeaplessVec::new();
         self.preemptions_lines_into(&mut output)?;
         Ok(output)
@@ -6954,9 +7024,10 @@ fn validate_host_ticket_token(value: &str) -> Result<(), NineDoorBridgeError> {
     if trimmed.as_bytes().len() > HOST_TICKET_ID_MAX_BYTES {
         return Err(NineDoorBridgeError::InvalidPayload);
     }
-    if !trimmed.chars().all(|ch| {
-        ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':')
-    }) {
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':'))
+    {
         return Err(NineDoorBridgeError::InvalidPayload);
     }
     Ok(())
@@ -7678,10 +7749,7 @@ enum PolicyCtlCommand {
 }
 
 fn parse_schedule_ctl(payload: &str) -> Result<ScheduleRequest, NineDoorBridgeError> {
-    validate_json_keys(
-        payload,
-        &["id", "role", "priority", "ticks", "budget_ms"],
-    )?;
+    validate_json_keys(payload, &["id", "role", "priority", "ticks", "budget_ms"])?;
     let id = parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
     let role =
         parse_json_string_field(payload, "role").ok_or(NineDoorBridgeError::InvalidPayload)?;
@@ -7716,14 +7784,14 @@ fn parse_lease_ctl(payload: &str) -> Result<LeaseCtlCommand, NineDoorBridgeError
                 payload,
                 &["op", "id", "subject", "resource", "ttl_s", "priority"],
             )?;
-            let id =
-                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let id = parse_json_string_field(payload, "id")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
             let subject = parse_json_string_field(payload, "subject")
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
             let resource = parse_json_string_field(payload, "resource")
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
-            let ttl_s =
-                parse_json_u64_field(payload, "ttl_s").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let ttl_s = parse_json_u64_field(payload, "ttl_s")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
             let priority = parse_json_u64_field(payload, "priority")
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
             validate_lease_id(id)?;
@@ -7745,10 +7813,10 @@ fn parse_lease_ctl(payload: &str) -> Result<LeaseCtlCommand, NineDoorBridgeError
         }
         "renew" => {
             validate_json_keys(payload, &["op", "id", "ttl_s", "priority"])?;
-            let id =
-                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
-            let ttl_s =
-                parse_json_u64_field(payload, "ttl_s").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let id = parse_json_string_field(payload, "id")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let ttl_s = parse_json_u64_field(payload, "ttl_s")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
             let priority = parse_json_u64_field(payload, "priority")
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
             validate_lease_id(id)?;
@@ -7766,8 +7834,8 @@ fn parse_lease_ctl(payload: &str) -> Result<LeaseCtlCommand, NineDoorBridgeError
         }
         "preempt" => {
             validate_json_keys(payload, &["op", "id", "reason"])?;
-            let id =
-                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let id = parse_json_string_field(payload, "id")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
             let reason = parse_json_string_field(payload, "reason")
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
             validate_lease_id(id)?;
@@ -7815,10 +7883,10 @@ fn parse_export_ctl(payload: &str) -> Result<ExportCtlCommand, NineDoorBridgeErr
     match op {
         "open" => {
             validate_json_keys(payload, &["op", "id", "ttl_s"])?;
-            let id =
-                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
-            let ttl_s =
-                parse_json_u64_field(payload, "ttl_s").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let id = parse_json_string_field(payload, "id")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let ttl_s = parse_json_u64_field(payload, "ttl_s")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
             validate_export_id(id)?;
             let ttl_s = u32::try_from(ttl_s).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
             if ttl_s == 0 {
@@ -7831,8 +7899,8 @@ fn parse_export_ctl(payload: &str) -> Result<ExportCtlCommand, NineDoorBridgeErr
         }
         "close" => {
             validate_json_keys(payload, &["op", "id", "reason"])?;
-            let id =
-                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let id = parse_json_string_field(payload, "id")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
             let reason = parse_json_string_field(payload, "reason")
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
             validate_export_id(id)?;
@@ -7851,8 +7919,8 @@ fn parse_policy_ctl(payload: &str) -> Result<PolicyCtlCommand, NineDoorBridgeErr
     match op {
         "apply" => {
             validate_json_keys(payload, &["op", "id", "sha256"])?;
-            let id =
-                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let id = parse_json_string_field(payload, "id")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
             let sha256 = parse_json_string_field(payload, "sha256")
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
             validate_policy_revision_id(id)?;
@@ -7864,8 +7932,8 @@ fn parse_policy_ctl(payload: &str) -> Result<PolicyCtlCommand, NineDoorBridgeErr
         }
         "rollback" => {
             validate_json_keys(payload, &["op", "id"])?;
-            let id =
-                parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let id = parse_json_string_field(payload, "id")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
             validate_policy_revision_id(id)?;
             Ok(PolicyCtlCommand::Rollback { id: id.to_owned() })
         }
@@ -7931,9 +7999,10 @@ fn validate_extended_token(value: &str, max_len: usize) -> Result<(), NineDoorBr
     if value == "." || value == ".." {
         return Err(NineDoorBridgeError::InvalidPayload);
     }
-    if !value.chars().all(|ch| {
-        ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' || ch == ':'
-    }) {
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' || ch == ':')
+    {
         return Err(NineDoorBridgeError::InvalidPayload);
     }
     Ok(())
@@ -8500,8 +8569,7 @@ fn parse_telemetry_reference_chunk(
         return Ok(None);
     }
     let seq = parse_json_u64_field(payload, "seq").ok_or(NineDoorBridgeError::InvalidPayload)?;
-    let offset =
-        parse_json_u64_field(payload, "off").ok_or(NineDoorBridgeError::InvalidPayload)?;
+    let offset = parse_json_u64_field(payload, "off").ok_or(NineDoorBridgeError::InvalidPayload)?;
     let chunk_bytes =
         parse_json_u64_field(payload, "len").ok_or(NineDoorBridgeError::InvalidPayload)?;
     if chunk_bytes == 0 {
@@ -8523,10 +8591,9 @@ fn is_valid_reference_digest(value: &str) -> bool {
     if value.is_empty() || value.len() > TELEMETRY_REFERENCE_DIGEST_MAX_BYTES {
         return false;
     }
-    value.chars().all(|ch| {
-        ch.is_ascii_alphanumeric()
-            || matches!(ch, '-' | '_' | '+' | '/' | '=' | '.')
-    })
+    value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '+' | '/' | '=' | '.'))
 }
 
 fn parse_json_string_field<'a>(input: &'a str, key: &str) -> Option<&'a str> {
@@ -8746,9 +8813,7 @@ mod tests {
         junk.push_str("junk").expect("insert junk");
         output.push(junk).expect("push junk");
 
-        bridge
-            .list_into("/", &mut output)
-            .expect("list root");
+        bridge.list_into("/", &mut output).expect("list root");
 
         assert!(
             !output.iter().any(|line| line.as_str() == "junk"),
@@ -8820,18 +8885,14 @@ mod tests {
             .expect("append action should evict consumed entry");
 
         assert_eq!(policy.actions.len(), 2);
-        assert!(
-            policy
-                .actions
-                .iter()
-                .all(|action| action.id.as_str() != "old-consumed")
-        );
-        assert!(
-            policy
-                .actions
-                .iter()
-                .any(|action| action.id.as_str() == "active-2")
-        );
+        assert!(policy
+            .actions
+            .iter()
+            .all(|action| action.id.as_str() != "old-consumed"));
+        assert!(policy
+            .actions
+            .iter()
+            .any(|action| action.id.as_str() == "active-2"));
     }
 
     #[test]

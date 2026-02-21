@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate host sidecar policy enforcement and audit logging.
 // Author: Lukas Bower
@@ -137,8 +137,8 @@ fn host_control_write_requires_queen_and_audits() {
 
 #[test]
 fn host_ticket_streams_validate_schema_and_bounds() {
-    let host_config = HostNamespaceConfig::enabled("/host", &[HostProvider::Systemd])
-        .expect("host config");
+    let host_config =
+        HostNamespaceConfig::enabled("/host", &[HostProvider::Systemd]).expect("host config");
     let server = NineDoor::new_with_host_config(host_config);
     server.register_ticket_secret(Role::WorkerHeartbeat, "worker");
     let ticket = issue_ticket("worker", Role::WorkerHeartbeat, "worker-1");
@@ -167,11 +167,7 @@ fn host_ticket_streams_validate_schema_and_bounds() {
         )
         .expect("worker attach");
 
-    let spec_path = vec![
-        "host".to_owned(),
-        "tickets".to_owned(),
-        "spec".to_owned(),
-    ];
+    let spec_path = vec!["host".to_owned(), "tickets".to_owned(), "spec".to_owned()];
     worker.walk(1, 2, &spec_path).expect("walk ticket spec");
     let err = worker
         .open(2, OpenMode::write_append())
@@ -184,15 +180,23 @@ fn host_ticket_streams_validate_schema_and_bounds() {
         other => panic!("unexpected error: {other:?}"),
     }
 
-    queen.walk(1, 2, &spec_path).expect("queen walk ticket spec");
+    queen
+        .walk(1, 2, &spec_path)
+        .expect("queen walk ticket spec");
     queen
         .open(2, OpenMode::write_append())
         .expect("queen open ticket spec");
     let valid_spec = br#"{"schema":"host-ticket/v1","id":"ticket-1","idempotency_key":"idem-1","action":"systemd.restart","target":"/host/systemd/cohesix-agent.service/restart"}"#;
     queen.write(2, valid_spec).expect("write valid ticket spec");
+    let federated_spec = br#"{"schema":"host-ticket/v1","id":"ticket-2","idempotency_key":"idem-2","action":"systemd.restart","target":"/host/systemd/cohesix-agent.service/restart","expires_unix_ms":1893456000000,"source_hive":"hive-a","target_hive":"hive-b","relay_hop":1,"relay_correlation_id":"ticket-2:idem-2:hive-a:hive-b"}"#;
+    queen
+        .write(2, federated_spec)
+        .expect("write federated ticket spec");
     queen.clunk(2).expect("clunk ticket spec");
 
-    queen.walk(1, 3, &spec_path).expect("queen walk ticket spec");
+    queen
+        .walk(1, 3, &spec_path)
+        .expect("queen walk ticket spec");
     queen
         .open(3, OpenMode::write_append())
         .expect("queen open ticket spec");
@@ -208,7 +212,27 @@ fn host_ticket_streams_validate_schema_and_bounds() {
     }
     queen.clunk(3).expect("clunk invalid ticket spec");
 
-    queen.walk(1, 4, &spec_path).expect("queen walk ticket spec");
+    queen
+        .walk(1, 9, &spec_path)
+        .expect("queen walk ticket spec");
+    queen
+        .open(9, OpenMode::write_append())
+        .expect("queen open ticket spec");
+    let err = queen
+        .write(9, br#"{"schema":"host-ticket/v1","id":"bad-fed","idempotency_key":"idem-fed","action":"systemd.restart","source_hive":"hive-a"}"#)
+        .expect_err("write invalid federated ticket fields");
+    match err {
+        NineDoorError::Protocol { code, message } => {
+            assert_eq!(code, ErrorCode::Invalid);
+            assert!(message.contains("federation"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    queen.clunk(9).expect("clunk invalid federated ticket spec");
+
+    queen
+        .walk(1, 4, &spec_path)
+        .expect("queen walk ticket spec");
     queen
         .open(4, OpenMode::write_append())
         .expect("queen open ticket spec");
@@ -228,12 +252,10 @@ fn host_ticket_streams_validate_schema_and_bounds() {
     }
     queen.clunk(4).expect("clunk oversize ticket spec");
 
-    let status_path = vec![
-        "host".to_owned(),
-        "tickets".to_owned(),
-        "status".to_owned(),
-    ];
-    queen.walk(1, 5, &status_path).expect("queen walk ticket status");
+    let status_path = vec!["host".to_owned(), "tickets".to_owned(), "status".to_owned()];
+    queen
+        .walk(1, 5, &status_path)
+        .expect("queen walk ticket status");
     queen
         .open(5, OpenMode::write_append())
         .expect("queen open ticket status");

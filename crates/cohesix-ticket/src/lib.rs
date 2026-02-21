@@ -464,7 +464,6 @@ impl TicketToken {
     }
 
     /// Encode the ticket into its text representation.
-    #[must_use]
     pub fn encode(&self) -> Result<String, TicketError> {
         let payload = self.claims.encode_payload()?;
         let payload_hex = hex::encode(payload);

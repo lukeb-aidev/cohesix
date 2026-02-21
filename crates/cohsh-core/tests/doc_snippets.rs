@@ -26,8 +26,7 @@ fn read_fixture_hash(path: &PathBuf) -> String {
     contents
         .lines()
         .map(str::trim)
-        .filter(|line| line.len() == 64 && line.chars().all(|c| c.is_ascii_hexdigit()))
-        .last()
+        .rfind(|line| line.len() == 64 && line.chars().all(|c| c.is_ascii_hexdigit()))
         .unwrap_or_else(|| panic!("fixture hash missing: {}", path.display()))
         .to_string()
 }

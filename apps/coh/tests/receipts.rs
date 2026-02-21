@@ -55,7 +55,10 @@ fn gpu_lease_receipt_includes_proc_lease_snapshot() -> Result<()> {
     let receipt_text = std::fs::read_to_string(&receipt_path)
         .with_context(|| format!("read {}", receipt_path.display()))?;
     let receipt: Value = serde_json::from_str(&receipt_text).context("parse receipt json")?;
-    assert_eq!(receipt.get("kind").and_then(Value::as_str), Some("gpu-lease"));
+    assert_eq!(
+        receipt.get("kind").and_then(Value::as_str),
+        Some("gpu-lease")
+    );
 
     let entries = receipt
         .pointer("/proc_lease/active_entries")
@@ -63,7 +66,9 @@ fn gpu_lease_receipt_includes_proc_lease_snapshot() -> Result<()> {
         .cloned()
         .unwrap_or_default();
     assert!(
-        entries.iter().any(|entry| entry.get("id").and_then(Value::as_str) == Some("lease-1")),
+        entries
+            .iter()
+            .any(|entry| entry.get("id").and_then(Value::as_str) == Some("lease-1")),
         "expected proc lease active entry to be present"
     );
 

@@ -67,7 +67,7 @@ fn telemetry_ingest_rejects_oversize_record() {
         ..TelemetryIngestConfig::default()
     };
     let server = NineDoor::new_with_limits_and_telemetry_manifest(
-        Arc::new(TestClock::default()),
+        Arc::new(TestClock),
         Default::default(),
         TelemetryConfig::default(),
         ingest,

@@ -5,32 +5,85 @@
 
 #![allow(unused_imports)]
 
-use super::{AffinityPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig};
+use super::{
+    AffinityPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig,
+    HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction,
+    HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition,
+    LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig,
+    PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig,
+    ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits,
+    ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig,
+    SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig,
+    TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig,
+    TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig,
+    UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig,
+};
 use cohesix_ticket::Role;
 
-pub const TICKET_TABLE_SHA256: &str = "fd0ebff1d0b4cfcc2a03a1015578545dfa68f0240e782b60ad7956c2492972eb";
-pub const NAMESPACE_TABLE_SHA256: &str = "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
-pub const AUDIT_TABLE_SHA256: &str = "61347a321c056a7c4be6e10eceaf9a0e962c844971d1803ce47427a11eafc3aa";
+pub const TICKET_TABLE_SHA256: &str =
+    "fd0ebff1d0b4cfcc2a03a1015578545dfa68f0240e782b60ad7956c2492972eb";
+pub const NAMESPACE_TABLE_SHA256: &str =
+    "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
+pub const AUDIT_TABLE_SHA256: &str =
+    "860a145bdf436ce96e6378a90f0490d57b7cf15b458eb7413caaf29226f046bf";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
-    TicketSpec { role: Role::Queen, secret: "bootstrap" },
-    TicketSpec { role: Role::WorkerHeartbeat, secret: "worker" },
-    TicketSpec { role: Role::WorkerGpu, secret: "worker-gpu" },
-    TicketSpec { role: Role::WorkerBus, secret: "worker-bus" },
-    TicketSpec { role: Role::WorkerLora, secret: "worker-lora" },
+    TicketSpec {
+        role: Role::Queen,
+        secret: "bootstrap",
+    },
+    TicketSpec {
+        role: Role::WorkerHeartbeat,
+        secret: "worker",
+    },
+    TicketSpec {
+        role: Role::WorkerGpu,
+        secret: "worker-gpu",
+    },
+    TicketSpec {
+        role: Role::WorkerBus,
+        secret: "worker-bus",
+    },
+    TicketSpec {
+        role: Role::WorkerLora,
+        secret: "worker-lora",
+    },
 ];
 
-pub const NAMESPACE_MOUNTS: [NamespaceMount; 1] = [
-    NamespaceMount { service: "logs", target: &["log"] },
-];
+pub const NAMESPACE_MOUNTS: [NamespaceMount; 1] = [NamespaceMount {
+    service: "logs",
+    target: &["log"],
+}];
 
-pub const CACHE_POLICY: CachePolicy = CachePolicy { kernel_ops: true, dma_clean: true, dma_invalidate: true, unify_instructions: false };
+pub const CACHE_POLICY: CachePolicy = CachePolicy {
+    kernel_ops: true,
+    dma_clean: true,
+    dma_invalidate: true,
+    unify_instructions: false,
+};
 
-pub const SECURE9P_LIMITS: Secure9pLimits = Secure9pLimits { msize: 8192, walk_depth: 8, tags_per_session: 16, batch_frames: 1, short_write_policy: ShortWritePolicy::Reject };
+pub const SECURE9P_LIMITS: Secure9pLimits = Secure9pLimits {
+    msize: 8192,
+    walk_depth: 8,
+    tags_per_session: 16,
+    batch_frames: 1,
+    short_write_policy: ShortWritePolicy::Reject,
+};
 
-pub const TICKET_LIMITS: TicketLimits = TicketLimits { max_scopes: 8, max_scope_path_len: 128, max_scope_rate_per_s: 64, bandwidth_bytes: 131072, cursor_resumes: 16, cursor_advances: 256 };
+pub const TICKET_LIMITS: TicketLimits = TicketLimits {
+    max_scopes: 8,
+    max_scope_path_len: 128,
+    max_scope_rate_per_s: 64,
+    bandwidth_bytes: 131072,
+    cursor_resumes: 16,
+    cursor_advances: 256,
+};
 
-pub const SHARDING_CONFIG: ShardingConfig = ShardingConfig { enabled: true, shard_bits: 8, legacy_worker_alias: true };
+pub const SHARDING_CONFIG: ShardingConfig = ShardingConfig {
+    enabled: true,
+    shard_bits: 8,
+    legacy_worker_alias: true,
+};
 
 pub const AFFINITY_NINEDOOR_CORES: [u8; 1] = [1];
 
@@ -38,280 +91,92 @@ pub const AFFINITY_PROVIDER_CORES: [u8; 2] = [2, 3];
 
 pub const AFFINITY_WORKER_CORES: [u8; 2] = [2, 3];
 
-pub const AFFINITY_POLICY: AffinityPolicy = AffinityPolicy { enabled: true, max_cores: 4, authority_core: Some(0), ninedoor_cores: &AFFINITY_NINEDOOR_CORES, provider_cores: &AFFINITY_PROVIDER_CORES, worker_cores: &AFFINITY_WORKER_CORES };
+pub const AFFINITY_POLICY: AffinityPolicy = AffinityPolicy {
+    enabled: true,
+    max_cores: 4,
+    authority_core: Some(0),
+    ninedoor_cores: &AFFINITY_NINEDOOR_CORES,
+    provider_cores: &AFFINITY_PROVIDER_CORES,
+    worker_cores: &AFFINITY_WORKER_CORES,
+};
 
 pub const SHARD_LABELS: [&str; 256] = [
-    "00",
-    "01",
-    "02",
-    "03",
-    "04",
-    "05",
-    "06",
-    "07",
-    "08",
-    "09",
-    "0a",
-    "0b",
-    "0c",
-    "0d",
-    "0e",
-    "0f",
-    "10",
-    "11",
-    "12",
-    "13",
-    "14",
-    "15",
-    "16",
-    "17",
-    "18",
-    "19",
-    "1a",
-    "1b",
-    "1c",
-    "1d",
-    "1e",
-    "1f",
-    "20",
-    "21",
-    "22",
-    "23",
-    "24",
-    "25",
-    "26",
-    "27",
-    "28",
-    "29",
-    "2a",
-    "2b",
-    "2c",
-    "2d",
-    "2e",
-    "2f",
-    "30",
-    "31",
-    "32",
-    "33",
-    "34",
-    "35",
-    "36",
-    "37",
-    "38",
-    "39",
-    "3a",
-    "3b",
-    "3c",
-    "3d",
-    "3e",
-    "3f",
-    "40",
-    "41",
-    "42",
-    "43",
-    "44",
-    "45",
-    "46",
-    "47",
-    "48",
-    "49",
-    "4a",
-    "4b",
-    "4c",
-    "4d",
-    "4e",
-    "4f",
-    "50",
-    "51",
-    "52",
-    "53",
-    "54",
-    "55",
-    "56",
-    "57",
-    "58",
-    "59",
-    "5a",
-    "5b",
-    "5c",
-    "5d",
-    "5e",
-    "5f",
-    "60",
-    "61",
-    "62",
-    "63",
-    "64",
-    "65",
-    "66",
-    "67",
-    "68",
-    "69",
-    "6a",
-    "6b",
-    "6c",
-    "6d",
-    "6e",
-    "6f",
-    "70",
-    "71",
-    "72",
-    "73",
-    "74",
-    "75",
-    "76",
-    "77",
-    "78",
-    "79",
-    "7a",
-    "7b",
-    "7c",
-    "7d",
-    "7e",
-    "7f",
-    "80",
-    "81",
-    "82",
-    "83",
-    "84",
-    "85",
-    "86",
-    "87",
-    "88",
-    "89",
-    "8a",
-    "8b",
-    "8c",
-    "8d",
-    "8e",
-    "8f",
-    "90",
-    "91",
-    "92",
-    "93",
-    "94",
-    "95",
-    "96",
-    "97",
-    "98",
-    "99",
-    "9a",
-    "9b",
-    "9c",
-    "9d",
-    "9e",
-    "9f",
-    "a0",
-    "a1",
-    "a2",
-    "a3",
-    "a4",
-    "a5",
-    "a6",
-    "a7",
-    "a8",
-    "a9",
-    "aa",
-    "ab",
-    "ac",
-    "ad",
-    "ae",
-    "af",
-    "b0",
-    "b1",
-    "b2",
-    "b3",
-    "b4",
-    "b5",
-    "b6",
-    "b7",
-    "b8",
-    "b9",
-    "ba",
-    "bb",
-    "bc",
-    "bd",
-    "be",
-    "bf",
-    "c0",
-    "c1",
-    "c2",
-    "c3",
-    "c4",
-    "c5",
-    "c6",
-    "c7",
-    "c8",
-    "c9",
-    "ca",
-    "cb",
-    "cc",
-    "cd",
-    "ce",
-    "cf",
-    "d0",
-    "d1",
-    "d2",
-    "d3",
-    "d4",
-    "d5",
-    "d6",
-    "d7",
-    "d8",
-    "d9",
-    "da",
-    "db",
-    "dc",
-    "dd",
-    "de",
-    "df",
-    "e0",
-    "e1",
-    "e2",
-    "e3",
-    "e4",
-    "e5",
-    "e6",
-    "e7",
-    "e8",
-    "e9",
-    "ea",
-    "eb",
-    "ec",
-    "ed",
-    "ee",
-    "ef",
-    "f0",
-    "f1",
-    "f2",
-    "f3",
-    "f4",
-    "f5",
-    "f6",
-    "f7",
-    "f8",
-    "f9",
-    "fa",
-    "fb",
-    "fc",
-    "fd",
-    "fe",
-    "ff",
+    "00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "0a", "0b", "0c", "0d", "0e", "0f",
+    "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "1a", "1b", "1c", "1d", "1e", "1f",
+    "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "2a", "2b", "2c", "2d", "2e", "2f",
+    "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "3a", "3b", "3c", "3d", "3e", "3f",
+    "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "4a", "4b", "4c", "4d", "4e", "4f",
+    "50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "5a", "5b", "5c", "5d", "5e", "5f",
+    "60", "61", "62", "63", "64", "65", "66", "67", "68", "69", "6a", "6b", "6c", "6d", "6e", "6f",
+    "70", "71", "72", "73", "74", "75", "76", "77", "78", "79", "7a", "7b", "7c", "7d", "7e", "7f",
+    "80", "81", "82", "83", "84", "85", "86", "87", "88", "89", "8a", "8b", "8c", "8d", "8e", "8f",
+    "90", "91", "92", "93", "94", "95", "96", "97", "98", "99", "9a", "9b", "9c", "9d", "9e", "9f",
+    "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "aa", "ab", "ac", "ad", "ae", "af",
+    "b0", "b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8", "b9", "ba", "bb", "bc", "bd", "be", "bf",
+    "c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "ca", "cb", "cc", "cd", "ce", "cf",
+    "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8", "d9", "da", "db", "dc", "dd", "de", "df",
+    "e0", "e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "ea", "eb", "ec", "ed", "ee", "ef",
+    "f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "fa", "fb", "fc", "fd", "fe", "ff",
 ];
 
-pub const TELEMETRY_CONFIG: TelemetryConfig = TelemetryConfig { ring_bytes_per_worker: 1024, frame_schema: TelemetryFrameSchema::LegacyPlaintext, cursor: TelemetryCursorConfig { retain_on_boot: false } };
+pub const TELEMETRY_CONFIG: TelemetryConfig = TelemetryConfig {
+    ring_bytes_per_worker: 1024,
+    frame_schema: TelemetryFrameSchema::LegacyPlaintext,
+    cursor: TelemetryCursorConfig {
+        retain_on_boot: false,
+    },
+};
 
-pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = TelemetryIngestConfig { max_segments_per_device: 4, max_bytes_per_segment: 131072, max_total_bytes_per_device: 524288, max_reference_entries_per_segment: 1024, max_reference_manifest_bytes_per_segment: 131072, max_reference_bytes_per_segment: 1073741824, eviction_policy: TelemetryIngestEvictionPolicy::EvictOldest };
+pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = TelemetryIngestConfig {
+    max_segments_per_device: 4,
+    max_bytes_per_segment: 131072,
+    max_total_bytes_per_device: 524288,
+    max_reference_entries_per_segment: 1024,
+    max_reference_manifest_bytes_per_segment: 131072,
+    max_reference_bytes_per_segment: 1073741824,
+    eviction_policy: TelemetryIngestEvictionPolicy::EvictOldest,
+};
 
-pub const LIFECYCLE_AUTO_TRANSITIONS: [LifecycleAutoTransition; 1] = [
-    LifecycleAutoTransition { from: LifecycleState::Booting, to: LifecycleState::Online },
-];
+pub const LIFECYCLE_AUTO_TRANSITIONS: [LifecycleAutoTransition; 1] = [LifecycleAutoTransition {
+    from: LifecycleState::Booting,
+    to: LifecycleState::Online,
+}];
 
-pub const LIFECYCLE_CONFIG: LifecycleConfig = LifecycleConfig { initial_state: LifecycleState::Booting, auto_transitions: &LIFECYCLE_AUTO_TRANSITIONS };
+pub const LIFECYCLE_CONFIG: LifecycleConfig = LifecycleConfig {
+    initial_state: LifecycleState::Booting,
+    auto_transitions: &LIFECYCLE_AUTO_TRANSITIONS,
+};
 
-pub const CONTROL_PLANE_CONFIG: ControlPlaneConfig = ControlPlaneConfig { schedule: ScheduleControlConfig { enable: true, queue_max_entries: 256, ctl_max_bytes: 8192 }, lease: LeaseControlConfig { enable: true, active_max_entries: 256, preemptions_max_entries: 256, ctl_max_bytes: 8192 }, export: ExportControlConfig { enable: true, ctl_max_bytes: 2048 } };
+pub const CONTROL_PLANE_CONFIG: ControlPlaneConfig = ControlPlaneConfig {
+    schedule: ScheduleControlConfig {
+        enable: true,
+        queue_max_entries: 256,
+        ctl_max_bytes: 8192,
+    },
+    lease: LeaseControlConfig {
+        enable: true,
+        active_max_entries: 256,
+        preemptions_max_entries: 256,
+        ctl_max_bytes: 8192,
+    },
+    export: ExportControlConfig {
+        enable: true,
+        ctl_max_bytes: 2048,
+    },
+};
 
-pub const CAS_CONFIG: CasConfig = CasConfig { enable: true, chunk_bytes: 128, delta_enable: true, signing_required: true, signing_key: Some([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]), models_enabled: false };
+pub const CAS_CONFIG: CasConfig = CasConfig {
+    enable: true,
+    chunk_bytes: 128,
+    delta_enable: true,
+    signing_required: true,
+    signing_key: Some([
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd,
+        0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+        0xcd, 0xef,
+    ]),
+    models_enabled: false,
+};
 
 pub const PROC_9P_SESSIONS_BYTES: usize = 8192;
 pub const PROC_9P_OUTSTANDING_BYTES: usize = 128;
@@ -340,9 +205,98 @@ pub const PROC_SCHEDULE_QUEUE_BYTES: usize = 256;
 pub const PROC_LEASE_SUMMARY_BYTES: usize = 160;
 pub const PROC_LEASE_ACTIVE_BYTES: usize = 256;
 pub const PROC_LEASE_PREEMPTIONS_BYTES: usize = 256;
-pub const OBSERVABILITY_CONFIG: ObservabilityConfig = ObservabilityConfig { proc_9p: Proc9pConfig { sessions: true, outstanding: true, short_writes: true, sessions_bytes: 8192, outstanding_bytes: 128, short_writes_bytes: 128 }, proc_9p_session: Proc9pSessionConfig { active: true, state: true, since_ms: true, owner: true, active_bytes: 128, state_bytes: 64, since_ms_bytes: 64, owner_bytes: 96 }, proc_ingest: ProcIngestConfig { p50_ms: true, p95_ms: true, backpressure: true, dropped: true, queued: true, watch: true, p50_ms_bytes: 64, p95_ms_bytes: 64, backpressure_bytes: 64, dropped_bytes: 64, queued_bytes: 64, watch_max_entries: 16, watch_line_bytes: 192, watch_min_interval_ms: 50, latency_samples: 32, latency_tolerance_ms: 5, counter_tolerance: 1 }, proc_root: ProcRootConfig { reachable: true, last_seen_ms: true, cut_reason: true, reachable_bytes: 32, last_seen_ms_bytes: 64, cut_reason_bytes: 64 }, proc_pressure: ProcPressureConfig { busy: true, quota: true, cut: true, policy: true, busy_bytes: 64, quota_bytes: 64, cut_bytes: 64, policy_bytes: 64 }, proc_schedule: ProcScheduleConfig { summary: true, queue: true, summary_bytes: 128, queue_bytes: 256 }, proc_lease: ProcLeaseConfig { summary: true, active: true, preemptions: true, summary_bytes: 160, active_bytes: 256, preemptions_bytes: 256 } };
+pub const OBSERVABILITY_CONFIG: ObservabilityConfig = ObservabilityConfig {
+    proc_9p: Proc9pConfig {
+        sessions: true,
+        outstanding: true,
+        short_writes: true,
+        sessions_bytes: 8192,
+        outstanding_bytes: 128,
+        short_writes_bytes: 128,
+    },
+    proc_9p_session: Proc9pSessionConfig {
+        active: true,
+        state: true,
+        since_ms: true,
+        owner: true,
+        active_bytes: 128,
+        state_bytes: 64,
+        since_ms_bytes: 64,
+        owner_bytes: 96,
+    },
+    proc_ingest: ProcIngestConfig {
+        p50_ms: true,
+        p95_ms: true,
+        backpressure: true,
+        dropped: true,
+        queued: true,
+        watch: true,
+        p50_ms_bytes: 64,
+        p95_ms_bytes: 64,
+        backpressure_bytes: 64,
+        dropped_bytes: 64,
+        queued_bytes: 64,
+        watch_max_entries: 16,
+        watch_line_bytes: 192,
+        watch_min_interval_ms: 50,
+        latency_samples: 32,
+        latency_tolerance_ms: 5,
+        counter_tolerance: 1,
+    },
+    proc_root: ProcRootConfig {
+        reachable: true,
+        last_seen_ms: true,
+        cut_reason: true,
+        reachable_bytes: 32,
+        last_seen_ms_bytes: 64,
+        cut_reason_bytes: 64,
+    },
+    proc_pressure: ProcPressureConfig {
+        busy: true,
+        quota: true,
+        cut: true,
+        policy: true,
+        busy_bytes: 64,
+        quota_bytes: 64,
+        cut_bytes: 64,
+        policy_bytes: 64,
+    },
+    proc_schedule: ProcScheduleConfig {
+        summary: true,
+        queue: true,
+        summary_bytes: 128,
+        queue_bytes: 256,
+    },
+    proc_lease: ProcLeaseConfig {
+        summary: true,
+        active: true,
+        preemptions: true,
+        summary_bytes: 160,
+        active_bytes: 256,
+        preemptions_bytes: 256,
+    },
+};
 
-pub const UI_PROVIDER_CONFIG: UiProviderConfig = UiProviderConfig { proc_9p: UiProc9pConfig { sessions: true, outstanding: true, short_writes: true }, proc_ingest: UiProcIngestConfig { p50_ms: true, p95_ms: true, backpressure: true }, policy_preflight: UiPolicyPreflightConfig { req: false, diff: false }, updates: UiUpdatesConfig { manifest: true, status: true } };
+pub const UI_PROVIDER_CONFIG: UiProviderConfig = UiProviderConfig {
+    proc_9p: UiProc9pConfig {
+        sessions: true,
+        outstanding: true,
+        short_writes: true,
+    },
+    proc_ingest: UiProcIngestConfig {
+        p50_ms: true,
+        p95_ms: true,
+        backpressure: true,
+    },
+    policy_preflight: UiPolicyPreflightConfig {
+        req: false,
+        diff: false,
+    },
+    updates: UiUpdatesConfig {
+        manifest: true,
+        status: true,
+    },
+};
 
 pub const HOST_PROVIDERS: [HostProvider; 4] = [
     HostProvider::Systemd,
@@ -379,42 +333,127 @@ pub const HOST_TICKET_LIFECYCLE: [HostTicketLifecycleState; 6] = [
     HostTicketLifecycleState::Expired,
 ];
 
-pub const HOST_CONFIG: HostConfig = HostConfig { enable: true, mount_at: "/host", providers: &HOST_PROVIDERS, tickets: HostTicketConfig { enable: true, request_schema: "host-ticket/v1", result_schema: "host-ticket-result/v1", max_line_bytes: 2048, action_allowlist: &HOST_TICKET_ACTION_ALLOWLIST, lifecycle: &HOST_TICKET_LIFECYCLE } };
-
-pub const MODBUS_ADAPTERS: [SidecarBusAdapter; 0] = [
+pub const HOST_FEDERATION_PEERS: [HostFederationPeer; 2] = [
+    HostFederationPeer {
+        name: "hive-b",
+        rest_url: "http://127.0.0.1:8081",
+        auth_ref: "COHESIX_RELAY_HIVE_B_TOKEN",
+    },
+    HostFederationPeer {
+        name: "hive-c",
+        rest_url: "http://127.0.0.1:8082",
+        auth_ref: "COHESIX_RELAY_HIVE_C_TOKEN",
+    },
 ];
 
-pub const DNP3_ADAPTERS: [SidecarBusAdapter; 0] = [
+pub const HOST_FEDERATION_ACTION_ALLOWLIST: [HostTicketAction; 16] = [
+    HostTicketAction::GpuLeaseGrant,
+    HostTicketAction::GpuLeaseRenew,
+    HostTicketAction::GpuLeaseRelease,
+    HostTicketAction::PeftImport,
+    HostTicketAction::PeftActivate,
+    HostTicketAction::PeftRollback,
+    HostTicketAction::SystemdStart,
+    HostTicketAction::SystemdStop,
+    HostTicketAction::SystemdRestart,
+    HostTicketAction::SystemdStatusCheck,
+    HostTicketAction::DockerRestart,
+    HostTicketAction::DockerStop,
+    HostTicketAction::DockerStatusCheck,
+    HostTicketAction::K8sCordon,
+    HostTicketAction::K8sDrain,
+    HostTicketAction::K8sLeaseSync,
 ];
 
-pub const LORA_ADAPTERS: [SidecarLoraAdapter; 0] = [
-];
+pub const HOST_CONFIG: HostConfig = HostConfig {
+    enable: true,
+    mount_at: "/host",
+    providers: &HOST_PROVIDERS,
+    tickets: HostTicketConfig {
+        enable: true,
+        request_schema: "host-ticket/v1",
+        result_schema: "host-ticket-result/v1",
+        max_line_bytes: 2048,
+        action_allowlist: &HOST_TICKET_ACTION_ALLOWLIST,
+        lifecycle: &HOST_TICKET_LIFECYCLE,
+    },
+    federation: HostFederationConfig {
+        enable: true,
+        local_hive: "hive-a",
+        peers: &HOST_FEDERATION_PEERS,
+        action_allowlist: &HOST_FEDERATION_ACTION_ALLOWLIST,
+        relay_queue_max_entries: 256,
+        relay_queue_max_bytes: 32768,
+        wal_max_entries: 1024,
+        wal_max_bytes: 524288,
+        relay_timeout_ms: 2000,
+    },
+};
 
-pub const SIDECAR_CONFIG: SidecarConfig = SidecarConfig { modbus: SidecarBusConfig { enable: false, mount_at: "/bus", adapters: &MODBUS_ADAPTERS }, dnp3: SidecarBusConfig { enable: false, mount_at: "/bus", adapters: &DNP3_ADAPTERS }, lora: SidecarLoraConfig { enable: false, mount_at: "/lora", adapters: &LORA_ADAPTERS } };
+pub const MODBUS_ADAPTERS: [SidecarBusAdapter; 0] = [];
+
+pub const DNP3_ADAPTERS: [SidecarBusAdapter; 0] = [];
+
+pub const LORA_ADAPTERS: [SidecarLoraAdapter; 0] = [];
+
+pub const SIDECAR_CONFIG: SidecarConfig = SidecarConfig {
+    modbus: SidecarBusConfig {
+        enable: false,
+        mount_at: "/bus",
+        adapters: &MODBUS_ADAPTERS,
+    },
+    dnp3: SidecarBusConfig {
+        enable: false,
+        mount_at: "/bus",
+        adapters: &DNP3_ADAPTERS,
+    },
+    lora: SidecarLoraConfig {
+        enable: false,
+        mount_at: "/lora",
+        adapters: &LORA_ADAPTERS,
+    },
+};
 
 pub const POLICY_RULES: [PolicyRule; 2] = [
-    PolicyRule { id: "queen-ctl", target: "/queen/ctl" },
-    PolicyRule { id: "systemd-restart", target: "/host/systemd/*/restart" },
+    PolicyRule {
+        id: "queen-ctl",
+        target: "/queen/ctl",
+    },
+    PolicyRule {
+        id: "systemd-restart",
+        target: "/host/systemd/*/restart",
+    },
 ];
 
-pub const POLICY_CONFIG: PolicyConfig = PolicyConfig { enable: true, limits: PolicyLimits { queue_max_entries: 256, queue_max_bytes: 8192, ctl_max_bytes: 2048, status_max_bytes: 512 }, rules: &POLICY_RULES };
+pub const POLICY_CONFIG: PolicyConfig = PolicyConfig {
+    enable: true,
+    limits: PolicyLimits {
+        queue_max_entries: 256,
+        queue_max_bytes: 8192,
+        ctl_max_bytes: 2048,
+        status_max_bytes: 512,
+    },
+    rules: &POLICY_RULES,
+};
 
 pub const POLICY_RULES_JSON: &str = "{\n  \"enabled\": true,\n  \"limits\": {\n    \"queue_max_entries\": 256,\n    \"queue_max_bytes\": 8192,\n    \"ctl_max_bytes\": 2048,\n    \"status_max_bytes\": 512\n  },\n  \"rules\": [\n    {\n      \"id\": \"queen-ctl\",\n      \"target\": \"/queen/ctl\"\n    },\n    {\n      \"id\": \"systemd-restart\",\n      \"target\": \"/host/systemd/*/restart\"\n    }\n  ]\n}";
 
-pub const AUDIT_CONFIG: AuditConfig = AuditConfig { enable: false, journal_max_bytes: 8192, decisions_max_bytes: 4096, replay_enable: false, replay_max_entries: 64, replay_ctl_max_bytes: 1024, replay_status_max_bytes: 1024 };
+pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
+    enable: false,
+    journal_max_bytes: 8192,
+    decisions_max_bytes: 4096,
+    replay_enable: false,
+    replay_max_entries: 64,
+    replay_ctl_max_bytes: 1024,
+    replay_status_max_bytes: 1024,
+};
 
-pub const EVENT_PUMP_FDS: [&str; 5] = [
-    "serial",
-    "timer",
-    "ipc",
-    "net-console",
-    "ninedoor",
-];
+pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
 pub const INITIAL_AUDIT_LINES: [&str; 23] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=af1586465c29995de8086260fe57138aa3481d8ea70f42e5d37b1add06026af0",
+    "manifest.sha256=0884f452da6fe84e7148c3c1e01d605b45f09f1da09914d87e961cc2c256b905",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -436,4 +475,3 @@ pub const INITIAL_AUDIT_LINES: [&str; 23] = [
     "manifest.features.net_console=true",
     "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];
-

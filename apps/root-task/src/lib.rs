@@ -21,6 +21,8 @@
 #[cfg(all(target_os = "none", not(feature = "kernel")))]
 compile_error!("enable the `kernel` feature when building root-task for seL4 targets");
 
+/// Manifest-driven SMP affinity helpers.
+pub mod affinity;
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
 pub mod arch;
 #[cfg(feature = "kernel")]
@@ -29,8 +31,6 @@ pub mod audit;
 #[cfg(feature = "kernel")]
 /// Authority queue for serializing control-plane mutations.
 pub mod authority;
-/// Manifest-driven SMP affinity helpers.
-pub mod affinity;
 pub mod console;
 pub mod event;
 /// Compile-time feature manifest and guard rails.

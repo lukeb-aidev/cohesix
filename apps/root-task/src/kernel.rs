@@ -20,11 +20,11 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(feature = "timers-arch-counter")]
 use core::arch::asm;
 
+use crate::affinity;
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
 use crate::arch::aarch64::timer::timer_freq_hz;
 #[cfg(feature = "kernel")]
 use crate::audit::boot as audit_boot;
-use crate::affinity;
 use crate::boot::{bi_extra, ep, tcb, uart_pl011};
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::cspace::cspace_first_retypes;
@@ -1289,9 +1289,7 @@ fn bootstrap<P: Platform>(
     if affinity_policy.enabled {
         let observed_nodes = bootinfo_view.header().numNodes as u8;
         if let Err(err) = affinity::validate_policy(&affinity_policy, observed_nodes) {
-            return Err(BootError::Fatal(format!(
-                "affinity policy invalid: {err}"
-            )));
+            return Err(BootError::Fatal(format!("affinity policy invalid: {err}")));
         }
         let tcb = bootinfo_view.header().init_tcb_cap();
         match affinity::apply_tcb_affinity(

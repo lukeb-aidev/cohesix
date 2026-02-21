@@ -360,6 +360,22 @@ def parse_args() -> argparse.Namespace:
         help="Optional shell command after cutover. Supports {src} and {dst}.",
     )
     parser.add_argument(
+        "--relay-pause-cmd",
+        default="",
+        help=(
+            "Optional shell command to pause federation relay before fencing/cutover. "
+            "Supports {src} and {dst}."
+        ),
+    )
+    parser.add_argument(
+        "--relay-resume-cmd",
+        default="",
+        help=(
+            "Optional shell command to resume federation relay after successful cutover. "
+            "Supports {src} and {dst}."
+        ),
+    )
+    parser.add_argument(
         "--allow-failback",
         action="store_true",
         help="Allow automatic failback to preferred side once healthy.",
@@ -503,6 +519,13 @@ def main() -> int:
                 else:
                     try:
                         run_hook(
+                            hook_name="relay-pause",
+                            command_template=args.relay_pause_cmd,
+                            src_side=src_side,
+                            dst_side=target_side,
+                            dry_run=args.dry_run,
+                        )
+                        run_hook(
                             hook_name="fence",
                             command_template=args.fence_cmd,
                             src_side=src_side,
@@ -517,6 +540,13 @@ def main() -> int:
                         run_hook(
                             hook_name="post-cutover",
                             command_template=args.post_cutover_cmd,
+                            src_side=src_side,
+                            dst_side=target_side,
+                            dry_run=args.dry_run,
+                        )
+                        run_hook(
+                            hook_name="relay-resume",
+                            command_template=args.relay_resume_cmd,
                             src_side=src_side,
                             dst_side=target_side,
                             dry_run=args.dry_run,

@@ -27,7 +27,7 @@ fn script_paths() -> Vec<PathBuf> {
 fn cli_check_parses_scripts() {
     let bin = assert_cmd::cargo::cargo_bin!("cohsh");
     for path in script_paths() {
-        let mut cmd = Command::new(&bin);
+        let mut cmd = Command::new(bin);
         cmd.arg("--check").arg(&path);
         cmd.assert().success();
     }

@@ -77,7 +77,7 @@ fn telemetry_ingest_refuses_segment_quota() {
         ..TelemetryIngestConfig::default()
     };
     let server = NineDoor::new_with_limits_and_telemetry_manifest(
-        Arc::new(TestClock::default()),
+        Arc::new(TestClock),
         Default::default(),
         TelemetryConfig::default(),
         ingest,
@@ -121,7 +121,7 @@ fn telemetry_ingest_evicts_oldest_segment() {
         ..TelemetryIngestConfig::default()
     };
     let server = NineDoor::new_with_limits_and_telemetry_manifest(
-        Arc::new(TestClock::default()),
+        Arc::new(TestClock),
         Default::default(),
         TelemetryConfig::default(),
         ingest,
@@ -170,7 +170,7 @@ fn telemetry_ingest_evicts_on_total_bytes() {
         ..TelemetryIngestConfig::default()
     };
     let server = NineDoor::new_with_limits_and_telemetry_manifest(
-        Arc::new(TestClock::default()),
+        Arc::new(TestClock),
         Default::default(),
         TelemetryConfig::default(),
         ingest,

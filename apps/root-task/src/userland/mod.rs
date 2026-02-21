@@ -11,10 +11,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "aarch64"))]
 use core::sync::atomic::AtomicU64;
 
-#[cfg(feature = "serial-console")]
-use crate::boot::uart_pl011;
 #[cfg(feature = "kernel")]
 use crate::affinity;
+#[cfg(feature = "serial-console")]
+use crate::boot::uart_pl011;
 use crate::bootstrap::log as boot_log;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::console::CohesixConsole;
@@ -391,12 +391,9 @@ where
 {
     if let Some(ninedoor) = ctx.ninedoor.borrow_mut().take() {
         let policy = affinity::policy();
-        pump = affinity::with_role_affinity(
-            affinity::AffinityRole::NineDoor,
-            0,
-            &policy,
-            || pump.with_ninedoor(ninedoor),
-        );
+        pump = affinity::with_role_affinity(affinity::AffinityRole::NineDoor, 0, &policy, || {
+            pump.with_ninedoor(ninedoor)
+        });
     }
 
     pump

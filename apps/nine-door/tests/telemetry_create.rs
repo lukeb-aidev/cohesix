@@ -50,7 +50,7 @@ fn telemetry_ingest_disabled_hides_namespace() {
         eviction_policy: TelemetryIngestEvictionPolicy::Refuse,
     };
     let server = NineDoor::new_with_limits_and_telemetry_manifest(
-        Arc::new(TestClock::default()),
+        Arc::new(TestClock),
         Default::default(),
         TelemetryConfig::default(),
         ingest,
@@ -75,7 +75,7 @@ fn telemetry_ingest_allocates_segment_and_latest() {
         ..TelemetryIngestConfig::default()
     };
     let server = NineDoor::new_with_limits_and_telemetry_manifest(
-        Arc::new(TestClock::default()),
+        Arc::new(TestClock),
         Default::default(),
         TelemetryConfig::default(),
         ingest,

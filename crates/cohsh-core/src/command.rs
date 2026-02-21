@@ -453,7 +453,7 @@ mod tests {
         ];
 
         let verbs: Vec<ConsoleVerb> = commands.iter().map(Command::verb).collect();
-        let expected: Vec<ConsoleVerb> = ALL_VERBS.iter().copied().collect();
+        let expected: Vec<ConsoleVerb> = ALL_VERBS.to_vec();
         assert_eq!(verbs, expected, "console verb inventory drift");
     }
 

@@ -14,7 +14,7 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from .audit import CohesixAudit
@@ -26,6 +26,7 @@ from .errors import CohesixError
 from .paths import validate_path
 
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+_TOKEN_PATTERN_WITH_COLON = re.compile(r"^[A-Za-z0-9._:-]+$")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -57,15 +58,22 @@ def _env_float(name: str, default: float) -> float:
     return value
 
 
-def _normalize_token(field_name: str, value: str, max_bytes: int = 128) -> str:
+def _normalize_token(
+    field_name: str,
+    value: str,
+    max_bytes: int = 128,
+    allow_colon: bool = False,
+) -> str:
     token = value.strip()
     if not token:
         raise CohesixError(f"{field_name} must not be empty")
     if len(token.encode("utf-8")) > max_bytes:
         raise CohesixError(f"{field_name} exceeds {max_bytes} bytes")
-    if not _TOKEN_PATTERN.match(token):
+    pattern = _TOKEN_PATTERN_WITH_COLON if allow_colon else _TOKEN_PATTERN
+    if not pattern.match(token):
+        charset = "[A-Za-z0-9._:-]" if allow_colon else "[A-Za-z0-9._-]"
         raise CohesixError(
-            f"{field_name} must use ASCII token characters [A-Za-z0-9._-]"
+            f"{field_name} must use ASCII token characters {charset}"
         )
     return token
 
@@ -277,6 +285,10 @@ class HostTicketRequest:
     target: Optional[str] = None
     args: Dict[str, object] = field(default_factory=dict)
     expires_unix_ms: Optional[int] = None
+    source_hive: Optional[str] = None
+    target_hive: Optional[str] = None
+    relay_hop: Optional[int] = None
+    relay_correlation_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -298,6 +310,38 @@ class HostTicketRequest:
             raise CohesixError("host ticket args must be a JSON object")
         if self.expires_unix_ms is not None and self.expires_unix_ms <= 0:
             raise CohesixError("expires_unix_ms must be > 0 when set")
+        if self.source_hive is None and self.target_hive is not None:
+            raise CohesixError("source_hive is required when target_hive is set")
+        if self.target_hive is None and self.source_hive is not None:
+            raise CohesixError("target_hive is required when source_hive is set")
+        if self.source_hive is not None:
+            object.__setattr__(
+                self,
+                "source_hive",
+                _normalize_token("source_hive", self.source_hive, max_bytes=64),
+            )
+        if self.target_hive is not None:
+            object.__setattr__(
+                self,
+                "target_hive",
+                _normalize_token("target_hive", self.target_hive, max_bytes=64),
+            )
+        if self.relay_hop is not None:
+            hop = _require_positive("relay_hop", self.relay_hop)
+            if hop > 32:
+                raise CohesixError("relay_hop must be <= 32")
+            object.__setattr__(self, "relay_hop", hop)
+        if self.relay_correlation_id is not None:
+            object.__setattr__(
+                self,
+                "relay_correlation_id",
+                _normalize_token(
+                    "relay_correlation_id",
+                    self.relay_correlation_id,
+                    max_bytes=256,
+                    allow_colon=True,
+                ),
+            )
 
     def to_payload(self, schema: str = "host-ticket/v1") -> Dict[str, object]:
         payload: Dict[str, object] = {
@@ -312,6 +356,14 @@ class HostTicketRequest:
             payload["args"] = self.args
         if self.expires_unix_ms is not None:
             payload["expires_unix_ms"] = self.expires_unix_ms
+        if self.source_hive is not None:
+            payload["source_hive"] = self.source_hive
+        if self.target_hive is not None:
+            payload["target_hive"] = self.target_hive
+        if self.relay_hop is not None:
+            payload["relay_hop"] = self.relay_hop
+        if self.relay_correlation_id is not None:
+            payload["relay_correlation_id"] = self.relay_correlation_id
         return payload
 
 
@@ -608,6 +660,37 @@ class CohesixOrchestrator:
 
         tickets = [intent.to_ticket_request() for intent in intents]
         return self.enqueue_host_tickets(tickets, audit)
+
+    def enqueue_federated_host_tickets(
+        self,
+        source_hive: str,
+        target_hive: str,
+        requests: Iterable[HostTicketRequest],
+        audit: Optional[CohesixAudit] = None,
+    ) -> List[ControlWriteResult]:
+        """Append relay-enveloped host tickets for cross-hive forwarding."""
+
+        source_hive_norm = _normalize_token("source_hive", source_hive, max_bytes=64)
+        target_hive_norm = _normalize_token("target_hive", target_hive, max_bytes=64)
+        if source_hive_norm == target_hive_norm:
+            raise CohesixError("source_hive and target_hive must differ")
+        enriched: List[HostTicketRequest] = []
+        for request in requests:
+            correlation = (
+                request.relay_correlation_id
+                or f"{request.ticket_id}:{request.idempotency_key}:{source_hive_norm}:{target_hive_norm}"
+            )
+            hop = request.relay_hop if request.relay_hop is not None else 1
+            enriched.append(
+                replace(
+                    request,
+                    source_hive=source_hive_norm,
+                    target_hive=target_hive_norm,
+                    relay_hop=hop,
+                    relay_correlation_id=correlation,
+                )
+            )
+        return self.enqueue_host_tickets(enriched, audit)
 
     def read_proc_snapshot(self, audit: Optional[CohesixAudit] = None) -> ProcSnapshot:
         """Read scheduler and lease observability files into a typed snapshot."""

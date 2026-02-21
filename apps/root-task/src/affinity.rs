@@ -9,9 +9,9 @@ use core::fmt;
 use crate::generated;
 
 #[cfg(feature = "kernel")]
-use crate::sel4::BootInfoExt;
-#[cfg(feature = "kernel")]
 use crate::sel4::seL4_CPtr;
+#[cfg(feature = "kernel")]
+use crate::sel4::BootInfoExt;
 #[cfg(feature = "kernel")]
 use sel4_sys;
 
@@ -38,7 +38,10 @@ impl AffinityRole {
 /// Errors surfaced when validating or applying affinity hints.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AffinityError {
-    NodesMismatch { expected: u8, observed: u8 },
+    NodesMismatch {
+        expected: u8,
+        observed: u8,
+    },
     InvalidCore {
         role: AffinityRole,
         core: u8,
@@ -85,7 +88,10 @@ pub fn policy() -> generated::AffinityPolicy {
     generated::affinity_policy()
 }
 
-pub fn validate_policy(policy: &generated::AffinityPolicy, observed_nodes: u8) -> Result<(), AffinityError> {
+pub fn validate_policy(
+    policy: &generated::AffinityPolicy,
+    observed_nodes: u8,
+) -> Result<(), AffinityError> {
     if !policy.enabled {
         return Ok(());
     }
@@ -134,7 +140,11 @@ pub fn validate_policy(policy: &generated::AffinityPolicy, observed_nodes: u8) -
     Ok(())
 }
 
-pub fn select_core(policy: &generated::AffinityPolicy, role: AffinityRole, index: usize) -> Option<u8> {
+pub fn select_core(
+    policy: &generated::AffinityPolicy,
+    role: AffinityRole,
+    index: usize,
+) -> Option<u8> {
     if !policy.enabled {
         return None;
     }

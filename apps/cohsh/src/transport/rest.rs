@@ -175,7 +175,9 @@ impl RestTransport {
         // Conservatively cap `data=` so the full acknowledgement line stays within bounds.
         // `render_ack` prefixes `OK CAT` plus separators, so leave headroom.
         let headroom = 64usize;
-        let available = max_len.saturating_sub(detail.len()).saturating_sub(headroom);
+        let available = max_len
+            .saturating_sub(detail.len())
+            .saturating_sub(headroom);
         if available == 0 {
             return detail;
         }
@@ -211,14 +213,17 @@ impl Transport for RestTransport {
             return Err(anyhow!("rest transport supports queen role only"));
         }
         if let Some(ticket) = ticket {
-            let _ = normalize_ticket(role, Some(ticket), TicketPolicy::tcp()).map_err(|err| {
-                anyhow!("ticket invalid for rest transport: {err}")
-            })?;
+            let _ = normalize_ticket(role, Some(ticket), TicketPolicy::tcp())
+                .map_err(|err| anyhow!("ticket invalid for rest transport: {err}"))?;
         }
         self.attached = true;
         let session = Session::new(DEFAULT_SESSION_ID, role);
         let detail = format!("role={}", role_label(role));
-        self.push_ack(AckStatus::Ok, ConsoleVerb::Attach.ack_label(), Some(detail.as_str()));
+        self.push_ack(
+            AckStatus::Ok,
+            ConsoleVerb::Attach.ack_label(),
+            Some(detail.as_str()),
+        );
         Ok(session)
     }
 
@@ -240,7 +245,11 @@ impl Transport for RestTransport {
         match self.client.tail(path, max_bytes) {
             Ok(lines) => {
                 let detail = format!("path={path}");
-                self.push_ack(AckStatus::Ok, ConsoleVerb::Tail.ack_label(), Some(detail.as_str()));
+                self.push_ack(
+                    AckStatus::Ok,
+                    ConsoleVerb::Tail.ack_label(),
+                    Some(detail.as_str()),
+                );
                 Ok(lines)
             }
             Err(err) => {
@@ -281,7 +290,11 @@ impl Transport for RestTransport {
         match self.client.list(path) {
             Ok(lines) => {
                 let detail = format!("path={path}");
-                self.push_ack(AckStatus::Ok, ConsoleVerb::Ls.ack_label(), Some(detail.as_str()));
+                self.push_ack(
+                    AckStatus::Ok,
+                    ConsoleVerb::Ls.ack_label(),
+                    Some(detail.as_str()),
+                );
                 Ok(lines)
             }
             Err(err) => {
@@ -304,7 +317,7 @@ impl Transport for RestTransport {
                 let detail = if trimmed.is_empty() {
                     format!("path={path}")
                 } else {
-                    format!("path={path} bytes={}", trimmed.as_bytes().len())
+                    format!("path={path} bytes={}", trimmed.len())
                 };
                 self.push_ack(
                     AckStatus::Ok,

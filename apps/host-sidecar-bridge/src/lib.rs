@@ -196,7 +196,11 @@ impl HostSidecarBridge {
         Ok(())
     }
 
-    fn publish_k8s_mock<T: Transport>(&self, transport: &mut T, session: &cohsh::Session) -> Result<()> {
+    fn publish_k8s_mock<T: Transport>(
+        &self,
+        transport: &mut T,
+        session: &cohsh::Session,
+    ) -> Result<()> {
         let nodes_root = format!("{}/k8s/node", self.mount());
         let entries = transport
             .list(session, &nodes_root)
@@ -278,7 +282,10 @@ impl HostSidecarBridge {
         let snapshot = kubectl_nodes().unwrap_or_else(|err| {
             let mut map = HashMap::new();
             let reason = sanitize_value(&err.to_string());
-            map.insert("__error__".to_owned(), format!("state=unknown reason={reason}"));
+            map.insert(
+                "__error__".to_owned(),
+                format!("state=unknown reason={reason}"),
+            );
             map
         });
         for node in &topology.k8s_nodes {
@@ -410,9 +417,7 @@ fn sanitize_value(input: &str) -> String {
     let trimmed = input.trim();
     let mut out = String::new();
     for ch in trimmed.chars() {
-        if ch.is_ascii_alphanumeric()
-            || matches!(ch, '-' | '_' | '.' | ':' | '/' | ',')
-        {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '/' | ',') {
             out.push(ch);
         } else if ch.is_whitespace() {
             out.push('_');

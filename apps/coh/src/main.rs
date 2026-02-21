@@ -8,7 +8,7 @@
 //! CLI entry point for the Cohesix host bridge tool.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
@@ -16,8 +16,8 @@ use coh::console::ConsoleSession;
 use coh::policy::{default_policy_path, load_policy, CohPolicy};
 use coh::rest::RestSession;
 use coh::{
-    doctor, evidence, evidence_timeline, gpu, mount, peft, run as coh_run, telemetry, CohAccess,
-    CohAudit,
+    doctor, evidence, evidence_timeline, fleet, gpu, mount, peft, run as coh_run, telemetry,
+    CohAccess, CohAudit,
 };
 use cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT;
 use cohesix_ticket::Role;
@@ -59,6 +59,8 @@ enum Command {
     Run(RunArgs),
     /// Telemetry pull operations.
     Telemetry(TelemetryArgs),
+    /// Read-only multi-hive fan-in commands.
+    Fleet(FleetArgs),
     /// Evidence pack and timeline operations.
     Evidence(EvidenceArgs),
 }
@@ -232,6 +234,27 @@ struct EvidenceArgs {
     command: EvidenceCommand,
 }
 
+#[derive(Debug, Parser)]
+struct FleetArgs {
+    #[command(flatten)]
+    connect: ConnectArgs,
+    /// Repeatable hive targets in `name=url` form.
+    #[arg(long = "hive", value_name = "NAME=URL")]
+    hives: Vec<String>,
+    #[command(subcommand)]
+    command: FleetCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum FleetCommand {
+    /// Read `/proc/lifecycle/state` and `/proc/root/reachable` across hives.
+    Status,
+    /// Read `/proc/lease/summary` across hives.
+    LeaseSummary,
+    /// Read `/proc/pressure/*` across hives.
+    Pressure,
+}
+
 #[derive(Debug, Subcommand)]
 enum EvidenceCommand {
     /// Export a deterministic evidence pack directory.
@@ -290,6 +313,7 @@ fn main() -> Result<()> {
             let policy = load_policy(&policy_path)?;
             run_telemetry(role, cli.ticket.as_deref(), &policy, args)
         }
+        Command::Fleet(args) => run_fleet(args),
         Command::Evidence(args) => run_evidence(role, cli.ticket.as_deref(), &policy_path, args),
     }
 }
@@ -310,7 +334,7 @@ fn resolve_policy_path(cli_path: Option<PathBuf>) -> Result<PathBuf> {
 fn run_doctor(
     role: Role,
     ticket: Option<&str>,
-    policy_path: &PathBuf,
+    policy_path: &Path,
     args: DoctorArgs,
 ) -> Result<()> {
     let mut audit = CohAudit::new();
@@ -815,10 +839,34 @@ fn run_telemetry(
     }
 }
 
+fn run_fleet(args: FleetArgs) -> Result<()> {
+    if args.connect.mock {
+        return Err(anyhow!(
+            "fleet commands require REST gateways; --mock is not supported"
+        ));
+    }
+    let targets = fleet::parse_hive_targets(
+        args.hives.as_slice(),
+        resolve_rest_url(args.connect.rest_url.as_deref()).as_deref(),
+    )?;
+    let rest_auth_token = resolve_rest_auth_token(args.connect.rest_auth_token.as_deref());
+    let lines = match args.command {
+        FleetCommand::Status => fleet::fleet_status(&targets, rest_auth_token.as_deref()),
+        FleetCommand::LeaseSummary => {
+            fleet::fleet_lease_summary(&targets, rest_auth_token.as_deref())
+        }
+        FleetCommand::Pressure => fleet::fleet_pressure(&targets, rest_auth_token.as_deref()),
+    };
+    for line in lines {
+        println!("{line}");
+    }
+    Ok(())
+}
+
 fn run_evidence(
     role: Role,
     ticket: Option<&str>,
-    policy_path: &PathBuf,
+    policy_path: &Path,
     args: EvidenceArgs,
 ) -> Result<()> {
     match args.command {
@@ -828,9 +876,11 @@ fn run_evidence(
             let bounds = if pack.connect.mock {
                 evidence::build_local_bounds()
             } else if let Some(rest_url) = resolve_rest_url(pack.connect.rest_url.as_deref()) {
-                let rest_auth_token = resolve_rest_auth_token(pack.connect.rest_auth_token.as_deref());
+                let rest_auth_token =
+                    resolve_rest_auth_token(pack.connect.rest_auth_token.as_deref());
                 let rest = RestSession::connect(rest_url, rest_auth_token);
-                rest.bounds().unwrap_or_else(|_| evidence::build_local_bounds())
+                rest.bounds()
+                    .unwrap_or_else(|_| evidence::build_local_bounds())
             } else {
                 evidence::build_local_bounds()
             };
@@ -889,6 +939,7 @@ fn emit_audit(audit: CohAudit) {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum AccessHandle {
     Console(ConsoleSession),
     Rest(RestSession),

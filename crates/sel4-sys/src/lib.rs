@@ -1498,7 +1498,7 @@ mod imp {
 
         #[inline(always)]
         pub const fn length(self) -> seL4_Word {
-            (self.words[0] & 0x7f) >> 0
+            self.words[0] & 0x7f
         }
 
         #[inline(always)]
@@ -1708,7 +1708,7 @@ mod imp {
 
         #[inline(always)]
         pub const fn length(self) -> seL4_Word {
-            (self.words[0] & 0x7f) >> 0
+            self.words[0] & 0x7f
         }
 
         #[inline(always)]

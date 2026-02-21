@@ -74,7 +74,7 @@ impl TcpTransport {
         let addr = (host, port)
             .to_socket_addrs()?
             .next()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "no socket address"))?;
+            .ok_or_else(|| std::io::Error::other("no socket address"))?;
         let stream = TcpStream::connect(addr)?;
         stream.set_read_timeout(Some(timeout))?;
         stream.set_write_timeout(Some(timeout))?;

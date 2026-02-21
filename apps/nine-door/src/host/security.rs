@@ -331,7 +331,7 @@ impl TicketUsage {
     /// Check cursor quotas for a telemetry read.
     pub fn check_cursor(&self, path_key: &str, offset: u64) -> Result<CursorCheck, TicketDeny> {
         let last = self.cursor_offsets.get(path_key).copied();
-        let is_resume = last.map_or(false, |last| offset < last);
+        let is_resume = last.is_some_and(|last| offset < last);
         self.quotas.check_cursor(is_resume)?;
         Ok(CursorCheck { is_resume })
     }
@@ -358,7 +358,7 @@ impl TicketUsage {
                 continue;
             }
             let match_len = scope.path.len();
-            if best.map_or(true, |(_, best_len)| match_len > best_len) {
+            if best.is_none_or(|(_, best_len)| match_len > best_len) {
                 best = Some((idx, match_len));
             }
         }

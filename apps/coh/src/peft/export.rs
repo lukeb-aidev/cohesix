@@ -115,6 +115,7 @@ impl ExportLimit {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn export_file<C: CohAccess>(
     client: &mut C,
     policy: &CohPeftExportPolicy,
@@ -167,7 +168,7 @@ fn validate_export_entries(entries: &[String]) -> Result<()> {
 }
 
 fn enforce_id_bytes(value: &str, max_bytes: u32) -> Result<()> {
-    let len = value.as_bytes().len() as u32;
+    let len = value.len() as u32;
     if len > max_bytes {
         return Err(anyhow!("id length {len} exceeds max {max_bytes}"));
     }

@@ -108,12 +108,8 @@ pub fn export_pack<C: CohAccess>(
     spec: &EvidencePackSpec,
     audit: &mut CohAudit,
 ) -> Result<EvidencePackSummary> {
-    fs::create_dir_all(&spec.out_dir).with_context(|| {
-        format!(
-            "create evidence pack output dir {}",
-            spec.out_dir.display()
-        )
-    })?;
+    fs::create_dir_all(&spec.out_dir)
+        .with_context(|| format!("create evidence pack output dir {}", spec.out_dir.display()))?;
 
     let meta = EvidenceMeta {
         schema: EVIDENCE_META_SCHEMA,
@@ -246,7 +242,10 @@ fn capture_proc_schedule<C: CohAccess>(
             None,
         )?;
     } else {
-        items.push(missing_item("/proc/schedule/summary", "proc/schedule/summary"));
+        items.push(missing_item(
+            "/proc/schedule/summary",
+            "proc/schedule/summary",
+        ));
     }
     if schedule.queue {
         capture_file(
@@ -340,19 +339,31 @@ fn capture_audit<C: CohAccess>(
     };
     write_payload(&spec.out_dir, "/audit/export", &export_bytes)?;
 
-    let (journal_max, decisions_max) = parse_audit_export_bounds(&export_bytes)
-        .unwrap_or((DEFAULT_AUDIT_FALLBACK_MAX_BYTES, DEFAULT_AUDIT_FALLBACK_MAX_BYTES));
+    let (journal_max, decisions_max) = parse_audit_export_bounds(&export_bytes).unwrap_or((
+        DEFAULT_AUDIT_FALLBACK_MAX_BYTES,
+        DEFAULT_AUDIT_FALLBACK_MAX_BYTES,
+    ));
 
-    if let Some(payload) =
-        read_optional(client, "/audit/journal", journal_max, CaptureVerb::Cat, audit, items)?
-    {
+    if let Some(payload) = read_optional(
+        client,
+        "/audit/journal",
+        journal_max,
+        CaptureVerb::Cat,
+        audit,
+        items,
+    )? {
         let redacted = redact_ticket_json_lines(&payload)?;
         write_payload(&spec.out_dir, "/audit/journal", &redacted)?;
     }
 
-    if let Some(payload) =
-        read_optional(client, "/audit/decisions", decisions_max, CaptureVerb::Cat, audit, items)?
-    {
+    if let Some(payload) = read_optional(
+        client,
+        "/audit/decisions",
+        decisions_max,
+        CaptureVerb::Cat,
+        audit,
+        items,
+    )? {
         let redacted = redact_ticket_json_lines(&payload)?;
         write_payload(&spec.out_dir, "/audit/decisions", &redacted)?;
     }
@@ -371,9 +382,14 @@ fn capture_host_tickets<C: CohAccess>(
         "/host/tickets/status",
         "/host/tickets/deadletter",
     ] {
-        if let Some(payload) =
-            read_optional(client, path, DEFAULT_HOST_TICKET_MAX_BYTES, CaptureVerb::Cat, audit, items)?
-        {
+        if let Some(payload) = read_optional(
+            client,
+            path,
+            DEFAULT_HOST_TICKET_MAX_BYTES,
+            CaptureVerb::Cat,
+            audit,
+            items,
+        )? {
             let redacted = redact_host_ticket_json_lines(&payload)?;
             write_payload(&spec.out_dir, path, &redacted)?;
         }
@@ -457,6 +473,10 @@ fn redact_sensitive_value(value: &mut serde_json::Value) {
 fn sensitive_key(key: &str) -> bool {
     let lower = key.to_ascii_lowercase();
     lower.contains("token")
+        || lower.contains("authorization")
+        || lower.contains("auth_token")
+        || lower == "auth_ref"
+        || lower == "auth"
         || lower.contains("secret")
         || lower.contains("password")
         || lower.contains("signing_key")
@@ -485,6 +505,7 @@ fn parse_audit_export_bounds(payload: &[u8]) -> Option<(usize, usize)> {
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capture_file<C: CohAccess>(
     client: &mut C,
     out_dir: &Path,
@@ -513,11 +534,19 @@ fn capture_file<C: CohAccess>(
                 Ok(())
             }
             Err(err) if is_missing(&err) => {
-                items.push(missing_item(path, override_saved_as.unwrap_or(strip_leading_slash(path))));
+                items.push(missing_item(
+                    path,
+                    override_saved_as.unwrap_or(strip_leading_slash(path)),
+                ));
                 Ok(())
             }
             Err(err) => {
-                items.push(error_item(path, override_saved_as.unwrap_or(strip_leading_slash(path)), verb, &err));
+                items.push(error_item(
+                    path,
+                    override_saved_as.unwrap_or(strip_leading_slash(path)),
+                    verb,
+                    &err,
+                ));
                 Err(err)
             }
         },
@@ -538,11 +567,19 @@ fn capture_file<C: CohAccess>(
                 Ok(())
             }
             Err(err) if is_missing(&err) => {
-                items.push(missing_item(path, override_saved_as.unwrap_or(strip_leading_slash(path))));
+                items.push(missing_item(
+                    path,
+                    override_saved_as.unwrap_or(strip_leading_slash(path)),
+                ));
                 Ok(())
             }
             Err(err) => {
-                items.push(error_item(path, override_saved_as.unwrap_or(strip_leading_slash(path)), verb, &err));
+                items.push(error_item(
+                    path,
+                    override_saved_as.unwrap_or(strip_leading_slash(path)),
+                    verb,
+                    &err,
+                ));
                 Err(err)
             }
         },
@@ -563,7 +600,11 @@ fn read_optional<C: CohAccess>(
     };
     match payload {
         Ok(payload) => {
-            audit.push_ack(AckStatus::Ok, verb.as_str(), Some(format!("path={path}").as_str()));
+            audit.push_ack(
+                AckStatus::Ok,
+                verb.as_str(),
+                Some(format!("path={path}").as_str()),
+            );
             items.push(EvidenceItem {
                 path: path.to_owned(),
                 saved_as: strip_leading_slash(path).to_owned(),
@@ -609,7 +650,8 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let payload = serde_json::to_vec_pretty(value).context("serialize evidence json")?;
     fs::write(&tmp_path, &payload)
         .with_context(|| format!("write evidence json {}", tmp_path.display()))?;
-    fs::rename(&tmp_path, path).with_context(|| format!("commit evidence json {}", path.display()))?;
+    fs::rename(&tmp_path, path)
+        .with_context(|| format!("commit evidence json {}", path.display()))?;
     Ok(())
 }
 

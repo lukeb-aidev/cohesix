@@ -24,13 +24,19 @@ use crate::executors::ExecutorConfig;
 pub mod claim;
 /// Ticket action executors.
 pub mod executors;
+/// Federated cross-hive relay worker.
+pub mod relay;
 /// Status receipt helpers.
 pub mod status;
+/// Relay write-ahead log persistence.
+pub mod wal;
 
 /// Default resolved manifest path.
 pub const DEFAULT_RESOLVED_MANIFEST_PATH: &str = "out/manifests/root_task_resolved.json";
 /// Default cursor state file path.
 pub const DEFAULT_CURSOR_STATE_PATH: &str = "out/host-ticket-agent/cursor.json";
+/// Default relay WAL state file path.
+pub const DEFAULT_RELAY_WAL_PATH: &str = "out/host-ticket-agent/relay-wal.json";
 
 const REQUIRED_LIFECYCLE_STATES: &[&str] = &[
     "queued",
@@ -42,7 +48,7 @@ const REQUIRED_LIFECYCLE_STATES: &[&str] = &[
 ];
 
 /// Host ticket spec line (`/host/tickets/spec`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostTicketSpec {
     /// Request schema.
@@ -62,6 +68,18 @@ pub struct HostTicketSpec {
     /// Optional expiration timestamp in unix milliseconds.
     #[serde(default)]
     pub expires_unix_ms: Option<u64>,
+    /// Optional originating hive identifier for federated relay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hive: Option<String>,
+    /// Optional destination hive identifier for federated relay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_hive: Option<String>,
+    /// Optional relay hop counter (monotonic across relays).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_hop: Option<u16>,
+    /// Optional deterministic relay correlation id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_correlation_id: Option<String>,
 }
 
 /// Host ticket result line (`/host/tickets/status` or `/host/tickets/deadletter`).
@@ -81,6 +99,18 @@ pub struct HostTicketResult {
     /// Optional bounded detail message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Optional originating hive identifier for federated relay receipts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hive: Option<String>,
+    /// Optional destination hive identifier for federated relay receipts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_hive: Option<String>,
+    /// Optional relay hop counter copied from the originating ticket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_hop: Option<u16>,
+    /// Optional deterministic relay correlation id copied from the ticket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_correlation_id: Option<String>,
 }
 
 /// Manifest-driven ticket configuration for the host agent.
@@ -100,17 +130,54 @@ pub struct HostTicketManifest {
     pub action_allowlist: Vec<String>,
     /// Lifecycle states accepted by the namespace.
     pub lifecycle: Vec<String>,
+    /// Manifest-driven federation relay policy.
+    pub federation: HostFederationManifest,
+}
+
+/// Manifest-driven peer descriptor for host ticket federation relay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostFederationPeer {
+    /// Unique peer hive identifier.
+    pub name: String,
+    /// Peer gateway REST URL.
+    pub rest_url: String,
+    /// Environment variable key that stores the peer request-auth token.
+    pub auth_ref: String,
+}
+
+/// Manifest-driven federation relay policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostFederationManifest {
+    /// Whether relay is enabled.
+    pub enabled: bool,
+    /// Local hive identifier.
+    pub local_hive: String,
+    /// Known remote peers.
+    pub peers: Vec<HostFederationPeer>,
+    /// Relay-allowlisted actions.
+    pub action_allowlist: Vec<String>,
+    /// Max queued intents allowed before backpressure.
+    pub relay_queue_max_entries: u16,
+    /// Max queued intent bytes allowed before backpressure.
+    pub relay_queue_max_bytes: u32,
+    /// Max WAL entries retained.
+    pub wal_max_entries: u32,
+    /// Max WAL bytes retained.
+    pub wal_max_bytes: u32,
+    /// Per-peer relay timeout in milliseconds.
+    pub relay_timeout_ms: u32,
 }
 
 impl HostTicketManifest {
     /// Load ticket configuration from `out/manifests/root_task_resolved.json`.
     pub fn from_resolved_manifest(path: &Path) -> Result<Self> {
-        let payload = fs::read(path)
-            .with_context(|| format!("read resolved manifest {}", path.display()))?;
+        let payload =
+            fs::read(path).with_context(|| format!("read resolved manifest {}", path.display()))?;
         let manifest: ResolvedManifest =
             serde_json::from_slice(&payload).context("parse resolved manifest JSON")?;
         let host = manifest.ecosystem.host;
         let tickets = host.tickets;
+        let federation = host.federation;
 
         let mount_path = normalise_absolute_path(host.mount_at.as_str())
             .context("invalid ecosystem.host.mount_at")?;
@@ -156,6 +223,68 @@ impl HostTicketManifest {
             }
         }
 
+        let mut federation_actions = dedupe_tokens(federation.action_allowlist);
+        federation_actions.sort();
+        let mut federation_peers = Vec::<HostFederationPeer>::new();
+        for peer in federation.peers {
+            let name =
+                normalise_token("ecosystem.host.federation.peers[].name", peer.name.as_str())?;
+            let rest_url = normalise_rest_url(peer.rest_url.as_str())?;
+            let auth_ref = normalise_token(
+                "ecosystem.host.federation.peers[].auth_ref",
+                peer.auth_ref.as_str(),
+            )?;
+            federation_peers.push(HostFederationPeer {
+                name,
+                rest_url,
+                auth_ref,
+            });
+        }
+        federation_peers.sort_by(|left, right| left.name.cmp(&right.name));
+        let federation_enabled = enabled && federation.enable;
+        if federation_enabled {
+            if federation_peers.is_empty() {
+                return Err(anyhow!(
+                    "ecosystem.host.federation.peers must not be empty when enabled"
+                ));
+            }
+            if federation_actions.is_empty() {
+                return Err(anyhow!(
+                    "ecosystem.host.federation.action_allowlist must not be empty when enabled"
+                ));
+            }
+            if federation.relay_queue_max_entries == 0 {
+                return Err(anyhow!(
+                    "ecosystem.host.federation.relay_queue_max_entries must be >= 1 when enabled"
+                ));
+            }
+            if federation.relay_queue_max_bytes == 0 {
+                return Err(anyhow!(
+                    "ecosystem.host.federation.relay_queue_max_bytes must be >= 1 when enabled"
+                ));
+            }
+            if federation.wal_max_entries == 0 {
+                return Err(anyhow!(
+                    "ecosystem.host.federation.wal_max_entries must be >= 1 when enabled"
+                ));
+            }
+            if federation.wal_max_bytes == 0 {
+                return Err(anyhow!(
+                    "ecosystem.host.federation.wal_max_bytes must be >= 1 when enabled"
+                ));
+            }
+            if federation.relay_timeout_ms == 0 {
+                return Err(anyhow!(
+                    "ecosystem.host.federation.relay_timeout_ms must be >= 1 when enabled"
+                ));
+            }
+        }
+
+        let local_hive = normalise_token(
+            "ecosystem.host.federation.local_hive",
+            federation.local_hive.as_str(),
+        )?;
+
         Ok(Self {
             enabled,
             mount_path,
@@ -164,6 +293,17 @@ impl HostTicketManifest {
             max_line_bytes: tickets.max_line_bytes,
             action_allowlist: actions,
             lifecycle,
+            federation: HostFederationManifest {
+                enabled: federation_enabled,
+                local_hive,
+                peers: federation_peers,
+                action_allowlist: federation_actions,
+                relay_queue_max_entries: federation.relay_queue_max_entries,
+                relay_queue_max_bytes: federation.relay_queue_max_bytes,
+                wal_max_entries: federation.wal_max_entries,
+                wal_max_bytes: federation.wal_max_bytes,
+                relay_timeout_ms: federation.relay_timeout_ms,
+            },
         })
     }
 
@@ -284,8 +424,11 @@ where
         manifest.request_schema.as_str(),
         manifest.max_line_bytes,
     )?;
-    let mut results =
-        claim::parse_result_lines(&status_lines, manifest.result_schema.as_str(), manifest.max_line_bytes)?;
+    let mut results = claim::parse_result_lines(
+        &status_lines,
+        manifest.result_schema.as_str(),
+        manifest.max_line_bytes,
+    )?;
     let mut deadletters = claim::parse_result_lines(
         &deadletter_lines,
         manifest.result_schema.as_str(),
@@ -419,7 +562,9 @@ fn load_cursor_state(path: &Path) -> Result<CursorState> {
     let payload = match fs::read(path) {
         Ok(payload) => payload,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(CursorState::default()),
-        Err(err) => return Err(err).with_context(|| format!("read cursor state {}", path.display())),
+        Err(err) => {
+            return Err(err).with_context(|| format!("read cursor state {}", path.display()))
+        }
     };
     let state: CursorState = serde_json::from_slice(&payload)
         .with_context(|| format!("parse cursor state {}", path.display()))?;
@@ -451,6 +596,38 @@ fn dedupe_tokens(values: Vec<String>) -> Vec<String> {
         }
     }
     out
+}
+
+fn normalise_token(label: &str, token: &str) -> Result<String> {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("{label} must not be empty"));
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':'))
+    {
+        return Err(anyhow!("{label} contains invalid characters"));
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn normalise_rest_url(url: &str) -> Result<String> {
+    let mut trimmed = url.trim().to_owned();
+    if trimmed.is_empty() {
+        return Err(anyhow!(
+            "ecosystem.host.federation.peers[].rest_url must not be empty"
+        ));
+    }
+    while trimmed.ends_with('/') {
+        trimmed.pop();
+    }
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return Err(anyhow!(
+            "ecosystem.host.federation.peers[].rest_url must start with http:// or https://"
+        ));
+    }
+    Ok(trimmed)
 }
 
 fn normalise_absolute_path(path: &str) -> Result<String> {
@@ -504,6 +681,8 @@ struct ResolvedHost {
     mount_at: String,
     #[serde(default)]
     tickets: ResolvedHostTickets,
+    #[serde(default)]
+    federation: ResolvedHostFederation,
 }
 
 impl Default for ResolvedHost {
@@ -512,6 +691,7 @@ impl Default for ResolvedHost {
             enable: false,
             mount_at: default_host_mount(),
             tickets: ResolvedHostTickets::default(),
+            federation: ResolvedHostFederation::default(),
         }
     }
 }
@@ -545,6 +725,54 @@ impl Default for ResolvedHostTickets {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct ResolvedHostFederation {
+    #[serde(default)]
+    enable: bool,
+    #[serde(default = "default_local_hive")]
+    local_hive: String,
+    #[serde(default)]
+    peers: Vec<ResolvedHostFederationPeer>,
+    #[serde(default)]
+    action_allowlist: Vec<String>,
+    #[serde(default = "default_relay_queue_max_entries")]
+    relay_queue_max_entries: u16,
+    #[serde(default = "default_relay_queue_max_bytes")]
+    relay_queue_max_bytes: u32,
+    #[serde(default = "default_wal_max_entries")]
+    wal_max_entries: u32,
+    #[serde(default = "default_wal_max_bytes")]
+    wal_max_bytes: u32,
+    #[serde(default = "default_relay_timeout_ms")]
+    relay_timeout_ms: u32,
+}
+
+impl Default for ResolvedHostFederation {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            local_hive: default_local_hive(),
+            peers: Vec::new(),
+            action_allowlist: Vec::new(),
+            relay_queue_max_entries: default_relay_queue_max_entries(),
+            relay_queue_max_bytes: default_relay_queue_max_bytes(),
+            wal_max_entries: default_wal_max_entries(),
+            wal_max_bytes: default_wal_max_bytes(),
+            relay_timeout_ms: default_relay_timeout_ms(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolvedHostFederationPeer {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    rest_url: String,
+    #[serde(default)]
+    auth_ref: String,
+}
+
 fn default_host_mount() -> String {
     "/host".to_owned()
 }
@@ -561,6 +789,30 @@ fn default_max_line_bytes() -> u32 {
     2048
 }
 
+fn default_local_hive() -> String {
+    "hive-a".to_owned()
+}
+
+fn default_relay_queue_max_entries() -> u16 {
+    256
+}
+
+fn default_relay_queue_max_bytes() -> u32 {
+    32 * 1024
+}
+
+fn default_wal_max_entries() -> u32 {
+    1024
+}
+
+fn default_wal_max_bytes() -> u32 {
+    512 * 1024
+}
+
+fn default_relay_timeout_ms() -> u32 {
+    1500
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -572,7 +824,7 @@ mod tests {
 
     #[test]
     fn manifest_loader_reads_ticket_config() {
-        let temp = tempfile::TempDir::new().expect("temp dir");
+        let temp = tempfile::TempDir::new().unwrap_or_else(|err| unreachable!("temp dir: {err}"));
         let path = temp.path().join("resolved.json");
         let payload = r#"{
           "ecosystem": {
@@ -586,20 +838,41 @@ mod tests {
                 "max_line_bytes": 2048,
                 "action_allowlist": ["systemd.restart"],
                 "lifecycle": ["queued","claimed","running","succeeded","failed","expired"]
+              },
+              "federation": {
+                "enable": true,
+                "local_hive": "hive-a",
+                "action_allowlist": ["systemd.restart"],
+                "relay_queue_max_entries": 128,
+                "relay_queue_max_bytes": 16384,
+                "wal_max_entries": 512,
+                "wal_max_bytes": 262144,
+                "relay_timeout_ms": 2500,
+                "peers": [
+                  {
+                    "name": "hive-b",
+                    "rest_url": "http://127.0.0.1:8081",
+                    "auth_ref": "COHESIX_RELAY_HIVE_B_TOKEN"
+                  }
+                ]
               }
             }
           }
         }"#;
-        fs::write(&path, payload).expect("write manifest");
-        let config = HostTicketManifest::from_resolved_manifest(&path).expect("load manifest");
+        fs::write(&path, payload).unwrap_or_else(|err| unreachable!("write manifest: {err}"));
+        let config = HostTicketManifest::from_resolved_manifest(&path)
+            .unwrap_or_else(|err| unreachable!("load manifest: {err}"));
         assert!(config.enabled);
         assert_eq!(config.mount_path, "/host");
         assert_eq!(config.spec_path(), "/host/tickets/spec");
+        assert!(config.federation.enabled);
+        assert_eq!(config.federation.local_hive, "hive-a");
+        assert_eq!(config.federation.peers.len(), 1);
     }
 
     #[test]
     fn process_once_is_cursor_and_terminal_safe() {
-        let temp = tempfile::TempDir::new().expect("temp dir");
+        let temp = tempfile::TempDir::new().unwrap_or_else(|err| unreachable!("temp dir: {err}"));
         let cursor = temp.path().join("cursor.json");
         let manifest = HostTicketManifest {
             enabled: true,
@@ -612,6 +885,17 @@ mod tests {
                 .iter()
                 .map(|value| (*value).to_owned())
                 .collect(),
+            federation: HostFederationManifest {
+                enabled: false,
+                local_hive: "hive-a".to_owned(),
+                peers: Vec::new(),
+                action_allowlist: Vec::new(),
+                relay_queue_max_entries: 256,
+                relay_queue_max_bytes: 32 * 1024,
+                wal_max_entries: 1024,
+                wal_max_bytes: 512 * 1024,
+                relay_timeout_ms: 1500,
+            },
         };
         let mut files = BTreeMap::<String, Vec<String>>::new();
         files.insert(
@@ -643,7 +927,7 @@ mod tests {
                 Ok("ok".to_owned())
             },
         )
-        .expect("process pass");
+        .unwrap_or_else(|err| unreachable!("process pass: {err}"));
         assert_eq!(summary.succeeded, 1);
         assert_eq!(summary.skipped_terminal, 1);
         assert_eq!(executions, 1);
@@ -656,10 +940,10 @@ mod tests {
             &config,
             unix_time_ms_now(),
             |_transport, _session, _spec, _config| {
-                panic!("second pass should not execute");
+                unreachable!("second pass should not execute");
             },
         )
-        .expect("second pass");
+        .unwrap_or_else(|err| unreachable!("second pass: {err}"));
         assert_eq!(second.seen, 0);
     }
 

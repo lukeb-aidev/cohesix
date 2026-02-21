@@ -86,7 +86,7 @@ impl TraceLog {
                 .ok_or(TraceError::LengthOverflow)?;
         }
         for line in &self.ack_lines {
-            let len = line.as_bytes().len();
+            let len = line.len();
             if len > max_ack {
                 return Err(TraceError::AckTooLarge {
                     len,
@@ -264,7 +264,7 @@ impl TraceLogBuilder {
 
     /// Record an acknowledgement line.
     pub fn record_ack(&mut self, line: &str) -> Result<(), TraceError> {
-        let len = line.as_bytes().len();
+        let len = line.len();
         if len > self.policy.max_ack_bytes as usize {
             return Err(TraceError::AckTooLarge {
                 len,

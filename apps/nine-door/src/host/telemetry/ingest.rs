@@ -334,8 +334,9 @@ impl TelemetryIngestState {
                             message: "telemetry reference manifest byte quota exceeded".to_owned(),
                         });
                     }
-                    let referenced_total =
-                        segment.reference_total_bytes.saturating_add(reference.chunk_bytes);
+                    let referenced_total = segment
+                        .reference_total_bytes
+                        .saturating_add(reference.chunk_bytes);
                     if referenced_total > self.config.max_reference_bytes_per_segment {
                         return Err(TelemetryIngestError {
                             kind: TelemetryIngestErrorKind::QuotaExceeded,
@@ -480,8 +481,7 @@ fn is_valid_reference_digest(value: &str) -> bool {
     if value.is_empty() || value.len() > TELEMETRY_REFERENCE_DIGEST_MAX_BYTES {
         return false;
     }
-    value.chars().all(|ch| {
-        ch.is_ascii_alphanumeric()
-            || matches!(ch, '-' | '_' | '+' | '/' | '=' | '.')
-    })
+    value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '+' | '/' | '=' | '.'))
 }

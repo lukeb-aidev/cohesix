@@ -361,19 +361,13 @@ fn validate_policy(policy: &CohshPolicy) -> Result<()> {
         ));
     }
     if policy.host_telemetry.nvidia_poll_ms == 0 {
-        return Err(anyhow!(
-            "cohsh host_telemetry nvidia_poll_ms must be >= 1"
-        ));
+        return Err(anyhow!("cohsh host_telemetry nvidia_poll_ms must be >= 1"));
     }
     if policy.host_telemetry.systemd_poll_ms == 0 {
-        return Err(anyhow!(
-            "cohsh host_telemetry systemd_poll_ms must be >= 1"
-        ));
+        return Err(anyhow!("cohsh host_telemetry systemd_poll_ms must be >= 1"));
     }
     if policy.host_telemetry.docker_poll_ms == 0 {
-        return Err(anyhow!(
-            "cohsh host_telemetry docker_poll_ms must be >= 1"
-        ));
+        return Err(anyhow!("cohsh host_telemetry docker_poll_ms must be >= 1"));
     }
     if policy.host_telemetry.k8s_poll_ms == 0 {
         return Err(anyhow!("cohsh host_telemetry k8s_poll_ms must be >= 1"));

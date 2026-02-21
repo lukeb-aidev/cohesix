@@ -61,6 +61,14 @@ struct HostTicketSpecEntry {
     action: String,
     #[serde(default)]
     target: Option<String>,
+    #[serde(default)]
+    source_hive: Option<String>,
+    #[serde(default)]
+    target_hive: Option<String>,
+    #[serde(default)]
+    relay_hop: Option<u16>,
+    #[serde(default)]
+    relay_correlation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -71,6 +79,14 @@ struct HostTicketResultEntry {
     state: String,
     #[serde(default)]
     message: Option<String>,
+    #[serde(default)]
+    source_hive: Option<String>,
+    #[serde(default)]
+    target_hive: Option<String>,
+    #[serde(default)]
+    relay_hop: Option<u16>,
+    #[serde(default)]
+    relay_correlation_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +96,10 @@ struct HostTicketIdentity {
     action: String,
     state: Option<String>,
     target: Option<String>,
+    source_hive: Option<String>,
+    target_hive: Option<String>,
+    relay_hop: Option<u16>,
+    relay_correlation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -111,6 +131,14 @@ struct TimelineEvent {
     correlation_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ticket_action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_hive: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_hive: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relay_hop: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relay_correlation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -163,14 +191,33 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
                 idempotency_key: ticket_identity
                     .as_ref()
                     .map(|value| value.idempotency_key.clone()),
-                correlation_key: ticket_identity
-                    .as_ref()
-                    .map(|value| ticket_correlation_key(&value.id, &value.idempotency_key)),
+                correlation_key: ticket_identity.as_ref().map(|value| {
+                    ticket_correlation_key(
+                        &value.id,
+                        &value.idempotency_key,
+                        value.source_hive.as_deref(),
+                        value.target_hive.as_deref(),
+                    )
+                }),
                 ticket_action: ticket_identity.as_ref().map(|value| value.action.clone()),
-                target: ticket_identity.as_ref().and_then(|value| value.target.clone()),
+                source_hive: ticket_identity
+                    .as_ref()
+                    .and_then(|value| value.source_hive.clone()),
+                target_hive: ticket_identity
+                    .as_ref()
+                    .and_then(|value| value.target_hive.clone()),
+                relay_hop: ticket_identity.as_ref().and_then(|value| value.relay_hop),
+                relay_correlation_id: ticket_identity
+                    .as_ref()
+                    .and_then(|value| value.relay_correlation_id.clone()),
+                target: ticket_identity
+                    .as_ref()
+                    .and_then(|value| value.target.clone()),
                 subject: None,
                 resource: None,
-                state: ticket_identity.as_ref().and_then(|value| value.state.clone()),
+                state: ticket_identity
+                    .as_ref()
+                    .and_then(|value| value.state.clone()),
                 ttl_s: None,
                 priority: None,
             });
@@ -196,6 +243,10 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
                 idempotency_key: None,
                 correlation_key: None,
                 ticket_action: None,
+                source_hive: None,
+                target_hive: None,
+                relay_hop: None,
+                relay_correlation_id: None,
                 target: entry.target,
                 subject: None,
                 resource: None,
@@ -226,8 +277,14 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
                 correlation_key: Some(ticket_correlation_key(
                     entry.id.as_str(),
                     entry.idempotency_key.as_str(),
+                    entry.source_hive.as_deref(),
+                    entry.target_hive.as_deref(),
                 )),
                 ticket_action: Some(entry.action),
+                source_hive: entry.source_hive,
+                target_hive: entry.target_hive,
+                relay_hop: entry.relay_hop,
+                relay_correlation_id: entry.relay_correlation_id,
                 target: entry.target,
                 subject: None,
                 resource: None,
@@ -240,7 +297,9 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
 
     let host_ticket_status = pack_dir.join("host").join("tickets").join("status");
     if host_ticket_status.is_file() {
-        for entry in parse_jsonl::<HostTicketResultEntry>(&host_ticket_status, "host/tickets/status")? {
+        for entry in
+            parse_jsonl::<HostTicketResultEntry>(&host_ticket_status, "host/tickets/status")?
+        {
             events.push(TimelineEvent {
                 schema: TIMELINE_SCHEMA,
                 kind: "host-ticket.status".to_owned(),
@@ -258,8 +317,14 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
                 correlation_key: Some(ticket_correlation_key(
                     entry.id.as_str(),
                     entry.idempotency_key.as_str(),
+                    entry.source_hive.as_deref(),
+                    entry.target_hive.as_deref(),
                 )),
                 ticket_action: Some(entry.action),
+                source_hive: entry.source_hive,
+                target_hive: entry.target_hive,
+                relay_hop: entry.relay_hop,
+                relay_correlation_id: entry.relay_correlation_id,
                 target: None,
                 subject: None,
                 resource: None,
@@ -272,9 +337,10 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
 
     let host_ticket_deadletter = pack_dir.join("host").join("tickets").join("deadletter");
     if host_ticket_deadletter.is_file() {
-        for entry in
-            parse_jsonl::<HostTicketResultEntry>(&host_ticket_deadletter, "host/tickets/deadletter")?
-        {
+        for entry in parse_jsonl::<HostTicketResultEntry>(
+            &host_ticket_deadletter,
+            "host/tickets/deadletter",
+        )? {
             events.push(TimelineEvent {
                 schema: TIMELINE_SCHEMA,
                 kind: "host-ticket.deadletter".to_owned(),
@@ -292,8 +358,14 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
                 correlation_key: Some(ticket_correlation_key(
                     entry.id.as_str(),
                     entry.idempotency_key.as_str(),
+                    entry.source_hive.as_deref(),
+                    entry.target_hive.as_deref(),
                 )),
                 ticket_action: Some(entry.action),
+                source_hive: entry.source_hive,
+                target_hive: entry.target_hive,
+                relay_hop: entry.relay_hop,
+                relay_correlation_id: entry.relay_correlation_id,
                 target: None,
                 subject: None,
                 resource: None,
@@ -324,6 +396,10 @@ fn build_events(pack_dir: &Path) -> Result<Vec<TimelineEvent>> {
                 idempotency_key: None,
                 correlation_key: None,
                 ticket_action: None,
+                source_hive: None,
+                target_hive: None,
+                relay_hop: None,
+                relay_correlation_id: None,
                 target: None,
                 subject: Some(entry.subject),
                 resource: Some(entry.resource),
@@ -389,6 +465,10 @@ fn parse_ticket_identity_from_payload(path: &str, payload: &str) -> Option<HostT
             action: parsed.action,
             state: Some(parsed.state),
             target: None,
+            source_hive: parsed.source_hive,
+            target_hive: parsed.target_hive,
+            relay_hop: parsed.relay_hop,
+            relay_correlation_id: parsed.relay_correlation_id,
         });
     }
     if let Ok(parsed) = serde_json::from_str::<HostTicketSpecEntry>(trimmed) {
@@ -398,13 +478,27 @@ fn parse_ticket_identity_from_payload(path: &str, payload: &str) -> Option<HostT
             action: parsed.action,
             state: Some("queued".to_owned()),
             target: parsed.target,
+            source_hive: parsed.source_hive,
+            target_hive: parsed.target_hive,
+            relay_hop: parsed.relay_hop,
+            relay_correlation_id: parsed.relay_correlation_id,
         });
     }
     None
 }
 
-fn ticket_correlation_key(id: &str, idempotency_key: &str) -> String {
-    format!("{id}:{idempotency_key}")
+fn ticket_correlation_key(
+    id: &str,
+    idempotency_key: &str,
+    source_hive: Option<&str>,
+    target_hive: Option<&str>,
+) -> String {
+    match (source_hive, target_hive) {
+        (Some(source_hive), Some(target_hive)) => {
+            format!("{id}:{idempotency_key}:{source_hive}:{target_hive}")
+        }
+        _ => format!("{id}:{idempotency_key}"),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -427,8 +521,12 @@ fn parse_lease_active(path: &Path) -> Result<Vec<LeaseActiveEntry>> {
     for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
         let fields = parse_kv_line(line);
         let Some(id) = fields.get("id") else { continue };
-        let Some(subject) = fields.get("subject") else { continue };
-        let Some(resource) = fields.get("resource") else { continue };
+        let Some(subject) = fields.get("subject") else {
+            continue;
+        };
+        let Some(resource) = fields.get("resource") else {
+            continue;
+        };
         let ttl_s = fields
             .get("ttl_s")
             .and_then(|value| value.parse::<u32>().ok())
@@ -504,12 +602,18 @@ fn write_markdown(path: &Path, events: &[TimelineEvent]) -> Result<()> {
             }
             _ if event.correlation_key.is_some() => {
                 out.push_str(&format!(
-                    "- ticket={} action={} state={} source={} target={}\n",
+                    "- ticket={} action={} state={} source_hive={} target_hive={} stream={} target={} relay_hop={}\n",
                     event.correlation_key.as_deref().unwrap_or(""),
                     event.ticket_action.as_deref().unwrap_or(""),
                     event.state.as_deref().unwrap_or(""),
+                    event.source_hive.as_deref().unwrap_or(""),
+                    event.target_hive.as_deref().unwrap_or(""),
                     event.source,
-                    event.target.as_deref().unwrap_or("")
+                    event.target.as_deref().unwrap_or(""),
+                    event
+                        .relay_hop
+                        .map(|value| value.to_string())
+                        .unwrap_or_default()
                 ));
             }
             _ => {}

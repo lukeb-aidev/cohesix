@@ -55,7 +55,7 @@ fn demo_snapshot_fixture_matches_payload() -> Result<()> {
 
 #[test]
 fn demo_snapshot_replay_is_deterministic() -> Result<()> {
-    let payload = fs::read(&demo_snapshot_path()).context("read demo fixture")?;
+    let payload = fs::read(demo_snapshot_path()).context("read demo fixture")?;
     let digest = replay_digest(&payload)?;
     assert_eq!(digest, DEMO_DIGEST, "demo digest mismatch");
     Ok(())

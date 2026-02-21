@@ -107,11 +107,10 @@ impl fmt::Display for TicketError {
 pub fn parse_role(input: &str, mode: RoleParseMode) -> Option<Role> {
     if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::Queen)) {
         Some(Role::Queen)
-    } else if matches!(mode, RoleParseMode::AllowWorkerAlias)
-        && input.eq_ignore_ascii_case("worker")
+    } else if (matches!(mode, RoleParseMode::AllowWorkerAlias)
+        && input.eq_ignore_ascii_case("worker"))
+        || input.eq_ignore_ascii_case(proto_role_label(ProtoRole::Worker))
     {
-        Some(Role::WorkerHeartbeat)
-    } else if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::Worker)) {
         Some(Role::WorkerHeartbeat)
     } else if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::GpuWorker)) {
         Some(Role::WorkerGpu)

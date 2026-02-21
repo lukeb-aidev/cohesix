@@ -53,8 +53,8 @@ fn trace_replay_matches_fixture() -> Result<()> {
         ConsoleVerb::Tail.ack_label(),
         Some(tail_detail.as_str()),
     ));
-    let mut stream = replay.client().tail(&telemetry_path)?;
-    while let Some(event) = stream.next() {
+    let stream = replay.client().tail(&telemetry_path)?;
+    for event in stream {
         match event? {
             TailEvent::Line(line) => transcript.push(line),
             TailEvent::End => transcript.push(END_LINE.to_owned()),

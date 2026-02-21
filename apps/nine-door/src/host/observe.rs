@@ -874,6 +874,7 @@ impl WatchRing {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn try_append(
         &mut self,
         now_ms: u64,

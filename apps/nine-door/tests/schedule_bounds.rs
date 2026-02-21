@@ -22,11 +22,7 @@ fn schedule_queue_enforces_max_entries() {
     let server = NineDoor::new();
     let mut client = attach_queen(&server);
 
-    let ctl_path = vec![
-        "queen".to_owned(),
-        "schedule".to_owned(),
-        "ctl".to_owned(),
-    ];
+    let ctl_path = vec!["queen".to_owned(), "schedule".to_owned(), "ctl".to_owned()];
     client.walk(1, 2, &ctl_path).expect("walk schedule ctl");
     client
         .open(2, OpenMode::write_append())
@@ -41,7 +37,8 @@ fn schedule_queue_enforces_max_entries() {
             .expect("write schedule entry");
     }
 
-    let overflow = r#"{"id":"sched-over","role":"worker-heartbeat","priority":1,"ticks":1,"budget_ms":1}"#;
+    let overflow =
+        r#"{"id":"sched-over","role":"worker-heartbeat","priority":1,"ticks":1,"budget_ms":1}"#;
     let err = client
         .write(2, overflow.as_bytes())
         .expect_err("queue should be full");

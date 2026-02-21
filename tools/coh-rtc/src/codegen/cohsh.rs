@@ -190,7 +190,11 @@ fn render_policy_toml(manifest: &Manifest, manifest_hash: &str) -> String {
     writeln!(
         contents,
         "systemd_poll_ms = {}",
-        manifest.client_policies.cohsh.host_telemetry.systemd_poll_ms
+        manifest
+            .client_policies
+            .cohsh
+            .host_telemetry
+            .systemd_poll_ms
     )
     .ok();
     writeln!(
@@ -302,7 +306,11 @@ fn render_policy_doc(manifest: &Manifest, manifest_hash: &str, policy_hash: &str
     writeln!(
         contents,
         "- `cohsh.host_telemetry.systemd_poll_ms`: `{}`",
-        manifest.client_policies.cohsh.host_telemetry.systemd_poll_ms
+        manifest
+            .client_policies
+            .cohsh
+            .host_telemetry
+            .systemd_poll_ms
     )
     .ok();
     writeln!(
@@ -425,7 +433,11 @@ fn render_policy_rust(manifest: &Manifest, manifest_hash: &str, policy_hash: &st
     writeln!(
         contents,
         "pub const COHSH_HOST_TELEMETRY_SYSTEMD_POLL_MS: u64 = {};",
-        manifest.client_policies.cohsh.host_telemetry.systemd_poll_ms
+        manifest
+            .client_policies
+            .cohsh
+            .host_telemetry
+            .systemd_poll_ms
     )
     .ok();
     writeln!(

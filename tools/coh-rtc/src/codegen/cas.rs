@@ -99,8 +99,7 @@ pub fn build_cas_template(manifest: &Manifest) -> CasTemplate {
     map.insert("signature".to_owned(), signature_value);
 
     let canonical = canonicalize_json_keys(Value::Object(map));
-    let json = serde_json::to_string_pretty(&canonical)
-        .expect("render cas manifest template json");
+    let json = serde_json::to_string_pretty(&canonical).expect("render cas manifest template json");
     let hash = hash_bytes(json.as_bytes());
     CasTemplate { json, hash }
 }

@@ -294,7 +294,7 @@ fn last_non_empty_line(bytes: &[u8]) -> Result<Option<String>> {
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .map(str::to_owned)
-        .last())
+        .next_back())
 }
 
 fn parse_lease_entry(line: &str) -> Result<LeaseEntry> {

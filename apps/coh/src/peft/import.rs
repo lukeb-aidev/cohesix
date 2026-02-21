@@ -259,6 +259,7 @@ fn read_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_manifest(
     model_id: &str,
     base_model: &str,
@@ -308,7 +309,7 @@ fn ensure_dir(path: &Path, label: &str) -> Result<()> {
 }
 
 fn enforce_id_bytes(value: &str, max_bytes: u32) -> Result<()> {
-    let len = value.as_bytes().len() as u32;
+    let len = value.len() as u32;
     if len > max_bytes {
         return Err(anyhow!("id length {len} exceeds max {max_bytes}"));
     }

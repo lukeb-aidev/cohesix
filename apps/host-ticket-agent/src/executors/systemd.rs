@@ -29,7 +29,9 @@ pub fn execute(
     match action {
         "systemd.start" => execute_action(transport, session, config, spec, unit.as_str(), "start"),
         "systemd.stop" => execute_action(transport, session, config, spec, unit.as_str(), "stop"),
-        "systemd.restart" => execute_action(transport, session, config, spec, unit.as_str(), "restart"),
+        "systemd.restart" => {
+            execute_action(transport, session, config, spec, unit.as_str(), "restart")
+        }
         "systemd.status-check" => execute_status(transport, session, config, unit.as_str()),
         other => Err(anyhow!("unsupported systemd action {other}")),
     }
@@ -43,7 +45,8 @@ fn execute_action(
     unit: &str,
     action: &str,
 ) -> Result<String> {
-    let output = run_systemctl(&[action, unit]).with_context(|| format!("systemctl {action} {unit}"))?;
+    let output =
+        run_systemctl(&[action, unit]).with_context(|| format!("systemctl {action} {unit}"))?;
     let control_path = format!("{}/systemd/{unit}/{action}", config.mount);
     let control_line = format!("ticket={} action={action}\n", spec.id);
     transport
@@ -138,7 +141,7 @@ fn resolve_unit(spec: &HostTicketSpec) -> Result<String> {
 }
 
 fn bounded_utf8(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes).replace('\n', " ").replace('\r', " ");
+    let text = String::from_utf8_lossy(bytes).replace(['\n', '\r'], " ");
     if text.len() <= MAX_CAPTURE_BYTES {
         return text.trim().to_owned();
     }
@@ -168,6 +171,10 @@ mod tests {
             target: Some("/host/systemd/cohesix-agent.service/restart".to_owned()),
             args: Value::Null,
             expires_unix_ms: None,
+            source_hive: None,
+            target_hive: None,
+            relay_hop: None,
+            relay_correlation_id: None,
         };
         let unit = resolve_unit(&spec).expect("unit");
         assert_eq!(unit, "cohesix-agent.service");

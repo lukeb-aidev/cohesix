@@ -553,7 +553,7 @@ fn validate_path(label: &str, value: &str, allow_root: bool) -> Result<()> {
         if component == "." || component == ".." {
             return Err(anyhow!("{label} contains invalid component '{component}'"));
         }
-        if component.as_bytes().iter().any(|byte| *byte == 0) {
+        if component.as_bytes().contains(&0) {
             return Err(anyhow!("{label} contains NUL byte"));
         }
         depth += 1;
@@ -572,7 +572,7 @@ fn validate_host_path(label: &str, value: &str) -> Result<()> {
     if trimmed.is_empty() {
         return Err(anyhow!("{label} must not be empty"));
     }
-    if trimmed.as_bytes().iter().any(|byte| *byte == 0) {
+    if trimmed.as_bytes().contains(&0) {
         return Err(anyhow!("{label} contains NUL byte"));
     }
     let mut depth = 0usize;

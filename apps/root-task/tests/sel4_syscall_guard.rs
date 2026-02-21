@@ -10,7 +10,7 @@ use std::process::Command;
 fn no_direct_sel4_syscall_invocations() {
     let pattern = "sel4_sys::seL4_(Send|NBSend|Call|Reply|ReplyRecv|Signal|Wait|Recv|Yield)";
     let output = Command::new("rg")
-        .args(&["-n", pattern, "src"])
+        .args(["-n", pattern, "src"])
         .output()
         .expect("rg must be available to enforce sel4 syscall routing");
 

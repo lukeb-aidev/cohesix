@@ -118,7 +118,7 @@ impl PolicyStore {
         let rules = config
             .rules()
             .iter()
-            .map(|rule| PolicyRule::parse(rule))
+            .map(PolicyRule::parse)
             .collect::<Result<Vec<_>, _>>()?;
         let rules_snapshot = render_rules_snapshot(config.enabled_flag(), &rules, config.limits())?;
         Ok(Self {
@@ -858,7 +858,10 @@ fn validate_policy_revision_id(id: &str) -> Result<(), NineDoorError> {
     if id.len() > MAX_POLICY_REV_ID_LEN {
         return Err(NineDoorError::protocol(
             ErrorCode::Invalid,
-            format!("policy revision id exceeds max length {}", MAX_POLICY_REV_ID_LEN),
+            format!(
+                "policy revision id exceeds max length {}",
+                MAX_POLICY_REV_ID_LEN
+            ),
         ));
     }
     if !id

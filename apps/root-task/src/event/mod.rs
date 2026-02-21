@@ -652,7 +652,7 @@ impl TicketUsage {
 
     fn check_cursor(&self, path_key: &str, offset: u64) -> Result<CursorCheck, TicketDeny> {
         let last = self.cursor_offsets.get(path_key).copied();
-        let is_resume = last.map_or(false, |last| offset < last);
+        let is_resume = last.is_some_and(|last| offset < last);
         self.quotas.check_cursor(is_resume)?;
         Ok(CursorCheck { is_resume })
     }
@@ -694,7 +694,7 @@ impl TicketUsage {
                 continue;
             }
             let match_len = scope.path.len();
-            if best.map_or(true, |(_, best_len)| match_len > best_len) {
+            if best.is_none_or(|(_, best_len)| match_len > best_len) {
                 best = Some((idx, match_len));
             }
         }
@@ -2161,16 +2161,11 @@ where
                             let cursor_offset = self.ticket_cursor_offset(path_str).unwrap_or(0);
                             if path_str == "/log/queen.log" {
                                 let bytes = {
-                                    let pending = self
-                                        .pending_stream
-                                        .get_or_insert_with(PendingStream::new);
+                                    let pending =
+                                        self.pending_stream.get_or_insert_with(PendingStream::new);
                                     pending.reset();
                                     log_buffer::snapshot_lines_into(&mut pending.lines);
-                                    pending
-                                        .lines
-                                        .iter()
-                                        .map(|line| line.len() as u64)
-                                        .sum()
+                                    pending.lines.iter().map(|line| line.len() as u64).sum()
                                 };
                                 stream_bytes = bytes;
                                 path_supported = true;
@@ -2191,20 +2186,15 @@ where
                                         {
                                             pending.lines.clear();
                                         }
-                                        pending
-                                            .lines
-                                            .iter()
-                                            .map(|line| line.len() as u64)
-                                            .sum()
+                                        pending.lines.iter().map(|line| line.len() as u64).sum()
                                     };
                                     stream_bytes = bytes;
                                     path_supported = true;
                                 }
                             } else if let Some(bridge) = self.ninedoor.as_mut() {
                                 let (bytes, meta, err) = {
-                                    let pending = self
-                                        .pending_stream
-                                        .get_or_insert_with(PendingStream::new);
+                                    let pending =
+                                        self.pending_stream.get_or_insert_with(PendingStream::new);
                                     pending.reset();
                                     match bridge.telemetry_tail_into(
                                         path_str,
@@ -2263,7 +2253,8 @@ where
                                 {
                                     let mut cursor_check: Option<CursorCheck> = None;
                                     if let Some(meta) = cursor_meta {
-                                        match self.check_ticket_cursor(path_str, meta.start_offset) {
+                                        match self.check_ticket_cursor(path_str, meta.start_offset)
+                                        {
                                             Ok(check) => {
                                                 cursor_check = check;
                                             }
@@ -2337,9 +2328,8 @@ where
                         {
                             if let Some(bridge_ref) = self.ninedoor.as_mut() {
                                 let (data_bytes, cat_err) = {
-                                    let pending = self
-                                        .pending_stream
-                                        .get_or_insert_with(PendingStream::new);
+                                    let pending =
+                                        self.pending_stream.get_or_insert_with(PendingStream::new);
                                     pending.reset();
                                     match bridge_ref.cat_into(path_str, &mut pending.lines) {
                                         Ok(()) => {
@@ -2357,17 +2347,8 @@ where
                                     cmd_status = "err";
                                     let sid = self.session_id.unwrap_or(0);
                                     let err_msg = format_message(format_args!("{err}"));
-                                    self.audit_ninedoor_err(
-                                        sid,
-                                        "CAT",
-                                        path_str,
-                                        err_msg.as_str(),
-                                    );
-                                    self.emit_ninedoor_refusal(
-                                        verb_label,
-                                        Some(path_str),
-                                        &err,
-                                    );
+                                    self.audit_ninedoor_err(sid, "CAT", path_str, err_msg.as_str());
+                                    self.emit_ninedoor_refusal(verb_label, Some(path_str), &err);
                                 } else {
                                     let log_path = path_str == "/log/queen.log";
                                     let stream_bytes = if log_path { 0 } else { data_bytes };
@@ -2377,17 +2358,14 @@ where
                                             TicketVerb::Read,
                                             denial,
                                         );
-                                        self.emit_ticket_denied(
-                                            verb_label,
-                                            Some(path_str),
-                                            denial,
-                                        );
+                                        self.emit_ticket_denied(verb_label, Some(path_str), denial);
                                         if let Some(pending) = self.pending_stream.as_mut() {
                                             pending.lines.clear();
                                         }
                                         cmd_status = "err";
                                     } else {
-                                        let cursor_check = match self.check_ticket_cursor(path_str, 0)
+                                        let cursor_check = match self
+                                            .check_ticket_cursor(path_str, 0)
                                         {
                                             Ok(check) => check,
                                             Err(denial) => {
@@ -2401,8 +2379,7 @@ where
                                                     Some(path_str),
                                                     denial,
                                                 );
-                                                if let Some(pending) =
-                                                    self.pending_stream.as_mut()
+                                                if let Some(pending) = self.pending_stream.as_mut()
                                                 {
                                                     pending.lines.clear();
                                                 }
@@ -2426,7 +2403,8 @@ where
                                                     log_buffer::snapshot_user_lines::<
                                                         DEFAULT_LINE_CAPACITY,
                                                         { log_buffer::LOG_USER_SNAPSHOT_LINES },
-                                                    >()
+                                                    >(
+                                                    )
                                                 } else {
                                                     HeaplessVec::new()
                                                 };
@@ -2461,8 +2439,7 @@ where
                                                             pending_lines.iter().enumerate()
                                                         {
                                                             if user_lines.iter().any(|user_line| {
-                                                                user_line.as_str()
-                                                                    == line.as_str()
+                                                                user_line.as_str() == line.as_str()
                                                             }) {
                                                                 last_user_idx = Some(idx);
                                                             }
@@ -2470,15 +2447,13 @@ where
                                                         let start = last_user_idx
                                                             .map(|idx| idx + 1)
                                                             .unwrap_or(0);
-                                                        for line in
-                                                            pending_lines.iter().skip(start)
+                                                        for line in pending_lines.iter().skip(start)
                                                         {
                                                             if line.as_str().starts_with('[') {
                                                                 continue;
                                                             }
                                                             if user_lines.iter().any(|user_line| {
-                                                                user_line.as_str()
-                                                                    == line.as_str()
+                                                                user_line.as_str() == line.as_str()
                                                             }) {
                                                                 continue;
                                                             }
@@ -2492,15 +2467,14 @@ where
                                                     }
                                                 } else {
                                                     for line in pending_lines.iter() {
-                                                        if summary_refs
-                                                            .push(line.as_str())
-                                                            .is_err()
+                                                        if summary_refs.push(line.as_str()).is_err()
                                                         {
                                                             break;
                                                         }
                                                     }
                                                 }
-                                                let summary_lines: &[&str] = summary_refs.as_slice();
+                                                let summary_lines: &[&str] =
+                                                    summary_refs.as_slice();
                                                 let mut summary: HeaplessString<128> =
                                                     HeaplessString::new();
                                                 let mut selected: HeaplessVec<
@@ -2514,7 +2488,8 @@ where
                                                     for (idx, line) in
                                                         summary_lines.iter().enumerate().rev()
                                                     {
-                                                        if prefer_user_lines && line.starts_with('[')
+                                                        if prefer_user_lines
+                                                            && line.starts_with('[')
                                                         {
                                                             continue;
                                                         }
@@ -2522,7 +2497,8 @@ where
                                                         if line_len > max_line_len {
                                                             continue;
                                                         }
-                                                        let sep = if total_len == 0 { 0 } else { 1 };
+                                                        let sep =
+                                                            if total_len == 0 { 0 } else { 1 };
                                                         if line_len
                                                             .saturating_add(sep)
                                                             .saturating_add(total_len)
@@ -2544,7 +2520,8 @@ where
                                                     total_len = 0;
                                                     prefer_user_lines = false;
                                                 }
-                                                if selected.is_empty() && !summary_lines.is_empty() {
+                                                if selected.is_empty() && !summary_lines.is_empty()
+                                                {
                                                     if let Some(line) = summary_lines.last() {
                                                         for ch in line.chars() {
                                                             if summary.push(ch).is_err() {
@@ -2561,7 +2538,8 @@ where
                                                                 break;
                                                             }
                                                         }
-                                                        if let Some(line) = summary_lines.get(*idx) {
+                                                        if let Some(line) = summary_lines.get(*idx)
+                                                        {
                                                             if summary.push_str(line).is_err() {
                                                                 break;
                                                             }
@@ -2611,7 +2589,9 @@ where
                                                     "audit cat.ack path={}",
                                                     path_str
                                                 ));
-                                                crate::debug_uart::debug_uart_line(message.as_str());
+                                                crate::debug_uart::debug_uart_line(
+                                                    message.as_str(),
+                                                );
                                             }
                                             self.emit_ack_ok(verb_label, Some(detail.as_str()));
                                             self.metrics.ui_reads =
@@ -2624,12 +2604,13 @@ where
                                             {
                                                 pending.next_line = 0;
                                                 pending.bandwidth_bytes = stream_bytes;
-                                                pending.cursor = cursor_check.map(|check| PendingCursor {
-                                                    path_key: path_str.to_owned(),
-                                                    offset: 0,
-                                                    len: data_bytes as usize,
-                                                    check,
-                                                });
+                                                pending.cursor =
+                                                    cursor_check.map(|check| PendingCursor {
+                                                        path_key: path_str.to_owned(),
+                                                        offset: 0,
+                                                        len: data_bytes as usize,
+                                                        check,
+                                                    });
                                             }
                                         }
                                     }
@@ -2672,9 +2653,8 @@ where
                         {
                             if let Some(bridge_ref) = self.ninedoor.as_mut() {
                                 let (data_bytes, entries_len, list_err) = {
-                                    let pending = self
-                                        .pending_stream
-                                        .get_or_insert_with(PendingStream::new);
+                                    let pending =
+                                        self.pending_stream.get_or_insert_with(PendingStream::new);
                                     pending.reset();
                                     match bridge_ref.list_into(path_str, &mut pending.lines) {
                                         Ok(()) => {
@@ -2693,19 +2673,9 @@ where
                                     cmd_status = "err";
                                     let sid = self.session_id.unwrap_or(0);
                                     let err_msg = format_message(format_args!("{err}"));
-                                    self.audit_ninedoor_err(
-                                        sid,
-                                        "LS",
-                                        path_str,
-                                        err_msg.as_str(),
-                                    );
-                                    self.emit_ninedoor_refusal(
-                                        verb_label,
-                                        Some(path_str),
-                                        &err,
-                                    );
-                                } else if let Err(denial) =
-                                    self.check_ticket_bandwidth(data_bytes)
+                                    self.audit_ninedoor_err(sid, "LS", path_str, err_msg.as_str());
+                                    self.emit_ninedoor_refusal(verb_label, Some(path_str), &err);
+                                } else if let Err(denial) = self.check_ticket_bandwidth(data_bytes)
                                 {
                                     self.record_ticket_denial(path_str, TicketVerb::Read, denial);
                                     self.emit_ticket_denied(verb_label, Some(path_str), denial);
@@ -2811,71 +2781,55 @@ where
                         let detail = format_message(format_args!(
                             "detail=denied path={path_str} error=EPERM"
                         ));
-                        self.emit_refusal(
-                            verb_label,
-                            RefusalReason::Policy,
-                            Some(detail.as_str()),
-                        );
+                        self.emit_refusal(verb_label, RefusalReason::Policy, Some(detail.as_str()));
+                    } else if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Write)
+                    {
+                        self.record_ticket_denial(path_str, TicketVerb::Write, denial);
+                        self.emit_ticket_denied(verb_label, Some(path_str), denial);
+                        cmd_status = "err";
+                    } else if let Err(denial) = self.check_ticket_bandwidth(payload.len() as u64) {
+                        self.record_ticket_denial(path_str, TicketVerb::Write, denial);
+                        self.emit_ticket_denied(verb_label, Some(path_str), denial);
+                        cmd_status = "err";
                     } else {
-                        if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Write) {
-                            self.record_ticket_denial(path_str, TicketVerb::Write, denial);
-                            self.emit_ticket_denied(verb_label, Some(path_str), denial);
-                            cmd_status = "err";
-                        } else if let Err(denial) =
-                            self.check_ticket_bandwidth(payload.len() as u64)
+                        let message = format_message(format_args!(
+                            "console: echo {} bytes={}",
+                            path_str,
+                            payload.len()
+                        ));
+                        self.audit.info(message.as_str());
+                        self.metrics.accepted_commands += 1;
+                        #[cfg(feature = "kernel")]
                         {
-                            self.record_ticket_denial(path_str, TicketVerb::Write, denial);
-                            self.emit_ticket_denied(verb_label, Some(path_str), denial);
-                            cmd_status = "err";
-                        } else {
-                            let message = format_message(format_args!(
-                                "console: echo {} bytes={}",
-                                path_str,
-                                payload.len()
-                            ));
-                            self.audit.info(message.as_str());
-                            self.metrics.accepted_commands += 1;
-                            #[cfg(feature = "kernel")]
-                            {
-                                if let Some(bridge_ref) = self.ninedoor.as_mut() {
-                                    match bridge_ref.echo(path_str, payload.as_str()) {
-                                        Ok(()) => {
-                                            let detail = format_message(format_args!(
-                                                "path={} bytes={}",
-                                                path_str,
-                                                payload.len()
-                                            ));
-                                            self.emit_ack_ok(verb_label, Some(detail.as_str()));
-                                            self.consume_ticket_bandwidth(payload.len() as u64);
-                                        }
-                                        Err(err) => {
-                                            cmd_status = "err";
-                                            let sid = self.session_id.unwrap_or(0);
-                                            let err_msg = format_message(format_args!("{err}"));
-                                            self.audit_ninedoor_err(
-                                                sid,
-                                                "ECHO",
-                                                path.as_str(),
-                                                err_msg.as_str(),
-                                            );
-                                            self.emit_ninedoor_refusal(
-                                                verb_label,
-                                                Some(path_str),
-                                                &err,
-                                            );
-                                        }
+                            if let Some(bridge_ref) = self.ninedoor.as_mut() {
+                                match bridge_ref.echo(path_str, payload.as_str()) {
+                                    Ok(()) => {
+                                        let detail = format_message(format_args!(
+                                            "path={} bytes={}",
+                                            path_str,
+                                            payload.len()
+                                        ));
+                                        self.emit_ack_ok(verb_label, Some(detail.as_str()));
+                                        self.consume_ticket_bandwidth(payload.len() as u64);
                                     }
-                                } else {
-                                    cmd_status = "err";
-                                    self.emit_refusal(
-                                        verb_label,
-                                        RefusalReason::Policy,
-                                        Some("detail=ninedoor-unavailable"),
-                                    );
+                                    Err(err) => {
+                                        cmd_status = "err";
+                                        let sid = self.session_id.unwrap_or(0);
+                                        let err_msg = format_message(format_args!("{err}"));
+                                        self.audit_ninedoor_err(
+                                            sid,
+                                            "ECHO",
+                                            path.as_str(),
+                                            err_msg.as_str(),
+                                        );
+                                        self.emit_ninedoor_refusal(
+                                            verb_label,
+                                            Some(path_str),
+                                            &err,
+                                        );
+                                    }
                                 }
-                            }
-                            #[cfg(not(feature = "kernel"))]
-                            {
+                            } else {
                                 cmd_status = "err";
                                 self.emit_refusal(
                                     verb_label,
@@ -2883,6 +2837,15 @@ where
                                     Some("detail=ninedoor-unavailable"),
                                 );
                             }
+                        }
+                        #[cfg(not(feature = "kernel"))]
+                        {
+                            cmd_status = "err";
+                            self.emit_refusal(
+                                verb_label,
+                                RefusalReason::Policy,
+                                Some("detail=ninedoor-unavailable"),
+                            );
                         }
                     }
                 } else {

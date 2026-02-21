@@ -81,6 +81,12 @@ impl MonotonicTimebase {
     }
 }
 
+impl Default for MonotonicTimebase {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Timebase for MonotonicTimebase {
     fn now_ms(&self) -> u64 {
         self.counter_ms.load(Ordering::Relaxed)

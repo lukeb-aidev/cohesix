@@ -6,8 +6,8 @@
 
 use std::collections::VecDeque;
 
-use serde::Deserialize;
 use secure9p_codec::ErrorCode;
+use serde::Deserialize;
 
 use super::observe::{ProcLeaseConfig, ProcScheduleConfig};
 use crate::NineDoorError;
@@ -216,7 +216,12 @@ impl ScheduleState {
                 "schedule id already exists",
             ));
         }
-        append_log_line(&mut self.ctl_log, line, self.ctl_max_bytes, "schedule control")?;
+        append_log_line(
+            &mut self.ctl_log,
+            line,
+            self.ctl_max_bytes,
+            "schedule control",
+        )?;
         let seq = self.next_seq;
         self.next_seq = self.next_seq.saturating_add(1);
         self.queue.push_back(ScheduleEntry {
@@ -550,7 +555,11 @@ impl LeaseState {
                 "id={} subject={} resource={} reason={} seq={}\n",
                 entry.id, entry.subject, entry.resource, entry.reason, entry.seq
             );
-            ensure_len("proc/lease/preemptions", line.len(), self.proc_preemptions_bytes)?;
+            ensure_len(
+                "proc/lease/preemptions",
+                line.len(),
+                self.proc_preemptions_bytes,
+            )?;
             if out.len().saturating_add(line.len()) > self.proc_preemptions_bytes {
                 break;
             }
@@ -616,7 +625,12 @@ impl ExportState {
                         "export window list full",
                     ));
                 }
-                append_log_line(&mut self.ctl_log, line, self.ctl_max_bytes, "export control")?;
+                append_log_line(
+                    &mut self.ctl_log,
+                    line,
+                    self.ctl_max_bytes,
+                    "export control",
+                )?;
                 let seq = self.next_seq;
                 self.next_seq = self.next_seq.saturating_add(1);
                 if let Some(index) = existing {
@@ -637,7 +651,12 @@ impl ExportState {
                     .ok_or_else(|| {
                         NineDoorError::protocol(ErrorCode::Invalid, "export id not found")
                     })?;
-                append_log_line(&mut self.ctl_log, line, self.ctl_max_bytes, "export control")?;
+                append_log_line(
+                    &mut self.ctl_log,
+                    line,
+                    self.ctl_max_bytes,
+                    "export control",
+                )?;
                 let _ = self.windows.swap_remove(position);
             }
         }
@@ -663,10 +682,7 @@ fn append_log_line(
     let bytes = line.as_bytes();
     let needs_newline = !bytes.ends_with(b"\n");
     let extra = if needs_newline { 1 } else { 0 };
-    let new_len = log
-        .len()
-        .saturating_add(bytes.len())
-        .saturating_add(extra);
+    let new_len = log.len().saturating_add(bytes.len()).saturating_add(extra);
     if new_len > max_bytes {
         return Err(NineDoorError::protocol(
             ErrorCode::Invalid,
@@ -734,9 +750,10 @@ fn validate_extended_token(value: &str, max_len: usize, label: &str) -> Result<(
             format!("{label} must not be '.' or '..'"),
         ));
     }
-    if !value.chars().all(|ch| {
-        ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' || ch == ':'
-    }) {
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' || ch == ':')
+    {
         return Err(NineDoorError::protocol(
             ErrorCode::Invalid,
             format!("{label} must be alphanumeric, '-', '_', '.', or ':'"),

@@ -212,9 +212,9 @@ impl<T: Secure9pTransport> Transport for TraceShellTransport<T> {
                 .client
                 .as_mut()
                 .context("attach to a session before running tail")?;
-            let mut stream = client.tail(path)?;
+            let stream = client.tail(path)?;
             let mut lines = Vec::new();
-            while let Some(event) = stream.next() {
+            for event in stream {
                 match event? {
                     TailEvent::Line(line) => lines.push(line),
                     TailEvent::End => lines.push(cohsh_core::END_LINE.to_owned()),

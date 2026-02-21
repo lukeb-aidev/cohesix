@@ -8,9 +8,7 @@ use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
 use cohsh::{Session, Transport};
-use host_sidecar_bridge::providers::{
-    format_docker_status_line, parse_docker_info_output,
-};
+use host_sidecar_bridge::providers::{format_docker_status_line, parse_docker_info_output};
 
 use super::{arg_str, target_components, ExecutorConfig};
 use crate::HostTicketSpec;
@@ -40,15 +38,21 @@ fn execute_action(
     action: &str,
 ) -> Result<String> {
     let container = resolve_container(spec)?;
-    let output =
-        run_docker(&[action, container.as_str()]).with_context(|| format!("docker {action} {container}"))?;
+    let output = run_docker(&[action, container.as_str()])
+        .with_context(|| format!("docker {action} {container}"))?;
     let control_path = format!("{}/docker/{action}", config.mount);
     let control_line = format!("ticket={} container={container} action={action}\n", spec.id);
     transport
         .write(session, control_path.as_str(), control_line.as_bytes())
         .with_context(|| format!("write {}", control_path))?;
     let state = inspect_container_state(container.as_str())?;
-    publish_container_status(transport, session, config, container.as_str(), state.as_str())?;
+    publish_container_status(
+        transport,
+        session,
+        config,
+        container.as_str(),
+        state.as_str(),
+    )?;
     Ok(format!(
         "docker action={action} container={container} state={} cmd={}",
         state,
@@ -64,7 +68,13 @@ fn execute_status_check(
 ) -> Result<String> {
     if let Some(container) = resolve_container_optional(spec) {
         let state = inspect_container_state(container.as_str())?;
-        publish_container_status(transport, session, config, container.as_str(), state.as_str())?;
+        publish_container_status(
+            transport,
+            session,
+            config,
+            container.as_str(),
+            state.as_str(),
+        )?;
         return Ok(format!(
             "docker status-check container={container} state={state}"
         ));
@@ -103,7 +113,11 @@ fn publish_container_status(
     container: &str,
     state: &str,
 ) -> Result<()> {
-    let line = format!("state={} container={}\n", sanitize_token(state), sanitize_token(container));
+    let line = format!(
+        "state={} container={}\n",
+        sanitize_token(state),
+        sanitize_token(container)
+    );
     publish_line(transport, session, config, line.as_str())
 }
 
@@ -169,7 +183,7 @@ fn resolve_container_optional(spec: &HostTicketSpec) -> Option<String> {
 }
 
 fn bounded_utf8(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes).replace('\n', " ").replace('\r', " ");
+    let text = String::from_utf8_lossy(bytes).replace(['\n', '\r'], " ");
     if text.len() <= MAX_CAPTURE_BYTES {
         return text.trim().to_owned();
     }
@@ -212,6 +226,10 @@ mod tests {
             target: None,
             args: serde_json::json!({ "container": "cohesix-agent" }),
             expires_unix_ms: None,
+            source_hive: None,
+            target_hive: None,
+            relay_hop: None,
+            relay_correlation_id: None,
         };
         assert_eq!(
             resolve_container_optional(&spec).as_deref(),
@@ -229,7 +247,14 @@ mod tests {
             target: Some("/host/docker/worker-1/restart".to_owned()),
             args: Value::Null,
             expires_unix_ms: None,
+            source_hive: None,
+            target_hive: None,
+            relay_hop: None,
+            relay_correlation_id: None,
         };
-        assert_eq!(resolve_container_optional(&spec).as_deref(), Some("worker-1"));
+        assert_eq!(
+            resolve_container_optional(&spec).as_deref(),
+            Some("worker-1")
+        );
     }
 }

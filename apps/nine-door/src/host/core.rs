@@ -12,7 +12,6 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::{BudgetSpec, Role, TicketKey, TicketToken, TicketVerb};
 use gpu_bridge_host::{status_entry, GpuNamespaceSnapshot};
-use sha2::{Digest, Sha256};
 use log::{debug, info, trace};
 use secure9p_codec::{
     Codec, ErrorCode, OpenMode, Qid, Request, RequestBody, Response, ResponseBody, SessionId,
@@ -22,6 +21,7 @@ use secure9p_core::{
     FidError, QueueDepth, QueueError, SessionLimits, ShardedFidTable, TagError, TagWindow,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use trace_model::TraceLevel;
 use worker_gpu::{GpuLease as WorkerGpuLease, JobDescriptor};
 
@@ -132,6 +132,7 @@ enum AuthState {
 }
 
 impl ServerCore {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         clock: Arc<dyn Clock>,
         limits: SessionLimits,
@@ -2172,7 +2173,9 @@ struct GpuBridgeReceiver {
 #[derive(Debug)]
 enum GpuBridgeUpdate {
     None,
-    Started { bytes: usize },
+    Started {
+        bytes: usize,
+    },
     Complete {
         bytes: usize,
         sha256: String,
@@ -2214,14 +2217,9 @@ impl GpuBridgeReceiver {
             let pending = self.pending.take().ok_or_else(|| {
                 NineDoorError::protocol(ErrorCode::Invalid, "gpu bridge end without begin")
             })?;
-            let decoded = BASE64_STANDARD
-                .decode(&pending.encoded)
-                .map_err(|_| {
-                    NineDoorError::protocol(
-                        ErrorCode::Invalid,
-                        "gpu bridge base64 decode failed",
-                    )
-                })?;
+            let decoded = BASE64_STANDARD.decode(&pending.encoded).map_err(|_| {
+                NineDoorError::protocol(ErrorCode::Invalid, "gpu bridge base64 decode failed")
+            })?;
             if decoded.len() != pending.expected_bytes {
                 return Err(NineDoorError::protocol(
                     ErrorCode::Invalid,
@@ -2289,6 +2287,7 @@ struct ControlPlane {
 }
 
 impl ControlPlane {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         telemetry: TelemetryConfig,
         telemetry_ingest: TelemetryIngestConfig,
@@ -2410,8 +2409,7 @@ impl ControlPlane {
         }
         if self.schedule.proc_summary_enabled() {
             let payload = self.schedule.summary_payload()?;
-            self.namespace
-                .set_proc_schedule_summary_payload(&payload)?;
+            self.namespace.set_proc_schedule_summary_payload(&payload)?;
         }
         if self.schedule.proc_queue_enabled() {
             let payload = self.schedule.queue_payload()?;
@@ -2561,9 +2559,7 @@ impl ControlPlane {
                     snapshot,
                 }) => {
                     self.install_gpu_nodes(&snapshot)?;
-                    self.set_gpu_bridge_status(&format!(
-                        "state=ok bytes={bytes} sha256={sha256}"
-                    ))?;
+                    self.set_gpu_bridge_status(&format!("state=ok bytes={bytes} sha256={sha256}"))?;
                 }
                 Err(err) => {
                     let reason = gpu_bridge_error_message(&err);
@@ -2636,23 +2632,16 @@ impl ControlPlane {
             let outcome = match command {
                 QueenCommand::Spawn(spec) => {
                     self.ensure_lifecycle_gate(lifecycle::GATE_NEW_WORK)?;
-                    let result = self.spawn_worker(&spec).map(|worker_id| {
+                    self.spawn_worker(&spec).map(|worker_id| {
                         events.push(QueenEvent::Spawned(worker_id));
-                    });
-                    result
+                    })
                 }
-                QueenCommand::Kill(KillCommand { kill }) => {
-                    let result = self.kill_worker(&kill).map(|()| {
-                        events.push(QueenEvent::Killed(kill));
-                    });
-                    result
-                }
-                QueenCommand::Budget(payload) => {
-                    let result = self.update_default_budget(&payload).map(|()| {
-                        events.push(QueenEvent::BudgetUpdated);
-                    });
-                    result
-                }
+                QueenCommand::Kill(KillCommand { kill }) => self.kill_worker(&kill).map(|()| {
+                    events.push(QueenEvent::Killed(kill));
+                }),
+                QueenCommand::Budget(payload) => self.update_default_budget(&payload).map(|()| {
+                    events.push(QueenEvent::BudgetUpdated);
+                }),
                 QueenCommand::Bind(command) => {
                     self.ensure_lifecycle_gate(lifecycle::GATE_NEW_WORK)?;
                     let result =
@@ -2734,11 +2723,7 @@ impl ControlPlane {
         role: Option<Role>,
         ticket: Option<&str>,
     ) -> Result<u32, NineDoorError> {
-        let ctl_path = vec![
-            "queen".to_owned(),
-            "schedule".to_owned(),
-            "ctl".to_owned(),
-        ];
+        let ctl_path = vec!["queen".to_owned(), "schedule".to_owned(), "ctl".to_owned()];
         let text = str::from_utf8(data).map_err(|err| {
             NineDoorError::protocol(
                 ErrorCode::Invalid,
@@ -2856,11 +2841,7 @@ impl ControlPlane {
         role: Option<Role>,
         ticket: Option<&str>,
     ) -> Result<u32, NineDoorError> {
-        let ctl_path = vec![
-            "queen".to_owned(),
-            "export".to_owned(),
-            "ctl".to_owned(),
-        ];
+        let ctl_path = vec!["queen".to_owned(), "export".to_owned(), "ctl".to_owned()];
         let text = str::from_utf8(data).map_err(|err| {
             NineDoorError::protocol(
                 ErrorCode::Invalid,
@@ -3829,8 +3810,6 @@ impl RootState {
             RootCutReason::SessionRevoked
         } else if self.flags & ROOT_FLAG_POLICY != 0 {
             RootCutReason::PolicyDenied
-        } else if self.flags & ROOT_FLAG_NETWORK != 0 {
-            RootCutReason::NetworkUnreachable
         } else {
             RootCutReason::NetworkUnreachable
         };
@@ -3949,6 +3928,7 @@ impl SessionState {
         self.fids.remove(fid)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn configure_role(
         &mut self,
         role: Role,
@@ -4035,6 +4015,7 @@ impl SessionState {
         self.mark_closed(now);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_mount(
         &mut self,
         shards: &ShardLayout,
@@ -4199,6 +4180,7 @@ impl MountTable {
 struct AccessPolicy;
 
 impl AccessPolicy {
+    #[allow(clippy::too_many_arguments)]
     fn ensure_open(
         shards: &ShardLayout,
         role: Option<Role>,
@@ -4255,6 +4237,7 @@ impl AccessPolicy {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn ensure_read(
         shards: &ShardLayout,
         role: Option<Role>,
@@ -4315,6 +4298,7 @@ impl AccessPolicy {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn ensure_write(
         shards: &ShardLayout,
         role: Option<Role>,
@@ -4374,6 +4358,7 @@ impl AccessPolicy {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn ensure_path(
         shards: &ShardLayout,
         role: Option<Role>,
@@ -4505,7 +4490,7 @@ fn worker_common_path(path: &[String]) -> bool {
 }
 
 fn host_allowed_prefix(host_mount: Option<&[String]>, path: &[String]) -> bool {
-    host_mount.map_or(false, |mount| path.starts_with(mount))
+    host_mount.is_some_and(|mount| path.starts_with(mount))
 }
 
 fn host_allowed_path(host_mount: Option<&[String]>, path: &[String]) -> bool {
@@ -5114,7 +5099,7 @@ mod tests {
             }
         ));
         queen
-            .walk(1, 3, &vec!["log".into(), "queen.log".into()])
+            .walk(1, 3, &["log".into(), "queen.log".into()])
             .unwrap();
         queen.open(3, OpenMode::read_only()).unwrap();
         let log = String::from_utf8(queen.read(3, 0, 1024).unwrap()).unwrap();
@@ -5198,7 +5183,7 @@ mod tests {
 
         fn advance(&self, duration: Duration) {
             let mut guard = self.now.lock().unwrap();
-            *guard = *guard + duration;
+            *guard += duration;
         }
     }
 

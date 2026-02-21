@@ -109,8 +109,8 @@ mod tests {
 
     #[test]
     fn parse_systemd_output() {
-        let parsed = parse_systemd_show_output("ActiveState=active\nSubState=running\n")
-            .expect("parse");
+        let parsed =
+            parse_systemd_show_output("ActiveState=active\nSubState=running\n").expect("parse");
         assert_eq!(parsed.state, "active");
         assert_eq!(parsed.sub, "running");
         assert_eq!(

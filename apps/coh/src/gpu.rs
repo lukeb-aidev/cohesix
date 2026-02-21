@@ -10,8 +10,8 @@ use std::path::Path;
 use anyhow::{anyhow, Context, Result};
 use cohsh::queen;
 use cohsh_core::wire::AckStatus;
-use serde::Serialize;
 use serde::Deserialize;
+use serde::Serialize;
 
 use crate::{CohAccess, CohAudit, MAX_DIR_LIST_BYTES};
 
@@ -100,8 +100,7 @@ pub fn status<C: CohAccess>(client: &mut C, audit: &mut CohAudit, gpu_id: &str) 
     let line = text
         .lines()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .last()
+        .rfind(|value| !value.is_empty())
         .unwrap_or("EMPTY");
     audit.push_line(format!("gpu id={gpu_id} status={line}"));
     Ok(())

@@ -200,7 +200,7 @@ impl ConsoleHarness {
                         Some("reason=unauthenticated"),
                     )];
                 }
-                let detail = format!("path={} bytes={}", path.as_str(), payload.as_bytes().len());
+                let detail = format!("path={} bytes={}", path.as_str(), payload.len());
                 vec![render_ack_line(
                     AckStatus::Ok,
                     verb_label,
@@ -529,6 +529,7 @@ fn run_tcp_transcript(script_path: &Path, harness: ConsoleHarness) -> (Vec<Strin
     (lines, elapsed_ms)
 }
 
+#[allow(clippy::type_complexity)]
 fn spawn_tcp_server(
     mut harness: ConsoleHarness,
 ) -> (

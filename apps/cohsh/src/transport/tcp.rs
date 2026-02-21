@@ -174,6 +174,7 @@ impl ConsoleLock {
         let path = console_lock_path(host, port);
         let mut file = OpenOptions::new()
             .create(true)
+            .truncate(true)
             .read(true)
             .write(true)
             .open(&path)
@@ -759,7 +760,7 @@ impl TcpTransport {
         let stream = self.stream.as_mut().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotConnected, "TCP transport not connected")
         })?;
-        let total_len = line.as_bytes().len().saturating_add(4);
+        let total_len = line.len().saturating_add(4);
         let len: u32 = total_len
             .try_into()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "frame too large"))?;

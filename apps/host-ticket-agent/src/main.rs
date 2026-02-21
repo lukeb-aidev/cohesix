@@ -15,14 +15,12 @@ use anyhow::{Context, Result};
 use clap::{ArgAction, Parser};
 use coh::policy::{default_policy_path, load_policy, CohPolicy};
 use cohesix_ticket::Role;
-use cohsh::{
-    NineDoorTransport, RestTransport, RoleArg, Session, TcpTransport, Transport,
-};
-use host_ticket_agent::{
-    process_tickets_once, unix_time_ms_now, HostTicketManifest, DEFAULT_CURSOR_STATE_PATH,
-    DEFAULT_RESOLVED_MANIFEST_PATH,
-};
+use cohsh::{NineDoorTransport, RestTransport, RoleArg, Session, TcpTransport, Transport};
 use host_ticket_agent::executors::ExecutorConfig;
+use host_ticket_agent::{
+    process_tickets_once, relay, unix_time_ms_now, HostTicketManifest, DEFAULT_CURSOR_STATE_PATH,
+    DEFAULT_RELAY_WAL_PATH, DEFAULT_RESOLVED_MANIFEST_PATH,
+};
 use nine_door::{HostNamespaceConfig, HostProvider, HostTicketPolicy, NineDoor};
 
 /// CLI arguments for `host-ticket-agent`.
@@ -47,6 +45,12 @@ struct Args {
     /// Poll interval in milliseconds when running continuously.
     #[arg(long, default_value_t = 1000)]
     poll_ms: u64,
+    /// Enable federated relay forwarding (`ecosystem.host.federation`).
+    #[arg(long, action = ArgAction::SetTrue)]
+    relay: bool,
+    /// Relay WAL state file for deterministic resume.
+    #[arg(long, value_name = "FILE", default_value = DEFAULT_RELAY_WAL_PATH)]
+    relay_wal: PathBuf,
     /// Process one pass and exit.
     #[arg(long, action = ArgAction::SetTrue)]
     run_once: bool,
@@ -137,6 +141,34 @@ fn main() -> Result<()> {
             }
         }
 
+        if args.relay {
+            let relay_pass =
+                relay::relay_once(transport.as_mut(), &session, &manifest, &args.relay_wal);
+            match relay_pass {
+                Ok(summary) => {
+                    if summary.seen > 0
+                        || summary.forwarded > 0
+                        || summary.remote_write_failures > 0
+                        || summary.queue_depth > 0
+                    {
+                        println!(
+                            "host-ticket-agent relay: seen={} candidates={} deduped={} forwarded={} remote_failures={} backpressure={} queue_depth={} wal={}",
+                            summary.seen,
+                            summary.candidates,
+                            summary.deduped,
+                            summary.forwarded,
+                            summary.remote_write_failures,
+                            summary.backpressure_drops,
+                            summary.queue_depth,
+                            args.relay_wal.display()
+                        );
+                    }
+                }
+                Err(err) if args.run_once => return Err(err),
+                Err(err) => eprintln!("host-ticket-agent relay: pass failed: {err}"),
+            }
+        }
+
         if args.run_once {
             break;
         }
@@ -159,7 +191,8 @@ fn build_transport(args: &Args, manifest: &HostTicketManifest) -> Result<Box<dyn
         return Ok(Box::new(RestTransport::new(rest_url, auth)));
     }
     Ok(Box::new(
-        TcpTransport::new(args.tcp_host.clone(), args.tcp_port).with_auth_token(args.auth_token.clone()),
+        TcpTransport::new(args.tcp_host.clone(), args.tcp_port)
+            .with_auth_token(args.auth_token.clone()),
     ))
 }
 
@@ -209,10 +242,7 @@ fn resolve_registry_root(policy_path: Option<&Path>) -> PathBuf {
     match load_policy(path.as_path()) {
         Ok(policy) => PathBuf::from(policy.peft.import.registry_root),
         Err(err) => {
-            eprintln!(
-                "host-ticket-agent: {} (using generated coh defaults)",
-                err
-            );
+            eprintln!("host-ticket-agent: {} (using generated coh defaults)", err);
             PathBuf::from(CohPolicy::from_generated().peft.import.registry_root)
         }
     }

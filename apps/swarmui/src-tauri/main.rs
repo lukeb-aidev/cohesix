@@ -508,7 +508,7 @@ fn main() {
         }
         let role = mint_args
             .role
-            .ok_or_else(|| "missing --role for --mint-ticket")
+            .ok_or("missing --role for --mint-ticket")
             .unwrap_or_else(|err| {
                 eprintln!("{err}");
                 std::process::exit(2);
@@ -529,7 +529,7 @@ fn main() {
     if replay_path.is_some() && trace_replay_path.is_some() {
         panic!("cannot use --replay and --replay-trace together");
     }
-    let data_dir = tauri::api::path::data_dir().unwrap_or_else(|| std::env::temp_dir());
+    let data_dir = tauri::api::path::data_dir().unwrap_or_else(std::env::temp_dir);
     let mut config = SwarmUiConfig::from_generated(data_dir.clone());
     if replay_path.is_some() {
         config.offline = true;

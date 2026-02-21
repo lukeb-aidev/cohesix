@@ -346,11 +346,32 @@ pub struct HostTicketConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct HostFederationPeer {
+    pub name: &'static str,
+    pub rest_url: &'static str,
+    pub auth_ref: &'static str,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct HostFederationConfig {
+    pub enable: bool,
+    pub local_hive: &'static str,
+    pub peers: &'static [HostFederationPeer],
+    pub action_allowlist: &'static [HostTicketAction],
+    pub relay_queue_max_entries: u16,
+    pub relay_queue_max_bytes: u32,
+    pub wal_max_entries: u32,
+    pub wal_max_bytes: u32,
+    pub relay_timeout_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct HostConfig {
     pub enable: bool,
     pub mount_at: &'static str,
     pub providers: &'static [HostProvider],
     pub tickets: HostTicketConfig,
+    pub federation: HostFederationConfig,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -441,7 +462,8 @@ pub struct AuditConfig {
 }
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
-pub const MANIFEST_SHA256: &str = "af1586465c29995de8086260fe57138aa3481d8ea70f42e5d37b1add06026af0";
+pub const MANIFEST_SHA256: &str =
+    "0884f452da6fe84e7148c3c1e01d605b45f09f1da09914d87e961cc2c256b905";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

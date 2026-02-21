@@ -36,7 +36,8 @@ fn lease_active_and_preemptions_enforce_bounds() {
         client.write(2, payload.as_bytes()).expect("grant lease");
     }
 
-    let overflow = r#"{"op":"grant","id":"lover","subject":"s","resource":"r","ttl_s":1,"priority":1}"#;
+    let overflow =
+        r#"{"op":"grant","id":"lover","subject":"s","resource":"r","ttl_s":1,"priority":1}"#;
     let err = client
         .write(2, overflow.as_bytes())
         .expect_err("active list should be full");
@@ -47,12 +48,11 @@ fn lease_active_and_preemptions_enforce_bounds() {
 
     for idx in 0..PREEMPTIONS_MAX {
         let payload = format!("{{\"op\":\"preempt\",\"id\":\"l{idx}\",\"reason\":\"x\"}}");
-        client
-            .write(2, payload.as_bytes())
-            .expect("preempt lease");
+        client.write(2, payload.as_bytes()).expect("preempt lease");
     }
 
-    let grant_again = r#"{"op":"grant","id":"lextra","subject":"s","resource":"r","ttl_s":1,"priority":1}"#;
+    let grant_again =
+        r#"{"op":"grant","id":"lextra","subject":"s","resource":"r","ttl_s":1,"priority":1}"#;
     client
         .write(2, grant_again.as_bytes())
         .expect("grant after preemptions");

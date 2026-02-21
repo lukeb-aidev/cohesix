@@ -100,10 +100,7 @@ fn check_controls(root: &Path, controls: &ControlsFile) -> Result<(), Vec<String
                 ));
             }
             let has_required = control.evidence.iter().any(|evidence| {
-                matches!(
-                    evidence.kind.as_str(),
-                    "test" | "script" | "log_fixture"
-                )
+                matches!(evidence.kind.as_str(), "test" | "script" | "log_fixture")
             });
             if !has_required {
                 errors.push(format!(

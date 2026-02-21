@@ -44,7 +44,7 @@ impl Transport for StubTransport {
 
 #[test]
 fn ping_reports_detached_state() {
-    let mut shell = Shell::new(StubTransport::default(), Cursor::new(Vec::new()));
+    let mut shell = Shell::new(StubTransport, Cursor::new(Vec::new()));
     let err = shell
         .execute("ping")
         .expect_err("ping should fail when detached");
@@ -56,7 +56,7 @@ fn ping_reports_detached_state() {
 
 #[test]
 fn ping_reports_attachment_state() {
-    let mut shell = Shell::new(StubTransport::default(), Cursor::new(Vec::new()));
+    let mut shell = Shell::new(StubTransport, Cursor::new(Vec::new()));
     shell
         .attach(Role::Queen, None)
         .expect("attach should succeed");

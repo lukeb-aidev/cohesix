@@ -138,10 +138,7 @@ impl CasStore {
     }
 
     pub fn list_models(&self) -> Vec<String> {
-        self.models
-            .keys()
-            .map(|digest| hex::encode(digest))
-            .collect()
+        self.models.keys().map(hex::encode).collect()
     }
 
     pub fn list_update_chunks(&self, epoch: &str) -> Vec<String> {
@@ -152,11 +149,7 @@ impl CasStore {
         else {
             return Vec::new();
         };
-        let mut entries: Vec<String> = manifest
-            .chunks
-            .iter()
-            .map(|digest| hex::encode(digest))
-            .collect();
+        let mut entries: Vec<String> = manifest.chunks.iter().map(hex::encode).collect();
         entries.sort();
         entries
     }
@@ -269,7 +262,10 @@ impl CasStore {
         self.ensure_epoch(epoch)?;
         let payload = decode_payload(data)?;
         let expected_offset = {
-            let bundle = self.updates.get_mut(epoch).expect("update bundle must exist");
+            let bundle = self
+                .updates
+                .get_mut(epoch)
+                .expect("update bundle must exist");
             if let Some(existing) = bundle.manifest_bytes.as_ref() {
                 let expected_offset = bundle.manifest_pending.len() as u64;
                 let provided_offset = if offset == u64::MAX {

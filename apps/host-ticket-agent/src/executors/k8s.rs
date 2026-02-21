@@ -172,7 +172,7 @@ fn resolve_node(spec: &HostTicketSpec) -> Result<String> {
 }
 
 fn bounded_utf8(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes).replace('\n', " ").replace('\r', " ");
+    let text = String::from_utf8_lossy(bytes).replace(['\n', '\r'], " ");
     if text.len() <= MAX_CAPTURE_BYTES {
         return text.trim().to_owned();
     }
@@ -217,6 +217,10 @@ mod tests {
             target: Some("/host/k8s/node/node-1/cordon".to_owned()),
             args: Value::Null,
             expires_unix_ms: None,
+            source_hive: None,
+            target_hive: None,
+            relay_hop: None,
+            relay_correlation_id: None,
         };
         let node = resolve_node(&spec).expect("node");
         assert_eq!(node, "node-1");

@@ -18,11 +18,11 @@ pub use cohsh_core::{
     Command, CommandParser, ConsoleError, MAX_LINE_LEN, MAX_ROLE_LEN, MAX_TICKET_LEN,
 };
 
+#[cfg(feature = "kernel")]
+use crate::affinity;
 use crate::platform::Platform;
 #[cfg(feature = "kernel")]
 use crate::sel4::BootInfoExt;
-#[cfg(feature = "kernel")]
-use crate::affinity;
 
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4;

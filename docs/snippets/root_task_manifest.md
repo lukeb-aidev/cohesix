@@ -176,7 +176,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `af1586465c29995de8086260fe57138aa3481d8ea70f42e5d37b1add06026af0`
+- `manifest.sha256`: `0884f452da6fe84e7148c3c1e01d605b45f09f1da09914d87e961cc2c256b905`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -204,6 +204,22 @@
 - `ecosystem.host.enable`: `true`
 - `ecosystem.host.mount_at`: `/host`
 - `ecosystem.host.providers`: `systemd`, `k8s`, `docker`, `nvidia`
+- `ecosystem.host.tickets.enable`: `true`
+- `ecosystem.host.tickets.request_schema`: `host-ticket/v1`
+- `ecosystem.host.tickets.result_schema`: `host-ticket-result/v1`
+- `ecosystem.host.tickets.max_line_bytes`: `2048`
+- `ecosystem.host.tickets.action_allowlist`: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`, `peft.import`, `peft.activate`, `peft.rollback`, `systemd.start`, `systemd.stop`, `systemd.restart`, `systemd.status-check`, `docker.restart`, `docker.stop`, `docker.status-check`, `k8s.cordon`, `k8s.drain`, `k8s.lease.sync`
+- `ecosystem.host.tickets.lifecycle`: `queued`, `claimed`, `running`, `succeeded`, `failed`, `expired`
+- `ecosystem.host.federation.enable`: `true`
+- `ecosystem.host.federation.local_hive`: `hive-a`
+- `ecosystem.host.federation.relay_queue_max_entries`: `256`
+- `ecosystem.host.federation.relay_queue_max_bytes`: `32768`
+- `ecosystem.host.federation.wal_max_entries`: `1024`
+- `ecosystem.host.federation.wal_max_bytes`: `524288`
+- `ecosystem.host.federation.relay_timeout_ms`: `2000`
+- `ecosystem.host.federation.peers`: `hive-b` -> `http://127.0.0.1:8081` (`auth_ref=COHESIX_RELAY_HIVE_B_TOKEN`)
+- `ecosystem.host.federation.peers`: `hive-c` -> `http://127.0.0.1:8082` (`auth_ref=COHESIX_RELAY_HIVE_C_TOKEN`)
+- `ecosystem.host.federation.action_allowlist`: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`, `peft.import`, `peft.activate`, `peft.rollback`, `systemd.start`, `systemd.stop`, `systemd.restart`, `systemd.status-check`, `docker.restart`, `docker.stop`, `docker.status-check`, `k8s.cordon`, `k8s.drain`, `k8s.lease.sync`
 - `/host` namespace mounted at `/host` when enabled.
 - `ecosystem.audit.enable`: `false`
 - `ecosystem.audit.journal_max_bytes`: `8192`
@@ -222,4 +238,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `af1586465c29995de8086260fe57138aa3481d8ea70f42e5d37b1add06026af0`)._
+_Generated from `configs/root_task.toml` (sha256: `0884f452da6fe84e7148c3c1e01d605b45f09f1da09914d87e961cc2c256b905`)._

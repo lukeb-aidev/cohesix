@@ -100,7 +100,7 @@ fn run_console_replay(commands: &[String]) -> Result<Vec<String>> {
         let (command, args) = split_command(line)?;
         match command.as_str() {
             "attach" => {
-                let role = parse_role_arg(args.get(0))?;
+                let role = parse_role_arg(args.first())?;
                 let ticket = args.get(1).map(String::as_str);
                 let result = transport.attach(role, ticket);
                 transcript.extend(transport.drain_acknowledgements());
@@ -108,7 +108,7 @@ fn run_console_replay(commands: &[String]) -> Result<Vec<String>> {
             }
             "spawn" => {
                 let session = session.as_ref().context("attach before spawn")?;
-                let role = args.get(0).context("spawn requires a role")?;
+                let role = args.first().context("spawn requires a role")?;
                 let payload = queen::spawn(role, args.iter().skip(1).map(String::as_str))?;
                 let result = transport.write(session, queen::queen_ctl_path(), payload.as_bytes());
                 transcript.extend(transport.drain_acknowledgements());
@@ -116,7 +116,7 @@ fn run_console_replay(commands: &[String]) -> Result<Vec<String>> {
             }
             "kill" => {
                 let session = session.as_ref().context("attach before kill")?;
-                let worker_id = args.get(0).context("kill requires a worker id")?;
+                let worker_id = args.first().context("kill requires a worker id")?;
                 let payload = queen::kill(worker_id)?;
                 let result = transport.write(session, queen::queen_ctl_path(), payload.as_bytes());
                 transcript.extend(transport.drain_acknowledgements());
@@ -124,7 +124,7 @@ fn run_console_replay(commands: &[String]) -> Result<Vec<String>> {
             }
             "tail" => {
                 let session = session.as_ref().context("attach before tail")?;
-                let path = args.get(0).context("tail requires a path")?;
+                let path = args.first().context("tail requires a path")?;
                 let result = transport.tail(session, path);
                 transcript.extend(transport.drain_acknowledgements());
                 match result {
@@ -155,7 +155,7 @@ fn run_client_replay(commands: &[String]) -> Result<Vec<String>> {
         let (command, args) = split_command(line)?;
         match command.as_str() {
             "attach" => {
-                let role = parse_role_arg(args.get(0))?;
+                let role = parse_role_arg(args.first())?;
                 let ticket = args.get(1).map(String::as_str);
                 let connection = server.connect().context("open NineDoor session")?;
                 let transport = InProcessTransport::new(connection);
@@ -182,15 +182,11 @@ fn run_client_replay(commands: &[String]) -> Result<Vec<String>> {
             }
             "spawn" => {
                 let client = client.as_mut().context("attach before spawn")?;
-                let role = args.get(0).context("spawn requires a role")?;
+                let role = args.first().context("spawn requires a role")?;
                 let payload = queen::spawn(role, args.iter().skip(1).map(String::as_str))?;
                 write_payload(client, queen::queen_ctl_path(), payload.as_bytes())
                     .with_context(|| "spawn write failed")?;
-                let detail = format!(
-                    "path={} bytes={}",
-                    queen::queen_ctl_path(),
-                    payload.as_bytes().len()
-                );
+                let detail = format!("path={} bytes={}", queen::queen_ctl_path(), payload.len());
                 transcript.push(render_ack_line(
                     AckStatus::Ok,
                     ConsoleVerb::Spawn.ack_label(),
@@ -199,15 +195,11 @@ fn run_client_replay(commands: &[String]) -> Result<Vec<String>> {
             }
             "kill" => {
                 let client = client.as_mut().context("attach before kill")?;
-                let worker_id = args.get(0).context("kill requires a worker id")?;
+                let worker_id = args.first().context("kill requires a worker id")?;
                 let payload = queen::kill(worker_id)?;
                 write_payload(client, queen::queen_ctl_path(), payload.as_bytes())
                     .with_context(|| "kill write failed")?;
-                let detail = format!(
-                    "path={} bytes={}",
-                    queen::queen_ctl_path(),
-                    payload.as_bytes().len()
-                );
+                let detail = format!("path={} bytes={}", queen::queen_ctl_path(), payload.len());
                 transcript.push(render_ack_line(
                     AckStatus::Ok,
                     ConsoleVerb::Kill.ack_label(),
@@ -216,16 +208,16 @@ fn run_client_replay(commands: &[String]) -> Result<Vec<String>> {
             }
             "tail" => {
                 let client = client.as_mut().context("attach before tail")?;
-                let path = args.get(0).context("tail requires a path")?;
+                let path = args.first().context("tail requires a path")?;
                 match client.tail(path) {
-                    Ok(mut stream) => {
+                    Ok(stream) => {
                         let detail = format!("path={path}");
                         transcript.push(render_ack_line(
                             AckStatus::Ok,
                             ConsoleVerb::Tail.ack_label(),
                             Some(detail.as_str()),
                         ));
-                        while let Some(event) = stream.next() {
+                        for event in stream {
                             match event? {
                                 TailEvent::Line(line) => transcript.push(line),
                                 TailEvent::End => transcript.push(END_LINE.to_owned()),

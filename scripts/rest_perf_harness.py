@@ -702,6 +702,21 @@ def apply_fast_ramp_defaults(args: argparse.Namespace) -> None:
         args.max_inflight = FAST_RAMP_MAX_INFLIGHT
 
 
+def apply_multi_hive_defaults(args: argparse.Namespace, argv_tokens: Sequence[str]) -> None:
+    """Derive workers-min/max from federation shape unless explicitly overridden."""
+    if not args.multi_hive:
+        return
+    args.hives = clamp_int(args.hives, 2, 10, "hives")
+    args.workers_per_hive = clamp_int(
+        args.workers_per_hive, 1, 1500, "workers-per-hive"
+    )
+    total_workers = args.hives * args.workers_per_hive
+    if "--workers-min" not in argv_tokens:
+        args.workers_min = total_workers
+    if "--workers-max" not in argv_tokens:
+        args.workers_max = total_workers
+
+
 def error_rate(entry: OpStats) -> float:
     if entry.count <= 0:
         return 0.0
@@ -886,6 +901,26 @@ def parse_args() -> argparse.Namespace:
         help="Maximum worker count (default: %(default)s).",
     )
     sim.add_argument(
+        "--multi-hive",
+        action="store_true",
+        help=(
+            "Enable federated multi-hive mode; this computes a total worker target from "
+            "--hives * --workers-per-hive unless workers-min/max are provided explicitly."
+        ),
+    )
+    sim.add_argument(
+        "--hives",
+        type=int,
+        default=3,
+        help="Hive count when --multi-hive is enabled (default: %(default)s).",
+    )
+    sim.add_argument(
+        "--workers-per-hive",
+        type=int,
+        default=1000,
+        help="Per-hive worker cap when --multi-hive is enabled (default: %(default)s).",
+    )
+    sim.add_argument(
         "--intensity-min",
         type=int,
         default=DEFAULT_INTENSITY_MIN,
@@ -999,6 +1034,7 @@ def parse_args() -> argparse.Namespace:
         help="Maximum distinct error lines included in summary artifacts.",
     )
 
+    argv_tokens = sys.argv[1:]
     args = parser.parse_args()
 
     env_tcp_token = (
@@ -1037,9 +1073,15 @@ def parse_args() -> argparse.Namespace:
             "telemetry-reference-chunk-bytes",
         )
         apply_fast_ramp_defaults(args)
+        apply_multi_hive_defaults(args, argv_tokens)
         args.duration_mins = clamp_int(args.duration_mins, 1, 60, "duration-mins")
-        args.workers_min = clamp_int(args.workers_min, 1, 1500, "workers-min")
-        args.workers_max = clamp_int(args.workers_max, 1, 1500, "workers-max")
+        workers_upper_bound = 1500 if not args.multi_hive else 15000
+        args.workers_min = clamp_int(
+            args.workers_min, 1, workers_upper_bound, "workers-min"
+        )
+        args.workers_max = clamp_int(
+            args.workers_max, 1, workers_upper_bound, "workers-max"
+        )
         if args.workers_min > args.workers_max:
             raise SystemExit("workers-min must be <= workers-max")
         args.intensity_min = clamp_int(args.intensity_min, 1, 10, "intensity-min")
@@ -2362,6 +2404,9 @@ def run_simulation(args: argparse.Namespace) -> int:
         args.logger.log(
             f"[simulate] duration={args.duration_mins}m "
             f"workers={args.workers_min}-{args.workers_max} "
+            f"multi_hive={'on' if args.multi_hive else 'off'} "
+            f"hives={args.hives if args.multi_hive else 1} "
+            f"workers_per_hive={args.workers_per_hive if args.multi_hive else args.workers_max} "
             f"intensity={args.intensity_min}-{args.intensity_max} "
             f"rest={rest_url} "
             f"transient_retries={'on' if args.transient_retries else 'off'} "
@@ -2660,6 +2705,12 @@ def write_simulation_artifacts(
         "rest_url": args.rest_url,
         "workers_min": args.workers_min,
         "workers_max": args.workers_max,
+        "multi_hive": args.multi_hive,
+        "hives": args.hives if args.multi_hive else 1,
+        "workers_per_hive": args.workers_per_hive if args.multi_hive else args.workers_max,
+        "federated_worker_target": (
+            args.hives * args.workers_per_hive if args.multi_hive else args.workers_max
+        ),
         "worker_cap": worker_cap,
         "intensity_min": args.intensity_min,
         "intensity_max": args.intensity_max,

@@ -488,12 +488,30 @@ flowchart LR
   - `peft.*` via existing host registry + `/gpu/models/*`.
   - `systemd.*`, `docker.*`, `k8s.*` as host-side coexistence actions.
 - Agent appends lifecycle receipts (`claimed`, `running`, `succeeded`, `failed`, `expired`) to `/host/tickets/status` or `/host/tickets/deadletter`.
-- Evidence/timeline tooling correlates `id + idempotency_key` across request/outcome/audit/lease artifacts.
+- Evidence/timeline tooling correlates:
+  - local: `id + idempotency_key`
+  - federated: `id + idempotency_key + source_hive + target_hive`
+  across request/outcome/audit/lease artifacts.
 
 **Why this is distinctive:**
 - No new in-VM protocols.
 - One control shape for heterogeneous ecosystems.
 - Deterministic replay and chargeback from append-only ticket streams.
+
+## 28) Multi-hive federation (10x1k pattern, single-writer preserved)
+**Problem:** A single hive has practical reliability limits around high worker counts; operators need to orchestrate many hives without introducing active/active split-brain writes.
+
+**Cohesix flow:**
+- Keep each hive authoritative and single-writer.
+- Use host-only relay (`host-ticket-agent --relay`) to forward allowlisted intents between hives via existing REST mutation paths.
+- Persist relay queue state in WAL and replay unapplied entries deterministically after restart/cutover.
+- Use `coh fleet status|lease-summary|pressure` for read-only fan-in visibility across hives.
+- Use failover watchdog hooks (`--relay-pause-cmd`, `--relay-resume-cmd`) to freeze relay during cutover and resume after health checks.
+
+**Why this is distinctive:**
+- Scales to multi-hive operations (for example 10 queens x 1000 workers) without changing VM protocols.
+- Preserves strict split-brain fencing and explicit authority boundaries.
+- Produces replayable evidence linking source intent to target execution and terminal receipts.
 
 ---
 

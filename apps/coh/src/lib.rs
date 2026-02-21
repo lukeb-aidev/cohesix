@@ -15,6 +15,8 @@ pub mod doctor;
 pub mod evidence;
 /// Offline timeline generation for evidence packs.
 pub mod evidence_timeline;
+/// Read-only multi-hive fleet fan-in helpers.
+pub mod fleet;
 /// GPU inventory and lease helpers.
 pub mod gpu;
 /// Secure9P-backed mount adapter.
@@ -173,7 +175,7 @@ pub(crate) fn validate_component(component: &str) -> Result<()> {
     if component.contains('/') {
         return Err(anyhow!("path component '{component}' contains '/'"));
     }
-    if component.as_bytes().iter().any(|byte| *byte == 0) {
+    if component.as_bytes().contains(&0) {
         return Err(anyhow!("path component contains NUL byte"));
     }
     Ok(())
@@ -213,7 +215,9 @@ impl<T: Secure9pTransport> CohAccess for CohClient<T> {
         let mut window: Vec<u8> = Vec::new();
         let count = self.negotiated_msize();
         loop {
-            let chunk = self.read(fid, offset, count).with_context(|| format!("read {path}"))?;
+            let chunk = self
+                .read(fid, offset, count)
+                .with_context(|| format!("read {path}"))?;
             if chunk.is_empty() {
                 break;
             }

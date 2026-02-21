@@ -28,11 +28,7 @@ fn schedule_ctl_appends_and_updates_proc() {
     let server = NineDoor::new();
     let mut client = attach_queen(&server);
 
-    let ctl_path = vec![
-        "queen".to_owned(),
-        "schedule".to_owned(),
-        "ctl".to_owned(),
-    ];
+    let ctl_path = vec!["queen".to_owned(), "schedule".to_owned(), "ctl".to_owned()];
     client.walk(1, 2, &ctl_path).expect("walk schedule ctl");
     client
         .open(2, OpenMode::write_append())
@@ -43,7 +39,11 @@ fn schedule_ctl_appends_and_updates_proc() {
     assert_eq!(written as usize, payload.len());
     client.clunk(2).expect("clunk schedule ctl");
 
-    let summary_path = vec!["proc".to_owned(), "schedule".to_owned(), "summary".to_owned()];
+    let summary_path = vec![
+        "proc".to_owned(),
+        "schedule".to_owned(),
+        "summary".to_owned(),
+    ];
     let summary = read_text(&mut client, 3, &summary_path);
     assert!(summary.contains("queue=1"));
 

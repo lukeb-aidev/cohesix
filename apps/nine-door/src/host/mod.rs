@@ -368,6 +368,7 @@ impl NineDoor {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_with_limits_telemetry_host_policy_shards(
         clock: Arc<dyn Clock>,
         limits: SessionLimits,

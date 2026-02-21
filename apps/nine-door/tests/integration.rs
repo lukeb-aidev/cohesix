@@ -573,9 +573,7 @@ fn open_gpu_job_file(client: &mut InProcessConnection, fid: u32, gpu_id: &str) {
 
 fn read_text(client: &mut InProcessConnection, fid: u32, path: &[String]) -> String {
     client.walk(1, fid, path).expect("walk path");
-    client
-        .open(fid, OpenMode::read_only())
-        .expect("open path");
+    client.open(fid, OpenMode::read_only()).expect("open path");
     let data = client.read(fid, 0, MAX_MSIZE).expect("read path");
     client.clunk(fid).expect("clunk path");
     String::from_utf8(data).expect("utf8")
@@ -596,7 +594,7 @@ fn read_all(client: &mut InProcessConnection, path: &[String]) -> String {
         if chunk.is_empty() {
             break;
         }
-        offset = offset + chunk.len() as u64;
+        offset += chunk.len() as u64;
         buffer.extend_from_slice(&chunk);
         if chunk.len() < MAX_MSIZE as usize {
             break;

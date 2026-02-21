@@ -412,7 +412,10 @@ impl Inventory for CudaInventory {
         for (index, device) in devices.into_iter().enumerate() {
             let memory_mb = device.total_memory_bytes / (1024 * 1024);
             let memory_mb = u32::try_from(memory_mb).with_context(|| {
-                format!("cuda memory bytes overflow for GPU-{index}: {}", device.total_memory_bytes)
+                format!(
+                    "cuda memory bytes overflow for GPU-{index}: {}",
+                    device.total_memory_bytes
+                )
             })?;
             let driver_version = if device.driver_version.trim().is_empty() {
                 "unknown".to_owned()
@@ -473,7 +476,7 @@ impl GpuBridge {
         Self {
             inventories: vec![InventoryCandidate::new(
                 InventoryBackend::Nvml,
-                Box::new(NvmlInventory::default()),
+                Box::new(NvmlInventory),
             )],
             model_registry: None,
         }
@@ -486,7 +489,7 @@ impl GpuBridge {
         Self {
             inventories: vec![InventoryCandidate::new(
                 InventoryBackend::Cuda,
-                Box::new(CudaInventory::default()),
+                Box::new(CudaInventory),
             )],
             model_registry: None,
         }
@@ -903,12 +906,16 @@ pub fn build_publish_lines_with_limit(
     let chunk_len = ((max_echo_len.saturating_sub(GPU_BRIDGE_B64_PREFIX.len())) / 4) * 4;
     ensure!(chunk_len >= 4, "max echo len too small for base64 chunks");
     for chunk in encoded.as_bytes().chunks(chunk_len) {
-        let chunk_str = core::str::from_utf8(chunk)
-            .map_err(|_| anyhow!("base64 chunk is not valid UTF-8"))?;
+        let chunk_str =
+            core::str::from_utf8(chunk).map_err(|_| anyhow!("base64 chunk is not valid UTF-8"))?;
         lines.push(format!("{GPU_BRIDGE_B64_PREFIX}{chunk_str}"));
     }
     lines.push("end".to_owned());
-    Ok(GpuBridgePublish { bytes, sha256, lines })
+    Ok(GpuBridgePublish {
+        bytes,
+        sha256,
+        lines,
+    })
 }
 
 /// Parse a wire-format GPU namespace snapshot.
@@ -935,10 +942,14 @@ pub fn parse_wire_snapshot(bytes: &[u8]) -> Result<GpuNamespaceSnapshot> {
             continue;
         }
         let mut parts = line.split_whitespace();
-        let keyword = parts.next().ok_or_else(|| anyhow!("wire line missing keyword"))?;
+        let keyword = parts
+            .next()
+            .ok_or_else(|| anyhow!("wire line missing keyword"))?;
         match keyword {
             "schema" => {
-                let schema = parts.next().ok_or_else(|| anyhow!("schema missing value"))?;
+                let schema = parts
+                    .next()
+                    .ok_or_else(|| anyhow!("schema missing value"))?;
                 if schema != GPU_BRIDGE_WIRE_SCHEMA {
                     return Err(anyhow!("unsupported wire schema: {schema}"));
                 }
@@ -1046,7 +1057,10 @@ pub fn parse_wire_snapshot(bytes: &[u8]) -> Result<GpuNamespaceSnapshot> {
         telemetry_schema.ok_or_else(|| anyhow!("wire payload missing telemetry schema"))?;
     Ok(GpuNamespaceSnapshot {
         nodes,
-        models: GpuModelCatalog { available: models, active },
+        models: GpuModelCatalog {
+            available: models,
+            active,
+        },
         telemetry_schema,
     })
 }
@@ -1112,14 +1126,14 @@ pub fn auto_bridge(mock: bool) -> Result<GpuBridge> {
         {
             candidates.push(InventoryCandidate::new(
                 InventoryBackend::Nvml,
-                Box::new(NvmlInventory::default()),
+                Box::new(NvmlInventory),
             ));
         }
         #[cfg(feature = "cuda")]
         {
             candidates.push(InventoryCandidate::new(
                 InventoryBackend::Cuda,
-                Box::new(CudaInventory::default()),
+                Box::new(CudaInventory),
             ));
         }
         if candidates.is_empty() {

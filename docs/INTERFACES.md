@@ -550,13 +550,21 @@ Line formats (append-only snapshots; values are sanitized and lines capped at 25
 - On provider errors, status lines emit `state=unknown reason=<detail>` and thermal falls back to `temp_c=unknown`.
 - Host tickets are strict JSONL:
   - spec line required fields: `schema`, `id`, `idempotency_key`, `action`; optional `target`, `args`, `expires_unix_ms`.
+  - spec line federation fields (optional, additive): `source_hive`, `target_hive`, `relay_hop`, `relay_correlation_id`.
   - result line required fields: `schema`, `id`, `idempotency_key`, `action`, `state`; optional `message`.
+  - result line federation fields (optional, additive): `source_hive`, `target_hive`, `relay_hop`, `relay_correlation_id`.
   - `id`/`idempotency_key` tokens are bounded ASCII (`[A-Za-z0-9._:-]`, max 128 bytes).
+  - `source_hive` and `target_hive` are pair-required (both set or both unset).
+  - `relay_hop` must be in range `1..=32` when present.
+  - `relay_correlation_id` follows the same bounded token charset (`[A-Za-z0-9._:-]`).
   - action must be in manifest allowlist.
   - state must be in manifest lifecycle allowlist.
   - line bytes must be `<= ecosystem.host.tickets.max_line_bytes` and `<= secure9p.msize`.
 - Canonical lifecycle transitions for host tickets: `queued` -> `claimed` -> `running` -> `succeeded|failed|expired`.
-- Idempotency key for replay/evidence correlation is `id + idempotency_key`.
+- Idempotency key for replay/evidence correlation is:
+  - local tickets: `id + idempotency_key`
+  - federated tickets: `id + idempotency_key + source_hive + target_hive`
+- Federation relay policy is manifest-gated under `ecosystem.host.federation.*` (peer inventory, allowlisted actions, queue/WAL bounds, timeout).
 
 - `/host` is only mounted when `ecosystem.host.enable = true`; providers are selected from `ecosystem.host.providers[]` and mounted at `ecosystem.host.mount_at`.
 - Control writes are append-only; non-queen write attempts return deterministic `Permission` (`EPERM`) errors and emit audit lines that include the ticket and path.

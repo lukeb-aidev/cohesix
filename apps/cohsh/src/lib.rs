@@ -41,10 +41,10 @@ pub use policy::{
     CohshRetryPolicy, PolicyOverrides,
 };
 pub use session_pool::{PoolKind, SessionPool, TransportFactory};
-#[cfg(feature = "tcp")]
-pub use transport::tcp::{tcp_debug_enabled, PooledTcpTransport, SharedTcpTransport, TcpTransport};
 #[cfg(feature = "rest")]
 pub use transport::rest::RestTransport;
+#[cfg(feature = "tcp")]
+pub use transport::tcp::{tcp_debug_enabled, PooledTcpTransport, SharedTcpTransport, TcpTransport};
 #[cfg(feature = "tcp")]
 pub use transport::COHSH_TCP_PORT;
 
@@ -195,7 +195,8 @@ pub const CONTROL_SCHEDULE_ENABLED: bool = generated_client::CONTROL_SCHEDULE_EN
 /// Manifest-derived schedule control payload bound.
 pub const CONTROL_SCHEDULE_CTL_MAX_BYTES: u32 = generated_client::CONTROL_SCHEDULE_CTL_MAX_BYTES;
 /// Manifest-derived lease active bounds.
-pub const CONTROL_LEASE_ACTIVE_MAX_ENTRIES: u32 = generated_client::CONTROL_LEASE_ACTIVE_MAX_ENTRIES;
+pub const CONTROL_LEASE_ACTIVE_MAX_ENTRIES: u32 =
+    generated_client::CONTROL_LEASE_ACTIVE_MAX_ENTRIES;
 /// Manifest-derived lease enable flag.
 pub const CONTROL_LEASE_ENABLED: bool = generated_client::CONTROL_LEASE_ENABLED;
 /// Manifest-derived lease preemptions bounds.
@@ -234,8 +235,7 @@ pub const PROC_LEASE_ACTIVE_ENABLED: bool = generated_client::PROC_LEASE_ACTIVE_
 /// Manifest-derived /proc lease preemptions bound.
 pub const PROC_LEASE_PREEMPTIONS_BYTES: u32 = generated_client::PROC_LEASE_PREEMPTIONS_BYTES;
 /// Manifest-derived /proc lease preemptions enable flag.
-pub const PROC_LEASE_PREEMPTIONS_ENABLED: bool =
-    generated_client::PROC_LEASE_PREEMPTIONS_ENABLED;
+pub const PROC_LEASE_PREEMPTIONS_ENABLED: bool = generated_client::PROC_LEASE_PREEMPTIONS_ENABLED;
 const MAX_SCRIPT_LINES: usize = 256;
 const MAX_SCRIPT_WAIT_MS: u64 = 2000;
 const MAX_SCRIPT_RESPONSES: usize = 8;
@@ -1084,7 +1084,9 @@ fn validate_qemu_smp_arg(arg: &str) -> Result<()> {
         let Some(first) = chars.next() else {
             bail!("QEMU SMP token has empty key: {token}");
         };
-        if !first.is_ascii_alphabetic() || !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
+        if !first.is_ascii_alphabetic()
+            || !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+        {
             bail!("QEMU SMP token has invalid key: {token}");
         }
         if value.is_empty() || !value.chars().all(|ch| ch.is_ascii_digit()) {
@@ -3085,7 +3087,6 @@ impl<T: Transport, W: Write> Shell<T, W> {
             let batch = config.batch;
             let delay_ms = config.delay_ms;
             let payload_bytes = config.payload_bytes;
-            let max_payload = max_payload;
             let inject_bytes = config.inject_bytes;
             let inject_remaining = Arc::clone(&remaining_injects);
             let successes = Arc::clone(&pooled_successes);
@@ -3351,7 +3352,8 @@ impl<T: Transport, W: Write> Shell<T, W> {
                             result.pooled.ops_per_s > result.baseline.ops_per_s
                         };
                         let mut ok = result.failures == 0 && result.observed == result.expected;
-                        if config.inject_failures > 0 && result.injected > 0 && result.retries == 0 {
+                        if config.inject_failures > 0 && result.injected > 0 && result.retries == 0
+                        {
                             ok = false;
                         }
                         if config.exhaust > 0 && result.pool_exhausted == 0 {
@@ -3399,11 +3401,11 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         return Err(anyhow!("tcp-diag takes at most one argument: port"));
                     }
                     self.run_tcp_diag(port_arg)?;
-                    return Ok(CommandStatus::Continue);
+                    Ok(CommandStatus::Continue)
                 }
                 #[cfg(not(feature = "tcp"))]
                 {
-                    return Err(anyhow!("tcp-diag is available only in TCP-enabled builds"));
+                    Err(anyhow!("tcp-diag is available only in TCP-enabled builds"))
                 }
             }
             "echo" => {
@@ -3827,9 +3829,10 @@ pub(crate) fn normalise_payload(input: &str) -> Result<String> {
     if trimmed.is_empty() {
         return Err(anyhow!("payload must not be empty"));
     }
-    let content = if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
-        &trimmed[1..trimmed.len() - 1]
-    } else if trimmed.len() >= 2 && trimmed.starts_with('\'') && trimmed.ends_with('\'') {
+    let content = if trimmed.len() >= 2
+        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
+    {
         &trimmed[1..trimmed.len() - 1]
     } else {
         trimmed
@@ -4136,7 +4139,11 @@ fn build_telemetry_ctl_payload(mime: &str) -> Result<String> {
     Ok(payload)
 }
 
-fn build_telemetry_records(payload: &str, mime: &str, max_record_bytes: usize) -> Result<Vec<Vec<u8>>> {
+fn build_telemetry_records(
+    payload: &str,
+    mime: &str,
+    max_record_bytes: usize,
+) -> Result<Vec<Vec<u8>>> {
     if payload.is_empty() {
         return Err(anyhow!("telemetry push payload is empty"));
     }
@@ -4175,7 +4182,7 @@ fn select_telemetry_payload_len(
     let mut low = 0usize;
     let mut high = remaining.len();
     while low < high {
-        let mut mid = (low + high + 1) / 2;
+        let mut mid = (low + high).div_ceil(2);
         while mid > 0 && !remaining.is_char_boundary(mid) {
             mid = mid.saturating_sub(1);
         }

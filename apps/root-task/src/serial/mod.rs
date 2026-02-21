@@ -213,8 +213,7 @@ where
             }
         }
 
-        loop {
-            let Some(byte) = self.tx.dequeue() else { break };
+        while let Some(byte) = self.tx.dequeue() {
             match self.driver.write_byte(byte) {
                 Ok(()) => {}
                 Err(NbError::WouldBlock) => {
@@ -251,10 +250,8 @@ where
                     return Some(completed);
                 }
                 0x08 | 0x7f => {
-                    if self.line.pop().is_some() {
-                        if self.echo {
-                            self.enqueue_tx(b"\x08 \x08");
-                        }
+                    if self.line.pop().is_some() && self.echo {
+                        self.enqueue_tx(b"\x08 \x08");
                     }
                 }
                 byte if byte.is_ascii_control() => {

@@ -73,6 +73,12 @@ impl AppendOnlyTracker {
     }
 }
 
+impl Default for AppendOnlyTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Exclusive lock for REST-backed mounts (one mount per gateway URL).
 #[derive(Debug)]
 pub struct RestMountLock {
@@ -92,6 +98,7 @@ impl RestMountLock {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(true)
             .open(&path)
             .with_context(|| format!("open rest mount lock {}", path.display()))?;
         if let Err(err) = file.try_lock_exclusive() {
@@ -228,7 +235,7 @@ pub fn validate_path(path: &str) -> Result<()> {
         if component == "." || component == ".." {
             return Err(anyhow!("path component '{component}' is not permitted"));
         }
-        if component.as_bytes().iter().any(|byte| *byte == 0) {
+        if component.as_bytes().contains(&0) {
             return Err(anyhow!("path component contains NUL byte"));
         }
         depth += 1;

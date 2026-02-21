@@ -101,6 +101,7 @@ impl HostProvider {
 }
 
 const HOST_TICKET_ID_MAX_BYTES: usize = 128;
+const HOST_TICKET_MAX_RELAY_HOP: u16 = 32;
 const DEFAULT_HOST_TICKET_ACTIONS: &[&str] = &[
     "gpu.lease.grant",
     "gpu.lease.renew",
@@ -139,6 +140,16 @@ struct HostTicketSpecLine {
     target: Option<String>,
     #[serde(default)]
     args: Option<serde_json::Value>,
+    #[serde(default)]
+    expires_unix_ms: Option<u64>,
+    #[serde(default)]
+    source_hive: Option<String>,
+    #[serde(default)]
+    target_hive: Option<String>,
+    #[serde(default)]
+    relay_hop: Option<u16>,
+    #[serde(default)]
+    relay_correlation_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,6 +162,14 @@ struct HostTicketResultLine {
     state: String,
     #[serde(default)]
     message: Option<String>,
+    #[serde(default)]
+    source_hive: Option<String>,
+    #[serde(default)]
+    target_hive: Option<String>,
+    #[serde(default)]
+    relay_hop: Option<u16>,
+    #[serde(default)]
+    relay_correlation_id: Option<String>,
 }
 
 /// Configuration for `/host/tickets/*` control streams.
@@ -301,7 +320,7 @@ impl HostTicketPolicy {
                 continue;
             }
             saw_line = true;
-            if line.as_bytes().len() > self.max_line_bytes as usize {
+            if line.len() > self.max_line_bytes as usize {
                 return Err(NineDoorError::protocol(
                     ErrorCode::Invalid,
                     format!(
@@ -326,7 +345,10 @@ impl HostTicketPolicy {
 
     fn validate_spec_line(&self, line: &str) -> Result<(), NineDoorError> {
         let parsed: HostTicketSpecLine = serde_json::from_str(line).map_err(|err| {
-            NineDoorError::protocol(ErrorCode::Invalid, format!("invalid host ticket spec: {err}"))
+            NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("invalid host ticket spec: {err}"),
+            )
         })?;
         if parsed.schema != self.request_schema {
             return Err(NineDoorError::protocol(
@@ -350,6 +372,20 @@ impl HostTicketPolicy {
                 ));
             }
         }
+        if let Some(expires_unix_ms) = parsed.expires_unix_ms {
+            if expires_unix_ms == 0 {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    "host ticket expires_unix_ms must be > 0 when present",
+                ));
+            }
+        }
+        validate_ticket_federation_fields(
+            parsed.source_hive.as_deref(),
+            parsed.target_hive.as_deref(),
+            parsed.relay_hop,
+            parsed.relay_correlation_id.as_deref(),
+        )?;
         let _ = parsed.args;
         Ok(())
     }
@@ -389,6 +425,12 @@ impl HostTicketPolicy {
                 ));
             }
         }
+        validate_ticket_federation_fields(
+            parsed.source_hive.as_deref(),
+            parsed.target_hive.as_deref(),
+            parsed.relay_hop,
+            parsed.relay_correlation_id.as_deref(),
+        )?;
         Ok(())
     }
 }
@@ -407,7 +449,7 @@ fn validate_ticket_identifier(label: &str, value: &str) -> Result<(), NineDoorEr
             format!("host ticket {label} must not be empty"),
         ));
     }
-    if trimmed.as_bytes().len() > HOST_TICKET_ID_MAX_BYTES {
+    if trimmed.len() > HOST_TICKET_ID_MAX_BYTES {
         return Err(NineDoorError::protocol(
             ErrorCode::Invalid,
             format!(
@@ -416,13 +458,49 @@ fn validate_ticket_identifier(label: &str, value: &str) -> Result<(), NineDoorEr
             ),
         ));
     }
-    if !trimmed.chars().all(|ch| {
-        ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':')
-    }) {
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':'))
+    {
         return Err(NineDoorError::protocol(
             ErrorCode::Invalid,
             format!("host ticket {label} contains invalid characters"),
         ));
+    }
+    Ok(())
+}
+
+fn validate_ticket_federation_fields(
+    source_hive: Option<&str>,
+    target_hive: Option<&str>,
+    relay_hop: Option<u16>,
+    relay_correlation_id: Option<&str>,
+) -> Result<(), NineDoorError> {
+    if source_hive.is_some() != target_hive.is_some() {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            "host ticket federation requires both source_hive and target_hive",
+        ));
+    }
+    if let Some(source_hive) = source_hive {
+        validate_ticket_identifier("source_hive", source_hive)?;
+    }
+    if let Some(target_hive) = target_hive {
+        validate_ticket_identifier("target_hive", target_hive)?;
+    }
+    if let Some(relay_hop) = relay_hop {
+        if relay_hop == 0 || relay_hop > HOST_TICKET_MAX_RELAY_HOP {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!(
+                    "host ticket relay_hop must be in range 1..={}",
+                    HOST_TICKET_MAX_RELAY_HOP
+                ),
+            ));
+        }
+    }
+    if let Some(correlation_id) = relay_correlation_id {
+        validate_ticket_identifier("relay_correlation_id", correlation_id)?;
     }
     Ok(())
 }
@@ -964,6 +1042,7 @@ impl Namespace {
     }
 
     /// Construct the namespace with telemetry, manifest storage, host provider config, and policy.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_telemetry_manifest_host_policy(
         telemetry: TelemetryConfig,
         telemetry_ingest: TelemetryIngestConfig,
@@ -1667,11 +1746,7 @@ impl Namespace {
         }
         if self.ui.updates.status {
             self.ensure_file_raw(&update_path, "status", FileNode::ReadOnly(Vec::new()))?;
-            self.ensure_file_raw(
-                &update_path,
-                "status.cbor",
-                FileNode::ReadOnly(Vec::new()),
-            )?;
+            self.ensure_file_raw(&update_path, "status.cbor", FileNode::ReadOnly(Vec::new()))?;
         }
         self.ensure_dir_raw(&update_path, "chunks")?;
         Ok(())
@@ -2134,17 +2209,16 @@ impl Namespace {
             path.push("node".to_owned());
             path
         };
-        for node in ["node-1"] {
-            self.ensure_dir(&nodes_root, node)?;
-            let node_path = {
-                let mut path = nodes_root.clone();
-                path.push(node.to_owned());
-                path
-            };
-            self.ensure_append_only_file(&node_path, "status", b"unknown")?;
-            self.ensure_append_only_file(&node_path, "cordon", b"")?;
-            self.ensure_append_only_file(&node_path, "drain", b"")?;
-        }
+        let node = "node-1";
+        self.ensure_dir(&nodes_root, node)?;
+        let node_path = {
+            let mut path = nodes_root.clone();
+            path.push(node.to_owned());
+            path
+        };
+        self.ensure_append_only_file(&node_path, "status", b"unknown")?;
+        self.ensure_append_only_file(&node_path, "cordon", b"")?;
+        self.ensure_append_only_file(&node_path, "drain", b"")?;
         Ok(())
     }
 
@@ -2174,17 +2248,16 @@ impl Namespace {
             path.push("gpu".to_owned());
             path
         };
-        for gpu in ["0"] {
-            self.ensure_dir(&gpu_root, gpu)?;
-            let gpu_path = {
-                let mut path = gpu_root.clone();
-                path.push(gpu.to_owned());
-                path
-            };
-            self.ensure_append_only_file(&gpu_path, "status", b"ok")?;
-            self.ensure_append_only_file(&gpu_path, "power_cap", b"")?;
-            self.ensure_append_only_file(&gpu_path, "thermal", b"42C")?;
-        }
+        let gpu = "0";
+        self.ensure_dir(&gpu_root, gpu)?;
+        let gpu_path = {
+            let mut path = gpu_root.clone();
+            path.push(gpu.to_owned());
+            path
+        };
+        self.ensure_append_only_file(&gpu_path, "status", b"ok")?;
+        self.ensure_append_only_file(&gpu_path, "power_cap", b"")?;
+        self.ensure_append_only_file(&gpu_path, "thermal", b"42C")?;
         Ok(())
     }
 
@@ -2841,19 +2914,13 @@ impl Namespace {
     }
 
     /// Replace the `/proc/schedule/summary` contents.
-    pub fn set_proc_schedule_summary_payload(
-        &mut self,
-        data: &[u8],
-    ) -> Result<(), NineDoorError> {
+    pub fn set_proc_schedule_summary_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
         let parent = vec!["proc".to_owned(), "schedule".to_owned()];
         self.set_read_only_file(&parent, "summary", data)
     }
 
     /// Replace the `/proc/schedule/queue` contents.
-    pub fn set_proc_schedule_queue_payload(
-        &mut self,
-        data: &[u8],
-    ) -> Result<(), NineDoorError> {
+    pub fn set_proc_schedule_queue_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
         let parent = vec!["proc".to_owned(), "schedule".to_owned()];
         self.set_read_only_file(&parent, "queue", data)
     }
@@ -2871,10 +2938,7 @@ impl Namespace {
     }
 
     /// Replace the `/proc/lease/preemptions` contents.
-    pub fn set_proc_lease_preemptions_payload(
-        &mut self,
-        data: &[u8],
-    ) -> Result<(), NineDoorError> {
+    pub fn set_proc_lease_preemptions_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
         let parent = vec!["proc".to_owned(), "lease".to_owned()];
         self.set_read_only_file(&parent, "preemptions", data)
     }

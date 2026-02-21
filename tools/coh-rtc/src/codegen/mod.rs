@@ -7,17 +7,18 @@ mod cas;
 pub mod cbor;
 mod cli;
 mod coh;
-mod cohsh;
 pub mod cohesix_py;
+mod cohsh;
 mod docs;
 mod rust;
 mod swarmui;
 
 use crate::ir::Manifest;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 pub use docs::DocFragments;
 
@@ -274,6 +275,16 @@ pub fn emit_all(
         &options.swarmui_defaults_rust_out,
         &options.swarmui_defaults_doc_out,
     )?;
+    let root_task_mod_rs = options.out_dir.join("mod.rs");
+    let root_task_bootstrap_rs = options.out_dir.join("bootstrap.rs");
+    format_rust_sources(&[
+        root_task_mod_rs.as_path(),
+        root_task_bootstrap_rs.as_path(),
+        cohsh_artifacts.policy_rust.as_path(),
+        cohsh_client_artifacts.client_rust.as_path(),
+        coh_policy_artifacts.policy_rust.as_path(),
+        swarmui_artifacts.defaults_rust.as_path(),
+    ])?;
 
     fs::write(&options.manifest_out, resolved_json).with_context(|| {
         format!(
@@ -343,4 +354,31 @@ pub fn hash_bytes(bytes: &[u8]) -> String {
 pub fn hash_path(path: &Path) -> Result<String> {
     let contents = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     Ok(hash_bytes(&contents))
+}
+
+fn format_rust_sources(paths: &[&Path]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let mut cmd = Command::new("rustfmt");
+    cmd.arg("--edition").arg("2021");
+    for path in paths {
+        cmd.arg(path);
+    }
+    let output = cmd
+        .output()
+        .with_context(|| "failed to run rustfmt on generated Rust sources")?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    bail!(
+        "rustfmt failed for generated Rust sources (status={}): stdout={}; stderr={}",
+        output.status,
+        stdout.trim(),
+        stderr.trim()
+    );
 }

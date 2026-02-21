@@ -146,6 +146,45 @@ def test_enqueue_host_tickets_writes_spec_stream() -> None:
         assert '"id":"ticket-1"' in content
 
 
+def test_enqueue_federated_host_tickets_sets_relay_envelope() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        backend = MockBackend(root=tmp)
+        orchestrator = CohesixOrchestrator(backend=backend)
+        writes = orchestrator.enqueue_federated_host_tickets(
+            source_hive="hive-a",
+            target_hive="hive-b",
+            requests=[
+                HostTicketRequest(
+                    ticket_id="ticket-fed-1",
+                    idempotency_key="idem-fed-1",
+                    action="systemd.restart",
+                    target="/host/systemd/cohesix-agent.service/restart",
+                )
+            ],
+        )
+        assert len(writes) == 1
+        spec_path = Path(tmp) / "host" / "tickets" / "spec"
+        content = spec_path.read_text(encoding="utf-8").strip()
+        assert '"source_hive":"hive-a"' in content
+        assert '"target_hive":"hive-b"' in content
+        assert '"relay_hop":1' in content
+        assert '"relay_correlation_id":"ticket-fed-1:idem-fed-1:hive-a:hive-b"' in content
+
+
+def test_host_ticket_request_requires_both_hive_fields() -> None:
+    try:
+        HostTicketRequest(
+            ticket_id="ticket-fed-2",
+            idempotency_key="idem-fed-2",
+            action="systemd.restart",
+            source_hive="hive-a",
+        )
+    except CohesixError as exc:
+        assert "target_hive" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected source_hive/target_hive validation failure")
+
+
 def test_enqueue_k8s_rbac_tickets_translates_intents() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         backend = MockBackend(root=tmp)

@@ -294,7 +294,7 @@ mod tests {
         reset_sink();
         static CAPTURED: AtomicU8 = AtomicU8::new(0);
         let context = &CAPTURED as *const AtomicU8 as *mut ();
-        install_raw_sink(context, capture_emit as usize);
+        install_raw_sink(context, capture_emit as *const () as usize);
         write_debug_byte(b'B');
         assert_eq!(CAPTURED.load(Ordering::SeqCst), b'B');
         clear_debug_buffer();
@@ -308,7 +308,7 @@ mod tests {
         reset_sink();
         static CAPTURED: AtomicU8 = AtomicU8::new(0);
         let bogus_context = 0x10usize as *mut ();
-        install_raw_sink(bogus_context, capture_emit as usize);
+        install_raw_sink(bogus_context, capture_emit as *const () as usize);
         write_debug_byte(b'C');
         assert_eq!(CAPTURED.load(Ordering::SeqCst), 0);
         let snapshot = buffer_contents();

@@ -73,7 +73,9 @@ impl GatewayClient {
                     Err(anyhow!("BOUNDS failed (http {code}): {body}"))
                 }
             }
-            Err(ureq::Error::Transport(err)) => Err(anyhow!(err).context("gateway transport error")),
+            Err(ureq::Error::Transport(err)) => {
+                Err(anyhow!(err).context("gateway transport error"))
+            }
         }
     }
 
@@ -117,9 +119,7 @@ impl GatewayClient {
             path: path.to_owned(),
             line: Some(line.to_owned()),
         };
-        let response = self
-            .with_auth(self.agent.post(&url))
-            .send_json(payload);
+        let response = self.with_auth(self.agent.post(&url)).send_json(payload);
         let parsed = handle_response("ECHO", response)?;
         Ok(parsed.bytes.unwrap_or(0))
     }
@@ -370,9 +370,7 @@ fn ensure_ok(verb: &str, response: GatewayResponse) -> Result<GatewayResponse> {
     if response.status.eq_ignore_ascii_case("OK") {
         return Ok(response);
     }
-    let detail = response
-        .error
-        .unwrap_or_else(|| format!("{verb} failed"));
+    let detail = response.error.unwrap_or_else(|| format!("{verb} failed"));
     Err(anyhow!(detail))
 }
 

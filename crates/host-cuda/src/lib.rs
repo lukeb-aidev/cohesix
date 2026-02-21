@@ -27,14 +27,14 @@ pub struct CudaDeviceInfo {
 pub fn enumerate_devices() -> Result<Vec<CudaDeviceInfo>> {
     #[cfg(target_os = "linux")]
     {
-        return linux::enumerate_devices();
+        linux::enumerate_devices()
     }
     #[cfg(not(target_os = "linux"))]
     {
-        return Err(anyhow::anyhow!(
+        Err(anyhow::anyhow!(
             "cuda backend unsupported on {}",
             std::env::consts::OS
-        ));
+        ))
     }
 }
 
@@ -93,15 +93,14 @@ mod linux {
         for index in 0..device_count {
             let device = CUdevice::from(index);
             let name = driver.device_name(device)?;
-            let sm_count = driver.device_attribute(device, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)?;
-            let total_memory_bytes = driver
-                .device_total_mem(device)
-                .or_else(|err| {
-                    runtime
-                        .as_ref()
-                        .ok_or(err)
-                        .and_then(|rt| rt.device_total_mem(device))
-                })?;
+            let sm_count =
+                driver.device_attribute(device, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)?;
+            let total_memory_bytes = driver.device_total_mem(device).or_else(|err| {
+                runtime
+                    .as_ref()
+                    .ok_or(err)
+                    .and_then(|rt| rt.device_total_mem(device))
+            })?;
             devices.push(CudaDeviceInfo {
                 name,
                 total_memory_bytes,
@@ -128,8 +127,10 @@ mod linux {
             let lib = load_library(&["libcuda.so.1", "libcuda.so"])?;
             unsafe {
                 let cu_init = load_symbol::<CuInit>(&lib, b"cuInit\0")?;
-                let cu_device_get_count = load_symbol::<CuDeviceGetCount>(&lib, b"cuDeviceGetCount\0")?;
-                let cu_device_get_name = load_symbol::<CuDeviceGetName>(&lib, b"cuDeviceGetName\0")?;
+                let cu_device_get_count =
+                    load_symbol::<CuDeviceGetCount>(&lib, b"cuDeviceGetCount\0")?;
+                let cu_device_get_name =
+                    load_symbol::<CuDeviceGetName>(&lib, b"cuDeviceGetName\0")?;
                 let cu_device_get_attribute =
                     load_symbol::<CuDeviceGetAttribute>(&lib, b"cuDeviceGetAttribute\0")?;
                 let cu_driver_get_version =
@@ -225,10 +226,8 @@ mod linux {
             unsafe {
                 let cuda_runtime_get_version =
                     load_symbol::<CudaRuntimeGetVersion>(&lib, b"cudaRuntimeGetVersion\0")?;
-                let cuda_mem_get_info =
-                    load_symbol::<CudaMemGetInfo>(&lib, b"cudaMemGetInfo\0")?;
-                let cuda_set_device =
-                    load_symbol::<CudaSetDevice>(&lib, b"cudaSetDevice\0")?;
+                let cuda_mem_get_info = load_symbol::<CudaMemGetInfo>(&lib, b"cudaMemGetInfo\0")?;
+                let cuda_set_device = load_symbol::<CudaSetDevice>(&lib, b"cudaSetDevice\0")?;
                 let cuda_free = load_symbol::<CudaFree>(&lib, b"cudaFree\0")?;
                 Ok(Self {
                     _lib: lib,
@@ -250,15 +249,14 @@ mod linux {
         }
 
         fn device_total_mem(&self, device: CUdevice) -> Result<u64> {
-            runtime_ok(
-                unsafe { (self.cuda_set_device)(device) },
-                "cudaSetDevice",
-            )?;
+            runtime_ok(unsafe { (self.cuda_set_device)(device) }, "cudaSetDevice")?;
             let _ = unsafe { (self.cuda_free)(std::ptr::null_mut()) };
             let mut free = 0usize;
             let mut total = 0usize;
             runtime_ok(
-                unsafe { (self.cuda_mem_get_info)(&mut free as *mut usize, &mut total as *mut usize) },
+                unsafe {
+                    (self.cuda_mem_get_info)(&mut free as *mut usize, &mut total as *mut usize)
+                },
                 "cudaMemGetInfo",
             )?;
             Ok(total as u64)
@@ -277,7 +275,9 @@ mod linux {
         Err(anyhow!(
             "failed to load CUDA library {:?}: {}",
             names,
-            last_err.map(|e| e.to_string()).unwrap_or_else(|| "unknown".to_owned())
+            last_err
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "unknown".to_owned())
         ))
     }
 

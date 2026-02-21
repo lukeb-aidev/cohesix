@@ -369,6 +369,43 @@ action_allowlist = [
 ]
 lifecycle = ["queued", "claimed", "running", "succeeded", "failed", "expired"]
 
+[ecosystem.host.federation]
+enable = true
+local_hive = "hive-a"
+action_allowlist = [
+  "gpu.lease.grant",
+  "gpu.lease.renew",
+  "gpu.lease.release",
+  "peft.import",
+  "peft.activate",
+  "peft.rollback",
+  "systemd.start",
+  "systemd.stop",
+  "systemd.restart",
+  "systemd.status-check",
+  "docker.restart",
+  "docker.stop",
+  "docker.status-check",
+  "k8s.cordon",
+  "k8s.drain",
+  "k8s.lease.sync",
+]
+relay_queue_max_entries = 256
+relay_queue_max_bytes = 32768
+wal_max_entries = 1024
+wal_max_bytes = 524288
+relay_timeout_ms = 2000
+
+[[ecosystem.host.federation.peers]]
+name = "hive-b"
+rest_url = "http://127.0.0.1:8081"
+auth_ref = "COHESIX_RELAY_HIVE_B_TOKEN"
+
+[[ecosystem.host.federation.peers]]
+name = "hive-c"
+rest_url = "http://127.0.0.1:8082"
+auth_ref = "COHESIX_RELAY_HIVE_C_TOKEN"
+
 [ecosystem.audit]
 enable = false
 journal_max_bytes = 8192

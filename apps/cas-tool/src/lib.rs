@@ -111,7 +111,7 @@ pub fn chunk_payload(payload: &[u8], chunk_bytes: usize) -> Result<Vec<CasChunk>
     if chunk_bytes == 0 {
         bail!("chunk_bytes must be > 0");
     }
-    if payload.len() % chunk_bytes != 0 {
+    if !payload.len().is_multiple_of(chunk_bytes) {
         bail!(
             "payload length {} is not a multiple of chunk_bytes {}",
             payload.len(),

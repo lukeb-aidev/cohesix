@@ -406,11 +406,38 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct HostFederationPeer {{")?;
+    writeln!(mod_contents, "    pub name: &'static str,")?;
+    writeln!(mod_contents, "    pub rest_url: &'static str,")?;
+    writeln!(mod_contents, "    pub auth_ref: &'static str,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct HostFederationConfig {{")?;
+    writeln!(mod_contents, "    pub enable: bool,")?;
+    writeln!(mod_contents, "    pub local_hive: &'static str,")?;
+    writeln!(
+        mod_contents,
+        "    pub peers: &'static [HostFederationPeer],"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub action_allowlist: &'static [HostTicketAction],"
+    )?;
+    writeln!(mod_contents, "    pub relay_queue_max_entries: u16,")?;
+    writeln!(mod_contents, "    pub relay_queue_max_bytes: u32,")?;
+    writeln!(mod_contents, "    pub wal_max_entries: u32,")?;
+    writeln!(mod_contents, "    pub wal_max_bytes: u32,")?;
+    writeln!(mod_contents, "    pub relay_timeout_ms: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct HostConfig {{")?;
     writeln!(mod_contents, "    pub enable: bool,")?;
     writeln!(mod_contents, "    pub mount_at: &'static str,")?;
     writeln!(mod_contents, "    pub providers: &'static [HostProvider],")?;
     writeln!(mod_contents, "    pub tickets: HostTicketConfig,")?;
+    writeln!(mod_contents, "    pub federation: HostFederationConfig,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -856,7 +883,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AffinityPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AffinityPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -1316,13 +1343,48 @@ pub fn emit_rust(
     writeln!(bootstrap_contents, "];\n")?;
     writeln!(
         bootstrap_contents,
-        "pub const HOST_CONFIG: HostConfig = HostConfig {{ enable: {}, mount_at: \"{}\", providers: &HOST_PROVIDERS, tickets: HostTicketConfig {{ enable: {}, request_schema: \"{}\", result_schema: \"{}\", max_line_bytes: {}, action_allowlist: &HOST_TICKET_ACTION_ALLOWLIST, lifecycle: &HOST_TICKET_LIFECYCLE }} }};\n",
+        "pub const HOST_FEDERATION_PEERS: [HostFederationPeer; {}] = [",
+        manifest.ecosystem.host.federation.peers.len()
+    )?;
+    for peer in &manifest.ecosystem.host.federation.peers {
+        writeln!(
+            bootstrap_contents,
+            "    HostFederationPeer {{ name: \"{}\", rest_url: \"{}\", auth_ref: \"{}\" }},",
+            escape_literal(&peer.name),
+            escape_literal(&peer.rest_url),
+            escape_literal(&peer.auth_ref)
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const HOST_FEDERATION_ACTION_ALLOWLIST: [HostTicketAction; {}] = [",
+        manifest.ecosystem.host.federation.action_allowlist.len()
+    )?;
+    for action in &manifest.ecosystem.host.federation.action_allowlist {
+        writeln!(
+            bootstrap_contents,
+            "    {},",
+            host_ticket_action_to_rust(*action)
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const HOST_CONFIG: HostConfig = HostConfig {{ enable: {}, mount_at: \"{}\", providers: &HOST_PROVIDERS, tickets: HostTicketConfig {{ enable: {}, request_schema: \"{}\", result_schema: \"{}\", max_line_bytes: {}, action_allowlist: &HOST_TICKET_ACTION_ALLOWLIST, lifecycle: &HOST_TICKET_LIFECYCLE }}, federation: HostFederationConfig {{ enable: {}, local_hive: \"{}\", peers: &HOST_FEDERATION_PEERS, action_allowlist: &HOST_FEDERATION_ACTION_ALLOWLIST, relay_queue_max_entries: {}, relay_queue_max_bytes: {}, wal_max_entries: {}, wal_max_bytes: {}, relay_timeout_ms: {} }} }};\n",
         manifest.ecosystem.host.enable,
         escape_literal(&manifest.ecosystem.host.mount_at),
         manifest.ecosystem.host.tickets.enable,
         escape_literal(&manifest.ecosystem.host.tickets.request_schema),
         escape_literal(&manifest.ecosystem.host.tickets.result_schema),
-        manifest.ecosystem.host.tickets.max_line_bytes
+        manifest.ecosystem.host.tickets.max_line_bytes,
+        manifest.ecosystem.host.federation.enable,
+        escape_literal(&manifest.ecosystem.host.federation.local_hive),
+        manifest.ecosystem.host.federation.relay_queue_max_entries,
+        manifest.ecosystem.host.federation.relay_queue_max_bytes,
+        manifest.ecosystem.host.federation.wal_max_entries,
+        manifest.ecosystem.host.federation.wal_max_bytes,
+        manifest.ecosystem.host.federation.relay_timeout_ms
     )?;
 
     let (modbus_adapters, dnp3_adapters) = resolve_bus_adapters(manifest)?;
@@ -1380,7 +1442,7 @@ pub fn emit_rust(
             escape_literal(adapter.id),
             escape_literal(&adapter.mount),
             escape_literal(adapter.scope),
-            escape_literal(&adapter.region),
+            escape_literal(adapter.region),
             adapter.duty_cycle_percent,
             adapter.window_ms,
             adapter.max_payload_bytes,

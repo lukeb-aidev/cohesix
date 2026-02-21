@@ -110,7 +110,7 @@ fn lifecycle_proc_files_are_read_only() {
     let state = read_text(
         &mut client,
         10,
-        &vec![
+        &[
             "proc".to_owned(),
             "lifecycle".to_owned(),
             "state".to_owned(),

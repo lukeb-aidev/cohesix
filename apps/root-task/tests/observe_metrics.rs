@@ -11,8 +11,8 @@ use root_task::observe::IngestMetrics;
 struct CountingAlloc;
 
 thread_local! {
-    static ALLOC_COUNT: Cell<usize> = Cell::new(0);
-    static COUNT_ENABLED: Cell<bool> = Cell::new(false);
+    static ALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
+    static COUNT_ENABLED: Cell<bool> = const { Cell::new(false) };
 }
 
 fn bump_alloc() {

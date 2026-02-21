@@ -104,30 +104,35 @@ ln -sfn /mnt/coh-a /mnt/coh-live
 curl -fsS http://127.0.0.1:48080/v1/meta/status | jq .
 cat /mnt/coh-live/proc/lifecycle/state
 ```
-2. Gate new work.
+2. Pause federation relay writers (host-side).
+```bash
+pkill -TERM -f "host-ticket-agent.*--relay" || true
+```
+3. Gate new work.
 ```bash
 echo cordon >> /mnt/coh-live/queen/lifecycle/ctl
 echo drain >> /mnt/coh-live/queen/lifecycle/ctl
 ```
-3. Confirm drain/lease state.
+4. Confirm drain/lease state.
 ```bash
 cat /mnt/coh-live/proc/lifecycle/state
 cat /mnt/coh-live/proc/lease/summary
 ```
-4. Cut over active path.
+5. Cut over active path.
 ```bash
 ln -sfn /mnt/coh-b /mnt/coh-live
 ```
-5. Resume on standby.
+6. Resume on standby.
 ```bash
 echo resume >> /mnt/coh-live/queen/lifecycle/ctl
 cat /mnt/coh-live/proc/lifecycle/state
 ```
-6. Replay unapplied WAL intents (idempotent IDs only).
+7. Replay unapplied relay WAL intents (idempotent IDs only).
+8. Resume federation relay writers against the new active hive.
 
 ## 8) Unplanned Failover Runbook
 When active queen or gateway is unavailable:
-1. Freeze writers for `N` seconds (short global write pause).
+1. Freeze writers and pause relay for `N` seconds (short global write pause).
 2. Switch active symlink immediately:
 ```bash
 ln -sfn /mnt/coh-b /mnt/coh-live
@@ -137,15 +142,16 @@ ln -sfn /mnt/coh-b /mnt/coh-live
 cat /mnt/coh-live/proc/lifecycle/state
 curl -fsS http://127.0.0.1:48081/v1/meta/status | jq .
 ```
-4. Replay WAL with idempotency keys.
-5. Resume write traffic.
+4. Replay relay WAL with idempotency keys.
+5. Resume relay and write traffic.
 
 ## 9) Failback Runbook
 1. Restore original active hive and verify health.
 2. Put current active into maintenance (`cordon`, `drain`) if required.
 3. Move `/mnt/coh-live` back.
-4. Replay any pending WAL records.
-5. Confirm lifecycle `ONLINE` and normal pressure counters.
+4. Replay any pending relay WAL records.
+5. Resume relay on the restored active hive.
+6. Confirm lifecycle `ONLINE` and normal pressure counters.
 
 ## 10) Operational Validation Checks
 Run after every cutover:
@@ -269,6 +275,8 @@ python3 scripts/failover_watchdog.py \
   --b-mount /mnt/coh-b \
   --live-link /mnt/coh-live \
   --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --relay-pause-cmd "launchctl stop com.cohesix.host-ticket-agent || true" \
+  --relay-resume-cmd "launchctl start com.cohesix.host-ticket-agent || true" \
   --failure-threshold 3 \
   --success-threshold 1 \
   --hold-down-sec 15 \
@@ -278,6 +286,8 @@ python3 scripts/failover_watchdog.py \
 Options for production controls:
 - `--fence-cmd "<command with {src} and {dst}>"`
 - `--post-cutover-cmd "<command with {src} and {dst}>"`
+- `--relay-pause-cmd "<command with {src} and {dst}>"`
+- `--relay-resume-cmd "<command with {src} and {dst}>"`
 - `--lock-file /var/run/cohesix-failover-watchdog.lock`
 - `--allow-failback` (disabled by default; keep manual failback unless strongly justified)
 

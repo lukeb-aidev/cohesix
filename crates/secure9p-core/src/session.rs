@@ -36,9 +36,10 @@ pub enum FidError {
 }
 
 /// Short write retry policy for transport adapters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShortWritePolicy {
     /// Reject short writes without retrying.
+    #[default]
     Reject,
     /// Retry short writes with exponential back-off.
     Retry,
@@ -63,12 +64,6 @@ impl ShortWritePolicy {
                 Some(DEFAULT_SHORT_WRITE_BACKOFF_MS.saturating_mul(factor))
             }
         }
-    }
-}
-
-impl Default for ShortWritePolicy {
-    fn default() -> Self {
-        ShortWritePolicy::Reject
     }
 }
 

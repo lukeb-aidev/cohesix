@@ -47,6 +47,14 @@ const MAX_COH_SCHEMA_LEN: usize = 64;
 const MAX_COH_LEASE_STATE_LEN: usize = 16;
 const MAX_COH_PEFT_ID_LEN: u32 = 256;
 const MAX_HOST_TICKET_ACTIONS: usize = 32;
+const MAX_HOST_FEDERATION_PEERS: usize = 32;
+const MAX_HOST_FEDERATION_HIVE_LEN: usize = 64;
+const MAX_HOST_FEDERATION_AUTH_REF_LEN: usize = 128;
+const MAX_HOST_FEDERATION_URL_LEN: usize = 256;
+const MAX_HOST_FEDERATION_QUEUE_ENTRIES: u16 = 4096;
+const MAX_HOST_FEDERATION_WAL_ENTRIES: u32 = 16_384;
+const MAX_HOST_FEDERATION_QUEUE_BYTES: u32 = 1024 * 1024;
+const MAX_HOST_FEDERATION_WAL_BYTES: u32 = 8 * 1024 * 1024;
 const MAX_LIFECYCLE_AUTO_TRANSITIONS: usize = 8;
 const MAX_SCHEDULE_ID_LEN: usize = 64;
 const MAX_SCHEDULE_ROLE_LEN: usize = 16;
@@ -333,10 +341,14 @@ impl Manifest {
             if host.tickets.enable {
                 bail!("ecosystem.host.tickets.enable requires ecosystem.host.enable = true");
             }
+            if host.federation.enable {
+                bail!("ecosystem.host.federation.enable requires ecosystem.host.enable = true");
+            }
             return Ok(());
         }
         self.validate_host_mount()?;
         self.validate_host_tickets()?;
+        self.validate_host_federation()?;
         if self.secure9p.msize > MAX_MSIZE {
             bail!("ecosystem.host.enable requires secure9p.msize <= {MAX_MSIZE}");
         }
@@ -825,6 +837,166 @@ impl Manifest {
                     required.as_str()
                 );
             }
+        }
+        Ok(())
+    }
+
+    fn validate_host_federation(&self) -> Result<()> {
+        let federation = &self.ecosystem.host.federation;
+        if !federation.enable {
+            return Ok(());
+        }
+        if !self.ecosystem.host.tickets.enable {
+            bail!("ecosystem.host.federation.enable requires ecosystem.host.tickets.enable = true");
+        }
+        validate_host_federation_token(
+            "ecosystem.host.federation.local_hive",
+            federation.local_hive.as_str(),
+            MAX_HOST_FEDERATION_HIVE_LEN,
+        )?;
+        if federation.peers.is_empty() {
+            bail!("ecosystem.host.federation.peers must not be empty");
+        }
+        if federation.peers.len() > MAX_HOST_FEDERATION_PEERS {
+            bail!(
+                "ecosystem.host.federation.peers exceeds max {}",
+                MAX_HOST_FEDERATION_PEERS
+            );
+        }
+        if federation.relay_queue_max_entries == 0 {
+            bail!("ecosystem.host.federation.relay_queue_max_entries must be >= 1");
+        }
+        if federation.relay_queue_max_entries > MAX_HOST_FEDERATION_QUEUE_ENTRIES {
+            bail!(
+                "ecosystem.host.federation.relay_queue_max_entries {} exceeds max {}",
+                federation.relay_queue_max_entries,
+                MAX_HOST_FEDERATION_QUEUE_ENTRIES
+            );
+        }
+        if federation.relay_queue_max_bytes == 0 {
+            bail!("ecosystem.host.federation.relay_queue_max_bytes must be >= 1");
+        }
+        if federation.relay_queue_max_bytes > MAX_HOST_FEDERATION_QUEUE_BYTES {
+            bail!(
+                "ecosystem.host.federation.relay_queue_max_bytes {} exceeds max {}",
+                federation.relay_queue_max_bytes,
+                MAX_HOST_FEDERATION_QUEUE_BYTES
+            );
+        }
+        if federation.relay_queue_max_bytes < self.ecosystem.host.tickets.max_line_bytes {
+            bail!(
+                "ecosystem.host.federation.relay_queue_max_bytes {} must be >= ecosystem.host.tickets.max_line_bytes {}",
+                federation.relay_queue_max_bytes,
+                self.ecosystem.host.tickets.max_line_bytes
+            );
+        }
+        if federation.wal_max_entries == 0 {
+            bail!("ecosystem.host.federation.wal_max_entries must be >= 1");
+        }
+        if federation.wal_max_entries > MAX_HOST_FEDERATION_WAL_ENTRIES {
+            bail!(
+                "ecosystem.host.federation.wal_max_entries {} exceeds max {}",
+                federation.wal_max_entries,
+                MAX_HOST_FEDERATION_WAL_ENTRIES
+            );
+        }
+        if federation.wal_max_entries < u32::from(federation.relay_queue_max_entries) {
+            bail!(
+                "ecosystem.host.federation.wal_max_entries {} must be >= relay_queue_max_entries {}",
+                federation.wal_max_entries,
+                federation.relay_queue_max_entries
+            );
+        }
+        if federation.wal_max_bytes == 0 {
+            bail!("ecosystem.host.federation.wal_max_bytes must be >= 1");
+        }
+        if federation.wal_max_bytes > MAX_HOST_FEDERATION_WAL_BYTES {
+            bail!(
+                "ecosystem.host.federation.wal_max_bytes {} exceeds max {}",
+                federation.wal_max_bytes,
+                MAX_HOST_FEDERATION_WAL_BYTES
+            );
+        }
+        if federation.wal_max_bytes < federation.relay_queue_max_bytes {
+            bail!(
+                "ecosystem.host.federation.wal_max_bytes {} must be >= relay_queue_max_bytes {}",
+                federation.wal_max_bytes,
+                federation.relay_queue_max_bytes
+            );
+        }
+        if federation.relay_timeout_ms < 100 {
+            bail!("ecosystem.host.federation.relay_timeout_ms must be >= 100");
+        }
+        if federation.relay_timeout_ms > 60_000 {
+            bail!("ecosystem.host.federation.relay_timeout_ms must be <= 60000");
+        }
+        if federation.action_allowlist.is_empty() {
+            bail!("ecosystem.host.federation.action_allowlist must not be empty");
+        }
+        if federation.action_allowlist.len() > MAX_HOST_TICKET_ACTIONS {
+            bail!(
+                "ecosystem.host.federation.action_allowlist exceeds max {}",
+                MAX_HOST_TICKET_ACTIONS
+            );
+        }
+        let mut seen_relay_actions = BTreeSet::new();
+        for action in &federation.action_allowlist {
+            if !seen_relay_actions.insert(*action) {
+                bail!("ecosystem.host.federation.action_allowlist has duplicates");
+            }
+            if !self
+                .ecosystem
+                .host
+                .tickets
+                .action_allowlist
+                .contains(action)
+            {
+                bail!(
+                    "ecosystem.host.federation.action_allowlist action '{}' must also be listed in ecosystem.host.tickets.action_allowlist",
+                    action.as_str()
+                );
+            }
+        }
+        let mut seen_peers = BTreeSet::new();
+        for peer in &federation.peers {
+            validate_host_federation_token(
+                "ecosystem.host.federation.peers[].name",
+                peer.name.as_str(),
+                MAX_HOST_FEDERATION_HIVE_LEN,
+            )?;
+            if peer.name == federation.local_hive {
+                bail!(
+                    "ecosystem.host.federation.peers[].name '{}' must differ from local_hive",
+                    peer.name
+                );
+            }
+            if !seen_peers.insert(peer.name.as_str()) {
+                bail!(
+                    "ecosystem.host.federation.peers contains duplicate name '{}'",
+                    peer.name
+                );
+            }
+            let rest_url = peer.rest_url.trim();
+            if rest_url.is_empty() {
+                bail!("ecosystem.host.federation.peers[].rest_url must not be empty");
+            }
+            if rest_url.len() > MAX_HOST_FEDERATION_URL_LEN {
+                bail!(
+                    "ecosystem.host.federation.peers[].rest_url exceeds max length {}",
+                    MAX_HOST_FEDERATION_URL_LEN
+                );
+            }
+            if !(rest_url.starts_with("http://") || rest_url.starts_with("https://")) {
+                bail!(
+                    "ecosystem.host.federation.peers[].rest_url '{}' must start with http:// or https://",
+                    peer.rest_url
+                );
+            }
+            validate_host_federation_token(
+                "ecosystem.host.federation.peers[].auth_ref",
+                peer.auth_ref.as_str(),
+                MAX_HOST_FEDERATION_AUTH_REF_LEN,
+            )?;
         }
         Ok(())
     }
@@ -1571,8 +1743,7 @@ impl Manifest {
         if peft.export.max_telemetry_bytes == 0 {
             bail!("client_policies.coh.peft.export.max_telemetry_bytes must be >= 1");
         }
-        if peft.export.max_telemetry_bytes > self.telemetry_ingest.max_total_bytes_per_device as u32
-        {
+        if peft.export.max_telemetry_bytes > self.telemetry_ingest.max_total_bytes_per_device {
             bail!(
                 "client_policies.coh.peft.export.max_telemetry_bytes {} exceeds telemetry_ingest.max_total_bytes_per_device {}",
                 peft.export.max_telemetry_bytes,
@@ -1652,7 +1823,7 @@ impl Manifest {
         if trimmed.is_empty() {
             bail!("{label} must not be empty");
         }
-        if trimmed.as_bytes().iter().any(|byte| *byte == 0) {
+        if trimmed.as_bytes().contains(&0) {
             bail!("{label} contains NUL byte");
         }
         let components: Vec<&str> = trimmed.split('/').filter(|seg| !seg.is_empty()).collect();
@@ -1964,24 +2135,13 @@ pub struct FeatureToggles {
     pub std_host_tools: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct CacheConfig {
     pub kernel_ops: bool,
     pub dma_clean: bool,
     pub dma_invalidate: bool,
     pub unify_instructions: bool,
-}
-
-impl Default for CacheConfig {
-    fn default() -> Self {
-        Self {
-            kernel_ops: false,
-            dma_clean: false,
-            dma_invalidate: false,
-            unify_instructions: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2031,22 +2191,12 @@ impl Default for Namespaces {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Sharding {
     pub enabled: bool,
     pub shard_bits: u8,
     pub legacy_worker_alias: bool,
-}
-
-impl Default for Sharding {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            shard_bits: 0,
-            legacy_worker_alias: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2056,7 +2206,7 @@ pub struct NamespaceMount {
     pub target: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Ecosystem {
     pub host: EcosystemHost,
@@ -2065,22 +2215,12 @@ pub struct Ecosystem {
     pub models: FeatureFlag,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Sidecars {
     pub modbus: SidecarBusConfig,
     pub dnp3: SidecarBusConfig,
     pub lora: SidecarLoraConfig,
-}
-
-impl Default for Sidecars {
-    fn default() -> Self {
-        Self {
-            modbus: SidecarBusConfig::default(),
-            dnp3: SidecarBusConfig::default(),
-            lora: SidecarLoraConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2266,7 +2406,7 @@ impl Default for LifecycleConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ControlPlaneConfig {
     pub schedule: ScheduleControlConfig,
@@ -2274,17 +2414,7 @@ pub struct ControlPlaneConfig {
     pub export: ExportControlConfig,
 }
 
-impl Default for ControlPlaneConfig {
-    fn default() -> Self {
-        Self {
-            schedule: ScheduleControlConfig::default(),
-            lease: LeaseControlConfig::default(),
-            export: ExportControlConfig::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ScheduleControlConfig {
     pub enable: bool,
@@ -2292,17 +2422,7 @@ pub struct ScheduleControlConfig {
     pub ctl_max_bytes: u32,
 }
 
-impl Default for ScheduleControlConfig {
-    fn default() -> Self {
-        Self {
-            enable: false,
-            queue_max_entries: 0,
-            ctl_max_bytes: 0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct LeaseControlConfig {
     pub enable: bool,
@@ -2311,34 +2431,14 @@ pub struct LeaseControlConfig {
     pub ctl_max_bytes: u32,
 }
 
-impl Default for LeaseControlConfig {
-    fn default() -> Self {
-        Self {
-            enable: false,
-            active_max_entries: 0,
-            preemptions_max_entries: 0,
-            ctl_max_bytes: 0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ExportControlConfig {
     pub enable: bool,
     pub ctl_max_bytes: u32,
 }
 
-impl Default for ExportControlConfig {
-    fn default() -> Self {
-        Self {
-            enable: false,
-            ctl_max_bytes: 0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Observability {
     pub proc_9p: Proc9pObservability,
@@ -2348,20 +2448,6 @@ pub struct Observability {
     pub proc_pressure: ProcPressureObservability,
     pub proc_schedule: ProcScheduleObservability,
     pub proc_lease: ProcLeaseObservability,
-}
-
-impl Default for Observability {
-    fn default() -> Self {
-        Self {
-            proc_9p: Proc9pObservability::default(),
-            proc_9p_session: Proc9pSessionObservability::default(),
-            proc_ingest: ProcIngestObservability::default(),
-            proc_root: ProcRootObservability::default(),
-            proc_pressure: ProcPressureObservability::default(),
-            proc_schedule: ProcScheduleObservability::default(),
-            proc_lease: ProcLeaseObservability::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2558,7 +2644,7 @@ impl Default for ProcLeaseObservability {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct UiProviders {
     pub proc_9p: UiProc9p,
@@ -2567,18 +2653,7 @@ pub struct UiProviders {
     pub updates: UiUpdates,
 }
 
-impl Default for UiProviders {
-    fn default() -> Self {
-        Self {
-            proc_9p: UiProc9p::default(),
-            proc_ingest: UiProcIngest::default(),
-            policy_preflight: UiPolicyPreflight::default(),
-            updates: UiUpdates::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct UiProc9p {
     pub sessions: bool,
@@ -2586,17 +2661,7 @@ pub struct UiProc9p {
     pub short_writes: bool,
 }
 
-impl Default for UiProc9p {
-    fn default() -> Self {
-        Self {
-            sessions: false,
-            outstanding: false,
-            short_writes: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct UiProcIngest {
     pub p50_ms: bool,
@@ -2604,49 +2669,21 @@ pub struct UiProcIngest {
     pub backpressure: bool,
 }
 
-impl Default for UiProcIngest {
-    fn default() -> Self {
-        Self {
-            p50_ms: false,
-            p95_ms: false,
-            backpressure: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct UiPolicyPreflight {
     pub req: bool,
     pub diff: bool,
 }
 
-impl Default for UiPolicyPreflight {
-    fn default() -> Self {
-        Self {
-            req: false,
-            diff: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct UiUpdates {
     pub manifest: bool,
     pub status: bool,
 }
 
-impl Default for UiUpdates {
-    fn default() -> Self {
-        Self {
-            manifest: false,
-            status: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ClientPolicies {
     pub coh: CohClientPolicy,
@@ -2656,36 +2693,13 @@ pub struct ClientPolicies {
     pub trace: ClientTracePolicy,
 }
 
-impl Default for ClientPolicies {
-    fn default() -> Self {
-        Self {
-            coh: CohClientPolicy::default(),
-            cohsh: CohshClientPolicy::default(),
-            retry: ClientRetryPolicy::default(),
-            heartbeat: ClientHeartbeatPolicy::default(),
-            trace: ClientTracePolicy::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct CohClientPolicy {
     pub mount: CohMountPolicy,
     pub telemetry: CohTelemetryPolicy,
     pub run: CohRunPolicy,
     pub peft: CohPeftPolicy,
-}
-
-impl Default for CohClientPolicy {
-    fn default() -> Self {
-        Self {
-            mount: CohMountPolicy::default(),
-            telemetry: CohTelemetryPolicy::default(),
-            run: CohRunPolicy::default(),
-            peft: CohPeftPolicy::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2726,38 +2740,19 @@ impl Default for CohTelemetryPolicy {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct CohRunPolicy {
     pub lease: CohLeasePolicy,
     pub breadcrumb: CohBreadcrumbPolicy,
 }
 
-impl Default for CohRunPolicy {
-    fn default() -> Self {
-        Self {
-            lease: CohLeasePolicy::default(),
-            breadcrumb: CohBreadcrumbPolicy::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct CohPeftPolicy {
     pub export: CohPeftExportPolicy,
     pub import: CohPeftImportPolicy,
     pub activate: CohPeftActivatePolicy,
-}
-
-impl Default for CohPeftPolicy {
-    fn default() -> Self {
-        Self {
-            export: CohPeftExportPolicy::default(),
-            import: CohPeftImportPolicy::default(),
-            activate: CohPeftActivatePolicy::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3002,22 +2997,12 @@ impl Default for SwarmUiPathsConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct CohshClientPolicy {
     pub pool: CohshPoolPolicy,
     pub tail: CohshTailPolicy,
     pub host_telemetry: CohshHostTelemetryPolicy,
-}
-
-impl Default for CohshClientPolicy {
-    fn default() -> Self {
-        Self {
-            pool: CohshPoolPolicy::default(),
-            tail: CohshTailPolicy::default(),
-            host_telemetry: CohshHostTelemetryPolicy::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3120,7 +3105,7 @@ impl Default for ClientTracePolicy {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct CasConfig {
     pub enable: bool,
@@ -3129,39 +3114,16 @@ pub struct CasConfig {
     pub signing: Option<CasSigningConfig>,
 }
 
-impl Default for CasConfig {
-    fn default() -> Self {
-        Self {
-            enable: false,
-            store: CasStoreConfig::default(),
-            delta: CasDeltaConfig::default(),
-            signing: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct CasStoreConfig {
     pub chunk_bytes: u32,
 }
 
-impl Default for CasStoreConfig {
-    fn default() -> Self {
-        Self { chunk_bytes: 0 }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct CasDeltaConfig {
     pub enable: bool,
-}
-
-impl Default for CasDeltaConfig {
-    fn default() -> Self {
-        Self { enable: false }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3171,18 +3133,10 @@ pub struct CasSigningConfig {
     pub key_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct TelemetryCursor {
     pub retain_on_boot: bool,
-}
-
-impl Default for TelemetryCursor {
-    fn default() -> Self {
-        Self {
-            retain_on_boot: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3199,17 +3153,6 @@ pub enum TelemetryIngestEvictionPolicy {
     EvictOldest,
 }
 
-impl Default for Ecosystem {
-    fn default() -> Self {
-        Self {
-            host: EcosystemHost::default(),
-            audit: AuditConfig::default(),
-            policy: PolicyConfig::default(),
-            models: FeatureFlag::default(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EcosystemHost {
@@ -3220,6 +3163,8 @@ pub struct EcosystemHost {
     pub mount_at: String,
     #[serde(default)]
     pub tickets: HostTicketConfig,
+    #[serde(default)]
+    pub federation: HostFederationConfig,
 }
 
 impl Default for EcosystemHost {
@@ -3229,6 +3174,7 @@ impl Default for EcosystemHost {
             providers: Vec::new(),
             mount_at: default_host_mount(),
             tickets: HostTicketConfig::default(),
+            federation: HostFederationConfig::default(),
         }
     }
 }
@@ -3270,6 +3216,47 @@ impl Default for HostTicketConfig {
             lifecycle: default_host_ticket_lifecycle(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct HostFederationConfig {
+    pub enable: bool,
+    #[serde(default = "default_host_federation_local_hive")]
+    pub local_hive: String,
+    #[serde(default)]
+    pub peers: Vec<HostFederationPeer>,
+    #[serde(default = "default_host_ticket_action_allowlist")]
+    pub action_allowlist: Vec<HostTicketAction>,
+    pub relay_queue_max_entries: u16,
+    pub relay_queue_max_bytes: u32,
+    pub wal_max_entries: u32,
+    pub wal_max_bytes: u32,
+    pub relay_timeout_ms: u32,
+}
+
+impl Default for HostFederationConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            local_hive: default_host_federation_local_hive(),
+            peers: Vec::new(),
+            action_allowlist: default_host_ticket_action_allowlist(),
+            relay_queue_max_entries: 256,
+            relay_queue_max_bytes: 32 * 1024,
+            wal_max_entries: 1024,
+            wal_max_bytes: 512 * 1024,
+            relay_timeout_ms: 1500,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostFederationPeer {
+    pub name: String,
+    pub rest_url: String,
+    pub auth_ref: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -3355,16 +3342,10 @@ impl HostTicketLifecycleState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct FeatureFlag {
     pub enable: bool,
-}
-
-impl Default for FeatureFlag {
-    fn default() -> Self {
-        Self { enable: false }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3449,6 +3430,10 @@ impl Role {
 
 fn default_host_mount() -> String {
     "/host".to_owned()
+}
+
+fn default_host_federation_local_hive() -> String {
+    "hive-a".to_owned()
 }
 
 fn default_host_ticket_request_schema() -> String {
@@ -3763,6 +3748,23 @@ fn validate_policy_rule(rule: &PolicyRule) -> Result<()> {
         if component.contains('*') && component != "*" {
             bail!("ecosystem.policy.rules[].target wildcard must be '*'");
         }
+    }
+    Ok(())
+}
+
+fn validate_host_federation_token(label: &str, value: &str, max_len: usize) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("{label} must not be empty");
+    }
+    if trimmed.len() > max_len {
+        bail!("{label} exceeds max length {}", max_len);
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':'))
+    {
+        bail!("{label} contains invalid characters");
     }
     Ok(())
 }

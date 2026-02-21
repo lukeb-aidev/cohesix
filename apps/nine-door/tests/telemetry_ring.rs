@@ -63,7 +63,7 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
         },
     };
     let manifest = TelemetryManifestStore::new();
-    let clock = std::sync::Arc::new(TestClock::default());
+    let clock = std::sync::Arc::new(TestClock);
     let payload_one = b"one\n";
     let payload_two = b"two\n";
     let payload_three = b"three\n";

@@ -96,8 +96,8 @@ fn append_tail(
         ConsoleVerb::Tail.ack_label(),
         Some(detail.as_str()),
     ));
-    let mut stream = client.tail(path)?;
-    while let Some(event) = stream.next() {
+    let stream = client.tail(path)?;
+    for event in stream {
         match event? {
             TailEvent::Line(line) => transcript.push(line),
             TailEvent::End => transcript.push(END_LINE.to_owned()),
@@ -114,7 +114,7 @@ fn append_spawn(
     let detail = format!(
         "path={} bytes={}",
         queen::queen_ctl_path(),
-        SPAWN_PAYLOAD.as_bytes().len()
+        SPAWN_PAYLOAD.len()
     );
     transcript.push(render_ack_line(
         AckStatus::Ok,

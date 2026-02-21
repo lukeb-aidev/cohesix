@@ -218,6 +218,7 @@ Commands:
   run        Run a host command with lease validation and breadcrumb logging
   telemetry  Telemetry pull operations
   evidence   Evidence pack and timeline operations
+  fleet      Read-only multi-hive fan-in status commands
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -257,6 +258,9 @@ Options:
 ./bin/coh telemetry pull --host 127.0.0.1 --port 31337 --out ./out/telemetry
 ./bin/coh evidence pack --host 127.0.0.1 --port 31337 --out ./out/evidence/live --with-telemetry
 ./bin/coh evidence timeline --in ./out/evidence/live
+./bin/coh fleet status --rest-url http://127.0.0.1:8080 --hive hive-a=http://127.0.0.1:8080 --hive hive-b=http://127.0.0.1:8081 --hive hive-c=http://127.0.0.1:8082
+./bin/coh fleet lease-summary --rest-url http://127.0.0.1:8080 --hive hive-a=http://127.0.0.1:8080 --hive hive-b=http://127.0.0.1:8081 --hive hive-c=http://127.0.0.1:8082
+./bin/coh fleet pressure --rest-url http://127.0.0.1:8080 --hive hive-a=http://127.0.0.1:8080 --hive hive-b=http://127.0.0.1:8081 --hive hive-c=http://127.0.0.1:8082
 ./bin/coh peft export --host 127.0.0.1 --port 31337 --job job_8932 --out ./out/export
 ./bin/coh peft import --host 127.0.0.1 --port 31337 --publish --model demo-model \
   --from demo/peft_adapter --job job_8932 --export ./out/export --registry ./out/model_registry
@@ -304,7 +308,8 @@ python3 tools/cohesix-py/examples/siem_export_ndjson.py --pack ./out/evidence/li
 - `coh run` executes a host command locally after validating a lease and appends bounded breadcrumbs to `/gpu/<id>/status`.
 - `coh run` requires an active lease in `/gpu/<id>/lease` and will refuse to execute without one.
 - `coh evidence pack` exports a deterministic on-disk snapshot sourced only from existing Cohesix surfaces (`/proc`, `/log`, `/audit`, `/replay`, telemetry). Exported audit JSONL hashes ticket fields (`ticket` → `sha256:<hex>`) so evidence packs do not leak raw capability tickets.
-- `coh evidence timeline` generates `timeline.ndjson` and `timeline.md` offline from an evidence pack directory.
+- `coh evidence timeline` generates `timeline.ndjson` and `timeline.md` offline from an evidence pack directory. For federated host tickets, timeline rows include `source_hive`, `target_hive`, `relay_hop`, and correlate with `id + idempotency_key + source_hive + target_hive`.
+- `coh fleet` commands are read-only fan-in views over `/proc` surfaces (`status`, `lease-summary`, `pressure`). They never mutate hive state.
 - Policy enforcement is manifest-driven; `COH_POLICY` (or `out/coh_policy.toml`) must hash-match the compiled defaults.
 - If policy gating is enabled (see `/policy/rules`), writes to `/queen/ctl` require approvals queued in `/actions/queue`. `coh gpu lease`, `coh run`, and `coh peft ...` will fail with `ERR ECHO reason=policy ... EPERM` until an approval is queued.
 - Auth token fallback order is `--auth-token`, `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`.
@@ -479,6 +484,8 @@ Host-only ticket executor that tails `/host/tickets/spec`, applies allowlisted a
       --cursor <FILE>            Cursor state file for deterministic resume
       --mount <PATH>             Optional host mount override (default from manifest)
       --poll-ms <POLL_MS>        Poll interval in milliseconds [default: 1000]
+      --relay                    Enable federated relay forwarding from /host/tickets/spec
+      --relay-wal <FILE>         Relay WAL state file [default: out/host-ticket-agent/relay-wal.json]
       --run-once                 Process one pass and exit
       --mock                     Use deterministic in-process NineDoor
       --rest-url <URL>           REST gateway base URL
@@ -495,6 +502,9 @@ Host-only ticket executor that tails `/host/tickets/spec`, applies allowlisted a
 ./bin/host-ticket-agent --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token "$COH_AUTH_TOKEN"
 ./bin/host-ticket-agent --rest-url http://127.0.0.1:8080 \
   --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"
+./bin/host-ticket-agent --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --relay --relay-wal out/host-ticket-agent/relay-wal.json
 ```
 
 ### Notes
@@ -502,6 +512,9 @@ Host-only ticket executor that tails `/host/tickets/spec`, applies allowlisted a
 - Cursor resume is persisted to `out/host-ticket-agent/cursor.json` by default.
 - Lifecycle receipts are append-only and bounded (`claimed`, `running`, `succeeded`, `failed`, `expired`).
 - Idempotency key is `id + idempotency_key`; terminal receipts deduplicate repeated ticket specs.
+- Federated relay idempotency key is `id + idempotency_key + source_hive + target_hive`.
+- Relay forwarding is manifest-gated (`ecosystem.host.federation.*`) and only relays intents authored by the local hive.
+- Relay envelope fields are additive and optional: `source_hive`, `target_hive`, `relay_hop`, `relay_correlation_id`.
 - Supported action adapters: `gpu.lease.*`, `peft.*`, `systemd.*`, `docker.*`, `k8s.*`.
 - CLI help still shows `--auth-token` defaulting to `changeme` for compatibility; set a real secret via `--auth-token`/`COH_AUTH_TOKEN`/`COHSH_AUTH_TOKEN` for production.
 - Use REST mode when multiplexing with other tools through `hive-gateway`.
@@ -555,7 +568,7 @@ curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 - Non-loopback binds are blocked by default; use `--allow-non-loopback-bind` (or `HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND=1`) only when exposure is intentional.
 - Gateway role/ticket is fixed at startup; REST clients inherit that single role and ticket. There is no per-request ticket.
 - Request handling is brokered through bounded control/telemetry queues with fair scheduling; write/read pressure returns deterministic `429` (`gateway backpressure`) instead of hidden retries.
-- `/v1/meta/status` includes broker counters (`control_waiters`, `telemetry_waiters`, `pool_exhausted`, `timeout_rejections`, `telemetry_yields`) for tuning and incident triage.
+- `/v1/meta/status` includes broker counters (`control_waiters`, `telemetry_waiters`, `pool_exhausted`, `timeout_rejections`, `telemetry_yields`) and relay counters (`relay_queue_depth`, `relay_deduped`, `relay_remote_write_failures`) for federation triage.
 - Bind the gateway to loopback and expose it remotely via SSH tunneling.
 
 ### Remote access pattern (SSH tunnel)

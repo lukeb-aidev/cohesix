@@ -102,10 +102,8 @@ fn manifest_codegen_is_deterministic() {
     let baseline_cbor = fs::read(&cbor_snippet).expect("cbor snippet");
     let baseline_cohesix_py_defaults =
         fs::read(&cohesix_py_defaults).expect("cohesix python defaults");
-    let baseline_cohesix_py_doc =
-        fs::read(&cohesix_py_doc).expect("cohesix python defaults doc");
-    let baseline_coh_doctor_doc =
-        fs::read(&coh_doctor_doc).expect("coh doctor doc");
+    let baseline_cohesix_py_doc = fs::read(&cohesix_py_doc).expect("cohesix python defaults doc");
+    let baseline_coh_doctor_doc = fs::read(&coh_doctor_doc).expect("coh doctor doc");
     let baseline_policy = fs::read(&cohsh_policy).expect("cohsh policy");
     let baseline_policy_rust = fs::read(&cohsh_policy_rust).expect("cohsh policy rust");
     let baseline_policy_doc = fs::read(&cohsh_policy_doc).expect("cohsh policy doc");
@@ -139,8 +137,7 @@ fn manifest_codegen_is_deterministic() {
     let second_cbor = fs::read(&cbor_snippet).expect("cbor snippet");
     let second_cohesix_py_defaults =
         fs::read(&cohesix_py_defaults).expect("cohesix python defaults");
-    let second_cohesix_py_doc =
-        fs::read(&cohesix_py_doc).expect("cohesix python defaults doc");
+    let second_cohesix_py_doc = fs::read(&cohesix_py_doc).expect("cohesix python defaults doc");
     let second_coh_doctor_doc = fs::read(&coh_doctor_doc).expect("coh doctor doc");
     let second_policy = fs::read(&cohsh_policy).expect("cohsh policy");
     let second_policy_rust = fs::read(&cohsh_policy_rust).expect("cohsh policy rust");

@@ -759,7 +759,11 @@ impl DocFragments {
         writeln!(
             schema_md,
             "- `client_policies.cohsh.host_telemetry.systemd_poll_ms`: `{}`",
-            manifest.client_policies.cohsh.host_telemetry.systemd_poll_ms
+            manifest
+                .client_policies
+                .cohsh
+                .host_telemetry
+                .systemd_poll_ms
         )
         .ok();
         writeln!(
@@ -1186,6 +1190,160 @@ impl DocFragments {
                 .join(", ");
             writeln!(ecosystem_md, "- `ecosystem.host.providers`: {providers}").ok();
         }
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.host.tickets.enable`: `{}`",
+            manifest.ecosystem.host.tickets.enable
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.host.tickets.request_schema`: `{}`",
+            manifest.ecosystem.host.tickets.request_schema
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.host.tickets.result_schema`: `{}`",
+            manifest.ecosystem.host.tickets.result_schema
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.host.tickets.max_line_bytes`: `{}`",
+            manifest.ecosystem.host.tickets.max_line_bytes
+        )
+        .ok();
+        if manifest.ecosystem.host.tickets.action_allowlist.is_empty() {
+            writeln!(
+                ecosystem_md,
+                "- `ecosystem.host.tickets.action_allowlist`: `(none)`"
+            )
+            .ok();
+        } else {
+            let actions = manifest
+                .ecosystem
+                .host
+                .tickets
+                .action_allowlist
+                .iter()
+                .map(|action| format!("`{}`", action.as_str()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(
+                ecosystem_md,
+                "- `ecosystem.host.tickets.action_allowlist`: {actions}"
+            )
+            .ok();
+        }
+        if manifest.ecosystem.host.tickets.lifecycle.is_empty() {
+            writeln!(
+                ecosystem_md,
+                "- `ecosystem.host.tickets.lifecycle`: `(none)`"
+            )
+            .ok();
+        } else {
+            let lifecycle = manifest
+                .ecosystem
+                .host
+                .tickets
+                .lifecycle
+                .iter()
+                .map(|state| format!("`{}`", state.as_str()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(
+                ecosystem_md,
+                "- `ecosystem.host.tickets.lifecycle`: {lifecycle}"
+            )
+            .ok();
+        }
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.host.federation.enable`: `{}`",
+            manifest.ecosystem.host.federation.enable
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.host.federation.local_hive`: `{}`",
+            manifest.ecosystem.host.federation.local_hive
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.host.federation.relay_queue_max_entries`: `{}`",
+            manifest.ecosystem.host.federation.relay_queue_max_entries
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.host.federation.relay_queue_max_bytes`: `{}`",
+            manifest.ecosystem.host.federation.relay_queue_max_bytes
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.host.federation.wal_max_entries`: `{}`",
+            manifest.ecosystem.host.federation.wal_max_entries
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.host.federation.wal_max_bytes`: `{}`",
+            manifest.ecosystem.host.federation.wal_max_bytes
+        )
+        .ok();
+        writeln!(
+            ecosystem_md,
+            "- `ecosystem.host.federation.relay_timeout_ms`: `{}`",
+            manifest.ecosystem.host.federation.relay_timeout_ms
+        )
+        .ok();
+        if manifest.ecosystem.host.federation.peers.is_empty() {
+            writeln!(
+                ecosystem_md,
+                "- `ecosystem.host.federation.peers`: `(none)`"
+            )
+            .ok();
+        } else {
+            for peer in &manifest.ecosystem.host.federation.peers {
+                writeln!(
+                    ecosystem_md,
+                    "- `ecosystem.host.federation.peers`: `{}` -> `{}` (`auth_ref={}`)",
+                    peer.name, peer.rest_url, peer.auth_ref
+                )
+                .ok();
+            }
+        }
+        if manifest
+            .ecosystem
+            .host
+            .federation
+            .action_allowlist
+            .is_empty()
+        {
+            writeln!(
+                ecosystem_md,
+                "- `ecosystem.host.federation.action_allowlist`: `(none)`"
+            )
+            .ok();
+        } else {
+            let actions = manifest
+                .ecosystem
+                .host
+                .federation
+                .action_allowlist
+                .iter()
+                .map(|action| format!("`{}`", action.as_str()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(
+                ecosystem_md,
+                "- `ecosystem.host.federation.action_allowlist`: {actions}"
+            )
+            .ok();
+        }
         if manifest.ecosystem.host.enable {
             writeln!(
                 ecosystem_md,
@@ -1373,8 +1531,7 @@ impl DocFragments {
         let proc_pressure_enabled =
             proc_pressure.busy || proc_pressure.quota || proc_pressure.cut || proc_pressure.policy;
         let proc_schedule_enabled = proc_schedule.summary || proc_schedule.queue;
-        let proc_lease_enabled =
-            proc_lease.summary || proc_lease.active || proc_lease.preemptions;
+        let proc_lease_enabled = proc_lease.summary || proc_lease.active || proc_lease.preemptions;
 
         let mut observability_interfaces_md = String::new();
         writeln!(
@@ -1829,7 +1986,11 @@ impl DocFragments {
         .ok();
 
         let mut cohesix_py_defaults_md = String::new();
-        writeln!(cohesix_py_defaults_md, "### Cohesix Python defaults (generated)").ok();
+        writeln!(
+            cohesix_py_defaults_md,
+            "### Cohesix Python defaults (generated)"
+        )
+        .ok();
         writeln!(
             cohesix_py_defaults_md,
             "- `manifest.sha256`: `{}`",
@@ -2190,12 +2351,8 @@ pub fn emit_coh_doctor_snippet(docs: &DocFragments, path: &Path) -> Result<()> {
     writeln!(contents, "<!-- Copyright 2026 Lukas Bower -->")?;
     writeln!(contents)?;
     writeln!(contents, "{}", docs.coh_doctor_checks_md.trim_end())?;
-    fs::write(path, contents).with_context(|| {
-        format!(
-            "failed to write coh doctor snippet {}",
-            path.display()
-        )
-    })?;
+    fs::write(path, contents)
+        .with_context(|| format!("failed to write coh doctor snippet {}", path.display()))?;
     Ok(())
 }
 

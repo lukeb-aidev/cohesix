@@ -65,6 +65,35 @@ def test_clamp_target_workers_respects_cap() -> None:
     assert rest_perf.clamp_target_workers(6, 8) == 6
 
 
+def test_apply_multi_hive_defaults_sets_total_worker_target() -> None:
+    args = argparse.Namespace(
+        multi_hive=True,
+        hives=3,
+        workers_per_hive=1000,
+        workers_min=rest_perf.DEFAULT_WORKERS_MIN,
+        workers_max=rest_perf.DEFAULT_WORKERS_MAX,
+    )
+    rest_perf.apply_multi_hive_defaults(args, argv_tokens=[])
+    assert args.workers_min == 3000
+    assert args.workers_max == 3000
+
+
+def test_apply_multi_hive_defaults_respects_explicit_bounds() -> None:
+    args = argparse.Namespace(
+        multi_hive=True,
+        hives=4,
+        workers_per_hive=900,
+        workers_min=2000,
+        workers_max=2400,
+    )
+    rest_perf.apply_multi_hive_defaults(
+        args,
+        argv_tokens=["--workers-min", "2000", "--workers-max", "2400"],
+    )
+    assert args.workers_min == 2000
+    assert args.workers_max == 2400
+
+
 def test_parse_bind_host_port_accepts_valid_host_port() -> None:
     host, port = rest_perf.parse_bind_host_port("127.0.0.1:8080", "gateway-bind")
     assert host == "127.0.0.1"

@@ -100,7 +100,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25e](#25e) | Evidence Packs + Integration Kits (Audit-First Adoption) | Complete |
 | [25f](#25f) | Gateway Broker Refactor + Large Telemetry Reference Manifests (No-Retry Reliability Gate) | Complete |
 | [25g](#25g) | Host Control Tickets via FUSE (GPU/PEFT + systemd/docker + K8s Coexistence) | Complete |
-| [25h](#25h) | Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) | Pending |
+| [25h](#25h) | Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) | Complete |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [26a](#26a) | UEFI Networking Baseline (Pi 4 GENETv5 + Static IPv4) | Pending |
 | [26b](#26b) | UEFI DHCP Baseline (Pi 4 NIC + Wi-Fi Policy) | Pending |

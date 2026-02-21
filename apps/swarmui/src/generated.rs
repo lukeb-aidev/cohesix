@@ -5,7 +5,8 @@
 
 #![allow(dead_code)]
 
-pub const MANIFEST_SHA256: &str = "af1586465c29995de8086260fe57138aa3481d8ea70f42e5d37b1add06026af0";
+pub const MANIFEST_SHA256: &str =
+    "0884f452da6fe84e7148c3c1e01d605b45f09f1da09914d87e961cc2c256b905";
 pub const SECURE9P_MSIZE: u32 = 8192;
 pub const SECURE9P_WALK_DEPTH: u8 = 8;
 pub const SWARMUI_TICKET_SCOPE: &str = "per-ticket";
@@ -31,10 +32,4 @@ pub const SWARMUI_TRACE_MAX_BYTES: u32 = 1048576;
 pub const SWARMUI_TELEMETRY_ROOT: &str = "/worker";
 pub const SWARMUI_PROC_INGEST_ROOT: &str = "/proc/ingest";
 pub const SWARMUI_WORKER_ROOT: &str = "/worker";
-pub const SWARMUI_NAMESPACE_ROOTS: &[&str] = &[
-    "/proc",
-    "/queen",
-    "/worker",
-    "/log",
-    "/gpu",
-];
+pub const SWARMUI_NAMESPACE_ROOTS: &[&str] = &["/proc", "/queen", "/worker", "/log", "/gpu"];

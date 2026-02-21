@@ -22,10 +22,10 @@ use std::thread;
 #[cfg(any(feature = "rest", feature = "tcp"))]
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "tcp")]
-use cohsh::TcpTransport;
 #[cfg(any(feature = "rest", feature = "tcp"))]
 use cohsh::RestTransport;
+#[cfg(feature = "tcp")]
+use cohsh::TcpTransport;
 
 /// CLI options for the host-sidecar bridge.
 #[derive(Debug, Parser)]

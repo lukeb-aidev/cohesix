@@ -146,7 +146,7 @@ fn sharded_attach_scales_and_exports_metrics() {
         }
     }
     assert_eq!(worker_sessions, Some(WORKER_COUNT));
-    assert!(total_sessions.unwrap_or(0) >= WORKER_COUNT + 1);
+    assert!(total_sessions.unwrap_or(0) > WORKER_COUNT);
     assert_eq!(shard_total, WORKER_COUNT);
 
     let shards = ShardLayout::default();

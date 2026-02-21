@@ -4,6 +4,7 @@
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![allow(clippy::items_after_test_module, clippy::type_complexity)]
 
 //! SwarmUI backend helpers: session management, transcripts, and cache handling.
 
@@ -441,13 +442,13 @@ where
 
             let detail = format!("path={path}");
             match session.client.tail(&path) {
-                Ok(mut stream) => {
+                Ok(stream) => {
                     lines.push(render_ack_line(
                         AckStatus::Ok,
                         ConsoleVerb::Tail.ack_label(),
                         Some(detail.as_str()),
                     ));
-                    while let Some(event) = stream.next() {
+                    for event in stream {
                         match event {
                             Ok(TailEvent::Line(line)) => lines.push(line),
                             Ok(TailEvent::End) => lines.push(END_LINE.to_owned()),
@@ -582,7 +583,7 @@ where
                 }
             };
             if role != Role::Queen {
-                let detail = format!("reason=permission");
+                let detail = "reason=permission".to_string();
                 return SwarmUiTranscript::err(vec![render_ack_line(
                     AckStatus::Err,
                     ConsoleVerb::Cat.ack_label(),
@@ -1062,7 +1063,7 @@ where
         let cache = self
             .cache
             .as_ref()
-            .ok_or_else(|| SwarmUiError::Cache(CacheError::Disabled))?;
+            .ok_or(SwarmUiError::Cache(CacheError::Disabled))?;
         let record = cache.write(key, payload)?;
         Ok(record)
     }
@@ -1072,7 +1073,7 @@ where
         let cache = self
             .cache
             .as_ref()
-            .ok_or_else(|| SwarmUiError::Cache(CacheError::Disabled))?;
+            .ok_or(SwarmUiError::Cache(CacheError::Disabled))?;
         Ok(cache.read(key)?)
     }
 
@@ -2017,7 +2018,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 }
             };
             if role != Role::Queen {
-                let detail = format!("reason=permission");
+                let detail = "reason=permission".to_string();
                 return SwarmUiTranscript::err(vec![render_ack_line(
                     AckStatus::Err,
                     ConsoleVerb::Cat.ack_label(),
@@ -2345,7 +2346,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         let cache = self
             .cache
             .as_ref()
-            .ok_or_else(|| SwarmUiError::Cache(CacheError::Disabled))?;
+            .ok_or(SwarmUiError::Cache(CacheError::Disabled))?;
         let record = cache.write(key, payload)?;
         Ok(record)
     }
@@ -2355,7 +2356,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         let cache = self
             .cache
             .as_ref()
-            .ok_or_else(|| SwarmUiError::Cache(CacheError::Disabled))?;
+            .ok_or(SwarmUiError::Cache(CacheError::Disabled))?;
         Ok(cache.read(key)?)
     }
 
