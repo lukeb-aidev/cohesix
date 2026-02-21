@@ -102,6 +102,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25g](#25g) | Host Control Tickets via FUSE (GPU/PEFT + systemd/docker + K8s Coexistence) | Complete |
 | [25h](#25h) | Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) | Pending |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
+| [26a](#26a) | UEFI Networking Baseline (Pi 4 GENETv5 + Static IPv4) | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [29](#29) | Edge Local Status (UEFI Host Tool) | Pending |
@@ -5997,6 +5998,114 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 - VM vs hardware outputs compared; differences must be profile-gated.
 **Deliverables:**
 - Attestation evidence documented in `docs/SECURITY.md` and `docs/HARDWARE_BRINGUP.md`.
+
+---
+
+## Milestone 26a — UEFI Networking Baseline (Pi 4 GENETv5 + Static IPv4) <a id="26a"></a>
+[Milestones](#Milestones)
+
+**Why now (platform continuity):**  
+Milestone 26 establishes UEFI boot and identity, but field validation on Raspberry Pi 4 class hardware requires a native NIC path that preserves the existing root-task networking model. This milestone introduces a hardware-backed baseline networking profile without changing Cohesix control-plane semantics.
+
+**Non-negotiable constraints:**
+- No new in-VM listeners or protocols; the authenticated root-task TCP console remains the only in-VM TCP listener.
+- DHCP is out of scope for 26a and remains Milestone 30 work; 26a uses static IPv4 only.
+- Any VM vs UEFI networking differences must be profile-gated, manifest-defined, and documented.
+- Driver implementation must remain HAL-bound with bounded queues and deterministic memory budgets.
+
+### Prerequisite
+- Milestone **26** completed (UEFI boot chain + device identity attestation).
+
+### Goal
+Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` GENETv5) and wire `uefi-aarch64` static IPv4 configuration through manifest → generated artifacts → root-task net bring-up.
+
+### Deliverables
+- **GENETv5 NIC backend (Pi 4)**
+  - Add a root-task driver backend for Broadcom GENETv5, implemented in pure Rust with HAL ownership for MMIO, IRQ, DMA, and cache maintenance.
+  - Leverage Linux `bcmgenet` behavior as a reference for register programming order, descriptor handling, reset/link sequencing, and PHY/MDIO bring-up (design reference only; no direct code lift).
+  - Integrate backend selection into existing `NetBackend` plumbing and keep QEMU backends (`rtl8139`/`virtio-net`) unchanged.
+
+- **Profile-gated static IPv4 for `uefi-aarch64`**
+  - Extend manifest IR and validation with bounded static IPv4 fields for UEFI profile (interface IP, prefix length, optional gateway).
+  - Generate root-task networking config from `coh-rtc` artifacts instead of hard-wired dev-virt defaults when `profile.name=uefi-aarch64`.
+  - Reject invalid/static-zero network configs deterministically at compile time or early boot.
+
+- **Docs-as-built alignment**
+  - Update `docs/ARCHITECTURE.md`, `docs/INTERFACES.md`, and `docs/SECURITY.md` with:
+    - profile-gated backend matrix (QEMU vs Pi 4),
+    - static IPv4 configuration source of truth,
+    - deterministic bounds and failure modes for GENETv5 bring-up.
+  - Update `docs/HARDWARE_BRINGUP.md` with Pi 4 UEFI network checklist and expected boot evidence lines.
+
+### Commands
+- `cargo check -p root-task`
+- `cargo test -p root-task net:: -- --nocapture`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
+- `scripts/uefi/qemu-uefi.sh --console serial --tcp-port 31337`
+- `cargo run -p cohsh --features tcp -- --transport tcp --host <STATIC_IP> --port 31337 --script scripts/cohsh/boot_v0.coh`
+
+### Checks (DoD)
+- Pi 4 UEFI boot reaches root-task network init and reports `GENETv5` backend with static IPv4 from manifest-generated config.
+- `cohsh --transport tcp` succeeds against the configured static address with no console grammar or ACK/ERR/END drift.
+- Invalid UEFI static IPv4 manifest settings are rejected deterministically (compiler validation and/or early-boot fail-fast).
+- No DHCP client path is introduced in 26a; DHCP remains scoped to Milestone 30.
+- Full regression pack remains green on QEMU; any profile-gated divergence is explicitly documented and fixture-backed.
+
+### Compiler touchpoints
+- `coh-rtc` emits profile-gated network config tables (backend selection + static IPv4 fields) into generated root-task artifacts.
+- Manifest validation enforces:
+  - static IPv4 required for `uefi-aarch64` network-enabled profile,
+  - prefix bounds (`1..=32`),
+  - backend/profile compatibility (`bcmgenet` only where declared in `hw.devices`).
+- Docs snippet regeneration includes static IPv4 and backend mapping excerpts for Architecture/Interfaces docs.
+
+### Task Breakdown
+```
+Title/ID: m26a-bcmgenet-driver
+Goal: Add HAL-bound Broadcom GENETv5 NIC backend for Raspberry Pi 4 bring-up.
+Inputs: apps/root-task/src/net/*, apps/root-task/src/drivers/*, docs/SECURITY.md, Linux bcmgenet driver behavior notes.
+Changes:
+  - apps/root-task/src/drivers/bcmgenet.rs — GENETv5 register/ring/IRQ/PHY implementation with bounded queues.
+  - apps/root-task/src/drivers/mod.rs — expose bcmgenet backend.
+  - apps/root-task/src/net/mod.rs + apps/root-task/src/net/stack.rs — backend selection and init wiring.
+Commands:
+  - cargo check -p root-task
+  - cargo test -p root-task --features "kernel net-console" bcmgenet
+Checks:
+  - Link-up, RX/TX smoke, and deterministic error paths are covered by unit/integration tests.
+Deliverables:
+  - Pi 4 GENETv5 backend integrated behind existing net abstractions.
+
+Title/ID: m26a-static-ipv4-profile-gate
+Goal: Make UEFI static IPv4 config manifest-authoritative and profile-gated.
+Inputs: configs/root_task.toml, tools/coh-rtc, apps/root-task/src/generated, docs/INTERFACES.md.
+Changes:
+  - tools/coh-rtc/src/* — add IR fields + validation for `uefi-aarch64` static IPv4 network config.
+  - apps/root-task/src/generated/* — regenerated network config outputs.
+  - apps/root-task/src/net/mod.rs — consume generated profile config before dev-virt fallback defaults.
+Commands:
+  - cargo test -p coh-rtc
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+Checks:
+  - Invalid static IPv4 entries fail deterministically; valid configs produce stable generated artifacts.
+Deliverables:
+  - Manifest-driven static IPv4 for UEFI profile with docs-as-built parity.
+
+Title/ID: m26a-pi4-uefi-validation
+Goal: Prove end-to-end TCP console reachability on Pi 4 using static IPv4 with no protocol drift.
+Inputs: scripts/uefi/esp-build.sh, docs/HARDWARE_BRINGUP.md, scripts/cohsh/boot_v0.coh.
+Changes:
+  - docs/HARDWARE_BRINGUP.md — Pi 4 checklist, expected boot lines, static IPv4 examples.
+  - docs/ARCHITECTURE.md + docs/SECURITY.md — backend and threat-model updates.
+Commands:
+  - scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json
+  - cargo run -p cohsh --features tcp -- --transport tcp --host <STATIC_IP> --port 31337 --script scripts/cohsh/boot_v0.coh
+Checks:
+  - Console attach/tail/test flows are unchanged except for profile-gated backend/address selection.
+Deliverables:
+  - Reproducible Pi 4 UEFI network bring-up evidence and updated docs.
+```
 
 ---
 
