@@ -6000,7 +6000,7 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 ---
 
 ## Task Breakdown
-
+```
 ### Title/ID: m26-uefi-bootchain
 **Goal:** Boot via UEFI → elfloader.efi → seL4; load manifest from ESP; emit stable fingerprint lines.  
 **Inputs:** EFI-built elfloader, `scripts/uefi/esp-build.sh`, `scripts/uefi/qemu-uefi.sh`, `configs/root_task.toml` (`profile.name`).  
@@ -6077,7 +6077,7 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 - Docs and generated snippets remain aligned with the enforced boundary.
 **Deliverables:**
 - Auditable UEFI/HAL ownership boundary with CI-friendly guard commands and updated as-built docs.
-
+```
 ---
 
 ## Milestone 26a — UEFI Networking Baseline (Pi 4 GENETv5 + Static IPv4) <a id="26a"></a>
