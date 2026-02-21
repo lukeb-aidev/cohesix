@@ -6001,81 +6001,81 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 
 ## Task Breakdown
 ```
-### Title/ID: m26-uefi-bootchain
+Title/ID: m26-uefi-bootchain
 **Goal:** Boot via UEFI → elfloader.efi → seL4; load manifest from ESP; emit stable fingerprint lines.  
 **Inputs:** EFI-built elfloader, `scripts/uefi/esp-build.sh`, `scripts/uefi/qemu-uefi.sh`, `configs/root_task.toml` (`profile.name`).  
-**Changes:**
+Changes:
 - `scripts/uefi/esp-build.sh` — build ESP with `BOOTAA64.EFI` (elfloader), kernel, rootserver, optional initrd, manifest + hash; deterministic logs.
 - `scripts/uefi/qemu-uefi.sh` — UEFI QEMU path using EDK2 pflash; keep `virt` machine for parity.
 - `apps/root-task` — print manifest fingerprint in the same serial ordering as VM baseline.
 **Commands:**
 - `cmake --build seL4/build --target elfloader.efi`
 - `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
-**Checks:**
+Checks:
 - QEMU `--uefi` serial output matches VM ordering; missing/invalid manifest aborts before any ticket material.
-**Deliverables:**
+Deliverables:
 - UEFI boot artifacts and referenced fingerprints in `docs/HARDWARE_BRINGUP.md`.
 
 ---
 
-### Title/ID: m26-attestation
-**Goal:** Implement TPM/DICE identity sealing and export via `/proc/boot` with strict determinism.  
-**Inputs:** `apps/root-task/src/attest.rs`, `docs/SECURITY.md` (attestation section).  
-**Changes:**
+Title/ID: m26-attestation
+Goal: Implement TPM/DICE identity sealing and export via `/proc/boot` with strict determinism.  
+Inputs: `apps/root-task/src/attest.rs`, `docs/SECURITY.md` (attestation section).  
+Changes:
 - `apps/root-task/src/attest.rs` — bounded TPM quote path + DICE fallback; seal ticket seeds only after successful attestation.
 - `/proc/boot` — append evidence summary (hashes/IDs only; no secrets).
 - Host docs/scripts for optional QEMU TPM emulation and serial/local-seat evidence capture.
 **Commands:**
 - `scripts/uefi/qemu-uefi.sh --console serial`
 - Physical/local-seat checklist: verify root-console `help`, `bi`, and `ping`; capture attestation and manifest fingerprint lines from serial/local-seat transcript.
-**Checks:**
+Checks:
 - Attestation failure aborts boot deterministically with audit.
 - Successful evidence hash matches manifest fingerprint.
 - VM vs hardware outputs compared from serial/local-seat transcripts; differences must be profile-gated.
-**Deliverables:**
+Deliverables:**
 - Attestation evidence documented in `docs/SECURITY.md` and `docs/HARDWARE_BRINGUP.md`.
 
 ---
 
-### Title/ID: m26-local-seat-minimal
-**Goal:** Provide primitive local post-boot diagnostics on Pi 4 by wiring USB keyboard input and HDMI text output into the existing root console path.  
-**Inputs:** `apps/root-task/src/console/*`, `apps/root-task/src/userland/mod.rs`, `apps/root-task/src/event/*`, HAL device mapping, `tools/coh-rtc` schema/codegen, `configs/root_task.toml`, `docs/USERLAND_AND_CLI.md`, `docs/HARDWARE_BRINGUP.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`.  
-**Changes:**
+Title/ID: m26-local-seat-minimal
+Goal: Provide primitive local post-boot diagnostics on Pi 4 by wiring USB keyboard input and HDMI text output into the existing root console path.  
+Inputs: `apps/root-task/src/console/*`, `apps/root-task/src/userland/mod.rs`, `apps/root-task/src/event/*`, HAL device mapping, `tools/coh-rtc` schema/codegen, `configs/root_task.toml`, `docs/USERLAND_AND_CLI.md`, `docs/HARDWARE_BRINGUP.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`.  
+Changes:
 - `apps/root-task/src/drivers/*` + HAL wiring — add minimal USB keyboard input path required for line-oriented root-console commands on Pi 4 (`uefi-aarch64`) only.
 - `apps/root-task/src/console/*` + event pump wiring — feed keyboard bytes into the existing parser/dispatcher; do not introduce new verbs, framing, or policy paths.
 - `apps/root-task/src/*` local video output module — add primitive HDMI text sink that mirrors console output with bounded memory and deterministic truncation.
 - `tools/coh-rtc/src/*` + generated artifacts — add/validate `hw.local_seat` fields (`enabled`, `required`, declared keyboard/display devices) and emit profile-gated constants.
 - `docs/USERLAND_AND_CLI.md` + `docs/HARDWARE_BRINGUP.md` + `docs/ARCHITECTURE.md` + `docs/SECURITY.md` — document local-seat behavior, failure modes, and strict non-goals (no in-VM UI stack).
-**Commands:**
+Commands:
 - `cargo check -p root-task`
 - `cargo test -p root-task --features "kernel serial-console" local_seat`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 - `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
-**Checks:**
+Checks:
 - USB keyboard commands produce the same command parsing and responses as PL011 for root-console diagnostics.
 - HDMI output mirrors root-console lines deterministically; serial transcript remains canonical for Milestone 26.
 - `hw.local_seat.required=true` fails fast when local-seat devices are missing/unusable; `required=false` degrades to serial-only with explicit boot/audit lines.
-**Deliverables:**
+Deliverables:
 - Pi 4 local diagnostics seat evidence (boot transcript + command transcript) and aligned docs-as-built updates.
 
 ---
 
-### Title/ID: m26-hal-uefi-boundary
-**Goal:** Enforce a hard boundary where UEFI remains pre-handoff firmware and all post-handoff device interactions are HAL-owned.  
-**Inputs:** `apps/root-task/src/hal/*`, `apps/root-task/src/drivers/*`, `apps/root-task/src/kernel.rs`, `tools/coh-rtc/src/*`, `docs/ARCHITECTURE.md`, `docs/HARDWARE_BRINGUP.md`, `docs/SECURITY.md`.  
-**Changes:**
+Title/ID: m26-hal-uefi-boundary
+Goal: Enforce a hard boundary where UEFI remains pre-handoff firmware and all post-handoff device interactions are HAL-owned.  
+Inputs:`apps/root-task/src/hal/*`, `apps/root-task/src/drivers/*`, `apps/root-task/src/kernel.rs`, `tools/coh-rtc/src/*`, `docs/ARCHITECTURE.md`, `docs/HARDWARE_BRINGUP.md`, `docs/SECURITY.md`.  
+Changes:
 - HAL and driver traits — ensure every Milestone 26 runtime path (serial, local seat input/output, attestation device access, networking handoff points) is represented through HAL interfaces and profile-gated backends.
 - Root-task runtime — remove or prohibit direct EFI service assumptions after seL4 entry; consume only validated manifest/DT-derived hardware declarations.
 - Compiler/docs guards — add deterministic checks and documentation language that classify firmware-owned vs Cohesix-owned responsibilities.
-**Commands:**
+Commands:
 - `cargo check -p root-task`
 - `cargo test -p root-task hal:: -- --nocapture`
 - `rg -n "EFI_|boot_services|runtime_services|uefi::" apps/root-task/src apps/nine-door/src tools/coh-rtc/src`
-**Checks:**
+Checks:
 - Runtime builds contain no direct EFI service usage in root-task paths.
 - HAL remains the sole device access surface post-handoff.
 - Docs and generated snippets remain aligned with the enforced boundary.
-**Deliverables:**
+Deliverables:
 - Auditable UEFI/HAL ownership boundary with CI-friendly guard commands and updated as-built docs.
 ```
 ---
