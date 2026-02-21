@@ -6107,7 +6107,8 @@ Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` G
 ### Deliverables
 - **GENETv5 NIC backend (Pi 4)**
   - Add a root-task driver backend for Broadcom GENETv5, implemented in pure Rust with HAL ownership for MMIO, IRQ, DMA, and cache maintenance.
-  - Leverage Linux `bcmgenet` behavior as a reference for register programming order, descriptor handling, reset/link sequencing, and PHY/MDIO bring-up (design reference only; no direct code lift).
+  - Use this design-reference order for architecture review: Linux `bcmgenet` driver behavior (primary) -> Linux `bcm2711` Pi 4 DT bindings for GENET/MDIO/PHY wiring (secondary) -> U-Boot `bcmgenet` bring-up behavior (tertiary sanity reference).
+  - References are design-only inputs; no direct code lift is permitted.
   - Integrate backend selection into existing `NetBackend` plumbing and keep QEMU backends (`rtl8139`/`virtio-net`) unchanged.
 
 - **Profile-gated static IPv4 for `uefi-aarch64`**
@@ -6151,18 +6152,21 @@ Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` G
 ```
 Title/ID: m26a-bcmgenet-driver
 Goal: Add HAL-bound Broadcom GENETv5 NIC backend for Raspberry Pi 4 bring-up.
-Inputs: apps/root-task/src/net/*, apps/root-task/src/drivers/*, docs/SECURITY.md, Linux bcmgenet driver behavior notes.
+Inputs: apps/root-task/src/net/*, apps/root-task/src/drivers/*, apps/root-task/src/hal/*, docs/SECURITY.md, Linux `bcmgenet` + Linux `bcm2711` DT binding notes + U-Boot `bcmgenet` bring-up notes (reference-only).
 Changes:
-  - apps/root-task/src/drivers/bcmgenet.rs — GENETv5 register/ring/IRQ/PHY implementation with bounded queues.
+  - apps/root-task/src/drivers/bcmgenet.rs — GENETv5 register/ring/IRQ/PHY implementation with bounded queues and HAL-backed MMIO/IRQ/DMA/MDIO access only.
   - apps/root-task/src/drivers/mod.rs — expose bcmgenet backend.
   - apps/root-task/src/net/mod.rs + apps/root-task/src/net/stack.rs — backend selection and init wiring.
+  - docs/ARCHITECTURE.md + docs/SECURITY.md — record GENET design-reference provenance and explicit no-code-lift policy.
 Commands:
   - cargo check -p root-task
   - cargo test -p root-task --features "kernel net-console" bcmgenet
+  - rg -n "EFI_|boot_services|runtime_services|uefi::" apps/root-task/src tools/coh-rtc/src
 Checks:
   - Link-up, RX/TX smoke, and deterministic error paths are covered by unit/integration tests.
+  - GENET runtime paths remain HAL-only; no direct MMIO/firmware-service usage appears outside HAL-owned modules.
 Deliverables:
-  - Pi 4 GENETv5 backend integrated behind existing net abstractions.
+  - Pi 4 GENETv5 backend integrated behind existing net abstractions with documented source provenance order (Linux `bcmgenet` -> Linux `bcm2711` DT -> U-Boot `bcmgenet`) and reference-only compliance.
 
 Title/ID: m26a-static-ipv4-profile-gate
 Goal: Make UEFI static IPv4 config manifest-authoritative and profile-gated.
