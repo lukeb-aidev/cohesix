@@ -15,10 +15,14 @@
 - `EFI/BOOT/BOOTAA64.EFI`
 - `cohesix/kernel.elf`
 - `cohesix/rootserver`
+- `cohesix/gic-version.txt`
 - optional `cohesix/initrd.cpio`
 - `cohesix/manifest.json` + `cohesix/manifest.sha256`
 - optional `dtb/*`
+- `scripts/uefi/esp-build.sh` syncs `out/cohesix/staging/rootserver` into `seL4/build_UEFI/elfloader/rootserver`, rebuilds `elfloader.efi`, and verifies the embedded rootserver payload before packaging.
 - `scripts/uefi/qemu-uefi.sh` boots UEFI on QEMU using EDK2 pflash + FAT-backed ESP.
+- `scripts/uefi/qemu-uefi.sh` auto-detects GIC version from ESP/seL4 config and defaults to `-machine virt,gic-version=<detected>,virtualization=on` (`kernel-irqchip=off` is included by default on macOS to match release `run.sh` behavior).
+- For `qemu-arm-virt` SMP builds, the DTB consumed by upstream seL4/elfloader should report `psci.method = "smc"` (for example by dumping DTB from `qemu-system-aarch64 -machine virt,virtualization=on,...`).
 - Both scripts write auditable logs/artifacts under `out/uefi/`.
 
 ## Manifest profiles
@@ -32,8 +36,8 @@
 - attestation policy/device requirements when `hw.attestation.enabled=true`
 
 ## UEFI build/boot commands
-1. Build EFI elfloader (requires a configured upstream seL4 CMake tree):
-`cmake --build seL4/build --target elfloader.efi`
+1. Build EFI elfloader (requires a configured upstream seL4 CMake tree with `ElfloaderImage=efi`, typically `seL4/build_UEFI`):
+`cmake --build seL4/build_UEFI`
 2. Resolve UEFI manifest:
 `cargo run -p coh-rtc -- configs/root_task_uefi_aarch64.toml --out out/uefi/generated --manifest out/uefi/root_task_resolved_uefi.json --cas-manifest-template out/uefi/cas_manifest_template_uefi.json --cli-script out/uefi/boot_v0_uefi.coh --doc-snippet out/uefi/root_task_manifest_uefi.md --gpu-breadcrumbs-snippet out/uefi/gpu_breadcrumbs_uefi.md --observability-interfaces-snippet out/uefi/observability_interfaces_uefi.md --observability-security-snippet out/uefi/observability_security_uefi.md --ticket-quotas-snippet out/uefi/ticket_quotas_uefi.md --trace-policy-snippet out/uefi/trace_policy_uefi.md --cas-interfaces-snippet out/uefi/cas_interfaces_uefi.md --cas-security-snippet out/uefi/cas_security_uefi.md --cohesix-py-defaults out/uefi/cohesix_py_defaults_uefi.py --cohesix-py-doc out/uefi/cohesix_py_defaults_uefi.md --coh-doctor-doc out/uefi/coh_doctor_checks_uefi.md --cohsh-policy out/uefi/cohsh_policy_uefi.toml --cohsh-policy-rust out/uefi/cohsh_policy_uefi.rs --cohsh-policy-doc out/uefi/cohsh_policy_uefi.md --cohsh-client-rust out/uefi/cohsh_client_uefi.rs --cohsh-client-doc out/uefi/cohsh_client_uefi.md --cohsh-grammar-doc out/uefi/cohsh_grammar_uefi.md --cohsh-ticket-policy-doc out/uefi/cohsh_ticket_policy_uefi.md --coh-policy out/uefi/coh_policy_uefi.toml --coh-policy-rust out/uefi/coh_policy_uefi.rs --coh-policy-doc out/uefi/coh_policy_uefi.md --swarmui-defaults out/uefi/swarmui_defaults_uefi.toml --swarmui-defaults-rust out/uefi/swarmui_defaults_uefi.rs --swarmui-defaults-doc out/uefi/swarmui_defaults_uefi.md`
 3. Build deterministic ESP:

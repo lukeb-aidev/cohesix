@@ -1200,7 +1200,7 @@ pub fn take_debug_uart_capture() -> HeaplessVec<u8, DEBUG_UART_CAPTURE_LEN> {
     out
 }
 
-#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
+#[cfg(all(feature = "kernel", target_arch = "aarch64", sel4_config_printing))]
 #[no_mangle]
 /// Executes the `DebugPutChar` seL4 syscall to emit a byte on the debug console.
 pub unsafe extern "C" fn seL4_DebugPutChar(byte: u8) {
@@ -1220,6 +1220,11 @@ pub unsafe extern "C" fn seL4_DebugPutChar(byte: u8) {
         );
     }
 }
+
+#[cfg(all(feature = "kernel", target_arch = "aarch64", not(sel4_config_printing)))]
+#[no_mangle]
+/// Stub used when kernel printing is disabled for the active seL4 configuration.
+pub unsafe extern "C" fn seL4_DebugPutChar(_byte: u8) {}
 
 #[cfg(all(feature = "kernel", target_arch = "aarch64", sel4_config_debug_build))]
 #[inline(always)]

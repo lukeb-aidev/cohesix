@@ -23,7 +23,7 @@ ELF_MAGIC = b"\x7fELF"
 CPIO_MAGIC = b"070701"
 
 ARCHIVE_SYMBOL_START = "_archive_start"
-ARCHIVE_SYMBOL_END = "_archive_end"
+ARCHIVE_SYMBOL_END_CANDIDATES = ("_archive_end", "_archive_start_end")
 ROOTSERVER_ENTRY = "rootserver"
 
 
@@ -65,7 +65,7 @@ def _load_segment_base(data: bytes) -> tuple[int, int]:
 
 
 def _lookup_archive_symbols(source: Path) -> tuple[int, int]:
-    """Resolve _archive_start/_archive_end virtual addresses via nm."""
+    """Resolve archive boundary virtual addresses via nm."""
 
     try:
         output = subprocess.check_output(["nm", "-g", str(source)], text=True)
@@ -83,7 +83,7 @@ def _lookup_archive_symbols(source: Path) -> tuple[int, int]:
         addr_str, _, symbol = parts
         if symbol == ARCHIVE_SYMBOL_START:
             archive_start = int(addr_str, 16)
-        elif symbol == ARCHIVE_SYMBOL_END:
+        elif symbol in ARCHIVE_SYMBOL_END_CANDIDATES:
             archive_end = int(addr_str, 16)
 
     if archive_start is None or archive_end is None:

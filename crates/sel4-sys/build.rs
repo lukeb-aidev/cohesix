@@ -29,6 +29,14 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(sel4_config_kernel_mcs)");
     println!("cargo:rustc-check-cfg=cfg(sel4_sys_debug_dump_cpuinfo)");
     println!("cargo:rustc-check-cfg=cfg(sel4_sys_has_tcb_set_affinity)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_sys_config_debug_build)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_sys_config_printing)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_sys_bindings_have_debug_cap_identify)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_sys_bindings_have_debug_put_char)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_sys_bindings_have_debug_dump_scheduler)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_sys_bindings_have_debug_dump_cpuinfo)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_sys_has_debug_cap_identify_syscall)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_sys_has_debug_dump_scheduler_syscall)");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD");
 
@@ -64,12 +72,36 @@ fn main() {
     if let Some(true) = probe_config_flag(&config_sources, "CONFIG_KERNEL_MCS") {
         println!("cargo:rustc-cfg=sel4_config_kernel_mcs");
     }
+    if let Some(true) = probe_config_flag(&config_sources, "CONFIG_DEBUG_BUILD") {
+        println!("cargo:rustc-cfg=sel4_sys_config_debug_build");
+    }
+    if let Some(true) = probe_config_flag(&config_sources, "CONFIG_PRINTING") {
+        println!("cargo:rustc-cfg=sel4_sys_config_printing");
+    }
 
     generate_bindings(&build_dir, &config_sources);
 
     if target_os == "none" {
         let bindings_path = out_dir.join("bindings.rs");
         if let Ok(contents) = fs::read_to_string(&bindings_path) {
+            if contents.contains("pub fn seL4_DebugCapIdentify") {
+                println!("cargo:rustc-cfg=sel4_sys_bindings_have_debug_cap_identify");
+            }
+            if contents.contains("pub fn seL4_DebugPutChar") {
+                println!("cargo:rustc-cfg=sel4_sys_bindings_have_debug_put_char");
+            }
+            if contents.contains("pub fn seL4_DebugDumpScheduler") {
+                println!("cargo:rustc-cfg=sel4_sys_bindings_have_debug_dump_scheduler");
+            }
+            if contents.contains("pub fn seL4_DebugDumpCPUInfo") {
+                println!("cargo:rustc-cfg=sel4_sys_bindings_have_debug_dump_cpuinfo");
+            }
+            if contents.contains("seL4_Syscall_ID_seL4_SysDebugCapIdentify") {
+                println!("cargo:rustc-cfg=sel4_sys_has_debug_cap_identify_syscall");
+            }
+            if contents.contains("seL4_Syscall_ID_seL4_SysDebugDumpScheduler") {
+                println!("cargo:rustc-cfg=sel4_sys_has_debug_dump_scheduler_syscall");
+            }
             if contents.contains("seL4_Syscall_ID_seL4_SysDebugDumpCPUInfo") {
                 println!("cargo:rustc-cfg=sel4_sys_debug_dump_cpuinfo");
             }
@@ -137,6 +169,10 @@ fn parse_config_flag(contents: &str, flag: &str) -> Option<bool> {
             return Some(value);
         }
 
+        if let Some(value) = parse_define_flag(line, flag) {
+            return Some(value);
+        }
+
         if let Some(value) = parse_assignment_line(line, flag) {
             return Some(value);
         }
@@ -159,6 +195,22 @@ fn parse_comment_line(line: &str, flag: &str) -> Option<bool> {
     }
 
     None
+}
+
+fn parse_define_flag(line: &str, flag: &str) -> Option<bool> {
+    let line = line.strip_prefix("#define ")?;
+    let mut parts = line.split_whitespace();
+    let key = parts.next()?;
+    if key != flag {
+        return None;
+    }
+
+    let value = parts.next()?;
+    match value {
+        "1" | "y" | "Y" | "ON" | "TRUE" | "YES" => Some(true),
+        "0" | "n" | "N" | "OFF" | "FALSE" | "NO" => Some(false),
+        _ => None,
+    }
 }
 
 fn parse_assignment_line(line: &str, flag: &str) -> Option<bool> {

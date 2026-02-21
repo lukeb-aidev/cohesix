@@ -16,7 +16,14 @@ OUT_DIR="${ROOT_DIR}/out/uefi"
 CONSOLE="serial"
 MEMORY_MB=2048
 SMP_TOPO="${COHESIX_QEMU_SMP_TOPO:-${QEMU_SMP_TOPO:-4,cores=4,threads=1,sockets=1}}"
-MACHINE_EXTRA="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-}}"
+HOST_OS="$(uname -s 2>/dev/null || true)"
+DEFAULT_MACHINE_EXTRA="virtualization=on"
+if [[ "$HOST_OS" == "Darwin" ]]; then
+    DEFAULT_MACHINE_EXTRA="virtualization=on,kernel-irqchip=off"
+fi
+# Keep PSCI conduit compatibility for SMP bring-up under UEFI on qemu-arm-virt.
+MACHINE_EXTRA="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-$DEFAULT_MACHINE_EXTRA}}"
+GIC_VERSION="${COHESIX_QEMU_GIC_VERSION:-${QEMU_GIC_VERSION:-}}"
 ENABLE_NET=0
 declare -a EXTRA_ARGS=()
 
@@ -37,6 +44,7 @@ Options:
                              serial = nographic + stdio serial (default)
   --memory-mb <n>            Guest RAM in MiB (default: 2048)
   --smp <value>              QEMU -smp value (default: COHESIX_QEMU_SMP_TOPO or 4,cores=4,threads=1,sockets=1)
+  --gic-version <2|3>        Force QEMU virt GIC version (default: auto-detect, fallback 2)
   --enable-net               Enable QEMU user-mode networking (Milestone 26a+)
   -h, --help                 Show this help
 
@@ -78,6 +86,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --smp)
             SMP_TOPO="$2"
+            shift 2
+            ;;
+        --gic-version)
+            GIC_VERSION="$2"
             shift 2
             ;;
         --enable-net)
@@ -154,6 +166,42 @@ discover_ovmf_vars_template() {
     return 1
 }
 
+auto_detect_gic_version() {
+    local detect_script="${ROOT_DIR}/scripts/lib/detect_gic_version.py"
+    local esp_gic="${ESP_DIR}/cohesix/gic-version.txt"
+    local config
+    local value
+    local -a candidates=(
+        "${ROOT_DIR}/seL4/build_UEFI/kernel/gen_config/kernel/gen_config.h"
+        "${ROOT_DIR}/seL4/SMP_build/kernel/gen_config/kernel/gen_config.h"
+        "${ROOT_DIR}/seL4/build/kernel/gen_config/kernel/gen_config.h"
+    )
+
+    if [[ -f "$esp_gic" ]]; then
+        value="$(tr -d '[:space:]' < "$esp_gic")"
+        if [[ "$value" == "2" || "$value" == "3" ]]; then
+            printf "%s\n" "$value"
+            return 0
+        fi
+    fi
+
+    if [[ ! -f "$detect_script" ]]; then
+        return 1
+    fi
+
+    for config in "${candidates[@]}"; do
+        if [[ -f "$config" ]]; then
+            value="$(python3 "$detect_script" "$config" 2>/dev/null || true)"
+            if [[ "$value" == "2" || "$value" == "3" ]]; then
+                printf "%s\n" "$value"
+                return 0
+            fi
+        fi
+    done
+
+    return 1
+}
+
 if [[ -z "$OVMF_CODE" ]]; then
     if ! OVMF_CODE="$(discover_ovmf_code)"; then
         fail "no OVMF code image found; pass --ovmf-code explicitly"
@@ -181,8 +229,18 @@ if [[ "$CONSOLE" != "serial" && "$CONSOLE" != "graphical" ]]; then
     fail "--console must be 'serial' or 'graphical'"
 fi
 
+if [[ -z "$GIC_VERSION" ]]; then
+    GIC_VERSION="$(auto_detect_gic_version || true)"
+fi
+if [[ -z "$GIC_VERSION" ]]; then
+    GIC_VERSION="2"
+fi
+if [[ "$GIC_VERSION" != "2" && "$GIC_VERSION" != "3" ]]; then
+    fail "--gic-version must be '2' or '3' (received '${GIC_VERSION}')"
+fi
+
 declare -a qemu_args=(
-    -machine "virt,gic-version=3${MACHINE_EXTRA:+,${MACHINE_EXTRA}}"
+    -machine "virt,gic-version=${GIC_VERSION}${MACHINE_EXTRA:+,${MACHINE_EXTRA}}"
     -cpu cortex-a72
     -m "$MEMORY_MB"
     -smp "$SMP_TOPO"
@@ -211,6 +269,7 @@ log "esp=${ESP_DIR}"
 log "ovmf_code=${OVMF_CODE}"
 log "ovmf_vars=${VARS_WORKING}"
 log "console=${CONSOLE} net_enabled=${ENABLE_NET}"
+log "machine=virt,gic-version=${GIC_VERSION}${MACHINE_EXTRA:+,${MACHINE_EXTRA}} smp=${SMP_TOPO}"
 log "launching UEFI boot"
 
 "$QEMU_BIN" "${qemu_args[@]}" | tee -a "$LOG_FILE"

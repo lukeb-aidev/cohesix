@@ -18,12 +18,16 @@ mod imp {
     include!(concat!(env!("OUT_DIR"), "/sel4_config_consts.rs"));
 
     extern "C" {
+        #[cfg(not(sel4_sys_bindings_have_debug_cap_identify))]
         pub fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Word;
 
+        #[cfg(not(sel4_sys_bindings_have_debug_put_char))]
         pub fn seL4_DebugPutChar(c: u8);
 
+        #[cfg(not(sel4_sys_bindings_have_debug_dump_scheduler))]
         pub fn seL4_DebugDumpScheduler();
 
+        #[cfg(not(sel4_sys_bindings_have_debug_dump_cpuinfo))]
         pub fn seL4_DebugDumpCPUInfo();
     }
 
@@ -81,6 +85,10 @@ mod imp {
         (*seL4_GetIPCBuffer()).msg[index as usize] = value;
     }
 
+    #[cfg(all(
+        sel4_sys_has_debug_cap_identify_syscall,
+        sel4_sys_config_debug_build
+    ))]
     #[export_name = "seL4_DebugCapIdentify"]
     pub unsafe extern "C" fn sel4_debug_cap_identify(cap: seL4_CPtr) -> seL4_Word {
         let mut cap_word = cap as seL4_Word;
@@ -106,6 +114,19 @@ mod imp {
         cap_word
     }
 
+    #[cfg(any(
+        not(sel4_sys_has_debug_cap_identify_syscall),
+        not(sel4_sys_config_debug_build)
+    ))]
+    #[export_name = "seL4_DebugCapIdentify"]
+    pub unsafe extern "C" fn sel4_debug_cap_identify_fallback(_cap: seL4_CPtr) -> seL4_Word {
+        0
+    }
+
+    #[cfg(all(
+        sel4_sys_has_debug_dump_scheduler_syscall,
+        sel4_sys_config_debug_build
+    ))]
     #[export_name = "seL4_DebugDumpScheduler"]
     pub unsafe extern "C" fn sel4_debug_dump_scheduler() {
         let mut unused0 = 0;
@@ -129,7 +150,14 @@ mod imp {
         );
     }
 
-    #[cfg(sel4_sys_debug_dump_cpuinfo)]
+    #[cfg(any(
+        not(sel4_sys_has_debug_dump_scheduler_syscall),
+        not(sel4_sys_config_debug_build)
+    ))]
+    #[export_name = "seL4_DebugDumpScheduler"]
+    pub unsafe extern "C" fn sel4_debug_dump_scheduler_fallback() {}
+
+    #[cfg(all(sel4_sys_debug_dump_cpuinfo, sel4_sys_config_debug_build))]
     #[export_name = "seL4_DebugDumpCPUInfo"]
     pub unsafe extern "C" fn sel4_debug_dump_cpu_info() {
         let mut unused0 = 0;
@@ -153,7 +181,10 @@ mod imp {
         );
     }
 
-    #[cfg(not(sel4_sys_debug_dump_cpuinfo))]
+    #[cfg(any(
+        not(sel4_sys_debug_dump_cpuinfo),
+        not(sel4_sys_config_debug_build)
+    ))]
     #[export_name = "seL4_DebugDumpCPUInfo"]
     pub unsafe extern "C" fn sel4_debug_dump_cpu_info() {}
 
