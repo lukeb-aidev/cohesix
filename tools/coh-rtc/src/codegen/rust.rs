@@ -5,8 +5,8 @@
 
 use crate::codegen::hash_bytes;
 use crate::ir::{
-    resolve_manifest_relative_path, HostProvider, HostTicketAction, HostTicketLifecycleState,
-    Manifest, Role, SidecarLink,
+    resolve_manifest_relative_path, AttestationPolicy, HardwareDeviceKind, HostProvider,
+    HostTicketAction, HostTicketLifecycleState, Manifest, Role, SidecarLink,
 };
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -350,6 +350,56 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum HardwareDeviceKind {{")?;
+    writeln!(mod_contents, "    Uart,")?;
+    writeln!(mod_contents, "    Net,")?;
+    writeln!(mod_contents, "    Tpm,")?;
+    writeln!(mod_contents, "    Rtc,")?;
+    writeln!(mod_contents, "    Keyboard,")?;
+    writeln!(mod_contents, "    Display,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct HardwareDevice {{")?;
+    writeln!(mod_contents, "    pub kind: HardwareDeviceKind,")?;
+    writeln!(mod_contents, "    pub id: &'static str,")?;
+    writeln!(mod_contents, "    pub required: bool,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum AttestationPolicy {{")?;
+    writeln!(mod_contents, "    TpmOnly,")?;
+    writeln!(mod_contents, "    TpmOrDice,")?;
+    writeln!(mod_contents, "    DiceOnly,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct AttestationConfig {{")?;
+    writeln!(mod_contents, "    pub enabled: bool,")?;
+    writeln!(mod_contents, "    pub policy: AttestationPolicy,")?;
+    writeln!(mod_contents, "    pub evidence_max_bytes: u16,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct LocalSeatConfig {{")?;
+    writeln!(mod_contents, "    pub enabled: bool,")?;
+    writeln!(mod_contents, "    pub required: bool,")?;
+    writeln!(mod_contents, "    pub keyboard_device: &'static str,")?;
+    writeln!(mod_contents, "    pub display_device: &'static str,")?;
+    writeln!(mod_contents, "    pub line_bytes: u16,")?;
+    writeln!(mod_contents, "    pub buffer_lines: u16,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct HardwareConfig {{")?;
+    writeln!(mod_contents, "    pub secure_boot: bool,")?;
+    writeln!(mod_contents, "    pub no_nic: bool,")?;
+    writeln!(mod_contents, "    pub attestation: AttestationConfig,")?;
+    writeln!(mod_contents, "    pub local_seat: LocalSeatConfig,")?;
+    writeln!(mod_contents, "    pub devices: &'static [HardwareDevice],")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
     writeln!(mod_contents, "pub enum HostProvider {{")?;
     writeln!(mod_contents, "    Systemd,")?;
     writeln!(mod_contents, "    K8s,")?;
@@ -667,6 +717,10 @@ pub fn emit_rust(
     )?;
     writeln!(
         mod_contents,
+        "pub const HARDWARE_CONFIG: HardwareConfig = bootstrap::HARDWARE_CONFIG;"
+    )?;
+    writeln!(
+        mod_contents,
         "pub const HOST_CONFIG: HostConfig = bootstrap::HOST_CONFIG;"
     )?;
     writeln!(
@@ -799,6 +853,13 @@ pub fn emit_rust(
     writeln!(mod_contents, "    bootstrap::CAS_CONFIG")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
+        "pub const fn hardware_config() -> HardwareConfig {{"
+    )?;
+    writeln!(mod_contents, "    bootstrap::HARDWARE_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "pub const fn host_config() -> HostConfig {{")?;
     writeln!(mod_contents, "    bootstrap::HOST_CONFIG")?;
     writeln!(mod_contents, "}}")?;
@@ -883,7 +944,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AffinityPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -1093,6 +1154,36 @@ pub fn emit_rust(
         cas_signing_required,
         cas_signing_key,
         manifest.ecosystem.models.enable
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const HARDWARE_DEVICES: [HardwareDevice; {}] = [",
+        manifest.hw.devices.len()
+    )?;
+    for device in &manifest.hw.devices {
+        writeln!(
+            bootstrap_contents,
+            "    HardwareDevice {{ kind: {}, id: \"{}\", required: {} }},",
+            hw_device_kind_to_rust(device.kind),
+            escape_literal(device.id.as_str()),
+            device.required
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {{ secure_boot: {}, no_nic: {}, attestation: AttestationConfig {{ enabled: {}, policy: {}, evidence_max_bytes: {} }}, local_seat: LocalSeatConfig {{ enabled: {}, required: {}, keyboard_device: \"{}\", display_device: \"{}\", line_bytes: {}, buffer_lines: {} }}, devices: &HARDWARE_DEVICES }};\n",
+        manifest.hw.secure_boot,
+        manifest.hw.no_nic,
+        manifest.hw.attestation.enabled,
+        attestation_policy_to_rust(manifest.hw.attestation.policy),
+        manifest.hw.attestation.evidence_max_bytes,
+        manifest.hw.local_seat.enabled,
+        manifest.hw.local_seat.required,
+        escape_literal(manifest.hw.local_seat.keyboard_device.as_str()),
+        escape_literal(manifest.hw.local_seat.display_device.as_str()),
+        manifest.hw.local_seat.line_bytes,
+        manifest.hw.local_seat.buffer_lines
     )?;
     writeln!(
         bootstrap_contents,
@@ -1536,6 +1627,33 @@ fn role_to_rust(role: Role) -> &'static str {
     }
 }
 
+fn attestation_policy_to_rust(policy: AttestationPolicy) -> &'static str {
+    match policy {
+        AttestationPolicy::TpmOnly => "AttestationPolicy::TpmOnly",
+        AttestationPolicy::TpmOrDice => "AttestationPolicy::TpmOrDice",
+        AttestationPolicy::DiceOnly => "AttestationPolicy::DiceOnly",
+    }
+}
+
+fn attestation_policy_label(policy: AttestationPolicy) -> &'static str {
+    match policy {
+        AttestationPolicy::TpmOnly => "tpm-only",
+        AttestationPolicy::TpmOrDice => "tpm-or-dice",
+        AttestationPolicy::DiceOnly => "dice-only",
+    }
+}
+
+fn hw_device_kind_to_rust(kind: HardwareDeviceKind) -> &'static str {
+    match kind {
+        HardwareDeviceKind::Uart => "HardwareDeviceKind::Uart",
+        HardwareDeviceKind::Net => "HardwareDeviceKind::Net",
+        HardwareDeviceKind::Tpm => "HardwareDeviceKind::Tpm",
+        HardwareDeviceKind::Rtc => "HardwareDeviceKind::Rtc",
+        HardwareDeviceKind::Keyboard => "HardwareDeviceKind::Keyboard",
+        HardwareDeviceKind::Display => "HardwareDeviceKind::Display",
+    }
+}
+
 fn host_provider_to_rust(provider: &HostProvider) -> &'static str {
     match provider {
         HostProvider::Systemd => "HostProvider::Systemd",
@@ -1872,7 +1990,7 @@ fn build_audit_lines(
     manifest_hash: &str,
     event_pump_fds: &[&'static str],
 ) -> Vec<String> {
-    vec![
+    let mut lines = vec![
         format!("manifest.schema={}", manifest.root_task.schema),
         format!("manifest.profile={}", manifest.profile.name),
         format!("manifest.sha256={}", manifest_hash),
@@ -1938,8 +2056,46 @@ fn build_audit_lines(
             "manifest.features.net_console={}",
             manifest.features.net_console
         ),
-        format!("event_pump.fds={}", event_pump_fds.join(",")),
-    ]
+        format!("manifest.hw.secure_boot={}", manifest.hw.secure_boot),
+        format!("manifest.hw.no_nic={}", manifest.hw.no_nic),
+        format!(
+            "manifest.hw.attestation.enabled={}",
+            manifest.hw.attestation.enabled
+        ),
+        format!(
+            "manifest.hw.attestation.policy={}",
+            attestation_policy_label(manifest.hw.attestation.policy)
+        ),
+        format!(
+            "manifest.hw.local_seat.enabled={}",
+            manifest.hw.local_seat.enabled
+        ),
+        format!(
+            "manifest.hw.local_seat.required={}",
+            manifest.hw.local_seat.required
+        ),
+    ];
+
+    if manifest.hw.attestation.enabled {
+        let evidence_seed = format!(
+            "{}:{}",
+            attestation_policy_label(manifest.hw.attestation.policy),
+            manifest_hash
+        );
+        lines.push(format!(
+            "attestation.bound_manifest_sha256={}",
+            manifest_hash
+        ));
+        lines.push(format!(
+            "attestation.evidence_sha256={}",
+            hash_bytes(evidence_seed.as_bytes())
+        ));
+    }
+    if manifest.profile.name == "uefi-aarch64" && manifest.hw.no_nic {
+        lines.push("manifest.hw.networking=disabled-m26-baseline".to_owned());
+    }
+    lines.push(format!("event_pump.fds={}", event_pump_fds.join(",")));
+    lines
 }
 
 fn write_if_changed(path: &Path, contents: &str) -> Result<()> {

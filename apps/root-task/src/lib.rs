@@ -25,6 +25,8 @@ compile_error!("enable the `kernel` feature when building root-task for seL4 tar
 pub mod affinity;
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
 pub mod arch;
+/// Deterministic manifest-bound attestation policy helpers.
+pub mod attest;
 #[cfg(feature = "kernel")]
 /// Audit helpers for boot sequencing and readiness checkpoints.
 pub mod audit;
@@ -35,6 +37,8 @@ pub mod console;
 pub mod event;
 /// Compile-time feature manifest and guard rails.
 pub mod features;
+/// Local diagnostics seat policy helpers for Milestone 26 bring-up.
+pub mod local_seat;
 /// Observability metric helpers shared with the event pump.
 pub mod observe;
 /// Compile-time profile surface exposed to kernels and tests.

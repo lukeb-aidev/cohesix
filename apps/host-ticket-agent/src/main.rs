@@ -125,12 +125,13 @@ fn main() -> Result<()> {
             Ok(summary) => {
                 if summary.seen > 0 || summary.terminal_updates() > 0 {
                     println!(
-                        "host-ticket-agent: seen={} succeeded={} failed={} expired={} skipped_terminal={} cursor={}",
+                        "host-ticket-agent: seen={} succeeded={} failed={} expired={} skipped_terminal={} skipped_remote_target={} cursor={}",
                         summary.seen,
                         summary.succeeded,
                         summary.failed,
                         summary.expired,
                         summary.skipped_terminal,
+                        summary.skipped_remote_target,
                         args.cursor.display()
                     );
                 }

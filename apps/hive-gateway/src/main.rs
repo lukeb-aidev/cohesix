@@ -63,8 +63,8 @@ const AUTHORIZATION_BEARER_PREFIX: &str = "bearer ";
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 const DEFAULT_PROC_CACHE_TTL_MS: u64 = 500;
 const DEFAULT_PROC_CACHE_MAX_ENTRIES: usize = 64;
-const CONTROL_POOL_WAIT_LIMIT_MS: u64 = 2_000;
-const TELEMETRY_POOL_WAIT_LIMIT_MS: u64 = 1_500;
+const CONTROL_POOL_WAIT_LIMIT_MS: u64 = 5_000;
+const TELEMETRY_POOL_WAIT_LIMIT_MS: u64 = 5_000;
 const BROKER_ENQUEUE_RETRY_SLEEP_MS: u64 = 5;
 const BROKER_CONTROL_QUEUE_CAPACITY: usize = 256;
 const BROKER_TELEMETRY_QUEUE_CAPACITY: usize = 1024;
@@ -1221,6 +1221,7 @@ impl AppState {
         let payload = payload.to_vec();
         let deadline = Instant::now() + Duration::from_millis(CONTROL_WRITE_RETRY_WINDOW_MS);
         let retry_deadline_enabled = is_retryable_control_write_path(write_path.as_str());
+        let mut first_retryable_error: Option<String> = None;
         let mut retry_delay = Duration::from_millis(CONTROL_WRITE_RETRY_SLEEP_MS);
         loop {
             let result = self.submit_broker(
@@ -1240,10 +1241,23 @@ impl AppState {
                         return Err(err);
                     }
                     let message = err.to_string();
-                    if Instant::now() >= deadline
-                        || !is_retryable_control_write_error(message.as_str())
-                    {
+                    if !is_retryable_control_write_error(message.as_str()) {
+                        if first_retryable_error.is_some() {
+                            return Err(anyhow::anyhow!(final_control_write_error(
+                                &first_retryable_error,
+                                message.as_str()
+                            )));
+                        }
                         return Err(err);
+                    }
+                    if first_retryable_error.is_none() {
+                        first_retryable_error = Some(message.clone());
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(anyhow::anyhow!(final_control_write_error(
+                            &first_retryable_error,
+                            message.as_str()
+                        )));
                     }
                     thread::sleep(retry_delay);
                     retry_delay = next_delay(
@@ -1608,6 +1622,16 @@ fn is_retryable_control_write_error(error: &str) -> bool {
         || lowered.contains("buffer full")
         || lowered.contains("session pool exhausted")
         || lowered.contains("gateway backpressure")
+}
+
+fn final_control_write_error(
+    first_retryable_error: &Option<String>,
+    current_error: &str,
+) -> String {
+    first_retryable_error
+        .as_deref()
+        .unwrap_or(current_error)
+        .to_owned()
 }
 
 fn extract_request_auth(headers: &HeaderMap) -> Option<String> {
@@ -1987,6 +2011,19 @@ mod tests {
         assert!(!is_retryable_control_write_error(
             "ERR ECHO reason=policy detail=invalid-payload path=/queen/lease/ctl error=invalid payload"
         ));
+    }
+
+    #[test]
+    fn final_control_write_error_prefers_initial_retryable_error() {
+        let first = Some(
+            "ERR ECHO reason=quota detail=buffer-full path=/queen/ctl error=buffer full".to_owned(),
+        );
+        let later = "ERR ECHO reason=policy detail=denied path=/queen/ctl error=EPERM";
+        assert_eq!(
+            final_control_write_error(&first, later),
+            "ERR ECHO reason=quota detail=buffer-full path=/queen/ctl error=buffer full"
+        );
+        assert_eq!(final_control_write_error(&None, later), later);
     }
 
     #[test]

@@ -296,6 +296,56 @@ pub struct UiProviderConfig {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HardwareDeviceKind {
+    Uart,
+    Net,
+    Tpm,
+    Rtc,
+    Keyboard,
+    Display,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct HardwareDevice {
+    pub kind: HardwareDeviceKind,
+    pub id: &'static str,
+    pub required: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttestationPolicy {
+    TpmOnly,
+    TpmOrDice,
+    DiceOnly,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AttestationConfig {
+    pub enabled: bool,
+    pub policy: AttestationPolicy,
+    pub evidence_max_bytes: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LocalSeatConfig {
+    pub enabled: bool,
+    pub required: bool,
+    pub keyboard_device: &'static str,
+    pub display_device: &'static str,
+    pub line_bytes: u16,
+    pub buffer_lines: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct HardwareConfig {
+    pub secure_boot: bool,
+    pub no_nic: bool,
+    pub attestation: AttestationConfig,
+    pub local_seat: LocalSeatConfig,
+    pub devices: &'static [HardwareDevice],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostProvider {
     Systemd,
     K8s,
@@ -463,7 +513,7 @@ pub struct AuditConfig {
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
 pub const MANIFEST_SHA256: &str =
-    "0884f452da6fe84e7148c3c1e01d605b45f09f1da09914d87e961cc2c256b905";
+    "1aee4b854f804a6f250d113062597502ba30a1198315c33fe0156d5d2d1b7cb3";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
@@ -496,6 +546,7 @@ pub const PROC_SCHEDULE_QUEUE_BYTES: usize = bootstrap::PROC_SCHEDULE_QUEUE_BYTE
 pub const PROC_LEASE_SUMMARY_BYTES: usize = bootstrap::PROC_LEASE_SUMMARY_BYTES;
 pub const PROC_LEASE_ACTIVE_BYTES: usize = bootstrap::PROC_LEASE_ACTIVE_BYTES;
 pub const PROC_LEASE_PREEMPTIONS_BYTES: usize = bootstrap::PROC_LEASE_PREEMPTIONS_BYTES;
+pub const HARDWARE_CONFIG: HardwareConfig = bootstrap::HARDWARE_CONFIG;
 pub const HOST_CONFIG: HostConfig = bootstrap::HOST_CONFIG;
 pub const SIDECAR_CONFIG: SidecarConfig = bootstrap::SIDECAR_CONFIG;
 pub const POLICY_CONFIG: PolicyConfig = bootstrap::POLICY_CONFIG;
@@ -565,6 +616,10 @@ pub const fn ui_provider_config() -> UiProviderConfig {
 
 pub const fn cas_config() -> CasConfig {
     bootstrap::CAS_CONFIG
+}
+
+pub const fn hardware_config() -> HardwareConfig {
+    bootstrap::HARDWARE_CONFIG
 }
 
 pub const fn host_config() -> HostConfig {

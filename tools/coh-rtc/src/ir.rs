@@ -55,6 +55,10 @@ const MAX_HOST_FEDERATION_QUEUE_ENTRIES: u16 = 4096;
 const MAX_HOST_FEDERATION_WAL_ENTRIES: u32 = 16_384;
 const MAX_HOST_FEDERATION_QUEUE_BYTES: u32 = 1024 * 1024;
 const MAX_HOST_FEDERATION_WAL_BYTES: u32 = 8 * 1024 * 1024;
+const MAX_HW_DEVICES: usize = 32;
+const MAX_HW_DEVICE_ID_LEN: usize = 64;
+const MAX_LOCAL_SEAT_DEVICE_ID_LEN: usize = 64;
+const MAX_LOCAL_SEAT_BUFFER_LINES: u16 = 1024;
 const MAX_LIFECYCLE_AUTO_TRANSITIONS: usize = 8;
 const MAX_SCHEDULE_ID_LEN: usize = 64;
 const MAX_SCHEDULE_ROLE_LEN: usize = 16;
@@ -78,6 +82,8 @@ pub struct Manifest {
     pub event_pump: EventPump,
     pub secure9p: Secure9pLimits,
     pub features: FeatureToggles,
+    #[serde(default)]
+    pub hw: HardwareConfig,
     #[serde(default)]
     pub cache: CacheConfig,
     pub tickets: Vec<TicketSpec>,
@@ -154,6 +160,7 @@ impl Manifest {
                 bail!("std_host_tools requires profile.kernel = false");
             }
         }
+        self.validate_hw()?;
         self.validate_cache()?;
         self.validate_namespace_mounts()?;
         self.validate_sharding()?;
@@ -258,6 +265,139 @@ impl Manifest {
                 );
             }
         }
+        Ok(())
+    }
+
+    fn validate_hw(&self) -> Result<()> {
+        if self.hw.devices.len() > MAX_HW_DEVICES {
+            bail!("hw.devices exceeds max {}", MAX_HW_DEVICES);
+        }
+        let mut seen_ids = BTreeSet::new();
+        for device in &self.hw.devices {
+            let id = device.id.trim();
+            if id.is_empty() {
+                bail!("hw.devices[].id must not be empty");
+            }
+            if id.len() > MAX_HW_DEVICE_ID_LEN {
+                bail!(
+                    "hw.devices[].id '{}' exceeds max length {}",
+                    id,
+                    MAX_HW_DEVICE_ID_LEN
+                );
+            }
+            if id.contains('/') || id.contains("..") {
+                bail!("hw.devices[].id '{}' contains invalid path characters", id);
+            }
+            if !seen_ids.insert(id.to_owned()) {
+                bail!("hw.devices[].id '{}' is duplicated", id);
+            }
+        }
+
+        let local_seat = &self.hw.local_seat;
+        if local_seat.required && !local_seat.enabled {
+            bail!("hw.local_seat.required=true requires hw.local_seat.enabled=true");
+        }
+        if local_seat.keyboard_device.trim().is_empty() {
+            bail!("hw.local_seat.keyboard_device must not be empty");
+        }
+        if local_seat.display_device.trim().is_empty() {
+            bail!("hw.local_seat.display_device must not be empty");
+        }
+        if local_seat.keyboard_device.len() > MAX_LOCAL_SEAT_DEVICE_ID_LEN {
+            bail!(
+                "hw.local_seat.keyboard_device exceeds max length {}",
+                MAX_LOCAL_SEAT_DEVICE_ID_LEN
+            );
+        }
+        if local_seat.display_device.len() > MAX_LOCAL_SEAT_DEVICE_ID_LEN {
+            bail!(
+                "hw.local_seat.display_device exceeds max length {}",
+                MAX_LOCAL_SEAT_DEVICE_ID_LEN
+            );
+        }
+        if local_seat.line_bytes == 0 {
+            bail!("hw.local_seat.line_bytes must be >= 1");
+        }
+        if u32::from(local_seat.line_bytes) > self.secure9p.msize {
+            bail!(
+                "hw.local_seat.line_bytes {} exceeds secure9p.msize {}",
+                local_seat.line_bytes,
+                self.secure9p.msize
+            );
+        }
+        if local_seat.buffer_lines == 0 {
+            bail!("hw.local_seat.buffer_lines must be >= 1");
+        }
+        if local_seat.buffer_lines > MAX_LOCAL_SEAT_BUFFER_LINES {
+            bail!(
+                "hw.local_seat.buffer_lines {} exceeds max {}",
+                local_seat.buffer_lines,
+                MAX_LOCAL_SEAT_BUFFER_LINES
+            );
+        }
+
+        let attest = &self.hw.attestation;
+        if attest.evidence_max_bytes == 0 {
+            bail!("hw.attestation.evidence_max_bytes must be >= 1");
+        }
+        if u32::from(attest.evidence_max_bytes) > self.secure9p.msize {
+            bail!(
+                "hw.attestation.evidence_max_bytes {} exceeds secure9p.msize {}",
+                attest.evidence_max_bytes,
+                self.secure9p.msize
+            );
+        }
+
+        let has_device =
+            |kind: HardwareDeviceKind| self.hw.devices.iter().any(|device| device.kind == kind);
+        let has_tpm = has_device(HardwareDeviceKind::Tpm);
+        if attest.enabled {
+            match attest.policy {
+                AttestationPolicy::TpmOnly if !has_tpm => {
+                    bail!("hw.attestation.policy=tpm-only requires hw.devices[] kind=tpm");
+                }
+                AttestationPolicy::TpmOrDice
+                | AttestationPolicy::DiceOnly
+                | AttestationPolicy::TpmOnly => {}
+            }
+        }
+
+        if self.profile.name == "uefi-aarch64" {
+            if !self.hw.no_nic {
+                bail!("profile.name=uefi-aarch64 requires hw.no_nic=true for Milestone 26");
+            }
+            if self.features.net_console {
+                bail!(
+                    "profile.name=uefi-aarch64 requires features.net_console=false for Milestone 26"
+                );
+            }
+            if !has_device(HardwareDeviceKind::Uart) {
+                bail!("profile.name=uefi-aarch64 requires hw.devices[] kind=uart");
+            }
+            if !has_device(HardwareDeviceKind::Rtc) {
+                bail!("profile.name=uefi-aarch64 requires hw.devices[] kind=rtc");
+            }
+            if attest.enabled
+                && matches!(
+                    attest.policy,
+                    AttestationPolicy::TpmOnly | AttestationPolicy::TpmOrDice
+                )
+                && !has_tpm
+            {
+                bail!(
+                    "profile.name=uefi-aarch64 with attestation enabled requires TPM device declaration"
+                );
+            }
+            if local_seat.enabled {
+                if !has_device(HardwareDeviceKind::Keyboard) {
+                    bail!("hw.local_seat.enabled requires hw.devices[] kind=keyboard");
+                }
+                if !has_device(HardwareDeviceKind::Display) {
+                    bail!("hw.local_seat.enabled requires hw.devices[] kind=display");
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -2057,7 +2197,10 @@ impl Default for AffinityPolicy {
 
 #[cfg(test)]
 mod tests {
-    use super::AffinityPolicy;
+    use super::{
+        load_manifest, AffinityPolicy, AttestationPolicy, HardwareDevice, HardwareDeviceKind,
+    };
+    use std::path::PathBuf;
 
     #[test]
     fn affinity_defaults_enabled_with_expected_cores() {
@@ -2068,6 +2211,108 @@ mod tests {
         assert_eq!(policy.ninedoor_cores, vec![1]);
         assert_eq!(policy.provider_cores, vec![2, 3]);
         assert_eq!(policy.worker_cores, vec![2, 3]);
+    }
+
+    fn fixture_manifest() -> super::Manifest {
+        let manifest_path = repo_root()
+            .join("configs/root_task.toml")
+            .canonicalize()
+            .expect("fixture manifest path");
+        load_manifest(&manifest_path).expect("load fixture manifest")
+    }
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("repo root path")
+    }
+
+    fn base_uefi_manifest() -> super::Manifest {
+        let mut manifest = fixture_manifest();
+        manifest.profile.name = "uefi-aarch64".to_owned();
+        manifest.features.net_console = false;
+        manifest.hw.no_nic = true;
+        manifest.hw.devices = vec![
+            HardwareDevice {
+                kind: HardwareDeviceKind::Uart,
+                id: "uart0".to_owned(),
+                required: true,
+            },
+            HardwareDevice {
+                kind: HardwareDeviceKind::Rtc,
+                id: "rtc0".to_owned(),
+                required: true,
+            },
+        ];
+        manifest
+    }
+
+    #[test]
+    fn uefi_requires_no_nic_baseline() {
+        let mut manifest = base_uefi_manifest();
+        manifest.hw.no_nic = false;
+        let err = manifest
+            .validate()
+            .expect_err("uefi profile without no_nic must fail");
+        assert!(
+            err.to_string()
+                .contains("profile.name=uefi-aarch64 requires hw.no_nic=true"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn uefi_rejects_net_console_flag() {
+        let mut manifest = base_uefi_manifest();
+        manifest.features.net_console = true;
+        let err = manifest
+            .validate()
+            .expect_err("uefi profile with net_console enabled must fail");
+        assert!(
+            err.to_string()
+                .contains("profile.name=uefi-aarch64 requires features.net_console=false"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn uefi_accepts_minimal_no_nic_hardware_bindings() {
+        let manifest = base_uefi_manifest();
+        manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect("minimal uefi no-nic manifest must validate");
+    }
+
+    #[test]
+    fn local_seat_required_demands_enabled() {
+        let mut manifest = fixture_manifest();
+        manifest.hw.local_seat.required = true;
+        manifest.hw.local_seat.enabled = false;
+        let err = manifest
+            .validate()
+            .expect_err("required local seat without enable should fail");
+        assert!(
+            err.to_string()
+                .contains("hw.local_seat.required=true requires hw.local_seat.enabled=true"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn tpm_only_attestation_requires_tpm_device() {
+        let mut manifest = fixture_manifest();
+        manifest.hw.attestation.enabled = true;
+        manifest.hw.attestation.policy = AttestationPolicy::TpmOnly;
+        manifest.hw.devices.clear();
+        let err = manifest
+            .validate()
+            .expect_err("tpm-only policy without tpm device must fail");
+        assert!(
+            err.to_string()
+                .contains("hw.attestation.policy=tpm-only requires hw.devices[] kind=tpm"),
+            "unexpected error: {err}"
+        );
     }
 }
 
@@ -2133,6 +2378,86 @@ pub struct FeatureToggles {
     pub std_console: bool,
     #[serde(default)]
     pub std_host_tools: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct HardwareConfig {
+    pub secure_boot: bool,
+    pub no_nic: bool,
+    pub attestation: AttestationConfig,
+    pub local_seat: LocalSeatConfig,
+    pub devices: Vec<HardwareDevice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HardwareDevice {
+    pub kind: HardwareDeviceKind,
+    pub id: String,
+    #[serde(default)]
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HardwareDeviceKind {
+    Uart,
+    Net,
+    Tpm,
+    Rtc,
+    Keyboard,
+    Display,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AttestationConfig {
+    pub enabled: bool,
+    pub policy: AttestationPolicy,
+    pub evidence_max_bytes: u16,
+}
+
+impl Default for AttestationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            policy: AttestationPolicy::TpmOrDice,
+            evidence_max_bytes: 256,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AttestationPolicy {
+    TpmOnly,
+    TpmOrDice,
+    DiceOnly,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LocalSeatConfig {
+    pub enabled: bool,
+    pub required: bool,
+    pub keyboard_device: String,
+    pub display_device: String,
+    pub line_bytes: u16,
+    pub buffer_lines: u16,
+}
+
+impl Default for LocalSeatConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            required: false,
+            keyboard_device: "usb-kbd0".to_owned(),
+            display_device: "hdmi0".to_owned(),
+            line_bytes: 160,
+            buffer_lines: 128,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

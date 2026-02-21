@@ -5,12 +5,12 @@
 
 # Cohesix Architecture (As-Built)
 
-Cohesix is a control-plane OS for secure orchestration and telemetry of edge GPU nodes using a Queen/Worker hive model. This document describes the current as-built system for the QEMU `aarch64/virt` target and the macOS host; manifest-gated features are called out explicitly.
+Cohesix is a control-plane OS for secure orchestration and telemetry of edge GPU nodes using a Queen/Worker hive model. This document describes the current as-built system for the QEMU `aarch64/virt` target, the `uefi-aarch64` manifest profile, and the macOS host; manifest-gated features are called out explicitly.
 
 ## 1. Scope and Non-Goals
 Scope:
 - Host: macOS 26 on Apple Silicon for build, QEMU, and host tools.
-- Target: QEMU `aarch64/virt` (GICv3) running upstream seL4; userspace is a pure Rust CPIO rootfs.
+- Targets: QEMU `aarch64/virt` (GICv3) running upstream seL4 plus UEFI boot packaging (`elfloader.efi` path) for `uefi-aarch64`; userspace is a pure Rust CPIO rootfs.
 - Control plane: Secure9P namespace plus a deterministic console grammar shared with `cohsh`/`cohsh-core`.
 
 Non-goals:
@@ -18,7 +18,7 @@ Non-goals:
 - Control channels outside Secure9P and the console grammar (no ad-hoc RPC, no shared-memory shortcuts).
 - In-VM TCP services except the authenticated root-task console.
 - In-VM UI clients or host-side tooling; UI/CLI remain host-only and observational.
-- Hardware/UEFI deployment details beyond the current milestone (UEFI boot is planned; see `docs/BUILD_PLAN.md`).
+- In-VM UI stacks or alternate local-shell grammars; local diagnostics seat reuses the existing root-console parser and command set.
 
 ## 2. System Boundaries and TCB
 - VM boundary: seL4 kernel plus the CPIO userspace payload (`root-task` and worker binaries). This is the trusted computing base.
@@ -70,9 +70,13 @@ Non-goals:
 3. UART is mapped and the serial logger is activated; the boot banner is emitted.
 4. HAL setup, timer initialization, and IPC endpoints are established.
 5. Manifest-generated tables (tickets, Secure9P limits, policy/audit flags) are loaded from `apps/root-task/src/generated`.
-6. The log buffer (`/log/queen.log`) and NineDoorBridge are initialized.
-7. Serial console starts; TCP console is started if `net-console` is built.
-8. The event pump enters its cooperative loop (serial, timer, networking, IPC, NineDoorBridge), avoiding busy waits.
+6. Milestone 26 hardware gates execute before ticket publication:
+- no-NIC baseline (`hw.no_nic`) suppresses net-console bring-up.
+- attestation policy (`hw.attestation.*`) is evaluated and can abort boot deterministically.
+- local-seat policy (`hw.local_seat.*`) is evaluated with fail-fast/degrade semantics.
+7. The log buffer (`/log/queen.log`) and NineDoorBridge are initialized.
+8. Serial console starts; TCP console is started only when networking is enabled by profile/policy.
+9. The event pump enters its cooperative loop (serial, timer, networking, IPC, NineDoorBridge), avoiding busy waits.
 
 ### CSpace bootstrap invariants
 - Root CNode addressing uses the kernel-advertised radix (`initThreadCNodeSizeBits`), with `seL4_CapInitThreadCNode` as the root and offsets fixed at 0.
@@ -111,7 +115,7 @@ Mount and bind semantics:
 - **Telemetry (worker):** Workers append newline-delimited records to `/shard/<label>/worker/<id>/telemetry`; ring sizes and schema selection are manifest-driven (`telemetry.ring_bytes_per_worker`, `telemetry.frame_schema`).
 - **Telemetry ingest (host push):** Host tools append bounded envelopes to `/queen/telemetry/<device_id>/`; quotas and eviction are manifest-driven (`telemetry_ingest.*`). Large artifacts use bounded reference manifests (`coh-ref-c/v1`) instead of generic file transfer, and `/proc/ingest/*` reports ingest health.
 - **Logging:** All roles read `/log/queen.log`; only queen/host tools append.
-- **Observability:** `/proc/boot` exposes manifest fingerprints; `/proc/tests/*` carries regression scripts; `/proc/9p/*`, `/proc/root/*`, `/proc/pressure/*`, `/proc/ingest/*`, `/proc/schedule/*`, and `/proc/lease/*` surface bounded stats when enabled.
+- **Observability:** `/proc/boot` exposes manifest fingerprints, Milestone 26 hardware gates, and attestation evidence hashes; `/proc/tests/*` carries regression scripts; `/proc/9p/*`, `/proc/root/*`, `/proc/pressure/*`, `/proc/ingest/*`, `/proc/schedule/*`, and `/proc/lease/*` surface bounded stats when enabled.
 - **GPU:** Host GPU bridge publishes `/gpu/<id>/*`, `/gpu/models/*`, and `/gpu/telemetry/schema.json` via `/gpu/bridge/ctl`; worker-gpu reads `info/status` and appends to `job/ctl` within ticket scope.
 - **Host sidecars:** `/host/*` is present only when enabled in the manifest; providers are published by `host-sidecar-bridge`.
 - **Policy/Audit/Replay:** `/policy`, `/actions`, `/audit`, `/replay` appear only when enabled in the manifest; `/policy/ctl` drives apply/rollback and `/actions/queue` carries approvals/denials; writes are append-only and audited.

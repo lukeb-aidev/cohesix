@@ -152,16 +152,16 @@ pub fn export_pack<C: CohAccess>(
 
     capture_audit(client, spec, audit, &mut items)?;
     capture_host_tickets(client, spec, audit, &mut items)?;
-    capture_file(
+    if let Some(payload) = read_optional(
         client,
-        &spec.out_dir,
         "/replay/status",
-        CaptureVerb::Cat,
         DEFAULT_REPLAY_STATUS_MAX_BYTES,
+        CaptureVerb::Cat,
         audit,
         &mut items,
-        None,
-    )?;
+    )? {
+        write_payload(&spec.out_dir, "/replay/status", &payload)?;
+    }
 
     if spec.with_telemetry {
         let telemetry_dir = spec.out_dir.join("telemetry");

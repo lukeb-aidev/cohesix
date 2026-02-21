@@ -101,7 +101,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25f](#25f) | Gateway Broker Refactor + Large Telemetry Reference Manifests (No-Retry Reliability Gate) | Complete |
 | [25g](#25g) | Host Control Tickets via FUSE (GPU/PEFT + systemd/docker + K8s Coexistence) | Complete |
 | [25h](#25h) | Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) | Complete |
-| [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
+| [26](#26) | UEFI Bare-Metal Boot & Device Identity | Complete |
 | [26a](#26a) | UEFI Networking Baseline (Pi 4 GENETv5 + Static IPv4) | Pending |
 | [26b](#26b) | UEFI DHCP Baseline (Pi 4 NIC + Wi-Fi Policy) | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
@@ -5878,6 +5878,8 @@ The next planned releases will target bare metal UEFI and AWS native boot via AM
 
 ## Milestone 26 — UEFI Bare-Metal Boot & Device Identity <a id="26"></a> 
 [Milestones](#Milestones)
+
+**Status:** Complete — DoD checks passed and full `docs/TEST_PLAN.md` staged run completed (`out/test-plan/20260221T132259Z-m26`, Stage 01-05 all green; due-diligence log root `out/audit/gate/20260221T140141Z`).
 
 **Why now (context):**  
 To meet hardware deployment goals (Edge §3 retail hubs, Edge §8 defense ISR, Security §12 segmentation), Cohesix must boot on physical aarch64 UEFI hardware with attested manifests while preserving the lean `no_std` footprint and the upstream seL4 boot model. This milestone transitions from the QEMU reference profile to physical UEFI deployment, with VM behavior expected to mirror the hardware target unless explicitly profile-gated.

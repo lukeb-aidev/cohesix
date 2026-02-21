@@ -171,12 +171,25 @@
 - `features.serial_console`: `true`
 - `features.std_console`: `false`
 - `features.std_host_tools`: `false`
+- `hw.secure_boot`: `false`
+- `hw.no_nic`: `false`
+- `hw.attestation.enabled`: `false`
+- `hw.attestation.policy`: `tpm-or-dice`
+- `hw.attestation.evidence_max_bytes`: `256`
+- `hw.local_seat.enabled`: `false`
+- `hw.local_seat.required`: `false`
+- `hw.local_seat.keyboard_device`: `usb-kbd0`
+- `hw.local_seat.display_device`: `hdmi0`
+- `hw.local_seat.line_bytes`: `160`
+- `hw.local_seat.buffer_lines`: `128`
+- `hw.devices`: `0` entries
+- `hw.devices[]`: `(none)`
 - `namespaces.role_isolation`: `true`
 - `sharding.enabled`: `true`
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `0884f452da6fe84e7148c3c1e01d605b45f09f1da09914d87e961cc2c256b905`
+- `manifest.sha256`: `1aee4b854f804a6f250d113062597502ba30a1198315c33fe0156d5d2d1b7cb3`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -238,4 +251,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `0884f452da6fe84e7148c3c1e01d605b45f09f1da09914d87e961cc2c256b905`)._
+_Generated from `configs/root_task.toml` (sha256: `1aee4b854f804a6f250d113062597502ba30a1198315c33fe0156d5d2d1b7cb3`)._

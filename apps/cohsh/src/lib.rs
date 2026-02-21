@@ -4558,7 +4558,9 @@ mod tests {
     fn tcp_payload_budget_is_capped_by_console_echo_limit() {
         let path = "/queen/telemetry/telemetry-demo/seg/seg-000001";
         let budget = max_payload_len_for_transport(path, true);
-        assert_eq!(budget, MAX_ECHO_LEN);
+        let line_budget = max_payload_len_for_path(path, CONSOLE_LINE_CAPACITY);
+        assert_eq!(budget, line_budget.min(MAX_ECHO_LEN));
+        assert!(budget <= MAX_ECHO_LEN);
     }
 
     #[test]

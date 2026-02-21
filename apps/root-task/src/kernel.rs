@@ -23,6 +23,7 @@ use core::arch::asm;
 use crate::affinity;
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
 use crate::arch::aarch64::timer::timer_freq_hz;
+use crate::attest;
 #[cfg(feature = "kernel")]
 use crate::audit::boot as audit_boot;
 use crate::boot::{bi_extra, ep, tcb, uart_pl011};
@@ -59,6 +60,7 @@ use crate::event::{
 use crate::generated;
 use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
+use crate::local_seat::{self, LocalSeatInit};
 #[cfg(all(feature = "net-console", feature = "kernel"))]
 use crate::net::{DefaultNetStack as NetStack, NetPoller, CONSOLE_TCP_PORT, DEFAULT_NET_BACKEND};
 #[cfg(all(feature = "net-console", not(feature = "kernel")))]
@@ -2831,6 +2833,8 @@ fn bootstrap<P: Platform>(
             console.writeln_prefixed("[uart] init skipped: PL011 mapping unavailable");
         }
 
+        let hardware = generated::hardware_config();
+
         check_bootinfo(&mut boot_guard, "[mark] net.init.pre");
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let net_backend_label = DEFAULT_NET_BACKEND.label();
@@ -2838,7 +2842,13 @@ fn bootstrap<P: Platform>(
         let (net_stack, virtio_present, net_init_error) = {
             use crate::net::{init_net_console, NetConsoleError};
 
-            if !sel4::ep_ready() || !sel4::ep_validated() {
+            if hardware.no_nic {
+                boot_log::force_uart_line("[net-console] disabled reason=manifest-no-nic err=0");
+                log::info!("[net-console] disabled by manifest no_nic baseline");
+                let mut detail = heapless::String::<192>::new();
+                let _ = write!(detail, "disabled by manifest hw.no_nic=true");
+                (None, false, Some(detail))
+            } else if !sel4::ep_ready() || !sel4::ep_validated() {
                 boot_log::force_uart_line("[net-console] disabled reason=no-root-ep err=0");
                 log::warn!("[net-console] skipped: root endpoint not ready");
                 (None, false, None)
@@ -2895,6 +2905,76 @@ fn bootstrap<P: Platform>(
                 (timer, ipc)
             }
         };
+
+        match attest::evaluate(hardware, generated::MANIFEST_SHA256) {
+            Ok(Some(evidence)) => {
+                let mut line = heapless::String::<320>::new();
+                let _ = write!(
+                    line,
+                    "[attestation] enabled policy={} method={} bound_manifest_sha256={} evidence_sha256={}",
+                    attest::attestation_policy_label(evidence.policy),
+                    evidence.method.as_str(),
+                    evidence.manifest_sha256,
+                    evidence.evidence_sha256
+                );
+                console.writeln_prefixed(line.as_str());
+                boot_log::force_uart_line(line.as_str());
+            }
+            Ok(None) => {
+                console.writeln_prefixed("[attestation] disabled");
+                boot_log::force_uart_line("[attestation] disabled");
+            }
+            Err(err) => {
+                let mut line = heapless::String::<128>::new();
+                let _ = write!(line, "[attestation] abort reason={}", err.as_str());
+                console.writeln_prefixed(line.as_str());
+                boot_log::force_uart_line(line.as_str());
+                return Err(BootError::Fatal(format!(
+                    "attestation failed: {}",
+                    err.as_str()
+                )));
+            }
+        }
+
+        match local_seat::evaluate(hardware, false) {
+            Ok(LocalSeatInit::Disabled) => {
+                console.writeln_prefixed("[local-seat] disabled");
+                boot_log::force_uart_line("[local-seat] disabled");
+            }
+            Ok(LocalSeatInit::Active(status)) => {
+                let mut line = heapless::String::<240>::new();
+                let _ = write!(
+                    line,
+                    "[local-seat] active keyboard={} display={} line_bytes={} buffer_lines={}",
+                    status.keyboard_device,
+                    status.display_device,
+                    status.line_bytes,
+                    status.buffer_lines
+                );
+                console.writeln_prefixed(line.as_str());
+                boot_log::force_uart_line(line.as_str());
+            }
+            Ok(LocalSeatInit::Degraded(reason)) => {
+                let mut line = heapless::String::<128>::new();
+                let _ = write!(line, "[local-seat] degraded reason={}", reason.as_str());
+                console.writeln_prefixed(line.as_str());
+                boot_log::force_uart_line(line.as_str());
+            }
+            Err(err) => {
+                let mut line = heapless::String::<128>::new();
+                let _ = write!(
+                    line,
+                    "[local-seat] abort required=true reason={}",
+                    err.as_str()
+                );
+                console.writeln_prefixed(line.as_str());
+                boot_log::force_uart_line(line.as_str());
+                return Err(BootError::Fatal(format!(
+                    "local-seat required policy failed: {}",
+                    err.as_str()
+                )));
+            }
+        }
 
         let mut tickets: TicketTable<{ generated::TICKET_COUNT }> = TicketTable::new();
         for spec in generated::ticket_inventory() {
@@ -2998,7 +3078,11 @@ fn bootstrap<P: Platform>(
                 .as_ref()
                 .map(heapless::String::as_str)
                 .unwrap_or("net stack init failed");
-            log::warn!("[boot] net-console unavailable: net stack init failed ({detail})");
+            if generated::hardware_config().no_nic {
+                log::info!("[boot] net-console intentionally disabled ({detail})");
+            } else {
+                log::warn!("[boot] net-console unavailable: net stack init failed ({detail})");
+            }
         }
         let caps_start = empty_start as u32;
         let caps_end = cs.next_candidate_slot();

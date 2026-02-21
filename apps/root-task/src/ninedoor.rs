@@ -8665,6 +8665,9 @@ fn boot_lines_into(
         if line.starts_with("manifest.schema=")
             || line.starts_with("manifest.profile=")
             || line.starts_with("manifest.sha256=")
+            || line.starts_with("manifest.features.net_console=")
+            || line.starts_with("manifest.hw.")
+            || line.starts_with("attestation.")
             || line.starts_with("telemetry.")
             || line.starts_with("event_pump.")
         {

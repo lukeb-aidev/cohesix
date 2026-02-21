@@ -388,7 +388,7 @@ mod tests {
                 "max_path_len": 96,
                 "max_json_len": 192,
                 "max_id_len": 32,
-                "max_echo_len": 128,
+                "max_echo_len": 224,
                 "max_ticket_len": 224
             },
             "paths": {

@@ -353,6 +353,81 @@ def test_echo_with_policy_retry_queues_on_buffer_full() -> None:
     ]
 
 
+def test_echo_with_policy_retry_waits_for_policy_consumption() -> None:
+    class DummyClient:
+        def __init__(self) -> None:
+            self.calls = []
+            self.queen_calls = 0
+
+        def echo(self, path: str, line: str) -> rest_perf.GatewayResponse:
+            self.calls.append((path, line))
+            if path == "/actions/queue":
+                return rest_perf.GatewayResponse(
+                    status="OK",
+                    verb="ECHO",
+                    path=path,
+                    end=True,
+                    lines=[],
+                    bytes=None,
+                    error=None,
+                )
+            if path == "/queen/ctl":
+                self.queen_calls += 1
+                if self.queen_calls <= 2:
+                    return rest_perf.GatewayResponse(
+                        status="ERR",
+                        verb="ECHO",
+                        path=path,
+                        end=True,
+                        lines=[],
+                        bytes=None,
+                        error="ERR ECHO reason=policy detail=denied path=/queen/ctl error=EPERM",
+                    )
+                return rest_perf.GatewayResponse(
+                    status="OK",
+                    verb="ECHO",
+                    path=path,
+                    end=True,
+                    lines=[],
+                    bytes=None,
+                    error=None,
+                )
+            return rest_perf.GatewayResponse(
+                status="ERR",
+                verb="ECHO",
+                path=path,
+                end=True,
+                lines=[],
+                bytes=None,
+                error="bad path",
+            )
+
+    state = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=0,
+        policy_enabled=True,
+        actions_enabled=True,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=True,
+        transient_retries=True,
+        strict_control_errors=False,
+    )
+    client = DummyClient()
+    rest_perf._echo_with_policy_retry_inner(client, "/queen/ctl", "{}", state)
+
+    assert [call[0] for call in client.calls] == [
+        "/queen/ctl",
+        "/actions/queue",
+        "/queen/ctl",
+        "/actions/queue",
+        "/queen/ctl",
+    ]
+
+
 def test_run_with_retry_policy_honors_no_retry_mode() -> None:
     state = rest_perf.SimState(
         bounds={},

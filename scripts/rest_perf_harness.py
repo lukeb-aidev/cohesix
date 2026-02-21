@@ -1496,6 +1496,16 @@ def _echo_with_policy_retry_inner(
     line: str,
     state: SimState,
 ) -> None:
+    def is_policy_retryable(error: Optional[str]) -> bool:
+        if not error:
+            return False
+        err_lower = error.lower()
+        return (
+            "policy" in err_lower
+            or "buffer full" in err_lower
+            or "buffer-full" in err_lower
+        )
+
     def attempt() -> None:
         response = client.echo(path, line)
         if response.status == "OK":
@@ -1505,13 +1515,22 @@ def _echo_with_policy_retry_inner(
             and state.auto_approve
             and response.error
         ):
-            err_lower = response.error.lower()
-            if "policy" in err_lower or "buffer full" in err_lower or "buffer-full" in err_lower:
-                queue_approval(client, path, state)
-                response_retry = client.echo(path, line)
-                if response_retry.status == "OK":
-                    return
-                response = response_retry
+            if is_policy_retryable(response.error):
+                # Auto-approval must tolerate concurrent /queen/ctl writes that can
+                # consume the queued approval before this request retries.
+                retry_sleep_s = 0.02
+                max_rounds = 24
+                for round_idx in range(max_rounds):
+                    queue_approval(client, path, state)
+                    response_retry = client.echo(path, line)
+                    if response_retry.status == "OK":
+                        return
+                    response = response_retry
+                    if not is_policy_retryable(response_retry.error):
+                        break
+                    if round_idx + 1 < max_rounds:
+                        time.sleep(retry_sleep_s)
+                        retry_sleep_s = min(retry_sleep_s * 1.5, 0.25)
         raise RestError(
             f"ECHO {path} failed: {response.error}",
             response,

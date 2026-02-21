@@ -1,20 +1,59 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Document current hardware bring-up status and constraints. -->
+<!-- Purpose: Document Cohesix UEFI hardware bring-up workflows and constraints. -->
 <!-- Author: Lukas Bower -->
-# Hardware Bring-up (Status)
+# Hardware Bring-up (As-Built)
 
-## Current status (as-built)
-- Cohesix is validated on QEMU `aarch64/virt` only.
-- There is **no** in-repo UEFI bring-up script or packaging flow at this time.
-- The QEMU reference boot transcript and invariants are documented in
-  `docs/BOOT_REFERENCE.md`.
+## Scope
+- Cohesix supports two bring-up paths:
+- QEMU `aarch64/virt` (development/CI baseline).
+- UEFI aarch64 boot packaging with `elfloader.efi` handoff semantics (`UEFI -> elfloader.efi -> seL4 -> root-task`).
+- Milestone 26 keeps a strict no-NIC baseline for `uefi-aarch64`.
 
-## UEFI bring-up (planned)
-UEFI bring-up is planned under Milestone 25a in `docs/BUILD_PLAN.md`. Until that
-milestone lands, any UEFI artifacts, packaging steps, or TPM/DICE attestation
-hooks are **not** part of the as-built system.
+## UEFI tooling
+- `scripts/uefi/esp-build.sh` builds a deterministic ESP tree with:
+- `EFI/BOOT/BOOTAA64.EFI`
+- `cohesix/kernel.elf`
+- `cohesix/rootserver`
+- optional `cohesix/initrd.cpio`
+- `cohesix/manifest.json` + `cohesix/manifest.sha256`
+- optional `dtb/*`
+- `scripts/uefi/qemu-uefi.sh` boots UEFI on QEMU using EDK2 pflash + FAT-backed ESP.
+- Both scripts write auditable logs/artifacts under `out/uefi/`.
 
-## Reference usage (QEMU)
-Use the existing QEMU harness described in `docs/QUICKSTART.md` and
-`docs/USERLAND_AND_CLI.md` for the authoritative dev/CI workflow.
+## Manifest profiles
+- Development profile: `configs/root_task.toml` (`profile.name = "virt-aarch64"`).
+- UEFI profile: `configs/root_task_uefi_aarch64.toml` (`profile.name = "uefi-aarch64"`).
+- `coh-rtc` enforces Milestone 26 UEFI gates:
+- `hw.no_nic=true`
+- `features.net_console=false`
+- declared `uart` + `rtc` devices
+- local-seat declarations when `hw.local_seat.enabled=true`
+- attestation policy/device requirements when `hw.attestation.enabled=true`
+
+## UEFI build/boot commands
+1. Build EFI elfloader (requires a configured upstream seL4 CMake tree):
+`cmake --build seL4/build --target elfloader.efi`
+2. Resolve UEFI manifest:
+`cargo run -p coh-rtc -- configs/root_task_uefi_aarch64.toml --out out/uefi/generated --manifest out/uefi/root_task_resolved_uefi.json --cas-manifest-template out/uefi/cas_manifest_template_uefi.json --cli-script out/uefi/boot_v0_uefi.coh --doc-snippet out/uefi/root_task_manifest_uefi.md --gpu-breadcrumbs-snippet out/uefi/gpu_breadcrumbs_uefi.md --observability-interfaces-snippet out/uefi/observability_interfaces_uefi.md --observability-security-snippet out/uefi/observability_security_uefi.md --ticket-quotas-snippet out/uefi/ticket_quotas_uefi.md --trace-policy-snippet out/uefi/trace_policy_uefi.md --cas-interfaces-snippet out/uefi/cas_interfaces_uefi.md --cas-security-snippet out/uefi/cas_security_uefi.md --cohesix-py-defaults out/uefi/cohesix_py_defaults_uefi.py --cohesix-py-doc out/uefi/cohesix_py_defaults_uefi.md --coh-doctor-doc out/uefi/coh_doctor_checks_uefi.md --cohsh-policy out/uefi/cohsh_policy_uefi.toml --cohsh-policy-rust out/uefi/cohsh_policy_uefi.rs --cohsh-policy-doc out/uefi/cohsh_policy_uefi.md --cohsh-client-rust out/uefi/cohsh_client_uefi.rs --cohsh-client-doc out/uefi/cohsh_client_uefi.md --cohsh-grammar-doc out/uefi/cohsh_grammar_uefi.md --cohsh-ticket-policy-doc out/uefi/cohsh_ticket_policy_uefi.md --coh-policy out/uefi/coh_policy_uefi.toml --coh-policy-rust out/uefi/coh_policy_uefi.rs --coh-policy-doc out/uefi/coh_policy_uefi.md --swarmui-defaults out/uefi/swarmui_defaults_uefi.toml --swarmui-defaults-rust out/uefi/swarmui_defaults_uefi.rs --swarmui-defaults-doc out/uefi/swarmui_defaults_uefi.md`
+3. Build deterministic ESP:
+`scripts/uefi/esp-build.sh --manifest out/uefi/root_task_resolved_uefi.json --out-dir out/uefi/m26`
+4. Boot in QEMU UEFI mode:
+`scripts/uefi/qemu-uefi.sh --esp-dir out/uefi/m26/esp --console serial`
+
+## Milestone 26 boot evidence requirements
+- `/proc/boot` must include:
+- `manifest.sha256=...`
+- `manifest.hw.no_nic=true`
+- `manifest.hw.networking=disabled-m26-baseline`
+- `attestation.bound_manifest_sha256=...`
+- `attestation.evidence_sha256=...` (when attestation enabled)
+- Boot must fail before ticket registration if:
+- attestation is required/enabled and policy cannot be satisfied.
+- `hw.local_seat.required=true` and local-seat initialisation cannot be satisfied.
+- If `hw.local_seat.required=false`, runtime must degrade to serial-only diagnostics with explicit `[local-seat] degraded ...` boot lines.
+
+## UEFI ownership boundary
+- Firmware-owned (pre-handoff only): UEFI boot manager/UI, Boot Services, Runtime Services.
+- Cohesix-owned (post-handoff): HAL-backed device access only (UART, local seat paths, attestation device plumbing, network handoff points).
+- Root-task runtime code must not call UEFI services directly after seL4 entry.

@@ -1058,6 +1058,87 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `hw.secure_boot`: `{}`",
+            manifest.hw.secure_boot
+        )
+        .ok();
+        writeln!(schema_md, "- `hw.no_nic`: `{}`", manifest.hw.no_nic).ok();
+        writeln!(
+            schema_md,
+            "- `hw.attestation.enabled`: `{}`",
+            manifest.hw.attestation.enabled
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.attestation.policy`: `{}`",
+            format_attestation_policy(manifest.hw.attestation.policy)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.attestation.evidence_max_bytes`: `{}`",
+            manifest.hw.attestation.evidence_max_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.local_seat.enabled`: `{}`",
+            manifest.hw.local_seat.enabled
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.local_seat.required`: `{}`",
+            manifest.hw.local_seat.required
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.local_seat.keyboard_device`: `{}`",
+            manifest.hw.local_seat.keyboard_device
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.local_seat.display_device`: `{}`",
+            manifest.hw.local_seat.display_device
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.local_seat.line_bytes`: `{}`",
+            manifest.hw.local_seat.line_bytes
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.local_seat.buffer_lines`: `{}`",
+            manifest.hw.local_seat.buffer_lines
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.devices`: `{}` entries",
+            manifest.hw.devices.len()
+        )
+        .ok();
+        if manifest.hw.devices.is_empty() {
+            writeln!(schema_md, "- `hw.devices[]`: `(none)`").ok();
+        } else {
+            for device in &manifest.hw.devices {
+                writeln!(
+                    schema_md,
+                    "- `hw.devices[]`: `kind={}` `id={}` `required={}`",
+                    format_hardware_device_kind(device.kind),
+                    device.id,
+                    device.required
+                )
+                .ok();
+            }
+        }
+        writeln!(
+            schema_md,
             "- `namespaces.role_isolation`: `{}`",
             manifest.namespaces.role_isolation
         )
@@ -2508,6 +2589,25 @@ fn format_ingest_eviction_policy(
     match policy {
         crate::ir::TelemetryIngestEvictionPolicy::Refuse => "refuse",
         crate::ir::TelemetryIngestEvictionPolicy::EvictOldest => "evict-oldest",
+    }
+}
+
+fn format_attestation_policy(policy: crate::ir::AttestationPolicy) -> &'static str {
+    match policy {
+        crate::ir::AttestationPolicy::TpmOnly => "tpm-only",
+        crate::ir::AttestationPolicy::TpmOrDice => "tpm-or-dice",
+        crate::ir::AttestationPolicy::DiceOnly => "dice-only",
+    }
+}
+
+fn format_hardware_device_kind(kind: crate::ir::HardwareDeviceKind) -> &'static str {
+    match kind {
+        crate::ir::HardwareDeviceKind::Uart => "uart",
+        crate::ir::HardwareDeviceKind::Net => "net",
+        crate::ir::HardwareDeviceKind::Tpm => "tpm",
+        crate::ir::HardwareDeviceKind::Rtc => "rtc",
+        crate::ir::HardwareDeviceKind::Keyboard => "keyboard",
+        crate::ir::HardwareDeviceKind::Display => "display",
     }
 }
 

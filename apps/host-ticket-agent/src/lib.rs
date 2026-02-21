@@ -14,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use cohsh::{Session, Transport};
+use cohsh_core::MAX_ECHO_LEN;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -60,13 +61,13 @@ pub struct HostTicketSpec {
     /// Action verb from the manifest allowlist.
     pub action: String,
     /// Optional action target path/token.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
     /// Optional JSON arguments for the action.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Value::is_null")]
     pub args: Value,
     /// Optional expiration timestamp in unix milliseconds.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_unix_ms: Option<u64>,
     /// Optional originating hive identifier for federated relay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -349,6 +350,8 @@ pub struct ProcessSummary {
     pub expired: usize,
     /// Specs skipped because an existing terminal receipt was found.
     pub skipped_terminal: usize,
+    /// Federated specs skipped because they target a different hive.
+    pub skipped_remote_target: usize,
 }
 
 impl ProcessSummary {
@@ -447,6 +450,16 @@ where
 
     for spec in specs.iter().skip(cursor.next_spec_index) {
         summary.seen = summary.seen.saturating_add(1);
+
+        if let Some(target_hive) = spec.target_hive.as_deref() {
+            if target_hive != manifest.federation.local_hive {
+                summary.skipped_remote_target = summary.skipped_remote_target.saturating_add(1);
+                cursor.next_spec_index = cursor.next_spec_index.saturating_add(1);
+                save_cursor_state(cursor_path, &cursor)?;
+                continue;
+            }
+        }
+
         let key = TicketKey::new(spec.id.as_str(), spec.idempotency_key.as_str());
         if terminal.contains(&key) {
             summary.skipped_terminal = summary.skipped_terminal.saturating_add(1);
@@ -548,14 +561,19 @@ fn append_result(
     message: Option<&str>,
     path: &str,
 ) -> Result<()> {
+    let line_limit = effective_result_line_limit(manifest.max_line_bytes);
     let line = status::build_result_line(
         spec,
         manifest.result_schema.as_str(),
         state,
         message,
-        manifest.max_line_bytes,
+        line_limit,
     )?;
     status::append_result_line(transport, session, path, line.as_str())
+}
+
+fn effective_result_line_limit(max_line_bytes: u32) -> u32 {
+    max_line_bytes.min(MAX_ECHO_LEN as u32)
 }
 
 fn load_cursor_state(path: &Path) -> Result<CursorState> {
@@ -907,7 +925,10 @@ mod tests {
         );
         files.insert(manifest.status_path(), Vec::new());
         files.insert(manifest.deadletter_path(), Vec::new());
-        let mut transport = FakeTransport { files };
+        let mut transport = FakeTransport {
+            files,
+            max_write_line_len: None,
+        };
         let session = Session::new(1.into(), Role::Queen);
         let config = ExecutorConfig {
             mount: "/host".to_owned(),
@@ -947,9 +968,141 @@ mod tests {
         assert_eq!(second.seen, 0);
     }
 
+    #[test]
+    fn process_once_skips_remote_federated_targets() {
+        let temp = tempfile::TempDir::new().unwrap_or_else(|err| unreachable!("temp dir: {err}"));
+        let cursor = temp.path().join("cursor.json");
+        let manifest = HostTicketManifest {
+            enabled: true,
+            mount_path: "/host".to_owned(),
+            request_schema: "host-ticket/v1".to_owned(),
+            result_schema: "host-ticket-result/v1".to_owned(),
+            max_line_bytes: 2048,
+            action_allowlist: vec!["systemd.restart".to_owned()],
+            lifecycle: REQUIRED_LIFECYCLE_STATES
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
+            federation: HostFederationManifest {
+                enabled: true,
+                local_hive: "hive-a".to_owned(),
+                peers: Vec::new(),
+                action_allowlist: vec!["systemd.restart".to_owned()],
+                relay_queue_max_entries: 256,
+                relay_queue_max_bytes: 32 * 1024,
+                wal_max_entries: 1024,
+                wal_max_bytes: 512 * 1024,
+                relay_timeout_ms: 1500,
+            },
+        };
+
+        let mut files = BTreeMap::<String, Vec<String>>::new();
+        files.insert(
+            manifest.spec_path(),
+            vec![
+                "{\"schema\":\"host-ticket/v1\",\"id\":\"t-remote\",\"idempotency_key\":\"k-remote\",\"action\":\"systemd.restart\",\"source_hive\":\"hive-a\",\"target_hive\":\"hive-b\"}".to_owned(),
+            ],
+        );
+        files.insert(manifest.status_path(), Vec::new());
+        files.insert(manifest.deadletter_path(), Vec::new());
+
+        let mut transport = FakeTransport {
+            files,
+            max_write_line_len: None,
+        };
+        let session = Session::new(1.into(), Role::Queen);
+        let config = ExecutorConfig {
+            mount: "/host".to_owned(),
+            registry_root: PathBuf::from("out/model_registry"),
+        };
+
+        let mut executions = 0usize;
+        let summary = process_tickets_once_with_executor(
+            &mut transport,
+            &session,
+            &manifest,
+            &cursor,
+            &config,
+            unix_time_ms_now(),
+            |_transport, _session, _spec, _config| {
+                executions = executions.saturating_add(1);
+                Ok("ok".to_owned())
+            },
+        )
+        .unwrap_or_else(|err| unreachable!("process pass: {err}"));
+
+        assert_eq!(summary.seen, 1);
+        assert_eq!(summary.skipped_remote_target, 1);
+        assert_eq!(summary.terminal_updates(), 0);
+        assert_eq!(executions, 0);
+    }
+
+    #[test]
+    fn process_once_compacts_federated_results_for_echo_limit() {
+        let temp = tempfile::TempDir::new().unwrap_or_else(|err| unreachable!("temp dir: {err}"));
+        let cursor = temp.path().join("cursor.json");
+        let manifest = HostTicketManifest {
+            enabled: true,
+            mount_path: "/host".to_owned(),
+            request_schema: "host-ticket/v1".to_owned(),
+            result_schema: "host-ticket-result/v1".to_owned(),
+            max_line_bytes: 2048,
+            action_allowlist: vec!["systemd.stop".to_owned()],
+            lifecycle: REQUIRED_LIFECYCLE_STATES
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
+            federation: HostFederationManifest {
+                enabled: true,
+                local_hive: "hive-b".to_owned(),
+                peers: Vec::new(),
+                action_allowlist: vec!["systemd.stop".to_owned()],
+                relay_queue_max_entries: 256,
+                relay_queue_max_bytes: 32 * 1024,
+                wal_max_entries: 1024,
+                wal_max_bytes: 512 * 1024,
+                relay_timeout_ms: 1500,
+            },
+        };
+
+        let mut files = BTreeMap::<String, Vec<String>>::new();
+        files.insert(
+            manifest.spec_path(),
+            vec![
+                "{\"schema\":\"host-ticket/v1\",\"id\":\"fed-ticket-1\",\"idempotency_key\":\"idem-1\",\"action\":\"systemd.stop\",\"source_hive\":\"hive-a\",\"target_hive\":\"hive-b\",\"relay_hop\":2,\"relay_correlation_id\":\"fed-ticket-1:idem-1:hive-a:hive-b\"}".to_owned(),
+            ],
+        );
+        files.insert(manifest.status_path(), Vec::new());
+        files.insert(manifest.deadletter_path(), Vec::new());
+
+        let mut transport = FakeTransport {
+            files,
+            max_write_line_len: Some(224),
+        };
+        let session = Session::new(1.into(), Role::Queen);
+        let config = ExecutorConfig {
+            mount: "/host".to_owned(),
+            registry_root: PathBuf::from("out/model_registry"),
+        };
+
+        let summary = process_tickets_once_with_executor(
+            &mut transport,
+            &session,
+            &manifest,
+            &cursor,
+            &config,
+            unix_time_ms_now(),
+            |_transport, _session, _spec, _config| Ok("ok".to_owned()),
+        )
+        .unwrap_or_else(|err| unreachable!("process pass: {err}"));
+
+        assert_eq!(summary.succeeded, 1);
+    }
+
     #[derive(Debug)]
     struct FakeTransport {
         files: BTreeMap<String, Vec<String>>,
+        max_write_line_len: Option<usize>,
     }
 
     impl Transport for FakeTransport {
@@ -979,6 +1132,11 @@ mod tests {
             for line in text.lines() {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() {
+                    if let Some(limit) = self.max_write_line_len {
+                        if trimmed.len() > limit {
+                            return Err(anyhow!("payload exceeds max_echo_len {limit}"));
+                        }
+                    }
                     entry.push(trimmed.to_owned());
                 }
             }

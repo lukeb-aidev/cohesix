@@ -203,8 +203,148 @@ impl Drop for PoolLease {
             return;
         }
         match self.kind {
-            PoolKind::Control => state.control_idle.push_back(session),
+            // Keep control-plane traffic sticky to the most recently used session.
+            // Some control paths (for example policy approvals and gated writes)
+            // rely on per-session sequencing semantics.
+            PoolKind::Control => state.control_idle.push_front(session),
             PoolKind::Telemetry => state.telemetry_idle.push_back(session),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use anyhow::{anyhow, Result};
+    use cohesix_ticket::Role;
+    use secure9p_codec::SessionId;
+
+    use super::{PoolKind, SessionPool, TransportFactory};
+    use crate::{Session, Transport, TransportMetrics};
+
+    #[derive(Debug)]
+    struct TestTransport {
+        next_session_id: std::sync::Arc<AtomicU64>,
+    }
+
+    impl Transport for TestTransport {
+        fn attach(&mut self, role: Role, _ticket: Option<&str>) -> Result<Session> {
+            let id = self.next_session_id.fetch_add(1, Ordering::SeqCst);
+            Ok(Session::new(SessionId::from_raw(id), role))
+        }
+
+        fn kind(&self) -> &'static str {
+            "test"
+        }
+
+        fn ping(&mut self, _session: &Session) -> Result<String> {
+            Ok("pong".to_owned())
+        }
+
+        fn tail(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+            Err(anyhow!("tail is not implemented"))
+        }
+
+        fn read(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+            Err(anyhow!("read is not implemented"))
+        }
+
+        fn list(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+            Err(anyhow!("list is not implemented"))
+        }
+
+        fn write(&mut self, _session: &Session, _path: &str, _payload: &[u8]) -> Result<()> {
+            Ok(())
+        }
+
+        fn metrics(&self) -> TransportMetrics {
+            TransportMetrics::default()
+        }
+    }
+
+    #[test]
+    fn control_pool_reuses_most_recent_session() {
+        let next_session_id = std::sync::Arc::new(AtomicU64::new(1));
+        let factory: std::sync::Arc<dyn TransportFactory> = std::sync::Arc::new({
+            let next_session_id = std::sync::Arc::clone(&next_session_id);
+            move || {
+                Ok(Box::new(TestTransport {
+                    next_session_id: std::sync::Arc::clone(&next_session_id),
+                }) as Box<dyn Transport + Send>)
+            }
+        });
+        let pool = SessionPool::new(2, 2, factory);
+        let attach_result = pool.attach(Role::Queen, None);
+        assert!(
+            attach_result.is_ok(),
+            "attach pool failed: {:?}",
+            attach_result.err()
+        );
+        if attach_result.is_err() {
+            return;
+        }
+
+        let first_checkout = pool.checkout(PoolKind::Control);
+        assert!(
+            first_checkout.is_ok(),
+            "first control checkout failed: {:?}",
+            first_checkout.err()
+        );
+        let Some(first_lease) = first_checkout.ok() else {
+            return;
+        };
+        let first_id = first_lease.session().id().into_raw();
+        drop(first_lease);
+
+        let second_checkout = pool.checkout(PoolKind::Control);
+        assert!(
+            second_checkout.is_ok(),
+            "second control checkout failed: {:?}",
+            second_checkout.err()
+        );
+        let Some(second_lease) = second_checkout.ok() else {
+            return;
+        };
+        let second_id = second_lease.session().id().into_raw();
+        drop(second_lease);
+        assert_eq!(second_id, first_id);
+
+        let checkout_a = pool.checkout(PoolKind::Control);
+        assert!(
+            checkout_a.is_ok(),
+            "control checkout a failed: {:?}",
+            checkout_a.err()
+        );
+        let Some(lease_a) = checkout_a.ok() else {
+            return;
+        };
+        let checkout_b = pool.checkout(PoolKind::Control);
+        assert!(
+            checkout_b.is_ok(),
+            "control checkout b failed: {:?}",
+            checkout_b.err()
+        );
+        let Some(lease_b) = checkout_b.ok() else {
+            return;
+        };
+        let id_a = lease_a.session().id().into_raw();
+        let id_b = lease_b.session().id().into_raw();
+        assert_ne!(id_a, id_b);
+        drop(lease_a);
+        drop(lease_b);
+
+        let reused_checkout = pool.checkout(PoolKind::Control);
+        assert!(
+            reused_checkout.is_ok(),
+            "reused control checkout failed: {:?}",
+            reused_checkout.err()
+        );
+        let Some(reused_lease) = reused_checkout.ok() else {
+            return;
+        };
+        let reused_id = reused_lease.session().id().into_raw();
+        drop(reused_lease);
+        assert_eq!(reused_id, id_b);
     }
 }

@@ -6,15 +6,16 @@
 #![allow(unused_imports)]
 
 use super::{
-    AffinityPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig,
+    AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig,
+    ControlPlaneConfig, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind,
     HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction,
     HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition,
-    LifecycleConfig, LifecycleState, NamespaceMount, ObservabilityConfig, PolicyConfig,
-    PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig,
-    ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits,
-    ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig,
-    SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig,
-    TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig,
+    LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, ObservabilityConfig,
+    PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig,
+    ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig,
+    Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig,
+    SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig,
+    TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig,
     TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig,
     UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig,
 };
@@ -25,7 +26,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "860a145bdf436ce96e6378a90f0490d57b7cf15b458eb7413caaf29226f046bf";
+    "2c43eee27ed6b3d38c73436c52b6d771ce45279367b2f5206de0caef78e4b041";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -176,6 +177,27 @@ pub const CAS_CONFIG: CasConfig = CasConfig {
         0xcd, 0xef,
     ]),
     models_enabled: false,
+};
+
+pub const HARDWARE_DEVICES: [HardwareDevice; 0] = [];
+
+pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {
+    secure_boot: false,
+    no_nic: false,
+    attestation: AttestationConfig {
+        enabled: false,
+        policy: AttestationPolicy::TpmOrDice,
+        evidence_max_bytes: 256,
+    },
+    local_seat: LocalSeatConfig {
+        enabled: false,
+        required: false,
+        keyboard_device: "usb-kbd0",
+        display_device: "hdmi0",
+        line_bytes: 160,
+        buffer_lines: 128,
+    },
+    devices: &HARDWARE_DEVICES,
 };
 
 pub const PROC_9P_SESSIONS_BYTES: usize = 8192;
@@ -450,10 +472,10 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
-pub const INITIAL_AUDIT_LINES: [&str; 23] = [
+pub const INITIAL_AUDIT_LINES: [&str; 29] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=0884f452da6fe84e7148c3c1e01d605b45f09f1da09914d87e961cc2c256b905",
+    "manifest.sha256=1aee4b854f804a6f250d113062597502ba30a1198315c33fe0156d5d2d1b7cb3",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -473,5 +495,11 @@ pub const INITIAL_AUDIT_LINES: [&str; 23] = [
     "manifest.cache.dma_invalidate=true",
     "manifest.cache.unify_instructions=false",
     "manifest.features.net_console=true",
+    "manifest.hw.secure_boot=false",
+    "manifest.hw.no_nic=false",
+    "manifest.hw.attestation.enabled=false",
+    "manifest.hw.attestation.policy=tpm-or-dice",
+    "manifest.hw.local_seat.enabled=false",
+    "manifest.hw.local_seat.required=false",
     "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];

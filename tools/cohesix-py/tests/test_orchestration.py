@@ -222,12 +222,15 @@ def test_enqueue_k8s_rbac_tickets_translates_intents() -> None:
 def test_enqueue_host_tickets_checks_transport_payload_bound() -> None:
     backend = RestBackend("http://127.0.0.1:1")
     orchestrator = CohesixOrchestrator(backend=backend)
+    bound = orchestrator._transport_payload_bound("/host/tickets/spec")
+    assert bound is not None
+    oversized_value = "x" * (bound + 64)
     request = HostTicketRequest(
         ticket_id="ticket-long",
         idempotency_key="idem-long",
         action="k8s.cordon",
         target="/host/k8s/node/node-1/cordon",
-        args={"subject": "ops", "namespace": "edge"},
+        args={"subject": "ops", "namespace": "edge", "oversized": oversized_value},
     )
     try:
         orchestrator.enqueue_host_tickets([request])

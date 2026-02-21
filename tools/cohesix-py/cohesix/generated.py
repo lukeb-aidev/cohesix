@@ -4,14 +4,14 @@
 # Copyright 2026 Lukas Bower
 
 DEFAULTS = {
-    "manifest_sha256": "0884f452da6fe84e7148c3c1e01d605b45f09f1da09914d87e961cc2c256b905",
+    "manifest_sha256": "1aee4b854f804a6f250d113062597502ba30a1198315c33fe0156d5d2d1b7cb3",
     "secure9p": {"msize": 8192, "walk_depth": 8},
     "console": {
         "max_line_len": 256,
         "max_path_len": 96,
         "max_json_len": 192,
         "max_id_len": 32,
-        "max_echo_len": 128,
+        "max_echo_len": 224,
         "max_ticket_len": 224,
     },
     "ticket_limits": {

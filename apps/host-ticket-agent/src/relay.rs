@@ -426,4 +426,34 @@ mod tests {
         assert_eq!(second.forwarded, 1);
         assert_eq!(second.queue_depth, 0);
     }
+
+    #[test]
+    fn relay_payload_omits_null_optional_fields() {
+        let spec = HostTicketSpec {
+            schema: "host-ticket/v1".to_owned(),
+            id: "fed-ticket-1".to_owned(),
+            idempotency_key: "idem-1".to_owned(),
+            action: "systemd.stop".to_owned(),
+            target: None,
+            args: serde_json::Value::Null,
+            expires_unix_ms: None,
+            source_hive: Some("hive-a".to_owned()),
+            target_hive: Some("hive-b".to_owned()),
+            relay_hop: Some(1),
+            relay_correlation_id: Some("fed-ticket-1:idem-1:hive-a:hive-b".to_owned()),
+        };
+
+        let payload = build_relay_payload(
+            spec,
+            "hive-a",
+            "hive-b",
+            "fed-ticket-1:idem-1:hive-a:hive-b",
+        )
+        .unwrap_or_else(|err| unreachable!("payload build: {err}"));
+
+        assert!(!payload.contains("\"target\":null"));
+        assert!(!payload.contains("\"args\":null"));
+        assert!(!payload.contains("\"expires_unix_ms\":null"));
+        assert!(payload.len() <= 224);
+    }
 }

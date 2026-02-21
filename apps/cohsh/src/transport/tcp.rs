@@ -55,6 +55,18 @@ fn is_frame_error(ack: &crate::proto::Ack<'_>) -> bool {
     matches!(ack.status, AckStatus::Err) && ack.verb.eq_ignore_ascii_case(FRAME_ERROR_VERB)
 }
 
+fn ack_path_matches(ack: &crate::proto::Ack<'_>, expected_path: &str) -> bool {
+    let Some(detail) = ack.detail else {
+        return true;
+    };
+    for token in detail.split_ascii_whitespace() {
+        if let Some(path) = token.strip_prefix("path=") {
+            return path == expected_path;
+        }
+    }
+    true
+}
+
 #[derive(Debug, Clone)]
 struct SessionCache {
     role: Role,
@@ -1283,7 +1295,7 @@ impl TcpTransport {
                             if is_frame_error(&ack) {
                                 return Err(anyhow!("console frame rejected: {response}"));
                             }
-                            if ack.verb.eq_ignore_ascii_case(verb) {
+                            if ack.verb.eq_ignore_ascii_case(verb) && ack_path_matches(&ack, path) {
                                 let _ = self.record_ack(&response);
                                 if matches!(ack.status, AckStatus::Err) {
                                     return Err(anyhow!("{verb} failed: {response}"));
@@ -1551,7 +1563,8 @@ impl Transport for TcpTransport {
                             {
                                 return Err(anyhow!("echo failed: {response}"));
                             }
-                            if ack.verb.eq_ignore_ascii_case("ECHO") {
+                            if ack.verb.eq_ignore_ascii_case("ECHO") && ack_path_matches(&ack, path)
+                            {
                                 if matches!(ack.status, AckStatus::Ok) {
                                     return Ok(());
                                 }
@@ -1614,7 +1627,8 @@ impl Transport for TcpTransport {
                             {
                                 return Err(anyhow!("echo failed: {response}"));
                             }
-                            if ack.verb.eq_ignore_ascii_case("ECHO") {
+                            if ack.verb.eq_ignore_ascii_case("ECHO") && ack_path_matches(&ack, path)
+                            {
                                 if matches!(ack.status, AckStatus::Ok) {
                                     acked = acked.saturating_add(1);
                                     continue;
@@ -2103,13 +2117,35 @@ mod tests {
 
     #[test]
     fn partial_frames_survive_timeouts() {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
+        let listener_result = TcpListener::bind(("127.0.0.1", 0));
+        assert!(
+            listener_result.is_ok(),
+            "listener bind failed: {:?}",
+            listener_result.err()
+        );
+        let Some(listener) = listener_result.ok() else {
+            return;
+        };
+        let local_addr_result = listener.local_addr();
+        assert!(
+            local_addr_result.is_ok(),
+            "listener local_addr failed: {:?}",
+            local_addr_result.err()
+        );
+        let Some(local_addr) = local_addr_result.ok() else {
+            return;
+        };
+        let port = local_addr.port();
         thread::spawn(move || {
             for stream in listener.incoming().take(1) {
-                let mut stream = stream.unwrap();
+                let Ok(mut stream) = stream else {
+                    return;
+                };
                 write_frame(&mut stream, "OK AUTH detail=present-token");
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let Ok(cloned) = stream.try_clone() else {
+                    return;
+                };
+                let mut reader = BufReader::new(cloned);
                 while let Some(line) = read_frame(&mut reader) {
                     let trimmed = line.trim();
                     if trimmed.starts_with("AUTH ") {
@@ -2137,8 +2173,102 @@ mod tests {
             .with_timeout(Duration::from_millis(50))
             .with_max_retries(3)
             .with_auth_token(TEST_AUTH_TOKEN);
-        let session = transport.attach(Role::Queen, None).unwrap();
-        let entries = transport.list(&session, "/proc/tests").unwrap();
+        let session_result = transport.attach(Role::Queen, None);
+        assert!(
+            session_result.is_ok(),
+            "attach failed: {:?}",
+            session_result.err()
+        );
+        let Some(session) = session_result.ok() else {
+            return;
+        };
+        let entries_result = transport.list(&session, "/proc/tests");
+        assert!(
+            entries_result.is_ok(),
+            "list failed: {:?}",
+            entries_result.err()
+        );
+        let Some(entries) = entries_result.ok() else {
+            return;
+        };
         assert_eq!(entries, vec!["selftest_quick.coh".to_owned()]);
+    }
+
+    #[test]
+    fn write_ignores_echo_ack_for_other_path() {
+        let listener_result = TcpListener::bind(("127.0.0.1", 0));
+        assert!(
+            listener_result.is_ok(),
+            "listener bind failed: {:?}",
+            listener_result.err()
+        );
+        let Some(listener) = listener_result.ok() else {
+            return;
+        };
+        let local_addr_result = listener.local_addr();
+        assert!(
+            local_addr_result.is_ok(),
+            "listener local_addr failed: {:?}",
+            local_addr_result.err()
+        );
+        let Some(local_addr) = local_addr_result.ok() else {
+            return;
+        };
+        let port = local_addr.port();
+        thread::spawn(move || {
+            for stream in listener.incoming().take(1) {
+                let Ok(mut stream) = stream else {
+                    return;
+                };
+                write_frame(&mut stream, "OK AUTH detail=present-token");
+                let Ok(cloned) = stream.try_clone() else {
+                    return;
+                };
+                let mut reader = BufReader::new(cloned);
+                while let Some(line) = read_frame(&mut reader) {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("AUTH ") {
+                        write_frame(&mut stream, "OK AUTH");
+                    } else if trimmed.starts_with("ATTACH") {
+                        write_frame(&mut stream, "OK ATTACH role=queen");
+                    } else if trimmed.starts_with("ECHO /actions/queue ") {
+                        // Emit a stale /queen/ctl ack before the matching /actions/queue ack.
+                        write_frame(
+                            &mut stream,
+                            "ERR ECHO reason=policy detail=denied path=/queen/ctl error=EPERM",
+                        );
+                        write_frame(&mut stream, "OK ECHO path=/actions/queue bytes=64");
+                        break;
+                    } else if trimmed == "PING" {
+                        write_frame(&mut stream, "PONG");
+                        write_frame(&mut stream, "OK PING reply=pong");
+                    }
+                }
+            }
+        });
+
+        let mut transport = TcpTransport::new("127.0.0.1", port)
+            .with_timeout(Duration::from_millis(100))
+            .with_max_retries(3)
+            .with_auth_token(TEST_AUTH_TOKEN);
+        let session_result = transport.attach(Role::Queen, None);
+        assert!(
+            session_result.is_ok(),
+            "attach failed: {:?}",
+            session_result.err()
+        );
+        let Some(session) = session_result.ok() else {
+            return;
+        };
+        let write_result = transport.write(
+            &session,
+            "/actions/queue",
+            br#"{"id":"a","target":"/queen/ctl","decision":"approve"}"#,
+        );
+        assert!(
+            write_result.is_ok(),
+            "write should ignore stale ack from another path: {:?}",
+            write_result.err()
+        );
     }
 }

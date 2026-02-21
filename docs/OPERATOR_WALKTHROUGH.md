@@ -6,7 +6,7 @@
 
 This walkthrough follows the as-built lifecycle control surfaces exposed by NineDoor and `cohsh`
 for 0.9.0-beta. It includes hive-gateway (REST multiplexer), live GPU publish, PEFT flows,
-host-sidecar telemetry, and Live Hive text overlays.
+host-sidecar telemetry, Multi-Hive federation via ticket relay, and Live Hive text overlays.
 For host tool usage, interdependencies, and policy/mount details, see
 [HOST_TOOLS.md](HOST_TOOLS.md).
 
@@ -24,6 +24,16 @@ For host tool usage, interdependencies, and policy/mount details, see
 - REST is a 1:1 projection of `LS`, `CAT`, and `ECHO`. It does not add new verbs or semantics.
 - REST clients inherit the gateway role (typically `queen`); there is no per-request ticket.
 - Keep the gateway bound to loopback and use an SSH tunnel for remote operators.
+
+## Multi-Hive federation model (0.9.0-beta)
+- Federation stays within existing `host-ticket/v1` surfaces (`/host/tickets/spec|status|deadletter`); no new VM-side verbs are introduced.
+- Keep single-writer discipline per logical hive. Federation relays intents between hives; it does not permit concurrent control writers for one hive.
+- `host-ticket-agent --relay` forwards only manifest-allowlisted actions (`ecosystem.host.federation.action_allowlist`) to configured peers.
+- Relay envelope fields are additive: `source_hive`, `target_hive`, `relay_hop`, `relay_correlation_id`.
+- `source_hive` and `target_hive` are pair-required; local flow deduplicates by `id + idempotency_key`, federated flow deduplicates by `id + idempotency_key + source_hive + target_hive`.
+- `relay_hop` is monotonic and bounded (`1..=32`); first forwarded hop is `1`.
+- `relay_correlation_id` is deterministic and aligns with the federated idempotency key by default.
+- Canonical term definitions are in [HOST_TOOLS.md#glossary](HOST_TOOLS.md#glossary).
 
 ## Where `--watch` data lands
 - `host-sidecar-bridge --watch` continuously refreshes `/host/*` (for example `/host/systemd/status`, `/host/nvidia/gpu/0/status`).
@@ -156,6 +166,52 @@ Use REST to automate an operator script without taking the console.
      --script scripts/cohsh/boot_v0.coh
    ```
    In a release bundle, replace the script path with your own `.coh` file.
+
+### E) Multi-Hive relay (source Mac -> target Jetson)
+Use this when source-hive operators need deterministic ticket execution on a remote hive.
+
+1. On source hive (`hive-mac`), run gateway + relay-capable ticket agent:
+   ```bash
+   COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN="$COH_AUTH_TOKEN" \
+     HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+     COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
+     ./bin/hive-gateway
+   ./bin/host-ticket-agent --rest-url http://127.0.0.1:8080 \
+     --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+     --relay --relay-wal out/host-ticket-agent/relay-wal.json
+   ```
+2. On target hive (`hive-jetson`), run gateway + ticket agent (no relay required):
+   ```bash
+   COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN="$COH_AUTH_TOKEN" \
+     HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+     COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
+     ./bin/hive-gateway
+   ./bin/host-ticket-agent --rest-url http://127.0.0.1:8080 \
+     --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"
+   ```
+3. From source, enqueue a federated ticket intent:
+   ```bash
+   curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
+     -H "Authorization: Bearer ${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" \
+     -H 'Content-Type: application/json' \
+     -d '{"path":"/host/tickets/spec","line":"{\"schema\":\"host-ticket/v1\",\"id\":\"fed-systemd-1\",\"idempotency_key\":\"fed-20260221-1\",\"action\":\"systemd.restart\",\"target\":\"/host/systemd/cohesix-agent.service/restart\",\"source_hive\":\"hive-mac\",\"target_hive\":\"hive-jetson\"}"}'
+   ```
+4. From source, open a read-only tunnel to the target gateway:
+   ```bash
+   ssh -L 8081:127.0.0.1:8080 <jetson-host>
+   ```
+5. Verify remote execution receipts on the target hive:
+   ```bash
+   curl -sS 'http://127.0.0.1:8081/v1/fs/cat?path=/host/tickets/status&max_bytes=4096' | jq .
+   ```
+   Expected: ticket result lines include `source_hive`, `target_hive`, and a positive `relay_hop`.
+6. Generate evidence timeline on the target to preserve relay provenance:
+   ```bash
+   ./bin/coh evidence pack --rest-url http://127.0.0.1:8081 \
+     --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+     --out ./out/evidence/federated --with-telemetry
+   ./bin/coh evidence timeline --in ./out/evidence/federated
+   ```
 
 ## FUSE mounts (`coh mount`) over TCP vs REST
 `coh mount` exposes a host filesystem view over Secure9P namespaces. It is a projection of `LS`/`CAT`/`ECHO` with manifest-derived bounds and policy allowlists enforced.
@@ -453,6 +509,14 @@ curl -sS http://127.0.0.1:8080/v1/meta/status | jq .
 Inspect broker counters (`control_waiters`, `telemetry_waiters`, `pool_exhausted`, `timeout_rejections`) before increasing publish rates.
 
 ---
+
+## Multi-Hive glossary terms
+- `Multi-Hive Federation`: Host-side ticket relay between independent hives using existing `host-ticket/v1` schemas and namespaces.
+- `Source Hive` (`source_hive`): Hive where the ticket intent is authored and initially queued.
+- `Target Hive` (`target_hive`): Remote hive selected for relay execution.
+- `Relay Hop` (`relay_hop`): Monotonic relay counter (`1..=32`) attached to federated ticket lines.
+- `Relay Correlation ID` (`relay_correlation_id`): Deterministic cross-hive correlation token, usually `id:idempotency_key:source_hive:target_hive`.
+- `Federated Idempotency Key`: Dedup identity `id + idempotency_key + source_hive + target_hive`.
 
 ## Troubleshooting quick hits
 - `ERR ECHO reason=policy ... EPERM`: queue an approval in `/actions/queue`, then retry the control write.

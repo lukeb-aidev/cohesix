@@ -33,36 +33,39 @@ pub fn build_result_line(
         relay_hop: spec.relay_hop,
         relay_correlation_id: spec.relay_correlation_id.clone(),
     };
-    let mut line = serde_json::to_string(&result)?;
-    if line.len() > max_line_bytes as usize {
-        let fallback = truncate_to_bytes(
-            result
-                .message
-                .as_deref()
-                .unwrap_or("status exceeded max_line_bytes"),
-            96,
-        );
-        let compact = HostTicketResult {
-            schema: result.schema,
-            id: result.id,
-            idempotency_key: result.idempotency_key,
-            action: result.action,
-            state: result.state,
-            message: Some(fallback),
-            source_hive: result.source_hive,
-            target_hive: result.target_hive,
-            relay_hop: result.relay_hop,
-            relay_correlation_id: result.relay_correlation_id,
-        };
-        line = serde_json::to_string(&compact)?;
+    if let Some(line) = encode_if_within_limit(&result, max_line_bytes)? {
+        return Ok(line);
     }
-    if line.len() > max_line_bytes as usize {
-        return Err(anyhow!(
-            "ticket result line exceeds max_line_bytes {}",
-            max_line_bytes
-        ));
+
+    let mut compact = result.clone();
+    compact.relay_correlation_id = None;
+    if let Some(line) = encode_if_within_limit(&compact, max_line_bytes)? {
+        return Ok(line);
     }
-    Ok(line)
+
+    if let Some(message) = compact.message.as_deref() {
+        compact.message = Some(truncate_to_bytes(message, 96));
+    }
+    if let Some(line) = encode_if_within_limit(&compact, max_line_bytes)? {
+        return Ok(line);
+    }
+
+    compact.message = None;
+    if let Some(line) = encode_if_within_limit(&compact, max_line_bytes)? {
+        return Ok(line);
+    }
+
+    compact.source_hive = None;
+    compact.target_hive = None;
+    compact.relay_hop = None;
+    if let Some(line) = encode_if_within_limit(&compact, max_line_bytes)? {
+        return Ok(line);
+    }
+
+    Err(anyhow!(
+        "ticket result line exceeds max_line_bytes {}",
+        max_line_bytes
+    ))
 }
 
 /// Append a rendered receipt line to the supplied path.
@@ -97,6 +100,17 @@ fn truncate_to_bytes(input: &str, max_bytes: usize) -> String {
         out.push(ch);
     }
     out
+}
+
+fn encode_if_within_limit(
+    result: &HostTicketResult,
+    max_line_bytes: u32,
+) -> Result<Option<String>> {
+    let line = serde_json::to_string(result)?;
+    if line.len() > max_line_bytes as usize {
+        return Ok(None);
+    }
+    Ok(Some(line))
 }
 
 #[cfg(test)]
@@ -138,5 +152,35 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("max_line_bytes"));
+    }
+
+    #[test]
+    fn line_builder_drops_relay_correlation_when_bounded() {
+        let spec = HostTicketSpec {
+            schema: "host-ticket/v1".to_owned(),
+            id: "fed-ticket-1".to_owned(),
+            idempotency_key: "idem-1".to_owned(),
+            action: "systemd.stop".to_owned(),
+            target: None,
+            args: Value::Null,
+            expires_unix_ms: None,
+            source_hive: Some("hive-a".to_owned()),
+            target_hive: Some("hive-b".to_owned()),
+            relay_hop: Some(2),
+            relay_correlation_id: Some("fed-ticket-1:idem-1:hive-a:hive-b".to_owned()),
+        };
+        let line = build_result_line(
+            &spec,
+            "host-ticket-result/v1",
+            "claimed",
+            Some("claimed by host-ticket-agent"),
+            224,
+        )
+        .unwrap_or_else(|err| unreachable!("build compact line: {err}"));
+        assert!(line.len() <= 224);
+        assert!(!line.contains("relay_correlation_id"));
+        assert!(line.contains("claimed by host-ticket-agent"));
+        assert!(line.contains("\"source_hive\":\"hive-a\""));
+        assert!(line.contains("\"target_hive\":\"hive-b\""));
     }
 }

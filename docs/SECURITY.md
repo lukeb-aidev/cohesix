@@ -33,6 +33,18 @@ The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; Q
   expand the audit surface for data races and timing side effects.
 - Back-pressure is explicit: overloaded tasks return deterministic `ERR ... reason=busy` instead of hidden queues or background work.
 
+## 1.2 Milestone 26 Identity/Hardware Baseline
+- `coh-rtc` enforces `uefi-aarch64` no-NIC gates: `hw.no_nic=true` and `features.net_console=false`.
+- Boot logs include deterministic no-network evidence (`manifest.hw.networking=disabled-m26-baseline`) so the Pi 4 Milestone 26 baseline is auditable without TCP reachability.
+- Attestation policy is manifest-gated through `hw.attestation.*`:
+- `tpm-only` requires a TPM declaration.
+- `tpm-or-dice` and `dice-only` are encoded deterministically and bound to the manifest fingerprint.
+- Root-task evaluates attestation before ticket registration. If attestation is enabled and policy guarantees are unsatisfied, boot aborts deterministically and emits audited reason codes.
+- `/proc/boot` includes `attestation.bound_manifest_sha256` and `attestation.evidence_sha256` when attestation is enabled.
+- Local diagnostics seat policy is manifest-gated through `hw.local_seat.*` and declared keyboard/display devices.
+- `hw.local_seat.required=true` is fail-fast: missing declarations or unavailable backend aborts boot before ticket material is published.
+- `hw.local_seat.required=false` degrades to serial-only diagnostics with explicit audited boot lines.
+
 ## 2. Console Hardening
 - A leaky-bucket rate limiter permits two consecutive authentication failures per 60-second window; the third failure triggers a
   90-second cooldown and surfaces `RateLimited` to both serial and TCP clients. The event pump layers an exponential back-off

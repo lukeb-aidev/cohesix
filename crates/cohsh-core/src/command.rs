@@ -25,7 +25,7 @@ pub const MAX_JSON_LEN: usize = 192;
 /// Maximum number of characters accepted for worker identifiers.
 pub const MAX_ID_LEN: usize = 32;
 /// Maximum number of characters accepted for echo payloads.
-pub const MAX_ECHO_LEN: usize = 128;
+pub const MAX_ECHO_LEN: usize = 224;
 
 const MAX_FAILED_LOGINS: u32 = 3;
 const RATE_LIMIT_WINDOW_MS: u64 = 60_000;

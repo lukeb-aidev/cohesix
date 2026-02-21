@@ -513,6 +513,8 @@ Host-only ticket executor that tails `/host/tickets/spec`, applies allowlisted a
 - Lifecycle receipts are append-only and bounded (`claimed`, `running`, `succeeded`, `failed`, `expired`).
 - Idempotency key is `id + idempotency_key`; terminal receipts deduplicate repeated ticket specs.
 - Federated relay idempotency key is `id + idempotency_key + source_hive + target_hive`.
+- Federation fields `source_hive` and `target_hive` are pair-required (`both set` or `both unset`).
+- `relay_hop` is optional but, when present, must be in range `1..=32`; relay forwarding increments it monotonically.
 - Relay forwarding is manifest-gated (`ecosystem.host.federation.*`) and only relays intents authored by the local hive.
 - Relay envelope fields are additive and optional: `source_hive`, `target_hive`, `relay_hop`, `relay_correlation_id`.
 - Supported action adapters: `gpu.lease.*`, `peft.*`, `systemd.*`, `docker.*`, `k8s.*`.
@@ -785,6 +787,52 @@ Notes:
 - For continuous telemetry, run `host-sidecar-bridge --watch --rest-url http://127.0.0.1:8080` while `hive-gateway` remains the console client.
 - For ticket-driven host actions, run `host-ticket-agent` through the same gateway (`--rest-url ...`) so ticket writes and receipts stay in one multiplexed control path.
 
+### 8) Multi-Hive federation relay (source + target)
+Goal: queue a host ticket on one hive and execute it on a federated peer with deterministic dedupe and receipts.
+Why this matters: validates manifest-gated relay (`ecosystem.host.federation`) without introducing new control-plane verbs.
+
+Source hive (`hive-mac`, local gateway `:8080`):
+```bash
+./qemu/run.sh
+COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN="$COH_AUTH_TOKEN" \
+  HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
+  ./bin/hive-gateway
+./bin/host-ticket-agent --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --relay --relay-wal out/host-ticket-agent/relay-wal.json
+```
+
+Target hive (`hive-jetson`, run directly on Jetson):
+```bash
+./qemu/run.sh
+COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN="$COH_AUTH_TOKEN" \
+  HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
+  ./bin/hive-gateway
+./bin/host-ticket-agent --rest-url http://127.0.0.1:8080 \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"
+```
+
+Submit one federated ticket on source:
+```bash
+curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
+  -H "Authorization: Bearer ${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d '{"path":"/host/tickets/spec","line":"{\"schema\":\"host-ticket/v1\",\"id\":\"fed-systemd-1\",\"idempotency_key\":\"fed-20260221-1\",\"action\":\"systemd.restart\",\"target\":\"/host/systemd/cohesix-agent.service/restart\",\"source_hive\":\"hive-mac\",\"target_hive\":\"hive-jetson\"}"}'
+```
+
+Create a read-only tunnel from source for verification:
+```bash
+ssh -L 8081:127.0.0.1:8080 <jetson-host>
+```
+
+Verify receipt fields on target via the tunnel:
+```bash
+curl -sS 'http://127.0.0.1:8081/v1/fs/cat?path=/host/tickets/status&max_bytes=4096' | jq .
+```
+Expected: status lines include `source_hive`, `target_hive`, and `relay_hop`; repeated spec submission with the same federated key deduplicates.
+
 ## Policy & Dependency Diagrams
 These diagrams summarize the policy gating and host-tool interdependencies that most often surprise new users.
 
@@ -871,6 +919,7 @@ flowchart TD
 - `Evidence Timeline`: Offline correlation output from `coh evidence timeline` (`timeline.ndjson`, `timeline.md`) generated from an evidence pack.
 - `Export Window` (`/queen/export/ctl`): Append-only control for opening/closing bounded export periods.
 - `Failover` (`0.9.0-beta`): Supported as single-writer active/standby with host-orchestrated cutover; active/active multi-queen writes to one logical hive are not supported.
+- `Federated Idempotency Key`: Cross-hive dedupe identity `id + idempotency_key + source_hive + target_hive`.
 - `Feature Gate`: Manifest toggle that enables/disables namespaces (for example `/policy`, `/audit`, `/replay`, `/updates`, `/models`).
 - `Fencing`: Controls that prevent split-brain by ensuring only one writer can mutate control paths at a time.
 - `Fid`: 9P file identifier scoped to a session.
@@ -896,6 +945,7 @@ flowchart TD
 - `Mock Mode`: In-process backend; no VM or TCP console required.
 - `Models Registry` (`/gpu/models/*` or `/models/*`): Host-authored model manifests and active pointers (manifest-gated).
 - `Mount`: FUSE view of Secure9P paths; long-running process.
+- `Multi-Hive Federation`: Host-side relay of allowlisted `host-ticket/v1` intents across independent hives, while preserving single-writer behavior per hive.
 - `msize`: Negotiated Secure9P max message size (≤ 8192).
 - `Mutating Routes` (REST): Gateway endpoints that change VM state (for example `POST /v1/fs/echo`); require request-auth.
 - `Namespace`: Role-scoped view of paths exposed by NineDoor.
@@ -911,6 +961,8 @@ flowchart TD
 - `QEMU` (aarch64/virt): Reference dev/CI VM target.
 - `Queen`: Hive orchestrator role with authority over control files and worker lifecycle.
 - `ReplayFS` (`/replay/*`): Append-only replay control and status (manifest-gated).
+- `Relay Correlation ID` (`relay_correlation_id`): Deterministic token used to correlate the same federated intent across spec/status/evidence streams.
+- `Relay Hop` (`relay_hop`): Monotonic cross-hive forwarding counter; values are bounded to `1..=32`.
 - `REST Mount Exclusivity` (`coh mount --rest-url`): Exactly one active FUSE mount per gateway URL on a host; additional mounts must wait until unmount.
 - `Role Ticket`: Role-scoped capability token minted for queen/worker roles.
 - `Root Task`: seL4 root task hosting NineDoor, console listeners, and ticket issuance.
@@ -922,6 +974,7 @@ flowchart TD
 - `Sharding Legacy Alias`: Optional `/worker/<id>/telemetry` alias for backward compatibility when `sharding.legacy_worker_alias = true`.
 - `Short Write`: Transport-level partial write handling (reject or bounded retry).
 - `Single-Writer`: Operational rule that exactly one active writable control path/queen is used per logical hive.
+- `Source Hive` (`source_hive`): Origin hive that authored and queued a federated ticket intent.
 - `Tag Window`: Manifest-bounded limit on in-flight 9P tags per session.
 - `Telemetry`: Append-only worker data stored under `/worker/*` or `/shard/*/worker/*`.
 - `Telemetry Segment`: OS-named ingest segment under `/queen/telemetry/<device_id>/seg/`.
@@ -931,6 +984,7 @@ flowchart TD
 - `Ticket Scope`: Optional path/rate limits attached to a ticket.
 - `Ticket Secret`: Host-only secret used to MAC tickets.
 - `Ticket Subject`: Worker identity bound to a ticket.
+- `Target Hive` (`target_hive`): Destination peer hive selected for federated relay execution.
 - `Trace/Replay`: Deterministic logs and snapshots used for UI replay/testing.
 - `UI Providers`: Manifest-gated observability nodes under `/proc`.
 - `WAL (Write-Ahead Log)`: Host-side intent log written before control mutations so unapplied entries can be replayed safely after cutover.

@@ -1,0 +1,476 @@
+# Author: Lukas Bower
+# Purpose: Define the root-task manifest consumed by coh-rtc.
+# Copyright 2026 Lukas Bower
+[meta]
+author = "Lukas Bower"
+purpose = "UEFI aarch64 root-task manifest input for coh-rtc."
+
+[root_task]
+schema = "1.5"
+
+[root_task.affinity]
+enabled = true
+max_cores = 4
+authority_core = 0
+ninedoor_cores = [1]
+provider_cores = [2, 3]
+worker_cores = [2, 3]
+
+[profile]
+name = "uefi-aarch64"
+kernel = true
+
+[event_pump]
+tick_ms = 5
+
+[secure9p]
+msize = 8192
+walk_depth = 8
+tags_per_session = 16
+batch_frames = 1
+
+[secure9p.short_write]
+policy = "reject"
+
+[cas]
+enable = true
+
+[cas.store]
+chunk_bytes = 128
+
+[cas.delta]
+enable = true
+
+[cas.signing]
+required = true
+key_path = "resources/fixtures/cas_signing_key.hex"
+
+[cache]
+kernel_ops = true
+dma_clean = true
+dma_invalidate = true
+unify_instructions = false
+
+[features]
+net_console = false
+serial_console = true
+std_console = false
+std_host_tools = false
+
+[hw]
+secure_boot = false
+no_nic = true
+
+[hw.attestation]
+enabled = true
+policy = "tpm-or-dice"
+evidence_max_bytes = 256
+
+[hw.local_seat]
+enabled = true
+required = false
+keyboard_device = "usb-kbd0"
+display_device = "hdmi0"
+line_bytes = 160
+buffer_lines = 128
+
+[[hw.devices]]
+kind = "uart"
+id = "uart0"
+required = true
+
+[[hw.devices]]
+kind = "rtc"
+id = "rtc0"
+required = true
+
+[[hw.devices]]
+kind = "tpm"
+id = "tpm0"
+required = false
+
+[[hw.devices]]
+kind = "keyboard"
+id = "usb-kbd0"
+required = false
+
+[[hw.devices]]
+kind = "display"
+id = "hdmi0"
+required = false
+
+[namespaces]
+role_isolation = true
+
+[[namespaces.mounts]]
+service = "logs"
+target = ["log"]
+
+[sharding]
+enabled = true
+shard_bits = 8
+legacy_worker_alias = true
+
+[telemetry]
+ring_bytes_per_worker = 1024
+frame_schema = "legacy-plaintext"
+
+[telemetry.cursor]
+retain_on_boot = false
+
+[telemetry_ingest]
+max_segments_per_device = 4
+max_bytes_per_segment = 131072
+max_total_bytes_per_device = 524288
+max_reference_entries_per_segment = 1024
+max_reference_manifest_bytes_per_segment = 131072
+max_reference_bytes_per_segment = 1073741824
+eviction_policy = "evict-oldest"
+
+[lifecycle]
+initial_state = "BOOTING"
+
+[[lifecycle.auto_transitions]]
+from = "BOOTING"
+to = "ONLINE"
+
+[control_plane.schedule]
+enable = true
+queue_max_entries = 256
+ctl_max_bytes = 8192
+
+[control_plane.lease]
+enable = true
+active_max_entries = 256
+preemptions_max_entries = 256
+ctl_max_bytes = 8192
+
+[control_plane.export]
+enable = true
+ctl_max_bytes = 2048
+
+[observability.proc_9p]
+sessions = true
+outstanding = true
+short_writes = true
+sessions_bytes = 8192
+outstanding_bytes = 128
+short_writes_bytes = 128
+
+[observability.proc_9p_session]
+active = true
+state = true
+since_ms = true
+owner = true
+active_bytes = 128
+state_bytes = 64
+since_ms_bytes = 64
+owner_bytes = 96
+
+[observability.proc_ingest]
+p50_ms = true
+p95_ms = true
+backpressure = true
+dropped = true
+queued = true
+watch = true
+p50_ms_bytes = 64
+p95_ms_bytes = 64
+backpressure_bytes = 64
+dropped_bytes = 64
+queued_bytes = 64
+watch_max_entries = 16
+watch_line_bytes = 192
+watch_min_interval_ms = 50
+latency_samples = 32
+latency_tolerance_ms = 5
+counter_tolerance = 1
+
+[observability.proc_root]
+reachable = true
+last_seen_ms = true
+cut_reason = true
+reachable_bytes = 32
+last_seen_ms_bytes = 64
+cut_reason_bytes = 64
+
+[observability.proc_pressure]
+busy = true
+quota = true
+cut = true
+policy = true
+busy_bytes = 64
+quota_bytes = 64
+cut_bytes = 64
+policy_bytes = 64
+
+[observability.proc_schedule]
+summary = true
+queue = true
+summary_bytes = 128
+queue_bytes = 256
+
+[observability.proc_lease]
+summary = true
+active = true
+preemptions = true
+summary_bytes = 160
+active_bytes = 256
+preemptions_bytes = 256
+
+[ui_providers.proc_9p]
+sessions = true
+outstanding = true
+short_writes = true
+
+[ui_providers.proc_ingest]
+p50_ms = true
+p95_ms = true
+backpressure = true
+
+[ui_providers.policy_preflight]
+req = false
+diff = false
+
+[ui_providers.updates]
+manifest = true
+status = true
+
+[client_policies.cohsh.pool]
+control_sessions = 2
+telemetry_sessions = 24
+
+[client_policies.cohsh.tail]
+poll_ms_default = 1000
+poll_ms_min = 250
+poll_ms_max = 10000
+
+[client_policies.cohsh.host_telemetry]
+nvidia_poll_ms = 1000
+systemd_poll_ms = 2000
+docker_poll_ms = 2000
+k8s_poll_ms = 5000
+
+[client_policies.coh.mount]
+root = "/"
+allowlist = ["/proc", "/queen", "/worker", "/log", "/gpu", "/host"]
+
+[client_policies.coh.telemetry]
+root = "/queen/telemetry"
+max_devices = 32
+max_segments_per_device = 4
+max_bytes_per_segment = 131072
+max_total_bytes_per_device = 524288
+
+[client_policies.coh.run.lease]
+schema = "gpu-lease/v1"
+active_state = "ACTIVE"
+max_bytes = 1024
+
+[client_policies.coh.run.breadcrumb]
+schema = "gpu-breadcrumb/v1"
+max_line_bytes = 512
+max_command_bytes = 256
+
+[client_policies.coh.peft.export]
+root = "/queen/export/lora_jobs"
+max_telemetry_bytes = 131072
+max_policy_bytes = 8192
+max_base_model_bytes = 1024
+
+[client_policies.coh.peft.import]
+registry_root = "out/model_registry"
+max_adapter_bytes = 67108864
+max_lora_bytes = 65536
+max_metrics_bytes = 65536
+max_manifest_bytes = 8192
+
+[client_policies.coh.peft.activate]
+max_model_id_bytes = 128
+max_state_bytes = 4096
+
+[client_policies.retry]
+max_attempts = 3
+backoff_ms = 200
+ceiling_ms = 2000
+timeout_ms = 5000
+
+[client_policies.heartbeat]
+interval_ms = 15000
+
+[client_policies.trace]
+max_bytes = 1048576
+
+[client_paths]
+queen_ctl = "/queen/ctl"
+queen_lifecycle_ctl = "/queen/lifecycle/ctl"
+queen_schedule_ctl = "/queen/schedule/ctl"
+queen_lease_ctl = "/queen/lease/ctl"
+queen_export_ctl = "/queen/export/ctl"
+policy_ctl = "/policy/ctl"
+log = "/log/queen.log"
+
+[swarmui]
+ticket_scope = "per-ticket"
+
+[swarmui.cache]
+enabled = false
+max_bytes = 262144
+ttl_s = 3600
+
+[swarmui.hive]
+frame_cap_fps = 30
+step_ms = 16
+lod_zoom_out = 0.7
+lod_zoom_in = 1.25
+lod_event_budget = 512
+snapshot_max_events = 4096
+overlay_lines = 3
+detail_lines = 50
+line_cap_bytes = 160
+per_worker_bytes = 2048
+pending_lines_per_worker = 64
+pending_event_cap = 4096
+poll_workers_per_tick = 32
+status_poll_ms = 500
+degrade_pressure = 1.0
+
+[swarmui.paths]
+telemetry_root = "/worker"
+proc_ingest_root = "/proc/ingest"
+worker_root = "/worker"
+namespace_roots = ["/proc", "/queen", "/worker", "/log", "/gpu"]
+
+[ticket_limits]
+max_scopes = 8
+max_scope_path_len = 128
+max_scope_rate_per_s = 64
+bandwidth_bytes = 131072
+cursor_resumes = 16
+cursor_advances = 256
+
+[[tickets]]
+role = "queen"
+secret = "bootstrap"
+
+[[tickets]]
+role = "worker-heartbeat"
+secret = "worker"
+
+[[tickets]]
+role = "worker-gpu"
+secret = "worker-gpu"
+
+[[tickets]]
+role = "worker-bus"
+secret = "worker-bus"
+
+[[tickets]]
+role = "worker-lora"
+secret = "worker-lora"
+
+[sidecars.modbus]
+enable = false
+mount_at = "/bus"
+
+[sidecars.dnp3]
+enable = false
+mount_at = "/bus"
+
+[sidecars.lora]
+enable = false
+mount_at = "/lora"
+
+[ecosystem.host]
+enable = true
+providers = ["systemd", "k8s", "docker", "nvidia"]
+mount_at = "/host"
+
+[ecosystem.host.tickets]
+enable = true
+request_schema = "host-ticket/v1"
+result_schema = "host-ticket-result/v1"
+max_line_bytes = 2048
+action_allowlist = [
+  "gpu.lease.grant",
+  "gpu.lease.renew",
+  "gpu.lease.release",
+  "peft.import",
+  "peft.activate",
+  "peft.rollback",
+  "systemd.start",
+  "systemd.stop",
+  "systemd.restart",
+  "systemd.status-check",
+  "docker.restart",
+  "docker.stop",
+  "docker.status-check",
+  "k8s.cordon",
+  "k8s.drain",
+  "k8s.lease.sync",
+]
+lifecycle = ["queued", "claimed", "running", "succeeded", "failed", "expired"]
+
+[ecosystem.host.federation]
+enable = true
+local_hive = "hive-a"
+action_allowlist = [
+  "gpu.lease.grant",
+  "gpu.lease.renew",
+  "gpu.lease.release",
+  "peft.import",
+  "peft.activate",
+  "peft.rollback",
+  "systemd.start",
+  "systemd.stop",
+  "systemd.restart",
+  "systemd.status-check",
+  "docker.restart",
+  "docker.stop",
+  "docker.status-check",
+  "k8s.cordon",
+  "k8s.drain",
+  "k8s.lease.sync",
+]
+relay_queue_max_entries = 256
+relay_queue_max_bytes = 32768
+wal_max_entries = 1024
+wal_max_bytes = 524288
+relay_timeout_ms = 2000
+
+[[ecosystem.host.federation.peers]]
+name = "hive-b"
+rest_url = "http://127.0.0.1:8081"
+auth_ref = "COHESIX_RELAY_HIVE_B_TOKEN"
+
+[[ecosystem.host.federation.peers]]
+name = "hive-c"
+rest_url = "http://127.0.0.1:8082"
+auth_ref = "COHESIX_RELAY_HIVE_C_TOKEN"
+
+[ecosystem.audit]
+enable = false
+journal_max_bytes = 8192
+decisions_max_bytes = 4096
+replay_enable = false
+replay_max_entries = 64
+replay_ctl_max_bytes = 1024
+replay_status_max_bytes = 1024
+
+[ecosystem.policy]
+enable = true
+queue_max_entries = 256
+queue_max_bytes = 8192
+ctl_max_bytes = 2048
+status_max_bytes = 512
+
+[[ecosystem.policy.rules]]
+id = "queen-ctl"
+target = "/queen/ctl"
+
+[[ecosystem.policy.rules]]
+id = "systemd-restart"
+target = "/host/systemd/*/restart"
+
+[ecosystem.models]
+enable = false

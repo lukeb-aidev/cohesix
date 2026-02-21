@@ -14,6 +14,7 @@ clap = { workspace = true }
 coh = { path = "../coh" }
 cohesix-ticket = { workspace = true }
 cohsh = { path = "../cohsh", features = ["tcp", "rest"] }
+cohsh-core = { workspace = true }
 host-sidecar-bridge = { path = "../host-sidecar-bridge" }
 nine-door = { path = "../nine-door" }
 serde = { workspace = true }
