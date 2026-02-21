@@ -103,6 +103,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25h](#25h) | Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) | Pending |
 | [26](#26) | UEFI Bare-Metal Boot & Device Identity | Pending |
 | [26a](#26a) | UEFI Networking Baseline (Pi 4 GENETv5 + Static IPv4) | Pending |
+| [26b](#26b) | UEFI DHCP Baseline (Pi 4 NIC + Wi-Fi Policy) | Pending |
 | [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [29](#29) | Edge Local Status (UEFI Host Tool) | Pending |
@@ -5883,6 +5884,7 @@ To meet hardware deployment goals (Edge §3 retail hubs, Edge §8 defense ISR, S
 **Non-negotiable constraint:**  
 - No networking, 9P semantics, or console behaviors may diverge between VM and UEFI profiles except where explicitly marked as hardware-profile-specific in `ARCHITECTURE.md`.
 - Any divergence must be documented and schema-gated.
+- Backward compatibility is mandatory across this UEFI rollout: Milestones 26, 26a, and 26b must not break existing QEMU workflows on macOS (`hvf`/`tcg`) or Linux (`kvm`/`tcg`) for `aarch64/virt`; any allowed divergence must be explicitly profile-gated and documented.
 - UEFI firmware networking is out of scope; all TCP behavior remains post-seL4 boot in root-task.
 - Local diagnostics on Pi 4 (`uefi-aarch64`) must reuse the existing root-console parser and command semantics; no new shell grammar or in-VM protocol is permitted.
 - The local diagnostics seat is intentionally primitive: USB keyboard input and HDMI text output only. No windowing, mouse, compositor, terminal emulation layer, or graphics stack is allowed.
@@ -5986,6 +5988,7 @@ Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads
 - `hw.local_seat.required` enforces deterministic fail-fast semantics when local-seat initialisation cannot be satisfied.
 - On Pi 4 during Milestone 26, networking remains intentionally disabled and TCP console reachability is not required for a successful boot.
 - Root-task post-handoff paths use HAL-only device access; no direct EFI protocol/service calls exist in runtime code.
+- Existing macOS/Linux QEMU bring-up and regression scripts continue to pass unchanged (other than explicitly documented profile-gated hardware evidence steps).
 - Full Regression Pack passes under QEMU and (where applicable) on hardware; any divergence is treated as a bug unless explicitly documented.
 
 ---
@@ -6089,9 +6092,10 @@ Milestone 26 establishes UEFI boot, identity, and a local diagnostics seat with 
 **Non-negotiable constraints:**
 - No new in-VM listeners or protocols; the authenticated root-task TCP console remains the only in-VM TCP listener.
 - Milestone 26a is the first milestone where Pi 4 TCP console reachability is expected; Milestone 26 must remain valid without NIC/TCP on Pi 4.
-- DHCP is out of scope for 26a and remains Milestone 30 work; 26a uses static IPv4 only.
+- DHCP is intentionally out of scope for 26a and is delivered in Milestone 26b; 26a uses static IPv4 only.
 - Any VM vs UEFI networking differences must be profile-gated, manifest-defined, and documented.
 - Driver implementation must remain HAL-bound with bounded queues and deterministic memory budgets.
+- Backward compatibility is mandatory: 26a network changes must preserve existing macOS/Linux QEMU console and networking workflows unless explicitly profile-gated for Pi 4 `uefi-aarch64`.
 
 ### Prerequisite
 - Milestone **26** completed (UEFI boot chain + device identity attestation + local diagnostics seat + UEFI/HAL boundary enforcement).
@@ -6131,7 +6135,8 @@ Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` G
 - `cohsh --transport tcp` succeeds against the configured static address with no console grammar or ACK/ERR/END drift.
 - Invalid UEFI static IPv4 manifest settings are rejected deterministically (compiler validation and/or early-boot fail-fast).
 - Pi 4 26a validation explicitly demonstrates transition from Milestone 26 no-NIC baseline to 26a NIC-enabled boot using profile-gated configuration only.
-- No DHCP client path is introduced in 26a; DHCP remains scoped to Milestone 30.
+- No DHCP client path is introduced in 26a; DHCP remains scoped to Milestone 26b.
+- Existing macOS/Linux QEMU test and operator flows remain backward compatible with pre-26 behavior.
 - Full regression pack remains green on QEMU; any profile-gated divergence is explicitly documented and fixture-backed.
 
 ### Compiler touchpoints
@@ -6188,6 +6193,143 @@ Checks:
   - Console attach/tail/test flows are unchanged except for profile-gated backend/address selection.
 Deliverables:
   - Reproducible Pi 4 UEFI network bring-up evidence and updated docs.
+```
+
+---
+
+## Milestone 26b — UEFI DHCP Baseline (Pi 4 NIC + Wi-Fi Policy) <a id="26b"></a>
+[Milestones](#Milestones)
+
+**Why now (operator continuity):**  
+Milestone 26a brings up deterministic static IPv4 on Pi 4 wired NIC. Milestone 26b introduces a minimal DHCP path so operators can boot and diagnose in less-controlled edge environments without hand-editing static addresses, while preserving `no_std`, bounded behavior, and existing console/9P semantics.
+
+**Non-negotiable constraints:**
+- DHCP implementation must be pure Rust, `no_std`, and intentionally bare-bones (DHCPv4 only: DISCOVER/OFFER/REQUEST/ACK plus bounded timeout/retry logic).
+- No new in-VM listeners or protocols are permitted; DHCP is only a client-side address acquisition path for existing network surfaces.
+- Post-seL4 runtime must remain HAL-only; no direct UEFI Boot Services/Runtime Services calls are allowed in root-task.
+- NIC and Wi-Fi DHCP behavior must be policy-configurable for `uefi-aarch64` through compiler-validated profile settings sourced from UEFI boot configuration when available; if firmware does not expose usable settings, manifest defaults are authoritative.
+- Wi-Fi scope is minimal diagnostics connectivity only (join + DHCP + existing TCP console path); no in-VM supplicant stack, roaming framework, or broad feature surface.
+- Milestone 26b includes a new profile-gated Pi 4 CYW43xx Wi-Fi driver path; all Wi-Fi dataplane/control-plane access must be HAL-backed (SDIO, power/reset, IRQ/OOB, firmware handoff hooks) with no direct MMIO or firmware-service calls outside HAL.
+- CYW43xx design references must be used in this order for architecture review: OpenBSD `bwfm` -> Zephyr/Infineon WHD HAL split -> Linux `brcmfmac` SDIO edge-case behavior. These are design references only; no source copy/paste is permitted.
+- Backward compatibility is mandatory: Milestone 26b must not break existing macOS/Linux QEMU workflows, fixtures, or transport semantics.
+
+### Prerequisite
+- Milestone **26a** completed (Pi 4 GENETv5 + static IPv4 + profile-gated NIC bring-up).
+
+### Goal
+Add a deterministic `no_std` DHCP client core that can operate on Pi 4 wired NIC and profile-gated Wi-Fi paths, with bounded UEFI-configurable network policy selection where available, while keeping all pre-existing QEMU flows backward compatible on macOS and Linux.
+
+### Deliverables
+- **Minimal DHCP core (`no_std`)**
+  - Add a bounded DHCPv4 client core in root-task with strict packet validation, deterministic timers, bounded retransmits, and no dynamic protocol extensions beyond required lease fields.
+  - Keep memory usage fixed and auditable; no unbounded allocations, no background worker threads, and no protocol parser ambiguity.
+
+- **Interface binding: wired + Wi-Fi (profile-gated)**
+  - Wire DHCP core to existing Pi 4 GENETv5 backend.
+  - Add a profile-gated Wi-Fi association + link-up path for Pi 4 CYW43xx-class devices sufficient to reach DHCP (design remains HAL-bound and capability-scoped).
+  - Introduce a dedicated CYW43xx Wi-Fi backend wired through HAL traits and existing `NetBackend` policy selection; no alternate ad-hoc control path is allowed.
+  - Record implementation provenance in docs (OpenBSD `bwfm` design shape, Zephyr/WHD HAL layering, Linux `brcmfmac` recovery/link edge cases) and enforce reference-only usage.
+  - Maintain a single network control-plane surface: existing root console + NineDoor behavior only.
+
+- **UEFI-configurable network policy**
+  - Extend manifest/compiler schema with bounded policy fields for `uefi-aarch64`, including:
+    - network mode (`off`, `static`, `dhcp`),
+    - interface policy (`wired`, `wifi`, `auto`),
+    - DHCP timing bounds and retry limits.
+  - When firmware/boot setup can provide network policy inputs, capture them pre-handoff and normalize through manifest/DTB-generated structures validated by `coh-rtc`.
+  - Preserve deterministic fallback behavior when UEFI policy inputs are missing or invalid.
+
+- **Backward-compatibility guardrails**
+  - Keep QEMU `aarch64/virt` behavior for macOS/Linux unchanged by default (existing static/dev-virt flows must keep working with no required operator command changes).
+  - Add explicit regression checks proving 26/26a/26b additions are profile-gated and do not alter prior QEMU console grammar, ACK/ERR/END behavior, or existing transport fixtures.
+
+### Commands
+- `cargo check -p root-task`
+- `cargo test -p root-task net:: -- --nocapture`
+- `cargo test -p coh-rtc`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
+- `scripts/uefi/qemu-uefi.sh --console serial --tcp-port 31337`
+- `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
+
+### Checks (DoD)
+- Pi 4 wired path acquires a DHCP lease within bounded retries/timeouts and exposes acquired config through existing diagnostics surfaces.
+- Pi 4 Wi-Fi path (when enabled in profile and credentials are present) reaches link-up and acquires DHCP with deterministic failure modes and audited errors.
+- Invalid DHCP options, malformed offers, lease overflows, and timeout exhaustion fail safely and deterministically.
+- UEFI-configurable network policy (where available) is honored through compiler-validated handoff structures; missing/unsupported firmware policy cleanly falls back to manifest defaults.
+- Existing macOS/Linux QEMU workflows remain backward compatible, including serial/TCP console behavior and existing regression fixtures.
+- CYW43xx Wi-Fi path demonstrates HAL-only access in runtime code and tests; no direct MMIO/UEFI service usage exists outside HAL-owned modules.
+- Full regression pack remains green on QEMU; any profile-gated divergence is explicitly documented and fixture-backed.
+
+### Compiler touchpoints
+- `coh-rtc` adds bounded `uefi-aarch64` network policy fields for mode/interface selection and DHCP retry/timing limits.
+- Validation enforces:
+  - policy bounds and enum validity,
+  - interface/profile compatibility (wired vs Wi-Fi declarations),
+  - deterministic fallback policy when optional UEFI-provided inputs are absent.
+- Generated snippets in architecture/interfaces/security docs include the new policy and DHCP bounds so docs-as-built remains authoritative.
+
+### Task Breakdown
+```
+Title/ID: m26b-dhcp-core-nostd
+Goal: Implement bare-bones, bounded DHCPv4 client logic for root-task networking.
+Inputs: apps/root-task/src/net/*, docs/INTERFACES.md, docs/SECURITY.md.
+Changes:
+  - apps/root-task/src/net/dhcp.rs — deterministic DHCP state machine and packet parser (DISCOVER/OFFER/REQUEST/ACK only).
+  - apps/root-task/src/net/mod.rs — integrate DHCP mode into existing net bootstrap sequencing.
+Commands:
+  - cargo check -p root-task
+  - cargo test -p root-task --features "kernel net-console" dhcp
+Checks:
+  - Lease acquisition and timeout paths are bounded and test-covered.
+Deliverables:
+  - `no_std` DHCP core integrated with deterministic diagnostics.
+
+Title/ID: m26b-uefi-net-policy
+Goal: Make wired/Wi-Fi DHCP policy compiler-authoritative with optional UEFI-provided inputs.
+Inputs: configs/root_task.toml, tools/coh-rtc, apps/root-task/src/generated, docs/HARDWARE_BRINGUP.md.
+Changes:
+  - tools/coh-rtc/src/* — add policy IR fields (`mode`, `interface`, DHCP bounds) and validation.
+  - apps/root-task/src/generated/* — regenerated network policy constants/artifacts.
+  - docs/HARDWARE_BRINGUP.md — document UEFI policy source, fallback rules, and expected boot lines.
+Commands:
+  - cargo test -p coh-rtc
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+Checks:
+  - Invalid policy settings fail deterministically; valid settings generate stable artifacts.
+Deliverables:
+  - Manifest/UEFI-policy-driven DHCP mode selection with docs-as-built parity.
+
+Title/ID: m26b-pi4-wifi-dhcp-baseline
+Goal: Add minimal Pi 4 Wi-Fi path sufficient for DHCP-backed diagnostics connectivity.
+Inputs: apps/root-task/src/drivers/*, apps/root-task/src/hal/*, docs/ARCHITECTURE.md, docs/SECURITY.md.
+Changes:
+  - apps/root-task/src/drivers/* — add HAL-bound CYW43xx-class Wi-Fi bring-up path with bounded join/retry behavior and no direct MMIO outside HAL traits.
+  - apps/root-task/src/net/* — bind Wi-Fi link state into shared DHCP/bootstrap flow.
+  - docs/ARCHITECTURE.md + docs/SECURITY.md — update network backend matrix, bounds, threat notes, and design-reference provenance (`bwfm` -> Zephyr/WHD HAL split -> `brcmfmac` edge-case guidance; no code lift).
+Commands:
+  - cargo check -p root-task
+  - cargo test -p root-task wifi:: -- --nocapture
+  - rg -n "EFI_|boot_services|runtime_services|uefi::" apps/root-task/src tools/coh-rtc/src
+Checks:
+  - Wi-Fi join + DHCP works when enabled and declared; failure modes remain deterministic and auditable.
+  - Wi-Fi runtime/device access remains HAL-only; any non-HAL direct access path fails review.
+Deliverables:
+  - Profile-gated CYW43xx Wi-Fi DHCP diagnostics path for Pi 4 with explicit reference-only provenance documentation.
+
+Title/ID: m26b-qemu-compat-gate
+Goal: Prove 26/26a/26b changes do not break macOS/Linux QEMU backward compatibility.
+Inputs: scripts/qemu-run.sh, scripts/uefi/qemu-uefi.sh, regression fixtures, docs/TEST_PLAN.md.
+Changes:
+  - docs/TEST_PLAN.md — add explicit compatibility matrix checks for macOS/Linux QEMU after 26/26a/26b.
+  - scripts/ci/* — add guard checks that fail on console/protocol drift for existing QEMU fixtures.
+Commands:
+  - scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none
+  - scripts/uefi/qemu-uefi.sh --console serial
+Checks:
+  - Existing QEMU fixtures on macOS/Linux remain passing with no operator-facing behavior regressions.
+Deliverables:
+  - Auditable compatibility evidence for the UEFI rollout milestones.
 ```
 
 ---
@@ -6592,8 +6734,8 @@ Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-t
   - `manifest.json` and `manifest.sha256`
   - embedded, signed fabric bootstrap manifest (≥2 endpoints, root trust anchors)
 - ENA driver (adminq + single TX/RX queue) in root-task.
-- Minimal DHCP/TCP/TLS client in root-task (post-seL4), no firmware networking.
-- Diskless bootstrap path **after seL4**: ENA → DHCP → TCP → TLS → 9door mount.
+- Reuse the Milestone 26b `no_std` DHCP core and add ENA binding + TCP/TLS client integration in root-task (post-seL4), with no firmware networking.
+- Diskless bootstrap path **after seL4**: ENA → DHCP (26b core) → TCP → TLS → 9door mount.
 - Optional IMDSv2 bootstrap (instance identity + config) using a bounded, allowlisted HTTP client over the existing TCP stack. No listeners; no background refresh loop.
 - AMI registration tooling for Arm64 (`uefi` / `uefi-preferred`).
 - Documentation in `docs/AWS_AMI.md` covering boot path, failure modes, and recovery.
@@ -6668,7 +6810,7 @@ Title/ID: m30-net-bootstrap
 Goal: Network bootstrap to fabric (post-seL4, in root-task).
 Inputs: apps/root-task net stack, TLS helpers, docs/AWS_AMI.md.
 Changes:
-- apps/root-task/src/net/dhcp.rs — bounded DHCP client.
+- apps/root-task/src/net/dhcp.rs — adapt/reuse Milestone 26b DHCP core for ENA link and AWS-specific bounds.
 - apps/root-task/src/net/tcp.rs — TCP bring-up for long-lived sessions.
 - apps/root-task/src/net/tls.rs — fabric-auth TLS handshake.
 - apps/root-task/src/net/bootstrap.rs — deterministic sequencing and retries.
