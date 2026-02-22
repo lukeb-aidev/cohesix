@@ -110,6 +110,7 @@ use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
 #[cfg(feature = "kernel")]
 use crate::debug_uart::debug_uart_str;
+use crate::local_seat::{LocalSeatRuntime, KEYBOARD_POLL_CHUNK_BYTES};
 #[cfg(feature = "kernel")]
 use crate::log_buffer;
 #[cfg(feature = "net-console")]
@@ -1044,6 +1045,7 @@ where
     bootstrap_handler: Option<&'a mut dyn BootstrapMessageHandler>,
     #[cfg(feature = "kernel")]
     console_context: Option<ConsoleContext>,
+    local_seat: Option<&'a mut LocalSeatRuntime>,
     banner_emitted: bool,
 }
 
@@ -1116,6 +1118,7 @@ where
             bootstrap_handler: None,
             #[cfg(feature = "kernel")]
             console_context: None,
+            local_seat: None,
             banner_emitted: false,
         }
     }
@@ -1132,6 +1135,12 @@ where
     #[cfg(feature = "kernel")]
     pub fn with_ninedoor(mut self, bridge: &'a mut NineDoorBridge) -> Self {
         self.ninedoor = Some(bridge);
+        self
+    }
+
+    /// Attach a local-seat runtime for keyboard ingress and mirrored egress.
+    pub fn with_local_seat(mut self, runtime: &'a mut LocalSeatRuntime) -> Self {
+        self.local_seat = Some(runtime);
         self
     }
 
@@ -1163,6 +1172,7 @@ where
     pub fn poll(&mut self) {
         self.serial.poll_io();
         self.consume_serial();
+        self.consume_local_seat();
 
         #[cfg(feature = "kernel")]
         let timebase_now_ms = crate::hal::timebase().now_ms();
@@ -1502,6 +1512,9 @@ where
             self.emit_serial_line(line);
             return true;
         }
+        if let Some(runtime) = self.local_seat.as_mut() {
+            runtime.mirror_line(line);
+        }
         #[cfg(feature = "net-console")]
         if self.last_input_source == ConsoleInputSource::Net {
             if let Some(net) = self.net.as_mut() {
@@ -1512,11 +1525,17 @@ where
     }
 
     fn emit_serial_line(&mut self, line: &str) {
+        if let Some(runtime) = self.local_seat.as_mut() {
+            runtime.mirror_line(line);
+        }
         self.serial.enqueue_tx(line.as_bytes());
         self.serial.enqueue_tx(b"\r\n");
     }
 
     fn emit_prompt(&mut self) {
+        if let Some(runtime) = self.local_seat.as_mut() {
+            runtime.mirror_line(CONSOLE_PROMPT);
+        }
         self.serial.enqueue_tx(CONSOLE_PROMPT.as_bytes());
     }
 
@@ -1792,6 +1811,39 @@ where
         while let Some(line) = self.serial.next_line() {
             self.last_input_source = ConsoleInputSource::Serial;
             self.process_console_line(&line);
+        }
+    }
+
+    fn consume_local_seat(&mut self) {
+        let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
+        loop {
+            if let Some(runtime) = self.local_seat.as_mut() {
+                runtime.poll_backend_keyboard();
+            }
+            let read = match self.local_seat.as_mut() {
+                Some(runtime) => runtime.drain_keyboard_bytes(&mut chunk),
+                None => return,
+            };
+            if read == 0 {
+                break;
+            }
+            self.last_input_source = ConsoleInputSource::Serial;
+            for &byte in &chunk[..read] {
+                match self.parser.push_byte(byte) {
+                    Ok(Some(command)) => {
+                        self.metrics.console_lines = self.metrics.console_lines.saturating_add(1);
+                        if let Err(err) = self.handle_command(command) {
+                            #[cfg(feature = "kernel")]
+                            self.handle_dispatch_error(err);
+                            #[cfg(not(feature = "kernel"))]
+                            match err {}
+                        }
+                        self.emit_prompt();
+                    }
+                    Ok(None) => {}
+                    Err(err) => self.handle_console_error(err),
+                }
+            }
         }
     }
 
@@ -4421,6 +4473,34 @@ mod tests {
         let transcript: Vec<u8> = tx.into_iter().collect();
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(rendered.contains("PONG"), "{rendered}");
+    }
+
+    #[test]
+    fn local_seat_keyboard_ingress_uses_shared_parser_and_mirror() {
+        let driver = LoopbackSerial::<64>::new();
+        let serial = SerialPort::<_, 64, 64, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.enqueue_keyboard_bytes(b"ping\n");
+
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.session = Some(SessionRole::Queen);
+        pump.poll();
+        drop(pump);
+
+        let mirrored = local_seat.mirrored_lines_snapshot();
+        assert!(mirrored.iter().any(|line| line.contains("PONG")));
+        assert!(mirrored.iter().any(|line| line.contains("cohesix>")));
     }
 
     #[cfg(feature = "kernel")]

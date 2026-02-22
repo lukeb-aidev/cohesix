@@ -10,7 +10,6 @@ extern crate alloc;
 use alloc::{borrow::ToOwned, boxed::Box, format, string::String};
 use core::cell::RefCell;
 use core::cmp;
-use core::convert::TryFrom;
 use core::fmt::{self, Write};
 use core::ops::{Range, RangeInclusive};
 use core::panic::PanicInfo;
@@ -75,14 +74,14 @@ use crate::sel4;
 use crate::sel4::first_regular_untyped;
 use crate::sel4::{
     bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, BootInfoView,
-    DevicePtPool, KernelEnv, ReservedVaddrRanges, RetypeKind, RetypeStatus, IPC_PAGE_BYTES,
-    MSG_MAX_WORDS,
+    DevicePtPool, KernelEnv, ReservedVaddrRanges, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
-    pl011::{Pl011, Pl011Mmio},
+    kernel_uart::{KernelSerialDriver, KernelUartKind, KernelUartMmio, UART_CANDIDATES},
+    pl011::Pl011,
     SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
-use crate::uart::pl011::{self as early_uart, PL011_PADDR};
+use crate::uart::pl011 as early_uart;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use spin::Mutex;
 
@@ -543,17 +542,17 @@ fn log_text_span() {
 compile_error!("root-task kernel build currently supports only aarch64 targets");
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
-static mut EARLY_UART_SINK: DebugSink = DebugSink {
-    context: core::ptr::null_mut(),
-    emit: pl011_debug_emit,
-};
-
-#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 const PL011_DR_OFFSET: usize = 0x00;
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 const PL011_FR_OFFSET: usize = 0x18;
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 const PL011_FR_TXFF: u32 = 1 << 5;
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+const MINI_UART_IO_OFFSET: usize = 0x40;
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+const MINI_UART_LSR_OFFSET: usize = 0x54;
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+const MINI_UART_LSR_TX_EMPTY: u32 = 1 << 5;
 
 #[cfg(target_arch = "aarch64")]
 static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
@@ -578,6 +577,26 @@ unsafe extern "C" fn pl011_debug_emit(context: *mut (), byte: u8) {
     }
 }
 
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+unsafe extern "C" fn mini_uart_debug_emit(context: *mut (), byte: u8) {
+    debug_assert!(!context.is_null(), "mini-UART sink context must be valid");
+    debug_assert!(
+        context as usize & (core::mem::align_of::<u32>() - 1) == 0,
+        "mini-UART sink context must be 4-byte aligned",
+    );
+    let base = context.cast::<u8>();
+    let io = unsafe { base.add(MINI_UART_IO_OFFSET).cast::<u32>() };
+    let lsr = unsafe { base.add(MINI_UART_LSR_OFFSET).cast::<u32>() };
+
+    unsafe {
+        while ptr::read_volatile(lsr) & MINI_UART_LSR_TX_EMPTY == 0 {
+            core::hint::spin_loop();
+        }
+
+        ptr::write_volatile(io, u32::from(byte));
+    }
+}
+
 /// Capability summary exposed to the interactive console.
 #[derive(Copy, Clone, Debug)]
 pub struct ConsoleCaps {
@@ -596,6 +615,204 @@ pub struct ConsoleCaps {
 fn parse_hex(arg: &str) -> Option<usize> {
     let trimmed = arg.trim_start_matches("0x");
     usize::from_str_radix(trimmed, 16).ok()
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Pi4UefiDtbDiagnostics {
+    has_chosen: bool,
+    has_stdout_path: bool,
+    has_xhci_node: bool,
+    has_xhci_disabled: bool,
+    has_pcie_node: bool,
+    has_pcie_disabled: bool,
+}
+
+fn dtb_prop_cstr<'a>(value: &'a [u8]) -> Option<&'a str> {
+    let end = value
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(value.len());
+    if end == 0 {
+        return None;
+    }
+    core::str::from_utf8(&value[..end]).ok()
+}
+
+fn dtb_prop_u32_be(value: &[u8], offset: usize) -> Option<u32> {
+    let chunk = value.get(offset..offset.saturating_add(4))?;
+    Some(u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+}
+
+fn dtb_node_unit_address(name: &str, marker: &str) -> Option<usize> {
+    let marker_offset = name.find(marker)?;
+    let suffix = &name[marker_offset + marker.len()..];
+    let hex_len = suffix
+        .as_bytes()
+        .iter()
+        .take_while(|byte| byte.is_ascii_hexdigit())
+        .count();
+    if hex_len == 0 {
+        return None;
+    }
+    usize::from_str_radix(&suffix[..hex_len], 16).ok()
+}
+
+fn dtb_first_reg_addr(value: &[u8]) -> Option<usize> {
+    if value.len() >= 8 {
+        let hi = dtb_prop_u32_be(value, 0)? as u64;
+        let lo = dtb_prop_u32_be(value, 4)? as u64;
+        let combined = (hi << 32) | lo;
+        if let Ok(addr) = usize::try_from(combined) {
+            if addr & 0xFFF == 0 {
+                return Some(addr);
+            }
+        }
+        let first_cell = hi as usize;
+        if first_cell & 0xFFF == 0 {
+            return Some(first_cell);
+        }
+        usize::try_from(combined).ok()
+    } else if value.len() >= 4 {
+        Some(dtb_prop_u32_be(value, 0)? as usize)
+    } else {
+        None
+    }
+}
+
+fn collect_pi4_uefi_xhci_mmio_hint(
+    dtb: &bi_extra::Dtb<'_>,
+) -> Result<Option<usize>, bi_extra::ParseError> {
+    let mut hint = None;
+    let mut path = HeaplessVec::<&str, 16>::new();
+    let mut cursor = dtb.structure_cursor();
+    while let Some(item) = cursor.next()? {
+        match item {
+            bi_extra::StructureItem::BeginNode(name) => {
+                let _ = path.push(name);
+                if hint.is_none() {
+                    hint = dtb_node_unit_address(name, "xhci@");
+                }
+            }
+            bi_extra::StructureItem::EndNode => {
+                let _ = path.pop();
+            }
+            bi_extra::StructureItem::Property { name, value } => {
+                if hint.is_some() || name != "reg" {
+                    continue;
+                }
+                let in_xhci = path.iter().any(|segment| segment.contains("xhci@"));
+                if in_xhci {
+                    hint = dtb_first_reg_addr(value);
+                }
+            }
+        }
+        if hint.is_some() {
+            break;
+        }
+    }
+    Ok(hint)
+}
+
+fn infer_pi4_uefi_xhci_mmio_hint(extra_bytes: &[u8], extra_range: Range<usize>) -> Option<usize> {
+    let dtb_blob = bi_extra::locate_dtb(extra_bytes, extra_range).ok()?;
+    let dtb = bi_extra::parse_dtb(dtb_blob).ok()?;
+    collect_pi4_uefi_xhci_mmio_hint(&dtb).ok().flatten()
+}
+
+fn collect_pi4_uefi_dtb_diagnostics(
+    dtb: &bi_extra::Dtb<'_>,
+) -> Result<Pi4UefiDtbDiagnostics, bi_extra::ParseError> {
+    let mut diagnostics = Pi4UefiDtbDiagnostics::default();
+    let mut path = HeaplessVec::<&str, 16>::new();
+    let mut cursor = dtb.structure_cursor();
+    while let Some(item) = cursor.next()? {
+        match item {
+            bi_extra::StructureItem::BeginNode(name) => {
+                let _ = path.push(name);
+                if name == "chosen" {
+                    diagnostics.has_chosen = true;
+                }
+                if name.contains("xhci@") {
+                    diagnostics.has_xhci_node = true;
+                }
+                if name.contains("pcie@") {
+                    diagnostics.has_pcie_node = true;
+                }
+            }
+            bi_extra::StructureItem::EndNode => {
+                let _ = path.pop();
+            }
+            bi_extra::StructureItem::Property { name, value } => {
+                let in_chosen = path.iter().any(|segment| *segment == "chosen");
+                let in_xhci = path.iter().any(|segment| segment.contains("xhci@"));
+                let in_pcie = path.iter().any(|segment| segment.contains("pcie@"));
+                if in_chosen && name == "stdout-path" && dtb_prop_cstr(value).is_some() {
+                    diagnostics.has_stdout_path = true;
+                }
+                if name == "status" {
+                    let disabled = dtb_prop_cstr(value)
+                        .map(|status| status.eq_ignore_ascii_case("disabled"))
+                        .unwrap_or(false);
+                    if in_xhci && disabled {
+                        diagnostics.has_xhci_disabled = true;
+                    }
+                    if in_pcie && disabled {
+                        diagnostics.has_pcie_disabled = true;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(diagnostics)
+}
+
+fn emit_pi4_uefi_dtb_diagnostics<P: Platform>(
+    console: &mut DebugConsole<'_, P>,
+    diagnostics: Pi4UefiDtbDiagnostics,
+) {
+    let bool_label = |value: bool| if value { "yes" } else { "no" };
+    let mut line = HeaplessString::<192>::new();
+    let _ = write!(
+        line,
+        "[uefi-diag] dtb chosen={} stdout-path={} xhci-node={} pcie-node={}",
+        bool_label(diagnostics.has_chosen),
+        bool_label(diagnostics.has_stdout_path),
+        bool_label(diagnostics.has_xhci_node),
+        bool_label(diagnostics.has_pcie_node),
+    );
+    console.writeln_prefixed(line.as_str());
+
+    if !diagnostics.has_xhci_node {
+        if diagnostics.has_pcie_node {
+            console.writeln_prefixed(
+                "[uefi-diag] inferred XhciPci=1 (PCIe mode); set XhciPci=0 for local-seat USB keyboard",
+            );
+        } else {
+            console.writeln_prefixed(
+                "[uefi-diag] missing xHCI DT node; verify SystemTableMode=1 and XhciReload=1",
+            );
+        }
+    } else if diagnostics.has_xhci_disabled {
+        console.writeln_prefixed(
+            "[uefi-diag] xHCI DT node is disabled; inferred stale DT, set XhciReload=1 and reboot",
+        );
+    } else {
+        console
+            .writeln_prefixed("[uefi-diag] xHCI DT node present (matches XhciPci=0 expectation)");
+    }
+
+    if !diagnostics.has_stdout_path {
+        console.writeln_prefixed(
+            "[uefi-diag] chosen.stdout-path missing; firmware DT handoff may be incomplete (SystemTableMode)",
+        );
+    }
+}
+
+fn emit_pi4_uefi_no_dtb_hint<P: Platform>(console: &mut DebugConsole<'_, P>) {
+    console.writeln_prefixed(
+        "[uefi-diag] no DTB payload; inferred SystemTableMode=0 (ACPI-only) or firmware DT handoff disabled",
+    );
 }
 
 const MAX_HEXDUMP_LEN: usize = 256;
@@ -997,7 +1214,7 @@ struct BootStateGuard {
 /// Boot-time feature flags enabling optional subsystems.
 #[derive(Debug, Clone, Copy)]
 pub struct BootFeatures {
-    /// Whether the PL011-backed serial console is enabled.
+    /// Whether the UART-backed serial console is enabled.
     pub serial_console: bool,
     /// Whether the networking stack is enabled.
     pub net: bool,
@@ -1061,12 +1278,19 @@ pub struct BootContext {
     /// bootstrap traffic; the fault endpoint is reserved exclusively for seL4 fault
     /// delivery.
     pub endpoints: KernelEndpoints,
-    /// PL011 UART slot reserved for the serial console.
+    /// UART slot reserved for the serial console.
     pub uart_slot: Option<sel4_sys::seL4_CPtr>,
-    /// Mapping metadata for the PL011 UART.
-    pub uart_mmio: Option<Pl011Mmio>,
+    /// Mapping metadata for the runtime-selected UART backend.
+    pub uart_mmio: Option<KernelUartMmio>,
     pub(crate) serial: RefCell<
-        Option<SerialPort<Pl011, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>>,
+        Option<
+            SerialPort<
+                KernelSerialDriver,
+                DEFAULT_RX_CAPACITY,
+                DEFAULT_TX_CAPACITY,
+                DEFAULT_LINE_CAPACITY,
+            >,
+        >,
     >,
     pub(crate) timer: RefCell<Option<KernelTimer>>,
     pub(crate) ipc: RefCell<Option<KernelIpc>>,
@@ -1075,6 +1299,8 @@ pub struct BootContext {
     pub(crate) net_stack: RefCell<Option<NetStack>>,
     #[cfg(feature = "kernel")]
     pub(crate) ninedoor: RefCell<Option<&'static mut NineDoorBridge>>,
+    #[cfg(feature = "kernel")]
+    pub(crate) local_seat: RefCell<Option<&'static mut local_seat::LocalSeatRuntime>>,
 }
 
 impl BootStateGuard {
@@ -1200,7 +1426,25 @@ impl Drop for BootStateGuard {
             log::error!("[boot] bootstrap exited without committing; refusing to reset boot state");
             self.commit.telemetry.emit();
             state::mark_aborted();
-            panic!("[boot] bootstrap aborted before commit");
+            panic!(
+                "[boot] bootstrap aborted before commit phase={} sub={} reason={} err={}",
+                if self.commit.telemetry.phase.is_empty() {
+                    "unknown"
+                } else {
+                    self.commit.telemetry.phase
+                },
+                if self.commit.telemetry.substep.is_empty() {
+                    "unspecified"
+                } else {
+                    self.commit.telemetry.substep
+                },
+                if self.commit.telemetry.reason.is_empty() {
+                    "unspecified"
+                } else {
+                    self.commit.telemetry.reason
+                },
+                self.commit.telemetry.error_code.unwrap_or_default()
+            );
         } else if !self.commit.full_committed {
             state::mark_aborted();
         }
@@ -1213,7 +1457,7 @@ impl Drop for BootStateGuard {
 /// accidentally bypassed userland by logging before the bootstrap logger was
 /// installed and by leaving alternative stubs around. Keeping the hand-off
 /// here ensures we always enter the event-pump userland path or loudly fall
-/// back to the PL011 console when bootstrap fails.
+/// back to the UART console when bootstrap fails.
 pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
     let boot_state = state::state();
     if boot_state != BootState::Cold {
@@ -1917,7 +2161,7 @@ fn bootstrap<P: Platform>(
         check_bootinfo(&mut boot_guard, "MARK 37");
         boot_log::force_uart_line("[MARK 37] enter bootstrap-minimal");
         log::warn!(
-            "[boot] bootstrap-minimal: skipping EP retype/PL011 map/TCB copy; entering console"
+            "[boot] bootstrap-minimal: skipping EP retype/UART map/TCB copy; entering console"
         );
         crate::boot::ep::publish_root_ep(sel4_sys::seL4_CapNull);
         console.writeln_prefixed("[boot] bootstrap-minimal: entering console");
@@ -2427,384 +2671,156 @@ fn bootstrap<P: Platform>(
         Box::leak(bridge)
     };
 
-    let pl011_paddr = usize::try_from(PL011_PADDR)
-        .expect("PL011 physical address must fit within usize on this platform");
     let mut uart_slot: Option<sel4_sys::seL4_CPtr> = None;
-    let mut uart_mmio: Option<Pl011Mmio> = None;
-    let (uart_region, pl011_map_error) = match hal.map_device(pl011_paddr) {
-        Ok(region) => (Some(region), None),
-        Err(HalError::Sel4(err)) => {
-            let error_code = err as i32;
-            let error_label = error_name(err);
-            let mut line = heapless::String::<128>::new();
-            let _ = write!(
-                line,
-                "map_device(0x{addr:08x}) failed with {label} ({code})",
-                addr = PL011_PADDR,
-                label = error_label,
-                code = error_code,
-            );
-            console.writeln_prefixed(line.as_str());
-            if err == sel4_sys::seL4_NotEnoughMemory {
-                log::error!(
-                    "[pl011] device PageTable retype hit NotEnoughMemory; planner under-reserved RAM for device mappings"
+    let mut uart_mmio: Option<KernelUartMmio> = None;
+    let mut uart_map_error: Option<sel4_sys::seL4_Error> = None;
+    for candidate in UART_CANDIDATES {
+        let paddr = candidate.paddr();
+        let coverage = hal.device_coverage(paddr, DEVICE_FRAME_BITS);
+        if coverage.is_none() {
+            continue;
+        }
+
+        match hal.map_device(paddr) {
+            Ok(region) => {
+                let mmio = KernelUartMmio::mapped(candidate, region.cap(), region.ptr());
+                mmio.assert_page_coverage(1 << sel4::PAGE_BITS);
+                log::info!(
+                    target: "boot",
+                    "[uart:mmio] backend={} paddr=0x{paddr:08x} cap=0x{cap:04x} vaddr=0x{vaddr:016x} mapped={mapped}",
+                    mmio.label(),
+                    paddr = mmio.paddr(),
+                    cap = mmio.cap().unwrap_or(sel4_sys::seL4_CapNull),
+                    vaddr = mmio.vaddr().as_ptr() as usize,
+                    mapped = mmio.is_mapped(),
                 );
-            }
 
-            let snapshot = hal.snapshot();
-            let mut window = heapless::String::<160>::new();
-            let _ = write!(
-                window,
-                "device_window base=0x{dbase:08x} cursor=0x{dcursor:08x}; dma_window base=0x{dmabase:08x} cursor=0x{dmacursor:08x}",
-                dbase = snapshot.device_base,
-                dcursor = snapshot.device_cursor,
-                dmabase = snapshot.dma_base,
-                dmacursor = snapshot.dma_cursor,
-            );
-            console.writeln_prefixed(window.as_str());
-
-            let mut cspace = heapless::String::<160>::new();
-            let _ = write!(
-                cspace,
-                "cspace used={used} remaining={remaining} capacity={capacity}",
-                used = snapshot.cspace_used,
-                remaining = snapshot.cspace_remaining,
-                capacity = snapshot.cspace_capacity,
-            );
-            console.writeln_prefixed(cspace.as_str());
-
-            let mut vspace = heapless::String::<192>::new();
-            let _ = write!(
-                vspace,
-                "translation_state tables={tables} directories={directories} upper_directories={upper}",
-                tables = snapshot.page_tables_mapped,
-                directories = snapshot.page_directories_mapped,
-                upper = snapshot.page_upper_directories_mapped,
-            );
-            console.writeln_prefixed(vspace.as_str());
-
-            let mut root_info = heapless::String::<160>::new();
-            let _ = write!(
-                root_info,
-                "cspace.root=0x{root:04x} depth={depth}",
-                root = snapshot.cspace_root,
-                depth = snapshot.cspace_root_depth,
-            );
-            console.writeln_prefixed(root_info.as_str());
-
-            let stats = snapshot.untyped;
-            let mut untyped = heapless::String::<192>::new();
-            let _ = write!(
-                untyped,
-                "untyped total={total} used={used}; device total={dev_total} used={dev_used}",
-                total = stats.total,
-                used = stats.used,
-                dev_total = stats.device_total,
-                dev_used = stats.device_used,
-            );
-            console.writeln_prefixed(untyped.as_str());
-
-            if let Some(last) = snapshot.last_retype {
-                let mut detail = heapless::String::<256>::new();
-                match last.status {
-                    RetypeStatus::Pending => {
-                        let _ = write!(
-                            detail,
-                            "retype status=pending raw.untyped=0x{ucap:08x} raw.paddr=0x{paddr:08x} raw.size_bits={usize_bits} raw.slot=0x{slot:04x} raw.offset={offset} raw.depth={depth} raw.root=0x{root:04x} raw.node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
-                            ucap = last.trace.untyped_cap,
-                            paddr = last.trace.untyped_paddr,
-                            usize_bits = last.trace.untyped_size_bits,
-                            slot = last.trace.dest_slot,
-                            offset = last.trace.dest_offset,
-                            depth = last.trace.cnode_depth,
-                            root = last.trace.cnode_root,
-                            node_index = last.trace.node_index,
-                            otype = last.trace.object_type,
-                            obj_bits = last.trace.object_size_bits,
-                        );
-                    }
-                    RetypeStatus::Ok => {
-                        let _ = write!(
-                            detail,
-                            "retype status=ok raw.untyped=0x{ucap:08x} raw.paddr=0x{paddr:08x} raw.size_bits={usize_bits} raw.slot=0x{slot:04x} raw.offset=0x{offset:04x} raw.depth={depth} raw.root=0x{root:04x} raw.node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
-                            ucap = last.trace.untyped_cap,
-                            paddr = last.trace.untyped_paddr,
-                            usize_bits = last.trace.untyped_size_bits,
-                            slot = last.trace.dest_slot,
-                            offset = last.trace.dest_offset,
-                            depth = last.trace.cnode_depth,
-                            root = last.trace.cnode_root,
-                            node_index = last.trace.node_index,
-                            otype = last.trace.object_type,
-                            obj_bits = last.trace.object_size_bits,
-                        );
-                    }
-                    RetypeStatus::Err(code) => {
-                        let _ = write!(
-                            detail,
-                            "retype status={err}({code}) raw.untyped=0x{ucap:08x} raw.paddr=0x{paddr:08x} raw.size_bits={usize_bits} raw.slot=0x{slot:04x} raw.offset={offset:04x} raw.depth={depth} raw.root=0x{root:04x} raw.node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
-                            err = error_name(code),
-                            code = code,
-                            ucap = last.trace.untyped_cap,
-                            paddr = last.trace.untyped_paddr,
-                            usize_bits = last.trace.untyped_size_bits,
-                            slot = last.trace.dest_slot,
-                            offset = last.trace.dest_offset,
-                            depth = last.trace.cnode_depth,
-                            root = last.trace.cnode_root,
-                            node_index = last.trace.node_index,
-                            otype = last.trace.object_type,
-                            obj_bits = last.trace.object_size_bits,
-                        );
-                    }
-                }
-                console.writeln_prefixed(detail.as_str());
-
-                let mut kind = heapless::String::<176>::new();
-                match last.trace.kind {
-                    RetypeKind::DevicePage { paddr } => {
-                        let _ = write!(
-                            kind,
-                            "retype.kind=device_page target_paddr=0x{paddr:08x}",
-                            paddr = paddr,
-                        );
-                    }
-                    RetypeKind::DmaPage { paddr } => {
-                        let _ = write!(
-                            kind,
-                            "retype.kind=dma_page target_paddr=0x{paddr:08x}",
-                            paddr = paddr,
-                        );
-                    }
-                    RetypeKind::PageTable { vaddr } => {
-                        let _ = write!(
-                            kind,
-                            "retype.kind=page_table base_vaddr=0x{vaddr:08x}",
-                            vaddr = vaddr,
-                        );
-                    }
-                    RetypeKind::PageDirectory { vaddr } => {
-                        let _ = write!(
-                            kind,
-                            "retype.kind=page_directory base_vaddr=0x{vaddr:08x}",
-                            vaddr = vaddr,
-                        );
-                    }
-                    RetypeKind::PageUpperDirectory { vaddr } => {
-                        let _ = write!(
-                            kind,
-                            "retype.kind=page_upper_directory base_vaddr=0x{vaddr:08x}",
-                            vaddr = vaddr,
-                        );
-                    }
-                }
-                console.writeln_prefixed(kind.as_str());
-
-                let mut init = heapless::String::<192>::new();
+                let mut map_line = heapless::String::<160>::new();
                 let _ = write!(
-                    init,
-                    "retype.init_cnode cap=0x{cap:04x} slot=0x{slot:04x} bits={bits} max_slots={max}",
-                    cap = last.init_cnode_cap,
-                    slot = last.init_cnode_slot,
-                    bits = last.init_cnode_bits,
-                    max = last.init_cnode_capacity,
+                    map_line,
+                    "[vspace:map] uart backend={} paddr=0x{paddr:08x} -> vaddr=0x{vaddr:016x} attrs=UNCACHED OK",
+                    mmio.label(),
+                    paddr = mmio.paddr(),
+                    vaddr = mmio.vaddr().as_ptr() as usize,
                 );
-                console.writeln_prefixed(init.as_str());
+                console.writeln_prefixed(map_line.as_str());
 
-                if let Some(sanitised) = last.sanitised {
-                    let mut sanitised_line = heapless::String::<224>::new();
-                    let _ = write!(
-                        sanitised_line,
-                        "retype.sanitised root=0x{root:04x} index=0x{index:04x} depth={depth} offset=0x{offset:04x}",
-                        root = sanitised.cnode_root,
-                        index = sanitised.node_index,
-                        depth = sanitised.cnode_depth,
-                        offset = sanitised.dest_offset,
-                    );
-                    console.writeln_prefixed(sanitised_line.as_str());
-                } else if let Some(error) = last.sanitise_error {
-                    let mut error_line = heapless::String::<224>::new();
-                    let _ = write!(error_line, "retype.sanitise_error={error}");
-                    console.writeln_prefixed(error_line.as_str());
+                uart_pl011::publish_uart_slot(region.cap());
+                if mmio.kind() == KernelUartKind::Pl011 {
+                    early_uart::register_console_base(mmio.vaddr().as_ptr() as usize);
                 }
-
-                let expected_depth = last.canonical_cnode_depth as usize;
-                let actual_depth = last.trace.cnode_depth as usize;
-                if actual_depth != expected_depth {
-                    let mut depth = heapless::String::<192>::new();
-                    let _ = write!(
-                        depth,
-                        "retype.cnode_depth mismatch: expected={expected} (canonical root depth) actual={actual}",
-                        expected = expected_depth,
-                        actual = actual_depth,
-                    );
-                    console.writeln_prefixed(depth.as_str());
-                }
-
-                let dest = last.trace.dest_offset as usize;
-                if dest >= last.init_cnode_capacity {
-                    let mut offset = heapless::String::<192>::new();
-                    let _ = write!(
-                        offset,
-                        "retype.dest_offset out of range: offset=0x{dest:04x} limit=0x{limit:04x}",
-                        dest = dest,
-                        limit = last.init_cnode_capacity,
-                    );
-                    console.writeln_prefixed(offset.as_str());
-                }
-            } else {
-                console.writeln_prefixed("no retype trace captured");
+                uart_slot = Some(region.cap());
+                uart_mmio = Some(mmio);
+                break;
             }
-
-            match hal.device_coverage(pl011_paddr, DEVICE_FRAME_BITS) {
-                Some(region) => {
-                    let mut coverage = heapless::String::<192>::new();
-                    let region_state = if region.used { "reserved" } else { "free" };
-                    let _ = write!(
-                        coverage,
-                        "device coverage idx={index} [{base:#010x}..{limit:#010x}) size_bits={size} state={state}",
-                        index = region.index,
-                        base = region.base,
-                        limit = region.limit,
-                        size = region.size_bits,
-                        state = region_state,
+            Err(HalError::Sel4(err)) => {
+                uart_map_error = Some(err);
+                let mut line = heapless::String::<160>::new();
+                let _ = write!(
+                    line,
+                    "map_device uart backend={} paddr=0x{paddr:08x} failed: {} ({})",
+                    candidate.label(),
+                    err as i32,
+                    error_name(err),
+                    paddr = paddr,
+                );
+                console.writeln_prefixed(line.as_str());
+                if err == sel4_sys::seL4_NotEnoughMemory {
+                    log::error!(
+                        "[uart] map_device hit NotEnoughMemory for backend={} paddr=0x{paddr:08x}",
+                        candidate.label(),
+                        paddr = paddr
                     );
-                    console.writeln_prefixed(coverage.as_str());
-                }
-                None => {
-                    console.writeln_prefixed("no device untyped covers requested PL011 range");
                 }
             }
-
-            post_commit.flag_failure("pl011.map.sel4", error_label);
-            (None, Some(err))
+            Err(other) => {
+                let mut line = heapless::String::<160>::new();
+                let _ = write!(
+                    line,
+                    "map_device uart backend={} paddr=0x{paddr:08x} failed: {other}",
+                    candidate.label(),
+                    paddr = paddr,
+                    other = other,
+                );
+                console.writeln_prefixed(line.as_str());
+            }
         }
-        Err(HalError::Unsupported(reason)) => {
-            let mut line = heapless::String::<128>::new();
-            let _ = write!(
-                line,
-                "map_device(0x{addr:08x}) unsupported: {reason}",
-                addr = PL011_PADDR,
-                reason = reason,
-            );
-            console.writeln_prefixed(line.as_str());
+    }
 
-            (None, None)
-        }
-        Err(HalError::NoPci) => {
-            let mut line = heapless::String::<128>::new();
-            let _ = write!(
-                line,
-                "map_device(0x{addr:08x}) failed: pci unavailable",
-                addr = PL011_PADDR,
-            );
-            console.writeln_prefixed(line.as_str());
-
-            (None, None)
-        }
-        Err(HalError::InvalidPciAddress) => {
-            let mut line = heapless::String::<128>::new();
-            let _ = write!(
-                line,
-                "map_device(0x{addr:08x}) failed: invalid pci address",
-                addr = PL011_PADDR,
-            );
-            console.writeln_prefixed(line.as_str());
-
-            (None, None)
-        }
-        Err(HalError::PciBarUnavailable) => {
-            let mut line = heapless::String::<128>::new();
-            let _ = write!(
-                line,
-                "map_device(0x{addr:08x}) failed: pci bar unavailable",
-                addr = PL011_PADDR,
-            );
-            console.writeln_prefixed(line.as_str());
-
-            (None, None)
-        }
-    };
-
-    if let Some(region) = uart_region {
-        let mmio = Pl011Mmio::mapped(pl011_paddr, region.cap(), region.ptr());
-        mmio.assert_page_coverage(1 << sel4::PAGE_BITS, 0x0ff);
-        log::info!(
-            target: "boot",
-            "[uart:mmio] paddr=0x{paddr:08x} cap=0x{cap:04x} vaddr=0x{vaddr:016x} mapped={mapped}",
-            paddr = mmio.paddr(),
-            cap = mmio.cap().unwrap_or(sel4_sys::seL4_CapNull),
-            vaddr = mmio.vaddr().as_ptr() as usize,
-            mapped = mmio.is_mapped(),
-        );
-
-        let mut map_line = heapless::String::<128>::new();
-        let mapped_vaddr = mmio.vaddr().as_ptr() as usize;
-        let _ = write!(
-            map_line,
-            "[vspace:map] pl011 paddr=0x{paddr:08x} -> vaddr=0x{vaddr:016x} attrs=UNCACHED OK",
-            vaddr = mapped_vaddr,
-            paddr = PL011_PADDR,
-        );
-        console.writeln_prefixed(map_line.as_str());
-
-        uart_pl011::publish_uart_slot(region.cap());
-        early_uart::register_console_base(mapped_vaddr);
-        uart_slot = Some(region.cap());
-        uart_mmio = Some(mmio);
-    } else {
-        let label = pl011_map_error
+    if uart_mmio.is_none() {
+        let label = uart_map_error
             .map(error_name)
             .unwrap_or("mapping not available");
-        post_commit.flag_failure("pl011.map", label);
-        console.writeln_prefixed("[uart] PL011 unavailable; continuing without serial console");
+        post_commit.flag_failure("uart.map", label);
+        console.writeln_prefixed(
+            "[uart] no supported UART backend mapped; continuing without serial console",
+        );
     }
 
     let mut serial: Option<
-        SerialPort<Pl011, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>,
+        SerialPort<
+            KernelSerialDriver,
+            DEFAULT_RX_CAPACITY,
+            DEFAULT_TX_CAPACITY,
+            DEFAULT_LINE_CAPACITY,
+        >,
     > = None;
 
     #[cfg(feature = "debug-input")]
     {
-        if let Some(ref mmio) = uart_mmio {
-            let mut driver = Pl011::new(mmio.vaddr());
-            driver.init();
-            console.writeln_prefixed("[uart] init OK");
-            driver.write_str("[console] PL011 console online\n");
-            driver.write_str("[cohesix:root-task] uart logger online\n");
-            let console_caps = ConsoleCaps {
-                init_cnode: bootinfo_ref.init_cnode_cap(),
-                init_vspace: sel4_sys::seL4_CapInitThreadVSpace,
-                init_tcb: bootinfo_ref.init_tcb_cap(),
-                console_endpoint_slot: first_retypes
-                    .as_ref()
-                    .map(|info| info.endpoint_slot)
-                    .unwrap_or(crate::sel4::seL4_CapNull),
-                tcb_copy_slot: first_retypes.as_ref().map(|info| info.tcb_copy_slot),
-            };
-            start_console(driver, console_caps);
+        if let Some(mmio) = uart_mmio {
+            match mmio {
+                KernelUartMmio::Pl011(mapping) => {
+                    let mut driver = Pl011::new(mapping.vaddr());
+                    driver.init();
+                    console.writeln_prefixed("[uart] init OK backend=pl011");
+                    driver.write_str("[console] PL011 console online\n");
+                    driver.write_str("[cohesix:root-task] uart logger online\n");
+                    let console_caps = ConsoleCaps {
+                        init_cnode: bootinfo_ref.init_cnode_cap(),
+                        init_vspace: sel4_sys::seL4_CapInitThreadVSpace,
+                        init_tcb: bootinfo_ref.init_tcb_cap(),
+                        console_endpoint_slot: first_retypes
+                            .as_ref()
+                            .map(|info| info.endpoint_slot)
+                            .unwrap_or(crate::sel4::seL4_CapNull),
+                        tcb_copy_slot: first_retypes.as_ref().map(|info| info.tcb_copy_slot),
+                    };
+                    start_console(driver, console_caps);
+                }
+                KernelUartMmio::Bcm2711MiniUart(_) => {
+                    post_commit
+                        .flag_failure("uart.debug-input", "backend does not support debug-input");
+                    console.writeln_prefixed(
+                        "[uart] debug-input disabled: bcm2711-mini-uart backend does not support blocking debug shell",
+                    );
+                }
+            }
         } else {
-            post_commit.flag_failure("uart.debug-input", "pl011 mapping unavailable");
+            post_commit.flag_failure("uart.debug-input", "uart mapping unavailable");
         }
     }
 
     #[cfg(not(feature = "debug-input"))]
     {
-        if let Some(ref mmio) = uart_mmio {
-            let mut driver = Pl011::new(mmio.vaddr());
+        if let Some(mmio) = uart_mmio {
+            let mut driver = KernelSerialDriver::from_mmio(mmio);
             driver.init();
-            console.writeln_prefixed("[uart] init OK");
-            driver.write_str("[console] PL011 console online\n");
+            let mut init_line = heapless::String::<96>::new();
+            let _ = write!(init_line, "[uart] init OK backend={}", driver.label());
+            console.writeln_prefixed(init_line.as_str());
+            let mut online_line = heapless::String::<96>::new();
+            let _ = write!(online_line, "[console] {} console online\n", driver.label());
+            driver.write_str(online_line.as_str());
             #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
             {
-                unsafe {
-                    EARLY_UART_SINK = DebugSink {
-                        context: mmio.vaddr().as_ptr().cast::<()>(),
-                        emit: pl011_debug_emit,
-                    };
-                }
-
-                let sink = unsafe { EARLY_UART_SINK };
+                let sink = DebugSink {
+                    context: mmio.vaddr().as_ptr().cast::<()>(),
+                    emit: match mmio.kind() {
+                        KernelUartKind::Pl011 => pl011_debug_emit,
+                        KernelUartKind::Bcm2711MiniUart => mini_uart_debug_emit,
+                    },
+                };
                 let emit_addr = sink.emit as usize;
                 let ctx_addr = sink.context as usize;
                 let mut sink_line = heapless::String::<128>::new();
@@ -2830,7 +2846,7 @@ fn bootstrap<P: Platform>(
                 DEFAULT_LINE_CAPACITY,
             >::new(driver));
         } else {
-            console.writeln_prefixed("[uart] init skipped: PL011 mapping unavailable");
+            console.writeln_prefixed("[uart] init skipped: no mapped UART backend");
         }
 
         let hardware = generated::hardware_config();
@@ -2936,23 +2952,63 @@ fn bootstrap<P: Platform>(
             }
         }
 
-        match local_seat::evaluate(hardware, false) {
+        let mut local_seat_runtime: Option<&'static mut local_seat::LocalSeatRuntime> = None;
+        let local_seat_required = hardware.local_seat.required;
+        let xhci_mmio_hint = infer_pi4_uefi_xhci_mmio_hint(extra_bytes, extra_range.clone());
+        if let Some(mmio_base) = xhci_mmio_hint {
+            let mut line = heapless::String::<96>::new();
+            let _ = write!(line, "[local-seat] xhci-mmio-hint=0x{mmio_base:016x}");
+            console.writeln_prefixed(line.as_str());
+            boot_log::force_uart_line(line.as_str());
+        }
+        match local_seat::evaluate(hardware, local_seat::runtime_backend_available()) {
             Ok(LocalSeatInit::Disabled) => {
                 console.writeln_prefixed("[local-seat] disabled");
                 boot_log::force_uart_line("[local-seat] disabled");
             }
             Ok(LocalSeatInit::Active(status)) => {
-                let mut line = heapless::String::<240>::new();
-                let _ = write!(
-                    line,
-                    "[local-seat] active keyboard={} display={} line_bytes={} buffer_lines={}",
-                    status.keyboard_device,
-                    status.display_device,
-                    status.line_bytes,
-                    status.buffer_lines
-                );
-                console.writeln_prefixed(line.as_str());
-                boot_log::force_uart_line(line.as_str());
+                let mut runtime = local_seat::LocalSeatRuntime::new(status);
+                match local_seat::attach_platform_backend(&mut runtime, &mut hal, xhci_mmio_hint) {
+                    Ok(()) => {
+                        local_seat_runtime = Some(Box::leak(Box::new(runtime)));
+                        let mut line = heapless::String::<256>::new();
+                        let _ = write!(
+                            line,
+                            "[local-seat] active keyboard={} display={} line_bytes={} buffer_lines={}",
+                            status.keyboard_device,
+                            status.display_device,
+                            status.line_bytes,
+                            status.buffer_lines
+                        );
+                        console.writeln_prefixed(line.as_str());
+                        boot_log::force_uart_line(line.as_str());
+                    }
+                    Err(backend_err) => {
+                        if local_seat_required {
+                            let mut line = heapless::String::<192>::new();
+                            let _ = write!(
+                                line,
+                                "[local-seat] abort required=true reason=backend-unavailable detail={}",
+                                backend_err.as_str()
+                            );
+                            console.writeln_prefixed(line.as_str());
+                            boot_log::force_uart_line(line.as_str());
+                            return Err(BootError::Fatal(format!(
+                                "local-seat required backend failed: {}",
+                                backend_err.as_str()
+                            )));
+                        }
+
+                        let mut line = heapless::String::<192>::new();
+                        let _ = write!(
+                            line,
+                            "[local-seat] degraded reason=backend-unavailable detail={}",
+                            backend_err.as_str()
+                        );
+                        console.writeln_prefixed(line.as_str());
+                        boot_log::force_uart_line(line.as_str());
+                    }
+                }
             }
             Ok(LocalSeatInit::Degraded(reason)) => {
                 let mut line = heapless::String::<128>::new();
@@ -2992,9 +3048,7 @@ fn bootstrap<P: Platform>(
         crate::bp!("spawn.worker.end");
 
         crate::bp!("dtb.parse.begin");
-        if dtb_deferred {
-            console.writeln_prefixed("[boot] dtb locate skipped/failed: deferred");
-        } else if !extra_bytes.is_empty() {
+        if !extra_bytes.is_empty() {
             match bi_extra::locate_dtb(extra_bytes, extra_range.clone()) {
                 Ok(dtb_blob) => match bi_extra::parse_dtb(dtb_blob) {
                     Ok(dtb) => {
@@ -3008,21 +3062,50 @@ fn bootstrap<P: Platform>(
                             header.strings_offset(),
                         );
                         console.writeln_prefixed(msg.as_str());
+                        if hardware.local_seat.enabled {
+                            match collect_pi4_uefi_dtb_diagnostics(&dtb) {
+                                Ok(diagnostics) => {
+                                    emit_pi4_uefi_dtb_diagnostics(&mut console, diagnostics);
+                                }
+                                Err(err) => {
+                                    let mut diag_line = heapless::String::<128>::new();
+                                    let _ = write!(
+                                        diag_line,
+                                        "[uefi-diag] dtb diagnostics skipped: {err}"
+                                    );
+                                    console.writeln_prefixed(diag_line.as_str());
+                                }
+                            }
+                        }
                     }
                     Err(err) => {
                         let mut msg = heapless::String::<96>::new();
                         let _ = write!(msg, "[boot] dtb parse failed: {err}");
                         console.writeln_prefixed(msg.as_str());
+                        if hardware.local_seat.enabled {
+                            emit_pi4_uefi_no_dtb_hint(&mut console);
+                        }
                     }
                 },
                 Err(err) => {
                     let mut msg = heapless::String::<112>::new();
                     let _ = write!(msg, "[boot] dtb locate skipped/failed: {err}");
                     console.writeln_prefixed(msg.as_str());
+                    if hardware.local_seat.enabled {
+                        emit_pi4_uefi_no_dtb_hint(&mut console);
+                    }
                 }
+            }
+        } else if dtb_deferred {
+            console.writeln_prefixed("[boot] dtb locate skipped/failed: deferred");
+            if hardware.local_seat.enabled {
+                emit_pi4_uefi_no_dtb_hint(&mut console);
             }
         } else {
             console.writeln_prefixed("[boot] no dtb payload present");
+            if hardware.local_seat.enabled {
+                emit_pi4_uefi_no_dtb_hint(&mut console);
+            }
         }
         crate::bp!("dtb.parse.end");
         boot_tracer().advance(BootPhase::DTBParseDone);
@@ -3143,6 +3226,8 @@ fn bootstrap<P: Platform>(
             net_stack: RefCell::new(net_stack),
             #[cfg(feature = "kernel")]
             ninedoor: RefCell::new(Some(ninedoor)),
+            #[cfg(feature = "kernel")]
+            local_seat: RefCell::new(local_seat_runtime),
         };
 
         #[cfg(not(feature = "net-console"))]
@@ -3159,6 +3244,8 @@ fn bootstrap<P: Platform>(
             tickets: RefCell::new(Some(tickets)),
             #[cfg(feature = "kernel")]
             ninedoor: RefCell::new(None),
+            #[cfg(feature = "kernel")]
+            local_seat: RefCell::new(local_seat_runtime),
         };
         return Ok(ctx);
     }

@@ -39,6 +39,8 @@ pub mod event;
 pub mod features;
 /// Local diagnostics seat policy helpers for Milestone 26 bring-up.
 pub mod local_seat;
+#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+mod local_seat_pi4;
 /// Observability metric helpers shared with the event pump.
 pub mod observe;
 /// Compile-time profile surface exposed to kernels and tests.

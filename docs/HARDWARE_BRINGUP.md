@@ -20,6 +20,7 @@
 - `cohesix/manifest.json` + `cohesix/manifest.sha256`
 - optional `dtb/*`
 - `scripts/uefi/esp-build.sh` syncs `out/cohesix/staging/rootserver` into `seL4/build_UEFI/elfloader/rootserver`, rebuilds `elfloader.efi`, and verifies the embedded rootserver payload before packaging.
+- `scripts/uefi/esp-build.sh` validates the `bcm2711` memory profile against generated seL4 headers and fails fast when `RPI4_MEMORY` does not match (`--rpi4-memory-mb`, default `8192` MiB).
 - `scripts/uefi/qemu-uefi.sh` boots UEFI on QEMU using EDK2 pflash + FAT-backed ESP.
 - `scripts/uefi/qemu-uefi.sh` auto-detects GIC version from ESP/seL4 config and defaults to `-machine virt,gic-version=<detected>,virtualization=on` (`kernel-irqchip=off` is included by default on macOS to match release `run.sh` behavior).
 - For `qemu-arm-virt` SMP builds, the DTB consumed by upstream seL4/elfloader should report `psci.method = "smc"` (for example by dumping DTB from `qemu-system-aarch64 -machine virt,virtualization=on,...`).
@@ -44,6 +45,15 @@
 `scripts/uefi/esp-build.sh --manifest out/uefi/root_task_resolved_uefi.json --out-dir out/uefi/m26`
 4. Boot in QEMU UEFI mode:
 `scripts/uefi/qemu-uefi.sh --esp-dir out/uefi/m26/esp --console serial`
+
+## Raspberry Pi 4 UEFI Settings (Firmware 1.50)
+- For local-seat HDMI + USB keyboard bring-up, use:
+- `setvar XhciPci -guid CD7CC258-31DB-22E6-9F22-63B0B8EED6B5 -bs -rt -nv =0x00000000`
+- `setvar XhciReload -guid CD7CC258-31DB-22E6-9F22-63B0B8EED6B5 -bs -rt -nv =0x00000001`
+- `setvar SystemTableMode -guid CD7CC258-31DB-22E6-9F22-63B0B8EED6B5 -bs -rt -nv =0x00000001`
+- `setvar RamLimitTo3GB -guid CD7CC258-31DB-22E6-9F22-63B0B8EED6B5 -bs -rt -nv =0x00000001`
+- Reboot firmware after applying values.
+- NIC can be re-enabled later by restoring firmware defaults for USB/PCIe networking variables; this does not change Cohesix serial/local-seat protocol semantics.
 
 ## Milestone 26 boot evidence requirements
 - `/proc/boot` must include:

@@ -3661,16 +3661,43 @@ impl<'a> KernelEnv<'a> {
         self.alloc_dma_frame_attr(seL4_ARM_Page_Default)
     }
 
+    /// Allocates a DMA-capable frame from the lowest-address RAM and maps it.
+    pub fn alloc_dma_frame_low(&mut self) -> Result<RamFrame, seL4_Error> {
+        self.alloc_dma_frame_low_attr(seL4_ARM_Page_Default)
+    }
+
     /// Allocates a DMA-capable frame and maps it with the supplied cache attribute.
     pub fn alloc_dma_frame_attr(
         &mut self,
         attr: sel4_sys::seL4_ARM_VMAttributes,
     ) -> Result<RamFrame, seL4_Error> {
-        BOOTINFO_WINDOW_GUARD.check("alloc_dma_frame_attr");
-        let reserved = self
-            .untyped
-            .reserve_ram_high(PAGE_BITS as u8)
-            .ok_or(seL4_NotEnoughMemory)?;
+        self.alloc_dma_frame_attr_inner(attr, true)
+    }
+
+    /// Allocates a low-address DMA-capable frame with the supplied cache attribute.
+    pub fn alloc_dma_frame_low_attr(
+        &mut self,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+    ) -> Result<RamFrame, seL4_Error> {
+        self.alloc_dma_frame_attr_inner(attr, false)
+    }
+
+    fn alloc_dma_frame_attr_inner(
+        &mut self,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+        prefer_high: bool,
+    ) -> Result<RamFrame, seL4_Error> {
+        BOOTINFO_WINDOW_GUARD.check(if prefer_high {
+            "alloc_dma_frame_attr"
+        } else {
+            "alloc_dma_frame_low_attr"
+        });
+        let reserved = if prefer_high {
+            self.untyped.reserve_ram_high(PAGE_BITS as u8)
+        } else {
+            self.untyped.reserve_ram(PAGE_BITS as u8)
+        }
+        .ok_or(seL4_NotEnoughMemory)?;
         let frame_slot = self.allocate_slot();
         let mut trace = self.prepare_retype_trace(
             &reserved,
@@ -3701,7 +3728,8 @@ impl<'a> KernelEnv<'a> {
         record_dma_mapping(paddr, range.start, PAGE_SIZE, attr_raw);
         ::log::info!(
             target: "hal",
-            "[hal] dma frame mapped vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=0x{attr:08x}",
+            "[hal] dma frame mapped source={source} vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=0x{attr:08x}",
+            source = if prefer_high { "high" } else { "low" },
             vaddr = range.start,
             paddr = paddr,
             attr = attr_raw,

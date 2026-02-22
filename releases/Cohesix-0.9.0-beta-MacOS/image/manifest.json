@@ -5,26 +5,26 @@
     {
       "name": "root-task",
       "path": "cohesix/bin/root-task",
-      "size": 1947624,
-      "sha256": "858e57e09757e8933993eb1b5ce373b026fea1b34e3b4b654b747f5716165b3a"
+      "size": 1742808,
+      "sha256": "3c95c3692f22e5c8d2e10afdf0ea882568e51dd4dbde0e4fe00a460187f8fe22"
     },
     {
       "name": "nine-door",
       "path": "cohesix/bin/nine-door",
-      "size": 1080,
-      "sha256": "12499bc5c598e15e761bc6c479a14feea7f0790049bd0d96d46ffd46f6759d1d"
+      "size": 1360,
+      "sha256": "a25d44feca9344d869f9a9e4dbbcd9ad9fbefe9984209301fbc276ce23ed87ba"
     },
     {
       "name": "worker-heart",
       "path": "cohesix/bin/worker-heart",
-      "size": 1080,
-      "sha256": "6c415d0a745f9035f77eb4a5d5fd271581c36facbb043d34148418f7ea1f21cf"
+      "size": 1360,
+      "sha256": "9a6b1fffadcdbb34386fdde51671b9d603352ffb3e12c9d0f56c8c0eb1d29ecd"
     },
     {
       "name": "worker-gpu",
       "path": "cohesix/bin/worker-gpu",
-      "size": 1080,
-      "sha256": "7c33211ae4745c8e1cc4617dd2e2e4a24dce6f691878642805b2ca4cca6bb01e"
+      "size": 1360,
+      "sha256": "d67d9ef1521cce1c00c9c88b3fc5ffd6a46822c2762b40acb3073d54cb386c87"
     }
   ]
 }

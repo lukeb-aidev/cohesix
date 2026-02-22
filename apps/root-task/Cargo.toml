@@ -1,3 +1,4 @@
+# Copyright 2026 Lukas Bower
 # Author: Lukas Bower
 # Purpose: Configure the root-task crate dependencies and metadata.
 [package]
@@ -61,6 +62,7 @@ kernel = [
     "dep:sel4-panicking",
     "bootstrap-trace",
     "dep:linked_list_allocator",
+    "dep:spin",
 ]
 mock-sel4 = ["kernel"]
 net-console = [
@@ -111,6 +113,8 @@ static_assertions = "1.1"
 trace-model = { path = "../../crates/trace-model" }
 cohesix-net-constants = { workspace = true }
 cohsh-core = { workspace = true }
+font8x8 = { version = "0.3.1", default-features = false }
+usb-oxide = { version = "0.2.1" }
 [dependencies.sel4-sys]
 version = "0.0.28"
 optional = true

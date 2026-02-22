@@ -26,7 +26,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "2c43eee27ed6b3d38c73436c52b6d771ce45279367b2f5206de0caef78e4b041";
+    "672e5826b7bf7145c87de67e76eeb02681d16edad89034be2e68f17ebf7b52e5";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -179,18 +179,44 @@ pub const CAS_CONFIG: CasConfig = CasConfig {
     models_enabled: false,
 };
 
-pub const HARDWARE_DEVICES: [HardwareDevice; 0] = [];
+pub const HARDWARE_DEVICES: [HardwareDevice; 5] = [
+    HardwareDevice {
+        kind: HardwareDeviceKind::Uart,
+        id: "uart0",
+        required: true,
+    },
+    HardwareDevice {
+        kind: HardwareDeviceKind::Rtc,
+        id: "rtc0",
+        required: true,
+    },
+    HardwareDevice {
+        kind: HardwareDeviceKind::Tpm,
+        id: "tpm0",
+        required: false,
+    },
+    HardwareDevice {
+        kind: HardwareDeviceKind::Keyboard,
+        id: "usb-kbd0",
+        required: false,
+    },
+    HardwareDevice {
+        kind: HardwareDeviceKind::Display,
+        id: "hdmi0",
+        required: false,
+    },
+];
 
 pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {
     secure_boot: false,
-    no_nic: false,
+    no_nic: true,
     attestation: AttestationConfig {
-        enabled: false,
+        enabled: true,
         policy: AttestationPolicy::TpmOrDice,
         evidence_max_bytes: 256,
     },
     local_seat: LocalSeatConfig {
-        enabled: false,
+        enabled: true,
         required: false,
         keyboard_device: "usb-kbd0",
         display_device: "hdmi0",
@@ -470,12 +496,12 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
     replay_status_max_bytes: 1024,
 };
 
-pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
+pub const EVENT_PUMP_FDS: [&str; 4] = ["serial", "timer", "ipc", "ninedoor"];
 
-pub const INITIAL_AUDIT_LINES: [&str; 29] = [
+pub const INITIAL_AUDIT_LINES: [&str; 32] = [
     "manifest.schema=1.5",
-    "manifest.profile=virt-aarch64",
-    "manifest.sha256=1aee4b854f804a6f250d113062597502ba30a1198315c33fe0156d5d2d1b7cb3",
+    "manifest.profile=uefi-aarch64",
+    "manifest.sha256=a45284de554506d98a95a2a05984838ced7eb3d090b473e29c99d202952d38d9",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -494,12 +520,15 @@ pub const INITIAL_AUDIT_LINES: [&str; 29] = [
     "manifest.cache.dma_clean=true",
     "manifest.cache.dma_invalidate=true",
     "manifest.cache.unify_instructions=false",
-    "manifest.features.net_console=true",
+    "manifest.features.net_console=false",
     "manifest.hw.secure_boot=false",
-    "manifest.hw.no_nic=false",
-    "manifest.hw.attestation.enabled=false",
+    "manifest.hw.no_nic=true",
+    "manifest.hw.attestation.enabled=true",
     "manifest.hw.attestation.policy=tpm-or-dice",
-    "manifest.hw.local_seat.enabled=false",
+    "manifest.hw.local_seat.enabled=true",
     "manifest.hw.local_seat.required=false",
-    "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
+    "attestation.bound_manifest_sha256=a45284de554506d98a95a2a05984838ced7eb3d090b473e29c99d202952d38d9",
+    "attestation.evidence_sha256=944ad586a84a9dfa7b434d00dc3ecf8cba8504e3d125bee3c7f2b4ff9aec25e3",
+    "manifest.hw.networking=disabled-m26-baseline",
+    "event_pump.fds=serial,timer,ipc,ninedoor",
 ];

@@ -85,10 +85,7 @@ mod imp {
         (*seL4_GetIPCBuffer()).msg[index as usize] = value;
     }
 
-    #[cfg(all(
-        sel4_sys_has_debug_cap_identify_syscall,
-        sel4_sys_config_debug_build
-    ))]
+    #[cfg(all(sel4_sys_has_debug_cap_identify_syscall, sel4_sys_config_debug_build))]
     #[export_name = "seL4_DebugCapIdentify"]
     pub unsafe extern "C" fn sel4_debug_cap_identify(cap: seL4_CPtr) -> seL4_Word {
         let mut cap_word = cap as seL4_Word;
@@ -123,10 +120,7 @@ mod imp {
         0
     }
 
-    #[cfg(all(
-        sel4_sys_has_debug_dump_scheduler_syscall,
-        sel4_sys_config_debug_build
-    ))]
+    #[cfg(all(sel4_sys_has_debug_dump_scheduler_syscall, sel4_sys_config_debug_build))]
     #[export_name = "seL4_DebugDumpScheduler"]
     pub unsafe extern "C" fn sel4_debug_dump_scheduler() {
         let mut unused0 = 0;
@@ -181,10 +175,7 @@ mod imp {
         );
     }
 
-    #[cfg(any(
-        not(sel4_sys_debug_dump_cpuinfo),
-        not(sel4_sys_config_debug_build)
-    ))]
+    #[cfg(any(not(sel4_sys_debug_dump_cpuinfo), not(sel4_sys_config_debug_build)))]
     #[export_name = "seL4_DebugDumpCPUInfo"]
     pub unsafe extern "C" fn sel4_debug_dump_cpu_info() {}
 

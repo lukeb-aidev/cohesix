@@ -5,8 +5,21 @@
 
 //! Local diagnostics seat policy helpers (Milestone 26).
 
+extern crate alloc;
+
 use crate::console::{Command, CommandParser, ConsoleError};
 use crate::generated::{self, HardwareDeviceKind};
+#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+use crate::local_seat_pi4::{Pi4LocalSeat, Pi4SeatError};
+use alloc::collections::VecDeque;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+/// Maximum number of queued keyboard bytes retained by the local-seat runtime.
+pub const KEYBOARD_QUEUE_MAX_BYTES: usize = 4_096;
+
+/// Maximum keyboard bytes drained from the runtime in one event-pump cycle.
+pub const KEYBOARD_POLL_CHUNK_BYTES: usize = 128;
 
 /// Deterministic local-seat initialisation outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +43,191 @@ pub struct LocalSeatStatus {
     pub line_bytes: u16,
     /// Ring depth for mirrored lines.
     pub buffer_lines: u16,
+}
+
+/// Runtime state for local-seat keyboard ingress and mirrored line egress.
+///
+/// This state is bounded by manifest values (`line_bytes`, `buffer_lines`) and
+/// is transport-agnostic so HAL-owned keyboard/display backends can wire bytes
+/// in/out without affecting parser semantics.
+#[derive(Debug)]
+pub struct LocalSeatRuntime {
+    status: LocalSeatStatus,
+    keyboard_queue: VecDeque<u8>,
+    mirrored_lines: VecDeque<String>,
+    dropped_keyboard_bytes: u64,
+    dropped_mirrored_lines: u64,
+    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    backend: Option<Pi4LocalSeat>,
+}
+
+impl LocalSeatRuntime {
+    /// Create a new runtime buffer set for the active local-seat manifest.
+    #[must_use]
+    pub fn new(status: LocalSeatStatus) -> Self {
+        Self {
+            status,
+            keyboard_queue: VecDeque::new(),
+            mirrored_lines: VecDeque::new(),
+            dropped_keyboard_bytes: 0,
+            dropped_mirrored_lines: 0,
+            #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+            backend: None,
+        }
+    }
+
+    /// Return manifest-derived runtime limits.
+    #[must_use]
+    pub const fn status(&self) -> LocalSeatStatus {
+        self.status
+    }
+
+    /// Queue keyboard bytes received from a HAL-owned input backend.
+    ///
+    /// Returns the number of bytes accepted into the bounded queue.
+    pub fn enqueue_keyboard_bytes(&mut self, bytes: &[u8]) -> usize {
+        let mut accepted = 0usize;
+        for &byte in bytes {
+            if self.keyboard_queue.len() >= KEYBOARD_QUEUE_MAX_BYTES {
+                self.dropped_keyboard_bytes = self.dropped_keyboard_bytes.saturating_add(1);
+                continue;
+            }
+            self.keyboard_queue.push_back(byte);
+            accepted = accepted.saturating_add(1);
+        }
+        accepted
+    }
+
+    /// Drain queued keyboard bytes into `out` and return bytes written.
+    pub fn drain_keyboard_bytes(&mut self, out: &mut [u8]) -> usize {
+        let mut written = 0usize;
+        for slot in out.iter_mut() {
+            match self.keyboard_queue.pop_front() {
+                Some(byte) => {
+                    *slot = byte;
+                    written = written.saturating_add(1);
+                }
+                None => break,
+            }
+        }
+        written
+    }
+
+    /// Mirror a console line into the bounded local-seat output ring.
+    pub fn mirror_line(&mut self, line: &str) {
+        let truncated = truncate_for_display(line, self.status.line_bytes);
+        let mut mirrored = String::new();
+        mirrored.push_str(truncated);
+
+        while self.mirrored_lines.len() >= usize::from(self.status.buffer_lines) {
+            if self.mirrored_lines.pop_front().is_none() {
+                break;
+            }
+            self.dropped_mirrored_lines = self.dropped_mirrored_lines.saturating_add(1);
+        }
+        self.mirrored_lines.push_back(mirrored);
+
+        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        if let Some(backend) = self.backend.as_mut() {
+            backend.write_line(truncated);
+        }
+    }
+
+    /// Snapshot mirrored lines for diagnostics/tests.
+    #[must_use]
+    pub fn mirrored_lines_snapshot(&self) -> Vec<String> {
+        self.mirrored_lines.iter().cloned().collect()
+    }
+
+    /// Count of keyboard bytes dropped due to queue saturation.
+    #[must_use]
+    pub const fn dropped_keyboard_bytes(&self) -> u64 {
+        self.dropped_keyboard_bytes
+    }
+
+    /// Count of mirrored lines dropped due to ring saturation.
+    #[must_use]
+    pub const fn dropped_mirrored_lines(&self) -> u64 {
+        self.dropped_mirrored_lines
+    }
+
+    /// Poll the platform local-seat input backend and enqueue discovered bytes.
+    pub fn poll_backend_keyboard(&mut self) {
+        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        {
+            let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
+            if let Some(backend) = self.backend.as_mut() {
+                let read = backend.poll_keyboard_bytes(&mut chunk);
+                if read > 0 {
+                    let _ = self.enqueue_keyboard_bytes(&chunk[..read]);
+                }
+            }
+        }
+    }
+
+    /// Returns whether a physical backend is attached to this runtime.
+    #[must_use]
+    pub fn backend_attached(&self) -> bool {
+        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        {
+            return self.backend.is_some();
+        }
+        #[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+        {
+            false
+        }
+    }
+
+    /// Attach a platform backend (HDMI text + keyboard ingress) to this runtime.
+    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    pub fn attach_backend(&mut self, backend: Pi4LocalSeat) {
+        self.backend = Some(backend);
+    }
+}
+
+/// Runtime local-seat backend initialisation error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalSeatBackendError {
+    /// Platform backend initialisation failed with a Pi4-specific reason.
+    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    Pi4(Pi4SeatError),
+    /// No local-seat backend is available on this profile/target.
+    Unsupported,
+}
+
+impl LocalSeatBackendError {
+    /// Stable diagnostic token.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+            Self::Pi4(err) => err.as_str(),
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+/// Try to attach a concrete platform backend to a local-seat runtime.
+#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+pub fn attach_platform_backend(
+    runtime: &mut LocalSeatRuntime,
+    hal: &mut crate::hal::KernelHal<'_>,
+    xhci_mmio_hint: Option<usize>,
+) -> Result<(), LocalSeatBackendError> {
+    let backend = Pi4LocalSeat::new(hal, xhci_mmio_hint).map_err(LocalSeatBackendError::Pi4)?;
+    runtime.attach_backend(backend);
+    Ok(())
+}
+
+/// Host/test profile backend attach path (always unavailable).
+#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[cfg(feature = "kernel")]
+pub fn attach_platform_backend(
+    _runtime: &mut LocalSeatRuntime,
+    _hal: &mut crate::hal::KernelHal<'_>,
+    _xhci_mmio_hint: Option<usize>,
+) -> Result<(), LocalSeatBackendError> {
+    Err(LocalSeatBackendError::Unsupported)
 }
 
 /// Non-fatal degraded modes when `required=false`.
@@ -76,6 +274,19 @@ impl LocalSeatError {
             Self::BackendUnavailable => "backend-unavailable",
         }
     }
+}
+
+/// Returns whether the local-seat runtime backend is available.
+///
+/// The current backend provides bounded keyboard buffering and mirrored output
+/// routing while HAL-owned physical USB/HDMI device transports are attached.
+#[must_use]
+pub const fn runtime_backend_available() -> bool {
+    cfg!(all(
+        feature = "kernel",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))
 }
 
 /// Evaluate local-seat initialisation policy.
@@ -230,5 +441,45 @@ mod tests {
     fn mirror_truncation_respects_configured_bound() {
         let truncated = truncate_for_display("0123456789abcdef", 8);
         assert_eq!(truncated, "01234567");
+    }
+
+    #[test]
+    fn runtime_queues_keyboard_bytes_with_bounded_capacity() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        let payload = [b'a'; KEYBOARD_QUEUE_MAX_BYTES + 64];
+        let accepted = runtime.enqueue_keyboard_bytes(&payload);
+        assert_eq!(accepted, KEYBOARD_QUEUE_MAX_BYTES);
+        assert_eq!(runtime.dropped_keyboard_bytes(), 64);
+
+        let mut drained = vec![0u8; 32];
+        let read = runtime.drain_keyboard_bytes(&mut drained);
+        assert_eq!(read, 32);
+        assert!(drained.iter().all(|byte| *byte == b'a'));
+    }
+
+    #[test]
+    fn runtime_mirrors_lines_with_manifest_bounds() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 5,
+            buffer_lines: 2,
+        });
+
+        runtime.mirror_line("123456");
+        runtime.mirror_line("abcdef");
+        runtime.mirror_line("xyz");
+
+        let lines = runtime.mirrored_lines_snapshot();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "abcde");
+        assert_eq!(lines[1], "xyz");
+        assert_eq!(runtime.dropped_mirrored_lines(), 1);
     }
 }

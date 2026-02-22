@@ -23,6 +23,7 @@ ELFLOADER_OVERRIDDEN=0
 KERNEL_OVERRIDDEN=0
 SYNC_EMBEDDED_ROOTSERVER=1
 REBUILD_ELFLOADER=1
+EXPECTED_RPI4_MEMORY_MB="${COHESIX_RPI4_MEMORY_MB:-8192}"
 
 usage() {
     cat <<'USAGE'
@@ -50,6 +51,7 @@ Options:
                              Skip syncing Cohesix rootserver into <sel4-build-dir>/elfloader/rootserver
   --no-rebuild-elfloader     Skip rebuilding elfloader.efi after rootserver sync
   --allow-non-uefi-profile   Do not fail when manifest.profile.name != uefi-aarch64
+  --rpi4-memory-mb <mb>      Expected seL4 RPI4 memory profile (1024|2048|4096|8192; default: env COHESIX_RPI4_MEMORY_MB or 8192)
   --force                    Remove existing output directory before building
   -h, --help                 Show this help
 USAGE
@@ -103,6 +105,10 @@ while [[ $# -gt 0 ]]; do
         --allow-non-uefi-profile)
             ALLOW_NON_UEFI_PROFILE=1
             shift
+            ;;
+        --rpi4-memory-mb)
+            EXPECTED_RPI4_MEMORY_MB="$2"
+            shift 2
             ;;
         --force)
             FORCE=1
@@ -226,6 +232,70 @@ detect_gic_version() {
     return 0
 }
 
+detect_rpi4_memory_mb() {
+    local devices_header="$1"
+    python3 - "$devices_header" <<'PY'
+import pathlib
+import re
+import sys
+
+header = pathlib.Path(sys.argv[1])
+text = header.read_text(encoding="utf-8")
+ends = [int(value, 16) for value in re.findall(r"\.end\s*=\s*0x([0-9a-fA-F]+)", text)]
+if not ends:
+    raise SystemExit(1)
+max_end = max(ends)
+profiles = [
+    (0x200000000, 8192),
+    (0xFC000000, 4096),
+    (0x7C000000, 2048),
+    (0x3B400000, 1024),
+]
+for threshold, profile_mb in profiles:
+    if max_end >= threshold:
+        print(profile_mb)
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+validate_rpi4_memory_profile() {
+    local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
+    local devices_header="${SEL4_BUILD_DIR}/kernel/gen_headers/plat/machine/devices_gen.h"
+    local kernel_platform=""
+    local detected_memory_mb=""
+    local sel4_source_dir=""
+
+    [[ -f "$cache_file" ]] || return 0
+    kernel_platform="$(awk -F= '/^KernelPlatform:STRING=/{print $2; exit}' "$cache_file")"
+    if [[ "$kernel_platform" != "bcm2711" ]]; then
+        return 0
+    fi
+
+    case "$EXPECTED_RPI4_MEMORY_MB" in
+        1024|2048|4096|8192) ;;
+        *)
+            fail "invalid --rpi4-memory-mb value '${EXPECTED_RPI4_MEMORY_MB}' (expected 1024|2048|4096|8192)"
+            ;;
+    esac
+
+    require_file "$devices_header"
+    detected_memory_mb="$(detect_rpi4_memory_mb "$devices_header" || true)"
+    if [[ -z "$detected_memory_mb" ]]; then
+        fail "unable to detect RPi4 memory profile from ${devices_header}"
+    fi
+
+    if [[ "$detected_memory_mb" != "$EXPECTED_RPI4_MEMORY_MB" ]]; then
+        sel4_source_dir="$(awk -F= '/^CMAKE_HOME_DIRECTORY:INTERNAL=/{print $2; exit}' "$cache_file")"
+        if [[ -z "$sel4_source_dir" ]]; then
+            sel4_source_dir="<seL4-source-dir>"
+        fi
+        fail "RPI4 memory profile mismatch: expected ${EXPECTED_RPI4_MEMORY_MB} MiB, detected ${detected_memory_mb} MiB. Reconfigure with: cmake -S ${sel4_source_dir} -B ${SEL4_BUILD_DIR} -DKernelPlatform=bcm2711 -DElfloaderImage=efi -DRPI4_MEMORY=${EXPECTED_RPI4_MEMORY_MB}"
+    fi
+
+    log "validated RPI4 memory profile: ${detected_memory_mb} MiB"
+}
+
 embedded_rootserver_size() {
     local image="$1"
     python3 - "$image" <<'PY'
@@ -297,6 +367,12 @@ PY
 sync_embedded_rootserver() {
     local embedded_rootserver="${SEL4_BUILD_DIR}/elfloader/rootserver"
     local generated_image=""
+    local image_candidate=""
+    local kernel_platform=""
+    local cmake_project_name=""
+    local expected_rootserver_size=""
+    local generated_rootserver_size=""
+    local sel4test_driver_rootserver=""
 
     if [[ "$SYNC_EMBEDDED_ROOTSERVER" -ne 1 ]]; then
         log "skipping embedded rootserver sync (--no-sync-embedded-rootserver)"
@@ -306,6 +382,18 @@ sync_embedded_rootserver() {
     [[ -d "$SEL4_BUILD_DIR" ]] || fail "seL4 build directory not found: ${SEL4_BUILD_DIR}"
     require_file "$ROOTSERVER_ELF"
     require_file "$embedded_rootserver"
+
+    if [[ -f "${SEL4_BUILD_DIR}/CMakeCache.txt" ]]; then
+        kernel_platform="$(awk -F= '/^KernelPlatform:STRING=/{print $2; exit}' "${SEL4_BUILD_DIR}/CMakeCache.txt")"
+        cmake_project_name="$(awk -F= '/^CMAKE_PROJECT_NAME:STATIC=/{print $2; exit}' "${SEL4_BUILD_DIR}/CMakeCache.txt")"
+    fi
+    if [[ "$cmake_project_name" == "sel4test" ]]; then
+        sel4test_driver_rootserver="${SEL4_BUILD_DIR}/apps/sel4test-driver/sel4test-driver"
+        if [[ -f "$sel4test_driver_rootserver" ]]; then
+            copy_file "$ROOTSERVER_ELF" "$sel4test_driver_rootserver"
+            log "seeded sel4test-driver rootserver payload from ${ROOTSERVER_ELF}"
+        fi
+    fi
 
     if cmp -s "$ROOTSERVER_ELF" "$embedded_rootserver"; then
         log "embedded rootserver source already matches ${ROOTSERVER_ELF}"
@@ -325,10 +413,35 @@ sync_embedded_rootserver() {
         fail "elfloader.efi rebuild failed (see ${LOG_FILE})"
     fi
 
-    generated_image="$(find "${SEL4_BUILD_DIR}/images" -maxdepth 1 -type f -name "*-image-*" | sort | head -n 1 || true)"
+    if [[ -f "$embedded_rootserver" ]]; then
+        expected_rootserver_size="$(wc -c < "$embedded_rootserver" | tr -d '[:space:]')"
+    else
+        expected_rootserver_size="$(wc -c < "$ROOTSERVER_ELF" | tr -d '[:space:]')"
+    fi
+
+    if [[ -n "$kernel_platform" ]]; then
+        while IFS= read -r image_candidate; do
+            [[ -n "$image_candidate" ]] || continue
+            generated_rootserver_size="$(embedded_rootserver_size "$image_candidate" || true)"
+            if [[ "$generated_rootserver_size" == "$expected_rootserver_size" ]]; then
+                generated_image="$image_candidate"
+                break
+            fi
+            log "ignoring generated image ${image_candidate}: embedded rootserver size ${generated_rootserver_size:-unknown} does not match expected ${expected_rootserver_size}"
+        done < <(find "${SEL4_BUILD_DIR}/images" -maxdepth 1 -type f -name "*-image-arm-${kernel_platform}" | sort)
+    fi
+
     if [[ -n "$generated_image" ]]; then
+        log "selected generated image for KernelPlatform=${kernel_platform}: ${generated_image}"
         copy_file "$generated_image" "$ELFLOADER_EFI"
         log "updated ${ELFLOADER_EFI} from ${generated_image}"
+    else
+        generated_rootserver_size="$(embedded_rootserver_size "$ELFLOADER_EFI" || true)"
+        if [[ "$generated_rootserver_size" == "$expected_rootserver_size" ]]; then
+            log "using ${ELFLOADER_EFI}: embedded rootserver size ${generated_rootserver_size}"
+        else
+            log "no generated image candidate matched embedded rootserver size ${expected_rootserver_size}; keeping ${ELFLOADER_EFI}"
+        fi
     fi
 }
 
@@ -342,12 +455,17 @@ if [[ -n "$DTB_DIR" && ! -d "$DTB_DIR" ]]; then
 fi
 
 resolve_sel4_build_dir
+validate_rpi4_memory_profile
 sync_embedded_rootserver
 require_file "$ELFLOADER_EFI"
 require_file "$KERNEL_ELF"
 
 embedded_size="$(embedded_rootserver_size "$ELFLOADER_EFI" || true)"
-expected_size="$(wc -c < "$ROOTSERVER_ELF" | tr -d '[:space:]')"
+if [[ -f "${SEL4_BUILD_DIR}/elfloader/rootserver" ]]; then
+    expected_size="$(wc -c < "${SEL4_BUILD_DIR}/elfloader/rootserver" | tr -d '[:space:]')"
+else
+    expected_size="$(wc -c < "$ROOTSERVER_ELF" | tr -d '[:space:]')"
+fi
 if [[ -z "$embedded_size" ]]; then
     fail "could not locate embedded rootserver entry inside ${ELFLOADER_EFI}"
 fi

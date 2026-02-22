@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide bounded serial console primitives for the root task and host simulations.
 // Author: Lukas Bower
@@ -26,6 +26,10 @@ use portable_atomic::AtomicU32;
 #[cfg(feature = "kernel")]
 use portable_atomic::{AtomicU64, Ordering as AtomicOrdering};
 
+#[cfg(feature = "kernel")]
+pub mod bcm2711_mini_uart;
+#[cfg(feature = "kernel")]
+pub mod kernel_uart;
 #[cfg(feature = "kernel")]
 pub mod pl011;
 pub mod virtio;

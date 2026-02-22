@@ -282,6 +282,14 @@ pub trait Hardware {
     /// Allocates a DMA-capable frame and maps it into the DMA window.
     fn alloc_dma_frame(&mut self) -> Result<RamFrame, Self::Error>;
 
+    /// Allocates a DMA-capable frame from the lowest-address RAM untyped.
+    ///
+    /// Platforms may route this to the default DMA allocator when no low-memory
+    /// distinction is required.
+    fn alloc_dma_frame_low(&mut self) -> Result<RamFrame, Self::Error> {
+        self.alloc_dma_frame()
+    }
+
     /// Allocates a DMA-capable frame with the requested cache attribute.
     fn alloc_dma_frame_attr(
         &mut self,
@@ -359,6 +367,10 @@ impl<'a> Hardware for KernelHal<'a> {
 
     fn alloc_dma_frame(&mut self) -> Result<RamFrame, Self::Error> {
         self.env.alloc_dma_frame().map_err(HalError::from)
+    }
+
+    fn alloc_dma_frame_low(&mut self) -> Result<RamFrame, Self::Error> {
+        self.env.alloc_dma_frame_low().map_err(HalError::from)
     }
 
     fn alloc_dma_frame_attr(

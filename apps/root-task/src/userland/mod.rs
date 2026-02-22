@@ -38,7 +38,7 @@ use crate::platform::Platform;
 use crate::profile;
 use crate::sel4;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
-use crate::serial::pl011::{Pl011, Pl011Mmio};
+use crate::serial::pl011::Pl011;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::uart::pl011;
 use heapless::String as HeaplessString;
@@ -62,7 +62,13 @@ pub fn main(ctx: BootContext) -> ! {
     boot_log::force_uart_line("[mark] bootstrap.runtime.enter");
 
     #[cfg(all(feature = "serial-console", feature = "kernel"))]
-    let uart_base = ctx.uart_mmio.as_ref().map(Pl011Mmio::vaddr);
+    let uart_base = ctx.uart_mmio.as_ref().map(|mmio| mmio.vaddr());
+    #[cfg(all(feature = "serial-console", feature = "kernel"))]
+    let uart_backend = ctx
+        .uart_mmio
+        .as_ref()
+        .map(|mmio| mmio.label())
+        .unwrap_or("none");
 
     let mut audit = LoggerAudit;
     #[cfg(feature = "kernel")]
@@ -99,8 +105,8 @@ pub fn main(ctx: BootContext) -> ! {
         target: "userland",
         "[userland] event-pump: building console runtime (serial + timer + ipc)"
     );
-    // The event pump is the single source of truth for console I/O so the
-    // PL011 UART and TCP transports both feed the same CLI engine.
+    // The event pump is the single source of truth for console I/O so UART and
+    // TCP transports both feed the same CLI engine.
     let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
     log::info!(
         target: "userland",
@@ -111,6 +117,7 @@ pub fn main(ctx: BootContext) -> ! {
     #[cfg(all(feature = "serial-console", feature = "kernel"))]
     log::info!("[console] spawn: starting root console task on serial");
     pump = attach_kernel_console(pump, &ctx, bootstrap_ipc.as_mut());
+    pump = attach_local_seat(pump, &ctx);
     pump = attach_ninedoor_bridge(pump, &ctx);
 
     #[cfg(feature = "net-console")]
@@ -154,19 +161,21 @@ pub fn main(ctx: BootContext) -> ! {
     {
         log::info!(
             target: "root_task::kernel",
-            "[boot] phase: RootShell.begin (uart_slot_present={}, uart_vaddr_present={})",
+            "[boot] phase: RootShell.begin (uart_slot_present={}, uart_vaddr_present={}, uart_backend={})",
             ctx.uart_slot.is_some(),
             uart_base.is_some(),
+            uart_backend,
         );
         if ctx.uart_slot.is_none() || uart_base.is_none() {
             log::warn!(
                 target: "userland",
-                "[userland] PL011 mapping unavailable; continuing with serial console anyway"
+                "[userland] UART mapping unavailable; continuing with serial console anyway"
             );
         }
         log::info!(
             target: "userland",
-            "[userland] event-pump: mapping PL011 for shared console I/O"
+            "[userland] event-pump: using UART backend={} for shared console I/O",
+            uart_backend
         );
         log::info!(
             target: "root_task::kernel",
@@ -379,6 +388,37 @@ where
 }
 
 #[cfg(feature = "kernel")]
+fn attach_local_seat<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    ctx: &BootContext,
+) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    if let Some(runtime) = ctx.local_seat.borrow_mut().take() {
+        pump = pump.with_local_seat(runtime);
+    }
+    pump
+}
+
+#[cfg(not(feature = "kernel"))]
+fn attach_local_seat<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    _ctx: &BootContext,
+) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    pump
+}
+
+#[cfg(feature = "kernel")]
 fn attach_ninedoor_bridge<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
     mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
     ctx: &BootContext,
@@ -481,7 +521,7 @@ fn start_kernel_cli<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE
     pump.start_cli();
     log::info!(
         target: "userland",
-        "Root shell: Cohesix console online on PL011",
+        "Root shell: Cohesix console online on UART",
     );
 }
 

@@ -83,3 +83,4 @@ cohesix-cas = { path = "crates/cohesix-cas" }
 
 [patch.crates-io]
 sel4-sys = { path = "crates/sel4-sys" }
+usb-oxide = { path = "third_party/usb-oxide" }
