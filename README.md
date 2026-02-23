@@ -65,7 +65,7 @@ Operators interact with Cohesix through two consoles:
 - a local **PL011 UART console** for early bring-up and recovery, and  
 - a **remote TCP console** consumed by the `cohsh` shell, which mirrors serial semantics and provides the primary operational interface from Unix-like hosts.
 
-The intended deployment target is **physical ARM64 hardware booted via UEFI**. Today, QEMU `aarch64/virt` is used for bring-up, CI, and testing, with the expectation that QEMU behaviour closely mirrors the eventual hardware profiles. Cohesix is **not** a general-purpose operating system and deliberately avoids POSIX semantics, libc, dynamic linking, and in-VM hardware stacks to keep the system small and analyzable.
+The intended deployment target is **physical ARM64 hardware**, with Raspberry Pi 4 bring-up aligned to the upstream seL4 **U-Boot + binary image** flow. Today, QEMU `aarch64/virt` is used for bring-up, CI, and testing, with the expectation that QEMU behaviour closely mirrors the eventual hardware profiles where applicable. Cohesix is **not** a general-purpose operating system and deliberately avoids POSIX semantics, libc, dynamic linking, and in-VM hardware stacks to keep the system small and analyzable.
 
 In short, Cohesix treats **orchestration itself as an operating-system problem**, with authority, lifecycle, and failure handling as first-class concerns.
 
@@ -125,7 +125,7 @@ flowchart LR
     GPUB["gpu-bridge-host (host)<br/>CUDA and NVML here<br/>lease enforcement<br/>publishes gpu + models"]:::hosttool
   end
 
-  subgraph TARGET["Target (QEMU aarch64 virt today; UEFI ARM64 later)"]
+  subgraph TARGET["Target (QEMU aarch64 virt today; Pi4 U-Boot bare metal)"]
     subgraph K["Upstream seL4 kernel"]
       SEL4["seL4<br/>caps, IPC, scheduling<br/>formal foundation"]:::kernel
     end

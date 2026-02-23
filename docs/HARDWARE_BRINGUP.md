@@ -1,59 +1,72 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Document Cohesix UEFI hardware bring-up workflows and constraints. -->
+<!-- Purpose: Document Cohesix Raspberry Pi 4 hardware bring-up workflows and constraints using the official U-Boot + binary image path. -->
 <!-- Author: Lukas Bower -->
 # Hardware Bring-up (As-Built)
 
 ## Scope
 - Cohesix supports two bring-up paths:
 - QEMU `aarch64/virt` (development/CI baseline).
-- UEFI aarch64 boot packaging with `elfloader.efi` handoff semantics (`UEFI -> elfloader.efi -> seL4 -> root-task`).
-- Milestone 26 keeps a strict no-NIC baseline for `uefi-aarch64`.
+- Raspberry Pi 4 (`bcm2711`) via upstream-style boot chain: `Pi firmware -> U-Boot -> seL4 image -> root-task`.
+- Milestone 26 keeps a strict no-NIC runtime baseline on Pi 4.
 
-## UEFI tooling
-- `scripts/uefi/esp-build.sh` builds a deterministic ESP tree with:
-- `EFI/BOOT/BOOTAA64.EFI`
-- `cohesix/kernel.elf`
-- `cohesix/rootserver`
-- `cohesix/gic-version.txt`
-- optional `cohesix/initrd.cpio`
-- `cohesix/manifest.json` + `cohesix/manifest.sha256`
-- optional `dtb/*`
-- `scripts/uefi/esp-build.sh` syncs `out/cohesix/staging/rootserver` into `seL4/build_UEFI/elfloader/rootserver`, rebuilds `elfloader.efi`, and verifies the embedded rootserver payload before packaging.
-- `scripts/uefi/esp-build.sh` validates the `bcm2711` memory profile against generated seL4 headers and fails fast when `RPI4_MEMORY` does not match (`--rpi4-memory-mb`, default `8192` MiB).
-- `scripts/uefi/qemu-uefi.sh` boots UEFI on QEMU using EDK2 pflash + FAT-backed ESP.
-- `scripts/uefi/qemu-uefi.sh` auto-detects GIC version from ESP/seL4 config and defaults to `-machine virt,gic-version=<detected>,virtualization=on` (`kernel-irqchip=off` is included by default on macOS to match release `run.sh` behavior).
-- For `qemu-arm-virt` SMP builds, the DTB consumed by upstream seL4/elfloader should report `psci.method = "smc"` (for example by dumping DTB from `qemu-system-aarch64 -machine virt,virtualization=on,...`).
-- Both scripts write auditable logs/artifacts under `out/uefi/`.
+## Canonical Pi 4 boot chain
+1. Pi boot firmware loads `start4.elf` and `fixup4.dat`.
+2. Firmware loads `u-boot.bin` (from FAT boot partition).
+3. U-Boot loads the seL4 image (`sel4test-driver-image-arm-bcm2711`) using `fatload`.
+4. U-Boot transfers control with `go`.
+5. seL4 enters root-task; Cohesix reaches `cohesix>` prompt.
 
 ## Manifest profiles
 - Development profile: `configs/root_task.toml` (`profile.name = "virt-aarch64"`).
-- UEFI profile: `configs/root_task_uefi_aarch64.toml` (`profile.name = "uefi-aarch64"`).
-- `coh-rtc` enforces Milestone 26 UEFI gates:
+- Pi 4 bare-metal profile: `profile.name = "pi4-uboot-aarch64"` (legacy `uefi-aarch64` accepted only as transition alias while migration completes).
+- `coh-rtc` enforces Milestone 26 gates:
 - `hw.no_nic=true`
 - `features.net_console=false`
 - declared `uart` + `rtc` devices
 - local-seat declarations when `hw.local_seat.enabled=true`
 - attestation policy/device requirements when `hw.attestation.enabled=true`
 
-## UEFI build/boot commands
-1. Build EFI elfloader (requires a configured upstream seL4 CMake tree with `ElfloaderImage=efi`, typically `seL4/build_UEFI`):
-`cmake --build seL4/build_UEFI`
-2. Resolve UEFI manifest:
-`cargo run -p coh-rtc -- configs/root_task_uefi_aarch64.toml --out out/uefi/generated --manifest out/uefi/root_task_resolved_uefi.json --cas-manifest-template out/uefi/cas_manifest_template_uefi.json --cli-script out/uefi/boot_v0_uefi.coh --doc-snippet out/uefi/root_task_manifest_uefi.md --gpu-breadcrumbs-snippet out/uefi/gpu_breadcrumbs_uefi.md --observability-interfaces-snippet out/uefi/observability_interfaces_uefi.md --observability-security-snippet out/uefi/observability_security_uefi.md --ticket-quotas-snippet out/uefi/ticket_quotas_uefi.md --trace-policy-snippet out/uefi/trace_policy_uefi.md --cas-interfaces-snippet out/uefi/cas_interfaces_uefi.md --cas-security-snippet out/uefi/cas_security_uefi.md --cohesix-py-defaults out/uefi/cohesix_py_defaults_uefi.py --cohesix-py-doc out/uefi/cohesix_py_defaults_uefi.md --coh-doctor-doc out/uefi/coh_doctor_checks_uefi.md --cohsh-policy out/uefi/cohsh_policy_uefi.toml --cohsh-policy-rust out/uefi/cohsh_policy_uefi.rs --cohsh-policy-doc out/uefi/cohsh_policy_uefi.md --cohsh-client-rust out/uefi/cohsh_client_uefi.rs --cohsh-client-doc out/uefi/cohsh_client_uefi.md --cohsh-grammar-doc out/uefi/cohsh_grammar_uefi.md --cohsh-ticket-policy-doc out/uefi/cohsh_ticket_policy_uefi.md --coh-policy out/uefi/coh_policy_uefi.toml --coh-policy-rust out/uefi/coh_policy_uefi.rs --coh-policy-doc out/uefi/coh_policy_uefi.md --swarmui-defaults out/uefi/swarmui_defaults_uefi.toml --swarmui-defaults-rust out/uefi/swarmui_defaults_uefi.rs --swarmui-defaults-doc out/uefi/swarmui_defaults_uefi.md`
-3. Build deterministic ESP:
-`scripts/uefi/esp-build.sh --manifest out/uefi/root_task_resolved_uefi.json --out-dir out/uefi/m26`
-4. Boot in QEMU UEFI mode:
-`scripts/uefi/qemu-uefi.sh --esp-dir out/uefi/m26/esp --console serial`
+## Pi 4 build + boot commands
+1. Build seL4 Pi 4 image:
+`cmake --build seL4/build_UEFI --target images/sel4test-driver-image-arm-bcm2711`
+2. Build U-Boot (Pi 4):
+`make -C third_party/u-boot rpi_4_defconfig`
+`make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j$(sysctl -n hw.ncpu)`
+3. Prepare FAT boot partition with:
+- Pi firmware files (`start4.elf`, `fixup4.dat`, required DTB/overlay files),
+- `u-boot.bin`,
+- `sel4test-driver-image-arm-bcm2711`,
+- Cohesix manifest artifacts (`manifest.json`, `manifest.sha256`, and related packaged assets).
+4. Ensure `config.txt` includes:
+- `arm_64bit=1`
+- `enable_uart=1`
+- `kernel=u-boot.bin`
+5. Boot from U-Boot shell:
+- `fatls mmc 0:1`
+- `fatload mmc 0:1 ${loadaddr} sel4test-driver-image-arm-bcm2711`
+- `go ${loadaddr}`
 
-## Raspberry Pi 4 UEFI Settings (Firmware 1.50)
-- For local-seat HDMI + USB keyboard bring-up, use:
-- `setvar XhciPci -guid CD7CC258-31DB-22E6-9F22-63B0B8EED6B5 -bs -rt -nv =0x00000000`
-- `setvar XhciReload -guid CD7CC258-31DB-22E6-9F22-63B0B8EED6B5 -bs -rt -nv =0x00000001`
-- `setvar SystemTableMode -guid CD7CC258-31DB-22E6-9F22-63B0B8EED6B5 -bs -rt -nv =0x00000001`
-- `setvar RamLimitTo3GB -guid CD7CC258-31DB-22E6-9F22-63B0B8EED6B5 -bs -rt -nv =0x00000001`
-- Reboot firmware after applying values.
-- NIC can be re-enabled later by restoring firmware defaults for USB/PCIe networking variables; this does not change Cohesix serial/local-seat protocol semantics.
+## U-Boot networking setup (for 26a/26b prep)
+- These settings are pre-boot controls; Milestone 26 runtime remains no-NIC.
+- Typical env setup:
+- `setenv autoload no`
+- `setenv ipaddr <board-ip>`
+- `setenv serverip <host-ip>`
+- `setenv ethact <interface>`
+- `dhcp`
+- `ping ${serverip}`
+- `saveenv`
+
+## macOS U-Boot debug harness (fast iteration)
+- Purpose: validate U-Boot scripts/env/network setup behavior quickly before hardware retest.
+- Build QEMU U-Boot:
+`make -C third_party/u-boot qemu_arm64_defconfig`
+`make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j$(sysctl -n hw.ncpu)`
+- Run:
+`qemu-system-aarch64 -machine virt -cpu cortex-a57 -m 2048 -nographic -bios third_party/u-boot/u-boot.bin`
+- In harness, test env/network primitives (`printenv`, `setenv`, `dhcp`, `ping`, `tftpboot`) and script logic.
+- Limitation: this harness does not prove Pi 4 USB keyboard, HDMI output, or GENET fidelity; those are hardware-only checks.
 
 ## Milestone 26 boot evidence requirements
 - `/proc/boot` must include:
@@ -62,12 +75,16 @@
 - `manifest.hw.networking=disabled-m26-baseline`
 - `attestation.bound_manifest_sha256=...`
 - `attestation.evidence_sha256=...` (when attestation enabled)
+- Pi 4 local-seat proof must show:
+- HDMI displays `cohesix>` prompt.
+- USB keyboard input reaches the existing root-console parser.
+- Typed commands produce visible responses on HDMI with deterministic ordering relative to serial.
 - Boot must fail before ticket registration if:
 - attestation is required/enabled and policy cannot be satisfied.
-- `hw.local_seat.required=true` and local-seat initialisation cannot be satisfied.
+- `hw.local_seat.required=true` and local-seat initialization cannot be satisfied.
 - If `hw.local_seat.required=false`, runtime must degrade to serial-only diagnostics with explicit `[local-seat] degraded ...` boot lines.
 
-## UEFI ownership boundary
-- Firmware-owned (pre-handoff only): UEFI boot manager/UI, Boot Services, Runtime Services.
-- Cohesix-owned (post-handoff): HAL-backed device access only (UART, local seat paths, attestation device plumbing, network handoff points).
-- Root-task runtime code must not call UEFI services directly after seL4 entry.
+## Bootloader/HAL ownership boundary
+- Bootloader-owned (pre-handoff): Pi firmware + U-Boot setup, media loading, pre-boot env/network commands.
+- Cohesix-owned (post-seL4): HAL-backed runtime device access only (UART, local-seat paths, attestation plumbing, network handoff points).
+- Root-task runtime code must not call bootloader/firmware services directly after seL4 entry.

@@ -3,14 +3,14 @@
 <!-- Purpose: Track Cohesix milestones, deliverables, and completion criteria for ARM64 Pure Rust userspace builds. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Build Plan (ARM64, Pure Rust Userspace)
-Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
+Cohesix targets physical ARM64 hardware with an official Raspberry Pi 4 bring-up path aligned to upstream seL4 guidance (`U-Boot + binary image`). QEMU `aarch64/virt` remains the reference setup for bring-up, CI, and deterministic regression testing.
 
 **Host:** macOS 26 on Apple Silicon (M4)
 **Target:** QEMU aarch64 `virt` (GICv3)
 **Kernel:** Upstream seL4 (external build)
 **Userspace:** Pure Rust crates (`root-task`, `nine-door`, `worker-heart`, future `worker-gpu`, `gpu-bridge-host` host tool)
 
-Physical ARM64 hardware booted via UEFI is the planned deployment environment; early milestones stabilise against QEMU `aarch64/virt` as the reference development and CI profile while preserving semantics for the eventual hardware bring-up.
+Physical ARM64 hardware remains the deployment target; for Raspberry Pi 4, Milestone 26 onward follows the upstream seL4 U-Boot handoff model while preserving QEMU `aarch64/virt` semantics as the reference development and CI profile.
 
 The milestones below build cumulatively; do not advance until the specified checks pass and documentation is updated. Each step
 is grounded in the architectural intent outlined in `docs/ARCHITECTURE.md`, the repository conventions from `docs/REPO_LAYOUT.md`,
@@ -101,13 +101,13 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25f](#25f) | Gateway Broker Refactor + Large Telemetry Reference Manifests (No-Retry Reliability Gate) | Complete |
 | [25g](#25g) | Host Control Tickets via FUSE (GPU/PEFT + systemd/docker + K8s Coexistence) | Complete |
 | [25h](#25h) | Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) | Complete |
-| [26](#26) | UEFI Bare-Metal Boot & Device Identity | Complete |
-| [26a](#26a) | UEFI Networking Baseline (Pi 4 GENETv5 + Static IPv4) | Pending |
-| [26b](#26b) | UEFI DHCP Baseline (Pi 4 NIC + Wi-Fi Policy) | Pending |
-| [27](#27) | UEFI On-Device Spool Stores + Settings Persistence | Pending |
+| [26](#26) | Official Pi 4 Bring-up (U-Boot + Binary Image) | In Progress |
+| [26a](#26a) | Pi 4 Networking Baseline (GENETv5 + Static IPv4, U-Boot Configurable) | Pending |
+| [26b](#26b) | Pi 4 DHCP Baseline (NIC + Wi-Fi Policy, U-Boot Configurable) | Pending |
+| [27](#27) | Pi 4 On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [28b](#28b) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
-| [29](#29) | Edge Local Status (UEFI Host Tool) | Pending |
+| [29](#29) | Edge Local Status (Pi 4 Host Tool) | Pending |
 | [30](#30) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
 
 ---
@@ -2712,7 +2712,7 @@ After Milestone 20h:
 **Release 0.1.0 alpha**
 ----
 
-Next, Alpha Release 2 targets a plug-and-play operator experience immediately after Milestone 20.x. Milestones 21-24 define the Alpha track; the UEFI and AWS AMI work follows starting at Milestone 26.
+Next, Alpha Release 2 targets a plug-and-play operator experience immediately after Milestone 20.x. Milestones 21-24 define the Alpha track; Pi 4 bare-metal (`U-Boot + binary image`) and AWS AMI work follows starting at Milestone 26.
 
 ## Milestone 21a — Telemetry Ingest with OS-Named Segments (Severely Limited Create) <a id="21a"></a> 
 [Milestones](#Milestones)
@@ -5872,240 +5872,232 @@ Deliverables:
 
 ---
 
-The next planned releases will target bare metal UEFI and AWS native boot via AMI.
+The next planned releases target official Raspberry Pi 4 bare-metal boot (`U-Boot + binary image`) and AWS native boot via AMI.
 
 ---
 
-## Milestone 26 — UEFI Bare-Metal Boot & Device Identity <a id="26"></a> 
+## Milestone 26 — Official Pi 4 Bring-up (U-Boot + Binary Image) <a id="26"></a> 
 [Milestones](#Milestones)
 
-**Status:** Complete — DoD checks passed and full `docs/TEST_PLAN.md` staged run completed (`out/test-plan/20260221T132259Z-m26`, Stage 01-05 all green; due-diligence log root `out/audit/gate/20260221T140141Z`).
+**Status:** In Progress — pivoted on February 23, 2026 from UEFI `BOOTAA64.EFI` bring-up to the official upstream seL4 Raspberry Pi 4 flow (`U-Boot + binary image`).
 
 **Why now (context):**  
-To meet hardware deployment goals (Edge §3 retail hubs, Edge §8 defense ISR, Security §12 segmentation), Cohesix must boot on physical aarch64 UEFI hardware with attested manifests while preserving the lean `no_std` footprint and the upstream seL4 boot model. This milestone transitions from the QEMU reference profile to physical UEFI deployment, with VM behavior expected to mirror the hardware target unless explicitly profile-gated.
+Upstream seL4 Pi 4 bring-up documentation and examples are built around loading the generated seL4 image from U-Boot (`fatload` + `go`) on `bcm2711`, not a UEFI handoff chain. Aligning Milestone 26 to this path reduces boot complexity, matches upstream behavior, and gives deterministic control at the U-Boot prompt for upcoming network milestones (26a/26b).
 
-**Non-negotiable constraint:**  
-- No networking, 9P semantics, or console behaviors may diverge between VM and UEFI profiles except where explicitly marked as hardware-profile-specific in `ARCHITECTURE.md`.
-- Any divergence must be documented and schema-gated.
-- Backward compatibility is mandatory across this UEFI rollout: Milestones 26, 26a, and 26b must not break existing QEMU workflows on macOS (`hvf`/`tcg`) or Linux (`kvm`/`tcg`) for `aarch64/virt`; any allowed divergence must be explicitly profile-gated and documented.
-- UEFI firmware networking is out of scope; all TCP behavior remains post-seL4 boot in root-task.
-- Local diagnostics on Pi 4 (`uefi-aarch64`) must reuse the existing root-console parser and command semantics; no new shell grammar or in-VM protocol is permitted.
-- The local diagnostics seat is intentionally primitive: USB keyboard input and HDMI text output only. No windowing, mouse, compositor, terminal emulation layer, or graphics stack is allowed.
-- Milestone 26 is a strict no-NIC baseline on Pi 4: hardware network bring-up is disabled and TCP console reachability on Pi 4 is out of scope until Milestone 26a.
-- All post-seL4 hardware access (UART, NET, USB input, HDMI text output, TPM, RTC) must go through HAL-owned traits/drivers. Direct MMIO/IRQ wiring outside HAL is prohibited.
-- UEFI Boot Services and Runtime Services are firmware concerns only and must not be invoked by root-task after seL4 handoff.
+**Non-negotiable constraints:**  
+- Boot chain for Pi 4 Milestone 26 is: `Pi firmware (start4/fixup) -> U-Boot -> seL4 image -> root-task`.
+- Milestone 26 acceptance no longer depends on UEFI firmware settings or `BOOTAA64.EFI`.
+- Backward compatibility remains mandatory: Pi 4 changes must not break existing QEMU workflows on macOS (`hvf`/`tcg`) or Linux (`kvm`/`tcg`) for `aarch64/virt`.
+- Local diagnostics on Pi 4 must reuse the existing root-console parser and command semantics; no new shell grammar or in-VM protocol is permitted.
+- Local diagnostics seat remains primitive: USB keyboard input + HDMI text output only; no compositor/windowing stack.
+- Milestone 26 remains a strict no-NIC runtime baseline on Pi 4; root-task network bring-up and TCP console reachability on Pi 4 start in Milestone 26a.
+- U-Boot may be used for pre-kernel network setup and diagnostics, but no new Cohesix protocol semantics may be introduced there.
+- All post-seL4 hardware access (UART, NET, USB input, HDMI text output, TPM, RTC) must go through HAL-owned traits/drivers.
 
 ---
 
-### Prerequisite (must be completed before Milestone 26)
-**Upstream elfloader EFI support**
-- Confirm and enable upstream seL4 **elfloader EFI build** to produce a valid PE/COFF EFI executable (`elfloader.efi`) for aarch64.
-- The EFI-built elfloader must:
-  - Relocate correctly under UEFI.
-  - Load the seL4 kernel, initial user image, DTB (when present), and CPIO rootfs.
-  - Preserve existing VM boot semantics once seL4 is entered.
-- Any local build glue required to emit `elfloader.efi` must not fork elfloader logic and must track upstream.
+### Prerequisites (must be completed before Milestone 26 DoD)
+**Upstream seL4 Pi 4 binary image support**
+- Confirm and use upstream seL4 image output for `KernelPlatform=bcm2711` (for example `sel4test-driver-image-arm-bcm2711`).
+- The generated image must preserve existing VM boot semantics once seL4 is entered.
+
+**Upstream U-Boot Pi 4 support**
+- Build Pi 4 U-Boot using `rpi_4_defconfig`.
+- Ensure SD card firmware handoff is configured to load `u-boot.bin` as kernel payload.
 
 ---
 
 ### Goal
-Deliver a **UEFI → elfloader.efi → seL4 → root-task** boot path that loads the generated manifest from boot media, performs TPM-backed (or DICE-fallback) identity attestation in root-task, mirrors VM behavior deterministically, and enables a primitive local diagnostics seat on Pi 4 (USB keyboard input + HDMI text output) using the existing root console semantics.
+Deliver a **Pi firmware -> U-Boot -> seL4 image -> root-task** boot path on Raspberry Pi 4 that reaches the `cohesix>` prompt with primitive local diagnostics (USB keyboard input + HDMI text output) and deterministic no-NIC runtime evidence.
 
 ---
 
 ### Deliverables
 
-- **UEFI boot chain**
-  - Use upstream **elfloader built as an EFI PE/COFF binary** (`EFI/BOOT/BOOTAA64.EFI`) as the sole UEFI application.
-  - Root-task remains the first user process post-kernel boot; root-task is never executed as an EFI application.
+- **Pi 4 U-Boot boot chain**
+  - Standard FAT boot partition contains:
+    - Raspberry Pi firmware assets (`start4.elf`, `fixup4.dat`, board DTBs/overlays as needed),
+    - `u-boot.bin`,
+    - seL4 generated image (`sel4test-driver-image-arm-bcm2711`),
+    - Cohesix manifest artifacts used by root-task.
+  - Root-task remains the first user process post-kernel boot.
 
-- **UEFI image builder**
-  - Introduce `scripts/uefi/esp-build.sh` to build a reproducible FAT ESP containing:
-    - `EFI/BOOT/BOOTAA64.EFI` (elfloader EFI)
-    - `kernel.elf`
-    - `rootserver` (root task ELF)
-    - optional `initrd.cpio`
-    - `manifest.json` and `manifest.sha256`
-    - optional `dtb/` assets (platform-specific)
-  - Deterministic file ordering and hashes; build logs captured as CI artifacts.
+- **U-Boot command path (authoritative for boot control)**
+  - Document and standardize operator commands:
+    - `fatls` to verify media,
+    - `fatload` to load image into RAM,
+    - `go` to transfer execution.
+  - Define the environment conventions that 26a/26b will extend (`loadaddr`, `ipaddr`, `serverip`, `ethact`, `autoload`, `bootcmd`).
+
+- **macOS debug harness for U-Boot scripts**
+  - Add a reproducible QEMU U-Boot harness on macOS using `qemu_arm64_defconfig` and `qemu-system-aarch64 -machine virt`.
+  - Use this harness to debug U-Boot env scripts and pre-boot network setup logic quickly.
+  - Explicitly document that QEMU harness does not prove Pi 4 USB keyboard, HDMI, or GENET hardware behavior.
 
 - **Identity & attestation**
-  - Identity subsystem implemented in root-task leveraging **TPM 2.0** or declared **DICE fallback**.
+  - Identity subsystem remains in root-task (TPM 2.0 or declared DICE fallback).
   - Capability ticket seeds are sealed only after successful attestation.
-  - Attestation evidence bound to the manifest fingerprint is appended to `/proc/boot` and exported via NineDoor.
-  - If attestation is enabled but unavailable, boot aborts deterministically with audited error and no partial state.
+  - Attestation evidence bound to manifest fingerprint is appended to `/proc/boot` and exported via NineDoor.
 
 - **Schema & validation**
-  - Manifest IR (current schema) uses `profile.name: uefi-aarch64`.
-  - Hardware declarations under a gated section (e.g., `hw.devices[]` with UART, NET, TPM, RTC; `hw.secure_boot`; `hw.attestation`).
-  - Validation enforces required bindings and TPM availability when attestation is enabled.
-
-- **Secure Boot documentation**
-  - Secure Boot treated as firmware enforcement; OS records and validates observable state where trustworthy.
-  - Measurements, manifest fingerprints, and bring-up notes captured in `docs/HARDWARE_BRINGUP.md` and aligned with `docs/SECURITY.md`.
-
-- **UEFI/HAL ownership boundary**
-  - Define and document an explicit ownership split:
-    - firmware-owned (UEFI pre-OS services, boot manager/UI, protocol drivers before handoff),
-    - Cohesix-owned (post-seL4 device access via HAL only).
-  - Any UEFI-derived boot metadata consumed after handoff (for example display mode hints or device declarations) must enter root-task only through manifest/DTB-generated structures validated by `coh-rtc`.
-  - Add regression guards that fail when root-task introduces direct EFI protocol/service usage or bypasses HAL for device access.
+  - Introduce profile naming aligned to boot reality (`pi4-uboot-aarch64`), with a compatibility alias from `uefi-aarch64` permitted only during migration.
+  - Validate bounded hardware declarations (`uart`, `rtc`, local-seat, attestation policy/device requirements).
+  - Enforce no-NIC runtime gate for Milestone 26 profile(s).
 
 - **Local diagnostics seat (Pi 4, essential-only)**
-  - Add a profile-gated local seat path for `uefi-aarch64` that accepts input from a USB keyboard after seL4 boot and routes it through the same root console command parser used by PL011/TCP.
-  - Add a primitive HDMI text sink that mirrors root-console output lines (boot + interactive diagnostics) with bounded buffers and deterministic truncation.
-  - Preserve existing operator model: PL011 remains authoritative in Milestone 26 and TCP remains the architectural remote surface (enabled on Pi 4 starting in Milestone 26a); local seat is an additive diagnostics ingress/egress path, not a new control-plane surface.
-  - If `hw.local_seat.required=true` and the keyboard/display path cannot initialise, boot must fail deterministically before ticket material is published. If `required=false`, the system must degrade to serial-only diagnostics in Milestone 26 with explicit audited diagnostics.
+  - Profile-gated local-seat path consumes USB keyboard input and routes bytes into the existing root console parser.
+  - Primitive HDMI text sink mirrors root-console output lines with bounded memory and deterministic truncation.
+  - If `hw.local_seat.required=true` and keyboard/display path cannot initialise, boot fails deterministically before ticket publication.
 
 - **No-NIC baseline validation (Milestone 26 only)**
-  - Root-task must complete boot/attestation/local-seat bring-up on Pi 4 without NIC initialisation.
-  - Boot diagnostics must include deterministic evidence that networking is intentionally disabled for Milestone 26 on `uefi-aarch64`.
-  - Attestation and manifest-fingerprint validation for Milestone 26 must be executable without TCP transport dependency.
-
-- **Automation & bring-up**
-  - Introduce `scripts/uefi/qemu-uefi.sh` using EDK2 pflash and the EFI-built elfloader.
-  - Optional host-only TPM emulation (e.g., `swtpm`) for QEMU testing.
-  - Lab checklist for the reference dev board.
+  - Root-task completes boot/attestation/local-seat bring-up without NIC initialisation.
+  - `/proc/boot` emits deterministic evidence that networking is intentionally disabled in Milestone 26 runtime.
 
 ---
 
 ### Commands
-- `cmake --build seL4/build --target elfloader.efi`
-- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
-- `scripts/uefi/qemu-uefi.sh --console serial`
-- `cargo check -p root-task`
-- `cargo test -p root-task --features "kernel serial-console" local_seat`
-- `rg -n "EFI_|boot_services|runtime_services|uefi::" apps/root-task/src apps/nine-door/src tools/coh-rtc/src`
-- Physical hardware checklist: capture `/proc/boot`, compare manifest hash to CI baseline.
+- Build seL4 Pi 4 image:
+  - `cmake --build seL4/build_UEFI --target images/sel4test-driver-image-arm-bcm2711`
+- Build U-Boot for Pi 4:
+  - `make -C third_party/u-boot rpi_4_defconfig`
+  - `make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j$(sysctl -n hw.ncpu)`
+- U-Boot boot commands on Pi 4:
+  - `fatls mmc 0:1`
+  - `fatload mmc 0:1 ${loadaddr} sel4test-driver-image-arm-bcm2711`
+  - `go ${loadaddr}`
+- U-Boot pre-boot networking setup commands (for 26a/26b preparation and diagnostics):
+  - `setenv autoload no`
+  - `setenv ipaddr <board-ip>`
+  - `setenv serverip <host-ip>`
+  - `dhcp`
+  - `ping ${serverip}`
+  - `saveenv`
+- macOS QEMU U-Boot harness:
+  - `make -C third_party/u-boot qemu_arm64_defconfig`
+  - `make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j$(sysctl -n hw.ncpu)`
+  - `qemu-system-aarch64 -machine virt -cpu cortex-a57 -m 2048 -nographic -bios third_party/u-boot/u-boot.bin`
+- Runtime checks:
+  - `cargo check -p root-task`
+  - `cargo test -p root-task --features "kernel serial-console" local_seat`
 
 ---
 
 ### Checks (DoD)
-- EFI-built elfloader boots under QEMU TCG and on the reference dev board.
-- Serial startup ordering **exactly matches** VM baseline; any drift is a bug unless profile-gated and documented.
-- Manifest fingerprint printed early and matches packaged hash.
-- If `hw.attestation.enabled=true`, attestation succeeds and evidence hash matches the manifest fingerprint; if unavailable, boot aborts deterministically.
-- Compiler rejects manifests selecting `uefi-aarch64` without required hardware bindings or attestation settings.
-- On Pi 4 with local seat enabled, typed USB keyboard input reaches the existing root console command handlers (for example `help`, `bi`, `caps`, `ping`) with unchanged grammar and deterministic bounds.
-- On Pi 4 with local seat enabled, root-console output is mirrored to HDMI text with deterministic line ordering relative to serial/TCP output.
-- `hw.local_seat.required` enforces deterministic fail-fast semantics when local-seat initialisation cannot be satisfied.
-- On Pi 4 during Milestone 26, networking remains intentionally disabled and TCP console reachability is not required for a successful boot.
-- Root-task post-handoff paths use HAL-only device access; no direct EFI protocol/service calls exist in runtime code.
-- Existing macOS/Linux QEMU bring-up and regression scripts continue to pass unchanged (other than explicitly documented profile-gated hardware evidence steps).
-- Full Regression Pack passes under QEMU and (where applicable) on hardware; any divergence is treated as a bug unless explicitly documented.
+- Pi 4 boots through U-Boot using `fatload` + `go` into seL4/root-task with deterministic log ordering.
+- `cohesix>` prompt appears on HDMI text output and accepts USB keyboard commands (`help`, `bi`, `caps`, `ping`) with unchanged parser semantics.
+- Command responses typed on USB keyboard are visible on HDMI and match serial transcript semantics.
+- Manifest fingerprint is printed and matches packaged hash.
+- If `hw.attestation.enabled=true`, attestation succeeds and evidence hash matches manifest fingerprint; if unavailable, boot aborts deterministically.
+- Milestone 26 runtime on Pi 4 emits deterministic no-NIC evidence and does not require TCP console reachability.
+- Root-task post-seL4 paths use HAL-only device access; no direct firmware-service assumptions in runtime code.
+- macOS QEMU U-Boot harness can execute U-Boot env/network commands for script validation; Pi 4 hardware remains authoritative for USB/HDMI/NIC proof.
+- Existing macOS/Linux QEMU regression scripts continue to pass unchanged unless explicitly profile-gated and documented.
 
 ---
 
 ### Compiler touchpoints
-- `coh-rtc` emits hardware tables for the selected profile; docs import them into `docs/HARDWARE_BRINGUP.md` and `docs/ARCHITECTURE.md`.
-- `coh-rtc` extends `uefi-aarch64` hardware schema with bounded local-seat declarations (keyboard/display presence and `required` policy), and emits generated constants consumed by root-task bring-up.
-- `coh-rtc` validates UEFI/HAL boundary declarations so post-handoff runtime configuration cannot request unsupported direct-firmware access paths.
-- `coh-rtc` enforces Milestone 26 no-NIC baseline gates for `uefi-aarch64`, reserving Pi 4 NIC-enabled profile validation for Milestone 26a.
-- Regeneration guard compares manifest fingerprints recorded in UEFI docs against generated outputs, failing CI on drift.
+- `coh-rtc` emits hardware tables for selected profile(s) and docs import them into `docs/HARDWARE_BRINGUP.md` and `docs/ARCHITECTURE.md`.
+- `coh-rtc` extends Pi 4 profile schema with bounded local-seat declarations (`enabled`, `required`, declared keyboard/display devices).
+- `coh-rtc` enforces Milestone 26 no-NIC runtime gates while allowing U-Boot pre-boot network env declarations for future milestones.
+- Migration guard: accept legacy `uefi-aarch64` manifests only through an explicit compatibility path and emit deterministic deprecation diagnostics.
 
 ---
 
 ## Task Breakdown
 ```
-Title/ID: m26-uefi-bootchain
-**Goal:** Boot via UEFI → elfloader.efi → seL4; load manifest from ESP; emit stable fingerprint lines.  
-**Inputs:** EFI-built elfloader, `scripts/uefi/esp-build.sh`, `scripts/uefi/qemu-uefi.sh`, `configs/root_task.toml` (`profile.name`).  
+Title/ID: m26-uboot-bootchain
+Goal: Boot Pi 4 via upstream U-Boot commands (`fatload` + `go`) into seL4/root-task with stable manifest fingerprint output.
+Inputs: `seL4/build_UEFI/images/sel4test-driver-image-arm-bcm2711`, `third_party/u-boot`, Pi firmware boot partition files, profile manifest.
 Changes:
-- `scripts/uefi/esp-build.sh` — build ESP with `BOOTAA64.EFI` (elfloader), kernel, rootserver, optional initrd, manifest + hash; deterministic logs.
-- `scripts/uefi/qemu-uefi.sh` — UEFI QEMU path using EDK2 pflash; keep `virt` machine for parity.
-- `apps/root-task` — print manifest fingerprint in the same serial ordering as VM baseline.
-**Commands:**
-- `cmake --build seL4/build --target elfloader.efi`
-- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
+  - `scripts/uboot/pi4-image-build.sh` — build deterministic Pi 4 FAT payload (`u-boot.bin` + seL4 image + manifest artifacts).
+  - `docs/HARDWARE_BRINGUP.md` — document canonical Pi 4 U-Boot command flow and SD layout.
+  - `apps/root-task` — preserve boot fingerprint line ordering relative to serial/local seat.
+Commands:
+  - `cmake --build seL4/build_UEFI --target images/sel4test-driver-image-arm-bcm2711`
+  - `make -C third_party/u-boot rpi_4_defconfig`
+  - `make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j$(sysctl -n hw.ncpu)`
 Checks:
-- QEMU `--uefi` serial output matches VM ordering; missing/invalid manifest aborts before any ticket material.
+  - Pi 4 reaches root-task via `fatload` + `go`; missing/invalid manifest aborts before ticket publication.
 Deliverables:
-- UEFI boot artifacts and referenced fingerprints in `docs/HARDWARE_BRINGUP.md`.
+  - Reproducible Pi 4 U-Boot boot artifacts with documented hashes and commands.
 
 ---
 
-Title/ID: m26-attestation
-Goal: Implement TPM/DICE identity sealing and export via `/proc/boot` with strict determinism.  
-Inputs: `apps/root-task/src/attest.rs`, `docs/SECURITY.md` (attestation section).  
+Title/ID: m26-uboot-mac-debug-harness
+Goal: Provide a fast macOS U-Boot/QEMU harness for debugging boot scripts and future network env setup.
+Inputs: `third_party/u-boot` (`qemu_arm64_defconfig`), `qemu-system-aarch64`, docs updates.
 Changes:
-- `apps/root-task/src/attest.rs` — bounded TPM quote path + DICE fallback; seal ticket seeds only after successful attestation.
-- `/proc/boot` — append evidence summary (hashes/IDs only; no secrets).
-- Host docs/scripts for optional QEMU TPM emulation and serial/local-seat evidence capture.
-**Commands:**
-- `scripts/uefi/qemu-uefi.sh --console serial`
-- Physical/local-seat checklist: verify root-console `help`, `bi`, and `ping`; capture attestation and manifest fingerprint lines from serial/local-seat transcript.
+  - `scripts/uboot/qemu-uboot-smoke.sh` — launch U-Boot on QEMU `virt` with deterministic serial logging.
+  - `docs/HARDWARE_BRINGUP.md` — list supported harness use cases and explicit non-goals (no Pi4 USB/HDMI/GENET fidelity).
+Commands:
+  - `make -C third_party/u-boot qemu_arm64_defconfig`
+  - `make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j$(sysctl -n hw.ncpu)`
+  - `qemu-system-aarch64 -machine virt -cpu cortex-a57 -m 2048 -nographic -bios third_party/u-boot/u-boot.bin`
 Checks:
-- Attestation failure aborts boot deterministically with audit.
-- Successful evidence hash matches manifest fingerprint.
-- VM vs hardware outputs compared from serial/local-seat transcripts; differences must be profile-gated.
-Deliverables:**
-- Attestation evidence documented in `docs/SECURITY.md` and `docs/HARDWARE_BRINGUP.md`.
+  - Harness reaches U-Boot prompt and can execute env and network setup commands deterministically.
+Deliverables:
+  - Faster pre-hardware debug loop for U-Boot setup logic.
 
 ---
 
 Title/ID: m26-local-seat-minimal
-Goal: Provide primitive local post-boot diagnostics on Pi 4 by wiring USB keyboard input and HDMI text output into the existing root console path.  
-Inputs: `apps/root-task/src/console/*`, `apps/root-task/src/userland/mod.rs`, `apps/root-task/src/event/*`, HAL device mapping, `tools/coh-rtc` schema/codegen, `configs/root_task.toml`, `docs/USERLAND_AND_CLI.md`, `docs/HARDWARE_BRINGUP.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`.  
+Goal: Provide primitive local post-boot diagnostics on Pi 4 by wiring USB keyboard input and HDMI text output into existing root-console path.
+Inputs: `apps/root-task/src/console/*`, `apps/root-task/src/userland/mod.rs`, `apps/root-task/src/event/*`, HAL mapping, `tools/coh-rtc`, profile manifest.
 Changes:
-- `apps/root-task/src/drivers/*` + HAL wiring — add minimal USB keyboard input path required for line-oriented root-console commands on Pi 4 (`uefi-aarch64`) only.
-- `apps/root-task/src/console/*` + event pump wiring — feed keyboard bytes into the existing parser/dispatcher; do not introduce new verbs, framing, or policy paths.
-- `apps/root-task/src/*` local video output module — add primitive HDMI text sink that mirrors console output with bounded memory and deterministic truncation.
-- `tools/coh-rtc/src/*` + generated artifacts — add/validate `hw.local_seat` fields (`enabled`, `required`, declared keyboard/display devices) and emit profile-gated constants.
-- `docs/USERLAND_AND_CLI.md` + `docs/HARDWARE_BRINGUP.md` + `docs/ARCHITECTURE.md` + `docs/SECURITY.md` — document local-seat behavior, failure modes, and strict non-goals (no in-VM UI stack).
+  - HAL-bound USB keyboard input path feeding existing parser/dispatcher.
+  - Primitive HDMI text sink mirroring root-console output lines with bounded memory and deterministic truncation.
+  - `coh-rtc` schema/codegen for `hw.local_seat` (`enabled`, `required`, declared devices).
 Commands:
-- `cargo check -p root-task`
-- `cargo test -p root-task --features "kernel serial-console" local_seat`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
+  - `cargo check -p root-task`
+  - `cargo test -p root-task --features "kernel serial-console" local_seat`
+  - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 Checks:
-- USB keyboard commands produce the same command parsing and responses as PL011 for root-console diagnostics.
-- HDMI output mirrors root-console lines deterministically; serial transcript remains canonical for Milestone 26.
-- `hw.local_seat.required=true` fails fast when local-seat devices are missing/unusable; `required=false` degrades to serial-only with explicit boot/audit lines.
+  - USB keyboard commands yield identical parser semantics to serial.
+  - HDMI output mirrors root-console lines deterministically.
+  - `hw.local_seat.required=true` fails fast when dependencies are unsatisfied.
 Deliverables:
-- Pi 4 local diagnostics seat evidence (boot transcript + command transcript) and aligned docs-as-built updates.
+  - Pi 4 local-seat evidence proving `cohesix>` command loop on USB keyboard + HDMI.
 
 ---
 
-Title/ID: m26-hal-uefi-boundary
-Goal: Enforce a hard boundary where UEFI remains pre-handoff firmware and all post-handoff device interactions are HAL-owned.  
-Inputs:`apps/root-task/src/hal/*`, `apps/root-task/src/drivers/*`, `apps/root-task/src/kernel.rs`, `tools/coh-rtc/src/*`, `docs/ARCHITECTURE.md`, `docs/HARDWARE_BRINGUP.md`, `docs/SECURITY.md`.  
+Title/ID: m26-hal-boundary
+Goal: Keep all post-seL4 runtime device access HAL-owned while allowing U-Boot-only pre-boot control.
+Inputs: `apps/root-task/src/hal/*`, `apps/root-task/src/drivers/*`, `apps/root-task/src/kernel.rs`, `tools/coh-rtc/src/*`, docs.
 Changes:
-- HAL and driver traits — ensure every Milestone 26 runtime path (serial, local seat input/output, attestation device access, networking handoff points) is represented through HAL interfaces and profile-gated backends.
-- Root-task runtime — remove or prohibit direct EFI service assumptions after seL4 entry; consume only validated manifest/DT-derived hardware declarations.
-- Compiler/docs guards — add deterministic checks and documentation language that classify firmware-owned vs Cohesix-owned responsibilities.
+  - Ensure all Milestone 26 runtime paths (serial, local seat, attestation, future network handoff points) are represented through HAL interfaces.
+  - Add deterministic checks and documentation language for bootloader-owned vs Cohesix-owned responsibilities.
 Commands:
-- `cargo check -p root-task`
-- `cargo test -p root-task hal:: -- --nocapture`
-- `rg -n "EFI_|boot_services|runtime_services|uefi::" apps/root-task/src apps/nine-door/src tools/coh-rtc/src`
+  - `cargo check -p root-task`
+  - `cargo test -p root-task hal:: -- --nocapture`
+  - `rg -n "EFI_|boot_services|runtime_services|uefi::" apps/root-task/src apps/nine-door/src tools/coh-rtc/src`
 Checks:
-- Runtime builds contain no direct EFI service usage in root-task paths.
-- HAL remains the sole device access surface post-handoff.
-- Docs and generated snippets remain aligned with the enforced boundary.
+  - No direct firmware-service assumptions in runtime code.
+  - HAL remains sole runtime device access surface.
 Deliverables:
-- Auditable UEFI/HAL ownership boundary with CI-friendly guard commands and updated as-built docs.
+  - Auditable bootloader/runtime boundary with CI-friendly guard commands and docs-as-built updates.
 ```
 ---
 
-## Milestone 26a — UEFI Networking Baseline (Pi 4 GENETv5 + Static IPv4) <a id="26a"></a>
+## Milestone 26a — Pi 4 Networking Baseline (GENETv5 + Static IPv4, U-Boot Configurable) <a id="26a"></a>
 [Milestones](#Milestones)
 
 **Why now (platform continuity):**  
-Milestone 26 establishes UEFI boot, identity, and a local diagnostics seat with an intentional no-NIC baseline on Raspberry Pi 4. Milestone 26a introduces the first Pi 4 native NIC path while preserving the existing root-task networking model and Cohesix control-plane semantics.
+Milestone 26 establishes Pi 4 U-Boot boot, identity, and a local diagnostics seat with an intentional no-NIC runtime baseline. Milestone 26a introduces the first Pi 4 native NIC path while preserving the existing root-task networking model and Cohesix control-plane semantics.
 
 **Non-negotiable constraints:**
 - No new in-VM listeners or protocols; the authenticated root-task TCP console remains the only in-VM TCP listener.
 - Milestone 26a is the first milestone where Pi 4 TCP console reachability is expected; Milestone 26 must remain valid without NIC/TCP on Pi 4.
 - DHCP is intentionally out of scope for 26a and is delivered in Milestone 26b; 26a uses static IPv4 only.
-- Any VM vs UEFI networking differences must be profile-gated, manifest-defined, and documented.
+- Any VM vs Pi 4 networking differences must be profile-gated, manifest-defined, and documented.
 - Driver implementation must remain HAL-bound with bounded queues and deterministic memory budgets.
-- Backward compatibility is mandatory: 26a network changes must preserve existing macOS/Linux QEMU console and networking workflows unless explicitly profile-gated for Pi 4 `uefi-aarch64`.
+- Backward compatibility is mandatory: 26a network changes must preserve existing macOS/Linux QEMU console and networking workflows unless explicitly profile-gated for Pi 4 `pi4-uboot-aarch64` (with transitional alias support for legacy `uefi-aarch64` manifests).
 
 ### Prerequisite
-- Milestone **26** completed (UEFI boot chain + device identity attestation + local diagnostics seat + UEFI/HAL boundary enforcement).
-- Milestone 26 hardware evidence includes deterministic no-NIC boot transcripts for Pi 4 (`uefi-aarch64`).
+- Milestone **26** completed (U-Boot boot chain + device identity attestation + local diagnostics seat + bootloader/HAL boundary enforcement).
+- Milestone 26 hardware evidence includes deterministic no-NIC boot transcripts for Pi 4 (`pi4-uboot-aarch64`).
 
 ### Goal
-Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` GENETv5) and wire `uefi-aarch64` static IPv4 configuration through manifest → generated artifacts → root-task net bring-up.
+Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` GENETv5) and wire `pi4-uboot-aarch64` static IPv4 configuration through manifest -> generated artifacts -> root-task net bring-up.
 
 ### Deliverables
 - **GENETv5 NIC backend (Pi 4)**
@@ -6114,9 +6106,9 @@ Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` G
   - References are design-only inputs; no direct code lift is permitted.
   - Integrate backend selection into existing `NetBackend` plumbing and keep QEMU backends (`rtl8139`/`virtio-net`) unchanged.
 
-- **Profile-gated static IPv4 for `uefi-aarch64`**
-  - Extend manifest IR and validation with bounded static IPv4 fields for UEFI profile (interface IP, prefix length, optional gateway).
-  - Generate root-task networking config from `coh-rtc` artifacts instead of hard-wired dev-virt defaults when `profile.name=uefi-aarch64`.
+- **Profile-gated static IPv4 for `pi4-uboot-aarch64`**
+  - Extend manifest IR and validation with bounded static IPv4 fields for Pi 4 U-Boot profile (interface IP, prefix length, optional gateway).
+  - Generate root-task networking config from `coh-rtc` artifacts instead of hard-wired dev-virt defaults when `profile.name=pi4-uboot-aarch64` (or accepted legacy alias).
   - Reject invalid/static-zero network configs deterministically at compile time or early boot.
 
 - **Docs-as-built alignment**
@@ -6124,20 +6116,20 @@ Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` G
     - profile-gated backend matrix (QEMU vs Pi 4),
     - static IPv4 configuration source of truth,
     - deterministic bounds and failure modes for GENETv5 bring-up.
-  - Update `docs/HARDWARE_BRINGUP.md` with Pi 4 UEFI network checklist and expected boot evidence lines.
+  - Update `docs/HARDWARE_BRINGUP.md` with Pi 4 U-Boot network checklist and expected boot evidence lines.
 
 ### Commands
 - `cargo check -p root-task`
 - `cargo test -p root-task net:: -- --nocapture`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
-- `scripts/uefi/qemu-uefi.sh --console serial --tcp-port 31337`
+- `scripts/uboot/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json`
+- `scripts/uboot/qemu-uboot-smoke.sh --net user`
 - `cargo run -p cohsh --features tcp -- --transport tcp --host <STATIC_IP> --port 31337 --script scripts/cohsh/boot_v0.coh`
 
 ### Checks (DoD)
-- Pi 4 UEFI boot reaches root-task network init and reports `GENETv5` backend with static IPv4 from manifest-generated config.
+- Pi 4 U-Boot boot reaches root-task network init and reports `GENETv5` backend with static IPv4 from manifest-generated config.
 - `cohsh --transport tcp` succeeds against the configured static address with no console grammar or ACK/ERR/END drift.
-- Invalid UEFI static IPv4 manifest settings are rejected deterministically (compiler validation and/or early-boot fail-fast).
+- Invalid Pi 4 static IPv4 manifest settings are rejected deterministically (compiler validation and/or early-boot fail-fast).
 - Pi 4 26a validation explicitly demonstrates transition from Milestone 26 no-NIC baseline to 26a NIC-enabled boot using profile-gated configuration only.
 - No DHCP client path is introduced in 26a; DHCP remains scoped to Milestone 26b.
 - Existing macOS/Linux QEMU test and operator flows remain backward compatible with pre-26 behavior.
@@ -6146,7 +6138,7 @@ Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` G
 ### Compiler touchpoints
 - `coh-rtc` emits profile-gated network config tables (backend selection + static IPv4 fields) into generated root-task artifacts.
 - Manifest validation enforces:
-  - static IPv4 required for `uefi-aarch64` network-enabled profile,
+  - static IPv4 required for `pi4-uboot-aarch64` network-enabled profile,
   - prefix bounds (`1..=32`),
   - backend/profile compatibility (`bcmgenet` only where declared in `hw.devices`).
 - Docs snippet regeneration includes static IPv4 and backend mapping excerpts for Architecture/Interfaces docs.
@@ -6172,10 +6164,10 @@ Deliverables:
   - Pi 4 GENETv5 backend integrated behind existing net abstractions with documented source provenance order (Linux `bcmgenet` -> Linux `bcm2711` DT -> U-Boot `bcmgenet`) and reference-only compliance.
 
 Title/ID: m26a-static-ipv4-profile-gate
-Goal: Make UEFI static IPv4 config manifest-authoritative and profile-gated.
+Goal: Make Pi 4 U-Boot static IPv4 config manifest-authoritative and profile-gated.
 Inputs: configs/root_task.toml, tools/coh-rtc, apps/root-task/src/generated, docs/INTERFACES.md.
 Changes:
-  - tools/coh-rtc/src/* — add IR fields + validation for `uefi-aarch64` static IPv4 network config.
+  - tools/coh-rtc/src/* — add IR fields + validation for `pi4-uboot-aarch64` static IPv4 network config.
   - apps/root-task/src/generated/* — regenerated network config outputs.
   - apps/root-task/src/net/mod.rs — consume generated profile config before dev-virt fallback defaults.
 Commands:
@@ -6184,27 +6176,27 @@ Commands:
 Checks:
   - Invalid static IPv4 entries fail deterministically; valid configs produce stable generated artifacts.
 Deliverables:
-  - Manifest-driven static IPv4 for UEFI profile with docs-as-built parity.
+  - Manifest-driven static IPv4 for Pi 4 U-Boot profile with docs-as-built parity.
 
-Title/ID: m26a-pi4-uefi-validation
+Title/ID: m26a-pi4-uboot-validation
 Goal: Prove end-to-end TCP console reachability on Pi 4 using static IPv4 with no protocol drift.
-Inputs: scripts/uefi/esp-build.sh, docs/HARDWARE_BRINGUP.md, scripts/cohsh/boot_v0.coh.
+Inputs: scripts/uboot/pi4-image-build.sh, docs/HARDWARE_BRINGUP.md, scripts/cohsh/boot_v0.coh.
 Changes:
   - docs/HARDWARE_BRINGUP.md — Pi 4 checklist, expected boot lines, static IPv4 examples.
   - docs/ARCHITECTURE.md + docs/SECURITY.md — backend and threat-model updates.
 Commands:
-  - scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json
+  - scripts/uboot/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json
   - cargo run -p cohsh --features tcp -- --transport tcp --host <STATIC_IP> --port 31337 --script scripts/cohsh/boot_v0.coh
 Checks:
   - Validation includes a before/after proof: Milestone 26 no-NIC transcript and Milestone 26a NIC-enabled transcript for the same board profile family.
   - Console attach/tail/test flows are unchanged except for profile-gated backend/address selection.
 Deliverables:
-  - Reproducible Pi 4 UEFI network bring-up evidence and updated docs.
+  - Reproducible Pi 4 U-Boot network bring-up evidence and updated docs.
 ```
 
 ---
 
-## Milestone 26b — UEFI DHCP Baseline (Pi 4 NIC + Wi-Fi Policy) <a id="26b"></a>
+## Milestone 26b — Pi 4 DHCP Baseline (NIC + Wi-Fi Policy, U-Boot Configurable) <a id="26b"></a>
 [Milestones](#Milestones)
 
 **Why now (operator continuity):**  
@@ -6213,8 +6205,8 @@ Milestone 26a brings up deterministic static IPv4 on Pi 4 wired NIC. Milestone 2
 **Non-negotiable constraints:**
 - DHCP implementation must be pure Rust, `no_std`, and intentionally bare-bones (DHCPv4 only: DISCOVER/OFFER/REQUEST/ACK plus bounded timeout/retry logic).
 - No new in-VM listeners or protocols are permitted; DHCP is only a client-side address acquisition path for existing network surfaces.
-- Post-seL4 runtime must remain HAL-only; no direct UEFI Boot Services/Runtime Services calls are allowed in root-task.
-- NIC and Wi-Fi DHCP behavior must be policy-configurable for `uefi-aarch64` through compiler-validated profile settings sourced from UEFI boot configuration when available; if firmware does not expose usable settings, manifest defaults are authoritative.
+- Post-seL4 runtime must remain HAL-only; no direct bootloader/firmware service calls are allowed in root-task.
+- NIC and Wi-Fi DHCP behavior must be policy-configurable for `pi4-uboot-aarch64` through compiler-validated profile settings sourced from U-Boot environment configuration when available; if bootloader policy inputs are absent, manifest defaults are authoritative.
 - Wi-Fi scope is minimal diagnostics connectivity only (join + DHCP + existing TCP console path); no in-VM supplicant stack, roaming framework, or broad feature surface.
 - Milestone 26b includes a new profile-gated Pi 4 CYW43xx Wi-Fi driver path; all Wi-Fi dataplane/control-plane access must be HAL-backed (SDIO, power/reset, IRQ/OOB, firmware handoff hooks) with no direct MMIO or firmware-service calls outside HAL.
 - CYW43xx design references must be used in this order for architecture review: OpenBSD `bwfm` -> Zephyr/Infineon WHD HAL split -> Linux `brcmfmac` SDIO edge-case behavior. These are design references only; no source copy/paste is permitted.
@@ -6224,7 +6216,7 @@ Milestone 26a brings up deterministic static IPv4 on Pi 4 wired NIC. Milestone 2
 - Milestone **26a** completed (Pi 4 GENETv5 + static IPv4 + profile-gated NIC bring-up).
 
 ### Goal
-Add a deterministic `no_std` DHCP client core that can operate on Pi 4 wired NIC and profile-gated Wi-Fi paths, with bounded UEFI-configurable network policy selection where available, while keeping all pre-existing QEMU flows backward compatible on macOS and Linux.
+Add a deterministic `no_std` DHCP client core that can operate on Pi 4 wired NIC and profile-gated Wi-Fi paths, with bounded U-Boot-configurable network policy selection where available, while keeping all pre-existing QEMU flows backward compatible on macOS and Linux.
 
 ### Deliverables
 - **Minimal DHCP core (`no_std`)**
@@ -6238,13 +6230,13 @@ Add a deterministic `no_std` DHCP client core that can operate on Pi 4 wired NIC
   - Record implementation provenance in docs (OpenBSD `bwfm` design shape, Zephyr/WHD HAL layering, Linux `brcmfmac` recovery/link edge cases) and enforce reference-only usage.
   - Maintain a single network control-plane surface: existing root console + NineDoor behavior only.
 
-- **UEFI-configurable network policy**
-  - Extend manifest/compiler schema with bounded policy fields for `uefi-aarch64`, including:
+- **U-Boot-configurable network policy**
+  - Extend manifest/compiler schema with bounded policy fields for `pi4-uboot-aarch64`, including:
     - network mode (`off`, `static`, `dhcp`),
     - interface policy (`wired`, `wifi`, `auto`),
     - DHCP timing bounds and retry limits.
-  - When firmware/boot setup can provide network policy inputs, capture them pre-handoff and normalize through manifest/DTB-generated structures validated by `coh-rtc`.
-  - Preserve deterministic fallback behavior when UEFI policy inputs are missing or invalid.
+  - When bootloader setup can provide network policy inputs, capture them pre-handoff and normalize through manifest/DTB-generated structures validated by `coh-rtc`.
+  - Preserve deterministic fallback behavior when U-Boot policy inputs are missing or invalid.
 
 - **Backward-compatibility guardrails**
   - Keep QEMU `aarch64/virt` behavior for macOS/Linux unchanged by default (existing static/dev-virt flows must keep working with no required operator command changes).
@@ -6255,25 +6247,25 @@ Add a deterministic `no_std` DHCP client core that can operate on Pi 4 wired NIC
 - `cargo test -p root-task net:: -- --nocapture`
 - `cargo test -p coh-rtc`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
-- `scripts/uefi/qemu-uefi.sh --console serial --tcp-port 31337`
+- `scripts/uboot/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json`
+- `scripts/uboot/qemu-uboot-smoke.sh --net user`
 - `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
 
 ### Checks (DoD)
 - Pi 4 wired path acquires a DHCP lease within bounded retries/timeouts and exposes acquired config through existing diagnostics surfaces.
 - Pi 4 Wi-Fi path (when enabled in profile and credentials are present) reaches link-up and acquires DHCP with deterministic failure modes and audited errors.
 - Invalid DHCP options, malformed offers, lease overflows, and timeout exhaustion fail safely and deterministically.
-- UEFI-configurable network policy (where available) is honored through compiler-validated handoff structures; missing/unsupported firmware policy cleanly falls back to manifest defaults.
+- U-Boot-configurable network policy (where available) is honored through compiler-validated handoff structures; missing/unsupported bootloader policy cleanly falls back to manifest defaults.
 - Existing macOS/Linux QEMU workflows remain backward compatible, including serial/TCP console behavior and existing regression fixtures.
-- CYW43xx Wi-Fi path demonstrates HAL-only access in runtime code and tests; no direct MMIO/UEFI service usage exists outside HAL-owned modules.
+- CYW43xx Wi-Fi path demonstrates HAL-only access in runtime code and tests; no direct MMIO/bootloader-service usage exists outside HAL-owned modules.
 - Full regression pack remains green on QEMU; any profile-gated divergence is explicitly documented and fixture-backed.
 
 ### Compiler touchpoints
-- `coh-rtc` adds bounded `uefi-aarch64` network policy fields for mode/interface selection and DHCP retry/timing limits.
+- `coh-rtc` adds bounded `pi4-uboot-aarch64` network policy fields for mode/interface selection and DHCP retry/timing limits.
 - Validation enforces:
   - policy bounds and enum validity,
   - interface/profile compatibility (wired vs Wi-Fi declarations),
-  - deterministic fallback policy when optional UEFI-provided inputs are absent.
+  - deterministic fallback policy when optional U-Boot-provided inputs are absent.
 - Generated snippets in architecture/interfaces/security docs include the new policy and DHCP bounds so docs-as-built remains authoritative.
 
 ### Task Breakdown
@@ -6292,20 +6284,20 @@ Checks:
 Deliverables:
   - `no_std` DHCP core integrated with deterministic diagnostics.
 
-Title/ID: m26b-uefi-net-policy
-Goal: Make wired/Wi-Fi DHCP policy compiler-authoritative with optional UEFI-provided inputs.
+Title/ID: m26b-uboot-net-policy
+Goal: Make wired/Wi-Fi DHCP policy compiler-authoritative with optional U-Boot-provided inputs.
 Inputs: configs/root_task.toml, tools/coh-rtc, apps/root-task/src/generated, docs/HARDWARE_BRINGUP.md.
 Changes:
   - tools/coh-rtc/src/* — add policy IR fields (`mode`, `interface`, DHCP bounds) and validation.
   - apps/root-task/src/generated/* — regenerated network policy constants/artifacts.
-  - docs/HARDWARE_BRINGUP.md — document UEFI policy source, fallback rules, and expected boot lines.
+  - docs/HARDWARE_BRINGUP.md — document U-Boot policy source, fallback rules, and expected boot lines.
 Commands:
   - cargo test -p coh-rtc
   - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
 Checks:
   - Invalid policy settings fail deterministically; valid settings generate stable artifacts.
 Deliverables:
-  - Manifest/UEFI-policy-driven DHCP mode selection with docs-as-built parity.
+  - Manifest/U-Boot-policy-driven DHCP mode selection with docs-as-built parity.
 
 Title/ID: m26b-pi4-wifi-dhcp-baseline
 Goal: Add minimal Pi 4 Wi-Fi path sufficient for DHCP-backed diagnostics connectivity.
@@ -6326,25 +6318,25 @@ Deliverables:
 
 Title/ID: m26b-qemu-compat-gate
 Goal: Prove 26/26a/26b changes do not break macOS/Linux QEMU backward compatibility.
-Inputs: scripts/qemu-run.sh, scripts/uefi/qemu-uefi.sh, regression fixtures, docs/TEST_PLAN.md.
+Inputs: scripts/qemu-run.sh, scripts/uboot/qemu-uboot-smoke.sh, regression fixtures, docs/TEST_PLAN.md.
 Changes:
   - docs/TEST_PLAN.md — add explicit compatibility matrix checks for macOS/Linux QEMU after 26/26a/26b.
   - scripts/ci/* — add guard checks that fail on console/protocol drift for existing QEMU fixtures.
 Commands:
   - scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none
-  - scripts/uefi/qemu-uefi.sh --console serial
+  - scripts/uboot/qemu-uboot-smoke.sh --net user
 Checks:
   - Existing QEMU fixtures on macOS/Linux remain passing with no operator-facing behavior regressions.
 Deliverables:
-  - Auditable compatibility evidence for the UEFI rollout milestones.
+  - Auditable compatibility evidence for the Pi 4 bare-metal rollout milestones.
 ```
 
 ---
 
-## Milestone 27 — UEFI On-Device Spool Stores + Settings Persistence <a id="27"></a> 
+## Milestone 27 — Pi 4 On-Device Spool Stores + Settings Persistence <a id="27"></a> 
 [Milestones](#Milestones)
 
-**Why now (resilience):** After UEFI boot + identity (26), edge deployments need store/forward for telemetry and minimal settings that survive reboots and link outages without introducing a general filesystem or new protocols.
+**Why now (resilience):** After Pi 4 U-Boot boot + identity (26), edge deployments need store/forward for telemetry and minimal settings that survive reboots and link outages without introducing a general filesystem or new protocols.
 
 **Non-negotiable constraints**
 - No changes to console grammar, 9P semantics, or TCP behavior vs VM unless profile‑gated and documented.
@@ -6353,7 +6345,7 @@ Deliverables:
 - Persistence is exposed only through NineDoor nodes (file‑shaped, bounded).
 
 ### Prerequisite
-- Milestone **26** completed (UEFI boot chain + device identity).
+- Milestone **26** completed (Pi 4 U-Boot boot chain + device identity).
 
 ### Goal
 Provide **bounded, crash‑resilient on‑device persistence** for:
@@ -6408,12 +6400,12 @@ exposed through NineDoor without expanding the TCB.
 - Store/forward works offline and resumes correctly after reboot.
 - Settings updates are atomic across power loss (A/B semantics).
 - No general filesystem or POSIX surface introduced.
-- VM vs UEFI semantics remain byte‑stable unless explicitly profile‑gated.
+- VM vs Pi 4 boot profile semantics remain byte‑stable unless explicitly profile‑gated.
 - Regression pack passes unchanged; new tests are additive.
 
 ### Compiler touchpoints
 - `coh-rtc` emits persistence limits (record size, max bytes, policy mode) into manifest IR; docs import the generated snippets.
-- Manifest validation rejects persistence when storage devices are missing or mis‑declared for the UEFI profile.
+- Manifest validation rejects persistence when storage devices are missing or mis‑declared for the Pi 4 boot profile.
 
 ### Task Breakdown
 ```
@@ -6475,7 +6467,7 @@ Deliverables:
 [Milestones](#Milestones)
 
 **Why now (operator & adoption):**  
-By this stage Cohesix is architecturally complete, SMP-aware, and UEFI-capable. What remains is operability: giving operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols.
+By this stage Cohesix is architecturally complete, SMP-aware, and Pi 4 bare-metal capable. What remains is operability: giving operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols.
 
 This milestone delivers a small, opinionated set of host-side utilities that read existing file-shaped state and artifacts. They do not mutate system state, do not self-heal, and do not bypass policy.
 
@@ -6639,7 +6631,7 @@ This command is binary by design and suitable for CI and compliance workflows.
 - Tools must operate correctly against:
   - QEMU single-core
   - QEMU multicore
-  - UEFI profile (where applicable)
+  - Pi 4 boot profile (where applicable)
 
 ---
 
@@ -6882,10 +6874,10 @@ After Milestone 28b:
 - Queen control retries are safe by construction.
 - Release profiles enforce key hygiene and enable audit-grade reconstruction by default.
 
-## Milestone 29 — Edge Local Status (UEFI Host Tool)  <a id="29"></a> 
+## Milestone 29 — Edge Local Status (Pi 4 Host Tool)  <a id="29"></a> 
 [Milestones](#Milestones)
 
-**Why now (compiler):** Field techs need offline status on edge devices using the same 9P grammar. Tool must respect UEFI profile and attestation outputs.
+**Why now (compiler):** Field techs need offline status on edge devices using the same 9P grammar. Tool must respect Pi 4 boot profile semantics and attestation outputs.
 
 **Goal**
 Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection of boot/attest data using the existing TCP console transport (or offline trace replay), without adding any in-VM 9P/TCP listener.
@@ -6910,13 +6902,13 @@ Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection 
 - UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
 
 **Compiler touchpoints**
-- `coh-rtc` emits localhost binding guidance and attestation paths for UEFI profile into docs/HARDWARE_BRINGUP.md and docs/USERLAND_AND_CLI.md.
+- `coh-rtc` emits localhost binding guidance and attestation paths for Pi 4 boot profile into `docs/HARDWARE_BRINGUP.md` and `docs/USERLAND_AND_CLI.md`.
 
 **Task Breakdown**
 ```
 Title/ID: m29-status-tool
 Goal: Build coh-status for offline/local status reads over 9P/TCP.
-Inputs: apps/coh-status/, UEFI manifest outputs, attestation nodes.
+Inputs: apps/coh-status/, Pi 4 boot profile manifest outputs, attestation nodes.
 Changes:
   - apps/coh-status/src/main.rs — read-only client using cohsh-core; offline cache for attest data.
   - apps/coh-status/tests/offline.rs — simulate offline read and expired ticket.
