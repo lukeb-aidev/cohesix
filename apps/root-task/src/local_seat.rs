@@ -10,7 +10,7 @@ extern crate alloc;
 use crate::console::{Command, CommandParser, ConsoleError};
 use crate::generated::{self, HardwareDeviceKind};
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
-use crate::local_seat_pi4::{Pi4LocalSeat, Pi4SeatError};
+use crate::local_seat_pi4::{Pi4FramebufferHint, Pi4LocalSeat, Pi4LocalSeatHints, Pi4SeatError};
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -59,6 +59,28 @@ pub struct LocalSeatRuntime {
     dropped_mirrored_lines: u64,
     #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
     backend: Option<Pi4LocalSeat>,
+}
+
+/// Optional DT/firmware display mapping hint for local-seat HDMI output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalSeatDisplayHint {
+    /// Physical base of the framebuffer allocation.
+    pub paddr: usize,
+    /// Visible width in pixels.
+    pub width: usize,
+    /// Visible height in pixels.
+    pub height: usize,
+    /// Bytes per rendered scanline.
+    pub pitch: usize,
+}
+
+/// Optional platform-specific hints for local-seat backend attachment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LocalSeatPlatformHints {
+    /// Optional MMIO base for Pi4 xHCI.
+    pub xhci_mmio_hint: Option<usize>,
+    /// Optional DT/firmware framebuffer hint for HDMI rendering.
+    pub display_hint: Option<LocalSeatDisplayHint>,
 }
 
 impl LocalSeatRuntime {
@@ -212,9 +234,18 @@ impl LocalSeatBackendError {
 pub fn attach_platform_backend(
     runtime: &mut LocalSeatRuntime,
     hal: &mut crate::hal::KernelHal<'_>,
-    xhci_mmio_hint: Option<usize>,
+    hints: LocalSeatPlatformHints,
 ) -> Result<(), LocalSeatBackendError> {
-    let backend = Pi4LocalSeat::new(hal, xhci_mmio_hint).map_err(LocalSeatBackendError::Pi4)?;
+    let backend_hints = Pi4LocalSeatHints {
+        xhci_mmio_hint: hints.xhci_mmio_hint,
+        framebuffer_hint: hints.display_hint.map(|hint| Pi4FramebufferHint {
+            paddr: hint.paddr,
+            width: hint.width,
+            height: hint.height,
+            pitch: hint.pitch,
+        }),
+    };
+    let backend = Pi4LocalSeat::new(hal, backend_hints).map_err(LocalSeatBackendError::Pi4)?;
     runtime.attach_backend(backend);
     Ok(())
 }
@@ -225,7 +256,7 @@ pub fn attach_platform_backend(
 pub fn attach_platform_backend(
     _runtime: &mut LocalSeatRuntime,
     _hal: &mut crate::hal::KernelHal<'_>,
-    _xhci_mmio_hint: Option<usize>,
+    _hints: LocalSeatPlatformHints,
 ) -> Result<(), LocalSeatBackendError> {
     Err(LocalSeatBackendError::Unsupported)
 }

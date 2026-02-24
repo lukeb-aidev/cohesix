@@ -315,6 +315,44 @@ fn file_matches(path: &Path) -> bool {
     }
 }
 
+fn stage_and_emit_linker_script(script: &Path) -> Result<(), String> {
+    println!("cargo:rerun-if-changed={}", script.display());
+
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR must be set by cargo"));
+    let staged = out_dir.join(script.file_name().unwrap_or_else(|| OsStr::new("sel4.ld")));
+
+    let mut contents = fs::read_to_string(script).map_err(|err| {
+        format!(
+            "Failed to read linker script {} for staging: {}",
+            script.display(),
+            err
+        )
+    })?;
+
+    // Guard against the precedence pitfall in the upstream elfloader
+    // script where the core stack reservation expression,
+    // `. = . + 1 * 1 << 12;`, expands to `(. + 1) << 12`, inflating the
+    // root-task image size by ~256 GiB and pushing `.bss` symbols far
+    // outside the 4 GiB range that AArch64 ADRP relocations can reach.
+    // Normalise the expression so the increment is a single 4 KiB page.
+    contents = contents.replace(". = . + 1 * 1 << 12;", ". = . + (1 * (1 << 12));");
+
+    fs::write(&staged, contents).map_err(|err| {
+        format!(
+            "Failed to stage linker script from {} to {}: {}",
+            script.display(),
+            staged.display(),
+            err
+        )
+    })?;
+
+    println!("cargo:rustc-env=SEL4_LD={}", staged.display());
+    println!("cargo:rustc-link-arg-bin=root-task=-T{}", staged.display());
+    println!("cargo:rustc-link-arg-bin=root-task=-gc-sections");
+    println!("cargo:rustc-link-arg-bin=root-task=-no-pie");
+    Ok(())
+}
+
 fn stage_linker_script(build_root: &Path) -> Result<(), String> {
     let mut errors = Vec::new();
 
@@ -334,47 +372,35 @@ fn stage_linker_script(build_root: &Path) -> Result<(), String> {
                 ))),
             }
         }) {
-            Ok(script) => {
-                println!("cargo:rerun-if-changed={}", script.display());
-
-                let out_dir =
-                    PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR must be set by cargo"));
-                let staged =
-                    out_dir.join(script.file_name().unwrap_or_else(|| OsStr::new("sel4.ld")));
-
-                let mut contents = fs::read_to_string(&script).unwrap_or_else(|err| {
-                    panic!(
-                        "Failed to read linker script {} for staging: {}",
-                        script.display(),
-                        err
-                    );
-                });
-
-                // Guard against the precedence pitfall in the upstream elfloader
-                // script where the core stack reservation expression,
-                // `. = . + 1 * 1 << 12;`, expands to `(. + 1) << 12`, inflating the
-                // root-task image size by ~256 GiB and pushing `.bss` symbols far
-                // outside the 4 GiB range that AArch64 ADRP relocations can reach.
-                // Normalise the expression so the increment is a single 4 KiB page.
-                contents = contents.replace(". = . + 1 * 1 << 12;", ". = . + (1 * (1 << 12));");
-
-                fs::write(&staged, contents).unwrap_or_else(|err| {
-                    panic!(
-                        "Failed to stage linker script from {} to {}: {}",
-                        script.display(),
-                        staged.display(),
-                        err
-                    );
-                });
-
-                println!("cargo:rustc-env=SEL4_LD={}", staged.display());
-                println!("cargo:rustc-link-arg-bin=root-task=-T{}", staged.display());
-                println!("cargo:rustc-link-arg-bin=root-task=-gc-sections");
-                println!("cargo:rustc-link-arg-bin=root-task=-no-pie");
-                return Ok(());
-            }
+            Ok(script) => return stage_and_emit_linker_script(&script),
             Err(err) => errors.push(format!("{}: {}", candidate.file_name, err)),
         }
+    }
+
+    let manifest_fallback = PathBuf::from(
+        env::var("CARGO_MANIFEST_DIR")
+            .map_err(|err| format!("CARGO_MANIFEST_DIR is unavailable: {err}"))?,
+    )
+    .join("sel4.ld");
+    if file_matches(&manifest_fallback) {
+        match classify_linker_script(&manifest_fallback) {
+            Ok(LinkerScriptKind::User) => return stage_and_emit_linker_script(&manifest_fallback),
+            Ok(other) => errors.push(format!(
+                "manifest fallback {} rejected: classified as {:?}",
+                manifest_fallback.display(),
+                other
+            )),
+            Err(err) => errors.push(format!(
+                "manifest fallback {} rejected: {}",
+                manifest_fallback.display(),
+                err
+            )),
+        }
+    } else {
+        errors.push(format!(
+            "manifest fallback {} is missing",
+            manifest_fallback.display()
+        ));
     }
 
     let searched = LINKER_SCRIPT_SEARCH_SETS

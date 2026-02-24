@@ -30,6 +30,10 @@ pub fn classify_linker_script(path: &Path) -> Result<LinkerScriptKind, String> {
     if path_contains_component(path, "kernel") {
         return Ok(LinkerScriptKind::Kernel);
     }
+    if path_contains_component(path, "elfloader") {
+        // The elfloader script links the boot image, not the root-task ELF.
+        return Ok(LinkerScriptKind::Kernel);
+    }
 
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
@@ -125,7 +129,7 @@ const USER_MARKERS: &[&str] = &[
     "rootserver_objects_end",
 ];
 
-const USER_PATH_HINTS: &[&str] = &["rootserver", "sel4runtime", "elfloader"];
+const USER_PATH_HINTS: &[&str] = &["rootserver", "sel4runtime"];
 
 #[cfg(test)]
 mod tests {
@@ -173,10 +177,10 @@ mod tests {
     }
 
     #[test]
-    fn elfloader_hint_is_treated_as_user() {
+    fn elfloader_script_is_rejected_for_root_task() {
         assert_eq!(
             classify_linker_script(Path::new("build/elfloader/linker.lds_pp")).unwrap(),
-            LinkerScriptKind::User
+            LinkerScriptKind::Kernel
         );
     }
 

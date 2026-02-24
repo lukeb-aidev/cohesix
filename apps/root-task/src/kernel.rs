@@ -553,6 +553,8 @@ const MINI_UART_IO_OFFSET: usize = 0x40;
 const MINI_UART_LSR_OFFSET: usize = 0x54;
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 const MINI_UART_LSR_TX_EMPTY: u32 = 1 << 5;
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+const DEBUG_SINK_SPIN_LIMIT: usize = 1_000_000;
 
 #[cfg(target_arch = "aarch64")]
 static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
@@ -569,7 +571,12 @@ unsafe extern "C" fn pl011_debug_emit(context: *mut (), byte: u8) {
     let fr = unsafe { base.add(PL011_FR_OFFSET).cast::<u32>() };
 
     unsafe {
+        let mut spins = 0usize;
         while ptr::read_volatile(fr) & PL011_FR_TXFF != 0 {
+            spins = spins.saturating_add(1);
+            if spins >= DEBUG_SINK_SPIN_LIMIT {
+                return;
+            }
             core::hint::spin_loop();
         }
 
@@ -589,7 +596,12 @@ unsafe extern "C" fn mini_uart_debug_emit(context: *mut (), byte: u8) {
     let lsr = unsafe { base.add(MINI_UART_LSR_OFFSET).cast::<u32>() };
 
     unsafe {
+        let mut spins = 0usize;
         while ptr::read_volatile(lsr) & MINI_UART_LSR_TX_EMPTY == 0 {
+            spins = spins.saturating_add(1);
+            if spins >= DEBUG_SINK_SPIN_LIMIT {
+                return;
+            }
             core::hint::spin_loop();
         }
 
@@ -643,6 +655,12 @@ fn dtb_prop_u32_be(value: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
 }
 
+fn dtb_prop_u64_be(value: &[u8], offset: usize) -> Option<u64> {
+    let hi = u64::from(dtb_prop_u32_be(value, offset)?);
+    let lo = u64::from(dtb_prop_u32_be(value, offset.saturating_add(4))?);
+    Some((hi << 32) | lo)
+}
+
 fn dtb_node_unit_address(name: &str, marker: &str) -> Option<usize> {
     let marker_offset = name.find(marker)?;
     let suffix = &name[marker_offset + marker.len()..];
@@ -677,6 +695,34 @@ fn dtb_first_reg_addr(value: &[u8]) -> Option<usize> {
     } else {
         None
     }
+}
+
+fn dtb_first_reg_addr_size(value: &[u8]) -> Option<(usize, usize)> {
+    if value.len() >= 16 {
+        let addr = usize::try_from(dtb_prop_u64_be(value, 0)?).ok()?;
+        let size = usize::try_from(dtb_prop_u64_be(value, 8)?).ok()?;
+        if size == 0 {
+            return None;
+        }
+        return Some((addr, size));
+    }
+    if value.len() >= 12 {
+        let addr = usize::try_from(dtb_prop_u64_be(value, 0)?).ok()?;
+        let size = usize::try_from(dtb_prop_u32_be(value, 8)?).ok()?;
+        if size == 0 {
+            return None;
+        }
+        return Some((addr, size));
+    }
+    if value.len() >= 8 {
+        let addr = usize::try_from(dtb_prop_u32_be(value, 0)?).ok()?;
+        let size = usize::try_from(dtb_prop_u32_be(value, 4)?).ok()?;
+        if size == 0 {
+            return None;
+        }
+        return Some((addr, size));
+    }
+    None
 }
 
 fn collect_pi4_uefi_xhci_mmio_hint(
@@ -717,6 +763,126 @@ fn infer_pi4_uefi_xhci_mmio_hint(extra_bytes: &[u8], extra_range: Range<usize>) 
     let dtb_blob = bi_extra::locate_dtb(extra_bytes, extra_range).ok()?;
     let dtb = bi_extra::parse_dtb(dtb_blob).ok()?;
     collect_pi4_uefi_xhci_mmio_hint(&dtb).ok().flatten()
+}
+
+fn collect_pi4_uefi_framebuffer_hint(
+    dtb: &bi_extra::Dtb<'_>,
+) -> Result<Option<local_seat::LocalSeatDisplayHint>, bi_extra::ParseError> {
+    #[derive(Clone, Copy, Debug, Default)]
+    struct Candidate {
+        paddr: Option<usize>,
+        size: Option<usize>,
+        width: Option<usize>,
+        height: Option<usize>,
+        stride: Option<usize>,
+        disabled: bool,
+    }
+
+    impl Candidate {
+        fn into_hint(self) -> Option<local_seat::LocalSeatDisplayHint> {
+            if self.disabled {
+                return None;
+            }
+            let paddr = self.paddr?;
+            let width = self.width?;
+            let height = self.height?;
+            let stride = self.stride?;
+            if width == 0 || height == 0 || stride == 0 {
+                return None;
+            }
+            let min_pitch = width.saturating_mul(4);
+            let pitch = cmp::max(stride, min_pitch);
+            let required = pitch.saturating_mul(height);
+            let declared = self.size.unwrap_or(required);
+            if declared < required {
+                return None;
+            }
+            Some(local_seat::LocalSeatDisplayHint {
+                paddr,
+                width,
+                height,
+                pitch,
+            })
+        }
+    }
+
+    let mut path = HeaplessVec::<&str, 16>::new();
+    let mut cursor = dtb.structure_cursor();
+    let mut candidate_depth: Option<usize> = None;
+    let mut candidate = Candidate::default();
+
+    while let Some(item) = cursor.next()? {
+        match item {
+            bi_extra::StructureItem::BeginNode(name) => {
+                let _ = path.push(name);
+                if candidate_depth.is_none()
+                    && (name.contains("framebuffer") || name.contains("simplefb"))
+                {
+                    candidate_depth = Some(path.len());
+                    candidate = Candidate::default();
+                }
+            }
+            bi_extra::StructureItem::EndNode => {
+                if let Some(depth) = candidate_depth {
+                    if path.len() == depth {
+                        if let Some(hint) = candidate.into_hint() {
+                            return Ok(Some(hint));
+                        }
+                        candidate_depth = None;
+                        candidate = Candidate::default();
+                    }
+                }
+                let _ = path.pop();
+            }
+            bi_extra::StructureItem::Property { name, value } => {
+                let Some(depth) = candidate_depth else {
+                    continue;
+                };
+                if path.len() != depth {
+                    continue;
+                }
+                match name {
+                    "reg" => {
+                        if let Some((paddr, size)) = dtb_first_reg_addr_size(value) {
+                            candidate.paddr = Some(paddr);
+                            candidate.size = Some(size);
+                        } else if let Some(addr) = dtb_first_reg_addr(value) {
+                            candidate.paddr = Some(addr);
+                        }
+                    }
+                    "width" => {
+                        candidate.width =
+                            dtb_prop_u32_be(value, 0).and_then(|v| usize::try_from(v).ok());
+                    }
+                    "height" => {
+                        candidate.height =
+                            dtb_prop_u32_be(value, 0).and_then(|v| usize::try_from(v).ok());
+                    }
+                    "stride" => {
+                        candidate.stride =
+                            dtb_prop_u32_be(value, 0).and_then(|v| usize::try_from(v).ok());
+                    }
+                    "status" => {
+                        candidate.disabled = dtb_prop_cstr(value)
+                            .map(|status| status.eq_ignore_ascii_case("disabled"))
+                            .unwrap_or(false);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn infer_pi4_uefi_framebuffer_hint(
+    extra_bytes: &[u8],
+    extra_range: Range<usize>,
+) -> Option<local_seat::LocalSeatDisplayHint> {
+    let dtb_blob = bi_extra::locate_dtb(extra_bytes, extra_range).ok()?;
+    let dtb = bi_extra::parse_dtb(dtb_blob).ok()?;
+    collect_pi4_uefi_framebuffer_hint(&dtb).ok().flatten()
 }
 
 fn collect_pi4_uefi_dtb_diagnostics(
@@ -1049,6 +1215,117 @@ impl From<FatalBootstrapError> for BootError {
     fn from(value: FatalBootstrapError) -> Self {
         Self::Fatal(value.message().to_owned())
     }
+}
+
+fn init_local_seat_runtime<P: Platform>(
+    console: &mut DebugConsole<'_, P>,
+    hardware: generated::HardwareConfig,
+    hal: &mut KernelHal<'_>,
+    extra_bytes: &[u8],
+    extra_range: Range<usize>,
+) -> Result<Option<&'static mut local_seat::LocalSeatRuntime>, BootError> {
+    let mut local_seat_runtime: Option<&'static mut local_seat::LocalSeatRuntime> = None;
+    let local_seat_required = hardware.local_seat.required;
+    let xhci_mmio_hint = infer_pi4_uefi_xhci_mmio_hint(extra_bytes, extra_range.clone());
+    let display_hint = infer_pi4_uefi_framebuffer_hint(extra_bytes, extra_range.clone());
+    if let Some(mmio_base) = xhci_mmio_hint {
+        let mut line = heapless::String::<96>::new();
+        let _ = write!(line, "[local-seat] xhci-mmio-hint=0x{mmio_base:016x}");
+        console.writeln_prefixed(line.as_str());
+        boot_log::force_uart_line(line.as_str());
+    }
+    if let Some(hint) = display_hint {
+        let mut line = heapless::String::<192>::new();
+        let _ = write!(
+            line,
+            "[local-seat] fb-hint paddr=0x{paddr:016x} width={} height={} pitch={}",
+            hint.width,
+            hint.height,
+            hint.pitch,
+            paddr = hint.paddr
+        );
+        console.writeln_prefixed(line.as_str());
+        boot_log::force_uart_line(line.as_str());
+    } else {
+        console.writeln_prefixed("[local-seat] fb-hint unavailable (falling back to mailbox)");
+        boot_log::force_uart_line("[local-seat] fb-hint unavailable (falling back to mailbox)");
+    }
+    let local_seat_hints = local_seat::LocalSeatPlatformHints {
+        xhci_mmio_hint,
+        display_hint,
+    };
+    match local_seat::evaluate(hardware, local_seat::runtime_backend_available()) {
+        Ok(LocalSeatInit::Disabled) => {
+            console.writeln_prefixed("[local-seat] disabled");
+            boot_log::force_uart_line("[local-seat] disabled");
+        }
+        Ok(LocalSeatInit::Active(status)) => {
+            let mut runtime = local_seat::LocalSeatRuntime::new(status);
+            match local_seat::attach_platform_backend(&mut runtime, hal, local_seat_hints) {
+                Ok(()) => {
+                    local_seat_runtime = Some(Box::leak(Box::new(runtime)));
+                    let mut line = heapless::String::<256>::new();
+                    let _ = write!(
+                        line,
+                        "[local-seat] active keyboard={} display={} line_bytes={} buffer_lines={}",
+                        status.keyboard_device,
+                        status.display_device,
+                        status.line_bytes,
+                        status.buffer_lines
+                    );
+                    console.writeln_prefixed(line.as_str());
+                    boot_log::force_uart_line(line.as_str());
+                }
+                Err(backend_err) => {
+                    if local_seat_required {
+                        let mut line = heapless::String::<192>::new();
+                        let _ = write!(
+                            line,
+                            "[local-seat] abort required=true reason=backend-unavailable detail={}",
+                            backend_err.as_str()
+                        );
+                        console.writeln_prefixed(line.as_str());
+                        boot_log::force_uart_line(line.as_str());
+                        return Err(BootError::Fatal(format!(
+                            "local-seat required backend failed: {}",
+                            backend_err.as_str()
+                        )));
+                    }
+
+                    let mut line = heapless::String::<192>::new();
+                    let _ = write!(
+                        line,
+                        "[local-seat] degraded reason=backend-unavailable detail={}",
+                        backend_err.as_str()
+                    );
+                    console.writeln_prefixed(line.as_str());
+                    boot_log::force_uart_line(line.as_str());
+                }
+            }
+        }
+        Ok(LocalSeatInit::Degraded(reason)) => {
+            let mut line = heapless::String::<128>::new();
+            let _ = write!(line, "[local-seat] degraded reason={}", reason.as_str());
+            console.writeln_prefixed(line.as_str());
+            boot_log::force_uart_line(line.as_str());
+        }
+        Err(err) => {
+            let mut line = heapless::String::<128>::new();
+            let _ = write!(
+                line,
+                "[local-seat] abort required=true reason={}",
+                err.as_str()
+            );
+            console.writeln_prefixed(line.as_str());
+            boot_log::force_uart_line(line.as_str());
+            return Err(BootError::Fatal(format!(
+                "local-seat required policy failed: {}",
+                err.as_str()
+            )));
+        }
+    }
+
+    Ok(local_seat_runtime)
 }
 
 #[derive(Default)]
@@ -2809,35 +3086,39 @@ fn bootstrap<P: Platform>(
             let mut init_line = heapless::String::<96>::new();
             let _ = write!(init_line, "[uart] init OK backend={}", driver.label());
             console.writeln_prefixed(init_line.as_str());
-            let mut online_line = heapless::String::<96>::new();
-            let _ = write!(online_line, "[console] {} console online\n", driver.label());
-            driver.write_str(online_line.as_str());
+            if matches!(driver.kind(), KernelUartKind::Bcm2711MiniUart) {
+                console.writeln_prefixed(
+                    "[uart] backend=bcm2711-mini-uart (runtime only; skipping blocking early writes)",
+                );
+            }
             #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
             {
-                let sink = DebugSink {
-                    context: mmio.vaddr().as_ptr().cast::<()>(),
-                    emit: match mmio.kind() {
-                        KernelUartKind::Pl011 => pl011_debug_emit,
-                        KernelUartKind::Bcm2711MiniUart => mini_uart_debug_emit,
-                    },
-                };
-                let emit_addr = sink.emit as usize;
-                let ctx_addr = sink.context as usize;
-                let mut sink_line = heapless::String::<128>::new();
-                let _ = write!(
-                    sink_line,
-                    "[debug-sink] emit=0x{emit:016x} ctx=0x{ctx:016x}",
-                    emit = emit_addr,
-                    ctx = ctx_addr,
-                );
-                console.writeln_prefixed(sink_line.as_str());
-                if emit_addr & 0b11 != 0 || emit_addr <= 0x1000 || ctx_addr <= 0x1000 {
-                    post_commit.flag_failure("debug-sink", "debug sink address invalid");
+                if mmio.kind() == KernelUartKind::Pl011 {
+                    let sink = DebugSink {
+                        context: mmio.vaddr().as_ptr().cast::<()>(),
+                        emit: pl011_debug_emit,
+                    };
+                    let emit_addr = sink.emit as usize;
+                    let ctx_addr = sink.context as usize;
+                    let mut sink_line = heapless::String::<128>::new();
+                    let _ = write!(
+                        sink_line,
+                        "[debug-sink] emit=0x{emit:016x} ctx=0x{ctx:016x}",
+                        emit = emit_addr,
+                        ctx = ctx_addr,
+                    );
+                    console.writeln_prefixed(sink_line.as_str());
+                    if emit_addr & 0b11 != 0 || emit_addr <= 0x1000 || ctx_addr <= 0x1000 {
+                        post_commit.flag_failure("debug-sink", "debug sink address invalid");
+                    } else {
+                        sel4_panicking::install_debug_sink(sink);
+                    }
                 } else {
-                    sel4_panicking::install_debug_sink(sink);
+                    console.writeln_prefixed(
+                        "[debug-sink] skipped for bcm2711-mini-uart (avoid blocking panic path)",
+                    );
                 }
             }
-            driver.write_str("[cohesix:root-task] uart logger online\n");
             log::info!("[boot] after uart logger online");
             serial = Some(SerialPort::<
                 _,
@@ -2850,6 +3131,13 @@ fn bootstrap<P: Platform>(
         }
 
         let hardware = generated::hardware_config();
+        let local_seat_runtime = init_local_seat_runtime(
+            &mut console,
+            hardware,
+            &mut hal,
+            extra_bytes,
+            extra_range.clone(),
+        )?;
 
         check_bootinfo(&mut boot_guard, "[mark] net.init.pre");
         #[cfg(all(feature = "net-console", feature = "kernel"))]
@@ -2947,86 +3235,6 @@ fn bootstrap<P: Platform>(
                 boot_log::force_uart_line(line.as_str());
                 return Err(BootError::Fatal(format!(
                     "attestation failed: {}",
-                    err.as_str()
-                )));
-            }
-        }
-
-        let mut local_seat_runtime: Option<&'static mut local_seat::LocalSeatRuntime> = None;
-        let local_seat_required = hardware.local_seat.required;
-        let xhci_mmio_hint = infer_pi4_uefi_xhci_mmio_hint(extra_bytes, extra_range.clone());
-        if let Some(mmio_base) = xhci_mmio_hint {
-            let mut line = heapless::String::<96>::new();
-            let _ = write!(line, "[local-seat] xhci-mmio-hint=0x{mmio_base:016x}");
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
-        }
-        match local_seat::evaluate(hardware, local_seat::runtime_backend_available()) {
-            Ok(LocalSeatInit::Disabled) => {
-                console.writeln_prefixed("[local-seat] disabled");
-                boot_log::force_uart_line("[local-seat] disabled");
-            }
-            Ok(LocalSeatInit::Active(status)) => {
-                let mut runtime = local_seat::LocalSeatRuntime::new(status);
-                match local_seat::attach_platform_backend(&mut runtime, &mut hal, xhci_mmio_hint) {
-                    Ok(()) => {
-                        local_seat_runtime = Some(Box::leak(Box::new(runtime)));
-                        let mut line = heapless::String::<256>::new();
-                        let _ = write!(
-                            line,
-                            "[local-seat] active keyboard={} display={} line_bytes={} buffer_lines={}",
-                            status.keyboard_device,
-                            status.display_device,
-                            status.line_bytes,
-                            status.buffer_lines
-                        );
-                        console.writeln_prefixed(line.as_str());
-                        boot_log::force_uart_line(line.as_str());
-                    }
-                    Err(backend_err) => {
-                        if local_seat_required {
-                            let mut line = heapless::String::<192>::new();
-                            let _ = write!(
-                                line,
-                                "[local-seat] abort required=true reason=backend-unavailable detail={}",
-                                backend_err.as_str()
-                            );
-                            console.writeln_prefixed(line.as_str());
-                            boot_log::force_uart_line(line.as_str());
-                            return Err(BootError::Fatal(format!(
-                                "local-seat required backend failed: {}",
-                                backend_err.as_str()
-                            )));
-                        }
-
-                        let mut line = heapless::String::<192>::new();
-                        let _ = write!(
-                            line,
-                            "[local-seat] degraded reason=backend-unavailable detail={}",
-                            backend_err.as_str()
-                        );
-                        console.writeln_prefixed(line.as_str());
-                        boot_log::force_uart_line(line.as_str());
-                    }
-                }
-            }
-            Ok(LocalSeatInit::Degraded(reason)) => {
-                let mut line = heapless::String::<128>::new();
-                let _ = write!(line, "[local-seat] degraded reason={}", reason.as_str());
-                console.writeln_prefixed(line.as_str());
-                boot_log::force_uart_line(line.as_str());
-            }
-            Err(err) => {
-                let mut line = heapless::String::<128>::new();
-                let _ = write!(
-                    line,
-                    "[local-seat] abort required=true reason={}",
-                    err.as_str()
-                );
-                console.writeln_prefixed(line.as_str());
-                boot_log::force_uart_line(line.as_str());
-                return Err(BootError::Fatal(format!(
-                    "local-seat required policy failed: {}",
                     err.as_str()
                 )));
             }

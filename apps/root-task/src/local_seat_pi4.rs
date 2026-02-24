@@ -71,6 +71,32 @@ const XHCI_MMIO_CANDIDATE_LIMIT: usize = 4;
 const XHCI_MAX_PROBE_PORTS: usize = 16;
 const KEYBOARD_ATTACH_ATTEMPTS: usize = 2;
 const KEYBOARD_RETRY_SPINS: usize = 200_000;
+const FB_BYTES_PER_PIXEL: usize = mem::size_of::<u32>();
+const MAX_FB_WIDTH: usize = 4096;
+const MAX_FB_HEIGHT: usize = 4096;
+const MAX_FB_BYTES: usize = 64 * 1024 * 1024;
+
+/// Optional DT/firmware framebuffer hint for Pi4 HDMI output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pi4FramebufferHint {
+    /// Physical base of the framebuffer allocation.
+    pub paddr: usize,
+    /// Visible width in pixels.
+    pub width: usize,
+    /// Visible height in pixels.
+    pub height: usize,
+    /// Bytes per rendered scanline.
+    pub pitch: usize,
+}
+
+/// Optional platform hints for Pi4 local-seat attachment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Pi4LocalSeatHints {
+    /// Optional MMIO base for Pi4 xHCI.
+    pub xhci_mmio_hint: Option<usize>,
+    /// Optional DT/firmware framebuffer hint.
+    pub framebuffer_hint: Option<Pi4FramebufferHint>,
+}
 
 /// Pi4 local-seat backend errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,17 +144,24 @@ impl core::fmt::Debug for Pi4LocalSeat {
 
 impl Pi4LocalSeat {
     /// Initialize the Pi4 local-seat backend.
-    pub fn new(
-        hal: &mut KernelHal<'_>,
-        xhci_mmio_hint: Option<usize>,
-    ) -> Result<Self, Pi4SeatError> {
-        let mut display = HdmiTextSink::new(hal)?;
+    pub fn new(hal: &mut KernelHal<'_>, hints: Pi4LocalSeatHints) -> Result<Self, Pi4SeatError> {
+        let mut display = HdmiTextSink::new(hal, hints.framebuffer_hint)?;
+
+        let mut display_line = heapless::String::<128>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut display_line,
+            format_args!(
+                "[local-seat] pi4 display backend={}",
+                display.backend_label()
+            ),
+        );
+        boot_log::force_uart_line(display_line.as_str());
         display.write_line("[cohesix] local-seat HDMI online");
 
         let mut keyboard = None;
         let mut keyboard_error = None;
         for attempt in 1..=KEYBOARD_ATTACH_ATTEMPTS {
-            match UsbKeyboard::new(hal, xhci_mmio_hint) {
+            match UsbKeyboard::new(hal, hints.xhci_mmio_hint) {
                 Ok(found) => {
                     keyboard = Some(found);
                     if attempt > 1 {
@@ -214,17 +247,25 @@ impl Mailbox {
         };
 
         let total_words = 2usize
-            .saturating_add(3)
-            .saturating_add(payload.len())
-            .saturating_add(1);
+            .checked_add(3)
+            .and_then(|value| value.checked_add(payload.len()))
+            .and_then(|value| value.checked_add(1))
+            .ok_or(Pi4SeatError::MailboxProtocol)?;
         if total_words > words.len() {
             return Err(Pi4SeatError::MailboxProtocol);
         }
 
-        words[0] = (total_words * mem::size_of::<u32>()) as u32;
+        words[0] = total_words
+            .checked_mul(mem::size_of::<u32>())
+            .and_then(|bytes| u32::try_from(bytes).ok())
+            .ok_or(Pi4SeatError::MailboxProtocol)?;
         words[1] = 0;
         words[2] = tag;
-        words[3] = (payload.len() * mem::size_of::<u32>()) as u32;
+        words[3] = payload
+            .len()
+            .checked_mul(mem::size_of::<u32>())
+            .and_then(|bytes| u32::try_from(bytes).ok())
+            .ok_or(Pi4SeatError::MailboxProtocol)?;
         words[4] = request_len_bytes;
         words[5..5 + payload.len()].copy_from_slice(payload);
         words[5 + payload.len()] = 0;
@@ -282,15 +323,21 @@ impl Mailbox {
 
     fn read_reg(&self, offset: usize) -> u32 {
         let base = self.regs.ptr().as_ptr() as usize;
+        let Some(addr) = base.checked_add(offset) else {
+            return 0;
+        };
         // SAFETY: Register block was mapped as device memory by HAL.
-        unsafe { ptr::read_volatile((base + offset) as *const u32) }
+        unsafe { ptr::read_volatile(addr as *const u32) }
     }
 
     fn write_reg(&self, offset: usize, value: u32) {
         let base = self.regs.ptr().as_ptr() as usize;
+        let Some(addr) = base.checked_add(offset) else {
+            return;
+        };
         // SAFETY: Register block was mapped as device memory by HAL.
         unsafe {
-            ptr::write_volatile((base + offset) as *mut u32, value);
+            ptr::write_volatile(addr as *mut u32, value);
         }
     }
 }
@@ -299,16 +346,57 @@ struct HdmiTextSink {
     width: usize,
     height: usize,
     pitch: usize,
+    framebuffer_len: usize,
     cols: usize,
     rows: usize,
     row: usize,
     col: usize,
     framebuffer: *mut u8,
+    backend: HdmiBackend,
     mappings: Vec<crate::sel4::DeviceFrame>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HdmiBackend {
+    DtbSimpleFramebuffer,
+    MailboxProperty,
+}
+
+impl HdmiBackend {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::DtbSimpleFramebuffer => "dtb-simplefb",
+            Self::MailboxProperty => "mailbox-property",
+        }
+    }
+}
+
 impl HdmiTextSink {
-    fn new(hal: &mut KernelHal<'_>) -> Result<Self, Pi4SeatError> {
+    fn new(
+        hal: &mut KernelHal<'_>,
+        framebuffer_hint: Option<Pi4FramebufferHint>,
+    ) -> Result<Self, Pi4SeatError> {
+        if let Some(hint) = framebuffer_hint {
+            match Self::from_fixed_framebuffer(hal, hint, HdmiBackend::DtbSimpleFramebuffer) {
+                Ok(sink) => return Ok(sink),
+                Err(err) => {
+                    let mut line = heapless::String::<192>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] display dtb-simplefb rejected detail={} fallback=mailbox",
+                            err.as_str()
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                }
+            }
+        }
+
+        Self::new_from_mailbox(hal)
+    }
+
+    fn new_from_mailbox(hal: &mut KernelHal<'_>) -> Result<Self, Pi4SeatError> {
         let mut mailbox = Mailbox::new(hal)?;
 
         let mut phys = [DEFAULT_FB_WIDTH, DEFAULT_FB_HEIGHT];
@@ -339,9 +427,60 @@ impl HdmiTextSink {
         }
 
         let fb_phys = bus_to_phys(fb_bus);
+        Self::from_mapped_framebuffer(
+            hal,
+            fb_phys,
+            fb_size,
+            virt[0] as usize,
+            virt[1] as usize,
+            pitch[0] as usize,
+            HdmiBackend::MailboxProperty,
+        )
+    }
+
+    fn from_fixed_framebuffer(
+        hal: &mut KernelHal<'_>,
+        hint: Pi4FramebufferHint,
+        backend: HdmiBackend,
+    ) -> Result<Self, Pi4SeatError> {
+        if hint.width == 0 || hint.height == 0 || hint.pitch == 0 {
+            return Err(Pi4SeatError::FramebufferUnavailable);
+        }
+        let fb_size = hint
+            .pitch
+            .checked_mul(hint.height)
+            .ok_or(Pi4SeatError::FramebufferUnavailable)?;
+        Self::from_mapped_framebuffer(
+            hal,
+            hint.paddr,
+            fb_size,
+            hint.width,
+            hint.height,
+            hint.pitch,
+            backend,
+        )
+    }
+
+    fn from_mapped_framebuffer(
+        hal: &mut KernelHal<'_>,
+        fb_phys: usize,
+        fb_size: usize,
+        width: usize,
+        height: usize,
+        pitch: usize,
+        backend: HdmiBackend,
+    ) -> Result<Self, Pi4SeatError> {
+        if fb_phys == 0 || fb_size == 0 || width == 0 || height == 0 || pitch == 0 {
+            return Err(Pi4SeatError::FramebufferUnavailable);
+        }
+        let framebuffer_len = validate_framebuffer_geometry(width, height, pitch, fb_size)
+            .ok_or(Pi4SeatError::FramebufferUnavailable)?;
+
         let page_base = fb_phys & !PAGE_MASK;
         let page_offset = fb_phys & PAGE_MASK;
-        let map_len = page_offset.saturating_add(fb_size);
+        let map_len = page_offset
+            .checked_add(fb_size)
+            .ok_or(Pi4SeatError::FramebufferUnavailable)?;
         let page_count = div_ceil(map_len, PAGE_SIZE);
         if page_count == 0 {
             return Err(Pi4SeatError::FramebufferUnavailable);
@@ -349,7 +488,12 @@ impl HdmiTextSink {
 
         let mut mappings = Vec::with_capacity(page_count);
         for page in 0..page_count {
-            let paddr = page_base.saturating_add(page.saturating_mul(PAGE_SIZE));
+            let paddr = page_base
+                .checked_add(
+                    page.checked_mul(PAGE_SIZE)
+                        .ok_or(Pi4SeatError::FramebufferUnavailable)?,
+                )
+                .ok_or(Pi4SeatError::FramebufferUnavailable)?;
             let frame = hal
                 .map_device(paddr)
                 .map_err(|_| Pi4SeatError::FramebufferMap)?;
@@ -362,35 +506,42 @@ impl HdmiTextSink {
             .ptr()
             .as_ptr() as usize;
         for (idx, frame) in mappings.iter().enumerate() {
-            let expected = first.saturating_add(idx.saturating_mul(PAGE_SIZE));
+            let expected = first
+                .checked_add(
+                    idx.checked_mul(PAGE_SIZE)
+                        .ok_or(Pi4SeatError::FramebufferMap)?,
+                )
+                .ok_or(Pi4SeatError::FramebufferMap)?;
             let got = frame.ptr().as_ptr() as usize;
             if got != expected {
                 return Err(Pi4SeatError::FramebufferMap);
             }
         }
 
-        let framebuffer = (first + page_offset) as *mut u8;
-
-        let width = virt[0] as usize;
-        let height = virt[1] as usize;
-        if width == 0 || height == 0 {
-            return Err(Pi4SeatError::FramebufferUnavailable);
-        }
+        let framebuffer = first
+            .checked_add(page_offset)
+            .ok_or(Pi4SeatError::FramebufferMap)? as *mut u8;
 
         let mut sink = Self {
             width,
             height,
-            pitch: pitch[0] as usize,
+            pitch,
+            framebuffer_len,
             cols: cmp::max(1, width / CHAR_WIDTH),
             rows: cmp::max(1, height / CHAR_HEIGHT),
             row: 0,
             col: 0,
             framebuffer,
+            backend,
             mappings,
         };
 
         sink.clear_screen();
         Ok(sink)
+    }
+
+    fn backend_label(&self) -> &'static str {
+        self.backend.as_str()
     }
 
     fn write_line(&mut self, line: &str) {
@@ -466,10 +617,29 @@ impl HdmiTextSink {
         if x >= self.width || y >= self.height {
             return;
         }
-        let byte_off = y
-            .saturating_mul(self.pitch)
-            .saturating_add(x.saturating_mul(mem::size_of::<u32>()));
-        let addr = (self.framebuffer as usize).saturating_add(byte_off) as *mut u32;
+        let row_off = match y.checked_mul(self.pitch) {
+            Some(value) => value,
+            None => return,
+        };
+        let col_off = match x.checked_mul(FB_BYTES_PER_PIXEL) {
+            Some(value) => value,
+            None => return,
+        };
+        let byte_off = match row_off.checked_add(col_off) {
+            Some(value) => value,
+            None => return,
+        };
+        let end = match byte_off.checked_add(FB_BYTES_PER_PIXEL) {
+            Some(value) => value,
+            None => return,
+        };
+        if end > self.framebuffer_len {
+            return;
+        }
+        let addr = match (self.framebuffer as usize).checked_add(byte_off) {
+            Some(value) => value as *mut u32,
+            None => return,
+        };
         // SAFETY: `framebuffer` is a mapped writable frame buffer and bounds were checked.
         unsafe {
             ptr::write_volatile(addr, color);
@@ -701,8 +871,9 @@ impl SeatDma {
                 expected_phys = phys;
                 expected_virt = virt;
             } else {
-                let next_phys = expected_phys.saturating_add(idx.saturating_mul(PAGE_SIZE));
-                let next_virt = expected_virt.saturating_add(idx.saturating_mul(PAGE_SIZE));
+                let off = idx.checked_mul(PAGE_SIZE)?;
+                let next_phys = expected_phys.checked_add(off)?;
+                let next_virt = expected_virt.checked_add(off)?;
                 if phys != next_phys || virt != next_virt {
                     return None;
                 }
@@ -717,7 +888,7 @@ impl SeatDma {
         state.regions.push(PhysRegion {
             virt_start: expected_virt,
             phys_start: expected_phys,
-            length: page_count.saturating_mul(PAGE_SIZE),
+            length: page_count.checked_mul(PAGE_SIZE)?,
             size,
             align,
             backing: RegionBacking::Dma(frames),
@@ -732,20 +903,20 @@ impl SeatDma {
 
         let page_base = phys & !PAGE_MASK;
         let page_offset = phys & PAGE_MASK;
-        let map_len = page_offset.saturating_add(size);
+        let map_len = page_offset.checked_add(size)?;
         let page_count = div_ceil(map_len, PAGE_SIZE);
         let hal = hal_from_ptr(state.hal_ptr)?;
 
         let mut frames = Vec::with_capacity(page_count);
         let mut first_virt = 0usize;
         for idx in 0..page_count {
-            let page_phys = page_base.saturating_add(idx.saturating_mul(PAGE_SIZE));
+            let page_phys = page_base.checked_add(idx.checked_mul(PAGE_SIZE)?)?;
             let frame = hal.map_device(page_phys).ok()?;
             let virt = frame.ptr().as_ptr() as usize;
             if idx == 0 {
                 first_virt = virt;
             } else {
-                let next_virt = first_virt.saturating_add(idx.saturating_mul(PAGE_SIZE));
+                let next_virt = first_virt.checked_add(idx.checked_mul(PAGE_SIZE)?)?;
                 if virt != next_virt {
                     return None;
                 }
@@ -753,11 +924,11 @@ impl SeatDma {
             frames.push(frame);
         }
 
-        let virt = first_virt.saturating_add(page_offset);
+        let virt = first_virt.checked_add(page_offset)?;
         state.regions.push(PhysRegion {
             virt_start: virt,
             phys_start: phys,
-            length: map_len,
+            length: size,
             size,
             align: PAGE_SIZE,
             backing: RegionBacking::Mmio(frames),
@@ -768,9 +939,14 @@ impl SeatDma {
     fn virt_to_phys_locked(state: &SeatDmaState, va: usize) -> usize {
         for region in &state.regions {
             let start = region.virt_start;
-            let end = start.saturating_add(region.length);
+            let Some(end) = start.checked_add(region.length) else {
+                continue;
+            };
             if (start..end).contains(&va) {
-                return region.phys_start.saturating_add(va.saturating_sub(start));
+                let offset = va - start;
+                if let Some(phys) = region.phys_start.checked_add(offset) {
+                    return phys;
+                }
             }
         }
         va
@@ -862,4 +1038,27 @@ fn read_config_desc(config_blob: &[u8]) -> Option<ConfigDesc> {
     }
     // SAFETY: The descriptor bytes may be unaligned in the returned USB blob.
     Some(unsafe { ptr::read_unaligned(config_blob.as_ptr().cast::<ConfigDesc>()) })
+}
+
+fn validate_framebuffer_geometry(
+    width: usize,
+    height: usize,
+    pitch: usize,
+    fb_size: usize,
+) -> Option<usize> {
+    if width == 0 || height == 0 || pitch == 0 || fb_size == 0 {
+        return None;
+    }
+    if width > MAX_FB_WIDTH || height > MAX_FB_HEIGHT || fb_size > MAX_FB_BYTES {
+        return None;
+    }
+    let min_pitch = width.checked_mul(FB_BYTES_PER_PIXEL)?;
+    if pitch < min_pitch {
+        return None;
+    }
+    let required = pitch.checked_mul(height)?;
+    if required == 0 || required > fb_size || required > MAX_FB_BYTES {
+        return None;
+    }
+    Some(required)
 }

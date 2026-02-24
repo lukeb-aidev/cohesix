@@ -35,6 +35,7 @@ pub const MU_CNTL_OFFSET: usize = 0x60;
 const LSR_DATA_READY: u32 = 1 << 0;
 const LSR_TX_EMPTY: u32 = 1 << 5;
 const LSR_TX_IDLE: u32 = 1 << 6;
+const TX_SPIN_LIMIT: usize = 1_000_000;
 
 /// MMIO mapping metadata for the BCM2711 mini-UART.
 #[derive(Clone, Copy, Debug)]
@@ -161,7 +162,12 @@ impl Bcm2711MiniUart {
 
     /// Emit a single byte, blocking until the transmitter can accept data.
     pub fn putc_blocking(&mut self, byte: u8) {
+        let mut spins = 0usize;
         while (self.read_reg(MU_LSR_OFFSET) & LSR_TX_EMPTY) == 0 {
+            spins = spins.saturating_add(1);
+            if spins >= TX_SPIN_LIMIT {
+                return;
+            }
             core::hint::spin_loop();
         }
         self.write_reg(MU_IO_OFFSET, u32::from(byte));
@@ -174,7 +180,12 @@ impl Bcm2711MiniUart {
 
     /// Flush pending characters until the transmitter is idle.
     pub fn flush(&mut self) {
+        let mut spins = 0usize;
         while (self.read_reg(MU_LSR_OFFSET) & LSR_TX_IDLE) == 0 {
+            spins = spins.saturating_add(1);
+            if spins >= TX_SPIN_LIMIT {
+                return;
+            }
             core::hint::spin_loop();
         }
     }
