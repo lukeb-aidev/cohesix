@@ -6009,7 +6009,7 @@ Title/ID: m26-uboot-bootchain
 Goal: Boot Pi 4 via upstream U-Boot commands (`fatload` + `go`) into seL4/root-task with stable manifest fingerprint output.
 Inputs: `seL4/build_UEFI/images/sel4test-driver-image-arm-bcm2711`, `third_party/u-boot`, Pi firmware boot partition files, profile manifest.
 Changes:
-  - `scripts/uboot/pi4-image-build.sh` — build deterministic Pi 4 FAT payload (`u-boot.bin` + seL4 image + manifest artifacts).
+  - `scripts/pi4-image-build.sh` — build deterministic Pi 4 FAT payload (`u-boot.bin` + seL4 image + manifest artifacts).
   - `docs/HARDWARE_BRINGUP.md` — document canonical Pi 4 U-Boot command flow and SD layout.
   - `apps/root-task` — preserve boot fingerprint line ordering relative to serial/local seat.
 Commands:
@@ -6122,7 +6122,7 @@ Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` G
 - `cargo check -p root-task`
 - `cargo test -p root-task net:: -- --nocapture`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `scripts/uboot/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json`
+- `scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json`
 - `scripts/uboot/qemu-uboot-smoke.sh --net user`
 - `cargo run -p cohsh --features tcp -- --transport tcp --host <STATIC_IP> --port 31337 --script scripts/cohsh/boot_v0.coh`
 
@@ -6180,12 +6180,12 @@ Deliverables:
 
 Title/ID: m26a-pi4-uboot-validation
 Goal: Prove end-to-end TCP console reachability on Pi 4 using static IPv4 with no protocol drift.
-Inputs: scripts/uboot/pi4-image-build.sh, docs/HARDWARE_BRINGUP.md, scripts/cohsh/boot_v0.coh.
+Inputs: scripts/pi4-image-build.sh, docs/HARDWARE_BRINGUP.md, scripts/cohsh/boot_v0.coh.
 Changes:
   - docs/HARDWARE_BRINGUP.md — Pi 4 checklist, expected boot lines, static IPv4 examples.
   - docs/ARCHITECTURE.md + docs/SECURITY.md — backend and threat-model updates.
 Commands:
-  - scripts/uboot/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json
+  - scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json
   - cargo run -p cohsh --features tcp -- --transport tcp --host <STATIC_IP> --port 31337 --script scripts/cohsh/boot_v0.coh
 Checks:
   - Validation includes a before/after proof: Milestone 26 no-NIC transcript and Milestone 26a NIC-enabled transcript for the same board profile family.
@@ -6247,7 +6247,7 @@ Add a deterministic `no_std` DHCP client core that can operate on Pi 4 wired NIC
 - `cargo test -p root-task net:: -- --nocapture`
 - `cargo test -p coh-rtc`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `scripts/uboot/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json`
+- `scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json`
 - `scripts/uboot/qemu-uboot-smoke.sh --net user`
 - `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
 

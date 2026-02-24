@@ -1226,29 +1226,40 @@ fn init_local_seat_runtime<P: Platform>(
 ) -> Result<Option<&'static mut local_seat::LocalSeatRuntime>, BootError> {
     let mut local_seat_runtime: Option<&'static mut local_seat::LocalSeatRuntime> = None;
     let local_seat_required = hardware.local_seat.required;
-    let xhci_mmio_hint = infer_pi4_uefi_xhci_mmio_hint(extra_bytes, extra_range.clone());
-    let display_hint = infer_pi4_uefi_framebuffer_hint(extra_bytes, extra_range.clone());
-    if let Some(mmio_base) = xhci_mmio_hint {
-        let mut line = heapless::String::<96>::new();
-        let _ = write!(line, "[local-seat] xhci-mmio-hint=0x{mmio_base:016x}");
-        console.writeln_prefixed(line.as_str());
-        boot_log::force_uart_line(line.as_str());
-    }
-    if let Some(hint) = display_hint {
-        let mut line = heapless::String::<192>::new();
-        let _ = write!(
-            line,
-            "[local-seat] fb-hint paddr=0x{paddr:016x} width={} height={} pitch={}",
-            hint.width,
-            hint.height,
-            hint.pitch,
-            paddr = hint.paddr
-        );
-        console.writeln_prefixed(line.as_str());
-        boot_log::force_uart_line(line.as_str());
+    let local_seat_enabled = hardware.local_seat.enabled;
+    let xhci_mmio_hint = if local_seat_enabled {
+        infer_pi4_uefi_xhci_mmio_hint(extra_bytes, extra_range.clone())
     } else {
-        console.writeln_prefixed("[local-seat] fb-hint unavailable (falling back to mailbox)");
-        boot_log::force_uart_line("[local-seat] fb-hint unavailable (falling back to mailbox)");
+        None
+    };
+    let display_hint = if local_seat_enabled {
+        infer_pi4_uefi_framebuffer_hint(extra_bytes, extra_range.clone())
+    } else {
+        None
+    };
+    if local_seat_enabled {
+        if let Some(mmio_base) = xhci_mmio_hint {
+            let mut line = heapless::String::<96>::new();
+            let _ = write!(line, "[local-seat] xhci-mmio-hint=0x{mmio_base:016x}");
+            console.writeln_prefixed(line.as_str());
+            boot_log::force_uart_line(line.as_str());
+        }
+        if let Some(hint) = display_hint {
+            let mut line = heapless::String::<192>::new();
+            let _ = write!(
+                line,
+                "[local-seat] fb-hint paddr=0x{paddr:016x} width={} height={} pitch={}",
+                hint.width,
+                hint.height,
+                hint.pitch,
+                paddr = hint.paddr
+            );
+            console.writeln_prefixed(line.as_str());
+            boot_log::force_uart_line(line.as_str());
+        } else {
+            console.writeln_prefixed("[local-seat] fb-hint unavailable (falling back to mailbox)");
+            boot_log::force_uart_line("[local-seat] fb-hint unavailable (falling back to mailbox)");
+        }
     }
     let local_seat_hints = local_seat::LocalSeatPlatformHints {
         xhci_mmio_hint,

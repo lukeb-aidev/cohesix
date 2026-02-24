@@ -603,13 +603,9 @@ main() {
             ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console"
         fi
     else
-        if [[ "$ROOT_TASK_FEATURES" != *"cohesix-dev"* ]]; then
-            append_root_task_feature "serial-console"
-            if [[ "$TRANSPORT" == "tcp" ]]; then
-                append_root_task_feature "net"
-                append_root_task_feature "net-console"
-            fi
-        fi
+        # Preserve explicit --root-task-features verbatim so hardware profile
+        # parity checks (e.g. Pi4 no-NIC baselines) are not transport-mutated.
+        :
     fi
 
     for feature in "${ROOT_TASK_FEATURE_EXTRAS[@]-}"; do
