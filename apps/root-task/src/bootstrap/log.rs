@@ -184,6 +184,7 @@ static EP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static EP_ATTACHED: AtomicBool = AtomicBool::new(false);
 static BRIDGE_CREATED: AtomicBool = AtomicBool::new(false);
 static EP_ONLY_PERMITTED: AtomicBool = AtomicBool::new(false);
+static EP_ATTACH_WAIT_LOGGED: AtomicBool = AtomicBool::new(false);
 static POST_COMMIT_IPC_UNLOCKED: AtomicBool = AtomicBool::new(false);
 static PRECOMMIT_IPC_FORBIDDEN: AtomicU32 = AtomicU32::new(0);
 static LOG_DROPS: AtomicU32 = AtomicU32::new(0);
@@ -267,12 +268,18 @@ fn maybe_enter_post_commit_transports() {
     if !ep_sink_permitted() {
         return;
     }
-    if BRIDGE_CREATED.load(Ordering::Acquire) {
-        enter_mirrored_transport();
-        if EP_ATTACHED.load(Ordering::Acquire) {
-            try_enter_ep_only();
-        }
+    if !BRIDGE_CREATED.load(Ordering::Acquire) {
+        return;
     }
+    if !EP_ATTACHED.load(Ordering::Acquire) {
+        if !EP_ATTACH_WAIT_LOGGED.swap(true, Ordering::AcqRel) {
+            emit_uart(b"[trace] log transport: waiting for NineDoor attach\r\n");
+        }
+        return;
+    }
+    EP_ATTACH_WAIT_LOGGED.store(false, Ordering::Release);
+    enter_mirrored_transport();
+    try_enter_ep_only();
 }
 
 fn record_drop() {
@@ -352,7 +359,9 @@ fn send_frame(payload: &[u8]) -> Result<(), ()> {
         crate::sel4::set_message_register(slot, *word);
     }
 
-    sel4::send_unchecked(endpoint, info);
+    // Use non-blocking send to avoid stalling bootstrap if the EP consumer
+    // has not started receiving yet.
+    sel4::send_nb_unchecked(endpoint, info);
     drop(guard);
     Ok(())
 }
@@ -561,6 +570,32 @@ mod tests {
         sel4::lock_ipc_send();
         POST_COMMIT_IPC_UNLOCKED.store(false, Ordering::Release);
     }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn logger_switch_waits_until_bridge_attach() {
+        init_logger_bootstrap_only();
+        set_no_bridge_mode(false);
+        POST_COMMIT_IPC_UNLOCKED.store(true, Ordering::Release);
+        sel4::set_ep(0x1234);
+        sel4::set_ep_validated(true);
+        sel4::unlock_ipc_send();
+
+        notify_bridge_created();
+        assert!(matches!(LOGGER.transport(), LogTransport::UartOnly));
+
+        switch_logger_to_userland().expect("switch request should succeed");
+        assert!(matches!(LOGGER.transport(), LogTransport::UartOnly));
+
+        notify_bridge_attached();
+        assert!(matches!(LOGGER.transport(), LogTransport::UartMirroredEp));
+
+        notify_bridge_detached();
+        sel4::clear_ep();
+        sel4::lock_ipc_send();
+        POST_COMMIT_IPC_UNLOCKED.store(false, Ordering::Release);
+        set_no_bridge_mode(false);
+    }
 }
 
 fn run_self_test() -> bool {
@@ -667,6 +702,7 @@ pub fn init_logger_bootstrap_only() {
     EP_ATTACHED.store(false, Ordering::Release);
     BRIDGE_CREATED.store(false, Ordering::Release);
     EP_ONLY_PERMITTED.store(false, Ordering::Release);
+    EP_ATTACH_WAIT_LOGGED.store(false, Ordering::Release);
     POST_COMMIT_IPC_UNLOCKED.store(false, Ordering::Release);
     ::log::set_max_level(LevelFilter::Info);
 }
@@ -691,6 +727,7 @@ pub fn switch_logger_to_userland() -> Result<(), Error> {
         LogTransport::UartOnly => {}
     }
     EP_REQUESTED.store(true, Ordering::Release);
+    EP_ATTACH_WAIT_LOGGED.store(false, Ordering::Release);
     maybe_enter_post_commit_transports();
     Ok(())
 }
@@ -707,12 +744,14 @@ pub fn notify_bridge_created() {
 /// Inform the logger that the NineDoor bridge has completed authentication.
 pub fn notify_bridge_attached() {
     EP_ATTACHED.store(true, Ordering::Release);
+    EP_ATTACH_WAIT_LOGGED.store(false, Ordering::Release);
     maybe_enter_post_commit_transports();
 }
 
 /// Inform the logger that the bridge is no longer attached.
 pub fn notify_bridge_detached() {
     EP_ATTACHED.store(false, Ordering::Release);
+    EP_ATTACH_WAIT_LOGGED.store(false, Ordering::Release);
     if matches!(
         LOGGER.transport(),
         LogTransport::EpOnly | LogTransport::UartMirroredEp
@@ -755,6 +794,7 @@ pub fn set_no_bridge_mode(enabled: bool) {
         EP_ATTACHED.store(false, Ordering::Release);
         BRIDGE_CREATED.store(false, Ordering::Release);
         EP_ONLY_PERMITTED.store(false, Ordering::Release);
+        EP_ATTACH_WAIT_LOGGED.store(false, Ordering::Release);
     }
 }
 

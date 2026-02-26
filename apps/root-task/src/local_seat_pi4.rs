@@ -221,14 +221,16 @@ struct Mailbox {
     regs: crate::sel4::DeviceFrame,
     regs_paddr: usize,
     request: crate::sel4::RamFrame,
+    _prefix_maps: Vec<crate::sel4::DeviceFrame>,
 }
 
 impl Mailbox {
     fn new(hal: &mut KernelHal<'_>) -> Result<Self, Pi4SeatError> {
         let mut regs = None;
         let mut regs_paddr = 0usize;
+        let mut prefix_maps = Vec::new();
         for &candidate in &MAILBOX_PAGE_PADDR_CANDIDATES {
-            if let Ok(mapped) = hal.map_device(candidate) {
+            if let Ok(mapped) = Self::map_device_exact(hal, candidate, &mut prefix_maps) {
                 regs = Some(mapped);
                 regs_paddr = candidate;
                 break;
@@ -252,7 +254,63 @@ impl Mailbox {
             regs,
             regs_paddr,
             request,
+            _prefix_maps: prefix_maps,
         })
+    }
+
+    fn map_device_exact(
+        hal: &mut KernelHal<'_>,
+        paddr: usize,
+        prefix_maps: &mut Vec<crate::sel4::DeviceFrame>,
+    ) -> Result<crate::sel4::DeviceFrame, Pi4SeatError> {
+        let Some(coverage) = hal.device_coverage(paddr, crate::sel4::PAGE_BITS) else {
+            return Err(Pi4SeatError::MailboxMap);
+        };
+        let span_bytes = coverage.limit.saturating_sub(coverage.base);
+        let page_count = cmp::max(1usize, span_bytes / PAGE_SIZE);
+        let max_attempts = cmp::min(page_count.saturating_add(1), 1024);
+
+        for attempt in 0..max_attempts {
+            let frame = hal.map_device(paddr).map_err(|_| Pi4SeatError::MailboxMap)?;
+            let actual_paddr =
+                crate::sel4::page_get_address(frame.cap()).map_err(|_| Pi4SeatError::MailboxMap)?;
+            if actual_paddr == paddr {
+                if attempt > 0 {
+                    let mut line = heapless::String::<200>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] mailbox map exact after retries={} base=0x{:08x} limit=0x{:08x}",
+                            attempt,
+                            coverage.base,
+                            coverage.limit
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                }
+                return Ok(frame);
+            }
+
+            let mut line = heapless::String::<220>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] mailbox map mismatch want=0x{want:08x} got=0x{got:08x} attempt={}/{}",
+                    attempt + 1,
+                    max_attempts,
+                    want = paddr,
+                    got = actual_paddr
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+
+            if actual_paddr > paddr {
+                return Err(Pi4SeatError::MailboxMap);
+            }
+            prefix_maps.push(frame);
+        }
+
+        Err(Pi4SeatError::MailboxMap)
     }
 
     fn call_tag(

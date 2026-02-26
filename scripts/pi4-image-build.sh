@@ -14,6 +14,8 @@ SEL4_VENV_DIR="${HOME}/seL4/.venv_aarch64"
 U_BOOT_BIN="${ROOT_DIR}/third_party/u-boot/u-boot.bin"
 FIRMWARE_DIR="${ROOT_DIR}/out/uefi/pi4-followup/firmware/v1.50"
 STAGE_DIR="${ROOT_DIR}/out/pi4-sd"
+SEL4_UPSTREAM_IMAGE_NAME="sel4test-driver-image-arm-bcm2711"
+COHESIX_IMAGE_NAME="cohesix-image-arm-bcm2711"
 FLASH_DISK=""
 DISK_LABEL="COHESIX"
 ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console"
@@ -26,7 +28,7 @@ Usage: scripts/pi4-image-build.sh [options]
 Builds and stages a Pi 4 SD payload with:
   - Raspberry Pi firmware files (start4.elf, fixup4.dat, DTB + overlays)
   - U-Boot (u-boot.bin)
-  - seL4 image (sel4test-driver-image-arm-bcm2711)
+  - seL4 image (upstream output copied as cohesix-image-arm-bcm2711)
   - Cohesix autoboot script (boot.scr.uimg)
 
 By default this script only builds/stages files under out/pi4-sd.
@@ -40,6 +42,8 @@ Options:
   --u-boot-bin <path>       U-Boot binary (default: third_party/u-boot/u-boot.bin)
   --firmware-dir <dir>      Pi firmware directory (default: out/uefi/pi4-followup/firmware/v1.50)
   --stage-dir <dir>         Output staging directory (default: out/pi4-sd)
+  --image-name <name>       Staged/boot image filename on FAT partition
+                            (default: cohesix-image-arm-bcm2711)
   --root-task-features <f>  Comma-separated root-task feature list
                             (default: kernel,bootstrap-trace,serial-console)
   --skip-build              Skip rebuild and reuse existing seL4 image in sel4 build dir
@@ -66,6 +70,60 @@ require_file() {
 require_dir() {
     local path="$1"
     [[ -d "$path" ]] || fail "required directory missing: ${path}"
+}
+
+resolve_sel4_source_dir() {
+    if [[ -f "${SEL4_BUILD_DIR}/CMakeCache.txt" ]]; then
+        local cached
+        cached="$(awk -F= '/^CMAKE_HOME_DIRECTORY:INTERNAL=/{print $2}' "${SEL4_BUILD_DIR}/CMakeCache.txt" | tail -n 1)"
+        if [[ -n "$cached" && -d "$cached" && -f "${cached}/CMakeLists.txt" ]]; then
+            printf "%s\n" "$cached"
+            return 0
+        fi
+    fi
+
+    local inferred
+    inferred="$(cd "${SEL4_BUILD_DIR}/.." && pwd)"
+    [[ -f "${inferred}/CMakeLists.txt" ]] || fail "could not resolve seL4 source dir for ${SEL4_BUILD_DIR}"
+    printf "%s\n" "$inferred"
+}
+
+configure_pi4_sel4_build() {
+    local sel4_source_dir="$1"
+
+    log "Configuring ${SEL4_BUILD_DIR} for Pi4 serial diagnostics"
+    cmake -S "$sel4_source_dir" -B "$SEL4_BUILD_DIR" \
+      -DAARCH64=TRUE \
+      -DARM_HYP=OFF \
+      -DPLATFORM=bcm2711 \
+      -DRELEASE=OFF \
+      -DVERIFICATION=OFF \
+      -DSMP=ON \
+      -DNUM_NODES=4 \
+      -DSel4testAllowSettingsOverride=ON \
+      -DKernelPlatform=bcm2711 \
+      -DKernelSel4Arch=aarch64 \
+      -DKernelDebugBuild=ON \
+      -DKernelPrinting=ON \
+      -DHardwareDebugAPI=OFF \
+      -DKernelMaxNumNodes=4 \
+      -DKernelRootCNodeSizeBits=13 \
+      -DElfloaderImage=binary \
+      -DElfloaderIncludeDtb=ON \
+      -DSIMULATION=OFF \
+      -DCMAKE_BUILD_TYPE=Debug
+
+    local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
+    require_file "$cache_file"
+    grep -q "^KernelPlatform:STRING=bcm2711$" "$cache_file" || fail "KernelPlatform not set to bcm2711"
+    grep -q "^RELEASE:BOOL=OFF$" "$cache_file" || fail "RELEASE mode unexpectedly enabled"
+    grep -q "^SMP:BOOL=ON$" "$cache_file" || fail "SMP not enabled"
+    grep -q "^NUM_NODES:STRING=4$" "$cache_file" || fail "NUM_NODES not set to 4"
+    grep -q "^Sel4testAllowSettingsOverride:BOOL=ON$" "$cache_file" || fail "Sel4testAllowSettingsOverride not ON"
+    grep -q "^KernelDebugBuild:BOOL=ON$" "$cache_file" || fail "KernelDebugBuild not ON"
+    grep -q "^KernelPrinting:BOOL=ON$" "$cache_file" || fail "KernelPrinting not ON"
+    grep -q "^HardwareDebugAPI:BOOL=OFF$" "$cache_file" || fail "HardwareDebugAPI must be OFF for current sel4-sys bindings"
+    grep -q "^KernelMaxNumNodes:STRING=4$" "$cache_file" || fail "KernelMaxNumNodes not 4"
 }
 
 resolve_mkimage() {
@@ -114,6 +172,11 @@ parse_args() {
             --stage-dir)
                 [[ $# -ge 2 ]] || fail "--stage-dir requires a path"
                 STAGE_DIR="$2"
+                shift 2
+                ;;
+            --image-name)
+                [[ $# -ge 2 ]] || fail "--image-name requires a filename"
+                COHESIX_IMAGE_NAME="$2"
                 shift 2
                 ;;
             --root-task-features)
@@ -179,10 +242,14 @@ run_coh_rtc_codegen() {
 build_pi4_image() {
     local root_task_elf="${ROOT_DIR}/target/aarch64-unknown-none/release/root-task"
     local embedded_rootserver="${SEL4_BUILD_DIR}/elfloader/rootserver"
+    local sel4_source_dir
 
     export SEL4_BUILD_DIR
     export SEL4_BUILD="$SEL4_BUILD_DIR"
     export SEL4_LD="${ROOT_DIR}/apps/root-task/sel4.ld"
+
+    sel4_source_dir="$(resolve_sel4_source_dir)"
+    configure_pi4_sel4_build "$sel4_source_dir"
 
     log "Regenerating manifest artifacts via coh-rtc"
     run_coh_rtc_codegen
@@ -205,55 +272,87 @@ build_pi4_image() {
     jobs="$(sysctl -n hw.ncpu)"
     log "Rebuilding Pi4 seL4 image in ${SEL4_BUILD_DIR}"
     cmake --build "$SEL4_BUILD_DIR" \
-      --target images/sel4test-driver-image-arm-bcm2711 \
+      --target "images/${SEL4_UPSTREAM_IMAGE_NAME}" \
       -j"$jobs"
 }
 
 write_boot_cmd() {
     local out="$1"
+    local coh_image="$2"
+    local fallback_image="$3"
     cat >"$out" <<'EOF'
 echo "[cohesix] pi4 autoboot script"
-setenv coh_image sel4test-driver-image-arm-bcm2711
+setenv coh_image __COH_IMAGE__
+setenv coh_image_fallback __COH_IMAGE_FALLBACK__
 setenv coh_addr 0x10000000
 setenv coh_state_addr 0x13000000
 setenv coh_state_size 0
 setenv cohesix_boot_bytes 0
-setenv coh_write_state 'if env export -t ${coh_state_addr} cohesix_boot_stage cohesix_boot_bytes; then setexpr coh_state_size ${filesize} - 1; fatwrite mmc 0:1 ${coh_state_addr} cohesix_boot_state.txt ${coh_state_size}; fi'
+setenv cohesix_boot_image ${coh_image}
+setenv coh_write_state 'if env export -t ${coh_state_addr} cohesix_boot_stage cohesix_boot_bytes cohesix_boot_image; then setexpr coh_state_size ${filesize} - 1; fatwrite mmc 0:1 ${coh_state_addr} cohesix_boot_state.txt ${coh_state_size}; fi'
 
 setenv cohesix_boot_stage pre_load
 setenv cohesix_boot_bytes 0
+setenv cohesix_boot_image ${coh_image}
 run coh_write_state
 
 if fatload mmc 0:1 ${coh_addr} ${coh_image}; then
     setenv cohesix_boot_stage loaded
     setenv cohesix_boot_bytes ${filesize}
+    setenv cohesix_boot_image ${coh_image}
     run coh_write_state
 
     echo "[cohesix] loaded ${coh_image} to ${coh_addr}; jumping"
     setenv cohesix_boot_stage before_go
+    setenv cohesix_boot_image ${coh_image}
     run coh_write_state
 
     go ${coh_addr}
 
     setenv cohesix_boot_stage returned_from_go
+    setenv cohesix_boot_image ${coh_image}
     run coh_write_state
     echo "[cohesix] returned from image"
 else
-    setenv cohesix_boot_stage load_failed
-    setenv cohesix_boot_bytes 0
-    run coh_write_state
+    echo "[cohesix] primary image load failed: ${coh_image}"
+    if fatload mmc 0:1 ${coh_addr} ${coh_image_fallback}; then
+        setenv coh_image ${coh_image_fallback}
+        setenv cohesix_boot_stage loaded_legacy_fallback
+        setenv cohesix_boot_bytes ${filesize}
+        setenv cohesix_boot_image ${coh_image}
+        run coh_write_state
 
-    echo "[cohesix] ERROR: failed to load ${coh_image} from mmc 0:1"
-    echo "[cohesix] manual: fatls mmc 0:1"
-    echo "[cohesix] manual: fatload mmc 0:1 0x10000000 ${coh_image}"
-    echo "[cohesix] manual: go 0x10000000"
+        echo "[cohesix] loaded fallback ${coh_image} to ${coh_addr}; jumping"
+        setenv cohesix_boot_stage before_go
+        setenv cohesix_boot_image ${coh_image}
+        run coh_write_state
+
+        go ${coh_addr}
+
+        setenv cohesix_boot_stage returned_from_go
+        setenv cohesix_boot_image ${coh_image}
+        run coh_write_state
+        echo "[cohesix] returned from image"
+    else
+        setenv cohesix_boot_stage load_failed
+        setenv cohesix_boot_bytes 0
+        setenv cohesix_boot_image ${coh_image}
+        run coh_write_state
+
+        echo "[cohesix] ERROR: failed to load ${coh_image} or fallback ${coh_image_fallback} from mmc 0:1"
+        echo "[cohesix] manual: fatls mmc 0:1"
+        echo "[cohesix] manual: fatload mmc 0:1 0x10000000 ${coh_image}"
+        echo "[cohesix] manual: go 0x10000000"
+    fi
 fi
 EOF
+    sed -i '' "s/__COH_IMAGE__/${coh_image}/g" "$out"
+    sed -i '' "s/__COH_IMAGE_FALLBACK__/${fallback_image}/g" "$out"
 }
 
 stage_sd_payload() {
     local mkimage_bin="$1"
-    local sel4_image="${SEL4_BUILD_DIR}/images/sel4test-driver-image-arm-bcm2711"
+    local sel4_image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
     local stage_overlays="${STAGE_DIR}/overlays"
 
     require_file "$sel4_image"
@@ -269,7 +368,7 @@ stage_sd_payload() {
     cp -f "${FIRMWARE_DIR}/overlays/miniuart-bt.dtbo" "${stage_overlays}/miniuart-bt.dtbo"
     cp -f "${FIRMWARE_DIR}/overlays/upstream-pi4.dtbo" "${stage_overlays}/upstream-pi4.dtbo"
     cp -f "$U_BOOT_BIN" "${STAGE_DIR}/u-boot.bin"
-    cp -f "$sel4_image" "${STAGE_DIR}/sel4test-driver-image-arm-bcm2711"
+    cp -f "$sel4_image" "${STAGE_DIR}/${COHESIX_IMAGE_NAME}"
 
     cat > "${STAGE_DIR}/config.txt" <<'EOF'
 arm_64bit=1
@@ -278,12 +377,13 @@ enable_uart=1
 uart_2ndstage=1
 enable_gic=1
 kernel=u-boot.bin
-dtoverlay=miniuart-bt
 dtoverlay=upstream-pi4
+# Keep mini-UART on GPIO14/15 to match seL4 bcm2711 serial1 console routing.
+core_freq=250
 total_mem=1024
 EOF
 
-    write_boot_cmd "${STAGE_DIR}/boot.cmd"
+    write_boot_cmd "${STAGE_DIR}/boot.cmd" "${COHESIX_IMAGE_NAME}" "${SEL4_UPSTREAM_IMAGE_NAME}"
     "$mkimage_bin" \
       -A arm64 \
       -T script \
@@ -293,9 +393,10 @@ EOF
       "${STAGE_DIR}/boot.scr.uimg" \
       >/dev/null
 
-    cat > "${STAGE_DIR}/cohesix_boot_state.txt" <<'EOF'
+    cat > "${STAGE_DIR}/cohesix_boot_state.txt" <<EOF
 cohesix_boot_stage=prepared
 cohesix_boot_bytes=0
+cohesix_boot_image=${COHESIX_IMAGE_NAME}
 EOF
 
     require_file "${STAGE_DIR}/boot.scr.uimg"
@@ -321,18 +422,20 @@ flash_sd_card() {
         diskutil mount "$part" >/dev/null
     fi
 
-    rsync -a --delete \
+    COPYFILE_DISABLE=1 rsync -a --delete \
       --exclude=".Spotlight-V100" \
       --exclude=".fseventsd" \
       --exclude=".Trashes" \
       --exclude="._*" \
       "${STAGE_DIR}/" "${volume}/"
 
+    find "${volume}" -xdev -name '._*' -type f -delete 2>/dev/null || true
+
     sync
 
     local stage_hash sd_hash
-    stage_hash="$(shasum -a 256 "${STAGE_DIR}/sel4test-driver-image-arm-bcm2711" | awk '{print $1}')"
-    sd_hash="$(shasum -a 256 "${volume}/sel4test-driver-image-arm-bcm2711" | awk '{print $1}')"
+    stage_hash="$(shasum -a 256 "${STAGE_DIR}/${COHESIX_IMAGE_NAME}" | awk '{print $1}')"
+    sd_hash="$(shasum -a 256 "${volume}/${COHESIX_IMAGE_NAME}" | awk '{print $1}')"
     [[ "$stage_hash" == "$sd_hash" ]] || fail "rootserver image hash mismatch after flash"
 
     diskutil unmount "$volume" >/dev/null

@@ -856,6 +856,17 @@ pub fn send_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
     }
 }
 
+/// Issues a raw seL4 non-blocking send without validating the destination capability.
+#[cfg(feature = "kernel")]
+#[track_caller]
+#[inline(always)]
+pub fn send_nb_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
+    guard_ipc_destination("send_nb_unchecked", dest);
+    unsafe {
+        syscall::nb_send(dest, info);
+    }
+}
+
 /// Issues a raw seL4 call without validating the destination capability.
 #[cfg(feature = "kernel")]
 #[track_caller]
@@ -944,6 +955,7 @@ fn emit_illegal_send_line(line: &str) {
 #[derive(Clone, Copy, Debug)]
 pub enum IpcSyscallKind {
     Send,
+    NbSend,
     Call,
     Reply,
     ReplyRecv,

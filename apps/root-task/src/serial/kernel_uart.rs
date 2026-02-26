@@ -25,8 +25,8 @@ pub const PI4_PL011_PADDR: usize = 0xFE20_1000;
 /// Ordered UART candidates for runtime probing.
 pub const UART_CANDIDATES: [KernelUartCandidate; 3] = [
     KernelUartCandidate::QemuPl011,
-    KernelUartCandidate::Pi4Pl011,
     KernelUartCandidate::Pi4MiniUart,
+    KernelUartCandidate::Pi4Pl011,
 ];
 
 /// Runtime-selected kernel UART backend kind.

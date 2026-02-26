@@ -10,8 +10,8 @@ use core::panic::Location;
 
 use super::{ipc_bootstrap_trap, IpcSyscallKind};
 use sel4_sys::{
-    seL4_CPtr, seL4_CallWithMRs, seL4_MessageInfo, seL4_NBRecv, seL4_Recv, seL4_Reply, seL4_Send,
-    seL4_Wait, seL4_Word, seL4_Yield,
+    seL4_CPtr, seL4_CallWithMRs, seL4_MessageInfo, seL4_NBRecv, seL4_NBSend, seL4_Recv,
+    seL4_Reply, seL4_Send, seL4_Wait, seL4_Word, seL4_Yield,
 };
 
 extern "C" {
@@ -29,6 +29,15 @@ pub(super) unsafe fn send(dest: seL4_CPtr, info: seL4_MessageInfo) {
     }
 
     unsafe { seL4_Send(dest, info) };
+}
+
+#[track_caller]
+pub(super) unsafe fn nb_send(dest: seL4_CPtr, info: seL4_MessageInfo) {
+    if ipc_bootstrap_trap(IpcSyscallKind::NbSend, dest, Location::caller()) {
+        return;
+    }
+
+    unsafe { seL4_NBSend(dest, info) };
 }
 
 #[track_caller]

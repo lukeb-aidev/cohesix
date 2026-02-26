@@ -1361,7 +1361,13 @@ where
     /// Emit console audit messages once the UART bridge is connected.
     pub fn announce_console_ready(&mut self) {
         if self.ninedoor.is_some() {
-            boot_log::switch_logger_to_log_buffer();
+            if crate::generated::hardware_config().local_seat.enabled {
+                boot_log::force_uart_line(
+                    "[trace] log channel remains UART during local-seat bring-up",
+                );
+            } else {
+                boot_log::switch_logger_to_log_buffer();
+            }
         }
         self.audit.info("console: attach uart");
         if let Some(bridge) = self.ninedoor.as_mut() {

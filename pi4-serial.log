@@ -1,0 +1,95 @@
+Read start4.elf bytes  2299008 hnd 0x151
+Read fixup4.dat bytes     5496 hnd 0x120
+0x00a03115 0x00000000 0x00001fff
+MEM GPU: 76 ARM: 948 TOTAL: 1024
+Starting start4.elf @ 0xfec00200 partition 0
+XHCI-STOP
+xHC ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+USBSTS 18
++
+
+MESS:00:00:03.548847:0: arasan: arasan_emmc_open
+MESS:00:00:03.550505:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
+MESS:00:00:03.670739:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
+MESS:00:00:03.683609:0: arasan: arasan_emmc_set_clock C0: 0x00800f00 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 390000 max: 400000 delay: 5
+MESS:00:00:03.721284:0: boot-part: 0 fs-type: 0
+MESS:00:00:03.722697:0: boot-part: 0 fs-type: 3
+MESS:00:00:03.727081:0: arasan: arasan_emmc_set_clock C0: 0x00800f06 C1: 0x000e0207 emmc: 200000000 actual: 50000000 div: 0x00000002 target: 50000000 min: 0 max: 50000000 delay: 1
+MESS:00:00:03.745490:0: brfs: File read: /mfs/sd/config.txt
+MESS:00:00:03.748258:0: brfs: File read: 145 bytes
+MESS:00:00:03.833658:0: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:00:00:03.838159:0: HDMI1:EDID giving up on reading EDID block 0
+MESS:00:00:03.844065:0: brfs: File read: /mfs/sd/config.txt
+MESS:00:00:04.339909:0: gpioman: gpioman_get_pin_num: pin DISPLAY_DSI_PORT not defined
+MESS:00:00:04.345459:0: gpioman: gpioman_get_pin_num: pin DISPLAY_DSI_PORT not defined
+MESS:00:00:04.354493:0: *** Restart logging
+MESS:00:00:04.356267:0: brfs: File read: 145 bytes
+MESS:00:00:04.425950:0: hdmi: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:00:00:04.430982:0: hdmi: HDMI1:EDID giving up on reading EDID block 0
+MESS:00:00:04.446987:0: hdmi: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:00:00:04.452062:0: hdmi: HDMI1:EDID giving up on reading EDID block 0
+MESS:00:00:04.457659:0: hdmi: HDMI:hdmi_get_state is deprecated, use hdmi_get_display_state instead
+MESS:00:00:04.466418:0: HDMI0: hdmi_pixel_encoding: 300000000
+MESS:00:00:04.471921:0: HDMI1: hdmi_pixel_encoding: 300000000
+MESS:00:00:04.488432:0: dtb_file 'bcm2711-rpi-4-b.dtb'
+MESS:00:00:04.502213:0: brfs: File read: /mfs/sd/bcm2711-rpi-4-b.dtb
+MESS:00:00:04.505502:0: Loaded 'bcm2711-rpi-4-b.dtb' to 0x100 size 0xd3f8
+MESS:00:00:04.545546:0: brfs: File read: 54264 bytes
+MESS:00:00:04.601637:0: brfs: File read: /mfs/sd/config.txt
+MESS:00:00:04.604284:0: brfs: File read: 145 bytes
+MESS:00:00:04.609887:0: brfs: File read: /mfs/sd/overlays/miniuart-bt.dtbo
+MESS:00:00:04.666073:0: Loaded overlay 'miniuart-bt'
+MESS:00:00:04.773361:0: brfs: File read: 1566 bytes
+MESS:00:00:04.776787:0: brfs: File read: /mfs/sd/overlays/upstream-pi4.dtbo
+MESS:00:00:04.934425:0: Loaded overlay 'upstream-pi4'
+MESS:00:00:05.358850:0: brfs: File read: 2775 bytes
+MESS:00:00:05.361073:0: Failed to open command line file 'cmdline.txt'
+MESS:00:00:05.596833:0: brfs: File read: /mfs/sd/u-boot.bin
+MESS:00:00:05.599299:0: Loaded 'u-boot.bin' to 0x200000 size 0xadc78
+MESS:00:00:05.606187:0: Kernel relocated to 0x80000
+MESS:00:00:05.609970:0: Device tree loaded to 0x2eff2500 (size 0xda35)
+MESS:00:00:05.618074:0: uart: Set PL011 baud rate to 103448.300000 Hz
+MESS:00:00:05.625299:0: uart: Baud rate change done...
+MESS:00:00:05.627318:0: uart: Baud rate change done...
+MESS:00:00:05.634368:0: gpioman: gpioman_get_pin_num: pin SDCARD_CONTROL_POWER not defined
+MESS:00:00:05.640322:0: Watchdog stopped
+MESS:00:00:05.643818:0: arm_loader: Starting ARM with 948MB
+
+
+U-Boot 2026.01 (Feb 23 2026 - 22:20:17 +1100)
+
+DRAM:  948 MiB
+RPI 4 Model B (0xc03115)
+Core:  215 devices, 18 uclasses, devicetree: board
+MMC:   mmcnr@7e300000: 1, mmc@7e340000: 0
+Loading Environment from FAT... Unable to read "uboot.env" from mmc0:1... 
+In:    serial,usbkbd
+Out:   serial,vidconsole
+Err:   serial,vidconsole
+Net:   eth0: ethernet@7d580000
+
+PCIe BRCM: link up, 5.0 Gbps x1 (SSC)
+starting USB...
+Starting the controller
+USB XHCI 1.00
+Bus xhci_pci: 4 USB Device(s) found
+       scanning usb for storage devices... 0 Storage Device(s) found
+Hit any key to stop autoboot:  2 Hit any key to stop autoboot: 1Hit any key to stop autoboot: 0
+Card did not respond to voltage select! : -110
+Cannot persist EFI variables without system partition
+** Booting bootflow '<NULL>' with efi_mgr
+Loading Boot0000 'mmc 0' failed
+EFI boot manager: Cannot load any image
+Boot failed (err=-14)
+Card did not respond to voltage select! : -110
+Card did not respond to voltage select! : -110
+Card did not respond to voltage select! : -110
+Card did not respond to voltage select! : -110
+** Booting bootflow 'mmc@7e340000.bootdev.part_1' with script
+[cohesix] pi4 autoboot script
+49 bytes written in 28 ms (1000 Bytes/s)
+1493672 bytes read in 78 ms (18.3 MiB/s)
+52 bytes written in 21 ms (2 KiB/s)
+[cohesix] loaded sel4test-driver-image-arm-bcm2711 to 0x10000000; jumping
+55 bytes written in 21 ms (2 KiB/s)
+## Starting application at 0x10000000 ...

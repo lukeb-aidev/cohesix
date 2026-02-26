@@ -13,7 +13,7 @@
 ## Canonical Pi 4 boot chain
 1. Pi boot firmware loads `start4.elf` and `fixup4.dat`.
 2. Firmware loads `u-boot.bin` (from FAT boot partition).
-3. U-Boot loads the seL4 image (`sel4test-driver-image-arm-bcm2711`) using `fatload`.
+3. U-Boot loads the staged Cohesix payload (`cohesix-image-arm-bcm2711`) using `fatload`.
 4. U-Boot transfers control with `go`.
 5. seL4 enters root-task; Cohesix reaches `cohesix>` prompt.
 
@@ -36,7 +36,7 @@
 3. Prepare FAT boot partition with:
 - Pi firmware files (`start4.elf`, `fixup4.dat`, required DTB/overlay files),
 - `u-boot.bin`,
-- `sel4test-driver-image-arm-bcm2711`,
+- `cohesix-image-arm-bcm2711` (copied from seL4 `images/sel4test-driver-image-arm-bcm2711`),
 - Cohesix manifest artifacts (`manifest.json`, `manifest.sha256`, and related packaged assets).
 4. Ensure `config.txt` includes:
 - `arm_64bit=1`
@@ -44,7 +44,7 @@
 - `kernel=u-boot.bin`
 5. Boot from U-Boot shell:
 - `fatls mmc 0:1`
-- `fatload mmc 0:1 ${loadaddr} sel4test-driver-image-arm-bcm2711`
+- `fatload mmc 0:1 ${loadaddr} cohesix-image-arm-bcm2711`
 - `go ${loadaddr}`
 
 ## U-Boot networking setup (for 26a/26b prep)

@@ -3337,6 +3337,15 @@ fn bootstrap<P: Platform>(
                 "[boot] logger.switch: EP disabled in dev-virt (UART-only)"
             );
             false
+        } else if generated::hardware_config().local_seat.enabled {
+            boot_log::force_uart_line(
+                "[trace] logger.switch deferred for local-seat bring-up (UART-only)",
+            );
+            log::info!(
+                target: "root_task::kernel",
+                "[boot] logger.switch: deferred for local-seat bring-up (UART-only)"
+            );
+            false
         } else if let Err(err) = boot_log::switch_logger_to_userland() {
             log::error!("[boot] logger switch failed: {:?}", err);
             boot_guard.record_reason("logger.switch", None);
