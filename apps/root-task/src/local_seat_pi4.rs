@@ -27,7 +27,7 @@ use crate::hal::{Hardware, KernelHal};
 const PAGE_SIZE: usize = 4096;
 const PAGE_MASK: usize = PAGE_SIZE - 1;
 
-const MAILBOX_PAGE_PADDR: usize = 0xFE00_B000;
+const MAILBOX_PAGE_PADDR_CANDIDATES: [usize; 2] = [0xFE00_B000, 0x7E00_B000];
 const MAILBOX_READ_OFFSET: usize = 0x880;
 const MAILBOX_STATUS0_OFFSET: usize = 0x898;
 const MAILBOX_WRITE_OFFSET: usize = 0x8A0;
@@ -37,9 +37,10 @@ const MAILBOX_FULL: u32 = 0x8000_0000;
 const MAILBOX_CHANNEL_PROPERTY: u32 = 8;
 const MAILBOX_RESPONSE_SUCCESS: u32 = 0x8000_0000;
 const MAILBOX_VALUE_RESPONSE: u32 = 1 << 31;
-const MAILBOX_WAIT_SPINS: usize = 5_000_000;
+const MAILBOX_WAIT_SPINS: usize = 50_000_000;
+const MAILBOX_DRAIN_LIMIT: usize = 64;
 
-const VC_BUS_UNCACHED_BASE: u32 = 0xC000_0000;
+const VC_BUS_ALIAS_BASES: [u32; 2] = [0xC000_0000, 0x4000_0000];
 const VC_BUS_MASK: u32 = 0x3FFF_FFFF;
 
 const TAG_SET_PHYSICAL_SIZE: u32 = 0x0004_8003;
@@ -218,18 +219,40 @@ impl Pi4LocalSeat {
 
 struct Mailbox {
     regs: crate::sel4::DeviceFrame,
+    regs_paddr: usize,
     request: crate::sel4::RamFrame,
 }
 
 impl Mailbox {
     fn new(hal: &mut KernelHal<'_>) -> Result<Self, Pi4SeatError> {
-        let regs = hal
-            .map_device(MAILBOX_PAGE_PADDR)
-            .map_err(|_| Pi4SeatError::MailboxMap)?;
+        let mut regs = None;
+        let mut regs_paddr = 0usize;
+        for &candidate in &MAILBOX_PAGE_PADDR_CANDIDATES {
+            if let Ok(mapped) = hal.map_device(candidate) {
+                regs = Some(mapped);
+                regs_paddr = candidate;
+                break;
+            }
+        }
+        let regs = regs.ok_or(Pi4SeatError::MailboxMap)?;
+
         let request = hal
-            .alloc_dma_frame_low()
+            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Uncached)
             .map_err(|_| Pi4SeatError::MailboxDma)?;
-        Ok(Self { regs, request })
+        let mut line = heapless::String::<160>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] mailbox regs=0x{regs_paddr:08x} req_paddr=0x{req:08x}",
+                req = request.paddr()
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        Ok(Self {
+            regs,
+            regs_paddr,
+            request,
+        })
     }
 
     fn call_tag(
@@ -238,6 +261,7 @@ impl Mailbox {
         request_len_bytes: u32,
         payload: &mut [u32],
     ) -> Result<(), Pi4SeatError> {
+        let original_payload = payload.to_vec();
         let words = {
             let bytes = self.request.as_mut_slice();
             // SAFETY: The DMA request page is 4-byte aligned and sized to PAGE_SIZE.
@@ -246,6 +270,59 @@ impl Mailbox {
             }
         };
 
+        let mut last_err = Pi4SeatError::MailboxProtocol;
+        for (alias_index, &alias_base) in VC_BUS_ALIAS_BASES.iter().enumerate() {
+            self.encode_request(words, tag, request_len_bytes, &original_payload)?;
+            let request_bus = phys_to_bus(self.request.paddr(), alias_base)
+                .ok_or(Pi4SeatError::MailboxDma)?;
+
+            match self.mailbox_send(request_bus) {
+                Ok(()) => {
+                    if words[1] != MAILBOX_RESPONSE_SUCCESS {
+                        last_err = Pi4SeatError::MailboxProtocol;
+                        continue;
+                    }
+                    if words[2] != tag {
+                        last_err = Pi4SeatError::MailboxProtocol;
+                        continue;
+                    }
+                    if (words[4] & MAILBOX_VALUE_RESPONSE) == 0 {
+                        last_err = Pi4SeatError::MailboxProtocol;
+                        continue;
+                    }
+                    if alias_index > 0 {
+                        let mut line = heapless::String::<192>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] mailbox alias fallback alias=0x{alias_base:08x}"
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                    }
+                    payload.copy_from_slice(&words[5..5 + payload.len()]);
+                    return Ok(());
+                }
+                Err(err @ Pi4SeatError::MailboxTimeout) | Err(err @ Pi4SeatError::MailboxProtocol) => {
+                    last_err = err;
+                    if alias_index + 1 == VC_BUS_ALIAS_BASES.len() {
+                        return Err(err);
+                    }
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(last_err)
+    }
+
+    fn encode_request(
+        &self,
+        words: &mut [u32],
+        tag: u32,
+        request_len_bytes: u32,
+        payload: &[u32],
+    ) -> Result<(), Pi4SeatError> {
         let total_words = 2usize
             .checked_add(3)
             .and_then(|value| value.checked_add(payload.len()))
@@ -270,28 +347,26 @@ impl Mailbox {
         words[5..5 + payload.len()].copy_from_slice(payload);
         words[5 + payload.len()] = 0;
 
-        let request_bus = phys_to_bus(self.request.paddr()).ok_or(Pi4SeatError::MailboxDma)?;
-        self.mailbox_send(request_bus)?;
-
-        if words[1] != MAILBOX_RESPONSE_SUCCESS {
-            return Err(Pi4SeatError::MailboxProtocol);
-        }
-        if words[2] != tag {
-            return Err(Pi4SeatError::MailboxProtocol);
-        }
-        if (words[4] & MAILBOX_VALUE_RESPONSE) == 0 {
-            return Err(Pi4SeatError::MailboxProtocol);
-        }
-
-        payload.copy_from_slice(&words[5..5 + payload.len()]);
+        // Ensure the request header/payload writes are globally observed before
+        // handing the request buffer address to VideoCore.
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
     fn mailbox_send(&self, data: u32) -> Result<(), Pi4SeatError> {
+        // Drain stale responses first so we don't consume an earlier transaction.
+        for _ in 0..MAILBOX_DRAIN_LIMIT {
+            if self.read_reg(MAILBOX_STATUS0_OFFSET) & MAILBOX_EMPTY != 0 {
+                break;
+            }
+            let _ = self.read_reg(MAILBOX_READ_OFFSET);
+        }
+
         let mut wait = 0usize;
         while self.read_reg(MAILBOX_STATUS1_OFFSET) & MAILBOX_FULL != 0 {
             wait = wait.saturating_add(1);
             if wait >= MAILBOX_WAIT_SPINS {
+                self.log_timeout("send-space");
                 return Err(Pi4SeatError::MailboxTimeout);
             }
             spin_loop();
@@ -302,11 +377,14 @@ impl Mailbox {
             (data & !0xF) | (MAILBOX_CHANNEL_PROPERTY & 0xF),
         );
 
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+
         wait = 0;
         loop {
             while self.read_reg(MAILBOX_STATUS0_OFFSET) & MAILBOX_EMPTY != 0 {
                 wait = wait.saturating_add(1);
                 if wait >= MAILBOX_WAIT_SPINS {
+                    self.log_timeout("recv");
                     return Err(Pi4SeatError::MailboxTimeout);
                 }
                 spin_loop();
@@ -319,6 +397,20 @@ impl Mailbox {
                 return Ok(());
             }
         }
+    }
+
+    fn log_timeout(&self, phase: &str) {
+        let mut line = heapless::String::<200>::new();
+        let status0 = self.read_reg(MAILBOX_STATUS0_OFFSET);
+        let status1 = self.read_reg(MAILBOX_STATUS1_OFFSET);
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] mailbox timeout phase={phase} regs=0x{regs:08x} status0=0x{status0:08x} status1=0x{status1:08x}",
+                regs = self.regs_paddr
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
     }
 
     fn read_reg(&self, offset: usize) -> u32 {
@@ -1010,11 +1102,11 @@ fn hal_from_ptr(ptr: usize) -> Option<&'static mut KernelHal<'static>> {
 }
 
 #[inline]
-fn phys_to_bus(phys: usize) -> Option<u32> {
+fn phys_to_bus(phys: usize, alias_base: u32) -> Option<u32> {
     if phys > VC_BUS_MASK as usize {
         return None;
     }
-    Some((phys as u32 & VC_BUS_MASK) | VC_BUS_UNCACHED_BASE)
+    Some((phys as u32 & VC_BUS_MASK) | alias_base)
 }
 
 #[inline]
