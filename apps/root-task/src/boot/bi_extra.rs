@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the boot/bi_extra module for root-task.
 // Author: Lukas Bower
@@ -214,6 +214,35 @@ fn read_le_word(blob: &[u8], offset: usize) -> Result<usize, ExtraError> {
     usize::try_from(value).map_err(|_| ExtraError::Bounds)
 }
 
+fn locate_raw_dtb(extra: &[u8]) -> Result<Option<&[u8]>, ExtraError> {
+    if extra.len() < FDT_HEADER_LEN {
+        return Ok(None);
+    }
+
+    let magic = u32::from_be_bytes(
+        extra[0..4]
+            .try_into()
+            .expect("slice length validated by FDT_HEADER_LEN check"),
+    );
+    if magic != FDT_MAGIC {
+        return Ok(None);
+    }
+
+    let total_size = u32::from_be_bytes(
+        extra[4..8]
+            .try_into()
+            .expect("slice length validated by FDT_HEADER_LEN check"),
+    ) as usize;
+    if total_size < FDT_HEADER_LEN {
+        return Err(ExtraError::InvalidLength);
+    }
+    if total_size > extra.len() {
+        return Err(ExtraError::Truncated);
+    }
+
+    Ok(Some(&extra[..total_size]))
+}
+
 /// Locates the DTB payload within the bootinfo extra blob.
 pub fn locate_dtb(extra: &[u8], extra_range: Range<usize>) -> Result<&[u8], ExtraError> {
     let slice_start = extra.as_ptr() as usize;
@@ -235,6 +264,10 @@ pub fn locate_dtb(extra: &[u8], extra_range: Range<usize>) -> Result<&[u8], Extr
 
     if extra.len() < BOOTINFO_HEADER_SIZE {
         return Err(ExtraError::TooShort);
+    }
+
+    if let Some(raw) = locate_raw_dtb(extra)? {
+        return Ok(raw);
     }
 
     let mut cursor = 0usize;
@@ -500,6 +533,20 @@ mod tests {
         buf.extend_from_slice(&value.to_be_bytes());
     }
 
+    fn push_le_word(buf: &mut Vec<u8>, value: usize) {
+        match core::mem::size_of::<seL4_Word>() {
+            4 => {
+                let value = u32::try_from(value).expect("word value must fit in u32");
+                buf.extend_from_slice(&value.to_le_bytes());
+            }
+            8 => {
+                let value = u64::try_from(value).expect("word value must fit in u64");
+                buf.extend_from_slice(&value.to_le_bytes());
+            }
+            other => panic!("unsupported seL4_Word size in test: {other}"),
+        }
+    }
+
     fn push_string(strings: &mut Vec<u8>, value: &str) -> usize {
         let offset = strings.len();
         strings.extend_from_slice(value.as_bytes());
@@ -648,6 +695,34 @@ mod tests {
         ));
         let err = cursor.next().expect_err("oversized property must error");
         assert_eq!(err, ParseError::PropertyTooLarge);
+    }
+
+    #[test]
+    fn locate_dtb_accepts_raw_blob_format() {
+        let sample = build_sample_dtb();
+        let start = sample.blob.as_ptr() as usize;
+        let range = start..start + sample.blob.len();
+        let dtb = locate_dtb(sample.blob.as_slice(), range).expect("raw dtb should locate");
+        let parsed = parse_dtb(dtb).expect("raw dtb should parse");
+        assert_eq!(parsed.header().totalsize(), sample.blob.len());
+    }
+
+    #[test]
+    fn locate_dtb_accepts_header_wrapped_format() {
+        let sample = build_sample_dtb();
+        let mut wrapped = Vec::new();
+        let record_len = BOOTINFO_HEADER_SIZE
+            .checked_add(sample.blob.len())
+            .expect("record len overflow");
+        push_le_word(&mut wrapped, SEL4_BOOTINFO_HEADER_FDT_ID);
+        push_le_word(&mut wrapped, record_len);
+        wrapped.extend_from_slice(sample.blob.as_slice());
+
+        let start = wrapped.as_ptr() as usize;
+        let range = start..start + wrapped.len();
+        let dtb = locate_dtb(wrapped.as_slice(), range).expect("wrapped dtb should locate");
+        let parsed = parse_dtb(dtb).expect("wrapped dtb should parse");
+        assert_eq!(parsed.header().totalsize(), sample.blob.len());
     }
 }
 

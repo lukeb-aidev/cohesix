@@ -13,6 +13,7 @@ use core::cmp;
 use core::hint::spin_loop;
 use core::mem;
 use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use font8x8::legacy::BASIC_LEGACY;
 use spin::Mutex;
@@ -39,6 +40,7 @@ const MAILBOX_RESPONSE_SUCCESS: u32 = 0x8000_0000;
 const MAILBOX_VALUE_RESPONSE: u32 = 1 << 31;
 const MAILBOX_WAIT_SPINS: usize = 50_000_000;
 const MAILBOX_DRAIN_LIMIT: usize = 64;
+const MAILBOX_MAP_EXACT_ATTEMPT_CAP: usize = 1024;
 
 const VC_BUS_ALIAS_BASES: [u32; 2] = [0xC000_0000, 0x4000_0000];
 const VC_BUS_MASK: u32 = 0x3FFF_FFFF;
@@ -49,6 +51,7 @@ const TAG_SET_DEPTH: u32 = 0x0004_8005;
 const TAG_SET_PIXEL_ORDER: u32 = 0x0004_8006;
 const TAG_ALLOCATE_BUFFER: u32 = 0x0004_0001;
 const TAG_GET_PITCH: u32 = 0x0004_0008;
+const TAG_NOTIFY_XHCI_RESET: u32 = 0x0003_0058;
 
 const DEFAULT_FB_WIDTH: u32 = 1024;
 const DEFAULT_FB_HEIGHT: u32 = 768;
@@ -72,10 +75,19 @@ const XHCI_MMIO_CANDIDATE_LIMIT: usize = 4;
 const XHCI_MAX_PROBE_PORTS: usize = 16;
 const KEYBOARD_ATTACH_ATTEMPTS: usize = 2;
 const KEYBOARD_RETRY_SPINS: usize = 200_000;
+const VL805_PCI_DEV_ADDR: u32 = 0x0010_0000;
+const VL805_NOTIFY_SETTLE_SPINS: usize = 50_000;
+const FRAMEBUFFER_MAP_EXACT_ATTEMPT_CAP: usize = 2048;
+const XHCI_MMIO_MAP_EXACT_ATTEMPT_CAP: usize = 2048;
+const EXACT_MAP_LOG_INITIAL_RETRIES: usize = 8;
+const EXACT_MAP_LOG_STRIDE: usize = 128;
 const FB_BYTES_PER_PIXEL: usize = mem::size_of::<u32>();
 const MAX_FB_WIDTH: usize = 4096;
 const MAX_FB_HEIGHT: usize = 4096;
 const MAX_FB_BYTES: usize = 64 * 1024 * 1024;
+const MAX_FB_MAP_PAGES: usize = MAX_FB_BYTES / PAGE_SIZE;
+
+static VL805_RESET_NOTIFIED: AtomicBool = AtomicBool::new(false);
 
 /// Optional DT/firmware framebuffer hint for Pi4 HDMI output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,6 +236,76 @@ struct Mailbox {
     _prefix_maps: Vec<crate::sel4::DeviceFrame>,
 }
 
+#[inline]
+const fn should_log_exact_map_retry(attempt: usize, max_attempts: usize) -> bool {
+    if attempt < EXACT_MAP_LOG_INITIAL_RETRIES {
+        return true;
+    }
+    if attempt + 1 >= max_attempts {
+        return true;
+    }
+    (attempt + 1) % EXACT_MAP_LOG_STRIDE == 0
+}
+
+fn map_device_exact(
+    hal: &mut KernelHal<'_>,
+    paddr: usize,
+    attempt_cap: usize,
+    label: &'static str,
+    error: Pi4SeatError,
+    prefix_maps: &mut Vec<crate::sel4::DeviceFrame>,
+) -> Result<crate::sel4::DeviceFrame, Pi4SeatError> {
+    let Some(coverage) = hal.device_coverage(paddr, crate::sel4::PAGE_BITS) else {
+        return Err(error);
+    };
+    let span_bytes = coverage.limit.saturating_sub(coverage.base);
+    let span_pages = cmp::max(1usize, div_ceil(span_bytes, PAGE_SIZE));
+    let max_attempts = cmp::max(1usize, cmp::min(span_pages.saturating_add(1), attempt_cap));
+
+    for attempt in 0..max_attempts {
+        let frame = hal.map_device(paddr).map_err(|_| error)?;
+        let actual_paddr = crate::sel4::page_get_address(frame.cap()).map_err(|_| error)?;
+        if actual_paddr == paddr {
+            if attempt > 0 {
+                let mut line = heapless::String::<200>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] {label} map exact after retries={} base=0x{:08x} limit=0x{:08x}",
+                        attempt,
+                        coverage.base,
+                        coverage.limit
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
+            return Ok(frame);
+        }
+
+        if should_log_exact_map_retry(attempt, max_attempts) {
+            let mut line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] {label} map mismatch want=0x{want:08x} got=0x{got:08x} attempt={}/{}",
+                    attempt + 1,
+                    max_attempts,
+                    want = paddr,
+                    got = actual_paddr
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
+
+        if actual_paddr > paddr {
+            return Err(error);
+        }
+        prefix_maps.push(frame);
+    }
+
+    Err(error)
+}
+
 impl Mailbox {
     fn new(hal: &mut KernelHal<'_>) -> Result<Self, Pi4SeatError> {
         let mut regs = None;
@@ -258,59 +340,28 @@ impl Mailbox {
         })
     }
 
+    fn notify_vl805_reset(&mut self) -> Result<(), Pi4SeatError> {
+        let mut payload = [VL805_PCI_DEV_ADDR];
+        self.call_tag(TAG_NOTIFY_XHCI_RESET, 4, &mut payload)?;
+        for _ in 0..VL805_NOTIFY_SETTLE_SPINS {
+            spin_loop();
+        }
+        Ok(())
+    }
+
     fn map_device_exact(
         hal: &mut KernelHal<'_>,
         paddr: usize,
         prefix_maps: &mut Vec<crate::sel4::DeviceFrame>,
     ) -> Result<crate::sel4::DeviceFrame, Pi4SeatError> {
-        let Some(coverage) = hal.device_coverage(paddr, crate::sel4::PAGE_BITS) else {
-            return Err(Pi4SeatError::MailboxMap);
-        };
-        let span_bytes = coverage.limit.saturating_sub(coverage.base);
-        let page_count = cmp::max(1usize, span_bytes / PAGE_SIZE);
-        let max_attempts = cmp::min(page_count.saturating_add(1), 1024);
-
-        for attempt in 0..max_attempts {
-            let frame = hal.map_device(paddr).map_err(|_| Pi4SeatError::MailboxMap)?;
-            let actual_paddr =
-                crate::sel4::page_get_address(frame.cap()).map_err(|_| Pi4SeatError::MailboxMap)?;
-            if actual_paddr == paddr {
-                if attempt > 0 {
-                    let mut line = heapless::String::<200>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] mailbox map exact after retries={} base=0x{:08x} limit=0x{:08x}",
-                            attempt,
-                            coverage.base,
-                            coverage.limit
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                }
-                return Ok(frame);
-            }
-
-            let mut line = heapless::String::<220>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] mailbox map mismatch want=0x{want:08x} got=0x{got:08x} attempt={}/{}",
-                    attempt + 1,
-                    max_attempts,
-                    want = paddr,
-                    got = actual_paddr
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-
-            if actual_paddr > paddr {
-                return Err(Pi4SeatError::MailboxMap);
-            }
-            prefix_maps.push(frame);
-        }
-
-        Err(Pi4SeatError::MailboxMap)
+        map_device_exact(
+            hal,
+            paddr,
+            MAILBOX_MAP_EXACT_ATTEMPT_CAP,
+            "mailbox",
+            Pi4SeatError::MailboxMap,
+            prefix_maps,
+        )
     }
 
     fn call_tag(
@@ -331,8 +382,8 @@ impl Mailbox {
         let mut last_err = Pi4SeatError::MailboxProtocol;
         for (alias_index, &alias_base) in VC_BUS_ALIAS_BASES.iter().enumerate() {
             self.encode_request(words, tag, request_len_bytes, &original_payload)?;
-            let request_bus = phys_to_bus(self.request.paddr(), alias_base)
-                .ok_or(Pi4SeatError::MailboxDma)?;
+            let request_bus =
+                phys_to_bus(self.request.paddr(), alias_base).ok_or(Pi4SeatError::MailboxDma)?;
 
             match self.mailbox_send(request_bus) {
                 Ok(()) => {
@@ -361,7 +412,8 @@ impl Mailbox {
                     payload.copy_from_slice(&words[5..5 + payload.len()]);
                     return Ok(());
                 }
-                Err(err @ Pi4SeatError::MailboxTimeout) | Err(err @ Pi4SeatError::MailboxProtocol) => {
+                Err(err @ Pi4SeatError::MailboxTimeout)
+                | Err(err @ Pi4SeatError::MailboxProtocol) => {
                     last_err = err;
                     if alias_index + 1 == VC_BUS_ALIAS_BASES.len() {
                         return Err(err);
@@ -504,6 +556,7 @@ struct HdmiTextSink {
     framebuffer: *mut u8,
     backend: HdmiBackend,
     mappings: Vec<crate::sel4::DeviceFrame>,
+    _prefix_maps: Vec<crate::sel4::DeviceFrame>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -629,13 +682,14 @@ impl HdmiTextSink {
         let page_base = fb_phys & !PAGE_MASK;
         let page_offset = fb_phys & PAGE_MASK;
         let map_len = page_offset
-            .checked_add(fb_size)
+            .checked_add(framebuffer_len)
             .ok_or(Pi4SeatError::FramebufferUnavailable)?;
         let page_count = div_ceil(map_len, PAGE_SIZE);
-        if page_count == 0 {
+        if page_count == 0 || page_count > MAX_FB_MAP_PAGES {
             return Err(Pi4SeatError::FramebufferUnavailable);
         }
 
+        let mut prefix_maps = Vec::new();
         let mut mappings = Vec::with_capacity(page_count);
         for page in 0..page_count {
             let paddr = page_base
@@ -644,9 +698,14 @@ impl HdmiTextSink {
                         .ok_or(Pi4SeatError::FramebufferUnavailable)?,
                 )
                 .ok_or(Pi4SeatError::FramebufferUnavailable)?;
-            let frame = hal
-                .map_device(paddr)
-                .map_err(|_| Pi4SeatError::FramebufferMap)?;
+            let frame = map_device_exact(
+                hal,
+                paddr,
+                FRAMEBUFFER_MAP_EXACT_ATTEMPT_CAP,
+                "framebuffer",
+                Pi4SeatError::FramebufferMap,
+                &mut prefix_maps,
+            )?;
             mappings.push(frame);
         }
 
@@ -684,6 +743,7 @@ impl HdmiTextSink {
             framebuffer,
             backend,
             mappings,
+            _prefix_maps: prefix_maps,
         };
 
         sink.clear_screen();
@@ -803,6 +863,31 @@ impl Drop for HdmiTextSink {
     }
 }
 
+fn notify_vl805_reset_once(hal: &mut KernelHal<'_>) {
+    if VL805_RESET_NOTIFIED.load(Ordering::Acquire) {
+        return;
+    }
+
+    let result = Mailbox::new(hal).and_then(|mut mailbox| mailbox.notify_vl805_reset());
+    match result {
+        Ok(()) => {
+            VL805_RESET_NOTIFIED.store(true, Ordering::Release);
+            boot_log::force_uart_line("[local-seat] vl805 reset notify=ok");
+        }
+        Err(err) => {
+            let mut line = heapless::String::<160>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 reset notify=skipped detail={}",
+                    err.as_str()
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
+    }
+}
+
 struct UsbKeyboard {
     hid: HidDevice<SeatDma>,
     last_keys: [u8; 6],
@@ -811,6 +896,8 @@ struct UsbKeyboard {
 
 impl UsbKeyboard {
     fn new(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usize>) -> Result<Self, Pi4SeatError> {
+        notify_vl805_reset_once(hal);
+
         let mut candidates = [0usize; XHCI_MMIO_CANDIDATE_LIMIT];
         let mut candidate_count = 0usize;
         if let Some(hint) = xhci_mmio_hint {
@@ -1057,11 +1144,20 @@ impl SeatDma {
         let page_count = div_ceil(map_len, PAGE_SIZE);
         let hal = hal_from_ptr(state.hal_ptr)?;
 
-        let mut frames = Vec::with_capacity(page_count);
+        let mut prefix_frames = Vec::new();
+        let mut mapped_frames = Vec::with_capacity(page_count);
         let mut first_virt = 0usize;
         for idx in 0..page_count {
             let page_phys = page_base.checked_add(idx.checked_mul(PAGE_SIZE)?)?;
-            let frame = hal.map_device(page_phys).ok()?;
+            let frame = map_device_exact(
+                hal,
+                page_phys,
+                XHCI_MMIO_MAP_EXACT_ATTEMPT_CAP,
+                "xhci mmio",
+                Pi4SeatError::XhciInit,
+                &mut prefix_frames,
+            )
+            .ok()?;
             let virt = frame.ptr().as_ptr() as usize;
             if idx == 0 {
                 first_virt = virt;
@@ -1071,10 +1167,12 @@ impl SeatDma {
                     return None;
                 }
             }
-            frames.push(frame);
+            mapped_frames.push(frame);
         }
 
         let virt = first_virt.checked_add(page_offset)?;
+        let mut frames = prefix_frames;
+        frames.extend(mapped_frames);
         state.regions.push(PhysRegion {
             virt_start: virt,
             phys_start: phys,
