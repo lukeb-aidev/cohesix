@@ -2953,6 +2953,18 @@ fn bootstrap<P: Platform>(
         hal.consume_bootstrap_slots(consumed_slots);
     }
 
+    let hardware = generated::hardware_config();
+    // Initialise local-seat before UART MMIO mapping so low Pi4 peripheral
+    // pages (e.g. mailbox at 0xfe00_b000) can be reserved before higher UART
+    // pages advance the device-untyped cursor.
+    let local_seat_runtime = init_local_seat_runtime(
+        &mut console,
+        hardware,
+        &mut hal,
+        extra_bytes,
+        extra_range.clone(),
+    )?;
+
     #[cfg(feature = "kernel")]
     let ninedoor: &'static mut NineDoorBridge = {
         let bridge = Box::new(NineDoorBridge::new());
@@ -3140,15 +3152,6 @@ fn bootstrap<P: Platform>(
         } else {
             console.writeln_prefixed("[uart] init skipped: no mapped UART backend");
         }
-
-        let hardware = generated::hardware_config();
-        let local_seat_runtime = init_local_seat_runtime(
-            &mut console,
-            hardware,
-            &mut hal,
-            extra_bytes,
-            extra_range.clone(),
-        )?;
 
         check_bootinfo(&mut boot_guard, "[mark] net.init.pre");
         #[cfg(all(feature = "net-console", feature = "kernel"))]
