@@ -219,7 +219,6 @@ pub struct Pi4LocalSeat {
     keyboard: Option<UsbKeyboard>,
     keyboard_init_attempted: bool,
     xhci_mmio_hint: Option<usize>,
-    xhci_pci_preflighted: bool,
     hal_ptr: usize,
 }
 
@@ -233,19 +232,7 @@ impl Pi4LocalSeat {
     /// Initialize the Pi4 local-seat backend.
     pub fn new(hal: &mut KernelHal<'_>, hints: Pi4LocalSeatHints) -> Result<Self, Pi4SeatError> {
         let mut display = HdmiTextSink::new(hal, hints.framebuffer_hint)?;
-        let mut resolved_xhci_mmio_hint = hints.xhci_mmio_hint;
-        let mut xhci_pci_preflighted = false;
-        if let Some(mmio) = prepare_vl805_pci(hal) {
-            resolved_xhci_mmio_hint = Some(mmio);
-            xhci_pci_preflighted = true;
-            let mut line = heapless::String::<176>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!("[local-seat] vl805 pci preflight=boot-cached mmio=0x{mmio:016x}"),
-            );
-            boot_log::force_uart_line(line.as_str());
-        }
-        prime_pinned_xhci_window(hal, resolved_xhci_mmio_hint);
+        prime_pinned_xhci_window(hal, hints.xhci_mmio_hint);
 
         let mut display_line = heapless::String::<128>::new();
         let _ = core::fmt::Write::write_fmt(
@@ -263,8 +250,7 @@ impl Pi4LocalSeat {
             display,
             keyboard: None,
             keyboard_init_attempted: false,
-            xhci_mmio_hint: resolved_xhci_mmio_hint,
-            xhci_pci_preflighted,
+            xhci_mmio_hint: hints.xhci_mmio_hint,
             hal_ptr: hal as *mut _ as usize,
         })
     }
@@ -281,7 +267,7 @@ impl Pi4LocalSeat {
             let mut keyboard_error = None;
             if let Some(hal) = hal_from_ptr(self.hal_ptr) {
                 for attempt in 1..=KEYBOARD_ATTACH_ATTEMPTS {
-                    match UsbKeyboard::new(hal, self.xhci_mmio_hint, self.xhci_pci_preflighted) {
+                    match UsbKeyboard::new(hal, self.xhci_mmio_hint) {
                         Ok(found) => {
                             self.keyboard = Some(found);
                             if attempt > 1 {
@@ -1424,33 +1410,16 @@ impl HubPortStatus {
 }
 
 impl UsbKeyboard {
-    fn new(
-        hal: &mut KernelHal<'_>,
-        xhci_mmio_hint: Option<usize>,
-        xhci_pci_preflighted: bool,
-    ) -> Result<Self, Pi4SeatError> {
+    fn new(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usize>) -> Result<Self, Pi4SeatError> {
         if VL805_RESET_NOTIFY_BEFORE_USB_PROBE {
             notify_vl805_reset_once(hal);
         } else if !VL805_RESET_BYPASSED_LOGGED.swap(true, Ordering::AcqRel) {
             boot_log::force_uart_line("[local-seat] vl805 reset notify=bypassed");
         }
-        let vl805_pci_mmio = if xhci_pci_preflighted {
-            if let Some(mmio) = xhci_mmio_hint {
-                let mut line = heapless::String::<176>::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut line,
-                    format_args!("[local-seat] vl805 pci preflight=cached mmio=0x{mmio:016x}"),
-                );
-                boot_log::force_uart_line(line.as_str());
-            }
-            xhci_mmio_hint
-        } else {
-            let mmio = prepare_vl805_pci(hal);
-            if mmio.is_none() {
-                boot_log::force_uart_line("[local-seat] vl805 pci preflight=none");
-            }
-            mmio
-        };
+        let vl805_pci_mmio = prepare_vl805_pci(hal);
+        if vl805_pci_mmio.is_none() {
+            boot_log::force_uart_line("[local-seat] vl805 pci preflight=none");
+        }
 
         let mut candidates = [0usize; XHCI_MMIO_CANDIDATE_LIMIT];
         let mut candidate_count = 0usize;
