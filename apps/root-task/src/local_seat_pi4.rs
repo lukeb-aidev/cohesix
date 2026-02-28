@@ -67,7 +67,14 @@ const TAB_WIDTH: usize = 4;
 const FG_COLOR: u32 = 0xFFFF_FFFF;
 const BG_COLOR: u32 = 0xFF00_0000;
 
-const RPI4_XHCI_MMIO_FALLBACKS: [usize; 2] = [0x0000_0000_FE98_0000, 0x0000_0000_7E98_0000];
+// When DTB hints are unavailable in bootinfo extra payloads, prefer the Pi4
+// UEFI/VL805 high MMIO aperture observed in successful boots before trying
+// legacy low aliases.
+const RPI4_XHCI_MMIO_FALLBACKS: [usize; 3] = [
+    0x0000_0006_0000_0000,
+    0x0000_0000_FE98_0000,
+    0x0000_0000_7E98_0000,
+];
 // Pi4 UEFI + seL4 can raise a fatal asynchronous external abort if we touch
 // some legacy ECAM aliases during early boot. Restrict probing to the
 // firmware-observed high ECAM aperture used by the working xHCI path.
@@ -1023,6 +1030,16 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
             .device_coverage(config_page, crate::sel4::PAGE_BITS)
             .is_none()
         {
+            let mut line = heapless::String::<176>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 pci skip ecam=0x{ecam:016x} cfg=0x{cfg:016x} reason=no-device-coverage",
+                    ecam = ecam_base,
+                    cfg = config_paddr
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
             continue;
         }
 
@@ -1035,7 +1052,19 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
             &mut prefix_maps,
         ) {
             Ok(frame) => frame,
-            Err(_) => continue,
+            Err(_) => {
+                let mut line = heapless::String::<192>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] vl805 pci skip ecam=0x{ecam:016x} cfg=0x{cfg:016x} reason=map-exact-failed",
+                        ecam = ecam_base,
+                        cfg = config_paddr
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                continue;
+            }
         };
         let Some(config_virt) = (frame.ptr().as_ptr() as usize).checked_add(config_page_offset)
         else {
