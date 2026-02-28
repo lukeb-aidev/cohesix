@@ -68,11 +68,10 @@ const FG_COLOR: u32 = 0xFFFF_FFFF;
 const BG_COLOR: u32 = 0xFF00_0000;
 
 const RPI4_XHCI_MMIO_FALLBACKS: [usize; 2] = [0x0000_0000_FE98_0000, 0x0000_0000_7E98_0000];
-const VL805_ECAM_BASE_CANDIDATES: [usize; 3] = [
-    0x0000_0000_FD50_0000,
-    0x0000_0000_6000_0000,
-    0x0000_0006_0000_0000,
-];
+// Pi4 UEFI + seL4 can raise a fatal asynchronous external abort if we touch
+// some legacy ECAM aliases during early boot. Restrict probing to the
+// firmware-observed high ECAM aperture used by the working xHCI path.
+const VL805_ECAM_BASE_CANDIDATES: [usize; 1] = [0x0000_0006_0000_0000];
 const XHCI_MMIO_CANDIDATE_LIMIT: usize = 8;
 const VL805_PCI_CFG_ATTEMPT_CAP: usize = 512;
 const XHCI_MAX_PROBE_PORTS: usize = 16;
