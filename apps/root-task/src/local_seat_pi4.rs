@@ -96,9 +96,6 @@ const VL805_NOTIFY_SETTLE_SPINS: usize = 50_000;
 // interrupt before IRQ handlers are installed, stalling boot at local-seat
 // bring-up. Keep it disabled for now.
 const VL805_RESET_NOTIFY_BEFORE_USB_PROBE: bool = false;
-// Probe VL805 PCI config space first so xHCI MMIO accesses only occur after
-// command + interrupt policy has been normalised.
-const VL805_PCI_PREFLIGHT_BEFORE_USB_PROBE: bool = true;
 const VL805_PCI_VENDOR_ID: u16 = 0x1106;
 const VL805_PCI_DEVICE_ID: u16 = 0x3483;
 const VL805_EXPECTED_CLASS_CODE: u32 = 0x0C03_30;
@@ -1232,12 +1229,10 @@ impl UsbKeyboard {
         } else if !VL805_RESET_BYPASSED_LOGGED.swap(true, Ordering::AcqRel) {
             boot_log::force_uart_line("[local-seat] vl805 reset notify=bypassed");
         }
-        let vl805_pci_mmio = if VL805_PCI_PREFLIGHT_BEFORE_USB_PROBE {
-            prepare_vl805_pci(hal)
-        } else {
-            boot_log::force_uart_line("[local-seat] vl805 pci preflight=bypassed");
-            None
-        };
+        let vl805_pci_mmio = prepare_vl805_pci(hal);
+        if vl805_pci_mmio.is_none() {
+            boot_log::force_uart_line("[local-seat] vl805 pci preflight=none");
+        }
 
         let mut candidates = [0usize; XHCI_MMIO_CANDIDATE_LIMIT];
         let mut candidate_count = 0usize;
@@ -1262,14 +1257,31 @@ impl UsbKeyboard {
             candidates[candidate_count] = mmio;
             candidate_count = candidate_count.saturating_add(1);
         };
-        if let Some(vl805_mmio) = vl805_pci_mmio {
-            consider_candidate(vl805_mmio);
-        }
-        if let Some(hint) = xhci_mmio_hint {
-            consider_candidate(hint);
-        }
-        for fallback in RPI4_XHCI_MMIO_FALLBACKS {
-            consider_candidate(fallback);
+        match vl805_pci_mmio {
+            Some(vl805_mmio) => {
+                consider_candidate(vl805_mmio);
+                if let Some(hint) = xhci_mmio_hint {
+                    if hint != vl805_mmio {
+                        let mut line = heapless::String::<208>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] xhci hint ignored hint=0x{hint:016x} verified=0x{verified:016x}",
+                                verified = vl805_mmio
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                    }
+                }
+            }
+            None => {
+                if let Some(hint) = xhci_mmio_hint {
+                    consider_candidate(hint);
+                }
+                for fallback in RPI4_XHCI_MMIO_FALLBACKS {
+                    consider_candidate(fallback);
+                }
+            }
         }
 
         let mut saw_controller = false;
