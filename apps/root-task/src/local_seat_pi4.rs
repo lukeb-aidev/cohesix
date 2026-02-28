@@ -17,6 +17,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use font8x8::legacy::BASIC_LEGACY;
 use spin::Mutex;
+use usb_oxide::regs as xhci_regs;
 use usb_oxide::{
     class, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature, hub_protocol,
     request, scancode_to_ascii, ConfigDesc, DeviceDesc, Dma, HidDevice, HubDesc, SetupPacket,
@@ -128,11 +129,11 @@ const PCI_MSIX_CTL_OFFSET: usize = 0x02;
 const PCI_MSIX_CTL_ENABLE: u16 = 1 << 15;
 const FRAMEBUFFER_MAP_EXACT_ATTEMPT_CAP: usize = 2048;
 const XHCI_MMIO_MAP_EXACT_ATTEMPT_CAP: usize = 4096;
-const XHCI_MMIO_PRESEED_BYTES: usize = 0x10000;
 const EXACT_MAP_LOG_INITIAL_RETRIES: usize = 8;
 const EXACT_MAP_LOG_STRIDE: usize = 128;
 const FB_BYTES_PER_PIXEL: usize = mem::size_of::<u32>();
 const XHCI_MMIO_MAX_BYTES: usize = 2 * 1024 * 1024;
+const XHCI_MMIO_INIT_BYTES: usize = PAGE_SIZE;
 const XHCI_DMA_MAX_BYTES: usize = 8 * 1024 * 1024;
 // BCM2711 PCIe cannot DMA above the first 3 GiB (see upstream bcm2711.dtsi
 // pcie0 dma-ranges). Keep VL805/xHCI buffers under this ceiling.
@@ -439,13 +440,13 @@ fn prime_pinned_xhci_window(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usiz
     }
 
     for &mmio in &candidates[..candidate_count] {
-        if pin_xhci_mmio_window(hal, mmio, XHCI_MMIO_PRESEED_BYTES).is_ok() {
+        if let Ok(mmio_bytes) = pin_xhci_mmio_window(hal, mmio) {
             let mut line = heapless::String::<176>::new();
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
                     "[local-seat] xhci mmio preseeded mmio=0x{mmio:016x} bytes=0x{bytes:05x}",
-                    bytes = XHCI_MMIO_PRESEED_BYTES
+                    bytes = mmio_bytes
                 ),
             );
             boot_log::force_uart_line(line.as_str());
@@ -454,19 +455,10 @@ fn prime_pinned_xhci_window(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usiz
     }
 }
 
-fn pin_xhci_mmio_window(
-    hal: &mut KernelHal<'_>,
-    phys_start: usize,
-    length: usize,
-) -> Result<(), Pi4SeatError> {
-    if length == 0 || (phys_start & PAGE_MASK) != 0 {
+fn pin_xhci_mmio_window(hal: &mut KernelHal<'_>, phys_start: usize) -> Result<usize, Pi4SeatError> {
+    if (phys_start & PAGE_MASK) != 0 {
         return Err(Pi4SeatError::XhciInit);
     }
-    let page_count = div_ceil(length, PAGE_SIZE);
-    if page_count == 0 {
-        return Err(Pi4SeatError::XhciInit);
-    }
-
     let mut prefix_frames = Vec::new();
     let first = map_device_exact(
         hal,
@@ -477,6 +469,11 @@ fn pin_xhci_mmio_window(
         &mut prefix_frames,
     )?;
     let first_virt = first.ptr().as_ptr() as usize;
+    let length = infer_xhci_mmio_length(first_virt).ok_or(Pi4SeatError::XhciInit)?;
+    let page_count = div_ceil(length, PAGE_SIZE);
+    if page_count == 0 {
+        return Err(Pi4SeatError::XhciInit);
+    }
 
     let mut frames = Vec::with_capacity(page_count);
     frames.push(first);
@@ -508,7 +505,53 @@ fn pin_xhci_mmio_window(
         length,
         virt_start: first_virt,
     });
-    Ok(())
+    Ok(length)
+}
+
+fn infer_xhci_mmio_length(mmio: usize) -> Option<usize> {
+    // SAFETY: `mmio` points at a mapped xHCI capability page.
+    let cap_length = unsafe { (mmio as *const u8).read_volatile() };
+    if cap_length < 0x20 || (cap_length as usize) >= XHCI_MMIO_INIT_BYTES || (cap_length & 0x3) != 0
+    {
+        return None;
+    }
+
+    // SAFETY: Register offsets are within the first mapped 4KiB capability page.
+    let hcs1 = unsafe { ((mmio + xhci_regs::HCSPARAMS1) as *const u32).read_volatile() };
+    // SAFETY: Register offsets are within the first mapped 4KiB capability page.
+    let hcs2 = unsafe { ((mmio + xhci_regs::HCSPARAMS2) as *const u32).read_volatile() };
+    // SAFETY: Register offsets are within the first mapped 4KiB capability page.
+    let db_offset = unsafe { ((mmio + xhci_regs::DBOFF) as *const u32).read_volatile() };
+    // SAFETY: Register offsets are within the first mapped 4KiB capability page.
+    let rts_offset = unsafe { ((mmio + xhci_regs::RTSOFF) as *const u32).read_volatile() };
+
+    let max_slots = (hcs1 & 0xff) as usize;
+    let max_ports = ((hcs1 >> 24) & 0xff) as usize;
+    let max_scratchpad = (((hcs2 >> 27) & 0x1f) | (((hcs2 >> 21) & 0x1f) << 5)) as usize;
+    if max_slots == 0 || max_slots > 255 {
+        return None;
+    }
+    if max_ports == 0 || max_ports > 255 {
+        return None;
+    }
+    if max_scratchpad > 256 {
+        return None;
+    }
+
+    if (db_offset & 0x3) != 0 || (rts_offset & 0x1f) != 0 {
+        return None;
+    }
+    if db_offset < cap_length as u32 || rts_offset < cap_length as u32 {
+        return None;
+    }
+
+    let mmio_size = (rts_offset as usize + 0x20 + 0x20)
+        .max(db_offset as usize + (max_slots + 1) * 4)
+        .max(0x10000);
+    if !(XHCI_MMIO_INIT_BYTES..=XHCI_MMIO_MAX_BYTES).contains(&mmio_size) {
+        return None;
+    }
+    Some(mmio_size)
 }
 
 impl Mailbox {
