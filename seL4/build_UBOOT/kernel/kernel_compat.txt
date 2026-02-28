@@ -1,0 +1,1 @@
+arm,armv8-timer;arm,gic-400;brcm,bcm2835-aux-uart;brcm,bcm2836-l1-intc;

@@ -1,0 +1,18 @@
+#pragma once
+
+/* disabled: CONFIG_IMAGE_ELF */
+#define CONFIG_IMAGE_BINARY  1
+/* disabled: CONFIG_IMAGE_EFI */
+/* disabled: CONFIG_IMAGE_UIMAGE */
+#define CONFIG_ELFLOADER_IMAGE  binary
+/* disabled: CONFIG_ARM_MONITOR_HOOK */
+/* disabled: CONFIG_GPT_PTIMER_NS_PL1_ACCESS */
+/* disabled: CONFIG_ARM_ERRATA_764369 */
+#define CONFIG_HASH_NONE  1
+/* disabled: CONFIG_HASH_SHA */
+/* disabled: CONFIG_HASH_MD5 */
+#define CONFIG_HASH_INSTRUCTIONS  hash_none
+#define CONFIG_ELFLOADER_INCLUDE_DTB  1
+/* disabled: CONFIG_ELFLOADER_ROOTSERVERS_LAST */
+/* disabled: CONFIG_ELFLOADER_ARMV8_LEAVE_AARCH64 */
+/* disabled: CONFIG_ELFLOADER_PRECOMPILE */

@@ -1,0 +1,1 @@
+regen /Users/lukasbower/seL4/build_UBOOT/kernel/kernel.dtb /Users/lukasbower/seL4/kernel/tools/dts/rpi4.dts;/Users/lukasbower/seL4/kernel/src/plat/bcm2711/overlay-rpi4.dts;/Users/lukasbower/seL4/kernel/src/plat/bcm2711/overlay-rpi4-address-mapping.dts;/Users/lukasbower/seL4/kernel/src/plat/bcm2711/overlay-rpi4-1gb.dts
