@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the bootstrap/log module for root-task.
 // Author: Lukas Bower
@@ -287,9 +287,7 @@ fn record_drop() {
 }
 
 fn emit_uart(payload: &[u8]) {
-    for &byte in payload {
-        sel4::debug_put_char_raw(byte);
-    }
+    sel4::debug_put_bytes_raw(payload);
 }
 
 /// Emit a UART line regardless of the current logger transport.
@@ -315,8 +313,7 @@ pub fn force_uart_line(line: &str) {
         return;
     }
 
-    emit_uart(line.as_bytes());
-    emit_uart(b"\r\n");
+    sel4::debug_put_line_raw(line.as_bytes());
 }
 
 fn emit_ep(payload: &[u8]) -> Result<(), ()> {

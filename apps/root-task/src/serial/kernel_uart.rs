@@ -170,6 +170,8 @@ pub enum KernelSerialDriver {
     Pl011(Pl011),
     /// BCM2711 mini-UART backend.
     Bcm2711MiniUart(Bcm2711MiniUart),
+    /// No physical UART is mapped; reads/writes stay non-blocking no-op.
+    Null,
 }
 
 impl KernelSerialDriver {
@@ -184,12 +186,19 @@ impl KernelSerialDriver {
         }
     }
 
+    /// Construct a no-op serial backend used when no UART mapping is available.
+    #[must_use]
+    pub const fn null() -> Self {
+        Self::Null
+    }
+
     /// Backend kind.
     #[must_use]
     pub const fn kind(&self) -> KernelUartKind {
         match self {
             Self::Pl011(_) => KernelUartKind::Pl011,
             Self::Bcm2711MiniUart(_) => KernelUartKind::Bcm2711MiniUart,
+            Self::Null => KernelUartKind::Pl011,
         }
     }
 
@@ -199,6 +208,7 @@ impl KernelSerialDriver {
         match self {
             Self::Pl011(_) => "pl011",
             Self::Bcm2711MiniUart(_) => "bcm2711-mini-uart",
+            Self::Null => "none",
         }
     }
 
@@ -208,6 +218,7 @@ impl KernelSerialDriver {
         match self {
             Self::Pl011(driver) => driver.vaddr(),
             Self::Bcm2711MiniUart(driver) => driver.vaddr(),
+            Self::Null => 0,
         }
     }
 
@@ -216,6 +227,7 @@ impl KernelSerialDriver {
         match self {
             Self::Pl011(driver) => driver.init(),
             Self::Bcm2711MiniUart(driver) => driver.init(),
+            Self::Null => {}
         }
     }
 
@@ -224,6 +236,9 @@ impl KernelSerialDriver {
         match self {
             Self::Pl011(driver) => driver.write_str(text),
             Self::Bcm2711MiniUart(driver) => driver.write_str(text),
+            Self::Null => {
+                let _ = text;
+            }
         }
     }
 
@@ -232,7 +247,7 @@ impl KernelSerialDriver {
     pub fn into_pl011(self) -> Option<Pl011> {
         match self {
             Self::Pl011(driver) => Some(driver),
-            Self::Bcm2711MiniUart(_) => None,
+            Self::Bcm2711MiniUart(_) | Self::Null => None,
         }
     }
 }
@@ -246,6 +261,7 @@ impl SerialDriver for KernelSerialDriver {
         match self {
             Self::Pl011(driver) => driver.read_byte(),
             Self::Bcm2711MiniUart(driver) => driver.read_byte(),
+            Self::Null => Err(nb::Error::WouldBlock),
         }
     }
 
@@ -253,6 +269,10 @@ impl SerialDriver for KernelSerialDriver {
         match self {
             Self::Pl011(driver) => driver.write_byte(byte),
             Self::Bcm2711MiniUart(driver) => driver.write_byte(byte),
+            Self::Null => {
+                let _ = byte;
+                Err(nb::Error::WouldBlock)
+            }
         }
     }
 }

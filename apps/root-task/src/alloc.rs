@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the alloc module for root-task.
 // Author: Lukas Bower
@@ -38,12 +38,21 @@ impl GuardedAllocator {
                 .init(span.start as *mut u8, span.end.saturating_sub(span.start));
         }
     }
+
+    #[inline(always)]
+    fn zero_sized_dangling(layout: Layout) -> *mut u8 {
+        layout.align() as *mut u8
+    }
 }
 
 unsafe impl GlobalAlloc for GuardedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if !no_alloc::alloc_ready() {
             no_alloc::assert_no_alloc("alloc");
+        }
+
+        if layout.size() == 0 {
+            return Self::zero_sized_dangling(layout);
         }
 
         unsafe { self.inner.alloc(layout) }
@@ -54,6 +63,10 @@ unsafe impl GlobalAlloc for GuardedAllocator {
             no_alloc::assert_no_alloc("dealloc");
         }
 
+        if layout.size() == 0 {
+            return;
+        }
+
         unsafe { self.inner.dealloc(ptr, layout) }
     }
 
@@ -62,12 +75,30 @@ unsafe impl GlobalAlloc for GuardedAllocator {
             no_alloc::assert_no_alloc("alloc_zeroed");
         }
 
+        if layout.size() == 0 {
+            return Self::zero_sized_dangling(layout);
+        }
+
         unsafe { self.inner.alloc_zeroed(layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         if !no_alloc::alloc_ready() {
             no_alloc::assert_no_alloc("realloc");
+        }
+
+        if new_size == 0 {
+            if layout.size() != 0 {
+                unsafe { self.inner.dealloc(ptr, layout) }
+            }
+            return Self::zero_sized_dangling(layout);
+        }
+
+        if layout.size() == 0 {
+            let Ok(new_layout) = Layout::from_size_align(new_size, layout.align()) else {
+                return core::ptr::null_mut();
+            };
+            return unsafe { self.inner.alloc(new_layout) };
         }
 
         unsafe { self.inner.realloc(ptr, layout, new_size) }

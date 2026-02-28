@@ -81,6 +81,7 @@ static IPC_SEND_UNLOCKED: AtomicBool = AtomicBool::new(false);
 static BOOTINFO_WINDOW_DUMPED: AtomicBool = AtomicBool::new(false);
 const DMA_MAP_DIAG: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
 const DMA_MAP_LOG_CAPACITY: usize = 128;
+const MAX_DEVICE_SKIP_OBJECTS: usize = 512;
 
 #[derive(Clone, Copy)]
 struct DmaMapRecord {
@@ -939,15 +940,6 @@ static BOOTSTRAP_SEND_INSTRUMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(feature = "kernel")]
 fn emit_illegal_send_line(line: &str) {
-    if crate::log_buffer::log_channel_active() {
-        crate::bootstrap::log::force_uart_line(line);
-        return;
-    }
-    for &byte in line.as_bytes() {
-        debug_put_char_raw(byte);
-    }
-    debug_put_char_raw(b'\r');
-    debug_put_char_raw(b'\n');
     crate::bootstrap::log::force_uart_line(line);
 }
 
@@ -1126,7 +1118,39 @@ pub fn debug_put_char(ch: i32) {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn debug_put_char_raw(byte: u8) {
-    unsafe { seL4_DebugPutChar(byte) }
+    debug_put_bytes_raw(core::slice::from_ref(&byte));
+}
+
+/// Emits a byte slice to the seL4 debug console using the raw debug syscall.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn debug_put_bytes_raw(bytes: &[u8]) {
+    serial::with_uart_tx_lock(|| {
+        for &byte in bytes {
+            // SAFETY: seL4 exposes DebugPutChar as a side-effect-only diagnostic
+            // syscall and accepts any byte value.
+            unsafe { seL4_DebugPutChar(byte) }
+        }
+    });
+}
+
+/// Emits a line (with CRLF) to the seL4 debug console using the raw debug syscall.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn debug_put_line_raw(line: &[u8]) {
+    serial::with_uart_tx_lock(|| {
+        for &byte in line {
+            // SAFETY: seL4 exposes DebugPutChar as a side-effect-only diagnostic
+            // syscall and accepts any byte value.
+            unsafe { seL4_DebugPutChar(byte) }
+        }
+        // SAFETY: seL4 exposes DebugPutChar as a side-effect-only diagnostic
+        // syscall and accepts any byte value.
+        unsafe {
+            seL4_DebugPutChar(b'\r');
+            seL4_DebugPutChar(b'\n');
+        }
+    });
 }
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
@@ -1194,6 +1218,23 @@ pub fn debug_put_char_raw(byte: u8) {
     }
 
     let _ = byte;
+}
+
+/// Emits a byte slice to the debug UART in host builds without touching MMIO.
+#[cfg(all(not(feature = "kernel")))]
+#[inline(always)]
+pub fn debug_put_bytes_raw(bytes: &[u8]) {
+    for &byte in bytes {
+        debug_put_char_raw(byte);
+    }
+}
+
+/// Emits a line (with CRLF) to the debug UART in host builds without touching MMIO.
+#[cfg(all(not(feature = "kernel")))]
+#[inline(always)]
+pub fn debug_put_line_raw(line: &[u8]) {
+    debug_put_bytes_raw(line);
+    debug_put_bytes_raw(b"\r\n");
 }
 
 /// Clears the captured UART buffer in host tests.
@@ -2710,9 +2751,9 @@ impl<'a> UntypedCatalog<'a> {
 
     fn reserve_index(&mut self, index: usize, obj_bits: u8) -> Option<ReservedUntyped> {
         let entry = self.entries.get_mut(index)?;
-        let obj_bytes = 1u128 << core::cmp::min(obj_bits, 127);
+        let obj_bytes = Self::object_bytes(obj_bits);
         let capacity_bytes = entry.capacity_bytes();
-        let aligned_start = (entry.used_bytes + (obj_bytes - 1)) & !(obj_bytes - 1);
+        let aligned_start = Self::aligned_start(entry.used_bytes, obj_bytes);
         let end = aligned_start.saturating_add(obj_bytes);
         if end > capacity_bytes {
             return None;
@@ -2728,40 +2769,86 @@ impl<'a> UntypedCatalog<'a> {
         })
     }
 
-    /// Reserves an untyped covering the supplied device physical address range.
-    pub fn reserve_device(&mut self, paddr: usize, size_bits: usize) -> Option<ReservedUntyped> {
-        let end = paddr.saturating_add(1usize << size_bits);
-        let obj_bits = size_bits as u8;
-        for index in 0..self.entries.len() {
-            let should_reserve = {
-                let entry = &self.entries[index];
-                if entry.desc.is_device == 0 {
-                    false
-                } else {
-                    let base = entry.desc.paddr as usize;
-                    let limit = base.saturating_add(1usize << entry.desc.size_bits);
-                    if base <= paddr && end <= limit {
-                        if entry.remaining_bytes() == 0 {
-                            log::error!(
-                                "[device-pt] device ut=0x{cap:03x} exhausted; skipping retype request",
-                                cap = self.bootinfo.untyped.start + index as seL4_CPtr,
-                            );
-                            false
-                        } else {
-                            true
-                        }
-                    } else {
-                        false
-                    }
-                }
-            };
+    #[inline(always)]
+    fn object_bytes(obj_bits: u8) -> u128 {
+        1u128 << core::cmp::min(obj_bits, 127)
+    }
 
-            if should_reserve {
-                if let Some(reserved) = self.reserve_index(index, obj_bits) {
-                    return Some(reserved);
-                }
+    #[inline(always)]
+    fn aligned_start(used_bytes: u128, obj_bytes: u128) -> u128 {
+        (used_bytes + (obj_bytes - 1)) & !(obj_bytes - 1)
+    }
+
+    #[inline(always)]
+    fn aligned_start_for_index(&self, index: usize, obj_bits: u8) -> Option<u128> {
+        let entry = self.entries.get(index)?;
+        let obj_bytes = Self::object_bytes(obj_bits);
+        Some(Self::aligned_start(entry.used_bytes, obj_bytes))
+    }
+
+    #[inline(always)]
+    fn entry_limit(entry: &TrackedUntyped) -> usize {
+        let base = entry.desc.paddr as usize;
+        base.saturating_add(1usize << entry.desc.size_bits)
+    }
+
+    fn best_device_index_for_range(
+        &self,
+        paddr: usize,
+        size_bits: usize,
+        obj_bits: u8,
+    ) -> Option<usize> {
+        let size_bytes = 1usize.checked_shl(size_bits as u32)?;
+        let end = paddr.checked_add(size_bytes)?;
+        let obj_bytes = Self::object_bytes(obj_bits);
+        let mut best: Option<(usize, usize, usize, usize)> = None;
+        for (index, entry) in self.entries.iter().enumerate() {
+            if entry.desc.is_device == 0 {
+                continue;
+            }
+            let base = entry.desc.paddr as usize;
+            let limit = Self::entry_limit(entry);
+            if !(base <= paddr && end <= limit) {
+                continue;
+            }
+            let aligned_start = Self::aligned_start(entry.used_bytes, obj_bytes);
+            let aligned_start_usize = usize::try_from(aligned_start).ok()?;
+            let next_paddr = base.checked_add(aligned_start_usize)?;
+            if next_paddr > paddr {
+                continue;
+            }
+            let aligned_end = aligned_start.saturating_add(obj_bytes);
+            if aligned_end > entry.capacity_bytes() {
+                continue;
+            }
+            let gap = paddr.saturating_sub(next_paddr);
+            let span = limit.saturating_sub(base);
+            match best {
+                Some((best_gap, best_span, best_base, _))
+                    if gap > best_gap
+                        || (gap == best_gap && span > best_span)
+                        || (gap == best_gap && span == best_span && base < best_base) => {}
+                _ => best = Some((gap, span, base, index)),
             }
         }
+        best.map(|(_, _, _, index)| index)
+    }
+
+    fn reserve_device_from_index(&mut self, index: usize, obj_bits: u8) -> Option<ReservedUntyped> {
+        self.reserve_index(index, obj_bits)
+    }
+
+    /// Reserves an untyped covering the supplied device physical address range.
+    pub fn reserve_device(&mut self, paddr: usize, size_bits: usize) -> Option<ReservedUntyped> {
+        let obj_bits = size_bits as u8;
+        let index = self.best_device_index_for_range(paddr, size_bits, obj_bits)?;
+        if let Some(reserved) = self.reserve_device_from_index(index, obj_bits) {
+            return Some(reserved);
+        }
+        log::error!(
+            "[device-pt] device ut=0x{cap:03x} exhausted; skipping retype request",
+            cap = self.bootinfo.untyped.start + index as seL4_CPtr,
+        );
         None
     }
 
@@ -2915,24 +3002,16 @@ impl<'a> UntypedCatalog<'a> {
     /// Locates the device untyped covering the requested physical range, if available.
     #[must_use]
     pub fn device_coverage(&self, paddr: usize, size_bits: usize) -> Option<DeviceCoverage> {
-        let end = paddr.saturating_add(1usize << size_bits);
-        self.entries.iter().enumerate().find_map(|(index, entry)| {
-            if entry.desc.is_device == 0 {
-                return None;
-            }
-            let base = entry.desc.paddr as usize;
-            let limit = base.saturating_add(1usize << entry.desc.size_bits);
-            if base <= paddr && end <= limit {
-                Some(DeviceCoverage {
-                    base,
-                    limit,
-                    size_bits: entry.desc.size_bits,
-                    index,
-                    used: entry.used_bytes > 0,
-                })
-            } else {
-                None
-            }
+        let index = self.best_device_index_for_range(paddr, size_bits, PAGE_BITS as u8)?;
+        let entry = self.entries.get(index)?;
+        let base = entry.desc.paddr as usize;
+        let limit = Self::entry_limit(entry);
+        Some(DeviceCoverage {
+            base,
+            limit,
+            size_bits: entry.desc.size_bits,
+            index,
+            used: entry.used_bytes > 0,
         })
     }
 }
@@ -3018,6 +3097,7 @@ pub struct KernelEnv<'a> {
     last_retype: Option<RetypeLog>,
     ipcbuf_trace: bool,
     ipcbuf_view: Option<IpcBufView>,
+    device_skip_objects: Vec<seL4_CPtr, MAX_DEVICE_SKIP_OBJECTS>,
     device_pt_pool: Option<DevicePtPool>,
     reserved: ReservedVaddrRanges,
 }
@@ -3320,6 +3400,7 @@ impl<'a> KernelEnv<'a> {
             last_retype: None,
             ipcbuf_trace: false,
             ipcbuf_view: None,
+            device_skip_objects: Vec::new(),
             device_pt_pool,
             reserved,
         }
@@ -3463,10 +3544,75 @@ impl<'a> KernelEnv<'a> {
             caller.line(),
             device_cursor = self.device_cursor,
         );
+        let coverage = self
+            .untyped
+            .device_coverage(paddr, PAGE_BITS)
+            .ok_or(seL4_NotEnoughMemory)?;
+        let target_offset = paddr.saturating_sub(coverage.base);
+        let mut current_offset = self
+            .untyped
+            .aligned_start_for_index(coverage.index, PAGE_BITS as u8)
+            .and_then(|offset| usize::try_from(offset).ok())
+            .ok_or(seL4_NotEnoughMemory)?;
+        if current_offset > target_offset {
+            log::warn!(
+                "[sel4.map_device] cannot map paddr=0x{paddr:08x}; untyped cursor advanced to 0x{cursor:08x}",
+                cursor = coverage.base.saturating_add(current_offset),
+            );
+            return Err(seL4_NotEnoughMemory);
+        }
+
+        while current_offset < target_offset {
+            let remaining = target_offset.saturating_sub(current_offset);
+            let max_entry_bits = core::cmp::min(
+                coverage.size_bits as usize,
+                usize::BITS.saturating_sub(1) as usize,
+            );
+            let mut chunk_bits = core::cmp::min(
+                max_entry_bits,
+                (usize::BITS - 1 - remaining.leading_zeros()) as usize,
+            );
+            if chunk_bits < PAGE_BITS {
+                chunk_bits = PAGE_BITS;
+            }
+            while chunk_bits > PAGE_BITS {
+                let start = self
+                    .untyped
+                    .aligned_start_for_index(coverage.index, chunk_bits as u8)
+                    .and_then(|offset| usize::try_from(offset).ok())
+                    .ok_or(seL4_NotEnoughMemory)?;
+                let size = 1usize << chunk_bits;
+                if start.saturating_add(size) <= target_offset {
+                    break;
+                }
+                chunk_bits -= 1;
+            }
+            let reserved_skip = self
+                .untyped
+                .reserve_device_from_index(coverage.index, chunk_bits as u8)
+                .ok_or(seL4_NotEnoughMemory)?;
+            self.retype_device_skip_object(&reserved_skip, chunk_bits as u8)?;
+            current_offset = self
+                .untyped
+                .aligned_start_for_index(coverage.index, PAGE_BITS as u8)
+                .and_then(|offset| usize::try_from(offset).ok())
+                .ok_or(seL4_NotEnoughMemory)?;
+        }
+
         let reserved = self
             .untyped
-            .reserve_device(paddr, PAGE_BITS)
+            .reserve_device_from_index(coverage.index, PAGE_BITS as u8)
             .ok_or(seL4_NotEnoughMemory)?;
+        if reserved.paddr() != paddr {
+            log::warn!(
+                "[sel4.map_device] reservation mismatch target=0x{target:08x} reserved=0x{reserved:08x} ut=0x{cap:03x}",
+                target = paddr,
+                reserved = reserved.paddr(),
+                cap = reserved.cap(),
+            );
+            self.untyped.release(&reserved);
+            return Err(seL4_NotEnoughMemory);
+        }
         let frame_slot = self.allocate_slot();
         #[cfg(target_arch = "aarch64")]
         let page_obj: seL4_Word = sel4_sys::seL4_ARM_Page as seL4_Word;
@@ -3509,6 +3655,23 @@ impl<'a> KernelEnv<'a> {
             self.untyped.release(&reserved);
             return Err(err);
         }
+        let actual_paddr = match page_get_address(frame_slot) {
+            Ok(addr) => addr,
+            Err(err) => {
+                self.record_retype(trace, RetypeStatus::Err(err));
+                return Err(err);
+            }
+        };
+        if actual_paddr != paddr {
+            log::warn!(
+                "[sel4.map_device] cap paddr mismatch target=0x{target:08x} actual=0x{actual:08x} slot=0x{slot:04x}",
+                target = paddr,
+                actual = actual_paddr,
+                slot = frame_slot,
+            );
+            self.record_retype(trace, RetypeStatus::Err(seL4_RangeError));
+            return Err(seL4_RangeError);
+        }
         self.record_retype(trace, RetypeStatus::Ok);
         let range = self.next_mapping_range(self.device_cursor, PAGE_SIZE, "device-frame");
         self.device_cursor = range.end;
@@ -3519,6 +3682,30 @@ impl<'a> KernelEnv<'a> {
             ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(range.start))
                 .expect("device mapping address must be non-null"),
         })
+    }
+
+    fn retype_device_skip_object(
+        &mut self,
+        reserved: &ReservedUntyped,
+        object_bits: u8,
+    ) -> Result<(), seL4_Error> {
+        let slot = self.allocate_slot();
+        let result = cspace_sys::untyped_retype_into_init_root(
+            reserved.cap() as seL4_CPtr,
+            sel4_sys::seL4_UntypedObject as seL4_Word,
+            object_bits as seL4_Word,
+            slot,
+        );
+        match result {
+            Ok(()) => self
+                .device_skip_objects
+                .push(slot)
+                .map_err(|_| seL4_NotEnoughMemory),
+            Err(err) => {
+                self.untyped.release(reserved);
+                Err(err.into_sel4_error())
+            }
+        }
     }
 
     /// Maps the init thread's IPC buffer frame into the supplied virtual address.
@@ -4744,6 +4931,49 @@ mod tests {
             .expect("high reservation");
 
         assert_eq!(high.paddr(), 0x5000_0000);
+    }
+
+    #[test]
+    fn reserve_device_prefers_closest_covered_untyped() {
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.untyped.start = 0x300;
+        bootinfo.untyped.end = 2;
+        bootinfo.untypedList[0].paddr = 0x3c00_0000;
+        bootinfo.untypedList[0].sizeBits = 26;
+        bootinfo.untypedList[0].isDevice = 1;
+        bootinfo.untypedList[1].paddr = 0x3e50_0000;
+        bootinfo.untypedList[1].sizeBits = 21;
+        bootinfo.untypedList[1].isDevice = 1;
+
+        let mut catalog = UntypedCatalog::new(&bootinfo, None);
+        let reserved = catalog
+            .reserve_device(0x3e51_3000, PAGE_BITS)
+            .expect("device reservation should succeed");
+
+        assert_eq!(reserved.cap(), 0x301);
+        assert_eq!(reserved.paddr(), 0x3e50_0000);
+    }
+
+    #[test]
+    fn device_coverage_prefers_closest_covered_untyped() {
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.untyped.start = 0x300;
+        bootinfo.untyped.end = 2;
+        bootinfo.untypedList[0].paddr = 0x3c00_0000;
+        bootinfo.untypedList[0].sizeBits = 26;
+        bootinfo.untypedList[0].isDevice = 1;
+        bootinfo.untypedList[1].paddr = 0x3e50_0000;
+        bootinfo.untypedList[1].sizeBits = 21;
+        bootinfo.untypedList[1].isDevice = 1;
+
+        let catalog = UntypedCatalog::new(&bootinfo, None);
+        let coverage = catalog
+            .device_coverage(0x3e51_3000, PAGE_BITS)
+            .expect("coverage should resolve");
+
+        assert_eq!(coverage.index, 1);
+        assert_eq!(coverage.base, 0x3e50_0000);
+        assert_eq!(coverage.limit, 0x3e70_0000);
     }
 
     #[test]

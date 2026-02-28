@@ -6,11 +6,15 @@ use crate::{
     ring::{EventRing, PhysMem, Ring, Trb, completion, trb_type},
 };
 
-use alloc::{boxed::Box, sync::Arc};
-use core::hint::spin_loop;
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use core::{
+    hint::spin_loop,
+    sync::atomic::{Ordering, compiler_fence},
+};
 use spin::Mutex;
 
 const MMIO_INIT_SIZE: usize = 0x1000;
+const MMIO_MAX_SIZE: usize = 0x20_0000;
 const CMD_RING_SIZE: usize = 256;
 const EVENT_RING_SIZE: usize = 256;
 const STOP_WAIT_SPINS: usize = 10_000_000;
@@ -18,7 +22,94 @@ const RESET_WAIT_SPINS: usize = 10_000_000;
 const READY_WAIT_SPINS: usize = 10_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
 const PORT_RESET_WAIT_SPINS: usize = 10_000_000;
+const PORT_ENABLE_WAIT_SPINS: usize = 10_000_000;
+const PORT_SETTLE_SPINS: usize = 100_000;
 const DROP_HALT_WAIT_SPINS: usize = 1_000_000;
+const USBSTS_CLEAR_MASK: u32 = reg::USBSTS_EINT | reg::USBSTS_PCD | reg::USBSTS_HSE | reg::USBSTS_HCE;
+const USBLEGACY_BIOS_OWNED: u32 = 1 << 16;
+const USBLEGACY_OS_OWNED: u32 = 1 << 24;
+const EXT_CAP_SCAN_LIMIT: usize = 64;
+const MAX_REASONABLE_SLOTS: u8 = 255;
+const MAX_REASONABLE_PORTS: u8 = 255;
+// Pi4/VL805 uses a small scratchpad count; very large values are usually
+// bogus capability reads from an incorrect MMIO candidate.
+const MAX_REASONABLE_SCRATCHPAD: u16 = 256;
+const PORT_CHANGE_BITS: u32 = reg::PORTSC_CSC
+    | reg::PORTSC_PEC
+    | reg::PORTSC_WRC
+    | reg::PORTSC_OCC
+    | reg::PORTSC_PRC
+    | reg::PORTSC_PLC
+    | reg::PORTSC_CEC;
+const PORTSC_NEUTRAL_MASK: u32 = reg::PORTSC_CCS
+    | reg::PORTSC_PED
+    | reg::PORTSC_OCA
+    | reg::PORTSC_PLS_MASK
+    | reg::PORTSC_PP
+    | reg::PORTSC_SPEED_MASK
+    | reg::PORTSC_PIC_MASK
+    | reg::PORTSC_CAS
+    | reg::PORTSC_WCE
+    | reg::PORTSC_WDE
+    | reg::PORTSC_WOE
+    | reg::PORTSC_DR;
+
+#[inline(always)]
+fn ring_write_barrier() {
+    compiler_fence(Ordering::Release);
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("dmb oshst", options(nostack, preserves_flags));
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    core::sync::atomic::fence(Ordering::Release);
+}
+
+#[inline]
+const fn port_state_neutral(portsc: u32) -> u32 {
+    portsc & PORTSC_NEUTRAL_MASK
+}
+
+fn parse_controller_params(
+    cap_length: u8,
+    hcs1: u32,
+    hcs2: u32,
+    db_offset: u32,
+    rts_offset: u32,
+) -> Option<(u8, u8, u16, usize)> {
+    if cap_length < 0x20 || (cap_length as usize) >= MMIO_INIT_SIZE || (cap_length & 0x3) != 0 {
+        return None;
+    }
+
+    let max_slots = (hcs1 & 0xff) as u8;
+    let max_ports = ((hcs1 >> 24) & 0xff) as u8;
+    let max_scratchpad = (((hcs2 >> 27) & 0x1f) | (((hcs2 >> 21) & 0x1f) << 5)) as u16;
+    if max_slots == 0 || max_slots > MAX_REASONABLE_SLOTS {
+        return None;
+    }
+    if max_ports == 0 || max_ports > MAX_REASONABLE_PORTS {
+        return None;
+    }
+    if max_scratchpad > MAX_REASONABLE_SCRATCHPAD {
+        return None;
+    }
+
+    if (db_offset & 0x3) != 0 || (rts_offset & 0x1f) != 0 {
+        return None;
+    }
+    if db_offset < cap_length as u32 || rts_offset < cap_length as u32 {
+        return None;
+    }
+
+    let mmio_size = (rts_offset as usize + 0x20 + 0x20)
+        .max(db_offset as usize + (max_slots as usize + 1) * 4)
+        .max(0x10000);
+    if !(MMIO_INIT_SIZE..=MMIO_MAX_SIZE).contains(&mmio_size) {
+        return None;
+    }
+
+    Some((max_slots, max_ports, max_scratchpad, mmio_size))
+}
 
 /// xHCI Controller
 pub struct XhciCtrl<H: Dma> {
@@ -31,10 +122,60 @@ pub struct XhciCtrl<H: Dma> {
     max_slots: u8,
     max_ports: u8,
     dcbaa: PhysMem<H>,
-    scratchpad: Option<PhysMem<H>>,
+    scratchpad: Option<ScratchpadSet<H>>,
     cmd_ring: Mutex<Box<Ring<H>>>,
     event_ring: Mutex<Box<EventRing<H>>>,
     host: Arc<H>,
+}
+
+/// Snapshot of xHCI command/event ring state for timeout diagnostics.
+#[derive(Clone, Copy, Debug)]
+pub struct XhciCommandDiag {
+    /// Current value of `USBCMD`.
+    pub usbcmd: u32,
+    /// Current value of `USBSTS`.
+    pub usbsts: u32,
+    /// Current value of `CRCR`.
+    pub crcr: u64,
+    /// Current value of `DCBAAP`.
+    pub dcbaap: u64,
+    /// Current value of interrupter 0 `IMAN`.
+    pub iman: u32,
+    /// Current value of interrupter 0 `ERDP`.
+    pub erdp: u64,
+    /// Current value of interrupter 0 `ERSTBA`.
+    pub erstba: u64,
+    /// Current value of the selected port `PORTSC`.
+    pub portsc: u32,
+}
+
+struct ScratchpadSet<H: Dma> {
+    array: PhysMem<H>,
+    buffers: Vec<PhysMem<H>>,
+}
+
+impl<H: Dma> ScratchpadSet<H> {
+    fn build(host: &H, count: usize) -> Result<Self> {
+        // xHCI spec requires 64-byte alignment for the scratchpad pointer array.
+        let array = PhysMem::alloc(host, count * core::mem::size_of::<u64>(), 64)?;
+        let mut buffers = Vec::new();
+        buffers
+            .try_reserve_exact(count)
+            .map_err(|_| UsbError::OoRam)?;
+
+        let array_ptr = array.as_ptr::<u64>();
+        for index in 0..count {
+            // Scratchpad buffers are page-sized and page-aligned.
+            let page = PhysMem::alloc(host, host.page_size(), host.page_size())?;
+            let phys = page.phys(host);
+            unsafe {
+                array_ptr.add(index).write_volatile(phys);
+            }
+            buffers.push(page);
+        }
+
+        Ok(Self { array, buffers })
+    }
 }
 
 impl<H: Dma> XhciCtrl<H> {
@@ -43,9 +184,8 @@ impl<H: Dma> XhciCtrl<H> {
         let host = Arc::new(host);
 
         // Initial map to read capability registers
-        let init_mmio = unsafe {
-            host.map_mmio(mmio_phys, MMIO_INIT_SIZE)
-        }.ok_or(UsbError::MapFail)?;
+        let init_mmio =
+            unsafe { host.map_mmio(mmio_phys, MMIO_INIT_SIZE) }.ok_or(UsbError::MapFail)?;
 
         let cap_length = unsafe { (init_mmio as *const u8).read_volatile() };
         let hcs1: u32 = unsafe { ((init_mmio + reg::HCSPARAMS1) as *const u32).read_volatile() };
@@ -53,23 +193,17 @@ impl<H: Dma> XhciCtrl<H> {
         let db_offset: u32 = unsafe { ((init_mmio + reg::DBOFF) as *const u32).read_volatile() };
         let rts_offset: u32 = unsafe { ((init_mmio + reg::RTSOFF) as *const u32).read_volatile() };
 
-        let max_slots = (hcs1 & 0xff) as u8;
-        let max_ports = ((hcs1 >> 24) & 0xff) as u8;
-        let max_scratchpad = ((hcs2 >> 27) & 0x1f) | (((hcs2 >> 21) & 0x1f) << 5);
-
-        // Calculate total MMIO size needed
-        let mmio_size = (rts_offset as usize + 0x20 + 0x20)
-            .max(db_offset as usize + (max_slots as usize + 1) * 4)
-            .max(0x10000);
+        let parsed = parse_controller_params(cap_length, hcs1, hcs2, db_offset, rts_offset);
 
         unsafe {
             host.unmap_mmio(init_mmio, MMIO_INIT_SIZE);
         }
+        let Some((max_slots, max_ports, max_scratchpad, mmio_size)) = parsed else {
+            return Err(UsbError::MapFail);
+        };
 
         // Remap with full size
-        let mmio = unsafe {
-            host.map_mmio(mmio_phys, mmio_size)
-        }.ok_or(UsbError::MapFail)?;
+        let mmio = unsafe { host.map_mmio(mmio_phys, mmio_size) }.ok_or(UsbError::MapFail)?;
 
         let op_base = mmio + cap_length as usize;
         let rt_base = mmio + rts_offset as usize;
@@ -80,31 +214,11 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Allocate scratchpad if needed
         let scratchpad = if max_scratchpad > 0 {
-            // xHCI spec requires 64-byte alignment for scratchpad array
-            let sp_array = PhysMem::alloc(&*host, max_scratchpad as usize * 8, 64)?;
-            // Scratchpad buffers must be page-aligned
-            let sp_bufs = PhysMem::alloc(
-                &*host,
-                max_scratchpad as usize * host.page_size(),
-                host.page_size(),
-            )?;
-
-            // Fill scratchpad array with buffer addresses
-            let array_ptr = sp_array.as_ptr::<u64>();
-            for i in 0..max_scratchpad as usize {
-                let buf_phys = sp_bufs.phys(&*host) + (i * host.page_size()) as u64;
-                unsafe {
-                    array_ptr.add(i).write_volatile(buf_phys);
-                }
-            }
-
-            // Point DCBAA[0] to scratchpad array
+            let set = ScratchpadSet::build(&*host, max_scratchpad as usize)?;
             unsafe {
-                dcbaa.as_ptr::<u64>().write_volatile(sp_array.phys(&*host));
+                dcbaa.as_ptr::<u64>().write_volatile(set.array.phys(&*host));
             }
-
-            // Keep sp_bufs alive, sp_array is referenced via DCBAA[0]
-            Some(sp_bufs)
+            Some(set)
         } else {
             None
         };
@@ -134,6 +248,10 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     fn init(&mut self) -> Result<()> {
+        // Some firmware/UEFI stacks leave xHCI under legacy ownership until
+        // the OS-owned semaphore is asserted.
+        self.claim_legacy_ownership()?;
+
         // Stop controller if running
         let usbcmd = self.read_op::<u32>(reg::USBCMD);
         if (usbcmd & reg::USBCMD_RUN) != 0 {
@@ -183,11 +301,18 @@ impl<H: Dma> XhciCtrl<H> {
 
         self.write_reg(int_base + reg::ERSTSZ, 1u32);
         self.write_reg(int_base + reg::ERSTBA, event_ring.erst_phys(&*self.host));
-        self.write_reg(int_base + reg::ERDP, event_ring.ring_phys(&*self.host));
+        // Prime ERDP and clear Event Handler Busy before running the controller.
+        self.write_reg(int_base + reg::ERDP, event_ring.ring_phys(&*self.host) | 0x8);
+        // Keep moderation disabled; Cohesix local-seat uses polling and does
+        // not install xHCI IRQ handlers during early boot.
+        self.write_reg(int_base + reg::IMOD, 0u32);
+        self.write_reg(int_base + reg::IMAN, reg::IMAN_IP);
         drop(event_ring);
 
-        // Enable interrupts and start controller
-        self.write_op(reg::USBCMD, reg::USBCMD_RUN | reg::USBCMD_INTE);
+        // Clear stale status before run so command completions are observable.
+        self.write_op(reg::USBSTS, USBSTS_CLEAR_MASK);
+        // Start controller in polling mode (interrupt delivery remains masked).
+        self.write_op(reg::USBCMD, reg::USBCMD_RUN);
 
         // Wait for controller to be ready
         waited = 0;
@@ -197,6 +322,49 @@ impl<H: Dma> XhciCtrl<H> {
                 return Err(UsbError::Timeout);
             }
             spin_loop();
+        }
+
+        Ok(())
+    }
+
+    fn claim_legacy_ownership(&self) -> Result<()> {
+        let hccparams1 = self.read_reg::<u32>(reg::HCCPARAMS1);
+        let mut ext_offset = (((hccparams1 >> 16) & 0xffff) as usize) * 4;
+        if ext_offset == 0 || ext_offset >= self.mmio_size {
+            return Ok(());
+        }
+
+        for _ in 0..EXT_CAP_SCAN_LIMIT {
+            if ext_offset + core::mem::size_of::<u32>() > self.mmio_size {
+                return Ok(());
+            }
+            let legacy = self.read_reg::<u32>(ext_offset);
+            let cap_id = (legacy & 0xff) as u8;
+            let next = ((legacy >> 8) & 0xff) as usize * 4;
+
+            if cap_id == reg::ECAP_USB_LEGACY {
+                if (legacy & USBLEGACY_BIOS_OWNED) == 0 {
+                    return Ok(());
+                }
+                self.write_reg(ext_offset, legacy | USBLEGACY_OS_OWNED);
+                let mut waited = 0usize;
+                while (self.read_reg::<u32>(ext_offset) & USBLEGACY_BIOS_OWNED) != 0 {
+                    waited = waited.saturating_add(1);
+                    if waited >= RESET_WAIT_SPINS {
+                        return Err(UsbError::Timeout);
+                    }
+                    spin_loop();
+                }
+                return Ok(());
+            }
+
+            if next == 0 {
+                return Ok(());
+            }
+            ext_offset = ext_offset.saturating_add(next);
+            if ext_offset >= self.mmio_size {
+                return Ok(());
+            }
         }
 
         Ok(())
@@ -220,16 +388,34 @@ impl<H: Dma> XhciCtrl<H> {
         self.write_reg(self.op_base - self.mmio + offset, val)
     }
 
+    #[inline(always)]
+    fn read_op_u64(&self, offset: usize) -> u64 {
+        let lo = self.read_op::<u32>(offset) as u64;
+        let hi = self.read_op::<u32>(offset + 4) as u64;
+        (hi << 32) | lo
+    }
+
+    #[inline(always)]
+    fn read_reg_u64(&self, offset: usize) -> u64 {
+        let lo = self.read_reg::<u32>(offset) as u64;
+        let hi = self.read_reg::<u32>(offset + 4) as u64;
+        (hi << 32) | lo
+    }
+
     /// Ring the command doorbell
     fn ring_cmd_doorbell(&self) {
         let db = reg::doorbell(self.db_offset, 0);
+        ring_write_barrier();
         self.write_reg(db, 0u32);
+        let _ = self.read_reg::<u32>(db);
     }
 
     /// Ring device doorbell
     pub fn ring_doorbell(&self, slot: u8, target: u8) {
         let db = reg::doorbell(self.db_offset, slot);
+        ring_write_barrier();
         self.write_reg(db, target as u32);
+        let _ = self.read_reg::<u32>(db);
     }
 
     /// Update event ring dequeue pointer
@@ -240,6 +426,9 @@ impl<H: Dma> XhciCtrl<H> {
             int_base + reg::ERDP,
             event_ring.dequeue_ptr(&*self.host) | 0x8,
         );
+        // Keep interrupt delivery masked; acknowledge pending interrupt state.
+        self.write_reg(int_base + reg::IMAN, reg::IMAN_IP);
+        self.write_op(reg::USBSTS, reg::USBSTS_EINT);
     }
 
     /// Wait for command completion
@@ -298,7 +487,11 @@ impl<H: Dma> XhciCtrl<H> {
             status: 0,
             control: trb_type::ENABLE_SLOT << 10,
         };
-        let evt = self.submit_command(trb)?;
+        let evt = match self.submit_command(trb) {
+            Err(UsbError::Timeout) => return Err(UsbError::EnableSlotTimeout),
+            Err(err) => return Err(err),
+            Ok(evt) => evt,
+        };
         Ok(evt.slot_id())
     }
 
@@ -328,29 +521,55 @@ impl<H: Dma> XhciCtrl<H> {
     /// Reset a port
     pub fn reset_port(&self, port: u8) -> Result<()> {
         let offset = reg::port_reg_base(self.cap_length, port);
-        let portsc: u32 = self.read_reg(offset);
+        let mut portsc: u32 = self.read_reg(offset);
+        if (portsc & reg::PORTSC_CCS) == 0 {
+            return Err(UsbError::DeviceNotFound);
+        }
 
-        // Set port reset, preserve PP, clear change bits
-        let val = (portsc & reg::PORTSC_PP) | reg::PORTSC_PR;
-        self.write_reg(offset, val);
+        // Clear stale change bits before asserting reset.
+        self.write_reg(offset, port_state_neutral(portsc) | PORT_CHANGE_BITS);
+        portsc = self.read_reg(offset);
+
+        // Keep power enabled while requesting reset.
+        let reset = port_state_neutral(portsc) | reg::PORTSC_PP | reg::PORTSC_PR;
+        self.write_reg(offset, reset);
 
         // Wait for reset to complete
         let mut waited = 0usize;
         loop {
-            let portsc: u32 = self.read_reg(offset);
+            portsc = self.read_reg(offset);
             if (portsc & reg::PORTSC_PR) == 0 {
                 break;
             }
             waited = waited.saturating_add(1);
             if waited >= PORT_RESET_WAIT_SPINS {
-                return Err(UsbError::Timeout);
+                return Err(UsbError::PortResetTimeout);
             }
             spin_loop();
         }
 
-        // Clear Port Reset Change
-        let portsc: u32 = self.read_reg(offset);
-        self.write_reg(offset, portsc | reg::PORTSC_PRC);
+        // Wait for the link to settle and expose either PED or speed bits.
+        waited = 0;
+        loop {
+            portsc = self.read_reg(offset);
+            let connected = (portsc & reg::PORTSC_CCS) != 0;
+            let enabled = (portsc & reg::PORTSC_PED) != 0;
+            let speed = reg::portsc_speed(portsc);
+            if connected && (enabled || speed != 0) {
+                break;
+            }
+            waited = waited.saturating_add(1);
+            if waited >= PORT_ENABLE_WAIT_SPINS {
+                return Err(UsbError::PortEnableTimeout);
+            }
+            spin_loop();
+        }
+
+        // Acknowledge port status change bits after reset.
+        self.write_reg(offset, port_state_neutral(portsc) | PORT_CHANGE_BITS);
+        for _ in 0..PORT_SETTLE_SPINS {
+            spin_loop();
+        }
 
         Ok(())
     }
@@ -389,6 +608,41 @@ impl<H: Dma> XhciCtrl<H> {
     /// Get max ports
     pub fn max_ports(&self) -> u8 {
         self.max_ports
+    }
+
+    /// Captures key command/event-ring registers for timeout debugging.
+    pub fn command_diag_for_port(&self, port: u8) -> XhciCommandDiag {
+        let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
+        XhciCommandDiag {
+            usbcmd: self.read_op::<u32>(reg::USBCMD),
+            usbsts: self.read_op::<u32>(reg::USBSTS),
+            crcr: self.read_op_u64(reg::CRCR),
+            dcbaap: self.read_op_u64(reg::DCBAAP),
+            iman: self.read_reg::<u32>(int_base + reg::IMAN),
+            erdp: self.read_reg_u64(int_base + reg::ERDP),
+            erstba: self.read_reg_u64(int_base + reg::ERSTBA),
+            portsc: self.port_status(port),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_controller_params;
+
+    #[test]
+    fn parse_controller_params_rejects_all_ones() {
+        assert!(
+            parse_controller_params(0xff, 0xffff_ffff, 0xffff_ffff, 0xffff_ffff, 0xffff_ffff)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn parse_controller_params_accepts_reasonable_window() {
+        let hcs1 = 32u32 | (8u32 << 24);
+        let parsed = parse_controller_params(0x40, hcs1, 0, 0x1000, 0x2000);
+        assert!(parsed.is_some());
     }
 }
 

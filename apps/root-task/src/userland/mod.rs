@@ -76,11 +76,13 @@ pub fn main(ctx: BootContext) -> ! {
         let now_ms = crate::hal::timebase().now_ms();
         let _ = lifecycle::init(now_ms);
     }
-    let serial = ctx
-        .serial
-        .borrow_mut()
-        .take()
-        .expect("serial driver missing from BootContext");
+    let serial = ctx.serial.borrow_mut().take().unwrap_or_else(|| {
+        log::warn!(
+            target: "userland",
+            "[userland] serial driver missing from BootContext; using no-op serial backend"
+        );
+        crate::serial::SerialPort::new(crate::serial::kernel_uart::KernelSerialDriver::null())
+    });
     let timer = ctx
         .timer
         .borrow_mut()

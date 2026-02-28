@@ -16,6 +16,10 @@ use core::hint::spin_loop;
 use spin::Mutex;
 
 const CONTROL_XFER_WAIT_SPINS: usize = 20_000_000;
+const ROUTE_STRING_MASK: u32 = 0x000f_ffff;
+const ROOT_HUB_PORT_SHIFT: u32 = 16;
+const SLOT_DEV_MTT: u32 = 1 << 25;
+const TT_PORT_SHIFT: u32 = 8;
 
 /// xHCI Slot Context (32 bytes).
 ///
@@ -37,15 +41,28 @@ pub struct SlotContext {
 
 impl SlotContext {
     /// Creates a new Slot Context.
-    pub fn new(route: u32, speed: u8, context_entries: u8, root_port: u8) -> Self {
+    pub fn new(route: u32, speed: u8, context_entries: u8, root_hub_port: u8) -> Self {
         Self {
-            dw0: (route & 0xfffff) | ((speed as u32) << 20) | ((context_entries as u32) << 27),
-            dw1: ((root_port as u32) << 16),
+            dw0: (route & ROUTE_STRING_MASK)
+                | ((speed as u32) << 20)
+                | ((context_entries as u32) << 27),
+            dw1: (root_hub_port as u32) << ROOT_HUB_PORT_SHIFT,
             dw2: 0,
             dw3: 0,
             _0: [0; 4],
         }
     }
+}
+
+/// Transaction Translator (TT) context for FS/LS devices behind a HS hub.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TtContext {
+    /// Hub slot ID hosting the TT.
+    pub hub_slot_id: u8,
+    /// Downstream hub port number (USB numbering, starts at 1).
+    pub downstream_port: u8,
+    /// Whether the parent hub advertises Multi-TT support.
+    pub multi_tt: bool,
 }
 
 /// xHCI Endpoint Context (32 bytes).
@@ -127,6 +144,8 @@ pub struct UsbDevice<H: Dma> {
     ctrl: Arc<XhciCtrl<H>>,
     slot_id: u8,
     port: u8,
+    root_hub_port: u8,
+    route: u32,
     speed: u8,
     device_ctx: PhysMem<H>,
     input_ctx: PhysMem<H>,
@@ -136,16 +155,48 @@ pub struct UsbDevice<H: Dma> {
 }
 
 impl<H: Dma> UsbDevice<H> {
-    /// Create and address a new USB device
+    /// Create and address a new USB device on a root hub port.
     pub fn new(ctrl: Arc<XhciCtrl<H>>, port: u8) -> Result<Self> {
+        ctrl.reset_port(port)?;
+        let speed = ctrl.port_speed(port);
+        let root_hub_port = port.saturating_add(1);
+        Self::new_with_topology(ctrl, port, 0, root_hub_port, speed, None)
+    }
+
+    /// Create and address a new USB device routed behind a hub.
+    pub fn new_routed(
+        ctrl: Arc<XhciCtrl<H>>,
+        route: u32,
+        root_hub_port: u8,
+        speed: u8,
+        tt_context: Option<TtContext>,
+    ) -> Result<Self> {
+        let port = root_hub_port.checked_sub(1).ok_or(UsbError::InvPort)?;
+        Self::new_with_topology(ctrl, port, route, root_hub_port, speed, tt_context)
+    }
+
+    fn new_with_topology(
+        ctrl: Arc<XhciCtrl<H>>,
+        port: u8,
+        route: u32,
+        root_hub_port: u8,
+        speed: u8,
+        tt_context: Option<TtContext>,
+    ) -> Result<Self> {
+        if root_hub_port == 0 {
+            return Err(UsbError::InvPort);
+        }
+        if tt_context
+            .as_ref()
+            .is_some_and(|tt| tt.hub_slot_id == 0 || tt.downstream_port == 0)
+        {
+            return Err(UsbError::InvPort);
+        }
+
         let host = ctrl.host();
 
         // Enable slot
         let slot_id = ctrl.enable_slot()?;
-
-        // Reset port and get speed
-        ctrl.reset_port(port)?;
-        let speed = ctrl.port_speed(port);
 
         // Allocate contexts
         let device_ctx = PhysMem::alloc(
@@ -169,12 +220,23 @@ impl<H: Dma> UsbDevice<H> {
             (*input).input_control[1] = 0b11;
 
             // Slot Context
-            (*input).slot = SlotContext::new(0, speed, 1, port + 1);
+            let mut slot_ctx = SlotContext::new(route, speed, 1, root_hub_port);
+            if let Some(tt) = tt_context {
+                if tt.multi_tt {
+                    slot_ctx.dw0 |= SLOT_DEV_MTT;
+                }
+                slot_ctx.dw2 =
+                    (tt.hub_slot_id as u32) | ((tt.downstream_port as u32) << TT_PORT_SHIFT);
+            }
+            (*input).slot = slot_ctx;
 
             // EP0 Context (Control endpoint)
             let max_packet = match speed {
                 reg::SPEED_LOW => 8,
-                reg::SPEED_FULL => 8,
+                // xHCI enumeration commonly seeds FS EP0 with 64 bytes.
+                // This matches U-Boot/Linux bring-up behavior and avoids
+                // early control-transfer failures on many FS devices.
+                reg::SPEED_FULL => 64,
                 reg::SPEED_HIGH => 64,
                 reg::SPEED_SUPER => 512,
                 _ => 8,
@@ -197,7 +259,11 @@ impl<H: Dma> UsbDevice<H> {
             status: 0,
             control: (trb_type::ADDRESS_DEVICE << 10) | ((slot_id as u32) << 24),
         };
-        ctrl.submit_command(trb)?;
+        match ctrl.submit_command(trb) {
+            Err(UsbError::Timeout) => return Err(UsbError::AddressDeviceTimeout),
+            Err(err) => return Err(err),
+            Ok(_) => {}
+        }
 
         // Allocate ep_rings on heap to reduce stack usage
         let mut ep_rings = Vec::with_capacity(31);
@@ -207,6 +273,8 @@ impl<H: Dma> UsbDevice<H> {
             ctrl,
             slot_id,
             port,
+            root_hub_port,
+            route: route & ROUTE_STRING_MASK,
             speed,
             device_ctx,
             input_ctx,
@@ -479,9 +547,19 @@ impl<H: Dma> UsbDevice<H> {
         self.slot_id
     }
 
-    /// Returns the root hub port number this device is connected to.
+    /// Returns the root hub port index (0-based) this device routes through.
     pub fn port(&self) -> u8 {
         self.port
+    }
+
+    /// Returns the root hub port number (USB numbering, starts at 1).
+    pub fn root_hub_port(&self) -> u8 {
+        self.root_hub_port
+    }
+
+    /// Returns the xHCI route string (20-bit).
+    pub fn route(&self) -> u32 {
+        self.route
     }
 
     /// Returns the device speed (see `reg::SPEED_*` constants).

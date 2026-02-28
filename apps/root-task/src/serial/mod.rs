@@ -25,6 +25,8 @@ use nb::Error as NbError;
 use portable_atomic::AtomicU32;
 #[cfg(feature = "kernel")]
 use portable_atomic::{AtomicU64, Ordering as AtomicOrdering};
+#[cfg(feature = "kernel")]
+use spin::Mutex as SpinMutex;
 
 #[cfg(feature = "kernel")]
 pub mod bcm2711_mini_uart;
@@ -65,6 +67,24 @@ pub fn puts_once(message: &'static str) {
 /// Host-mode stub used when the seL4 debug console is unavailable.
 #[allow(dead_code)]
 pub fn puts_once(_message: &'static str) {}
+
+#[cfg(feature = "kernel")]
+static UART_TX_LOCK: SpinMutex<()> = SpinMutex::new(());
+
+/// Serialize all physical UART TX access so debug/syslog bytes do not interleave
+/// with root-console traffic.
+#[inline(always)]
+pub(crate) fn with_uart_tx_lock<R>(f: impl FnOnce() -> R) -> R {
+    #[cfg(feature = "kernel")]
+    {
+        let _guard = UART_TX_LOCK.lock();
+        f()
+    }
+    #[cfg(not(feature = "kernel"))]
+    {
+        f()
+    }
+}
 
 /// Capacity of the RX staging queue used by [`SerialPort`].
 pub const DEFAULT_RX_CAPACITY: usize = 512;
@@ -202,34 +222,36 @@ where
     }
 
     fn flush_tx(&mut self) {
-        // Flush staged TX bytes to the device until it reports back-pressure.
-        if let Some(byte) = self.pending_tx.take() {
-            match self.driver.write_byte(byte) {
-                Ok(()) => {}
-                Err(NbError::WouldBlock) => {
-                    self.pending_tx = Some(byte);
-                    return;
-                }
-                Err(NbError::Other(_)) => {
-                    self.telemetry.tx_overflow();
-                    return;
+        with_uart_tx_lock(|| {
+            // Flush staged TX bytes to the device until it reports back-pressure.
+            if let Some(byte) = self.pending_tx.take() {
+                match self.driver.write_byte(byte) {
+                    Ok(()) => {}
+                    Err(NbError::WouldBlock) => {
+                        self.pending_tx = Some(byte);
+                        return;
+                    }
+                    Err(NbError::Other(_)) => {
+                        self.telemetry.tx_overflow();
+                        return;
+                    }
                 }
             }
-        }
 
-        while let Some(byte) = self.tx.dequeue() {
-            match self.driver.write_byte(byte) {
-                Ok(()) => {}
-                Err(NbError::WouldBlock) => {
-                    self.pending_tx = Some(byte);
-                    return;
-                }
-                Err(NbError::Other(_)) => {
-                    self.telemetry.tx_overflow();
-                    return;
+            while let Some(byte) = self.tx.dequeue() {
+                match self.driver.write_byte(byte) {
+                    Ok(()) => {}
+                    Err(NbError::WouldBlock) => {
+                        self.pending_tx = Some(byte);
+                        return;
+                    }
+                    Err(NbError::Other(_)) => {
+                        self.telemetry.tx_overflow();
+                        return;
+                    }
                 }
             }
-        }
+        });
     }
 
     /// Retrieve the next sanitised console line, if available.

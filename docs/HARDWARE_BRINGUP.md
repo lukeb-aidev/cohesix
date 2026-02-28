@@ -79,6 +79,7 @@
 - HDMI displays `cohesix>` prompt.
 - USB keyboard input reaches the existing root-console parser.
 - Typed commands produce visible responses on HDMI with deterministic ordering relative to serial.
+- Pi 4 USB local-seat DMA buffers must remain below `0xC0000000` (first 3 GiB), matching the BCM2711 PCIe `dma-ranges` limit used by VL805/xHCI.
 - Boot must fail before ticket registration if:
 - attestation is required/enabled and policy cannot be satisfied.
 - `hw.local_seat.required=true` and local-seat initialization cannot be satisfied.

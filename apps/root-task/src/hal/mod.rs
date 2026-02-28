@@ -299,6 +299,15 @@ pub trait Hardware {
         self.alloc_dma_frame()
     }
 
+    /// Allocates a low-address DMA-capable frame with the requested cache attribute.
+    fn alloc_dma_frame_low_attr(
+        &mut self,
+        attr: seL4_ARM_VMAttributes,
+    ) -> Result<RamFrame, Self::Error> {
+        let _ = attr;
+        self.alloc_dma_frame_low()
+    }
+
     /// Reserves an unmapped guard page in the DMA window and returns its base.
     fn reserve_dma_guard_page(&mut self) -> Result<usize, Self::Error>;
 
@@ -378,6 +387,15 @@ impl<'a> Hardware for KernelHal<'a> {
         attr: seL4_ARM_VMAttributes,
     ) -> Result<RamFrame, Self::Error> {
         self.env.alloc_dma_frame_attr(attr).map_err(HalError::from)
+    }
+
+    fn alloc_dma_frame_low_attr(
+        &mut self,
+        attr: seL4_ARM_VMAttributes,
+    ) -> Result<RamFrame, Self::Error> {
+        self.env
+            .alloc_dma_frame_low_attr(attr)
+            .map_err(HalError::from)
     }
 
     fn reserve_dma_guard_page(&mut self) -> Result<usize, Self::Error> {

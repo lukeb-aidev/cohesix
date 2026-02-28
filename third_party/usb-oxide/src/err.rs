@@ -10,6 +10,14 @@ use core::result::Result as CoreResult;
 pub enum UsbError {
     /// Operation timed out
     Timeout,
+    /// Port reset timed out
+    PortResetTimeout,
+    /// Port did not reach enabled/ready state after reset
+    PortEnableTimeout,
+    /// Enable Slot command timed out
+    EnableSlotTimeout,
+    /// Address Device command timed out
+    AddressDeviceTimeout,
     /// Out of memory
     OoRam,
     /// Failed to map MMIO region

@@ -39,8 +39,8 @@ mod desc;
 mod dev;
 mod err;
 mod hid;
-mod ram;
 mod msc;
+mod ram;
 mod reg;
 mod ring;
 mod xhci;
@@ -133,7 +133,7 @@ pub use crate::msc::{
 pub use crate::ring::{completion, trb_flags, trb_type};
 
 // Re-export device context types
-pub use crate::dev::{DeviceContext, EndpointContext, InputContext, SlotContext};
+pub use crate::dev::{DeviceContext, EndpointContext, InputContext, SlotContext, TtContext};
 
 // Re-export register definitions (useful for advanced users)
 /// xHCI register offsets and constants.

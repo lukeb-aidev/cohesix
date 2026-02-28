@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the debug_uart module for root-task.
 // Author: Lukas Bower
@@ -15,9 +15,7 @@ pub fn debug_uart_str(s: &str) {
             crate::log_buffer::append_log_bytes(s.as_bytes());
             return;
         }
-        for byte in s.bytes() {
-            crate::sel4::debug_put_char(i32::from(byte));
-        }
+        crate::sel4::debug_put_bytes_raw(s.as_bytes());
     }
 
     #[cfg(not(feature = "kernel"))]
@@ -30,15 +28,9 @@ pub fn debug_uart_str(s: &str) {
 pub fn debug_uart_line(line: &str) {
     #[cfg(feature = "kernel")]
     {
-        for byte in line.bytes() {
-            crate::sel4::debug_put_char_raw(byte);
-        }
-        crate::sel4::debug_put_char_raw(b'\r');
-        crate::sel4::debug_put_char_raw(b'\n');
+        crate::sel4::debug_put_line_raw(line.as_bytes());
         if line.starts_with("audit ") {
-            for byte in b"cohesix> " {
-                crate::sel4::debug_put_char_raw(*byte);
-            }
+            crate::sel4::debug_put_bytes_raw(b"cohesix> ");
         }
     }
 

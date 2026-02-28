@@ -18,8 +18,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use font8x8::legacy::BASIC_LEGACY;
 use spin::Mutex;
 use usb_oxide::{
-    find_hid_interfaces, hid_protocol, hid_subclass, scancode_to_ascii, ConfigDesc, Dma, HidDevice,
-    UsbDevice, XhciCtrl,
+    class, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature, hub_protocol,
+    request, scancode_to_ascii, ConfigDesc, DeviceDesc, Dma, HidDevice, HubDesc, SetupPacket,
+    TtContext, UsbDevice, UsbError, XhciCtrl,
 };
 
 use crate::bootstrap::log as boot_log;
@@ -66,28 +67,85 @@ const TAB_WIDTH: usize = 4;
 const FG_COLOR: u32 = 0xFFFF_FFFF;
 const BG_COLOR: u32 = 0xFF00_0000;
 
-const RPI4_XHCI_MMIO_FALLBACKS: [usize; 3] = [
+const RPI4_XHCI_MMIO_FALLBACKS: [usize; 2] = [0x0000_0000_FE98_0000, 0x0000_0000_7E98_0000];
+const VL805_ECAM_BASE_CANDIDATES: [usize; 3] = [
+    0x0000_0000_FD50_0000,
+    0x0000_0000_6000_0000,
     0x0000_0006_0000_0000,
-    0x0000_0000_FE98_0000,
-    0x0000_0000_7E98_0000,
 ];
-const XHCI_MMIO_CANDIDATE_LIMIT: usize = 4;
+const XHCI_MMIO_CANDIDATE_LIMIT: usize = 8;
+const VL805_PCI_CFG_ATTEMPT_CAP: usize = 512;
 const XHCI_MAX_PROBE_PORTS: usize = 16;
-const KEYBOARD_ATTACH_ATTEMPTS: usize = 2;
+const XHCI_PORT_DETECT_PASSES: usize = 4;
+const XHCI_PORT_DETECT_SETTLE_SPINS: usize = 200_000;
+const HUB_ENUM_MAX_DEPTH: usize = 2;
+const HUB_MAX_DOWNSTREAM_PORTS: usize = 15;
+const HUB_DESC_MAX_BYTES: usize = 12;
+const HUB_PORT_STATUS_BYTES: usize = 4;
+const HUB_PORT_STATUS_RETRY_LOOPS: usize = 64;
+const HUB_PORT_STATUS_RETRY_SPINS: usize = 50_000;
+const HUB_POWER_SETTLE_SPINS_PER_2MS: usize = 25_000;
+const HUB_RESET_SETTLE_SPINS: usize = 200_000;
+// Device untyped retype on seL4 is monotonic; retries can only consume more
+// device window state without restoring earlier probe addresses.
+const KEYBOARD_ATTACH_ATTEMPTS: usize = 1;
 const KEYBOARD_RETRY_SPINS: usize = 200_000;
 const VL805_PCI_DEV_ADDR: u32 = 0x0010_0000;
 const VL805_NOTIFY_SETTLE_SPINS: usize = 50_000;
+// On Pi4 + seL4 this mailbox reset notification can raise an early platform
+// interrupt before IRQ handlers are installed, stalling boot at local-seat
+// bring-up. Keep it disabled for now.
+const VL805_RESET_NOTIFY_BEFORE_USB_PROBE: bool = false;
+// Probe VL805 PCI config space first so xHCI MMIO accesses only occur after
+// command + interrupt policy has been normalised.
+const VL805_PCI_PREFLIGHT_BEFORE_USB_PROBE: bool = true;
+const VL805_PCI_VENDOR_ID: u16 = 0x1106;
+const VL805_PCI_DEVICE_ID: u16 = 0x3483;
+const VL805_EXPECTED_CLASS_CODE: u32 = 0x0C03_30;
+const VL805_ECAM_WINDOW_BYTES: usize = 0x0100_0000;
+const PCI_CFG_VENDOR_DEVICE: usize = 0x00;
+const PCI_CFG_COMMAND_STATUS: usize = 0x04;
+const PCI_CFG_CLASS_REVISION: usize = 0x08;
+const PCI_CFG_CAP_PTR: usize = 0x34;
+const PCI_CFG_BAR0: usize = 0x10;
+const PCI_CFG_BAR1: usize = 0x14;
+const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
+const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
+const PCI_COMMAND_INTERRUPT_DISABLE: u16 = 1 << 10;
+const PCI_BAR_IO_SPACE: u32 = 1 << 0;
+const PCI_BAR_TYPE_MASK: u32 = 0b110;
+const PCI_BAR_TYPE_64: u32 = 0b100;
+const PCI_BAR_ADDR_MASK: u64 = !0xFu64;
+const PCI_CAP_ID_MSI: u8 = 0x05;
+const PCI_CAP_ID_MSIX: u8 = 0x11;
+const PCI_CAP_SCAN_LIMIT: usize = 32;
+const PCI_MSI_CTL_OFFSET: usize = 0x02;
+const PCI_MSI_CTL_ENABLE: u16 = 1 << 0;
+const PCI_MSIX_CTL_OFFSET: usize = 0x02;
+const PCI_MSIX_CTL_ENABLE: u16 = 1 << 15;
 const FRAMEBUFFER_MAP_EXACT_ATTEMPT_CAP: usize = 2048;
-const XHCI_MMIO_MAP_EXACT_ATTEMPT_CAP: usize = 2048;
+const XHCI_MMIO_MAP_EXACT_ATTEMPT_CAP: usize = 4096;
 const EXACT_MAP_LOG_INITIAL_RETRIES: usize = 8;
 const EXACT_MAP_LOG_STRIDE: usize = 128;
 const FB_BYTES_PER_PIXEL: usize = mem::size_of::<u32>();
+const XHCI_MMIO_MAX_BYTES: usize = 2 * 1024 * 1024;
+const XHCI_DMA_MAX_BYTES: usize = 8 * 1024 * 1024;
+// BCM2711 PCIe cannot DMA above the first 3 GiB (see upstream bcm2711.dtsi
+// pcie0 dma-ranges). Keep VL805/xHCI buffers under this ceiling.
+const RPI4_PCIE_DMA_LIMIT: usize = 0xC000_0000;
+// Pi4 mailbox framebuffers should live in upper low-memory carveouts. Treat
+// lower addresses as unsafe to avoid scribbling userspace/kernel RAM when
+// firmware returns an unexpected bus alias.
+const MIN_SAFE_FB_PHYS: usize = 0x3000_0000;
+const MAX_SAFE_FB_PHYS_EXCL: usize = 0x4000_0000;
 const MAX_FB_WIDTH: usize = 4096;
 const MAX_FB_HEIGHT: usize = 4096;
 const MAX_FB_BYTES: usize = 64 * 1024 * 1024;
 const MAX_FB_MAP_PAGES: usize = MAX_FB_BYTES / PAGE_SIZE;
 
 static VL805_RESET_NOTIFIED: AtomicBool = AtomicBool::new(false);
+static VL805_RESET_BYPASSED_LOGGED: AtomicBool = AtomicBool::new(false);
+static USB_DMA_RANGE_WARNED: AtomicBool = AtomicBool::new(false);
 
 /// Optional DT/firmware framebuffer hint for Pi4 HDMI output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -272,9 +330,7 @@ fn map_device_exact(
                     &mut line,
                     format_args!(
                         "[local-seat] {label} map exact after retries={} base=0x{:08x} limit=0x{:08x}",
-                        attempt,
-                        coverage.base,
-                        coverage.limit
+                        attempt, coverage.base, coverage.limit
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
@@ -321,7 +377,7 @@ impl Mailbox {
         let regs = regs.ok_or(Pi4SeatError::MailboxMap)?;
 
         let request = hal
-            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Uncached)
+            .alloc_dma_frame_low_attr(sel4_sys::seL4_ARM_Page_Uncached)
             .map_err(|_| Pi4SeatError::MailboxDma)?;
         let mut line = heapless::String::<160>::new();
         let _ = core::fmt::Write::write_fmt(
@@ -630,6 +686,39 @@ impl HdmiTextSink {
         }
 
         let fb_phys = bus_to_phys(fb_bus);
+        let Some(fb_end) = fb_phys.checked_add(fb_size) else {
+            return Err(Pi4SeatError::FramebufferUnavailable);
+        };
+        let mut line = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] fb mailbox bus=0x{bus:08x} phys=0x{phys:08x} end=0x{end:08x} size={size} pitch={pitch} {width}x{height}",
+                bus = fb_bus,
+                phys = fb_phys,
+                end = fb_end,
+                size = fb_size,
+                pitch = pitch[0],
+                width = virt[0],
+                height = virt[1],
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        if !framebuffer_phys_window_safe(fb_phys, fb_size) {
+            let mut reject = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut reject,
+                format_args!(
+                    "[local-seat] fb mailbox reject phys=[0x{phys:08x}..0x{end:08x}) safe=[0x{safe_start:08x}..0x{safe_end:08x})",
+                    phys = fb_phys,
+                    end = fb_end,
+                    safe_start = MIN_SAFE_FB_PHYS,
+                    safe_end = MAX_SAFE_FB_PHYS_EXCL,
+                ),
+            );
+            boot_log::force_uart_line(reject.as_str());
+            return Err(Pi4SeatError::FramebufferUnavailable);
+        }
         Self::from_mapped_framebuffer(
             hal,
             fb_phys,
@@ -888,98 +977,491 @@ fn notify_vl805_reset_once(hal: &mut KernelHal<'_>) {
     }
 }
 
+fn decode_pci_mmio_bar(bar0: u32, bar1: u32) -> Option<usize> {
+    if (bar0 & PCI_BAR_IO_SPACE) != 0 {
+        return None;
+    }
+
+    let is_64 = (bar0 & PCI_BAR_TYPE_MASK) == PCI_BAR_TYPE_64;
+    let base = if is_64 {
+        ((bar1 as u64) << 32) | ((bar0 as u64) & PCI_BAR_ADDR_MASK)
+    } else {
+        (bar0 as u64) & PCI_BAR_ADDR_MASK
+    };
+    if base == 0 {
+        return None;
+    }
+    usize::try_from(base).ok()
+}
+
+fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
+    let mut prefix_maps = Vec::new();
+    for &ecam_base in &VL805_ECAM_BASE_CANDIDATES {
+        let Some(config_paddr) = ecam_base.checked_add(VL805_PCI_DEV_ADDR as usize) else {
+            continue;
+        };
+        let config_page = config_paddr & !PAGE_MASK;
+        let config_page_offset = config_paddr & PAGE_MASK;
+        if hal
+            .device_coverage(config_page, crate::sel4::PAGE_BITS)
+            .is_none()
+        {
+            continue;
+        }
+
+        let frame = match map_device_exact(
+            hal,
+            config_page,
+            VL805_PCI_CFG_ATTEMPT_CAP,
+            "vl805-pci",
+            Pi4SeatError::XhciInit,
+            &mut prefix_maps,
+        ) {
+            Ok(frame) => frame,
+            Err(_) => continue,
+        };
+        let Some(config_virt) = (frame.ptr().as_ptr() as usize).checked_add(config_page_offset)
+        else {
+            continue;
+        };
+
+        let vendor_device = pci_cfg_read_u32(config_virt, PCI_CFG_VENDOR_DEVICE);
+        let vendor_id = (vendor_device & 0xffff) as u16;
+        let device_id = ((vendor_device >> 16) & 0xffff) as u16;
+        if vendor_id == 0 || vendor_id == 0xffff {
+            continue;
+        }
+
+        if vendor_id != VL805_PCI_VENDOR_ID || device_id != VL805_PCI_DEVICE_ID {
+            let mut id_line = heapless::String::<176>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut id_line,
+                format_args!(
+                    "[local-seat] vl805 pci id mismatch got={vid:04x}:{did:04x} expected={exp_vid:04x}:{exp_did:04x}",
+                    vid = vendor_id,
+                    did = device_id,
+                    exp_vid = VL805_PCI_VENDOR_ID,
+                    exp_did = VL805_PCI_DEVICE_ID
+                ),
+            );
+            boot_log::force_uart_line(id_line.as_str());
+            continue;
+        }
+
+        let class_revision = pci_cfg_read_u32(config_virt, PCI_CFG_CLASS_REVISION);
+        let class_code = (class_revision >> 8) & 0x00ff_ffff;
+
+        if class_code != VL805_EXPECTED_CLASS_CODE {
+            let mut class_line = heapless::String::<176>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut class_line,
+                format_args!(
+                    "[local-seat] vl805 pci class mismatch got=0x{class_code:06x} expected=0x{expected:06x}",
+                    expected = VL805_EXPECTED_CLASS_CODE
+                ),
+            );
+            boot_log::force_uart_line(class_line.as_str());
+            continue;
+        }
+
+        let bar0 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR0);
+        let bar1 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR1);
+        let mmio = decode_pci_mmio_bar(bar0, bar1);
+        let Some(mmio) = mmio else {
+            boot_log::force_uart_line("[local-seat] vl805 pci missing BAR0 MMIO address");
+            continue;
+        };
+
+        let ecam_end = ecam_base.saturating_add(VL805_ECAM_WINDOW_BYTES);
+        if (ecam_base..ecam_end).contains(&mmio) {
+            let mut reject_line = heapless::String::<192>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut reject_line,
+                format_args!(
+                    "[local-seat] vl805 pci reject mmio=0x{mmio:016x} reason=bar-points-to-ecam ecam=[0x{base:016x}..0x{end:016x})",
+                    base = ecam_base,
+                    end = ecam_end
+                ),
+            );
+            boot_log::force_uart_line(reject_line.as_str());
+            continue;
+        }
+
+        if (mmio & PAGE_MASK) != 0 {
+            let mut reject_line = heapless::String::<160>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut reject_line,
+                format_args!("[local-seat] vl805 pci reject mmio=0x{mmio:016x} reason=unaligned"),
+            );
+            boot_log::force_uart_line(reject_line.as_str());
+            continue;
+        }
+
+        if hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_none() {
+            let mut reject_line = heapless::String::<176>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut reject_line,
+                format_args!(
+                    "[local-seat] vl805 pci reject mmio=0x{mmio:016x} reason=no-device-coverage"
+                ),
+            );
+            boot_log::force_uart_line(reject_line.as_str());
+            continue;
+        }
+
+        let command_status = pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS);
+        let command_before = (command_status & 0xffff) as u16;
+        let command_target = command_before
+            | PCI_COMMAND_MEMORY_SPACE
+            | PCI_COMMAND_BUS_MASTER
+            | PCI_COMMAND_INTERRUPT_DISABLE;
+        if command_target != command_before {
+            let command_updated = (command_status & !0xffff) | command_target as u32;
+            pci_cfg_write_u32(config_virt, PCI_CFG_COMMAND_STATUS, command_updated);
+        }
+        let (msi_disabled, msix_disabled) = disable_pci_interrupt_caps(config_virt);
+        let command_after = (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
+
+        let mut line = heapless::String::<256>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 pci selected ecam=0x{ecam:016x} cfg=0x{cfg:016x} vid:did={vid:04x}:{did:04x} class=0x{class_code:06x} cmd=0x{before:04x}->0x{after:04x} msi_off={msi} msix_off={msix} bar0=0x{bar0:08x}",
+                ecam = ecam_base,
+                cfg = config_paddr,
+                vid = vendor_id,
+                did = device_id,
+                before = command_before,
+                after = command_after,
+                msi = if msi_disabled { "yes" } else { "no" },
+                msix = if msix_disabled { "yes" } else { "no" },
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+
+        return Some(mmio);
+    }
+    None
+}
+
+fn disable_pci_interrupt_caps(config_base: usize) -> (bool, bool) {
+    let mut msi_disabled = false;
+    let mut msix_disabled = false;
+    let mut ptr = (pci_cfg_read_u8(config_base, PCI_CFG_CAP_PTR) as usize) & !0x3;
+    let mut scanned = 0usize;
+    while ptr >= 0x40 && ptr + 4 <= PAGE_SIZE && scanned < PCI_CAP_SCAN_LIMIT {
+        let cap_id = pci_cfg_read_u8(config_base, ptr);
+        let next = (pci_cfg_read_u8(config_base, ptr + 1) as usize) & !0x3;
+        match cap_id {
+            PCI_CAP_ID_MSI if ptr + PCI_MSI_CTL_OFFSET + 2 <= PAGE_SIZE => {
+                let ctl = pci_cfg_read_u16(config_base, ptr + PCI_MSI_CTL_OFFSET);
+                if (ctl & PCI_MSI_CTL_ENABLE) != 0 {
+                    pci_cfg_write_u16(
+                        config_base,
+                        ptr + PCI_MSI_CTL_OFFSET,
+                        ctl & !PCI_MSI_CTL_ENABLE,
+                    );
+                }
+                msi_disabled = true;
+            }
+            PCI_CAP_ID_MSIX if ptr + PCI_MSIX_CTL_OFFSET + 2 <= PAGE_SIZE => {
+                let ctl = pci_cfg_read_u16(config_base, ptr + PCI_MSIX_CTL_OFFSET);
+                if (ctl & PCI_MSIX_CTL_ENABLE) != 0 {
+                    pci_cfg_write_u16(
+                        config_base,
+                        ptr + PCI_MSIX_CTL_OFFSET,
+                        ctl & !PCI_MSIX_CTL_ENABLE,
+                    );
+                }
+                msix_disabled = true;
+            }
+            _ => {}
+        }
+        if next == ptr {
+            break;
+        }
+        ptr = next;
+        scanned = scanned.saturating_add(1);
+    }
+    (msi_disabled, msix_disabled)
+}
+
 struct UsbKeyboard {
     hid: HidDevice<SeatDma>,
     last_keys: [u8; 6],
     poll_error_logged: bool,
 }
 
+#[derive(Clone, Copy)]
+struct HubPortStatus {
+    status: u16,
+    change: u16,
+}
+
+impl HubPortStatus {
+    #[inline]
+    const fn connected(self) -> bool {
+        (self.status & (1 << 0)) != 0
+    }
+
+    #[inline]
+    const fn enabled(self) -> bool {
+        (self.status & (1 << 1)) != 0
+    }
+
+    #[inline]
+    const fn reset(self) -> bool {
+        (self.status & (1 << 4)) != 0
+    }
+
+    #[inline]
+    const fn low_speed(self) -> bool {
+        (self.status & (1 << 9)) != 0
+    }
+
+    #[inline]
+    const fn high_speed(self) -> bool {
+        (self.status & (1 << 10)) != 0
+    }
+}
+
 impl UsbKeyboard {
     fn new(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usize>) -> Result<Self, Pi4SeatError> {
-        notify_vl805_reset_once(hal);
+        if VL805_RESET_NOTIFY_BEFORE_USB_PROBE {
+            notify_vl805_reset_once(hal);
+        } else if !VL805_RESET_BYPASSED_LOGGED.swap(true, Ordering::AcqRel) {
+            boot_log::force_uart_line("[local-seat] vl805 reset notify=bypassed");
+        }
+        let vl805_pci_mmio = if VL805_PCI_PREFLIGHT_BEFORE_USB_PROBE {
+            prepare_vl805_pci(hal)
+        } else {
+            boot_log::force_uart_line("[local-seat] vl805 pci preflight=bypassed");
+            None
+        };
 
         let mut candidates = [0usize; XHCI_MMIO_CANDIDATE_LIMIT];
         let mut candidate_count = 0usize;
-        if let Some(hint) = xhci_mmio_hint {
-            if hint != 0 {
-                candidates[candidate_count] = hint;
-                candidate_count = candidate_count.saturating_add(1);
+        let mut consider_candidate = |mmio: usize| {
+            if mmio == 0 || candidate_count >= candidates.len() {
+                return;
             }
+            if hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_none() {
+                let mut line = heapless::String::<192>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci candidate skipped mmio=0x{mmio:016x} reason=no-device-coverage"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                return;
+            }
+            if candidates[..candidate_count].contains(&mmio) {
+                return;
+            }
+            candidates[candidate_count] = mmio;
+            candidate_count = candidate_count.saturating_add(1);
+        };
+        if let Some(vl805_mmio) = vl805_pci_mmio {
+            consider_candidate(vl805_mmio);
+        }
+        if let Some(hint) = xhci_mmio_hint {
+            consider_candidate(hint);
         }
         for fallback in RPI4_XHCI_MMIO_FALLBACKS {
-            if candidates[..candidate_count].contains(&fallback) {
-                continue;
-            }
-            if candidate_count >= candidates.len() {
-                break;
-            }
-            candidates[candidate_count] = fallback;
-            candidate_count = candidate_count.saturating_add(1);
+            consider_candidate(fallback);
         }
 
         let mut saw_controller = false;
         let mut saw_keyboard_init_error = false;
-        for &mmio_base in &candidates[..candidate_count] {
-            let dma = SeatDma::new(hal);
-            let ctrl = match XhciCtrl::new(mmio_base, dma) {
-                Ok(ctrl) => {
-                    saw_controller = true;
-                    Arc::new(ctrl)
-                }
-                Err(_) => continue,
-            };
-
-            let max_ports = cmp::min(ctrl.max_ports() as usize, XHCI_MAX_PROBE_PORTS);
-            for port in 0..max_ports {
-                if !ctrl.port_connected(port as u8) {
-                    continue;
-                }
-
-                let mut device = match UsbDevice::new(ctrl.clone(), port as u8) {
-                    Ok(device) => device,
-                    Err(_) => continue,
-                };
-
-                if device.get_device_descriptor().is_err() {
-                    continue;
-                }
-
-                let config_blob = match device.get_config_descriptor(0) {
-                    Ok(config_blob) => config_blob,
-                    Err(_) => continue,
-                };
-                let Some(config) = read_config_desc(&config_blob) else {
-                    continue;
-                };
-                if device.set_configuration(config.configuration).is_err() {
-                    continue;
-                }
-
-                let device = Arc::new(device);
-                let interfaces = find_hid_interfaces(&config_blob);
-                for (iface, ep_in) in interfaces {
-                    if iface.interface_subclass != hid_subclass::BOOT
-                        || iface.interface_protocol != hid_protocol::KEYBOARD
-                    {
+        for prefer_high in [false, true] {
+            for &mmio_base in &candidates[..candidate_count] {
+                let dma = SeatDma::new(hal, prefer_high);
+                let ctrl = match XhciCtrl::new(mmio_base, dma) {
+                    Ok(ctrl) => {
+                        saw_controller = true;
+                        Arc::new(ctrl)
+                    }
+                    Err(err) => {
+                        let mut line = heapless::String::<192>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] xhci probe failed mmio=0x{mmio:016x} dma={} detail={err:?}",
+                                if prefer_high { "high" } else { "low" },
+                                mmio = mmio_base
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
                         continue;
                     }
-                    let hid = match HidDevice::from_interface(device.clone(), &iface, &ep_in) {
-                        Ok(hid) => hid,
-                        Err(_) => {
-                            saw_keyboard_init_error = true;
+                };
+
+                let max_ports = cmp::min(ctrl.max_ports() as usize, XHCI_MAX_PROBE_PORTS);
+                let mut connected_mask = 0u32;
+                let mut detect_passes_used = 1usize;
+                for pass in 0..XHCI_PORT_DETECT_PASSES {
+                    detect_passes_used = pass.saturating_add(1);
+                    connected_mask = 0;
+                    for port in 0..max_ports {
+                        if ctrl.port_connected(port as u8) {
+                            connected_mask |= 1u32 << port;
+                        }
+                    }
+                    if connected_mask != 0 || pass + 1 >= XHCI_PORT_DETECT_PASSES {
+                        break;
+                    }
+                    for _ in 0..XHCI_PORT_DETECT_SETTLE_SPINS {
+                        spin_loop();
+                    }
+                }
+
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci online mmio=0x{mmio:016x} dma={} ports={} connected_mask=0x{mask:04x} detect_passes={}",
+                        if prefer_high { "high" } else { "low" },
+                        max_ports,
+                        detect_passes_used,
+                        mmio = mmio_base,
+                        mask = connected_mask,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+
+                for port in 0..max_ports {
+                    if (connected_mask & (1u32 << port)) == 0 {
+                        continue;
+                    }
+
+                    let mut device = match UsbDevice::new(ctrl.clone(), port as u8) {
+                        Ok(device) => device,
+                        Err(err) => {
+                            let mut line = heapless::String::<192>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] usb root-enum failed port={} stage=address dma={} detail={err:?}",
+                                    port + 1,
+                                    if prefer_high { "high" } else { "low" },
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            if matches!(err, UsbError::EnableSlotTimeout) {
+                                let diag = ctrl.command_diag_for_port(port as u8);
+                                let mut summary = heapless::String::<224>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut summary,
+                                    format_args!(
+                                        "[local-seat] xhci timeout diag port={} usbcmd=0x{usbcmd:08x} usbsts=0x{usbsts:08x} portsc=0x{portsc:08x}",
+                                        port + 1,
+                                        usbcmd = diag.usbcmd,
+                                        usbsts = diag.usbsts,
+                                        portsc = diag.portsc,
+                                    ),
+                                );
+                                boot_log::force_uart_line(summary.as_str());
+
+                                let mut regs0 = heapless::String::<192>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut regs0,
+                                    format_args!(
+                                        "[local-seat] xhci timeout regs crcr=0x{crcr:016x} dcbaap=0x{dcbaap:016x} iman=0x{iman:08x}",
+                                        crcr = diag.crcr,
+                                        dcbaap = diag.dcbaap,
+                                        iman = diag.iman,
+                                    ),
+                                );
+                                boot_log::force_uart_line(regs0.as_str());
+
+                                let mut regs1 = heapless::String::<192>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut regs1,
+                                    format_args!(
+                                        "[local-seat] xhci timeout regs erdp=0x{erdp:016x} erstba=0x{erstba:016x}",
+                                        erdp = diag.erdp,
+                                        erstba = diag.erstba,
+                                    ),
+                                );
+                                boot_log::force_uart_line(regs1.as_str());
+                            }
                             continue;
                         }
                     };
-                    if hid.queue_read().is_err() {
-                        saw_keyboard_init_error = true;
+
+                    let device_desc = match device.get_device_descriptor() {
+                        Ok(desc) => desc,
+                        Err(err) => {
+                            let mut line = heapless::String::<192>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] usb root-enum failed port={} stage=device-desc detail={err:?}",
+                                    port + 1
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            continue;
+                        }
+                    };
+
+                    let config_blob = match device.get_config_descriptor(0) {
+                        Ok(config_blob) => config_blob,
+                        Err(err) => {
+                            let mut line = heapless::String::<192>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] usb root-enum failed port={} stage=config-desc detail={err:?}",
+                                    port + 1
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            continue;
+                        }
+                    };
+                    let Some(config) = read_config_desc(&config_blob) else {
+                        let mut line = heapless::String::<160>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] usb root-enum failed port={} stage=config-parse",
+                                port + 1
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        continue;
+                    };
+                    if let Err(err) = device.set_configuration(config.configuration) {
+                        let mut line = heapless::String::<192>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] usb root-enum failed port={} stage=set-config({}) detail={err:?}",
+                                port + 1,
+                                config.configuration
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
                         continue;
                     }
-                    hid.device().ctrl().host().seal_runtime();
-                    return Ok(Self {
-                        hid,
-                        last_keys: [0; 6],
-                        poll_error_logged: false,
-                    });
+
+                    let device = Arc::new(device);
+                    if let Some(hid) = Self::probe_device_for_keyboard(
+                        device,
+                        device_desc,
+                        &config_blob,
+                        HUB_ENUM_MAX_DEPTH,
+                        &mut saw_keyboard_init_error,
+                    ) {
+                        hid.device().ctrl().host().seal_runtime();
+                        return Ok(Self {
+                            hid,
+                            last_keys: [0; 6],
+                            poll_error_logged: false,
+                        });
+                    }
                 }
             }
         }
@@ -990,6 +1472,394 @@ impl UsbKeyboard {
             Err(Pi4SeatError::UsbKeyboardMissing)
         } else {
             Err(Pi4SeatError::XhciInit)
+        }
+    }
+
+    fn probe_device_for_keyboard(
+        device: Arc<UsbDevice<SeatDma>>,
+        device_desc: DeviceDesc,
+        config_blob: &[u8],
+        depth_remaining: usize,
+        saw_keyboard_init_error: &mut bool,
+    ) -> Option<HidDevice<SeatDma>> {
+        if let Some(hid) =
+            Self::attach_hid_keyboard(device.clone(), config_blob, saw_keyboard_init_error)
+        {
+            return Some(hid);
+        }
+        if depth_remaining == 0 {
+            return None;
+        }
+
+        let Some((hub_protocol_code, multi_tt)) =
+            Self::hub_interface_info(device_desc, config_blob)
+        else {
+            let mut line = heapless::String::<192>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] usb non-hid/non-hub slot={} class=0x{:02x} subclass=0x{:02x} proto=0x{:02x}",
+                    device.slot_id(),
+                    device_desc.device_class,
+                    device_desc.device_subclass,
+                    device_desc.device_protocol
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            return None;
+        };
+
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] usb hub detected slot={} route=0x{route:05x} root_port={} protocol={}",
+                device.slot_id(),
+                device.root_hub_port(),
+                hub_protocol_code,
+                route = device.route(),
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+
+        Self::scan_hub_children(
+            device,
+            hub_protocol_code,
+            multi_tt,
+            depth_remaining.saturating_sub(1),
+            saw_keyboard_init_error,
+        )
+    }
+
+    fn attach_hid_keyboard(
+        device: Arc<UsbDevice<SeatDma>>,
+        config_blob: &[u8],
+        saw_keyboard_init_error: &mut bool,
+    ) -> Option<HidDevice<SeatDma>> {
+        let interfaces = find_hid_interfaces(config_blob);
+        for (iface, ep_in) in interfaces {
+            if iface.interface_subclass != hid_subclass::BOOT
+                || iface.interface_protocol != hid_protocol::KEYBOARD
+            {
+                continue;
+            }
+            let hid = match HidDevice::from_interface(device.clone(), &iface, &ep_in) {
+                Ok(hid) => hid,
+                Err(_) => {
+                    *saw_keyboard_init_error = true;
+                    continue;
+                }
+            };
+            if hid.queue_read().is_err() {
+                *saw_keyboard_init_error = true;
+                continue;
+            }
+            return Some(hid);
+        }
+        None
+    }
+
+    fn hub_interface_info(device_desc: DeviceDesc, config_blob: &[u8]) -> Option<(u8, bool)> {
+        if device_desc.device_class == class::HUB {
+            let protocol = device_desc.device_protocol;
+            return Some((protocol, protocol == hub_protocol::HI_SPEED_MULTI_TT));
+        }
+
+        let mut offset = 0usize;
+        while offset + 2 <= config_blob.len() {
+            let len = config_blob[offset] as usize;
+            let dtype = config_blob[offset + 1];
+            if len == 0 || offset + len > config_blob.len() {
+                break;
+            }
+
+            if dtype == desc_type::INTERFACE && len >= 9 {
+                // SAFETY: Descriptor bytes may be unaligned in the config blob.
+                let iface = unsafe {
+                    ptr::read_unaligned(
+                        config_blob
+                            .as_ptr()
+                            .add(offset)
+                            .cast::<usb_oxide::InterfaceDesc>(),
+                    )
+                };
+                if iface.interface_class == class::HUB {
+                    return Some((
+                        iface.interface_protocol,
+                        iface.interface_protocol == hub_protocol::HI_SPEED_MULTI_TT,
+                    ));
+                }
+            }
+            offset += len;
+        }
+        None
+    }
+
+    fn scan_hub_children(
+        device: Arc<UsbDevice<SeatDma>>,
+        hub_protocol_code: u8,
+        hub_multi_tt: bool,
+        depth_remaining: usize,
+        saw_keyboard_init_error: &mut bool,
+    ) -> Option<HidDevice<SeatDma>> {
+        let hub_desc = match Self::read_hub_descriptor(device.as_ref(), hub_protocol_code) {
+            Some(desc) => desc,
+            None => {
+                let mut line = heapless::String::<192>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] hub enum failed slot={} stage=hub-desc proto={}",
+                        device.slot_id(),
+                        hub_protocol_code
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                return None;
+            }
+        };
+        let max_ports = cmp::min(hub_desc.num_ports as usize, HUB_MAX_DOWNSTREAM_PORTS);
+        if max_ports == 0 {
+            return None;
+        }
+
+        for downstream in 1..=max_ports {
+            let _ =
+                Self::hub_set_feature(device.as_ref(), hub_feature::PORT_POWER, downstream as u8);
+        }
+
+        let power_settle_spins = HUB_POWER_SETTLE_SPINS_PER_2MS
+            .saturating_mul((hub_desc.pwr_on_2_pwr_good as usize).max(1));
+        for _ in 0..power_settle_spins {
+            spin_loop();
+        }
+
+        for downstream in 1..=max_ports {
+            let downstream_port = downstream as u8;
+
+            if !Self::hub_set_feature(device.as_ref(), hub_feature::PORT_RESET, downstream_port) {
+                continue;
+            }
+            for _ in 0..HUB_RESET_SETTLE_SPINS {
+                spin_loop();
+            }
+
+            let Some(status) =
+                Self::wait_hub_port_ready(device.as_ref(), downstream_port, hub_protocol_code)
+            else {
+                continue;
+            };
+            Self::clear_hub_port_change_bits(device.as_ref(), downstream_port, status);
+
+            let Some(route) = append_route_segment(device.route(), downstream_port) else {
+                continue;
+            };
+            let child_speed = Self::speed_from_hub_port_status(status, hub_protocol_code);
+            let tt_context = if (child_speed == usb_oxide::regs::SPEED_LOW
+                || child_speed == usb_oxide::regs::SPEED_FULL)
+                && device.speed() == usb_oxide::regs::SPEED_HIGH
+            {
+                Some(TtContext {
+                    hub_slot_id: device.slot_id(),
+                    downstream_port,
+                    multi_tt: hub_multi_tt,
+                })
+            } else {
+                None
+            };
+
+            let mut child = match UsbDevice::new_routed(
+                device.ctrl().clone(),
+                route,
+                device.root_hub_port(),
+                child_speed,
+                tt_context,
+            ) {
+                Ok(child) => child,
+                Err(err) => {
+                    let mut line = heapless::String::<224>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] hub child failed slot={} port={} stage=address detail={err:?}",
+                            device.slot_id(),
+                            downstream_port
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    continue;
+                }
+            };
+
+            let child_desc = match child.get_device_descriptor() {
+                Ok(desc) => desc,
+                Err(err) => {
+                    let mut line = heapless::String::<224>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] hub child failed slot={} port={} stage=device-desc detail={err:?}",
+                            device.slot_id(),
+                            downstream_port
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    continue;
+                }
+            };
+            let child_config_blob = match child.get_config_descriptor(0) {
+                Ok(config_blob) => config_blob,
+                Err(err) => {
+                    let mut line = heapless::String::<224>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] hub child failed slot={} port={} stage=config-desc detail={err:?}",
+                            device.slot_id(),
+                            downstream_port
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    continue;
+                }
+            };
+            let Some(config) = read_config_desc(&child_config_blob) else {
+                let mut line = heapless::String::<192>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] hub child failed slot={} port={} stage=config-parse",
+                        device.slot_id(),
+                        downstream_port
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                continue;
+            };
+            if let Err(err) = child.set_configuration(config.configuration) {
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] hub child failed slot={} port={} stage=set-config({}) detail={err:?}",
+                        device.slot_id(),
+                        downstream_port,
+                        config.configuration
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                continue;
+            }
+
+            let child = Arc::new(child);
+            if let Some(hid) = Self::probe_device_for_keyboard(
+                child,
+                child_desc,
+                &child_config_blob,
+                depth_remaining,
+                saw_keyboard_init_error,
+            ) {
+                return Some(hid);
+            }
+        }
+
+        None
+    }
+
+    fn read_hub_descriptor(device: &UsbDevice<SeatDma>, hub_protocol_code: u8) -> Option<HubDesc> {
+        let mut blob = [0u8; HUB_DESC_MAX_BYTES];
+        let setup = if hub_protocol_code == hub_protocol::SUPER_SPEED {
+            SetupPacket::new(
+                0xA0,
+                request::GET_DESCRIPTOR,
+                (desc_type::SS_HUB as u16) << 8,
+                0,
+                blob.len() as u16,
+            )
+        } else {
+            SetupPacket::hub_get_descriptor(blob.len() as u16)
+        };
+        let transferred = device.control_transfer(&setup, Some(&mut blob)).ok()?;
+        if transferred < mem::size_of::<HubDesc>() {
+            return None;
+        }
+        // SAFETY: Hub descriptor bytes may be unaligned in the transfer buffer.
+        Some(unsafe { ptr::read_unaligned(blob.as_ptr().cast::<HubDesc>()) })
+    }
+
+    fn hub_set_feature(device: &UsbDevice<SeatDma>, feature: u16, port: u8) -> bool {
+        let setup = SetupPacket::hub_set_port_feature(feature, port);
+        device.control_transfer(&setup, None).is_ok()
+    }
+
+    fn hub_clear_feature(device: &UsbDevice<SeatDma>, feature: u16, port: u8) -> bool {
+        let setup = SetupPacket::hub_clear_port_feature(feature, port);
+        device.control_transfer(&setup, None).is_ok()
+    }
+
+    fn hub_port_status(device: &UsbDevice<SeatDma>, port: u8) -> Option<HubPortStatus> {
+        let mut bytes = [0u8; HUB_PORT_STATUS_BYTES];
+        let setup = SetupPacket::hub_get_port_status(port);
+        let transferred = device.control_transfer(&setup, Some(&mut bytes)).ok()?;
+        if transferred < HUB_PORT_STATUS_BYTES {
+            return None;
+        }
+        Some(HubPortStatus {
+            status: u16::from_le_bytes([bytes[0], bytes[1]]),
+            change: u16::from_le_bytes([bytes[2], bytes[3]]),
+        })
+    }
+
+    fn wait_hub_port_ready(
+        device: &UsbDevice<SeatDma>,
+        port: u8,
+        hub_protocol_code: u8,
+    ) -> Option<HubPortStatus> {
+        for _ in 0..HUB_PORT_STATUS_RETRY_LOOPS {
+            if let Some(status) = Self::hub_port_status(device, port) {
+                let ready = if hub_protocol_code == hub_protocol::SUPER_SPEED {
+                    status.connected() && !status.reset()
+                } else {
+                    status.connected() && status.enabled() && !status.reset()
+                };
+                if ready {
+                    return Some(status);
+                }
+            }
+            for _ in 0..HUB_PORT_STATUS_RETRY_SPINS {
+                spin_loop();
+            }
+        }
+        None
+    }
+
+    fn clear_hub_port_change_bits(device: &UsbDevice<SeatDma>, port: u8, status: HubPortStatus) {
+        if (status.change & (1 << 0)) != 0 {
+            let _ = Self::hub_clear_feature(device, hub_feature::C_PORT_CONNECTION, port);
+        }
+        if (status.change & (1 << 1)) != 0 {
+            let _ = Self::hub_clear_feature(device, hub_feature::C_PORT_ENABLE, port);
+        }
+        if (status.change & (1 << 2)) != 0 {
+            let _ = Self::hub_clear_feature(device, hub_feature::C_PORT_SUSPEND, port);
+        }
+        if (status.change & (1 << 3)) != 0 {
+            let _ = Self::hub_clear_feature(device, hub_feature::C_PORT_OVER_CURRENT, port);
+        }
+        if (status.change & (1 << 4)) != 0 {
+            let _ = Self::hub_clear_feature(device, hub_feature::C_PORT_RESET, port);
+        }
+    }
+
+    fn speed_from_hub_port_status(status: HubPortStatus, hub_protocol_code: u8) -> u8 {
+        if hub_protocol_code == hub_protocol::SUPER_SPEED {
+            usb_oxide::regs::SPEED_SUPER
+        } else if status.high_speed() {
+            usb_oxide::regs::SPEED_HIGH
+        } else if status.low_speed() {
+            usb_oxide::regs::SPEED_LOW
+        } else {
+            usb_oxide::regs::SPEED_FULL
         }
     }
 
@@ -1049,6 +1919,7 @@ unsafe impl Sync for SeatDma {}
 
 struct SeatDmaState {
     hal_ptr: usize,
+    prefer_high: bool,
     sealed: bool,
     regions: Vec<PhysRegion>,
 }
@@ -1068,10 +1939,11 @@ struct PhysRegion {
 }
 
 impl SeatDma {
-    fn new(hal: &mut KernelHal<'_>) -> Self {
+    fn new(hal: &mut KernelHal<'_>, prefer_high: bool) -> Self {
         Self {
             state: Mutex::new(SeatDmaState {
                 hal_ptr: hal as *mut _ as usize,
+                prefer_high,
                 sealed: false,
                 regions: Vec::new(),
             }),
@@ -1088,6 +1960,9 @@ impl SeatDma {
         if state.sealed || size == 0 {
             return None;
         }
+        if size > XHCI_DMA_MAX_BYTES {
+            return None;
+        }
         if !align.is_power_of_two() {
             return None;
         }
@@ -1099,11 +1974,29 @@ impl SeatDma {
         let mut expected_phys = 0usize;
         let mut expected_virt = 0usize;
         for idx in 0..page_count {
-            let frame = hal
-                .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Uncached)
-                .ok()?;
+            let frame = if state.prefer_high {
+                hal.alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Uncached)
+                    .ok()?
+            } else {
+                hal.alloc_dma_frame_low_attr(sel4_sys::seL4_ARM_Page_Uncached)
+                    .ok()?
+            };
             let phys = frame.paddr();
             let virt = frame.ptr().as_ptr() as usize;
+            if phys >= RPI4_PCIE_DMA_LIMIT {
+                if !USB_DMA_RANGE_WARNED.swap(true, Ordering::AcqRel) {
+                    let mut line = heapless::String::<192>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci dma outside pcie window paddr=0x{phys:016x} limit=0x{limit:08x}",
+                            limit = RPI4_PCIE_DMA_LIMIT
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                }
+                return None;
+            }
             if idx == 0 {
                 expected_phys = phys;
                 expected_virt = virt;
@@ -1136,6 +2029,56 @@ impl SeatDma {
     fn map_mmio_locked(state: &mut SeatDmaState, phys: usize, size: usize) -> Option<usize> {
         if state.sealed || size == 0 {
             return None;
+        }
+        if size > XHCI_MMIO_MAX_BYTES {
+            return None;
+        }
+        let request_end = phys.checked_add(size)?;
+
+        let mut extend_index: Option<usize> = None;
+        for (index, region) in state.regions.iter().enumerate() {
+            let RegionBacking::Mmio(_) = &region.backing else {
+                continue;
+            };
+            let mapped_start = region.phys_start;
+            let mapped_end = mapped_start.checked_add(region.length)?;
+            if phys >= mapped_start && request_end <= mapped_end {
+                let offset = phys.checked_sub(mapped_start)?;
+                return region.virt_start.checked_add(offset);
+            }
+            if phys == mapped_start && request_end > mapped_end {
+                extend_index = Some(index);
+            }
+        }
+
+        if let Some(index) = extend_index {
+            let hal = hal_from_ptr(state.hal_ptr)?;
+            let region = state.regions.get_mut(index)?;
+            let mapped_base_phys = region.phys_start & !PAGE_MASK;
+            let mapped_base_virt = region
+                .virt_start
+                .checked_sub(region.phys_start & PAGE_MASK)?;
+            let RegionBacking::Mmio(frames) = &mut region.backing else {
+                return None;
+            };
+
+            let mut mapped_end =
+                mapped_base_phys.checked_add(frames.len().checked_mul(PAGE_SIZE)?)?;
+            while mapped_end < request_end {
+                let frame = hal.map_device(mapped_end).ok()?;
+                let expected_virt =
+                    mapped_base_virt.checked_add(frames.len().checked_mul(PAGE_SIZE)?)?;
+                let actual_virt = frame.ptr().as_ptr() as usize;
+                if actual_virt != expected_virt {
+                    return None;
+                }
+                frames.push(frame);
+                mapped_end = mapped_end.checked_add(PAGE_SIZE)?;
+            }
+
+            region.length = request_end.saturating_sub(region.phys_start);
+            let offset = phys.checked_sub(region.phys_start)?;
+            return region.virt_start.checked_add(offset);
         }
 
         let page_base = phys & !PAGE_MASK;
@@ -1258,6 +2201,55 @@ fn hal_from_ptr(ptr: usize) -> Option<&'static mut KernelHal<'static>> {
 }
 
 #[inline]
+fn pci_cfg_read_u32(base: usize, offset: usize) -> u32 {
+    let Some(addr) = base.checked_add(offset) else {
+        return 0;
+    };
+    // SAFETY: `base` points to a mapped PCI config page in `prepare_vl805_pci`.
+    unsafe { ptr::read_volatile(addr as *const u32) }
+}
+
+#[inline]
+fn pci_cfg_read_u16(base: usize, offset: usize) -> u16 {
+    let Some(addr) = base.checked_add(offset) else {
+        return 0;
+    };
+    // SAFETY: `base` points to a mapped PCI config page in `prepare_vl805_pci`.
+    unsafe { ptr::read_volatile(addr as *const u16) }
+}
+
+#[inline]
+fn pci_cfg_read_u8(base: usize, offset: usize) -> u8 {
+    let Some(addr) = base.checked_add(offset) else {
+        return 0;
+    };
+    // SAFETY: `base` points to a mapped PCI config page in `prepare_vl805_pci`.
+    unsafe { ptr::read_volatile(addr as *const u8) }
+}
+
+#[inline]
+fn pci_cfg_write_u32(base: usize, offset: usize, value: u32) {
+    let Some(addr) = base.checked_add(offset) else {
+        return;
+    };
+    // SAFETY: `base` points to a mapped PCI config page in `prepare_vl805_pci`.
+    unsafe {
+        ptr::write_volatile(addr as *mut u32, value);
+    }
+}
+
+#[inline]
+fn pci_cfg_write_u16(base: usize, offset: usize, value: u16) {
+    let Some(addr) = base.checked_add(offset) else {
+        return;
+    };
+    // SAFETY: `base` points to a mapped PCI config page in `prepare_vl805_pci`.
+    unsafe {
+        ptr::write_volatile(addr as *mut u16, value);
+    }
+}
+
+#[inline]
 fn phys_to_bus(phys: usize, alias_base: u32) -> Option<u32> {
     if phys > VC_BUS_MASK as usize {
         return None;
@@ -1271,12 +2263,35 @@ fn bus_to_phys(bus: u32) -> usize {
 }
 
 #[inline]
+fn framebuffer_phys_window_safe(fb_phys: usize, fb_size: usize) -> bool {
+    let Some(fb_end) = fb_phys.checked_add(fb_size) else {
+        return false;
+    };
+    fb_phys >= MIN_SAFE_FB_PHYS && fb_end <= MAX_SAFE_FB_PHYS_EXCL
+}
+
+#[inline]
 const fn div_ceil(value: usize, divisor: usize) -> usize {
     if value == 0 {
         0
     } else {
         1 + ((value - 1) / divisor)
     }
+}
+
+#[inline]
+fn append_route_segment(route: u32, downstream_port: u8) -> Option<u32> {
+    let mut depth = 0u32;
+    let mut rem = route & 0x000f_ffff;
+    while rem != 0 {
+        depth = depth.saturating_add(1);
+        rem >>= 4;
+    }
+    if depth >= 5 {
+        return None;
+    }
+    let segment = cmp::min(downstream_port, 15) as u32;
+    Some((route & 0x000f_ffff) | (segment << (depth * 4)))
 }
 
 #[inline]
@@ -1309,4 +2324,26 @@ fn validate_framebuffer_geometry(
         return None;
     }
     Some(required)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_pci_mmio_bar;
+
+    #[test]
+    fn decode_pci_mmio_bar_rejects_io_bar() {
+        assert_eq!(decode_pci_mmio_bar(0x0000_0001, 0), None);
+    }
+
+    #[test]
+    fn decode_pci_mmio_bar_decodes_32bit_bar() {
+        assert_eq!(decode_pci_mmio_bar(0xFE98_0000, 0), Some(0xFE98_0000));
+    }
+
+    #[test]
+    fn decode_pci_mmio_bar_decodes_64bit_bar() {
+        let low = 0x0000_0004;
+        let high = 0x0000_0006;
+        assert_eq!(decode_pci_mmio_bar(low, high), Some(0x0000_0006_0000_0000));
+    }
 }

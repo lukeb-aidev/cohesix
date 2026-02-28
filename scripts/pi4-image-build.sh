@@ -243,6 +243,9 @@ build_pi4_image() {
     local root_task_elf="${ROOT_DIR}/target/aarch64-unknown-none/release/root-task"
     local embedded_rootserver="${SEL4_BUILD_DIR}/elfloader/rootserver"
     local sel4_source_dir
+    local jobs
+    local root_hash_expected
+    local root_hash_actual
 
     export SEL4_BUILD_DIR
     export SEL4_BUILD="$SEL4_BUILD_DIR"
@@ -262,18 +265,27 @@ build_pi4_image() {
       --no-default-features \
       --features "$ROOT_TASK_FEATURES"
 
-    require_file "$root_task_elf"
-    require_file "$embedded_rootserver"
-
-    cp -f "$root_task_elf" "$embedded_rootserver"
-    log "Synced root-task into ${embedded_rootserver}"
-
-    local jobs
     jobs="$(sysctl -n hw.ncpu)"
+    require_file "$root_task_elf"
     log "Rebuilding Pi4 seL4 image in ${SEL4_BUILD_DIR}"
     cmake --build "$SEL4_BUILD_DIR" \
       --target "images/${SEL4_UPSTREAM_IMAGE_NAME}" \
       -j"$jobs"
+
+    require_file "$embedded_rootserver"
+    cp -f "$root_task_elf" "$embedded_rootserver"
+    log "Injected root-task into ${embedded_rootserver}"
+
+    # Repack the image after injection. The second build should not regenerate
+    # rootserver if sel4test-driver has not changed.
+    cmake --build "$SEL4_BUILD_DIR" \
+      --target "images/${SEL4_UPSTREAM_IMAGE_NAME}" \
+      -j"$jobs"
+
+    root_hash_expected="$(shasum -a 256 "$root_task_elf" | awk '{print $1}')"
+    root_hash_actual="$(shasum -a 256 "$embedded_rootserver" | awk '{print $1}')"
+    [[ "$root_hash_actual" == "$root_hash_expected" ]] || \
+      fail "embedded rootserver was regenerated after root-task injection"
 }
 
 write_boot_cmd() {
